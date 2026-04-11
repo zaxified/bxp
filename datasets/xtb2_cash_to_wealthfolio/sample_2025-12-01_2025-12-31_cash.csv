@@ -1,0 +1,28 @@
+Type,Ticker,Instrument,Time,Amount,ID,Comment,Product
+Stock sell,PFE.US,Pfizer,2025-12-30 14:31:46,512.35,1068547849,CLOSE BUY 1 @ 25.00,My Trades
+Withholding tax,ABEA.DE,Alphabet,2025-12-15 10:58:04,-0.65,1052139777,ABEA.DE USD WHT 15%,My Trades
+Dividend,ABEA.DE,Alphabet,2025-12-15 10:58:04,4.32,1052139776,ABEA.DE USD 0.2100/ SHR,My Trades
+Withholding tax,O.US,Realty,2025-12-15 06:53:27,-3.33,1051453295,O.US USD WHT 15%,My Trades
+Dividend,O.US,Realty,2025-12-15 06:53:27,22.18,1051453294,O.US USD 0.2695/ SHR,My Trades
+Withholding tax,O.US,Realty,2025-12-15 06:53:26,-4.16,1051436341,O.US USD WHT 15%,My Trades
+Dividend,O.US,Realty,2025-12-15 06:53:26,27.72,1051436340,O.US USD 0.2695/ SHR,My Trades
+Withholding tax,CZG.CZ,Ceska zbrojovka,2025-12-11 11:23:08,15.75,1047497193,corr CZG.CZ CZK WHT 35%,My Trades
+Dividend,CZG.CZ,Ceska zbrojovka,2025-12-11 11:23:07,-45,1047497192,corr CZG.CZ CZK 15.0000/ SHR,My Trades
+Withholding tax,CZG.CZ,Ceska zbrojovka,2025-12-11 11:23:07,120.75,1047497190,corr CZG.CZ CZK WHT 35%,My Trades
+Dividend,CZG.CZ,Ceska zbrojovka,2025-12-11 11:23:07,-345,1047497189,corr CZG.CZ CZK 15.0000/ SHR,My Trades
+Withholding tax,CZG.CZ,Ceska zbrojovka,2025-12-11 11:23:07,5.25,1047497183,corr CZG.CZ CZK WHT 35%,My Trades
+Dividend,CZG.CZ,Ceska zbrojovka,2025-12-11 11:23:07,-15,1047497182,corr CZG.CZ CZK 15.0000/ SHR,My Trades
+Free funds interest,,,2025-12-04 12:50:48,0.82,1038873719,Free-funds Interest 2025-11,My Trades
+Stock purchase,KOMB.CZ,Komercni Banka,2025-12-03 08:09:10,-2340,1036472011,OPEN BUY 2 @ 1170.00,My Trades
+Stock purchase,CZG.CZ,Ceska zbrojovka,2025-12-03 08:06:42,-2900,1036470882,OPEN BUY 4 @ 725.00,My Trades
+Stock purchase,NOV.DE,Novo Nordisk,2025-12-03 08:04:45,-4963.01,1036422471,OPEN BUY 5 @ 40.900,My Trades
+Stock purchase,NOVN.CH,Novartis,2025-12-03 08:01:34,-2792.94,1036421025,OPEN BUY 1 @ 106.92,My Trades
+Stock purchase,PFE.US,Pfizer,2025-12-02 19:48:20,-4743.66,1036081197,OPEN BUY 9 @ 25.22,My Trades
+Stock purchase,MRNA.US,Moderna,2025-12-02 19:46:08,-5091,1036080705,OPEN BUY 10 @ 24.36,My Trades
+Stock purchase,BNTX.US,BioNTech,2025-12-02 19:40:50,-6045.82,1036079783,OPEN BUY 3 @ 96.42,My Trades
+Stock purchase,VICI.US,VICI Properties,2025-12-02 19:26:53,-11820.47,1036077264,OPEN BUY 20 @ 28.28,My Trades
+Stock purchase,O.US,Realty,2025-12-02 19:26:05,-9576,1036077094,OPEN BUY 8 @ 57.27,My Trades
+Withholding tax,PFE.US,Pfizer,2025-12-01 10:59:12,-13.33,1033852339,PFE.US USD WHT 15%,My Trades
+Dividend,PFE.US,Pfizer,2025-12-01 10:59:12,88.86,1033852338,PFE.US USD 0.4300/ SHR,My Trades
+Deposit,,,2025-12-01 08:27:17,50000,1033425296,Deposit,My Trades
+Total,,,,98.6299999999974,,,

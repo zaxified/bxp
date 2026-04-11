@@ -1,0 +1,149 @@
+// trading212_to_wealthfolio sample template
+{
+  ticker_maps: {
+    trading212: {
+      "ASML":   "ASML.AS",
+      "CMBT":   "CMBT.BR",
+      "CSPX":   "CSPX.L",
+      "DIV":    "DIV.TO",
+      "IMB":    "IMB.L",
+      "LGEN":   "LGEN.L",
+      "NESN":   "NESN.SW",
+      "NG":     "NG.L",
+      "NOVN":   "NOVN.SW",
+      "RIO":    "RIO.L",
+      "ROG":    "ROG.SW",
+      "ROP":    "ROG.SW",
+      "SMIF":   "SMIF.L",
+      "UBSG":   "UBSG.SW",
+      "UKW":    "UKW.L",
+      "ZURN":   "ZURN.SW"
+    }
+  },
+  conversion_templates: {
+    trading212_to_wealthfolio: {
+      data_dir:                  ".",
+      file_type_in:              "csv",
+      file_type_out:             "csv",
+      file_pattern_in:           ".csv",
+      file_pattern_out:          ".csvx",
+      csv_delimiter_in:          ",",
+      csv_delimiter_out:         ",",
+      csv_decimal_separator_in:  ".",
+      csv_decimal_separator_out: ".",
+      csv_text_quote_in:         "double",
+      csv_text_quote_out:        "none",
+      date_filter_from_filename: false,
+      ticker_map:                "trading212",
+      input_schema: {
+        $date:            "[Time]",
+        $ticker:          "IF([Ticker] != '', TICKER([Ticker]), '$CASH-' & [Currency (Total)])",
+        $isin:            "",
+        $quantity:        "IF([Ticker] != '', [No. of shares], 1)",
+        $unitprice:       "IF([Ticker] != '', (ABS([Total]) - ABS([Currency conversion fee]) - ABS([Stamp duty reserve tax])) / [No. of shares], ABS([Total]))",
+        $currency:        "[Currency (Total)]",
+        $fee:             "IF(ABS([Currency conversion fee]) + ABS([Stamp duty reserve tax]) > 0, ABS([Currency conversion fee]) + ABS([Stamp duty reserve tax]), '')",
+        $amount:          "IF([Ticker] != '', ABS([Total]) - ABS([Currency conversion fee]) - ABS([Stamp duty reserve tax]), ABS([Total]))",
+        $account:         "'xT212'",
+        $fxRate:          "",
+        $subtype:         "",
+        $instrumentType:  "",
+        $comment:         "[ID] & '_' & [Time]"
+      },
+      row_rules_debug_missing: true,
+      row_rules: [
+        { when: "([Action] = 'Market buy' OR [Action] = 'Limit buy' OR [Action] = 'Stock distribution') AND [Total] = 0",
+          rows: [ { $action: "'TRANSFER_IN'" } ] },
+        { when: "[Action] = 'Market sell' AND [Total] = 0",
+          rows: [ { $action: "'TRANSFER_OUT'" } ] },
+        { when: "[Action] = 'Market buy' OR [Action] = 'Limit buy' OR [Action] = 'Stock distribution'",
+          rows: [ { $action: "'BUY'" } ] },
+        { when: "[Action] = 'Market sell'",
+          rows: [ { $action: "'SELL'" } ] },
+        { when: "[Action] = 'Deposit'",
+          rows: [ { $action: "'DEPOSIT'", $quantity: "", $unitprice: "" } ] },
+        { when: "[Action] = 'Withdrawal'",
+          rows: [ { $action: "'WITHDRAWAL'", $quantity: "", $unitprice: "" } ] },
+        { when: "[Action] = 'Dividend (Dividend)' OR [Action] = 'Dividend (Dividend manufactured payment)' OR [Action] = 'Dividend (Tax exempted)'",
+          rows: [ { $action: "'DIVIDEND'" } ] },
+        { when: "[Action] = 'Interest on cash' OR [Action] = 'Lending interest'",
+          rows: [ { $action: "'INTEREST'" } ] },
+        { when: "[Action] = 'SPLIT'",
+          rows: [ { $action: "'SPLIT'" } ] },
+        { when: "[Action] = 'Currency conversion'",
+          rows: [
+            {
+              $action:    "'FEE'",
+              $ticker:    "'$CASH-' & [Currency (Currency conversion fee)]",
+              $quantity:  "",
+              $unitprice: "",
+              $currency:  "[Currency (Currency conversion fee)]",
+              $fee:       "",
+              $amount:    "ABS([Currency conversion fee])"
+            },
+            {
+              $action:    "'WITHDRAWAL'",
+              $ticker:    "'$CASH-' & [Currency (Currency conversion from amount)]",
+              $quantity:  "",
+              $unitprice: "",
+              $currency:  "[Currency (Currency conversion from amount)]",
+              $fee:       "",
+              $amount:    "ABS([Currency conversion from amount])"
+            },
+            {
+              $action:    "'DEPOSIT'",
+              $ticker:    "'$CASH-' & [Currency (Currency conversion to amount)]",
+              $quantity:  "",
+              $unitprice: "",
+              $currency:  "[Currency (Currency conversion to amount)]",
+              $fee:       "",
+              $amount:    "ABS([Currency conversion to amount])"
+            }
+          ]
+        },
+        { when: "[Action] = 'Result adjustment' OR [Action] = 'Dividend adjustment'",
+          rows: [
+            {
+              $action:    "IF([Total] > 0, 'DEPOSIT', 'WITHDRAWAL')",
+              $ticker:    "'$CASH-' & [Currency (Total)]",
+              $quantity:  "1",
+              $unitprice: "ABS([Total])",
+              $currency:  "[Currency (Total)]",
+              $fee:       "",
+              $amount:    "ABS([Total])"
+            }
+          ]
+        },
+        { when: "[Action] = 'ADR Fee'",
+          rows: [
+            {
+              $action:    "'FEE'",
+              $ticker:    "'$CASH-' & [Currency (Price / share)]",
+              $quantity:  "1",
+              $unitprice: "ABS([Total])",
+              $currency:  "[Currency (Price / share)]",
+              $fee:       "",
+              $amount:    "ABS([Total])"
+            }
+          ]
+        }
+      ],
+      output_schema: {
+        date:            "$date",
+        symbol:          "$ticker",
+        isin:            "$isin",
+        quantity:        "$quantity",
+        activityType:    "$action",
+        unitPrice:       "$unitprice",
+        currency:        "$currency",
+        fee:             "$fee",
+        amount:          "$amount",
+        account:         "$account",
+        fxRate:          "$fxRate",
+        subtype:         "$subtype",
+        instrumentType:  "$instrumentType",
+        comment:         "$comment"
+      }
+    }
+  }
+}

@@ -1,0 +1,76 @@
+// anycoin_to_wealthfolio sample template
+{
+  ticker_maps: {
+    anycoin: {
+      "BTC": "BTC-EUR"
+    }
+  },
+  conversion_templates: {
+    anycoin_to_wealthfolio: {
+      data_dir:                  ".",
+      file_type_in:              "csv",
+      file_type_out:             "csv",
+      file_pattern_in:           ".csv",
+      file_pattern_out:          ".csvx",
+      csv_delimiter_in:          ",",
+      csv_delimiter_out:         ",",
+      csv_decimal_separator_in:  ".",
+      csv_decimal_separator_out: ".",
+      csv_text_quote_in:         "none",
+      csv_text_quote_out:        "none",
+      date_filter_from_filename: true,
+      ticker_map:                "anycoin",
+      pre_pass: {
+        when:       "[Type] = 'trade payment'",
+        key:        "[Order ID]",
+        values: {
+          amount:   "ABS([Amount])",
+          currency: "[Currency]"
+        }
+      },
+      input_schema: {
+        $date:            "DATE_CONVERT([Date], 'YYYY-MM-DDThh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')",
+        $ticker:          "IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))",
+        $quantity:        "IF([Type] = 'deposit', 1, [Amount])",
+        $unitprice:       "IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount') / [Amount])",
+        $currency:        "IF([Type] = 'deposit', [Currency], LOOKUP([Order ID], 'currency'))",
+        $fee:             "",
+        $amount:          "IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount'))",
+        $account:         "", 
+        $fxRate:          "",
+        $subtype:         "",
+        $instrumentType:  "",
+        $comment:         "[anycoin TX ID]"
+      },
+      row_rules_debug_missing: true,
+      row_rules: [
+        {
+          when: "[Type] = 'deposit'",
+          rows: [ { 
+            $action: "'DEPOSIT'"
+          } ]
+        },
+        { when: "[Type] = 'trade fill'",          rows: [ { $action: "'BUY'" } ] },
+        { when: "[Type] = 'trade payment'",       rows: [] },
+        { when: "[Type] = 'withdrawal'",          rows: [] },
+        { when: "[Type] = 'withdrawal_block'",    rows: [] },
+        { when: "[Type] = 'withdrawal_unblock'",  rows: [] }
+      ],
+      output_schema: {
+        date:             "$date",
+        symbol:           "$ticker",
+        quantity:         "$quantity",
+        activityType:     "$action",
+        unitPrice:        "$unitprice",
+        currency:         "$currency",
+        fee:              "$fee",
+        amount:           "$amount",
+        account:          "$account",
+        fxRate:           "$fxRate",
+        subtype:          "$subtype",
+        instrumentType:   "$instrumentType",
+        comment:          "$comment"
+      }
+    }
+  }
+}

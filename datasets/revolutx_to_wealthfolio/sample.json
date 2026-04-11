@@ -1,0 +1,64 @@
+// revolutx_to_wealthfolio sample template
+{
+  ticker_maps: {
+    revolutx: {
+      "BTC": "BTC-USD"
+    }
+  },
+  conversion_templates: {
+    revolutx_to_wealthfolio: {
+      data_dir:                  ".",
+      file_type_in:              "csv",
+      file_type_out:             "csv",
+      file_pattern_in:           ".csv",
+      file_pattern_out:          ".csvx",
+      csv_delimiter_in:          ",",
+      csv_delimiter_out:         ",",
+      csv_decimal_separator_in:  ".",
+      csv_decimal_separator_out: ".",
+      csv_text_quote_in:         "double",
+      csv_text_quote_out:        "none",
+      date_filter_from_filename: true,
+      ticker_map:                "revolutx",
+      input_schema: {
+        $date:            "DATE_CONVERT([Date], 'D MMM YYYY, hh:mm:ss', 'YYYY-MM-DD hh:mm:ss')",
+        $ticker:          "IF([Type] = 'Other', '$CASH-' & PRICE_CURRENCY([Value]), TICKER([Symbol]))",
+        $quantity:        "IF([Type] = 'Other', 1, [Quantity])",
+        $unitprice:       "IF([Type] = 'Other', PRICE_VALUE([Value]), PRICE_VALUE([Price]))",
+        $currency:        "PRICE_CURRENCY([Value])",
+        $fee:             "IF(PRICE_VALUE([Fees]) > 0, PRICE_VALUE([Fees]), '')",
+        $amount:          "PRICE_VALUE([Value])",
+        $account:         "",
+        $fxRate:          "",
+        $subtype:         "",
+        $instrumentType:  "",
+        $comment:         "DATE_CONVERT([Date], 'D MMM YYYY, hh:mm:ss', 'YYYYMMDDhhmmss')"
+      },
+      row_rules_debug_missing: true,
+      row_rules: [
+        { when: "[Type] = 'Buy' OR [Type] = 'Buy - Revolut X'", rows: [ { $action: "'BUY'" } ] },
+        { when: "[Type] = 'Sell'",                              rows: [ { $action: "'SELL'" } ] },
+        { when: "[Type] = 'Other'",                             rows: [ { $action: "'DEPOSIT'" } ] },
+        { when: "[Type] = 'Staking reward'",                    rows: [] },
+        { when: "[Type] = 'Stake'",                             rows: [] },
+        { when: "[Type] = 'Unstake'",                           rows: [] },
+        { when: "[Type] = 'Learn reward'",                      rows: [] }
+      ],
+      output_schema: {
+        date:             "$date",
+        symbol:           "$ticker",
+        quantity:         "$quantity",
+        activityType:     "$action",
+        unitPrice:        "$unitprice",
+        currency:         "$currency",
+        fee:              "$fee",
+        account:          "$account",
+        amount:           "$amount",
+        fxRate:           "$fxRate",
+        subtype:          "$subtype",
+        instrumentType:   "$instrumentType",
+        comment:          "$comment"
+      }
+    }
+  }
+}

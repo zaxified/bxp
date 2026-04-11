@@ -1,0 +1,49 @@
+Action,Time,ISIN,Ticker,Name,Notes,ID,No. of shares,Price / share,Currency (Price / share),Exchange rate,Result,Currency (Result),Total,Currency (Total),Withholding tax,Currency (Withholding tax),Charge amount,Currency (Charge amount),Deposit fee,Currency (Deposit fee),Stamp duty reserve tax,Currency (Stamp duty reserve tax),Currency conversion from amount,Currency (Currency conversion from amount),Currency conversion to amount,Currency (Currency conversion to amount),Currency conversion fee,Currency (Currency conversion fee)
+Deposit,2022-05-16 15:51:42,,,,"Transaction ID: DL7FTQTMNDTG2C52",00000000-0000-0000-0000-000000000001,,,,,,1.00,"EUR",,
+Deposit,2022-05-16 15:54:11,,,,"Free Shares Promotion",00000000-0000-0000-0000-000000000002,,,,,,69.25,"EUR",,
+Market buy,2022-05-16 15:54:11,US02079K3059,GOOGL,"Alphabet (Class A)",,EOF000000000000017,0.0313646200,2296.6500000000,USD,1.04185065,"EUR",69.24,"EUR",0.10,"EUR"
+Deposit,2022-05-24 06:41:48,,,,"Bank Transfer",00000000-0000-0000-0000-000000000003,,,,,,40.42,"EUR",,Interest on cash,2023-06-12 21:13:11,"Interest on cash",00000000-0000-0000-0000-000000000004,0.01,"EUR"
+Interest on cash,2023-06-19 21:11:08,"Interest on cash",00000000-0000-0000-0000-000000000005,0.01,"EUR"
+Interest on cash,2023-06-26 21:11:02,"Interest on cash",00000000-0000-0000-0000-000000000006,0.01,"EUR"
+Interest on cash,2023-07-03 21:12:07,"Interest on cash",00000000-0000-0000-0000-000000000007,0.01,"EUR"
+Currency conversion,2024-04-24 22:47:09,,,,"10000.00 CZK -> 395.50 EUR",O7K4BWR2XSAY7LJ6,,,,,,,-0.59,"EUR",,,,,,,,,10000.00,"CZK",395.50,"EUR",-0.59,"EUR"
+Market buy,2024-04-24 23:25:20,US02209S1033,MO,"Altria",,EOF000000000000018,1.0143800000,42.9200000000,USD,1.06970981,,"EUR",40.76,"EUR",,,,,,,,,,,,,0.06,"EUR"
+Market buy,2024-04-25 07:00:35,GB0007188757,RIO,"Rio Tinto",,EOF000000000000019,0.2447117400,5517.0000000000,GBX,85.77348599,,"EUR",15.84,"EUR",,,,,,,0.08,"EUR",,,,,0.02,"EUR"
+Market buy,2024-04-25 07:00:35,GB00BDR05C01,NG,"National Grid",,EOF000000000000020,1.5948185200,1058.0000000000,GBX,85.78129100,,"EUR",19.80,"EUR",,,,,,,0.10,"EUR",,,,,0.03,"EUR"
+Market buy,2024-04-25 07:00:39,GB0005603997,LGEN,"Legal & General",,EOF000000000000021,5.7498922000,234.8000000000,GBX,85.77348720,,"EUR",15.84,"EUR",,,,,,,0.08,"EUR",,,,,0.02,"EUR"
+Market buy,2024-04-25 07:56:40,GG00BJVDZ946,SMIF,"TwentyFour Select Monthly Income Fund",,EOF000000000000022,20.4213360000,83.0000000000,GBX,85.73449104,,"EUR",19.80,"EUR",,,,,,,,,,,,,0.03,"EUR"
+Market buy,2024-04-25 13:30:02,CA2553311002,DIV,"Diversified Royalty",,EOF000000000000023,10.4302500000,2.7800000000,CAD,1.46667147,,"EUR",19.80,"EUR",,,,,,,,,,,,,0.03,"EUR"
+Market buy,2024-04-25 13:30:03,US00123Q1040,AGNC,"AGNC Investment",,EOF000000000000024,2.2694400000,9.3100000000,USD,1.06871453,,"EUR",19.80,"EUR",,,,,,,,,,,,,0.03,"EUR"
+Market buy,2024-04-25 13:30:05,US85571B1052,STWD,"Starwood Property Trust",,EOF000000000000025,1.0936070000,19.3200000000,USD,1.06871457,,"EUR",19.80,"EUR",,,,,,,,,,,,,0.03,"EUR"
+Market buy,2024-04-25 13:30:05,US26884U1097,EPR,"EPR Properties",,EOF000000000000026,0.5132310000,41.1600000000,USD,1.06851734,,"EUR",19.80,"EUR",,,,,,,,,,,,,0.03,"EUR"
+Currency conversion,2024-05-04 11:32:29,,,,"10000.00 CZK -> 398.08 EUR",XRM58LDVFXHU0AVW,,,,,,,-0.60,"EUR",,,,,,,,,10000.00,"CZK",398.08,"EUR",-0.60,"EUR"
+Market sell,2024-05-07 15:10:22,US0389231087,ABR,"Arbor Realty Trust",,EOF000000000000027,0.0802000000,13.4600000000,USD,1.07949200,0.03,"EUR",1.00,"EUR",,,,,,,,,,,,,,
+Market sell,2024-05-07 15:10:27,US5246601075,LEG,"Leggett & Platt",,EOF000000000000028,1.1553250000,13.3200000000,USD,1.07841128,-5.50,"EUR",14.25,"EUR",,,,,,,,,,,,,0.02,"EUR"
+Currency conversion,2024-05-07 16:34:29,,,,"3000.00 CZK -> 103.02 GBP",B9EISNYBDAFAW9C2,,,,,,,-0.15,"GBP",,,,,,,,,3000.00,"CZK",103.02,"GBP",-0.15,"GBP"
+Dividend (Dividend),2024-05-09 11:00:19,US00123Q1040,AGNC,"AGNC Investment",,,2.2694400000,0.102000,USD,0.95039425,,,0.22,"EUR",0.04,USD,,,,,,,,,,,,
+Lending interest,2024-05-15 01:13:03,,,,"Share lending interest",00000000-0000-0000-0000-000000000008,,,,,,,0.01,"EUR",,,,,,,,,,,,,,
+Dividend (Dividend),2024-05-15 11:54:22,US26884U1097,EPR,"EPR Properties",,,0.5132310000,0.242250,USD,0.88474072,,,0.11,"EUR",0.02,USD,,,,,,,,,,,,
+Dividend (Dividend),2024-05-15 11:57:02,US7561091049,O,"Realty Income",,,0.3976750000,0.218450,USD,0.92089401,,,0.08,"EUR",0.02,USD,,,,,,,,,,,,
+Dividend (Dividend),2024-05-15 12:25:58,US56035L1044,MAIN,"Main Street Capital",,,0.5068310000,0.204000,USD,0.96717856,,,0.10,"EUR",0.02,USD,,,,,,,,,,,,
+Lending interest,2024-05-16 08:51:27,,,,"Share lending interest",00000000-0000-0000-0000-000000000009,,,,,,,0.01,"EUR",,,,,,,,,,,,,,
+Lending interest,2024-05-17 01:13:51,,,,"Share lending interest",00000000-0000-0000-0000-000000000010,,,,,,,0.01,"EUR",,,,,,,,,,,,,,
+Dividend (Dividend),2024-05-17 09:40:22,US68268W1036,OMF,"OneMain",,,0.4979960000,0.884000,USD,0.93133459,,,0.41,"EUR",0.08,USD,,,,,,,,,,,,
+Lending interest,2024-05-20 01:11:19,,,,"Share lending interest",00000000-0000-0000-0000-000000000011,,,,,,,0.01,"EUR",,,,,,,,,,,,,,
+Dividend (Dividend),2024-05-21 10:59:39,US4270965084,HTGC,"Hercules Capital",,,2.7693290000,0.068000,USD,0.90274575,,,0.17,"EUR",0.03,USD,,,,,,,,,,,,
+Dividend (Tax exempted),2024-05-31 11:53:14,BE0003816338,CMBT,"CMB Tech",,,4.1869930000,3.490000,USD,0.92112251,,,13.46,"EUR",0.00,USD,,,,,,,,,,,,
+Result adjustment,2024-06-06 10:55:39,,,,"Proceeds from sale of National Grid PLC (NGPN) rights. Sold on 04.06.2024 at price of 2.22 GBP per right.",00000000-0000-0000-0000-000000000012,,,,,,,5.77,"EUR",,,,,,,,,,,,,,
+Dividend (Tax exempted),2024-07-18 11:52:58,BE0003816338,CMBT,"CMB Tech",,,12.6486240000,0.810000,USD,0.91455807,,,9.37,"EUR",0.00,USD,,,,,,,,,,,,
+Limit buy,2024-08-16 13:43:45,US7170811035,PFE,"Pfizer",,EOF000000000000029,10.0000000000,27.9800000000,USD,1.00000000,,"USD",279.80,"USD",,,,,,,,,,,,,,
+Limit buy,2024-09-03 13:30:03,US09077B1044,BCAB,"BioAtla",,EOF000000000000030,300.0000000000,1.7500000000,USD,1.00000000,,"USD",525.00,"USD",,,,,,,,,,,,,,
+Dividend (Dividend manufactured payment),2024-09-27 12:56:54,US56035L1044,MAIN,"Main Street Capital",,,7.8045760000,0.255000,USD,0.89439735,,,1.78,"EUR",0.35,USD,,,,,,,,,,,,
+Dividend (Dividend manufactured payment),2024-10-15 13:27:57,US56035L1044,MAIN,"Main Street Capital",,,7.8045760000,0.208250,USD,0.91675216,,,1.49,"EUR",0.29,USD,,,,,,,,,,,,
+Dividend (Dividend manufactured payment),2024-11-12 12:19:54,US00123Q1040,AGNC,"AGNC Investment",,,37.9396590000,0.102000,USD,0.94060609,,,3.64,"EUR",0.68,USD,,,,,,,,,,,,
+Dividend (Dividend manufactured payment),2024-11-15 17:08:53,US56035L1044,MAIN,"Main Street Capital",,,7.8045760000,0.208250,USD,0.94751566,,,1.54,"EUR",0.29,USD,,,,,,,,,,,,
+Market sell,2025-04-07 16:27:01,US02209S1033,MO,"Altria",,EOF000000000000031,0.1695360000,55.4200000000,USD,1.09252152,0.95,"EUR",8.59,"EUR",,,,,,,,,0.01,"EUR",,
+Dividend adjustment,2025-06-13 10:54:00,,,,"2024 US dividends withholding tax adjustment",00000000-0000-0000-0000-000000000013,,,,,,,5.36,"EUR",,,,,,,,,,,,
+Stock distribution,2025-08-20 12:40:26,US64361Q1013,VNOM,"Viper Energy",,EOF000000000000032,15.9131927200,0E-10,USD,,,"EUR",0.00,"EUR",,,,,,,,,,,,
+ADR Fee,2025-11-06 07:58:58,,Baidu,,,,6.00000000,-0.02000000,USD,0.87002700,,,-0.12,,,,,,,,,,,,2025-11-05,-0.10
+Withdrawal,2025-12-05 00:05:21,,,,,00000000-0000-0000-0000-000000000014,,,,,,,-5.00,"EUR",,,,,,,,,,,,
+Withdrawal,2025-12-05 19:29:58,,,,,00000000-0000-0000-0000-000000000015,,,,,,,-5.00,"EUR",,,,,,,,,,,,
+Withdrawal,2025-12-13 03:04:22,,,,,00000000-0000-0000-0000-000000000016,,,,,,,-5.00,"EUR",,,,,,,,,,,,
+Market sell,2025-08-20 12:40:18,US82983N1081,STR,"Sitio Royalties",,EOF000000000000033,32.7769160000,0E-10,USD,,-597.62,"EUR",0.00,"EUR",,,,,,,,,,,,
