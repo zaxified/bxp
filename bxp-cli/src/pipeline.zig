@@ -239,17 +239,27 @@ fn writeJsonString(out: *Stdout, s: []const u8) !void {
 /// Keys are variable names (owned by config); values are allocated with ctx.alloc.
 /// On expression error the variable is stored as empty string.
 /// In debug mode, every error is printed before being suppressed.
+/// Saves and restores ctx.error_detail so the caller's detail buffer is unaffected.
 fn evalAllVars(
     schema: std.StringHashMap([]const u8),
-    ctx: *const expr_mod.Context,
+    ctx: *expr_mod.Context,
     out: Output,
 ) !std.StringHashMap([]const u8) {
     var vars = std.StringHashMap([]const u8).init(ctx.alloc);
+    var detail: []const u8 = "";
+    const saved_detail = ctx.error_detail;
+    ctx.error_detail = &detail;
+    defer ctx.error_detail = saved_detail;
     var it = schema.iterator();
     while (it.next()) |e| {
+        detail = "";
         const val = expr_mod.evalString(e.value_ptr.*, ctx) catch |err| blk: {
             if (out.debug) {
-                out.writer.print("[expr error] {s} = \"{s}\": {s}\n  fields:", .{ e.key_ptr.*, e.value_ptr.*, @errorName(err) }) catch {};
+                if (detail.len > 0) {
+                    out.writer.print("[expr error] {s} = \"{s}\": {s} ({s})\n  fields:", .{ e.key_ptr.*, e.value_ptr.*, @errorName(err), detail }) catch {};
+                } else {
+                    out.writer.print("[expr error] {s} = \"{s}\": {s}\n  fields:", .{ e.key_ptr.*, e.value_ptr.*, @errorName(err) }) catch {};
+                }
                 for (ctx.fields) |f| {
                     out.writer.print(" \"{s}\"", .{f}) catch {};
                 }
@@ -517,7 +527,8 @@ pub fn processBroker(
         for (all_rows.items) |fields| {
             _ = line_arena.reset(.retain_capacity);
 
-            const row_ctx = expr_mod.Context{
+            var row_detail: []const u8 = "";
+            var row_ctx = expr_mod.Context{
                 .fields = fields,
                 .col_index = &col_index,
                 .quote_out = bc.csv_text_quote_out,
@@ -525,6 +536,7 @@ pub fn processBroker(
                 .lookup_table = lookup_table_ptr,
                 .alloc = line_alloc,
                 .decimal_sep_in = bc.csv_decimal_separator_in,
+                .error_detail = &row_detail,
             };
 
             // Evaluate all input_schema variables for this row.
@@ -534,9 +546,14 @@ pub fn processBroker(
             const rules = bc.row_rules orelse &.{};
             var rule_matched = false;
             for (rules) |rule| {
+                row_detail = "";
                 const when_val = expr_mod.eval(rule.when, &row_ctx) catch |err| {
                     if (out.debug) {
-                        out.writer.print("[row_rules when error] \"{s}\": {s}\n", .{ rule.when, @errorName(err) }) catch {};
+                        if (row_detail.len > 0) {
+                            out.writer.print("[row_rules when error] \"{s}\": {s} ({s})\n", .{ rule.when, @errorName(err), row_detail }) catch {};
+                        } else {
+                            out.writer.print("[row_rules when error] \"{s}\": {s}\n", .{ rule.when, @errorName(err) }) catch {};
+                        }
                         out.writer.flush() catch {};
                     }
                     continue;
@@ -551,9 +568,14 @@ pub fn processBroker(
                     while (base_it.next()) |e| try merged.put(e.key_ptr.*, e.value_ptr.*);
                     var ov_it = row_override.iterator();
                     while (ov_it.next()) |e| {
+                        row_detail = "";
                         const val = expr_mod.evalString(e.value_ptr.*, &row_ctx) catch |err| blk: {
                             if (out.debug) {
-                                out.writer.print("[row_rules error] {s} = \"{s}\": {s}\n", .{ e.key_ptr.*, e.value_ptr.*, @errorName(err) }) catch {};
+                                if (row_detail.len > 0) {
+                                    out.writer.print("[row_rules error] {s} = \"{s}\": {s} ({s})\n", .{ e.key_ptr.*, e.value_ptr.*, @errorName(err), row_detail }) catch {};
+                                } else {
+                                    out.writer.print("[row_rules error] {s} = \"{s}\": {s}\n", .{ e.key_ptr.*, e.value_ptr.*, @errorName(err) }) catch {};
+                                }
                                 out.writer.flush() catch {};
                             }
                             break :blk "";

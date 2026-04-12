@@ -136,58 +136,58 @@ pub const BrokerConfig = struct {
 
     /// Validates the structural integrity of this template configuration.
     /// Prints a descriptive error to writer and returns error.InvalidConfig on the first violation.
-    pub fn validate(self: *const BrokerConfig, template_id: []const u8, writer: anytype) !void {
+    pub fn validate(self: *const BrokerConfig, template_id: []const u8, config_path: []const u8, writer: anytype) !void {
         if (self.data_dir.len == 0) {
-            try writer.print("error: template '{s}': data_dir must not be empty\n", .{template_id});
+            try writer.print("---\n# {s}: config error: template '{s}': data_dir must not be empty\n", .{ config_path, template_id });
             return error.InvalidConfig;
         }
         if (self.file_pattern_in.len == 0) {
-            try writer.print("error: template '{s}': file_pattern_in must not be empty (use \".csv\" to process all CSV files)\n", .{template_id});
+            try writer.print("---\n# {s}: config error: template '{s}': file_pattern_in must not be empty (use \".csv\" to process all CSV files)\n", .{ config_path, template_id });
             return error.InvalidConfig;
         }
         if (self.file_pattern_out.len == 0) {
-            try writer.print("error: template '{s}': file_pattern_out must not be empty\n", .{template_id});
+            try writer.print("---\n# {s}: config error: template '{s}': file_pattern_out must not be empty\n", .{ config_path, template_id });
             return error.InvalidConfig;
         }
         if (self.input_schema.count() == 0) {
-            try writer.print("error: template '{s}': input_schema must not be empty\n", .{template_id});
+            try writer.print("---\n# {s}: config error: template '{s}': input_schema must not be empty\n", .{ config_path, template_id });
             return error.InvalidConfig;
         }
         {
             var it = self.input_schema.iterator();
             while (it.next()) |e| {
                 if (e.key_ptr.*.len == 0 or e.key_ptr.*[0] != '$') {
-                    try writer.print("error: template '{s}': input_schema key '{s}' must start with '$'\n", .{ template_id, e.key_ptr.* });
+                    try writer.print("---\n# {s}: config error: template '{s}': input_schema key '{s}' must start with '$'\n", .{ config_path, template_id, e.key_ptr.* });
                     return error.InvalidConfig;
                 }
             }
         }
         if (self.output_schema.items.len == 0) {
-            try writer.print("error: template '{s}': output_schema must not be empty\n", .{template_id});
+            try writer.print("---\n# {s}: config error: template '{s}': output_schema must not be empty\n", .{ config_path, template_id });
             return error.InvalidConfig;
         }
         for (self.output_schema.items) |col| {
             if (col.header.len == 0) {
-                try writer.print("error: template '{s}': output_schema header must not be empty\n", .{template_id});
+                try writer.print("---\n# {s}: config error: template '{s}': output_schema header must not be empty\n", .{ config_path, template_id });
                 return error.InvalidConfig;
             }
             if (col.variable.len == 0 or col.variable[0] != '$') {
-                try writer.print("error: template '{s}': output_schema variable '{s}' must start with '$'\n", .{ template_id, col.variable });
+                try writer.print("---\n# {s}: config error: template '{s}': output_schema variable '{s}' must start with '$'\n", .{ config_path, template_id, col.variable });
                 return error.InvalidConfig;
             }
         }
         if (self.date_filter_from_filename and !self.input_schema.contains("$date")) {
-            try writer.print("error: template '{s}': date_filter_from_filename requires '$date' in input_schema\n", .{template_id});
+            try writer.print("---\n# {s}: config error: template '{s}': date_filter_from_filename requires '$date' in input_schema\n", .{ config_path, template_id });
             return error.InvalidConfig;
         }
         if (self.row_rules_debug_missing and self.row_rules == null) {
-            try writer.print("error: template '{s}': row_rules_debug_missing is true but row_rules is not defined\n", .{template_id});
+            try writer.print("---\n# {s}: config error: template '{s}': row_rules_debug_missing is true but row_rules is not defined\n", .{ config_path, template_id });
             return error.InvalidConfig;
         }
         if (self.row_rules) |rules| {
             for (rules) |rule| {
                 if (rule.when.len == 0) {
-                    try writer.print("error: template '{s}': row_rules entry has empty 'when'\n", .{template_id});
+                    try writer.print("---\n# {s}: config error: template '{s}': row_rules entry has empty 'when'\n", .{ config_path, template_id });
                     return error.InvalidConfig;
                 }
             }
@@ -200,8 +200,8 @@ pub const BrokerConfig = struct {
                 for (rule.rows) |row_override| {
                     if (!row_override.contains(col.variable)) {
                         try writer.print(
-                            "error: template '{s}': '{s}' is not in input_schema and not set by all row_rules rows\n",
-                            .{ template_id, col.variable });
+                            "---\n# {s}: config error: template '{s}': '{s}' is not in input_schema and not set by all row_rules rows\n",
+                            .{ config_path, template_id, col.variable });
                         return error.InvalidConfig;
                     }
                 }
@@ -209,22 +209,22 @@ pub const BrokerConfig = struct {
         }
         if (self.csv_delimiter_in == self.csv_decimal_separator_in) {
             try writer.print(
-                "error: template '{s}': csv_delimiter_in and csv_decimal_separator_in must be different characters\n",
-                .{template_id},
+                "---\n# {s}: config error: template '{s}': csv_delimiter_in and csv_decimal_separator_in must be different characters\n",
+                .{ config_path, template_id },
             );
             return error.InvalidConfig;
         }
         if (self.pre_pass) |pp| {
             if (pp.when.len == 0) {
-                try writer.print("error: template '{s}': pre_pass.when must not be empty\n", .{template_id});
+                try writer.print("---\n# {s}: config error: template '{s}': pre_pass.when must not be empty\n", .{ config_path, template_id });
                 return error.InvalidConfig;
             }
             if (pp.key.len == 0) {
-                try writer.print("error: template '{s}': pre_pass.key must not be empty\n", .{template_id});
+                try writer.print("---\n# {s}: config error: template '{s}': pre_pass.key must not be empty\n", .{ config_path, template_id });
                 return error.InvalidConfig;
             }
             if (pp.values.count() == 0) {
-                try writer.print("error: template '{s}': pre_pass.values must not be empty\n", .{template_id});
+                try writer.print("---\n# {s}: config error: template '{s}': pre_pass.values must not be empty\n", .{ config_path, template_id });
                 return error.InvalidConfig;
             }
         }
@@ -232,11 +232,11 @@ pub const BrokerConfig = struct {
             var it = self.ticker_map.iterator();
             while (it.next()) |e| {
                 if (e.key_ptr.*.len == 0) {
-                    try writer.print("error: template '{s}': ticker_map key must not be empty\n", .{template_id});
+                    try writer.print("---\n# {s}: config error: template '{s}': ticker_map key must not be empty\n", .{ config_path, template_id });
                     return error.InvalidConfig;
                 }
                 if (e.value_ptr.*.len == 0) {
-                    try writer.print("error: template '{s}': ticker_map value for '{s}' must not be empty\n", .{ template_id, e.key_ptr.* });
+                    try writer.print("---\n# {s}: config error: template '{s}': ticker_map value for '{s}' must not be empty\n", .{ config_path, template_id, e.key_ptr.* });
                     return error.InvalidConfig;
                 }
             }
@@ -327,41 +327,185 @@ pub const Config = struct {
 };
 
 
+/// Maps a std.json parse error to a human-readable description.
+fn jsonErrorDesc(err: anyerror) []const u8 {
+    return switch (err) {
+        error.DuplicateField     => "duplicate key in object — remove or rename the repeated key",
+        error.SyntaxError        => "unexpected character — check for missing quotes, commas, or brackets",
+        error.UnexpectedToken    => "unexpected token — check for misplaced brackets or missing separators",
+        error.InvalidCharacter   => "invalid character in value",
+        error.Overflow           => "number value out of range",
+        error.InvalidNumber      => "value is not a valid number",
+        error.InvalidUtf8        => "invalid UTF-8 sequence in string",
+        error.InvalidUnicodeHexSymbol => "invalid \\uXXXX escape sequence",
+        error.InvalidEnumTag     => "value does not match any expected tag",
+        else                     => @errorName(err),
+    };
+}
+
+/// Scans preprocessed JSON `content` to find the first duplicate object key.
+/// Tracks object/array nesting to distinguish keys from values.
+/// On success, prints a diagnostic with file, line, key name and source snippet.
+/// Returns true if a duplicate was found and printed.
+fn diagDuplicateKey(
+    alloc: std.mem.Allocator,
+    content: []const u8,
+    raw: []const u8,
+    config_path: []const u8,
+) bool {
+    var scanner = std.json.Scanner.initCompleteInput(alloc, content);
+    defer scanner.deinit();
+    var diag: std.json.Diagnostics = .{};
+    scanner.enableDiagnostics(&diag);
+
+    // Per-level state: is_object=true → track keys; is_object=false → array (no keys).
+    const Level = struct {
+        is_object: bool,
+        expect_key: bool,               // true when the next string token is an object key
+        keys: std.StringHashMap(void),  // keys seen at this object level
+    };
+    var stack: std.ArrayList(Level) = .empty;
+    defer {
+        for (stack.items) |*lvl| lvl.keys.deinit();
+        stack.deinit(alloc);
+    }
+
+    while (true) {
+        const tok = scanner.next() catch break;
+        switch (tok) {
+            .object_begin => stack.append(alloc, .{
+                .is_object  = true,
+                .expect_key = true,
+                .keys       = std.StringHashMap(void).init(alloc),
+            }) catch return false,
+
+            .array_begin => stack.append(alloc, .{
+                .is_object  = false,
+                .expect_key = false,
+                .keys       = std.StringHashMap(void).init(alloc),
+            }) catch return false,
+
+            .object_end, .array_end => {
+                if (stack.items.len > 0) {
+                    var top = stack.pop().?;
+                    top.keys.deinit();
+                }
+                // The container that just closed was a value in its parent object;
+                // the next token in that parent is a key (or closing '}').
+                if (stack.items.len > 0 and stack.items[stack.items.len - 1].is_object) {
+                    stack.items[stack.items.len - 1].expect_key = true;
+                }
+            },
+
+            .string => |s| {
+                if (stack.items.len == 0) continue;
+                const top = &stack.items[stack.items.len - 1];
+                if (!top.is_object) continue; // array element, not a key
+                if (top.expect_key) {
+                    // This string token is an object key.
+                    // diag position is after the closing '"'; adjust back to the opening '"'.
+                    const col_end = diag.getColumn();
+                    const ln      = diag.getLine();
+                    const caret_col: u64 = if (col_end >= s.len + 2) col_end - s.len - 2 else 1;
+
+                    if (top.keys.contains(s)) {
+                        // Found the first duplicate.
+                        std.debug.print(
+                            "# {s}:{d}:{d}: JSON error (line {d}, pos {d}) — duplicate key '{s}' — remove or rename the repeated key\n",
+                            .{ config_path, ln, caret_col, ln, caret_col, s },
+                        );
+                        var line_iter = std.mem.splitScalar(u8, raw, '\n');
+                        var cur: u64 = 1;
+                        while (line_iter.next()) |line_content| : (cur += 1) {
+                            if (cur == ln) {
+                                const trimmed = std.mem.trimRight(u8, line_content, "\r");
+                                std.debug.print("#   {s}\n#   ", .{trimmed});
+                                var c: u64 = 1;
+                                while (c < caret_col) : (c += 1) std.debug.print(" ", .{});
+                                std.debug.print("^\n", .{});
+                                break;
+                            }
+                        }
+                        return true;
+                    }
+                    const key_copy = alloc.dupe(u8, s) catch continue;
+                    top.keys.put(key_copy, {}) catch {};
+                    top.expect_key = false; // next token at this level is the value
+                } else {
+                    // String value; the next token at this level is a key.
+                    top.expect_key = true;
+                }
+            },
+
+            // Scalar values: next token in the same object is a key.
+            .number, .true, .false, .null => {
+                if (stack.items.len > 0 and stack.items[stack.items.len - 1].is_object) {
+                    stack.items[stack.items.len - 1].expect_key = true;
+                }
+            },
+
+            .end_of_document => break,
+            else => {},
+        }
+    }
+    return false;
+}
+
 /// Scans preprocessed JSON `content` to locate a syntax error and prints a diagnostic
 /// to stderr with file, line, column and the offending line with a caret marker.
 /// `raw` is the original JSON5 source — its line numbers match `content` because the
 /// preprocessor preserves newlines for single-line comments and unquoted keys.
+/// For semantic errors (e.g. DuplicateField) that pass the scanner, falls back to a
+/// description without position.
 fn diagJsonError(
     alloc: std.mem.Allocator,
     content: []const u8,
     raw: []const u8,
     config_path: []const u8,
+    err: anyerror,
 ) void {
+    std.debug.print("---\n", .{});
     var scanner = std.json.Scanner.initCompleteInput(alloc, content);
     defer scanner.deinit();
     var diag: std.json.Diagnostics = .{};
     scanner.enableDiagnostics(&diag);
+    var found_pos = false;
     while (true) {
-        const tok = scanner.next() catch {
-            const ln = diag.getLine();   // 1-based
+        const tok = scanner.next() catch |scan_err| {
+            found_pos = true;
+            const ln = diag.getLine();    // 1-based
             const col = diag.getColumn(); // 1-based
-            std.debug.print("{s}:{d}:{d}: JSON syntax error\n", .{ config_path, ln, col });
+            // Use the scanner's own error for the description — it matches the shown position.
+            // The `err` from parseFromSlice is only used in the no-position fallback below.
+            std.debug.print("# {s}:{d}:{d}: JSON error (line {d}, pos {d}) — {s}\n", .{ config_path, ln, col, ln, col, jsonErrorDesc(scan_err) });
             // Show the original source line (line numbers match content for typical JSON5)
             var line_iter = std.mem.splitScalar(u8, raw, '\n');
             var cur: u64 = 1;
             while (line_iter.next()) |line_content| : (cur += 1) {
                 if (cur == ln) {
                     const trimmed = std.mem.trimRight(u8, line_content, "\r");
-                    std.debug.print("  {s}\n  ", .{trimmed});
+                    std.debug.print("#   {s}\n#   ", .{trimmed});
                     var c: u64 = 1;
                     while (c < col) : (c += 1) std.debug.print(" ", .{});
                     std.debug.print("^\n", .{});
                     break;
                 }
             }
-            return;
+            break;
         };
-        if (tok == .end_of_document) return;
+        if (tok == .end_of_document) break;
+    }
+    if (!found_pos) {
+        // Semantic error — scanner found no position.
+        // For DuplicateField, scan again to find key name and location.
+        if (err == error.DuplicateField) {
+            if (!diagDuplicateKey(alloc, content, raw, config_path)) {
+                // Fallback if duplicate scan fails (should not happen).
+                std.debug.print("# {s}: JSON error — {s}\n", .{ config_path, jsonErrorDesc(err) });
+            }
+        } else {
+            std.debug.print("# {s}: JSON error — {s}\n", .{ config_path, jsonErrorDesc(err) });
+        }
     }
 }
 
@@ -389,7 +533,7 @@ pub fn load(alloc: std.mem.Allocator, config_path: []const u8) !Config {
     defer alloc.free(content);
 
     const parsed = std.json.parseFromSlice(std.json.Value, alloc, content, .{}) catch |err| {
-        diagJsonError(alloc, content, raw, config_path);
+        diagJsonError(alloc, content, raw, config_path, err);
         return err;
     };
     defer parsed.deinit();
@@ -674,7 +818,10 @@ pub fn load(alloc: std.mem.Allocator, config_path: []const u8) !Config {
                     }
                 }
 
-                if (output_schema == null) return error.MissingOutputSchema;
+                if (output_schema == null) {
+                    std.debug.print("---\n# {s}: config error: template '{s}': output_schema is required\n", .{ config_path, b_entry.key_ptr.* });
+                    return error.MissingOutputSchema;
+                }
 
                 // Store the completed broker entry under its ID key.
                 try config.brokers.put(

@@ -112,7 +112,7 @@ pub fn main() !void {
     const stats = run(args, out, fresh, alloc) catch |err| {
         if (err == error.Fatal) std.process.exit(1); // message already printed
         if (debug) return err; // propagate — Zig prints trace
-        out.fatal("fatal error: unexpected error: {s}\n", .{@errorName(err)});
+        out.fatal("---\n# fatal error: {s}\n", .{@errorName(err)});
         std.process.exit(1);
     };
 
@@ -165,7 +165,14 @@ fn run(args: [][:0]u8, out: Output, fresh: bool, alloc: std.mem.Allocator) !Sect
         return error.Fatal;
     };
 
-    var cfg = try config_mod.load(alloc, config_path);
+    var cfg = config_mod.load(alloc, config_path) catch {
+        // diagJsonError already printed the diagnostic to stderr.
+        out.writer.flush() catch {};
+        overall.has_fatal = true;
+        out.info("\n=== overall summary ===\n", .{});
+        out.summary(overall);
+        return error.Fatal;
+    };
     defer cfg.deinit();
 
     // Validate all templates before processing any data.
@@ -181,7 +188,7 @@ fn run(args: [][:0]u8, out: Output, fresh: bool, alloc: std.mem.Allocator) !Sect
         while (it.next()) |entry| {
             // validate() prints its own error message directly to out.writer.
             // Quiet mode does not suppress this message (config errors are fatal startup failures).
-            entry.value_ptr.validate(entry.key_ptr.*, out.writer) catch {
+            entry.value_ptr.validate(entry.key_ptr.*, config_path, out.writer) catch {
                 out.writer.flush() catch {};
                 overall.has_fatal = true;
                 out.info("\n=== overall summary ===\n", .{});

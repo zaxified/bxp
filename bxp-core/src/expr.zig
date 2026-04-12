@@ -104,6 +104,10 @@ pub const Context = struct {
     /// Output quote character resolved by ''' in expressions.
     /// 0 = none (''' produces ""), '\'' = single, '"' = double.
     quote_out: u8 = 0,
+    /// When non-null, the evaluator writes a human-readable description of the last
+    /// error here before returning the error.  String is allocated with ctx.alloc.
+    /// Caller sets this and resets the pointed value to "" before each eval call.
+    error_detail: ?*[]const u8 = null,
 
     /// Returns the field value at idx, trimmed of surrounding spaces.
     /// Returns "" when idx is out of range.
@@ -161,6 +165,9 @@ const Token = struct {
 const Tokenizer = struct {
     src: []const u8,
     pos: usize,
+    /// Set before returning error.UnexpectedChar so the caller can build a detail message.
+    error_char: u8 = 0,
+    error_pos: usize = 0, // 0-based position of the bad character in src
 
     fn init(src: []const u8) Tokenizer {
         return .{ .src = src, .pos = 0 };
@@ -241,6 +248,8 @@ const Tokenizer = struct {
                     self.pos += 1;
                     break :blk Token{ .kind = .neq, .text = "!=" };
                 }
+                self.error_char = '!';
+                self.error_pos = self.pos - 1; // self.pos was already incremented above
                 return error.UnexpectedChar;
             },
             '<' => blk: {
@@ -257,7 +266,11 @@ const Tokenizer = struct {
                 }
                 break :blk Token{ .kind = .gt, .text = ">" };
             },
-            else => return error.UnexpectedChar,
+            else => {
+                self.error_char = c;
+                self.error_pos = self.pos - 1; // self.pos was already incremented above
+                return error.UnexpectedChar;
+            },
         };
     }
 
@@ -276,9 +289,27 @@ const Tokenizer = struct {
 const Parser = struct {
     tok: Tokenizer,
     ctx: *const Context,
+    last_field_name: []const u8 = "",
 
     fn init(src: []const u8, ctx: *const Context) Parser {
         return .{ .tok = Tokenizer.init(src), .ctx = ctx };
+    }
+
+    /// Writes a formatted description to ctx.error_detail (if set by caller).
+    /// Writing through the pointer is safe even with *const Context because
+    /// we modify the pointed-to value, not the Context field itself.
+    fn setDetail(self: *const Parser, comptime fmt: []const u8, args: anytype) void {
+        const d = self.ctx.error_detail orelse return;
+        d.* = std.fmt.allocPrint(self.ctx.alloc, fmt, args) catch return;
+    }
+
+    /// Convenience wrapper for NotANumber — includes field name when known.
+    fn setNotANumber(self: *Parser, s: []const u8) void {
+        if (self.last_field_name.len > 0) {
+            self.setDetail("not a number: \"{s}\" (in [{s}])", .{ s, self.last_field_name });
+        } else {
+            self.setDetail("not a number: \"{s}\"", .{s});
+        }
     }
 
     // expr := or_expr
@@ -355,8 +386,14 @@ const Parser = struct {
             if (t.kind != .plus and t.kind != .minus) break;
             _ = try self.tok.next();
             const right = try self.parseCat();
-            const l = try left.toNumber();
-            const r = try right.toNumber();
+            const l = left.toNumber() catch |err| {
+                switch (left) { .string => |s| self.setNotANumber(s), else => {} }
+                return err;
+            };
+            const r = right.toNumber() catch |err| {
+                switch (right) { .string => |s| self.setNotANumber(s), else => {} }
+                return err;
+            };
             left = Value{ .number = if (t.kind == .plus) l + r else l - r };
         }
         return left;
@@ -385,8 +422,14 @@ const Parser = struct {
             if (t.kind != .star and t.kind != .slash) break;
             _ = try self.tok.next();
             const right = try self.parseUnary();
-            const l = try left.toNumber();
-            const r = try right.toNumber();
+            const l = left.toNumber() catch |err| {
+                switch (left) { .string => |s| self.setNotANumber(s), else => {} }
+                return err;
+            };
+            const r = right.toNumber() catch |err| {
+                switch (right) { .string => |s| self.setNotANumber(s), else => {} }
+                return err;
+            };
             if (t.kind == .slash) {
                 // Division by zero silently produces an empty string (no warning, no summary entry).
                 if (r == 0) {
@@ -407,7 +450,11 @@ const Parser = struct {
         if (t.kind == .minus) {
             _ = try self.tok.next();
             const v = try self.parseUnary();
-            return Value{ .number = -(try v.toNumber()) };
+            const n = v.toNumber() catch |err| {
+                switch (v) { .string => |s| self.setNotANumber(s), else => {} }
+                return err;
+            };
+            return Value{ .number = -n };
         }
         return self.parsePrimary();
     }
@@ -431,7 +478,14 @@ const Parser = struct {
                 return v;
             },
             .ident => return self.evalCall(t.text),
-            else => return error.UnexpectedToken,
+            else => {
+                if (t.kind == .eof) {
+                    self.setDetail("unexpected end of expression — expression may be incomplete", .{});
+                } else {
+                    self.setDetail("unexpected token '{s}' (kind: {s})", .{ t.text, @tagName(t.kind) });
+                }
+                return error.UnexpectedToken;
+            },
         }
     }
 
@@ -444,6 +498,8 @@ const Parser = struct {
             self.ctx.field(idx - 1) // 1-based → 0-based
         else |_|
             self.ctx.fieldByName(name);
+
+        self.last_field_name = name;
 
         if (self.ctx.decimal_sep_in != '.' and
             std.mem.indexOfScalar(u8, raw, self.ctx.decimal_sep_in) != null and
@@ -536,23 +592,48 @@ const Parser = struct {
 
         const a = args.items;
 
-        if (std.ascii.eqlIgnoreCase(name, "ABS")) return builtinAbs(a);
-        if (std.ascii.eqlIgnoreCase(name, "FIELDS")) return builtinFields(a, self.ctx);
+        if (std.ascii.eqlIgnoreCase(name, "ABS")) return builtinAbs(a) catch |err| {
+            if (a.len >= 1) switch (a[0]) { .string => |s| self.setNotANumber(s), else => {} };
+            return err;
+        };
+        if (std.ascii.eqlIgnoreCase(name, "FIELDS")) return builtinFields(a, self.ctx) catch |err| {
+            if (a.len >= 1) switch (a[0]) { .string => |s| self.setNotANumber(s), else => {} };
+            return err;
+        };
         if (std.ascii.eqlIgnoreCase(name, "PRICE_VALUE")) return builtinPriceValue(a);
         if (std.ascii.eqlIgnoreCase(name, "PRICE_CURRENCY")) return builtinPriceCurrency(a);
         if (std.ascii.eqlIgnoreCase(name, "TICKER")) return builtinTicker(a, self.ctx);
-        if (std.ascii.eqlIgnoreCase(name, "DATE_CONVERT")) return builtinDateConvert(a, self.ctx.alloc);
+        if (std.ascii.eqlIgnoreCase(name, "DATE_CONVERT")) return builtinDateConvert(a, self.ctx.alloc) catch |err| {
+            if (a.len >= 1) switch (a[0]) {
+                .string => |s| self.setDetail("DATE_CONVERT: {s} — input \"{s}\"", .{ @errorName(err), s }),
+                else => {},
+            };
+            return err;
+        };
         if (std.ascii.eqlIgnoreCase(name, "LOOKUP")) return builtinLookup(a, self.ctx);
-        if (std.ascii.eqlIgnoreCase(name, "SPLIT_PART")) return builtinSplitPart(a);
+        if (std.ascii.eqlIgnoreCase(name, "SPLIT_PART")) return builtinSplitPart(a) catch |err| {
+            if (a.len >= 3) switch (a[2]) { .string => |s| self.setNotANumber(s), else => {} };
+            return err;
+        };
         if (std.ascii.eqlIgnoreCase(name, "CONTAINS")) return builtinContains(a);
         if (std.ascii.eqlIgnoreCase(name, "REPLACE")) return builtinReplace(a, self.ctx.alloc);
         if (std.ascii.eqlIgnoreCase(name, "NOW")) return builtinNow(a, self.ctx.alloc);
         if (std.ascii.eqlIgnoreCase(name, "TRIM")) return builtinTrim(a);
-        if (std.ascii.eqlIgnoreCase(name, "ROUND")) return builtinRound(a);
-        if (std.ascii.eqlIgnoreCase(name, "FLOOR")) return builtinFloor(a);
-        if (std.ascii.eqlIgnoreCase(name, "CEILING")) return builtinCeiling(a);
+        if (std.ascii.eqlIgnoreCase(name, "ROUND")) return builtinRound(a) catch |err| {
+            if (a.len >= 1) switch (a[0]) { .string => |s| self.setNotANumber(s), else => {} };
+            return err;
+        };
+        if (std.ascii.eqlIgnoreCase(name, "FLOOR")) return builtinFloor(a) catch |err| {
+            if (a.len >= 1) switch (a[0]) { .string => |s| self.setNotANumber(s), else => {} };
+            return err;
+        };
+        if (std.ascii.eqlIgnoreCase(name, "CEILING")) return builtinCeiling(a) catch |err| {
+            if (a.len >= 1) switch (a[0]) { .string => |s| self.setNotANumber(s), else => {} };
+            return err;
+        };
         if (std.ascii.eqlIgnoreCase(name, "RAND")) return builtinRand(a);
 
+        self.setDetail("unknown function '{s}' — check function name spelling", .{name});
         return error.UnknownFunction;
     }
 };
@@ -895,7 +976,17 @@ fn normalizeMonthAbbrev(s: []const u8, alloc: std.mem.Allocator) ![]const u8 {
 pub fn eval(src: []const u8, ctx: *const Context) !Value {
     if (src.len == 0) return Value{ .string = "" };
     var p = Parser.init(src, ctx);
-    return p.parseExpr();
+    return p.parseExpr() catch |err| {
+        // If the tokenizer recorded the bad character, surface it as detail.
+        // Only set detail when it hasn't already been written by a deeper setDetail call.
+        if (p.tok.error_char != 0) {
+            const d = ctx.error_detail orelse return err;
+            if (d.len == 0) {
+                p.setDetail("unexpected character '{c}' at pos {d}", .{ p.tok.error_char, p.tok.error_pos + 1 });
+            }
+        }
+        return err;
+    };
 }
 
 /// Evaluates src and returns the result as a string allocated with ctx.alloc.
