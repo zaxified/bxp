@@ -1,4 +1,4 @@
-/// Processing pipeline for bxp-cli: per-broker file conversion and xlsx pre-pass.
+/// Processing pipeline for bxp-cli: per-template file conversion and xlsx pre-pass.
 ///
 /// Owns the core data-processing logic: reading input files, evaluating expressions,
 /// applying row rules, and writing output.  CLI argument parsing and config loading
@@ -24,14 +24,14 @@ pub const Stdout = std.Io.Writer;
 /// per-template processing, or overall).
 pub const SectionStats = struct {
     warnings: u32 = 0,
-    /// Number of warnings emitted because a CSV input had zero data rows.
-    warning_empty_csv: u32 = 0,
     has_fatal: bool = false,
+    /// Wall-clock nanoseconds elapsed during this section (set by the owning function).
+    time_ns: u64 = 0,
 
     pub fn merge(self: *SectionStats, other: SectionStats) void {
         self.warnings += other.warnings;
-        self.warning_empty_csv += other.warning_empty_csv;
         if (other.has_fatal) self.has_fatal = true;
+        self.time_ns += other.time_ns;
     }
 };
 
@@ -63,17 +63,23 @@ pub const Output = struct {
         self.writer.flush() catch {};
     }
 
-    /// Print a processing summary line. Suppressed in --quiet mode.
+    /// Print a per-section summary line. Suppressed in --quiet mode.
     pub fn summary(self: Output, stats: SectionStats) void {
         if (self.quiet) return;
         const errors: u32 = if (stats.has_fatal) 1 else 0;
-        if (stats.warnings == 0) {
-            self.writer.print("  Summary: 0 warnings, {d} error(s)\n", .{errors}) catch {};
-        } else if (stats.warning_empty_csv > 0) {
-            self.writer.print("  Summary: {d} warning(s) ({d}x empty_csv), {d} error(s)\n", .{ stats.warnings, stats.warning_empty_csv, errors }) catch {};
-        } else {
-            self.writer.print("  Summary: {d} warning(s), {d} error(s)\n", .{ stats.warnings, errors }) catch {};
-        }
+        const secs = stats.time_ns / 1_000_000_000;
+        const ms = (stats.time_ns % 1_000_000_000) / 1_000_000;
+        self.writer.print("summary: errors:{d} warnings:{d} time:{d}.{d:0>3}s\n", .{ errors, stats.warnings, secs, ms }) catch {};
+        self.writer.flush() catch {};
+    }
+
+    /// Print the overall summary line (no leading "summary:" label). Suppressed in --quiet mode.
+    pub fn overallLine(self: Output, stats: SectionStats) void {
+        if (self.quiet) return;
+        const errors: u32 = if (stats.has_fatal) 1 else 0;
+        const secs = stats.time_ns / 1_000_000_000;
+        const ms = (stats.time_ns % 1_000_000_000) / 1_000_000;
+        self.writer.print("errors:{d} warnings:{d} time:{d}.{d:0>3}s\n", .{ errors, stats.warnings, secs, ms }) catch {};
         self.writer.flush() catch {};
     }
 };
@@ -273,7 +279,7 @@ fn evalAllVars(
     return vars;
 }
 
-/// Processes all matching input files in dir_path for the given broker.
+/// Processes all matching input files in dir_path for the given template.
 /// For each file:
 ///   1. Extracts optional date range from the filename.
 ///   2. Reads and parses input (CSV or JSON); builds col_index from the header/keys.
@@ -289,14 +295,16 @@ pub fn processBroker(
     alloc: std.mem.Allocator,
 ) !SectionStats {
     var stats = SectionStats{};
+    var timer = try std.time.Timer.start();
 
-    out.info("\n=== broker: {s} ===\n", .{bid});
+    out.info("\n=== template: {s} ===\n", .{bid});
 
     // Open the data directory; print a clean message if it doesn't exist.
     var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch |err| {
         if (err == error.FileNotFound) {
             out.fatal("error: directory not found: '{s}'\n", .{dir_path});
             stats.has_fatal = true;
+            stats.time_ns = timer.read();
             return stats;
         }
         return err;
@@ -325,7 +333,8 @@ pub fn processBroker(
     }.lessThan);
 
     if (names.items.len == 0) {
-        out.info("No input files for broker '{s}' in '{s}'\n", .{ bid, dir_path });
+        out.info("No input files for template '{s}' in '{s}'\n", .{ bid, dir_path });
+        stats.time_ns = timer.read();
         return stats;
     }
 
@@ -417,15 +426,12 @@ pub fn processBroker(
             }
         }
 
-        // Warn if the file has no data rows.
+        // Warn if the file has no data rows (detail printed only in --debug mode).
         if (all_rows.items.len == 0) {
             stats.warnings += 1;
-            stats.warning_empty_csv += 1;
             if (out.debug) {
                 out.writer.print("warning: no rows in '{s}' (template: {s}, file: {s}/{s})\n", .{ filename, bid, dir_path, filename }) catch {};
                 out.writer.flush() catch {};
-            } else {
-                out.warning("warning: no rows in '{s}'\n", .{filename});
             }
         }
 
@@ -627,6 +633,7 @@ pub fn processBroker(
         try fout.flush();
     }
 
+    stats.time_ns = timer.read();
     return stats;
 }
 
@@ -645,6 +652,7 @@ pub fn xlsxPrePass(
     dir_path_arg: ?[]const u8,
 ) !SectionStats {
     var xlsx_stats = SectionStats{};
+    var timer = try std.time.Timer.start();
 
     var dir_specs = std.StringArrayHashMap(std.array_list.Managed(xlsx_mod.SheetSpec)).init(alloc);
     defer {
@@ -742,12 +750,14 @@ pub fn xlsxPrePass(
             xlsx_mod.xlsxToCsv(alloc, xlsx_file, specs, dir, stem) catch |err| {
                 out.fatal("fatal error: xlsx conversion failed for '{s}': {s}\n", .{ xlsx_name, @errorName(err) });
                 xlsx_stats.has_fatal = true;
+                xlsx_stats.time_ns = timer.read();
                 out.summary(xlsx_stats);
                 return error.Fatal;
             };
         }
     }
 
+    xlsx_stats.time_ns = timer.read();
     out.summary(xlsx_stats);
     return xlsx_stats;
 }

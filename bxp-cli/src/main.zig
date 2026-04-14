@@ -125,6 +125,7 @@ pub fn main() !void {
 /// Returns overall SectionStats; exit code is determined by the caller.
 fn run(args: [][:0]u8, out: Output, fresh: bool, alloc: std.mem.Allocator) !SectionStats {
     var overall = SectionStats{};
+    var timer = try std.time.Timer.start();
 
     // Determine config path from --config before loading.
     var config_path: []const u8 = DEFAULT_CONFIG_PATH;
@@ -148,7 +149,8 @@ fn run(args: [][:0]u8, out: Output, fresh: bool, alloc: std.mem.Allocator) !Sect
         out.fatal("error: --config path contains dangerous characters or too many '../': {s}\n", .{config_path});
         overall.has_fatal = true;
         out.info("\n=== overall summary ===\n", .{});
-        out.summary(overall);
+        overall.time_ns = timer.read();
+        out.overallLine(overall);
         return error.Fatal;
     };
 
@@ -161,7 +163,8 @@ fn run(args: [][:0]u8, out: Output, fresh: bool, alloc: std.mem.Allocator) !Sect
         }
         overall.has_fatal = true;
         out.info("\n=== overall summary ===\n", .{});
-        out.summary(overall);
+        overall.time_ns = timer.read();
+        out.overallLine(overall);
         return error.Fatal;
     };
 
@@ -170,7 +173,8 @@ fn run(args: [][:0]u8, out: Output, fresh: bool, alloc: std.mem.Allocator) !Sect
         out.writer.flush() catch {};
         overall.has_fatal = true;
         out.info("\n=== overall summary ===\n", .{});
-        out.summary(overall);
+        overall.time_ns = timer.read();
+        out.overallLine(overall);
         return error.Fatal;
     };
     defer cfg.deinit();
@@ -180,7 +184,8 @@ fn run(args: [][:0]u8, out: Output, fresh: bool, alloc: std.mem.Allocator) !Sect
         out.fatal("error: {s} defines no conversion_templates\n", .{config_path});
         overall.has_fatal = true;
         out.info("\n=== overall summary ===\n", .{});
-        out.summary(overall);
+        overall.time_ns = timer.read();
+        out.overallLine(overall);
         return error.Fatal;
     }
     {
@@ -192,7 +197,8 @@ fn run(args: [][:0]u8, out: Output, fresh: bool, alloc: std.mem.Allocator) !Sect
                 out.writer.flush() catch {};
                 overall.has_fatal = true;
                 out.info("\n=== overall summary ===\n", .{});
-                out.summary(overall);
+                overall.time_ns = timer.read();
+                out.overallLine(overall);
                 return error.Fatal;
             };
         }
@@ -245,7 +251,8 @@ fn run(args: [][:0]u8, out: Output, fresh: bool, alloc: std.mem.Allocator) !Sect
             out.fatal("error: path argument contains dangerous characters or too many '../': {s}\n", .{p});
             overall.has_fatal = true;
             out.info("\n=== overall summary ===\n", .{});
-            out.summary(overall);
+            overall.time_ns = timer.read();
+            out.overallLine(overall);
             return error.Fatal;
         };
     }
@@ -255,7 +262,8 @@ fn run(args: [][:0]u8, out: Output, fresh: bool, alloc: std.mem.Allocator) !Sect
     if (xlsx_stats.has_fatal) {
         overall.merge(xlsx_stats);
         out.info("\n=== overall summary ===\n", .{});
-        out.summary(overall);
+        overall.time_ns = timer.read();
+        out.overallLine(overall);
         return error.Fatal;
     }
     overall.merge(xlsx_stats);
@@ -266,7 +274,8 @@ fn run(args: [][:0]u8, out: Output, fresh: bool, alloc: std.mem.Allocator) !Sect
             out.fatal("error: template '{s}' is not defined in {s}\n", .{ bid, config_path });
             overall.has_fatal = true;
             out.info("\n=== overall summary ===\n", .{});
-            out.summary(overall);
+            overall.time_ns = timer.read();
+            out.overallLine(overall);
             return error.Fatal;
         };
         const dir_path = dir_path_arg orelse bc.data_dir;
@@ -283,6 +292,7 @@ fn run(args: [][:0]u8, out: Output, fresh: bool, alloc: std.mem.Allocator) !Sect
     }
 
     out.info("\n=== overall summary ===\n", .{});
-    out.summary(overall);
+    overall.time_ns = timer.read();
+    out.overallLine(overall);
     return overall;
 }
