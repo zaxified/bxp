@@ -247,7 +247,7 @@ pub const BrokerConfig = struct {
 /// Top-level configuration loaded from bxp-cli.json.
 pub const Config = struct {
     /// Map from user-defined template key (e.g. "revolutx_to_wealthfolio") to its configuration.
-    brokers: std.StringHashMap(BrokerConfig),
+    brokers: std.StringArrayHashMap(BrokerConfig),
     _alloc: std.mem.Allocator,
 
     /// Releases all heap memory owned by this Config.  Call once when done.
@@ -517,7 +517,7 @@ fn diagJsonError(
 /// Malformed JSON5 → returns an error.
 pub fn load(alloc: std.mem.Allocator, config_path: []const u8) !Config {
     var config = Config{
-        .brokers = std.StringHashMap(BrokerConfig).init(alloc),
+        .brokers = std.StringArrayHashMap(BrokerConfig).init(alloc),
         ._alloc = alloc,
     };
 

@@ -318,6 +318,11 @@ pub fn processBroker(
             try names.append(try alloc.dupe(u8, entry.name));
         }
     }
+    std.mem.sort([]u8, names.items, {}, struct {
+        fn lessThan(_: void, a: []u8, b: []u8) bool {
+            return std.mem.order(u8, a, b) == .lt;
+        }
+    }.lessThan);
 
     if (names.items.len == 0) {
         out.info("No input files for broker '{s}' in '{s}'\n", .{ bid, dir_path });
@@ -641,7 +646,7 @@ pub fn xlsxPrePass(
 ) !SectionStats {
     var xlsx_stats = SectionStats{};
 
-    var dir_specs = std.StringHashMap(std.array_list.Managed(xlsx_mod.SheetSpec)).init(alloc);
+    var dir_specs = std.StringArrayHashMap(std.array_list.Managed(xlsx_mod.SheetSpec)).init(alloc);
     defer {
         var ds_it = dir_specs.iterator();
         while (ds_it.next()) |e| e.value_ptr.deinit();
@@ -691,12 +696,27 @@ pub fn xlsxPrePass(
         };
         defer dir.close();
 
-        var fit = dir.iterate();
-        while (try fit.next()) |entry| {
-            if (entry.kind != .file and entry.kind != .sym_link) continue;
-            if (!std.mem.endsWith(u8, entry.name, ".xlsx")) continue;
+        var xlsx_names = std.array_list.Managed([]u8).init(alloc);
+        defer {
+            for (xlsx_names.items) |n| alloc.free(n);
+            xlsx_names.deinit();
+        }
+        {
+            var fit = dir.iterate();
+            while (try fit.next()) |entry| {
+                if (entry.kind != .file and entry.kind != .sym_link) continue;
+                if (!std.mem.endsWith(u8, entry.name, ".xlsx")) continue;
+                try xlsx_names.append(try alloc.dupe(u8, entry.name));
+            }
+        }
+        std.mem.sort([]u8, xlsx_names.items, {}, struct {
+            fn lessThan(_: void, a: []u8, b: []u8) bool {
+                return std.mem.order(u8, a, b) == .lt;
+            }
+        }.lessThan);
 
-            const stem = entry.name[0 .. entry.name.len - 5];
+        for (xlsx_names.items) |xlsx_name| {
+            const stem = xlsx_name[0 .. xlsx_name.len - 5];
 
             // --fresh: skip xlsx conversion if all expected csvx outputs already exist.
             if (fresh) {
@@ -710,17 +730,17 @@ pub fn xlsxPrePass(
                     };
                 }
                 if (all_exist) {
-                    out.info("  skipping '{s}' (output exists)\n", .{entry.name});
+                    out.info("  skipping '{s}' (output exists)\n", .{xlsx_name});
                     continue;
                 }
             }
 
-            const xlsx_file = try dir.openFile(entry.name, .{});
+            const xlsx_file = try dir.openFile(xlsx_name, .{});
             defer xlsx_file.close();
 
-            out.info("converting '{s}'\n", .{entry.name});
+            out.info("converting '{s}'\n", .{xlsx_name});
             xlsx_mod.xlsxToCsv(alloc, xlsx_file, specs, dir, stem) catch |err| {
-                out.fatal("fatal error: xlsx conversion failed for '{s}': {s}\n", .{ entry.name, @errorName(err) });
+                out.fatal("fatal error: xlsx conversion failed for '{s}': {s}\n", .{ xlsx_name, @errorName(err) });
                 xlsx_stats.has_fatal = true;
                 out.summary(xlsx_stats);
                 return error.Fatal;
