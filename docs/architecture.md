@@ -227,7 +227,7 @@ graph TD
 ```mermaid
 classDiagram
     class Config {
-        +brokers: StringHashMap~BrokerConfig~
+        +brokers: StringArrayHashMap~BrokerConfig~
         +ticker_maps: StringHashMap~TickerMap~
         +deinit()
     }

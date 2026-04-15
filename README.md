@@ -26,9 +26,8 @@ means writing a JSON/JSON5 template - no code, no compilation.
 - cross-row lookup tables **(LOOKUP)** for pairing
 related rows
 
-Inputs and outputs can be CSV, XLSX, or JSON - BXP is not limited to
-one-directional conversion. The architecture is two-pass: the first pass
-(pre_pass) builds a lookup map from selected rows, the second pass performs transformation and routing - a single input row can generate 0, 1, or N output rows based on rules (row_rules).
+Inputs can be CSV, JSON or XLSX and outputs can be CSV or JSON - BXP is not limited to one-directional conversion.
+The architecture is two-pass: the first pass (pre_pass) builds a lookup map from selected rows, the second pass performs transformation and routing - a single input row can generate 0, 1, or N output rows based on rules (row_rules).
 Output complies with the [**RFC 4180**](https://www.rfc-editor.org/rfc/rfc4180) standard and basic protection against formula injection.
 
 But here is the key point: ***BXP no longer just looks like broker export converter.*** The combination of a generic expression engine, JSON5-driven configuration, and a two-pass pipeline makes it a universal [**ETL micro-tool**](https://w.wiki/32mw). The project is open-source and welcomes contributions from the community - whether it's new conversion templates, extending the expression engine with new functions or adding support for additional input/output formats or you just want to try vibe code in Zig language.

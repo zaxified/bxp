@@ -277,7 +277,8 @@ unary -    →    * /    →    & (concat)    →    + -    →    = != < > <= >
 
 - Empty string → `0` in a numeric context.
 - Any non-empty string → `true` in a boolean context; empty string → `false`.
-- Numeric strings are parsed on demand; `csv_decimal_separator_in` controls which separator is accepted.
+- Numeric strings are parsed on demand; `csv_decimal_separator_in` controls which decimal separator is accepted.
+- American thousands-separated numbers (`1,234.56`, `-1,234,567`) are automatically parsed in arithmetic contexts; the original string is preserved when the field is passed through as-is to output.
 
 #### Minimal examples
 
