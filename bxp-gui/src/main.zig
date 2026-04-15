@@ -1,0 +1,83 @@
+const std = @import("std");
+const dvui = @import("dvui");
+
+const app_state = @import("app.zig");
+const layout = @import("layout.zig");
+
+pub const dvui_app: dvui.App = .{
+    .config = .{
+        .options = .{
+            .size = .{ .w = 1280.0, .h = 800.0 },
+            .min_size = .{ .w = 800.0, .h = 600.0 },
+            .title = "bxp-gui",
+            .window_init_options = .{
+                .theme = dvui.Theme.builtin.dracula,
+            },
+        },
+    },
+    .frameFn = appFrame,
+    .initFn = appInit,
+    .deinitFn = appDeinit,
+};
+pub const main = dvui.App.main;
+pub const panic = dvui.App.panic;
+pub const std_options: std.Options = .{
+    .logFn = dvui.App.logFn,
+};
+
+var gpa_instance = std.heap.GeneralPurposeAllocator(.{}){};
+const gpa = gpa_instance.allocator();
+
+var state: app_state.AppState = undefined;
+
+pub fn appInit(win: *dvui.Window) !void {
+    _ = win;
+    state = app_state.AppState.init(gpa);
+}
+
+pub fn appDeinit() void {
+    state.deinit();
+    _ = gpa_instance.deinit();
+}
+
+pub fn appFrame() !dvui.App.Result {
+    if (menu()) |res| return res;
+
+    try layout.render(&state);
+
+    return .ok;
+}
+
+fn menu() ?dvui.App.Result {
+    var hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{ .style = .window, .background = true, .expand = .horizontal });
+    defer hbox.deinit();
+
+    var m = dvui.menu(@src(), .horizontal, .{});
+    defer m.deinit();
+
+    if (dvui.menuItemLabel(@src(), "File", .{ .submenu = true }, .{ .tag = "menu-file" })) |r| {
+        var fw = dvui.floatingMenu(@src(), .{ .from = r }, .{});
+        defer fw.deinit();
+
+        if (dvui.menuItemLabel(@src(), "Open...", .{}, .{ .expand = .horizontal }) != null) {
+            openConfigDialog();
+            m.close();
+        }
+        if (dvui.menuItemLabel(@src(), "Exit", .{}, .{ .expand = .horizontal }) != null) {
+            return .close;
+        }
+    }
+
+    if (dvui.menuItemLabel(@src(), "View", .{ .submenu = true }, .{}) != null) {}
+
+    return null;
+}
+
+fn openConfigDialog() void {
+    // MVP: load the default DEV/bxp-cli.json path. A real native file dialog
+    // comes in Phase 2 — this is enough to prove the load → render pipeline.
+    const default_path = "../DEV/bxp-cli.json";
+    state.loadConfig(default_path) catch |err| {
+        std.log.err("failed to load {s}: {s}", .{ default_path, @errorName(err) });
+    };
+}

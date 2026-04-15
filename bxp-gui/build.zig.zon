@@ -1,0 +1,16 @@
+.{
+    .name = .bxp_gui,
+    .fingerprint = 0x27367bcf95fde0ca,
+    .version = "0.0.1",
+    .dependencies = .{
+        .bxp_core = .{
+            .path = "../bxp-core",
+        },
+        .dvui = .{
+            .url = "git+https://github.com/david-vanderson/dvui?ref=main#535ff1503b35d4107a3ea51bc41af26e858cb235",
+            .hash = "dvui-0.4.0-dev-AQFJmf-A3gCWYqYVQjenwJbQLtLAYAr2EnNWhbEdHI5O",
+        },
+    },
+    .minimum_zig_version = "0.15.0",
+    .paths = .{""},
+}
