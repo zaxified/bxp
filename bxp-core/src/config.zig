@@ -366,7 +366,11 @@ fn diagDuplicateKey(
     };
     var stack: std.ArrayList(Level) = .empty;
     defer {
-        for (stack.items) |*lvl| lvl.keys.deinit();
+        for (stack.items) |*lvl| {
+            var kit = lvl.keys.keyIterator();
+            while (kit.next()) |k| alloc.free(k.*);
+            lvl.keys.deinit();
+        }
         stack.deinit(alloc);
     }
 
@@ -388,6 +392,8 @@ fn diagDuplicateKey(
             .object_end, .array_end => {
                 if (stack.items.len > 0) {
                     var top = stack.pop().?;
+                    var kit = top.keys.keyIterator();
+                    while (kit.next()) |k| alloc.free(k.*);
                     top.keys.deinit();
                 }
                 // The container that just closed was a value in its parent object;
@@ -531,6 +537,11 @@ pub fn load(alloc: std.mem.Allocator, config_path: []const u8) !Config {
     defer alloc.free(raw);
     const content = try json5.preprocess(alloc, raw);
     defer alloc.free(content);
+
+    // Detect duplicate object keys before parsing — std.json silently uses last value.
+    if (diagDuplicateKey(alloc, content, raw, config_path)) {
+        return error.InvalidConfig;
+    }
 
     const parsed = std.json.parseFromSlice(std.json.Value, alloc, content, .{}) catch |err| {
         diagJsonError(alloc, content, raw, config_path, err);
