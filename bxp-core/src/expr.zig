@@ -67,7 +67,10 @@ pub const Value = union(enum) {
     pub fn toNumber(self: Value) !f80 {
         return switch (self) {
             .number => |n| n,
-            .string => |s| if (s.len == 0) 0 else std.fmt.parseFloat(f80, s) catch return error.NotANumber,
+            .string => |s| if (s.len == 0) 0 else
+                std.fmt.parseFloat(f80, s) catch
+                parseAmericanNumber(s) catch
+                return error.NotANumber,
             .boolean => |b| if (b) @as(f80, 1) else 0,
         };
     }
@@ -639,6 +642,54 @@ const Parser = struct {
 };
 
 // ---------------------------------------------------------------------------
+// Number parsing helpers
+// ---------------------------------------------------------------------------
+
+/// Parses a number in American thousands-separated format: "1,234.56", "-1,234,567", "1,000".
+/// Requires at least one thousands group (,ddd) — plain "123" is rejected (handled by parseFloat).
+/// Returns error.NotANumber if the string does not match the pattern.
+fn parseAmericanNumber(s: []const u8) error{NotANumber}!f80 {
+    var i: usize = 0;
+    if (i < s.len and s[i] == '-') i += 1;
+    // 1–3 leading digits before the first thousands group
+    const leading_start = i;
+    while (i < s.len and std.ascii.isDigit(s[i])) i += 1;
+    const leading = i - leading_start;
+    if (leading == 0 or leading > 3) return error.NotANumber;
+    // At least one ',ddd' group required
+    var groups: usize = 0;
+    while (i < s.len and s[i] == ',') {
+        if (s.len < i + 4) return error.NotANumber;
+        if (!std.ascii.isDigit(s[i + 1]) or
+            !std.ascii.isDigit(s[i + 2]) or
+            !std.ascii.isDigit(s[i + 3])) return error.NotANumber;
+        i += 4;
+        groups += 1;
+        // A digit immediately after the group means >3 digits between commas → invalid
+        if (i < s.len and std.ascii.isDigit(s[i])) return error.NotANumber;
+    }
+    if (groups == 0) return error.NotANumber;
+    // Optional decimal part
+    if (i < s.len) {
+        if (s[i] != '.') return error.NotANumber;
+        i += 1;
+        if (i >= s.len or !std.ascii.isDigit(s[i])) return error.NotANumber;
+        while (i < s.len and std.ascii.isDigit(s[i])) i += 1;
+    }
+    if (i != s.len) return error.NotANumber;
+    // Strip commas into a stack buffer and parse
+    var buf: [32]u8 = undefined;
+    var bi: usize = 0;
+    for (s) |c| {
+        if (c == ',') continue;
+        if (bi >= buf.len) return error.NotANumber;
+        buf[bi] = c;
+        bi += 1;
+    }
+    return std.fmt.parseFloat(f80, buf[0..bi]) catch return error.NotANumber;
+}
+
+// ---------------------------------------------------------------------------
 // Built-in function implementations
 // ---------------------------------------------------------------------------
 
@@ -1068,6 +1119,33 @@ test "Value.toNumber: numeric string is parsed" {
 
 test "Value.toNumber: non-numeric string returns error" {
     try testing.expectError(error.NotANumber, (Value{ .string = "abc" }).toNumber());
+}
+
+test "Value.toNumber: American thousands-separated format" {
+    try testing.expectEqual(@as(f80, 1234.56),   try (Value{ .string = "1,234.56"     }).toNumber());
+    try testing.expectEqual(@as(f80, 1234567),   try (Value{ .string = "1,234,567"    }).toNumber());
+    try testing.expectEqual(@as(f80, -1234.5),   try (Value{ .string = "-1,234.5"     }).toNumber());
+    try testing.expectEqual(@as(f80, 1000),      try (Value{ .string = "1,000"        }).toNumber());
+    // Must still be a string when not used in arithmetic
+    try testing.expectEqualStrings("1,234.56", (Value{ .string = "1,234.56" }).toString(testing.allocator) catch unreachable);
+    // Invalid patterns must stay NotANumber
+    try testing.expectError(error.NotANumber, (Value{ .string = "1,23.45"   }).toNumber()); // group not 3 digits
+    try testing.expectError(error.NotANumber, (Value{ .string = "1,2345"    }).toNumber()); // 4 digits in group
+    try testing.expectError(error.NotANumber, (Value{ .string = "12345,678" }).toNumber()); // 5 leading digits
+}
+
+test "eval: American number arithmetic via field ref" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    try h.col_index.put("Amount", 0);
+    const ctx = h.ctx(&.{"1,234.56"}, a);
+    // Arithmetic triggers toNumber — should parse correctly
+    try testing.expectEqualStrings("1234.56", try evalString("[Amount] * 1", &ctx));
+    try testing.expectEqualStrings("2469.12", try evalString("[Amount] * 2", &ctx));
+    // Plain passthrough — string preserved as-is
+    try testing.expectEqualStrings("1,234.56", try evalString("[Amount]",     &ctx));
 }
 
 test "Value.toBool: empty string is false, non-empty is true (even '0')" {
