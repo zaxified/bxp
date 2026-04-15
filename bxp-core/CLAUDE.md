@@ -55,7 +55,7 @@ Expression evaluator for `input_schema` and `row_rules` in bxp-cli.json.
 - Unit tests inline (~57 test cases).
 
 **Built-in functions:** IF, ABS, DATE_CONVERT, PRICE_VALUE, PRICE_CURRENCY, TICKER,
-LOOKUP, SPLIT_PART, CONTAINS, REPLACE, TRIM, ROUND, FLOOR, CEILING, NOW, RAND, FIELDS.
+LOOKUP, SPLIT_PART, CONTAINS, REPLACE, TRIM, ROUND, FLOOR, CEILING, NOW, RAND, COALESCE, FIELDS.
 
 ### config.zig
 JSON5 configuration loader.

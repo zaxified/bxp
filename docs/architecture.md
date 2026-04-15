@@ -215,7 +215,7 @@ graph TD
     PRICE_VALUE, TICKER,
     LOOKUP, SPLIT_PART,
     CONTAINS, REPLACE,
-    TRIM, ROUND, ..."]
+    TRIM, ROUND, COALESCE, ..."]
     FUNC --> SUNRISE_CALL["sunrise
     (DATE_CONVERT only)"]
 ```

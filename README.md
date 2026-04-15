@@ -17,7 +17,7 @@ means writing a JSON/JSON5 template - no code, no compilation.
 
 **The expression language currently supports**:
 
-- conditionals **(IF)**
+- conditionals **(IF, COALESCE)**
 - math **(ABS, ROUND, FLOOR, CEILING)**
 - string operations **(REPLACE, SPLIT_PART, TRIM, CONTAINS)**
 - price and currency extraction **(PRICE_VALUE, PRICE_CURRENCY)**

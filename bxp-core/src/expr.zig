@@ -25,6 +25,7 @@
 ///   FLOOR(f)                  — round f down to nearest integer
 ///   CEILING(f)                — round f up to nearest integer
 ///   RAND()                    — random float in [0, 1)
+///   COALESCE(a, b, ...)       — first non-empty argument (empty = whitespace-only string)
 ///   DATE_CONVERT(f, from, to) — reformat a date/time string; format tokens use sunrise syntax
 ///   PRICE_VALUE(f)            — strip currency symbol/code, return numeric string
 ///   PRICE_CURRENCY(f)         — extract currency code from a price string
@@ -635,6 +636,7 @@ const Parser = struct {
             return err;
         };
         if (std.ascii.eqlIgnoreCase(name, "RAND")) return builtinRand(a);
+        if (std.ascii.eqlIgnoreCase(name, "COALESCE")) return builtinCoalesce(a);
 
         self.setDetail("unknown function '{s}' — check function name spelling", .{name});
         return error.UnknownFunction;
@@ -904,6 +906,24 @@ fn builtinCeiling(args: []Value) !Value {
 fn builtinRand(args: []Value) !Value {
     if (args.len != 0) return error.WrongArgCount;
     return Value{ .number = @floatCast(std.crypto.random.float(f64)) };
+}
+
+/// COALESCE(a, b, ...) — return the first non-empty argument.
+/// A string is considered empty if its trimmed length is 0 (whitespace-only
+/// counts as empty). Numbers and booleans are never empty — even 0 and false
+/// are returned. If every argument is empty, the last argument is returned
+/// verbatim so callers can supply a default: COALESCE(@a, @b, "0").
+fn builtinCoalesce(args: []Value) !Value {
+    if (args.len == 0) return error.WrongArgCount;
+    for (args[0 .. args.len - 1]) |v| {
+        switch (v) {
+            .string => |s| {
+                if (std.mem.trim(u8, s, " \t\r\n").len > 0) return v;
+            },
+            .number, .boolean => return v,
+        }
+    }
+    return args[args.len - 1];
 }
 
 // ---------------------------------------------------------------------------
@@ -1762,4 +1782,48 @@ test "eval: RAND rejects wrong arg count" {
     var h = TestHelper.init(a);
     const ctx = h.ctx(&.{}, a);
     try testing.expectError(error.WrongArgCount, eval("RAND(5)", &ctx));
+}
+
+// ------------------------------------------------------------
+// COALESCE
+// ------------------------------------------------------------
+
+test "eval: COALESCE returns first non-empty string" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    try testing.expectEqualStrings("first",    try evalString("COALESCE('first', 'second')", &ctx));
+    try testing.expectEqualStrings("fallback", try evalString("COALESCE('', 'fallback')", &ctx));
+    try testing.expectEqualStrings("x",        try evalString("COALESCE('', '   ', 'x', 'y')", &ctx));
+}
+
+test "eval: COALESCE returns last arg verbatim when all empty" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    try testing.expectEqualStrings("",  try evalString("COALESCE('', '', '')", &ctx));
+    try testing.expectEqualStrings("0", try evalString("COALESCE('', '', '0')", &ctx));
+}
+
+test "eval: COALESCE treats numbers and booleans as non-empty" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    try testing.expectEqualStrings("0", try evalString("COALESCE('', 0, 'x')", &ctx));
+    try testing.expectEqualStrings("7", try evalString("COALESCE('', 7)", &ctx));
+}
+
+test "eval: COALESCE rejects zero args" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    try testing.expectError(error.WrongArgCount, eval("COALESCE()", &ctx));
 }
