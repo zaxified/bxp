@@ -1,5 +1,6 @@
 const std = @import("std");
 const config = @import("config");
+const json5_writer = @import("json5_writer.zig");
 
 pub const AppState = struct {
     gpa: std.mem.Allocator,
@@ -57,6 +58,17 @@ pub const AppState = struct {
 
     pub fn statusText(self: *const AppState) []const u8 {
         return self.status.items;
+    }
+
+    pub fn saveConfigAs(self: *AppState, path: []const u8) !void {
+        const cfg = self.config_owner orelse return error.NoConfigLoaded;
+        const f = try std.fs.cwd().createFile(path, .{});
+        defer f.close();
+        var buf: [8192]u8 = undefined;
+        var fw = f.writer(&buf);
+        try json5_writer.writeConfig(cfg, &fw.interface);
+        try fw.interface.flush();
+        try self.setStatusFmt("saved {s}", .{path});
     }
 };
 

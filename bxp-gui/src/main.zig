@@ -63,6 +63,10 @@ fn menu() ?dvui.App.Result {
             openConfigDialog();
             m.close();
         }
+        if (dvui.menuItemLabel(@src(), "Save As...", .{}, .{ .expand = .horizontal }) != null) {
+            saveConfigDialog();
+            m.close();
+        }
         if (dvui.menuItemLabel(@src(), "Exit", .{}, .{ .expand = .horizontal }) != null) {
             return .close;
         }
@@ -85,5 +89,24 @@ fn openConfigDialog() void {
     const path = picked orelse return;
     state.loadConfig(path) catch |err| {
         std.log.err("failed to load {s}: {s}", .{ path, @errorName(err) });
+    };
+}
+
+fn saveConfigDialog() void {
+    if (state.config_owner == null) {
+        std.log.warn("no config loaded — open a file first", .{});
+        return;
+    }
+    const arena = dvui.currentWindow().arena();
+    const filters = [_][]const u8{ "*.json", "*.json5" };
+    const picked = dvui.dialogNativeFileSave(arena, .{
+        .title = "Save bxp config as",
+        .filters = &filters,
+        .filter_description = "bxp config (*.json, *.json5)",
+    }) catch null;
+
+    const path = picked orelse return;
+    state.saveConfigAs(path) catch |err| {
+        std.log.err("failed to save {s}: {s}", .{ path, @errorName(err) });
     };
 }
