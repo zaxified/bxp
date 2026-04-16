@@ -63,6 +63,11 @@ fn menu() ?dvui.App.Result {
             openConfigDialog();
             m.close();
         }
+        const save_label: []const u8 = if (state.loaded_path != null) "Save" else "Save (no file)";
+        if (dvui.menuItemLabel(@src(), save_label, .{}, .{ .expand = .horizontal }) != null) {
+            saveConfig();
+            m.close();
+        }
         if (dvui.menuItemLabel(@src(), "Save As...", .{}, .{ .expand = .horizontal }) != null) {
             saveConfigDialog();
             m.close();
@@ -141,6 +146,16 @@ fn openConfigDialog() void {
     const path = picked orelse return;
     state.loadConfig(path) catch |err| {
         std.log.err("failed to load {s}: {s}", .{ path, @errorName(err) });
+    };
+}
+
+fn saveConfig() void {
+    const path = state.loaded_path orelse {
+        saveConfigDialog();
+        return;
+    };
+    state.saveConfigAs(path) catch |err| {
+        std.log.err("failed to save {s}: {s}", .{ path, @errorName(err) });
     };
 }
 
