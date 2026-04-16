@@ -19,6 +19,8 @@ pub fn build(b: *std.Build) void {
             .{ .name = "dvui",          .module = dvui_dep.module("dvui_sdl3") },
             .{ .name = "sdl-backend",   .module = dvui_dep.module("sdl3") },
             .{ .name = "config",        .module = core_dep.module("config") },
+            .{ .name = "csv",           .module = core_dep.module("csv") },
+            .{ .name = "expr",          .module = core_dep.module("expr") },
             .{ .name = "build_options", .module = options.createModule() },
         },
     });
@@ -37,7 +39,7 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run bxp-gui");
     run_step.dependOn(&run_cmd.step);
 
-    const tests = b.addTest(.{
+    const writer_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/json5_writer.zig"),
             .target = target,
@@ -47,7 +49,14 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
-    const run_tests = b.addRunArtifact(tests);
+    const settings_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/settings.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
     const test_step = b.step("test", "Run bxp-gui unit tests");
-    test_step.dependOn(&run_tests.step);
+    test_step.dependOn(&b.addRunArtifact(writer_tests).step);
+    test_step.dependOn(&b.addRunArtifact(settings_tests).step);
 }

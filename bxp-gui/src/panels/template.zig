@@ -21,15 +21,22 @@ pub fn render(state: *app.AppState) !void {
     const broker = cfg.brokers.get(name) orelse return;
     const edits = &state.edits.items[selected_idx];
 
-    // Title
+    // Title + view-mode toggle
     {
+        var hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .expand = .horizontal,
+            .margin = .{ .x = 12, .y = 10, .w = 12, .h = 4 },
+        });
+        defer hbox.deinit();
         var tl = dvui.textLayout(@src(), .{}, .{
             .expand = .horizontal,
             .font = .theme(.title),
-            .margin = .{ .x = 12, .y = 10, .w = 12, .h = 4 },
         });
         tl.addText(name, .{});
         tl.deinit();
+        if (dvui.button(@src(), "Debug ▶", .{}, .{})) {
+            state.view_mode = .debug;
+        }
     }
 
     // Validation banner

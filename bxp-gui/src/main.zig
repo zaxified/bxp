@@ -67,8 +67,60 @@ fn menu() ?dvui.App.Result {
             saveConfigDialog();
             m.close();
         }
+        if (state.settings.recent_files.items.len > 0) {
+            if (dvui.menuItemLabel(@src(), "Open Recent", .{ .submenu = true }, .{ .expand = .horizontal })) |rr| {
+                var rfw = dvui.floatingMenu(@src(), .{ .from = rr }, .{});
+                defer rfw.deinit();
+                for (state.settings.recent_files.items, 0..) |path, i| {
+                    if (dvui.menuItemLabel(@src(), path, .{}, .{ .id_extra = i, .expand = .horizontal }) != null) {
+                        state.loadConfig(path) catch |err| {
+                            std.log.err("recent load failed: {s} ({s})", .{ path, @errorName(err) });
+                        };
+                        m.close();
+                    }
+                }
+            }
+        }
         if (dvui.menuItemLabel(@src(), "Exit", .{}, .{ .expand = .horizontal }) != null) {
             return .close;
+        }
+    }
+
+    if (dvui.menuItemLabel(@src(), "Edit", .{ .submenu = true }, .{ .tag = "menu-edit" })) |r| {
+        var fw = dvui.floatingMenu(@src(), .{ .from = r }, .{});
+        defer fw.deinit();
+
+        const undo_label: []const u8 = if (state.canUndo()) "Undo" else "Undo (none)";
+        if (dvui.menuItemLabel(@src(), undo_label, .{}, .{ .expand = .horizontal }) != null) {
+            state.undo() catch |err| std.log.err("undo: {s}", .{@errorName(err)});
+            m.close();
+        }
+        const redo_label: []const u8 = if (state.canRedo()) "Redo" else "Redo (none)";
+        if (dvui.menuItemLabel(@src(), redo_label, .{}, .{ .expand = .horizontal }) != null) {
+            state.redo() catch |err| std.log.err("redo: {s}", .{@errorName(err)});
+            m.close();
+        }
+    }
+
+    if (dvui.menuItemLabel(@src(), "Debug", .{ .submenu = true }, .{ .tag = "menu-debug" })) |r| {
+        var fw = dvui.floatingMenu(@src(), .{ .from = r }, .{});
+        defer fw.deinit();
+
+        if (dvui.menuItemLabel(@src(), "Start Dry-Run", .{}, .{ .expand = .horizontal }) != null) {
+            if (state.selected_template) |idx| {
+                state.startSimulation(idx) catch |err| {
+                    std.log.err("startSimulation: {s}", .{@errorName(err)});
+                };
+            }
+            m.close();
+        }
+        if (dvui.menuItemLabel(@src(), "Form view", .{}, .{ .expand = .horizontal }) != null) {
+            state.view_mode = .form;
+            m.close();
+        }
+        if (dvui.menuItemLabel(@src(), "Debug view", .{}, .{ .expand = .horizontal }) != null) {
+            state.view_mode = .debug;
+            m.close();
         }
     }
 

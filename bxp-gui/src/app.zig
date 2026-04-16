@@ -1,6 +1,8 @@
 const std = @import("std");
 const config = @import("config");
 const json5_writer = @import("json5_writer.zig");
+const simulator = @import("simulator.zig");
+const settings_mod = @import("settings.zig");
 
 pub const CsvCharField = enum {
     delimiter_in,
@@ -176,6 +178,8 @@ fn copyInto(dst: []u8, len: *usize, src: []const u8) void {
     len.* = n;
 }
 
+pub const ViewMode = enum { form, debug };
+
 pub const AppState = struct {
     gpa: std.mem.Allocator,
     loaded_path: ?[]u8 = null,
@@ -185,19 +189,169 @@ pub const AppState = struct {
     status: std.ArrayListUnmanaged(u8) = .empty,
     edits: std.ArrayListUnmanaged(TemplateEdits) = .empty,
     validation: std.ArrayListUnmanaged(std.ArrayListUnmanaged(u8)) = .empty,
+    view_mode: ViewMode = .form,
+    simulation: ?simulator.Simulation = null,
+    simulation_template_idx: ?usize = null,
+    debug_row_idx: usize = 0,
+    settings: settings_mod.Settings,
+    undo_stack: std.ArrayListUnmanaged([]u8) = .empty,
+    undo_idx: usize = 0,
 
     pub fn init(gpa: std.mem.Allocator) AppState {
-        return .{ .gpa = gpa };
+        const loaded = settings_mod.load(gpa) catch settings_mod.Settings.init(gpa);
+        const view: ViewMode = if (std.mem.eql(u8, loaded.last_view_mode, "debug")) .debug else .form;
+        return .{ .gpa = gpa, .settings = loaded, .view_mode = view };
     }
 
     pub fn deinit(self: *AppState) void {
+        self.persistSettings() catch {};
+        self.clearSimulation();
         self.clearConfig();
         self.status.deinit(self.gpa);
+        self.settings.deinit();
+    }
+
+    fn persistSettings(self: *AppState) !void {
+        const mode_str: []const u8 = switch (self.view_mode) {
+            .form => "form",
+            .debug => "debug",
+        };
+        try self.settings.setViewMode(mode_str);
+        try settings_mod.save(self.gpa, &self.settings);
+    }
+
+    pub fn touchRecent(self: *AppState, path: []const u8) void {
+        self.settings.touchRecent(path) catch {};
+        self.persistSettings() catch {};
+    }
+
+    // ── Undo / redo via in-memory config snapshots ────────────────────────────
+
+    const UNDO_CAP: usize = 50;
+    const UNDO_TMP_PATH: []const u8 = "/tmp/bxp_gui_snapshot.json";
+
+    /// Serialize the current config to a freshly allocated byte slice.
+    fn snapshotBytes(self: *AppState) ![]u8 {
+        const cfg = self.config_owner orelse return error.NoConfigLoaded;
+        var list: std.ArrayListUnmanaged(u8) = .empty;
+        errdefer list.deinit(self.gpa);
+        var aw = std.Io.Writer.Allocating.fromArrayList(self.gpa, &list);
+        defer list = aw.toArrayList();
+        try json5_writer.writeConfig(cfg, &aw.writer);
+        const owned = try self.gpa.dupe(u8, list.items);
+        list.deinit(self.gpa);
+        list = .empty;
+        return owned;
+    }
+
+    /// Push the current config onto the undo stack as a new snapshot.
+    /// No-op when the new bytes equal the snapshot at `undo_idx` (keystroke
+    /// debounce). Drops anything past `undo_idx` (lost redo branch) and
+    /// clamps stack size to UNDO_CAP.
+    pub fn pushUndo(self: *AppState) void {
+        const bytes = self.snapshotBytes() catch return;
+        if (self.undo_stack.items.len > 0 and self.undo_idx < self.undo_stack.items.len) {
+            const head = self.undo_stack.items[self.undo_idx];
+            if (std.mem.eql(u8, head, bytes)) {
+                self.gpa.free(bytes);
+                return;
+            }
+            // Drop redo branch.
+            while (self.undo_stack.items.len > self.undo_idx + 1) {
+                const dropped = self.undo_stack.pop().?;
+                self.gpa.free(dropped);
+            }
+        }
+        self.undo_stack.append(self.gpa, bytes) catch {
+            self.gpa.free(bytes);
+            return;
+        };
+        if (self.undo_stack.items.len > UNDO_CAP) {
+            const dropped = self.undo_stack.orderedRemove(0);
+            self.gpa.free(dropped);
+        }
+        self.undo_idx = self.undo_stack.items.len - 1;
+    }
+
+    pub fn canUndo(self: *const AppState) bool {
+        return self.undo_idx > 0;
+    }
+
+    pub fn canRedo(self: *const AppState) bool {
+        return self.undo_stack.items.len > 0 and self.undo_idx + 1 < self.undo_stack.items.len;
+    }
+
+    pub fn undo(self: *AppState) !void {
+        if (!self.canUndo()) return;
+        self.undo_idx -= 1;
+        try self.restoreSnapshotBytes(self.undo_stack.items[self.undo_idx]);
+    }
+
+    pub fn redo(self: *AppState) !void {
+        if (!self.canRedo()) return;
+        self.undo_idx += 1;
+        try self.restoreSnapshotBytes(self.undo_stack.items[self.undo_idx]);
+    }
+
+    /// Replace the live config by parsing `bytes` (round-trips through /tmp
+    /// because `config.load` is file-based). Preserves loaded_path, view_mode,
+    /// and the currently selected template index when valid.
+    fn restoreSnapshotBytes(self: *AppState, bytes: []const u8) !void {
+        {
+            const f = try std.fs.cwd().createFile(UNDO_TMP_PATH, .{});
+            defer f.close();
+            try f.writeAll(bytes);
+        }
+        const new_cfg = try self.gpa.create(config.Config);
+        errdefer self.gpa.destroy(new_cfg);
+        new_cfg.* = try config.load(self.gpa, UNDO_TMP_PATH);
+
+        const prev_selected = self.selected_template;
+        self.clearTransientState();
+        self.clearSimulation();
+        if (self.config_owner) |cfg| {
+            cfg.deinit();
+            self.gpa.destroy(cfg);
+        }
+        self.config_owner = new_cfg;
+
+        var it = new_cfg.brokers.iterator();
+        while (it.next()) |entry| {
+            try self.template_names.append(self.gpa, entry.key_ptr.*);
+        }
+        std.mem.sort([]const u8, self.template_names.items, {}, lessThan);
+
+        try self.edits.ensureTotalCapacity(self.gpa, self.template_names.items.len);
+        try self.validation.ensureTotalCapacity(self.gpa, self.template_names.items.len);
+        for (self.template_names.items) |name| {
+            var e: TemplateEdits = .{};
+            if (new_cfg.brokers.get(name)) |b| try e.load(self.gpa, &b);
+            self.edits.appendAssumeCapacity(e);
+            self.validation.appendAssumeCapacity(.empty);
+        }
+        try self.revalidateAll();
+
+        if (prev_selected) |sel| {
+            if (sel < self.template_names.items.len) self.selected_template = sel;
+        }
     }
 
     fn clearConfig(self: *AppState) void {
+        self.clearSimulation();
+        self.clearUndoStack();
         if (self.loaded_path) |p| self.gpa.free(p);
         self.loaded_path = null;
+        self.clearTransientState();
+        if (self.config_owner) |cfg| {
+            cfg.deinit();
+            self.gpa.destroy(cfg);
+            self.config_owner = null;
+        }
+    }
+
+    /// Clear template_names, edits, validation, and selected_template.
+    /// Used by clearConfig and by restoreSnapshot before re-deriving them.
+    fn clearTransientState(self: *AppState) void {
         self.template_names.deinit(self.gpa);
         self.template_names = .empty;
         for (self.edits.items) |*e| e.deinit(self.gpa);
@@ -207,11 +361,63 @@ pub const AppState = struct {
         self.validation.deinit(self.gpa);
         self.validation = .empty;
         self.selected_template = null;
-        if (self.config_owner) |cfg| {
-            cfg.deinit();
-            self.gpa.destroy(cfg);
-            self.config_owner = null;
+    }
+
+    fn clearUndoStack(self: *AppState) void {
+        for (self.undo_stack.items) |b| self.gpa.free(b);
+        self.undo_stack.deinit(self.gpa);
+        self.undo_stack = .empty;
+        self.undo_idx = 0;
+    }
+
+    fn clearSimulation(self: *AppState) void {
+        if (self.simulation) |*sim| sim.deinit();
+        self.simulation = null;
+        self.simulation_template_idx = null;
+        self.debug_row_idx = 0;
+    }
+
+    /// Resolve `data_dir` from the selected template against the directory of
+    /// the loaded config file, run the simulator, replace any prior trace.
+    pub fn startSimulation(self: *AppState, template_idx: usize) !void {
+        const cfg = self.config_owner orelse return error.NoConfigLoaded;
+        if (template_idx >= self.template_names.items.len) return error.OutOfRange;
+        const name = self.template_names.items[template_idx];
+        const broker = cfg.brokers.get(name) orelse return error.TemplateNotFound;
+
+        const cfg_path = self.loaded_path orelse return error.NoConfigPath;
+        const cfg_dir = std.fs.path.dirname(cfg_path) orelse ".";
+        const resolved = if (std.fs.path.isAbsolute(broker.data_dir))
+            try self.gpa.dupe(u8, broker.data_dir)
+        else
+            try std.fs.path.join(self.gpa, &.{ cfg_dir, broker.data_dir });
+        defer self.gpa.free(resolved);
+
+        self.clearSimulation();
+        self.simulation = try simulator.run(self.gpa, &broker, resolved);
+        self.simulation_template_idx = template_idx;
+        self.debug_row_idx = 0;
+        self.view_mode = .debug;
+
+        if (self.simulation.?.error_message.len > 0) {
+            try self.setStatusFmt("dry-run: {s}", .{self.simulation.?.error_message});
+        } else {
+            try self.setStatusFmt("dry-run: {d} rows from '{s}'", .{
+                self.simulation.?.rows.len,
+                self.simulation.?.source_path,
+            });
         }
+    }
+
+    pub fn stepRow(self: *AppState, delta: isize) void {
+        const sim = if (self.simulation) |*s| s else return;
+        if (sim.rows.len == 0) return;
+        const cur: isize = @intCast(self.debug_row_idx);
+        var next = cur + delta;
+        if (next < 0) next = 0;
+        const max: isize = @intCast(sim.rows.len - 1);
+        if (next > max) next = max;
+        self.debug_row_idx = @intCast(next);
     }
 
     pub fn loadConfig(self: *AppState, path: []const u8) !void {
@@ -240,6 +446,8 @@ pub const AppState = struct {
         }
         try self.revalidateAll();
 
+        self.touchRecent(path);
+        self.pushUndo(); // initial snapshot
         try self.setStatusFmt("loaded {s} ({d} templates)", .{ path, self.template_names.items.len });
     }
 
@@ -313,6 +521,7 @@ pub const AppState = struct {
             .pre_pass_key => b_ptr.pre_pass.?.key = new_slice,
         }
         self.revalidateTemplate(template_idx) catch {};
+        self.pushUndo();
     }
 
     /// Rebuild broker.pre_pass.values from edits, freeing old entries via cfg._alloc.
@@ -340,6 +549,7 @@ pub const AppState = struct {
             try values.put(dk, dv);
         }
         self.revalidateTemplate(template_idx) catch {};
+        self.pushUndo();
     }
 
     /// Rebuild broker.input_schema from edits, freeing old entries via cfg._alloc.
@@ -366,6 +576,7 @@ pub const AppState = struct {
         }
 
         self.revalidateTemplate(template_idx) catch {};
+        self.pushUndo();
     }
 
     /// Rebuild broker.output_schema from edits, freeing old entries via cfg._alloc.
@@ -391,6 +602,7 @@ pub const AppState = struct {
         }
 
         self.revalidateTemplate(template_idx) catch {};
+        self.pushUndo();
     }
 
     /// Update only the `when` expressions for existing row_rules.
@@ -412,6 +624,7 @@ pub const AppState = struct {
             }
         }
         self.revalidateTemplate(template_idx) catch {};
+        self.pushUndo();
     }
 
     /// Rebuild broker.ticker_map from edits, freeing old entries via cfg._alloc.
@@ -438,6 +651,7 @@ pub const AppState = struct {
         }
 
         self.revalidateTemplate(template_idx) catch {};
+        self.pushUndo();
     }
 
     /// Append an empty row rule.
@@ -461,6 +675,7 @@ pub const AppState = struct {
         try self.edits.items[template_idx].row_rules.append(self.gpa, .{});
         self.edits.items[template_idx].has_row_rules = true;
         self.revalidateTemplate(template_idx) catch {};
+        self.pushUndo();
     }
 
     /// Remove the row rule at `rule_idx`.
@@ -500,6 +715,7 @@ pub const AppState = struct {
 
         _ = self.edits.items[template_idx].row_rules.orderedRemove(rule_idx);
         self.revalidateTemplate(template_idx) catch {};
+        self.pushUndo();
     }
 
     pub fn setCsvChar(self: *AppState, template_idx: usize, field: CsvCharField, new_value: u8) !void {
@@ -516,6 +732,7 @@ pub const AppState = struct {
             .text_quote_out => b_ptr.csv_text_quote_out = new_value,
         }
         self.revalidateTemplate(template_idx) catch {};
+        self.pushUndo();
     }
 
     pub fn setXlsxHeaderRow(self: *AppState, template_idx: usize, new_value: u32) !void {
@@ -544,6 +761,7 @@ pub const AppState = struct {
         var fw = f.writer(&buf);
         try json5_writer.writeConfig(cfg, &fw.interface);
         try fw.interface.flush();
+        self.touchRecent(path);
         try self.setStatusFmt("saved {s}", .{path});
     }
 };

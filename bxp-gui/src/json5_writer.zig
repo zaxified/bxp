@@ -298,6 +298,57 @@ fn writeJsonString(s: []const u8, w: anytype) !void {
 
 const testing = std.testing;
 
+test "roundtrip: real bxp-cli.examples.json loads, validates, writes, reloads" {
+    // Resolve path relative to the source file so the test runs from any cwd.
+    const path = "../../resources/bxp-cli.examples.json";
+    const f = std.fs.cwd().openFile(path, .{}) catch return error.SkipZigTest;
+    f.close();
+
+    var cfg = try config.load(testing.allocator, path);
+    defer cfg.deinit();
+    try testing.expect(cfg.brokers.count() > 0);
+
+    // Every template in the examples file must validate cleanly.
+    var it = cfg.brokers.iterator();
+    while (it.next()) |entry| {
+        var diag: std.ArrayListUnmanaged(u8) = .empty;
+        defer diag.deinit(testing.allocator);
+        var aw = std.Io.Writer.Allocating.fromArrayList(testing.allocator, &diag);
+        defer diag = aw.toArrayList();
+        entry.value_ptr.validate(entry.key_ptr.*, path, &aw.writer) catch |err| {
+            std.debug.print("validate '{s}' failed: {s}\n{s}\n", .{ entry.key_ptr.*, @errorName(err), diag.items });
+            return err;
+        };
+    }
+
+    // Write back and re-parse.
+    const out_path = "/tmp/bxp_gui_examples_roundtrip.json";
+    {
+        const out_f = try std.fs.cwd().createFile(out_path, .{});
+        defer out_f.close();
+        var buf: [8192]u8 = undefined;
+        var fw = out_f.writer(&buf);
+        try writeConfig(&cfg, &fw.interface);
+        try fw.interface.flush();
+    }
+
+    var cfg2 = try config.load(testing.allocator, out_path);
+    defer cfg2.deinit();
+    try testing.expectEqual(cfg.brokers.count(), cfg2.brokers.count());
+
+    var it2 = cfg.brokers.iterator();
+    while (it2.next()) |e| {
+        const b1 = e.value_ptr.*;
+        const b2 = cfg2.brokers.get(e.key_ptr.*) orelse return error.MissingTemplate;
+        try testing.expectEqualStrings(b1.file_pattern_in, b2.file_pattern_in);
+        try testing.expectEqualStrings(b1.file_pattern_out, b2.file_pattern_out);
+        try testing.expectEqual(b1.input_schema.count(), b2.input_schema.count());
+        try testing.expectEqual(b1.output_schema.items.len, b2.output_schema.items.len);
+        try testing.expectEqual(b1.ticker_map.count(), b2.ticker_map.count());
+        try testing.expectEqual(b1.date_filter_from_filename, b2.date_filter_from_filename);
+    }
+}
+
 test "roundtrip: write then reload yields equivalent broker fields" {
     const tmp_in = "/tmp/bxp_gui_rt_in.json";
     const tmp_out = "/tmp/bxp_gui_rt_out.json";

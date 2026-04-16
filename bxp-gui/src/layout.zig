@@ -5,6 +5,7 @@ const app = @import("app.zig");
 const explorer = @import("panels/explorer.zig");
 const template_panel = @import("panels/template.zig");
 const status_panel = @import("panels/status.zig");
+const debug_panel = @import("panels/debug.zig");
 
 var main_split: f32 = 0.18;
 var inner_split: f32 = 0.80;
@@ -38,7 +39,10 @@ pub fn render(state: *app.AppState) !void {
         if (inner.showFirst()) {
             var center = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
             defer center.deinit();
-            try template_panel.render(state);
+            switch (state.view_mode) {
+                .form => try template_panel.render(state),
+                .debug => try debug_panel.render(state),
+            }
         }
 
         if (inner.showSecond()) {
