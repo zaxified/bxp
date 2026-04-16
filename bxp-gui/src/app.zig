@@ -10,6 +10,26 @@ pub const BrokerStringField = enum {
     xlsx_sheet_output_suffix,
 };
 
+pub const SchemaEntry = struct {
+    key: [64]u8 = [_]u8{0} ** 64,
+    key_len: usize = 0,
+    val: [512]u8 = [_]u8{0} ** 512,
+    val_len: usize = 0,
+
+    pub fn set(self: *SchemaEntry, k: []const u8, v: []const u8) void {
+        copyInto(&self.key, &self.key_len, k);
+        copyInto(&self.val, &self.val_len, v);
+    }
+
+    pub fn keyText(self: *const SchemaEntry) []const u8 {
+        return self.key[0..self.key_len];
+    }
+
+    pub fn valText(self: *const SchemaEntry) []const u8 {
+        return self.val[0..self.val_len];
+    }
+};
+
 pub const TemplateEdits = struct {
     data_dir: [512]u8 = [_]u8{0} ** 512,
     data_dir_len: usize = 0,
@@ -21,8 +41,10 @@ pub const TemplateEdits = struct {
     xlsx_name_len: usize = 0,
     xlsx_suffix: [64]u8 = [_]u8{0} ** 64,
     xlsx_suffix_len: usize = 0,
+    input_schema: std.ArrayListUnmanaged(SchemaEntry) = .empty,
+    output_schema: std.ArrayListUnmanaged(SchemaEntry) = .empty,
 
-    pub fn load(self: *TemplateEdits, b: *const config.BrokerConfig) void {
+    pub fn load(self: *TemplateEdits, gpa: std.mem.Allocator, b: *const config.BrokerConfig) !void {
         copyInto(&self.data_dir, &self.data_dir_len, b.data_dir);
         copyInto(&self.file_pattern_in, &self.file_pattern_in_len, b.file_pattern_in);
         copyInto(&self.file_pattern_out, &self.file_pattern_out_len, b.file_pattern_out);
@@ -30,8 +52,32 @@ pub const TemplateEdits = struct {
             copyInto(&self.xlsx_name, &self.xlsx_name_len, xs.name);
             copyInto(&self.xlsx_suffix, &self.xlsx_suffix_len, xs.output_suffix);
         }
+
+        {
+            var it = b.input_schema.iterator();
+            while (it.next()) |e| {
+                var se: SchemaEntry = .{};
+                se.set(e.key_ptr.*, e.value_ptr.*);
+                try self.input_schema.append(gpa, se);
+            }
+            std.mem.sort(SchemaEntry, self.input_schema.items, {}, schemaLess);
+        }
+        for (b.output_schema.items) |col| {
+            var se: SchemaEntry = .{};
+            se.set(col.header, col.variable);
+            try self.output_schema.append(gpa, se);
+        }
+    }
+
+    pub fn deinit(self: *TemplateEdits, gpa: std.mem.Allocator) void {
+        self.input_schema.deinit(gpa);
+        self.output_schema.deinit(gpa);
     }
 };
+
+fn schemaLess(_: void, a: SchemaEntry, b: SchemaEntry) bool {
+    return std.mem.lessThan(u8, a.keyText(), b.keyText());
+}
 
 fn copyInto(dst: []u8, len: *usize, src: []const u8) void {
     const n = @min(dst.len, src.len);
@@ -63,6 +109,7 @@ pub const AppState = struct {
         self.loaded_path = null;
         self.template_names.deinit(self.gpa);
         self.template_names = .empty;
+        for (self.edits.items) |*e| e.deinit(self.gpa);
         self.edits.deinit(self.gpa);
         self.edits = .empty;
         for (self.validation.items) |*v| v.deinit(self.gpa);
@@ -96,7 +143,7 @@ pub const AppState = struct {
         try self.validation.ensureTotalCapacity(self.gpa, self.template_names.items.len);
         for (self.template_names.items) |name| {
             var e: TemplateEdits = .{};
-            if (cfg_ptr.brokers.get(name)) |b| e.load(&b);
+            if (cfg_ptr.brokers.get(name)) |b| try e.load(self.gpa, &b);
             self.edits.appendAssumeCapacity(e);
             self.validation.appendAssumeCapacity(.empty);
         }
@@ -170,6 +217,57 @@ pub const AppState = struct {
             .xlsx_sheet_name => b_ptr.xlsx_sheet.?.name = new_slice,
             .xlsx_sheet_output_suffix => b_ptr.xlsx_sheet.?.output_suffix = new_slice,
         }
+        self.revalidateTemplate(template_idx) catch {};
+    }
+
+    /// Rebuild broker.input_schema from edits, freeing old entries via cfg._alloc.
+    pub fn commitInputSchema(self: *AppState, template_idx: usize) !void {
+        const cfg = self.config_owner orelse return error.NoConfigLoaded;
+        if (template_idx >= self.template_names.items.len) return error.OutOfRange;
+        const name = self.template_names.items[template_idx];
+        const b_ptr = cfg.brokers.getPtr(name) orelse return error.TemplateNotFound;
+        const alloc = cfg._alloc;
+
+        var it = b_ptr.input_schema.iterator();
+        while (it.next()) |e| {
+            alloc.free(e.key_ptr.*);
+            alloc.free(e.value_ptr.*);
+        }
+        b_ptr.input_schema.clearRetainingCapacity();
+
+        for (self.edits.items[template_idx].input_schema.items) |se| {
+            const k = se.keyText();
+            if (k.len == 0) continue;
+            const dk = try alloc.dupe(u8, k);
+            const dv = try alloc.dupe(u8, se.valText());
+            try b_ptr.input_schema.put(dk, dv);
+        }
+
+        self.revalidateTemplate(template_idx) catch {};
+    }
+
+    /// Rebuild broker.output_schema from edits, freeing old entries via cfg._alloc.
+    pub fn commitOutputSchema(self: *AppState, template_idx: usize) !void {
+        const cfg = self.config_owner orelse return error.NoConfigLoaded;
+        if (template_idx >= self.template_names.items.len) return error.OutOfRange;
+        const name = self.template_names.items[template_idx];
+        const b_ptr = cfg.brokers.getPtr(name) orelse return error.TemplateNotFound;
+        const alloc = cfg._alloc;
+
+        for (b_ptr.output_schema.items) |col| {
+            alloc.free(col.header);
+            alloc.free(col.variable);
+        }
+        b_ptr.output_schema.clearRetainingCapacity();
+
+        for (self.edits.items[template_idx].output_schema.items) |se| {
+            const k = se.keyText();
+            if (k.len == 0) continue;
+            const dk = try alloc.dupe(u8, k);
+            const dv = try alloc.dupe(u8, se.valText());
+            try b_ptr.output_schema.append(.{ .header = dk, .variable = dv });
+        }
+
         self.revalidateTemplate(template_idx) catch {};
     }
 

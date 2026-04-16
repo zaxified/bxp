@@ -75,13 +75,10 @@ pub fn render(state: *app.AppState) !void {
     kvRow("file_type_out", @tagName(broker.file_type_out));
 
     sectionHeader("input_schema");
-    {
-        var it = broker.input_schema.iterator();
-        while (it.next()) |e| kvRow(e.key_ptr.*, e.value_ptr.*);
-    }
+    try schemaTable(state, selected_idx, .input, &edits.input_schema);
 
     sectionHeader("output_schema");
-    for (broker.output_schema.items) |col| kvRow(col.header, col.variable);
+    try schemaTable(state, selected_idx, .output, &edits.output_schema);
 
     sectionHeader("row_rules");
     if (broker.row_rules) |rules| {
@@ -96,6 +93,72 @@ pub fn render(state: *app.AppState) !void {
         }
     } else {
         dvui.label(@src(), "(none)", .{}, .{ .margin = .{ .x = 16, .y = 2, .w = 8, .h = 2 } });
+    }
+}
+
+const SchemaKind = enum { input, output };
+
+fn schemaTable(
+    state: *app.AppState,
+    template_idx: usize,
+    kind: SchemaKind,
+    list: *std.ArrayListUnmanaged(app.SchemaEntry),
+) !void {
+    var mutated = false;
+    var delete_idx: ?usize = null;
+
+    for (list.items, 0..) |*entry, row_i| {
+        var hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .id_extra = row_i,
+            .expand = .horizontal,
+            .margin = .{ .x = 16, .y = 1, .w = 8, .h = 1 },
+        });
+        defer hbox.deinit();
+
+        var key_te = dvui.textEntry(
+            @src(),
+            .{ .text = .{ .buffer = &entry.key } },
+            .{ .min_size_content = .{ .w = 180, .h = 0 } },
+        );
+        const key_changed = key_te.text_changed;
+        entry.key_len = key_te.getText().len;
+        key_te.deinit();
+
+        var val_te = dvui.textEntry(
+            @src(),
+            .{ .text = .{ .buffer = &entry.val } },
+            .{ .expand = .horizontal },
+        );
+        const val_changed = val_te.text_changed;
+        entry.val_len = val_te.getText().len;
+        val_te.deinit();
+
+        if (dvui.button(@src(), "×", .{}, .{ .min_size_content = .{ .w = 24, .h = 0 } })) {
+            delete_idx = row_i;
+        }
+
+        if (key_changed or val_changed) mutated = true;
+    }
+
+    if (dvui.button(@src(), "+ Add", .{}, .{ .margin = .{ .x = 16, .y = 2, .w = 8, .h = 2 } })) {
+        try list.append(state.gpa, .{});
+        mutated = true;
+    }
+
+    if (delete_idx) |di| {
+        _ = list.orderedRemove(di);
+        mutated = true;
+    }
+
+    if (mutated) {
+        switch (kind) {
+            .input => state.commitInputSchema(template_idx) catch |err| {
+                std.log.err("commit input_schema: {s}", .{@errorName(err)});
+            },
+            .output => state.commitOutputSchema(template_idx) catch |err| {
+                std.log.err("commit output_schema: {s}", .{@errorName(err)});
+            },
+        }
     }
 }
 
