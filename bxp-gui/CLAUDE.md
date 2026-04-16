@@ -14,8 +14,7 @@ variable values, row_rules matching, output rows, and pre_pass lookup contents.
 ## Stack
 
 - **Zig 0.15.2**
-- **DVUI** + **SDL3** backend (DVUI pinned in `build.zig.zon` to commit
-  `535ff1503b35d4107a3ea51bc41af26e858cb235`)
+- **DVUI v0.4.0** + **SDL3** backend (last version compatible with Zig 0.15.2)
 - **bxp-core** as a path dependency (modules: `config`, `csv`, `expr`)
 - Multiplatform: Linux ✓, Windows (cross-compile) ✓, macOS deferred (SDL3 needs `--sysroot`)
 
@@ -135,6 +134,14 @@ All 6 planned phases implemented. `zig build` and `zig build test` green.
 
 These bit during implementation — check here before debugging again:
 
+- **Duplicate widget IDs cause 100% CPU.** Any helper function called more than once
+  from the same parent (`sectionHeader`, `schemaHeaderRow`, `kvRow`, `schemaTable` for
+  input vs output) MUST take an `id_extra: usize` parameter and pass it to every widget
+  inside. Without it, widgets share `@src()` → DVUI `ScrollContainer` detects fluctuating
+  `virtualSize` → infinite `refresh()` cycle. This is the #1 bug source in this codebase.
+- **SDL3 on X11 bypasses KDE/Plasma compositor** by default, breaking alt-tab thumbnails
+  for ALL windows. Fixed via `SDL_SetHint("SDL_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR", "0")`
+  in `appStart()` (before window creation). Do not remove this.
 - **`Theme.Style.Name`** members: `content`, `window`, `control`, `highlight`, `err`,
   `app1..3`. **NO `accent`** — use `.highlight` for emphasis.
 - **`Config.brokers`** is `std.StringArrayHashMap(BrokerConfig)`. Mutate via
