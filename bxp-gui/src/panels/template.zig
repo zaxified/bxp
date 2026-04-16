@@ -25,6 +25,19 @@ pub fn render(state: *app.AppState) !void {
         tl.deinit();
     }
 
+    const vmsg = state.validationText(selected_idx);
+    if (vmsg.len > 0) {
+        var tl = dvui.textLayout(@src(), .{}, .{
+            .expand = .horizontal,
+            .style = .err,
+            .background = true,
+            .margin = .{ .x = 8, .y = 2, .w = 8, .h = 6 },
+            .padding = .all(6),
+        });
+        tl.addText(vmsg, .{});
+        tl.deinit();
+    }
+
     try editableRow(state, selected_idx, 0, "data_dir", &edits.data_dir, &edits.data_dir_len, .data_dir);
     try editableRow(state, selected_idx, 1, "file_pattern_in", &edits.file_pattern_in, &edits.file_pattern_in_len, .file_pattern_in);
     try editableRow(state, selected_idx, 2, "file_pattern_out", &edits.file_pattern_out, &edits.file_pattern_out_len, .file_pattern_out);

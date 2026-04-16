@@ -47,6 +47,7 @@ pub const AppState = struct {
     selected_template: ?usize = null,
     status: std.ArrayListUnmanaged(u8) = .empty,
     edits: std.ArrayListUnmanaged(TemplateEdits) = .empty,
+    validation: std.ArrayListUnmanaged(std.ArrayListUnmanaged(u8)) = .empty,
 
     pub fn init(gpa: std.mem.Allocator) AppState {
         return .{ .gpa = gpa };
@@ -64,6 +65,9 @@ pub const AppState = struct {
         self.template_names = .empty;
         self.edits.deinit(self.gpa);
         self.edits = .empty;
+        for (self.validation.items) |*v| v.deinit(self.gpa);
+        self.validation.deinit(self.gpa);
+        self.validation = .empty;
         self.selected_template = null;
         if (self.config_owner) |cfg| {
             cfg.deinit();
@@ -89,13 +93,50 @@ pub const AppState = struct {
         std.mem.sort([]const u8, self.template_names.items, {}, lessThan);
 
         try self.edits.ensureTotalCapacity(self.gpa, self.template_names.items.len);
+        try self.validation.ensureTotalCapacity(self.gpa, self.template_names.items.len);
         for (self.template_names.items) |name| {
             var e: TemplateEdits = .{};
             if (cfg_ptr.brokers.get(name)) |b| e.load(&b);
             self.edits.appendAssumeCapacity(e);
+            self.validation.appendAssumeCapacity(.empty);
         }
+        try self.revalidateAll();
 
         try self.setStatusFmt("loaded {s} ({d} templates)", .{ path, self.template_names.items.len });
+    }
+
+    pub fn revalidateAll(self: *AppState) !void {
+        const cfg = self.config_owner orelse return;
+        const cfg_path = self.loaded_path orelse "bxp.json";
+        for (self.template_names.items, 0..) |name, i| {
+            try self.revalidateOne(cfg, cfg_path, name, i);
+        }
+    }
+
+    pub fn revalidateTemplate(self: *AppState, template_idx: usize) !void {
+        const cfg = self.config_owner orelse return;
+        if (template_idx >= self.template_names.items.len) return;
+        const cfg_path = self.loaded_path orelse "bxp.json";
+        const name = self.template_names.items[template_idx];
+        try self.revalidateOne(cfg, cfg_path, name, template_idx);
+    }
+
+    fn revalidateOne(self: *AppState, cfg: *config.Config, cfg_path: []const u8, name: []const u8, idx: usize) !void {
+        const b = cfg.brokers.get(name) orelse return;
+        var msg = &self.validation.items[idx];
+        msg.clearRetainingCapacity();
+        var aw = std.Io.Writer.Allocating.fromArrayList(self.gpa, msg);
+        defer msg.* = aw.toArrayList();
+        b.validate(name, cfg_path, &aw.writer) catch {};
+    }
+
+    pub fn validationText(self: *const AppState, template_idx: usize) []const u8 {
+        if (template_idx >= self.validation.items.len) return "";
+        return self.validation.items[template_idx].items;
+    }
+
+    pub fn isValid(self: *const AppState, template_idx: usize) bool {
+        return self.validationText(template_idx).len == 0;
     }
 
     /// Replace broker field with `new_value`, reallocating via the config's allocator.
@@ -129,6 +170,7 @@ pub const AppState = struct {
             .xlsx_sheet_name => b_ptr.xlsx_sheet.?.name = new_slice,
             .xlsx_sheet_output_suffix => b_ptr.xlsx_sheet.?.output_suffix = new_slice,
         }
+        self.revalidateTemplate(template_idx) catch {};
     }
 
     pub fn setXlsxHeaderRow(self: *AppState, template_idx: usize, new_value: u32) !void {
