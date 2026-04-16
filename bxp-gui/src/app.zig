@@ -2,6 +2,29 @@ const std = @import("std");
 const config = @import("config");
 const json5_writer = @import("json5_writer.zig");
 
+pub const BrokerStringField = enum { data_dir, file_pattern_in, file_pattern_out };
+
+pub const TemplateEdits = struct {
+    data_dir: [512]u8 = [_]u8{0} ** 512,
+    data_dir_len: usize = 0,
+    file_pattern_in: [128]u8 = [_]u8{0} ** 128,
+    file_pattern_in_len: usize = 0,
+    file_pattern_out: [128]u8 = [_]u8{0} ** 128,
+    file_pattern_out_len: usize = 0,
+
+    pub fn load(self: *TemplateEdits, b: *const config.BrokerConfig) void {
+        copyInto(&self.data_dir, &self.data_dir_len, b.data_dir);
+        copyInto(&self.file_pattern_in, &self.file_pattern_in_len, b.file_pattern_in);
+        copyInto(&self.file_pattern_out, &self.file_pattern_out_len, b.file_pattern_out);
+    }
+};
+
+fn copyInto(dst: []u8, len: *usize, src: []const u8) void {
+    const n = @min(dst.len, src.len);
+    @memcpy(dst[0..n], src[0..n]);
+    len.* = n;
+}
+
 pub const AppState = struct {
     gpa: std.mem.Allocator,
     loaded_path: ?[]u8 = null,
@@ -9,6 +32,7 @@ pub const AppState = struct {
     template_names: std.ArrayListUnmanaged([]const u8) = .empty,
     selected_template: ?usize = null,
     status: std.ArrayListUnmanaged(u8) = .empty,
+    edits: std.ArrayListUnmanaged(TemplateEdits) = .empty,
 
     pub fn init(gpa: std.mem.Allocator) AppState {
         return .{ .gpa = gpa };
@@ -24,6 +48,8 @@ pub const AppState = struct {
         self.loaded_path = null;
         self.template_names.deinit(self.gpa);
         self.template_names = .empty;
+        self.edits.deinit(self.gpa);
+        self.edits = .empty;
         self.selected_template = null;
         if (self.config_owner) |cfg| {
             cfg.deinit();
@@ -48,7 +74,43 @@ pub const AppState = struct {
         }
         std.mem.sort([]const u8, self.template_names.items, {}, lessThan);
 
+        try self.edits.ensureTotalCapacity(self.gpa, self.template_names.items.len);
+        for (self.template_names.items) |name| {
+            var e: TemplateEdits = .{};
+            if (cfg_ptr.brokers.get(name)) |b| e.load(&b);
+            self.edits.appendAssumeCapacity(e);
+        }
+
         try self.setStatusFmt("loaded {s} ({d} templates)", .{ path, self.template_names.items.len });
+    }
+
+    /// Replace broker field with `new_value`, reallocating via the config's allocator.
+    pub fn updateBrokerString(
+        self: *AppState,
+        template_idx: usize,
+        comptime field: BrokerStringField,
+        new_value: []const u8,
+    ) !void {
+        const cfg = self.config_owner orelse return error.NoConfigLoaded;
+        if (template_idx >= self.template_names.items.len) return error.OutOfRange;
+        const name = self.template_names.items[template_idx];
+        const b_ptr = cfg.brokers.getPtr(name) orelse return error.TemplateNotFound;
+        const alloc = cfg._alloc;
+
+        const old_slice = switch (field) {
+            .data_dir => b_ptr.data_dir,
+            .file_pattern_in => b_ptr.file_pattern_in,
+            .file_pattern_out => b_ptr.file_pattern_out,
+        };
+        if (std.mem.eql(u8, old_slice, new_value)) return;
+
+        const new_slice = try alloc.dupe(u8, new_value);
+        alloc.free(old_slice);
+        switch (field) {
+            .data_dir => b_ptr.data_dir = new_slice,
+            .file_pattern_in => b_ptr.file_pattern_in = new_slice,
+            .file_pattern_out => b_ptr.file_pattern_out = new_slice,
+        }
     }
 
     fn setStatusFmt(self: *AppState, comptime fmt: []const u8, args: anytype) !void {

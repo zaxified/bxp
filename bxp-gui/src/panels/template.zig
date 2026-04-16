@@ -17,6 +17,7 @@ pub fn render(state: *app.AppState) !void {
 
     const name = state.template_names.items[selected_idx];
     const broker = cfg.brokers.get(name) orelse return;
+    const edits = &state.edits.items[selected_idx];
 
     {
         var tl = dvui.textLayout(@src(), .{}, .{ .expand = .horizontal, .font = .theme(.title), .margin = .all(8) });
@@ -24,9 +25,9 @@ pub fn render(state: *app.AppState) !void {
         tl.deinit();
     }
 
-    kvRow("data_dir", broker.data_dir);
-    kvRow("file_pattern_in", broker.file_pattern_in);
-    kvRow("file_pattern_out", broker.file_pattern_out);
+    try editableRow(state, selected_idx, 0, "data_dir", &edits.data_dir, &edits.data_dir_len, .data_dir);
+    try editableRow(state, selected_idx, 1, "file_pattern_in", &edits.file_pattern_in, &edits.file_pattern_in_len, .file_pattern_in);
+    try editableRow(state, selected_idx, 2, "file_pattern_out", &edits.file_pattern_out, &edits.file_pattern_out_len, .file_pattern_out);
     kvRow("date_filter_from_filename", if (broker.date_filter_from_filename) "true" else "false");
 
     sectionHeader("input_schema");
@@ -51,6 +52,36 @@ pub fn render(state: *app.AppState) !void {
         }
     } else {
         dvui.label(@src(), "(none)", .{}, .{ .margin = .{ .x = 16, .y = 2, .w = 8, .h = 2 } });
+    }
+}
+
+fn editableRow(
+    state: *app.AppState,
+    template_idx: usize,
+    row_id: usize,
+    label: []const u8,
+    buf: []u8,
+    len_ptr: *usize,
+    comptime field: app.BrokerStringField,
+) !void {
+    var hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = row_id, .expand = .horizontal, .margin = .{ .x = 16, .y = 1, .w = 8, .h = 1 } });
+    defer hbox.deinit();
+
+    var key_tl = dvui.textLayout(@src(), .{}, .{ .min_size_content = .{ .w = 180, .h = 0 } });
+    key_tl.addText(label, .{});
+    key_tl.deinit();
+
+    var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = buf } }, .{ .expand = .horizontal });
+    const text_changed = te.text_changed;
+    const current = te.getText();
+    const new_len = current.len;
+    te.deinit();
+
+    if (text_changed) {
+        len_ptr.* = new_len;
+        state.updateBrokerString(template_idx, field, buf[0..new_len]) catch |err| {
+            std.log.err("update {s} failed: {s}", .{ label, @errorName(err) });
+        };
     }
 }
 
