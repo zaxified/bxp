@@ -54,16 +54,16 @@ pub fn render(state: *app.AppState) !void {
     }
 
     // ── General ──
-    sectionHeader("General");
+    sectionHeader(100, "General");
     try editableRow(state, selected_idx, 0, "data_dir", &edits.data_dir, &edits.data_dir_len, .data_dir);
     try editableRow(state, selected_idx, 1, "file_pattern_in", &edits.file_pattern_in, &edits.file_pattern_in_len, .file_pattern_in);
     try editableRow(state, selected_idx, 2, "file_pattern_out", &edits.file_pattern_out, &edits.file_pattern_out_len, .file_pattern_out);
-    kvRow("date_filter_from_filename", if (broker.date_filter_from_filename) "true" else "false");
-    kvRow("file_type_in", @tagName(broker.file_type_in));
-    kvRow("file_type_out", @tagName(broker.file_type_out));
+    kvRow(200, "date_filter_from_filename", if (broker.date_filter_from_filename) "true" else "false");
+    kvRow(201, "file_type_in", @tagName(broker.file_type_in));
+    kvRow(202, "file_type_out", @tagName(broker.file_type_out));
 
     // ── CSV Format ──
-    sectionHeader("CSV Format");
+    sectionHeader(101, "CSV Format");
     try csvCharRow(state, selected_idx, 30, "delimiter_in", broker.csv_delimiter_in, .delimiter_in);
     try csvCharRow(state, selected_idx, 31, "delimiter_out", broker.csv_delimiter_out, .delimiter_out);
     try csvCharRow(state, selected_idx, 32, "decimal_sep_in", broker.csv_decimal_separator_in, .decimal_sep_in);
@@ -73,38 +73,38 @@ pub fn render(state: *app.AppState) !void {
 
     // ── XLSX Sheet ──
     if (broker.xlsx_sheet != null) {
-        sectionHeader("XLSX Sheet");
+        sectionHeader(102, "XLSX Sheet");
         try editableRow(state, selected_idx, 10, "name", &edits.xlsx_name, &edits.xlsx_name_len, .xlsx_sheet_name);
         try editableRow(state, selected_idx, 11, "output_suffix", &edits.xlsx_suffix, &edits.xlsx_suffix_len, .xlsx_sheet_output_suffix);
         try headerRowEditableRow(state, selected_idx, &edits.xlsx_header_row_buf, &edits.xlsx_header_row_len);
     }
 
     // ── Ticker Map ──
-    sectionHeader("Ticker Map");
-    schemaHeaderRow("Symbol", "Mapped Ticker");
+    sectionHeader(103, "Ticker Map");
+    schemaHeaderRow(300, "Symbol", "Mapped Ticker");
     try tickerMapTable(state, selected_idx, &edits.ticker_map);
 
     // ── Pre-pass ──
     if (edits.has_pre_pass) {
-        sectionHeader("Pre-pass");
+        sectionHeader(104, "Pre-pass");
         try editableRow(state, selected_idx, 20, "when", &edits.pre_pass_when, &edits.pre_pass_when_len, .pre_pass_when);
         try editableRow(state, selected_idx, 21, "key", &edits.pre_pass_key, &edits.pre_pass_key_len, .pre_pass_key);
-        schemaHeaderRow("Field", "Expression");
+        schemaHeaderRow(301, "Field", "Expression");
         try prePassValuesTable(state, selected_idx, &edits.pre_pass_values);
     }
 
     // ── Input Schema ──
-    sectionHeader("Input Schema");
-    schemaHeaderRow("Variable", "Expression");
+    sectionHeader(105, "Input Schema");
+    schemaHeaderRow(302, "Variable", "Expression");
     try schemaTable(state, selected_idx, .input, &edits.input_schema);
 
     // ── Output Schema ──
-    sectionHeader("Output Schema");
-    schemaHeaderRow("CSV Header", "Variable / Expression");
+    sectionHeader(106, "Output Schema");
+    schemaHeaderRow(303, "CSV Header", "Variable / Expression");
     try schemaTable(state, selected_idx, .output, &edits.output_schema);
 
     // ── Row Rules ──
-    sectionHeader("Row Rules");
+    sectionHeader(107, "Row Rules");
     try rowRulesTable(state, selected_idx, &edits.row_rules);
     if (dvui.button(@src(), "+ Add Rule", .{}, .{ .margin = .{ .x = 20, .y = 4, .w = 8, .h = 4 } })) {
         state.addRowRule(selected_idx) catch |err| {
@@ -121,12 +121,16 @@ fn schemaTable(
     kind: SchemaKind,
     list: *std.ArrayListUnmanaged(app.SchemaEntry),
 ) !void {
+    const kind_offset: usize = switch (kind) {
+        .input => 0,
+        .output => 10000,
+    };
     var mutated = false;
     var delete_idx: ?usize = null;
 
     for (list.items, 0..) |*entry, row_i| {
         var hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .id_extra = row_i,
+            .id_extra = row_i + kind_offset,
             .expand = .horizontal,
             .margin = .{ .x = 20, .y = 3, .w = 12, .h = 3 },
         });
@@ -156,7 +160,7 @@ fn schemaTable(
         if (key_changed) mutated = true;
     }
 
-    if (dvui.button(@src(), "+ Add", .{}, .{ .margin = .{ .x = 20, .y = 4, .w = 8, .h = 4 } })) {
+    if (dvui.button(@src(), "+ Add", .{}, .{ .id_extra = kind_offset, .margin = .{ .x = 20, .y = 4, .w = 8, .h = 4 } })) {
         try list.append(state.gpa, .{});
         mutated = true;
     }
@@ -466,8 +470,9 @@ fn headerRowEditableRow(
     }
 }
 
-fn schemaHeaderRow(left: []const u8, right: []const u8) void {
+fn schemaHeaderRow(id_extra: usize, left: []const u8, right: []const u8) void {
     var hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .id_extra = id_extra,
         .expand = .horizontal,
         .margin = .{ .x = 20, .y = 4, .w = 12, .h = 2 },
     });
@@ -492,9 +497,10 @@ fn schemaHeaderRow(left: []const u8, right: []const u8) void {
     }
 }
 
-fn sectionHeader(title: []const u8) void {
-    _ = dvui.separator(@src(), .{ .expand = .horizontal, .margin = .{ .x = 12, .y = 8, .w = 12, .h = 0 } });
+fn sectionHeader(id_extra: usize, title: []const u8) void {
+    _ = dvui.separator(@src(), .{ .id_extra = id_extra, .expand = .horizontal, .margin = .{ .x = 12, .y = 8, .w = 12, .h = 0 } });
     var tl = dvui.textLayout(@src(), .{}, .{
+        .id_extra = id_extra,
         .expand = .horizontal,
         .font = .theme(.heading),
         .margin = .{ .x = 12, .y = 2, .w = 12, .h = 4 },
@@ -524,8 +530,9 @@ fn exprRow(label: []const u8, expr: []const u8) void {
     val_tl.deinit();
 }
 
-fn kvRow(key: []const u8, value: []const u8) void {
+fn kvRow(id_extra: usize, key: []const u8, value: []const u8) void {
     var hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .id_extra = id_extra,
         .expand = .horizontal,
         .margin = .{ .x = 20, .y = 2, .w = 12, .h = 2 },
     });

@@ -57,20 +57,20 @@ pub fn render(state: *app.AppState) !void {
 
     sourceHeader(sim_ptr.source_path, state.debug_row_idx, sim_ptr.rows.len);
 
-    sectionHeader("Raw CSV fields");
+    sectionHeader(0, "Raw CSV fields");
     rawFieldsTable(sim_ptr.headers, row.raw_fields);
 
-    sectionHeader("input_schema variables");
+    sectionHeader(1, "input_schema variables");
     varTable(row.vars);
 
-    sectionHeader("row_rules");
+    sectionHeader(2, "row_rules");
     rulesTable(row.rules, row.matched_rule);
 
-    sectionHeader("Output rows");
+    sectionHeader(3, "Output rows");
     outputRows(sim_ptr.output_headers, row.output_rows);
 
     if (sim_ptr.pre_pass.len > 0) {
-        sectionHeader("Pre-pass lookup table");
+        sectionHeader(4, "Pre-pass lookup table");
         prePassTable(sim_ptr.pre_pass);
     }
 }
@@ -117,9 +117,10 @@ fn sourceHeader(path: []const u8, idx: usize, total: usize) void {
     tl.deinit();
 }
 
-fn sectionHeader(title: []const u8) void {
-    _ = dvui.separator(@src(), .{ .expand = .horizontal, .margin = .{ .x = 12, .y = 8, .w = 12, .h = 0 } });
+fn sectionHeader(id_extra: usize, title: []const u8) void {
+    _ = dvui.separator(@src(), .{ .id_extra = id_extra, .expand = .horizontal, .margin = .{ .x = 12, .y = 8, .w = 12, .h = 0 } });
     var tl = dvui.textLayout(@src(), .{}, .{
+        .id_extra = id_extra,
         .expand = .horizontal,
         .font = .theme(.heading),
         .margin = .{ .x = 12, .y = 2, .w = 12, .h = 4 },

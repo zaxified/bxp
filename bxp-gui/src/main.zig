@@ -1,26 +1,30 @@
 const std = @import("std");
 const dvui = @import("dvui");
+const sdl = @import("sdl-backend");
 
 const app_state = @import("app.zig");
 const layout = @import("layout.zig");
 
 pub const dvui_app: dvui.App = .{
-    .config = .{
-        .options = .{
-            .size = .{ .w = 1280.0, .h = 800.0 },
-            .min_size = .{ .w = 800.0, .h = 600.0 },
-            .title = "bxp-gui",
-            .window_init_options = .{
-                .theme = dvui.Theme.builtin.dracula,
-            },
-        },
-    },
+    .config = .{ .startFn = &appStart },
     .frameFn = appFrame,
     .initFn = appInit,
     .deinitFn = appDeinit,
 };
 pub const main = dvui.App.main;
 pub const panic = dvui.App.panic;
+
+fn appStart() dvui.App.StartOptions {
+    _ = sdl.c.SDL_SetHint("SDL_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR", "0");
+    return .{
+        .size = .{ .w = 1280.0, .h = 800.0 },
+        .min_size = .{ .w = 800.0, .h = 600.0 },
+        .title = "bxp-gui",
+        .window_init_options = .{
+            .theme = dvui.Theme.builtin.dracula,
+        },
+    };
+}
 pub const std_options: std.Options = .{
     .logFn = dvui.App.logFn,
 };
@@ -31,7 +35,7 @@ const gpa = gpa_instance.allocator();
 var state: app_state.AppState = undefined;
 
 pub fn appInit(win: *dvui.Window) !void {
-    _ = win;
+    win.max_fps = 30;
     state = app_state.AppState.init(gpa);
 }
 
@@ -129,7 +133,15 @@ fn menu() ?dvui.App.Result {
         }
     }
 
-    if (dvui.menuItemLabel(@src(), "View", .{ .submenu = true }, .{}) != null) {}
+    if (dvui.menuItemLabel(@src(), "View", .{ .submenu = true }, .{ .tag = "menu-view" })) |r| {
+        var fw = dvui.floatingMenu(@src(), .{ .from = r }, .{});
+        defer fw.deinit();
+
+        if (dvui.menuItemLabel(@src(), "DVUI Debug Window", .{}, .{ .expand = .horizontal }) != null) {
+            dvui.toggleDebugWindow();
+            m.close();
+        }
+    }
 
     return null;
 }

@@ -7,8 +7,8 @@
             .path = "../bxp-core",
         },
         .dvui = .{
-            .url = "git+https://github.com/david-vanderson/dvui?ref=main#535ff1503b35d4107a3ea51bc41af26e858cb235",
-            .hash = "dvui-0.4.0-dev-AQFJmf-A3gCWYqYVQjenwJbQLtLAYAr2EnNWhbEdHI5O",
+            .url = "git+https://github.com/david-vanderson/dvui?ref=v0.4.0#85c4cb4c28813743b191c691ba74ccd1cf52eff6",
+            .hash = "dvui-0.4.0-AQFJmQjU3wBQi8tkUTwHgtqWhhGlghgmBExQ-jqPRQBR",
         },
     },
     .minimum_zig_version = "0.15.0",
