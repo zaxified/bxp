@@ -3,6 +3,7 @@ const dvui = @import("dvui");
 const config = @import("config");
 const app = @import("../app.zig");
 const highlighter = @import("../expr_editor/highlighter.zig");
+const expr_widget = @import("../expr_editor/widget.zig");
 
 pub fn render(state: *app.AppState) !void {
     var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both });
@@ -133,19 +134,13 @@ fn schemaTable(
         entry.key_len = key_te.getText().len;
         key_te.deinit();
 
-        var val_te = dvui.textEntry(
-            @src(),
-            .{ .text = .{ .buffer = &entry.val } },
-            .{
-                .expand = .horizontal,
-                .min_size_content = .{ .w = 0, .h = 26 },
-                .margin = .{ .x = 6, .y = 0, .w = 0, .h = 0 },
-            },
-        );
-        const val_changed = val_te.text_changed;
-        entry.val_len = val_te.getText().len;
-        val_te.deinit();
-        if (val_changed) mutated = true;
+        const val_res = expr_widget.exprEntry(@src(), &entry.val, .{
+            .expand = .horizontal,
+            .min_size_content = .{ .w = 0, .h = 26 },
+            .margin = .{ .x = 6, .y = 0, .w = 0, .h = 0 },
+        });
+        entry.val_len = val_res.text.len;
+        if (val_res.text_changed) mutated = true;
 
         if (dvui.button(@src(), "x", .{}, .{ .margin = .{ .x = 6, .y = 0, .w = 0, .h = 0 } })) {
             delete_idx = row_i;
@@ -201,18 +196,13 @@ fn prePassValuesTable(
         entry.key_len = key_te.getText().len;
         key_te.deinit();
 
-        var val_te = dvui.textEntry(
-            @src(),
-            .{ .text = .{ .buffer = &entry.val } },
-            .{
-                .expand = .horizontal,
-                .min_size_content = .{ .w = 0, .h = 26 },
-                .margin = .{ .x = 6, .y = 0, .w = 0, .h = 0 },
-            },
-        );
-        if (val_te.text_changed) mutated = true;
-        entry.val_len = val_te.getText().len;
-        val_te.deinit();
+        const val_res = expr_widget.exprEntry(@src(), &entry.val, .{
+            .expand = .horizontal,
+            .min_size_content = .{ .w = 0, .h = 26 },
+            .margin = .{ .x = 6, .y = 0, .w = 0, .h = 0 },
+        });
+        if (val_res.text_changed) mutated = true;
+        entry.val_len = val_res.text.len;
 
         if (dvui.button(@src(), "x", .{}, .{ .margin = .{ .x = 6, .y = 0, .w = 0, .h = 0 } })) {
             delete_idx = row_i;
@@ -311,19 +301,14 @@ fn rowRulesTable(
                 lbl.deinit();
             }
 
-            var te = dvui.textEntry(
-                @src(),
-                .{ .text = .{ .buffer = &entry.when } },
-                .{
-                    .expand = .horizontal,
-                    .min_size_content = .{ .w = 0, .h = 26 },
-                },
-            );
-            if (te.text_changed) {
-                entry.when_len = te.getText().len;
+            const w_res = expr_widget.exprEntry(@src(), &entry.when, .{
+                .expand = .horizontal,
+                .min_size_content = .{ .w = 0, .h = 26 },
+            });
+            if (w_res.text_changed) {
+                entry.when_len = w_res.text.len;
                 mutated = true;
             }
-            te.deinit();
         }
     }
 
