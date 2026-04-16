@@ -98,11 +98,11 @@ fn saveConfigDialog() void {
         return;
     }
     const arena = dvui.currentWindow().arena();
-    const filters = [_][]const u8{ "*.json", "*.json5" };
+    const filters = [_][]const u8{"*.json"};
     const picked = dvui.dialogNativeFileSave(arena, .{
         .title = "Save bxp config as",
         .filters = &filters,
-        .filter_description = "bxp config (*.json, *.json5)",
+        .filter_description = "bxp config (*.json)",
     }) catch null;
 
     const path = picked orelse return;
