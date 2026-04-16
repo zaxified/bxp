@@ -69,19 +69,17 @@ pub fn render(state: *app.AppState) !void {
     }
 
     // ── XLSX Sheet ──
-    if (broker.xlsx_sheet) |xs| {
+    if (broker.xlsx_sheet != null) {
         sectionHeader("XLSX Sheet");
         try editableRow(state, selected_idx, 10, "name", &edits.xlsx_name, &edits.xlsx_name_len, .xlsx_sheet_name);
         try editableRow(state, selected_idx, 11, "output_suffix", &edits.xlsx_suffix, &edits.xlsx_suffix_len, .xlsx_sheet_output_suffix);
-        headerRowRow(xs.header_row);
+        try headerRowEditableRow(state, selected_idx, &edits.xlsx_header_row_buf, &edits.xlsx_header_row_len);
     }
 
     // ── Ticker Map ──
-    if (broker.ticker_map.count() > 0) {
-        sectionHeader("Ticker Map");
-        var it = broker.ticker_map.iterator();
-        while (it.next()) |e| kvRow(e.key_ptr.*, e.value_ptr.*);
-    }
+    sectionHeader("Ticker Map");
+    schemaHeaderRow("Symbol", "Mapped Ticker");
+    try tickerMapTable(state, selected_idx, &edits.ticker_map);
 
     // ── Pre-pass ──
     if (broker.pre_pass) |pp| {
@@ -104,10 +102,11 @@ pub fn render(state: *app.AppState) !void {
 
     // ── Row Rules ──
     sectionHeader("Row Rules");
-    if (edits.has_row_rules) {
-        try rowRulesTable(state, selected_idx, &edits.row_rules);
-    } else {
-        dvui.label(@src(), "(none)", .{}, .{ .margin = .{ .x = 20, .y = 4, .w = 8, .h = 4 } });
+    try rowRulesTable(state, selected_idx, &edits.row_rules);
+    if (dvui.button(@src(), "+ Add Rule", .{}, .{ .margin = .{ .x = 20, .y = 4, .w = 8, .h = 4 } })) {
+        state.addRowRule(selected_idx) catch |err| {
+            std.log.err("add row rule: {s}", .{@errorName(err)});
+        };
     }
 }
 
@@ -188,24 +187,31 @@ fn rowRulesTable(
     list: *std.ArrayListUnmanaged(app.RowRuleEdit),
 ) !void {
     if (list.items.len == 0) {
-        dvui.label(@src(), "(empty)", .{}, .{ .margin = .{ .x = 20, .y = 4, .w = 8, .h = 4 } });
+        dvui.label(@src(), "(no rules — every row passes through)", .{}, .{
+            .margin = .{ .x = 20, .y = 4, .w = 8, .h = 4 },
+        });
         return;
     }
 
     var mutated = false;
+    var delete_idx: ?usize = null;
+
     for (list.items, 0..) |*entry, row_i| {
-        // Rule header with when expression (highlighted)
+        // Rule header with when expression (highlighted) + delete button
         {
             var hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{
                 .id_extra = row_i,
                 .expand = .horizontal,
-                .margin = .{ .x = 20, .y = 4, .w = 12, .h = 0 },
+                .margin = .{ .x = 20, .y = 6, .w = 12, .h = 0 },
             });
             defer hbox.deinit();
 
             {
-                var lbl = dvui.textLayout(@src(), .{}, .{});
-                lbl.format("Rule {d}  ", .{row_i + 1}, .{});
+                var lbl = dvui.textLayout(@src(), .{ .break_lines = false }, .{
+                    .min_size_content = .{ .w = 70, .h = 0 },
+                    .font = .theme(.heading),
+                });
+                lbl.format("Rule {d}", .{row_i + 1}, .{});
                 lbl.deinit();
             }
 
@@ -216,12 +222,22 @@ fn rowRulesTable(
                 });
                 highlighter.addHighlighted(&preview, entry.when[0..entry.when_len]);
                 preview.deinit();
+            } else {
+                var spacer = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
+                spacer.deinit();
             }
 
             {
-                var cnt = dvui.textLayout(@src(), .{}, .{});
-                cnt.format("  ({d} rows)", .{entry.rows_count}, .{});
+                var cnt = dvui.textLayout(@src(), .{ .break_lines = false }, .{});
+                cnt.format("({d} rows)", .{entry.rows_count}, .{});
                 cnt.deinit();
+            }
+
+            if (dvui.button(@src(), "x", .{}, .{
+                .id_extra = row_i,
+                .margin = .{ .x = 6, .y = 0, .w = 0, .h = 0 },
+            })) {
+                delete_idx = row_i;
             }
         }
 
@@ -230,7 +246,7 @@ fn rowRulesTable(
             var hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{
                 .id_extra = row_i + 30000,
                 .expand = .horizontal,
-                .margin = .{ .x = 36, .y = 0, .w = 12, .h = 2 },
+                .margin = .{ .x = 36, .y = 0, .w = 12, .h = 4 },
             });
             defer hbox.deinit();
 
@@ -256,9 +272,75 @@ fn rowRulesTable(
         }
     }
 
+    if (delete_idx) |di| {
+        state.deleteRowRule(template_idx, di) catch |err| {
+            std.log.err("delete row rule: {s}", .{@errorName(err)});
+        };
+    }
+
     if (mutated) {
         state.commitRowRulesWhen(template_idx) catch |err| {
             std.log.err("commit row_rules: {s}", .{@errorName(err)});
+        };
+    }
+}
+
+fn tickerMapTable(
+    state: *app.AppState,
+    template_idx: usize,
+    list: *std.ArrayListUnmanaged(app.TickerEntry),
+) !void {
+    var mutated = false;
+    var delete_idx: ?usize = null;
+
+    for (list.items, 0..) |*entry, row_i| {
+        var hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .id_extra = row_i,
+            .expand = .horizontal,
+            .margin = .{ .x = 20, .y = 3, .w = 12, .h = 3 },
+        });
+        defer hbox.deinit();
+
+        var key_te = dvui.textEntry(
+            @src(),
+            .{ .text = .{ .buffer = &entry.key } },
+            .{ .min_size_content = .{ .w = 160, .h = 26 } },
+        );
+        if (key_te.text_changed) mutated = true;
+        entry.key_len = key_te.getText().len;
+        key_te.deinit();
+
+        var val_te = dvui.textEntry(
+            @src(),
+            .{ .text = .{ .buffer = &entry.val } },
+            .{
+                .expand = .horizontal,
+                .min_size_content = .{ .w = 0, .h = 26 },
+                .margin = .{ .x = 6, .y = 0, .w = 0, .h = 0 },
+            },
+        );
+        if (val_te.text_changed) mutated = true;
+        entry.val_len = val_te.getText().len;
+        val_te.deinit();
+
+        if (dvui.button(@src(), "x", .{}, .{ .margin = .{ .x = 6, .y = 0, .w = 0, .h = 0 } })) {
+            delete_idx = row_i;
+        }
+    }
+
+    if (dvui.button(@src(), "+ Add", .{}, .{ .margin = .{ .x = 20, .y = 4, .w = 8, .h = 4 } })) {
+        try list.append(state.gpa, .{});
+        mutated = true;
+    }
+
+    if (delete_idx) |di| {
+        _ = list.orderedRemove(di);
+        mutated = true;
+    }
+
+    if (mutated) {
+        state.commitTickerMap(template_idx) catch |err| {
+            std.log.err("commit ticker_map: {s}", .{@errorName(err)});
         };
     }
 }
@@ -302,10 +384,39 @@ fn editableRow(
     }
 }
 
-fn headerRowRow(current: u32) void {
-    var buf: [16]u8 = undefined;
-    const s = std.fmt.bufPrint(&buf, "{d}", .{current}) catch "?";
-    kvRow("header_row", s);
+fn headerRowEditableRow(
+    state: *app.AppState,
+    template_idx: usize,
+    buf: *[16]u8,
+    len_ptr: *usize,
+) !void {
+    var hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .id_extra = 12,
+        .expand = .horizontal,
+        .margin = .{ .x = 20, .y = 2, .w = 12, .h = 2 },
+    });
+    defer hbox.deinit();
+
+    {
+        var key_tl = dvui.textLayout(@src(), .{}, .{ .min_size_content = .{ .w = 160, .h = 0 } });
+        key_tl.addText("header_row", .{});
+        key_tl.deinit();
+    }
+
+    var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = buf } }, .{
+        .min_size_content = .{ .w = 100, .h = 26 },
+    });
+    const text_changed = te.text_changed;
+    const current = te.getText();
+    te.deinit();
+
+    if (text_changed) {
+        len_ptr.* = current.len;
+        const parsed = std.fmt.parseInt(u32, current, 10) catch return;
+        state.setXlsxHeaderRow(template_idx, parsed) catch |err| {
+            std.log.err("update header_row failed: {s}", .{@errorName(err)});
+        };
+    }
 }
 
 fn schemaHeaderRow(left: []const u8, right: []const u8) void {

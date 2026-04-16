@@ -45,6 +45,26 @@ pub const RowRuleEdit = struct {
     }
 };
 
+pub const TickerEntry = struct {
+    key: [64]u8 = [_]u8{0} ** 64,
+    key_len: usize = 0,
+    val: [64]u8 = [_]u8{0} ** 64,
+    val_len: usize = 0,
+
+    pub fn set(self: *TickerEntry, k: []const u8, v: []const u8) void {
+        copyInto(&self.key, &self.key_len, k);
+        copyInto(&self.val, &self.val_len, v);
+    }
+
+    pub fn keyText(self: *const TickerEntry) []const u8 {
+        return self.key[0..self.key_len];
+    }
+
+    pub fn valText(self: *const TickerEntry) []const u8 {
+        return self.val[0..self.val_len];
+    }
+};
+
 pub const TemplateEdits = struct {
     data_dir: [512]u8 = [_]u8{0} ** 512,
     data_dir_len: usize = 0,
@@ -60,6 +80,9 @@ pub const TemplateEdits = struct {
     output_schema: std.ArrayListUnmanaged(SchemaEntry) = .empty,
     row_rules: std.ArrayListUnmanaged(RowRuleEdit) = .empty,
     has_row_rules: bool = false,
+    ticker_map: std.ArrayListUnmanaged(TickerEntry) = .empty,
+    xlsx_header_row_buf: [16]u8 = [_]u8{0} ** 16,
+    xlsx_header_row_len: usize = 0,
 
     pub fn load(self: *TemplateEdits, gpa: std.mem.Allocator, b: *const config.BrokerConfig) !void {
         copyInto(&self.data_dir, &self.data_dir_len, b.data_dir);
@@ -68,6 +91,17 @@ pub const TemplateEdits = struct {
         if (b.xlsx_sheet) |xs| {
             copyInto(&self.xlsx_name, &self.xlsx_name_len, xs.name);
             copyInto(&self.xlsx_suffix, &self.xlsx_suffix_len, xs.output_suffix);
+            const written = std.fmt.bufPrint(&self.xlsx_header_row_buf, "{d}", .{xs.header_row}) catch "";
+            self.xlsx_header_row_len = written.len;
+        }
+
+        {
+            var tit = b.ticker_map.iterator();
+            while (tit.next()) |e| {
+                var te: TickerEntry = .{};
+                te.set(e.key_ptr.*, e.value_ptr.*);
+                try self.ticker_map.append(gpa, te);
+            }
         }
 
         {
@@ -98,6 +132,7 @@ pub const TemplateEdits = struct {
         self.input_schema.deinit(gpa);
         self.output_schema.deinit(gpa);
         self.row_rules.deinit(gpa);
+        self.ticker_map.deinit(gpa);
     }
 };
 
@@ -315,6 +350,94 @@ pub const AppState = struct {
                 rule.when = try alloc.dupe(u8, new_when);
             }
         }
+        self.revalidateTemplate(template_idx) catch {};
+    }
+
+    /// Rebuild broker.ticker_map from edits, freeing old entries via cfg._alloc.
+    pub fn commitTickerMap(self: *AppState, template_idx: usize) !void {
+        const cfg = self.config_owner orelse return error.NoConfigLoaded;
+        if (template_idx >= self.template_names.items.len) return error.OutOfRange;
+        const name = self.template_names.items[template_idx];
+        const b_ptr = cfg.brokers.getPtr(name) orelse return error.TemplateNotFound;
+        const alloc = cfg._alloc;
+
+        var it = b_ptr.ticker_map.iterator();
+        while (it.next()) |e| {
+            alloc.free(e.key_ptr.*);
+            alloc.free(e.value_ptr.*);
+        }
+        b_ptr.ticker_map.clearRetainingCapacity();
+
+        for (self.edits.items[template_idx].ticker_map.items) |te| {
+            const k = te.keyText();
+            if (k.len == 0) continue;
+            const dk = try alloc.dupe(u8, k);
+            const dv = try alloc.dupe(u8, te.valText());
+            try b_ptr.ticker_map.put(dk, dv);
+        }
+
+        self.revalidateTemplate(template_idx) catch {};
+    }
+
+    /// Append an empty row rule.
+    pub fn addRowRule(self: *AppState, template_idx: usize) !void {
+        const cfg = self.config_owner orelse return error.NoConfigLoaded;
+        if (template_idx >= self.template_names.items.len) return error.OutOfRange;
+        const name = self.template_names.items[template_idx];
+        const b_ptr = cfg.brokers.getPtr(name) orelse return error.TemplateNotFound;
+        const alloc = cfg._alloc;
+
+        const old_rules = b_ptr.row_rules orelse &[_]config.RowRule{};
+        var new_rules = try alloc.alloc(config.RowRule, old_rules.len + 1);
+        @memcpy(new_rules[0..old_rules.len], old_rules);
+        new_rules[old_rules.len] = .{
+            .when = try alloc.dupe(u8, ""),
+            .rows = try alloc.alloc(config.RowOverride, 0),
+        };
+        if (b_ptr.row_rules) |r| alloc.free(r);
+        b_ptr.row_rules = new_rules;
+
+        try self.edits.items[template_idx].row_rules.append(self.gpa, .{});
+        self.edits.items[template_idx].has_row_rules = true;
+        self.revalidateTemplate(template_idx) catch {};
+    }
+
+    /// Remove the row rule at `rule_idx`.
+    pub fn deleteRowRule(self: *AppState, template_idx: usize, rule_idx: usize) !void {
+        const cfg = self.config_owner orelse return error.NoConfigLoaded;
+        if (template_idx >= self.template_names.items.len) return error.OutOfRange;
+        const name = self.template_names.items[template_idx];
+        const b_ptr = cfg.brokers.getPtr(name) orelse return error.TemplateNotFound;
+        const alloc = cfg._alloc;
+
+        const rules = b_ptr.row_rules orelse return;
+        if (rule_idx >= rules.len) return;
+
+        const r = rules[rule_idx];
+        alloc.free(r.when);
+        for (r.rows) |*ro| {
+            var ovit = ro.iterator();
+            while (ovit.next()) |e| {
+                alloc.free(e.key_ptr.*);
+                alloc.free(e.value_ptr.*);
+            }
+            ro.deinit();
+        }
+        alloc.free(r.rows);
+
+        if (rules.len == 1) {
+            alloc.free(rules);
+            b_ptr.row_rules = null;
+            self.edits.items[template_idx].has_row_rules = false;
+        } else {
+            var new_rules = try alloc.alloc(config.RowRule, rules.len - 1);
+            @memcpy(new_rules[0..rule_idx], rules[0..rule_idx]);
+            @memcpy(new_rules[rule_idx..], rules[rule_idx + 1 ..]);
+            alloc.free(rules);
+            b_ptr.row_rules = new_rules;
+        }
+
+        _ = self.edits.items[template_idx].row_rules.orderedRemove(rule_idx);
         self.revalidateTemplate(template_idx) catch {};
     }
 
