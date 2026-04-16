@@ -55,18 +55,13 @@ pub fn render(state: *app.AppState) !void {
     kvRow("file_type_out", @tagName(broker.file_type_out));
 
     // ── CSV Format ──
-    if (broker.csv_delimiter_in != ',' or broker.csv_delimiter_out != ',' or
-        broker.csv_decimal_separator_in != '.' or broker.csv_decimal_separator_out != '.' or
-        broker.csv_text_quote_in != '"' or broker.csv_text_quote_out != 0)
-    {
-        sectionHeader("CSV Format");
-        if (broker.csv_delimiter_in != ',') kvRowChar("delimiter_in", broker.csv_delimiter_in);
-        if (broker.csv_delimiter_out != ',') kvRowChar("delimiter_out", broker.csv_delimiter_out);
-        if (broker.csv_decimal_separator_in != '.') kvRowChar("decimal_sep_in", broker.csv_decimal_separator_in);
-        if (broker.csv_decimal_separator_out != '.') kvRowChar("decimal_sep_out", broker.csv_decimal_separator_out);
-        if (broker.csv_text_quote_in != '"') kvRowQuote("quote_in", broker.csv_text_quote_in);
-        if (broker.csv_text_quote_out != 0) kvRowQuote("quote_out", broker.csv_text_quote_out);
-    }
+    sectionHeader("CSV Format");
+    try csvCharRow(state, selected_idx, 30, "delimiter_in", broker.csv_delimiter_in, .delimiter_in);
+    try csvCharRow(state, selected_idx, 31, "delimiter_out", broker.csv_delimiter_out, .delimiter_out);
+    try csvCharRow(state, selected_idx, 32, "decimal_sep_in", broker.csv_decimal_separator_in, .decimal_sep_in);
+    try csvCharRow(state, selected_idx, 33, "decimal_sep_out", broker.csv_decimal_separator_out, .decimal_sep_out);
+    try csvQuoteRow(state, selected_idx, 34, "quote_in", broker.csv_text_quote_in, .text_quote_in);
+    try csvQuoteRow(state, selected_idx, 35, "quote_out", broker.csv_text_quote_out, .text_quote_out);
 
     // ── XLSX Sheet ──
     if (broker.xlsx_sheet != null) {
@@ -82,12 +77,12 @@ pub fn render(state: *app.AppState) !void {
     try tickerMapTable(state, selected_idx, &edits.ticker_map);
 
     // ── Pre-pass ──
-    if (broker.pre_pass) |pp| {
+    if (edits.has_pre_pass) {
         sectionHeader("Pre-pass");
-        exprRow("when", pp.when);
-        exprRow("key", pp.key);
-        var it = pp.values.iterator();
-        while (it.next()) |e| exprRow(e.key_ptr.*, e.value_ptr.*);
+        try editableRow(state, selected_idx, 20, "when", &edits.pre_pass_when, &edits.pre_pass_when_len, .pre_pass_when);
+        try editableRow(state, selected_idx, 21, "key", &edits.pre_pass_key, &edits.pre_pass_key_len, .pre_pass_key);
+        schemaHeaderRow("Field", "Expression");
+        try prePassValuesTable(state, selected_idx, &edits.pre_pass_values);
     }
 
     // ── Input Schema ──
@@ -178,6 +173,66 @@ fn schemaTable(
                 std.log.err("commit output_schema: {s}", .{@errorName(err)});
             },
         }
+    }
+}
+
+fn prePassValuesTable(
+    state: *app.AppState,
+    template_idx: usize,
+    list: *std.ArrayListUnmanaged(app.SchemaEntry),
+) !void {
+    var mutated = false;
+    var delete_idx: ?usize = null;
+
+    for (list.items, 0..) |*entry, row_i| {
+        var hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .id_extra = row_i,
+            .expand = .horizontal,
+            .margin = .{ .x = 20, .y = 3, .w = 12, .h = 3 },
+        });
+        defer hbox.deinit();
+
+        var key_te = dvui.textEntry(
+            @src(),
+            .{ .text = .{ .buffer = &entry.key } },
+            .{ .min_size_content = .{ .w = 160, .h = 26 } },
+        );
+        if (key_te.text_changed) mutated = true;
+        entry.key_len = key_te.getText().len;
+        key_te.deinit();
+
+        var val_te = dvui.textEntry(
+            @src(),
+            .{ .text = .{ .buffer = &entry.val } },
+            .{
+                .expand = .horizontal,
+                .min_size_content = .{ .w = 0, .h = 26 },
+                .margin = .{ .x = 6, .y = 0, .w = 0, .h = 0 },
+            },
+        );
+        if (val_te.text_changed) mutated = true;
+        entry.val_len = val_te.getText().len;
+        val_te.deinit();
+
+        if (dvui.button(@src(), "x", .{}, .{ .margin = .{ .x = 6, .y = 0, .w = 0, .h = 0 } })) {
+            delete_idx = row_i;
+        }
+    }
+
+    if (dvui.button(@src(), "+ Add", .{}, .{ .margin = .{ .x = 20, .y = 4, .w = 8, .h = 4 } })) {
+        try list.append(state.gpa, .{});
+        mutated = true;
+    }
+
+    if (delete_idx) |di| {
+        _ = list.orderedRemove(di);
+        mutated = true;
+    }
+
+    if (mutated) {
+        state.commitPrePassValues(template_idx) catch |err| {
+            std.log.err("commit pre_pass values: {s}", .{@errorName(err)});
+        };
     }
 }
 
@@ -497,18 +552,90 @@ fn kvRow(key: []const u8, value: []const u8) void {
     }
 }
 
-fn kvRowChar(key: []const u8, c: u8) void {
-    var buf: [8]u8 = undefined;
-    const s = std.fmt.bufPrint(&buf, "'{c}'", .{c}) catch "?";
-    kvRow(key, s);
+fn csvCharRow(
+    state: *app.AppState,
+    template_idx: usize,
+    row_id: usize,
+    label: []const u8,
+    current: u8,
+    field: app.CsvCharField,
+) !void {
+    var hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .id_extra = row_id,
+        .expand = .horizontal,
+        .margin = .{ .x = 20, .y = 2, .w = 12, .h = 2 },
+    });
+    defer hbox.deinit();
+
+    {
+        var key_tl = dvui.textLayout(@src(), .{}, .{ .min_size_content = .{ .w = 160, .h = 0 } });
+        key_tl.addText(label, .{});
+        key_tl.deinit();
+    }
+
+    const Buf = struct {
+        var bufs: [6][2]u8 = .{.{0, 0}} ** 6;
+    };
+    const slot: usize = @intFromEnum(field);
+    Buf.bufs[slot][0] = current;
+    Buf.bufs[slot][1] = 0;
+
+    var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &Buf.bufs[slot] } }, .{
+        .min_size_content = .{ .w = 60, .h = 26 },
+    });
+    const text_changed = te.text_changed;
+    const text = te.getText();
+    te.deinit();
+
+    if (text_changed and text.len >= 1) {
+        state.setCsvChar(template_idx, field, text[0]) catch |err| {
+            std.log.err("update {s}: {s}", .{ label, @errorName(err) });
+        };
+    }
 }
 
-fn kvRowQuote(key: []const u8, c: u8) void {
-    const label: []const u8 = switch (c) {
-        '"' => "double",
-        '\'' => "single",
-        0 => "none",
-        else => "?",
+fn csvQuoteRow(
+    state: *app.AppState,
+    template_idx: usize,
+    row_id: usize,
+    label: []const u8,
+    current: u8,
+    field: app.CsvCharField,
+) !void {
+    var hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .id_extra = row_id,
+        .expand = .horizontal,
+        .margin = .{ .x = 20, .y = 2, .w = 12, .h = 2 },
+    });
+    defer hbox.deinit();
+
+    {
+        var key_tl = dvui.textLayout(@src(), .{}, .{ .min_size_content = .{ .w = 160, .h = 0 } });
+        key_tl.addText(label, .{});
+        key_tl.deinit();
+    }
+
+    const opts = [_][]const u8{ "none", "single", "double" };
+    var idx: usize = switch (current) {
+        0 => 0,
+        '\'' => 1,
+        '"' => 2,
+        else => 0,
     };
-    kvRow(key, label);
+    const initial = idx;
+    _ = dvui.dropdown(@src(), &opts, .{ .choice = &idx }, .{}, .{
+        .id_extra = row_id,
+        .min_size_content = .{ .w = 100, .h = 26 },
+    });
+    if (idx != initial) {
+        const new_ch: u8 = switch (idx) {
+            0 => 0,
+            1 => '\'',
+            2 => '"',
+            else => 0,
+        };
+        state.setCsvChar(template_idx, field, new_ch) catch |err| {
+            std.log.err("update {s}: {s}", .{ label, @errorName(err) });
+        };
+    }
 }

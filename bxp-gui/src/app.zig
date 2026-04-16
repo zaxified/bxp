@@ -2,12 +2,23 @@ const std = @import("std");
 const config = @import("config");
 const json5_writer = @import("json5_writer.zig");
 
+pub const CsvCharField = enum {
+    delimiter_in,
+    delimiter_out,
+    decimal_sep_in,
+    decimal_sep_out,
+    text_quote_in,
+    text_quote_out,
+};
+
 pub const BrokerStringField = enum {
     data_dir,
     file_pattern_in,
     file_pattern_out,
     xlsx_sheet_name,
     xlsx_sheet_output_suffix,
+    pre_pass_when,
+    pre_pass_key,
 };
 
 pub const SchemaEntry = struct {
@@ -83,6 +94,12 @@ pub const TemplateEdits = struct {
     ticker_map: std.ArrayListUnmanaged(TickerEntry) = .empty,
     xlsx_header_row_buf: [16]u8 = [_]u8{0} ** 16,
     xlsx_header_row_len: usize = 0,
+    has_pre_pass: bool = false,
+    pre_pass_when: [512]u8 = [_]u8{0} ** 512,
+    pre_pass_when_len: usize = 0,
+    pre_pass_key: [512]u8 = [_]u8{0} ** 512,
+    pre_pass_key_len: usize = 0,
+    pre_pass_values: std.ArrayListUnmanaged(SchemaEntry) = .empty,
 
     pub fn load(self: *TemplateEdits, gpa: std.mem.Allocator, b: *const config.BrokerConfig) !void {
         copyInto(&self.data_dir, &self.data_dir_len, b.data_dir);
@@ -118,6 +135,18 @@ pub const TemplateEdits = struct {
             se.set(col.header, col.variable);
             try self.output_schema.append(gpa, se);
         }
+        if (b.pre_pass) |pp| {
+            self.has_pre_pass = true;
+            copyInto(&self.pre_pass_when, &self.pre_pass_when_len, pp.when);
+            copyInto(&self.pre_pass_key, &self.pre_pass_key_len, pp.key);
+            var pit = pp.values.iterator();
+            while (pit.next()) |e| {
+                var se: SchemaEntry = .{};
+                se.set(e.key_ptr.*, e.value_ptr.*);
+                try self.pre_pass_values.append(gpa, se);
+            }
+            std.mem.sort(SchemaEntry, self.pre_pass_values.items, {}, schemaLess);
+        }
         if (b.row_rules) |rules| {
             self.has_row_rules = true;
             for (rules) |rule| {
@@ -133,6 +162,7 @@ pub const TemplateEdits = struct {
         self.output_schema.deinit(gpa);
         self.row_rules.deinit(gpa);
         self.ticker_map.deinit(gpa);
+        self.pre_pass_values.deinit(gpa);
     }
 };
 
@@ -266,6 +296,8 @@ pub const AppState = struct {
             .file_pattern_out => b_ptr.file_pattern_out,
             .xlsx_sheet_name => if (b_ptr.xlsx_sheet) |xs| xs.name else return error.NoXlsxSheet,
             .xlsx_sheet_output_suffix => if (b_ptr.xlsx_sheet) |xs| xs.output_suffix else return error.NoXlsxSheet,
+            .pre_pass_when => if (b_ptr.pre_pass) |pp| pp.when else return error.NoPrePass,
+            .pre_pass_key => if (b_ptr.pre_pass) |pp| pp.key else return error.NoPrePass,
         };
         if (std.mem.eql(u8, old_slice, new_value)) return;
 
@@ -277,6 +309,35 @@ pub const AppState = struct {
             .file_pattern_out => b_ptr.file_pattern_out = new_slice,
             .xlsx_sheet_name => b_ptr.xlsx_sheet.?.name = new_slice,
             .xlsx_sheet_output_suffix => b_ptr.xlsx_sheet.?.output_suffix = new_slice,
+            .pre_pass_when => b_ptr.pre_pass.?.when = new_slice,
+            .pre_pass_key => b_ptr.pre_pass.?.key = new_slice,
+        }
+        self.revalidateTemplate(template_idx) catch {};
+    }
+
+    /// Rebuild broker.pre_pass.values from edits, freeing old entries via cfg._alloc.
+    pub fn commitPrePassValues(self: *AppState, template_idx: usize) !void {
+        const cfg = self.config_owner orelse return error.NoConfigLoaded;
+        if (template_idx >= self.template_names.items.len) return error.OutOfRange;
+        const name = self.template_names.items[template_idx];
+        const b_ptr = cfg.brokers.getPtr(name) orelse return error.TemplateNotFound;
+        const alloc = cfg._alloc;
+        if (b_ptr.pre_pass == null) return error.NoPrePass;
+
+        var values = &b_ptr.pre_pass.?.values;
+        var it = values.iterator();
+        while (it.next()) |e| {
+            alloc.free(e.key_ptr.*);
+            alloc.free(e.value_ptr.*);
+        }
+        values.clearRetainingCapacity();
+
+        for (self.edits.items[template_idx].pre_pass_values.items) |se| {
+            const k = se.keyText();
+            if (k.len == 0) continue;
+            const dk = try alloc.dupe(u8, k);
+            const dv = try alloc.dupe(u8, se.valText());
+            try values.put(dk, dv);
         }
         self.revalidateTemplate(template_idx) catch {};
     }
@@ -438,6 +499,22 @@ pub const AppState = struct {
         }
 
         _ = self.edits.items[template_idx].row_rules.orderedRemove(rule_idx);
+        self.revalidateTemplate(template_idx) catch {};
+    }
+
+    pub fn setCsvChar(self: *AppState, template_idx: usize, field: CsvCharField, new_value: u8) !void {
+        const cfg = self.config_owner orelse return error.NoConfigLoaded;
+        if (template_idx >= self.template_names.items.len) return error.OutOfRange;
+        const name = self.template_names.items[template_idx];
+        const b_ptr = cfg.brokers.getPtr(name) orelse return error.TemplateNotFound;
+        switch (field) {
+            .delimiter_in => b_ptr.csv_delimiter_in = new_value,
+            .delimiter_out => b_ptr.csv_delimiter_out = new_value,
+            .decimal_sep_in => b_ptr.csv_decimal_separator_in = new_value,
+            .decimal_sep_out => b_ptr.csv_decimal_separator_out = new_value,
+            .text_quote_in => b_ptr.csv_text_quote_in = new_value,
+            .text_quote_out => b_ptr.csv_text_quote_out = new_value,
+        }
         self.revalidateTemplate(template_idx) catch {};
     }
 
