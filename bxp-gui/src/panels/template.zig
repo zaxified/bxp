@@ -2,6 +2,7 @@ const std = @import("std");
 const dvui = @import("dvui");
 const config = @import("config");
 const app = @import("../app.zig");
+const highlighter = @import("../expr_editor/highlighter.zig");
 
 pub fn render(state: *app.AppState) !void {
     var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both });
@@ -130,6 +131,17 @@ fn schemaTable(
         }
 
         if (key_changed or val_changed) mutated = true;
+
+        if (kind == .input and entry.val_len > 0) {
+            var preview = dvui.textLayout(@src(), .{}, .{
+                .id_extra = row_i + 10000,
+                .expand = .horizontal,
+                .margin = .{ .x = 196, .y = 0, .w = 40, .h = 2 },
+                .font = .theme(.mono),
+            });
+            highlighter.addHighlighted(&preview, entry.val[0..entry.val_len]);
+            preview.deinit();
+        }
     }
 
     if (dvui.button(@src(), "+ Add", .{}, .{ .margin = .{ .x = 16, .y = 2, .w = 8, .h = 2 } })) {
@@ -193,6 +205,17 @@ fn rowRulesTable(
             var cnt = dvui.textLayout(@src(), .{}, .{ .min_size_content = .{ .w = 70, .h = 0 } });
             cnt.format(" → {d} row(s)", .{entry.rows_count}, .{});
             cnt.deinit();
+        }
+
+        if (entry.when_len > 0) {
+            var preview = dvui.textLayout(@src(), .{}, .{
+                .id_extra = row_i + 20000,
+                .expand = .horizontal,
+                .margin = .{ .x = 66, .y = 0, .w = 78, .h = 2 },
+                .font = .theme(.mono),
+            });
+            highlighter.addHighlighted(&preview, entry.when[0..entry.when_len]);
+            preview.deinit();
         }
     }
 
