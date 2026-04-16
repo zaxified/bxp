@@ -2,7 +2,13 @@ const std = @import("std");
 const config = @import("config");
 const json5_writer = @import("json5_writer.zig");
 
-pub const BrokerStringField = enum { data_dir, file_pattern_in, file_pattern_out };
+pub const BrokerStringField = enum {
+    data_dir,
+    file_pattern_in,
+    file_pattern_out,
+    xlsx_sheet_name,
+    xlsx_sheet_output_suffix,
+};
 
 pub const TemplateEdits = struct {
     data_dir: [512]u8 = [_]u8{0} ** 512,
@@ -11,11 +17,19 @@ pub const TemplateEdits = struct {
     file_pattern_in_len: usize = 0,
     file_pattern_out: [128]u8 = [_]u8{0} ** 128,
     file_pattern_out_len: usize = 0,
+    xlsx_name: [256]u8 = [_]u8{0} ** 256,
+    xlsx_name_len: usize = 0,
+    xlsx_suffix: [64]u8 = [_]u8{0} ** 64,
+    xlsx_suffix_len: usize = 0,
 
     pub fn load(self: *TemplateEdits, b: *const config.BrokerConfig) void {
         copyInto(&self.data_dir, &self.data_dir_len, b.data_dir);
         copyInto(&self.file_pattern_in, &self.file_pattern_in_len, b.file_pattern_in);
         copyInto(&self.file_pattern_out, &self.file_pattern_out_len, b.file_pattern_out);
+        if (b.xlsx_sheet) |xs| {
+            copyInto(&self.xlsx_name, &self.xlsx_name_len, xs.name);
+            copyInto(&self.xlsx_suffix, &self.xlsx_suffix_len, xs.output_suffix);
+        }
     }
 };
 
@@ -97,10 +111,12 @@ pub const AppState = struct {
         const b_ptr = cfg.brokers.getPtr(name) orelse return error.TemplateNotFound;
         const alloc = cfg._alloc;
 
-        const old_slice = switch (field) {
+        const old_slice: []const u8 = switch (field) {
             .data_dir => b_ptr.data_dir,
             .file_pattern_in => b_ptr.file_pattern_in,
             .file_pattern_out => b_ptr.file_pattern_out,
+            .xlsx_sheet_name => if (b_ptr.xlsx_sheet) |xs| xs.name else return error.NoXlsxSheet,
+            .xlsx_sheet_output_suffix => if (b_ptr.xlsx_sheet) |xs| xs.output_suffix else return error.NoXlsxSheet,
         };
         if (std.mem.eql(u8, old_slice, new_value)) return;
 
@@ -110,7 +126,18 @@ pub const AppState = struct {
             .data_dir => b_ptr.data_dir = new_slice,
             .file_pattern_in => b_ptr.file_pattern_in = new_slice,
             .file_pattern_out => b_ptr.file_pattern_out = new_slice,
+            .xlsx_sheet_name => b_ptr.xlsx_sheet.?.name = new_slice,
+            .xlsx_sheet_output_suffix => b_ptr.xlsx_sheet.?.output_suffix = new_slice,
         }
+    }
+
+    pub fn setXlsxHeaderRow(self: *AppState, template_idx: usize, new_value: u32) !void {
+        const cfg = self.config_owner orelse return error.NoConfigLoaded;
+        if (template_idx >= self.template_names.items.len) return error.OutOfRange;
+        const name = self.template_names.items[template_idx];
+        const b_ptr = cfg.brokers.getPtr(name) orelse return error.TemplateNotFound;
+        if (b_ptr.xlsx_sheet == null) return error.NoXlsxSheet;
+        b_ptr.xlsx_sheet.?.header_row = new_value;
     }
 
     fn setStatusFmt(self: *AppState, comptime fmt: []const u8, args: anytype) !void {
