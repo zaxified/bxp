@@ -74,10 +74,16 @@ fn menu() ?dvui.App.Result {
 }
 
 fn openConfigDialog() void {
-    // MVP: load the default DEV/bxp-cli.json path. A real native file dialog
-    // comes in Phase 2 — this is enough to prove the load → render pipeline.
-    const default_path = "../DEV/bxp-cli.json";
-    state.loadConfig(default_path) catch |err| {
-        std.log.err("failed to load {s}: {s}", .{ default_path, @errorName(err) });
+    const arena = dvui.currentWindow().arena();
+    const filters = [_][]const u8{ "*.json", "*.json5" };
+    const picked = dvui.dialogNativeFileOpen(arena, .{
+        .title = "Open bxp config",
+        .filters = &filters,
+        .filter_description = "bxp config (*.json, *.json5)",
+    }) catch null;
+
+    const path = picked orelse return;
+    state.loadConfig(path) catch |err| {
+        std.log.err("failed to load {s}: {s}", .{ path, @errorName(err) });
     };
 }
