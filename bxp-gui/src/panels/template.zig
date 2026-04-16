@@ -94,10 +94,12 @@ pub fn render(state: *app.AppState) !void {
 
     // ── Input Schema ──
     sectionHeader("Input Schema");
+    schemaHeaderRow("Variable", "Expression");
     try schemaTable(state, selected_idx, .input, &edits.input_schema);
 
     // ── Output Schema ──
     sectionHeader("Output Schema");
+    schemaHeaderRow("CSV Header", "Variable / Expression");
     try schemaTable(state, selected_idx, .output, &edits.output_schema);
 
     // ── Row Rules ──
@@ -124,40 +126,34 @@ fn schemaTable(
         var hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .id_extra = row_i,
             .expand = .horizontal,
-            .margin = .{ .x = 20, .y = 2, .w = 12, .h = 2 },
+            .margin = .{ .x = 20, .y = 3, .w = 12, .h = 3 },
         });
         defer hbox.deinit();
 
         var key_te = dvui.textEntry(
             @src(),
             .{ .text = .{ .buffer = &entry.key } },
-            .{ .min_size_content = .{ .w = 140, .h = 0 } },
+            .{ .min_size_content = .{ .w = 160, .h = 26 } },
         );
         const key_changed = key_te.text_changed;
         entry.key_len = key_te.getText().len;
         key_te.deinit();
 
-        if (kind == .input and entry.val_len > 0) {
-            var preview = dvui.textLayout(@src(), .{}, .{
+        var val_te = dvui.textEntry(
+            @src(),
+            .{ .text = .{ .buffer = &entry.val } },
+            .{
                 .expand = .horizontal,
-                .font = .theme(.mono),
-                .margin = .{ .x = 4, .y = 0, .w = 4, .h = 0 },
-            });
-            highlighter.addHighlighted(&preview, entry.val[0..entry.val_len]);
-            preview.deinit();
-        } else {
-            var val_te = dvui.textEntry(
-                @src(),
-                .{ .text = .{ .buffer = &entry.val } },
-                .{ .expand = .horizontal },
-            );
-            const val_changed = val_te.text_changed;
-            entry.val_len = val_te.getText().len;
-            val_te.deinit();
-            if (val_changed) mutated = true;
-        }
+                .min_size_content = .{ .w = 0, .h = 26 },
+                .margin = .{ .x = 6, .y = 0, .w = 0, .h = 0 },
+            },
+        );
+        const val_changed = val_te.text_changed;
+        entry.val_len = val_te.getText().len;
+        val_te.deinit();
+        if (val_changed) mutated = true;
 
-        if (dvui.button(@src(), "x", .{}, .{ .margin = .{ .x = 4, .y = 0, .w = 0, .h = 0 } })) {
+        if (dvui.button(@src(), "x", .{}, .{ .margin = .{ .x = 6, .y = 0, .w = 0, .h = 0 } })) {
             delete_idx = row_i;
         }
 
@@ -247,7 +243,10 @@ fn rowRulesTable(
             var te = dvui.textEntry(
                 @src(),
                 .{ .text = .{ .buffer = &entry.when } },
-                .{ .expand = .horizontal },
+                .{
+                    .expand = .horizontal,
+                    .min_size_content = .{ .w = 0, .h = 26 },
+                },
             );
             if (te.text_changed) {
                 entry.when_len = te.getText().len;
@@ -286,7 +285,10 @@ fn editableRow(
         key_tl.deinit();
     }
 
-    var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = buf } }, .{ .expand = .horizontal });
+    var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = buf } }, .{
+        .expand = .horizontal,
+        .min_size_content = .{ .w = 0, .h = 26 },
+    });
     const text_changed = te.text_changed;
     const current = te.getText();
     const new_len = current.len;
@@ -304,6 +306,32 @@ fn headerRowRow(current: u32) void {
     var buf: [16]u8 = undefined;
     const s = std.fmt.bufPrint(&buf, "{d}", .{current}) catch "?";
     kvRow("header_row", s);
+}
+
+fn schemaHeaderRow(left: []const u8, right: []const u8) void {
+    var hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .expand = .horizontal,
+        .margin = .{ .x = 20, .y = 4, .w = 12, .h = 2 },
+    });
+    defer hbox.deinit();
+
+    {
+        var l = dvui.textLayout(@src(), .{}, .{
+            .min_size_content = .{ .w = 160, .h = 0 },
+            .font = .theme(.heading),
+        });
+        l.addText(left, .{});
+        l.deinit();
+    }
+    {
+        var r = dvui.textLayout(@src(), .{}, .{
+            .expand = .horizontal,
+            .font = .theme(.heading),
+            .margin = .{ .x = 6, .y = 0, .w = 0, .h = 0 },
+        });
+        r.addText(right, .{});
+        r.deinit();
+    }
 }
 
 fn sectionHeader(title: []const u8) void {
