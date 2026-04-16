@@ -81,16 +81,8 @@ pub fn render(state: *app.AppState) !void {
     try schemaTable(state, selected_idx, .output, &edits.output_schema);
 
     sectionHeader("row_rules");
-    if (broker.row_rules) |rules| {
-        if (rules.len == 0) {
-            dvui.label(@src(), "(empty)", .{}, .{ .margin = .{ .x = 16, .y = 2, .w = 8, .h = 2 } });
-        } else {
-            for (rules, 0..) |rule, idx| {
-                var tl = dvui.textLayout(@src(), .{}, .{ .id_extra = idx, .expand = .horizontal, .margin = .{ .x = 16, .y = 2, .w = 8, .h = 2 } });
-                tl.format("when: {s}  →  {d} row(s)", .{ rule.when, rule.rows.len }, .{});
-                tl.deinit();
-            }
-        }
+    if (edits.has_row_rules) {
+        try rowRulesTable(state, selected_idx, &edits.row_rules);
     } else {
         dvui.label(@src(), "(none)", .{}, .{ .margin = .{ .x = 16, .y = 2, .w = 8, .h = 2 } });
     }
@@ -159,6 +151,55 @@ fn schemaTable(
                 std.log.err("commit output_schema: {s}", .{@errorName(err)});
             },
         }
+    }
+}
+
+fn rowRulesTable(
+    state: *app.AppState,
+    template_idx: usize,
+    list: *std.ArrayListUnmanaged(app.RowRuleEdit),
+) !void {
+    if (list.items.len == 0) {
+        dvui.label(@src(), "(empty)", .{}, .{ .margin = .{ .x = 16, .y = 2, .w = 8, .h = 2 } });
+    }
+
+    var mutated = false;
+    for (list.items, 0..) |*entry, row_i| {
+        var hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .id_extra = row_i,
+            .expand = .horizontal,
+            .margin = .{ .x = 16, .y = 1, .w = 8, .h = 1 },
+        });
+        defer hbox.deinit();
+
+        {
+            var lbl = dvui.textLayout(@src(), .{}, .{ .min_size_content = .{ .w = 50, .h = 0 } });
+            lbl.addText("when:", .{});
+            lbl.deinit();
+        }
+
+        var te = dvui.textEntry(
+            @src(),
+            .{ .text = .{ .buffer = &entry.when } },
+            .{ .expand = .horizontal },
+        );
+        if (te.text_changed) {
+            entry.when_len = te.getText().len;
+            mutated = true;
+        }
+        te.deinit();
+
+        {
+            var cnt = dvui.textLayout(@src(), .{}, .{ .min_size_content = .{ .w = 70, .h = 0 } });
+            cnt.format(" → {d} row(s)", .{entry.rows_count}, .{});
+            cnt.deinit();
+        }
+    }
+
+    if (mutated) {
+        state.commitRowRulesWhen(template_idx) catch |err| {
+            std.log.err("commit row_rules: {s}", .{@errorName(err)});
+        };
     }
 }
 

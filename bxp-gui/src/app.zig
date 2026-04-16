@@ -30,6 +30,21 @@ pub const SchemaEntry = struct {
     }
 };
 
+pub const RowRuleEdit = struct {
+    when: [512]u8 = [_]u8{0} ** 512,
+    when_len: usize = 0,
+    rows_count: usize = 0,
+
+    pub fn set(self: *RowRuleEdit, rule: config.RowRule) void {
+        copyInto(&self.when, &self.when_len, rule.when);
+        self.rows_count = rule.rows.len;
+    }
+
+    pub fn whenText(self: *const RowRuleEdit) []const u8 {
+        return self.when[0..self.when_len];
+    }
+};
+
 pub const TemplateEdits = struct {
     data_dir: [512]u8 = [_]u8{0} ** 512,
     data_dir_len: usize = 0,
@@ -43,6 +58,8 @@ pub const TemplateEdits = struct {
     xlsx_suffix_len: usize = 0,
     input_schema: std.ArrayListUnmanaged(SchemaEntry) = .empty,
     output_schema: std.ArrayListUnmanaged(SchemaEntry) = .empty,
+    row_rules: std.ArrayListUnmanaged(RowRuleEdit) = .empty,
+    has_row_rules: bool = false,
 
     pub fn load(self: *TemplateEdits, gpa: std.mem.Allocator, b: *const config.BrokerConfig) !void {
         copyInto(&self.data_dir, &self.data_dir_len, b.data_dir);
@@ -67,11 +84,20 @@ pub const TemplateEdits = struct {
             se.set(col.header, col.variable);
             try self.output_schema.append(gpa, se);
         }
+        if (b.row_rules) |rules| {
+            self.has_row_rules = true;
+            for (rules) |rule| {
+                var rre: RowRuleEdit = .{};
+                rre.set(rule);
+                try self.row_rules.append(gpa, rre);
+            }
+        }
     }
 
     pub fn deinit(self: *TemplateEdits, gpa: std.mem.Allocator) void {
         self.input_schema.deinit(gpa);
         self.output_schema.deinit(gpa);
+        self.row_rules.deinit(gpa);
     }
 };
 
@@ -268,6 +294,27 @@ pub const AppState = struct {
             try b_ptr.output_schema.append(.{ .header = dk, .variable = dv });
         }
 
+        self.revalidateTemplate(template_idx) catch {};
+    }
+
+    /// Update only the `when` expressions for existing row_rules.
+    pub fn commitRowRulesWhen(self: *AppState, template_idx: usize) !void {
+        const cfg = self.config_owner orelse return error.NoConfigLoaded;
+        if (template_idx >= self.template_names.items.len) return error.OutOfRange;
+        const name = self.template_names.items[template_idx];
+        const b_ptr = cfg.brokers.getPtr(name) orelse return error.TemplateNotFound;
+        const alloc = cfg._alloc;
+        const rules = b_ptr.row_rules orelse return;
+        const edits_rr = self.edits.items[template_idx].row_rules.items;
+
+        for (rules, 0..) |*rule, i| {
+            if (i >= edits_rr.len) break;
+            const new_when = edits_rr[i].whenText();
+            if (!std.mem.eql(u8, rule.when, new_when)) {
+                alloc.free(rule.when);
+                rule.when = try alloc.dupe(u8, new_when);
+            }
+        }
         self.revalidateTemplate(template_idx) catch {};
     }
 
