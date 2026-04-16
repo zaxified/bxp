@@ -20,72 +20,92 @@ pub fn render(state: *app.AppState) !void {
     const broker = cfg.brokers.get(name) orelse return;
     const edits = &state.edits.items[selected_idx];
 
+    // Title
     {
-        var tl = dvui.textLayout(@src(), .{}, .{ .expand = .horizontal, .font = .theme(.title), .margin = .all(8) });
+        var tl = dvui.textLayout(@src(), .{}, .{
+            .expand = .horizontal,
+            .font = .theme(.title),
+            .margin = .{ .x = 12, .y = 10, .w = 12, .h = 4 },
+        });
         tl.addText(name, .{});
         tl.deinit();
     }
 
+    // Validation banner
     const vmsg = state.validationText(selected_idx);
     if (vmsg.len > 0) {
         var tl = dvui.textLayout(@src(), .{}, .{
             .expand = .horizontal,
             .style = .err,
             .background = true,
-            .margin = .{ .x = 8, .y = 2, .w = 8, .h = 6 },
-            .padding = .all(6),
+            .margin = .{ .x = 12, .y = 0, .w = 12, .h = 8 },
+            .padding = .all(8),
         });
         tl.addText(vmsg, .{});
         tl.deinit();
     }
 
+    // ── General ──
+    sectionHeader("General");
     try editableRow(state, selected_idx, 0, "data_dir", &edits.data_dir, &edits.data_dir_len, .data_dir);
     try editableRow(state, selected_idx, 1, "file_pattern_in", &edits.file_pattern_in, &edits.file_pattern_in_len, .file_pattern_in);
     try editableRow(state, selected_idx, 2, "file_pattern_out", &edits.file_pattern_out, &edits.file_pattern_out_len, .file_pattern_out);
     kvRow("date_filter_from_filename", if (broker.date_filter_from_filename) "true" else "false");
+    kvRow("file_type_in", @tagName(broker.file_type_in));
+    kvRow("file_type_out", @tagName(broker.file_type_out));
 
+    // ── CSV Format ──
+    if (broker.csv_delimiter_in != ',' or broker.csv_delimiter_out != ',' or
+        broker.csv_decimal_separator_in != '.' or broker.csv_decimal_separator_out != '.' or
+        broker.csv_text_quote_in != '"' or broker.csv_text_quote_out != 0)
+    {
+        sectionHeader("CSV Format");
+        if (broker.csv_delimiter_in != ',') kvRowChar("delimiter_in", broker.csv_delimiter_in);
+        if (broker.csv_delimiter_out != ',') kvRowChar("delimiter_out", broker.csv_delimiter_out);
+        if (broker.csv_decimal_separator_in != '.') kvRowChar("decimal_sep_in", broker.csv_decimal_separator_in);
+        if (broker.csv_decimal_separator_out != '.') kvRowChar("decimal_sep_out", broker.csv_decimal_separator_out);
+        if (broker.csv_text_quote_in != '"') kvRowQuote("quote_in", broker.csv_text_quote_in);
+        if (broker.csv_text_quote_out != 0) kvRowQuote("quote_out", broker.csv_text_quote_out);
+    }
+
+    // ── XLSX Sheet ──
     if (broker.xlsx_sheet) |xs| {
-        sectionHeader("xlsx_sheet");
+        sectionHeader("XLSX Sheet");
         try editableRow(state, selected_idx, 10, "name", &edits.xlsx_name, &edits.xlsx_name_len, .xlsx_sheet_name);
         try editableRow(state, selected_idx, 11, "output_suffix", &edits.xlsx_suffix, &edits.xlsx_suffix_len, .xlsx_sheet_output_suffix);
-        headerRowRow(state, selected_idx, xs.header_row);
+        headerRowRow(xs.header_row);
     }
 
-    if (broker.pre_pass) |pp| {
-        sectionHeader("pre_pass");
-        kvRow("when", pp.when);
-        kvRow("key", pp.key);
-        var it = pp.values.iterator();
-        while (it.next()) |e| kvRow(e.key_ptr.*, e.value_ptr.*);
-    }
-
+    // ── Ticker Map ──
     if (broker.ticker_map.count() > 0) {
-        sectionHeader("ticker_map");
+        sectionHeader("Ticker Map");
         var it = broker.ticker_map.iterator();
         while (it.next()) |e| kvRow(e.key_ptr.*, e.value_ptr.*);
     }
 
-    sectionHeader("csv_format");
-    kvRowChar("csv_delimiter_in", broker.csv_delimiter_in);
-    kvRowChar("csv_delimiter_out", broker.csv_delimiter_out);
-    kvRowChar("csv_decimal_separator_in", broker.csv_decimal_separator_in);
-    kvRowChar("csv_decimal_separator_out", broker.csv_decimal_separator_out);
-    kvRowQuote("csv_text_quote_in", broker.csv_text_quote_in);
-    kvRowQuote("csv_text_quote_out", broker.csv_text_quote_out);
-    kvRow("file_type_in", @tagName(broker.file_type_in));
-    kvRow("file_type_out", @tagName(broker.file_type_out));
+    // ── Pre-pass ──
+    if (broker.pre_pass) |pp| {
+        sectionHeader("Pre-pass");
+        exprRow("when", pp.when);
+        exprRow("key", pp.key);
+        var it = pp.values.iterator();
+        while (it.next()) |e| exprRow(e.key_ptr.*, e.value_ptr.*);
+    }
 
-    sectionHeader("input_schema");
+    // ── Input Schema ──
+    sectionHeader("Input Schema");
     try schemaTable(state, selected_idx, .input, &edits.input_schema);
 
-    sectionHeader("output_schema");
+    // ── Output Schema ──
+    sectionHeader("Output Schema");
     try schemaTable(state, selected_idx, .output, &edits.output_schema);
 
-    sectionHeader("row_rules");
+    // ── Row Rules ──
+    sectionHeader("Row Rules");
     if (edits.has_row_rules) {
         try rowRulesTable(state, selected_idx, &edits.row_rules);
     } else {
-        dvui.label(@src(), "(none)", .{}, .{ .margin = .{ .x = 16, .y = 2, .w = 8, .h = 2 } });
+        dvui.label(@src(), "(none)", .{}, .{ .margin = .{ .x = 20, .y = 4, .w = 8, .h = 4 } });
     }
 }
 
@@ -104,47 +124,47 @@ fn schemaTable(
         var hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .id_extra = row_i,
             .expand = .horizontal,
-            .margin = .{ .x = 16, .y = 1, .w = 8, .h = 1 },
+            .margin = .{ .x = 20, .y = 2, .w = 12, .h = 2 },
         });
         defer hbox.deinit();
 
         var key_te = dvui.textEntry(
             @src(),
             .{ .text = .{ .buffer = &entry.key } },
-            .{ .min_size_content = .{ .w = 180, .h = 0 } },
+            .{ .min_size_content = .{ .w = 140, .h = 0 } },
         );
         const key_changed = key_te.text_changed;
         entry.key_len = key_te.getText().len;
         key_te.deinit();
 
-        var val_te = dvui.textEntry(
-            @src(),
-            .{ .text = .{ .buffer = &entry.val } },
-            .{ .expand = .horizontal },
-        );
-        const val_changed = val_te.text_changed;
-        entry.val_len = val_te.getText().len;
-        val_te.deinit();
-
-        if (dvui.button(@src(), "×", .{}, .{ .min_size_content = .{ .w = 24, .h = 0 } })) {
-            delete_idx = row_i;
-        }
-
-        if (key_changed or val_changed) mutated = true;
-
         if (kind == .input and entry.val_len > 0) {
             var preview = dvui.textLayout(@src(), .{}, .{
-                .id_extra = row_i + 10000,
                 .expand = .horizontal,
-                .margin = .{ .x = 196, .y = 0, .w = 40, .h = 2 },
                 .font = .theme(.mono),
+                .margin = .{ .x = 4, .y = 0, .w = 4, .h = 0 },
             });
             highlighter.addHighlighted(&preview, entry.val[0..entry.val_len]);
             preview.deinit();
+        } else {
+            var val_te = dvui.textEntry(
+                @src(),
+                .{ .text = .{ .buffer = &entry.val } },
+                .{ .expand = .horizontal },
+            );
+            const val_changed = val_te.text_changed;
+            entry.val_len = val_te.getText().len;
+            val_te.deinit();
+            if (val_changed) mutated = true;
         }
+
+        if (dvui.button(@src(), "x", .{}, .{ .margin = .{ .x = 4, .y = 0, .w = 0, .h = 0 } })) {
+            delete_idx = row_i;
+        }
+
+        if (key_changed) mutated = true;
     }
 
-    if (dvui.button(@src(), "+ Add", .{}, .{ .margin = .{ .x = 16, .y = 2, .w = 8, .h = 2 } })) {
+    if (dvui.button(@src(), "+ Add", .{}, .{ .margin = .{ .x = 20, .y = 4, .w = 8, .h = 4 } })) {
         try list.append(state.gpa, .{});
         mutated = true;
     }
@@ -172,50 +192,68 @@ fn rowRulesTable(
     list: *std.ArrayListUnmanaged(app.RowRuleEdit),
 ) !void {
     if (list.items.len == 0) {
-        dvui.label(@src(), "(empty)", .{}, .{ .margin = .{ .x = 16, .y = 2, .w = 8, .h = 2 } });
+        dvui.label(@src(), "(empty)", .{}, .{ .margin = .{ .x = 20, .y = 4, .w = 8, .h = 4 } });
+        return;
     }
 
     var mutated = false;
     for (list.items, 0..) |*entry, row_i| {
-        var hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .id_extra = row_i,
-            .expand = .horizontal,
-            .margin = .{ .x = 16, .y = 1, .w = 8, .h = 1 },
-        });
-        defer hbox.deinit();
-
+        // Rule header with when expression (highlighted)
         {
-            var lbl = dvui.textLayout(@src(), .{}, .{ .min_size_content = .{ .w = 50, .h = 0 } });
-            lbl.addText("when:", .{});
-            lbl.deinit();
-        }
-
-        var te = dvui.textEntry(
-            @src(),
-            .{ .text = .{ .buffer = &entry.when } },
-            .{ .expand = .horizontal },
-        );
-        if (te.text_changed) {
-            entry.when_len = te.getText().len;
-            mutated = true;
-        }
-        te.deinit();
-
-        {
-            var cnt = dvui.textLayout(@src(), .{}, .{ .min_size_content = .{ .w = 70, .h = 0 } });
-            cnt.format(" → {d} row(s)", .{entry.rows_count}, .{});
-            cnt.deinit();
-        }
-
-        if (entry.when_len > 0) {
-            var preview = dvui.textLayout(@src(), .{}, .{
-                .id_extra = row_i + 20000,
+            var hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                .id_extra = row_i,
                 .expand = .horizontal,
-                .margin = .{ .x = 66, .y = 0, .w = 78, .h = 2 },
-                .font = .theme(.mono),
+                .margin = .{ .x = 20, .y = 4, .w = 12, .h = 0 },
             });
-            highlighter.addHighlighted(&preview, entry.when[0..entry.when_len]);
-            preview.deinit();
+            defer hbox.deinit();
+
+            {
+                var lbl = dvui.textLayout(@src(), .{}, .{});
+                lbl.format("Rule {d}  ", .{row_i + 1}, .{});
+                lbl.deinit();
+            }
+
+            if (entry.when_len > 0) {
+                var preview = dvui.textLayout(@src(), .{}, .{
+                    .expand = .horizontal,
+                    .font = .theme(.mono),
+                });
+                highlighter.addHighlighted(&preview, entry.when[0..entry.when_len]);
+                preview.deinit();
+            }
+
+            {
+                var cnt = dvui.textLayout(@src(), .{}, .{});
+                cnt.format("  ({d} rows)", .{entry.rows_count}, .{});
+                cnt.deinit();
+            }
+        }
+
+        // Editable when field
+        {
+            var hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                .id_extra = row_i + 30000,
+                .expand = .horizontal,
+                .margin = .{ .x = 36, .y = 0, .w = 12, .h = 2 },
+            });
+            defer hbox.deinit();
+
+            {
+                var lbl = dvui.textLayout(@src(), .{}, .{ .min_size_content = .{ .w = 50, .h = 0 } });
+                lbl.addText("when:", .{});
+                lbl.deinit();
+            }
+
+            var te = dvui.textEntry(
+                @src(),
+                .{ .text = .{ .buffer = &entry.when } },
+                .{ .expand = .horizontal },
+            );
+            if (te.text_changed) {
+                entry.when_len = te.getText().len;
+                mutated = true;
+            }
+            te.deinit();
         }
     }
 
@@ -235,12 +273,18 @@ fn editableRow(
     len_ptr: *usize,
     comptime field: app.BrokerStringField,
 ) !void {
-    var hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = row_id, .expand = .horizontal, .margin = .{ .x = 16, .y = 1, .w = 8, .h = 1 } });
+    var hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .id_extra = row_id,
+        .expand = .horizontal,
+        .margin = .{ .x = 20, .y = 2, .w = 12, .h = 2 },
+    });
     defer hbox.deinit();
 
-    var key_tl = dvui.textLayout(@src(), .{}, .{ .min_size_content = .{ .w = 180, .h = 0 } });
-    key_tl.addText(label, .{});
-    key_tl.deinit();
+    {
+        var key_tl = dvui.textLayout(@src(), .{}, .{ .min_size_content = .{ .w = 160, .h = 0 } });
+        key_tl.addText(label, .{});
+        key_tl.deinit();
+    }
 
     var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = buf } }, .{ .expand = .horizontal });
     const text_changed = te.text_changed;
@@ -256,17 +300,67 @@ fn editableRow(
     }
 }
 
-fn headerRowRow(state: *app.AppState, template_idx: usize, current: u32) void {
-    _ = state;
-    _ = template_idx;
+fn headerRowRow(current: u32) void {
     var buf: [16]u8 = undefined;
     const s = std.fmt.bufPrint(&buf, "{d}", .{current}) catch "?";
     kvRow("header_row", s);
 }
 
+fn sectionHeader(title: []const u8) void {
+    _ = dvui.separator(@src(), .{ .expand = .horizontal, .margin = .{ .x = 12, .y = 8, .w = 12, .h = 0 } });
+    var tl = dvui.textLayout(@src(), .{}, .{
+        .expand = .horizontal,
+        .font = .theme(.heading),
+        .margin = .{ .x = 12, .y = 2, .w = 12, .h = 4 },
+    });
+    tl.addText(title, .{});
+    tl.deinit();
+}
+
+fn exprRow(label: []const u8, expr: []const u8) void {
+    var hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .expand = .horizontal,
+        .margin = .{ .x = 20, .y = 2, .w = 12, .h = 2 },
+    });
+    defer hbox.deinit();
+
+    {
+        var key_tl = dvui.textLayout(@src(), .{}, .{ .min_size_content = .{ .w = 160, .h = 0 } });
+        key_tl.addText(label, .{});
+        key_tl.deinit();
+    }
+
+    var val_tl = dvui.textLayout(@src(), .{}, .{
+        .expand = .horizontal,
+        .font = .theme(.mono),
+    });
+    highlighter.addHighlighted(&val_tl, expr);
+    val_tl.deinit();
+}
+
+fn kvRow(key: []const u8, value: []const u8) void {
+    var hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .expand = .horizontal,
+        .margin = .{ .x = 20, .y = 2, .w = 12, .h = 2 },
+    });
+    defer hbox.deinit();
+
+    {
+        var key_tl = dvui.textLayout(@src(), .{}, .{ .min_size_content = .{ .w = 160, .h = 0 } });
+        key_tl.addText(key, .{});
+        key_tl.deinit();
+    }
+
+    {
+        var val_tl = dvui.textLayout(@src(), .{}, .{ .expand = .horizontal });
+        val_tl.addText(value, .{});
+        val_tl.deinit();
+    }
+}
+
 fn kvRowChar(key: []const u8, c: u8) void {
-    var buf: [16]u8 = undefined;
-    const s = std.fmt.bufPrint(&buf, "'{c}' (0x{x:0>2})", .{ c, c }) catch "?";
+    var buf: [8]u8 = undefined;
+    const s = std.fmt.bufPrint(&buf, "'{c}'", .{c}) catch "?";
     kvRow(key, s);
 }
 
@@ -278,23 +372,4 @@ fn kvRowQuote(key: []const u8, c: u8) void {
         else => "?",
     };
     kvRow(key, label);
-}
-
-fn sectionHeader(title: []const u8) void {
-    var tl = dvui.textLayout(@src(), .{}, .{ .expand = .horizontal, .font = .theme(.heading), .margin = .{ .x = 8, .y = 8, .w = 0, .h = 2 } });
-    tl.addText(title, .{});
-    tl.deinit();
-}
-
-fn kvRow(key: []const u8, value: []const u8) void {
-    var hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .x = 16, .y = 1, .w = 8, .h = 1 } });
-    defer hbox.deinit();
-
-    var key_tl = dvui.textLayout(@src(), .{}, .{ .min_size_content = .{ .w = 180, .h = 0 } });
-    key_tl.addText(key, .{});
-    key_tl.deinit();
-
-    var val_tl = dvui.textLayout(@src(), .{}, .{ .expand = .horizontal });
-    val_tl.addText(value, .{});
-    val_tl.deinit();
 }
