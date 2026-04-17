@@ -1,5 +1,6 @@
 import { useTraceStore } from "../store";
 import type { VarEntry } from "../trace/model";
+import { ExprInline } from "../expr/highlight";
 
 export function RowDetail() {
 	useTraceStore((s) => s.modelVersion); // force re-render on flush
@@ -19,13 +20,31 @@ export function RowDetail() {
 		);
 	}
 
+	const errorCount = row.vars.filter((v) => v.kind === "error").length;
+
 	return (
 		<div className="p-4 space-y-6 overflow-y-auto h-full">
+			{errorCount > 0 && (
+				<div className="flex items-center gap-2 text-xs text-red-300 bg-red-950/30 border border-red-900/50 rounded px-3 py-2">
+					<span className="text-red-400">⚠</span>
+					<span>
+						{errorCount} variable {errorCount === 1 ? "error" : "errors"} in
+						this row — see Variables section below.
+					</span>
+				</div>
+			)}
 			<Section title={`Row ${row.fileRow}`} subtitle={file.template}>
 				<FieldsTable headers={file.headers} values={row.fields} />
 			</Section>
 
-			<Section title="Variables" subtitle={`${row.vars.length} entries`}>
+			<Section
+				title="Variables"
+				subtitle={
+					errorCount > 0
+						? `${row.vars.length} entries · ${errorCount} error${errorCount === 1 ? "" : "s"}`
+						: `${row.vars.length} entries`
+				}
+			>
 				<VariablesTable vars={row.vars} />
 			</Section>
 
@@ -116,6 +135,7 @@ function VariablesTable({ vars }: { vars: VarEntry[] }) {
 		<table className="w-full text-xs font-mono border border-slate-800">
 			<thead>
 				<tr className="text-slate-500 text-left">
+					<th className="py-1 px-2 w-6 font-normal"></th>
 					<th className="py-1 px-2 w-32 font-normal">name</th>
 					<th className="py-1 px-2 font-normal">expr</th>
 					<th className="py-1 px-2 w-64 font-normal">value</th>
@@ -127,20 +147,40 @@ function VariablesTable({ vars }: { vars: VarEntry[] }) {
 					return (
 						<tr
 							key={`${v.name}-${i}`}
-							className="border-t border-slate-800"
+							className={`border-t border-slate-800 ${
+								isError ? "bg-red-950/20" : ""
+							}`}
 						>
-							<td className="py-1 px-2 text-indigo-300">{v.name}</td>
-							<td className="py-1 px-2 text-slate-300 whitespace-pre-wrap break-all">
-								{v.expr || <span className="text-slate-600">—</span>}
-							</td>
 							<td
-								className={`py-1 px-2 whitespace-pre-wrap break-all ${
-									isError ? "text-red-400" : "text-emerald-300"
+								className={`py-1 px-2 text-center ${
+									isError ? "text-red-400" : "text-slate-700"
 								}`}
 							>
-								{isError
-									? `${v.error}${v.detail ? ` ${v.detail}` : ""}`
-									: v.value || <span className="text-slate-600">""</span>}
+								{isError ? "⚠" : ""}
+							</td>
+							<td className="py-1 px-2 text-indigo-300 align-top">{v.name}</td>
+							<td className="py-1 px-2 text-slate-300 align-top">
+								{v.expr ? (
+									<ExprInline text={v.expr} />
+								) : (
+									<span className="text-slate-600">—</span>
+								)}
+							</td>
+							<td className="py-1 px-2 align-top whitespace-pre-wrap break-all">
+								{isError ? (
+									<div>
+										<div className="text-red-400 font-semibold">{v.error}</div>
+										{v.detail && (
+											<div className="text-red-300/80 text-[11px] mt-0.5">
+												{v.detail}
+											</div>
+										)}
+									</div>
+								) : (
+									<span className="text-emerald-300">
+										{v.value || <span className="text-slate-600">""</span>}
+									</span>
+								)}
 							</td>
 						</tr>
 					);
@@ -188,8 +228,8 @@ function RulesTable({
 									{r.matched ? "✓" : "·"}
 								</span>
 							</td>
-							<td className="py-1 px-2 text-slate-300 whitespace-pre-wrap break-all">
-								{r.when}
+							<td className="py-1 px-2 text-slate-300">
+								<ExprInline text={r.when} />
 							</td>
 						</tr>
 					))}
