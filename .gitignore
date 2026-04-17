@@ -1,5 +1,6 @@
 # Private data — never commit
 DEV/
+bxp-gui/
 
 # Binary release artifacts → GitHub Releases
 releases/
