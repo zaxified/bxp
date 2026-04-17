@@ -1,0 +1,10 @@
+node_modules/
+dist/
+build/
+.env.local.*
+.DS_Store
+*.log
+
+# Electrobun build artifacts
+artifacts/
+.electrobun/

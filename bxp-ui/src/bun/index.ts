@@ -1,0 +1,122 @@
+import { BrowserView, BrowserWindow, Updater } from "electrobun/bun";
+import { resolve } from "node:path";
+import type { AppRPCType } from "../shared/types";
+
+const DEV_SERVER_PORT = 5173;
+const DEV_SERVER_URL = `http://localhost:${DEV_SERVER_PORT}`;
+
+// Path to bxp-cli binary. In dev: sibling monorepo path. In packaged build:
+// TODO (Phase 6): resolve from Electrobun resources dir once packaging lands.
+const BXP_CLI_PATH =
+	process.env.BXP_CLI_PATH ??
+	resolve(import.meta.dir, "../../../bxp-cli/zig-out/bin/bxp-cli");
+
+async function getMainViewUrl(): Promise<string> {
+	const channel = await Updater.localInfo.channel();
+	if (channel === "dev") {
+		try {
+			await fetch(DEV_SERVER_URL, { method: "HEAD" });
+			console.log(`HMR enabled: using Vite dev server at ${DEV_SERVER_URL}`);
+			return DEV_SERVER_URL;
+		} catch {
+			console.log(
+				"Vite dev server not running. Run 'bun run dev:hmr' for HMR support.",
+			);
+		}
+	}
+	return "views://mainview/index.html";
+}
+
+// Stream a ReadableStream<Uint8Array> line-by-line (lines are stripped of trailing '\n').
+async function streamLines(
+	stream: ReadableStream<Uint8Array>,
+	onLine: (line: string) => void,
+): Promise<void> {
+	const decoder = new TextDecoder();
+	const reader = stream.getReader();
+	let buf = "";
+	for (;;) {
+		const { done, value } = await reader.read();
+		if (done) break;
+		buf += decoder.decode(value, { stream: true });
+		let nl = buf.indexOf("\n");
+		while (nl >= 0) {
+			onLine(buf.slice(0, nl));
+			buf = buf.slice(nl + 1);
+			nl = buf.indexOf("\n");
+		}
+	}
+	buf += decoder.decode();
+	if (buf.length > 0) onLine(buf);
+}
+
+async function readAll(stream: ReadableStream<Uint8Array>): Promise<string> {
+	const decoder = new TextDecoder();
+	const reader = stream.getReader();
+	let out = "";
+	for (;;) {
+		const { done, value } = await reader.read();
+		if (done) break;
+		out += decoder.decode(value, { stream: true });
+	}
+	return out + decoder.decode();
+}
+
+const url = await getMainViewUrl();
+
+const rpc = BrowserView.defineRPC<AppRPCType>({
+	maxRequestTime: 0,
+	handlers: {
+		requests: {
+			runDryRun: async ({ configPath, templateId }) => {
+				const args = [
+					"--config",
+					configPath,
+					"--dry-run",
+					"--trace",
+				];
+				if (templateId && templateId.length > 0) {
+					args.push("--template", templateId);
+				}
+				console.log("[bxp-cli] spawn:", BXP_CLI_PATH, args.join(" "));
+
+				const proc = Bun.spawn([BXP_CLI_PATH, ...args], {
+					stdout: "pipe",
+					stderr: "pipe",
+				});
+
+				const sendTrace = (line: string) => {
+					mainWindow.webview.rpc?.send.traceEvent({ line });
+				};
+				const sendStderr = (chunk: string) => {
+					mainWindow.webview.rpc?.send.stderr({ chunk });
+				};
+
+				const stdoutTask = streamLines(proc.stdout, sendTrace);
+				const stderrTask = readAll(proc.stderr);
+
+				await stdoutTask;
+				const stderrText = await stderrTask;
+				const exitCode = await proc.exited;
+
+				if (stderrText.length > 0) sendStderr(stderrText);
+				return { exitCode, stderr: stderrText };
+			},
+		},
+		messages: {},
+	},
+});
+
+const mainWindow = new BrowserWindow({
+	title: "bxp-ui",
+	url,
+	rpc,
+	frame: {
+		width: 1200,
+		height: 800,
+		x: 100,
+		y: 100,
+	},
+});
+
+console.log("bxp-ui started");

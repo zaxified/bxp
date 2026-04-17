@@ -30,6 +30,29 @@ echo "Building bxp-cli..."
 (cd "$MONO_ROOT/bxp-cli" && zig build)
 echo ""
 
+echo "Building bxp-fmt..."
+(cd "$MONO_ROOT/bxp-fmt" && zig build)
+echo ""
+
+echo "Smoke-testing bxp-fmt..."
+BXP_FMT="$MONO_ROOT/bxp-fmt/zig-out/bin/bxp-fmt"
+for sample_json in "$DATASETS"/*/sample.json; do
+    # --config must validate and round-trip verbatim.
+    out=$("$BXP_FMT" --config "$sample_json")
+    if [[ "$out" != "$(cat "$sample_json")" ]]; then
+        echo "FAIL: bxp-fmt --config did not round-trip $sample_json"
+        exit 1
+    fi
+done
+# --expr accepts valid syntax and rejects broken syntax.
+"$BXP_FMT" --expr "IF([Qty] > 0, 'BUY', 'SELL')" > /dev/null
+if "$BXP_FMT" --expr "IF([Qty" 2>/dev/null; then
+    echo "FAIL: bxp-fmt --expr did not reject broken expression"
+    exit 1
+fi
+echo "bxp-fmt OK"
+echo ""
+
 PASS=0
 FAIL=0
 FAILED=()
