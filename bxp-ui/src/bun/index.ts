@@ -6,19 +6,37 @@ import type { AppRPCType } from "../shared/types";
 const DEV_SERVER_PORT = 5173;
 const DEV_SERVER_URL = `http://localhost:${DEV_SERVER_PORT}`;
 
-// Resolve a sibling Zig binary by walking up from known starting points. In
-// Electrobun dev mode the main process runs from build/dev-linux-*/…, so a
-// fixed relative path won't do. Packaged builds (Phase 6) will swap this for
-// a resources-dir lookup.
-function findSiblingBin(relPath: string, envOverride?: string): string {
+// Resolve a sibling Zig binary. Three strategies, in priority order:
+//  1. Env override (BXP_CLI_PATH / BXP_FMT_PATH) — takes precedence.
+//  2. Packaged bundle: Resources/app/bin/<binName> relative to import.meta.dir.
+//     Electrobun ships app code under Resources/app/bun and we co-locate the
+//     Zig binaries under Resources/app/bin. Empty until the release flow wires
+//     the copy step (see README), but the resolver is ready.
+//  3. Dev / source tree: walk up from import.meta.dir and process.cwd(),
+//     looking for the matching zig-out path (works from both the repo root
+//     and the Electrobun build/dev-linux-*/ run location).
+function findSiblingBin(
+	binName: string,
+	devRelPath: string,
+	envOverride?: string,
+): string {
 	if (envOverride) return envOverride;
 
-	const starts = [import.meta.dir, process.cwd()];
 	const tried: string[] = [];
+
+	// Packaged bundle: sibling Resources/app/bin/<binName>
+	{
+		const packaged = resolve(import.meta.dir, "..", "bin", binName);
+		tried.push(packaged);
+		if (existsSync(packaged)) return packaged;
+	}
+
+	// Dev: walk up looking for bxp-cli/zig-out/bin/bxp-cli etc.
+	const starts = [import.meta.dir, process.cwd()];
 	for (const start of starts) {
 		let dir = start;
 		for (let i = 0; i < 8; i++) {
-			const candidate = resolve(dir, relPath);
+			const candidate = resolve(dir, devRelPath);
 			tried.push(candidate);
 			if (existsSync(candidate)) return candidate;
 			const parent = dirname(dir);
@@ -26,17 +44,20 @@ function findSiblingBin(relPath: string, envOverride?: string): string {
 			dir = parent;
 		}
 	}
+
 	console.error(
-		`[bxp-ui] ${relPath} not found.\nTried:\n  ${tried.join("\n  ")}`,
+		`[bxp-ui] ${binName} not found.\nTried:\n  ${tried.join("\n  ")}`,
 	);
-	return relPath.split("/").pop() ?? relPath;
+	return binName;
 }
 
 const BXP_CLI_PATH = findSiblingBin(
+	"bxp-cli",
 	"bxp-cli/zig-out/bin/bxp-cli",
 	process.env.BXP_CLI_PATH,
 );
 const BXP_FMT_PATH = findSiblingBin(
+	"bxp-fmt",
 	"bxp-fmt/zig-out/bin/bxp-fmt",
 	process.env.BXP_FMT_PATH,
 );
