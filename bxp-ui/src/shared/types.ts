@@ -10,6 +10,15 @@ export type RunDryRunResponse = {
 	stderr: string;
 };
 
+export type LoadConfigParams = {
+	path: string;
+};
+
+export type LoadConfigResponse = {
+	rawText: string;
+	validationError: string | null;
+};
+
 export type TraceEventMsg = {
 	line: string;
 };
@@ -24,6 +33,10 @@ export type AppRPCType = {
 			runDryRun: {
 				params: RunDryRunParams;
 				response: RunDryRunResponse;
+			};
+			loadConfig: {
+				params: LoadConfigParams;
+				response: LoadConfigResponse;
 			};
 		};
 		messages: Record<string, never>;

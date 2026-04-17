@@ -3,18 +3,21 @@
 	"version": "0.0.1",
 	"description": "Electrobun UI for bxp-cli: JSON5 config editor + dry-run debugger",
 	"private": true,
+	"type": "module",
 	"scripts": {
 		"start": "vite build && electrobun dev",
 		"dev": "electrobun dev --watch",
-		"dev:hmr": "concurrently \"bun run hmr\" \"bun run start\"",
+		"dev:hmr": "concurrently --kill-others --kill-signal=SIGINT --success=first \"bun run hmr\" \"bun run start\"",
 		"hmr": "vite --port 5173",
 		"build": "vite build && electrobun build",
 		"build:canary": "vite build && electrobun build --env=canary"
 	},
 	"dependencies": {
 		"electrobun": "1.17.3-beta.11",
+		"json5": "^2.2.3",
 		"react": "^18.3.1",
-		"react-dom": "^18.3.1"
+		"react-dom": "^18.3.1",
+		"zustand": "^5.0.12"
 	},
 	"devDependencies": {
 		"@types/bun": "latest",

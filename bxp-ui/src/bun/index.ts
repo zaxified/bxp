@@ -1,15 +1,47 @@
 import { BrowserView, BrowserWindow, Updater } from "electrobun/bun";
-import { resolve } from "node:path";
+import { resolve, dirname } from "node:path";
+import { existsSync } from "node:fs";
 import type { AppRPCType } from "../shared/types";
 
 const DEV_SERVER_PORT = 5173;
 const DEV_SERVER_URL = `http://localhost:${DEV_SERVER_PORT}`;
 
-// Path to bxp-cli binary. In dev: sibling monorepo path. In packaged build:
-// TODO (Phase 6): resolve from Electrobun resources dir once packaging lands.
-const BXP_CLI_PATH =
-	process.env.BXP_CLI_PATH ??
-	resolve(import.meta.dir, "../../../bxp-cli/zig-out/bin/bxp-cli");
+// Resolve a sibling Zig binary by walking up from known starting points. In
+// Electrobun dev mode the main process runs from build/dev-linux-*/…, so a
+// fixed relative path won't do. Packaged builds (Phase 6) will swap this for
+// a resources-dir lookup.
+function findSiblingBin(relPath: string, envOverride?: string): string {
+	if (envOverride) return envOverride;
+
+	const starts = [import.meta.dir, process.cwd()];
+	const tried: string[] = [];
+	for (const start of starts) {
+		let dir = start;
+		for (let i = 0; i < 8; i++) {
+			const candidate = resolve(dir, relPath);
+			tried.push(candidate);
+			if (existsSync(candidate)) return candidate;
+			const parent = dirname(dir);
+			if (parent === dir) break;
+			dir = parent;
+		}
+	}
+	console.error(
+		`[bxp-ui] ${relPath} not found.\nTried:\n  ${tried.join("\n  ")}`,
+	);
+	return relPath.split("/").pop() ?? relPath;
+}
+
+const BXP_CLI_PATH = findSiblingBin(
+	"bxp-cli/zig-out/bin/bxp-cli",
+	process.env.BXP_CLI_PATH,
+);
+const BXP_FMT_PATH = findSiblingBin(
+	"bxp-fmt/zig-out/bin/bxp-fmt",
+	process.env.BXP_FMT_PATH,
+);
+console.log(`[bxp-ui] bxp-cli: ${BXP_CLI_PATH}`);
+console.log(`[bxp-ui] bxp-fmt: ${BXP_FMT_PATH}`);
 
 async function getMainViewUrl(): Promise<string> {
 	const channel = await Updater.localInfo.channel();
@@ -65,7 +97,8 @@ async function readAll(stream: ReadableStream<Uint8Array>): Promise<string> {
 const url = await getMainViewUrl();
 
 const rpc = BrowserView.defineRPC<AppRPCType>({
-	maxRequestTime: 0,
+	// Dry-runs on big datasets can take many seconds; disable the timeout entirely.
+	maxRequestTime: Number.POSITIVE_INFINITY,
 	handlers: {
 		requests: {
 			runDryRun: async ({ configPath, templateId }) => {
@@ -101,6 +134,19 @@ const rpc = BrowserView.defineRPC<AppRPCType>({
 
 				if (stderrText.length > 0) sendStderr(stderrText);
 				return { exitCode, stderr: stderrText };
+			},
+			loadConfig: async ({ path }) => {
+				const rawText = await Bun.file(path).text();
+				const proc = Bun.spawn([BXP_FMT_PATH, "--config", path], {
+					stdout: "pipe",
+					stderr: "pipe",
+				});
+				const stderrText = await readAll(proc.stderr);
+				await readAll(proc.stdout);
+				const exitCode = await proc.exited;
+				const validationError =
+					exitCode === 0 ? null : stderrText.trim() || `bxp-fmt exit ${exitCode}`;
+				return { rawText, validationError };
 			},
 		},
 		messages: {},
