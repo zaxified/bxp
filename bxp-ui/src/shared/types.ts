@@ -19,6 +19,15 @@ export type LoadConfigResponse = {
 	validationError: string | null;
 };
 
+export type ValidateExprParams = {
+	expr: string;
+};
+
+export type ValidateExprResponse = {
+	ok: boolean;
+	error: string | null;
+};
+
 export type TraceEventMsg = {
 	line: string;
 };
@@ -37,6 +46,10 @@ export type AppRPCType = {
 			loadConfig: {
 				params: LoadConfigParams;
 				response: LoadConfigResponse;
+			};
+			validateExpr: {
+				params: ValidateExprParams;
+				response: ValidateExprResponse;
 			};
 		};
 		messages: Record<string, never>;

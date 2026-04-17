@@ -13,6 +13,13 @@
 		"build:canary": "vite build && electrobun build --env=canary"
 	},
 	"dependencies": {
+		"@codemirror/autocomplete": "^6.18.3",
+		"@codemirror/commands": "^6.7.1",
+		"@codemirror/language": "^6.10.5",
+		"@codemirror/lint": "^6.8.4",
+		"@codemirror/state": "^6.5.0",
+		"@codemirror/view": "^6.35.0",
+		"@lezer/highlight": "^1.2.1",
 		"electrobun": "1.17.3-beta.11",
 		"json5": "^2.2.3",
 		"react": "^18.3.1",

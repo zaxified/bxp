@@ -148,6 +148,20 @@ const rpc = BrowserView.defineRPC<AppRPCType>({
 					exitCode === 0 ? null : stderrText.trim() || `bxp-fmt exit ${exitCode}`;
 				return { rawText, validationError };
 			},
+			validateExpr: async ({ expr }) => {
+				const proc = Bun.spawn([BXP_FMT_PATH, "--expr", expr], {
+					stdout: "pipe",
+					stderr: "pipe",
+				});
+				const stderrText = await readAll(proc.stderr);
+				await readAll(proc.stdout);
+				const exitCode = await proc.exited;
+				if (exitCode === 0) return { ok: true, error: null };
+				return {
+					ok: false,
+					error: stderrText.trim() || `bxp-fmt exit ${exitCode}`,
+				};
+			},
 		},
 		messages: {},
 	},

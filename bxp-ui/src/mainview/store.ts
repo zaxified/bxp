@@ -15,6 +15,9 @@ type Rpc = {
 		loadConfig: (args: {
 			path: string;
 		}) => Promise<{ rawText: string; validationError: string | null }>;
+		validateExpr: (args: {
+			expr: string;
+		}) => Promise<{ ok: boolean; error: string | null }>;
 	};
 };
 
@@ -44,6 +47,9 @@ type TraceStore = {
 	configError: string | null;
 	configValidationError: string | null;
 	loadConfig: () => Promise<void>;
+
+	// Expression validation (Phase 5)
+	validateExpr: (expr: string) => Promise<{ ok: boolean; error: string | null }>;
 
 	// Selection
 	selectedFileId: string | null;
@@ -132,6 +138,15 @@ export const useTraceStore = create<TraceStore>((set, get) => {
 					configStatus: "error",
 					configError: e instanceof Error ? e.message : String(e),
 				});
+			}
+		},
+
+		validateExpr: async (expr) => {
+			if (!rpc) return { ok: false, error: "RPC not attached" };
+			try {
+				return await rpc.request.validateExpr({ expr });
+			} catch (e) {
+				return { ok: false, error: e instanceof Error ? e.message : String(e) };
 			}
 		},
 

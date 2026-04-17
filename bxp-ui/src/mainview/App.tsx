@@ -5,8 +5,9 @@ import { RowList } from "./components/RowList";
 import { RowDetail } from "./components/RowDetail";
 import { StatusBar } from "./components/StatusBar";
 import { ConfigView } from "./components/ConfigView";
+import { ExprPlayground } from "./components/ExprPlayground";
 
-type Tab = "config" | "debug";
+type Tab = "config" | "debug" | "expr";
 
 function App() {
 	const [tab, setTab] = useState<Tab>("debug");
@@ -21,10 +22,14 @@ function App() {
 				<TopTab active={tab === "debug"} onClick={() => setTab("debug")}>
 					Debug
 				</TopTab>
+				<TopTab active={tab === "expr"} onClick={() => setTab("expr")}>
+					Expr
+				</TopTab>
 			</nav>
 			<main className="flex-1 min-h-0">
 				{tab === "debug" && <DebugPanes />}
 				{tab === "config" && <ConfigView />}
+				{tab === "expr" && <ExprPlayground />}
 			</main>
 			<StatusBar />
 		</div>
