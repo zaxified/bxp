@@ -16,6 +16,9 @@ export function ConfigView() {
 	const validationError = useTraceStore((s) => s.configValidationError);
 	const configPath = useTraceStore((s) => s.configPath);
 	const loadConfig = useTraceStore((s) => s.loadConfig);
+	const saveDraft = useTraceStore((s) => s.saveDraft);
+	const saveStatus = useTraceStore((s) => s.configSaveStatus);
+	const saveError = useTraceStore((s) => s.configSaveError);
 	const historyLen = useTraceStore((s) => s.draftHistory.length);
 	const futureLen = useTraceStore((s) => s.draftFuture.length);
 	const undo = useTraceStore((s) => s.undo);
@@ -104,6 +107,13 @@ export function ConfigView() {
 				>
 					Reset
 				</ToolbarButton>
+				<ToolbarButton
+					onClick={() => saveDraft()}
+					disabled={!isDirty || saveStatus === "saving"}
+					title="Save config to disk (atomic write via tmp + rename)"
+				>
+					{saveStatus === "saving" ? "Saving…" : "Save"}
+				</ToolbarButton>
 				<ToolbarButton onClick={() => loadConfig()} title="Reload from disk">
 					Reload
 				</ToolbarButton>
@@ -118,6 +128,11 @@ export function ConfigView() {
 			{error && (
 				<div className="px-3 py-1.5 text-xs text-red-400 border-b border-red-900/40 bg-red-950/20">
 					{error}
+				</div>
+			)}
+			{saveError && (
+				<div className="px-3 py-1.5 text-xs text-red-400 border-b border-red-900/40 bg-red-950/20">
+					save failed: {saveError}
 				</div>
 			)}
 			<div className="flex-1 min-h-0 overflow-auto">

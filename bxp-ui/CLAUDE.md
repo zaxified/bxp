@@ -84,6 +84,9 @@ Defined in [`src/shared/types.ts`](src/shared/types.ts):
   streams stdout line-by-line via `traceEvent` messages.
 - **`loadConfig`** `{path}` → `{rawText, validationError}` — reads file and
   runs `bxp-fmt --config <path>` for validation.
+- **`saveConfig`** `{path, text}` → `{ok, error}` — writes `text` atomically
+  (`<path>.bxp-tmp` then `rename`) so a crash mid-write leaves the prior
+  config intact.
 - **`validateExpr`** `{expr}` → `{ok, error}` — runs `bxp-fmt --expr <text>`
   for live expression lint markers.
 - **Webview messages** `traceEvent` / `stderr` feed the zustand store's
@@ -113,6 +116,8 @@ the NDJSON wire protocol (schema_version = 1).
     a single history step. (done)
   - Comment/whitespace/key-order-preserving JSON5 round-trip via CST patch
     at serialize time (`src/mainview/config/roundtrip.ts`). (done)
+  - Save-to-disk button in the Config toolbar. Atomic tmp + rename,
+    followed by an auto-reload so bxp-fmt validation refreshes. (done)
   - Trace protocol spec doc. (done)
   - Linux ZSTD bundle shipping bxp-cli + bxp-fmt. (**not done** — README
     documents what's left; `findSiblingBin` is ready for the packaged layout,

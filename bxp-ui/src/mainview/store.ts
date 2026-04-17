@@ -2,6 +2,7 @@ import { create } from "zustand";
 import JSON5 from "json5";
 import { parseLine } from "./trace/parse";
 import { TraceBuilder, emptyModel, type TraceModel } from "./trace/model";
+import { buildRoundtrippedText } from "./config/roundtrip";
 
 type RunStatus = "idle" | "running" | "done" | "error";
 type ConfigStatus = "idle" | "loading" | "loaded" | "error";
@@ -105,6 +106,10 @@ type Rpc = {
 		loadConfig: (args: {
 			path: string;
 		}) => Promise<{ rawText: string; validationError: string | null }>;
+		saveConfig: (args: {
+			path: string;
+			text: string;
+		}) => Promise<{ ok: boolean; error: string | null }>;
 		validateExpr: (args: {
 			expr: string;
 		}) => Promise<{ ok: boolean; error: string | null }>;
@@ -136,7 +141,10 @@ type TraceStore = {
 	configParsed: unknown;
 	configError: string | null;
 	configValidationError: string | null;
+	configSaveStatus: "idle" | "saving" | "saved" | "error";
+	configSaveError: string | null;
 	loadConfig: () => Promise<void>;
+	saveDraft: () => Promise<void>;
 
 	// Editable config draft + undo/redo (Phase 6). `originalConfig` is pinned
 	// to the last-loaded parse; `draftConfig` is the current user-edited state.
@@ -225,6 +233,8 @@ export const useTraceStore = create<TraceStore>((set, get) => {
 		configParsed: null,
 		configError: null,
 		configValidationError: null,
+		configSaveStatus: "idle",
+		configSaveError: null,
 
 		originalConfig: null,
 		draftConfig: null,
@@ -268,6 +278,46 @@ export const useTraceStore = create<TraceStore>((set, get) => {
 				set({
 					configStatus: "error",
 					configError: e instanceof Error ? e.message : String(e),
+				});
+			}
+		},
+
+		saveDraft: async () => {
+			if (!rpc) {
+				set({ configSaveStatus: "error", configSaveError: "RPC not attached" });
+				return;
+			}
+			const s = get();
+			if (s.draftConfig === null) return;
+			const text = buildRoundtrippedText(
+				s.configText,
+				s.originalConfig,
+				s.draftConfig,
+				(v) => JSON5.stringify(v, null, 2),
+			);
+			set({ configSaveStatus: "saving", configSaveError: null });
+			try {
+				const res = await rpc.request.saveConfig({
+					path: s.configPath,
+					text,
+				});
+				if (!res.ok) {
+					set({
+						configSaveStatus: "error",
+						configSaveError: res.error ?? "save failed",
+					});
+					return;
+				}
+				set({ configSaveStatus: "saved", configSaveError: null });
+				// Reload from disk so bxp-fmt validation re-runs and
+				// originalConfig/configText pick up any on-disk normalization.
+				// This also resets the undo history — intentional, the saved
+				// state is the new baseline.
+				await get().loadConfig();
+			} catch (e) {
+				set({
+					configSaveStatus: "error",
+					configSaveError: e instanceof Error ? e.message : String(e),
 				});
 			}
 		},

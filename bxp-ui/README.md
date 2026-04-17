@@ -96,6 +96,7 @@ Defined in [`src/shared/types.ts`](src/shared/types.ts):
 | --------------- | ------------- | ----------------------------- | --------------------------------------- |
 | webview → bun   | `runDryRun`   | `{configPath, templateId?}`   | `{exitCode, stderr}`                    |
 | webview → bun   | `loadConfig`  | `{path}`                      | `{rawText, validationError}`            |
+| webview → bun   | `saveConfig`  | `{path, text}`                | `{ok, error}`                           |
 | webview → bun   | `validateExpr`| `{expr}`                      | `{ok, error}`                           |
 | bun → webview   | `traceEvent`  | `{line}` (one NDJSON line)    | —                                       |
 | bun → webview   | `stderr`      | `{chunk}`                     | —                                       |

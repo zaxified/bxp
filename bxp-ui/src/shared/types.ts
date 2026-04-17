@@ -19,6 +19,16 @@ export type LoadConfigResponse = {
 	validationError: string | null;
 };
 
+export type SaveConfigParams = {
+	path: string;
+	text: string;
+};
+
+export type SaveConfigResponse = {
+	ok: boolean;
+	error: string | null;
+};
+
 export type ValidateExprParams = {
 	expr: string;
 };
@@ -46,6 +56,10 @@ export type AppRPCType = {
 			loadConfig: {
 				params: LoadConfigParams;
 				response: LoadConfigResponse;
+			};
+			saveConfig: {
+				params: SaveConfigParams;
+				response: SaveConfigResponse;
 			};
 			validateExpr: {
 				params: ValidateExprParams;

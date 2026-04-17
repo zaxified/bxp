@@ -1,6 +1,7 @@
 import { BrowserView, BrowserWindow, Updater } from "electrobun/bun";
 import { resolve, dirname } from "node:path";
 import { existsSync } from "node:fs";
+import { rename, unlink } from "node:fs/promises";
 import type { AppRPCType } from "../shared/types";
 
 const DEV_SERVER_PORT = 5173;
@@ -168,6 +169,27 @@ const rpc = BrowserView.defineRPC<AppRPCType>({
 				const validationError =
 					exitCode === 0 ? null : stderrText.trim() || `bxp-fmt exit ${exitCode}`;
 				return { rawText, validationError };
+			},
+			saveConfig: async ({ path, text }) => {
+				// Atomic write: land the bytes in a sibling temp file first, then
+				// rename into place. A crash or power loss between the write and
+				// the rename leaves the original config intact.
+				const tmpPath = `${path}.bxp-tmp`;
+				try {
+					await Bun.write(tmpPath, text);
+					await rename(tmpPath, path);
+					return { ok: true, error: null };
+				} catch (e) {
+					try {
+						await unlink(tmpPath);
+					} catch {
+						// tmp file may not exist yet; ignore cleanup failure
+					}
+					return {
+						ok: false,
+						error: e instanceof Error ? e.message : String(e),
+					};
+				}
 			},
 			validateExpr: async ({ expr }) => {
 				const proc = Bun.spawn([BXP_FMT_PATH, "--expr", expr], {
