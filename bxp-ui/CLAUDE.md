@@ -9,8 +9,9 @@ Electrobun-based desktop app: JSON5 config editor + NDJSON dry-run debugger for
 - React 18 + TypeScript + Tailwind CSS + Vite 6
 - CodeMirror 6 (chosen over Monaco for bundle size and cheap inline editors)
 - zustand 5 for shared state
-- `json5` for parsing (plain JS object round-trip; comment/ordering preserving
-  AST is a future task)
+- `json5` for initial parsing (plain JS object powers the tree UI);
+  `@croct/json5-parser` for the serialize step so comments, whitespace, and
+  key order from the source file survive on round-trip
 
 ## Layout
 
@@ -106,7 +107,9 @@ the NDJSON wire protocol (schema_version = 1).
   - Inline expression highlighting in ConfigTree + click-to-expand. (done)
   - `var_error` visuals in RowDetail. (done)
   - Editable tree (string / number / boolean / expression leaves) with
-    zustand-backed undo/redo. (done — comment/whitespace round-trip still lossy)
+    zustand-backed undo/redo. (done)
+  - Comment/whitespace/key-order-preserving JSON5 round-trip via CST patch
+    at serialize time (`src/mainview/config/roundtrip.ts`). (done)
   - Trace protocol spec doc. (done)
   - Linux ZSTD bundle shipping bxp-cli + bxp-fmt. (**not done** — README
     documents what's left; `findSiblingBin` is ready for the packaged layout,

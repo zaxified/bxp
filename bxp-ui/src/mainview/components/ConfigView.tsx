@@ -3,6 +3,7 @@ import JSON5 from "json5";
 import { useTraceStore } from "../store";
 import { ConfigTree } from "./ConfigTree";
 import { ConfigRaw } from "./ConfigRaw";
+import { buildRoundtrippedText } from "../config/roundtrip";
 
 type Sub = "tree" | "raw";
 
@@ -25,17 +26,16 @@ export function ConfigView() {
 
 	const isDirty = draft !== original;
 
-	// Serialize draft for the Raw view. Comments from the source file are lost
-	// on round-trip — surfaced via a banner below. Proper comment/ordering
-	// preservation (AST-based) is a future task.
+	// Serialize draft for the Raw view. Parses the original text into a CST
+	// via @croct/json5-parser, patches only the leaves that actually changed,
+	// and emits the result — so comments, whitespace, and key order of
+	// untouched subtrees round-trip byte-for-byte.
 	const draftText = useMemo(() => {
 		if (draft == null) return text;
-		try {
-			return JSON5.stringify(draft, null, 2);
-		} catch {
-			return text;
-		}
-	}, [draft, text]);
+		return buildRoundtrippedText(text, original, draft, (v) =>
+			JSON5.stringify(v, null, 2),
+		);
+	}, [draft, original, text]);
 
 	// Auto-load when the user switches to Config tab and nothing is loaded yet
 	// (or when the path changes).
@@ -120,13 +120,6 @@ export function ConfigView() {
 					{error}
 				</div>
 			)}
-			{isDirty && sub === "raw" && (
-				<div className="px-3 py-1.5 text-xs text-slate-400 border-b border-slate-800 bg-slate-900/40">
-					Showing serialized draft. Comments and exact whitespace from the
-					source file are not yet preserved on round-trip.
-				</div>
-			)}
-
 			<div className="flex-1 min-h-0 overflow-auto">
 				{status === "loading" && (
 					<div className="p-4 text-xs text-slate-500 italic">Loading…</div>

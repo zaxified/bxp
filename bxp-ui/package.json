@@ -19,6 +19,7 @@
 		"@codemirror/lint": "^6.8.4",
 		"@codemirror/state": "^6.5.0",
 		"@codemirror/view": "^6.35.0",
+		"@croct/json5-parser": "^0.2.2",
 		"@lezer/highlight": "^1.2.1",
 		"electrobun": "1.17.3-beta.11",
 		"json5": "^2.2.3",
