@@ -35,37 +35,41 @@ pub const SectionStats = struct {
     }
 };
 
-/// Output wrapper that suppresses all writes when --quiet is active.
+/// Output wrapper that suppresses all writes when --quiet or --trace is active.
 /// All methods silently drop write errors (same pattern as existing debug prints).
+/// When --trace is active, human-readable lines are suppressed so that stdout
+/// contains only newline-delimited JSON (NDJSON) trace events.
 pub const Output = struct {
     writer: *Stdout,
     quiet: bool,
     debug: bool,
+    trace: bool = false,
+    dry_run: bool = false,
 
-    /// Print an informational line. Suppressed in --quiet mode.
+    /// Print an informational line. Suppressed in --quiet or --trace mode.
     pub fn info(self: Output, comptime fmt: []const u8, args: anytype) void {
-        if (self.quiet) return;
+        if (self.quiet or self.trace) return;
         self.writer.print(fmt, args) catch {};
         self.writer.flush() catch {};
     }
 
-    /// Print a warning line. Suppressed in --quiet mode.
+    /// Print a warning line. Suppressed in --quiet or --trace mode.
     pub fn warning(self: Output, comptime fmt: []const u8, args: anytype) void {
-        if (self.quiet) return;
+        if (self.quiet or self.trace) return;
         self.writer.print(fmt, args) catch {};
         self.writer.flush() catch {};
     }
 
-    /// Print a fatal-error line. Suppressed in --quiet mode.
+    /// Print a fatal-error line. Suppressed in --quiet or --trace mode.
     pub fn fatal(self: Output, comptime fmt: []const u8, args: anytype) void {
-        if (self.quiet) return;
+        if (self.quiet or self.trace) return;
         self.writer.print(fmt, args) catch {};
         self.writer.flush() catch {};
     }
 
-    /// Print a per-section summary line. Suppressed in --quiet mode.
+    /// Print a per-section summary line. Suppressed in --quiet or --trace mode.
     pub fn summary(self: Output, stats: SectionStats) void {
-        if (self.quiet) return;
+        if (self.quiet or self.trace) return;
         const errors: u32 = if (stats.has_fatal) 1 else 0;
         const secs = stats.time_ns / 1_000_000_000;
         const ms = (stats.time_ns % 1_000_000_000) / 1_000_000;
@@ -73,14 +77,34 @@ pub const Output = struct {
         self.writer.flush() catch {};
     }
 
-    /// Print the overall summary line (no leading "summary:" label). Suppressed in --quiet mode.
+    /// Print the overall summary line (no leading "summary:" label).
+    /// Suppressed in --quiet or --trace mode.
     pub fn overallLine(self: Output, stats: SectionStats) void {
-        if (self.quiet) return;
+        if (self.quiet or self.trace) return;
         const errors: u32 = if (stats.has_fatal) 1 else 0;
         const secs = stats.time_ns / 1_000_000_000;
         const ms = (stats.time_ns % 1_000_000_000) / 1_000_000;
         self.writer.print("errors:{d} warnings:{d} time:{d}.{d:0>3}s\n", .{ errors, stats.warnings, secs, ms }) catch {};
         self.writer.flush() catch {};
+    }
+
+    /// Emit one NDJSON event on stdout. No-op unless --trace is active.
+    /// The caller provides an anonymous struct whose fields are merged into the event
+    /// object alongside `"t": t_name`. `std.json.Stringify` handles string escaping.
+    /// Errors are swallowed (same pattern as info/warning/fatal).
+    pub fn event(self: Output, comptime t_name: []const u8, args: anytype) void {
+        if (!self.trace) return;
+        var jw: std.json.Stringify = .{ .writer = self.writer, .options = .{} };
+        jw.beginObject() catch return;
+        jw.objectField("t") catch return;
+        jw.write(t_name) catch return;
+        inline for (std.meta.fields(@TypeOf(args))) |field| {
+            jw.objectField(field.name) catch return;
+            jw.write(@field(args, field.name)) catch return;
+        }
+        jw.endObject() catch return;
+        self.writer.writeByte('\n') catch return;
+        self.writer.flush() catch return;
     }
 };
 
@@ -272,8 +296,10 @@ fn evalAllVars(
                 out.writer.print("\n", .{}) catch {};
                 out.writer.flush() catch {};
             }
+            out.event("var_error", .{ .name = e.key_ptr.*, .expr = e.value_ptr.*, .@"error" = @errorName(err), .detail = detail });
             break :blk "";
         };
+        out.event("var_eval", .{ .name = e.key_ptr.*, .expr = e.value_ptr.*, .value = val });
         try vars.put(e.key_ptr.*, val);
     }
     return vars;
@@ -435,6 +461,14 @@ pub fn processBroker(
             }
         }
 
+        const full_path = try std.fs.path.join(file_alloc, &.{ dir_path, filename });
+        out.event("file_start", .{
+            .template = bid,
+            .path = full_path,
+            .rows = all_rows.items.len,
+            .headers = col_names.items,
+        });
+
         // Build pre_pass lookup table if configured.
         // Iterates all rows, evaluates when, and stores values under
         // composite keys "key\x00field_name" for use by LOOKUP() in input_schema.
@@ -480,6 +514,7 @@ pub fn processBroker(
                     };
                     const composite = try std.mem.concat(file_alloc, u8, &.{ key_val, "\x00", ve.key_ptr.* });
                     try lookup_table.put(composite, val);
+                    out.event("prepass_set", .{ .key = key_val, .field = ve.key_ptr.*, .value = val });
                 }
             }
         }
@@ -512,12 +547,20 @@ pub fn processBroker(
             }
         }
 
-        const out_file = try dir.createFile(out_name, .{});
-        defer out_file.close();
-
+        // Output sink: real file, or Discarding writer under --dry-run.
+        var out_file: std.fs.File = undefined;
         var out_file_buf: [OUT_FILE_BUF_SIZE]u8 = undefined;
-        var out_fw = out_file.writer(&out_file_buf);
-        const fout = &out_fw.interface;
+        var out_fw: std.fs.File.Writer = undefined;
+        var discarding: std.Io.Writer.Discarding = undefined;
+        const fout: *std.Io.Writer = if (out.dry_run) blk: {
+            discarding = .init(&out_file_buf);
+            break :blk &discarding.writer;
+        } else blk: {
+            out_file = try dir.createFile(out_name, .{});
+            out_fw = out_file.writer(&out_file_buf);
+            break :blk &out_fw.interface;
+        };
+        defer if (!out.dry_run) out_file.close();
         const delim_out = &[_]u8{bc.csv_delimiter_out};
         if (bc.file_type_out == .json) {
             try fout.writeAll("[\n");
@@ -535,8 +578,10 @@ pub fn processBroker(
         const line_alloc = line_arena.allocator();
 
         var json_first_row = true;
-        for (all_rows.items) |fields| {
+        var file_rows_written: usize = 0;
+        for (all_rows.items, 0..) |fields, row_idx| {
             _ = line_arena.reset(.retain_capacity);
+            out.event("row_start", .{ .file_row = row_idx + 1, .fields = fields });
 
             var row_detail: []const u8 = "";
             var row_ctx = expr_mod.Context{
@@ -556,7 +601,7 @@ pub fn processBroker(
             // Row rules: first matching rule determines what to emit.
             const rules = bc.row_rules orelse &.{};
             var rule_matched = false;
-            for (rules) |rule| {
+            for (rules, 0..) |rule, rule_index| {
                 row_detail = "";
                 const when_val = expr_mod.eval(rule.when, &row_ctx) catch |err| {
                     if (out.debug) {
@@ -567,10 +612,15 @@ pub fn processBroker(
                         }
                         out.writer.flush() catch {};
                     }
+                    out.event("rule_no_match", .{ .rule_index = rule_index, .when = rule.when, .@"error" = @errorName(err) });
                     continue;
                 };
-                if (!when_val.toBool()) continue;
+                if (!when_val.toBool()) {
+                    out.event("rule_no_match", .{ .rule_index = rule_index, .when = rule.when });
+                    continue;
+                }
                 rule_matched = true;
+                out.event("rule_match", .{ .rule_index = rule_index, .when = rule.when });
                 // Empty rows slice = silent skip.
                 for (rule.rows) |row_override| {
                     // Start from base vars, then apply per-row overrides.
@@ -589,16 +639,29 @@ pub fn processBroker(
                                 }
                                 out.writer.flush() catch {};
                             }
+                            out.event("var_error", .{ .name = e.key_ptr.*, .expr = e.value_ptr.*, .@"error" = @errorName(err), .detail = row_detail });
                             break :blk "";
                         };
+                        out.event("var_eval", .{ .name = e.key_ptr.*, .expr = e.value_ptr.*, .value = val });
                         try merged.put(e.key_ptr.*, val);
                     }
                     // Date range filter.
                     const date_str = merged.get(VAR_DATE) orelse "";
                     if (date_min.len > 0 and date_str.len >= 10 and
-                        std.mem.order(u8, date_str[0..10], date_min) == .lt) continue;
+                        std.mem.order(u8, date_str[0..10], date_min) == .lt) {
+                        out.event("row_filtered", .{ .reason = "date_filter_from_filename" });
+                        continue;
+                    }
                     if (date_max.len > 0 and date_str.len >= 10 and
-                        std.mem.order(u8, date_str[0..10], date_max) == .gt) continue;
+                        std.mem.order(u8, date_str[0..10], date_max) == .gt) {
+                        out.event("row_filtered", .{ .reason = "date_filter_from_filename" });
+                        continue;
+                    }
+                    // Collect output values for trace emission.
+                    var out_values: std.ArrayList([]const u8) = .empty;
+                    for (bc.output_schema.items) |col| {
+                        try out_values.append(line_alloc, merged.get(col.variable) orelse "");
+                    }
                     if (bc.file_type_out == .json) {
                         if (!json_first_row) try fout.writeAll(",\n");
                         json_first_row = false;
@@ -611,6 +674,8 @@ pub fn processBroker(
                         }
                         try fout.writeAll("\n");
                     }
+                    out.event("row_output", .{ .values = out_values.items });
+                    file_rows_written += 1;
                 }
                 break; // first matching rule wins
             }
@@ -627,10 +692,22 @@ pub fn processBroker(
                     out.writer.flush() catch {};
                 }
             }
+            out.event("row_end", .{});
         }
 
         if (bc.file_type_out == .json) try fout.writeAll("\n]\n");
         try fout.flush();
+
+        out.event("file_end", .{
+            .template = bid,
+            .path = full_path,
+            .stats = .{
+                .rows = all_rows.items.len,
+                .written = file_rows_written,
+                .errors = @as(u32, 0),
+                .warnings = @as(u32, 0),
+            },
+        });
     }
 
     stats.time_ns = timer.read();
