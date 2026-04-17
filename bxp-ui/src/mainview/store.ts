@@ -37,6 +37,65 @@ function setAtPath(obj: unknown, path: readonly PathSeg[], value: unknown): unkn
 	return obj;
 }
 
+// Immutable transform-at-path: returns a shallow-copied spine where the
+// container at `path` has been passed through `transform`. Used by
+// structural edits (insert / delete / move / duplicate) so each produces
+// exactly one history entry with one new spine.
+function transformAtPath(
+	obj: unknown,
+	path: readonly PathSeg[],
+	transform: (container: unknown) => unknown,
+): unknown {
+	if (path.length === 0) return transform(obj);
+	const head = path[0];
+	const rest = path.slice(1);
+	if (typeof head === "number" && Array.isArray(obj)) {
+		const copy = obj.slice();
+		copy[head] = transformAtPath(obj[head], rest, transform);
+		return copy;
+	}
+	if (
+		typeof head === "string" &&
+		obj !== null &&
+		typeof obj === "object" &&
+		!Array.isArray(obj)
+	) {
+		const copy = { ...(obj as Record<string, unknown>) };
+		copy[head] = transformAtPath(
+			(obj as Record<string, unknown>)[head],
+			rest,
+			transform,
+		);
+		return copy;
+	}
+	return obj;
+}
+
+// Pick a key name not already present in `src`, starting from `base_copy`
+// and appending incrementing numeric suffixes if needed. Used when the
+// user duplicates an object entry without providing an explicit new key.
+function uniqueKey(src: Record<string, unknown>, base: string): string {
+	const stem = `${base}_copy`;
+	if (!(stem in src)) return stem;
+	for (let i = 2; i < 10_000; i++) {
+		const candidate = `${stem}${i}`;
+		if (!(candidate in src)) return candidate;
+	}
+	return `${stem}_${Date.now()}`;
+}
+
+function cloneDeep<T>(v: T): T {
+	if (Array.isArray(v)) return v.map(cloneDeep) as unknown as T;
+	if (v !== null && typeof v === "object") {
+		const out: Record<string, unknown> = {};
+		for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+			out[k] = cloneDeep(val);
+		}
+		return out as T;
+	}
+	return v;
+}
+
 type Rpc = {
 	request: {
 		runDryRun: (args: {
@@ -88,6 +147,25 @@ type TraceStore = {
 	draftHistory: unknown[];
 	draftFuture: unknown[];
 	editLeaf: (path: readonly PathSeg[], value: unknown) => void;
+	// Structural edits. `parentPath` points at the container (object/array),
+	// `key` is a string for objects and a number index for arrays. All of
+	// these push a history entry and clear the redo future.
+	insertChild: (
+		parentPath: readonly PathSeg[],
+		key: PathSeg,
+		value: unknown,
+	) => void;
+	deleteChild: (parentPath: readonly PathSeg[], key: PathSeg) => void;
+	moveChild: (
+		parentPath: readonly PathSeg[],
+		fromIndex: number,
+		toIndex: number,
+	) => void;
+	duplicateChild: (
+		parentPath: readonly PathSeg[],
+		key: PathSeg,
+		newKey?: string,
+	) => void;
 	undo: () => void;
 	redo: () => void;
 	resetDraft: () => void;
@@ -206,6 +284,125 @@ export const useTraceStore = create<TraceStore>((set, get) => {
 		editLeaf: (path, value) =>
 			set((s) => {
 				const next = setAtPath(s.draftConfig, path, value);
+				if (next === s.draftConfig) return {};
+				return {
+					draftConfig: next,
+					draftHistory: [...s.draftHistory, s.draftConfig],
+					draftFuture: [],
+				};
+			}),
+
+		insertChild: (parentPath, key, value) =>
+			set((s) => {
+				const next = transformAtPath(s.draftConfig, parentPath, (container) => {
+					if (Array.isArray(container)) {
+						if (typeof key !== "number") return container;
+						const copy = container.slice();
+						const idx = Math.max(0, Math.min(key, copy.length));
+						copy.splice(idx, 0, value);
+						return copy;
+					}
+					if (container !== null && typeof container === "object") {
+						if (typeof key !== "string" || key.length === 0) return container;
+						if (key in (container as Record<string, unknown>)) return container;
+						return { ...(container as Record<string, unknown>), [key]: value };
+					}
+					return container;
+				});
+				if (next === s.draftConfig) return {};
+				return {
+					draftConfig: next,
+					draftHistory: [...s.draftHistory, s.draftConfig],
+					draftFuture: [],
+				};
+			}),
+
+		deleteChild: (parentPath, key) =>
+			set((s) => {
+				const next = transformAtPath(s.draftConfig, parentPath, (container) => {
+					if (Array.isArray(container)) {
+						if (typeof key !== "number") return container;
+						if (key < 0 || key >= container.length) return container;
+						const copy = container.slice();
+						copy.splice(key, 1);
+						return copy;
+					}
+					if (container !== null && typeof container === "object") {
+						if (typeof key !== "string") return container;
+						const src = container as Record<string, unknown>;
+						if (!(key in src)) return container;
+						const copy: Record<string, unknown> = {};
+						for (const [k, v] of Object.entries(src)) {
+							if (k !== key) copy[k] = v;
+						}
+						return copy;
+					}
+					return container;
+				});
+				if (next === s.draftConfig) return {};
+				return {
+					draftConfig: next,
+					draftHistory: [...s.draftHistory, s.draftConfig],
+					draftFuture: [],
+				};
+			}),
+
+		moveChild: (parentPath, fromIndex, toIndex) =>
+			set((s) => {
+				const next = transformAtPath(s.draftConfig, parentPath, (container) => {
+					if (!Array.isArray(container)) return container;
+					if (
+						fromIndex < 0 ||
+						fromIndex >= container.length ||
+						toIndex < 0 ||
+						toIndex >= container.length ||
+						fromIndex === toIndex
+					) {
+						return container;
+					}
+					const copy = container.slice();
+					const [item] = copy.splice(fromIndex, 1);
+					copy.splice(toIndex, 0, item);
+					return copy;
+				});
+				if (next === s.draftConfig) return {};
+				return {
+					draftConfig: next,
+					draftHistory: [...s.draftHistory, s.draftConfig],
+					draftFuture: [],
+				};
+			}),
+
+		duplicateChild: (parentPath, key, newKey) =>
+			set((s) => {
+				const next = transformAtPath(s.draftConfig, parentPath, (container) => {
+					if (Array.isArray(container)) {
+						if (typeof key !== "number") return container;
+						if (key < 0 || key >= container.length) return container;
+						const copy = container.slice();
+						copy.splice(key + 1, 0, cloneDeep(container[key]));
+						return copy;
+					}
+					if (container !== null && typeof container === "object") {
+						if (typeof key !== "string") return container;
+						const src = container as Record<string, unknown>;
+						if (!(key in src)) return container;
+						const target =
+							newKey && newKey.length > 0 && !(newKey in src)
+								? newKey
+								: uniqueKey(src, key);
+						// Insert immediately after the source key to keep neighbors
+						// grouped visually in the tree (object order matters for our
+						// config files: templates sit next to their siblings).
+						const copy: Record<string, unknown> = {};
+						for (const [k, v] of Object.entries(src)) {
+							copy[k] = v;
+							if (k === key) copy[target] = cloneDeep(v);
+						}
+						return copy;
+					}
+					return container;
+				});
 				if (next === s.draftConfig) return {};
 				return {
 					draftConfig: next,

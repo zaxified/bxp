@@ -108,6 +108,9 @@ the NDJSON wire protocol (schema_version = 1).
   - `var_error` visuals in RowDetail. (done)
   - Editable tree (string / number / boolean / expression leaves) with
     zustand-backed undo/redo. (done)
+  - Structural edits on the tree: add child (with key + type picker),
+    delete, duplicate, and reorder (↑/↓ for array entries). Each edit is
+    a single history step. (done)
   - Comment/whitespace/key-order-preserving JSON5 round-trip via CST patch
     at serialize time (`src/mainview/config/roundtrip.ts`). (done)
   - Trace protocol spec doc. (done)

@@ -4,6 +4,7 @@ import { ExprEditor } from "./ExprEditor";
 import { useTraceStore, type PathSeg } from "../store";
 
 type Kind = "object" | "array" | "string" | "number" | "boolean" | "null";
+type NewType = "string" | "number" | "boolean" | "object" | "array";
 
 function kindOf(v: unknown): Kind {
 	if (v === null) return "null";
@@ -14,6 +15,21 @@ function kindOf(v: unknown): Kind {
 	if (t === "number") return "number";
 	if (t === "boolean") return "boolean";
 	return "null";
+}
+
+function defaultForType(t: NewType): unknown {
+	switch (t) {
+		case "string":
+			return "";
+		case "number":
+			return 0;
+		case "boolean":
+			return false;
+		case "object":
+			return {};
+		case "array":
+			return [];
+	}
 }
 
 function summary(v: unknown): string {
@@ -63,7 +79,15 @@ function isExprPath(path: readonly PathSeg[]): boolean {
 export function ConfigTree({ value }: { value: unknown }) {
 	return (
 		<div className="font-mono text-xs p-3">
-			<TreeNode label="config" value={value} depth={0} path={[]} rootOpen />
+			<TreeNode
+				label="config"
+				value={value}
+				depth={0}
+				path={[]}
+				siblingCount={0}
+				indexInParent={0}
+				rootOpen
+			/>
 		</div>
 	);
 }
@@ -73,12 +97,16 @@ function TreeNode({
 	value,
 	depth,
 	path,
+	siblingCount,
+	indexInParent,
 	rootOpen = false,
 }: {
 	label: string | number;
 	value: unknown;
 	depth: number;
 	path: readonly PathSeg[];
+	siblingCount: number;
+	indexInParent: number;
 	rootOpen?: boolean;
 }) {
 	const [open, setOpen] = useState(rootOpen || depth < 2);
@@ -89,7 +117,7 @@ function TreeNode({
 	if (!composite) {
 		const isExpr = k === "string" && isExprPath(path);
 		return (
-			<div className="flex items-baseline gap-2 py-0.5">
+			<div className="group flex items-baseline gap-2 py-0.5">
 				<span className="w-4 shrink-0" />
 				<LabelSpan label={label} />
 				<span className="text-slate-600">:</span>
@@ -98,6 +126,11 @@ function TreeNode({
 				) : (
 					<EditableLeaf kind={k} value={value} path={path} />
 				)}
+				<RowActions
+					path={path}
+					siblingCount={siblingCount}
+					indexInParent={indexInParent}
+				/>
 			</div>
 		);
 	}
@@ -110,7 +143,7 @@ function TreeNode({
 	return (
 		<div>
 			<div
-				className="flex items-baseline gap-2 py-0.5 cursor-pointer hover:bg-slate-800/40 rounded"
+				className="group flex items-baseline gap-2 py-0.5 cursor-pointer hover:bg-slate-800/40 rounded"
 				onClick={toggle}
 			>
 				<span className="w-4 shrink-0 text-slate-500 text-center select-none">
@@ -119,6 +152,12 @@ function TreeNode({
 				<LabelSpan label={label} />
 				<span className="text-slate-600">:</span>
 				<span className="text-slate-500">{summary(value)}</span>
+				<AddChildControl parentPath={path} parentKind={k} />
+				<RowActions
+					path={path}
+					siblingCount={siblingCount}
+					indexInParent={indexInParent}
+				/>
 			</div>
 			{open && (
 				<div style={{ paddingLeft: 16 }} className="border-l border-slate-800/80 ml-2">
@@ -127,13 +166,15 @@ function TreeNode({
 							{k === "array" ? "(empty array)" : "(empty object)"}
 						</div>
 					) : (
-						entries.map(([key, v]) => (
+						entries.map(([key, v], i) => (
 							<TreeNode
 								key={String(key)}
 								label={key as string | number}
 								value={v}
 								depth={depth + 1}
 								path={[...path, key as PathSeg]}
+								siblingCount={entries.length}
+								indexInParent={i}
 							/>
 						))
 					)}
@@ -148,6 +189,243 @@ function LabelSpan({ label }: { label: string | number }) {
 		return <span className="text-slate-500">[{label}]</span>;
 	}
 	return <span className="text-indigo-300">{label}</span>;
+}
+
+// Structural-edit buttons for a non-root tree node. Shows on hover via the
+// parent row's `group` class. Parent kind is inferred from the last path
+// segment: numeric = array parent, string = object parent.
+function RowActions({
+	path,
+	siblingCount,
+	indexInParent,
+}: {
+	path: readonly PathSeg[];
+	siblingCount: number;
+	indexInParent: number;
+}) {
+	const deleteChild = useTraceStore((s) => s.deleteChild);
+	const moveChild = useTraceStore((s) => s.moveChild);
+	const duplicateChild = useTraceStore((s) => s.duplicateChild);
+
+	if (path.length === 0) return null;
+	const myKey = path[path.length - 1];
+	const parentPath = path.slice(0, -1);
+	const inArray = typeof myKey === "number";
+
+	const handle = (fn: () => void) => (e: React.MouseEvent) => {
+		e.stopPropagation();
+		fn();
+	};
+
+	return (
+		<span className="ml-auto flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+			{inArray && (
+				<>
+					<ActionButton
+						title="Move up"
+						disabled={indexInParent === 0}
+						onClick={handle(() =>
+							moveChild(parentPath, indexInParent, indexInParent - 1),
+						)}
+					>
+						↑
+					</ActionButton>
+					<ActionButton
+						title="Move down"
+						disabled={indexInParent >= siblingCount - 1}
+						onClick={handle(() =>
+							moveChild(parentPath, indexInParent, indexInParent + 1),
+						)}
+					>
+						↓
+					</ActionButton>
+				</>
+			)}
+			<ActionButton
+				title="Duplicate"
+				onClick={handle(() => duplicateChild(parentPath, myKey))}
+			>
+				⧉
+			</ActionButton>
+			<ActionButton
+				title="Delete"
+				onClick={handle(() => {
+					if (confirm(`Delete ${String(myKey)}?`)) deleteChild(parentPath, myKey);
+				})}
+				danger
+			>
+				×
+			</ActionButton>
+		</span>
+	);
+}
+
+// Inline + button on a composite container's header row. Opens a modal to
+// pick the new entry's key (object) and type.
+function AddChildControl({
+	parentPath,
+	parentKind,
+}: {
+	parentPath: readonly PathSeg[];
+	parentKind: "object" | "array";
+}) {
+	const [open, setOpen] = useState(false);
+	return (
+		<>
+			<ActionButton
+				title="Add child"
+				onClick={(e) => {
+					e.stopPropagation();
+					setOpen(true);
+				}}
+			>
+				+
+			</ActionButton>
+			{open && (
+				<AddChildDialog
+					parentPath={parentPath}
+					parentKind={parentKind}
+					onClose={() => setOpen(false)}
+				/>
+			)}
+		</>
+	);
+}
+
+function AddChildDialog({
+	parentPath,
+	parentKind,
+	onClose,
+}: {
+	parentPath: readonly PathSeg[];
+	parentKind: "object" | "array";
+	onClose: () => void;
+}) {
+	const insertChild = useTraceStore((s) => s.insertChild);
+	const [keyName, setKeyName] = useState("");
+	const [type, setType] = useState<NewType>("string");
+	const [error, setError] = useState<string | null>(null);
+
+	const confirm = () => {
+		if (parentKind === "object") {
+			const k = keyName.trim();
+			if (k.length === 0) {
+				setError("Key name cannot be empty");
+				return;
+			}
+			insertChild(parentPath, k, defaultForType(type));
+		} else {
+			// Array: append. The store clamps to [0, length], so passing a
+			// large index means "at end".
+			insertChild(parentPath, Number.MAX_SAFE_INTEGER, defaultForType(type));
+		}
+		onClose();
+	};
+
+	return (
+		<div
+			className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
+			onClick={onClose}
+		>
+			<div
+				className="bg-slate-900 border border-slate-700 rounded-lg p-4 min-w-80 font-mono text-xs"
+				onClick={(e) => e.stopPropagation()}
+			>
+				<div className="text-slate-300 text-sm mb-3">
+					Add entry to {parentKind}
+				</div>
+				{parentKind === "object" && (
+					<div className="mb-3">
+						<div className="text-slate-500 mb-1">Key</div>
+						<input
+							autoFocus
+							value={keyName}
+							onChange={(e) => {
+								setKeyName(e.target.value);
+								setError(null);
+							}}
+							onKeyDown={(e) => {
+								if (e.key === "Enter") confirm();
+								if (e.key === "Escape") onClose();
+							}}
+							placeholder="new_key"
+							className="w-full bg-slate-950 text-indigo-300 border border-slate-700 rounded px-2 py-1"
+						/>
+					</div>
+				)}
+				<div className="mb-3">
+					<div className="text-slate-500 mb-1">Type</div>
+					<div className="flex flex-wrap gap-1">
+						{(["string", "number", "boolean", "object", "array"] as NewType[]).map(
+							(t) => (
+								<button
+									key={t}
+									type="button"
+									onClick={() => setType(t)}
+									className={`px-2 py-1 rounded border text-xs ${
+										type === t
+											? "border-sky-500 bg-sky-900/40 text-sky-200"
+											: "border-slate-700 text-slate-400 hover:text-slate-100"
+									}`}
+								>
+									{t}
+								</button>
+							),
+						)}
+					</div>
+				</div>
+				{error && <div className="text-red-400 mb-2">{error}</div>}
+				<div className="flex justify-end gap-2 mt-4">
+					<button
+						type="button"
+						onClick={onClose}
+						className="px-3 py-1 text-slate-400 hover:text-slate-100 rounded"
+					>
+						Cancel
+					</button>
+					<button
+						type="button"
+						onClick={confirm}
+						className="px-3 py-1 bg-sky-700 hover:bg-sky-600 text-white rounded"
+					>
+						Add
+					</button>
+				</div>
+			</div>
+		</div>
+	);
+}
+
+function ActionButton({
+	title,
+	onClick,
+	disabled = false,
+	danger = false,
+	children,
+}: {
+	title: string;
+	onClick: (e: React.MouseEvent) => void;
+	disabled?: boolean;
+	danger?: boolean;
+	children: React.ReactNode;
+}) {
+	return (
+		<button
+			type="button"
+			title={title}
+			onClick={onClick}
+			disabled={disabled}
+			className={`text-xs w-5 h-5 leading-none flex items-center justify-center rounded ${
+				disabled
+					? "text-slate-700 cursor-not-allowed"
+					: danger
+						? "text-red-400 hover:bg-red-950/50"
+						: "text-slate-400 hover:text-slate-100 hover:bg-slate-800"
+			}`}
+		>
+			{children}
+		</button>
+	);
 }
 
 function EditableLeaf({
