@@ -1,6 +1,7 @@
 node_modules/
 dist/
 build/
+build-bin/
 .env.local.*
 .DS_Store
 *.log

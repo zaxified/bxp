@@ -119,9 +119,20 @@ the NDJSON wire protocol (schema_version = 1).
   - Save-to-disk button in the Config toolbar. Atomic tmp + rename,
     followed by an auto-reload so bxp-fmt validation refreshes. (done)
   - Trace protocol spec doc. (done)
-  - Linux ZSTD bundle shipping bxp-cli + bxp-fmt. (**not done** — README
-    documents what's left; `findSiblingBin` is ready for the packaged layout,
-    only the release-time copy step is missing)
+  - Linux ZSTD bundle shipping bxp-cli + bxp-fmt.
+    [`scripts/stage-bins.sh`](scripts/stage-bins.sh) cross-compiles both
+    binaries to `x86_64-linux-musl` (`ReleaseSmall`, static) and stages them
+    under `build-bin/`. [`electrobun.config.ts`](electrobun.config.ts)
+    `build.copy` pulls them into `Resources/app/bin/` so `findSiblingBin`
+    resolves them at runtime. `bun run build:canary` produces the full
+    `.tar.zst` distributable (~32 MB) in `artifacts/`; extraction to
+    `/tmp` + `bxp-fmt --expr` confirmed working. (done)
+  - Theme toggle: two dark palettes, `slate` (default blue) and `zinc`
+    (neutral gray). [`src/mainview/index.css`](src/mainview/index.css)
+    defines the RGB triples as CSS vars; [`tailwind.config.js`](tailwind.config.js)
+    remaps the whole `slate-*` palette to `rgb(var(--slate-N) / <alpha-value>)`
+    so no component touches `zinc-*` directly. Zustand `theme` state,
+    persisted to `localStorage['bxp-ui.theme']`, toggled from TopBar. (done)
 
 ## Constraints
 

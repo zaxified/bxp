@@ -6,6 +6,21 @@ import { buildRoundtrippedText } from "./config/roundtrip";
 
 type RunStatus = "idle" | "running" | "done" | "error";
 type ConfigStatus = "idle" | "loading" | "loaded" | "error";
+export type Theme = "slate" | "zinc";
+
+const THEME_STORAGE_KEY = "bxp-ui.theme";
+
+function readStoredTheme(): Theme {
+	if (typeof localStorage === "undefined") return "slate";
+	const v = localStorage.getItem(THEME_STORAGE_KEY);
+	return v === "zinc" ? "zinc" : "slate";
+}
+
+function applyTheme(t: Theme): void {
+	if (typeof document === "undefined") return;
+	if (t === "slate") document.documentElement.removeAttribute("data-theme");
+	else document.documentElement.setAttribute("data-theme", t);
+}
 
 export type PathSeg = string | number;
 
@@ -123,6 +138,14 @@ type TraceStore = {
 	setConfigPath: (s: string) => void;
 	setTemplateId: (s: string) => void;
 
+	// Theme (Phase 6 polish). `"slate"` = default blue-tinted dark palette,
+	// `"zinc"` = neutral dark gray. Persisted to localStorage and applied to
+	// <html data-theme="..."> so Tailwind's slate-* classes (remapped to CSS
+	// vars in tailwind.config.js) swap palette without any component change.
+	theme: Theme;
+	setTheme: (t: Theme) => void;
+	toggleTheme: () => void;
+
 	// Runtime state
 	status: RunStatus;
 	runError: string | null;
@@ -219,6 +242,23 @@ export const useTraceStore = create<TraceStore>((set, get) => {
 		templateId: "",
 		setConfigPath: (s) => set({ configPath: s }),
 		setTemplateId: (s) => set({ templateId: s }),
+
+		theme: (() => {
+			const t = readStoredTheme();
+			applyTheme(t);
+			return t;
+		})(),
+		setTheme: (t) => {
+			applyTheme(t);
+			try {
+				localStorage.setItem(THEME_STORAGE_KEY, t);
+			} catch {}
+			set({ theme: t });
+		},
+		toggleTheme: () => {
+			const next: Theme = get().theme === "slate" ? "zinc" : "slate";
+			get().setTheme(next);
+		},
 
 		status: "idle",
 		runError: null,

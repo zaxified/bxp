@@ -112,29 +112,35 @@ live lint markers.
 
 ## Build and package
 
-Current state: local production build works.
-
 ```bash
+# Dev channel bundle (no installer archive):
 bun run build
+
+# Canary channel: full distributable with ZSTD archive + tar.gz installer:
+bun run build:canary
 ```
 
-This produces:
+Both scripts run [`scripts/stage-bins.sh`](scripts/stage-bins.sh) first, which
+cross-compiles `bxp-cli` and `bxp-fmt` for `x86_64-linux-musl` (`ReleaseSmall`,
+statically linked) and stages them under `build-bin/`. Electrobun's
+[`build.copy`](electrobun.config.ts) then pulls them into `Resources/app/bin/`
+so [`findSiblingBin`](src/bun/index.ts) resolves them at runtime (~500 kB for
+both binaries combined).
+
+Override the target with the `BXP_UI_BIN_TARGET` / `BXP_UI_BIN_OPTIMIZE`
+environment variables if cross-compiling for another Linux ABI.
+
+Outputs:
 
 - `dist/` — Vite-bundled webview assets.
 - `build/<channel>-linux-x64/bxp-ui-<channel>/` — Electrobun bundle layout
-  (`bin/`, `lib/`, `Resources/`).
-
-Full ZSTD-packaged distributable that ships `bxp-cli` + `bxp-fmt` alongside the
-Electrobun bundle is **not wired yet**. To finish it:
-
-1. Cross-compile Zig binaries for `x86_64-linux` and copy them into
-   `Resources/app/bin/` as part of the build step (add entries to
-   [`electrobun.config.ts`](electrobun.config.ts) `build.copy` or drive from
-   `scripts/release.sh`).
-2. Verify `findSiblingBin` resolves them in the packaged layout (path #2 above
-   is already in place).
-3. Use Electrobun's `bun run build:canary` or the update system to produce the
-   ZSTD self-extracting archive and test extraction to `/tmp` on a clean box.
+  (`bin/`, `lib/`, `Resources/app/bin/bxp-cli`, `Resources/app/bin/bxp-fmt`,
+  …).
+- `artifacts/canary-linux-x64-bxp-ui-canary.tar.zst` — full ZSTD-compressed
+  self-extracting distributable (~32 MB; extract and run
+  `bxp-ui-canary/bin/launcher`).
+- `artifacts/canary-linux-x64-bxp-ui-canary-Setup.tar.gz` — plain tar.gz
+  equivalent for installers that don't understand Zstandard.
 
 ## See also
 

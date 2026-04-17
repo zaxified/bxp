@@ -7,6 +7,8 @@ export function TopBar() {
 	const setConfigPath = useTraceStore((s) => s.setConfigPath);
 	const setTemplateId = useTraceStore((s) => s.setTemplateId);
 	const runDryRun = useTraceStore((s) => s.runDryRun);
+	const theme = useTraceStore((s) => s.theme);
+	const toggleTheme = useTraceStore((s) => s.toggleTheme);
 
 	const running = status === "running";
 
@@ -33,6 +35,14 @@ export function TopBar() {
 					placeholder="all"
 				/>
 			</label>
+			<button
+				type="button"
+				onClick={toggleTheme}
+				title={`Theme: ${theme} (click to switch)`}
+				className="self-end text-[10px] uppercase tracking-wider px-3 py-2 rounded border border-slate-700 bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-slate-100"
+			>
+				{theme === "slate" ? "Blue" : "Gray"}
+			</button>
 			<button
 				type="button"
 				onClick={() => {

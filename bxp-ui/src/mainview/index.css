@@ -1,3 +1,37 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* Theme palettes.
+ * Components reference `bg-slate-*` / `text-slate-*`; Tailwind's `slate`
+ * palette is remapped to these CSS vars in tailwind.config.js, so switching
+ * the `data-theme` attribute on <html> swaps the whole UI palette without
+ * touching any component. Values are whitespace-separated `R G B` triples
+ * consumed by `rgb(var(--slate-N) / <alpha-value>)`. */
+:root {
+	--slate-50: 248 250 252;
+	--slate-100: 241 245 249;
+	--slate-200: 226 232 240;
+	--slate-300: 203 213 225;
+	--slate-400: 148 163 184;
+	--slate-500: 100 116 139;
+	--slate-600: 71 85 105;
+	--slate-700: 51 65 85;
+	--slate-800: 30 41 59;
+	--slate-900: 15 23 42;
+	--slate-950: 2 6 23;
+}
+
+[data-theme="zinc"] {
+	--slate-50: 250 250 250;
+	--slate-100: 244 244 245;
+	--slate-200: 228 228 231;
+	--slate-300: 212 212 216;
+	--slate-400: 161 161 170;
+	--slate-500: 113 113 122;
+	--slate-600: 82 82 91;
+	--slate-700: 63 63 70;
+	--slate-800: 39 39 42;
+	--slate-900: 24 24 27;
+	--slate-950: 9 9 11;
+}

@@ -7,13 +7,19 @@ export default {
 		version: "0.0.1",
 	},
 	build: {
-		// Vite builds to dist/, we copy from there
+		// Vite builds to dist/; scripts/stage-bins.sh cross-compiles the Zig
+		// sidecar binaries into build-bin/ before electrobun's build step.
+		// Destinations are relative to Resources/app/ in the final bundle —
+		// see findSiblingBin in src/bun/index.ts (path #2).
 		copy: {
 			"dist/index.html": "views/mainview/index.html",
 			"dist/assets": "views/mainview/assets",
+			"build-bin/bxp-cli": "bin/bxp-cli",
+			"build-bin/bxp-fmt": "bin/bxp-fmt",
 		},
-		// Ignore Vite output in watch mode — HMR handles view rebuilds separately
-		watchIgnore: ["dist/**"],
+		// Ignore Vite output and staged binaries in watch mode — HMR handles
+		// webview rebuilds separately and binaries are only needed at package time.
+		watchIgnore: ["dist/**", "build-bin/**"],
 		mac: {
 			bundleCEF: false,
 		},
