@@ -19,6 +19,7 @@ import { bxpExpr } from "../expr/language";
 type Props = {
 	value: string;
 	onChange?: (v: string) => void;
+	onBlur?: (v: string) => void;
 	readOnly?: boolean;
 	height?: number | string;
 	marker?: string | null;
@@ -65,6 +66,7 @@ const baseTheme = EditorView.theme(
 export function ExprEditor({
 	value,
 	onChange,
+	onBlur,
 	readOnly = false,
 	height = 80,
 	marker = null,
@@ -74,6 +76,12 @@ export function ExprEditor({
 	// Compartments let us reconfigure a single facet (readOnly) without
 	// recreating the whole EditorState.
 	const readOnlyCompartment = useRef(new Compartment());
+	// Mirror the latest onBlur/onChange callbacks so the CM6 extension closure
+	// never captures a stale prop.
+	const onBlurRef = useRef(onBlur);
+	onBlurRef.current = onBlur;
+	const onChangeRef = useRef(onChange);
+	onChangeRef.current = onChange;
 
 	useEffect(() => {
 		if (!containerRef.current) return;
@@ -97,7 +105,13 @@ export function ExprEditor({
 				]),
 				EditorView.lineWrapping,
 				EditorView.updateListener.of((u) => {
-					if (u.docChanged) onChange?.(u.state.doc.toString());
+					if (u.docChanged) onChangeRef.current?.(u.state.doc.toString());
+				}),
+				EditorView.domEventHandlers({
+					blur: (_e, view) => {
+						onBlurRef.current?.(view.state.doc.toString());
+						return false;
+					},
 				}),
 				readOnlyCompartment.current.of(EditorState.readOnly.of(readOnly)),
 			],

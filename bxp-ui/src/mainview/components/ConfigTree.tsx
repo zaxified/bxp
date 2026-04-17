@@ -1,10 +1,9 @@
-import { useState, useCallback } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { ExprInline } from "../expr/highlight";
 import { ExprEditor } from "./ExprEditor";
+import { useTraceStore, type PathSeg } from "../store";
 
 type Kind = "object" | "array" | "string" | "number" | "boolean" | "null";
-
-type PathSeg = string | number;
 
 function kindOf(v: unknown): Kind {
 	if (v === null) return "null";
@@ -35,19 +34,12 @@ function summary(v: unknown): string {
 function isExprPath(path: readonly PathSeg[]): boolean {
 	if (path.length < 4) return false;
 	if (path[0] !== "conversion_templates") return false;
-	// path[1] is template id
 	const section = path[2];
-	if (section === "input_schema") {
-		// conversion_templates.<tpl>.input_schema.<$var>
-		return path.length === 4;
-	}
+	if (section === "input_schema") return path.length === 4;
 	if (section === "output_schema") {
-		// conversion_templates.<tpl>.output_schema[<i>]
 		return path.length === 4 && typeof path[3] === "number";
 	}
 	if (section === "row_rules") {
-		// conversion_templates.<tpl>.row_rules[<i>].when
-		// conversion_templates.<tpl>.row_rules[<i>].rows[<j>].<$var>
 		if (path.length === 5 && path[4] === "when") return true;
 		if (
 			path.length === 7 &&
@@ -59,7 +51,6 @@ function isExprPath(path: readonly PathSeg[]): boolean {
 		return false;
 	}
 	if (section === "pre_pass") {
-		// pre_pass.when | pre_pass.key | pre_pass.values.<k>
 		if (path.length === 4 && (path[3] === "when" || path[3] === "key")) {
 			return true;
 		}
@@ -103,9 +94,9 @@ function TreeNode({
 				<LabelSpan label={label} />
 				<span className="text-slate-600">:</span>
 				{isExpr ? (
-					<ExprLeaf text={String(value)} />
+					<ExprLeaf text={String(value)} path={path} />
 				) : (
-					<Leaf kind={k} value={value} />
+					<EditableLeaf kind={k} value={value} path={path} />
 				)}
 			</div>
 		);
@@ -159,28 +150,178 @@ function LabelSpan({ label }: { label: string | number }) {
 	return <span className="text-indigo-300">{label}</span>;
 }
 
-function Leaf({ kind, value }: { kind: Kind; value: unknown }) {
+function EditableLeaf({
+	kind,
+	value,
+	path,
+}: {
+	kind: Kind;
+	value: unknown;
+	path: readonly PathSeg[];
+}) {
+	const editLeaf = useTraceStore((s) => s.editLeaf);
 	if (kind === "string") {
 		return (
-			<span className="text-emerald-300 whitespace-pre-wrap break-all">
-				"{String(value)}"
-			</span>
+			<EditableString
+				value={String(value)}
+				onCommit={(v) => editLeaf(path, v)}
+			/>
 		);
 	}
 	if (kind === "number") {
-		return <span className="text-amber-300">{String(value)}</span>;
+		return (
+			<EditableNumber
+				value={Number(value)}
+				onCommit={(v) => editLeaf(path, v)}
+			/>
+		);
 	}
 	if (kind === "boolean") {
-		return <span className="text-sky-300">{String(value)}</span>;
+		return (
+			<EditableBoolean
+				value={Boolean(value)}
+				onCommit={(v) => editLeaf(path, v)}
+			/>
+		);
 	}
 	return <span className="text-slate-500 italic">null</span>;
 }
 
-// Expression leaf: default is a lightweight syntax-highlighted span (no editor
-// instance). Clicking toggles a full CM6 editor. Read-only for now — tree edits
-// are a later Phase 6 task.
-function ExprLeaf({ text }: { text: string }) {
+function EditableString({
+	value,
+	onCommit,
+}: {
+	value: string;
+	onCommit: (v: string) => void;
+}) {
+	const [editing, setEditing] = useState(false);
+	const [draft, setDraft] = useState(value);
+	useEffect(() => {
+		if (!editing) setDraft(value);
+	}, [value, editing]);
+
+	if (!editing) {
+		return (
+			<span
+				className="text-emerald-300 whitespace-pre-wrap break-all cursor-text hover:bg-slate-800/40 rounded px-0.5"
+				onClick={() => setEditing(true)}
+				title="click to edit"
+			>
+				"{value}"
+			</span>
+		);
+	}
+
+	const commit = () => {
+		setEditing(false);
+		if (draft !== value) onCommit(draft);
+	};
+	const cancel = () => {
+		setDraft(value);
+		setEditing(false);
+	};
+
+	return (
+		<input
+			autoFocus
+			value={draft}
+			onChange={(e) => setDraft(e.target.value)}
+			onBlur={commit}
+			onKeyDown={(e) => {
+				if (e.key === "Enter") commit();
+				if (e.key === "Escape") cancel();
+			}}
+			className="bg-slate-900 text-emerald-300 border border-slate-700 rounded px-1 font-mono text-xs min-w-40"
+		/>
+	);
+}
+
+function EditableNumber({
+	value,
+	onCommit,
+}: {
+	value: number;
+	onCommit: (v: number) => void;
+}) {
+	const [editing, setEditing] = useState(false);
+	const [draft, setDraft] = useState(String(value));
+	useEffect(() => {
+		if (!editing) setDraft(String(value));
+	}, [value, editing]);
+
+	if (!editing) {
+		return (
+			<span
+				className="text-amber-300 cursor-text hover:bg-slate-800/40 rounded px-0.5"
+				onClick={() => setEditing(true)}
+				title="click to edit"
+			>
+				{value}
+			</span>
+		);
+	}
+
+	const commit = () => {
+		setEditing(false);
+		const n = Number(draft);
+		if (!Number.isNaN(n) && n !== value) onCommit(n);
+	};
+	const cancel = () => {
+		setDraft(String(value));
+		setEditing(false);
+	};
+
+	return (
+		<input
+			autoFocus
+			type="number"
+			value={draft}
+			onChange={(e) => setDraft(e.target.value)}
+			onBlur={commit}
+			onKeyDown={(e) => {
+				if (e.key === "Enter") commit();
+				if (e.key === "Escape") cancel();
+			}}
+			className="bg-slate-900 text-amber-300 border border-slate-700 rounded px-1 font-mono text-xs w-24"
+		/>
+	);
+}
+
+function EditableBoolean({
+	value,
+	onCommit,
+}: {
+	value: boolean;
+	onCommit: (v: boolean) => void;
+}) {
+	return (
+		<button
+			type="button"
+			onClick={() => onCommit(!value)}
+			className="text-sky-300 cursor-pointer hover:bg-slate-800/40 rounded px-0.5"
+			title="click to toggle"
+		>
+			{String(value)}
+		</button>
+	);
+}
+
+// Expression leaf: click-to-expand CM6 editor. Editable; commits on blur so a
+// whole edit session is a single undo step.
+function ExprLeaf({
+	text,
+	path,
+}: {
+	text: string;
+	path: readonly PathSeg[];
+}) {
 	const [expanded, setExpanded] = useState(false);
+	const [draft, setDraft] = useState(text);
+	const editLeaf = useTraceStore((s) => s.editLeaf);
+	useEffect(() => {
+		setDraft(text);
+	}, [text]);
+
 	return (
 		<span className="flex-1 min-w-0">
 			<span
@@ -194,7 +335,14 @@ function ExprLeaf({ text }: { text: string }) {
 			</span>
 			{expanded && (
 				<div className="mt-1 mb-2">
-					<ExprEditor value={text} readOnly height={text.length > 60 ? 80 : 48} />
+					<ExprEditor
+						value={draft}
+						onChange={setDraft}
+						onBlur={(v) => {
+							if (v !== text) editLeaf(path, v);
+						}}
+						height={text.length > 60 ? 80 : 48}
+					/>
 				</div>
 			)}
 		</span>

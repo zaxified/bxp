@@ -6,6 +6,37 @@ import { TraceBuilder, emptyModel, type TraceModel } from "./trace/model";
 type RunStatus = "idle" | "running" | "done" | "error";
 type ConfigStatus = "idle" | "loading" | "loaded" | "error";
 
+export type PathSeg = string | number;
+
+// Immutable set-at-path: returns a shallow-copied spine with `value` installed
+// at `path`. Used to produce a fresh draft on every edit so zustand/React
+// notice the change via reference equality.
+function setAtPath(obj: unknown, path: readonly PathSeg[], value: unknown): unknown {
+	if (path.length === 0) return value;
+	const head = path[0];
+	const rest = path.slice(1);
+	if (typeof head === "number" && Array.isArray(obj)) {
+		const copy = obj.slice();
+		copy[head] = setAtPath(obj[head], rest, value);
+		return copy;
+	}
+	if (
+		typeof head === "string" &&
+		obj !== null &&
+		typeof obj === "object" &&
+		!Array.isArray(obj)
+	) {
+		const copy = { ...(obj as Record<string, unknown>) };
+		copy[head] = setAtPath(
+			(obj as Record<string, unknown>)[head],
+			rest,
+			value,
+		);
+		return copy;
+	}
+	return obj;
+}
+
 type Rpc = {
 	request: {
 		runDryRun: (args: {
@@ -47,6 +78,19 @@ type TraceStore = {
 	configError: string | null;
 	configValidationError: string | null;
 	loadConfig: () => Promise<void>;
+
+	// Editable config draft + undo/redo (Phase 6). `originalConfig` is pinned
+	// to the last-loaded parse; `draftConfig` is the current user-edited state.
+	// `draftHistory` / `draftFuture` hold whole-object snapshots — cheap because
+	// setAtPath copies only the spine, so shared subtrees stay alive.
+	originalConfig: unknown;
+	draftConfig: unknown;
+	draftHistory: unknown[];
+	draftFuture: unknown[];
+	editLeaf: (path: readonly PathSeg[], value: unknown) => void;
+	undo: () => void;
+	redo: () => void;
+	resetDraft: () => void;
 
 	// Expression validation (Phase 5)
 	validateExpr: (expr: string) => Promise<{ ok: boolean; error: string | null }>;
@@ -104,6 +148,11 @@ export const useTraceStore = create<TraceStore>((set, get) => {
 		configError: null,
 		configValidationError: null,
 
+		originalConfig: null,
+		draftConfig: null,
+		draftHistory: [],
+		draftFuture: [],
+
 		loadConfig: async () => {
 			if (!rpc) {
 				set({ configStatus: "error", configError: "RPC not attached" });
@@ -132,6 +181,10 @@ export const useTraceStore = create<TraceStore>((set, get) => {
 					configParsed: parsed,
 					configError: parseError,
 					configValidationError: validationError,
+					originalConfig: parsed,
+					draftConfig: parsed,
+					draftHistory: [],
+					draftFuture: [],
 				});
 			} catch (e) {
 				set({
@@ -149,6 +202,46 @@ export const useTraceStore = create<TraceStore>((set, get) => {
 				return { ok: false, error: e instanceof Error ? e.message : String(e) };
 			}
 		},
+
+		editLeaf: (path, value) =>
+			set((s) => {
+				const next = setAtPath(s.draftConfig, path, value);
+				if (next === s.draftConfig) return {};
+				return {
+					draftConfig: next,
+					draftHistory: [...s.draftHistory, s.draftConfig],
+					draftFuture: [],
+				};
+			}),
+
+		undo: () =>
+			set((s) => {
+				if (s.draftHistory.length === 0) return {};
+				const prev = s.draftHistory[s.draftHistory.length - 1];
+				return {
+					draftConfig: prev,
+					draftHistory: s.draftHistory.slice(0, -1),
+					draftFuture: [s.draftConfig, ...s.draftFuture],
+				};
+			}),
+
+		redo: () =>
+			set((s) => {
+				if (s.draftFuture.length === 0) return {};
+				const next = s.draftFuture[0];
+				return {
+					draftConfig: next,
+					draftHistory: [...s.draftHistory, s.draftConfig],
+					draftFuture: s.draftFuture.slice(1),
+				};
+			}),
+
+		resetDraft: () =>
+			set((s) => ({
+				draftConfig: s.originalConfig,
+				draftHistory: [],
+				draftFuture: [],
+			})),
 
 		selectedFileId: null,
 		selectedRowId: null,

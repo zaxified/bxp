@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import JSON5 from "json5";
 import { useTraceStore } from "../store";
 import { ConfigTree } from "./ConfigTree";
 import { ConfigRaw } from "./ConfigRaw";
@@ -8,13 +9,33 @@ type Sub = "tree" | "raw";
 export function ConfigView() {
 	const status = useTraceStore((s) => s.configStatus);
 	const text = useTraceStore((s) => s.configText);
-	const parsed = useTraceStore((s) => s.configParsed);
+	const draft = useTraceStore((s) => s.draftConfig);
+	const original = useTraceStore((s) => s.originalConfig);
 	const error = useTraceStore((s) => s.configError);
 	const validationError = useTraceStore((s) => s.configValidationError);
 	const configPath = useTraceStore((s) => s.configPath);
 	const loadConfig = useTraceStore((s) => s.loadConfig);
+	const historyLen = useTraceStore((s) => s.draftHistory.length);
+	const futureLen = useTraceStore((s) => s.draftFuture.length);
+	const undo = useTraceStore((s) => s.undo);
+	const redo = useTraceStore((s) => s.redo);
+	const resetDraft = useTraceStore((s) => s.resetDraft);
 
 	const [sub, setSub] = useState<Sub>("tree");
+
+	const isDirty = draft !== original;
+
+	// Serialize draft for the Raw view. Comments from the source file are lost
+	// on round-trip — surfaced via a banner below. Proper comment/ordering
+	// preservation (AST-based) is a future task.
+	const draftText = useMemo(() => {
+		if (draft == null) return text;
+		try {
+			return JSON5.stringify(draft, null, 2);
+		} catch {
+			return text;
+		}
+	}, [draft, text]);
 
 	// Auto-load when the user switches to Config tab and nothing is loaded yet
 	// (or when the path changes).
@@ -23,12 +44,29 @@ export function ConfigView() {
 	}, [status, loadConfig]);
 
 	useEffect(() => {
-		// Trigger reload when configPath changes after an initial load.
 		if (status === "loaded" || status === "error") {
 			loadConfig();
 		}
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [configPath]);
+
+	// Keyboard shortcuts: Ctrl/Cmd+Z for undo, Ctrl/Cmd+Shift+Z or Ctrl+Y for redo.
+	useEffect(() => {
+		const onKey = (e: KeyboardEvent) => {
+			const mod = e.ctrlKey || e.metaKey;
+			if (!mod) return;
+			if (e.key === "z" || e.key === "Z") {
+				e.preventDefault();
+				if (e.shiftKey) redo();
+				else undo();
+			} else if (e.key === "y" || e.key === "Y") {
+				e.preventDefault();
+				redo();
+			}
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [undo, redo]);
 
 	return (
 		<div className="h-full flex flex-col">
@@ -40,13 +78,35 @@ export function ConfigView() {
 					Raw JSON5
 				</SubTab>
 				<div className="flex-1" />
-				<button
-					type="button"
-					onClick={() => loadConfig()}
-					className="text-[10px] uppercase tracking-wider text-slate-400 hover:text-slate-100 px-2 py-1 rounded hover:bg-slate-800"
+				{isDirty && (
+					<span className="text-[10px] uppercase tracking-wider text-amber-400 px-2">
+						● modified
+					</span>
+				)}
+				<ToolbarButton
+					onClick={() => undo()}
+					disabled={historyLen === 0}
+					title="Undo (Ctrl+Z)"
 				>
+					Undo
+				</ToolbarButton>
+				<ToolbarButton
+					onClick={() => redo()}
+					disabled={futureLen === 0}
+					title="Redo (Ctrl+Shift+Z)"
+				>
+					Redo
+				</ToolbarButton>
+				<ToolbarButton
+					onClick={() => resetDraft()}
+					disabled={!isDirty}
+					title="Discard all changes"
+				>
+					Reset
+				</ToolbarButton>
+				<ToolbarButton onClick={() => loadConfig()} title="Reload from disk">
 					Reload
-				</button>
+				</ToolbarButton>
 				<StatusBadge status={status} />
 			</div>
 
@@ -60,20 +120,28 @@ export function ConfigView() {
 					{error}
 				</div>
 			)}
+			{isDirty && sub === "raw" && (
+				<div className="px-3 py-1.5 text-xs text-slate-400 border-b border-slate-800 bg-slate-900/40">
+					Showing serialized draft. Comments and exact whitespace from the
+					source file are not yet preserved on round-trip.
+				</div>
+			)}
 
 			<div className="flex-1 min-h-0 overflow-auto">
 				{status === "loading" && (
 					<div className="p-4 text-xs text-slate-500 italic">Loading…</div>
 				)}
-				{status !== "loading" && sub === "tree" && parsed !== null && (
-					<ConfigTree value={parsed} />
+				{status !== "loading" && sub === "tree" && draft !== null && (
+					<ConfigTree value={draft} />
 				)}
-				{status !== "loading" && sub === "tree" && parsed === null && (
+				{status !== "loading" && sub === "tree" && draft === null && (
 					<div className="p-4 text-xs text-slate-500 italic">
 						Config not parsed.
 					</div>
 				)}
-				{status !== "loading" && sub === "raw" && <ConfigRaw text={text} />}
+				{status !== "loading" && sub === "raw" && (
+					<ConfigRaw text={isDirty ? draftText : text} />
+				)}
 			</div>
 		</div>
 	);
@@ -96,6 +164,34 @@ function SubTab({
 				active
 					? "bg-slate-800 text-slate-100"
 					: "text-slate-400 hover:text-slate-100 hover:bg-slate-800/60"
+			}`}
+		>
+			{children}
+		</button>
+	);
+}
+
+function ToolbarButton({
+	onClick,
+	disabled = false,
+	title,
+	children,
+}: {
+	onClick: () => void;
+	disabled?: boolean;
+	title?: string;
+	children: React.ReactNode;
+}) {
+	return (
+		<button
+			type="button"
+			onClick={onClick}
+			disabled={disabled}
+			title={title}
+			className={`text-[10px] uppercase tracking-wider px-2 py-1 rounded ${
+				disabled
+					? "text-slate-600 cursor-not-allowed"
+					: "text-slate-400 hover:text-slate-100 hover:bg-slate-800"
 			}`}
 		>
 			{children}
