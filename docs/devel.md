@@ -1,7 +1,8 @@
 # BXP - Developer Guide
 
 > For end-user documentation see [`resources/readme.md`](../resources/readme.md) \
-> For architecture diagrams see [`docs/architecture.md`](architecture.md)
+> For architecture diagrams see [`docs/architecture.md`](architecture.md) \
+> For the bxp-ui NDJSON trace protocol see [`docs/bxp-ui-trace-protocol.md`](bxp-ui-trace-protocol.md)
 
 ---
 
