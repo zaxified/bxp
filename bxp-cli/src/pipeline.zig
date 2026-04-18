@@ -601,6 +601,7 @@ pub fn processBroker(
             // Row rules: first matching rule determines what to emit.
             const rules = bc.row_rules orelse &.{};
             var rule_matched = false;
+            var matched_rule_index: usize = 0;
             for (rules, 0..) |rule, rule_index| {
                 row_detail = "";
                 const when_val = expr_mod.eval(rule.when, &row_ctx) catch |err| {
@@ -620,7 +621,32 @@ pub fn processBroker(
                     continue;
                 }
                 rule_matched = true;
-                out.event("rule_match", .{ .rule_index = rule_index, .when = rule.when });
+                matched_rule_index = rule_index;
+                if (out.trace) emit_rule_match: {
+                    var jw: std.json.Stringify = .{ .writer = out.writer, .options = .{} };
+                    jw.beginObject() catch break :emit_rule_match;
+                    jw.objectField("t") catch break :emit_rule_match;
+                    jw.write("rule_match") catch break :emit_rule_match;
+                    jw.objectField("rule_index") catch break :emit_rule_match;
+                    jw.write(rule_index) catch break :emit_rule_match;
+                    jw.objectField("when") catch break :emit_rule_match;
+                    jw.write(rule.when) catch break :emit_rule_match;
+                    jw.objectField("rows") catch break :emit_rule_match;
+                    jw.beginArray() catch break :emit_rule_match;
+                    for (rule.rows) |row_override| {
+                        jw.beginObject() catch break :emit_rule_match;
+                        var it = row_override.iterator();
+                        while (it.next()) |entry| {
+                            jw.objectField(entry.key_ptr.*) catch break :emit_rule_match;
+                            jw.write(entry.value_ptr.*) catch break :emit_rule_match;
+                        }
+                        jw.endObject() catch break :emit_rule_match;
+                    }
+                    jw.endArray() catch break :emit_rule_match;
+                    jw.endObject() catch break :emit_rule_match;
+                    out.writer.writeByte('\n') catch break :emit_rule_match;
+                    out.writer.flush() catch break :emit_rule_match;
+                }
                 // Empty rows slice = silent skip.
                 for (rule.rows) |row_override| {
                     // Start from base vars, then apply per-row overrides.
@@ -678,6 +704,12 @@ pub fn processBroker(
                     file_rows_written += 1;
                 }
                 break; // first matching rule wins
+            }
+            // Emit rule_no_match for rules that were never evaluated (after the match).
+            if (rule_matched) {
+                for (rules[matched_rule_index + 1 ..], matched_rule_index + 1 ..) |rule, ri| {
+                    out.event("rule_no_match", .{ .rule_index = ri, .when = rule.when });
+                }
             }
             if (!rule_matched) {
                 // No rule matched — show as debug record if configured.

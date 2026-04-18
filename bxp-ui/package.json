@@ -7,7 +7,7 @@
 	"scripts": {
 		"start": "vite build && electrobun dev",
 		"dev": "electrobun dev --watch",
-		"dev:hmr": "concurrently --kill-others --kill-signal=SIGINT --success=first \"bun run hmr\" \"bun run start\"",
+		"dev:hmr": "bash scripts/sync-dev-bins.sh; concurrently --kill-others --kill-signal=SIGINT --success=first \"bun run hmr\" \"bun run start\"",
 		"hmr": "vite --port 5173",
 		"build": "bash scripts/stage-bins.sh && vite build && electrobun build",
 		"build:canary": "bash scripts/stage-bins.sh && vite build && electrobun build --env=canary",

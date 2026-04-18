@@ -1,4 +1,5 @@
 import { BrowserView, BrowserWindow, Updater } from "electrobun/bun";
+import { dlopen, FFIType, ptr } from "bun:ffi";
 import { resolve, dirname } from "node:path";
 import { existsSync } from "node:fs";
 import { rename, unlink } from "node:fs/promises";
@@ -221,5 +222,26 @@ const mainWindow = new BrowserWindow({
 		y: 100,
 	},
 });
+
+// Apply native window tweaks via FFI (Linux/GTK only; silently ignored on failure).
+// At runtime import.meta.dir = Resources/app/bun/ inside the dev/packaged bundle.
+try {
+	const nativeWrapperPath = resolve(import.meta.dir, "../../../bin/libNativeWrapper.so");
+	if (existsSync(nativeWrapperPath)) {
+		const nativeLib = dlopen(nativeWrapperPath, {
+			setWindowIcon: {
+				args: [FFIType.ptr, FFIType.cstring],
+				returns: FFIType.void,
+			},
+		});
+		const iconPath = resolve(import.meta.dir, "../../appIcon.png"); // Resources/appIcon.png
+		if (existsSync(iconPath)) {
+			nativeLib.symbols.setWindowIcon(mainWindow.ptr, ptr(Buffer.from(iconPath + "\0", "utf8")));
+		}
+	}
+} catch {
+	// Native icon setup failed — not critical.
+}
+
 
 console.log("bxp-ui started");

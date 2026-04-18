@@ -48,6 +48,7 @@ export type RuleMatchEvent = {
 	t: "rule_match";
 	rule_index: number;
 	when: string;
+	rows: Record<string, string>[];
 };
 
 export type RuleNoMatchEvent = {

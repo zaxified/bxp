@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTraceStore } from "../store";
 import type { RowModel } from "../trace/model";
 
@@ -6,7 +6,7 @@ type RowStatus = "written" | "filtered" | "no-match" | "error";
 
 function rowStatus(row: RowModel): RowStatus {
 	if (row.hasError) return "error";
-	if (row.output) return "written";
+	if (row.outputs.length > 0) return "written";
 	if (row.filteredReason) return "filtered";
 	return "no-match";
 }
@@ -19,10 +19,10 @@ const STATUS_STYLE: Record<RowStatus, string> = {
 };
 
 const STATUS_LABEL: Record<RowStatus, string> = {
-	written: "out",
-	filtered: "filt",
-	"no-match": "skip",
-	error: "err",
+	written: "▶",
+	filtered: "▼",
+	"no-match": "·",
+	error: "✕",
 };
 
 export function RowList() {
@@ -41,6 +41,20 @@ export function RowList() {
 		[file, rows, modelVersion],
 	);
 
+	const [filters, setFilters] = useState<Record<string, string>>({});
+
+	const headers = file?.headers ?? [];
+
+	const filteredRows = useMemo(() => {
+		return rowList.filter((row) =>
+			headers.every((h, i) => {
+				const f = filters[h];
+				if (!f) return true;
+				return (row.fields[i] ?? "").toLowerCase().includes(f.toLowerCase());
+			}),
+		);
+	}, [rowList, filters, headers]);
+
 	// Auto-select the first row when a file is first populated.
 	useEffect(() => {
 		if (selectedFileId === null) return;
@@ -48,6 +62,10 @@ export function RowList() {
 		if (rowList.length === 0) return;
 		selectRow(rowList[0].id);
 	}, [selectedFileId, selectedRowId, rowList, selectRow]);
+
+	function setFilter(col: string, value: string) {
+		setFilters((prev) => ({ ...prev, [col]: value }));
+	}
 
 	if (!file) {
 		return (
@@ -66,34 +84,70 @@ export function RowList() {
 	}
 
 	return (
-		<ul className="text-xs font-mono">
-			{rowList.map((row) => {
-				const st = rowStatus(row);
-				const active = row.id === selectedRowId;
-				return (
-					<li key={row.id}>
-						<button
-							type="button"
-							onClick={() => selectRow(row.id)}
-							className={`w-full text-left px-3 py-1.5 border-b border-slate-800 flex gap-2 items-baseline ${
-								active
-									? "bg-slate-800 text-slate-100"
-									: "text-slate-300 hover:bg-slate-800/60"
-							}`}
-						>
-							<span className="text-slate-500 w-8 text-right">
-								{row.fileRow}
-							</span>
-							<span className={`${STATUS_STYLE[st]} w-8 text-[10px]`}>
-								{STATUS_LABEL[st]}
-							</span>
-							<span className="flex-1 truncate text-slate-400">
-								{row.fields.slice(0, 3).join(" · ")}
-							</span>
-						</button>
-					</li>
-				);
-			})}
-		</ul>
+		<div className="h-full" style={{ overflow: "scroll", scrollbarWidth: "thin" }}>
+			<table className="text-xs font-mono border-collapse whitespace-nowrap">
+				<thead className="sticky top-0 z-10 bg-slate-900">
+					<tr>
+						<th className="py-1 px-1 border-b border-r border-slate-800 w-8"></th>
+						<th className="py-1 px-1 border-b border-r border-slate-800 w-8"></th>
+						{headers.map((h) => (
+							<th key={h} className="py-1 px-1 border-b border-r border-slate-800 last:border-r-0">
+								<input
+									type="text"
+									value={filters[h] ?? ""}
+									onChange={(e) => setFilter(h, e.target.value)}
+									placeholder="filter"
+									className="w-full bg-slate-800 text-slate-300 placeholder-slate-600 text-[11px] px-1.5 py-0.5 rounded border border-slate-700 focus:outline-none focus:border-slate-500"
+								/>
+							</th>
+						))}
+					</tr>
+					<tr>
+						<th className="py-1 px-2 text-left text-slate-500 font-normal border-b border-r border-slate-800 w-8">#</th>
+						<th className="py-1 px-2 text-left text-slate-500 font-normal border-b border-r border-slate-800 w-8"></th>
+						{headers.map((h) => (
+							<th
+								key={h}
+								className="py-1 px-2 text-left text-slate-400 font-semibold border-b border-r border-slate-800 last:border-r-0"
+							>
+								{h}
+							</th>
+						))}
+					</tr>
+				</thead>
+				<tbody>
+					{filteredRows.map((row) => {
+						const st = rowStatus(row);
+						const active = row.id === selectedRowId;
+						return (
+							<tr
+								key={row.id}
+								onClick={() => selectRow(row.id)}
+								className={`cursor-pointer border-b border-slate-800 ${
+									active
+										? "bg-slate-800"
+										: "hover:bg-slate-800/50"
+								}`}
+							>
+								<td className="py-1 px-2 text-slate-500 text-right border-r border-slate-800">
+									{row.fileRow}
+								</td>
+								<td className={`py-1 px-2 text-center border-r border-slate-800 ${STATUS_STYLE[st]}`}>
+									{STATUS_LABEL[st]}
+								</td>
+								{headers.map((h, i) => (
+									<td
+										key={h}
+										className="py-1 px-2 text-slate-300 border-r border-slate-800 last:border-r-0"
+									>
+										{row.fields[i] ?? ""}
+									</td>
+								))}
+							</tr>
+						);
+					})}
+				</tbody>
+			</table>
+		</div>
 	);
 }

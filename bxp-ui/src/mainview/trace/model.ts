@@ -25,6 +25,7 @@ export type RuleEntry = {
 	ruleIndex: number;
 	when: string;
 	matched: boolean;
+	rows: Record<string, string>[];
 };
 
 export type RowModel = {
@@ -35,7 +36,7 @@ export type RowModel = {
 	vars: VarEntry[];
 	rules: RuleEntry[];
 	filteredReason: string | null;
-	output: string[] | null;
+	outputs: string[][];
 	matchedRuleIndex: number | null;
 	hasError: boolean;
 };
@@ -170,7 +171,7 @@ export class TraceBuilder {
 			vars: [],
 			rules: [],
 			filteredReason: null,
-			output: null,
+			outputs: [],
 			matchedRuleIndex: null,
 			hasError: false,
 		};
@@ -213,10 +214,13 @@ export class TraceBuilder {
 	) {
 		const row = this.row();
 		if (!row) return;
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		const rows: Record<string, string>[] = (ev as any).rows ?? [];
 		row.rules.push({
 			ruleIndex: ev.rule_index,
 			when: ev.when,
 			matched,
+			rows,
 		});
 		if (matched && row.matchedRuleIndex === null) {
 			row.matchedRuleIndex = ev.rule_index;
@@ -232,7 +236,7 @@ export class TraceBuilder {
 	private applyRowOutput(ev: RowOutputEvent) {
 		const row = this.row();
 		if (!row) return;
-		row.output = ev.values;
+		row.outputs.push(ev.values);
 	}
 
 	private applyFileEnd(ev: FileEndEvent) {

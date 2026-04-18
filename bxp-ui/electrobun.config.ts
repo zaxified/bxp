@@ -25,6 +25,7 @@ export default {
 		},
 		linux: {
 			bundleCEF: false,
+			icon: "assets/appIcon.png",
 		},
 		win: {
 			bundleCEF: false,
