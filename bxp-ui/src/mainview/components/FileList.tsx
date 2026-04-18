@@ -16,7 +16,7 @@ export function FileList() {
 	}
 
 	return (
-		<ul className="text-xs">
+		<ul className="text-xs min-w-max">
 			{fileOrder.map((id) => {
 				const f = files[id];
 				if (!f) return null;
@@ -36,8 +36,8 @@ export function FileList() {
 									: "text-slate-300 hover:bg-slate-800/60"
 							}`}
 						>
-							<div className="font-medium truncate">{name}</div>
-							<div className="text-[10px] text-slate-500 mt-0.5">
+							<div className="font-medium whitespace-nowrap">{name}</div>
+							<div className="text-[10px] text-slate-500 mt-0.5 whitespace-nowrap">
 								{f.template} · {rows} rows
 								{written !== null && ` · ${written} written`}
 								{errors > 0 && (

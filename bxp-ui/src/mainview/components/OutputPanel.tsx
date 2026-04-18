@@ -63,12 +63,12 @@ export function OutputPanel() {
 						{cols.map((c) => (
 							<th
 								key={c.header}
-								className="py-1 px-2 text-left font-normal border-b border-r border-slate-800 last:border-r-0"
+								className="py-1 px-2 text-left font-normal border-b border-r border-slate-800 last:border-r-0 align-bottom"
 							>
-								<span className="text-slate-300 font-semibold">{c.header}</span>
 								{c.variable && (
-									<span className="text-indigo-400 ml-1 font-normal">({c.variable})</span>
+									<div className="text-indigo-300 text-[10px] leading-tight">{c.variable}</div>
 								)}
+								<div className="text-slate-400 font-semibold">{c.header}</div>
 							</th>
 						))}
 					</tr>

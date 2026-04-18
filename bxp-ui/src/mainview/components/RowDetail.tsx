@@ -93,7 +93,7 @@ export function RowDetail() {
 
 export function SectionHeader({ title, subtitle }: { title: string; subtitle?: string }) {
 	return (
-		<div className="px-3 py-2 text-[10px] uppercase tracking-wider text-slate-500 border-b border-slate-800 sticky top-0 bg-slate-950">
+		<div className="px-3 py-2 text-[10px] uppercase tracking-wider text-slate-500 border-b border-slate-800 sticky top-0 bg-slate-900">
 			{title}
 			{subtitle && (
 				<span className="text-slate-600 normal-case ml-2 font-normal">{subtitle}</span>

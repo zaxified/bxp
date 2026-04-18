@@ -10,6 +10,7 @@
 const std = @import("std");
 const config_mod = @import("config");
 const expr_mod = @import("expr");
+const docs_mod = @import("docs.zig");
 const build_options = @import("build_options");
 
 fn usage() void {
@@ -19,6 +20,7 @@ fn usage() void {
         \\Usage (exactly one action flag):
         \\  bxp-fmt --config <path>   validate and emit JSON5 config to stdout
         \\  bxp-fmt --expr '<text>'   validate one expression; stderr JSON on error
+        \\  bxp-fmt --docs            emit full language/schema documentation as JSON
         \\
         \\Options:
         \\  --version                 print version and exit
@@ -42,6 +44,7 @@ pub fn main() !void {
 
     var config_path: ?[]const u8 = null;
     var expr_src: ?[]const u8 = null;
+    var emit_docs = false;
 
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
@@ -56,6 +59,10 @@ pub fn main() !void {
             w.print("bxp-fmt {s}\n", .{build_options.version}) catch {};
             std.debug.print("{s}", .{w.buffered()});
             return;
+        }
+        if (std.mem.eql(u8, a, "--docs")) {
+            emit_docs = true;
+            continue;
         }
         if (std.mem.eql(u8, a, "--config")) {
             i += 1;
@@ -80,15 +87,23 @@ pub fn main() !void {
         std.process.exit(2);
     }
 
-    if (config_path != null and expr_src != null) {
-        std.debug.print("error: --config and --expr are mutually exclusive\n", .{});
+    const action_count = @as(u8, if (config_path != null) 1 else 0) +
+        @as(u8, if (expr_src != null) 1 else 0) +
+        @as(u8, if (emit_docs) 1 else 0);
+
+    if (action_count > 1) {
+        std.debug.print("error: --config, --expr, and --docs are mutually exclusive\n", .{});
         std.process.exit(2);
     }
-    if (config_path == null and expr_src == null) {
+    if (action_count == 0) {
         usage();
         std.process.exit(2);
     }
 
+    if (emit_docs) {
+        try runDocs();
+        return;
+    }
     if (config_path) |p| {
         try runConfig(alloc, p);
         return;
@@ -97,6 +112,15 @@ pub fn main() !void {
         try runExpr(alloc, e);
         return;
     }
+}
+
+/// --docs implementation: emit full language/schema documentation as JSON.
+fn runDocs() !void {
+    var stdout_buf: [4096]u8 = undefined;
+    var stdout_fw = std.fs.File.stdout().writer(&stdout_buf);
+    const stdout = &stdout_fw.interface;
+    try docs_mod.writeDocs(stdout);
+    try stdout.flush();
 }
 
 /// --config implementation: load + validate, then emit the source file verbatim.

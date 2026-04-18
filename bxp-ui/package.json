@@ -1,6 +1,6 @@
 {
 	"name": "bxp-ui",
-	"version": "0.0.1",
+	"version": "0.1.0",
 	"description": "Electrobun UI for bxp-cli: JSON5 config editor + dry-run debugger",
 	"private": true,
 	"type": "module",

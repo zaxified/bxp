@@ -1,8 +1,6 @@
 import { Fragment } from "react";
-import { FUNCTION_NAMES, BXP_KEYWORDS } from "./catalog";
-
-const FUNCTION_SET = new Set<string>(FUNCTION_NAMES);
-const KEYWORD_SET = new Set<string>(BXP_KEYWORDS);
+import { useTraceStore } from "../store";
+import { C } from "./colors";
 
 type Tok =
 	| "column"
@@ -20,7 +18,7 @@ type Span = { kind: Tok; text: string };
 
 // Single-pass tokenizer mirroring src/mainview/expr/language.ts. Returns spans
 // for React rendering; kept in sync with the CM6 StreamLanguage regex set.
-function tokenize(src: string): Span[] {
+function tokenize(src: string, fnSet: Set<string>, kwSet: Set<string>): Span[] {
 	const out: Span[] = [];
 	let i = 0;
 	while (i < src.length) {
@@ -76,9 +74,9 @@ function tokenize(src: string): Span[] {
 		const id = /^[A-Za-z_][A-Za-z0-9_]*/.exec(rest);
 		if (id) {
 			const word = id[0];
-			const kind: Tok = FUNCTION_SET.has(word)
+			const kind: Tok = fnSet.has(word)
 				? "function"
-				: KEYWORD_SET.has(word)
+				: kwSet.has(word)
 					? "keyword"
 					: "ident";
 			out.push({ kind, text: word });
@@ -92,26 +90,29 @@ function tokenize(src: string): Span[] {
 	return out;
 }
 
-const CLASS_FOR: Record<Tok, string> = {
-	column: "text-amber-400",
-	var: "text-pink-400",
-	string: "text-emerald-300",
-	number: "text-amber-300",
-	op: "text-slate-400",
-	punct: "text-slate-500",
-	function: "text-violet-300 font-semibold",
-	keyword: "text-sky-400 font-semibold",
-	ident: "text-slate-200",
-	ws: "",
+const STYLE_FOR: Record<Tok, { color?: string; fontWeight?: string }> = {
+	column:   { color: C.columnRef },
+	var:      { color: C.inputVar },
+	string:   { color: C.string },
+	number:   { color: C.number },
+	op:       { color: C.operator },
+	punct:    { color: C.punctuation },
+	function: { color: C.function,  fontWeight: "600" },
+	keyword:  { color: C.keyword,   fontWeight: "600" },
+	ident:    { color: C.ident },
+	ws:       {},
 };
 
 export function ExprInline({ text }: { text: string }) {
-	const spans = tokenize(text);
+	const docs = useTraceStore((s) => s.docs);
+	const fnSet = new Set<string>(docs?.functions.map((f) => f.name) ?? []);
+	const kwSet = new Set<string>(docs?.keywords.map((k) => k.name) ?? []);
+	const spans = tokenize(text, fnSet, kwSet);
 	return (
 		<span className="whitespace-pre-wrap break-all">
 			{spans.map((s, idx) => (
 				<Fragment key={idx}>
-					<span className={CLASS_FOR[s.kind]}>{s.text}</span>
+					<span style={STYLE_FOR[s.kind]}>{s.text}</span>
 				</Fragment>
 			))}
 		</span>

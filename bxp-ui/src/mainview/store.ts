@@ -3,17 +3,20 @@ import JSON5 from "json5";
 import { parseLine } from "./trace/parse";
 import { TraceBuilder, emptyModel, type TraceModel } from "./trace/model";
 import { buildRoundtrippedText } from "./config/roundtrip";
+import type { DocsResponse } from "../shared/types";
 
 type RunStatus = "idle" | "running" | "done" | "error";
 type ConfigStatus = "idle" | "loading" | "loaded" | "error";
+// FIXME(v1.0.0): add a proper light theme using Tailwind darkMode: 'class' —
+// requires adding dark: prefixes to all color classes across all components.
 export type Theme = "slate" | "zinc";
 
 const THEME_STORAGE_KEY = "bxp-ui.theme";
 
 function readStoredTheme(): Theme {
-	if (typeof localStorage === "undefined") return "slate";
+	if (typeof localStorage === "undefined") return "zinc";
 	const v = localStorage.getItem(THEME_STORAGE_KEY);
-	return v === "zinc" ? "zinc" : "slate";
+	return v === "slate" ? "slate" : "zinc";
 }
 
 function applyTheme(t: Theme): void {
@@ -128,6 +131,15 @@ type Rpc = {
 		validateExpr: (args: {
 			expr: string;
 		}) => Promise<{ ok: boolean; error: string | null }>;
+		openInEditor: (args: {
+			path: string;
+		}) => Promise<{ ok: boolean }>;
+		openUrl: (args: {
+			url: string;
+		}) => Promise<{ ok: boolean }>;
+		openFileDialog: (args: Record<string, never>) => Promise<{ path: string | null }>;
+		getStartupConfig: (args: Record<string, never>) => Promise<{ path: string | null }>;
+		getDocs: (args: Record<string, never>) => Promise<DocsResponse | null>;
 	};
 };
 
@@ -203,12 +215,24 @@ type TraceStore = {
 
 	// Expression validation (Phase 5)
 	validateExpr: (expr: string) => Promise<{ ok: boolean; error: string | null }>;
+	openInEditor: (path: string) => Promise<void>;
+	openUrl: (url: string) => Promise<void>;
+	openFileDialog: () => Promise<string | null>;
 
 	// Selection
 	selectedFileId: string | null;
 	selectedRowId: string | null;
 	selectFile: (id: string | null) => void;
 	selectRow: (id: string | null) => void;
+
+	// Docs loaded from bxp-fmt --docs (single source of truth)
+	docs: DocsResponse | null;
+
+	// Selected expr leaf (Config tab — drives the right panel editor)
+	selectedExprPath: readonly PathSeg[] | null;
+	selectedExprText: string;
+	setSelectedExpr: (path: readonly PathSeg[], text: string) => void;
+	clearSelectedExpr: () => void;
 
 	// Ingestion
 	pushLine: (line: string) => void;
@@ -238,7 +262,7 @@ export const useTraceStore = create<TraceStore>((set, get) => {
 	};
 
 	return {
-		configPath: "/home/zak/workspace/zig/bxp/DEV/bxp-cli.json",
+		configPath: "",
 		templateId: "",
 		setConfigPath: (s) => set({ configPath: s }),
 		setTemplateId: (s) => set({ templateId: s }),
@@ -256,8 +280,7 @@ export const useTraceStore = create<TraceStore>((set, get) => {
 			set({ theme: t });
 		},
 		toggleTheme: () => {
-			const next: Theme = get().theme === "slate" ? "zinc" : "slate";
-			get().setTheme(next);
+			get().setTheme(get().theme === "slate" ? "zinc" : "slate");
 		},
 
 		status: "idle",
@@ -287,6 +310,10 @@ export const useTraceStore = create<TraceStore>((set, get) => {
 				return;
 			}
 			const path = get().configPath;
+			if (!path) {
+				set({ configStatus: "idle" });
+				return;
+			}
 			set({
 				configStatus: "loading",
 				configError: null,
@@ -368,6 +395,34 @@ export const useTraceStore = create<TraceStore>((set, get) => {
 				return await rpc.request.validateExpr({ expr });
 			} catch (e) {
 				return { ok: false, error: e instanceof Error ? e.message : String(e) };
+			}
+		},
+
+		openInEditor: async (path) => {
+			if (!rpc) return;
+			try {
+				await rpc.request.openInEditor({ path });
+			} catch {
+				// ignore
+			}
+		},
+
+		openUrl: async (url) => {
+			if (!rpc) return;
+			try {
+				await rpc.request.openUrl({ url });
+			} catch {
+				// ignore
+			}
+		},
+
+		openFileDialog: async () => {
+			if (!rpc) return null;
+			try {
+				const res = await rpc.request.openFileDialog({});
+				return res.path;
+			} catch {
+				return null;
 			}
 		},
 
@@ -535,6 +590,13 @@ export const useTraceStore = create<TraceStore>((set, get) => {
 		selectFile: (id) => set({ selectedFileId: id, selectedRowId: null }),
 		selectRow: (id) => set({ selectedRowId: id }),
 
+		docs: null,
+
+		selectedExprPath: null,
+		selectedExprText: "",
+		setSelectedExpr: (path, text) => set({ selectedExprPath: path, selectedExprText: text }),
+		clearSelectedExpr: () => set({ selectedExprPath: null, selectedExprText: "" }),
+
 		pushLine: (line) => {
 			const res = parseLine(line);
 			if (res.kind === "invalid") {
@@ -559,6 +621,17 @@ export const useTraceStore = create<TraceStore>((set, get) => {
 
 		attachRpc: (r) => {
 			rpc = r;
+			// Load docs from bxp-fmt --docs
+			r.request.getDocs({}).then((docs) => {
+				if (docs) set({ docs });
+			}).catch(() => {});
+			// Auto-load bxp-cli.json from cwd if present
+			r.request.getStartupConfig({}).then(({ path }) => {
+				if (path) {
+					set({ configPath: path });
+					get().loadConfig();
+				}
+			}).catch(() => {});
 		},
 
 		runDryRun: async () => {

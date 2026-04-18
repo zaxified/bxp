@@ -2,7 +2,7 @@ import { BrowserView, BrowserWindow, Updater } from "electrobun/bun";
 import { dlopen, FFIType, ptr } from "bun:ffi";
 import { resolve, dirname } from "node:path";
 import { existsSync } from "node:fs";
-import { rename, unlink } from "node:fs/promises";
+import { rename, unlink, copyFile, access } from "node:fs/promises";
 import type { AppRPCType } from "../shared/types";
 
 const DEV_SERVER_PORT = 5173;
@@ -172,11 +172,23 @@ const rpc = BrowserView.defineRPC<AppRPCType>({
 				return { rawText, validationError };
 			},
 			saveConfig: async ({ path, text }) => {
-				// Atomic write: land the bytes in a sibling temp file first, then
-				// rename into place. A crash or power loss between the write and
-				// the rename leaves the original config intact.
 				const tmpPath = `${path}.bxp-tmp`;
 				try {
+					// Backup original before overwriting
+					const exists = await access(path).then(() => true).catch(() => false);
+					if (exists) {
+						const now = new Date();
+						const ts = [
+							now.getFullYear(),
+							String(now.getMonth() + 1).padStart(2, "0"),
+							String(now.getDate()).padStart(2, "0"),
+							String(now.getHours()).padStart(2, "0"),
+							String(now.getMinutes()).padStart(2, "0"),
+							String(now.getSeconds()).padStart(2, "0"),
+						].join("");
+						await copyFile(path, `${path}_${ts}`);
+					}
+					// Atomic write: temp file then rename
 					await Bun.write(tmpPath, text);
 					await rename(tmpPath, path);
 					return { ok: true, error: null };
@@ -205,6 +217,55 @@ const rpc = BrowserView.defineRPC<AppRPCType>({
 					ok: false,
 					error: stderrText.trim() || `bxp-fmt exit ${exitCode}`,
 				};
+			},
+			openInEditor: async ({ path }) => {
+				try {
+					Bun.spawn(["xdg-open", path], { stdout: "ignore", stderr: "ignore" });
+					return { ok: true };
+				} catch {
+					return { ok: false };
+				}
+			},
+			openUrl: async ({ url }) => {
+				try {
+					Bun.spawn(["xdg-open", url], { stdout: "ignore", stderr: "ignore" });
+					return { ok: true };
+				} catch {
+					return { ok: false };
+				}
+			},
+			getStartupConfig: async () => {
+				const candidate = resolve(process.cwd(), "bxp-cli.json");
+				return { path: existsSync(candidate) ? candidate : null };
+			},
+			getDocs: async () => {
+				try {
+					const proc = Bun.spawn([BXP_FMT_PATH, "--docs"], {
+						stdout: "pipe",
+						stderr: "ignore",
+					});
+					const out = await readAll(proc.stdout);
+					const exitCode = await proc.exited;
+					if (exitCode !== 0) return null;
+					return JSON.parse(out);
+				} catch {
+					return null;
+				}
+			},
+			// FIXME(v1.0.0): zenity dialog doesn't match the app's dark theme.
+			// Replace with a custom in-app path input modal.
+			openFileDialog: async () => {
+				try {
+					const proc = Bun.spawn(
+						["zenity", "--file-selection", "--title=Open config", "--file-filter=JSON files (*.json *.json5) | *.json *.json5"],
+						{ stdout: "pipe", stderr: "ignore" },
+					);
+					const out = (await readAll(proc.stdout)).trim();
+					await proc.exited;
+					return { path: out.length > 0 ? out : null };
+				} catch {
+					return { path: null };
+				}
 			},
 		},
 		messages: {},

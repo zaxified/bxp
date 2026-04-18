@@ -4,7 +4,7 @@ export default {
 	app: {
 		name: "bxp-ui",
 		identifier: "sh.blackboard.bxp-ui",
-		version: "0.0.1",
+		version: "0.1.0",
 	},
 	build: {
 		// Vite builds to dist/; scripts/stage-bins.sh cross-compiles the Zig

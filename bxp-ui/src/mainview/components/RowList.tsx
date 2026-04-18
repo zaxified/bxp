@@ -25,6 +25,13 @@ const STATUS_LABEL: Record<RowStatus, string> = {
 	error: "✕",
 };
 
+const STATUS_TITLE: Record<RowStatus, string> = {
+	written: "written to output",
+	filtered: "filtered out",
+	"no-match": "no matching rule",
+	error: "error",
+};
+
 export function RowList() {
 	const modelVersion = useTraceStore((s) => s.modelVersion);
 	const selectedFileId = useTraceStore((s) => s.selectedFileId);
@@ -133,7 +140,7 @@ export function RowList() {
 									{row.fileRow}
 								</td>
 								<td className={`py-1 px-2 text-center border-r border-slate-800 ${STATUS_STYLE[st]}`}>
-									{STATUS_LABEL[st]}
+									<span title={STATUS_TITLE[st]}>{STATUS_LABEL[st]}</span>
 								</td>
 								{headers.map((h, i) => (
 									<td

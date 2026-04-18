@@ -6,6 +6,7 @@ import {
 	bracketMatching,
 	indentOnInput,
 	foldKeymap,
+	type LanguageSupport,
 } from "@codemirror/language";
 import {
 	autocompletion,
@@ -14,7 +15,7 @@ import {
 	completionKeymap,
 } from "@codemirror/autocomplete";
 import { setDiagnostics, type Diagnostic } from "@codemirror/lint";
-import { bxpExpr } from "../expr/language";
+import type { Extension } from "@codemirror/state";
 
 type Props = {
 	value: string;
@@ -23,6 +24,7 @@ type Props = {
 	readOnly?: boolean;
 	height?: number | string;
 	marker?: string | null;
+	languageExt?: LanguageSupport | null;
 };
 
 const baseTheme = EditorView.theme(
@@ -70,14 +72,12 @@ export function ExprEditor({
 	readOnly = false,
 	height = 80,
 	marker = null,
+	languageExt = null,
 }: Props) {
 	const containerRef = useRef<HTMLDivElement | null>(null);
 	const viewRef = useRef<EditorView | null>(null);
-	// Compartments let us reconfigure a single facet (readOnly) without
-	// recreating the whole EditorState.
 	const readOnlyCompartment = useRef(new Compartment());
-	// Mirror the latest onBlur/onChange callbacks so the CM6 extension closure
-	// never captures a stale prop.
+	const langCompartment = useRef(new Compartment());
 	const onBlurRef = useRef(onBlur);
 	onBlurRef.current = onBlur;
 	const onChangeRef = useRef(onChange);
@@ -88,13 +88,13 @@ export function ExprEditor({
 		const state = EditorState.create({
 			doc: value,
 			extensions: [
-				lineNumbers({ formatNumber: () => "" }), // just the gutter gap, no numbers
+				lineNumbers({ formatNumber: () => "" }),
 				history(),
 				indentOnInput(),
 				bracketMatching(),
 				closeBrackets(),
 				autocompletion(),
-				bxpExpr(),
+				langCompartment.current.of(languageExt ? [languageExt as Extension] : []),
 				baseTheme,
 				keymap.of([
 					...closeBracketsKeymap,
@@ -128,7 +128,18 @@ export function ExprEditor({
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, []);
 
-	// Sync external `value` changes (e.g. example-picker buttons).
+	// Reconfigure language when docs load (languageExt changes from null → live).
+	useEffect(() => {
+		const view = viewRef.current;
+		if (!view) return;
+		view.dispatch({
+			effects: langCompartment.current.reconfigure(
+				languageExt ? [languageExt as Extension] : [],
+			),
+		});
+	}, [languageExt]);
+
+	// Sync external `value` changes.
 	useEffect(() => {
 		const view = viewRef.current;
 		if (!view) return;

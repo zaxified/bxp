@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { useTraceStore } from "../store";
 import { ExprEditor } from "./ExprEditor";
-import { BXP_FUNCTIONS } from "../expr/catalog";
+import { bxpExpr } from "../expr/language";
 
 const EXAMPLES: readonly { label: string; expr: string }[] = [
 	{ label: "date convert", expr: "DATE_CONVERT([Date], '%Y-%m-%d', '%d.%m.%Y')" },
@@ -21,6 +21,11 @@ export function ExprPlayground() {
 	const [expr, setExpr] = useState(EXAMPLES[0].expr);
 	const [state, setState] = useState<ValidationState>({ kind: "idle" });
 	const validateExpr = useTraceStore((s) => s.validateExpr);
+	const docs = useTraceStore((s) => s.docs);
+	const languageExt = useMemo(
+		() => (docs ? bxpExpr(docs.functions, docs.keywords) : null),
+		[docs],
+	);
 
 	// Debounced validation: 300ms after last keystroke.
 	useEffect(() => {
@@ -57,7 +62,7 @@ export function ExprPlayground() {
 								key={ex.label}
 								type="button"
 								onClick={() => setExpr(ex.expr)}
-								className="text-[10px] uppercase tracking-wider text-slate-500 hover:text-slate-100 px-2 py-1 rounded hover:bg-slate-800"
+								className="text-[10px] uppercase tracking-wider text-slate-500 hover:text-slate-100 px-2 py-1 hover:bg-slate-800"
 							>
 								{ex.label}
 							</button>
@@ -65,7 +70,7 @@ export function ExprPlayground() {
 					</div>
 				</div>
 
-				<ExprEditor value={expr} onChange={setExpr} height={160} marker={marker} />
+				<ExprEditor value={expr} onChange={setExpr} height={160} marker={marker} languageExt={languageExt} />
 
 				<div className="text-xs">
 					{state.kind === "error" && (
@@ -94,7 +99,7 @@ export function ExprPlayground() {
 					Functions
 				</h2>
 				<ul className="space-y-2 text-xs">
-					{BXP_FUNCTIONS.map((f) => (
+					{(docs?.functions ?? []).map((f) => (
 						<li key={f.name} className="font-mono">
 							<div className="text-indigo-300">{f.signature}</div>
 							<div className="text-slate-400 text-[11px] leading-snug">
