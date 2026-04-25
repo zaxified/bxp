@@ -1,0 +1,26 @@
+{
+	"folders": [
+		{
+			"path": ".."
+		},
+		{
+			"path": "../../bxp"
+		}
+	],
+	"settings": {
+		"workbench.colorTheme": "Dark Modern"
+	},
+	"extensions": {
+		"recommendations": [
+			"blueglassblock.better-json5",
+			"dart-code.dart-code",
+			"dart-code.flutter",
+			"zainchen.json",
+			"bierner.markdown-mermaid",
+			"davidanson.vscode-markdownlint",
+			"bpruitt-goddard.mermaid-markdown-syntax-highlighting",
+			"mechatroner.rainbow-csv",
+			"ziglang.vscode-zig"
+		]
+	}
+}
