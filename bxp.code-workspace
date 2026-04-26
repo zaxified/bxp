@@ -1,10 +1,7 @@
 {
 	"folders": [
 		{
-			"path": ".."
-		},
-		{
-			"path": "../../bxp"
+			"path": "."
 		}
 	],
 	"settings": {
