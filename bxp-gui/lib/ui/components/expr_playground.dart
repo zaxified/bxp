@@ -5,16 +5,18 @@ import '../../services/bxp_process_client.dart';
 import '../../store/trace_store.dart';
 import '../theme/bxp_theme.dart';
 import '../theme/bxp_text.dart';
+import 'expr_editor.dart';
 import 'expr_highlight.dart';
+import 'expr_panel.dart' show ExprValidationBadgeSlot;
 
 /// Standalone expression scratchpad — mirrors bxp-ui's ExprPlayground.
 ///
-/// Differs from the in-panel editor (which binds to `store.selectedExprPath`
-/// and writes its value back into `configJson`): this widget is entirely
-/// disconnected from the config. The user can paste or type any expression,
-/// click one of the preset examples, and see a live "valid/invalid" badge
-/// from `bxp-fmt --expr`. Useful for learning the DSL and sanity-checking
-/// an expression before pasting it into the real config.
+/// The playground is the same expression editor as the in-panel one — it
+/// reuses [ExprEditor] for autocomplete and the syntax-highlighting
+/// controller and shares the validation badge widget. The only differences
+/// are the header (preset example chips instead of the JSON path
+/// breadcrumb) and the absence of Reset/Apply buttons (no config to
+/// commit into).
 class ExprPlayground extends StatefulWidget {
   const ExprPlayground({super.key});
 
@@ -38,7 +40,8 @@ class _ExprPlaygroundState extends State<ExprPlayground> {
 
   late final ExprTextEditingController _ctrl;
   Timer? _debounce;
-  _Status _status = const _Status.idle();
+  ExprValidationState _state = ExprValidationState.idle;
+  String _errorMessage = '';
 
   @override
   void initState() {
@@ -61,22 +64,36 @@ class _ExprPlaygroundState extends State<ExprPlayground> {
     _debounce?.cancel();
     final text = _ctrl.text;
     if (text.trim().isEmpty) {
-      setState(() => _status = const _Status.idle());
+      setState(() {
+        _state = ExprValidationState.idle;
+        _errorMessage = '';
+      });
       return;
     }
-    setState(() => _status = const _Status.pending());
+    setState(() => _state = ExprValidationState.pending);
     _debounce = Timer(const Duration(milliseconds: 300), () => _validate(text));
   }
 
   Future<void> _validate(String text) async {
     if (text.trim().isEmpty) {
-      setState(() => _status = const _Status.idle());
+      setState(() {
+        _state = ExprValidationState.idle;
+        _errorMessage = '';
+      });
       return;
     }
     final err = await BxpProcessClient.validateExpr(text);
     // Guard against races: caller may have replaced text in the meantime.
     if (!mounted || _ctrl.text != text) return;
-    setState(() => _status = err == null ? const _Status.ok() : _Status.error(err));
+    setState(() {
+      if (err == null) {
+        _state = ExprValidationState.ok;
+        _errorMessage = '';
+      } else {
+        _state = ExprValidationState.error;
+        _errorMessage = err;
+      }
+    });
   }
 
   void _loadExample(String expr) {
@@ -88,6 +105,7 @@ class _ExprPlaygroundState extends State<ExprPlayground> {
   Widget build(BuildContext context) {
     context.watch<TraceStore>();
     final t = context.bxpTheme;
+    final isError = _state == ExprValidationState.error;
 
     return Padding(
       padding: const EdgeInsets.all(16),
@@ -95,69 +113,53 @@ class _ExprPlaygroundState extends State<ExprPlayground> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         mainAxisSize: MainAxisSize.min,
         children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              Text('EXPRESSION', style: BxpText.label(context)),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Wrap(
-                  alignment: WrapAlignment.end,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  spacing: 2,
-                  runSpacing: 2,
-                  children: [
-                    for (final ex in _examples)
-                      _ExampleBtn(
-                          label: ex.label,
-                          onTap: () => _loadExample(ex.expr)),
-                  ],
+          // Fixed header height matches the ExprPanel breadcrumb row so
+          // the editor box below does not jump when the user toggles
+          // between an opened expression and the playground (Esc / ✕).
+          SizedBox(
+            height: 32,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Text('EXPRESSION SCRATCHPAD', style: BxpText.label(context)),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Wrap(
+                    alignment: WrapAlignment.end,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    spacing: 2,
+                    runSpacing: 2,
+                    children: [
+                      for (final ex in _examples)
+                        _ExampleBtn(
+                            label: ex.label,
+                            onTap: () => _loadExample(ex.expr)),
+                    ],
+                  ),
                 ),
-              ),
-              const SizedBox(width: 8),
-              _StatusBadge(status: _status),
-            ],
+                const SizedBox(width: 8),
+                ExprValidationBadgeSlot(state: _state),
+              ],
+            ),
           ),
           const SizedBox(height: 10),
 
-          // Editor box.
-          Container(
-            decoration: BoxDecoration(
-              color: t.panelBg,
-              border: Border.all(
-                  color: _status.isError ? t.errorBorder : t.borderColor),
-            ),
-            child: TextField(
-              controller: _ctrl,
-              maxLines: null,
-              minLines: 5,
-              style: BxpText.body(context,color: t.textPrimary, sizePx: 13),
-              cursorColor: t.accentHighlight,
-              decoration: const InputDecoration(
-                isDense: true,
-                contentPadding: EdgeInsets.all(12),
-                border: InputBorder.none,
-              ),
-            ),
+          ExprEditor(
+            controller: _ctrl,
+            hasError: isError,
+            minLines: 5,
           ),
-          if (_status.isError) ...[
+          if (isError) ...[
             const SizedBox(height: 10),
             Container(
               padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(color: t.errorBg),
               child: SelectableText(
-                _status.message,
-                style: BxpText.body(context,color: t.errorText, size: BxpSize.sm),
+                _errorMessage,
+                style: BxpText.body(context, color: t.errorText, size: BxpSize.sm),
               ),
             ),
           ],
-
-          const SizedBox(height: 10),
-
-          Text(
-            'Scratchpad — changes here do not affect the config.',
-            style: BxpText.italic(context, size: BxpSize.xs),
-          ),
         ],
       ),
     );
@@ -203,51 +205,4 @@ class _ExampleBtnState extends State<_ExampleBtn> {
       ),
     );
   }
-}
-
-class _StatusBadge extends StatelessWidget {
-  final _Status status;
-  const _StatusBadge({required this.status});
-
-  @override
-  Widget build(BuildContext context) {
-    final t = context.bxpTheme;
-    late final String label;
-    late final Color color;
-    if (status.isOk) {
-      label = 'valid';
-      color = t.okText;
-    } else if (status.isError) {
-      label = 'invalid';
-      color = t.errorText;
-    } else if (status.isPending) {
-      label = 'checking';
-      color = t.infoText;
-    } else {
-      label = '';
-      color = Colors.transparent;
-    }
-    return SizedBox(
-      width: 56,
-      child: Align(
-        alignment: Alignment.centerRight,
-        child: Text(label, style: BxpText.label(context, color: color)),
-      ),
-    );
-  }
-}
-
-class _Status {
-  final int _kind; // 0=idle, 1=pending, 2=ok, 3=error
-  final String message;
-  const _Status._(this._kind, this.message);
-  const _Status.idle() : this._(0, '');
-  const _Status.pending() : this._(1, '');
-  const _Status.ok() : this._(2, '');
-  const _Status.error(String msg) : this._(3, msg);
-
-  bool get isIdle => _kind == 0;
-  bool get isPending => _kind == 1;
-  bool get isOk => _kind == 2;
-  bool get isError => _kind == 3;
 }

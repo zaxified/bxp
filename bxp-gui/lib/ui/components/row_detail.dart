@@ -139,8 +139,9 @@ class _RowDetailState extends State<RowDetail> {
                                             r.ruleIndex == row.matchedRuleIndex,
                                       )
                                       .firstOrNull;
-                                  if (matched == null)
+                                  if (matched == null) {
                                     return const SizedBox.shrink();
+                                  }
                                   return _Section(
                                     title: 'RULE RESULTS',
                                     subtitle: 'rule [${row.matchedRuleIndex}]',

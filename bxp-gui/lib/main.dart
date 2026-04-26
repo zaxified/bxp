@@ -109,8 +109,6 @@ class ZoomContainer extends StatefulWidget {
 }
 
 class _ZoomContainerState extends State<ZoomContainer> {
-  double _zoom = 1.0;
-
   @override
   void initState() {
     super.initState();
@@ -123,19 +121,22 @@ class _ZoomContainerState extends State<ZoomContainer> {
     super.dispose();
   }
 
+  TraceStore get _store => context.read<TraceStore>();
+  void _bump(double delta) => _store.setZoom(_store.zoom + delta);
+
   bool _handleKey(KeyEvent event) {
     if (event is KeyDownEvent || event is KeyRepeatEvent) {
       if (HardwareKeyboard.instance.isControlPressed) {
         final key = event.logicalKey.keyLabel;
         final physical = event.physicalKey;
         if (key == '+' || key == '=' || physical == PhysicalKeyboardKey.numpadAdd || physical == PhysicalKeyboardKey.equal || physical == PhysicalKeyboardKey.bracketRight) {
-          setState(() => _zoom = (_zoom + 0.1).clamp(0.5, 3.0));
+          _bump(0.1);
           return true;
         } else if (key == '-' || physical == PhysicalKeyboardKey.numpadSubtract || physical == PhysicalKeyboardKey.minus || physical == PhysicalKeyboardKey.slash) {
-          setState(() => _zoom = (_zoom - 0.1).clamp(0.5, 3.0));
+          _bump(-0.1);
           return true;
         } else if (key == '0' || physical == PhysicalKeyboardKey.numpad0 || physical == PhysicalKeyboardKey.digit0) {
-          setState(() => _zoom = 1.0);
+          _store.setZoom(1.0);
           return true;
         }
       }
@@ -145,22 +146,23 @@ class _ZoomContainerState extends State<ZoomContainer> {
 
   @override
   Widget build(BuildContext context) {
+    final zoom = context.watch<TraceStore>().zoom;
     return Listener(
       onPointerSignal: (event) {
         if (event is PointerScrollEvent && HardwareKeyboard.instance.isControlPressed) {
           if (event.scrollDelta.dy > 0) {
-            setState(() => _zoom = (_zoom - 0.1).clamp(0.5, 3.0));
+            _bump(-0.1);
           } else if (event.scrollDelta.dy < 0) {
-            setState(() => _zoom = (_zoom + 0.1).clamp(0.5, 3.0));
+            _bump(0.1);
           }
         }
       },
       child: Transform.scale(
-        scale: _zoom,
+        scale: zoom,
         alignment: Alignment.topLeft,
         child: FractionallySizedBox(
-          widthFactor: 1 / _zoom,
-          heightFactor: 1 / _zoom,
+          widthFactor: 1 / zoom,
+          heightFactor: 1 / zoom,
           alignment: Alignment.topLeft,
           child: widget.child,
         ),

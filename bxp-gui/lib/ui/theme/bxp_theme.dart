@@ -338,7 +338,11 @@ const _zinc = BxpTheme(
   textPrimary: Color(0xFFe4e4e7),
   textMuted: Color(0xFFa1a1aa),
   textSubtle: Color(0xFFa1a1aa),
-  accentHighlight: Color(0xFFd4d4d8),
+  // Cyan accent (borrowed from the dark preset) — zinc's monochrome
+  // palette would otherwise make accentHighlight a near-white gray,
+  // which reads as washed out for cursors, headers, and primary
+  // action buttons. Code-token greys stay pure (codeVariable et al.).
+  accentHighlight: Color(0xFF4FC3F7),
   errorBg: Color(0xFF7f1d1d),
   errorBorder: Color(0x99ef4444),
   errorText: Color(0xFFfca5a5),

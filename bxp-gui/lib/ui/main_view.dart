@@ -122,7 +122,9 @@ class _StatusBarState extends State<_StatusBar> {
       configStatusColor = t.textMuted;
     }
 
-    // Run status label + color.
+    // Run status label + color. Exit code is no longer surfaced here —
+    // the err-msg row above handles diagnostics (and is the place to
+    // expand stderr); the bottom row stays terse with just OK/ERR.
     final String runStatusText;
     final Color runStatusColor;
     switch (store.status) {
@@ -136,12 +138,14 @@ class _StatusBarState extends State<_StatusBar> {
         break;
       case RunStatus.done:
         final ec = store.lastExitCode ?? 0;
-        runStatusText = 'done - exit $ec';
         if (ec == 0) {
+          runStatusText = 'done - OK';
           runStatusColor = t.okText;
         } else if (ec == 2) {
+          runStatusText = 'done - ERR';
           runStatusColor = t.warnText;
         } else {
+          runStatusText = 'done - ERR';
           runStatusColor = t.errorText;
         }
         break;
@@ -175,50 +179,108 @@ class _StatusBarState extends State<_StatusBar> {
     final hasConfigError = store.configError != null ||
         store.configSaveError != null ||
         firstErr != null;
+    // The err-msg row is the single home for *all* problem output: config
+    // errors, save failures, and runtime stderr captured from the CLI.
+    // It's shown whenever any of those exist. When stderr exists, the
+    // whole row is click-to-expand (any sub-line) — no separate stderr
+    // link in the right edge of the status bar.
+    final hasStderr = store.stderrText.isNotEmpty;
+    final showErrRow = hasConfigError || hasStderr;
+    final stderrSuffix = hasStderr
+        ? '  ›  stderr (${store.stderrText.length}B)'
+        : '';
+    void toggleStderr() {
+      if (!hasStderr) return;
+      setState(() => _stderrExpanded = !_stderrExpanded);
+    }
 
-    return Stack(
-      clipBehavior: Clip.none,
+    return Column(
+      mainAxisSize: MainAxisSize.min,
       children: [
-        Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (hasConfigError)
-              Container(
-                width: double.infinity,
-                decoration: BoxDecoration(
-                  color: bg,
-                  border: Border(top: BorderSide(color: borderColor)),
+        // Expanded stderr lives ABOVE the err-msg row in the column flow
+        // (instead of as a Stack overlay) so the err-msg row stays
+        // visible and clickable while the panel is open — that's the
+        // user's only way to dismiss the panel.
+        if (_stderrExpanded && store.stderrText.isNotEmpty)
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 400),
+            child: Container(
+              width: double.infinity,
+              decoration: BoxDecoration(
+                color: t.surfaceBg,
+                border: Border(
+                  top: BorderSide(color: borderColor),
+                  left: BorderSide(color: t.errorBorder),
+                  right: BorderSide(color: t.errorBorder),
                 ),
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 3),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    if (firstErr != null)
-                      Text(
-                        'bxp-fmt: $firstErr',
-                        style: BxpText.body(context,
-                            color: t.warnText, size: BxpSize.sm),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    if (store.configError != null)
-                      Text(
-                        store.configError!,
-                        style: BxpText.body(context,
-                            color: t.errorText, size: BxpSize.sm),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    if (store.configSaveError != null)
-                      Text(
-                        'save: ${store.configSaveError!}',
-                        style: BxpText.body(context,
-                            color: t.errorText, size: BxpSize.sm),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                  ],
+              ),
+              padding: const EdgeInsets.all(12),
+              child: SingleChildScrollView(
+                child: SelectableText(
+                  store.stderrText,
+                  style: BxpText.body(context,
+                      color: t.errorText, size: BxpSize.sm),
+                ),
+              ),
+            ),
+          ),
+        if (showErrRow)
+          MouseRegion(
+                cursor: hasStderr
+                    ? SystemMouseCursors.click
+                    : SystemMouseCursors.basic,
+                child: GestureDetector(
+                  onTap: toggleStderr,
+                  child: Container(
+                    width: double.infinity,
+                    decoration: BoxDecoration(
+                      color: bg,
+                      border: Border(top: BorderSide(color: borderColor)),
+                    ),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 3),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (firstErr != null)
+                          Text(
+                            'bxp-fmt: $firstErr$stderrSuffix',
+                            style: BxpText.body(context,
+                                color: t.warnText, size: BxpSize.sm),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        if (store.configError != null)
+                          Text(
+                            firstErr == null
+                                ? '${store.configError!}$stderrSuffix'
+                                : store.configError!,
+                            style: BxpText.body(context,
+                                color: t.errorText, size: BxpSize.sm),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        if (store.configSaveError != null)
+                          Text(
+                            firstErr == null && store.configError == null
+                                ? 'save: ${store.configSaveError!}$stderrSuffix'
+                                : 'save: ${store.configSaveError!}',
+                            style: BxpText.body(context,
+                                color: t.errorText, size: BxpSize.sm),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        if (!hasConfigError && hasStderr)
+                          Text(
+                            'stderr (${store.stderrText.length}B)',
+                            style: BxpText.body(context,
+                                color: t.warnText, size: BxpSize.sm),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                      ],
+                    ),
+                  ),
                 ),
               ),
             Container(
@@ -284,51 +346,9 @@ class _StatusBarState extends State<_StatusBar> {
                 ),
               ],
               const Spacer(),
-              if (store.stderrText.isNotEmpty)
-                MouseRegion(
-                  cursor: SystemMouseCursors.click,
-                  child: GestureDetector(
-                    onTap: () =>
-                        setState(() => _stderrExpanded = !_stderrExpanded),
-                    child: Text(
-                      'stderr (${store.stderrText.length}B)',
-                      style: BxpText.body(context,
-                          color: t.errorText,
-                          size: BxpSize.sm,
-                          decoration: TextDecoration.underline),
-                    ),
-                  ),
-                ),
             ],
           ),
         ),
-          ],
-        ),
-        if (_stderrExpanded && store.stderrText.isNotEmpty)
-          Positioned(
-            right: 12,
-            bottom: 32,
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 640, maxHeight: 400),
-              child: Container(
-                decoration: BoxDecoration(
-                  color: t.surfaceBg,
-                  border: Border.all(color: t.errorBorder),
-                  boxShadow: [
-                    BoxShadow(color: t.dialogShadow, blurRadius: 8),
-                  ],
-                ),
-                padding: const EdgeInsets.all(12),
-                child: SingleChildScrollView(
-                  child: SelectableText(
-                    store.stderrText,
-                    style: BxpText.body(context,
-                        color: t.errorText, size: BxpSize.sm),
-                  ),
-                ),
-              ),
-            ),
-          ),
       ],
     );
   }

@@ -82,15 +82,37 @@ class BxpProcessClient {
   }
 
   /// Validates a single expression via `bxp-fmt --expr <text>`.
-  /// Returns null on success, error message on failure.
+  /// Returns null on success, human-readable message on failure.
+  ///
+  /// `bxp-fmt --expr` emits a structured `{"error":"X","detail":"Y"}` on
+  /// failure (currently on stdout, but we read both streams to stay
+  /// resilient to CLI version drift). We unwrap that into `"X: Y"` (or
+  /// just `"X"` when detail is empty) so the editor's error box reads
+  /// like a compiler diagnostic instead of leaking raw JSON.
   static Future<String?> validateExpr(String expr) async {
     if (expr.isEmpty) return null;
     final bin = findBin('bxp-fmt');
     if (bin == null) return 'bxp-fmt not found';
     final result = await Process.run(bin, ['--expr', expr]);
     if (result.exitCode == 0) return null;
-    final err = (result.stderr as String).trim();
-    return err.isEmpty ? 'invalid expression' : err;
+    final stdout = (result.stdout as String).trim();
+    final stderr = (result.stderr as String).trim();
+    final raw = stdout.isNotEmpty ? stdout : stderr;
+    if (raw.isEmpty) return 'invalid expression';
+    try {
+      final m = jsonDecode(raw);
+      if (m is Map) {
+        final err = m['error'];
+        final detail = m['detail'];
+        if (err is String && err.isNotEmpty) {
+          if (detail is String && detail.isNotEmpty) return '$err: $detail';
+          return err;
+        }
+      }
+    } catch (_) {
+      // Not JSON — fall through to the raw text.
+    }
+    return raw;
   }
 
   // ── Streaming invocations (stdout emitted as NDJSON events) ───────────

@@ -36,7 +36,13 @@ class TraceStore extends ChangeNotifier {
   String get textSchemeName => _textSchemeName;
   BxpTextScheme get textScheme =>
       bxpTextSchemes[_textSchemeName] ?? kBxpTextRoboto;
-  
+
+  // Ctrl+/Ctrl-/Ctrl+wheel UI zoom factor. Persisted under `bxp-gui.zoom`
+  // so power users don't have to re-zoom after every restart.
+  double _zoom = 1.0;
+  double get zoom => _zoom;
+
+
   // Runtime State
   RunStatus status = RunStatus.idle;
   RunMode runMode = RunMode.none;
@@ -67,6 +73,12 @@ class TraceStore extends ChangeNotifier {
   // Expression editor state
   List<String>? selectedExprPath;
   String selectedExprText = '';
+  // The text the editor was opened with — i.e. the value committed in
+  // configJson at the time of selection, plus whatever Apply has pushed
+  // since. The Reset button restores the editor to this baseline; without
+  // a separate field we can't tell the original text from the working
+  // copy because every keystroke flows through `selectedExprText`.
+  String selectedExprBaseline = '';
   String? exprValidationError;
   // Validation lifecycle. Mirrors bxp-ui's 4-state badge so the editor
   // and Playground can show "checking…" while a validateExpr spawn is
@@ -104,6 +116,7 @@ class TraceStore extends ChangeNotifier {
   void setSelectedExpr(List<String> path, String text) {
     selectedExprPath = path;
     selectedExprText = text;
+    selectedExprBaseline = text;
     exprGeneration++;
     // Opening a new leaf: start in pending state so the badge reads
     // "checking" instead of stale-flashing the previous result.
@@ -152,6 +165,7 @@ class TraceStore extends ChangeNotifier {
   void clearSelectedExpr() {
     selectedExprPath = null;
     selectedExprText = '';
+    selectedExprBaseline = '';
     exprValidationError = null;
     exprValidationState = ExprValidationState.idle;
     notifyListeners();
@@ -163,16 +177,29 @@ class TraceStore extends ChangeNotifier {
 
   Future<void> _init() async {
     final prefs = await SharedPreferences.getInstance();
-    final stored = prefs.getString('bxp-ui.theme');
-    if (stored != null && stored.isNotEmpty) {
-      _themePresetName = stored;
-    }
-    final ts = prefs.getString('bxp-ui.textScheme');
-    if (ts != null && ts.isNotEmpty && bxpTextSchemes.containsKey(ts)) {
-      _textSchemeName = ts;
-    }
-    _recentFiles = prefs.getStringList('bxp-ui.recent') ?? [];
-    _customPlaces = prefs.getStringList('bxp-gui.customPlaces') ?? [];
+    // Defensive reads — a corrupt/older prefs store should never crash
+    // the app or leave it in a half-loaded state. On any single read
+    // failure we silently keep the field's default value.
+    try {
+      final stored = prefs.getString('bxp-ui.theme');
+      if (stored != null && stored.isNotEmpty) _themePresetName = stored;
+    } catch (_) {}
+    try {
+      final ts = prefs.getString('bxp-ui.textScheme');
+      if (ts != null && ts.isNotEmpty && bxpTextSchemes.containsKey(ts)) {
+        _textSchemeName = ts;
+      }
+    } catch (_) {}
+    try {
+      final z = prefs.getDouble('bxp-gui.zoom');
+      if (z != null && z.isFinite && z >= 0.5 && z <= 3.0) _zoom = z;
+    } catch (_) {}
+    try {
+      _recentFiles = prefs.getStringList('bxp-ui.recent') ?? [];
+    } catch (_) {}
+    try {
+      _customPlaces = prefs.getStringList('bxp-gui.customPlaces') ?? [];
+    } catch (_) {}
     notifyListeners();
 
     // Pull the canonical docs catalog from the CLI in the background. We
@@ -287,6 +314,24 @@ class TraceStore extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('bxp-ui.textScheme', _textSchemeName);
     notifyListeners();
+  }
+
+  /// Set the UI zoom factor and persist under `bxp-gui.zoom`. Clamped to
+  /// [0.5, 3.0] — the same range the keyboard/scroll handler enforces.
+  void setZoom(double v) async {
+    if (!v.isFinite) return;
+    final clamped = v.clamp(0.5, 3.0);
+    if (clamped == _zoom) return;
+    _zoom = clamped;
+    notifyListeners();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setDouble('bxp-gui.zoom', _zoom);
+    } catch (_) {
+      // Persistence is best-effort. The user has already seen the zoom
+      // change; failing the write would only silently corrupt their next
+      // session, so we just swallow.
+    }
   }
 
   void setConfigPath(String path) {

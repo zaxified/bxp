@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../store/trace_store.dart';
@@ -117,11 +118,18 @@ class _DebugPanesState extends State<DebugPanes> {
                   child: LayoutBuilder(builder: (ctx, constraints) {
                     final totalH = constraints.maxHeight;
                     // Clamp heights so middle (RowDetail) keeps >= 60 px.
+                    // The inner `math.max(60, ...)` matters: when totalH is
+                    // small (60 < maxStackH < 120) the naive subtraction
+                    // would push the clamp's max below its min (60) and
+                    // `double.clamp` throws ArgumentError. We instead let
+                    // the panel collapse to its 60 px minimum and the
+                    // outer Column overflow indicator picks up the slack.
                     final maxStackH = totalH - 60.0 - 8.0; // splitters = 8
-                    final rowsInH = _rowsInHeight
-                        .clamp(60.0, maxStackH > 60.0 ? maxStackH - 60.0 : 60.0);
-                    final outputH = _outputHeight
-                        .clamp(60.0, (maxStackH - rowsInH).clamp(60.0, 600.0));
+                    final rowsInMax = math.max(60.0, maxStackH - 60.0);
+                    final rowsInH = _rowsInHeight.clamp(60.0, rowsInMax);
+                    final outputMax =
+                        math.max(60.0, math.min(600.0, maxStackH - rowsInH));
+                    final outputH = _outputHeight.clamp(60.0, outputMax);
                     final selectedFile = store.selectedFileId == null
                         ? null
                         : model?.files[store.selectedFileId];
