@@ -10,6 +10,7 @@ enum BxpThemePreset {
   dark,
   slate,
   zinc,
+  ftx,
 }
 
 /// Canonical palette tokens consumed by widgets.
@@ -549,11 +550,98 @@ const _dark = BxpTheme(
   tones: FlexTones.ultraContrast,
 );
 
+// FTX Terminal — amber accent (#d97706) on near-black (#0a0a0a).
+// Chrome palette ↔ ftx-terminal-color-theme.json:
+//   surfaceBg          = editor.background / terminal.background  (#0a0a0a)
+//   panelBg            = sideBar.background / editorWidget.bg     (#111111)
+//   borderColor        = sideBar.border / editorGroup.border      (#202020)
+//   textPrimary        = foreground                               (#e5e5e5)
+//   textMuted          = disabledForeground                       (#5a5a5a)
+//   textSubtle         = descriptionForeground                    (#808080)
+//   accentHighlight    = activityBar.foreground / sideBarTitle.fg (#e19d06)
+//   inputFill          = input.background                         (#0a0a0a)
+//   inputBorder        = input.border / checkbox.border           (#2a2a2a)
+//   inputBorderFocused = focusBorder / inputOption.activeBorder   (#d97706)
+//   inputPlaceholder   = input.placeholderForeground              (#5a5a5a)
+//   selectionBg        = list.activeSelectionBackground blend     (#1a1200)
+//   selectionText      = list.activeSelectionForeground           (#e19d06)
+// Syntax palette ↔ tokenColors / semanticTokenColors:
+//   codeKeyword   = keyword                (#d97706)
+//   codeString    = string                 (#e19d06)
+//   codeNumber    = constant.numeric       (#16a34a)
+//   codeFunction  = entity.name.function   (#22b8d6)
+//   codeVariable  = variable               (#e5e5e5)
+//   codeColumn    = amber accent highlight (#d97706)
+//   codeComment   = comment                (#5a5a5a)
+//   codeOperator  = keyword.operator       (#a0a0a0)
+//   codePunct     = punctuation            (#a0a0a0)
+//   codeIdent     = foreground             (#e5e5e5)
+const _ftx = BxpTheme(
+  preset: BxpThemePreset.ftx,
+  label: 'FTX',
+  brightness: Brightness.dark,
+  surfaceBg: Color(0xFF0a0a08),
+  panelBg: Color(0xFF1a1810),
+  borderColor: Color(0xFF332e20),
+  textPrimary: Color(0xFFf8f4e8),
+  textMuted: Color(0xFFc08830),
+  textSubtle: Color(0xFF9a7228),
+  accentHighlight: Color(0xFFe19d06),
+  errorBg: Color(0xFF3a0c0c),
+  errorBorder: Color(0xFFdc2626),
+  errorText: Color(0xFFffb4b4),
+  warnBg: Color(0xFF3a2a0c),
+  warnBorder: Color(0xFFd97706),
+  warnText: Color(0xFFffd28a),
+  okBg: Color(0xFF0d1f0d),
+  okBorder: Color(0xFF16a34a),
+  okText: Color(0xFF22c55e),
+  infoBg: Color(0xFF0a2a33),
+  infoBorder: Color(0xFF0891b1),
+  infoText: Color(0xFFa0e6f0),
+  inputFill: Color(0xFF0a0a0a),
+  inputBorder: Color(0xFF2a2a2a),
+  inputBorderFocused: Color(0xFFd97706),
+  inputPlaceholder: Color(0xFF9a7a28),
+  hoverOverlay: Color(0x14ffffff),
+  activeOverlay: Color(0x29ffffff),
+  selectionBg: Color(0xFF1a1200),
+  selectionText: Color(0xFFe19d06),
+  matchedRowTint: Color(0x1Ad97706),
+  scrollbarThumb: Color(0x662a2a2a),
+  scrollbarThumbHover: Color(0xFF3a3a3a),
+  dialogBarrier: Color(0xAA000000),
+  dialogBg: Color(0xFF111111),
+  dialogShadow: Color(0x66000000),
+  codeColumn: Color(0xFFd97706),
+  codeVariable: Color(0xFFf0ece0),
+  codeKeyword: Color(0xFFd97706),
+  codeFunction: Color(0xFF22b8d6),
+  codeString: Color(0xFFe19d06),
+  codeNumber: Color(0xFF16a34a),
+  codeOperator: Color(0xFFd0b878),
+  codePunct: Color(0xFFb8986a),
+  codeIdent: Color(0xFFf5f2e8),
+  codeComment: Color(0xFF806820),
+  valueString: Color(0xFFd4b870),
+  valueNumber: Color(0xFF16a34a),
+  valueBool: Color(0xFFd97706),
+  valueEmpty: Color(0xFF5a5a5a),
+  valueError: Color(0xFFdc2626),
+  valueWarn: Color(0xFFe19d06),
+  valueOk: Color(0xFF22c55e),
+  primarySeed: Color(0xFFd97706),
+  secondarySeed: Color(0xFFa0a0a0),
+  tertiarySeed: Color(0xFF0891b1),
+  tones: FlexTones.ultraContrast,
+);
+
 const Map<BxpThemePreset, BxpTheme> bxpThemes = {
   BxpThemePreset.light: _light,
   BxpThemePreset.dark: _dark,
   BxpThemePreset.slate: _slate,
   BxpThemePreset.zinc: _zinc,
+  BxpThemePreset.ftx: _ftx,
 };
 
 // Cycle order — light first so a new user's first cycle hop lands on
@@ -567,6 +655,7 @@ const List<BxpThemePreset> bxpThemeOrder = [
   BxpThemePreset.dark,
   BxpThemePreset.slate,
   BxpThemePreset.zinc,
+  BxpThemePreset.ftx,
 ];
 
 BxpThemePreset nextPreset(BxpThemePreset p) {
