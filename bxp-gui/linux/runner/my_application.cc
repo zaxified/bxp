@@ -52,14 +52,16 @@ static void my_application_activate(GApplication* application) {
     gtk_window_set_title(window, "bxp_gui");
   }
 
-  gtk_window_set_default_size(window, 1280, 720);
-  // Enforce a minimum size of 1024x768 so the layout never has to
+  gtk_window_set_default_size(window, 1280, 800);
+  // Enforce a minimum size of 1280x800 so the layout never has to
   // accommodate sub-laptop widths — every panel split assumes that
-  // amount of room. The hint is set at the GTK level so the WM
-  // refuses smaller resize attempts even before Flutter sees them.
+  // amount of room, and this floor also gives the runtime zoom guard
+  // (see lib/ui/zoom_limits.dart) headroom to scale beyond 1× without
+  // overflowing the window. The hint is set at the GTK level so the
+  // WM refuses smaller resize attempts even before Flutter sees them.
   GdkGeometry min_geom;
-  min_geom.min_width = 1024;
-  min_geom.min_height = 768;
+  min_geom.min_width = 1280;
+  min_geom.min_height = 800;
   gtk_window_set_geometry_hints(window, nullptr, &min_geom, GDK_HINT_MIN_SIZE);
 
   g_autoptr(FlDartProject) project = fl_dart_project_new();
