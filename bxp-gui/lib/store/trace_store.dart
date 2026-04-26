@@ -172,6 +172,7 @@ class TraceStore extends ChangeNotifier {
       _textSchemeName = ts;
     }
     _recentFiles = prefs.getStringList('bxp-ui.recent') ?? [];
+    _customPlaces = prefs.getStringList('bxp-gui.customPlaces') ?? [];
     notifyListeners();
 
     // Pull the canonical docs catalog from the CLI in the background. We
@@ -232,6 +233,26 @@ class TraceStore extends ChangeNotifier {
     }
     final prefs = await SharedPreferences.getInstance();
     await prefs.setStringList('bxp-ui.recent', _recentFiles);
+    notifyListeners();
+  }
+
+  // User-pinned directory paths shown in the OpenDialog sidebar under
+  // PLACES, alongside the built-in Home/Documents shortcuts. Persisted.
+  List<String> _customPlaces = [];
+  List<String> get customPlaces => List.unmodifiable(_customPlaces);
+
+  Future<void> addCustomPlace(String path) async {
+    if (path.isEmpty || _customPlaces.contains(path)) return;
+    _customPlaces.add(path);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList('bxp-gui.customPlaces', _customPlaces);
+    notifyListeners();
+  }
+
+  Future<void> removeCustomPlace(String path) async {
+    if (!_customPlaces.remove(path)) return;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList('bxp-gui.customPlaces', _customPlaces);
     notifyListeners();
   }
 
