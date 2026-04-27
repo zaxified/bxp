@@ -52,6 +52,66 @@ fi
 echo "bxp-fmt OK"
 echo ""
 
+# ── Annotated JSON regression + CST round-trip identity ─────────────────
+# Verifies bxp-fmt --config annotated output (comments + errors preserved)
+# AND that bxp-gui's CstSave.emit produces a byte-identical file when no
+# edits are applied. release.sh depends on test.sh, so any drift here
+# blocks a release.
+ANNOT_DIR="$DATASETS/_annotated_fixtures"
+if [[ -d "$ANNOT_DIR" ]]; then
+    echo "Annotated JSON regression..."
+    EXPECTED="$ANNOT_DIR/sample.expected.json"
+    if [[ ! -f "$EXPECTED" ]]; then
+        echo "FAIL: missing $EXPECTED"
+        exit 1
+    fi
+    # bxp-fmt exits 1 when the config carries $err_ markers — for our
+    # fixture that is expected (no conversion_templates defined). Capture
+    # exit code separately so `set -e` doesn't abort the run.
+    RAW_ANNOT=$("$BXP_FMT" --config "$ANNOT_DIR/sample.json5" 2>/dev/null || true)
+    # Strip $span_* / $spans_* keys (volatile byte offsets) before diffing.
+    NORM_ACTUAL=$(echo "$RAW_ANNOT" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+META_PREFIXES = ("$meta_", "$elem_meta_")
+def strip(o):
+    if isinstance(o, dict):
+        return {k: strip(v) for k, v in o.items() if not any(k.startswith(p) for p in META_PREFIXES)}
+    if isinstance(o, list):
+        return [strip(x) for x in o]
+    return o
+print(json.dumps(strip(d), indent=2))
+')
+    if ! diff <(echo "$NORM_ACTUAL") "$EXPECTED" > /dev/null; then
+        echo "FAIL: bxp-fmt annotated output drift"
+        diff <(echo "$NORM_ACTUAL") "$EXPECTED" | head -40
+        exit 1
+    fi
+    echo "Annotated JSON OK"
+
+    # CST round-trip identity: with no user edits, OpApply.apply must
+    # return bytes identical to the source. Run as a Dart unit test so
+    # we don't have to build a native binary.
+    if command -v dart > /dev/null; then
+        echo "CST round-trip identity..."
+        if ! (cd "$MONO_ROOT/bxp-gui" && \
+              BXP_FMT="$BXP_FMT" \
+              BXP_FIXTURE="$ANNOT_DIR/sample.json5" \
+              dart test test/op_apply_roundtrip_test.dart --reporter=compact) > /dev/null 2>&1; then
+            echo "FAIL: OpApply round-trip test failed"
+            (cd "$MONO_ROOT/bxp-gui" && \
+              BXP_FMT="$BXP_FMT" \
+              BXP_FIXTURE="$ANNOT_DIR/sample.json5" \
+              dart test test/op_apply_roundtrip_test.dart --reporter=compact) | head -20
+            exit 1
+        fi
+        echo "CST round-trip OK"
+    else
+        echo "CST round-trip skipped (dart not on PATH)"
+    fi
+    echo ""
+fi
+
 PASS=0
 FAIL=0
 FAILED=()
