@@ -16,7 +16,7 @@ class ConfigView extends StatefulWidget {
 }
 
 class _ConfigViewState extends State<ConfigView> {
-  double leftWidth = 400;
+  double leftFrac = 0.4;
 
   @override
   Widget build(BuildContext context) {
@@ -122,9 +122,17 @@ class _ConfigViewState extends State<ConfigView> {
           // path was a global state badge rather than a per-pane label.)
           // Split Content
           Expanded(
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
+            child: LayoutBuilder(
+              builder: (ctx, c) {
+                final totalW = c.maxWidth;
+                final minLeft = 200.0;
+                final minRight = 300.0;
+                final maxLeft = (totalW - minRight).clamp(minLeft, totalW);
+                final leftWidth =
+                    (totalW * leftFrac).clamp(minLeft, maxLeft);
+                return Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
                 // Left Pane: ConfigTree. Three exclusive states ordered
                 // by priority: configJson present → render tree (even
                 // when configError is set, so the user can still browse
@@ -159,13 +167,16 @@ class _ConfigViewState extends State<ConfigView> {
                 ResizeHandle(
                   axis: Axis.horizontal,
                   onDelta: (dx) => setState(() {
-                    leftWidth = (leftWidth + dx).clamp(200.0, 1000.0);
+                    final newW = (leftWidth + dx).clamp(minLeft, maxLeft);
+                    leftFrac = (newW / totalW).clamp(0.1, 0.9);
                   }),
                 ),
-                
+
                 // Right Pane: ExprPanel
                 const Expanded(child: ExprPanel()),
               ],
+                );
+              },
             ),
           ),
         ],

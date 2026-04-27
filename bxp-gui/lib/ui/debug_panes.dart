@@ -19,7 +19,7 @@ class DebugPanes extends StatefulWidget {
 }
 
 class _DebugPanesState extends State<DebugPanes> {
-  double _leftWidth = 260;
+  double _leftFrac = 0.25;
   double _rowsInHeight = 210;
   double _outputHeight = 176;
 
@@ -89,12 +89,18 @@ class _DebugPanesState extends State<DebugPanes> {
 
           // ── Main split pane ───────────────────────────────────────
           Expanded(
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
+            child: LayoutBuilder(builder: (ctx, outer) {
+              final totalW = outer.maxWidth;
+              const minLeft = 140.0;
+              const minRight = 300.0;
+              final maxLeft = (totalW - minRight).clamp(minLeft, totalW);
+              final leftWidth = (totalW * _leftFrac).clamp(minLeft, maxLeft);
+              return Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
                 // Left: File list
                 SizedBox(
-                  width: _leftWidth,
+                  width: leftWidth,
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
@@ -110,7 +116,8 @@ class _DebugPanesState extends State<DebugPanes> {
                 ResizeHandle(
                   axis: Axis.horizontal,
                   onDelta: (dx) => setState(() {
-                    _leftWidth = (_leftWidth + dx).clamp(140.0, 600.0);
+                    final newW = (leftWidth + dx).clamp(minLeft, maxLeft);
+                    _leftFrac = (newW / totalW).clamp(0.08, 0.9);
                   }),
                 ),
                 // Right: RowList + RowDetail + OutputPanel (3-row stack)
@@ -175,7 +182,8 @@ class _DebugPanesState extends State<DebugPanes> {
                   }),
                 ),
               ],
-            ),
+              );
+            }),
           ),
         ],
       ),
@@ -233,12 +241,20 @@ class _RunBtn extends StatelessWidget {
   }
 }
 
-class _TemplateSelect extends StatelessWidget {
+class _TemplateSelect extends StatefulWidget {
   final TraceStore store;
   const _TemplateSelect({required this.store});
 
   @override
+  State<_TemplateSelect> createState() => _TemplateSelectState();
+}
+
+class _TemplateSelectState extends State<_TemplateSelect> {
+  bool _hovered = false;
+
+  @override
   Widget build(BuildContext context) {
+    final store = widget.store;
     final t = context.bxpTheme;
     final label =
         store.templateId.isEmpty ? 'all templates' : store.templateId;
@@ -268,22 +284,31 @@ class _TemplateSelect extends StatelessWidget {
               child: Text(id, style: varStyle),
             )),
       ],
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-        decoration: BoxDecoration(
-          color: t.panelBg,
-          border: Border.all(color: t.borderColor),
-          borderRadius: BorderRadius.circular(3),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(label,
-                style: BxpText.body(context,
-                    color: t.codeVariable, size: BxpSize.sm)),
-            const SizedBox(width: 4),
-            Icon(Icons.keyboard_arrow_down, color: t.textMuted, size: 14),
-          ],
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => _hovered = true),
+        onExit: (_) => setState(() => _hovered = false),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 100),
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            color: _hovered ? t.withHover(t.panelBg) : t.panelBg,
+            border: Border.all(
+                color: _hovered ? t.accentHighlight : t.borderColor),
+            borderRadius: BorderRadius.circular(3),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(label,
+                  style: BxpText.body(context,
+                      color: t.codeVariable, size: BxpSize.sm)),
+              const SizedBox(width: 4),
+              Icon(Icons.keyboard_arrow_down,
+                  color: _hovered ? t.accentHighlight : t.textMuted,
+                  size: 14),
+            ],
+          ),
         ),
       ),
     );
