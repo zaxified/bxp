@@ -34,6 +34,17 @@ class Json5Emitter {
     return e._buf.toString();
   }
 
+  /// Emit a subtree at a non-zero indentation depth. Used by [CstSave]
+  /// when it falls back to a fresh render for one branch of the tree
+  /// (e.g. an array reorder) and needs the inner indent to match the
+  /// surrounding file. No trailing newline — the caller pastes the
+  /// result into existing text.
+  static String emitSubtree(dynamic tree, int depth) {
+    final e = Json5Emitter._();
+    e._value(tree, depth);
+    return e._buf.toString();
+  }
+
   Json5Emitter._();
 
   void _value(dynamic v, int depth) {
@@ -65,7 +76,11 @@ class Json5Emitter {
 
     for (final e in m.entries) {
       final k = e.key.toString();
-      if (k.startsWith(r'$err_')) continue;
+      if (k.startsWith(r'$err_') ||
+          k.startsWith(r'$span_') ||
+          k.startsWith(r'$spans_')) {
+        continue;
+      }
       if (k.startsWith(r'$comm_')) {
         final info = e.value;
         if (info is! Map) continue;
@@ -123,7 +138,35 @@ class Json5Emitter {
   }
 
   void _list(List list, int depth) {
-    if (list.isEmpty) {
+    // Pre-pass: $comm_<N> pseudo-objects (single-key Maps emitted by the Zig
+    // preprocessAnnotated for in-array comments) attach to neighbour elements.
+    // $err_<N> pseudo-objects are dropped defensively.
+    final groups = <_ElemGroup>[];
+    final pendingLeading = <String>[];
+    _ElemGroup? last;
+
+    for (final e in list) {
+      final pseudo = _pseudoCommInfo(e);
+      if (pseudo != null) {
+        if (pseudo.placement == 'trailing' && last != null) {
+          last.trailing.add(pseudo.text);
+        } else {
+          pendingLeading.add(pseudo.text);
+        }
+        continue;
+      }
+      if (_isPseudoErr(e)) continue;
+      last = _ElemGroup(value: e, leading: List.of(pendingLeading));
+      pendingLeading.clear();
+      groups.add(last);
+    }
+    if (pendingLeading.isNotEmpty && last != null) {
+      // Orphan leading-style comments after the last element → render as
+      // trailing-on-own-line on that element (mirrors _map).
+      last.trailing.addAll(pendingLeading);
+    }
+
+    if (groups.isEmpty) {
       _buf.write('[]');
       return;
     }
@@ -132,15 +175,41 @@ class Json5Emitter {
     final childPad = _indent * (depth + 1);
     final closePad = _indent * depth;
 
-    for (int i = 0; i < list.length; i++) {
+    for (int i = 0; i < groups.length; i++) {
+      final g = groups[i];
+      for (final c in g.leading) {
+        _buf.write(childPad);
+        _buf.write(c);
+        _buf.write('\n');
+      }
       _buf.write(childPad);
-      _value(list[i], depth + 1);
-      if (i < list.length - 1) _buf.write(',');
+      _value(g.value, depth + 1);
+      if (i < groups.length - 1) _buf.write(',');
+      for (final c in g.trailing) {
+        _buf.write(' ');
+        _buf.write(c);
+      }
       _buf.write('\n');
     }
 
     _buf.write(closePad);
     _buf.write(']');
+  }
+
+  static _PseudoComm? _pseudoCommInfo(dynamic e) {
+    if (e is! Map || e.length != 1) return null;
+    final k = e.keys.first.toString();
+    if (!k.startsWith(r'$comm_')) return null;
+    final v = e.values.first;
+    if (v is! Map) return null;
+    final text = v['text']?.toString() ?? '';
+    final placement = v['placement']?.toString() ?? 'leading';
+    return _PseudoComm(text, placement);
+  }
+
+  static bool _isPseudoErr(dynamic e) {
+    if (e is! Map || e.length != 1) return false;
+    return e.keys.first.toString().startsWith(r'$err_');
   }
 
   /// Emit a key: unquoted when it matches the JSON5 identifier rule,
@@ -217,4 +286,18 @@ class _KeyGroup {
     required this.value,
     required this.leading,
   }) : trailing = [];
+}
+
+class _ElemGroup {
+  final dynamic value;
+  final List<String> leading;
+  final List<String> trailing;
+
+  _ElemGroup({required this.value, required this.leading}) : trailing = [];
+}
+
+class _PseudoComm {
+  final String text;
+  final String placement;
+  _PseudoComm(this.text, this.placement);
 }

@@ -37,12 +37,20 @@ class _JsonNode extends StatefulWidget {
   final int depth;
   final List<String> path;
 
+  /// Comments with `placement: "trailing"` that the parent attached to this
+  /// node so they render inline (after the value, before the action buttons)
+  /// instead of on their own row. Pre-pass logic lives in [_buildMap] /
+  /// [_buildList]; comments without a preceding real key still render as
+  /// standalone rows via the `\$comm_` branch in [build].
+  final List<String> trailingComments;
+
   const _JsonNode({
     this.keyName,
     this.value,
     required this.expandAll,
     required this.depth,
     required this.path,
+    this.trailingComments = const [],
   });
 
   @override
@@ -123,10 +131,15 @@ class _JsonNodeState extends State<_JsonNode> {
     if (map.isEmpty) {
       return _buildRow(Text('(empty object)', style: BxpText.italic(context)));
     }
+    final children = _mapChildNodes(map);
+    // Count "real" children (skip $meta_/$elem_meta_/$meta_self/$err_/$comm_).
+    final realCount = map.keys
+        .where((k) => !k.toString().startsWith(r'$'))
+        .length;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _buildExpandableRow('{ ${map.length} }', true),
+        _buildExpandableRow('{ $realCount }', true),
         if (expanded)
           Container(
             margin: const EdgeInsets.only(left: 6.0),
@@ -136,17 +149,65 @@ class _JsonNodeState extends State<_JsonNode> {
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
-              children: map.entries.map((e) => _JsonNode(
-                keyName: e.key.toString(),
-                value: e.value,
-                expandAll: widget.expandAll,
-                depth: widget.depth + 1,
-                path: [...widget.path, e.key.toString()],
-              )).toList(),
+              children: children,
             ),
           ),
       ],
     );
+  }
+
+  /// Pre-pass over a map's entries: trailing-placement `$comm_<N>` siblings
+  /// attach to the preceding real key so they render inline. Other comment
+  /// entries (leading / standalone / block) and all real keys keep their
+  /// own rows; `$meta_<key>`, `$elem_meta_<key>`, `$meta_self` carry byte
+  /// offsets for OpApply and are not displayed in the tree.
+  List<Widget> _mapChildNodes(Map map) {
+    final out = <Widget>[];
+    int? lastRealIdx;
+    for (final e in map.entries) {
+      final k = e.key.toString();
+      if (k.startsWith(r'$meta_') ||
+          k.startsWith(r'$elem_meta_') ||
+          k == r'$meta_self') {
+        continue;
+      }
+      if (k.startsWith(r'$comm_')) {
+        final v = e.value;
+        final placement = (v is Map) ? v['placement']?.toString() : null;
+        final text = (v is Map && v['text'] is String) ? v['text'] as String : '';
+        if (placement == 'trailing' && lastRealIdx != null) {
+          // Re-emit the previous node with this comment appended inline.
+          final prev = out[lastRealIdx] as _JsonNode;
+          out[lastRealIdx] = _JsonNode(
+            keyName: prev.keyName,
+            value: prev.value,
+            expandAll: prev.expandAll,
+            depth: prev.depth,
+            path: prev.path,
+            trailingComments: [...prev.trailingComments, text],
+          );
+          continue;
+        }
+        // Leading / standalone / block — render as its own row.
+        out.add(_JsonNode(
+          keyName: k,
+          value: v,
+          expandAll: widget.expandAll,
+          depth: widget.depth + 1,
+          path: [...widget.path, k],
+        ));
+        continue;
+      }
+      out.add(_JsonNode(
+        keyName: k,
+        value: e.value,
+        expandAll: widget.expandAll,
+        depth: widget.depth + 1,
+        path: [...widget.path, k],
+      ));
+      lastRealIdx = out.length - 1;
+    }
+    return out;
   }
 
   Widget _buildList(List list) {
@@ -154,6 +215,7 @@ class _JsonNodeState extends State<_JsonNode> {
     if (list.isEmpty) {
       return _buildRow(Text('(empty array)', style: BxpText.italic(context)));
     }
+    final children = _listChildNodes(list);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -167,17 +229,70 @@ class _JsonNodeState extends State<_JsonNode> {
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
-              children: list.asMap().entries.map((e) => _JsonNode(
-                keyName: e.key.toString(),
-                value: e.value,
-                expandAll: widget.expandAll,
-                depth: widget.depth + 1,
-                path: [...widget.path, e.key.toString()],
-              )).toList(),
+              children: children,
             ),
           ),
       ],
     );
+  }
+
+  /// In-array comments live as single-key `{$comm_<N>: {text, placement}}`
+  /// pseudo-objects between real elements. Trailing-placement comments
+  /// inline onto the preceding real element; the rest render as their own
+  /// rows.
+  List<Widget> _listChildNodes(List list) {
+    final out = <Widget>[];
+    int? lastRealIdx;
+    for (int i = 0; i < list.length; i++) {
+      final v = list[i];
+      if (v is Map && v.length == 1) {
+        final k0 = v.keys.first.toString();
+        if (k0.startsWith(r'$comm_')) {
+          final inner = v.values.first;
+          final placement = (inner is Map) ? inner['placement']?.toString() : null;
+          final text = (inner is Map && inner['text'] is String) ? inner['text'] as String : '';
+          if (placement == 'trailing' && lastRealIdx != null) {
+            final prev = out[lastRealIdx] as _JsonNode;
+            out[lastRealIdx] = _JsonNode(
+              keyName: prev.keyName,
+              value: prev.value,
+              expandAll: prev.expandAll,
+              depth: prev.depth,
+              path: prev.path,
+              trailingComments: [...prev.trailingComments, text],
+            );
+            continue;
+          }
+          out.add(_JsonNode(
+            keyName: k0,
+            value: inner,
+            expandAll: widget.expandAll,
+            depth: widget.depth + 1,
+            path: [...widget.path, k0],
+          ));
+          continue;
+        }
+        if (k0.startsWith(r'$err_')) {
+          out.add(_JsonNode(
+            keyName: k0,
+            value: v.values.first,
+            expandAll: widget.expandAll,
+            depth: widget.depth + 1,
+            path: [...widget.path, k0],
+          ));
+          continue;
+        }
+      }
+      out.add(_JsonNode(
+        keyName: i.toString(),
+        value: v,
+        expandAll: widget.expandAll,
+        depth: widget.depth + 1,
+        path: [...widget.path, i.toString()],
+      ));
+      lastRealIdx = out.length - 1;
+    }
+    return out;
   }
 
   // Detects whether this path is a BXP expression leaf.
@@ -274,7 +389,9 @@ class _JsonNodeState extends State<_JsonNode> {
               Text('[${widget.keyName}]', style: muted),
               Text(' : ', style: muted),
             ],
-            Expanded(child: valueWidget),
+            valueWidget,
+            ..._inlineTrailingWidgets(),
+            const SizedBox(width: 40),
             Opacity(
               opacity: isHovered ? 1.0 : 0.0,
               child: _buildActionButtons(isComposite: false),
@@ -283,6 +400,20 @@ class _JsonNodeState extends State<_JsonNode> {
         ),
       ),
     );
+  }
+
+  List<Widget> _inlineTrailingWidgets() {
+    if (widget.trailingComments.isEmpty) return const [];
+    final t = context.bxpTheme;
+    final style = BxpText.body(context, color: t.codeComment, size: BxpSize.sm)
+        .copyWith(fontStyle: FontStyle.italic);
+    return [
+      for (final c in widget.trailingComments)
+        Padding(
+          padding: const EdgeInsets.only(left: 8.0),
+          child: Text(c, style: style),
+        ),
+    ];
   }
 
   Widget _buildExpandableRow(String summary, bool isComposite) {
@@ -315,38 +446,23 @@ class _JsonNodeState extends State<_JsonNode> {
                 Text('[${widget.keyName}]', style: muted),
                 Text(' : ', style: muted),
               ],
-              Expanded(
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Flexible(
-                      child: Text(summary,
-                          style: muted, overflow: TextOverflow.ellipsis),
+              Text(summary, style: muted),
+              if (isComposite && _hasDescendantError(widget.value))
+                Padding(
+                  padding: const EdgeInsets.only(left: 6.0),
+                  child: Container(
+                    width: 6,
+                    height: 6,
+                    decoration: BoxDecoration(
+                      color: t.errorBorder,
+                      shape: BoxShape.circle,
                     ),
-                    if (isComposite)
-                      Padding(
-                        padding: const EdgeInsets.only(left: 4.0),
-                        child: Text('+',
-                            style: BxpText.body(context,
-                                color: t.textMuted,
-                                size: BxpSize.md,
-                                weight: BxpWeight.bold)),
-                      ),
-                    if (isComposite && _hasDescendantError(widget.value))
-                      Padding(
-                        padding: const EdgeInsets.only(left: 6.0),
-                        child: Container(
-                          width: 6,
-                          height: 6,
-                          decoration: BoxDecoration(
-                            color: t.errorBorder,
-                            shape: BoxShape.circle,
-                          ),
-                        ),
-                      ),
-                  ],
+                  ),
                 ),
-              ),
+              ..._inlineTrailingWidgets(),
+              // 5-char gap before the action buttons so they don't crowd
+              // the value/summary text.
+              const SizedBox(width: 40),
               if (widget.keyName != 'config')
                 Opacity(
                   opacity: isHovered ? 1.0 : 0.0,
@@ -420,7 +536,7 @@ class _JsonNodeState extends State<_JsonNode> {
       }
       for (final e in node.entries) {
         final k = e.key.toString();
-        if (k.startsWith(r'$err_') || k.startsWith(r'$comm_')) continue;
+        if (k.startsWith(r'$')) continue; // skip ALL $-prefixed UI metadata
         if (_hasDescendantError(e.value)) return true;
       }
       return false;
@@ -683,20 +799,18 @@ class _ExprLeaf extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text('"', style: quoteStyle),
-              Expanded(
-                child: Container(
-                  decoration: showError
-                      ? BoxDecoration(
-                          border: Border(
-                            bottom: BorderSide(
-                                color: t.errorBorder,
-                                width: 1.5,
-                                style: BorderStyle.solid),
-                          ),
-                        )
-                      : null,
-                  child: ExprHighlight(text: text, size: BxpSize.md),
-                ),
+              Container(
+                decoration: showError
+                    ? BoxDecoration(
+                        border: Border(
+                          bottom: BorderSide(
+                              color: t.errorBorder,
+                              width: 1.5,
+                              style: BorderStyle.solid),
+                        ),
+                      )
+                    : null,
+                child: ExprHighlight(text: text, size: BxpSize.md),
               ),
               Text('"', style: quoteStyle),
             ],

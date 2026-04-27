@@ -25,39 +25,88 @@ class _MainViewState extends State<MainView> {
   bool _inspectorOpen = false;
 
   @override
+  void initState() {
+    super.initState();
+    // App-wide shortcut handler. CallbackShortcuts at the root only fires
+    // when the focused widget bubbles the key event up — many tree InkWells
+    // and scroll containers don't, so Ctrl+S etc. used to be dead unless
+    // focus happened to be on a bubbling TextField (e.g. the expr editor).
+    // HardwareKeyboard sees every key before focus routing, so we get true
+    // global coverage; we still ignore Ctrl+S/O/R/T while a TextField is
+    // focused so internal editing keystrokes (Ctrl+A select-all etc.) keep
+    // their meaning, but Ctrl+S we always intercept — there's no in-field
+    // semantics for Save and the user expects it to fire from anywhere.
+    HardwareKeyboard.instance.addHandler(_handleKey);
+  }
+
+  @override
+  void dispose() {
+    HardwareKeyboard.instance.removeHandler(_handleKey);
+    super.dispose();
+  }
+
+  bool _handleKey(KeyEvent event) {
+    if (event is! KeyDownEvent) return false;
+    final keys = HardwareKeyboard.instance.logicalKeysPressed;
+    final ctrl = keys.contains(LogicalKeyboardKey.controlLeft) ||
+        keys.contains(LogicalKeyboardKey.controlRight);
+    if (!ctrl) return false;
+    final shift = keys.contains(LogicalKeyboardKey.shiftLeft) ||
+        keys.contains(LogicalKeyboardKey.shiftRight);
+    final store = context.read<TraceStore>();
+    // Mirror the toolbar's disabled conditions so a shortcut never fires
+    // an action the equivalent button greys out (save while invalid,
+    // undo with empty history, reset on a clean tree, …).
+    final readOnly = store.configLoadHadErrors;
+    switch (event.logicalKey) {
+      case LogicalKeyboardKey.keyS:
+        if (readOnly ||
+            !store.isDirty ||
+            store.isSaving ||
+            store.configHasErrors) return true;
+        store.saveConfig();
+        return true;
+      case LogicalKeyboardKey.keyZ:
+        if (readOnly || !store.canUndo) return true;
+        store.undo();
+        return true;
+      case LogicalKeyboardKey.keyY:
+        if (readOnly || !store.canRedo) return true;
+        store.redo();
+        return true;
+      case LogicalKeyboardKey.keyO:
+        OpenDialog.show(context, (path) async {
+          store.setConfigPath(path);
+          await store.loadConfig();
+        });
+        return true;
+      case LogicalKeyboardKey.keyR:
+        if (store.configPath.isEmpty) return true;
+        store.loadConfig();
+        return true;
+      case LogicalKeyboardKey.keyT:
+        if (shift) {
+          setState(() => _inspectorOpen = !_inspectorOpen);
+          return true;
+        }
+        if (readOnly || !store.isDirty) return true;
+        store.resetDraft();
+        return true;
+    }
+    return false;
+  }
+
+  @override
   Widget build(BuildContext context) {
     final store = context.watch<TraceStore>();
     final activeTab = store.activeTabIndex;
 
-    return CallbackShortcuts(
-      bindings: {
-        const SingleActivator(LogicalKeyboardKey.keyS, control: true): () =>
-            store.saveConfig(),
-        const SingleActivator(LogicalKeyboardKey.keyZ, control: true): () =>
-            store.undo(),
-        const SingleActivator(LogicalKeyboardKey.keyY, control: true): () =>
-            store.redo(),
-        SingleActivator(LogicalKeyboardKey.keyO, control: true): () {
-          OpenDialog.show(context, (path) async {
-            store.setConfigPath(path);
-            await store.loadConfig();
-          });
-        },
-        const SingleActivator(LogicalKeyboardKey.keyR, control: true): () {
-          if (store.configPath.isNotEmpty) store.loadConfig();
-        },
-        const SingleActivator(LogicalKeyboardKey.keyT, control: true): () {
-          // Discard unsaved edits, snap back to baseline (no disk re-read).
-          if (store.configPath.isNotEmpty) store.resetDraft();
-        },
-        const SingleActivator(LogicalKeyboardKey.keyT,
-            control: true, shift: true): () {
-          setState(() => _inspectorOpen = !_inspectorOpen);
-        },
-      },
-      child: Focus(
-        autofocus: true,
-        child: Scaffold(
+    // Shortcuts are wired via HardwareKeyboard in initState — see comment
+    // there. We still keep autofocus so text fields don't capture initial
+    // focus before the user clicks anywhere.
+    return Focus(
+      autofocus: true,
+      child: Scaffold(
           body: Stack(
             children: [
               Column(
@@ -81,7 +130,6 @@ class _MainViewState extends State<MainView> {
             ],
           ),
         ),
-      ),
     );
   }
 }

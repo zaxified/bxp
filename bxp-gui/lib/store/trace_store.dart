@@ -4,7 +4,8 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/bxp_process_client.dart';
-import '../services/json5_emitter.dart';
+import '../services/op_apply.dart';
+import '../services/op_log.dart';
 import 'trace_model.dart';
 import 'trace_builder.dart';
 import '../ui/theme/bxp_text_scheme.dart';
@@ -56,6 +57,21 @@ class TraceStore extends ChangeNotifier {
   int? lastExitCode;
   
   Map<String, dynamic>? configJson;
+
+  /// Raw file bytes at load time. Kept verbatim so [OpApply] can replay
+  /// the user's edit log against them at save time without re-rendering
+  /// the whole file. Bytes (not String) — `$meta_*` offsets from bxp-fmt
+  /// are byte offsets, and UTF-16 indexing on a Dart String would corrupt
+  /// multi-byte UTF-8 (em dashes, accents, …).
+  List<int>? _rawConfigInput;
+
+  /// Annotated tree as it came back from `bxp-fmt --config` at load time
+  /// (with `$meta_*`, `$elem_meta_*`, `$meta_self`). [OpApply] reads spans
+  /// from this snapshot. `configJson` may diverge from this via UI edits.
+  Map<String, dynamic>? _originalAnnotated;
+
+  /// Append-only log of edits since load. Replayed at save time.
+  final OpLog _opLog = OpLog();
   String? configError;
   // True while a loadConfig spawn is in flight. Mirrors bxp-ui's
   // `configStatus === "loading"` so ConfigView can show a "Loading…"
@@ -160,6 +176,73 @@ class TraceStore extends ChangeNotifier {
         ? ExprValidationState.ok
         : ExprValidationState.error;
     notifyListeners();
+  }
+
+  // ── Live config validation ───────────────────────────────────────────
+  //
+  // Each op (edit/insert/delete/duplicate/move) schedules a debounced
+  // re-spawn of `bxp-fmt --config` so the user sees `$err_*` markers in
+  // the tree as soon as a change breaks syntax. Without this, validation
+  // ran only at save — which wrote a broken file before the user had a
+  // chance to undo, trapping them in readonly-on-reload mode.
+  Timer? _configValidateDebounce;
+  bool _configValidating = false;
+
+  /// Snapshot of "did this file contain `$err_*` at load time?" Drives the
+  /// readonly toolbar gate. Live errors introduced by edits do NOT flip
+  /// this — the user needs to keep editing to fix them.
+  bool _loadedWithErrors = false;
+  bool get configLoadHadErrors => _loadedWithErrors;
+
+  /// Ops slice that matches the current undo position. `_historyIndex`
+  /// equals the number of ops applied at this snapshot (history[0] is the
+  /// load-time baseline = 0 ops, history[i] = state after i ops). Edits
+  /// truncate the op log to this index before recording, so after a normal
+  /// edit `_opLog.ops.length == _historyIndex`. After undo without a new
+  /// edit they diverge — slice to keep validator/save in sync.
+  List<ConfigOp> get _activeOps {
+    final n = _historyIndex < 0 ? 0 : _historyIndex;
+    return n >= _opLog.ops.length ? _opLog.ops : _opLog.ops.sublist(0, n);
+  }
+
+  void _scheduleConfigValidation() {
+    _configValidateDebounce?.cancel();
+    _configValidateDebounce = Timer(const Duration(milliseconds: 250), () {
+      _validateConfigNow();
+    });
+  }
+
+  Future<void> _validateConfigNow() async {
+    if (_configValidating) return;
+    if (configJson == null || configPath.isEmpty) return;
+    if (isSaving) return; // saveConfig runs its own validation
+    final raw = _rawConfigInput;
+    final orig = _originalAnnotated;
+    if (raw == null || orig == null) return;
+    _configValidating = true;
+    final tmpPath = '$configPath.bxp-live';
+    final tmpFile = File(tmpPath);
+    try {
+      final outBytes = OpApply.apply(raw, orig, _activeOps);
+      await tmpFile.writeAsString(utf8.decode(outBytes), flush: true);
+      final out = await BxpProcessClient.loadConfig(tmpPath);
+      final parsed = jsonDecode(out);
+      if (parsed is! Map) return;
+      // Replace configJson with fresh annotated tree so $err_* markers
+      // surface in the JsonTree (red dot + inline message). Keep
+      // _originalAnnotated frozen — OpApply still replays from the load
+      // snapshot, not the live one.
+      configJson = Map<String, dynamic>.from(parsed);
+      _recomputeDirty();
+      notifyListeners();
+    } catch (_) {
+      // Best-effort: a transient parse failure shouldn't block edits.
+    } finally {
+      try {
+        if (await tmpFile.exists()) await tmpFile.delete();
+      } catch (_) {}
+      _configValidating = false;
+    }
   }
 
   void clearSelectedExpr() {
@@ -352,12 +435,34 @@ class TraceStore extends ChangeNotifier {
       configJson = jsonDecode(jsonOutput) as Map<String, dynamic>;
       configError = configJson?['error'] as String?;
       if (configError != null) configJson = null;
+      // Capture raw bytes + the annotated snapshot (with $meta_*) so OpApply
+      // can replay edit ops without re-parsing on save.
+      if (configJson != null && configPath.isNotEmpty) {
+        try {
+          _rawConfigInput = await File(configPath).readAsBytes();
+        } catch (_) {
+          _rawConfigInput = null;
+        }
+        _originalAnnotated = _deepCopy(configJson) as Map<String, dynamic>;
+      } else {
+        _rawConfigInput = null;
+        _originalAnnotated = null;
+      }
+      // Latch readonly mode based on the load-time tree only. Live edits
+      // may introduce $err_* markers (caught by per-op revalidation) but
+      // those should NOT lock the editor — the user needs to keep editing
+      // (or undo) to fix them. Save still refuses while errors are present.
+      _loadedWithErrors = _findFirstErrTrace(configJson) != null;
     } catch (e) {
       configError = e.toString();
       configJson = null;
+      _rawConfigInput = null;
+      _originalAnnotated = null;
     } finally {
       isLoadingConfig = false;
     }
+    // New load starts a fresh op log.
+    _opLog.clear();
     // Empty templateId means "all templates" (bxp-cli runs every template
     // in the config when --template is omitted). Keep that as the default;
     // only drop a stale selection if the current template no longer exists.
@@ -394,7 +499,7 @@ class TraceStore extends ChangeNotifier {
     // ConfigView toolbar already greys out edit buttons, but the inline
     // tree editors (EditableString/Number/Boolean) commit through this
     // path — guarding here covers both surfaces uniformly.
-    if (configHasErrors) return;
+    if (_loadedWithErrors) return;
 
     final oldValue = _getAt(path);
     if (oldValue == newValue) return;
@@ -434,11 +539,17 @@ class TraceStore extends ChangeNotifier {
         current[idx] = newValue;
       }
     }
-    
+    // Discard any "redone-away" ops before appending. After undo,
+    // _historyIndex < _opLog.ops.length; this keeps the log aligned with
+    // the visible history.
+    _opLog.truncate(_historyIndex);
+    _opLog.record(EditValueOp(path, newValue));
+
     configJson = root;
     _recomputeDirty();
     _pushHistory();
     notifyListeners();
+    _scheduleConfigValidation();
   }
 
   bool _isDirty = false;
@@ -474,7 +585,7 @@ class TraceStore extends ChangeNotifier {
   /// history. Mirrors bxp-ui's `resetDraft` action; bound to Ctrl+T.
   void resetDraft() {
     if (_savedBaseline == null) return;
-    if (configHasErrors) return; // edits are blocked anyway in this state
+    if (_loadedWithErrors) return; // edits are blocked anyway in this state
     configJson = _deepCopy(_savedBaseline);
     _isDirty = false;
     _history
@@ -500,6 +611,7 @@ class TraceStore extends ChangeNotifier {
         exprGeneration++;
       }
       notifyListeners();
+      _scheduleConfigValidation();
     }
   }
 
@@ -514,6 +626,7 @@ class TraceStore extends ChangeNotifier {
         exprGeneration++;
       }
       notifyListeners();
+      _scheduleConfigValidation();
     }
   }
 
@@ -616,7 +729,7 @@ class TraceStore extends ChangeNotifier {
   }
 
   void deleteConfigNode(List<String> path) {
-    if (configJson == null || path.isEmpty || configHasErrors) return;
+    if (configJson == null || path.isEmpty || _loadedWithErrors) return;
     final parentPath = path.sublist(0, path.length - 1);
     final lastKey = path.last;
     final parent = _getAt(parentPath);
@@ -632,10 +745,14 @@ class TraceStore extends ChangeNotifier {
 
     if (parent is Map) {
       parent.remove(lastKey);
+      _opLog.truncate(_historyIndex);
+      _opLog.record(DeleteOp(path));
     } else if (parent is List) {
       final removedIdx = int.tryParse(lastKey);
       if (removedIdx == null) return;
       parent.removeAt(removedIdx);
+      _opLog.truncate(_historyIndex);
+      _opLog.record(DeleteOp(path));
       // Shift sibling-selections downward: indices > removedIdx slide
       // up by one; the removed index itself was already cleared above.
       _shiftSelectionOnArrayEdit(parentPath, (oldIdx) {
@@ -647,10 +764,11 @@ class TraceStore extends ChangeNotifier {
     _recomputeDirty();
     _pushHistory();
     notifyListeners();
+    _scheduleConfigValidation();
   }
 
   void duplicateConfigNode(List<String> path) {
-    if (configJson == null || path.isEmpty || configHasErrors) return;
+    if (configJson == null || path.isEmpty || _loadedWithErrors) return;
     final parentPath = path.sublist(0, path.length - 1);
     final lastKey = path.last;
     final parent = _getAt(parentPath);
@@ -661,12 +779,16 @@ class TraceStore extends ChangeNotifier {
       int i = 2;
       while (parent.containsKey(newKey)) { newKey = '${lastKey}_copy$i'; i++; }
       parent[newKey] = value;
+      _opLog.truncate(_historyIndex);
+      _opLog.record(DuplicateOp(path, newKey: newKey));
       // Map duplicate: appended at end → no array-index shift, selection
       // unaffected (sibling keys keep their map keys).
     } else if (parent is List) {
       final idx = int.tryParse(lastKey);
       if (idx == null) return;
       parent.insert(idx + 1, value);
+      _opLog.truncate(_historyIndex);
+      _opLog.record(DuplicateOp(path));
       // Selection lives under same array AND was at index >= idx+1?
       // Then it slid one slot right. Selection on the duplicated source
       // (idx) stays put — the user still has the original highlighted.
@@ -678,33 +800,112 @@ class TraceStore extends ChangeNotifier {
     _recomputeDirty();
     _pushHistory();
     notifyListeners();
+    _scheduleConfigValidation();
   }
 
   /// Reorder an array entry by swapping with its sibling.
   ///
   /// [path] points at the entry to move. [delta] is +1 (down) or -1 (up).
   /// Only works when the parent is a List. No-op at list edges.
+  ///
+  /// Trailing-placement `$comm_<N>` pseudo-objects (in-array comments
+  /// attached to the preceding real element) move along with their element
+  /// so a swap of two real elements migrates their trailing comments too.
   void moveConfigNode(List<String> path, int delta) {
-    if (configJson == null || path.isEmpty || configHasErrors) return;
+    if (configJson == null || path.isEmpty || _loadedWithErrors) return;
     final parentPath = path.sublist(0, path.length - 1);
     final parent = _getAt(parentPath);
     if (parent is! List) return;
     final idx = int.tryParse(path.last);
     if (idx == null) return;
-    final newIdx = idx + delta;
-    if (newIdx < 0 || newIdx >= parent.length) return;
-    final tmp = parent[idx];
-    parent[idx] = parent[newIdx];
-    parent[newIdx] = tmp;
-    // Two indices swapped places — selections on either follow.
+
+    // Block = the real element at idx plus any trailing-placement pseudo
+    // comments that immediately follow it. These render attached in the
+    // tree, so they must travel with their owner.
+    final curStart = idx;
+    int curEnd = idx + 1;
+    while (curEnd < parent.length && _isTrailingPseudoComm(parent[curEnd])) {
+      curEnd++;
+    }
+
+    // Find the target real element in the requested direction. Skip over
+    // any pseudo-comment runs.
+    int? targetStart;
+    if (delta < 0) {
+      int t = idx - 1;
+      while (t >= 0 && _isPseudoComm(parent[t])) {
+        t--;
+      }
+      if (t < 0) return;
+      targetStart = t;
+    } else if (delta > 0) {
+      int t = curEnd;
+      while (t < parent.length && _isPseudoComm(parent[t])) {
+        t++;
+      }
+      if (t >= parent.length) return;
+      targetStart = t;
+    } else {
+      return; // delta == 0
+    }
+
+    int targetEnd = targetStart + 1;
+    while (targetEnd < parent.length && _isTrailingPseudoComm(parent[targetEnd])) {
+      targetEnd++;
+    }
+
+    // Swap two contiguous blocks (left + middle + right -> right + middle + left).
+    final leftStart = delta < 0 ? targetStart : curStart;
+    final leftEnd = delta < 0 ? targetEnd : curEnd;
+    final rightStart = delta < 0 ? curStart : targetStart;
+    final rightEnd = delta < 0 ? curEnd : targetEnd;
+    final prefix = parent.sublist(0, leftStart);
+    final leftBlock = parent.sublist(leftStart, leftEnd);
+    final middle = parent.sublist(leftEnd, rightStart);
+    final rightBlock = parent.sublist(rightStart, rightEnd);
+    final suffix = parent.sublist(rightEnd);
+    parent
+      ..clear()
+      ..addAll(prefix)
+      ..addAll(rightBlock)
+      ..addAll(middle)
+      ..addAll(leftBlock)
+      ..addAll(suffix);
+    _opLog.truncate(_historyIndex);
+    _opLog.record(MoveOp(path, delta));
+
+    // After the block swap, the moved real element sits at `prefix.length`
+    // (delta<0) or `prefix.length + rightBlock.length + middle.length`
+    // (delta>0). Selections on either real element follow.
+    final newIdx = delta < 0
+        ? prefix.length
+        : prefix.length + rightBlock.length + middle.length;
+    final otherIdx = delta < 0 ? leftStart : rightStart;
     _shiftSelectionOnArrayEdit(parentPath, (oldIdx) {
       if (oldIdx == idx) return newIdx;
-      if (oldIdx == newIdx) return idx;
+      if (oldIdx == otherIdx) return delta < 0 ? rightStart : leftStart;
       return oldIdx;
     });
     _recomputeDirty();
     _pushHistory();
     notifyListeners();
+    _scheduleConfigValidation();
+  }
+
+  /// True if [v] is a single-key Map whose only key starts with `$comm_`
+  /// (i.e. an in-array comment pseudo-object emitted by preprocessAnnotated).
+  static bool _isPseudoComm(dynamic v) {
+    if (v is! Map || v.length != 1) return false;
+    return v.keys.first.toString().startsWith(r'$comm_');
+  }
+
+  /// True if [v] is a `_isPseudoComm` AND its `placement` field is
+  /// `"trailing"`. These belong to the preceding real element.
+  static bool _isTrailingPseudoComm(dynamic v) {
+    if (!_isPseudoComm(v)) return false;
+    final inner = (v as Map).values.first;
+    if (inner is! Map) return false;
+    return inner['placement']?.toString() == 'trailing';
   }
 
   /// Insert a child into the container at [path].
@@ -722,15 +923,19 @@ class TraceStore extends ChangeNotifier {
     dynamic defaultValue, {
     int? atIndex,
   }) {
-    if (configJson == null || configHasErrors) return;
+    if (configJson == null || _loadedWithErrors) return;
     final target = _getAt(path);
     if (target is Map && newKey != null) {
       target[newKey] = defaultValue;
+      _opLog.truncate(_historyIndex);
+      _opLog.record(InsertOp(path, newKey, defaultValue));
     } else if (target is List) {
       final clamped = atIndex == null
           ? target.length
           : atIndex.clamp(0, target.length);
       target.insert(clamped, defaultValue);
+      _opLog.truncate(_historyIndex);
+      _opLog.record(InsertOp(path, clamped.toString(), defaultValue));
       // Selections under the same array at indices >= clamped shifted up.
       _shiftSelectionOnArrayEdit(path, (oldIdx) {
         if (oldIdx >= clamped) return oldIdx + 1;
@@ -740,6 +945,7 @@ class TraceStore extends ChangeNotifier {
     _recomputeDirty();
     _pushHistory();
     notifyListeners();
+    _scheduleConfigValidation();
   }
 
   /// Last error thrown during saveConfig, null when the save succeeded.
@@ -762,11 +968,21 @@ class TraceStore extends ChangeNotifier {
     final tmpPath = '$configPath.bxp-tmp';
     final tmpFile = File(tmpPath);
     try {
-      // Emit JSON5 with comments preserved. The in-memory configJson
-      // carries bxp-fmt's $comm_N annotations which the emitter converts
-      // back into `// comment` lines; $err_N diagnostic markers are
-      // dropped by the emitter.
-      final text = Json5Emitter.emit(configJson);
+      // OpApply replays the user's edit log against the original raw bytes
+      // using `$meta_*` tags from the annotated snapshot. Each user button
+      // press is one byte splice; comments, indentation, alignment, and
+      // trailing-comma style round-trip byte-for-byte for everything that
+      // wasn't directly edited.
+      final raw = _rawConfigInput;
+      final orig = _originalAnnotated;
+      if (raw == null || orig == null) {
+        configSaveError =
+            'cannot save: original raw input unavailable (load failure?)';
+        notifyListeners();
+        return;
+      }
+      final outBytes = OpApply.apply(raw, orig, _activeOps);
+      final text = utf8.decode(outBytes);
 
       // Write to <path>.bxp-tmp first so we can validate before touching
       // the real file. If anything goes wrong below, the original config
@@ -784,6 +1000,17 @@ class TraceStore extends ChangeNotifier {
         if (err != null) {
           await tmpFile.delete().catchError((_) => tmpFile);
           configSaveError = 'pre-save validation failed: $err';
+          notifyListeners();
+          return;
+        }
+        // bxp-fmt exits with annotated JSON (no top-level "error") even when
+        // it found `$err_*` markers inside the tree — exit code 1 + stdout.
+        // Without this scan, a syntactically broken save would still go
+        // through and trap the user in readonly-on-reload mode.
+        final treeErr = _findFirstErrTrace(parsed);
+        if (treeErr != null) {
+          await tmpFile.delete().catchError((_) => tmpFile);
+          configSaveError = 'pre-save validation failed: $treeErr';
           notifyListeners();
           return;
         }
@@ -821,10 +1048,12 @@ class TraceStore extends ChangeNotifier {
         ..add(_deepCopy(configJson));
       _historyIndex = 0;
       _isDirty = false;
+      _opLog.clear();
       notifyListeners();
 
       // Re-run bxp-fmt so validation markers ($err_/$comm_) refresh against
-      // the new on-disk content.
+      // the new on-disk content. (Also rebuilds _originalAnnotated and
+      // resets the op log baseline.)
       await loadConfig();
     } catch (e) {
       // Clean up the tmp file if it leaked through an unexpected exception
@@ -1002,7 +1231,10 @@ class TraceStore extends ChangeNotifier {
       }
       for (final e in v.entries) {
         final k = e.key.toString();
-        if (k.startsWith(r'$err_') || k.startsWith(r'$comm_')) continue;
+        // Skip ALL $-prefixed keys during recursion: $err_, $comm_,
+        // $meta_, $elem_meta_, $meta_self never carry user-visible
+        // diagnostics in their nested structure.
+        if (k.startsWith(r'$')) continue;
         final found = _findFirstErrTrace(e.value);
         if (found != null) return found;
       }

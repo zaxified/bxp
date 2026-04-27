@@ -47,7 +47,12 @@ class _ConfigViewState extends State<ConfigView> {
                 // on top of a broken file; only Open/Reload stay live so
                 // they can recover by editing externally and re-loading.
                 ...() {
-                  final readOnly = store.configHasErrors;
+                  // Latch readonly to load-time errors only. Live $err_*
+                  // introduced by an edit must NOT lock undo/redo/save —
+                  // the user needs those to fix the mistake. saveConfig
+                  // does its own pre-flight scan and refuses to write a
+                  // broken file.
+                  final readOnly = store.configLoadHadErrors;
                   return [
                     _ToolbarBtn(
                       title: 'OPEN',
@@ -85,14 +90,19 @@ class _ConfigViewState extends State<ConfigView> {
                       // double-click; we still disable the button so
                       // the affordance matches the no-op behaviour.
                       title: store.isSaving ? 'SAVING…' : 'SAVE',
-                      tooltip: 'Save config to disk (Ctrl+S)',
-                      disabled: readOnly || !store.isDirty || store.isSaving,
+                      tooltip: store.configHasErrors
+                          ? 'Cannot save while config has syntax errors'
+                          : 'Save config to disk (Ctrl+S)',
+                      disabled: readOnly ||
+                          !store.isDirty ||
+                          store.isSaving ||
+                          store.configHasErrors,
                       onTap: () => store.saveConfig(),
                     ),
                   ];
                 }(),
                 const SizedBox(width: 8),
-                if (store.configHasErrors)
+                if (store.configLoadHadErrors)
                   Text('● read-only (syntax errors)',
                       style: BxpText.label(context, color: t.errorText))
                 else if (store.isDirty && store.configError == null)
@@ -125,10 +135,7 @@ class _ConfigViewState extends State<ConfigView> {
                 SizedBox(
                   width: leftWidth,
                   child: store.configJson != null
-                    ? SingleChildScrollView(
-                        padding: const EdgeInsets.all(16.0),
-                        child: JsonTree(json: store.configJson, expandAll: false),
-                      )
+                    ? _ConfigTreeScroll(json: store.configJson)
                     : store.isLoadingConfig
                       ? Padding(
                           padding: const EdgeInsets.all(16.0),
@@ -207,5 +214,52 @@ class _ToolbarBtn extends StatelessWidget {
     );
     if (tooltip == null) return btn;
     return Tooltip(message: tooltip!, child: btn);
+  }
+}
+
+/// Tree pane with persistent horizontal + vertical scrollbars. Holds its
+/// own ScrollControllers so the Scrollbar widgets have stable thumbs;
+/// without explicit controllers a single SingleChildScrollView with
+/// `Axis.horizontal` nested inside a vertical one prevents the
+/// Scrollbar from latching onto either axis cleanly.
+class _ConfigTreeScroll extends StatefulWidget {
+  final dynamic json;
+  const _ConfigTreeScroll({required this.json});
+
+  @override
+  State<_ConfigTreeScroll> createState() => _ConfigTreeScrollState();
+}
+
+class _ConfigTreeScrollState extends State<_ConfigTreeScroll> {
+  final _vCtrl = ScrollController();
+  final _hCtrl = ScrollController();
+
+  @override
+  void dispose() {
+    _vCtrl.dispose();
+    _hCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scrollbar(
+      controller: _vCtrl,
+      thumbVisibility: true,
+      child: Scrollbar(
+        controller: _hCtrl,
+        thumbVisibility: true,
+        notificationPredicate: (n) => n.depth == 1,
+        child: SingleChildScrollView(
+          controller: _vCtrl,
+          padding: const EdgeInsets.all(16.0),
+          child: SingleChildScrollView(
+            controller: _hCtrl,
+            scrollDirection: Axis.horizontal,
+            child: JsonTree(json: widget.json, expandAll: false),
+          ),
+        ),
+      ),
+    );
   }
 }

@@ -72,18 +72,21 @@ class OutputPanel extends StatelessWidget {
         if (tpl is Map) {
           final schema = tpl['output_schema'];
           if (schema is Map && schema.isNotEmpty) {
-            // bxp-fmt's annotated JSON interleaves `$comm_N` (comments)
-            // and `$err_N` (diagnostic) entries with the real schema
-            // pairs. Treating them as columns surfaced lines like
-            //   header = "$comm_60"
-            //   variable = "{text: // optional ISIN column…, placement:trailing}"
-            // — render-only artefacts of the annotation format. Filter
-            // them out so the panel only shows actual output columns.
+            // bxp-fmt's annotated JSON interleaves UI metadata keys with
+            // real schema pairs: `$comm_N` (comments), `$err_N`
+            // (diagnostics), `$meta_<key>` / `$elem_meta_<key>` /
+            // `$meta_self` (byte-span info for OpApply). All `$`-prefixed
+            // entries are render-only artefacts and must not surface as
+            // output columns. Schema keys themselves start with `$`
+            // (`$action`, `$ticker`, …) so we exclude only the meta forms.
             return schema.entries
                 .where((e) {
                   final k = e.key.toString();
                   return !k.startsWith(r'$comm_') &&
-                      !k.startsWith(r'$err_');
+                      !k.startsWith(r'$err_') &&
+                      !k.startsWith(r'$meta_') &&
+                      !k.startsWith(r'$elem_meta_') &&
+                      k != r'$meta_self';
                 })
                 .map((e) => _ColDef(
                       header: e.key.toString(),
