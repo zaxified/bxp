@@ -149,34 +149,27 @@ class _ExprEditorState extends State<ExprEditor> {
     final items = <_AcItem>[];
     final up = prefix.toUpperCase();
     final store = context.read<TraceStore>();
-    // Source autocomplete from live docs when available; fall back to the
-    // hardcoded catalog so completion works on first launch (before the
-    // bxp-fmt --docs spawn returns) and when the binary isn't found.
-    final fnSrc = store.docFunctions.isNotEmpty
-        ? store.docFunctions
-              .map(
-                (f) => (
-                  f['name']?.toString() ?? '',
-                  f['signature']?.toString() ?? '',
-                  f['description']?.toString() ?? '',
-                ),
-              )
-              .where((e) => e.$1.isNotEmpty)
-              .toList()
-        : kExprFunctionsFallback
-              .map((f) => (f.$1.split('(').first, f.$1, f.$2))
-              .toList();
-    final kwSrc = store.docKeywords.isNotEmpty
-        ? store.docKeywords
-              .map(
-                (k) => (
-                  k['name']?.toString() ?? '',
-                  k['description']?.toString() ?? '',
-                ),
-              )
-              .where((e) => e.$1.isNotEmpty)
-              .toList()
-        : kExprKeywordsFallback;
+    // Live docs are guaranteed populated by the startup gate (see
+    // _StartupGate in main.dart) — bxp-fmt --docs is the only catalog.
+    final fnSrc = store.docFunctions
+        .map(
+          (f) => (
+            f['name']?.toString() ?? '',
+            f['signature']?.toString() ?? '',
+            f['description']?.toString() ?? '',
+          ),
+        )
+        .where((e) => e.$1.isNotEmpty)
+        .toList();
+    final kwSrc = store.docKeywords
+        .map(
+          (k) => (
+            k['name']?.toString() ?? '',
+            k['description']?.toString() ?? '',
+          ),
+        )
+        .where((e) => e.$1.isNotEmpty)
+        .toList();
     for (final f in fnSrc) {
       if (f.$1.toUpperCase().startsWith(up)) {
         items.add(
@@ -392,64 +385,3 @@ class _AcItem {
   });
 }
 
-// ── Static fallback catalog ─────────────────────────────────────────────────
-//
-// Used only until `bxp-fmt --docs` returns (or when the binary is missing).
-// Mirrors the hand-written list that historically lived in expr_panel.dart;
-// kept public so the DocsPanel can share the same fallback strings.
-
-const kExprFunctionsFallback = [
-  (
-    'IF(cond, yes, no)',
-    "Short-circuit conditional. Returns 'yes' if 'cond' is truthy, else 'no'.",
-  ),
-  ('ABS(f)', 'Absolute numeric value.'),
-  ('NOW()', 'Current UTC datetime as ISO 8601 string (YYYY-MM-DDTHH:MM:SSZ).'),
-  ('TRIM(f)', 'Strip leading and trailing whitespace from a string.'),
-  ('ROUND(f, n)', "Round 'f' to 'n' decimal places."),
-  ('FLOOR(f)', "Round 'f' down to nearest integer."),
-  ('CEILING(f)', "Round 'f' up to nearest integer."),
-  ('RAND()', 'Random float in [0, 1).'),
-  (
-    'COALESCE(a, b, ...)',
-    'First non-empty argument. Returns last argument verbatim as fallback.',
-  ),
-  (
-    'DATE_CONVERT(f, from, to)',
-    'Reformat a date/time string using sunrise syntax (e.g. %Y-%m-%d).',
-  ),
-  (
-    'PRICE_VALUE(f)',
-    'Strip currency symbol from a price string, return the numeric part.',
-  ),
-  (
-    'PRICE_CURRENCY(f)',
-    "Extract currency code from a price string (e.g. 'EUR', 'USD').",
-  ),
-  ('TICKER(f)', "Map field value through the template's ticker_map."),
-  ('LOOKUP(key, field)', 'Retrieve a value stored by the pre_pass table.'),
-  (
-    'SPLIT_PART(s, delim, n)',
-    "Return the n-th part of 's' split by 'delim' (1-based index).",
-  ),
-  (
-    'CONTAINS(haystack, needle)',
-    "Returns 'true' if 'haystack' contains 'needle', else 'false'.",
-  ),
-  (
-    'REPLACE(s, from, to)',
-    "Replace all occurrences of 'from' in 's' with 'to'.",
-  ),
-  (
-    'FIELDS(n)',
-    'Field value by 1-based column index (alternative to [ColumnName]).',
-  ),
-];
-
-const kExprKeywordsFallback = [
-  (
-    'AND',
-    'Logical AND. Both operands are evaluated. Returns "true" or "false".',
-  ),
-  ('OR', 'Logical OR. Both operands are evaluated. Returns "true" or "false".'),
-];

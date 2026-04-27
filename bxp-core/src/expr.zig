@@ -137,6 +137,51 @@ pub const Context = struct {
 // ---------------------------------------------------------------------------
 // Tokenizer — converts expression source text into a stream of tokens
 // ---------------------------------------------------------------------------
+//
+// Per-token TokenDoc consts live here (just above the Tokenizer that produces
+// each one). Bottom `tokens` array collects them by reference so adding a
+// token kind = add the recognition branch in `next()` + the doc const here in
+// one place.
+
+// Recognised by Tokenizer.next()'s `[` branch.
+const column_token_doc: TokenDoc = .{
+    .kind = "columnRef",
+    .syntax = "[ColumnName]",
+    .description = "Input CSV column value by header name. Case-sensitive.",
+};
+// `$variable` has NO tokenizer impl — it's the JSON config key shape used in
+// input_schema / output_schema; expressions only see the resolved values of
+// those variables, never the names. Documented here purely so the GUI's
+// syntax-help section can show users how to declare them in the config file.
+const input_var_token_doc: TokenDoc = .{
+    .kind = "inputVar",
+    .syntax = "$variable",
+    .description = "Named variable declared in input_schema. Must start with $.",
+};
+// Recognised by Tokenizer.next()'s `'` branch.
+const string_token_doc: TokenDoc = .{
+    .kind = "string",
+    .syntax = "'single quoted'",
+    .description = "String literal. Escape with \\' for embedded quote.",
+};
+// Recognised by Tokenizer.next()'s digit branch.
+const number_token_doc: TokenDoc = .{
+    .kind = "number",
+    .syntax = "123 / 3.14",
+    .description = "Numeric literal. Decimals supported. American thousands separators (1,234.56) parsed automatically.",
+};
+// Recognised as `ident` by the tokenizer, then resolved by Parser.evalCall.
+const function_token_doc: TokenDoc = .{
+    .kind = "function",
+    .syntax = "FUNCNAME(...)",
+    .description = "Built-in function call. See function list below.",
+};
+// Recognised as `ident` by the tokenizer, matched against AND/OR in parseAnd/parseOr.
+const keyword_token_doc: TokenDoc = .{
+    .kind = "keyword",
+    .syntax = "AND / OR",
+    .description = "Logical keyword operators.",
+};
 
 const TokKind = enum {
     string_lit, // 'text'
@@ -289,6 +334,42 @@ const Tokenizer = struct {
 // ---------------------------------------------------------------------------
 // Parser / Evaluator — recursive-descent; evaluates while parsing, no AST
 // ---------------------------------------------------------------------------
+//
+// Per-keyword + per-operator catalog consts live here, just above the Parser
+// that gives them meaning. Comparison ops cluster around parseCmp, additive
+// around parseAdd, multiplicative around parseMul, etc. — adding an operator
+// = add it to the tokenizer's switch + the parser handler + a doc const here
+// in one nearby region.
+
+// Handled in Parser.parseAnd.
+const and_kw_doc: KeywordDoc = .{
+    .name = "AND",
+    .description = "Logical AND. Both operands are evaluated. Returns \"true\" or \"false\".",
+};
+// Handled in Parser.parseOr.
+const or_kw_doc: KeywordDoc = .{
+    .name = "OR",
+    .description = "Logical OR. Both operands are evaluated. Returns \"true\" or \"false\".",
+};
+
+// Comparison operators — semantics in Parser.parseCmp.
+const eq_op_doc: OperatorDoc = .{ .token = "=",  .description = "Equality comparison. Returns \"true\" or \"false\"." };
+const neq_op_doc: OperatorDoc = .{ .token = "!=", .description = "Inequality comparison." };
+const lt_op_doc: OperatorDoc = .{ .token = "<",  .description = "Less-than comparison (numeric or lexicographic)." };
+const gt_op_doc: OperatorDoc = .{ .token = ">",  .description = "Greater-than comparison." };
+const lte_op_doc: OperatorDoc = .{ .token = "<=", .description = "Less-than-or-equal comparison." };
+const gte_op_doc: OperatorDoc = .{ .token = ">=", .description = "Greater-than-or-equal comparison." };
+
+// Additive operators — semantics in Parser.parseAdd (− also unary in parseUnary).
+const add_op_doc: OperatorDoc = .{ .token = "+", .description = "Numeric addition." };
+const sub_op_doc: OperatorDoc = .{ .token = "-", .description = "Numeric subtraction." };
+
+// Concat operator — semantics in Parser.parseCat.
+const concat_op_doc: OperatorDoc = .{ .token = "&", .description = "String concatenation: \"hello\" & \" \" & \"world\"" };
+
+// Multiplicative operators — semantics in Parser.parseMul.
+const mul_op_doc: OperatorDoc = .{ .token = "*", .description = "Numeric multiplication." };
+const div_op_doc: OperatorDoc = .{ .token = "/", .description = "Numeric division." };
 
 const Parser = struct {
     tok: Tokenizer,
@@ -550,7 +631,10 @@ const Parser = struct {
         }
     }
 
-    /// Dispatches function calls.
+    /// Dispatches function calls via the `builtins` catalog (single source of
+    /// truth — see "Catalog" section near end of file). IF is the only lazy
+    /// (short-circuit) builtin and is handled inline; everything else flows
+    /// through eager arg evaluation + a uniform adapter table.
     fn evalCall(self: *Parser, name: []const u8) anyerror!Value {
         // AND / OR handled as keywords in parseAnd/parseOr — if we see them
         // here as idents without a following '(', treat as boolean true/false.
@@ -594,53 +678,71 @@ const Parser = struct {
         }
         _ = try self.tok.next(); // consume ')'
 
-        const a = args.items;
-
-        if (std.ascii.eqlIgnoreCase(name, "ABS")) return builtinAbs(a) catch |err| {
-            if (a.len >= 1) switch (a[0]) { .string => |s| self.setNotANumber(s), else => {} };
-            return err;
-        };
-        if (std.ascii.eqlIgnoreCase(name, "FIELDS")) return builtinFields(a, self.ctx) catch |err| {
-            if (a.len >= 1) switch (a[0]) { .string => |s| self.setNotANumber(s), else => {} };
-            return err;
-        };
-        if (std.ascii.eqlIgnoreCase(name, "PRICE_VALUE")) return builtinPriceValue(a);
-        if (std.ascii.eqlIgnoreCase(name, "PRICE_CURRENCY")) return builtinPriceCurrency(a);
-        if (std.ascii.eqlIgnoreCase(name, "TICKER")) return builtinTicker(a, self.ctx);
-        if (std.ascii.eqlIgnoreCase(name, "DATE_CONVERT")) return builtinDateConvert(a, self.ctx.alloc) catch |err| {
-            if (a.len >= 1) switch (a[0]) {
-                .string => |s| self.setDetail("DATE_CONVERT: {s} — input \"{s}\"", .{ @errorName(err), s }),
-                else => {},
-            };
-            return err;
-        };
-        if (std.ascii.eqlIgnoreCase(name, "LOOKUP")) return builtinLookup(a, self.ctx);
-        if (std.ascii.eqlIgnoreCase(name, "SPLIT_PART")) return builtinSplitPart(a) catch |err| {
-            if (a.len >= 3) switch (a[2]) { .string => |s| self.setNotANumber(s), else => {} };
-            return err;
-        };
-        if (std.ascii.eqlIgnoreCase(name, "CONTAINS")) return builtinContains(a);
-        if (std.ascii.eqlIgnoreCase(name, "REPLACE")) return builtinReplace(a, self.ctx.alloc);
-        if (std.ascii.eqlIgnoreCase(name, "NOW")) return builtinNow(a, self.ctx.alloc);
-        if (std.ascii.eqlIgnoreCase(name, "TRIM")) return builtinTrim(a);
-        if (std.ascii.eqlIgnoreCase(name, "ROUND")) return builtinRound(a) catch |err| {
-            if (a.len >= 1) switch (a[0]) { .string => |s| self.setNotANumber(s), else => {} };
-            return err;
-        };
-        if (std.ascii.eqlIgnoreCase(name, "FLOOR")) return builtinFloor(a) catch |err| {
-            if (a.len >= 1) switch (a[0]) { .string => |s| self.setNotANumber(s), else => {} };
-            return err;
-        };
-        if (std.ascii.eqlIgnoreCase(name, "CEILING")) return builtinCeiling(a) catch |err| {
-            if (a.len >= 1) switch (a[0]) { .string => |s| self.setNotANumber(s), else => {} };
-            return err;
-        };
-        if (std.ascii.eqlIgnoreCase(name, "RAND")) return builtinRand(a);
-        if (std.ascii.eqlIgnoreCase(name, "COALESCE")) return builtinCoalesce(a);
+        // Linear scan over the catalog; case-insensitive name match.
+        // Skips lazy entries (IF is handled above; any future lazy fn must add its
+        // own special case before this loop).
+        for (builtins) |b| {
+            if (b.lazy) continue;
+            if (std.ascii.eqlIgnoreCase(name, b.name)) {
+                return b.impl.?(self, args.items);
+            }
+        }
 
         self.setDetail("unknown function '{s}' — check function name spelling", .{name});
         return error.UnknownFunction;
     }
+};
+
+// ---------------------------------------------------------------------------
+// Catalog types — exposed via `bxp-fmt --docs` for the GUI's expression
+// catalog (functions / keywords / operators / tokens). Per-fn FnDoc
+// declarations live RIGHT NEXT to each builtin impl + adapter further down,
+// so adding a function in one place keeps doc/impl/adapter visibly in sync.
+// The bottom `builtins` array just lists references to those named docs.
+// ---------------------------------------------------------------------------
+
+pub const FnDoc = struct {
+    name: []const u8,
+    signature: []const u8,
+    description: []const u8,
+};
+
+pub const KeywordDoc = struct {
+    name: []const u8,
+    description: []const u8,
+};
+
+pub const OperatorDoc = struct {
+    token: []const u8,
+    description: []const u8,
+};
+
+pub const TokenDoc = struct {
+    kind: []const u8,
+    syntax: []const u8,
+    description: []const u8,
+};
+
+/// Adapter shape used by every eager builtin: receives the active Parser (for
+/// ctx access + setDetail/setNotANumber error reporting) plus the evaluated
+/// argument array, returns a Value or an error.
+pub const FnImpl = *const fn (p: *Parser, args: []Value) anyerror!Value;
+
+pub const FnEntry = struct {
+    name: []const u8,
+    /// When true, the dispatcher does not call `impl` — the function parses its
+    /// own argument list via the Parser (used by IF for short-circuit eval).
+    lazy: bool = false,
+    doc: FnDoc,
+    impl: ?FnImpl = null,
+};
+
+/// IF — lazy/short-circuit. The dispatcher matches IF by name BEFORE reaching
+/// the table loop and parses its own arg list via Parser; no adapter exists.
+const if_doc: FnDoc = .{
+    .name = "IF",
+    .signature = "IF(cond, yes, no)",
+    .description = "Short-circuit conditional. Returns `yes` if `cond` is truthy, else `no`.",
 };
 
 // ---------------------------------------------------------------------------
@@ -695,17 +797,39 @@ fn parseAmericanNumber(s: []const u8) error{NotANumber}!f80 {
 // Built-in function implementations
 // ---------------------------------------------------------------------------
 
-/// Implements ABS(x): returns the absolute value of numeric expression x.
+// ── ABS ─────────────────────────────────────────────────────────────────
+const abs_doc: FnDoc = .{
+    .name = "ABS",
+    .signature = "ABS(f)",
+    .description = "Absolute numeric value.",
+};
 fn builtinAbs(args: []Value) !Value {
     if (args.len != 1) return error.WrongArgCount;
     return Value{ .number = @abs(try args[0].toNumber()) };
 }
+fn adaptAbs(p: *Parser, args: []Value) anyerror!Value {
+    return builtinAbs(args) catch |err| {
+        if (args.len >= 1) switch (args[0]) { .string => |s| p.setNotANumber(s), else => {} };
+        return err;
+    };
+}
 
-/// FIELDS(n) — 1-based column access.
+// ── FIELDS ──────────────────────────────────────────────────────────────
+const fields_doc: FnDoc = .{
+    .name = "FIELDS",
+    .signature = "FIELDS(n)",
+    .description = "Field value by 1-based column index (alternative to [ColumnName] when the header is unknown).",
+};
 fn builtinFields(args: []Value, ctx: *const Context) !Value {
     if (args.len != 1) return error.WrongArgCount;
     const idx = @as(usize, @intFromFloat(try args[0].toNumber()));
     return Value{ .string = ctx.field(idx - 1) };
+}
+fn adaptFields(p: *Parser, args: []Value) anyerror!Value {
+    return builtinFields(args, p.ctx) catch |err| {
+        if (args.len >= 1) switch (args[0]) { .string => |s| p.setNotANumber(s), else => {} };
+        return err;
+    };
 }
 
 /// stripCurrencySymbol strips a leading currency symbol (byte prefix) from s.
@@ -725,6 +849,12 @@ fn stripCurrencySymbol(s: []const u8) ?struct { rest: []const u8, iso: []const u
     return null;
 }
 
+// ── PRICE_VALUE ─────────────────────────────────────────────────────────
+const price_value_doc: FnDoc = .{
+    .name = "PRICE_VALUE",
+    .signature = "PRICE_VALUE(f)",
+    .description = "Strip currency symbol or code from a price string, return the numeric part.",
+};
 /// PRICE_VALUE("$88744.27") → "88744.27"
 /// PRICE_VALUE("€24.00") → "24.00"
 /// PRICE_VALUE("24.00 CZK") → "24.00"
@@ -739,7 +869,16 @@ fn builtinPriceValue(args: []Value) !Value {
     if (std.mem.indexOfScalar(u8, r, ' ')) |i| r = r[0..i];
     return Value{ .string = r };
 }
+fn adaptPriceValue(_: *Parser, args: []Value) anyerror!Value {
+    return builtinPriceValue(args);
+}
 
+// ── PRICE_CURRENCY ──────────────────────────────────────────────────────
+const price_currency_doc: FnDoc = .{
+    .name = "PRICE_CURRENCY",
+    .signature = "PRICE_CURRENCY(f)",
+    .description = "Extract currency code from a price string (e.g. \"EUR\", \"USD\").",
+};
 /// PRICE_CURRENCY("$88744.27") → "USD"
 /// PRICE_CURRENCY("€24.00") → "EUR"
 /// PRICE_CURRENCY("24.00 CZK") → "CZK"
@@ -754,7 +893,16 @@ fn builtinPriceCurrency(args: []Value) !Value {
     if (std.mem.indexOfScalar(u8, r, ' ')) |i| return Value{ .string = r[i + 1 ..] };
     return Value{ .string = "" };
 }
+fn adaptPriceCurrency(_: *Parser, args: []Value) anyerror!Value {
+    return builtinPriceCurrency(args);
+}
 
+// ── TICKER ──────────────────────────────────────────────────────────────
+const ticker_doc: FnDoc = .{
+    .name = "TICKER",
+    .signature = "TICKER(f)",
+    .description = "Map field value through the template's ticker_map. Returns value unchanged if not found.",
+};
 /// TICKER(field) — look up in ticker_map, return as-is if not found.
 fn builtinTicker(args: []Value, ctx: *const Context) !Value {
     if (args.len != 1) return error.WrongArgCount;
@@ -764,7 +912,16 @@ fn builtinTicker(args: []Value, ctx: *const Context) !Value {
     };
     return Value{ .string = ctx.ticker_map.get(s) orelse s };
 }
+fn adaptTicker(p: *Parser, args: []Value) anyerror!Value {
+    return builtinTicker(args, p.ctx);
+}
 
+// ── LOOKUP ──────────────────────────────────────────────────────────────
+const lookup_doc: FnDoc = .{
+    .name = "LOOKUP",
+    .signature = "LOOKUP(key, field)",
+    .description = "Retrieve a value stored by the pre_pass table. `key` is the lookup key; `field` is the $variable name (without $).",
+};
 /// LOOKUP(key, field) — reads a value stored by pre_pass.
 /// The lookup table uses composite keys "key\x00field".
 /// Returns empty string if no pre_pass table is present or key/field not found.
@@ -782,7 +939,16 @@ fn builtinLookup(args: []Value, ctx: *const Context) !Value {
     const composite = try std.mem.concat(ctx.alloc, u8, &.{ key, "\x00", field });
     return Value{ .string = table.get(composite) orelse "" };
 }
+fn adaptLookup(p: *Parser, args: []Value) anyerror!Value {
+    return builtinLookup(args, p.ctx);
+}
 
+// ── SPLIT_PART ──────────────────────────────────────────────────────────
+const split_part_doc: FnDoc = .{
+    .name = "SPLIT_PART",
+    .signature = "SPLIT_PART(s, delim, n)",
+    .description = "Return the n-th part of `s` split by `delim` (1-based index).",
+};
 /// SPLIT_PART(string, delimiter, n) — split string by delimiter, return nth part (1-based).
 /// Returns "" when fewer than n parts exist or delimiter is empty.
 fn builtinSplitPart(args: []Value) !Value {
@@ -811,7 +977,19 @@ fn builtinSplitPart(args: []Value) !Value {
         part += 1;
     }
 }
+fn adaptSplitPart(p: *Parser, args: []Value) anyerror!Value {
+    return builtinSplitPart(args) catch |err| {
+        if (args.len >= 3) switch (args[2]) { .string => |s| p.setNotANumber(s), else => {} };
+        return err;
+    };
+}
 
+// ── CONTAINS ────────────────────────────────────────────────────────────
+const contains_doc: FnDoc = .{
+    .name = "CONTAINS",
+    .signature = "CONTAINS(haystack, needle)",
+    .description = "Returns \"true\" if `haystack` contains `needle`, else \"false\".",
+};
 /// CONTAINS(string, substring) → bool — true when substring is found inside string.
 fn builtinContains(args: []Value) !Value {
     if (args.len != 2) return error.WrongArgCount;
@@ -825,7 +1003,16 @@ fn builtinContains(args: []Value) !Value {
     };
     return Value{ .boolean = std.mem.indexOf(u8, s, sub) != null };
 }
+fn adaptContains(_: *Parser, args: []Value) anyerror!Value {
+    return builtinContains(args);
+}
 
+// ── REPLACE ─────────────────────────────────────────────────────────────
+const replace_doc: FnDoc = .{
+    .name = "REPLACE",
+    .signature = "REPLACE(s, from, to)",
+    .description = "Replace all occurrences of `from` in `s` with `to`.",
+};
 /// REPLACE(string, old, new) — replace all occurrences of old with new.
 fn builtinReplace(args: []Value, alloc: std.mem.Allocator) !Value {
     if (args.len != 3) return error.WrongArgCount;
@@ -844,7 +1031,16 @@ fn builtinReplace(args: []Value, alloc: std.mem.Allocator) !Value {
     if (old.len == 0) return Value{ .string = s };
     return Value{ .string = try std.mem.replaceOwned(u8, alloc, s, old, new) };
 }
+fn adaptReplace(p: *Parser, args: []Value) anyerror!Value {
+    return builtinReplace(args, p.ctx.alloc);
+}
 
+// ── NOW ─────────────────────────────────────────────────────────────────
+const now_doc: FnDoc = .{
+    .name = "NOW",
+    .signature = "NOW()",
+    .description = "Current UTC datetime as ISO 8601 string (YYYY-MM-DDTHH:MM:SSZ).",
+};
 /// NOW() — current UTC datetime as ISO 8601 string: YYYY-MM-DDTHH:MM:SSZ.
 fn builtinNow(args: []Value, alloc: std.mem.Allocator) !Value {
     if (args.len != 0) return error.WrongArgCount;
@@ -864,7 +1060,16 @@ fn builtinNow(args: []Value, alloc: std.mem.Allocator) !Value {
         time.getSecondsIntoMinute(),
     }) };
 }
+fn adaptNow(p: *Parser, args: []Value) anyerror!Value {
+    return builtinNow(args, p.ctx.alloc);
+}
 
+// ── TRIM ────────────────────────────────────────────────────────────────
+const trim_doc: FnDoc = .{
+    .name = "TRIM",
+    .signature = "TRIM(f)",
+    .description = "Strip leading and trailing whitespace from a string.",
+};
 /// TRIM(f) — strip leading and trailing whitespace (spaces, tabs, CR, LF).
 fn builtinTrim(args: []Value) !Value {
     if (args.len != 1) return error.WrongArgCount;
@@ -874,7 +1079,16 @@ fn builtinTrim(args: []Value) !Value {
     };
     return Value{ .string = std.mem.trim(u8, s, " \t\r\n") };
 }
+fn adaptTrim(_: *Parser, args: []Value) anyerror!Value {
+    return builtinTrim(args);
+}
 
+// ── ROUND ───────────────────────────────────────────────────────────────
+const round_doc: FnDoc = .{
+    .name = "ROUND",
+    .signature = "ROUND(f, n)",
+    .description = "Round `f` to `n` decimal places.",
+};
 /// ROUND(f, n) — round f to n decimal places.
 /// n >= 0: round to n places after decimal point; n < 0: round to tens/hundreds/etc.
 fn builtinRound(args: []Value) !Value {
@@ -889,25 +1103,70 @@ fn builtinRound(args: []Value) !Value {
     }
     return Value{ .number = @round(x * factor) / factor };
 }
+fn adaptRound(p: *Parser, args: []Value) anyerror!Value {
+    return builtinRound(args) catch |err| {
+        if (args.len >= 1) switch (args[0]) { .string => |s| p.setNotANumber(s), else => {} };
+        return err;
+    };
+}
 
+// ── FLOOR ───────────────────────────────────────────────────────────────
+const floor_doc: FnDoc = .{
+    .name = "FLOOR",
+    .signature = "FLOOR(f)",
+    .description = "Round `f` down to nearest integer.",
+};
 /// FLOOR(f) — largest integer less than or equal to f.
 fn builtinFloor(args: []Value) !Value {
     if (args.len != 1) return error.WrongArgCount;
     return Value{ .number = @floor(try args[0].toNumber()) };
 }
+fn adaptFloor(p: *Parser, args: []Value) anyerror!Value {
+    return builtinFloor(args) catch |err| {
+        if (args.len >= 1) switch (args[0]) { .string => |s| p.setNotANumber(s), else => {} };
+        return err;
+    };
+}
 
+// ── CEILING ─────────────────────────────────────────────────────────────
+const ceiling_doc: FnDoc = .{
+    .name = "CEILING",
+    .signature = "CEILING(f)",
+    .description = "Round `f` up to nearest integer.",
+};
 /// CEILING(f) — smallest integer greater than or equal to f.
 fn builtinCeiling(args: []Value) !Value {
     if (args.len != 1) return error.WrongArgCount;
     return Value{ .number = @ceil(try args[0].toNumber()) };
 }
+fn adaptCeiling(p: *Parser, args: []Value) anyerror!Value {
+    return builtinCeiling(args) catch |err| {
+        if (args.len >= 1) switch (args[0]) { .string => |s| p.setNotANumber(s), else => {} };
+        return err;
+    };
+}
 
+// ── RAND ────────────────────────────────────────────────────────────────
+const rand_doc: FnDoc = .{
+    .name = "RAND",
+    .signature = "RAND()",
+    .description = "Random float in [0, 1).",
+};
 /// RAND() — cryptographically random float in [0, 1).
 fn builtinRand(args: []Value) !Value {
     if (args.len != 0) return error.WrongArgCount;
     return Value{ .number = @floatCast(std.crypto.random.float(f64)) };
 }
+fn adaptRand(_: *Parser, args: []Value) anyerror!Value {
+    return builtinRand(args);
+}
 
+// ── COALESCE ────────────────────────────────────────────────────────────
+const coalesce_doc: FnDoc = .{
+    .name = "COALESCE",
+    .signature = "COALESCE(a, b, ...)",
+    .description = "First non-empty argument (empty = whitespace-only string). Returns last argument verbatim as fallback.",
+};
 /// COALESCE(a, b, ...) — return the first non-empty argument.
 /// A string is considered empty if its trimmed length is 0 (whitespace-only
 /// counts as empty). Numbers and booleans are never empty — even 0 and false
@@ -925,11 +1184,16 @@ fn builtinCoalesce(args: []Value) !Value {
     }
     return args[args.len - 1];
 }
+fn adaptCoalesce(_: *Parser, args: []Value) anyerror!Value {
+    return builtinCoalesce(args);
+}
 
-// ---------------------------------------------------------------------------
-// DATE_CONVERT — reformat a date/time string from one pattern to another
-// ---------------------------------------------------------------------------
-
+// ── DATE_CONVERT ────────────────────────────────────────────────────────
+const date_convert_doc: FnDoc = .{
+    .name = "DATE_CONVERT",
+    .signature = "DATE_CONVERT(f, from, to)",
+    .description = "Reformat a date/time string. Format tokens use sunrise syntax (e.g. %Y-%m-%d, %d.%m.%Y, %H:%M:%S).",
+};
 /// Parses the input string according to from_fmt, then formats the result
 /// according to to_fmt.  Both format strings use sunrise token syntax:
 ///   YYYY  MM/M  MMM/MMMM  DD/D  hh/h  mm/m  ss/s  [literal]  [*]=wildcard
@@ -961,6 +1225,15 @@ fn builtinDateConvert(args: []Value, alloc: std.mem.Allocator) !Value {
         return Value{ .string = "" };
     };
     return Value{ .string = try dt.format(alloc, to_fmt) };
+}
+fn adaptDateConvert(p: *Parser, args: []Value) anyerror!Value {
+    return builtinDateConvert(args, p.ctx.alloc) catch |err| {
+        if (args.len >= 1) switch (args[0]) {
+            .string => |s| p.setDetail("DATE_CONVERT: {s} — input \"{s}\"", .{ @errorName(err), s }),
+            else => {},
+        };
+        return err;
+    };
 }
 
 /// Returns true if fmt contains the MMM token (exactly 3 M's, not part of MMMM).
@@ -1071,6 +1344,71 @@ pub fn evalString(src: []const u8, ctx: *const Context) ![]const u8 {
     } else |_| {}
     return s;
 }
+
+// ---------------------------------------------------------------------------
+// Catalog — single source of truth for FnDoc / OperatorDoc / KeywordDoc /
+// TokenDoc surfaced by `bxp-fmt --docs` and consumed by the GUI. Per-fn
+// FnDoc declarations live RIGHT NEXT to each builtin impl + adapter above
+// (search for "── <NAME> ──" headers); the `builtins` table at the very
+// bottom of this file just collects refs to them so the dispatcher in
+// evalCall can iterate. Keywords, operators and tokens have no impl in
+// expr.zig so their full data lives here.
+// ---------------------------------------------------------------------------
+
+pub const keywords = [_]KeywordDoc{ and_kw_doc, or_kw_doc };
+
+// Operator order chosen to match how the parser groups them visually — concat
+// + comparisons + additive + multiplicative — so a reader scanning the GUI's
+// docs panel sees roughly the same precedence flow as the parser code.
+pub const operators = [_]OperatorDoc{
+    concat_op_doc,
+    eq_op_doc,
+    neq_op_doc,
+    lt_op_doc,
+    gt_op_doc,
+    lte_op_doc,
+    gte_op_doc,
+    add_op_doc,
+    sub_op_doc,
+    mul_op_doc,
+    div_op_doc,
+};
+
+pub const tokens = [_]TokenDoc{
+    column_token_doc,
+    input_var_token_doc,
+    string_token_doc,
+    number_token_doc,
+    function_token_doc,
+    keyword_token_doc,
+};
+
+/// Master dispatch table — must be the LAST decl in the catalog because each
+/// entry references a `<name>_doc` const + `adaptXxx` adapter that are
+/// co-located with their `builtinXxx` impl above. Adding a builtin = add a
+/// new "── NAME ──" block above + one line here. Order is the iteration
+/// order in `evalCall` (case-insensitive lookup so order doesn't matter for
+/// correctness).
+pub const builtins = [_]FnEntry{
+    .{ .name = "IF",             .lazy = true, .doc = if_doc },
+    .{ .name = "ABS",            .doc = abs_doc,            .impl = adaptAbs },
+    .{ .name = "NOW",            .doc = now_doc,            .impl = adaptNow },
+    .{ .name = "TRIM",           .doc = trim_doc,           .impl = adaptTrim },
+    .{ .name = "ROUND",          .doc = round_doc,          .impl = adaptRound },
+    .{ .name = "FLOOR",          .doc = floor_doc,          .impl = adaptFloor },
+    .{ .name = "CEILING",        .doc = ceiling_doc,        .impl = adaptCeiling },
+    .{ .name = "RAND",           .doc = rand_doc,           .impl = adaptRand },
+    .{ .name = "COALESCE",       .doc = coalesce_doc,       .impl = adaptCoalesce },
+    .{ .name = "DATE_CONVERT",   .doc = date_convert_doc,   .impl = adaptDateConvert },
+    .{ .name = "PRICE_VALUE",    .doc = price_value_doc,    .impl = adaptPriceValue },
+    .{ .name = "PRICE_CURRENCY", .doc = price_currency_doc, .impl = adaptPriceCurrency },
+    .{ .name = "TICKER",         .doc = ticker_doc,         .impl = adaptTicker },
+    .{ .name = "LOOKUP",         .doc = lookup_doc,         .impl = adaptLookup },
+    .{ .name = "SPLIT_PART",     .doc = split_part_doc,     .impl = adaptSplitPart },
+    .{ .name = "CONTAINS",       .doc = contains_doc,       .impl = adaptContains },
+    .{ .name = "REPLACE",        .doc = replace_doc,        .impl = adaptReplace },
+    .{ .name = "FIELDS",         .doc = fields_doc,         .impl = adaptFields },
+};
 
 // ============================================================
 // Tests
@@ -1826,4 +2164,61 @@ test "eval: COALESCE rejects zero args" {
     var h = TestHelper.init(a);
     const ctx = h.ctx(&.{}, a);
     try testing.expectError(error.WrongArgCount, eval("COALESCE()", &ctx));
+}
+
+// ------------------------------------------------------------
+// Catalog consistency — guards single-source-of-truth invariants
+// ------------------------------------------------------------
+
+test "catalog: every builtin has a non-empty FnDoc" {
+    for (builtins) |b| {
+        try testing.expectEqualStrings(b.name, b.doc.name);
+        try testing.expect(b.doc.signature.len > 0);
+        try testing.expect(b.doc.description.len > 0);
+        // Eager builtins must have an impl; lazy ones must not.
+        if (b.lazy) {
+            try testing.expect(b.impl == null);
+        } else {
+            try testing.expect(b.impl != null);
+        }
+    }
+}
+
+test "catalog: builtin names are unique (case-insensitive)" {
+    for (builtins, 0..) |a, i| {
+        for (builtins[i + 1 ..]) |b| {
+            try testing.expect(!std.ascii.eqlIgnoreCase(a.name, b.name));
+        }
+    }
+}
+
+test "catalog: keywords are non-empty and unique" {
+    for (keywords, 0..) |a, i| {
+        try testing.expect(a.name.len > 0);
+        try testing.expect(a.description.len > 0);
+        for (keywords[i + 1 ..]) |b| {
+            try testing.expect(!std.ascii.eqlIgnoreCase(a.name, b.name));
+        }
+    }
+}
+
+test "catalog: operators are non-empty and unique" {
+    for (operators, 0..) |a, i| {
+        try testing.expect(a.token.len > 0);
+        try testing.expect(a.description.len > 0);
+        for (operators[i + 1 ..]) |b| {
+            try testing.expect(!std.mem.eql(u8, a.token, b.token));
+        }
+    }
+}
+
+test "catalog: tokens are non-empty and unique by kind" {
+    for (tokens, 0..) |a, i| {
+        try testing.expect(a.kind.len > 0);
+        try testing.expect(a.syntax.len > 0);
+        try testing.expect(a.description.len > 0);
+        for (tokens[i + 1 ..]) |b| {
+            try testing.expect(!std.mem.eql(u8, a.kind, b.kind));
+        }
+    }
 }

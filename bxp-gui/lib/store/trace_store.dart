@@ -258,6 +258,18 @@ class TraceStore extends ChangeNotifier {
     _init();
   }
 
+  /// True after [_init] finishes — successfully OR with a fatal error.
+  /// BxpApp gates MainView/FatalErrorView on this so the user sees a
+  /// clean splash for the brief async setup window.
+  bool _initialized = false;
+  bool get initialized => _initialized;
+
+  /// Set by [_init] when bxp-fmt is missing or its `--docs` output is
+  /// invalid. Non-null = render a blocking fatal-error screen and refuse
+  /// every other operation. Null = normal operation; docs guaranteed loaded.
+  String? _fatalStartupError;
+  String? get fatalStartupError => _fatalStartupError;
+
   Future<void> _init() async {
     final prefs = await SharedPreferences.getInstance();
     // Defensive reads — a corrupt/older prefs store should never crash
@@ -285,16 +297,42 @@ class TraceStore extends ChangeNotifier {
     } catch (_) {}
     notifyListeners();
 
-    // Pull the canonical docs catalog from the CLI in the background. We
-    // don't await it — the UI is usable before docs arrive, and the
-    // ExprPanel falls back to "no docs yet" instead of blocking startup.
-    // ignore: discarded_futures
-    BxpProcessClient.getDocs().then((d) {
-      if (d != null) {
+    // Pull the canonical docs catalog from the CLI. AWAITED on purpose —
+    // bxp-fmt is the single source of truth for the expression catalog
+    // (functions / keywords / operators / tokens / config schema). The GUI
+    // used to ship hand-maintained fallback constants, but they drifted
+    // from the live catalog and needed parallel maintenance. Now: if the
+    // binary is missing or `--docs` returns garbage, we set a fatal
+    // startup error and the app renders a blocking error screen instead
+    // of MainView (see BxpApp.home in main.dart). Once we reach the
+    // _initialized=true happy path, every consumer can read store.docX
+    // directly without a fallback branch.
+    final fmtBin = BxpProcessClient.findBin('bxp-fmt');
+    if (fmtBin == null) {
+      _fatalStartupError =
+          'bxp-fmt binary not found.\n\n'
+          'The GUI requires bxp-fmt to validate configs, evaluate expressions, '
+          'and load the docs catalog (functions / keywords / operators / tokens / '
+          'config schema). Without it nothing in the editor would work.\n\n'
+          'Searched (in order):\n'
+          '  • \$BXP_FMT_PATH environment variable\n'
+          '  • bxp-fmt in the same directory as bxp_gui';
+    } else {
+      final d = await BxpProcessClient.getDocs();
+      if (d == null) {
+        _fatalStartupError =
+            'bxp-fmt --docs failed.\n\n'
+            'Found bxp-fmt at: $fmtBin\n\n'
+            'Calling it with --docs returned no parseable JSON. The binary may '
+            'be from an incompatible bxp-fmt version (the GUI requires the '
+            '--docs flag), or its output is corrupted. Rebuild bxp-fmt from '
+            'the current monorepo and restart the GUI.';
+      } else {
         docs = d;
-        notifyListeners();
       }
-    });
+    }
+    _initialized = true;
+    notifyListeners();
 
     // Intentionally NO startup auto-load. bxp-gui always opens with an
     // empty editor; the user picks a file via Ctrl+O / OPEN button (the
@@ -333,6 +371,30 @@ class TraceStore extends ChangeNotifier {
   List<Map<String, dynamic>> get docConfigSchema =>
       ((docs?['config_schema'] as List?) ?? const [])
           .cast<Map<String, dynamic>>();
+
+  /// Resolve [path] (segments excluding the synthetic 'config' root) against
+  /// `docConfigSchema`. Returns the matching FieldDoc entry or null when the
+  /// docs catalog hasn't loaded yet or the path doesn't match anything.
+  ///
+  /// Pattern semantics: `*` in a schema key matches any single segment, so
+  /// `"conversion_templates.*.data_dir"` matches every template's data_dir.
+  /// Mirrors `_SchemaTooltipKey._matches` in json_tree.dart — kept here so
+  /// the delete guard, enum dropdown, and reorder gate share one rule.
+  Map<String, dynamic>? findSchemaDoc(List<String> path) {
+    if (path.isEmpty) return null;
+    for (final f in docConfigSchema) {
+      final pattern = f['key']?.toString() ?? '';
+      final segs = pattern.split('.');
+      if (segs.length != path.length) continue;
+      var ok = true;
+      for (int i = 0; i < segs.length; i++) {
+        if (segs[i] == '*') continue;
+        if (segs[i] != path[i]) { ok = false; break; }
+      }
+      if (ok) return f;
+    }
+    return null;
+  }
 
   Future<void> _addRecentFile(String path) async {
     if (path.isEmpty) return;
@@ -453,11 +515,20 @@ class TraceStore extends ChangeNotifier {
       // those should NOT lock the editor — the user needs to keep editing
       // (or undo) to fix them. Save still refuses while errors are present.
       _loadedWithErrors = _findFirstErrTrace(configJson) != null;
+      // Pull richer template metadata for the selector (one extra subprocess
+      // spawn per load — fire-and-forget shape would also be fine; we await
+      // here so the selector renders subtitles immediately on first paint).
+      if (configJson != null && configPath.isNotEmpty) {
+        _templateInfos = await BxpProcessClient.listTemplates(configPath);
+      } else {
+        _templateInfos = const [];
+      }
     } catch (e) {
       configError = e.toString();
       configJson = null;
       _rawConfigInput = null;
       _originalAnnotated = null;
+      _templateInfos = const [];
     } finally {
       isLoadingConfig = false;
     }
@@ -730,9 +801,16 @@ class TraceStore extends ChangeNotifier {
 
   void deleteConfigNode(List<String> path) {
     if (configJson == null || path.isEmpty || _loadedWithErrors) return;
+    // Schema-driven guard: required keys cannot be deleted from their parent
+    // map. Array entries (parent is List) are always deletable — the array
+    // itself may be required, but individual elements aren't.
     final parentPath = path.sublist(0, path.length - 1);
     final lastKey = path.last;
     final parent = _getAt(parentPath);
+    if (parent is Map) {
+      final doc = findSchemaDoc(path);
+      if (doc != null && doc['required'] == true) return;
+    }
 
     // Selection invalidation BEFORE the mutation so we can still inspect
     // the current path. Two cases that both clear the selection:
@@ -813,8 +891,36 @@ class TraceStore extends ChangeNotifier {
   /// so a swap of two real elements migrates their trailing comments too.
   void moveConfigNode(List<String> path, int delta) {
     if (configJson == null || path.isEmpty || _loadedWithErrors) return;
+    if (delta == 0) return;
     final parentPath = path.sublist(0, path.length - 1);
     final parent = _getAt(parentPath);
+
+    // Map-key reorder: rebuild the parent map with the target key swapped
+    // with its adjacent real-key sibling ($-prefixed pseudo-keys are
+    // skipped — they carry CST metadata, not config values). The CST
+    // patch in op_apply._moveMapKey replays this via $meta_<key>.block_span,
+    // so the on-disk byte-order stays in sync on Save.
+    if (parent is Map) {
+      final key = path.last;
+      final realKeys = parent.keys
+          .map((k) => k.toString())
+          .where((k) => !k.startsWith(r'$'))
+          .toList();
+      final pos = realKeys.indexOf(key);
+      if (pos < 0) return;
+      final targetPos = pos + delta;
+      if (targetPos < 0 || targetPos >= realKeys.length) return;
+      final targetKey = realKeys[targetPos];
+      swapMapKeysInPlace(parent, key, targetKey);
+      _opLog.truncate(_historyIndex);
+      _opLog.record(MoveOp(path, delta));
+      _recomputeDirty();
+      _pushHistory();
+      notifyListeners();
+      _scheduleConfigValidation();
+      return;
+    }
+
     if (parent is! List) return;
     final idx = int.tryParse(path.last);
     if (idx == null) return;
@@ -1211,6 +1317,13 @@ class TraceStore extends ChangeNotifier {
     }
     return const [];
   }
+
+  /// Rich template metadata (data_dir / file_pattern_in / description)
+  /// pulled from `bxp-fmt --config <path> --list-templates` after each
+  /// successful config load. Empty when the lookup hasn't run yet or the
+  /// CLI call failed — callers fall back to [availableTemplates] for IDs.
+  List<TemplateInfo> _templateInfos = const [];
+  List<TemplateInfo> get availableTemplateInfos => _templateInfos;
 
   /// True if the last loaded config contains any `$err_*` diagnostic node.
   /// Matches bxp-ui's `configHasErrors` — used to gate run buttons and

@@ -1,203 +1,63 @@
 /// Static documentation emitted by `bxp-fmt --docs`.
-/// Single source of truth for bxp-ui's ExprPanel catalog and ConfigTree
-/// inline field help. Update in lockstep with expr.zig and config.zig.
+///
+/// FnDoc / OperatorDoc / KeywordDoc / TokenDoc tables are owned by
+/// `bxp-core/src/expr.zig` (the catalog section near the bottom). Anything
+/// the GUI needs about the expression language must originate there — this
+/// file just re-exports those tables and serializes them to JSON together
+/// with the config-schema FieldDoc[].
 const std = @import("std");
+const expr = @import("expr");
 
-// ── Types ─────────────────────────────────────────────────────────────────────
+const FnDoc = expr.FnDoc;
+const KeywordDoc = expr.KeywordDoc;
+const OperatorDoc = expr.OperatorDoc;
+const TokenDoc = expr.TokenDoc;
 
-const FnDoc = struct {
-    name: []const u8,
-    signature: []const u8,
-    description: []const u8,
+// Function list flattened from expr.builtins.
+const functions = blk: {
+    var arr: [expr.builtins.len]FnDoc = undefined;
+    for (expr.builtins, 0..) |b, i| arr[i] = b.doc;
+    break :blk arr;
 };
+const keywords = expr.keywords;
+const operators = expr.operators;
+const tokens = expr.tokens;
 
-const KeywordDoc = struct {
-    name: []const u8,
-    description: []const u8,
-};
-
-const OperatorDoc = struct {
-    token: []const u8,
-    description: []const u8,
-};
-
-const TokenDoc = struct {
-    kind: []const u8,
-    syntax: []const u8,
-    description: []const u8,
-};
-
+/// FieldDoc — one entry per JSON path in the config schema.
+///
+/// `key` uses dot-paths with `*` standing in for any object key (e.g.
+/// `"conversion_templates.*.data_dir"` matches every template).
+/// `enum_values` is non-null only when the field accepts a closed set of
+/// strings (e.g. csv_text_quote_in: "none" | "single" | "double") — the GUI
+/// can render a dropdown and validate values against this list.
+/// `ordered` is true only for arrays/maps where document order has semantic
+/// meaning (row_rules: first match wins; output_schema: column order in
+/// output CSV) — the GUI uses it to gate ↑/↓ reorder buttons.
 const FieldDoc = struct {
     key: []const u8,
     type_name: []const u8,
     required: bool,
     default: ?[]const u8,
     description: []const u8,
-};
-
-// ── Functions ─────────────────────────────────────────────────────────────────
-
-const functions = [_]FnDoc{
-    .{
-        .name = "IF",
-        .signature = "IF(cond, yes, no)",
-        .description = "Short-circuit conditional. Returns `yes` if `cond` is truthy, else `no`.",
-    },
-    .{
-        .name = "ABS",
-        .signature = "ABS(f)",
-        .description = "Absolute numeric value.",
-    },
-    .{
-        .name = "NOW",
-        .signature = "NOW()",
-        .description = "Current UTC datetime as ISO 8601 string (YYYY-MM-DDTHH:MM:SSZ).",
-    },
-    .{
-        .name = "TRIM",
-        .signature = "TRIM(f)",
-        .description = "Strip leading and trailing whitespace from a string.",
-    },
-    .{
-        .name = "ROUND",
-        .signature = "ROUND(f, n)",
-        .description = "Round `f` to `n` decimal places.",
-    },
-    .{
-        .name = "FLOOR",
-        .signature = "FLOOR(f)",
-        .description = "Round `f` down to nearest integer.",
-    },
-    .{
-        .name = "CEILING",
-        .signature = "CEILING(f)",
-        .description = "Round `f` up to nearest integer.",
-    },
-    .{
-        .name = "RAND",
-        .signature = "RAND()",
-        .description = "Random float in [0, 1).",
-    },
-    .{
-        .name = "COALESCE",
-        .signature = "COALESCE(a, b, ...)",
-        .description = "First non-empty argument (empty = whitespace-only string). Returns last argument verbatim as fallback.",
-    },
-    .{
-        .name = "DATE_CONVERT",
-        .signature = "DATE_CONVERT(f, from, to)",
-        .description = "Reformat a date/time string. Format tokens use sunrise syntax (e.g. %Y-%m-%d, %d.%m.%Y, %H:%M:%S).",
-    },
-    .{
-        .name = "PRICE_VALUE",
-        .signature = "PRICE_VALUE(f)",
-        .description = "Strip currency symbol or code from a price string, return the numeric part.",
-    },
-    .{
-        .name = "PRICE_CURRENCY",
-        .signature = "PRICE_CURRENCY(f)",
-        .description = "Extract currency code from a price string (e.g. \"EUR\", \"USD\").",
-    },
-    .{
-        .name = "TICKER",
-        .signature = "TICKER(f)",
-        .description = "Map field value through the template's ticker_map. Returns value unchanged if not found.",
-    },
-    .{
-        .name = "LOOKUP",
-        .signature = "LOOKUP(key, field)",
-        .description = "Retrieve a value stored by the pre_pass table. `key` is the lookup key; `field` is the $variable name (without $).",
-    },
-    .{
-        .name = "SPLIT_PART",
-        .signature = "SPLIT_PART(s, delim, n)",
-        .description = "Return the n-th part of `s` split by `delim` (1-based index).",
-    },
-    .{
-        .name = "CONTAINS",
-        .signature = "CONTAINS(haystack, needle)",
-        .description = "Returns \"true\" if `haystack` contains `needle`, else \"false\".",
-    },
-    .{
-        .name = "REPLACE",
-        .signature = "REPLACE(s, from, to)",
-        .description = "Replace all occurrences of `from` in `s` with `to`.",
-    },
-    .{
-        .name = "FIELDS",
-        .signature = "FIELDS(n)",
-        .description = "Field value by 1-based column index (alternative to [ColumnName] when the header is unknown).",
-    },
-};
-
-// ── Keywords ──────────────────────────────────────────────────────────────────
-
-const keywords = [_]KeywordDoc{
-    .{
-        .name = "AND",
-        .description = "Logical AND. Both operands are evaluated. Returns \"true\" or \"false\".",
-    },
-    .{
-        .name = "OR",
-        .description = "Logical OR. Both operands are evaluated. Returns \"true\" or \"false\".",
-    },
-};
-
-// ── Operators ─────────────────────────────────────────────────────────────────
-
-const operators = [_]OperatorDoc{
-    .{ .token = "&",  .description = "String concatenation: \"hello\" & \" \" & \"world\"" },
-    .{ .token = "=",  .description = "Equality comparison. Returns \"true\" or \"false\"." },
-    .{ .token = "!=", .description = "Inequality comparison." },
-    .{ .token = "<",  .description = "Less-than comparison (numeric or lexicographic)." },
-    .{ .token = ">",  .description = "Greater-than comparison." },
-    .{ .token = "<=", .description = "Less-than-or-equal comparison." },
-    .{ .token = ">=", .description = "Greater-than-or-equal comparison." },
-    .{ .token = "+",  .description = "Numeric addition." },
-    .{ .token = "-",  .description = "Numeric subtraction." },
-    .{ .token = "*",  .description = "Numeric multiplication." },
-    .{ .token = "/",  .description = "Numeric division." },
-};
-
-// ── Tokens ────────────────────────────────────────────────────────────────────
-
-const tokens = [_]TokenDoc{
-    .{
-        .kind = "columnRef",
-        .syntax = "[ColumnName]",
-        .description = "Input CSV column value by header name. Case-sensitive.",
-    },
-    .{
-        .kind = "inputVar",
-        .syntax = "$variable",
-        .description = "Named variable declared in input_schema. Must start with $.",
-    },
-    .{
-        .kind = "string",
-        .syntax = "'single quoted'",
-        .description = "String literal. Escape with \\' for embedded quote.",
-    },
-    .{
-        .kind = "number",
-        .syntax = "123 / 3.14",
-        .description = "Numeric literal. Decimals supported. American thousands separators (1,234.56) parsed automatically.",
-    },
-    .{
-        .kind = "function",
-        .syntax = "FUNCNAME(...)",
-        .description = "Built-in function call. See function list below.",
-    },
-    .{
-        .kind = "keyword",
-        .syntax = "AND / OR",
-        .description = "Logical keyword operators.",
-    },
+    enum_values: ?[]const []const u8 = null,
+    ordered: bool = false,
 };
 
 // ── Config schema ─────────────────────────────────────────────────────────────
+//
+// Authoritative source for these entries: bxp-core/src/config.zig (parsed
+// keys) cross-checked with resources/bxp-cli.examples.json (rich inline
+// comments giving defaults and option lists). When the two disagree, the
+// examples file wins for description/options text — the user maintains it
+// actively — and config.zig wins for required/default/type.
+
+const file_type_values = [_][]const u8{ "csv", "json" };
+const csv_quote_values = [_][]const u8{ "none", "single", "double" };
+const csv_delimiter_values = [_][]const u8{ ",", ";", "\t", "|" };
+const csv_decimal_values = [_][]const u8{ ".", "," };
 
 const schema = [_]FieldDoc{
-    // Top-level
+    // ── Top-level ───────────────────────────────────────────────────────────
     .{
         .key = "ticker_maps",
         .type_name = "object",
@@ -206,33 +66,44 @@ const schema = [_]FieldDoc{
         .description = "Named ticker remapping tables. Each entry: map_name -> { broker_symbol: yahoo_symbol }. Referenced by templates via ticker_map: map_name.",
     },
     .{
+        .key = "ticker_maps.*",
+        .type_name = "object",
+        .required = false,
+        .default = null,
+        .description = "One named ticker map. Keys are broker symbols, values are the remapped target symbols (typically Yahoo Finance tickers).",
+    },
+    .{
         .key = "conversion_templates",
         .type_name = "object",
         .required = true,
         .default = null,
-        .description = "Map of template_id -> broker config. Each key is a unique template identifier used with --template flag.",
+        .description = "Map of template_id -> broker config. Each key is a unique template identifier used with --template flag. When bxp-cli runs without --template, all templates execute in declaration order.",
+        .ordered = true,
     },
-    // Template fields
+
+    // ── Template fields ─────────────────────────────────────────────────────
     .{
         .key = "conversion_templates.*.data_dir",
         .type_name = "string",
         .required = true,
         .default = null,
-        .description = "Path to input files, relative to this config file. e.g. \"my_broker\" or \"../data/broker\".",
+        .description = "Path to input files, relative to this config file. e.g. \"my_broker\", \"../data/broker\", or an absolute path.",
     },
     .{
         .key = "conversion_templates.*.file_type_in",
         .type_name = "string",
         .required = false,
         .default = "csv",
-        .description = "Input file format. Options: \"csv\" | \"json\" (array-of-objects).",
+        .description = "Input file format. \"json\" reads an array-of-objects.",
+        .enum_values = &file_type_values,
     },
     .{
         .key = "conversion_templates.*.file_type_out",
         .type_name = "string",
         .required = false,
         .default = "csv",
-        .description = "Output file format. Options: \"csv\" | \"json\".",
+        .description = "Output file format. \"json\" writes an array-of-objects.",
+        .enum_values = &file_type_values,
     },
     .{
         .key = "conversion_templates.*.file_pattern_in",
@@ -249,39 +120,52 @@ const schema = [_]FieldDoc{
         .description = "Output filename suffix. Replaces file_pattern_in in the output filename.",
     },
     .{
-        .key = "conversion_templates.*.header_row",
-        .type_name = "number",
-        .required = false,
-        .default = "1",
-        .description = "1-based row number that contains the column headers.",
-    },
-    .{
-        .key = "conversion_templates.*.csv_separator_in",
+        .key = "conversion_templates.*.csv_delimiter_in",
         .type_name = "string",
         .required = false,
         .default = ",",
-        .description = "Input CSV field separator character.",
+        .description = "Input CSV field separator (single character).",
+        .enum_values = &csv_delimiter_values,
     },
     .{
-        .key = "conversion_templates.*.csv_separator_out",
+        .key = "conversion_templates.*.csv_delimiter_out",
         .type_name = "string",
         .required = false,
         .default = ",",
-        .description = "Output CSV field separator character.",
+        .description = "Output CSV field separator (single character).",
+        .enum_values = &csv_delimiter_values,
+    },
+    .{
+        .key = "conversion_templates.*.csv_decimal_separator_in",
+        .type_name = "string",
+        .required = false,
+        .default = ".",
+        .description = "Decimal separator in input numeric fields. Set to \",\" for European-style CSV. Must differ from csv_delimiter_in.",
+        .enum_values = &csv_decimal_values,
+    },
+    .{
+        .key = "conversion_templates.*.csv_decimal_separator_out",
+        .type_name = "string",
+        .required = false,
+        .default = ".",
+        .description = "Decimal separator written in numeric output fields.",
+        .enum_values = &csv_decimal_values,
     },
     .{
         .key = "conversion_templates.*.csv_text_quote_in",
         .type_name = "string",
         .required = false,
-        .default = "none",
-        .description = "Input CSV text quoting style. Options: \"none\" | \"single\" | \"double\". Use ''' in expressions for a literal single-quote.",
+        .default = "double",
+        .description = "Input CSV text quoting style. Use ''' in expressions for a literal single-quote.",
+        .enum_values = &csv_quote_values,
     },
     .{
         .key = "conversion_templates.*.csv_text_quote_out",
         .type_name = "string",
         .required = false,
         .default = "none",
-        .description = "Output CSV text quoting style. Options: \"none\" | \"single\" | \"double\".",
+        .description = "Output CSV text quoting style.",
+        .enum_values = &csv_quote_values,
     },
     .{
         .key = "conversion_templates.*.ticker_map",
@@ -295,21 +179,53 @@ const schema = [_]FieldDoc{
         .type_name = "boolean",
         .required = false,
         .default = "false",
-        .description = "If true, extracts a date from the input filename and exposes it as $date in input_schema.",
+        .description = "When true, rows whose $date falls outside the date range encoded in the filename (YYYY-MM-DD_YYYY-MM-DD) are silently skipped. Requires $date in input_schema.",
     },
     .{
         .key = "conversion_templates.*.row_rules_debug_missing",
         .type_name = "boolean",
         .required = false,
         .default = "false",
-        .description = "If true, rows that match no row_rules entry are printed in --debug output.",
+        .description = "When true, rows that match no row_rules entry are printed in --debug output.",
     },
+
+    // ── xlsx_sheet (only present for xlsx-input templates) ──────────────────
+    .{
+        .key = "conversion_templates.*.xlsx_sheet",
+        .type_name = "object",
+        .required = false,
+        .default = null,
+        .description = "When set, the xlsx file in data_dir is converted to an intermediate CSV before the normal CSV processing loop.",
+    },
+    .{
+        .key = "conversion_templates.*.xlsx_sheet.name",
+        .type_name = "string",
+        .required = true,
+        .default = null,
+        .description = "Sheet name as it appears in the xlsx workbook (e.g. \"CASH OPERATION\").",
+    },
+    .{
+        .key = "conversion_templates.*.xlsx_sheet.header_row",
+        .type_name = "number",
+        .required = false,
+        .default = "1",
+        .description = "1-based row number that contains the column headers within this sheet.",
+    },
+    .{
+        .key = "conversion_templates.*.xlsx_sheet.output_suffix",
+        .type_name = "string",
+        .required = false,
+        .default = "",
+        .description = "Appended before \".csv\" in the intermediate filename (e.g. \"_3\").",
+    },
+
+    // ── input_schema ────────────────────────────────────────────────────────
     .{
         .key = "conversion_templates.*.input_schema",
         .type_name = "object",
         .required = true,
         .default = null,
-        .description = "Map of $variable -> expression. Each expression is evaluated per input row. Variables are referenced in output_schema and row_rules.",
+        .description = "Map of $variable -> expression. Each expression is evaluated per input row. Variables are referenced in output_schema and row_rules. Iteration order does not affect results.",
     },
     .{
         .key = "conversion_templates.*.input_schema.*",
@@ -318,33 +234,32 @@ const schema = [_]FieldDoc{
         .default = null,
         .description = "Expression evaluated per input row. Result stored in the $variable. Use [ColumnName] to reference input CSV columns.",
     },
+
+    // ── output_schema (object: header -> $variable) ─────────────────────────
     .{
         .key = "conversion_templates.*.output_schema",
-        .type_name = "array",
+        .type_name = "object",
         .required = true,
         .default = null,
-        .description = "Ordered list of output columns. Each entry: { header: string, variable: $var }. Column order in output matches this array.",
+        .description = "Output CSV column headers mapped to $variable values. Insertion order determines column order in the output file.",
+        .ordered = true,
     },
     .{
-        .key = "conversion_templates.*.output_schema.*.header",
+        .key = "conversion_templates.*.output_schema.*",
         .type_name = "string",
         .required = true,
         .default = null,
-        .description = "Output CSV column header name.",
+        .description = "$variable whose evaluated value fills this output column. Must start with $.",
     },
-    .{
-        .key = "conversion_templates.*.output_schema.*.variable",
-        .type_name = "string",
-        .required = true,
-        .default = null,
-        .description = "Input schema $variable whose evaluated value fills this output column.",
-    },
+
+    // ── row_rules (ordered: first match wins) ───────────────────────────────
     .{
         .key = "conversion_templates.*.row_rules",
         .type_name = "array",
         .required = false,
         .default = null,
-        .description = "Ordered list of output row rules. First matching rule produces the output rows. Rows matching no rule are silently skipped.",
+        .description = "Ordered list of conditional routing rules. The first rule whose `when` matches produces the output rows; later rules are not evaluated. Rows matching no rule are silently skipped (or shown via row_rules_debug_missing).",
+        .ordered = true,
     },
     .{
         .key = "conversion_templates.*.row_rules.*.when",
@@ -358,38 +273,47 @@ const schema = [_]FieldDoc{
         .type_name = "array",
         .required = true,
         .default = null,
-        .description = "Output rows produced when `when` matches. Each entry is an object mapping $variable -> expression override.",
+        .description = "Output rows produced when `when` matches. Each entry is an object overriding $variables; rows: [] silently skips the row, rows: [{}] emits one row using input_schema variables verbatim.",
     },
+    .{
+        .key = "conversion_templates.*.row_rules.*.rows.*",
+        .type_name = "object",
+        .required = false,
+        .default = null,
+        .description = "One output row. Map of $variable -> expression overriding the value from input_schema. Empty object {} = take all values verbatim from input_schema.",
+    },
+
+    // ── pre_pass (first-pass lookup table) ──────────────────────────────────
     .{
         .key = "conversion_templates.*.pre_pass",
         .type_name = "object",
         .required = false,
         .default = null,
-        .description = "First-pass lookup table configuration. Reads all input rows first, builds a keyed table, then expressions can call LOOKUP(key, field) in the main pass.",
+        .description = "First-pass lookup table built before the main loop. Iterates all rows, collects those matching `when`, stores `values` keyed by `key`. Access via LOOKUP(key, 'field').",
+    },
+    .{
+        .key = "conversion_templates.*.pre_pass.when",
+        .type_name = "expression",
+        .required = true,
+        .default = null,
+        .description = "Filter — only rows matching this condition are added to the lookup table.",
     },
     .{
         .key = "conversion_templates.*.pre_pass.key",
         .type_name = "expression",
         .required = true,
         .default = null,
-        .description = "Expression evaluated per row in the pre-pass to produce the lookup key string.",
+        .description = "Expression evaluated per row to produce the lookup key string.",
     },
     .{
-        .key = "conversion_templates.*.pre_pass.when",
-        .type_name = "expression",
-        .required = false,
-        .default = null,
-        .description = "Optional condition. Row is only included in the lookup table when this evaluates to truthy.",
-    },
-    .{
-        .key = "conversion_templates.*.pre_pass.fields",
+        .key = "conversion_templates.*.pre_pass.values",
         .type_name = "object",
         .required = true,
         .default = null,
-        .description = "Map of field_name -> expression. Values stored per key for retrieval via LOOKUP(key, field).",
+        .description = "Map of field_name -> expression. Each value is evaluated per pre-pass row and stored for retrieval via LOOKUP(key, 'field_name'). Field names have no $ prefix.",
     },
     .{
-        .key = "conversion_templates.*.pre_pass.fields.*",
+        .key = "conversion_templates.*.pre_pass.values.*",
         .type_name = "expression",
         .required = true,
         .default = null,
@@ -461,6 +385,13 @@ pub fn writeDocs(writer: *std.Io.Writer) !void {
         try jw.objectField("default");
         if (f.default) |d| try jw.write(d) else try jw.write(null);
         try jw.objectField("description"); try jw.write(f.description);
+        try jw.objectField("enum_values");
+        if (f.enum_values) |vs| {
+            try jw.beginArray();
+            for (vs) |v| try jw.write(v);
+            try jw.endArray();
+        } else try jw.write(null);
+        try jw.objectField("ordered");     try jw.write(f.ordered);
         try jw.endObject();
     }
     try jw.endArray();

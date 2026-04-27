@@ -10,60 +10,29 @@ import '../theme/bxp_text.dart';
 // VS Code Light Modern syntax (keyword=#0000FF, string=#A31515, ...),
 // dark theme renders Dark Modern (keyword=#569CD6, string=#CE9178, ...).
 
-// Static fallback used until `bxp-fmt --docs` returns. The live set
-// from TraceStore.docFunctions takes priority once it lands so the
-// highlighter always reflects what the runtime actually supports.
-const _kFunctionsFallback = {
-  'IF',
-  'ABS',
-  'NOW',
-  'TRIM',
-  'ROUND',
-  'FLOOR',
-  'CEILING',
-  'RAND',
-  'COALESCE',
-  'DATE_CONVERT',
-  'PRICE_VALUE',
-  'PRICE_CURRENCY',
-  'TICKER',
-  'LOOKUP',
-  'SPLIT_PART',
-  'CONTAINS',
-  'REPLACE',
-  'FIELDS',
-};
-
-const _kKeywordsFallback = {'AND', 'OR', 'true', 'false', 'null'};
-
 /// Cached active function/keyword sets, refreshed from the live docs
 /// each time the highlighter runs. Keeping this at module scope avoids
 /// allocating two new Sets per repaint of every cell with an expression.
-Set<String> _activeFunctions = _kFunctionsFallback;
-Set<String> _activeKeywords = _kKeywordsFallback;
+/// Never empty in normal operation: the startup gate refuses to launch
+/// MainView until `bxp-fmt --docs` populates `TraceStore.docFunctions`
+/// and `docKeywords`.
+Set<String> _activeFunctions = const {};
+Set<String> _activeKeywords = const {};
 
 void _refreshLiveSets(BuildContext context) {
   final store = context.watch<TraceStore>();
-  if (store.docFunctions.isNotEmpty) {
-    _activeFunctions = store.docFunctions
-        .map((f) => f['name']?.toString() ?? '')
-        .where((s) => s.isNotEmpty)
-        .toSet();
-  } else {
-    _activeFunctions = _kFunctionsFallback;
-  }
-  if (store.docKeywords.isNotEmpty) {
-    _activeKeywords = {
-      // Always keep boolean/null literals — they're tokenised as keywords
-      // for highlighting even when the docs catalog only lists AND/OR.
-      'true', 'false', 'null',
-      ...store.docKeywords
-          .map((k) => k['name']?.toString() ?? '')
-          .where((s) => s.isNotEmpty),
-    };
-  } else {
-    _activeKeywords = _kKeywordsFallback;
-  }
+  _activeFunctions = store.docFunctions
+      .map((f) => f['name']?.toString() ?? '')
+      .where((s) => s.isNotEmpty)
+      .toSet();
+  // Always keep boolean/null literals — they're tokenised as keywords for
+  // highlighting even though the docs catalog only lists AND/OR.
+  _activeKeywords = {
+    'true', 'false', 'null',
+    ...store.docKeywords
+        .map((k) => k['name']?.toString() ?? '')
+        .where((s) => s.isNotEmpty),
+  };
 }
 
 enum _Tok {

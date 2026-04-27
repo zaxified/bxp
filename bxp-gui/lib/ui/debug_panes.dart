@@ -264,6 +264,15 @@ class _TemplateSelectState extends State<_TemplateSelect> {
         BxpText.body(context, color: t.codeVariable, size: BxpSize.sm);
     final allStyle = BxpText.body(context,
         color: t.textMuted, fontStyle: FontStyle.italic, size: BxpSize.sm);
+    final subtitleStyle = BxpText.body(context,
+        color: t.textMuted, size: BxpSize.xs, fontStyle: FontStyle.italic);
+    // Build {id -> TemplateInfo} from the rich --list-templates result so
+    // we can render data_dir + file_pattern as a subtitle. Fall back to
+    // bare ids when the lookup is empty (CLI missing, old bxp-fmt, etc.).
+    final infos = {
+      for (final ti in store.availableTemplateInfos) ti.id: ti,
+    };
+    final ids = store.availableTemplates;
     return PopupMenuButton<String>(
       position: PopupMenuPosition.under,
       color: t.panelBg,
@@ -277,12 +286,31 @@ class _TemplateSelectState extends State<_TemplateSelect> {
           padding: const EdgeInsets.symmetric(horizontal: 10),
           child: Text('all templates', style: allStyle),
         ),
-        ...store.availableTemplates.map((id) => PopupMenuItem<String>(
-              value: id,
-              height: 28,
-              padding: const EdgeInsets.symmetric(horizontal: 10),
-              child: Text(id, style: varStyle),
-            )),
+        ...ids.map((id) {
+          final info = infos[id];
+          final subtitle = info == null
+              ? null
+              : (info.description?.isNotEmpty == true
+                  ? info.description!
+                  : [info.dataDir, info.filePatternIn]
+                      .where((s) => s != null && s.isNotEmpty)
+                      .join(' · '));
+          return PopupMenuItem<String>(
+            value: id,
+            // Two-line entry when subtitle exists, single-line otherwise.
+            height: subtitle != null && subtitle.isNotEmpty ? 40 : 28,
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(id, style: varStyle),
+                if (subtitle != null && subtitle.isNotEmpty)
+                  Text(subtitle, style: subtitleStyle),
+              ],
+            ),
+          );
+        }),
       ],
       child: MouseRegion(
         cursor: SystemMouseCursors.click,

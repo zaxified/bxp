@@ -136,7 +136,7 @@ class BxpApp extends StatelessWidget {
           // the navigator+overlay subtree.
           builder: (context, child) =>
               ZoomContainer(child: child ?? const SizedBox.shrink()),
-          home: const MainView(),
+          home: const _StartupGate(),
         );
       }),
     );
@@ -245,6 +245,107 @@ class _ZoomContainerState extends State<ZoomContainer> {
           heightFactor: 1 / zoom,
           alignment: Alignment.topLeft,
           child: widget.child,
+        ),
+      ),
+    );
+  }
+}
+
+/// Routes the home tab between three views:
+///   * loading splash while [TraceStore._init] runs the bxp-fmt smoke test
+///   * full-screen [_FatalErrorView] when bxp-fmt is missing or `--docs`
+///     fails — every other interaction is blocked here on purpose, the GUI
+///     cannot function without the catalog.
+///   * [MainView] otherwise, with `store.docs` guaranteed populated so
+///     downstream widgets can drop their fallback constants.
+class _StartupGate extends StatelessWidget {
+  const _StartupGate();
+
+  @override
+  Widget build(BuildContext context) {
+    final store = context.watch<TraceStore>();
+    if (!store.initialized) {
+      final t = context.bxpTheme;
+      return Scaffold(
+        backgroundColor: t.surfaceBg,
+        body: Center(
+          child: SizedBox(
+            width: 24,
+            height: 24,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              valueColor: AlwaysStoppedAnimation(t.accentHighlight),
+            ),
+          ),
+        ),
+      );
+    }
+    final fatal = store.fatalStartupError;
+    if (fatal != null) return _FatalErrorView(message: fatal);
+    return const MainView();
+  }
+}
+
+class _FatalErrorView extends StatelessWidget {
+  final String message;
+  const _FatalErrorView({required this.message});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.bxpTheme;
+    return Scaffold(
+      backgroundColor: t.surfaceBg,
+      body: SafeArea(
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 720),
+            child: Padding(
+              padding: const EdgeInsets.all(32),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.error_outline,
+                          color: t.errorText, size: 28),
+                      const SizedBox(width: 12),
+                      Text('Startup error',
+                          style: TextStyle(
+                            color: t.errorText,
+                            fontSize: 22,
+                            fontWeight: FontWeight.w600,
+                          )),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: t.dialogBg,
+                      border: Border.all(color: t.borderColor),
+                    ),
+                    child: SelectableText(
+                      message,
+                      style: TextStyle(
+                        color: t.textPrimary,
+                        fontSize: 13,
+                        height: 1.5,
+                        fontFamily: 'monospace',
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'The GUI cannot function without bxp-fmt. Fix the issue '
+                    'above and relaunch the app.',
+                    style: TextStyle(color: t.textMuted, fontSize: 13),
+                  ),
+                ],
+              ),
+            ),
+          ),
         ),
       ),
     );

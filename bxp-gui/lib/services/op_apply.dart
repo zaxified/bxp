@@ -258,12 +258,109 @@ class OpApply {
     final aMeta = parent[r'$meta_' + key] as Map?;
     final bMeta = parent[r'$meta_' + targetKey] as Map?;
     if (aMeta == null || bMeta == null) return;
-    final a = _coerceSpan(aMeta['block_span']);
-    final b = _coerceSpan(bMeta['block_span']);
-    if (a == null || b == null) return;
+    final aRaw = _coerceSpan(aMeta['block_span']);
+    final bRaw = _coerceSpan(bMeta['block_span']);
+    if (aRaw == null || bRaw == null) return;
+    // Extend each block backwards through any leading blank lines + `//`
+    // comment lines so separator headers travel with their template. Floor:
+    // the previous real key's block_span.end (so we never absorb another
+    // entry's block) — or parent's container open for the first key.
+    final aFloor = _previousBlockEnd(parent, realKeys, pos);
+    final bFloor = _previousBlockEnd(parent, realKeys, targetPos);
+    final a = _Span(_extendBlockBack(state.bytes, aRaw.start, aFloor), aRaw.end);
+    final b = _Span(_extendBlockBack(state.bytes, bRaw.start, bFloor), bRaw.end);
     _swapBlocks(state, a, b);
     // Reorder keys in parent map (Dart Maps are insertion-ordered).
     _swapMapKeysInPlace(parent, key, targetKey);
+    // After _swapBlocks+rename, each $meta_<key> still carries spans that
+    // describe where THAT key's bytes USED TO BE — but those byte ranges now
+    // hold the OTHER key's content. Splice's _shiftMeta correctly tracked
+    // position-shifts, but it can't model a swap. Exchange the span fields
+    // between the two metas so each one points to its key's NEW location.
+    // Without this, a second move on the same key looks up the wrong span
+    // and swaps the wrong bytes (visible to the user as the move appearing
+    // briefly and then bouncing back when live-validation re-parses).
+    final aRenamed = parent[r'$meta_' + targetKey] as Map?;
+    final bRenamed = parent[r'$meta_' + key] as Map?;
+    if (aRenamed != null && bRenamed != null) {
+      _exchangeSpans(aRenamed, bRenamed);
+    }
+  }
+
+  /// Exchange `key_span` / `value_span` / `block_span` field VALUES between
+  /// two `$meta_*` maps. Used by `_moveMapKey` and `_moveListElement` to fix
+  /// up span ownership after a content swap.
+  static void _exchangeSpans(Map metaA, Map metaB) {
+    for (final spanKey in const ['key_span', 'value_span', 'block_span']) {
+      final tmp = metaA[spanKey];
+      metaA[spanKey] = metaB[spanKey];
+      metaB[spanKey] = tmp;
+    }
+  }
+
+  /// Find the byte position right after the previous real key's block end.
+  /// Used as a floor when extending a key's block_span backwards through
+  /// leading blank/comment lines — never cross into a previous entry.
+  /// Falls back to the parent's container_span.start + 1 (just after `{`)
+  /// for the first key, or 0 if no container_span is available.
+  static int _previousBlockEnd(
+      Map parent, List<String> realKeys, int posInRealKeys) {
+    if (posInRealKeys > 0) {
+      final prevKey = realKeys[posInRealKeys - 1];
+      final prevMeta = parent[r'$meta_' + prevKey] as Map?;
+      if (prevMeta != null) {
+        final span = _coerceSpan(prevMeta['block_span']);
+        if (span != null) return span.end;
+      }
+    }
+    final selfMeta = parent[r'$meta_self'] as Map?;
+    if (selfMeta != null) {
+      final cs = _coerceSpan(selfMeta['container_span']);
+      if (cs != null) return cs.start + 1; // skip the `{`
+    }
+    return 0;
+  }
+
+  /// Walk back from [blockStart] through any contiguous run of blank lines
+  /// and `//` comment lines, stopping at [floor]. Returns the new (lower)
+  /// block_start that includes those preceding comment/blank lines so the
+  /// header comment travels with its template on a move.
+  static int _extendBlockBack(Uint8List bytes, int blockStart, int floor) {
+    int p = blockStart;
+    while (p > floor) {
+      // Find the line that ENDS at p (i.e., the line just above current p).
+      int prevLineEnd = p;
+      // If there's a `\n` right before p, step over it; otherwise the line
+      // we're examining shares its newline with whatever is immediately
+      // before p.
+      if (prevLineEnd > floor && bytes[prevLineEnd - 1] == 0x0A) {
+        prevLineEnd--;
+      }
+      int prevLineStart = prevLineEnd;
+      while (prevLineStart > floor && bytes[prevLineStart - 1] != 0x0A) {
+        prevLineStart--;
+      }
+      // Inspect line content (no newline inside [prevLineStart, prevLineEnd]).
+      bool blank = true;
+      bool isLineComment = false;
+      for (int i = prevLineStart; i < prevLineEnd; i++) {
+        final c = bytes[i];
+        if (c == 0x20 || c == 0x09) continue;
+        blank = false;
+        if (c == 0x2F &&
+            i + 1 < prevLineEnd &&
+            bytes[i + 1] == 0x2F) {
+          isLineComment = true;
+        }
+        break;
+      }
+      if (blank || isLineComment) {
+        p = prevLineStart;
+      } else {
+        break;
+      }
+    }
+    return p;
   }
 
   // ── Insert ────────────────────────────────────────────────────────────
@@ -714,15 +811,23 @@ void _swapBlocks(_State state, _Span a, _Span b) {
       final n = bytes[i + 1];
       if (n == 0x2F) {
         // Trailing `//` comment after the value → stop scanning; rest is tail.
-        if (valueEnd != null) {
+        // Only at depth 0 — `//` inside a nested object/array is just an
+        // inner comment and must NOT terminate the outer value scan
+        // (otherwise root-level entries like `id: { ... // foo \n ... }`
+        // would split right after the outer `:` and corrupt the swap).
+        if (depth == 0 && valueEnd != null) {
           return (
             value: bytes.sublist(0, valueEnd),
             hasComma: false,
             tail: bytes.sublist(valueEnd),
           );
         }
-        inLineComment = true;
+        // Inside a nested container (or before any value started): skip the
+        // rest of the line as a line comment.
         i += 2;
+        while (i < bytes.length && bytes[i] != 0x0A) {
+          i++;
+        }
         continue;
       }
       if (n == 0x2A) {
@@ -777,6 +882,13 @@ Uint8List _joinWithComma(({Uint8List value, bool hasComma, Uint8List tail}) p) {
     ..add(p.tail);
   return b.toBytes();
 }
+
+/// Swap two real map keys in [m] while keeping their `$meta_<key>` siblings
+/// adjacent. Public so the live tree mutation in `TraceStore.moveConfigNode`
+/// can reuse the same swap logic op_apply uses for the on-disk CST patch —
+/// guarantees both views agree on key order before Save replays the ops.
+void swapMapKeysInPlace(Map m, String keyA, String keyB) =>
+    _swapMapKeysInPlace(m, keyA, keyB);
 
 void _swapMapKeysInPlace(Map m, String keyA, String keyB) {
   // Dart Maps are insertion-ordered. Rebuild in place with keys swapped.

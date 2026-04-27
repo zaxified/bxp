@@ -25,9 +25,12 @@ fn usage() void {
         \\bxp-fmt — config and expression utility for bxp-cli
         \\
         \\Usage (exactly one action flag):
-        \\  bxp-fmt --config <path>   validate config; emit annotated JSON to stdout
-        \\  bxp-fmt --expr '<text>'   validate one expression; stderr JSON on error
-        \\  bxp-fmt --docs            emit full language/schema documentation as JSON
+        \\  bxp-fmt --config <path>                  validate config; emit annotated JSON to stdout
+        \\  bxp-fmt --expr '<text>'                  validate one expression; stderr JSON on error
+        \\  bxp-fmt --docs                           emit full language/schema documentation as JSON
+        \\  bxp-fmt --config <path> --list-templates emit JSON list of templates declared in config
+        \\  bxp-fmt --config <path> --fetch-template <id>
+        \\                                           emit one template block as JSON
         \\
         \\Options:
         \\  --version                 print version and exit
@@ -35,7 +38,7 @@ fn usage() void {
         \\
         \\Exit codes:
         \\  0 - success
-        \\  1 - validation failure
+        \\  1 - validation failure / template id not found
         \\  2 - usage error
         \\
     , .{});
@@ -52,6 +55,8 @@ pub fn main() !void {
     var config_path: ?[]const u8 = null;
     var expr_src: ?[]const u8 = null;
     var emit_docs = false;
+    var list_templates = false;
+    var fetch_template_id: ?[]const u8 = null;
 
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
@@ -89,17 +94,42 @@ pub fn main() !void {
             expr_src = args[i];
             continue;
         }
+        if (std.mem.eql(u8, a, "--list-templates")) {
+            list_templates = true;
+            continue;
+        }
+        if (std.mem.eql(u8, a, "--fetch-template")) {
+            i += 1;
+            if (i >= args.len) {
+                std.debug.print("error: --fetch-template requires a template id\n", .{});
+                std.process.exit(2);
+            }
+            fetch_template_id = args[i];
+            continue;
+        }
         std.debug.print("error: unknown argument: {s}\n", .{a});
         usage();
         std.process.exit(2);
     }
 
-    const action_count = @as(u8, if (config_path != null) 1 else 0) +
+    // --list-templates and --fetch-template are modifiers on --config; the
+    // bare --config (with neither modifier) is its own validate-and-emit
+    // action. Modifiers are mutually exclusive with each other.
+    const fetch_active = fetch_template_id != null;
+    const config_modifier_count = @as(u8, if (list_templates) 1 else 0) + @as(u8, if (fetch_active) 1 else 0);
+    if (config_modifier_count > 1) {
+        std.debug.print("error: --list-templates and --fetch-template are mutually exclusive\n", .{});
+        std.process.exit(2);
+    }
+
+    const has_config_action = config_path != null and config_modifier_count == 0;
+    const action_count = @as(u8, if (has_config_action) 1 else 0) +
         @as(u8, if (expr_src != null) 1 else 0) +
-        @as(u8, if (emit_docs) 1 else 0);
+        @as(u8, if (emit_docs) 1 else 0) +
+        @as(u8, if (config_modifier_count > 0) 1 else 0);
 
     if (action_count > 1) {
-        std.debug.print("error: --config, --expr, and --docs are mutually exclusive\n", .{});
+        std.debug.print("error: --config, --expr, --docs, --list-templates, and --fetch-template are mutually exclusive\n", .{});
         std.process.exit(2);
     }
     if (action_count == 0) {
@@ -107,6 +137,18 @@ pub fn main() !void {
         std.process.exit(2);
     }
 
+    if (config_modifier_count > 0) {
+        const path = config_path orelse {
+            std.debug.print("error: --list-templates / --fetch-template require --config <path>\n", .{});
+            std.process.exit(2);
+        };
+        if (fetch_active) {
+            try runFetchTemplate(alloc, path, fetch_template_id.?);
+        } else {
+            try runListTemplates(alloc, path);
+        }
+        return;
+    }
     if (emit_docs) {
         try runDocs();
         return;
@@ -128,6 +170,133 @@ fn runDocs() !void {
     var stdout_fw = std.fs.File.stdout().writer(&stdout_buf);
     const stdout = &stdout_fw.interface;
     try docs_mod.writeDocs(stdout);
+    try stdout.flush();
+}
+
+// ── --list-templates / --fetch-template ─────────────────────────────────────
+//
+// Read a JSON5 config, parse it without semantic validation, and emit either
+// a summary of every template (--list-templates) or one full template block
+// (--fetch-template). Both paths use the same JSON5 → JSON pipeline as
+// runConfig but skip the BrokerConfig load — invalid templates still appear
+// in the listing so the GUI can show "(broken)" rows.
+
+/// Reads the config file and parses it into a std.json.Value tree.
+/// On any I/O or JSON5 error, prints `{"error":"<name>"}` and exits 1.
+fn loadConfigValue(a: std.mem.Allocator, path: []const u8, stdout: *std.Io.Writer) !std.json.Value {
+    const raw = readFileCapped(a, path) catch |err| {
+        try emitRootErr(stdout, @errorName(err));
+        std.process.exit(1);
+    };
+    const json_text = json5_mod.preprocess(a, raw) catch |err| {
+        try emitRootErr(stdout, @errorName(err));
+        std.process.exit(1);
+    };
+    return std.json.parseFromSliceLeaky(std.json.Value, a, json_text, .{
+        .duplicate_field_behavior = .use_last,
+    }) catch |err| {
+        try emitRootErr(stdout, @errorName(err));
+        std.process.exit(1);
+    };
+}
+
+/// Returns an optional string field from a JSON object — null if missing/wrong type.
+fn optString(obj: std.json.ObjectMap, key: []const u8) ?[]const u8 {
+    const v = obj.get(key) orelse return null;
+    return switch (v) {
+        .string => |s| s,
+        else => null,
+    };
+}
+
+fn runListTemplates(alloc: std.mem.Allocator, path: []const u8) !void {
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    var stdout_buf: [4096]u8 = undefined;
+    var stdout_fw = std.fs.File.stdout().writer(&stdout_buf);
+    const stdout = &stdout_fw.interface;
+
+    const root = try loadConfigValue(a, path, stdout);
+
+    var jw: std.json.Stringify = .{ .writer = stdout, .options = .{ .whitespace = .indent_2 } };
+    try jw.beginObject();
+    try jw.objectField("templates");
+    try jw.beginArray();
+
+    if (root == .object) {
+        if (root.object.get("conversion_templates")) |ct| {
+            if (ct == .object) {
+                var it = ct.object.iterator();
+                while (it.next()) |entry| {
+                    const id = entry.key_ptr.*;
+                    try jw.beginObject();
+                    try jw.objectField("id"); try jw.write(id);
+
+                    if (entry.value_ptr.* == .object) {
+                        const tobj = entry.value_ptr.object;
+                        try jw.objectField("data_dir");
+                        if (optString(tobj, "data_dir")) |s| try jw.write(s) else try jw.write(null);
+                        try jw.objectField("file_pattern_in");
+                        if (optString(tobj, "file_pattern_in")) |s| try jw.write(s) else try jw.write(null);
+                        try jw.objectField("file_pattern_out");
+                        if (optString(tobj, "file_pattern_out")) |s| try jw.write(s) else try jw.write(null);
+                        try jw.objectField("file_type_in");
+                        try jw.write(optString(tobj, "file_type_in") orelse "csv");
+                        try jw.objectField("file_type_out");
+                        try jw.write(optString(tobj, "file_type_out") orelse "csv");
+                        try jw.objectField("description");
+                        if (optString(tobj, "description")) |s| try jw.write(s) else try jw.write(null);
+                    } else {
+                        try jw.objectField("error"); try jw.write("template entry is not an object");
+                    }
+                    try jw.endObject();
+                }
+            }
+        }
+    }
+
+    try jw.endArray();
+    try jw.endObject();
+    try stdout.writeByte('\n');
+    try stdout.flush();
+}
+
+fn runFetchTemplate(alloc: std.mem.Allocator, path: []const u8, id: []const u8) !void {
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    var stdout_buf: [4096]u8 = undefined;
+    var stdout_fw = std.fs.File.stdout().writer(&stdout_buf);
+    const stdout = &stdout_fw.interface;
+
+    const root = try loadConfigValue(a, path, stdout);
+
+    if (root != .object) {
+        try emitRootErr(stdout, "config root is not an object");
+        std.process.exit(1);
+    }
+    const ct = root.object.get("conversion_templates") orelse {
+        try emitRootErr(stdout, "no conversion_templates in config");
+        std.process.exit(1);
+    };
+    if (ct != .object) {
+        try emitRootErr(stdout, "conversion_templates is not an object");
+        std.process.exit(1);
+    }
+    const t = ct.object.get(id) orelse {
+        // stderr human message, stdout JSON error so callers can parse either.
+        std.debug.print("error: template id '{s}' not found in {s}\n", .{ id, path });
+        const msg = try std.fmt.allocPrint(a, "template id '{s}' not found", .{id});
+        try emitRootErr(stdout, msg);
+        std.process.exit(1);
+    };
+
+    var jw: std.json.Stringify = .{ .writer = stdout, .options = .{ .whitespace = .indent_2 } };
+    try jw.write(t);
+    try stdout.writeByte('\n');
     try stdout.flush();
 }
 

@@ -246,54 +246,45 @@ class _DocsPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     final store = context.watch<TraceStore>();
     final t = context.bxpTheme;
-    final fns = store.docFunctions.isNotEmpty
-        ? store.docFunctions
-              .map(
-                (f) => (
-                  f['signature']?.toString() ?? f['name']?.toString() ?? '',
-                  f['description']?.toString() ?? '',
-                ),
-              )
-              .toList()
-        : kExprFunctionsFallback;
-    final kws = store.docKeywords.isNotEmpty
-        ? store.docKeywords
-              .map(
-                (k) => (
-                  k['name']?.toString() ?? '',
-                  k['description']?.toString() ?? '',
-                ),
-              )
-              .toList()
-        : kExprKeywordsFallback;
-    final ops = store.docOperators.isNotEmpty
-        ? store.docOperators
-              .map(
-                (o) => (
-                  o['token']?.toString() ?? '',
-                  o['description']?.toString() ?? '',
-                ),
-              )
-              .toList()
-        : _operators;
+    // All four catalogs are guaranteed populated by the startup gate
+    // (see _StartupGate in main.dart) — bxp-fmt --docs is the only source
+    // of truth.
+    final fns = store.docFunctions
+        .map(
+          (f) => (
+            f['signature']?.toString() ?? f['name']?.toString() ?? '',
+            f['description']?.toString() ?? '',
+          ),
+        )
+        .toList();
+    final kws = store.docKeywords
+        .map(
+          (k) => (
+            k['name']?.toString() ?? '',
+            k['description']?.toString() ?? '',
+          ),
+        )
+        .toList();
+    final ops = store.docOperators
+        .map(
+          (o) => (
+            o['token']?.toString() ?? '',
+            o['description']?.toString() ?? '',
+          ),
+        )
+        .toList();
     // SYNTAX section: docs payload supplies (syntax, description, kind);
     // we map kind → theme-aware color so the swatch matches the inline
-    // highlighter (light/dark themes paint completely different
-    // palettes). Static fallback `_syntaxStatic` is parallel data
-    // shape — kind names mirror what bxp-fmt emits.
-    final syntax = store.docTokens.isNotEmpty
-        ? store.docTokens
-              .map(
-                (tok) => (
-                  tok['syntax']?.toString() ?? '',
-                  tok['description']?.toString() ?? '',
-                  _syntaxColorFor(tok['kind']?.toString() ?? '', t),
-                ),
-              )
-              .toList()
-        : _syntaxStatic
-              .map((e) => (e.$1, e.$2, _syntaxColorFor(e.$3, t)))
-              .toList();
+    // highlighter (light/dark themes paint completely different palettes).
+    final syntax = store.docTokens
+        .map(
+          (tok) => (
+            tok['syntax']?.toString() ?? '',
+            tok['description']?.toString() ?? '',
+            _syntaxColorFor(tok['kind']?.toString() ?? '', t),
+          ),
+        )
+        .toList();
 
     return Row(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -498,55 +489,6 @@ Color _syntaxColorFor(String kind, BxpTheme t) {
   }
 }
 
-// ── Static docs data ────────────────────────────────────────────────────────
-//
-// Functions/keywords fallback lives in `expr_editor.dart` (kExprFunctionsFallback,
-// kExprKeywordsFallback) and is reused by both DocsPanel and the autocomplete
-// popup. Operators and syntax tokens stay here — they're only consumed by
-// DocsPanel.
-
-const _operators = [
-  ('&', 'String concatenation: "Hello" & " " & "World"'),
-  ('=', 'Equality comparison. Returns "true" or "false".'),
-  ('!=', 'Inequality comparison.'),
-  ('<', 'Less-than comparison (numeric or lexicographic).'),
-  ('>', 'Greater-than comparison.'),
-  ('<=', 'Less-than-or-equal comparison.'),
-  ('>=', 'Greater-than-or-equal comparison.'),
-  ('+', 'Numeric addition.'),
-  ('-', 'Numeric subtraction.'),
-  ('*', 'Numeric multiplication.'),
-  ('/', 'Numeric division.'),
-];
-
-// Static fallback for the SYNTAX docs section. Stored as
-// (syntax, description, kind) so colour resolution flows through
-// `_syntaxColorFor` and stays theme-aware (matching the live docs
-// payload's shape).
-const _syntaxStatic = [
-  (
-    '[ColumnName]',
-    'Input CSV column value by header name. Case-sensitive.',
-    'columnRef',
-  ),
-  (
-    r'$variable',
-    r'Named variable declared in input_schema. Must start with $.',
-    'inputVar',
-  ),
-  (
-    "'single quoted'",
-    "String literal. Escape with \\' for embedded quote.",
-    'string',
-  ),
-  (
-    '123 / 3.14',
-    'Numeric literal. American thousands separators (1,234.56) parsed automatically.',
-    'number',
-  ),
-  ('FUNCNAME(...)', 'Built-in function call. See functions list.', 'function'),
-  ('AND / OR', 'Logical keyword operators.', 'keyword'),
-];
 
 /// Constant-width slot for the 4-state validation badge in the
 /// breadcrumb row. The label changes ("valid"/"invalid"/"checking"/—)

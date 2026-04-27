@@ -60,6 +60,13 @@ class _JsonNode extends StatefulWidget {
 class _JsonNodeState extends State<_JsonNode> {
   late bool expanded;
   bool isHovered = false;
+  /// True between an expand-click and a collapse-click. When set, child
+  /// nodes are constructed with `expandAll: true` so a single click on a
+  /// collapsed parent cascades down to every descendant. Reset on collapse
+  /// (children then snap back to depth-based default — this is intentional
+  /// so re-expanding a parent recurses freshly instead of restoring stale
+  /// per-child expansion state).
+  bool _recursiveExpand = false;
 
   @override
   void initState() {
@@ -181,7 +188,7 @@ class _JsonNodeState extends State<_JsonNode> {
           out[lastRealIdx] = _JsonNode(
             keyName: prev.keyName,
             value: prev.value,
-            expandAll: prev.expandAll,
+            expandAll: prev.expandAll || _recursiveExpand,
             depth: prev.depth,
             path: prev.path,
             trailingComments: [...prev.trailingComments, text],
@@ -192,7 +199,7 @@ class _JsonNodeState extends State<_JsonNode> {
         out.add(_JsonNode(
           keyName: k,
           value: v,
-          expandAll: widget.expandAll,
+          expandAll: widget.expandAll || _recursiveExpand,
           depth: widget.depth + 1,
           path: [...widget.path, k],
         ));
@@ -201,7 +208,7 @@ class _JsonNodeState extends State<_JsonNode> {
       out.add(_JsonNode(
         keyName: k,
         value: e.value,
-        expandAll: widget.expandAll,
+        expandAll: widget.expandAll || _recursiveExpand,
         depth: widget.depth + 1,
         path: [...widget.path, k],
       ));
@@ -256,7 +263,7 @@ class _JsonNodeState extends State<_JsonNode> {
             out[lastRealIdx] = _JsonNode(
               keyName: prev.keyName,
               value: prev.value,
-              expandAll: prev.expandAll,
+              expandAll: prev.expandAll || _recursiveExpand,
               depth: prev.depth,
               path: prev.path,
               trailingComments: [...prev.trailingComments, text],
@@ -266,7 +273,7 @@ class _JsonNodeState extends State<_JsonNode> {
           out.add(_JsonNode(
             keyName: k0,
             value: inner,
-            expandAll: widget.expandAll,
+            expandAll: widget.expandAll || _recursiveExpand,
             depth: widget.depth + 1,
             path: [...widget.path, k0],
           ));
@@ -276,7 +283,7 @@ class _JsonNodeState extends State<_JsonNode> {
           out.add(_JsonNode(
             keyName: k0,
             value: v.values.first,
-            expandAll: widget.expandAll,
+            expandAll: widget.expandAll || _recursiveExpand,
             depth: widget.depth + 1,
             path: [...widget.path, k0],
           ));
@@ -286,7 +293,7 @@ class _JsonNodeState extends State<_JsonNode> {
       out.add(_JsonNode(
         keyName: i.toString(),
         value: v,
-        expandAll: widget.expandAll,
+        expandAll: widget.expandAll || _recursiveExpand,
         depth: widget.depth + 1,
         path: [...widget.path, i.toString()],
       ));
@@ -327,13 +334,29 @@ class _JsonNodeState extends State<_JsonNode> {
           path: widget.path,
         );
       } else {
-        valWidget = _EditableString(
-          value: widget.value,
-          color: isComment ? t.codeComment : t.codeString,
-          onCommit: (val) {
-            context.read<TraceStore>().editConfigNode(widget.path, val);
-          },
-        );
+        // Schema-driven enum: when the field has a fixed set of values
+        // (e.g. csv_text_quote_in: "none"|"single"|"double"), swap the free
+        // TextField for a dropdown so invalid values cannot be entered.
+        final doc = context.read<TraceStore>().findSchemaDoc(widget.path);
+        final enumValues = (doc?['enum_values'] as List?)?.cast<String>();
+        if (enumValues != null && enumValues.isNotEmpty) {
+          valWidget = _EditableEnum(
+            value: widget.value as String,
+            values: enumValues,
+            color: isComment ? t.codeComment : t.codeString,
+            onCommit: (val) {
+              context.read<TraceStore>().editConfigNode(widget.path, val);
+            },
+          );
+        } else {
+          valWidget = _EditableString(
+            value: widget.value,
+            color: isComment ? t.codeComment : t.codeString,
+            onCommit: (val) {
+              context.read<TraceStore>().editConfigNode(widget.path, val);
+            },
+          );
+        }
       }
     } else if (widget.value is num) {
       valWidget = _EditableNumber(
@@ -374,15 +397,7 @@ class _JsonNodeState extends State<_JsonNode> {
           children: [
             const SizedBox(width: 16),
             if (widget.keyName != null && int.tryParse(widget.keyName!)?.toString() != widget.keyName) ...[
-              Text('${widget.keyName}',
-                  style: BxpText.body(context,
-                      color: widget.keyName!.startsWith('//')
-                          ? t.codeComment
-                          : t.codeVariable,
-                      size: BxpSize.md,
-                      fontStyle: widget.keyName!.startsWith('//')
-                          ? FontStyle.italic
-                          : FontStyle.normal)),
+              _SchemaTooltipKey(keyName: widget.keyName!, path: widget.path),
               Text(' : ',
                   style: BxpText.body(context,color: t.borderColor, size: BxpSize.md)),
             ] else if (widget.keyName != null) ...[
@@ -423,7 +438,12 @@ class _JsonNodeState extends State<_JsonNode> {
       onEnter: (_) => setState(() => isHovered = true),
       onExit: (_) => setState(() => isHovered = false),
       child: InkWell(
-        onTap: () => setState(() => expanded = !expanded),
+        onTap: () => setState(() {
+          expanded = !expanded;
+          // Cascade: a single click on a collapsed node expands every
+          // descendant. Children read this via the expandAll prop below.
+          _recursiveExpand = expanded;
+        }),
         child: Container(
           color: isHovered ? t.withHover(t.surfaceBg) : Colors.transparent,
           padding: const EdgeInsets.symmetric(vertical: 2.0),
@@ -481,12 +501,34 @@ class _JsonNodeState extends State<_JsonNode> {
     final isArrayEntry = widget.path.isNotEmpty &&
         int.tryParse(widget.path.last) != null;
 
+    // Schema-driven gates:
+    //   - reorder ↑/↓ for ordered arrays (parent has ordered: true) AND
+    //     for map entries whose parent is documented as ordered (e.g.
+    //     conversion_templates: bxp-cli runs templates in declaration order).
+    //   - delete × disabled for required map keys
+    final parentPath = widget.path.isEmpty
+        ? const <String>[]
+        : widget.path.sublist(0, widget.path.length - 1);
+    final parentDoc = store.findSchemaDoc(parentPath);
+    bool canReorder = false;
+    if (isArrayEntry) {
+      // Unknown array doc = allow reorder by default (don't lock the user
+      // out of arrays the schema doesn't cover yet).
+      canReorder = parentDoc == null || parentDoc['ordered'] == true;
+    } else if (widget.path.isNotEmpty) {
+      // Map-key reorder is opt-in: only when the parent map is explicitly
+      // marked ordered. Maps default to unordered in JSON semantics.
+      canReorder = parentDoc != null && parentDoc['ordered'] == true;
+    }
+    final selfDoc = store.findSchemaDoc(widget.path);
+    final isRequired = !isArrayEntry && selfDoc != null && selfDoc['required'] == true;
+
     return SizedBox(
       height: 16,
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          if (isArrayEntry) ...[
+          if (canReorder) ...[
             _ActionBtn(
               icon: '↑',
               tooltip: 'Move up',
@@ -515,9 +557,9 @@ class _JsonNodeState extends State<_JsonNode> {
           ),
           _ActionBtn(
             icon: '×',
-            tooltip: 'Delete',
-            color: t.errorText,
-            onTap: () => store.deleteConfigNode(widget.path),
+            tooltip: isRequired ? 'Required key — cannot delete' : 'Delete',
+            color: isRequired ? t.textMuted : t.errorText,
+            onTap: isRequired ? null : () => store.deleteConfigNode(widget.path),
           ),
           const SizedBox(width: 4),
         ],
@@ -567,7 +609,8 @@ class _ActionBtn extends StatelessWidget {
   final String icon;
   final String tooltip;
   final Color color;
-  final VoidCallback onTap;
+  /// Null = disabled (rendered greyed out, no hover, no click).
+  final VoidCallback? onTap;
 
   const _ActionBtn({required this.icon, required this.tooltip, required this.color, required this.onTap});
 
@@ -1024,6 +1067,74 @@ class _EditableBoolean extends StatelessWidget {
   }
 }
 
+/// Schema-driven dropdown for fields with `enum_values` (e.g.
+/// csv_text_quote_in: "none"|"single"|"double"). Renders the current value
+/// like _EditableString (quoted, click-to-open) but the click opens a
+/// PopupMenu instead of a TextField so the user can only pick a documented
+/// value. If the current value is not in [values] (manually edited config
+/// outside the GUI, or a docs/config drift) it stays selectable but appears
+/// at the top of the menu marked with a leading "(custom) " label.
+class _EditableEnum extends StatelessWidget {
+  final String value;
+  final List<String> values;
+  final Color color;
+  final ValueChanged<String> onCommit;
+
+  const _EditableEnum({
+    required this.value,
+    required this.values,
+    required this.color,
+    required this.onCommit,
+  });
+
+  static String _displayLabel(String v) =>
+      v == '\t' ? r'\t' : v;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.bxpTheme;
+    final isKnown = values.contains(value);
+    final menuItems = <PopupMenuEntry<String>>[];
+    if (!isKnown) {
+      menuItems.add(PopupMenuItem<String>(
+        value: value,
+        height: 28,
+        padding: const EdgeInsets.symmetric(horizontal: 10),
+        child: Text('(custom) "${_displayLabel(value)}"',
+            style: BxpText.body(context,
+                color: t.errorText, size: BxpSize.sm)),
+      ));
+    }
+    for (final v in values) {
+      menuItems.add(PopupMenuItem<String>(
+        value: v,
+        height: 28,
+        padding: const EdgeInsets.symmetric(horizontal: 10),
+        child: Text('"${_displayLabel(v)}"',
+            style: BxpText.body(context, color: color, size: BxpSize.sm)),
+      ));
+    }
+    return PopupMenuButton<String>(
+      position: PopupMenuPosition.under,
+      color: t.panelBg,
+      elevation: 2,
+      padding: EdgeInsets.zero,
+      onSelected: (val) {
+        if (val != value) onCommit(val);
+      },
+      itemBuilder: (_) => menuItems,
+      tooltip: 'pick value',
+      child: Text('"${_displayLabel(value)}"',
+          style: BxpText.body(context, color: color, size: BxpSize.md)
+              .copyWith(
+            decoration: TextDecoration.underline,
+            decorationStyle: TextDecorationStyle.dotted,
+            decorationColor: t.textMuted,
+          )),
+    );
+  }
+}
+
 /// Renders a config-tree key label with an optional schema-doc tooltip.
 ///
 /// Looks the path up against `bxp-fmt --docs` config_schema (with `*`
@@ -1075,14 +1186,22 @@ class _SchemaTooltipKey extends StatelessWidget {
     final required = doc['required'] == true;
     final defaultVal = doc['default']?.toString();
     final desc = doc['description']?.toString() ?? '';
+    final ordered = doc['ordered'] == true;
+    final enumValues = (doc['enum_values'] as List?)?.cast<String>();
 
     final headerParts = <String>[
       if (type.isNotEmpty) type,
       if (required) 'required',
       if (defaultVal != null && defaultVal != 'null') 'default: $defaultVal',
+      if (ordered) 'ordered',
     ];
+    final extras = <String>[
+      if (enumValues != null && enumValues.isNotEmpty)
+        'one of: ${enumValues.map((v) => v == "\t" ? r"\t" : v).join(", ")}',
+    ];
+    final body = [desc, ...extras].where((s) => s.isNotEmpty).join('\n\n');
     final tooltipMsg =
-        headerParts.isEmpty ? desc : '${headerParts.join(' · ')}\n\n$desc';
+        headerParts.isEmpty ? body : '${headerParts.join(' · ')}\n\n$body';
 
     return Tooltip(
       message: tooltipMsg,

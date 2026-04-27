@@ -14,28 +14,26 @@ import 'dart:io';
 class BxpProcessClient {
   /// Resolve a sibling binary. Search order:
   ///   1. Env override: `$BXP_CLI_PATH` / `$BXP_FMT_PATH`
-  ///   2. Packaged bundle (future): `bin/<name>` relative to executable
-  ///   3. Dev path (monorepo): `<cwd>/../<name>/zig-out/bin/<name>`
+  ///      — when SET (non-empty), this wins absolutely. If the path doesn't
+  ///        exist we return null instead of falling through to the other
+  ///        candidate: the user explicitly pinned this path and silently
+  ///        running a different binary is worse than showing a fatal error.
+  ///   2. `<name>` next to the bxp_gui executable.
   ///
-  /// Returns null when no candidate exists on disk.
+  /// Returns null when neither candidate exists on disk.
   static String? findBin(String name) {
     final envVar = switch (name) {
       'bxp-cli' => Platform.environment['BXP_CLI_PATH'],
       'bxp-fmt' => Platform.environment['BXP_FMT_PATH'],
       _ => null,
     };
-    if (envVar != null && envVar.isNotEmpty && File(envVar).existsSync()) {
-      return envVar;
+    if (envVar != null && envVar.isNotEmpty) {
+      return File(envVar).existsSync() ? envVar : null;
     }
 
-    // Packaged bundle: alongside the Flutter executable.
     final exeDir = File(Platform.resolvedExecutable).parent.path;
-    final packaged = '$exeDir/bin/$name';
-    if (File(packaged).existsSync()) return packaged;
-
-    // Dev layout (monorepo): sibling package in parent directory.
-    final dev = '${Directory.current.path}/../$name/zig-out/bin/$name';
-    if (File(dev).existsSync()) return dev;
+    final sibling = '$exeDir/$name';
+    if (File(sibling).existsSync()) return sibling;
 
     return null;
   }
@@ -78,6 +76,34 @@ class BxpProcessClient {
       return parsed is Map<String, dynamic> ? parsed : null;
     } catch (_) {
       return null;
+    }
+  }
+
+  /// Enumerates conversion templates declared in a config via
+  /// `bxp-fmt --config <path> --list-templates`. Returns an empty list when
+  /// the binary is missing or the call fails — the caller falls back to its
+  /// own enumeration of `configJson['conversion_templates']` keys, so a
+  /// failure here only loses the metadata (data_dir / file_pattern_in /
+  /// description) that powers the richer template-selector subtitle.
+  static Future<List<TemplateInfo>> listTemplates(String path) async {
+    final bin = findBin('bxp-fmt');
+    if (bin == null) return const [];
+    try {
+      final result =
+          await Process.run(bin, ['--config', path, '--list-templates']);
+      if (result.exitCode != 0) return const [];
+      final out = (result.stdout as String).trim();
+      if (out.isEmpty) return const [];
+      final parsed = jsonDecode(out);
+      if (parsed is! Map) return const [];
+      final list = parsed['templates'];
+      if (list is! List) return const [];
+      return list
+          .whereType<Map>()
+          .map((e) => TemplateInfo.fromJson(e.cast<String, dynamic>()))
+          .toList();
+    } catch (_) {
+      return const [];
     }
   }
 
@@ -227,4 +253,37 @@ class ProcessRunResult {
   final int exitCode;
   final String stderr;
   const ProcessRunResult({required this.exitCode, required this.stderr});
+}
+
+/// One entry returned by `bxp-fmt --list-templates` — used to render the
+/// template-selector subtitle (file pattern / description) without re-parsing
+/// the config inside the GUI.
+class TemplateInfo {
+  final String id;
+  final String? dataDir;
+  final String? filePatternIn;
+  final String? filePatternOut;
+  final String fileTypeIn;
+  final String fileTypeOut;
+  final String? description;
+
+  const TemplateInfo({
+    required this.id,
+    this.dataDir,
+    this.filePatternIn,
+    this.filePatternOut,
+    this.fileTypeIn = 'csv',
+    this.fileTypeOut = 'csv',
+    this.description,
+  });
+
+  factory TemplateInfo.fromJson(Map<String, dynamic> j) => TemplateInfo(
+        id: j['id']?.toString() ?? '',
+        dataDir: j['data_dir']?.toString(),
+        filePatternIn: j['file_pattern_in']?.toString(),
+        filePatternOut: j['file_pattern_out']?.toString(),
+        fileTypeIn: j['file_type_in']?.toString() ?? 'csv',
+        fileTypeOut: j['file_type_out']?.toString() ?? 'csv',
+        description: j['description']?.toString(),
+      );
 }
