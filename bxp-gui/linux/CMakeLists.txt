@@ -126,3 +126,22 @@ if(NOT CMAKE_BUILD_TYPE MATCHES "Debug")
   install(FILES "${AOT_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
     COMPONENT Runtime)
 endif()
+
+# Symlink bxp-fmt next to the bxp_gui binary so BxpProcessClient.findBin's
+# sibling-lookup succeeds on `flutter run` builds. The bundle directory is
+# nuked at the start of every install (line 88), so a manually-created
+# symlink doesn't survive — recreating it here is the only stable way.
+# The release pipeline (scripts/release.sh) is responsible for shipping a
+# real binary instead of this dev symlink.
+get_filename_component(BXP_FMT_SRC_ABS
+  "${CMAKE_SOURCE_DIR}/../../bxp-fmt/zig-out/bin/bxp-fmt" ABSOLUTE)
+install(CODE "
+  if(EXISTS \"${BXP_FMT_SRC_ABS}\")
+    execute_process(COMMAND \${CMAKE_COMMAND} -E copy
+      \"${BXP_FMT_SRC_ABS}\"
+      \"${CMAKE_INSTALL_PREFIX}/bxp-fmt\")
+    message(STATUS \"Copied bxp-fmt to ${CMAKE_INSTALL_PREFIX}/bxp-fmt\")
+  else()
+    message(WARNING \"bxp-fmt not found at ${BXP_FMT_SRC_ABS}; UI will fail at startup\")
+  endif()
+  " COMPONENT Runtime)

@@ -228,11 +228,16 @@ class TraceStore extends ChangeNotifier {
       final out = await BxpProcessClient.loadConfig(tmpPath);
       final parsed = jsonDecode(out);
       if (parsed is! Map) return;
-      // Replace configJson with fresh annotated tree so $err_* markers
-      // surface in the JsonTree (red dot + inline message). Keep
-      // _originalAnnotated frozen — OpApply still replays from the load
-      // snapshot, not the live one.
-      configJson = Map<String, dynamic>.from(parsed);
+      // Sync only $err_* diagnostic markers from the reparsed tree into
+      // the live tree, instead of replacing configJson wholesale. The
+      // wholesale replace was causing $comm_<N> ID drift across reparse:
+      // bxp-fmt assigns IDs by source order on every reparse, but the
+      // OpLog and the LIVE tree must agree on which comment is "$comm_3"
+      // for follow-up ops to land on the right entry. Keeping the tree
+      // mutated in place by user ops only (live edits in trace_store +
+      // OpApply on save) makes IDs stable for the duration of the
+      // session — fresh IDs only on save+reload.
+      _syncErrMarkers(configJson!, parsed);
       _recomputeDirty();
       notifyListeners();
     } catch (_) {
@@ -242,6 +247,41 @@ class TraceStore extends ChangeNotifier {
         if (await tmpFile.exists()) await tmpFile.delete();
       } catch (_) {}
       _configValidating = false;
+    }
+  }
+
+  /// Walk [src] (the reparsed tree) and copy any `$err_*` markers into [dst]
+  /// (the live tree) at structurally-matching paths. Also drop stale
+  /// `$err_*` from [dst] where [src] has none. Skips `$comm_*`/`$meta_*`
+  /// entries since their IDs may differ between trees.
+  static void _syncErrMarkers(dynamic dst, dynamic src) {
+    if (dst is Map && src is Map) {
+      // Drop existing $err_* from dst — they'll be repopulated below.
+      final stale = dst.keys
+          .where((k) => k.toString().startsWith(r'$err_'))
+          .toList();
+      for (final k in stale) {
+        dst.remove(k);
+      }
+      // Copy $err_* from src; recurse into matching real-key children.
+      src.forEach((k, v) {
+        final key = k.toString();
+        if (key.startsWith(r'$err_')) {
+          dst[key] = v;
+        } else if (!key.startsWith(r'$')) {
+          if (dst.containsKey(key)) {
+            _syncErrMarkers(dst[key], v);
+          }
+        }
+      });
+    } else if (dst is List && src is List) {
+      // Best-effort: walk by index. New/removed elements throw off the
+      // alignment; on misalignment we just skip (no live $err_ for that
+      // sub-tree until next op + reparse).
+      final n = dst.length < src.length ? dst.length : src.length;
+      for (int i = 0; i < n; i++) {
+        _syncErrMarkers(dst[i], src[i]);
+      }
     }
   }
 
@@ -309,14 +349,21 @@ class TraceStore extends ChangeNotifier {
     // directly without a fallback branch.
     final fmtBin = BxpProcessClient.findBin('bxp-fmt');
     if (fmtBin == null) {
+      final envPath = Platform.environment['BXP_FMT_PATH'] ?? '(unset)';
+      final exe = Platform.resolvedExecutable;
+      final exeDir = File(exe).parent.path;
+      final cwd = Directory.current.path;
       _fatalStartupError =
           'bxp-fmt binary not found.\n\n'
           'The GUI requires bxp-fmt to validate configs, evaluate expressions, '
           'and load the docs catalog (functions / keywords / operators / tokens / '
           'config schema). Without it nothing in the editor would work.\n\n'
           'Searched (in order):\n'
-          '  • \$BXP_FMT_PATH environment variable\n'
-          '  • bxp-fmt in the same directory as bxp_gui';
+          '  • \$BXP_FMT_PATH environment variable = $envPath\n'
+          '  • bxp-fmt in the same directory as bxp_gui = $exeDir/bxp-fmt\n\n'
+          'Diagnostics:\n'
+          '  • Platform.resolvedExecutable = $exe\n'
+          '  • Directory.current (PWD) = $cwd';
     } else {
       final d = await BxpProcessClient.getDocs();
       if (d == null) {
@@ -902,15 +949,26 @@ class TraceStore extends ChangeNotifier {
     // so the on-disk byte-order stays in sync on Save.
     if (parent is Map) {
       final key = path.last;
-      final realKeys = parent.keys
+      // Row-by-row sibling list: real keys + $comm_<N>. Skip the
+      // bookkeeping entries ($meta_*, $elem_meta_*, $meta_self, $err_*).
+      // This unified order matches what the GUI actually displays and
+      // mirrors op_apply._moveMapKey, so live tree and on-disk patch
+      // never disagree on neighbour relations.
+      final siblings = parent.keys
           .map((k) => k.toString())
-          .where((k) => !k.startsWith(r'$'))
+          .where((k) =>
+              !k.startsWith(r'$meta_') &&
+              !k.startsWith(r'$elem_meta_') &&
+              k != r'$meta_self' &&
+              !k.startsWith(r'$err_'))
           .toList();
-      final pos = realKeys.indexOf(key);
+      final pos = siblings.indexOf(key);
       if (pos < 0) return;
       final targetPos = pos + delta;
-      if (targetPos < 0 || targetPos >= realKeys.length) return;
-      final targetKey = realKeys[targetPos];
+      if (targetPos < 0 || targetPos >= siblings.length) return;
+      final targetKey = siblings[targetPos];
+      // swapMapKeysInPlace now handles both real-keys and $comm_<N> as
+      // either side, swapping their (key, meta) pairs in insertion order.
       swapMapKeysInPlace(parent, key, targetKey);
       _opLog.truncate(_historyIndex);
       _opLog.record(MoveOp(path, delta));
@@ -998,20 +1056,38 @@ class TraceStore extends ChangeNotifier {
     _scheduleConfigValidation();
   }
 
-  /// True if [v] is a single-key Map whose only key starts with `$comm_`
-  /// (i.e. an in-array comment pseudo-object emitted by preprocessAnnotated).
+  /// True if [v] is a Map whose keys are exclusively `$comm_*` and
+  /// `$meta_comm_*` — i.e. an in-array comment pseudo-object emitted by
+  /// preprocessAnnotated. (Now carries a sibling `$meta_comm_<N>` with byte
+  /// spans, so the old single-key check is no longer accurate.)
   static bool _isPseudoComm(dynamic v) {
-    if (v is! Map || v.length != 1) return false;
-    return v.keys.first.toString().startsWith(r'$comm_');
+    if (v is! Map) return false;
+    bool sawComm = false;
+    for (final k in v.keys) {
+      final s = k.toString();
+      if (s.startsWith(r'$comm_')) {
+        sawComm = true;
+        continue;
+      }
+      if (s.startsWith(r'$meta_comm_')) continue;
+      return false;
+    }
+    return sawComm;
   }
 
-  /// True if [v] is a `_isPseudoComm` AND its `placement` field is
+  /// True if [v] is a `_isPseudoComm` AND its `$comm_<N>` placement is
   /// `"trailing"`. These belong to the preceding real element.
   static bool _isTrailingPseudoComm(dynamic v) {
     if (!_isPseudoComm(v)) return false;
-    final inner = (v as Map).values.first;
-    if (inner is! Map) return false;
-    return inner['placement']?.toString() == 'trailing';
+    final m = v as Map;
+    for (final e in m.entries) {
+      if (e.key.toString().startsWith(r'$comm_')) {
+        final inner = e.value;
+        if (inner is! Map) return false;
+        return inner['placement']?.toString() == 'trailing';
+      }
+    }
+    return false;
   }
 
   /// Insert a child into the container at [path].
@@ -1048,6 +1124,129 @@ class TraceStore extends ChangeNotifier {
         return oldIdx;
       });
     }
+    _recomputeDirty();
+    _pushHistory();
+    notifyListeners();
+    _scheduleConfigValidation();
+  }
+
+  /// Edit a comment's text body. [path] ends in `$comm_<N>`. [newText] is
+  /// the body without `//` / `/* */` markers.
+  void editCommentNode(List<String> path, String newText) {
+    if (configJson == null || _loadedWithErrors) return;
+    if (path.isEmpty || !path.last.startsWith(r'$comm_')) return;
+    final commObj = _getAt(path);
+    if (commObj is! Map) return;
+    final existing = commObj['text']?.toString() ?? '';
+    final newFull = existing.startsWith('/*') ? '/*$newText*/' : '//$newText';
+    if (commObj['text'] == newFull) return;
+    commObj['text'] = newFull;
+    _opLog.truncate(_historyIndex);
+    _opLog.record(EditCommentOp(path, newText));
+    _recomputeDirty();
+    _pushHistory();
+    notifyListeners();
+    _scheduleConfigValidation();
+  }
+
+  /// Delete a standalone / leading / block comment.
+  void deleteCommentNode(List<String> path) {
+    if (configJson == null || _loadedWithErrors) return;
+    if (path.isEmpty || !path.last.startsWith(r'$comm_')) return;
+    final last = path.last;
+    final n = last.substring(r'$comm_'.length);
+    final parent = _getAt(path.sublist(0, path.length - 1));
+    if (parent is! Map) return;
+    parent.remove(last);
+    parent.remove(r'$meta_comm_' + n);
+    // If the parent was an array's pseudo-comm wrapper and is now empty of
+    // comment data, drop the wrapper from its grandparent list.
+    final hasComm = parent.keys.any((k) => k.toString().startsWith(r'$comm_'));
+    if (!hasComm && path.length >= 2) {
+      final wrapperParentPath = path.sublist(0, path.length - 2);
+      final list = _getAt(wrapperParentPath);
+      if (list is List) {
+        final idx = int.tryParse(path[path.length - 2]);
+        if (idx != null && idx >= 0 && idx < list.length) {
+          list.removeAt(idx);
+        }
+      }
+    }
+    _opLog.truncate(_historyIndex);
+    _opLog.record(DeleteCommentOp(path));
+    _recomputeDirty();
+    _pushHistory();
+    notifyListeners();
+    _scheduleConfigValidation();
+  }
+
+  /// Insert a fresh leading comment immediately above [anchorPath].
+  /// [style] is `"//"` or `"/*"`. [text] is the body without markers.
+  void insertCommentNode(List<String> anchorPath, String style, String text) {
+    if (configJson == null || _loadedWithErrors) return;
+    if (anchorPath.isEmpty) return;
+    final parent = _getAt(anchorPath.sublist(0, anchorPath.length - 1));
+    // Pick a fresh number not already used anywhere in the tree.
+    int maxN = 0;
+    void scan(dynamic node) {
+      if (node is Map) {
+        for (final e in node.entries) {
+          final k = e.key.toString();
+          if (k.startsWith(r'$comm_')) {
+            final n = int.tryParse(k.substring(r'$comm_'.length));
+            if (n != null && n > maxN) maxN = n;
+          }
+          if (!k.startsWith(r'$meta_') && !k.startsWith(r'$elem_meta_')) {
+            scan(e.value);
+          }
+        }
+      } else if (node is List) {
+        for (final v in node) {
+          scan(v);
+        }
+      }
+    }
+    scan(configJson);
+    final newN = maxN + 1;
+    final commKey = r'$comm_' + newN.toString();
+    final metaKey = r'$meta_comm_' + newN.toString();
+    final commObj = <String, dynamic>{
+      'text': style == '/*' ? '/*$text*/' : '//$text',
+      'placement': 'leading',
+    };
+    // op_apply.dart will fill in real spans on save. UI doesn't need them.
+    final metaObj = <String, dynamic>{
+      'value_span': {'start': 0, 'end': 0},
+      'block_span': {'start': 0, 'end': 0},
+    };
+    if (parent is Map) {
+      // Insert pair right before the anchor key in insertion order.
+      final entries = parent.entries.toList();
+      parent.clear();
+      bool injected = false;
+      for (final e in entries) {
+        if (!injected && e.key == anchorPath.last) {
+          parent[commKey] = commObj;
+          parent[metaKey] = metaObj;
+          injected = true;
+        }
+        parent[e.key] = e.value;
+      }
+      if (!injected) {
+        parent[commKey] = commObj;
+        parent[metaKey] = metaObj;
+      }
+    } else if (parent is List) {
+      final idx = int.tryParse(anchorPath.last);
+      if (idx == null) return;
+      parent.insert(idx, <String, dynamic>{commKey: commObj, metaKey: metaObj});
+      _shiftSelectionOnArrayEdit(anchorPath.sublist(0, anchorPath.length - 1),
+          (oldIdx) => oldIdx >= idx ? oldIdx + 1 : oldIdx);
+    } else {
+      return;
+    }
+    _opLog.truncate(_historyIndex);
+    _opLog.record(InsertCommentOp(anchorPath, style, text));
     _recomputeDirty();
     _pushHistory();
     notifyListeners();

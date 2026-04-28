@@ -19,8 +19,13 @@ class BxpProcessClient {
   ///        candidate: the user explicitly pinned this path and silently
   ///        running a different binary is worse than showing a fatal error.
   ///   2. `<name>` next to the bxp_gui executable.
+  ///   3. Dev-tree fallback: when the GUI is launched from a build directory
+  ///      inside the monorepo (e.g. `bxp-gui/build/linux/x64/debug/bundle`),
+  ///      walk up to find `bxp/<sibling-package>/zig-out/bin/<name>`. This
+  ///      lets `flutter run` work without copying/symlinking binaries every
+  ///      time the bundle is wiped by an install rebuild.
   ///
-  /// Returns null when neither candidate exists on disk.
+  /// Returns null when no candidate exists on disk.
   static String? findBin(String name) {
     final envVar = switch (name) {
       'bxp-cli' => Platform.environment['BXP_CLI_PATH'],
@@ -34,6 +39,20 @@ class BxpProcessClient {
     final exeDir = File(Platform.resolvedExecutable).parent.path;
     final sibling = '$exeDir/$name';
     if (File(sibling).existsSync()) return sibling;
+
+    // Walk up looking for a `bxp-gui/` directory; its parent is the monorepo
+    // root that holds sibling packages `bxp-cli/` and `bxp-fmt/`.
+    Directory dir = Directory(exeDir);
+    for (int i = 0; i < 10; i++) {
+      final parent = dir.parent;
+      if (parent.path == dir.path) break; // reached filesystem root
+      if (dir.path.endsWith('/bxp-gui')) {
+        final candidate = '${parent.path}/$name/zig-out/bin/$name';
+        if (File(candidate).existsSync()) return candidate;
+        break;
+      }
+      dir = parent;
+    }
 
     return null;
   }

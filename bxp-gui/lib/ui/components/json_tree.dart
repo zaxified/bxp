@@ -30,6 +30,15 @@ class _JsonTreeState extends State<JsonTree> {
   }
 }
 
+/// Trailing comment payload threaded from parent into [_JsonNode] so the
+/// inline `// foo` rendering can wire its own commit path back to the
+/// store without re-walking the tree.
+class _TrailingComment {
+  final List<String> path;
+  final String text; // includes `//` or `/* */` markers
+  const _TrailingComment({required this.path, required this.text});
+}
+
 class _JsonNode extends StatefulWidget {
   final String? keyName;
   final dynamic value;
@@ -39,10 +48,12 @@ class _JsonNode extends StatefulWidget {
 
   /// Comments with `placement: "trailing"` that the parent attached to this
   /// node so they render inline (after the value, before the action buttons)
-  /// instead of on their own row. Pre-pass logic lives in [_buildMap] /
-  /// [_buildList]; comments without a preceding real key still render as
-  /// standalone rows via the `\$comm_` branch in [build].
-  final List<String> trailingComments;
+  /// instead of on their own row. Each entry carries the comment's path so
+  /// the inline editor can commit edits via TraceStore.editCommentNode.
+  /// Pre-pass logic lives in [_buildMap] / [_buildList]; comments without a
+  /// preceding real key still render as standalone rows via the `\$comm_`
+  /// branch in [build].
+  final List<_TrailingComment> trailingComments;
 
   const _JsonNode({
     this.keyName,
@@ -91,17 +102,13 @@ class _JsonNodeState extends State<_JsonNode> {
 
     final t = context.bxpTheme;
 
-    // Comments
+    // Comments — editable when parent is `ordered: true`. Reorder/delete
+    // buttons follow the same gate as real keys so users only see them
+    // where they make sense.
     if (keyName != null && keyName.startsWith('\$comm_')) {
-      final obj = widget.value;
-      final text = (obj is Map && obj['text'] is String) ? obj['text'] as String : '';
-      return Padding(
-        padding: const EdgeInsets.only(left: 24.0, top: 2, bottom: 2),
-        child: Text(
-          text,
-          style: BxpText.body(context,color: t.codeComment, size: BxpSize.md)
-              .copyWith(fontStyle: FontStyle.italic),
-        ),
+      return _CommentRow(
+        path: widget.path,
+        commObj: widget.value,
       );
     }
 
@@ -191,7 +198,10 @@ class _JsonNodeState extends State<_JsonNode> {
             expandAll: prev.expandAll || _recursiveExpand,
             depth: prev.depth,
             path: prev.path,
-            trailingComments: [...prev.trailingComments, text],
+            trailingComments: [
+              ...prev.trailingComments,
+              _TrailingComment(path: [...widget.path, k], text: text),
+            ],
           );
           continue;
         }
@@ -252,10 +262,18 @@ class _JsonNodeState extends State<_JsonNode> {
     int? lastRealIdx;
     for (int i = 0; i < list.length; i++) {
       final v = list[i];
-      if (v is Map && v.length == 1) {
-        final k0 = v.keys.first.toString();
-        if (k0.startsWith(r'$comm_')) {
-          final inner = v.values.first;
+      // Pseudo-comment wrapper: `{$comm_<N>: {...}, $meta_comm_<N>: {...}}`.
+      // Recognised by all keys starting with `$comm_` or `$meta_comm_`.
+      if (v is Map && _isCommWrapper(v)) {
+        String? commKey;
+        for (final k in v.keys) {
+          if (k.toString().startsWith(r'$comm_')) {
+            commKey = k.toString();
+            break;
+          }
+        }
+        if (commKey != null) {
+          final inner = v[commKey];
           final placement = (inner is Map) ? inner['placement']?.toString() : null;
           final text = (inner is Map && inner['text'] is String) ? inner['text'] as String : '';
           if (placement == 'trailing' && lastRealIdx != null) {
@@ -266,19 +284,30 @@ class _JsonNodeState extends State<_JsonNode> {
               expandAll: prev.expandAll || _recursiveExpand,
               depth: prev.depth,
               path: prev.path,
-              trailingComments: [...prev.trailingComments, text],
+              trailingComments: [
+                ...prev.trailingComments,
+                _TrailingComment(
+                  path: [...widget.path, i.toString(), commKey],
+                  text: text,
+                ),
+              ],
             );
             continue;
           }
+          // Path includes the array index so op_apply._lookupCommentMetaRaw
+          // can walk through the wrapper to its $meta_comm_<N>.
           out.add(_JsonNode(
-            keyName: k0,
+            keyName: commKey,
             value: inner,
             expandAll: widget.expandAll || _recursiveExpand,
             depth: widget.depth + 1,
-            path: [...widget.path, k0],
+            path: [...widget.path, i.toString(), commKey],
           ));
           continue;
         }
+      }
+      if (v is Map && v.length == 1) {
+        final k0 = v.keys.first.toString();
         if (k0.startsWith(r'$err_')) {
           out.add(_JsonNode(
             keyName: k0,
@@ -419,14 +448,11 @@ class _JsonNodeState extends State<_JsonNode> {
 
   List<Widget> _inlineTrailingWidgets() {
     if (widget.trailingComments.isEmpty) return const [];
-    final t = context.bxpTheme;
-    final style = BxpText.body(context, color: t.codeComment, size: BxpSize.sm)
-        .copyWith(fontStyle: FontStyle.italic);
     return [
       for (final c in widget.trailingComments)
         Padding(
           padding: const EdgeInsets.only(left: 8.0),
-          child: Text(c, style: style),
+          child: _InlineCommentEdit(path: c.path, text: c.text),
         ),
     ];
   }
@@ -542,6 +568,16 @@ class _JsonNodeState extends State<_JsonNode> {
               onTap: () => store.moveConfigNode(widget.path, 1),
             ),
           ],
+          // "+ comment" inserts a fresh leading comment immediately above
+          // this row. Available everywhere — adding a label-style comment
+          // doesn't depend on container ordering.
+          if (widget.path.isNotEmpty)
+            _ActionBtn(
+              icon: '✎',
+              tooltip: 'Add comment above',
+              color: t.textMuted,
+              onTap: () => store.insertCommentNode(widget.path, '//', ' '),
+            ),
           if (isComposite)
             _ActionBtn(
               icon: '+',
@@ -599,6 +635,306 @@ class _JsonNodeState extends State<_JsonNode> {
         onConfirm: (key, value) {
           context.read<TraceStore>().insertConfigNode(widget.path, key, value);
         },
+      ),
+    );
+  }
+}
+
+/// True if [v] is the pseudo-object emitted by preprocessAnnotated for
+/// in-array comments — keys are exclusively `$comm_*` and `$meta_comm_*`.
+bool _isCommWrapper(Map v) {
+  bool sawComm = false;
+  for (final k in v.keys) {
+    final s = k.toString();
+    if (s.startsWith(r'$comm_')) {
+      sawComm = true;
+      continue;
+    }
+    if (s.startsWith(r'$meta_comm_')) continue;
+    return false;
+  }
+  return sawComm;
+}
+
+/// Editable comment row. Rendered for `$comm_<N>` keys (leading / standalone /
+/// block placement). Trailing comments render inline via `_inlineTrailingWidgets`
+/// on the owning row and are not handled here.
+class _CommentRow extends StatefulWidget {
+  final List<String> path;
+  final dynamic commObj;
+  const _CommentRow({required this.path, required this.commObj});
+  @override
+  State<_CommentRow> createState() => _CommentRowState();
+}
+
+class _CommentRowState extends State<_CommentRow> {
+  bool isHovered = false;
+  bool isEditing = false;
+  late TextEditingController controller;
+
+  @override
+  void initState() {
+    super.initState();
+    controller = TextEditingController(text: _bodyOf(widget.commObj));
+  }
+
+  @override
+  void didUpdateWidget(covariant _CommentRow old) {
+    super.didUpdateWidget(old);
+    if (!isEditing) controller.text = _bodyOf(widget.commObj);
+  }
+
+  static String _bodyOf(dynamic obj) {
+    final fullText = (obj is Map && obj['text'] is String) ? obj['text'] as String : '';
+    final isBlock = fullText.startsWith('/*');
+    if (isBlock) {
+      var s = fullText;
+      if (s.startsWith('/*')) s = s.substring(2);
+      if (s.endsWith('*/')) s = s.substring(0, s.length - 2);
+      return s;
+    }
+    if (fullText.startsWith('//')) return fullText.substring(2);
+    return fullText;
+  }
+
+  void _commit() {
+    final body = controller.text;
+    setState(() => isEditing = false);
+    final orig = _bodyOf(widget.commObj);
+    if (body != orig) {
+      context.read<TraceStore>().editCommentNode(widget.path, body);
+    }
+  }
+
+  void _cancel() {
+    controller.text = _bodyOf(widget.commObj);
+    setState(() => isEditing = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.bxpTheme;
+    final store = context.read<TraceStore>();
+    final fullText = (widget.commObj is Map && widget.commObj['text'] is String)
+        ? widget.commObj['text'] as String
+        : '';
+    final isBlock = fullText.startsWith('/*');
+    final body = _bodyOf(widget.commObj);
+
+    // Move gate (↑/↓): only in ordered containers — match real-key reorder.
+    // Edit / delete / insert are always allowed: text-only changes don't
+    // require a stable order.
+    List<String> orderedCheckPath = widget.path.length > 1
+        ? widget.path.sublist(0, widget.path.length - 1)
+        : const <String>[];
+    if (orderedCheckPath.isNotEmpty &&
+        int.tryParse(orderedCheckPath.last) != null) {
+      orderedCheckPath = orderedCheckPath.sublist(0, orderedCheckPath.length - 1);
+    }
+    final containerDoc = store.findSchemaDoc(orderedCheckPath);
+    final canMove = containerDoc != null && containerDoc['ordered'] == true;
+
+    final commentStyle = BxpText.body(context, color: t.codeComment, size: BxpSize.md)
+        .copyWith(fontStyle: FontStyle.italic);
+
+    Widget bodyWidget;
+    if (isEditing) {
+      // Block comments may span multiple lines — give the field room to grow
+      // and let Enter insert a newline. Line comments stay single-line; Enter
+      // commits.
+      bodyWidget = SizedBox(
+        width: 600,
+        child: CallbackShortcuts(
+          bindings: {
+            const SingleActivator(LogicalKeyboardKey.escape): _cancel,
+            if (!isBlock)
+              const SingleActivator(LogicalKeyboardKey.enter): _commit,
+          },
+          child: TextField(
+            controller: controller,
+            autofocus: true,
+            maxLines: isBlock ? null : 1,
+            minLines: isBlock ? 1 : 1,
+            keyboardType: isBlock ? TextInputType.multiline : TextInputType.text,
+            onSubmitted: isBlock ? null : (_) => _commit(),
+            onTapOutside: (_) => _commit(),
+            style: BxpText.body(context, color: t.codeComment, size: BxpSize.md),
+            cursorColor: t.accentHighlight,
+            decoration: InputDecoration(
+              isDense: true,
+              contentPadding:
+                  const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+              border: OutlineInputBorder(
+                borderSide: BorderSide(color: t.borderColor),
+              ),
+            ),
+          ),
+        ),
+      );
+    } else {
+      bodyWidget = InkWell(
+        onTap: () {
+          setState(() {
+            controller.text = body;
+            isEditing = true;
+          });
+        },
+        child: Container(
+          constraints: const BoxConstraints(minWidth: 300),
+          padding: const EdgeInsets.symmetric(horizontal: 2),
+          child: Text(
+            body.trim().isEmpty ? '(click to edit)' : body,
+            style: body.trim().isEmpty
+                ? commentStyle.copyWith(color: t.textMuted)
+                : commentStyle,
+          ),
+        ),
+      );
+    }
+
+    return MouseRegion(
+      onEnter: (_) => setState(() => isHovered = true),
+      onExit: (_) => setState(() => isHovered = false),
+      child: Container(
+        color: isHovered ? t.withHover(t.surfaceBg) : Colors.transparent,
+        padding: const EdgeInsets.only(left: 24.0, top: 2, bottom: 2),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(isBlock ? '/*' : '//', style: commentStyle),
+            bodyWidget,
+            if (isBlock) Text('*/', style: commentStyle),
+            const SizedBox(width: 40),
+            Opacity(
+              opacity: isHovered ? 1.0 : 0.0,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (canMove) ...[
+                    _ActionBtn(
+                      icon: '↑',
+                      tooltip: 'Move up',
+                      color: t.textMuted,
+                      onTap: () => store.moveConfigNode(widget.path, -1),
+                    ),
+                    _ActionBtn(
+                      icon: '↓',
+                      tooltip: 'Move down',
+                      color: t.textMuted,
+                      onTap: () => store.moveConfigNode(widget.path, 1),
+                    ),
+                  ],
+                  _ActionBtn(
+                    icon: '×',
+                    tooltip: 'Delete comment',
+                    color: t.errorText,
+                    onTap: () => store.deleteCommentNode(widget.path),
+                  ),
+                  const SizedBox(width: 4),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Inline editor for a trailing-placement comment that renders next to the
+/// row it follows (e.g. `key: value, // note`). Click to edit; Enter or
+/// tap-outside commits; Escape cancels.
+class _InlineCommentEdit extends StatefulWidget {
+  final List<String> path;
+  final String text; // includes `//` or `/* */` markers
+  const _InlineCommentEdit({required this.path, required this.text});
+  @override
+  State<_InlineCommentEdit> createState() => _InlineCommentEditState();
+}
+
+class _InlineCommentEditState extends State<_InlineCommentEdit> {
+  bool isEditing = false;
+  late TextEditingController controller;
+
+  @override
+  void initState() {
+    super.initState();
+    controller = TextEditingController(text: _bodyOf(widget.text));
+  }
+
+  @override
+  void didUpdateWidget(covariant _InlineCommentEdit old) {
+    super.didUpdateWidget(old);
+    if (!isEditing) controller.text = _bodyOf(widget.text);
+  }
+
+  static String _bodyOf(String full) {
+    if (full.startsWith('/*')) {
+      var s = full.substring(2);
+      if (s.endsWith('*/')) s = s.substring(0, s.length - 2);
+      return s;
+    }
+    if (full.startsWith('//')) return full.substring(2);
+    return full;
+  }
+
+  void _commit() {
+    final body = controller.text;
+    setState(() => isEditing = false);
+    if (body != _bodyOf(widget.text)) {
+      context.read<TraceStore>().editCommentNode(widget.path, body);
+    }
+  }
+
+  void _cancel() {
+    controller.text = _bodyOf(widget.text);
+    setState(() => isEditing = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.bxpTheme;
+    final style = BxpText.body(context, color: t.codeComment, size: BxpSize.sm)
+        .copyWith(fontStyle: FontStyle.italic);
+    if (!isEditing) {
+      return InkWell(
+        onTap: () {
+          setState(() {
+            controller.text = _bodyOf(widget.text);
+            isEditing = true;
+          });
+        },
+        child: Text(widget.text, style: style),
+      );
+    }
+    final isBlock = widget.text.startsWith('/*');
+    return SizedBox(
+      width: 400,
+      child: CallbackShortcuts(
+        bindings: {
+          const SingleActivator(LogicalKeyboardKey.escape): _cancel,
+          if (!isBlock)
+            const SingleActivator(LogicalKeyboardKey.enter): _commit,
+        },
+        child: TextField(
+          controller: controller,
+          autofocus: true,
+          maxLines: isBlock ? null : 1,
+          onSubmitted: isBlock ? null : (_) => _commit(),
+          onTapOutside: (_) => _commit(),
+          style: BxpText.body(context, color: t.codeComment, size: BxpSize.sm),
+          cursorColor: t.accentHighlight,
+          decoration: InputDecoration(
+            isDense: true,
+            contentPadding:
+                const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+            border: OutlineInputBorder(
+              borderSide: BorderSide(color: t.borderColor),
+            ),
+            prefixText: isBlock ? '/*' : '//',
+            suffixText: isBlock ? '*/' : null,
+          ),
+        ),
       ),
     );
   }

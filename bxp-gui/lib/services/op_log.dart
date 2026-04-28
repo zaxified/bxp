@@ -44,6 +44,31 @@ class MoveOp extends ConfigOp {
   const MoveOp(this.path, this.delta);
 }
 
+/// Edit a comment's text body (the bytes between `//` / `/* */` markers).
+/// [path] ends in `$comm_<N>`. [newText] is the raw body to splice in.
+class EditCommentOp extends ConfigOp {
+  final ConfigPath path;
+  final String newText;
+  const EditCommentOp(this.path, this.newText);
+}
+
+/// Delete a standalone / leading / block comment at [path] (`$comm_<N>`).
+/// Trailing comments aren't deleted via this op — they live with their owner.
+class DeleteCommentOp extends ConfigOp {
+  final ConfigPath path;
+  const DeleteCommentOp(this.path);
+}
+
+/// Insert a new comment immediately above the entry at [anchorPath].
+/// [style] is `"//"` or `"/*"`. [text] is the body (no markers).
+/// `MoveOp` with a `$comm_<N>` last-segment handles reordering.
+class InsertCommentOp extends ConfigOp {
+  final ConfigPath anchorPath;
+  final String style;
+  final String text;
+  const InsertCommentOp(this.anchorPath, this.style, this.text);
+}
+
 /// Insert a fresh entry into the parent at [parentPath].
 ///
 /// For Maps: [keyOrIndex] is the new key. Insertion happens after the

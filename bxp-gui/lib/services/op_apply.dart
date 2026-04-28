@@ -58,7 +58,107 @@ class OpApply {
         _applyMove(m, state);
       case InsertOp i:
         _applyInsert(i, state);
+      case EditCommentOp ec:
+        _applyEditComment(ec, state);
+      case DeleteCommentOp dc:
+        _applyDeleteComment(dc, state);
+        _renumberComments(state.tree);
+      case InsertCommentOp ic:
+        _applyInsertComment(ic, state);
+        _renumberComments(state.tree);
     }
+  }
+
+  /// Renumber every `$comm_<N>` + `$meta_comm_<N>` pair in [tree] so their
+  /// IDs match what `bxp-fmt`'s annotated reparse would assign — sequential
+  /// 1..K by source position (block_span.start). Without this, an insert
+  /// or delete leaves `state.tree`'s synthesised IDs out of step with the
+  /// IDs the GUI sees after `_validateConfigNow` replaces `configJson`
+  /// with the reparsed tree, and a follow-up op's path no longer matches.
+  ///
+  /// Critically: rename keys IN PLACE without disturbing the surrounding
+  /// insertion order. Earlier impl removed+re-added each entry which moved
+  /// it to the end of its parent map, breaking the source-order invariant
+  /// downstream ops rely on for sibling enumeration.
+  static void _renumberComments(dynamic tree) {
+    // Phase 1: collect every $comm_<N> with its block_start.
+    final entries = <_CommentEntry>[];
+    void collect(dynamic node) {
+      if (node is Map) {
+        for (final e in node.entries) {
+          final k = e.key.toString();
+          if (k.startsWith(r'$comm_')) {
+            final n = k.substring(r'$comm_'.length);
+            final meta = node[r'$meta_comm_' + n];
+            if (meta is Map) {
+              final b = meta['block_span'];
+              if (b is Map && b['start'] is int) {
+                entries.add(_CommentEntry(node, n, b['start'] as int));
+              }
+            }
+          }
+          if (!k.startsWith(r'$meta_') && !k.startsWith(r'$elem_meta_')) {
+            collect(e.value);
+          }
+        }
+      } else if (node is List) {
+        for (final v in node) {
+          collect(v);
+        }
+      }
+    }
+    collect(tree);
+
+    // Phase 2: assign new IDs by source position. Build a global old→new map.
+    entries.sort((a, b) => a.blockStart.compareTo(b.blockStart));
+    final oldToNew = <String, String>{};
+    for (var i = 0; i < entries.length; i++) {
+      oldToNew[entries[i].oldN] = (i + 1).toString();
+    }
+
+    // Phase 3: walk the tree and rebuild every map that holds $comm_*/
+    // $meta_comm_* entries, preserving insertion order while substituting
+    // the new IDs in place. Two-pass per map (TMP_ prefix) to avoid
+    // collisions when the new ID equals some other entry's old ID.
+    void rename(dynamic node) {
+      if (node is Map) {
+        bool needsRebuild = false;
+        for (final k in node.keys) {
+          final s = k.toString();
+          if (s.startsWith(r'$comm_') || s.startsWith(r'$meta_comm_')) {
+            needsRebuild = true;
+            break;
+          }
+        }
+        if (needsRebuild) {
+          final originalEntries = node.entries.toList();
+          node.clear();
+          for (final e in originalEntries) {
+            final k = e.key.toString();
+            if (k.startsWith(r'$comm_')) {
+              final oldN = k.substring(r'$comm_'.length);
+              final newN = oldToNew[oldN];
+              node[newN != null ? r'$comm_' + newN : k] = e.value;
+            } else if (k.startsWith(r'$meta_comm_')) {
+              final oldN = k.substring(r'$meta_comm_'.length);
+              final newN = oldToNew[oldN];
+              node[newN != null ? r'$meta_comm_' + newN : k] = e.value;
+            } else {
+              node[e.key] = e.value;
+            }
+          }
+        }
+        // Recurse after rebuild so nested $comm_<N> get the same treatment.
+        for (final v in node.values) {
+          rename(v);
+        }
+      } else if (node is List) {
+        for (final v in node) {
+          rename(v);
+        }
+      }
+    }
+    rename(tree);
   }
 
   // ── Edit ──────────────────────────────────────────────────────────────
@@ -194,6 +294,10 @@ class OpApply {
 
   static void _applyMove(MoveOp op, _State state) {
     if (op.delta == 0) return;
+    if (op.path.isNotEmpty && op.path.last.toString().startsWith(r'$comm_')) {
+      _moveComment(op, state);
+      return;
+    }
     final meta = _lookupMeta(state.tree, op.path);
     if (meta == null) return;
     final parent = _walkParent(state.tree, op.path);
@@ -246,42 +350,45 @@ class OpApply {
 
   static void _moveMapKey(MoveOp op, _State state, Map parent) {
     final key = op.path.last;
-    final realKeys = parent.keys
+    // Row-by-row sibling list: include real keys AND $comm_<N> entries.
+    // Skip only the bookkeeping siblings ($meta_*, $elem_meta_*, $err_*,
+    // $meta_self). This matches the row-level UX the GUI shows.
+    final siblings = parent.keys
         .map((k) => k.toString())
-        .where((k) => !k.startsWith(r'$'))
+        .where((k) => !k.startsWith(r'$meta_') &&
+            !k.startsWith(r'$elem_meta_') &&
+            k != r'$meta_self' &&
+            !k.startsWith(r'$err_'))
         .toList();
-    final pos = realKeys.indexOf(key);
+    final pos = siblings.indexOf(key);
     if (pos < 0) return;
     final targetPos = pos + op.delta;
-    if (targetPos < 0 || targetPos >= realKeys.length) return;
-    final targetKey = realKeys[targetPos];
-    final aMeta = parent[r'$meta_' + key] as Map?;
-    final bMeta = parent[r'$meta_' + targetKey] as Map?;
+    if (targetPos < 0 || targetPos >= siblings.length) return;
+    final targetKey = siblings[targetPos];
+    String metaOf(String k) => k.startsWith(r'$comm_')
+        ? r'$meta_comm_' + k.substring(r'$comm_'.length)
+        : r'$meta_' + k;
+    final aMeta = parent[metaOf(key)] as Map?;
+    final bMeta = parent[metaOf(targetKey)] as Map?;
     if (aMeta == null || bMeta == null) return;
     final aRaw = _coerceSpan(aMeta['block_span']);
     final bRaw = _coerceSpan(bMeta['block_span']);
     if (aRaw == null || bRaw == null) return;
-    // Extend each block backwards through any leading blank lines + `//`
-    // comment lines so separator headers travel with their template. Floor:
-    // the previous real key's block_span.end (so we never absorb another
-    // entry's block) — or parent's container open for the first key.
-    final aFloor = _previousBlockEnd(parent, realKeys, pos);
-    final bFloor = _previousBlockEnd(parent, realKeys, targetPos);
-    final a = _Span(_extendBlockBack(state.bytes, aRaw.start, aFloor), aRaw.end);
-    final b = _Span(_extendBlockBack(state.bytes, bRaw.start, bFloor), bRaw.end);
-    _swapBlocks(state, a, b);
+    // Row-by-row semantics: each row is its own block; we never absorb
+    // preceding blank/comment lines. (The old header-with-key absorption
+    // belonged to the pre-row-by-row model where comments moved as a
+    // group with the next real key. Now comments are first-class siblings
+    // that move independently, so block_span IS the row.)
+    _swapBlocks(state, aRaw, bRaw);
     // Reorder keys in parent map (Dart Maps are insertion-ordered).
-    _swapMapKeysInPlace(parent, key, targetKey);
-    // After _swapBlocks+rename, each $meta_<key> still carries spans that
-    // describe where THAT key's bytes USED TO BE — but those byte ranges now
-    // hold the OTHER key's content. Splice's _shiftMeta correctly tracked
-    // position-shifts, but it can't model a swap. Exchange the span fields
-    // between the two metas so each one points to its key's NEW location.
-    // Without this, a second move on the same key looks up the wrong span
-    // and swaps the wrong bytes (visible to the user as the move appearing
-    // briefly and then bouncing back when live-validation re-parses).
-    final aRenamed = parent[r'$meta_' + targetKey] as Map?;
-    final bRenamed = parent[r'$meta_' + key] as Map?;
+    _swapMapEntriesInPlace(parent, key, targetKey);
+    // After _swapBlocks + key swap, each meta still carries the spans that
+    // describe where THAT key's bytes USED TO BE — but those byte ranges
+    // now hold the OTHER key's content. Splice tracked position-shifts but
+    // can't model a swap. Exchange span fields between the two metas so
+    // each points at its key's NEW location.
+    final aRenamed = parent[metaOf(targetKey)] as Map?;
+    final bRenamed = parent[metaOf(key)] as Map?;
     if (aRenamed != null && bRenamed != null) {
       _exchangeSpans(aRenamed, bRenamed);
     }
@@ -361,6 +468,351 @@ class OpApply {
       }
     }
     return p;
+  }
+
+  // ── Comment: edit / delete / insert / move ────────────────────────────
+
+  static void _applyEditComment(EditCommentOp op, _State state) {
+    final raw = _lookupCommentMetaRaw(state.tree, op.path);
+    if (raw == null) return;
+    final v = _coerceSpan(raw['value_span']);
+    if (v == null) return;
+    final newBytes = utf8.encode(op.newText);
+    state.splice(v.start, v.end, newBytes);
+    final delta = newBytes.length - (v.end - v.start);
+    _grow(raw['value_span'] as Map, delta);
+    _grow(raw['block_span'] as Map, delta);
+    // Update tree text field on $comm_<N>, preserving original markers.
+    final parent = _walkParent(state.tree, op.path);
+    if (parent is Map) {
+      final commObj = parent[op.path.last];
+      if (commObj is Map) {
+        final existing = commObj['text']?.toString() ?? '';
+        if (existing.startsWith('/*')) {
+          commObj['text'] = '/*${op.newText}*/';
+        } else {
+          commObj['text'] = '//${op.newText}';
+        }
+      }
+    }
+  }
+
+  static void _applyDeleteComment(DeleteCommentOp op, _State state) {
+    final raw = _lookupCommentMetaRaw(state.tree, op.path);
+    if (raw == null) return;
+    final b = _coerceSpan(raw['block_span']);
+    if (b == null) return;
+    int delEnd = b.end;
+    if (delEnd < state.bytes.length && state.bytes[delEnd] == 0x0A) delEnd++;
+    // Also consume the run of `[ \t]*` that precedes the comment on the same line —
+    // covers indentation we want to remove with the comment.
+    int delStart = b.start;
+    state.splice(delStart, delEnd, Uint8List(0));
+    _removeCommentFromTree(state.tree, op.path);
+  }
+
+  static void _applyInsertComment(InsertCommentOp op, _State state) {
+    final anchorMeta = _lookupMetaRaw(state.tree, op.anchorPath);
+    if (anchorMeta == null) return;
+    final aBlock = _coerceSpan(anchorMeta['block_span']);
+    if (aBlock == null) return;
+    // Detect indent: leading inline whitespace at anchor's block start.
+    int p = aBlock.start;
+    while (p < state.bytes.length &&
+        (state.bytes[p] == 0x20 || state.bytes[p] == 0x09)) {
+      p++;
+    }
+    final indent = state.bytes.sublist(aBlock.start, p);
+    final commentSrc = (op.style == '/*') ? '/*${op.text}*/' : '//${op.text}';
+    final commentBytes = utf8.encode(commentSrc);
+    final entry = BytesBuilder(copy: false)
+      ..add(indent)
+      ..add(commentBytes)
+      ..addByte(0x0A);
+    final entryBytes = entry.toBytes();
+    final insertAt = aBlock.start;
+    state.splice(insertAt, insertAt, entryBytes);
+
+    // Synthesise meta + tree entries for the new comment.
+    final newN = _nextCommNumber(state.tree);
+    final commKey = r'$comm_' + newN.toString();
+    final metaKey = r'$meta_comm_' + newN.toString();
+    final markerLen = 2; // both `//` and `/*` are two bytes
+    final bodyStart = insertAt + indent.length + markerLen;
+    final bodyEnd = bodyStart + utf8.encode(op.text).length;
+    final blockStart = insertAt;
+    // block_end excludes the trailing `\n` to mirror json5.zig's emission
+    // (which doesn't include the newline in the block).
+    final blockEnd = insertAt + entryBytes.length - 1;
+
+    final commObj = <String, dynamic>{
+      'text': commentSrc,
+      'placement': 'leading',
+    };
+    final metaObj = <String, dynamic>{
+      'value_span': {'start': bodyStart, 'end': bodyEnd},
+      'block_span': {'start': blockStart, 'end': blockEnd},
+    };
+
+    final parent = _walkParent(state.tree, op.anchorPath);
+    final lastSeg = op.anchorPath.last.toString();
+    if (parent is Map) {
+      // Anchor is a map child. Insert $comm_<N> + $meta_comm_<N> right
+      // before the anchor key in insertion order.
+      _insertMapKeysBefore(parent, lastSeg, {commKey: commObj, metaKey: metaObj});
+    } else if (parent is List) {
+      // Anchor is an array element at index lastSeg. Insert pseudo-object.
+      final idx = int.tryParse(lastSeg);
+      if (idx == null) return;
+      parent.insert(idx, <String, dynamic>{commKey: commObj, metaKey: metaObj});
+      // No $elem_meta entry for pseudo-comm objects (Zig doesn't track them).
+    }
+  }
+
+  /// Move a $comm_<N> entry up/down past one sibling (real or comment).
+  /// Cut+paste because comments don't have a JSON5 trailing comma like real
+  /// entries — `_swapBlocks`'s comma-aware splice would corrupt them.
+  static void _moveComment(MoveOp op, _State state) {
+    final raw = _lookupCommentMetaRaw(state.tree, op.path);
+    if (raw == null) return;
+    final cb = _coerceSpan(raw['block_span']);
+    if (cb == null) return;
+    final siblings = _enumerateOrderedSiblings(state.tree, op.path);
+    if (siblings == null) return;
+    final myIdx = siblings.indexWhere((e) => e.lastSeg == op.path.last.toString());
+    if (myIdx < 0) return;
+    final tgtIdx = myIdx + op.delta;
+    if (tgtIdx < 0 || tgtIdx >= siblings.length) return;
+    final target = siblings[tgtIdx];
+
+    int cutEnd = cb.end;
+    if (cutEnd < state.bytes.length && state.bytes[cutEnd] == 0x0A) cutEnd++;
+    final commentBytes = state.bytes.sublist(cb.start, cutEnd);
+    state.splice(cb.start, cutEnd, Uint8List(0));
+
+    // Refresh target span (it may have shifted via _State.splice).
+    final tMeta = _lookupRawForSibling(state.tree, op.path, target);
+    if (tMeta == null) return;
+    final tb = _coerceSpan(tMeta['block_span']);
+    if (tb == null) return;
+
+    int insertAt;
+    if (op.delta < 0) {
+      insertAt = tb.start;
+    } else {
+      insertAt = tb.end;
+      if (insertAt < state.bytes.length && state.bytes[insertAt] == 0x0A) {
+        insertAt++;
+      }
+    }
+    state.splice(insertAt, insertAt, commentBytes);
+
+    // Reposition comment meta to its new bytes.
+    final newBlockStart = insertAt;
+    final newBlockEnd = insertAt + commentBytes.length -
+        ((commentBytes.isNotEmpty && commentBytes.last == 0x0A) ? 1 : 0);
+    final origVal = _coerceSpan(raw['value_span']);
+    final origBlock = _coerceSpan(raw['block_span']);
+    final valOffsetInBlock = (origVal != null && origBlock != null)
+        ? origVal.start - origBlock.start
+        : 2;
+    final valLen = (origVal != null) ? (origVal.end - origVal.start) : 0;
+    raw['block_span'] = {'start': newBlockStart, 'end': newBlockEnd};
+    raw['value_span'] = {
+      'start': newBlockStart + valOffsetInBlock,
+      'end': newBlockStart + valOffsetInBlock + valLen,
+    };
+
+    // Reorder tree to reflect new sibling order.
+    _reorderCommentInTree(state.tree, op.path, target, op.delta);
+  }
+
+  // ── Comment helpers ────────────────────────────────────────────────────
+
+  /// Look up `$meta_comm_<N>` for a path ending in `$comm_<N>`. The parent
+  /// in tree-walk is always a Map: either the real container (map context)
+  /// or the array's pseudo-comm wrapper object (array context).
+  static Map? _lookupCommentMetaRaw(dynamic tree, ConfigPath path) {
+    if (path.isEmpty) return null;
+    final last = path.last.toString();
+    if (!last.startsWith(r'$comm_')) return null;
+    final n = last.substring(r'$comm_'.length);
+    final parent = _walkParent(tree, path);
+    if (parent is Map) {
+      final m = parent[r'$meta_comm_' + n];
+      if (m is Map) return m;
+    }
+    return null;
+  }
+
+  static int _nextCommNumber(dynamic tree) {
+    int maxN = 0;
+    void scan(dynamic node) {
+      if (node is Map) {
+        for (final entry in node.entries) {
+          final k = entry.key.toString();
+          if (k.startsWith(r'$comm_')) {
+            final n = int.tryParse(k.substring(r'$comm_'.length));
+            if (n != null && n > maxN) maxN = n;
+          }
+          if (!k.startsWith(r'$meta_') && !k.startsWith(r'$elem_meta_')) {
+            scan(entry.value);
+          }
+        }
+      } else if (node is List) {
+        for (final v in node) {
+          scan(v);
+        }
+      }
+    }
+    scan(tree);
+    return maxN + 1;
+  }
+
+  static void _removeCommentFromTree(dynamic tree, ConfigPath path) {
+    final last = path.last.toString();
+    if (!last.startsWith(r'$comm_')) return;
+    final n = last.substring(r'$comm_'.length);
+    final parent = _walkParent(tree, path);
+    if (parent is! Map) return;
+    parent.remove(last);
+    parent.remove(r'$meta_comm_' + n);
+    // If we just emptied a pseudo-comm wrapper inside an array, drop the
+    // wrapper from the grandparent list.
+    final remaining = parent.keys
+        .where((k) =>
+            !k.toString().startsWith(r'$comm_') &&
+            !k.toString().startsWith(r'$meta_comm_'))
+        .isEmpty;
+    final hasNoComms = !parent.keys.any((k) => k.toString().startsWith(r'$comm_'));
+    if (remaining && hasNoComms) {
+      // wrapper-only object now empty. Path: [...gp, arrayKey, idx, "$comm_<N>"]
+      // Parent of wrapper = the list at path[len-3].
+      if (path.length >= 2) {
+        final wrapperParentPath = path.sublist(0, path.length - 1);
+        final list = _walkParent(tree, wrapperParentPath);
+        if (list is List) {
+          final idx = int.tryParse(wrapperParentPath.last.toString());
+          if (idx != null && idx >= 0 && idx < list.length) {
+            list.removeAt(idx);
+          }
+        }
+      }
+    }
+  }
+
+  static void _insertMapKeysBefore(
+      Map parent, String beforeKey, Map<String, dynamic> newEntries) {
+    final entries = parent.entries.toList();
+    parent.clear();
+    bool injected = false;
+    for (final e in entries) {
+      final k = e.key.toString();
+      if (!injected && k == beforeKey) {
+        newEntries.forEach((nk, nv) {
+          parent[nk] = nv;
+        });
+        injected = true;
+      }
+      parent[e.key] = e.value;
+    }
+    if (!injected) {
+      // Anchor not found — append at end as a last resort.
+      newEntries.forEach((nk, nv) {
+        parent[nk] = nv;
+      });
+    }
+  }
+
+  /// Sibling ordering used by comment moves. Entries in source order
+  /// (real keys/elements + comment slots), each described by a
+  /// path-resolvable last segment and a kind tag.
+  static List<_SiblingRef>? _enumerateOrderedSiblings(
+      dynamic tree, ConfigPath path) {
+    if (path.length < 1) return null;
+    final last = path.last.toString();
+    if (!last.startsWith(r'$comm_')) return null;
+    final parent = _walkParent(tree, path);
+    if (parent is Map) {
+      // Map context: walk parent's keys in insertion order; emit one
+      // _SiblingRef per real key and one per $comm_<N>.
+      final out = <_SiblingRef>[];
+      for (final k in parent.keys) {
+        final s = k.toString();
+        if (s.startsWith(r'$meta_') ||
+            s.startsWith(r'$elem_meta_') ||
+            s == r'$meta_self' ||
+            s.startsWith(r'$err_')) {
+          continue;
+        }
+        out.add(_SiblingRef(lastSeg: s, isComment: s.startsWith(r'$comm_')));
+      }
+      return out;
+    }
+    return null;
+  }
+
+  static Map? _lookupRawForSibling(
+      dynamic tree, ConfigPath myPath, _SiblingRef sib) {
+    final parentPath = myPath.sublist(0, myPath.length - 1);
+    final siblingPath = [...parentPath, sib.lastSeg];
+    if (sib.isComment) {
+      return _lookupCommentMetaRaw(tree, siblingPath);
+    }
+    return _lookupMetaRaw(tree, siblingPath);
+  }
+
+  /// Reorder my $comm_<N> + $meta_comm_<N> pair past `target`. For delta<0,
+  /// insert the pair just before target's first key (the real key or the
+  /// $comm_<N> key for comment targets). For delta>0, insert after target's
+  /// final paired entry (its $meta_<key> or $meta_comm_<N>).
+  static void _reorderCommentInTree(
+      dynamic tree, ConfigPath path, _SiblingRef target, int delta) {
+    final parent = _walkParent(tree, path);
+    if (parent is! Map) return;
+    final myKey = path.last.toString();
+    final n = myKey.substring(r'$comm_'.length);
+    final myMetaKey = r'$meta_comm_' + n;
+    final entries = parent.entries.toList();
+
+    // Keys that belong to "me" and "target" pair, used to decide insertion bounds.
+    final mineKeys = <String>{myKey, myMetaKey};
+    final targetFirstKey = target.lastSeg;
+    String targetLastKey;
+    if (target.isComment) {
+      final tn = target.lastSeg.substring(r'$comm_'.length);
+      targetLastKey = r'$meta_comm_' + tn;
+    } else {
+      targetLastKey = r'$meta_' + target.lastSeg;
+    }
+
+    parent.clear();
+    final myEntries = entries.where((e) => mineKeys.contains(e.key.toString())).toList();
+    final others = entries.where((e) => !mineKeys.contains(e.key.toString())).toList();
+
+    bool injected = false;
+    for (int i = 0; i < others.length; i++) {
+      final e = others[i];
+      final k = e.key.toString();
+      if (delta < 0 && !injected && k == targetFirstKey) {
+        for (final m in myEntries) {
+          parent[m.key] = m.value;
+        }
+        injected = true;
+      }
+      parent[e.key] = e.value;
+      if (delta > 0 && !injected && k == targetLastKey) {
+        for (final m in myEntries) {
+          parent[m.key] = m.value;
+        }
+        injected = true;
+      }
+    }
+    if (!injected) {
+      for (final m in myEntries) {
+        parent[m.key] = m.value;
+      }
+    }
   }
 
   // ── Insert ────────────────────────────────────────────────────────────
@@ -720,24 +1172,108 @@ void _removeFromTree(dynamic tree, ConfigPath path) {
 void _swapBlocks(_State state, _Span a, _Span b) {
   final low = a.start < b.start ? a : b;
   final high = a.start < b.start ? b : a;
+  final lowS = low.start, lowE = low.end;
+  final highS = high.start, highE = high.end;
+
+  // Snapshot every span living strictly INSIDE either block. These are
+  // nested children (composite values' inner $meta_*, $meta_self
+  // container_span, $elem_meta entries) whose bytes physically move with
+  // their parent block when we swap. Splice's _shiftMeta only models
+  // position shifts, not swaps, so without this fix-up children of `high`
+  // end up pointing into `low`'s post-shift slot (where the OTHER
+  // entry's content now sits) and the next op edits the wrong bytes.
+  final highChildSpans = <Map>[];
+  final lowChildSpans = <Map>[];
+  void scan(dynamic node) {
+    if (node is Map) {
+      for (final e in node.entries) {
+        final k = e.key.toString();
+        final v = e.value;
+        if (k.startsWith(r'$meta_') || k == r'$meta_self') {
+          if (v is Map) {
+            for (final spanKey in const [
+              'key_span',
+              'value_span',
+              'block_span',
+              'container_span',
+            ]) {
+              final s = v[spanKey];
+              if (s is Map) {
+                final st = s['start'];
+                if (st is int) {
+                  if (st > highS && st < highE) {
+                    highChildSpans.add(s);
+                  } else if (st > lowS && st < lowE) {
+                    lowChildSpans.add(s);
+                  }
+                }
+              }
+            }
+          }
+        } else if (k.startsWith(r'$elem_meta_')) {
+          if (v is List) {
+            for (final em in v) {
+              if (em is Map) {
+                for (final spanKey in const ['value_span', 'block_span']) {
+                  final s = em[spanKey];
+                  if (s is Map) {
+                    final st = s['start'];
+                    if (st is int) {
+                      if (st > highS && st < highE) {
+                        highChildSpans.add(s);
+                      } else if (st > lowS && st < lowE) {
+                        lowChildSpans.add(s);
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        } else if (!k.startsWith(r'$comm_') && !k.startsWith(r'$err_')) {
+          scan(v);
+        }
+      }
+    } else if (node is List) {
+      for (final v in node) {
+        scan(v);
+      }
+    }
+  }
+  scan(state.tree);
+
   // Content-aware swap: split each block into (value, optional `,`, tail)
   // and recombine so BOTH new contents end with `,` after the value.
-  // Without this, swapping the array's last element (which has no
-  // trailing comma) into a non-last position produces `{...} {...},` —
-  // missing-comma syntax error. Always emitting `,` is safe because
-  // JSON5 accepts a trailing comma on the last element too.
-  final lowOrig = state.bytes.sublist(low.start, low.end);
-  final highOrig = state.bytes.sublist(high.start, high.end);
+  // JSON5 accepts a trailing comma on the last element too, so this is
+  // always safe.
+  final lowOrig = state.bytes.sublist(lowS, lowE);
+  final highOrig = state.bytes.sublist(highS, highE);
   final lowParts = _splitArrayElemBlock(lowOrig);
   final highParts = _splitArrayElemBlock(highOrig);
-  // After the swap: low slot should hold what high originally had, and
-  // vice versa. Both rebuilt with a `,` after the value (JSON5 trailing
-  // comma is harmless on the last slot, required on non-last slots).
   final newLow = _joinWithComma(highParts);
   final newHigh = _joinWithComma(lowParts);
-  // Apply high first so its splice doesn't shift low's offset.
   state.splice(high.start, high.end, newHigh);
   state.splice(low.start, low.end, newLow);
+
+  // After the two splices:
+  //   * `high` children's spans were shifted by delta2 (splice2 boundary
+  //     was lowE, all metas with start >= lowE shifted by delta2). They
+  //     now sit in high's post-shift slot, but their bytes physically
+  //     live in low's slot. Required additional shift: lowS - highS - d2.
+  //   * `low` children's spans were not touched by either splice. Their
+  //     bytes now live in high's post-shift slot. Required additional
+  //     shift: highS - lowS + delta2 (negation of the above).
+  final delta2 = newLow.length - (lowE - lowS);
+  final adjustHigh = (lowS - highS) - delta2;
+  final adjustLow = -adjustHigh;
+  for (final s in highChildSpans) {
+    s['start'] = (s['start'] as int) + adjustHigh;
+    s['end'] = (s['end'] as int) + adjustHigh;
+  }
+  for (final s in lowChildSpans) {
+    s['start'] = (s['start'] as int) + adjustLow;
+    s['end'] = (s['end'] as int) + adjustLow;
+  }
 }
 
 /// Split block bytes into (valueBytes, hasComma, tailBytes).
@@ -883,15 +1419,24 @@ Uint8List _joinWithComma(({Uint8List value, bool hasComma, Uint8List tail}) p) {
   return b.toBytes();
 }
 
-/// Swap two real map keys in [m] while keeping their `$meta_<key>` siblings
-/// adjacent. Public so the live tree mutation in `TraceStore.moveConfigNode`
-/// can reuse the same swap logic op_apply uses for the on-disk CST patch —
-/// guarantees both views agree on key order before Save replays the ops.
+/// Swap two map entries in [m] while keeping their meta sibling
+/// (`$meta_<key>` for real keys, `$meta_comm_<N>` for `$comm_<N>` keys)
+/// adjacent. Either key may be a comment. Public so the live tree mutation
+/// in `TraceStore.moveConfigNode` can reuse the same swap logic op_apply
+/// uses for the on-disk CST patch — guarantees both views agree on key
+/// order before Save replays the ops.
 void swapMapKeysInPlace(Map m, String keyA, String keyB) =>
-    _swapMapKeysInPlace(m, keyA, keyB);
+    _swapMapEntriesInPlace(m, keyA, keyB);
 
-void _swapMapKeysInPlace(Map m, String keyA, String keyB) {
-  // Dart Maps are insertion-ordered. Rebuild in place with keys swapped.
+String _metaKeyOf(String k) => k.startsWith(r'$comm_')
+    ? r'$meta_comm_' + k.substring(r'$comm_'.length)
+    : r'$meta_' + k;
+
+void _swapMapEntriesInPlace(Map m, String keyA, String keyB) {
+  // Dart Maps are insertion-ordered. Rebuild in place, swapping the two
+  // (key, meta) pairs so each pair lands in the OTHER's old slot.
+  final metaA = _metaKeyOf(keyA);
+  final metaB = _metaKeyOf(keyB);
   final entries = m.entries.toList();
   m.clear();
   for (final e in entries) {
@@ -900,14 +1445,10 @@ void _swapMapKeysInPlace(Map m, String keyA, String keyB) {
       m[keyB] = entries.firstWhere((x) => x.key.toString() == keyB).value;
     } else if (k == keyB) {
       m[keyA] = entries.firstWhere((x) => x.key.toString() == keyA).value;
-    } else if (k == r'$meta_' + keyA) {
-      m[r'$meta_' + keyB] = entries
-          .firstWhere((x) => x.key.toString() == r'$meta_' + keyB)
-          .value;
-    } else if (k == r'$meta_' + keyB) {
-      m[r'$meta_' + keyA] = entries
-          .firstWhere((x) => x.key.toString() == r'$meta_' + keyA)
-          .value;
+    } else if (k == metaA) {
+      m[metaB] = entries.firstWhere((x) => x.key.toString() == metaB).value;
+    } else if (k == metaB) {
+      m[metaA] = entries.firstWhere((x) => x.key.toString() == metaA).value;
     } else {
       m[e.key] = e.value;
     }
@@ -915,8 +1456,38 @@ void _swapMapKeysInPlace(Map m, String keyA, String keyB) {
 }
 
 bool _isPseudoComm(dynamic v) {
-  if (v is! Map || v.length != 1) return false;
-  return v.keys.first.toString().startsWith(r'$comm_');
+  if (v is! Map) return false;
+  bool sawComm = false;
+  for (final k in v.keys) {
+    final s = k.toString();
+    if (s.startsWith(r'$comm_')) {
+      sawComm = true;
+      continue;
+    }
+    if (s.startsWith(r'$meta_comm_')) continue;
+    return false;
+  }
+  return sawComm;
+}
+
+/// Sibling reference used by comment-move sibling enumeration. `lastSeg` is
+/// the last path segment that resolves the sibling (a real map key, or a
+/// `$comm_<N>` key for comments).
+class _SiblingRef {
+  final String lastSeg;
+  final bool isComment;
+  _SiblingRef({required this.lastSeg, required this.isComment});
+}
+
+/// One `$comm_<N>` location used during global renumbering after a
+/// comment-affecting op. `tempIdx` is filled in pass 1 of the rename and
+/// consumed in pass 2.
+class _CommentEntry {
+  final Map parent;
+  final String oldN;
+  final int blockStart;
+  int tempIdx = 0;
+  _CommentEntry(this.parent, this.oldN, this.blockStart);
 }
 
 /// Map a Dart array index to the corresponding `$elem_meta_<key>` index.

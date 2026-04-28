@@ -251,8 +251,15 @@ fn placementName(p: Placement) []const u8 {
 }
 
 const PendingComment = struct {
-    text: []u8, // owned by alloc
+    text: []u8, // owned by alloc; includes `//` or `/* */` markers
     placement: Placement,
+    // Byte spans into the original input:
+    //   block_*: whole comment row incl. leading indent (for splice/move)
+    //   text_*:  comment body only, excluding markers (for EditCommentOp)
+    block_start: usize,
+    block_end: usize,
+    text_start: usize,
+    text_end: usize,
 };
 
 pub const AnnotatedResult = struct {
@@ -329,6 +336,18 @@ fn flushPending(
         try out.appendSlice(alloc, ", \"placement\": \"");
         try out.appendSlice(alloc, placementName(placement));
         try out.appendSlice(alloc, "\"}");
+        // Sibling $meta_comm_<N> with byte spans for the GUI's CST-preserving ops.
+        const meta_head = try std.fmt.allocPrint(
+            alloc,
+            ", \"$meta_comm_{d}\": {{\"value_span\": ",
+            .{counter.*},
+        );
+        defer alloc.free(meta_head);
+        try out.appendSlice(alloc, meta_head);
+        try appendSpanObj(out, alloc, p.text_start, p.text_end);
+        try out.appendSlice(alloc, ", \"block_span\": ");
+        try appendSpanObj(out, alloc, p.block_start, p.block_end);
+        try out.append(alloc, '}');
     }
     // If a key/value follows (mid-object flush), separate with a trailing comma.
     // At a closing brace, removeTrailingComma in the '}' handler takes care of any leftover.
@@ -562,7 +581,20 @@ fn flushPendingInArray(
         try appendJsonStr(out, alloc, p.text);
         try out.appendSlice(alloc, ", \"placement\": \"");
         try out.appendSlice(alloc, placementName(placement));
-        try out.appendSlice(alloc, "\"}}");
+        try out.appendSlice(alloc, "\"}");
+        // Sibling $meta_comm_<N> inside the same pseudo-object so reorder/edit
+        // ops can find spans next to the $comm_<N> they describe.
+        const meta_head = try std.fmt.allocPrint(
+            alloc,
+            ", \"$meta_comm_{d}\": {{\"value_span\": ",
+            .{counter.*},
+        );
+        defer alloc.free(meta_head);
+        try out.appendSlice(alloc, meta_head);
+        try appendSpanObj(out, alloc, p.text_start, p.text_end);
+        try out.appendSlice(alloc, ", \"block_span\": ");
+        try appendSpanObj(out, alloc, p.block_start, p.block_end);
+        try out.appendSlice(alloc, "}}");
     }
     if (!at_close) try out.appendSlice(alloc, ", ");
 
@@ -755,20 +787,40 @@ pub fn preprocessAnnotated(alloc: std.mem.Allocator, input: []const u8) !Annotat
             if (input[i + 1] == '/') {
                 const start = i;
                 i += 2;
+                const text_body_start = i;
                 while (i < input.len and input[i] != '\n') i += 1;
+                const text_body_end = i;
                 const text = try alloc.dupe(u8, input[start..i]);
-                try pending.append(alloc, .{ .text = text, .placement = detectLinePlacement(input, start) });
+                const placement = detectLinePlacement(input, start);
+                const blk_start = if (placement == .leading) walkBackToLineStart(input, start) else start;
+                try pending.append(alloc, .{
+                    .text = text,
+                    .placement = placement,
+                    .block_start = blk_start,
+                    .block_end = i,
+                    .text_start = text_body_start,
+                    .text_end = text_body_end,
+                });
                 continue;
             }
             if (input[i + 1] == '*') {
                 const start = i;
                 i += 2;
+                const text_body_start = i;
+                var body_end = i;
                 while (i + 1 < input.len) {
-                    if (input[i] == '*' and input[i + 1] == '/') { i += 2; break; }
+                    if (input[i] == '*' and input[i + 1] == '/') { body_end = i; i += 2; break; }
                     i += 1;
                 }
                 const text = try alloc.dupe(u8, input[start..i]);
-                try pending.append(alloc, .{ .text = text, .placement = .block });
+                try pending.append(alloc, .{
+                    .text = text,
+                    .placement = .block,
+                    .block_start = start,
+                    .block_end = i,
+                    .text_start = text_body_start,
+                    .text_end = body_end,
+                });
                 continue;
             }
         }
@@ -1236,6 +1288,52 @@ test "annotated: comment preserved as $comm trailing" {
     try std.testing.expectEqualStrings("// hi", comm.object.get("text").?.string);
     // trailing comment after value at end of object → keeps trailing placement
     try std.testing.expectEqualStrings("trailing", comm.object.get("placement").?.string);
+}
+
+test "annotated: $meta_comm_<N> spans for line + block comment" {
+    const alloc = std.testing.allocator;
+    const src = "// hello\n{a:1, /* inline */ b:2}";
+    const r = try preprocessAnnotated(alloc, src);
+    defer alloc.free(r.out);
+    const parsed = try std.json.parseFromSlice(std.json.Value, alloc, r.out, .{});
+    defer parsed.deinit();
+    // Leading line comment: text_span covers " hello", block_span covers "// hello".
+    const m1 = parsed.value.object.get("$meta_comm_1") orelse return error.MissingMeta1;
+    const v1s: usize = @intCast(m1.object.get("value_span").?.object.get("start").?.integer);
+    const v1e: usize = @intCast(m1.object.get("value_span").?.object.get("end").?.integer);
+    const b1s: usize = @intCast(m1.object.get("block_span").?.object.get("start").?.integer);
+    const b1e: usize = @intCast(m1.object.get("block_span").?.object.get("end").?.integer);
+    try std.testing.expectEqualStrings(" hello", src[v1s..v1e]);
+    try std.testing.expectEqualStrings("// hello", src[b1s..b1e]);
+    // Inline block comment: text_span covers " inline ", block_span covers "/* inline */".
+    const m2 = parsed.value.object.get("$meta_comm_2") orelse return error.MissingMeta2;
+    const v2s: usize = @intCast(m2.object.get("value_span").?.object.get("start").?.integer);
+    const v2e: usize = @intCast(m2.object.get("value_span").?.object.get("end").?.integer);
+    const b2s: usize = @intCast(m2.object.get("block_span").?.object.get("start").?.integer);
+    const b2e: usize = @intCast(m2.object.get("block_span").?.object.get("end").?.integer);
+    try std.testing.expectEqualStrings(" inline ", src[v2s..v2e]);
+    try std.testing.expectEqualStrings("/* inline */", src[b2s..b2e]);
+}
+
+test "annotated: $meta_comm_<N> inside array pseudo-object" {
+    const alloc = std.testing.allocator;
+    const src = "[1, // mid\n 2]";
+    const r = try preprocessAnnotated(alloc, src);
+    defer alloc.free(r.out);
+    const parsed = try std.json.parseFromSlice(std.json.Value, alloc, r.out, .{});
+    defer parsed.deinit();
+    const arr = parsed.value.array;
+    // Find the pseudo-object carrying $comm_1 + $meta_comm_1.
+    var found = false;
+    for (arr.items) |it| {
+        if (it != .object) continue;
+        const meta = it.object.get("$meta_comm_1") orelse continue;
+        const vs: usize = @intCast(meta.object.get("value_span").?.object.get("start").?.integer);
+        const ve: usize = @intCast(meta.object.get("value_span").?.object.get("end").?.integer);
+        try std.testing.expectEqualStrings(" mid", src[vs..ve]);
+        found = true;
+    }
+    try std.testing.expect(found);
 }
 
 test "annotated: multiple comments numbered" {
