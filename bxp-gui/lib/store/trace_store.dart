@@ -185,11 +185,57 @@ class TraceStore extends ChangeNotifier {
     return templateId.isNotEmpty ? templateId : null;
   }
 
+  /// Convert a real-only array index (the kind bxp-cli emits in trace
+  /// events) into a Dart raw index against `configJson` along [parentPath].
+  /// Returns the raw index, or null when the parent path can't be resolved
+  /// or the target slot doesn't exist.
+  ///
+  /// This is needed because:
+  ///   * bxp-cli iterates the in-memory config (no comments) and emits
+  ///     `rule_index: 2` for the third rule.
+  ///   * `configJson` is the annotated parse tree where `$comm_*` wrappers
+  ///     occupy real slots in the parsed list.
+  ///   * `JsonTree` paths and `OpApply` paths use the Dart raw index, so
+  ///     the same rule may be at raw index 3 if a leading comment exists.
+  int? _realToRawListIndex(List<String> parentPath, int realIdx) {
+    final root = configJson;
+    if (root == null) return null;
+    dynamic cur = root;
+    for (final seg in parentPath) {
+      if (cur is Map) {
+        cur = cur[seg];
+      } else if (cur is List) {
+        final i = int.tryParse(seg);
+        if (i == null || i < 0 || i >= cur.length) return null;
+        cur = cur[i];
+      } else {
+        return null;
+      }
+      if (cur == null) return null;
+    }
+    if (cur is! List) return null;
+    int seen = 0;
+    for (int i = 0; i < cur.length; i++) {
+      final v = cur[i];
+      // Match op_apply's "is comment wrapper?" predicate: a Map where
+      // every key starts with `$` (the only kind of element the parser
+      // emits as a wrapper rather than a real value).
+      final isCommWrapper = v is Map &&
+          v.keys.every((k) => k.toString().startsWith(r'$'));
+      if (isCommWrapper) continue;
+      if (seen == realIdx) return i;
+      seen++;
+    }
+    return null;
+  }
+
   void jumpToConfigRule(int ruleIndex, String whenExpr) {
     final tmpl = _activeTemplateId();
     if (tmpl == null) return;
+    final parentPath = ['conversion_templates', tmpl, 'row_rules'];
+    final raw = _realToRawListIndex(parentPath, ruleIndex) ?? ruleIndex;
     setActiveTab(0);
-    final path = ['conversion_templates', tmpl, 'row_rules', ruleIndex.toString(), 'when'];
+    final path = [...parentPath, raw.toString(), 'when'];
     setSelectedExpr(path, whenExpr);
   }
 
@@ -206,7 +252,9 @@ class TraceStore extends ChangeNotifier {
 
   /// Jump to an override expression inside a row_rules block:
   /// `row_rules[ruleIndex].rows[outputRowIndex].<varName>`. Used by
-  /// Rule-Results table cell clicks.
+  /// Rule-Results table cell clicks. Both list indices arrive from
+  /// trace events (real-only) and need conversion to Dart raw indices
+  /// before they'll match a JsonTree leaf.
   void jumpToConfigRuleVar(
     int ruleIndex,
     int outputRowIndex,
@@ -215,16 +263,12 @@ class TraceStore extends ChangeNotifier {
   ) {
     final tmpl = _activeTemplateId();
     if (tmpl == null) return;
+    final rulesPath = ['conversion_templates', tmpl, 'row_rules'];
+    final ruleRaw = _realToRawListIndex(rulesPath, ruleIndex) ?? ruleIndex;
+    final rowsPath = [...rulesPath, ruleRaw.toString(), 'rows'];
+    final rowRaw = _realToRawListIndex(rowsPath, outputRowIndex) ?? outputRowIndex;
     setActiveTab(0);
-    final path = [
-      'conversion_templates',
-      tmpl,
-      'row_rules',
-      ruleIndex.toString(),
-      'rows',
-      outputRowIndex.toString(),
-      varName,
-    ];
+    final path = [...rowsPath, rowRaw.toString(), varName];
     setSelectedExpr(path, exprText);
   }
 

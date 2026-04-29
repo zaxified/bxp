@@ -275,14 +275,17 @@ class _JsonNodeState extends State<_JsonNode> {
   /// inline onto the preceding real element; the rest render as their own
   /// rows.
   ///
-  /// Real elements (rules, output rows, …) use a "real-only" index: the
-  /// position counted across non-comment entries. This matches both
-  /// (a) the `rule_index` / `output_row_index` emitted by bxp-cli, which
-  ///     iterates the in-memory config array — comments don't exist there,
-  /// and (b) `OpApply`, which resolves array paths against the real-only
-  ///     element list when applying CST patches.
-  /// Comment-wrapper paths still use the raw position `i` so
-  /// `_lookupCommentMetaRaw` can reach `$meta_comm_<N>` siblings.
+  /// Path indexing follows the **Dart raw position** of the parsed list,
+  /// counting `$comm_*` wrappers as full slots. OpApply (`_emIndex`)
+  /// converts this to the real-only `$elem_meta_<key>` index when it
+  /// needs to splice CST byte spans, so paths must remain raw or save
+  /// will write to the wrong offsets and produce broken JSON.
+  ///
+  /// Visible labels (`keyName`) instead use a "real-only" counter so
+  /// `[N]` in the tree matches the `rule_index` / `output_row_index`
+  /// values bxp-cli emits in trace events. Without this divergence, a
+  /// comment before `row_rules[0]` would push the user-visible label to
+  /// `[1]` for what trace calls rule 0.
   List<Widget> _listChildNodes(List list) {
     final out = <Widget>[];
     int? lastRealIdx;
@@ -351,7 +354,7 @@ class _JsonNodeState extends State<_JsonNode> {
         value: v,
         expandAll: widget.expandAll || _recursiveExpand,
         depth: widget.depth + 1,
-        path: [...widget.path, realCount.toString()],
+        path: [...widget.path, i.toString()],
       ));
       lastRealIdx = out.length - 1;
       realCount++;
