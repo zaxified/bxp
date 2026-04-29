@@ -96,6 +96,9 @@ class TraceBuilder {
           name: ev['name'] as String? ?? '',
           expr: ev['expr'] as String?,
           value: ev['value'] as String?,
+          origin: ev['origin'] as String? ?? 'input_schema',
+          ruleIndex: ev['rule_index'] as int?,
+          outputRowIndex: ev['output_row_index'] as int?,
         ));
         break;
       case 'var_error':
@@ -107,6 +110,9 @@ class TraceBuilder {
           expr: ev['expr'] as String?,
           error: ev['error'] as String?,
           detail: ev['detail'] as String?,
+          origin: ev['origin'] as String? ?? 'input_schema',
+          ruleIndex: ev['rule_index'] as int?,
+          outputRowIndex: ev['output_row_index'] as int?,
         ));
         row.hasError = true;
         break;

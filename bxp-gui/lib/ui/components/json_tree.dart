@@ -79,6 +79,21 @@ class _JsonNodeState extends State<_JsonNode> {
   /// per-child expansion state).
   bool _recursiveExpand = false;
 
+  /// True when the active `selectedExprPath` lives somewhere inside this
+  /// node's subtree. Used by `_buildMap`/`_buildList` to render this node
+  /// expanded even if the user collapsed it manually — so click-to-jump
+  /// from the row-detail tables can reveal a deeply nested expression.
+  /// Recomputed every build via `context.watch<TraceStore>()`.
+  bool _isOnRevealPath(BuildContext ctx) {
+    final selected = ctx.watch<TraceStore>().selectedExprPath;
+    if (selected == null) return false;
+    if (selected.length <= widget.path.length) return false;
+    for (int i = 0; i < widget.path.length; i++) {
+      if (selected[i] != widget.path[i]) return false;
+    }
+    return true;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -150,11 +165,12 @@ class _JsonNodeState extends State<_JsonNode> {
     final realCount = map.keys
         .where((k) => !k.toString().startsWith(r'$'))
         .length;
+    final showChildren = expanded || _isOnRevealPath(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _buildExpandableRow('{ $realCount }', true),
-        if (expanded)
+        if (showChildren)
           Container(
             margin: const EdgeInsets.only(left: 6.0),
             padding: const EdgeInsets.only(left: 16.0),
@@ -233,11 +249,12 @@ class _JsonNodeState extends State<_JsonNode> {
       return _buildRow(Text('(empty array)', style: BxpText.italic(context)));
     }
     final children = _listChildNodes(list);
+    final showChildren = expanded || _isOnRevealPath(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _buildExpandableRow('[ ${list.length} ]', true),
-        if (expanded)
+        if (showChildren)
           Container(
             margin: const EdgeInsets.only(left: 6.0),
             padding: const EdgeInsets.only(left: 16.0),
@@ -257,9 +274,19 @@ class _JsonNodeState extends State<_JsonNode> {
   /// pseudo-objects between real elements. Trailing-placement comments
   /// inline onto the preceding real element; the rest render as their own
   /// rows.
+  ///
+  /// Real elements (rules, output rows, …) use a "real-only" index: the
+  /// position counted across non-comment entries. This matches both
+  /// (a) the `rule_index` / `output_row_index` emitted by bxp-cli, which
+  ///     iterates the in-memory config array — comments don't exist there,
+  /// and (b) `OpApply`, which resolves array paths against the real-only
+  ///     element list when applying CST patches.
+  /// Comment-wrapper paths still use the raw position `i` so
+  /// `_lookupCommentMetaRaw` can reach `$meta_comm_<N>` siblings.
   List<Widget> _listChildNodes(List list) {
     final out = <Widget>[];
     int? lastRealIdx;
+    int realCount = 0;
     for (int i = 0; i < list.length; i++) {
       final v = list[i];
       // Pseudo-comment wrapper: `{$comm_<N>: {...}, $meta_comm_<N>: {...}}`.
@@ -320,13 +347,14 @@ class _JsonNodeState extends State<_JsonNode> {
         }
       }
       out.add(_JsonNode(
-        keyName: i.toString(),
+        keyName: realCount.toString(),
         value: v,
         expandAll: widget.expandAll || _recursiveExpand,
         depth: widget.depth + 1,
-        path: [...widget.path, i.toString()],
+        path: [...widget.path, realCount.toString()],
       ));
       lastRealIdx = out.length - 1;
+      realCount++;
     }
     return out;
   }
@@ -1141,17 +1169,44 @@ class _AddChildDialogState extends State<_AddChildDialog> {
 }
 
 // ── Expression leaf – kliknutím otevře ExprPanel ───────────────────────────
-class _ExprLeaf extends StatelessWidget {
+class _ExprLeaf extends StatefulWidget {
   final String text;
   final List<String> path;
 
   const _ExprLeaf({required this.text, required this.path});
 
   @override
+  State<_ExprLeaf> createState() => _ExprLeafState();
+}
+
+class _ExprLeafState extends State<_ExprLeaf> {
+  // Last `exprGeneration` for which this leaf has performed a scroll-into-
+  // view. Without this guard every Provider rebuild while the leaf is
+  // active would call `Scrollable.ensureVisible` again.
+  int _lastScrolledGen = -1;
+
+  @override
   Widget build(BuildContext context) {
     final store = context.watch<TraceStore>();
     final isActive = store.selectedExprPath != null &&
-        _listEq(store.selectedExprPath!, path);
+        _listEq(store.selectedExprPath!, widget.path);
+    if (isActive && _lastScrolledGen != store.exprGeneration) {
+      _lastScrolledGen = store.exprGeneration;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        final ctx = context;
+        final renderObject = ctx.findRenderObject();
+        if (renderObject == null) return;
+        Scrollable.ensureVisible(
+          ctx,
+          duration: const Duration(milliseconds: 220),
+          alignment: 0.3,
+          alignmentPolicy: ScrollPositionAlignmentPolicy.explicit,
+        );
+      });
+    }
+    final text = widget.text;
+    final path = widget.path;
     // Show red underline on the selected leaf when bxp-fmt reports an
     // error for its current text. Non-selected leaves never get marked —
     // validating every expression on load would require one spawn per leaf.

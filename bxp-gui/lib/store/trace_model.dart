@@ -5,8 +5,29 @@ class VarEntry {
   final String? value;
   final String? error;
   final String? detail;
+  // Where this variable was defined. 'input_schema' (default) for vars
+  // declared at the top of a conversion template, 'row_rules' for vars
+  // defined inside the matched row_rules[ruleIndex].rows[*] override block.
+  // Drives the split between the Variables table and the Rule-Results
+  // panel in row_detail.dart.
+  final String origin;
+  final int? ruleIndex;
+  // Index inside `row_rules[ruleIndex].rows[]` for vars that came from a
+  // rule's per-output-row override block. Null for input_schema vars (and
+  // for older trace files without the field).
+  final int? outputRowIndex;
 
-  VarEntry({required this.kind, required this.name, this.expr, this.value, this.error, this.detail});
+  VarEntry({
+    required this.kind,
+    required this.name,
+    this.expr,
+    this.value,
+    this.error,
+    this.detail,
+    this.origin = 'input_schema',
+    this.ruleIndex,
+    this.outputRowIndex,
+  });
 }
 
 class RuleEntry {
@@ -38,6 +59,24 @@ class PrepassEntry {
   final String field;
   final String value;
   const PrepassEntry({required this.key, required this.field, required this.value});
+}
+
+/// One entry in the per-call trace produced by `bxp-fmt --expr-trace`. Used
+/// by the GUI's hover-on-token feature to surface the evaluated value of a
+/// nested function call (e.g. ABS([Fee]) → "1.50") without re-running the
+/// whole pipeline. `srcStart`/`srcEnd` are byte offsets into the expression
+/// source so the GUI can match a token's position to its trace entry.
+class ExprCallTrace {
+  final String fn;
+  final int srcStart;
+  final int srcEnd;
+  final String value;
+  const ExprCallTrace({
+    required this.fn,
+    required this.srcStart,
+    required this.srcEnd,
+    required this.value,
+  });
 }
 
 class FileModel {

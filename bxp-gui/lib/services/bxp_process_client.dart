@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import '../store/trace_model.dart';
+
 /// Spawn-based client for `bxp-cli` and `bxp-fmt`.
 ///
 /// Mirrors the RPC surface bxp-ui uses from its Bun main process: every
@@ -158,6 +160,51 @@ class BxpProcessClient {
       // Not JSON — fall through to the raw text.
     }
     return raw;
+  }
+
+  /// Re-evaluates an expression against a CSV row context and returns the
+  /// per-function-call NDJSON stream from `bxp-fmt --expr-trace`. Used by
+  /// the GUI's hover-on-token feature to surface intermediate values for
+  /// nested function calls (`ABS([Fee])` → "1.50") without re-running the
+  /// whole pipeline.
+  ///
+  /// Returns the parsed call list. An empty list means the expression had
+  /// no function calls or the spawn failed — the hover layer treats both
+  /// the same (fall back to docs-only tooltip).
+  static Future<List<ExprCallTrace>> traceExpr({
+    required String expr,
+    required List<String> headers,
+    required List<String> fields,
+  }) async {
+    final bin = findBin('bxp-fmt');
+    if (bin == null) return const [];
+    try {
+      final result = await Process.run(bin, [
+        '--expr-trace', expr,
+        '--row-headers', jsonEncode(headers),
+        '--row-fields', jsonEncode(fields),
+      ]);
+      final out = (result.stdout as String);
+      final calls = <ExprCallTrace>[];
+      for (final line in out.split('\n')) {
+        final trimmed = line.trim();
+        if (trimmed.isEmpty) continue;
+        final parsed = jsonDecode(trimmed);
+        if (parsed is! Map) continue;
+        // Skip the final-result sentinel `{"t":"final","value":"..."}` —
+        // the per-call entries omit `t` and have a `fn` field.
+        if (parsed['fn'] is! String) continue;
+        calls.add(ExprCallTrace(
+          fn: parsed['fn'] as String,
+          srcStart: (parsed['src_start'] as num).toInt(),
+          srcEnd: (parsed['src_end'] as num).toInt(),
+          value: parsed['value']?.toString() ?? '',
+        ));
+      }
+      return calls;
+    } catch (_) {
+      return const [];
+    }
   }
 
   // ── Streaming invocations (stdout emitted as NDJSON events) ───────────

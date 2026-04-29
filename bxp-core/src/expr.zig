@@ -112,6 +112,13 @@ pub const Context = struct {
     /// error here before returning the error.  String is allocated with ctx.alloc.
     /// Caller sets this and resets the pointed value to "" before each eval call.
     error_detail: ?*[]const u8 = null,
+    /// Per-call trace writer for the GUI hover-on-token feature. When set,
+    /// every successful function call emits one NDJSON record:
+    ///   {"fn": "ABS", "src_start": 4, "src_end": 14, "value": "1.50"}
+    /// `src_start` and `src_end` are byte offsets into the expression source
+    /// passed to `eval()`. Default null disables the writer entirely so the
+    /// runtime path (bxp-cli pipeline) pays no overhead.
+    trace_writer: ?*std.Io.Writer = null,
 
     /// Returns the field value at idx, trimmed of surrounding spaces.
     /// Returns "" when idx is out of range.
@@ -388,6 +395,37 @@ const Parser = struct {
         d.* = std.fmt.allocPrint(self.ctx.alloc, fmt, args) catch return;
     }
 
+    /// Emit one NDJSON record describing a successful function call to
+    /// `ctx.trace_writer` (no-op when the writer is null). Errors are
+    /// swallowed — tracing must never disrupt evaluation.
+    fn emitCallTrace(
+        self: *Parser,
+        name: []const u8,
+        src_start: usize,
+        src_end: usize,
+        value: Value,
+    ) void {
+        const w = self.ctx.trace_writer orelse return;
+        const value_str: []const u8 = switch (value) {
+            .number => |n| std.fmt.allocPrint(self.ctx.alloc, "{d}", .{n}) catch return,
+            .string => |s| s,
+            .boolean => |b| if (b) "true" else "false",
+        };
+        var jw: std.json.Stringify = .{ .writer = w, .options = .{} };
+        jw.beginObject() catch return;
+        jw.objectField("fn") catch return;
+        jw.write(name) catch return;
+        jw.objectField("src_start") catch return;
+        jw.write(src_start) catch return;
+        jw.objectField("src_end") catch return;
+        jw.write(src_end) catch return;
+        jw.objectField("value") catch return;
+        jw.write(value_str) catch return;
+        jw.endObject() catch return;
+        w.writeByte('\n') catch return;
+        w.flush() catch return;
+    }
+
     /// Convenience wrapper for NotANumber — includes field name when known.
     fn setNotANumber(self: *Parser, s: []const u8) void {
         if (self.last_field_name.len > 0) {
@@ -562,7 +600,18 @@ const Parser = struct {
                 if (closing.kind != .rparen) return error.ExpectedRParen;
                 return v;
             },
-            .ident => return self.evalCall(t.text),
+            .ident => {
+                // Capture the byte offset of the ident token in the original
+                // source so the GUI's hover lookup can match `[src_start..)`
+                // against the token's position. The text slice points into
+                // self.tok.src, so subtraction gives the start offset.
+                const name = t.text;
+                const src_start = @intFromPtr(name.ptr) - @intFromPtr(self.tok.src.ptr);
+                const result = try self.evalCall(name);
+                const src_end = self.tok.pos;
+                self.emitCallTrace(name, src_start, src_end, result);
+                return result;
+            },
             else => {
                 if (t.kind == .eof) {
                     self.setDetail("unexpected end of expression — expression may be incomplete", .{});

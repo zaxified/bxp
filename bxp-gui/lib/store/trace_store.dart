@@ -117,10 +117,115 @@ class TraceStore extends ChangeNotifier {
     }
   }
 
+  // Per-call expression trace cache for the hover-on-token feature. Keyed
+  // by `"${rowId}::${exprText}"`. Each entry is the parsed NDJSON output of
+  // `bxp-fmt --expr-trace` for that (row, expr) pair — list may be empty
+  // when the expression has no function calls or the spawn failed. The
+  // separate in-flight set prevents duplicate spawns when several Tooltip
+  // widgets request the same expression on the same frame.
+  final Map<String, List<ExprCallTrace>> _exprCallCache = {};
+  final Set<String> _exprCallInFlight = {};
+
+  String _exprCallKey(String rowId, String expr) => '$rowId::$expr';
+
+  /// Returns the cached per-call trace for an expression in a row, or null
+  /// if no spawn has completed yet. Callers that want to populate the cache
+  /// must first invoke [requestExprCallTrace] (typically from a post-frame
+  /// callback during a build that detects a function token in the spans).
+  List<ExprCallTrace>? exprCallTraces(String rowId, String expr) {
+    return _exprCallCache[_exprCallKey(rowId, expr)];
+  }
+
+  /// Lazily kicks off `bxp-fmt --expr-trace` for the given (row, expr) pair.
+  /// No-op when the cache already holds a result or another spawn is in
+  /// flight. Calls [notifyListeners] when the result lands so widgets that
+  /// depend on the cache rebuild and display the per-call values.
+  void requestExprCallTrace(String rowId, String expr) {
+    final key = _exprCallKey(rowId, expr);
+    if (_exprCallCache.containsKey(key)) return;
+    if (_exprCallInFlight.contains(key)) return;
+    final row = traceModel?.rows[rowId];
+    if (row == null) return;
+    final file = traceModel?.files[row.fileId];
+    if (file == null) return;
+    // Snapshot row state — the row may change (or be cleared) while the
+    // spawn is in flight; we want the trace to match the row at request
+    // time, not whatever happens to be selected when it returns.
+    final headers = List<String>.from(file.headers);
+    final fields = List<String>.from(row.fields);
+    _exprCallInFlight.add(key);
+    () async {
+      final calls = await BxpProcessClient.traceExpr(
+        expr: expr,
+        headers: headers,
+        fields: fields,
+      );
+      _exprCallCache[key] = calls;
+      _exprCallInFlight.remove(key);
+      notifyListeners();
+    }();
+  }
+
+  /// Resolve the conversion-template id for the currently-selected row.
+  /// Falls back to the global `templateId` (set when the user explicitly
+  /// picks a template tab); if neither is set we return null and the
+  /// jump-to-config helpers refuse to build a path with an empty segment
+  /// — which would land on `conversion_templates > > … > <var>` and
+  /// silently fail to reveal the leaf.
+  String? _activeTemplateId() {
+    final rowId = selectedRowId;
+    if (rowId != null) {
+      final row = traceModel?.rows[rowId];
+      if (row != null) {
+        final file = traceModel?.files[row.fileId];
+        final t = file?.template;
+        if (t != null && t.isNotEmpty) return t;
+      }
+    }
+    return templateId.isNotEmpty ? templateId : null;
+  }
+
   void jumpToConfigRule(int ruleIndex, String whenExpr) {
+    final tmpl = _activeTemplateId();
+    if (tmpl == null) return;
     setActiveTab(0);
-    final path = ['conversion_templates', templateId, 'row_rules', ruleIndex.toString(), 'when'];
+    final path = ['conversion_templates', tmpl, 'row_rules', ruleIndex.toString(), 'when'];
     setSelectedExpr(path, whenExpr);
+  }
+
+  /// Jump to a top-level `input_schema.<varName>` expression in the
+  /// template the currently-selected row belongs to. Used by Variables-
+  /// table row clicks.
+  void jumpToConfigVar(String varName, String exprText) {
+    final tmpl = _activeTemplateId();
+    if (tmpl == null) return;
+    setActiveTab(0);
+    final path = ['conversion_templates', tmpl, 'input_schema', varName];
+    setSelectedExpr(path, exprText);
+  }
+
+  /// Jump to an override expression inside a row_rules block:
+  /// `row_rules[ruleIndex].rows[outputRowIndex].<varName>`. Used by
+  /// Rule-Results table cell clicks.
+  void jumpToConfigRuleVar(
+    int ruleIndex,
+    int outputRowIndex,
+    String varName,
+    String exprText,
+  ) {
+    final tmpl = _activeTemplateId();
+    if (tmpl == null) return;
+    setActiveTab(0);
+    final path = [
+      'conversion_templates',
+      tmpl,
+      'row_rules',
+      ruleIndex.toString(),
+      'rows',
+      outputRowIndex.toString(),
+      varName,
+    ];
+    setSelectedExpr(path, exprText);
   }
 
   // Debouncer for expression validation. Spawn-based validateExpr costs

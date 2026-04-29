@@ -54,6 +54,9 @@ pub fn main() !void {
 
     var config_path: ?[]const u8 = null;
     var expr_src: ?[]const u8 = null;
+    var expr_trace_src: ?[]const u8 = null;
+    var row_headers_json: ?[]const u8 = null;
+    var row_fields_json: ?[]const u8 = null;
     var emit_docs = false;
     var list_templates = false;
     var fetch_template_id: ?[]const u8 = null;
@@ -94,6 +97,33 @@ pub fn main() !void {
             expr_src = args[i];
             continue;
         }
+        if (std.mem.eql(u8, a, "--expr-trace")) {
+            i += 1;
+            if (i >= args.len) {
+                std.debug.print("error: --expr-trace requires an expression string\n", .{});
+                std.process.exit(2);
+            }
+            expr_trace_src = args[i];
+            continue;
+        }
+        if (std.mem.eql(u8, a, "--row-headers")) {
+            i += 1;
+            if (i >= args.len) {
+                std.debug.print("error: --row-headers requires a JSON array string\n", .{});
+                std.process.exit(2);
+            }
+            row_headers_json = args[i];
+            continue;
+        }
+        if (std.mem.eql(u8, a, "--row-fields")) {
+            i += 1;
+            if (i >= args.len) {
+                std.debug.print("error: --row-fields requires a JSON array string\n", .{});
+                std.process.exit(2);
+            }
+            row_fields_json = args[i];
+            continue;
+        }
         if (std.mem.eql(u8, a, "--list-templates")) {
             list_templates = true;
             continue;
@@ -125,11 +155,12 @@ pub fn main() !void {
     const has_config_action = config_path != null and config_modifier_count == 0;
     const action_count = @as(u8, if (has_config_action) 1 else 0) +
         @as(u8, if (expr_src != null) 1 else 0) +
+        @as(u8, if (expr_trace_src != null) 1 else 0) +
         @as(u8, if (emit_docs) 1 else 0) +
         @as(u8, if (config_modifier_count > 0) 1 else 0);
 
     if (action_count > 1) {
-        std.debug.print("error: --config, --expr, --docs, --list-templates, and --fetch-template are mutually exclusive\n", .{});
+        std.debug.print("error: --config, --expr, --expr-trace, --docs, --list-templates, and --fetch-template are mutually exclusive\n", .{});
         std.process.exit(2);
     }
     if (action_count == 0) {
@@ -159,6 +190,10 @@ pub fn main() !void {
     }
     if (expr_src) |e| {
         try runExpr(alloc, e);
+        return;
+    }
+    if (expr_trace_src) |e| {
+        try runExprTrace(alloc, e, row_headers_json, row_fields_json);
         return;
     }
 }
@@ -572,4 +607,136 @@ fn runExpr(alloc: std.mem.Allocator, src: []const u8) !void {
         std.process.exit(1);
     };
     // Success: no stdout output; exit 0 implicit.
+}
+
+// ── --expr-trace ─────────────────────────────────────────────────────────────
+
+/// Parse + evaluate an expression with a per-call trace writer attached to
+/// stdout. Each successful function call emits one NDJSON line:
+///   {"fn":"ABS","src_start":0,"src_end":7,"value":"1.50"}
+/// Final result (or error) is emitted as a sentinel line so the GUI can tell
+/// the run finished:
+///   {"t":"final","value":"..."}        on success
+///   {"t":"error","error":"X","detail":"..."}  on failure (also exit 1)
+///
+/// `headers_json` and `fields_json` are JSON arrays of strings of equal
+/// length; together they reconstruct a CSV row context so `[ColumnName]` and
+/// `[n]` references resolve to real values during the re-evaluation. Both
+/// are optional — a null pair means an empty row context (column refs throw).
+fn runExprTrace(
+    gpa: std.mem.Allocator,
+    src: []const u8,
+    headers_json: ?[]const u8,
+    fields_json: ?[]const u8,
+) !void {
+    var stdout_buf: [4096]u8 = undefined;
+    var stdout_fw = std.fs.File.stdout().writer(&stdout_buf);
+    const stdout = &stdout_fw.interface;
+    var stderr_buf: [4096]u8 = undefined;
+    var stderr_fw = std.fs.File.stderr().writer(&stderr_buf);
+    const stderr = &stderr_fw.interface;
+
+    // Arena collects every transient allocation made during JSON arg parsing
+    // and expression evaluation. The tool exits immediately after this call,
+    // so freeing per-allocation is needless overhead — and DebugAllocator's
+    // leak report would mask real bugs if we tracked them individually.
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    var col_index = std.StringHashMap(usize).init(alloc);
+    defer col_index.deinit();
+    var ticker_map = std.StringHashMap([]const u8).init(alloc);
+    defer ticker_map.deinit();
+
+    // Decode headers/fields JSON arrays. Mismatched lengths or non-array
+    // shapes are usage errors (exit 2) — the GUI sends a known-good pair.
+    var headers_list = std.array_list.Managed([]const u8).init(alloc);
+    defer headers_list.deinit();
+    var fields_list = std.array_list.Managed([]const u8).init(alloc);
+    defer fields_list.deinit();
+    if (headers_json) |hj| {
+        const parsed = std.json.parseFromSlice(std.json.Value, alloc, hj, .{}) catch {
+            std.debug.print("error: --row-headers must be a JSON array of strings\n", .{});
+            std.process.exit(2);
+        };
+        defer parsed.deinit();
+        if (parsed.value != .array) {
+            std.debug.print("error: --row-headers must be a JSON array of strings\n", .{});
+            std.process.exit(2);
+        }
+        for (parsed.value.array.items) |item| {
+            if (item != .string) {
+                std.debug.print("error: --row-headers entries must be strings\n", .{});
+                std.process.exit(2);
+            }
+            try headers_list.append(try alloc.dupe(u8, item.string));
+        }
+    }
+    if (fields_json) |fj| {
+        const parsed = std.json.parseFromSlice(std.json.Value, alloc, fj, .{}) catch {
+            std.debug.print("error: --row-fields must be a JSON array of strings\n", .{});
+            std.process.exit(2);
+        };
+        defer parsed.deinit();
+        if (parsed.value != .array) {
+            std.debug.print("error: --row-fields must be a JSON array of strings\n", .{});
+            std.process.exit(2);
+        }
+        for (parsed.value.array.items) |item| {
+            if (item != .string) {
+                std.debug.print("error: --row-fields entries must be strings\n", .{});
+                std.process.exit(2);
+            }
+            try fields_list.append(try alloc.dupe(u8, item.string));
+        }
+    }
+    if (headers_list.items.len != fields_list.items.len) {
+        std.debug.print(
+            "error: --row-headers ({d}) and --row-fields ({d}) length mismatch\n",
+            .{ headers_list.items.len, fields_list.items.len },
+        );
+        std.process.exit(2);
+    }
+    for (headers_list.items, 0..) |h, idx| {
+        try col_index.put(h, idx);
+    }
+
+    var detail: []const u8 = "";
+    const ctx = expr_mod.Context{
+        .fields = fields_list.items,
+        .col_index = &col_index,
+        .ticker_map = &ticker_map,
+        .lookup_table = null,
+        .alloc = alloc,
+        .error_detail = &detail,
+        .trace_writer = stdout,
+    };
+
+    const result = expr_mod.evalString(src, &ctx) catch |err| {
+        // Emit error sentinel on stderr then exit non-zero. Per-fn traces
+        // already on stdout up to the point of failure are kept — the GUI
+        // can surface partial results when an outer call blew up.
+        var jw: std.json.Stringify = .{ .writer = stderr, .options = .{} };
+        jw.beginObject() catch {};
+        jw.objectField("t") catch {};
+        jw.write("error") catch {};
+        jw.objectField("error") catch {};
+        jw.write(@errorName(err)) catch {};
+        jw.objectField("detail") catch {};
+        jw.write(detail) catch {};
+        jw.endObject() catch {};
+        stderr.writeByte('\n') catch {};
+        stderr.flush() catch {};
+        std.process.exit(1);
+    };
+    var jw: std.json.Stringify = .{ .writer = stdout, .options = .{} };
+    jw.beginObject() catch {};
+    jw.objectField("t") catch {};
+    jw.write("final") catch {};
+    jw.objectField("value") catch {};
+    jw.write(result) catch {};
+    jw.endObject() catch {};
+    stdout.writeByte('\n') catch {};
+    stdout.flush() catch {};
 }

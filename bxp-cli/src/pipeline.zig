@@ -296,10 +296,10 @@ fn evalAllVars(
                 out.writer.print("\n", .{}) catch {};
                 out.writer.flush() catch {};
             }
-            out.event("var_error", .{ .name = e.key_ptr.*, .expr = e.value_ptr.*, .@"error" = @errorName(err), .detail = detail });
+            out.event("var_error", .{ .name = e.key_ptr.*, .expr = e.value_ptr.*, .@"error" = @errorName(err), .detail = detail, .origin = "input_schema" });
             break :blk "";
         };
-        out.event("var_eval", .{ .name = e.key_ptr.*, .expr = e.value_ptr.*, .value = val });
+        out.event("var_eval", .{ .name = e.key_ptr.*, .expr = e.value_ptr.*, .value = val, .origin = "input_schema" });
         try vars.put(e.key_ptr.*, val);
     }
     return vars;
@@ -653,7 +653,7 @@ pub fn processBroker(
                     out.writer.flush() catch break :emit_rule_match;
                 }
                 // Empty rows slice = silent skip.
-                for (rule.rows) |row_override| {
+                for (rule.rows, 0..) |row_override, output_row_index| {
                     // Start from base vars, then apply per-row overrides.
                     var merged = std.StringHashMap([]const u8).init(line_alloc);
                     var base_it = vars.iterator();
@@ -670,10 +670,10 @@ pub fn processBroker(
                                 }
                                 out.writer.flush() catch {};
                             }
-                            out.event("var_error", .{ .name = e.key_ptr.*, .expr = e.value_ptr.*, .@"error" = @errorName(err), .detail = row_detail });
+                            out.event("var_error", .{ .name = e.key_ptr.*, .expr = e.value_ptr.*, .@"error" = @errorName(err), .detail = row_detail, .origin = "row_rules", .rule_index = rule_index, .output_row_index = output_row_index });
                             break :blk "";
                         };
-                        out.event("var_eval", .{ .name = e.key_ptr.*, .expr = e.value_ptr.*, .value = val });
+                        out.event("var_eval", .{ .name = e.key_ptr.*, .expr = e.value_ptr.*, .value = val, .origin = "row_rules", .rule_index = rule_index, .output_row_index = output_row_index });
                         try merged.put(e.key_ptr.*, val);
                     }
                     // Date range filter.

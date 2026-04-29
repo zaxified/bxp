@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../../store/trace_model.dart';
 import '../../store/trace_store.dart';
 import '../theme/bxp_theme.dart';
 import '../theme/bxp_text.dart';
@@ -161,50 +162,204 @@ bool _boldFor(_Tok kind) => kind == _Tok.function_ || kind == _Tok.keyword;
 /// `BxpTextScheme` propagates here unchanged. The optional `sizePx`
 /// escape hatch exists for callers that need raw px (e.g. the editor
 /// box at 13 px which is between sizeMd and sizeXl).
+///
+/// When `hoverContext` is true, individual tokens become hoverable: column
+/// references resolve to the matching field value in the currently-selected
+/// row, `$var` references resolve to the var's evaluated value, and function
+/// names resolve to their signature/description from `docFunctions`. Default
+/// false to keep config-tree leaves cheap and non-interactive.
 class ExprHighlight extends StatelessWidget {
   final String text;
   final BxpSize size;
   final double? sizePx;
+  final bool hoverContext;
 
   const ExprHighlight({
     super.key,
     required this.text,
     this.size = BxpSize.md,
     this.sizePx,
+    this.hoverContext = false,
   });
 
   @override
   Widget build(BuildContext context) {
     _refreshLiveSets(context);
     final t = context.bxpTheme;
-    final ts = context.watch<TraceStore>().textScheme;
+    final store = context.watch<TraceStore>();
+    final ts = store.textScheme;
     final spans = _tokenize(text);
     final px = sizePx ?? resolveBxpSize(ts, size);
-    return RichText(
-      text: TextSpan(
-        // Family + letter-spacing flow from BxpTextScheme so editing
-        // the central scheme propagates to every inline expression.
-        style: TextStyle(
-          fontFamily: ts.fontFamily,
-          fontFamilyFallback: ts.fontFamilyFallback,
-          fontSize: px,
-          letterSpacing: ts.trackBody,
-        ),
-        children: spans
-            .map(
-              (s) => TextSpan(
-                text: s.text,
-                style: TextStyle(
-                  color: s.kind == _Tok.ws ? null : _colorFor(s.kind, t),
-                  fontWeight: _boldFor(s.kind)
-                      ? ts.weightBold
-                      : ts.weightRegular,
+
+    if (!hoverContext) {
+      // Fast path: single RichText, no tooltip wrappers — used by the
+      // config tree's `_ExprLeaf` where every keystroke triggers a full
+      // tree rebuild and per-token MouseRegions would add real overhead.
+      return RichText(
+        text: TextSpan(
+          style: TextStyle(
+            fontFamily: ts.fontFamily,
+            fontFamilyFallback: ts.fontFamilyFallback,
+            fontSize: px,
+            letterSpacing: ts.trackBody,
+          ),
+          children: spans
+              .map(
+                (s) => TextSpan(
+                  text: s.text,
+                  style: TextStyle(
+                    color: s.kind == _Tok.ws ? null : _colorFor(s.kind, t),
+                    fontWeight: _boldFor(s.kind)
+                        ? ts.weightBold
+                        : ts.weightRegular,
+                  ),
                 ),
-              ),
-            )
-            .toList(),
+              )
+              .toList(),
+        ),
+      );
+    }
+
+    // Hover path: one widget per token so each can have its own
+    // MouseRegion/Tooltip. Wrap with zero spacing visually mimics a
+    // single line of RichText for short expressions.
+    final row = (store.selectedRowId != null && store.traceModel != null)
+        ? store.traceModel!.rows[store.selectedRowId!]
+        : null;
+    final file = (row != null) ? store.traceModel!.files[row.fileId] : null;
+    final headers = file?.headers ?? const <String>[];
+    final docFunctions = store.docFunctions;
+    // Lazily kick off the per-call expression trace. The first hover-enabled
+    // render for this (row, expr) pair queues a `bxp-fmt --expr-trace` spawn;
+    // when the result lands the store fires notifyListeners and we rebuild
+    // with populated `calls` — so the function-token tooltip can switch from
+    // signature-only to signature + evaluated value.
+    final hasFn = spans.any((s) => s.kind == _Tok.function_);
+    if (row != null && hasFn) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        store.requestExprCallTrace(row.id, text);
+      });
+    }
+    final calls = (row != null)
+        ? store.exprCallTraces(row.id, text) ?? const <ExprCallTrace>[]
+        : const <ExprCallTrace>[];
+
+    final baseStyle = TextStyle(
+      fontFamily: ts.fontFamily,
+      fontFamilyFallback: ts.fontFamilyFallback,
+      fontSize: px,
+      letterSpacing: ts.trackBody,
+    );
+
+    final children = <Widget>[];
+    int offset = 0;
+    for (final s in spans) {
+      final start = offset;
+      final end = offset + s.text.length;
+      offset = end;
+      final tip = _tooltipFor(s, start, end, row, headers, docFunctions, calls);
+      final tokenWidget = Text(
+        s.text,
+        style: TextStyle(
+          color: s.kind == _Tok.ws ? null : _colorFor(s.kind, t),
+          fontWeight: _boldFor(s.kind) ? ts.weightBold : ts.weightRegular,
+        ),
+        softWrap: false,
+      );
+      if (tip == null) {
+        children.add(tokenWidget);
+        continue;
+      }
+      children.add(Tooltip(
+        message: tip,
+        waitDuration: const Duration(milliseconds: 250),
+        child: MouseRegion(
+          cursor: SystemMouseCursors.help,
+          child: tokenWidget,
+        ),
+      ));
+    }
+    return DefaultTextStyle.merge(
+      style: baseStyle,
+      child: Wrap(
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: children,
       ),
     );
+  }
+}
+
+/// Compose a tooltip string for the given token. Returns null when there is
+/// nothing useful to surface (literals, operators, punctuation, whitespace).
+/// Caller renders the tooltip via Flutter's built-in `Tooltip`.
+String? _tooltipFor(
+  _Span s,
+  int srcStart,
+  int srcEnd,
+  RowModel? row,
+  List<String> headers,
+  List<Map<String, dynamic>> docFunctions,
+  List<ExprCallTrace> calls,
+) {
+  switch (s.kind) {
+    case _Tok.column:
+      // `[fieldName]` — strip brackets and look up the value in the row.
+      if (row == null || s.text.length < 2) return null;
+      final raw = s.text.substring(1, s.text.length - 1);
+      // Numeric `[n]` (1-based column index) — show the field at that slot.
+      final asIdx = int.tryParse(raw);
+      if (asIdx != null && asIdx >= 1 && asIdx <= row.fields.length) {
+        return '[$asIdx] = "${row.fields[asIdx - 1]}"';
+      }
+      final hi = headers.indexOf(raw);
+      if (hi >= 0 && hi < row.fields.length) {
+        return '[$raw] = "${row.fields[hi]}"';
+      }
+      return '[$raw] (not in headers)';
+    case _Tok.variable:
+      if (row == null) return null;
+      final entry = row.vars
+          .where((v) => v.name == s.text)
+          .toList()
+          .reversed
+          .firstOrNull;
+      if (entry == null) return '${s.text} (not evaluated for this row)';
+      if (entry.kind == 'error') {
+        return '${s.text} → ⚠ ${entry.error ?? "error"}';
+      }
+      return '${s.text} → "${entry.value ?? ""}"';
+    case _Tok.function_:
+      String? sig;
+      String? desc;
+      for (final f in docFunctions) {
+        if (f['name'] == s.text) {
+          sig = f['signature']?.toString();
+          desc = f['description']?.toString();
+          break;
+        }
+      }
+      // Pick the call whose name token starts at this span's offset. Two
+      // calls of the same fn at different offsets don't collide.
+      ExprCallTrace? call;
+      for (final c in calls) {
+        if (c.fn == s.text && c.srcStart == srcStart) {
+          call = c;
+          break;
+        }
+      }
+      final parts = <String>[];
+      parts.add(sig ?? s.text);
+      if (call != null) parts.add('→ "${call.value}"');
+      if (desc != null && desc.isNotEmpty) parts.add(desc);
+      return parts.join('\n\n');
+    case _Tok.string:
+    case _Tok.number:
+    case _Tok.op:
+    case _Tok.punct:
+    case _Tok.keyword:
+    case _Tok.ident:
+    case _Tok.ws:
+      return null;
   }
 }
 
