@@ -1669,6 +1669,13 @@ class TraceStore extends ChangeNotifier {
       return;
     } finally {
       ticker.cancel();
+      // Final sync — the last 100ms tick may have fired before the
+      // closing batch of lines arrived, leaving the counter short of
+      // the true total. Without this the displayed number is
+      // non-deterministic (varies per run).
+      if (traceLinesCounter.value != rawLines) {
+        traceLinesCounter.value = rawLines;
+      }
     }
 
     status = RunStatus.done;
