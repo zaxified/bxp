@@ -50,6 +50,18 @@ class TraceStore extends ChangeNotifier {
   String? runError;
   String stderrText = '';
   int rawLines = 0;
+  // Live trace-line counter exposed as a ValueNotifier so the StatusBar's
+  // "trace lines" cell can rebuild at ~10 Hz during a stream WITHOUT
+  // calling main `notifyListeners()` (which would also rebuild RowList /
+  // FileList / OutputPanel and turn the dry-run into an O(N²) PlutoGrid
+  // re-allocation storm).
+  final ValueNotifier<int> traceLinesCounter = ValueNotifier(0);
+  // Bumped on every `file_start` event so FileList can grow live during a
+  // stream without main `notifyListeners()`. RowList does NOT listen to
+  // this — once the first file's auto-select fires (single main notify on
+  // first `file_end`), the grid renders once and stays put for the rest
+  // of the run.
+  final ValueNotifier<int> fileGen = ValueNotifier(0);
   // Exit code from the most recent dry-run / full-run, captured so the
   // status bar can show "done · exit N" with the right colour:
   //   0 → success (emerald), 2 → completed with warnings (amber),
@@ -1569,6 +1581,7 @@ class TraceStore extends ChangeNotifier {
     runError = null;
     stderrText = '';
     rawLines = 0;
+    traceLinesCounter.value = 0;
     lastExitCode = null;
     selectedFileId = null;
     selectedRowId = null;
@@ -1576,17 +1589,20 @@ class TraceStore extends ChangeNotifier {
     // Fresh builder so subsequent runs start clean.
     final builder = TraceBuilder();
     traceModel = builder.model;
+    // One main notify to flip status to running and clear stale model.
+    fileGen.value++;
     notifyListeners();
 
-    // Throttle notifyListeners during the stream — rebuilding on every line
-    // would tank rendering performance on fast pipelines.
-    bool dirty = false;
-    final ticker = Timer.periodic(const Duration(milliseconds: 16), (_) {
-      if (dirty) {
-        dirty = false;
-        notifyListeners();
+    // Counter ticker — only refreshes the `trace lines` ValueNotifier.
+    // Crucially does NOT call main `notifyListeners()`, so RowList /
+    // OutputPanel / status-bar aggregates do not rebuild per tick.
+    final ticker = Timer.periodic(const Duration(milliseconds: 100), (_) {
+      if (traceLinesCounter.value != rawLines) {
+        traceLinesCounter.value = rawLines;
       }
     });
+
+    int prevFileCount = 0;
 
     // bxp-cli interprets an omitted --template as "process everything".
     try {
@@ -1597,23 +1613,37 @@ class TraceStore extends ChangeNotifier {
         onLine: (line) {
           rawLines++;
           builder.parseLine(line);
-          // Auto-select the first file as soon as it streams in so the
-          // RowList / RowDetail / OutputPanel populate live instead of
-          // staying blank until the whole pipeline finishes. Mirrors
-          // bxp-ui's pushLine handler. Only the *first* file_start
-          // assigns selectedFileId; later files don't steal focus.
-          if (selectedFileId == null && builder.model.fileOrder.isNotEmpty) {
-            selectedFileId = builder.model.fileOrder.first;
+
+          // FileList grows live: bump `fileGen` whenever a new file_start
+          // landed. Cheap — typical M is < 50.
+          final fc = builder.model.fileOrder.length;
+          if (fc != prevFileCount) {
+            prevFileCount = fc;
+            fileGen.value++;
           }
-          dirty = true;
+
+          // Auto-select happens exactly ONCE, on the FIRST `file_end`
+          // (detected by the first file's `stats` being non-null). That
+          // single main `notifyListeners()` triggers RowList to mount
+          // PlutoGrid with the first file's complete row set. After that
+          // we stay quiet until `done` — no further row-level rebuilds.
+          if (selectedFileId == null && builder.model.fileOrder.isNotEmpty) {
+            final firstId = builder.model.fileOrder.first;
+            final firstFile = builder.model.files[firstId];
+            if (firstFile?.stats != null) {
+              selectedFileId = firstId;
+              if (firstFile!.rowIds.isNotEmpty) {
+                selectedRowId = firstFile.rowIds.first;
+              }
+              notifyListeners();
+            }
+          }
         },
-        // Live stderr stream — the StatusBar surfaces it via the
-        // expandable "stderr (NB)" detail. Mirrors bxp-ui pushStderr so
-        // the user sees pipeline warnings as they happen rather than
-        // batched at the end.
+        // Stderr is appended silently during the run; surface lands at
+        // the first-file-ready notify or at the final `done` notify so
+        // we don't pay a rebuild per chunk.
         onStderr: (chunk) {
           stderrText += chunk;
-          dirty = true;
         },
       );
 

@@ -206,46 +206,50 @@ class _StatusBarState extends State<_StatusBar> {
         break;
     }
 
-    // Aggregate stats.
-    int inputRows = 0;
-    int outputRows = 0;
-    int errors = 0;
-    int warnings = 0;
-    if (model != null) {
-      for (final id in model.fileOrder) {
-        final f = model.files[id];
-        if (f == null) continue;
-        inputRows += f.rowIds.length;
-        final stats = f.stats;
-        if (stats != null) {
-          outputRows += (stats['written'] as int? ?? 0);
-          errors += (stats['errors'] as int? ?? 0);
-          warnings += (stats['warnings'] as int? ?? 0);
-        }
-      }
-    }
-    final parseIssues = model?.issues.length ?? 0;
-
-    final firstErr = store.firstConfigErrorTrace;
-    final hasConfigError = store.configError != null ||
-        store.configSaveError != null ||
-        firstErr != null;
-    // The err-msg row is the single home for *all* problem output: config
-    // errors, save failures, and runtime stderr captured from the CLI.
-    // It's shown whenever any of those exist. When stderr exists, the
-    // whole row is click-to-expand (any sub-line) — no separate stderr
-    // link in the right edge of the status bar.
-    final hasStderr = store.stderrText.isNotEmpty;
-    final showErrRow = hasConfigError || hasStderr;
-    final stderrSuffix = hasStderr
-        ? '  ›  stderr (${store.stderrText.length}B)'
-        : '';
     void toggleStderr() {
-      if (!hasStderr) return;
+      if (store.stderrText.isEmpty) return;
       setState(() => _stderrExpanded = !_stderrExpanded);
     }
 
-    return Column(
+    // Status-bar aggregates (input rows / output rows / errors / warnings /
+    // stderr badge) live-update via `traceLinesCounter`. The notifier ticks
+    // ~10 Hz during a stream, so these small Text cells refresh smoothly
+    // without pulling the heavy widgets (RowList / FileList) along —
+    // they're outside this VLB and stay quiet until the main notify on
+    // first file_end / done.
+    return ValueListenableBuilder<int>(
+      valueListenable: store.traceLinesCounter,
+      builder: (context, _, _) {
+        int inputRows = 0;
+        int outputRows = 0;
+        int errors = 0;
+        int warnings = 0;
+        if (model != null) {
+          for (final id in model.fileOrder) {
+            final f = model.files[id];
+            if (f == null) continue;
+            inputRows += f.rowIds.length;
+            final stats = f.stats;
+            if (stats != null) {
+              outputRows += (stats['written'] as int? ?? 0);
+              errors += (stats['errors'] as int? ?? 0);
+              warnings += (stats['warnings'] as int? ?? 0);
+            }
+          }
+        }
+        final parseIssues = model?.issues.length ?? 0;
+
+        final firstErr = store.firstConfigErrorTrace;
+        final hasConfigError = store.configError != null ||
+            store.configSaveError != null ||
+            firstErr != null;
+        final hasStderr = store.stderrText.isNotEmpty;
+        final showErrRow = hasConfigError || hasStderr;
+        final stderrSuffix = hasStderr
+            ? '  ›  stderr (${store.stderrText.length}B)'
+            : '';
+
+        return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
         // Expanded stderr lives ABOVE the err-msg row in the column flow
@@ -376,7 +380,10 @@ class _StatusBarState extends State<_StatusBar> {
                   style: BxpText.body(context,
                       color: runStatusColor, size: BxpSize.sm)),
               const SizedBox(width: 16),
-              _StatCell(label: 'trace lines', value: '${store.rawLines}'),
+              ValueListenableBuilder<int>(
+                valueListenable: store.traceLinesCounter,
+                builder: (_, v, _) => _StatCell(label: 'trace lines', value: '$v'),
+              ),
               const SizedBox(width: 12),
               _StatCell(label: 'input rows', value: '$inputRows'),
               const SizedBox(width: 12),
@@ -404,6 +411,8 @@ class _StatusBarState extends State<_StatusBar> {
           ),
         ),
       ],
+        );
+      },
     );
   }
 }

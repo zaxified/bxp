@@ -80,7 +80,18 @@ class _FileListState extends State<FileList> {
 
   @override
   Widget build(BuildContext context) {
+    // Listen to BOTH the main store (for selection / theme / config events)
+    // and `store.fileGen` (bumped on every `file_start` during a stream so
+    // FileList grows live without main `notifyListeners`, which would
+    // otherwise cascade into a quadratic PlutoGrid rebuild in RowList).
     final store = context.watch<TraceStore>();
+    return ListenableBuilder(
+      listenable: store.fileGen,
+      builder: (context, _) => _buildBody(context, store),
+    );
+  }
+
+  Widget _buildBody(BuildContext context, TraceStore store) {
     final model = store.traceModel;
     final t = context.bxpTheme;
 
