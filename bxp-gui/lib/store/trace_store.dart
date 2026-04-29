@@ -901,9 +901,17 @@ class TraceStore extends ChangeNotifier {
     if (identical(a, b)) return true;
     if (a is Map && b is Map) {
       if (a.length != b.length) return false;
-      for (final e in a.entries) {
-        if (!b.containsKey(e.key)) return false;
-        if (!_deepEquals(e.value, b[e.key])) return false;
+      // Map-key INSERTION ORDER must match. Reordering top-level templates
+      // or output_schema entries is a key-swap that leaves the set + values
+      // identical, so an order-blind comparison would treat the post-move
+      // tree as equal to the saved baseline and `_isDirty` would never
+      // flip — Save and Apply stay greyed out and the move silently
+      // disappears. Walking entries in lockstep catches that.
+      final aIt = a.entries.iterator;
+      final bIt = b.entries.iterator;
+      while (aIt.moveNext() && bIt.moveNext()) {
+        if (aIt.current.key != bIt.current.key) return false;
+        if (!_deepEquals(aIt.current.value, bIt.current.value)) return false;
       }
       return true;
     }
