@@ -8,6 +8,7 @@ import 'components/row_detail.dart';
 import 'components/output_panel.dart';
 import 'components/panel_header.dart';
 import 'components/resize_handle.dart';
+import 'layout_defaults.dart';
 import 'theme/bxp_theme.dart';
 import 'theme/bxp_text.dart';
 
@@ -19,9 +20,9 @@ class DebugPanes extends StatefulWidget {
 }
 
 class _DebugPanesState extends State<DebugPanes> {
-  double _leftFrac = 0.25;
-  double _rowsInHeight = 210;
-  double _outputHeight = 176;
+  double _leftFrac = LayoutDefaults.filesDetailsLeft.defaultFrac;
+  double _rowsInFrac = LayoutDefaults.rowsIn.defaultFrac;
+  double _rowsOutFrac = LayoutDefaults.rowsOut.defaultFrac;
 
   @override
   Widget build(BuildContext context) {
@@ -91,10 +92,8 @@ class _DebugPanesState extends State<DebugPanes> {
           Expanded(
             child: LayoutBuilder(builder: (ctx, outer) {
               final totalW = outer.maxWidth;
-              const minLeft = 140.0;
-              const minRight = 300.0;
-              final maxLeft = (totalW - minRight).clamp(minLeft, totalW);
-              final leftWidth = (totalW * _leftFrac).clamp(minLeft, maxLeft);
+              const leftCfg = LayoutDefaults.filesDetailsLeft;
+              final leftWidth = totalW * leftCfg.clamp(_leftFrac);
               return Row(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
@@ -116,27 +115,48 @@ class _DebugPanesState extends State<DebugPanes> {
                 ResizeHandle(
                   axis: Axis.horizontal,
                   onDelta: (dx) => setState(() {
-                    final newW = (leftWidth + dx).clamp(minLeft, maxLeft);
-                    _leftFrac = (newW / totalW).clamp(0.08, 0.9);
+                    _leftFrac = leftCfg.clamp(_leftFrac + dx / totalW);
                   }),
                 ),
                 // Right: RowList + RowDetail + OutputPanel (3-row stack)
                 Expanded(
                   child: LayoutBuilder(builder: (ctx, constraints) {
                     final totalH = constraints.maxHeight;
-                    // Clamp heights so middle (RowDetail) keeps >= 60 px.
-                    // The inner `math.max(60, ...)` matters: when totalH is
-                    // small (60 < maxStackH < 120) the naive subtraction
-                    // would push the clamp's max below its min (60) and
-                    // `double.clamp` throws ArgumentError. We instead let
-                    // the panel collapse to its 60 px minimum and the
-                    // outer Column overflow indicator picks up the slack.
-                    final maxStackH = totalH - 60.0 - 8.0; // splitters = 8
-                    final rowsInMax = math.max(60.0, maxStackH - 60.0);
-                    final rowsInH = _rowsInHeight.clamp(60.0, rowsInMax);
-                    final outputMax =
-                        math.max(60.0, math.min(600.0, maxStackH - rowsInH));
-                    final outputH = _outputHeight.clamp(60.0, outputMax);
+                    const inCfg = LayoutDefaults.rowsIn;
+                    const midCfg = LayoutDefaults.rowsMid;
+                    const outCfg = LayoutDefaults.rowsOut;
+
+                    // Derive middle from the two side fractions and
+                    // re-clamp the sides so middle stays in its band.
+                    // When sides hit their max simultaneously middle is
+                    // forced above its own min — that's intentional.
+                    double inFrac = inCfg.clamp(_rowsInFrac);
+                    double outFrac = outCfg.clamp(_rowsOutFrac);
+                    double midFrac = 1.0 - inFrac - outFrac;
+                    if (midFrac < midCfg.minFrac) {
+                      final excess = midCfg.minFrac - midFrac;
+                      final inSlack = inFrac - inCfg.minFrac;
+                      final outSlack = outFrac - outCfg.minFrac;
+                      final total = inSlack + outSlack;
+                      if (total > 0) {
+                        inFrac -= excess * (inSlack / total);
+                        outFrac -= excess * (outSlack / total);
+                      }
+                      midFrac = 1.0 - inFrac - outFrac;
+                    } else if (midFrac > midCfg.maxFrac) {
+                      final deficit = midFrac - midCfg.maxFrac;
+                      final inRoom = inCfg.maxFrac - inFrac;
+                      final outRoom = outCfg.maxFrac - outFrac;
+                      final total = inRoom + outRoom;
+                      if (total > 0) {
+                        inFrac += deficit * (inRoom / total);
+                        outFrac += deficit * (outRoom / total);
+                      }
+                      midFrac = 1.0 - inFrac - outFrac;
+                    }
+
+                    final rowsInH = totalH * inFrac;
+                    final outputH = totalH * outFrac;
                     final selectedFile = store.selectedFileId == null
                         ? null
                         : model?.files[store.selectedFileId];
@@ -157,23 +177,35 @@ class _DebugPanesState extends State<DebugPanes> {
                             ],
                           ),
                         ),
-                        // Horizontal splitter (RowList / RowDetail)
+                        // Horizontal splitter (RowList / RowDetail).
+                        // Dragging adjusts rows-in only; middle absorbs
+                        // the delta unless it hits its own band, in
+                        // which case the clamp pins rows-in.
                         ResizeHandle(
                           axis: Axis.vertical,
                           onDelta: (dy) => setState(() {
-                            _rowsInHeight =
-                                (_rowsInHeight + dy).clamp(60.0, 500.0);
+                            final delta = dy / totalH;
+                            final maxIn = math.min(
+                                inCfg.maxFrac, 1.0 - outFrac - midCfg.minFrac);
+                            final minIn = math.max(
+                                inCfg.minFrac, 1.0 - outFrac - midCfg.maxFrac);
+                            _rowsInFrac =
+                                (inFrac + delta).clamp(minIn, maxIn);
                           }),
                         ),
                         const Expanded(child: RowDetail()),
-                        // Horizontal splitter (RowDetail / OutputPanel) —
-                        // dy is inverted because the OutputPanel grows
-                        // upward (drag up = bigger output pane).
+                        // Horizontal splitter (RowDetail / OutputPanel)
+                        // — dy inverted (drag up = bigger output pane).
                         ResizeHandle(
                           axis: Axis.vertical,
                           onDelta: (dy) => setState(() {
-                            _outputHeight =
-                                (_outputHeight - dy).clamp(60.0, 500.0);
+                            final delta = -dy / totalH;
+                            final maxOut = math.min(
+                                outCfg.maxFrac, 1.0 - inFrac - midCfg.minFrac);
+                            final minOut = math.max(
+                                outCfg.minFrac, 1.0 - inFrac - midCfg.maxFrac);
+                            _rowsOutFrac =
+                                (outFrac + delta).clamp(minOut, maxOut);
                           }),
                         ),
                         SizedBox(height: outputH, child: const OutputPanel()),

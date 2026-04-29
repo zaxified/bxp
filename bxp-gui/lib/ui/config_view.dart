@@ -5,6 +5,7 @@ import 'components/json_tree.dart';
 import 'components/expr_panel.dart';
 import 'components/open_dialog.dart';
 import 'components/resize_handle.dart';
+import 'layout_defaults.dart';
 import 'theme/bxp_theme.dart';
 import 'theme/bxp_text.dart';
 
@@ -16,7 +17,7 @@ class ConfigView extends StatefulWidget {
 }
 
 class _ConfigViewState extends State<ConfigView> {
-  double leftFrac = 0.4;
+  double leftFrac = LayoutDefaults.treeExprLeft.defaultFrac;
 
   @override
   Widget build(BuildContext context) {
@@ -125,11 +126,8 @@ class _ConfigViewState extends State<ConfigView> {
             child: LayoutBuilder(
               builder: (ctx, c) {
                 final totalW = c.maxWidth;
-                final minLeft = 200.0;
-                final minRight = 300.0;
-                final maxLeft = (totalW - minRight).clamp(minLeft, totalW);
-                final leftWidth =
-                    (totalW * leftFrac).clamp(minLeft, maxLeft);
+                const cfg = LayoutDefaults.treeExprLeft;
+                final leftWidth = totalW * cfg.clamp(leftFrac);
                 return Row(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
@@ -167,8 +165,7 @@ class _ConfigViewState extends State<ConfigView> {
                 ResizeHandle(
                   axis: Axis.horizontal,
                   onDelta: (dx) => setState(() {
-                    final newW = (leftWidth + dx).clamp(minLeft, maxLeft);
-                    leftFrac = (newW / totalW).clamp(0.1, 0.9);
+                    leftFrac = cfg.clamp(leftFrac + dx / totalW);
                   }),
                 ),
 

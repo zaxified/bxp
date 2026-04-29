@@ -4,6 +4,7 @@ import '../../store/trace_store.dart';
 import '../../store/trace_model.dart';
 import '../theme/bxp_theme.dart';
 import '../theme/bxp_text.dart';
+import '../layout_defaults.dart';
 import 'expr_highlight.dart';
 import 'resize_handle.dart';
 
@@ -15,9 +16,7 @@ class RowDetail extends StatefulWidget {
 }
 
 class _RowDetailState extends State<RowDetail> {
-  // Default left-pane width. Mirrors bxp-ui's `SEL_DEFAULT_W = 300`
-  // so a side-by-side comparison lines up out of the box.
-  double _leftWidth = 300;
+  double _leftFrac = LayoutDefaults.rowSelectedLeft.defaultFrac;
 
   @override
   Widget build(BuildContext context) {
@@ -72,12 +71,16 @@ class _RowDetailState extends State<RowDetail> {
 
         // ── Main split: ROW SELECTED | ROW TRANSFORM ───────────────
         Expanded(
-          child: Row(
+          child: LayoutBuilder(builder: (ctx, c) {
+            final totalW = c.maxWidth;
+            const cfg = LayoutDefaults.rowSelectedLeft;
+            final leftWidth = totalW * cfg.clamp(_leftFrac);
+            return Row(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               // 1. ROW SELECTED
               SizedBox(
-                width: _leftWidth,
+                width: leftWidth,
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
@@ -95,7 +98,7 @@ class _RowDetailState extends State<RowDetail> {
               ResizeHandle(
                 axis: Axis.horizontal,
                 onDelta: (dx) => setState(() {
-                  _leftWidth = (_leftWidth + dx).clamp(160.0, 600.0);
+                  _leftFrac = cfg.clamp(_leftFrac + dx / totalW);
                 }),
               ),
               // 2. ROW TRANSFORM
@@ -174,7 +177,8 @@ class _RowDetailState extends State<RowDetail> {
                 ),
               ),
             ],
-          ),
+            );
+          }),
         ),
       ],
     );

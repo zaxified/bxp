@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../store/trace_store.dart';
 import 'debug_panes.dart';
 import 'config_view.dart';
+import 'layout_defaults.dart';
 import 'components/top_bar.dart';
 import 'components/open_dialog.dart';
 import 'theme/bxp_theme.dart';
@@ -63,7 +64,9 @@ class _MainViewState extends State<MainView> {
         if (readOnly ||
             !store.isDirty ||
             store.isSaving ||
-            store.configHasErrors) return true;
+            store.configHasErrors) {
+          return true;
+        }
         store.saveConfig();
         return true;
       case LogicalKeyboardKey.keyZ:
@@ -251,7 +254,10 @@ class _StatusBarState extends State<_StatusBar> {
         // user's only way to dismiss the panel.
         if (_stderrExpanded && store.stderrText.isNotEmpty)
           ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 400),
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.sizeOf(context).height *
+                  LayoutDefaults.stderrPanelMaxHeightFrac,
+            ),
             child: Container(
               width: double.infinity,
               decoration: BoxDecoration(
