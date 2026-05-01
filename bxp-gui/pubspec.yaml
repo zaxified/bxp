@@ -1,6 +1,6 @@
 name: bxp_gui
 description: A sample command-line application.
-version: 1.0.0
+version: 0.1.0
 # repository: https://github.com/my_org/my_repo
 
 environment:
@@ -16,6 +16,7 @@ dependencies:
   provider: ^6.1.5+1
   shared_preferences: ^2.5.5
   split_view: ^3.2.2
+  package_info_plus: ^8.0.0
   pluto_grid: ^8.1.0
   pluto_menu_bar: ^3.0.1
   flex_seed_scheme: ^4.0.1

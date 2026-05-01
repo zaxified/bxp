@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../store/trace_store.dart';
@@ -10,6 +11,7 @@ import 'components/open_dialog.dart';
 import 'theme/bxp_theme.dart';
 import 'theme/bxp_text.dart';
 import 'theme/theme_inspector.dart';
+import 'settings_inspector.dart';
 
 class MainView extends StatefulWidget {
   const MainView({super.key});
@@ -24,6 +26,11 @@ class _MainViewState extends State<MainView> {
   /// affordance — no need to persist across restarts or notify other
   /// widgets.
   bool _inspectorOpen = false;
+
+  /// Ctrl+Shift+S toggles the [SettingsInspector] floating drawer.
+  /// Same rationale as `_inspectorOpen` — transient overlay, no need
+  /// to round-trip through TraceStore.
+  bool _settingsOpen = false;
 
   @override
   void initState() {
@@ -61,6 +68,14 @@ class _MainViewState extends State<MainView> {
     final readOnly = store.configLoadHadErrors;
     switch (event.logicalKey) {
       case LogicalKeyboardKey.keyS:
+        // Ctrl+Shift+S toggles the settings/runtime inspector. Mirrors the
+        // Ctrl+Shift+T branch in keyT below — keep both shift-modified
+        // shortcuts firing regardless of save preconditions, since they're
+        // pure UI overlays and have nothing to do with the config.
+        if (shift) {
+          setState(() => _settingsOpen = !_settingsOpen);
+          return true;
+        }
         if (readOnly ||
             !store.isDirty ||
             store.isSaving ||
@@ -130,6 +145,9 @@ class _MainViewState extends State<MainView> {
               if (_inspectorOpen)
                 ThemeInspector(
                     onClose: () => setState(() => _inspectorOpen = false)),
+              if (_settingsOpen)
+                SettingsInspector(
+                    onClose: () => setState(() => _settingsOpen = false)),
             ],
           ),
         ),
@@ -173,9 +191,11 @@ class _StatusBarState extends State<_StatusBar> {
       configStatusColor = t.textMuted;
     }
 
-    // Run status label + color. Exit code is no longer surfaced here —
-    // the err-msg row above handles diagnostics (and is the place to
-    // expand stderr); the bottom row stays terse with just OK/ERR.
+    // Run status label + color. Exit code maps to bxp-cli's contract:
+    //   0 = OK, 1 = error, 2 = warnings. Exit 2 already painted orange but
+    //   used to say "done - ERR" — the text and color disagreed. Distinct
+    //   text per band keeps the status bar legible without forcing the user
+    //   to read the color to know which kind of "done" it was.
     final String runStatusText;
     final Color runStatusColor;
     switch (store.status) {
@@ -193,7 +213,7 @@ class _StatusBarState extends State<_StatusBar> {
           runStatusText = 'done - OK';
           runStatusColor = t.okText;
         } else if (ec == 2) {
-          runStatusText = 'done - ERR';
+          runStatusText = 'done - WARN';
           runStatusColor = t.warnText;
         } else {
           runStatusText = 'done - ERR';
@@ -379,6 +399,10 @@ class _StatusBarState extends State<_StatusBar> {
               Text(runStatusText,
                   style: BxpText.body(context,
                       color: runStatusColor, size: BxpSize.sm)),
+              if (store.status == RunStatus.running) ...[
+                const SizedBox(width: 6),
+                _BrailleSpinner(color: runStatusColor),
+              ],
               const SizedBox(width: 16),
               ValueListenableBuilder<int>(
                 valueListenable: store.traceLinesCounter,
@@ -473,6 +497,50 @@ class _OutputStatCell extends StatelessWidget {
                     color: t.warnText, fontWeight: FontWeight.bold)),
         ],
       ),
+    );
+  }
+}
+
+
+class _BrailleSpinner extends StatefulWidget {
+  final Color color;
+  const _BrailleSpinner({required this.color});
+
+  @override
+  State<_BrailleSpinner> createState() => _BrailleSpinnerState();
+}
+
+class _BrailleSpinnerState extends State<_BrailleSpinner>
+    with SingleTickerProviderStateMixin {
+  static const _frames = [
+    "⠋", "⠙", "⠹", "⠸", "⠼",
+    "⠴", "⠦", "⠧", "⠇", "⠏",
+  ];
+  late final Ticker _ticker;
+  int _frame = 0;
+  Duration _last = Duration.zero;
+
+  @override
+  void initState() {
+    super.initState();
+    _ticker = createTicker((elapsed) {
+      if (elapsed - _last < const Duration(milliseconds: 100)) return;
+      _last = elapsed;
+      setState(() => _frame = (_frame + 1) % _frames.length);
+    })..start();
+  }
+
+  @override
+  void dispose() {
+    _ticker.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      _frames[_frame],
+      style: BxpText.body(context, color: widget.color, size: BxpSize.sm),
     );
   }
 }

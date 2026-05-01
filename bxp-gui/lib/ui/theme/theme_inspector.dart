@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../../store/trace_store.dart';
+import '../layout_defaults.dart';
 import 'bxp_theme.dart';
 import 'bxp_text.dart';
 
@@ -19,6 +20,8 @@ class ThemeInspector extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = context.bxpTheme;
+    final width = MediaQuery.sizeOf(context).width *
+        LayoutDefaults.sidePanelFrac;
 
     return CallbackShortcuts(
       bindings: {
@@ -40,7 +43,7 @@ class ThemeInspector extends StatelessWidget {
               right: 0,
               top: 0,
               bottom: 0,
-              width: 360,
+              width: width,
               child: Material(
                 color: t.dialogBg,
                 elevation: 8,
@@ -198,8 +201,24 @@ class _Section extends StatelessWidget {
   final List<Widget> children;
   const _Section(this.title, this.children);
 
+  // Number of token cells per row. Three keeps each cell wide enough to fit
+  // typical token names (≤22 chars) plus a 9-char hex on a single line at
+  // 40 % viewport width on a normal display.
+  static const _cols = 3;
+
   @override
   Widget build(BuildContext context) {
+    final rows = <TableRow>[];
+    for (var i = 0; i < children.length; i += _cols) {
+      final cells = <Widget>[];
+      for (var j = 0; j < _cols; j++) {
+        final idx = i + j;
+        cells.add(idx < children.length
+            ? children[idx]
+            : const SizedBox.shrink());
+      }
+      rows.add(TableRow(children: cells));
+    }
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
       child: Column(
@@ -210,7 +229,15 @@ class _Section extends StatelessWidget {
             child: Text(title.toUpperCase(),
                 style: BxpText.label(context)),
           ),
-          ...children,
+          Table(
+            columnWidths: const {
+              0: FlexColumnWidth(),
+              1: FlexColumnWidth(),
+              2: FlexColumnWidth(),
+            },
+            defaultVerticalAlignment: TableCellVerticalAlignment.middle,
+            children: rows,
+          ),
         ],
       ),
     );
@@ -259,36 +286,46 @@ class _TokenRow extends StatelessWidget {
     final Widget swatch;
     if (swatchOrColor is Color) {
       swatch = Container(
-        width: 20,
-        height: 20,
+        width: 14,
+        height: 14,
         decoration: BoxDecoration(
           color: swatchOrColor as Color,
           border: Border.all(color: t.borderColor, width: 1),
         ),
       );
     } else {
-      swatch = swatchOrColor as Widget;
+      swatch = SizedBox(width: 14, height: 14, child: swatchOrColor as Widget);
     }
 
+    // Cell is rendered inside a 3-column FlexColumnWidth Table cell, which
+    // gives it bounded width — so the inner Expanded children get sane
+    // constraints. Layout per cell: [swatch] [name expand] [hex right].
+    // Hex sits on its own line below name when the cell is narrow; since
+    // cell width depends on viewport, we put name on top and hex below in
+    // a Column to keep things readable on small windows.
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 2),
+      padding: const EdgeInsets.fromLTRB(0, 2, 8, 2),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           swatch,
-          const SizedBox(width: 8),
+          const SizedBox(width: 6),
           Expanded(
-            flex: 3,
-            child: Text(name,
-                style: BxpText.body(context,color: t.textPrimary, size: BxpSize.sm),
-                overflow: TextOverflow.ellipsis),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            flex: 2,
-            child: SelectableText(valueText,
-                style: BxpText.body(context,color: t.textMuted, size: BxpSize.xs),
-                maxLines: 1),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(name,
+                    style: BxpText.body(context,
+                        color: t.textPrimary, size: BxpSize.sm),
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 1),
+                SelectableText(valueText,
+                    style: BxpText.body(context,
+                        color: t.textMuted, size: BxpSize.xs),
+                    maxLines: 1),
+              ],
+            ),
           ),
         ],
       ),

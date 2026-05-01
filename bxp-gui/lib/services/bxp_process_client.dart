@@ -79,6 +79,26 @@ class BxpProcessClient {
     return '{"error": ${jsonEncode(err.isEmpty ? "unknown error" : err)}}';
   }
 
+  /// Probe a sibling binary for its version string via `<bin> --version`.
+  /// Both bxp-cli and bxp-fmt print `"<name> <version>\n"` (the version is
+  /// injected from `build.zig.zon` via `build_options.version`), so we keep
+  /// just the trailing token. Returns null when the binary is missing or
+  /// the call fails — callers render that as "(unknown)".
+  static Future<String?> getVersion(String name) async {
+    final bin = findBin(name);
+    if (bin == null) return null;
+    try {
+      final result = await Process.run(bin, ['--version']);
+      if (result.exitCode != 0) return null;
+      final out = (result.stdout as String).trim();
+      if (out.isEmpty) return null;
+      final parts = out.split(RegExp(r'\s+'));
+      return parts.length >= 2 ? parts.last : out;
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// Fetch the canonical function/keyword/operator/token/config-schema
   /// catalog from `bxp-fmt --docs`. Returns the parsed JSON tree, or
   /// null if the binary is missing or returns garbage. Mirrors bxp-ui's

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/bxp_process_client.dart';
 import '../services/op_apply.dart';
@@ -471,6 +472,18 @@ class TraceStore extends ChangeNotifier {
   String? _fatalStartupError;
   String? get fatalStartupError => _fatalStartupError;
 
+  /// Versions of the three components, populated once at [_init] time.
+  /// `bxpGuiVersion` comes from the embedded pubspec metadata via
+  /// `package_info_plus` — same single-source-of-truth pattern as bxp-cli /
+  /// bxp-fmt, where `build.zig` reads `.version` from `build.zig.zon` and
+  /// injects it as a comptime constant. Bumping the version anywhere in the
+  /// monorepo therefore requires touching exactly one manifest.
+  /// Null = lookup failed (binary missing, --version returned non-zero, etc.);
+  /// the SettingsInspector renders "(unknown)" in that case.
+  String? bxpGuiVersion;
+  String? bxpCliVersion;
+  String? bxpFmtVersion;
+
   Future<void> _init() async {
     final prefs = await SharedPreferences.getInstance();
     // Defensive reads — a corrupt/older prefs store should never crash
@@ -539,6 +552,27 @@ class TraceStore extends ChangeNotifier {
         docs = d;
       }
     }
+
+    // Probe versions in parallel — all three calls are independent and can
+    // tolerate failure (any null surfaces as "(unknown)" in the inspector).
+    // Run alongside the docs catalog so MainView opens with versions ready.
+    Future<String?> guiVer() async {
+      try {
+        final p = await PackageInfo.fromPlatform();
+        return p.version;
+      } catch (_) {
+        return null;
+      }
+    }
+    final results = await Future.wait<String?>([
+      guiVer(),
+      BxpProcessClient.getVersion('bxp-cli'),
+      BxpProcessClient.getVersion('bxp-fmt'),
+    ]);
+    bxpGuiVersion = results[0];
+    bxpCliVersion = results[1];
+    bxpFmtVersion = results[2];
+
     _initialized = true;
     notifyListeners();
 

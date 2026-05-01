@@ -69,10 +69,14 @@ pub fn main() !void {
             return;
         }
         if (std.mem.eql(u8, a, "--version")) {
-            var buf: [64]u8 = undefined;
-            var w: std.Io.Writer = .fixed(&buf);
-            w.print("bxp-fmt {s}\n", .{build_options.version}) catch {};
-            std.debug.print("{s}", .{w.buffered()});
+            // Match bxp-cli: write to stdout, not stderr. Tooling that
+            // captures `--version` output (the GUI's runtime info panel)
+            // expects stdout per the CLI convention.
+            var stdout_buf: [64]u8 = undefined;
+            var stdout_fw = std.fs.File.stdout().writer(&stdout_buf);
+            const stdout = &stdout_fw.interface;
+            stdout.print("bxp-fmt {s}\n", .{build_options.version}) catch {};
+            stdout.flush() catch {};
             return;
         }
         if (std.mem.eql(u8, a, "--docs")) {

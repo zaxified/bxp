@@ -324,11 +324,126 @@ class _DocsPanel extends StatelessWidget {
                 const _SectionLabel('SYNTAX'),
                 const SizedBox(height: 8),
                 for (final s in syntax) _SyntaxDoc(s.$1, s.$2, s.$3),
+                const SizedBox(height: 16),
+                const _SectionLabel('STATUS BAR'),
+                const SizedBox(height: 8),
+                _StatusDoc('IDLE',  'no config loaded',           t.textMuted),
+                _StatusDoc('LOADED','config parsed cleanly',      t.okText),
+                _StatusDoc('ERROR', 'config failed to validate',  t.errorText),
+                const SizedBox(height: 6),
+                _StatusDoc('idle',       'no run in progress',                t.textMuted),
+                _StatusDoc('running',    'dry-run / full run streaming',      t.warnText),
+                _StatusDoc('done - OK',  'exit 0 — all rows converted',       t.okText),
+                _StatusDoc('done - WARN','exit 2 — converted with warnings',  t.warnText),
+                _StatusDoc('done - ERR', 'exit 1 — see stderr panel',         t.errorText),
+                const SizedBox(height: 16),
+                const _SectionLabel('TIPS'),
+                const SizedBox(height: 8),
+                const _TipDoc('Click the file icon next to the config '
+                    'path to open it in your default editor.'),
+                const _TipDoc('Click the stderr badge in the status bar '
+                    'to expand / collapse the captured stderr panel.'),
+                const _TipDoc('Hover any token in the expression editor '
+                    'to see its docstring inline.'),
+                const _TipDoc('Ctrl+Scroll zooms the whole UI; Ctrl+0 '
+                    'resets, Ctrl++/Ctrl+- step.'),
+                const SizedBox(height: 16),
+                const _SectionLabel('SHORTCUTS'),
+                const SizedBox(height: 8),
+                const _ShortcutDoc('Ctrl+S',       'Save config'),
+                const _ShortcutDoc('Ctrl+O',       'Open config'),
+                const _ShortcutDoc('Ctrl+R',       'Reload config from disk'),
+                const _ShortcutDoc('Ctrl+Z',       'Undo'),
+                const _ShortcutDoc('Ctrl+Y',       'Redo'),
+                const _ShortcutDoc('Ctrl+T',       'Reset draft'),
+                const _ShortcutDoc('Ctrl+Shift+T', 'Toggle theme inspector'),
+                const _ShortcutDoc('Ctrl+Shift+S', 'Toggle settings / runtime inspector'),
+                const _ShortcutDoc('Esc',          'Close open dialog or inspector'),
               ],
             ),
           ),
         ),
       ],
+    );
+  }
+}
+
+class _ShortcutDoc extends StatelessWidget {
+  final String keys;
+  final String desc;
+  const _ShortcutDoc(this.keys, this.desc);
+  @override
+  Widget build(BuildContext context) {
+    final t = context.bxpTheme;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 5),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            constraints: const BoxConstraints(minWidth: 100, maxWidth: 110),
+            child: Text(
+              keys,
+              style: BxpText.body(
+                context,
+                color: t.codeKeyword,
+                size: BxpSize.sm,
+                weight: BxpWeight.bold,
+              ),
+            ),
+          ),
+          const SizedBox(width: 4),
+          Expanded(
+            child: Text(desc, style: BxpText.muted(context, size: BxpSize.xs)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StatusDoc extends StatelessWidget {
+  final String label;
+  final String desc;
+  final Color color;
+  const _StatusDoc(this.label, this.desc, this.color);
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            constraints: const BoxConstraints(minWidth: 72, maxWidth: 90),
+            child: Text(
+              label,
+              style: BxpText.body(
+                context,
+                color: color,
+                size: BxpSize.sm,
+                weight: BxpWeight.bold,
+              ),
+            ),
+          ),
+          const SizedBox(width: 4),
+          Expanded(
+            child: Text(desc, style: BxpText.muted(context, size: BxpSize.xs)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TipDoc extends StatelessWidget {
+  final String text;
+  const _TipDoc(this.text);
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Text(text, style: BxpText.muted(context, size: BxpSize.xs)),
     );
   }
 }

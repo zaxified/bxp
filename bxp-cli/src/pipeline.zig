@@ -53,9 +53,18 @@ pub const Output = struct {
         self.writer.flush() catch {};
     }
 
-    /// Print a warning line. Suppressed in --quiet or --trace mode.
+    /// Print a warning line. Suppressed in --quiet mode. In --trace mode
+    /// the line is redirected to stderr because stdout is reserved for the
+    /// NDJSON event stream — interleaving raw text would break the GUI's
+    /// line-by-line JSON parser. The GUI captures stderr separately and
+    /// surfaces it via the status bar's clickable warn/err panel, so the
+    /// human-readable warning is preserved.
     pub fn warning(self: Output, comptime fmt: []const u8, args: anytype) void {
-        if (self.quiet or self.trace) return;
+        if (self.quiet) return;
+        if (self.trace) {
+            std.debug.print(fmt, args);
+            return;
+        }
         self.writer.print(fmt, args) catch {};
         self.writer.flush() catch {};
     }
@@ -452,13 +461,15 @@ pub fn processBroker(
             }
         }
 
-        // Warn if the file has no data rows (detail printed only in --debug mode).
+        // Warn if the file has no data rows. Always emits text — the count
+        // alone leaves the user with `done - WARN` and no clue which file
+        // caused it; suppressing the message just because the run is not in
+        // --debug mode hides actionable information. `Output.warning()`
+        // gates on --quiet (silent) and routes via stderr in --trace mode
+        // (so the GUI can surface it without corrupting the NDJSON stream).
         if (all_rows.items.len == 0) {
             stats.warnings += 1;
-            if (out.debug) {
-                out.writer.print("warning: no rows in '{s}' (template: {s}, file: {s}/{s})\n", .{ filename, bid, dir_path, filename }) catch {};
-                out.writer.flush() catch {};
-            }
+            out.warning("warning: no rows in '{s}' (template: {s}, file: {s}/{s})\n", .{ filename, bid, dir_path, filename });
         }
 
         const full_path = try std.fs.path.join(file_alloc, &.{ dir_path, filename });

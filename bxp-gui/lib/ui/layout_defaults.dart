@@ -35,4 +35,9 @@ class LayoutDefaults {
   // available viewport. Caps the panel before it shoves the status
   // bar off-screen on small windows.
   static const stderrPanelMaxHeightFrac = 0.40;
+
+  // Floating right-side overlay drawers (ThemeInspector, SettingsInspector).
+  // Single fraction shared by both so they look identical-width regardless
+  // of which the user toggled.
+  static const sidePanelFrac = 0.40;
 }
