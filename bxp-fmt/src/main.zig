@@ -579,10 +579,19 @@ fn writeJsonString(writer: *std.Io.Writer, s: []const u8) !void {
 /// Parse + evaluate the expression with an empty Context.
 /// Expressions that reference [ColumnName] or $var will fail because the context
 /// has no fields — that is the intended behavior for a bare syntax check.
-fn runExpr(alloc: std.mem.Allocator, src: []const u8) !void {
+fn runExpr(gpa: std.mem.Allocator, src: []const u8) !void {
     var stderr_buf: [4096]u8 = undefined;
     var stderr_fw = std.fs.File.stderr().writer(&stderr_buf);
     const stderr = &stderr_fw.interface;
+
+    // Arena collects every transient allocation made during expression
+    // evaluation (string concat, error_detail formatting, ...). The tool
+    // exits immediately after this call, so freeing per-allocation is
+    // needless overhead — and DebugAllocator's leak report would mask
+    // real bugs if we tracked them individually.
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const alloc = arena.allocator();
 
     var col_index = std.StringHashMap(usize).init(alloc);
     defer col_index.deinit();
