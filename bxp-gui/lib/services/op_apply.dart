@@ -228,12 +228,21 @@ class OpApply {
         ..add(newKeyBytes)
         ..add(blockBytes.sublist(keyOff.end));
       final entryBytes = patched.toBytes();
-      final inserted = Uint8List(1 + entryBytes.length)
-        ..[0] = 0x0A
-        ..setRange(1, 1 + entryBytes.length, entryBytes);
+      // If the source entry is the last sibling in its map, its block has
+      // no trailing `,` — splicing `\n` + duplicate would emit two adjacent
+      // map entries without a separator (JSON5 syntax error). Detect and
+      // prepend `,` in that case (mirrors _insertMap's logic).
+      bool hasTrailingComma = false;
+      for (int i = origVal['end'] as int; i < (origBlock['end'] as int); i++) {
+        if (state.bytes[i] == 0x2C /* , */) { hasTrailingComma = true; break; }
+      }
+      final prefix = hasTrailingComma ? <int>[0x0A] : <int>[0x2C, 0x0A];
+      final inserted = Uint8List(prefix.length + entryBytes.length)
+        ..setRange(0, prefix.length, prefix)
+        ..setRange(prefix.length, prefix.length + entryBytes.length, entryBytes);
       state.splice(insertAt, insertAt, inserted);
 
-      final blockOffset = insertAt + 1;
+      final blockOffset = insertAt + prefix.length;
       final newKeyStart = blockOffset + keyOff.start;
       final keyDelta = newKeyBytes.length - (keyOff.end - keyOff.start);
       parent[newKey] = _deepCopy(parent[origKey]);
@@ -257,9 +266,17 @@ class OpApply {
       // Lists: keys are positional, no rename needed — copy the block
       // verbatim. This branch keeps the original behaviour.
       final original = state.bytes.sublist(meta.block.start, meta.block.end);
-      final inserted = Uint8List(1 + original.length)
-        ..[0] = 0x0A
-        ..setRange(1, 1 + original.length, original);
+      // Same trailing-comma detection as the Map branch: when duplicating
+      // the last list element, its block carries no `,` and we must add
+      // one before the inserted copy.
+      bool hasTrailingComma = false;
+      for (int i = meta.value.end; i < meta.block.end; i++) {
+        if (state.bytes[i] == 0x2C /* , */) { hasTrailingComma = true; break; }
+      }
+      final prefix = hasTrailingComma ? <int>[0x0A] : <int>[0x2C, 0x0A];
+      final inserted = Uint8List(prefix.length + original.length)
+        ..setRange(0, prefix.length, prefix)
+        ..setRange(prefix.length, prefix.length + original.length, original);
       state.splice(insertAt, insertAt, inserted);
       final idx = int.parse(op.path.last);
       final newIdx = idx + 1;
@@ -273,7 +290,7 @@ class OpApply {
           final origEntry = em[emIdx] as Map;
           final origBlock = origEntry['block_span'] as Map;
           final origVal = origEntry['value_span'] as Map;
-          final blockOffset = insertAt + 1;
+          final blockOffset = insertAt + prefix.length;
           final shift = blockOffset - (origBlock['start'] as int);
           em.insert(emIdx + 1, {
             'value_span': {
@@ -845,6 +862,7 @@ class OpApply {
     final emInsertAt = _emIndex(parent, idx);
     int byteOffset;
     Uint8List entryBytes;
+    bool hasTrailingComma = false;
     if (em.isNotEmpty) {
       // Use previous-real-sibling as template — copy its block, replace value.
       final tplEmIdx = (emInsertAt > 0) ? emInsertAt - 1 : 0;
@@ -861,6 +879,11 @@ class OpApply {
         ..add(tpl.sublist(valOff.end));
       entryBytes = patched.toBytes();
       byteOffset = tplBlock.end;
+      // When the template is the array's last element it has no trailing `,`
+      // — emit one before the new entry to keep JSON5 syntax valid.
+      for (int i = tplVal.end; i < tplBlock.end; i++) {
+        if (state.bytes[i] == 0x2C /* , */) { hasTrailingComma = true; break; }
+      }
     } else {
       // Empty array — fresh emit.
       entryBytes = utf8.encode('  ${_emitScalar(op.value)}');
@@ -868,11 +891,12 @@ class OpApply {
       // For simplicity, fall back: use parent map's emitted indent... TBD.
       return;
     }
-    final inserted = Uint8List(1 + entryBytes.length)
-      ..[0] = 0x0A
-      ..setRange(1, 1 + entryBytes.length, entryBytes);
+    final prefix = hasTrailingComma ? <int>[0x0A] : <int>[0x2C, 0x0A];
+    final inserted = Uint8List(prefix.length + entryBytes.length)
+      ..setRange(0, prefix.length, prefix)
+      ..setRange(prefix.length, prefix.length + entryBytes.length, entryBytes);
     state.splice(byteOffset, byteOffset, inserted);
-    final blockOffset = byteOffset + 1;
+    final blockOffset = byteOffset + prefix.length;
     parent.insert(idx, op.value);
     final tplEmIdx = (emInsertAt > 0) ? emInsertAt - 1 : 0;
     final tplEntry = em[tplEmIdx] as Map;
