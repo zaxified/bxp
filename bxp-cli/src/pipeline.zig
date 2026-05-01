@@ -485,11 +485,17 @@ pub fn processBroker(
             .output_headers = out_header_names.items,
         });
 
-        // Build pre_pass lookup table if configured.
-        // Iterates all rows, evaluates when, and stores values under
-        // composite keys "key\x00field_name" for use by LOOKUP() in input_schema.
+        // Build pre_pass lookup table(s) if any are configured.
+        // Each named block iterates all rows, evaluates `when`, and stores values
+        // under composite keys "name\x00key\x00field_name" so different blocks
+        // share the table without colliding. LOOKUP() resolves the name either
+        // via its 3-arg form or via ctx.single_prepass_name when only one block
+        // is defined.
         var lookup_table = std.StringHashMap([]const u8).init(file_alloc);
-        if (bc.pre_pass) |pp| {
+        var pp_it = bc.pre_passes.iterator();
+        while (pp_it.next()) |pp_entry| {
+            const pp_name = pp_entry.key_ptr.*;
+            const pp = pp_entry.value_ptr.*;
             for (all_rows.items) |fields| {
                 const pre_ctx = expr_mod.Context{
                     .fields = fields,
@@ -503,7 +509,7 @@ pub fn processBroker(
                 // Collect only rows where when evaluates to true.
                 const when = expr_mod.eval(pp.when, &pre_ctx) catch |err| {
                     if (out.debug) {
-                        out.writer.print("[pre_pass error] when = \"{s}\": {s}\n", .{ pp.when, @errorName(err) }) catch {};
+                        out.writer.print("[pre_pass {s} error] when = \"{s}\": {s}\n", .{ pp_name, pp.when, @errorName(err) }) catch {};
                         out.writer.flush() catch {};
                     }
                     continue;
@@ -512,30 +518,37 @@ pub fn processBroker(
                 // Evaluate key expression for this row.
                 const key_val = expr_mod.evalString(pp.key, &pre_ctx) catch |err| {
                     if (out.debug) {
-                        out.writer.print("[pre_pass error] key = \"{s}\": {s}\n", .{ pp.key, @errorName(err) }) catch {};
+                        out.writer.print("[pre_pass {s} error] key = \"{s}\": {s}\n", .{ pp_name, pp.key, @errorName(err) }) catch {};
                         out.writer.flush() catch {};
                     }
                     continue;
                 };
                 if (key_val.len == 0) continue;
-                // Store each value expression under "key\x00field_name".
+                // Store each value expression under "name\x00key\x00field_name".
                 var v_it = pp.values.iterator();
                 while (v_it.next()) |ve| {
                     const val = expr_mod.evalString(ve.value_ptr.*, &pre_ctx) catch |err| {
                         if (out.debug) {
-                            out.writer.print("[pre_pass error] values.{s} = \"{s}\": {s}\n", .{ ve.key_ptr.*, ve.value_ptr.*, @errorName(err) }) catch {};
+                            out.writer.print("[pre_pass {s} error] values.{s} = \"{s}\": {s}\n", .{ pp_name, ve.key_ptr.*, ve.value_ptr.*, @errorName(err) }) catch {};
                             out.writer.flush() catch {};
                         }
                         continue;
                     };
-                    const composite = try std.mem.concat(file_alloc, u8, &.{ key_val, "\x00", ve.key_ptr.* });
+                    const composite = try std.mem.concat(file_alloc, u8, &.{ pp_name, "\x00", key_val, "\x00", ve.key_ptr.* });
                     try lookup_table.put(composite, val);
-                    out.event("prepass_set", .{ .key = key_val, .field = ve.key_ptr.*, .value = val });
+                    out.event("prepass_set", .{ .name = pp_name, .key = key_val, .field = ve.key_ptr.*, .value = val });
                 }
             }
         }
+        const has_prepass = bc.pre_passes.count() > 0;
         const lookup_table_ptr: ?*const std.StringHashMap([]const u8) =
-            if (bc.pre_pass != null) &lookup_table else null;
+            if (has_prepass) &lookup_table else null;
+        // Implicit name for 2-arg LOOKUP — only defined when exactly one block exists.
+        const single_prepass_name: ?[]const u8 = blk: {
+            if (bc.pre_passes.count() != 1) break :blk null;
+            var only_it = bc.pre_passes.keyIterator();
+            break :blk only_it.next().?.*;
+        };
 
         // Open output file and write the output header (CSV) or opening bracket (JSON).
         // When file_pattern_out is set, strip file_pattern_in from the input filename
@@ -606,6 +619,7 @@ pub fn processBroker(
                 .quote_out = bc.csv_text_quote_out,
                 .ticker_map = &bc.ticker_map,
                 .lookup_table = lookup_table_ptr,
+                .single_prepass_name = single_prepass_name,
                 .alloc = line_alloc,
                 .decimal_sep_in = bc.csv_decimal_separator_in,
                 .error_detail = &row_detail,

@@ -376,8 +376,14 @@ class _JsonNodeState extends State<_JsonNode> {
       if (p.length == 7 && p[4] == 'rows' && int.tryParse(p[5]) != null) return true;
     }
     if (section == 'pre_pass') {
+      // Legacy: conversion_templates.<id>.pre_pass.when      (path len 4)
+      // Legacy: conversion_templates.<id>.pre_pass.values.<f>(path len 5)
+      // New:    conversion_templates.<id>.pre_pass.<name>.when      (path len 5)
+      // New:    conversion_templates.<id>.pre_pass.<name>.values.<f>(path len 6)
       if (p.length == 4 && (p[3] == 'when' || p[3] == 'key')) return true;
       if (p.length == 5 && p[3] == 'values') return true;
+      if (p.length == 5 && (p[4] == 'when' || p[4] == 'key')) return true;
+      if (p.length == 6 && p[4] == 'values') return true;
     }
     return false;
   }

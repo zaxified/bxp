@@ -30,7 +30,7 @@
 ///   PRICE_VALUE(f)            — strip currency symbol/code, return numeric string
 ///   PRICE_CURRENCY(f)         — extract currency code from a price string
 ///   TICKER(f)                 — map field value through broker's ticker_map
-///   LOOKUP(key, field)        — retrieve a value stored by the pre_pass table
+///   LOOKUP([name,] key, field) — retrieve a value stored by a pre_pass table
 const std = @import("std");
 const sunrise = @import("sunrise");
 
@@ -96,9 +96,14 @@ pub const Context = struct {
     col_index: *const std.StringHashMap(usize),
     /// Symbol remapping table from broker config (e.g. "BTC" → "BTC-USD").
     ticker_map: *const std.StringHashMap([]const u8),
-    /// Lookup table populated by the pre_pass scan; keys are "key\x00field".
+    /// Lookup table populated by the pre_pass scan; keys are "name\x00key\x00field".
     /// Null when no pre_pass is configured, or during the pre_pass scan itself.
     lookup_table: ?*const std.StringHashMap([]const u8),
+    /// When exactly one pre_pass block is defined, this holds its name so 2-arg
+    /// `LOOKUP(key, field)` can resolve to the implicit namespace. Null when zero
+    /// or multiple pre_pass blocks exist; in the latter case 2-arg LOOKUP is an
+    /// error and callers must use the explicit 3-arg form.
+    single_prepass_name: ?[]const u8 = null,
     /// Allocator for strings produced during expression evaluation.
     alloc: std.mem.Allocator,
     /// Decimal separator used in input CSV numeric fields (e.g. ',' for European format).
@@ -968,28 +973,45 @@ fn adaptTicker(p: *Parser, args: []Value) anyerror!Value {
 // ── LOOKUP ──────────────────────────────────────────────────────────────
 const lookup_doc: FnDoc = .{
     .name = "LOOKUP",
-    .signature = "LOOKUP(key, field)",
-    .description = "Retrieve a value stored by the pre_pass table. `key` is the lookup key; `field` is the $variable name (without $).",
+    .signature = "LOOKUP([name,] key, field)",
+    .description = "Retrieve a value stored by a pre_pass table. 3-arg form `LOOKUP(name, key, field)` selects the named pre_pass block. 2-arg form `LOOKUP(key, field)` works only when exactly one pre_pass block is defined.",
 };
-/// LOOKUP(key, field) — reads a value stored by pre_pass.
-/// The lookup table uses composite keys "key\x00field".
+/// LOOKUP — reads a value stored by pre_pass.
+///   3-arg: LOOKUP(name, key, field)  — explicit pre_pass name.
+///   2-arg: LOOKUP(key, field)        — only when a single pre_pass is defined;
+///                                      its name is taken from ctx.single_prepass_name.
+/// The lookup table uses composite keys "name\x00key\x00field".
 /// Returns empty string if no pre_pass table is present or key/field not found.
 fn builtinLookup(args: []Value, ctx: *const Context) !Value {
-    if (args.len != 2) return error.WrongArgCount;
-    const key = switch (args[0]) {
-        .string => |v| v,
-        else => return error.StringExpected,
-    };
-    const field = switch (args[1]) {
-        .string => |v| v,
-        else => return error.StringExpected,
-    };
+    if (args.len != 2 and args.len != 3) return error.WrongArgCount;
+    // No lookup_table → either validation context (bxp-fmt --expr) or runtime
+    // without any pre_pass defined. Both cases existed pre-namespacing and
+    // returned empty so validators don't choke on bare LOOKUP(...) exprs.
     const table = ctx.lookup_table orelse return Value{ .string = "" };
-    const composite = try std.mem.concat(ctx.alloc, u8, &.{ key, "\x00", field });
+    const name: []const u8 = if (args.len == 3) switch (args[0]) {
+        .string => |v| v,
+        else => return error.StringExpected,
+    } else ctx.single_prepass_name orelse return error.LookupRequiresName;
+    const key_idx: usize = if (args.len == 3) 1 else 0;
+    const field_idx: usize = if (args.len == 3) 2 else 1;
+    const key = switch (args[key_idx]) {
+        .string => |v| v,
+        else => return error.StringExpected,
+    };
+    const field = switch (args[field_idx]) {
+        .string => |v| v,
+        else => return error.StringExpected,
+    };
+    const composite = try std.mem.concat(ctx.alloc, u8, &.{ name, "\x00", key, "\x00", field });
     return Value{ .string = table.get(composite) orelse "" };
 }
 fn adaptLookup(p: *Parser, args: []Value) anyerror!Value {
-    return builtinLookup(args, p.ctx);
+    return builtinLookup(args, p.ctx) catch |err| {
+        if (err == error.LookupRequiresName) {
+            p.setDetail("LOOKUP requires explicit name when multiple pre_passes are defined", .{});
+        }
+        return err;
+    };
 }
 
 // ── SPLIT_PART ──────────────────────────────────────────────────────────

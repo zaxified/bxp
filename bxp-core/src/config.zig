@@ -96,8 +96,10 @@ pub const BrokerConfig = struct {
     /// the input filename (YYYY-MM-DD_YYYY-MM-DD) are silently skipped.
     /// Default: false — no date filtering unless explicitly enabled.
     date_filter_from_filename: bool,
-    /// Optional first-pass lookup table.  Null when not defined in bxp-cli.json.
-    pre_pass: ?PrePass,
+    /// Named first-pass lookup tables.  Empty map when not defined in bxp-cli.json.
+    /// Legacy single-block form is internally mapped to `_default`; multiple named
+    /// blocks each occupy their own namespace inside `lookup_table`.
+    pre_passes: std.StringHashMap(PrePass),
     /// Ordered list of row routing rules.  First matching rule wins.
     /// Empty rows = silent skip; no match + row_rules_debug_missing = debug output.
     /// Null when no "row_rules" key is present (all rows silently skipped).
@@ -214,18 +216,23 @@ pub const BrokerConfig = struct {
             );
             return error.InvalidConfig;
         }
-        if (self.pre_pass) |pp| {
-            if (pp.when.len == 0) {
-                try writer.print("---\n# {s}: config error: template '{s}': pre_pass.when must not be empty\n", .{ config_path, template_id });
-                return error.InvalidConfig;
-            }
-            if (pp.key.len == 0) {
-                try writer.print("---\n# {s}: config error: template '{s}': pre_pass.key must not be empty\n", .{ config_path, template_id });
-                return error.InvalidConfig;
-            }
-            if (pp.values.count() == 0) {
-                try writer.print("---\n# {s}: config error: template '{s}': pre_pass.values must not be empty\n", .{ config_path, template_id });
-                return error.InvalidConfig;
+        {
+            var pp_it = self.pre_passes.iterator();
+            while (pp_it.next()) |pp_entry| {
+                const name = pp_entry.key_ptr.*;
+                const pp = pp_entry.value_ptr.*;
+                if (pp.when.len == 0) {
+                    try writer.print("---\n# {s}: config error: template '{s}': pre_pass.{s}.when must not be empty\n", .{ config_path, template_id, name });
+                    return error.InvalidConfig;
+                }
+                if (pp.key.len == 0) {
+                    try writer.print("---\n# {s}: config error: template '{s}': pre_pass.{s}.key must not be empty\n", .{ config_path, template_id, name });
+                    return error.InvalidConfig;
+                }
+                if (pp.values.count() == 0) {
+                    try writer.print("---\n# {s}: config error: template '{s}': pre_pass.{s}.values must not be empty\n", .{ config_path, template_id, name });
+                    return error.InvalidConfig;
+                }
             }
         }
         {
@@ -317,13 +324,40 @@ pub const BrokerConfig = struct {
         }
         if (self.csv_delimiter_in == self.csv_decimal_separator_in)
             try errors.append(alloc, try ValidationError.init(alloc, base, "csv_delimiter_in", "csv_delimiter_in and csv_decimal_separator_in must be different characters"));
-        if (self.pre_pass) |pp| {
-            if (pp.when.len == 0)
-                try errors.append(alloc, try ValidationError.init(alloc, base, "pre_pass.when", "pre_pass.when must not be empty"));
-            if (pp.key.len == 0)
-                try errors.append(alloc, try ValidationError.init(alloc, base, "pre_pass.key", "pre_pass.key must not be empty"));
-            if (pp.values.count() == 0)
-                try errors.append(alloc, try ValidationError.init(alloc, base, "pre_pass.values", "pre_pass.values must not be empty"));
+        {
+            var pp_it = self.pre_passes.iterator();
+            while (pp_it.next()) |pp_entry| {
+                const name = pp_entry.key_ptr.*;
+                const pp = pp_entry.value_ptr.*;
+                // Legacy single block lives under the synthetic `_default` name; for backwards
+                // compatible diagnostics we skip the name segment in the error path so that
+                // existing GUI consumers see the original `pre_pass.when` paths.
+                const is_legacy = std.mem.eql(u8, name, "_default");
+                if (pp.when.len == 0) {
+                    const field = if (is_legacy)
+                        try alloc.dupe(u8, "pre_pass.when")
+                    else
+                        try std.fmt.allocPrint(alloc, "pre_pass.{s}.when", .{name});
+                    defer alloc.free(field);
+                    try errors.append(alloc, try ValidationError.init(alloc, base, field, "pre_pass.when must not be empty"));
+                }
+                if (pp.key.len == 0) {
+                    const field = if (is_legacy)
+                        try alloc.dupe(u8, "pre_pass.key")
+                    else
+                        try std.fmt.allocPrint(alloc, "pre_pass.{s}.key", .{name});
+                    defer alloc.free(field);
+                    try errors.append(alloc, try ValidationError.init(alloc, base, field, "pre_pass.key must not be empty"));
+                }
+                if (pp.values.count() == 0) {
+                    const field = if (is_legacy)
+                        try alloc.dupe(u8, "pre_pass.values")
+                    else
+                        try std.fmt.allocPrint(alloc, "pre_pass.{s}.values", .{name});
+                    defer alloc.free(field);
+                    try errors.append(alloc, try ValidationError.init(alloc, base, field, "pre_pass.values must not be empty"));
+                }
+            }
         }
         {
             var it = self.ticker_map.iterator();
@@ -412,17 +446,21 @@ pub const Config = struct {
             }
             os.deinit();
 
-            // Free pre_pass strings and values map.
-            if (entry.value_ptr.pre_pass) |*pp| {
-                self._alloc.free(pp.when);
-                self._alloc.free(pp.key);
-                var pp_it = pp.values.iterator();
-                while (pp_it.next()) |e| {
-                    self._alloc.free(e.key_ptr.*);
-                    self._alloc.free(e.value_ptr.*);
+            // Free pre_passes: each entry's name + when/key + values map (keys and values).
+            var pps = entry.value_ptr.pre_passes;
+            var pps_it = pps.iterator();
+            while (pps_it.next()) |pp_entry| {
+                self._alloc.free(pp_entry.key_ptr.*);
+                self._alloc.free(pp_entry.value_ptr.when);
+                self._alloc.free(pp_entry.value_ptr.key);
+                var pv_it = pp_entry.value_ptr.values.iterator();
+                while (pv_it.next()) |ve| {
+                    self._alloc.free(ve.key_ptr.*);
+                    self._alloc.free(ve.value_ptr.*);
                 }
-                pp.values.deinit();
+                pp_entry.value_ptr.values.deinit();
             }
+            pps.deinit();
 
             // Free row_rules: each rule's when string, each row override map, and the slices.
             if (entry.value_ptr.row_rules) |rules| {
@@ -635,6 +673,43 @@ fn diagJsonError(
     }
 }
 
+/// Parses a single `{ when, key, values }` pre_pass block into a PrePass.
+/// Caller owns all heap-allocated strings (released by Config.deinit).
+/// Missing fields are silently treated as empty so that downstream validation
+/// can produce a descriptive error path including the block name.
+fn parsePrePassBlock(alloc: std.mem.Allocator, ppobj: std.json.ObjectMap) !PrePass {
+    var when: []const u8 = try alloc.dupe(u8, "");
+    var pp_key: []const u8 = try alloc.dupe(u8, "");
+    var pp_values = std.StringHashMap([]const u8).init(alloc);
+
+    if (ppobj.get("when")) |v| {
+        if (v == .string) {
+            alloc.free(when);
+            when = try alloc.dupe(u8, v.string);
+        }
+    }
+    if (ppobj.get("key")) |v| {
+        if (v == .string) {
+            alloc.free(pp_key);
+            pp_key = try alloc.dupe(u8, v.string);
+        }
+    }
+    if (ppobj.get("values")) |vals_val| {
+        if (vals_val == .object) {
+            var vit = vals_val.object.iterator();
+            while (vit.next()) |e| {
+                if (e.value_ptr.* == .string) {
+                    try pp_values.put(
+                        try alloc.dupe(u8, e.key_ptr.*),
+                        try alloc.dupe(u8, e.value_ptr.string),
+                    );
+                }
+            }
+        }
+    }
+    return .{ .when = when, .key = pp_key, .values = pp_values };
+}
+
 /// Reads the config file at `config_path` (relative to cwd) and returns a fully
 /// populated Config.  All strings are duplicated into alloc so the caller
 /// owns the memory — release with Config.deinit().
@@ -700,7 +775,7 @@ pub fn load(alloc: std.mem.Allocator, config_path: []const u8) !Config {
                 var ticker_map = std.StringHashMap([]const u8).init(alloc);
                 var input_schema = std.StringHashMap([]const u8).init(alloc);
                 var date_filter_from_filename: bool = false;
-                var pre_pass: ?PrePass = null;
+                var pre_passes = std.StringHashMap(PrePass).init(alloc);
                 var row_rules: ?[]RowRule = null;
                 var row_rules_debug_missing: bool = false;
                 var output_schema: ?std.array_list.Managed(OutputColumn) = null;
@@ -871,44 +946,38 @@ pub fn load(alloc: std.mem.Allocator, config_path: []const u8) !Config {
                         }
                     }
 
-                    // pre_pass: optional first-pass lookup table built before main row loop.
+                    // pre_pass: optional first-pass lookup table(s) built before main row loop.
+                    //
+                    // Two accepted shapes:
+                    //   Legacy single block — `pre_pass: { when, key, values }`.
+                    //     Detected by the presence of the `when` key on the pre_pass object.
+                    //     Stored internally under the synthetic name `_default`.
+                    //   New named blocks — `pre_pass: { name1: { when, key, values }, ... }`.
+                    //     Each child is parsed as its own block; names are validated to be
+                    //     non-empty and free of NUL bytes (the composite-key delimiter).
                     if (bobj.get("pre_pass")) |pp_val| {
                         if (pp_val == .object) {
                             const ppobj = pp_val.object;
-                            var when: []const u8 = try alloc.dupe(u8, "");
-                            var pp_key: []const u8 = try alloc.dupe(u8, "");
-                            var pp_values = std.StringHashMap([]const u8).init(alloc);
-
-                            if (ppobj.get("when")) |v| {
-                                if (v == .string) {
-                                    alloc.free(when);
-                                    when = try alloc.dupe(u8, v.string);
-                                }
-                            }
-                            if (ppobj.get("key")) |v| {
-                                if (v == .string) {
-                                    alloc.free(pp_key);
-                                    pp_key = try alloc.dupe(u8, v.string);
-                                }
-                            }
-                            if (ppobj.get("values")) |vals_val| {
-                                if (vals_val == .object) {
-                                    var vit = vals_val.object.iterator();
-                                    while (vit.next()) |e| {
-                                        if (e.value_ptr.* == .string) {
-                                            try pp_values.put(
-                                                try alloc.dupe(u8, e.key_ptr.*),
-                                                try alloc.dupe(u8, e.value_ptr.string),
-                                            );
-                                        }
+                            const is_legacy_form = ppobj.get("when") != null;
+                            if (is_legacy_form) {
+                                const block = try parsePrePassBlock(alloc, ppobj);
+                                try pre_passes.put(try alloc.dupe(u8, "_default"), block);
+                            } else {
+                                var pp_it = ppobj.iterator();
+                                while (pp_it.next()) |pe| {
+                                    const name = pe.key_ptr.*;
+                                    if (name.len == 0 or std.mem.indexOfScalar(u8, name, 0) != null) {
+                                        std.debug.print(
+                                            "---\n# {s}: config error: template '{s}': pre_pass name must be non-empty and free of NUL bytes\n",
+                                            .{ config_path, b_entry.key_ptr.* },
+                                        );
+                                        return error.InvalidConfig;
                                     }
+                                    if (pe.value_ptr.* != .object) continue;
+                                    const block = try parsePrePassBlock(alloc, pe.value_ptr.object);
+                                    try pre_passes.put(try alloc.dupe(u8, name), block);
                                 }
                             }
-                            pre_pass = PrePass{
-                                .when = when,
-                                .key = pp_key,
-                                .values = pp_values,
-                            };
                         }
                     }
                     // csv_delimiter_in / csv_delimiter_out / csv_decimal_separator_in / csv_decimal_separator_out
@@ -965,7 +1034,7 @@ pub fn load(alloc: std.mem.Allocator, config_path: []const u8) !Config {
                         .ticker_map                = ticker_map,
                         .input_schema              = input_schema,
                         .date_filter_from_filename = date_filter_from_filename,
-                        .pre_pass                  = pre_pass,
+                        .pre_passes                = pre_passes,
                         .row_rules                 = row_rules,
                         .row_rules_debug_missing   = row_rules_debug_missing,
                         .output_schema             = output_schema.?,
