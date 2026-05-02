@@ -8,6 +8,7 @@ import '../services/ast_loader.dart';
 import '../services/ast_patch_client.dart';
 import '../services/ast_to_legacy_map.dart';
 import '../services/bxp_process_client.dart';
+import '../services/dev_trace.dart';
 import '../services/op_log.dart';
 import 'trace_model.dart';
 import 'trace_builder.dart';
@@ -727,6 +728,7 @@ class TraceStore extends ChangeNotifier {
   }
 
   Future<void> loadConfig() async {
+    devTrace('loadConfig.start', {'path': configPath});
     isLoadingConfig = true;
     notifyListeners();
     try {
@@ -735,6 +737,7 @@ class TraceStore extends ChangeNotifier {
         configError = null;
         _rawConfigInput = null;
         _templateInfos = const [];
+        devTrace('loadConfig.skip', {'reason': 'empty path'});
         return;
       }
 
@@ -758,6 +761,8 @@ class TraceStore extends ChangeNotifier {
         configJson = null;
         _loadedWithErrors = true;
         _templateInfos = const [];
+        devTrace('loadConfig.astParseFail',
+            {'diagnostics': astResult.diagnostics.length, 'first': configError});
         return;
       }
 
@@ -792,15 +797,21 @@ class TraceStore extends ChangeNotifier {
       }
 
       _loadedWithErrors = _findFirstErrTrace(configJson) != null;
+      devTrace('loadConfig.ok', {
+        'rawBytes': _rawConfigInput?.length ?? 0,
+        'loadedWithErrors': _loadedWithErrors,
+        'configError': configError,
+      });
 
       // Pull richer template metadata for the selector (separate subprocess
       // call into bxp-cli; not part of the AST loader path).
       _templateInfos = await BxpProcessClient.listTemplates(configPath);
-    } catch (e) {
+    } catch (e, st) {
       configError = e.toString();
       configJson = null;
       _rawConfigInput = null;
       _templateInfos = const [];
+      devTrace('loadConfig.fail', {'err': e.toString(), 'stack': st.toString().split('\n').take(3).join(' | ')});
     } finally {
       isLoadingConfig = false;
     }
@@ -886,6 +897,8 @@ class TraceStore extends ChangeNotifier {
     // _historyIndex < _opLog.ops.length; this keeps the log aligned with
     // the visible history.
     _opLog.truncate(_historyIndex);
+    devTrace('op.edit', {'path': path, 'newValue': newValue});
+
     _opLog.record(EditValueOp(path, newValue));
 
     configJson = root;
@@ -1104,12 +1117,16 @@ class TraceStore extends ChangeNotifier {
     if (parent is Map) {
       parent.remove(lastKey);
       _opLog.truncate(_historyIndex);
+      devTrace('op.delete', {'path': path});
+
       _opLog.record(DeleteOp(path));
     } else if (parent is List) {
       final removedIdx = int.tryParse(lastKey);
       if (removedIdx == null) return;
       parent.removeAt(removedIdx);
       _opLog.truncate(_historyIndex);
+      devTrace('op.delete', {'path': path});
+
       _opLog.record(DeleteOp(path));
       // Shift sibling-selections downward: indices > removedIdx slide
       // up by one; the removed index itself was already cleared above.
@@ -1138,6 +1155,8 @@ class TraceStore extends ChangeNotifier {
       while (parent.containsKey(newKey)) { newKey = '${lastKey}_copy$i'; i++; }
       parent[newKey] = value;
       _opLog.truncate(_historyIndex);
+      devTrace('op.duplicate.map', {'path': path, 'newKey': newKey});
+
       _opLog.record(DuplicateOp(path, newKey: newKey));
       // Map duplicate: appended at end → no array-index shift, selection
       // unaffected (sibling keys keep their map keys).
@@ -1146,6 +1165,8 @@ class TraceStore extends ChangeNotifier {
       if (idx == null) return;
       parent.insert(idx + 1, value);
       _opLog.truncate(_historyIndex);
+      devTrace('op.duplicate.list', {'path': path});
+
       _opLog.record(DuplicateOp(path));
       // Selection lives under same array AND was at index >= idx+1?
       // Then it slid one slot right. Selection on the duplicated source
@@ -1198,6 +1219,8 @@ class TraceStore extends ChangeNotifier {
       final targetKey = siblings[targetPos];
       _swapMapEntriesInPlace(parent, key, targetKey);
       _opLog.truncate(_historyIndex);
+      devTrace('op.move', {'path': path, 'delta': delta});
+
       _opLog.record(MoveOp(path, delta));
       // Phase 5a: a swap involving a `$comm_<N>` key may put it in a
       // different physical position; renumber so subsequent ops record
@@ -1267,6 +1290,8 @@ class TraceStore extends ChangeNotifier {
       ..addAll(leftBlock)
       ..addAll(suffix);
     _opLog.truncate(_historyIndex);
+    devTrace('op.move', {'path': path, 'delta': delta});
+
     _opLog.record(MoveOp(path, delta));
     // Phase 5a: array reorder shuffles in-array `$comm_<N>` wrapper
     // elements; renumber so the live tree's labels stay positional.
@@ -1344,6 +1369,8 @@ class TraceStore extends ChangeNotifier {
     if (target is Map && newKey != null) {
       target[newKey] = defaultValue;
       _opLog.truncate(_historyIndex);
+      devTrace('op.insert.map', {'parentPath': path, 'newKey': newKey});
+
       _opLog.record(InsertOp(path, newKey, defaultValue));
     } else if (target is List) {
       final clamped = atIndex == null
@@ -1351,6 +1378,8 @@ class TraceStore extends ChangeNotifier {
           : atIndex.clamp(0, target.length);
       target.insert(clamped, defaultValue);
       _opLog.truncate(_historyIndex);
+      devTrace('op.insert.list', {'parentPath': path, 'index': clamped});
+
       _opLog.record(InsertOp(path, clamped.toString(), defaultValue));
       // Selections under the same array at indices >= clamped shifted up.
       _shiftSelectionOnArrayEdit(path, (oldIdx) {
@@ -1376,6 +1405,8 @@ class TraceStore extends ChangeNotifier {
     if (commObj['text'] == newFull) return;
     commObj['text'] = newFull;
     _opLog.truncate(_historyIndex);
+    devTrace('op.editComment', {'path': path, 'newText': newText});
+
     _opLog.record(EditCommentOp(path, newText));
     _recomputeDirty();
     _pushHistory();
@@ -1407,6 +1438,8 @@ class TraceStore extends ChangeNotifier {
       }
     }
     _opLog.truncate(_historyIndex);
+    devTrace('op.deleteComment', {'path': path});
+
     _opLog.record(DeleteCommentOp(path));
     // Phase 5a: keep configJson's $comm_<N> sequential so subsequent ops
     // record paths matching the AST patcher's positional findCommentByGlobalN
@@ -1487,6 +1520,8 @@ class TraceStore extends ChangeNotifier {
       return;
     }
     _opLog.truncate(_historyIndex);
+    devTrace('op.insertComment', {'anchorPath': anchorPath, 'style': style});
+
     _opLog.record(InsertCommentOp(anchorPath, style, text));
     // Phase 5a: keep $comm_<N> sequential after the insert so future ops'
     // paths align with AST source-order numbering.
@@ -1511,6 +1546,8 @@ class TraceStore extends ChangeNotifier {
   Future<void> saveConfig() async {
     if (configJson == null || configPath.isEmpty) return;
     if (isSaving) return; // re-entrancy guard against double-click
+    devTrace('saveConfig.start',
+        {'path': configPath, 'opCount': _activeOps.length});
     configSaveError = null;
     isSaving = true;
     notifyListeners();
@@ -1533,6 +1570,8 @@ class TraceStore extends ChangeNotifier {
         outBytes = AstPatchClient.apply(raw, _activeOps);
       } on AstPatchError catch (e) {
         configSaveError = 'AST patch failed: ${e.message}';
+        devTrace('saveConfig.astPatchFail',
+            {'message': e.message, 'opCount': _activeOps.length});
         notifyListeners();
         return;
       }
@@ -1593,6 +1632,8 @@ class TraceStore extends ChangeNotifier {
       // Atomic rename: this is the one filesystem operation that cannot
       // leave the destination half-written.
       await tmpFile.rename(configPath);
+      devTrace('saveConfig.ok',
+          {'bytes': outBytes.length, 'opCount': _activeOps.length});
 
       // History compresses to a single "saved" baseline so the undo stack
       // starts fresh after a successful write.
@@ -1609,13 +1650,17 @@ class TraceStore extends ChangeNotifier {
       // the new on-disk content. (Also captures fresh raw bytes and resets
       // the op log baseline.)
       await loadConfig();
-    } catch (e) {
+    } catch (e, st) {
       // Clean up the tmp file if it leaked through an unexpected exception
       // path (e.g. rename failed after validation passed).
       try {
         if (await tmpFile.exists()) await tmpFile.delete();
       } catch (_) {}
       configSaveError = e.toString();
+      devTrace('saveConfig.fail', {
+        'err': e.toString(),
+        'stack': st.toString().split('\n').take(3).join(' | '),
+      });
       notifyListeners();
     } finally {
       // Always clear the in-flight flag so the toolbar SAVE button stops
