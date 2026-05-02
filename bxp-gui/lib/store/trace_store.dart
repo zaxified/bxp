@@ -4,7 +4,9 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../services/ast_loader.dart';
 import '../services/ast_patch_client.dart';
+import '../services/ast_to_legacy_map.dart';
 import '../services/bxp_process_client.dart';
 import '../services/op_log.dart';
 import 'trace_model.dart';
@@ -728,34 +730,72 @@ class TraceStore extends ChangeNotifier {
     isLoadingConfig = true;
     notifyListeners();
     try {
-      final jsonOutput = await BxpProcessClient.loadConfig(configPath);
-      configJson = jsonDecode(jsonOutput) as Map<String, dynamic>;
-      configError = configJson?['error'] as String?;
-      if (configError != null) configJson = null;
-      // Capture raw bytes so the AST patcher can replay edit ops without
-      // re-rendering the file on save.
-      if (configJson != null && configPath.isNotEmpty) {
-        try {
-          _rawConfigInput = await File(configPath).readAsBytes();
-        } catch (_) {
-          _rawConfigInput = null;
-        }
-      } else {
+      if (configPath.isEmpty) {
+        configJson = null;
+        configError = null;
         _rawConfigInput = null;
-      }
-      // Latch readonly mode based on the load-time tree only. Live edits
-      // may introduce $err_* markers (caught by per-op revalidation) but
-      // those should NOT lock the editor — the user needs to keep editing
-      // (or undo) to fix them. Save still refuses while errors are present.
-      _loadedWithErrors = _findFirstErrTrace(configJson) != null;
-      // Pull richer template metadata for the selector (one extra subprocess
-      // spawn per load — fire-and-forget shape would also be fine; we await
-      // here so the selector renders subtitles immediately on first paint).
-      if (configJson != null && configPath.isNotEmpty) {
-        _templateInfos = await BxpProcessClient.listTemplates(configPath);
-      } else {
         _templateInfos = const [];
+        return;
       }
+
+      // Phase 5a: AST is the primary loader. Parse the file via the Dart
+      // JSON5 AST library; the resulting tree's source-order numbering of
+      // comments drives every subsequent `$comm_<N>` label in configJson,
+      // which in turn matches what the AST patcher walks at save time.
+      // No more dual-numbering between bxp-fmt and AST.
+      final astResult = await AstLoader.loadFromFile(configPath);
+      _rawConfigInput = utf8.encode(astResult.rawText);
+
+      if (astResult.root == null) {
+        // JSON5 syntax error from the AST parser. bxp-fmt would fail too;
+        // skip its call and surface the diagnostic directly.
+        final firstErr = astResult.diagnostics.isNotEmpty
+            ? astResult.diagnostics.first
+            : null;
+        configError = firstErr != null
+            ? 'JSON5 parse error at ${firstErr.span.startLine}:${firstErr.span.startCol}: ${firstErr.message}'
+            : 'JSON5 parse error';
+        configJson = null;
+        _loadedWithErrors = true;
+        _templateInfos = const [];
+        return;
+      }
+
+      // Convert AST → bxp-fmt-shaped configJson via the legacy adapter.
+      // `$comm_<N>` numbering in this Map matches the AST's source-order
+      // walk; this is the contract that ends comment-move regressions.
+      configJson =
+          AstToLegacyMap.convert(astResult.root!) as Map<String, dynamic>;
+
+      // bxp-fmt --config still runs as a background validator: parses for
+      // schema / expr / pre_pass / cross-field issues that the AST parser
+      // (pure JSON5) doesn't know about. We extract its `$err_*` markers
+      // and merge them into our configJson at matching real-key paths.
+      try {
+        final jsonOutput = await BxpProcessClient.loadConfig(configPath);
+        final bxpTree = jsonDecode(jsonOutput);
+        if (bxpTree is Map<String, dynamic>) {
+          final bxpFatal = bxpTree['error'] as String?;
+          if (bxpFatal != null) {
+            // bxp-fmt couldn't even parse — but AST did. Surface the
+            // bxp-fmt error so the user knows about the deeper failure;
+            // the editor stays openable since AST has a tree.
+            configError = bxpFatal;
+          } else {
+            _syncErrMarkers(configJson!, bxpTree);
+          }
+        }
+      } catch (e) {
+        // bxp-fmt invocation itself failed (binary missing, crash, etc.).
+        // Don't block editing on validator failures.
+        configError ??= 'bxp-fmt validator unavailable: $e';
+      }
+
+      _loadedWithErrors = _findFirstErrTrace(configJson) != null;
+
+      // Pull richer template metadata for the selector (separate subprocess
+      // call into bxp-cli; not part of the AST loader path).
+      _templateInfos = await BxpProcessClient.listTemplates(configPath);
     } catch (e) {
       configError = e.toString();
       configJson = null;
@@ -1159,6 +1199,10 @@ class TraceStore extends ChangeNotifier {
       _swapMapEntriesInPlace(parent, key, targetKey);
       _opLog.truncate(_historyIndex);
       _opLog.record(MoveOp(path, delta));
+      // Phase 5a: a swap involving a `$comm_<N>` key may put it in a
+      // different physical position; renumber so subsequent ops record
+      // paths matching the AST patcher's positional walk on replay.
+      _renumberCommentsInPlace(configJson);
       _recomputeDirty();
       _pushHistory();
       notifyListeners();
@@ -1224,6 +1268,9 @@ class TraceStore extends ChangeNotifier {
       ..addAll(suffix);
     _opLog.truncate(_historyIndex);
     _opLog.record(MoveOp(path, delta));
+    // Phase 5a: array reorder shuffles in-array `$comm_<N>` wrapper
+    // elements; renumber so the live tree's labels stay positional.
+    _renumberCommentsInPlace(configJson);
 
     // After the block swap, the moved real element sits at `prefix.length`
     // (delta<0) or `prefix.length + rightBlock.length + middle.length`
@@ -1361,6 +1408,11 @@ class TraceStore extends ChangeNotifier {
     }
     _opLog.truncate(_historyIndex);
     _opLog.record(DeleteCommentOp(path));
+    // Phase 5a: keep configJson's $comm_<N> sequential so subsequent ops
+    // record paths matching the AST patcher's positional findCommentByGlobalN
+    // walk on replay. Done AFTER recording this op (its path uses the N
+    // that was visible to the user at click time).
+    _renumberCommentsInPlace(configJson);
     _recomputeDirty();
     _pushHistory();
     notifyListeners();
@@ -1436,6 +1488,9 @@ class TraceStore extends ChangeNotifier {
     }
     _opLog.truncate(_historyIndex);
     _opLog.record(InsertCommentOp(anchorPath, style, text));
+    // Phase 5a: keep $comm_<N> sequential after the insert so future ops'
+    // paths align with AST source-order numbering.
+    _renumberCommentsInPlace(configJson);
     _recomputeDirty();
     _pushHistory();
     notifyListeners();
@@ -1796,6 +1851,44 @@ class TraceStore extends ChangeNotifier {
       // Best-effort launch; don't surface transient errors to the UI.
     }
   }
+}
+
+/// Walk [tree] in source order (Map insertion order, list element order),
+/// reassigning every `$comm_<N>` key to be sequentially `1..K`. Phase 5a
+/// invariant: configJson's `$comm_<N>` numbering must match the AST's
+/// source-order walk; mid-session edits (insert / delete / move comments)
+/// can leave the in-memory tree with gaps or reordered N — call this
+/// after each such mutation, BEFORE recording the op, so the op_log path
+/// uses the post-renumber N that the AST patcher will see at replay time.
+///
+/// Walks: Map → recurse into each entry value in insertion order; List →
+/// recurse into each element. Comments inside in-array wrapper objects
+/// (`{$comm_<N>: ...}`) get renumbered too.
+void _renumberCommentsInPlace(dynamic tree) {
+  var counter = 0;
+  void rewrite(dynamic v) {
+    if (v is Map) {
+      final entries = v.entries.toList();
+      v.clear();
+      for (final e in entries) {
+        final k = e.key.toString();
+        if (k.startsWith(r'$comm_')) {
+          counter++;
+          v['\$comm_$counter'] = e.value;
+        } else {
+          v[e.key] = e.value;
+          if (!k.startsWith(r'$')) {
+            rewrite(e.value);
+          }
+        }
+      }
+    } else if (v is List) {
+      for (var i = 0; i < v.length; i++) {
+        rewrite(v[i]);
+      }
+    }
+  }
+  rewrite(tree);
 }
 
 /// Swap two map entries in [m] while keeping their `$meta_*` sibling
