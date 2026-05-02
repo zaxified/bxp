@@ -238,6 +238,27 @@ fn appendJsonStr(out: *std.ArrayList(u8), alloc: std.mem.Allocator, s: []const u
 }
 
 // ── annotated variant: preserves comments as $comm_<N>, errors as $err_<N> ─
+//
+// FIXME (Phase 5d, planned): the **only** annotation the GUI still
+// consumes is `$err_<N>` — the rest is dead-code-by-design after the
+// 2026-05-02 AST migration. Specifically:
+//
+//   * `$comm_<N>` (Map keys + List wrapper objects)
+//   * `$meta_comm_<N>`  (byte spans paired with each $comm_<N>)
+//   * `$meta_<key>` / `$elem_meta_<key>` / `$meta_self`
+//
+// All of these were emitted to support the original Dart CST patcher in
+// bxp-gui's trace_store.dart. That patcher was deleted in commit
+// `0b1a691` (Phase 3) and replaced by a Dart JSON5 AST library
+// (`bxp-gui/tool/json_ast_proto/`), which parses the file directly and
+// needs no spans or comment IDs from bxp-fmt. After Phase 5c-D
+// (commit `1e76587`) the GUI's adapter Map went away too, so nothing
+// outside this file even reads these keys anymore.
+//
+// Phase 5d will narrow the annotated-output contract to just `$err_*`
+// (probably as a new `--check` mode; `--config` may stay for backwards
+// compatibility with any external caller). Touchpoints to revisit
+// when that lands are tagged below with `// 5d-CANDIDATE:`.
 
 pub const Placement = enum { leading, trailing, block, standalone };
 
@@ -310,6 +331,8 @@ fn needsLeadingComma(out: []const u8) bool {
     return false;
 }
 
+// 5d-CANDIDATE: $comm_<N> + $meta_comm_<N> emission. GUI no longer
+// reads these (Phase 5c-D); kept only for callers outside bxp-gui.
 /// Emit all pending comments into `out` as `"$comm_N": {"text":"...","placement":"..."}`
 /// sibling entries. When `at_close` is true (flushing right before `}`), any
 /// `leading` placements are reclassified to `standalone`; trailing/block keep
@@ -489,6 +512,10 @@ fn appendSpanObj(out: *std.ArrayList(u8), alloc: std.mem.Allocator, start: usize
     try out.appendSlice(alloc, body);
 }
 
+// 5d-CANDIDATE: $meta_<key> spans were consumed by the original Dart
+// CST byte-patcher in trace_store.dart. That patcher is gone (Phase 3,
+// commit `0b1a691`); the AST library reparses raw bytes and needs no
+// spans. Safe to remove this emission.
 /// Emit `, "$meta_<key>": {key_span, value_span, block_span}` after a real
 /// child entry's value. The GUI needs all three to support edit / delete /
 /// duplicate / move / insert via byte-level operations against the original
@@ -515,6 +542,9 @@ fn emitChildMeta(
     try out.append(alloc, '}');
 }
 
+// 5d-CANDIDATE: $elem_meta_<key> — per-array-element byte spans, same
+// dead-after-CST-removal status as $meta_<key>. Safe to drop with the
+// caller in `preprocessAnnotated`.
 /// Emit `, "$elem_meta_<key>": [{value_span, block_span}, ...]` listing
 /// per-element byte ranges for an array. Mirrors `$meta_<key>` but without
 /// the key dimension (array elements have no keys).
@@ -541,6 +571,8 @@ fn emitElemMeta(
     try out.append(alloc, ']');
 }
 
+// 5d-CANDIDATE: $meta_self — container span pair. Same fate as the
+// other $meta_* emitters; nothing reads it after Phase 5c-D.
 /// Emit `"$meta_self": {container_span: {...}}` as a sibling inside the
 /// container itself. Always the first key emitted right after `{` or `[`,
 /// so it doesn't compete with content for ordering.
@@ -556,6 +588,9 @@ fn emitContainerMeta(
     try out.append(alloc, '}');
 }
 
+// 5d-CANDIDATE: in-array $comm_<N> wrapper pseudo-objects + their
+// $meta_comm_<N> sibling spans. Same provenance as the Map-side
+// flushPending — kept only for non-GUI callers.
 /// Emit pending comments into an array context as single-key pseudo-objects:
 /// `{"$comm_<N>": {"text":"...","placement":"..."}}`. They sit between real
 /// elements and stay valid JSON. The Dart side detects single-key `$comm_*`
