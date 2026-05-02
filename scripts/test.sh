@@ -89,25 +89,22 @@ print(json.dumps(strip(d), indent=2))
     fi
     echo "Annotated JSON OK"
 
-    # CST round-trip identity: with no user edits, OpApply.apply must
-    # return bytes identical to the source. Run as a Dart unit test so
-    # we don't have to build a native binary.
+    # AST round-trip identity: parse → dump → parse must recover the same
+    # tree (modulo first-save canonicalisation). Phase 5e moved this from
+    # the old CST byte-patcher (deleted) to the standalone AST library
+    # smoke runner.
     if command -v dart > /dev/null; then
-        echo "CST round-trip identity..."
-        if ! (cd "$MONO_ROOT/bxp-gui" && \
-              BXP_FMT="$BXP_FMT" \
-              BXP_FIXTURE="$ANNOT_DIR/sample.json5" \
-              dart test test/op_apply_roundtrip_test.dart --reporter=compact) > /dev/null 2>&1; then
-            echo "FAIL: OpApply round-trip test failed"
-            (cd "$MONO_ROOT/bxp-gui" && \
-              BXP_FMT="$BXP_FMT" \
-              BXP_FIXTURE="$ANNOT_DIR/sample.json5" \
-              dart test test/op_apply_roundtrip_test.dart --reporter=compact) | head -20
+        echo "AST round-trip identity..."
+        if ! (cd "$MONO_ROOT/bxp-gui/tool/json_ast_proto" && \
+              dart run bin/round_trip.dart) > /dev/null 2>&1; then
+            echo "FAIL: AST round-trip failed"
+            (cd "$MONO_ROOT/bxp-gui/tool/json_ast_proto" && \
+              dart run bin/round_trip.dart) | head -20
             exit 1
         fi
-        echo "CST round-trip OK"
+        echo "AST round-trip OK"
     else
-        echo "CST round-trip skipped (dart not on PATH)"
+        echo "AST round-trip skipped (dart not on PATH)"
     fi
     echo ""
 fi
