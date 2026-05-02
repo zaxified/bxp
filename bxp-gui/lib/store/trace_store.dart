@@ -4,12 +4,15 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:json_ast_proto/ast.dart';
+import 'package:json_ast_proto/operations.dart' as ast_ops;
 import '../services/ast_loader.dart';
 import '../services/ast_patch_client.dart';
 import '../services/ast_to_legacy_map.dart';
 import '../services/bxp_process_client.dart';
 import '../services/dev_trace.dart';
 import '../services/op_log.dart';
+import '../services/op_to_ast.dart';
 import 'trace_model.dart';
 import 'trace_builder.dart';
 import '../ui/theme/bxp_text_scheme.dart';
@@ -73,6 +76,14 @@ class TraceStore extends ChangeNotifier {
   int? lastExitCode;
   
   Map<String, dynamic>? configJson;
+
+  /// Phase 5c-A: AST is the live source of truth. Every mutation applies
+  /// to `_astRoot` first via `op_to_ast.applyConfigOp`; `configJson` is
+  /// then regenerated via `AstToLegacyMap.convert` so the existing UI
+  /// (still on the Map shape) stays in sync. Save / validate dump from
+  /// the same tree, eliminating the dual-mutation class of bugs that
+  /// plagued the Map-mutating earlier phases.
+  JsonAstNode? _astRoot;
 
   /// Raw file bytes at load time. Kept verbatim so the AST patcher can
   /// replay the user's edit log against them at save time without
@@ -443,6 +454,69 @@ class TraceStore extends ChangeNotifier {
     }
   }
 
+  /// Phase 5c-A: collect every `$err_*` map entry currently attached to
+  /// [tree], keyed by the path of its parent map. Used before regenerating
+  /// `configJson` from the AST adapter (which produces a fresh tree with
+  /// no error markers) so the markers can be re-spliced afterwards. Without
+  /// this, every keystroke would briefly clear the red dots until the
+  /// debounced bxp-fmt validator fires again.
+  static Map<String, Map<String, dynamic>> _collectErrMarkers(dynamic tree) {
+    final out = <String, Map<String, dynamic>>{};
+    void walk(dynamic node, List<String> path) {
+      if (node is Map) {
+        for (final e in node.entries) {
+          final key = e.key.toString();
+          if (key.startsWith(r'$err_')) {
+            final pathKey = path.join(' ');
+            (out[pathKey] ??= <String, dynamic>{})[key] = e.value;
+          } else if (!key.startsWith(r'$')) {
+            walk(e.value, [...path, key]);
+          }
+        }
+      } else if (node is List) {
+        for (var i = 0; i < node.length; i++) {
+          walk(node[i], [...path, i.toString()]);
+        }
+      }
+    }
+    walk(tree, const []);
+    return out;
+  }
+
+  /// Splice [markers] (keyed by parent-path joined with ` `) back into
+  /// the freshly-regenerated [tree]. Skips entries whose parent path no
+  /// longer exists or no longer points at a Map (e.g. the user deleted the
+  /// containing entry between marker capture and re-merge).
+  static void _reapplyErrMarkers(
+      dynamic tree, Map<String, Map<String, dynamic>> markers) {
+    if (markers.isEmpty) return;
+    for (final entry in markers.entries) {
+      final pathSegs =
+          entry.key.isEmpty ? const <String>[] : entry.key.split(' ');
+      dynamic cur = tree;
+      var ok = true;
+      for (final seg in pathSegs) {
+        if (cur is Map && cur.containsKey(seg)) {
+          cur = cur[seg];
+        } else if (cur is List) {
+          final idx = int.tryParse(seg);
+          if (idx == null || idx < 0 || idx >= cur.length) {
+            ok = false;
+            break;
+          }
+          cur = cur[idx];
+        } else {
+          ok = false;
+          break;
+        }
+      }
+      if (!ok || cur is! Map) continue;
+      for (final m in entry.value.entries) {
+        cur[m.key] = m.value;
+      }
+    }
+  }
+
   void clearSelectedExpr() {
     selectedExprPath = null;
     selectedExprText = '';
@@ -759,6 +833,7 @@ class TraceStore extends ChangeNotifier {
             ? 'JSON5 parse error at ${firstErr.span.startLine}:${firstErr.span.startCol}: ${firstErr.message}'
             : 'JSON5 parse error';
         configJson = null;
+        _astRoot = null;
         _loadedWithErrors = true;
         _templateInfos = const [];
         devTrace('loadConfig.astParseFail',
@@ -766,11 +841,15 @@ class TraceStore extends ChangeNotifier {
         return;
       }
 
+      // Phase 5c-A: AST is the live source of truth. Stash it; mutations
+      // operate on this tree and regenerate configJson via the adapter.
+      _astRoot = astResult.root;
+
       // Convert AST → bxp-fmt-shaped configJson via the legacy adapter.
       // `$comm_<N>` numbering in this Map matches the AST's source-order
       // walk; this is the contract that ends comment-move regressions.
       configJson =
-          AstToLegacyMap.convert(astResult.root!) as Map<String, dynamic>;
+          AstToLegacyMap.convert(_astRoot!) as Map<String, dynamic>;
 
       // bxp-fmt --config still runs as a background validator: parses for
       // schema / expr / pre_pass / cross-field issues that the AST parser
@@ -827,10 +906,13 @@ class TraceStore extends ChangeNotifier {
     // Fresh load establishes a new "clean" baseline. Everything edited
     // after this point counts as dirty until the user saves.
     _savedBaseline = _deepCopy(configJson);
+    _astBaseline = _astRoot?.clone();
     _isDirty = false;
     _history.clear();
+    _astHistory.clear();
     _historyIndex = 0;
     _history.add(_deepCopy(configJson));
+    if (_astRoot != null) _astHistory.add(_astRoot!.clone());
     configSaveError = null;
     // Add to MRU when the load reached bxp-fmt and produced a parseable
     // response — including configs that have $err_* markers (the user
@@ -846,6 +928,40 @@ class TraceStore extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Phase 5c-A: apply [op] to the live AST, regenerate `configJson` via
+  /// the adapter (preserving any `$err_*` markers attached by the
+  /// background validator), record the op in `_opLog`, push history, and
+  /// refresh the UI. Returns true on success; false if the AST mutation
+  /// threw (in which case nothing is recorded — the live tree is unchanged
+  /// and op_log stays consistent with what the AST patcher could replay).
+  bool _applyOpToAst(ConfigOp op, String traceEvent,
+      [Map<String, Object?>? traceData]) {
+    if (_astRoot == null) return false;
+    try {
+      applyConfigOp(_astRoot!, op);
+    } on ast_ops.AstOpError catch (e) {
+      devTrace('$traceEvent.fail',
+          {'err': e.toString(), if (traceData != null) ...traceData});
+      return false;
+    } catch (e) {
+      devTrace('$traceEvent.fail',
+          {'err': e.toString(), if (traceData != null) ...traceData});
+      return false;
+    }
+    final priorErrs = _collectErrMarkers(configJson);
+    final regen = AstToLegacyMap.convert(_astRoot!);
+    if (regen is! Map<String, dynamic>) {
+      devTrace('$traceEvent.fail', {'err': 'adapter returned non-Map root'});
+      return false;
+    }
+    configJson = regen;
+    _reapplyErrMarkers(configJson, priorErrs);
+    _opLog.truncate(_historyIndex);
+    devTrace(traceEvent, traceData);
+    _opLog.record(op);
+    return true;
+  }
+
   void editConfigNode(List<String> path, dynamic newValue) {
     if (configJson == null) return;
     // Mirror bxp-ui's `readOnly = configHasErrors`: when the loaded tree
@@ -857,51 +973,11 @@ class TraceStore extends ChangeNotifier {
 
     final oldValue = _getAt(path);
     if (oldValue == newValue) return;
-    
-    // We clone the root to trigger a new reference, although Provider just needs notifyListeners()
-    Map<String, dynamic> root = Map.from(configJson!);
-    dynamic current = root;
-    
-    for (int i = 0; i < path.length - 1; i++) {
-      final key = path[i];
-      if (current is Map) {
-        current[key] = current[key] is Map 
-            ? Map<String, dynamic>.from(current[key] as Map)
-            : current[key] is List
-                ? List<dynamic>.from(current[key] as List)
-                : current[key];
-        current = current[key];
-      } else if (current is List) {
-        final idx = int.tryParse(key);
-        if (idx != null && idx >= 0 && idx < current.length) {
-          current[idx] = current[idx] is Map 
-              ? Map<String, dynamic>.from(current[idx] as Map)
-              : current[idx] is List
-                  ? List<dynamic>.from(current[idx] as List)
-                  : current[idx];
-          current = current[idx];
-        }
-      }
-    }
-    
-    final lastKey = path.last;
-    if (current is Map) {
-      current[lastKey] = newValue;
-    } else if (current is List) {
-      final idx = int.tryParse(lastKey);
-      if (idx != null && idx >= 0 && idx < current.length) {
-        current[idx] = newValue;
-      }
-    }
-    // Discard any "redone-away" ops before appending. After undo,
-    // _historyIndex < _opLog.ops.length; this keeps the log aligned with
-    // the visible history.
-    _opLog.truncate(_historyIndex);
-    devTrace('op.edit', {'path': path, 'newValue': newValue});
 
-    _opLog.record(EditValueOp(path, newValue));
-
-    configJson = root;
+    if (!_applyOpToAst(EditValueOp(path, newValue), 'op.edit',
+        {'path': path, 'newValue': newValue})) {
+      return;
+    }
     _recomputeDirty();
     _pushHistory();
     notifyListeners();
@@ -920,14 +996,22 @@ class TraceStore extends ChangeNotifier {
   int _historyIndex = -1;
   dynamic _savedBaseline;
 
+  // Phase 5c-A: AST snapshots parallel to _history / _savedBaseline.
+  // Restored on undo/redo/resetDraft so the live AST stays in lockstep
+  // with the visible configJson Map.
+  final List<JsonAstNode> _astHistory = [];
+  JsonAstNode? _astBaseline;
+
   bool get canUndo => _historyIndex > 0;
   bool get canRedo => _historyIndex < _history.length - 1;
 
   void _pushHistory() {
     if (_historyIndex < _history.length - 1) {
       _history.removeRange(_historyIndex + 1, _history.length);
+      _astHistory.removeRange(_historyIndex + 1, _astHistory.length);
     }
     _history.add(_deepCopy(configJson));
+    if (_astRoot != null) _astHistory.add(_astRoot!.clone());
     _historyIndex = _history.length - 1;
   }
 
@@ -943,10 +1027,13 @@ class TraceStore extends ChangeNotifier {
     if (_savedBaseline == null) return;
     if (_loadedWithErrors) return; // edits are blocked anyway in this state
     configJson = _deepCopy(_savedBaseline);
+    _astRoot = _astBaseline?.clone();
     _isDirty = false;
     _history
       ..clear()
       ..add(_deepCopy(configJson));
+    _astHistory.clear();
+    if (_astRoot != null) _astHistory.add(_astRoot!.clone());
     _historyIndex = 0;
     if (selectedExprPath != null) {
       final val = _getAt(selectedExprPath!);
@@ -960,6 +1047,9 @@ class TraceStore extends ChangeNotifier {
     if (canUndo) {
       _historyIndex--;
       configJson = _deepCopy(_history[_historyIndex]);
+      if (_historyIndex < _astHistory.length) {
+        _astRoot = _astHistory[_historyIndex].clone();
+      }
       _recomputeDirty();
       if (selectedExprPath != null) {
         final val = _getAt(selectedExprPath!);
@@ -975,6 +1065,9 @@ class TraceStore extends ChangeNotifier {
     if (canRedo) {
       _historyIndex++;
       configJson = _deepCopy(_history[_historyIndex]);
+      if (_historyIndex < _astHistory.length) {
+        _astRoot = _astHistory[_historyIndex].clone();
+      }
       _recomputeDirty();
       if (selectedExprPath != null) {
         final val = _getAt(selectedExprPath!);
@@ -1114,25 +1207,18 @@ class TraceStore extends ChangeNotifier {
       clearSelectedExpr();
     }
 
-    if (parent is Map) {
-      parent.remove(lastKey);
-      _opLog.truncate(_historyIndex);
-      devTrace('op.delete', {'path': path});
+    final removedIdx = parent is List ? int.tryParse(lastKey) : null;
+    if (parent is List && removedIdx == null) return;
 
-      _opLog.record(DeleteOp(path));
-    } else if (parent is List) {
-      final removedIdx = int.tryParse(lastKey);
-      if (removedIdx == null) return;
-      parent.removeAt(removedIdx);
-      _opLog.truncate(_historyIndex);
-      devTrace('op.delete', {'path': path});
-
-      _opLog.record(DeleteOp(path));
+    if (!_applyOpToAst(DeleteOp(path), 'op.delete', {'path': path})) {
+      return;
+    }
+    if (parent is List) {
       // Shift sibling-selections downward: indices > removedIdx slide
       // up by one; the removed index itself was already cleared above.
       _shiftSelectionOnArrayEdit(parentPath, (oldIdx) {
         if (oldIdx == removedIdx) return -1; // shouldn't happen (cleared)
-        if (oldIdx > removedIdx) return oldIdx - 1;
+        if (oldIdx > removedIdx!) return oldIdx - 1;
         return oldIdx;
       });
     }
@@ -1147,27 +1233,25 @@ class TraceStore extends ChangeNotifier {
     final parentPath = path.sublist(0, path.length - 1);
     final lastKey = path.last;
     final parent = _getAt(parentPath);
-    final value = _deepCopy(_getAt(path));
     if (parent is Map) {
-      // Find unique key.
+      // Find unique key. The AST helper rejects collisions, but computing
+      // it here keeps the op_log self-contained (replay-safe even if we
+      // ever add a key-collision recovery upstream).
       String newKey = '${lastKey}_copy';
       int i = 2;
       while (parent.containsKey(newKey)) { newKey = '${lastKey}_copy$i'; i++; }
-      parent[newKey] = value;
-      _opLog.truncate(_historyIndex);
-      devTrace('op.duplicate.map', {'path': path, 'newKey': newKey});
-
-      _opLog.record(DuplicateOp(path, newKey: newKey));
+      if (!_applyOpToAst(DuplicateOp(path, newKey: newKey),
+          'op.duplicate.map', {'path': path, 'newKey': newKey})) {
+        return;
+      }
       // Map duplicate: appended at end → no array-index shift, selection
       // unaffected (sibling keys keep their map keys).
     } else if (parent is List) {
       final idx = int.tryParse(lastKey);
       if (idx == null) return;
-      parent.insert(idx + 1, value);
-      _opLog.truncate(_historyIndex);
-      devTrace('op.duplicate.list', {'path': path});
-
-      _opLog.record(DuplicateOp(path));
+      if (!_applyOpToAst(DuplicateOp(path), 'op.duplicate.list', {'path': path})) {
+        return;
+      }
       // Selection lives under same array AND was at index >= idx+1?
       // Then it slid one slot right. Selection on the duplicated source
       // (idx) stays put — the user still has the original highlighted.
@@ -1175,6 +1259,8 @@ class TraceStore extends ChangeNotifier {
         if (oldIdx > idx) return oldIdx + 1;
         return oldIdx;
       });
+    } else {
+      return;
     }
     _recomputeDirty();
     _pushHistory();
@@ -1182,171 +1268,47 @@ class TraceStore extends ChangeNotifier {
     _scheduleConfigValidation();
   }
 
-  /// Reorder an array entry by swapping with its sibling.
+  /// Reorder a sibling by swapping with its adjacent peer.
   ///
   /// [path] points at the entry to move. [delta] is +1 (down) or -1 (up).
-  /// Only works when the parent is a List. No-op at list edges.
-  ///
-  /// Trailing-placement `$comm_<N>` pseudo-objects (in-array comments
-  /// attached to the preceding real element) move along with their element
-  /// so a swap of two real elements migrates their trailing comments too.
+  /// Phase 5c-A: the AST `moveAt` op handles both Map and List in a single
+  /// uniform "swap with adjacent container entry" operation; trailing
+  /// comments come along automatically because they're peer entries
+  /// (Phase 5e). The list-side selection-shift logic still runs locally
+  /// since it's a UI concern, not part of the underlying mutation.
   void moveConfigNode(List<String> path, int delta) {
     if (configJson == null || path.isEmpty || _loadedWithErrors) return;
     if (delta == 0) return;
     final parentPath = path.sublist(0, path.length - 1);
     final parent = _getAt(parentPath);
 
-    // Map-key reorder: rebuild the parent map with the target key swapped
-    // with its adjacent real-key sibling ($-prefixed pseudo-keys are
-    // skipped — they carry CST metadata, not config values).
-    if (parent is Map) {
-      final key = path.last;
-      // Row-by-row sibling list: real keys + $comm_<N>. Skip the
-      // bookkeeping entries ($meta_*, $elem_meta_*, $meta_self, $err_*).
-      // This unified order matches what the GUI actually displays.
-      final siblings = parent.keys
-          .map((k) => k.toString())
-          .where((k) =>
-              !k.startsWith(r'$meta_') &&
-              !k.startsWith(r'$elem_meta_') &&
-              k != r'$meta_self' &&
-              !k.startsWith(r'$err_'))
-          .toList();
-      final pos = siblings.indexOf(key);
-      if (pos < 0) return;
-      final targetPos = pos + delta;
-      if (targetPos < 0 || targetPos >= siblings.length) return;
-      final targetKey = siblings[targetPos];
-      _swapMapEntriesInPlace(parent, key, targetKey);
-      _opLog.truncate(_historyIndex);
-      devTrace('op.move', {'path': path, 'delta': delta});
+    int? listIdx;
+    if (parent is List) {
+      listIdx = int.tryParse(path.last);
+      if (listIdx == null) return;
+    }
 
-      _opLog.record(MoveOp(path, delta));
-      // Phase 5a: a swap involving a `$comm_<N>` key may put it in a
-      // different physical position; renumber so subsequent ops record
-      // paths matching the AST patcher's positional walk on replay.
-      _renumberCommentsInPlace(configJson);
-      _recomputeDirty();
-      _pushHistory();
-      notifyListeners();
-      _scheduleConfigValidation();
+    if (!_applyOpToAst(MoveOp(path, delta), 'op.move',
+        {'path': path, 'delta': delta})) {
       return;
     }
 
-    if (parent is! List) return;
-    final idx = int.tryParse(path.last);
-    if (idx == null) return;
-
-    // Block = the real element at idx plus any trailing-placement pseudo
-    // comments that immediately follow it. These render attached in the
-    // tree, so they must travel with their owner.
-    final curStart = idx;
-    int curEnd = idx + 1;
-    while (curEnd < parent.length && _isTrailingPseudoComm(parent[curEnd])) {
-      curEnd++;
+    if (parent is List && listIdx != null) {
+      // The two adjacent real elements swapped; selections on either
+      // follow. (Comment peers are skipped from the index shift since
+      // selectedExprPath only ever points at a real-key element.)
+      final movedFrom = listIdx;
+      final movedTo = listIdx + delta;
+      _shiftSelectionOnArrayEdit(parentPath, (oldIdx) {
+        if (oldIdx == movedFrom) return movedTo;
+        if (oldIdx == movedTo) return movedFrom;
+        return oldIdx;
+      });
     }
-
-    // Find the target real element in the requested direction. Skip over
-    // any pseudo-comment runs.
-    int? targetStart;
-    if (delta < 0) {
-      int t = idx - 1;
-      while (t >= 0 && _isPseudoComm(parent[t])) {
-        t--;
-      }
-      if (t < 0) return;
-      targetStart = t;
-    } else if (delta > 0) {
-      int t = curEnd;
-      while (t < parent.length && _isPseudoComm(parent[t])) {
-        t++;
-      }
-      if (t >= parent.length) return;
-      targetStart = t;
-    } else {
-      return; // delta == 0
-    }
-
-    int targetEnd = targetStart + 1;
-    while (targetEnd < parent.length && _isTrailingPseudoComm(parent[targetEnd])) {
-      targetEnd++;
-    }
-
-    // Swap two contiguous blocks (left + middle + right -> right + middle + left).
-    final leftStart = delta < 0 ? targetStart : curStart;
-    final leftEnd = delta < 0 ? targetEnd : curEnd;
-    final rightStart = delta < 0 ? curStart : targetStart;
-    final rightEnd = delta < 0 ? curEnd : targetEnd;
-    final prefix = parent.sublist(0, leftStart);
-    final leftBlock = parent.sublist(leftStart, leftEnd);
-    final middle = parent.sublist(leftEnd, rightStart);
-    final rightBlock = parent.sublist(rightStart, rightEnd);
-    final suffix = parent.sublist(rightEnd);
-    parent
-      ..clear()
-      ..addAll(prefix)
-      ..addAll(rightBlock)
-      ..addAll(middle)
-      ..addAll(leftBlock)
-      ..addAll(suffix);
-    _opLog.truncate(_historyIndex);
-    devTrace('op.move', {'path': path, 'delta': delta});
-
-    _opLog.record(MoveOp(path, delta));
-    // Phase 5a: array reorder shuffles in-array `$comm_<N>` wrapper
-    // elements; renumber so the live tree's labels stay positional.
-    _renumberCommentsInPlace(configJson);
-
-    // After the block swap, the moved real element sits at `prefix.length`
-    // (delta<0) or `prefix.length + rightBlock.length + middle.length`
-    // (delta>0). Selections on either real element follow.
-    final newIdx = delta < 0
-        ? prefix.length
-        : prefix.length + rightBlock.length + middle.length;
-    final otherIdx = delta < 0 ? leftStart : rightStart;
-    _shiftSelectionOnArrayEdit(parentPath, (oldIdx) {
-      if (oldIdx == idx) return newIdx;
-      if (oldIdx == otherIdx) return delta < 0 ? rightStart : leftStart;
-      return oldIdx;
-    });
     _recomputeDirty();
     _pushHistory();
     notifyListeners();
     _scheduleConfigValidation();
-  }
-
-  /// True if [v] is a Map whose keys are exclusively `$comm_*` and
-  /// `$meta_comm_*` — i.e. an in-array comment pseudo-object emitted by
-  /// preprocessAnnotated. (Now carries a sibling `$meta_comm_<N>` with byte
-  /// spans, so the old single-key check is no longer accurate.)
-  static bool _isPseudoComm(dynamic v) {
-    if (v is! Map) return false;
-    bool sawComm = false;
-    for (final k in v.keys) {
-      final s = k.toString();
-      if (s.startsWith(r'$comm_')) {
-        sawComm = true;
-        continue;
-      }
-      if (s.startsWith(r'$meta_comm_')) continue;
-      return false;
-    }
-    return sawComm;
-  }
-
-  /// True if [v] is a `_isPseudoComm` AND its `$comm_<N>` placement is
-  /// `"trailing"`. These belong to the preceding real element.
-  static bool _isTrailingPseudoComm(dynamic v) {
-    if (!_isPseudoComm(v)) return false;
-    final m = v as Map;
-    for (final e in m.entries) {
-      if (e.key.toString().startsWith(r'$comm_')) {
-        final inner = e.value;
-        if (inner is! Map) return false;
-        return inner['placement']?.toString() == 'trailing';
-      }
-    }
-    return false;
   }
 
   /// Insert a child into the container at [path].
@@ -1367,25 +1329,26 @@ class TraceStore extends ChangeNotifier {
     if (configJson == null || _loadedWithErrors) return;
     final target = _getAt(path);
     if (target is Map && newKey != null) {
-      target[newKey] = defaultValue;
-      _opLog.truncate(_historyIndex);
-      devTrace('op.insert.map', {'parentPath': path, 'newKey': newKey});
-
-      _opLog.record(InsertOp(path, newKey, defaultValue));
+      if (!_applyOpToAst(InsertOp(path, newKey, defaultValue),
+          'op.insert.map', {'parentPath': path, 'newKey': newKey})) {
+        return;
+      }
     } else if (target is List) {
       final clamped = atIndex == null
           ? target.length
           : atIndex.clamp(0, target.length);
-      target.insert(clamped, defaultValue);
-      _opLog.truncate(_historyIndex);
-      devTrace('op.insert.list', {'parentPath': path, 'index': clamped});
-
-      _opLog.record(InsertOp(path, clamped.toString(), defaultValue));
+      if (!_applyOpToAst(InsertOp(path, clamped.toString(), defaultValue),
+          'op.insert.list',
+          {'parentPath': path, 'index': clamped})) {
+        return;
+      }
       // Selections under the same array at indices >= clamped shifted up.
       _shiftSelectionOnArrayEdit(path, (oldIdx) {
         if (oldIdx >= clamped) return oldIdx + 1;
         return oldIdx;
       });
+    } else {
+      return;
     }
     _recomputeDirty();
     _pushHistory();
@@ -1398,16 +1361,10 @@ class TraceStore extends ChangeNotifier {
   void editCommentNode(List<String> path, String newText) {
     if (configJson == null || _loadedWithErrors) return;
     if (path.isEmpty || !path.last.startsWith(r'$comm_')) return;
-    final commObj = _getAt(path);
-    if (commObj is! Map) return;
-    final existing = commObj['text']?.toString() ?? '';
-    final newFull = existing.startsWith('/*') ? '/*$newText*/' : '//$newText';
-    if (commObj['text'] == newFull) return;
-    commObj['text'] = newFull;
-    _opLog.truncate(_historyIndex);
-    devTrace('op.editComment', {'path': path, 'newText': newText});
-
-    _opLog.record(EditCommentOp(path, newText));
+    if (!_applyOpToAst(EditCommentOp(path, newText), 'op.editComment',
+        {'path': path, 'newText': newText})) {
+      return;
+    }
     _recomputeDirty();
     _pushHistory();
     notifyListeners();
@@ -1418,34 +1375,10 @@ class TraceStore extends ChangeNotifier {
   void deleteCommentNode(List<String> path) {
     if (configJson == null || _loadedWithErrors) return;
     if (path.isEmpty || !path.last.startsWith(r'$comm_')) return;
-    final last = path.last;
-    final n = last.substring(r'$comm_'.length);
-    final parent = _getAt(path.sublist(0, path.length - 1));
-    if (parent is! Map) return;
-    parent.remove(last);
-    parent.remove(r'$meta_comm_' + n);
-    // If the parent was an array's pseudo-comm wrapper and is now empty of
-    // comment data, drop the wrapper from its grandparent list.
-    final hasComm = parent.keys.any((k) => k.toString().startsWith(r'$comm_'));
-    if (!hasComm && path.length >= 2) {
-      final wrapperParentPath = path.sublist(0, path.length - 2);
-      final list = _getAt(wrapperParentPath);
-      if (list is List) {
-        final idx = int.tryParse(path[path.length - 2]);
-        if (idx != null && idx >= 0 && idx < list.length) {
-          list.removeAt(idx);
-        }
-      }
+    if (!_applyOpToAst(DeleteCommentOp(path), 'op.deleteComment',
+        {'path': path})) {
+      return;
     }
-    _opLog.truncate(_historyIndex);
-    devTrace('op.deleteComment', {'path': path});
-
-    _opLog.record(DeleteCommentOp(path));
-    // Phase 5a: keep configJson's $comm_<N> sequential so subsequent ops
-    // record paths matching the AST patcher's positional findCommentByGlobalN
-    // walk on replay. Done AFTER recording this op (its path uses the N
-    // that was visible to the user at click time).
-    _renumberCommentsInPlace(configJson);
     _recomputeDirty();
     _pushHistory();
     notifyListeners();
@@ -1457,75 +1390,13 @@ class TraceStore extends ChangeNotifier {
   void insertCommentNode(List<String> anchorPath, String style, String text) {
     if (configJson == null || _loadedWithErrors) return;
     if (anchorPath.isEmpty) return;
-    final parent = _getAt(anchorPath.sublist(0, anchorPath.length - 1));
-    // Pick a fresh number not already used anywhere in the tree.
-    int maxN = 0;
-    void scan(dynamic node) {
-      if (node is Map) {
-        for (final e in node.entries) {
-          final k = e.key.toString();
-          if (k.startsWith(r'$comm_')) {
-            final n = int.tryParse(k.substring(r'$comm_'.length));
-            if (n != null && n > maxN) maxN = n;
-          }
-          if (!k.startsWith(r'$meta_') && !k.startsWith(r'$elem_meta_')) {
-            scan(e.value);
-          }
-        }
-      } else if (node is List) {
-        for (final v in node) {
-          scan(v);
-        }
-      }
-    }
-    scan(configJson);
-    final newN = maxN + 1;
-    final commKey = r'$comm_' + newN.toString();
-    final metaKey = r'$meta_comm_' + newN.toString();
-    final commObj = <String, dynamic>{
-      'text': style == '/*' ? '/*$text*/' : '//$text',
-      'placement': 'leading',
-    };
-    // The AST patcher doesn't read these spans (it re-parses raw bytes);
-    // they're kept zero-valued only so the live-tree shape matches what
-    // bxp-fmt would emit on the next reload.
-    final metaObj = <String, dynamic>{
-      'value_span': {'start': 0, 'end': 0},
-      'block_span': {'start': 0, 'end': 0},
-    };
-    if (parent is Map) {
-      // Insert pair right before the anchor key in insertion order.
-      final entries = parent.entries.toList();
-      parent.clear();
-      bool injected = false;
-      for (final e in entries) {
-        if (!injected && e.key == anchorPath.last) {
-          parent[commKey] = commObj;
-          parent[metaKey] = metaObj;
-          injected = true;
-        }
-        parent[e.key] = e.value;
-      }
-      if (!injected) {
-        parent[commKey] = commObj;
-        parent[metaKey] = metaObj;
-      }
-    } else if (parent is List) {
-      final idx = int.tryParse(anchorPath.last);
-      if (idx == null) return;
-      parent.insert(idx, <String, dynamic>{commKey: commObj, metaKey: metaObj});
-      _shiftSelectionOnArrayEdit(anchorPath.sublist(0, anchorPath.length - 1),
-          (oldIdx) => oldIdx >= idx ? oldIdx + 1 : oldIdx);
-    } else {
+    if (!_applyOpToAst(InsertCommentOp(anchorPath, style, text),
+        'op.insertComment', {'anchorPath': anchorPath, 'style': style})) {
       return;
     }
-    _opLog.truncate(_historyIndex);
-    devTrace('op.insertComment', {'anchorPath': anchorPath, 'style': style});
-
-    _opLog.record(InsertCommentOp(anchorPath, style, text));
-    // Phase 5a: keep $comm_<N> sequential after the insert so future ops'
-    // paths align with AST source-order numbering.
-    _renumberCommentsInPlace(configJson);
+    // Comment peers don't enter the int-indexed list address space — UI
+    // selections point at real-key paths only — so no _shiftSelection is
+    // needed here even when the anchor is a list element.
     _recomputeDirty();
     _pushHistory();
     notifyListeners();
@@ -1898,69 +1769,3 @@ class TraceStore extends ChangeNotifier {
   }
 }
 
-/// Walk [tree] in source order (Map insertion order, list element order),
-/// reassigning every `$comm_<N>` key to be sequentially `1..K`. Phase 5a
-/// invariant: configJson's `$comm_<N>` numbering must match the AST's
-/// source-order walk; mid-session edits (insert / delete / move comments)
-/// can leave the in-memory tree with gaps or reordered N — call this
-/// after each such mutation, BEFORE recording the op, so the op_log path
-/// uses the post-renumber N that the AST patcher will see at replay time.
-///
-/// Walks: Map → recurse into each entry value in insertion order; List →
-/// recurse into each element. Comments inside in-array wrapper objects
-/// (`{$comm_<N>: ...}`) get renumbered too.
-void _renumberCommentsInPlace(dynamic tree) {
-  var counter = 0;
-  void rewrite(dynamic v) {
-    if (v is Map) {
-      final entries = v.entries.toList();
-      v.clear();
-      for (final e in entries) {
-        final k = e.key.toString();
-        if (k.startsWith(r'$comm_')) {
-          counter++;
-          v['\$comm_$counter'] = e.value;
-        } else {
-          v[e.key] = e.value;
-          if (!k.startsWith(r'$')) {
-            rewrite(e.value);
-          }
-        }
-      }
-    } else if (v is List) {
-      for (var i = 0; i < v.length; i++) {
-        rewrite(v[i]);
-      }
-    }
-  }
-  rewrite(tree);
-}
-
-/// Swap two map entries in [m] while keeping their `$meta_*` sibling
-/// (`$meta_<key>` for real keys, `$meta_comm_<N>` for `$comm_<N>` keys)
-/// adjacent. Either key may be a comment. Used by `moveConfigNode` to
-/// keep the live tree's insertion order in step with the user-visible
-/// row order; the AST patcher writes its own order on save independently.
-void _swapMapEntriesInPlace(Map m, String keyA, String keyB) {
-  String metaOf(String k) => k.startsWith(r'$comm_')
-      ? r'$meta_comm_' + k.substring(r'$comm_'.length)
-      : r'$meta_' + k;
-  final metaA = metaOf(keyA);
-  final metaB = metaOf(keyB);
-  final entries = m.entries.toList();
-  m.clear();
-  for (final e in entries) {
-    final k = e.key.toString();
-    if (k == keyA) {
-      m[keyB] = entries.firstWhere((x) => x.key.toString() == keyB).value;
-    } else if (k == keyB) {
-      m[keyA] = entries.firstWhere((x) => x.key.toString() == keyA).value;
-    } else if (k == metaA) {
-      m[metaB] = entries.firstWhere((x) => x.key.toString() == metaB).value;
-    } else if (k == metaB) {
-      m[metaA] = entries.firstWhere((x) => x.key.toString() == metaA).value;
-    } else {
-      m[e.key] = e.value;
-    }
-  }
-}
