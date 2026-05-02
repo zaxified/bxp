@@ -231,52 +231,53 @@ class _CommentWalker {
     return false;
   }
 
-  /// Visit `n`'s body (via `inner`), then its trailing comment if any.
-  /// Returns true if the target was found (caller should stop).
-  bool _visitBodyThenTrailing(JsonAstNode n, bool Function() inner) {
-    if (inner()) return true;
+  /// Single source of truth: visit body then trailing in source order for
+  /// EVERY node type. Earlier versions special-cased scalars (skipping
+  /// the trailing visit) and then wrapped array elements in an outer
+  /// `_visitBodyThenTrailing` to compensate — that double-counted the
+  /// trailing of container array elements (object/array trailings were
+  /// bumped twice). Unifying here means every comment is bumped exactly
+  /// once, matching `AstToLegacyMap`'s synthesised `$comm_<N>` numbering.
+  bool visit(JsonAstNode n) {
+    if (_body(n)) return true;
     if (n.trailingComment != null) {
       if (_bump(() => CommentLocation.trailing(n, seen))) return true;
     }
     return false;
   }
 
-  bool visit(JsonAstNode n) {
+  bool _body(JsonAstNode n) {
     if (n is JsonObject) {
-      return _visitBodyThenTrailing(n, () {
-        for (var i = 0; i < n.properties.length; i++) {
-          final entry = n.properties[i];
-          if (entry is CommentLine) {
-            final capturedIdx = i;
-            if (_bump(() => CommentLocation.standalone(n, capturedIdx, seen))) {
-              return true;
-            }
-          } else if (entry is JsonProperty) {
-            if (_visitBodyThenTrailing(entry, () => visit(entry.value))) {
-              return true;
-            }
+      for (var i = 0; i < n.properties.length; i++) {
+        final entry = n.properties[i];
+        if (entry is CommentLine) {
+          final capturedIdx = i;
+          if (_bump(() => CommentLocation.standalone(n, capturedIdx, seen))) {
+            return true;
           }
+        } else if (entry is JsonProperty) {
+          if (visit(entry)) return true;
         }
-        return false;
-      });
+      }
+      return false;
     }
     if (n is JsonArray) {
-      return _visitBodyThenTrailing(n, () {
-        for (var i = 0; i < n.elements.length; i++) {
-          final el = n.elements[i];
-          if (el is CommentLine) {
-            final capturedIdx = i;
-            if (_bump(() => CommentLocation.standalone(n, capturedIdx, seen))) {
-              return true;
-            }
-          } else {
-            if (_visitBodyThenTrailing(el, () => visit(el))) return true;
+      for (var i = 0; i < n.elements.length; i++) {
+        final el = n.elements[i];
+        if (el is CommentLine) {
+          final capturedIdx = i;
+          if (_bump(() => CommentLocation.standalone(n, capturedIdx, seen))) {
+            return true;
           }
+        } else {
+          if (visit(el)) return true;
         }
-        return false;
-      });
+      }
+      return false;
     }
-    // Scalar — has no children; its trailing comment is visited by caller.
-    return false;
+    if (n is JsonProperty) {
+      return visit(n.value);
+    }
+    return false; // scalar — body is empty, trailing handled by visit()
   }
 }
