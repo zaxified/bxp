@@ -180,7 +180,9 @@ void insertProperty(
   }
 }
 
-/// Insert a List element at real-index `index` (clamped to end).
+/// Insert a List element at raw `index` in `parent.elements` (clamped to
+/// end). RAW indexing — `index` counts CommentLine peers, matching the
+/// path convention used by the resolver and trace_store mutations.
 void insertElement(
   JsonAstNode root,
   List<String> parentPath,
@@ -192,14 +194,13 @@ void insertElement(
     throw AstOpError(
         'insertElement: parent at $parentPath is not an array', parentPath);
   }
-  final realCount = realElementCount(parent.elements);
-  final clamped = index < 0 ? 0 : (index > realCount ? realCount : index);
-  if (clamped == realCount) {
+  final n = parent.elements.length;
+  final clamped = index < 0 ? 0 : (index > n ? n : index);
+  if (clamped == n) {
     parent.elements.add(value);
     return;
   }
-  final raw = _realIndexToRawIndex(parent.elements, clamped);
-  parent.elements.insert(raw, value);
+  parent.elements.insert(clamped, value);
 }
 
 // --------------------------------------------------------------------------
@@ -260,16 +261,6 @@ int _findPropertyIndex(JsonObject obj, String key) {
   for (var i = 0; i < obj.properties.length; i++) {
     final e = obj.properties[i];
     if (e is JsonProperty && e.key == key) return i;
-  }
-  return -1;
-}
-
-int _realIndexToRawIndex(List<JsonAstNode> elements, int n) {
-  var seen = 0;
-  for (var i = 0; i < elements.length; i++) {
-    if (elements[i] is CommentLine) continue;
-    if (seen == n) return i;
-    seen++;
   }
   return -1;
 }

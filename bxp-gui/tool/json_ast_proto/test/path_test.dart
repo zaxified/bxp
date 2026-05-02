@@ -1,6 +1,8 @@
 import 'package:test/test.dart';
 
 import 'package:json_ast_proto/ast.dart';
+import 'package:json_ast_proto/dumper.dart';
+import 'package:json_ast_proto/operations.dart';
 import 'package:json_ast_proto/parser.dart';
 import 'package:json_ast_proto/path.dart';
 
@@ -41,18 +43,37 @@ void main() {
   });
 
   group('resolveNode — Array', () {
-    test('real index skips standalone comments', () {
-      // CommentLine before element 1 should not shift its real index.
+    test('RAW index addresses elements (CommentLine peers count)', () {
+      // The path resolver uses RAW indexing so trace_store and the AST
+      // patcher agree on which physical entry a path segment selects.
+      // A standalone CommentLine before "y" gets raw index 1; "y" then
+      // sits at raw index 2.
       final root = parseOk('[ "x",\n  // hi\n  "y", "z" ]');
-      // (the inline-array form parses fine; comment before "y" makes it
-      // multi-line)
-      final n = resolveNode(root, ['1']);
-      expect((n as JsonString).value, 'y');
+      expect((resolveNode(root, ['0']) as JsonString).value, 'x');
+      expect(resolveNode(root, ['1']) is CommentLine, isTrue);
+      expect((resolveNode(root, ['2']) as JsonString).value, 'y');
+      expect((resolveNode(root, ['3']) as JsonString).value, 'z');
     });
 
     test('out of range throws', () {
       final root = parseOk('[1, 2]');
       expect(() => resolveNode(root, ['5']), throwsA(isA<AstPathError>()));
+    });
+
+    test('regression: deleteAt with CommentLine peer hits path target', () {
+      // Phase 5c bugfix: prior real-only path semantics caused deleteAt
+      // (and friends) to silently target the wrong element when a
+      // standalone CommentLine sat before the addressed real entry.
+      // trace_store records RAW indices; the resolver must agree.
+      final root = parseOk('[\n  "r0",\n  // comment\n  "r1",\n  "r2"\n]');
+      // UI path for r1 (raw index 2 in elements/adapter Map list).
+      deleteAt(root, ['2']);
+      final dumped = Dumper.dump(root);
+      expect(dumped.contains('"r1"'), isFalse,
+          reason: 'r1 must be deleted, not r2');
+      expect(dumped.contains('"r0"'), isTrue);
+      expect(dumped.contains('"r2"'), isTrue);
+      expect(dumped.contains('// comment'), isTrue);
     });
 
     test('non-numeric segment throws', () {

@@ -80,11 +80,15 @@ ParentRef resolveParent(JsonAstNode root, List<String> path) {
     if (n == null) {
       throw AstPathError("expected numeric index, got '$last'", path);
     }
-    final idx = _realIndexToRawIndex(cur.elements, n);
-    if (idx < 0) {
+    // Path indices are RAW positions in `elements` (counting CommentLine
+    // peers), matching the convention `trace_store` uses when it walks
+    // the live AST / legacy adapter Map at edit time. Resolving with a
+    // real-only conversion here would silently target the wrong element
+    // when the array contains a standalone CommentLine before `n`.
+    if (n < 0 || n >= cur.elements.length) {
       throw AstPathError('list index $n out of range', path);
     }
-    return ParentRef(cur, cur.elements, idx);
+    return ParentRef(cur, cur.elements, n);
   }
   throw AstPathError(
       "cannot index into ${cur.runtimeType} with '$last'", path);
@@ -105,11 +109,11 @@ JsonAstNode _step(JsonAstNode node, String seg, List<String> fullPath) {
     if (n == null) {
       throw AstPathError("expected numeric index, got '$seg'", fullPath);
     }
-    final idx = _realIndexToRawIndex(node.elements, n);
-    if (idx < 0) {
+    // RAW indexing — see resolveParent for the rationale.
+    if (n < 0 || n >= node.elements.length) {
       throw AstPathError('list index $n out of range', fullPath);
     }
-    return node.elements[idx];
+    return node.elements[n];
   }
   if (node is JsonProperty) {
     return _step(node.value, seg, fullPath);
@@ -122,18 +126,6 @@ int _findPropertyIndex(JsonObject obj, String key) {
   for (var i = 0; i < obj.properties.length; i++) {
     final e = obj.properties[i];
     if (e is JsonProperty && e.key == key) return i;
-  }
-  return -1;
-}
-
-/// Map a real-only index (skipping [CommentLine]) to the raw index inside
-/// `elements`. Returns -1 if `n` is out of range.
-int _realIndexToRawIndex(List<JsonAstNode> elements, int n) {
-  var seen = 0;
-  for (var i = 0; i < elements.length; i++) {
-    if (elements[i] is CommentLine) continue;
-    if (seen == n) return i;
-    seen++;
   }
   return -1;
 }

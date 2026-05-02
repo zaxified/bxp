@@ -279,12 +279,13 @@ void main() {
     });
 
     test('List move swaps with adjacent row (CommentLine peer)', () {
-      // Phase 4: move = swap with adjacent CONTAINER entry (real or comment).
-      // No group-swap. Real index 1 (value 2) lives at raw index 3 in
-      // [CommentLine(first), 1, CommentLine(second), 2, 3]. Move -1 swaps
-      // value 2 with the preceding CommentLine(second).
+      // Phase 4: move = swap with adjacent CONTAINER entry (real or
+      // comment). No group-swap. Path indices are RAW positions in
+      // `elements`, matching trace_store's convention. Source parses to:
+      // [CL(first), 1, CL(second), 2, 3] — value 2 sits at raw 3. Move
+      // it -1 to swap with the preceding CommentLine(second).
       final root = parseOk('[\n  // first\n  1,\n  // second\n  2,\n  3\n]');
-      moveAt(root, ['1'], -1);
+      moveAt(root, ['3'], -1);
       // Expected order: // first, 1, 2, // second, 3.
       final dumped = Dumper.dump(root);
       final firstPos = dumped.indexOf('// first');
