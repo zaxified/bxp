@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import '../services/dev_trace.dart';
 import '../store/trace_store.dart';
 import 'debug_panes.dart';
 import 'config_view.dart';
@@ -73,6 +74,8 @@ class _MainViewState extends State<MainView> {
         // shortcuts firing regardless of save preconditions, since they're
         // pure UI overlays and have nothing to do with the config.
         if (shift) {
+          devTrace('action.shortcut',
+              {'combo': 'Ctrl+Shift+S', 'action': 'toggleSettings'});
           setState(() => _settingsOpen = !_settingsOpen);
           return true;
         }
@@ -82,17 +85,21 @@ class _MainViewState extends State<MainView> {
             store.configHasErrors) {
           return true;
         }
+        devTrace('action.shortcut', {'combo': 'Ctrl+S', 'action': 'save'});
         store.saveConfig();
         return true;
       case LogicalKeyboardKey.keyZ:
         if (readOnly || !store.canUndo) return true;
+        devTrace('action.shortcut', {'combo': 'Ctrl+Z', 'action': 'undo'});
         store.undo();
         return true;
       case LogicalKeyboardKey.keyY:
         if (readOnly || !store.canRedo) return true;
+        devTrace('action.shortcut', {'combo': 'Ctrl+Y', 'action': 'redo'});
         store.redo();
         return true;
       case LogicalKeyboardKey.keyO:
+        devTrace('action.shortcut', {'combo': 'Ctrl+O', 'action': 'openDialog'});
         OpenDialog.show(context, (path) async {
           store.setConfigPath(path);
           await store.loadConfig();
@@ -100,14 +107,18 @@ class _MainViewState extends State<MainView> {
         return true;
       case LogicalKeyboardKey.keyR:
         if (store.configPath.isEmpty) return true;
+        devTrace('action.shortcut', {'combo': 'Ctrl+R', 'action': 'reload'});
         store.loadConfig();
         return true;
       case LogicalKeyboardKey.keyT:
         if (shift) {
+          devTrace('action.shortcut',
+              {'combo': 'Ctrl+Shift+T', 'action': 'toggleThemeInspector'});
           setState(() => _inspectorOpen = !_inspectorOpen);
           return true;
         }
         if (readOnly || !store.isDirty) return true;
+        devTrace('action.shortcut', {'combo': 'Ctrl+T', 'action': 'resetDraft'});
         store.resetDraft();
         return true;
     }

@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:json_ast_proto/ast.dart';
 import 'package:json_ast_proto/path.dart' as ast_path;
 import 'package:provider/provider.dart';
+import '../../services/dev_trace.dart';
 import '../../services/schema_gate.dart';
 import '../../store/trace_store.dart';
 import '../theme/bxp_theme.dart';
@@ -584,6 +585,10 @@ class _JsonNodeState extends State<_JsonNode> {
     final store = context.read<TraceStore>();
     final v = widget.value;
     final isMap = v is JsonObject;
+    devTrace('action.addChild.open', {
+      'parentPath': widget.path,
+      'isMap': isMap,
+    });
     // SchemaGate consults FnDocs for valid keys + skips ones already
     // present. We pass the existing top-level property keys so it can do
     // that without re-walking the AST.

@@ -138,6 +138,7 @@ class TraceStore extends ChangeNotifier {
 
   void setActiveTab(int index) {
     if (activeTabIndex != index) {
+      devTrace('action.tab.set', {'index': index});
       activeTabIndex = index;
       notifyListeners();
     }
@@ -250,6 +251,7 @@ class TraceStore extends ChangeNotifier {
   }
 
   void jumpToConfigRule(int ruleIndex, String whenExpr) {
+    devTrace('action.jumpTo.rule', {'ruleIndex': ruleIndex});
     final tmpl = _activeTemplateId();
     if (tmpl == null) return;
     final parentPath = ['conversion_templates', tmpl, 'row_rules'];
@@ -263,6 +265,7 @@ class TraceStore extends ChangeNotifier {
   /// template the currently-selected row belongs to. Used by Variables-
   /// table row clicks.
   void jumpToConfigVar(String varName, String exprText) {
+    devTrace('action.jumpTo.var', {'varName': varName});
     final tmpl = _activeTemplateId();
     if (tmpl == null) return;
     setActiveTab(0);
@@ -281,6 +284,11 @@ class TraceStore extends ChangeNotifier {
     String varName,
     String exprText,
   ) {
+    devTrace('action.jumpTo.ruleVar', {
+      'ruleIndex': ruleIndex,
+      'outputRowIndex': outputRowIndex,
+      'varName': varName,
+    });
     final tmpl = _activeTemplateId();
     if (tmpl == null) return;
     final rulesPath = ['conversion_templates', tmpl, 'row_rules'];
@@ -299,6 +307,7 @@ class TraceStore extends ChangeNotifier {
   Timer? _validationDebounce;
 
   void setSelectedExpr(List<String> path, String text) {
+    devTrace('action.expr.select', {'path': path});
     selectedExprPath = path;
     selectedExprText = text;
     selectedExprBaseline = text;
@@ -738,6 +747,7 @@ class TraceStore extends ChangeNotifier {
   /// into the store.
   void setThemePreset(String name) async {
     if (_themePresetName == name) return;
+    devTrace('action.theme.set', {'name': name});
     _themePresetName = name;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('bxp-ui.theme', _themePresetName);
@@ -751,6 +761,7 @@ class TraceStore extends ChangeNotifier {
   void setTextScheme(String name) async {
     if (_textSchemeName == name) return;
     if (!bxpTextSchemes.containsKey(name)) return;
+    devTrace('action.textScheme.set', {'name': name});
     _textSchemeName = name;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('bxp-ui.textScheme', _textSchemeName);
@@ -776,11 +787,13 @@ class TraceStore extends ChangeNotifier {
   }
 
   void setConfigPath(String path) {
+    devTrace('action.config.setPath', {'path': path});
     configPath = path;
     notifyListeners();
   }
 
   void setTemplateId(String id) {
+    devTrace('action.template.set', {'id': id});
     templateId = id;
     notifyListeners();
   }
@@ -994,6 +1007,7 @@ class TraceStore extends ChangeNotifier {
   void resetDraft() {
     if (_astBaseline == null) return;
     if (_loadedWithErrors) return; // edits are blocked anyway in this state
+    devTrace('action.resetDraft');
     _astRoot = _astBaseline?.clone();
     _isDirty = false;
     _astHistory.clear();
@@ -1009,6 +1023,7 @@ class TraceStore extends ChangeNotifier {
 
   void undo() {
     if (canUndo) {
+      devTrace('action.undo', {'historyIndex': _historyIndex - 1});
       _historyIndex--;
       _astRoot = _astHistory[_historyIndex].clone();
       _recomputeDirty();
@@ -1024,6 +1039,7 @@ class TraceStore extends ChangeNotifier {
 
   void redo() {
     if (canRedo) {
+      devTrace('action.redo', {'historyIndex': _historyIndex + 1});
       _historyIndex++;
       _astRoot = _astHistory[_historyIndex].clone();
       _recomputeDirty();
@@ -1510,10 +1526,18 @@ class TraceStore extends ChangeNotifier {
         '${two(t.hour)}${two(t.minute)}${two(t.second)}';
   }
 
-  Future<void> runDryRun() => _streamRun(dry: true);
-  Future<void> runFullRun() => _streamRun(dry: false);
-  
+  Future<void> runDryRun() {
+    devTrace('action.run.dry');
+    return _streamRun(dry: true);
+  }
+  Future<void> runFullRun() {
+    devTrace('action.run.full');
+    return _streamRun(dry: false);
+  }
+
   void selectFile(String? id) {
+    if (selectedFileId == id) return;
+    devTrace('action.file.select', {'id': id});
     selectedFileId = id;
     // Auto-select the first row in the newly selected file so RowDetail
     // and OutputPanel populate immediately.
@@ -1523,6 +1547,8 @@ class TraceStore extends ChangeNotifier {
   }
   
   void selectRow(String? id) {
+    if (selectedRowId == id) return;
+    devTrace('action.row.select', {'id': id});
     selectedRowId = id;
     notifyListeners();
   }
@@ -1699,6 +1725,7 @@ class TraceStore extends ChangeNotifier {
   /// `openInEditor` RPC.
   Future<void> openInEditor(String path) async {
     if (path.isEmpty) return;
+    devTrace('action.openInEditor', {'path': path});
     try {
       if (Platform.isLinux) {
         await Process.start('xdg-open', [path], mode: ProcessStartMode.detached);
