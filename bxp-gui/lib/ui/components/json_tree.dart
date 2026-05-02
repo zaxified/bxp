@@ -140,9 +140,6 @@ class _JsonNodeState extends State<_JsonNode> {
     final t = context.bxpTheme;
     final realCount =
         obj.properties.whereType<JsonProperty>().length;
-    if (realCount == 0 && obj.properties.isEmpty) {
-      return _buildRow(Text('(empty object)', style: BxpText.italic(context)));
-    }
     final children = _mapChildNodes(obj);
     final showChildren = expanded || _isOnRevealPath(context);
     return Column(
@@ -228,9 +225,6 @@ class _JsonNodeState extends State<_JsonNode> {
     final t = context.bxpTheme;
     final realCount =
         arr.elements.where((e) => e is! CommentLine).length;
-    if (realCount == 0 && arr.elements.isEmpty) {
-      return _buildRow(Text('(empty array)', style: BxpText.italic(context)));
-    }
     final children = _listChildNodes(arr);
     final showChildren = expanded || _isOnRevealPath(context);
     return Column(

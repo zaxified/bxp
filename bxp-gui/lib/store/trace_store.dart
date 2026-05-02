@@ -8,7 +8,6 @@ import 'package:json_ast_proto/ast.dart';
 import 'package:json_ast_proto/operations.dart' as ast_ops;
 import '../services/ast_loader.dart';
 import '../services/ast_patch_client.dart';
-import '../services/ast_to_legacy_map.dart';
 import '../services/bxp_process_client.dart';
 import '../services/dev_trace.dart';
 import '../services/op_log.dart';
@@ -75,21 +74,20 @@ class TraceStore extends ChangeNotifier {
   //   anything else → red. Mirrors bxp-ui's StatusBar logic.
   int? lastExitCode;
   
-  Map<String, dynamic>? configJson;
+  /// Phase 5c-D: validation diagnostics keyed by encoded path
+  /// (`segment\x00segment\x00…`). Populated by `_validateConfigNow` after
+  /// each `bxp-fmt --config` run; consulted by `errorsAt` / `hasErrorIn`
+  /// from the UI. Empty until the first validator response lands.
+  Map<String, Map<String, String>> _validationErrors = const {};
 
-  /// Phase 5c-A: AST is the live source of truth. Every mutation applies
-  /// to `_astRoot` first via `op_to_ast.applyConfigOp`; `configJson` is
-  /// then regenerated via `AstToLegacyMap.convert` so the existing UI
-  /// (still on the Map shape) stays in sync. Save / validate dump from
-  /// the same tree, eliminating the dual-mutation class of bugs that
-  /// plagued the Map-mutating earlier phases.
+  /// AST is the single source of truth for the loaded config. Every
+  /// mutation applies through `op_to_ast.applyConfigOp`; saves dump
+  /// directly via the AST patcher.
   JsonAstNode? _astRoot;
 
-  /// Phase 5c-C: read-only view of the live AST for UI components that
-  /// have been migrated off the legacy `configJson` Map (output_panel,
-  /// schema_gate, …). Components MUST NOT mutate the returned tree —
-  /// edits go through TraceStore mutation methods so op_log + history
-  /// stay coherent with the visible state.
+  /// Read-only view of the live AST for UI components.
+  /// Components MUST NOT mutate the returned tree — edits go through
+  /// TraceStore mutation methods so op_log + history stay coherent.
   JsonAstNode? get astRoot => _astRoot;
 
   /// Raw file bytes at load time. Kept verbatim so the AST patcher can
@@ -214,43 +212,37 @@ class TraceStore extends ChangeNotifier {
   }
 
   /// Convert a real-only array index (the kind bxp-cli emits in trace
-  /// events) into a Dart raw index against `configJson` along [parentPath].
-  /// Returns the raw index, or null when the parent path can't be resolved
-  /// or the target slot doesn't exist.
-  ///
-  /// This is needed because:
-  ///   * bxp-cli iterates the in-memory config (no comments) and emits
-  ///     `rule_index: 2` for the third rule.
-  ///   * `configJson` is the annotated parse tree where `$comm_*` wrappers
-  ///     occupy real slots in the parsed list.
-  ///   * `JsonTree` paths and op_log paths use the Dart raw index, so
-  ///     the same rule may be at raw index 3 if a leading comment exists.
+  /// events) into the raw index in the AST's `JsonArray.elements` along
+  /// [parentPath]. Comment peers (CommentLine) shift the raw position
+  /// forward; trace events count only real entries, the UI / op_log /
+  /// AST resolver all use raw positions.
   int? _realToRawListIndex(List<String> parentPath, int realIdx) {
-    final root = configJson;
+    final root = _astRoot;
     if (root == null) return null;
-    dynamic cur = root;
+    JsonAstNode cur = root;
     for (final seg in parentPath) {
-      if (cur is Map) {
-        cur = cur[seg];
-      } else if (cur is List) {
+      if (cur is JsonObject) {
+        JsonAstNode? next;
+        for (final p in cur.properties.whereType<JsonProperty>()) {
+          if (p.key == seg) {
+            next = p.value;
+            break;
+          }
+        }
+        if (next == null) return null;
+        cur = next;
+      } else if (cur is JsonArray) {
         final i = int.tryParse(seg);
-        if (i == null || i < 0 || i >= cur.length) return null;
-        cur = cur[i];
+        if (i == null || i < 0 || i >= cur.elements.length) return null;
+        cur = cur.elements[i];
       } else {
         return null;
       }
-      if (cur == null) return null;
     }
-    if (cur is! List) return null;
+    if (cur is! JsonArray) return null;
     int seen = 0;
-    for (int i = 0; i < cur.length; i++) {
-      final v = cur[i];
-      // "Is comment wrapper?" predicate: a Map where every key starts with
-      // `$` (the only kind of element the parser emits as a wrapper rather
-      // than a real value).
-      final isCommWrapper = v is Map &&
-          v.keys.every((k) => k.toString().startsWith(r'$'));
-      if (isCommWrapper) continue;
+    for (int i = 0; i < cur.elements.length; i++) {
+      if (cur.elements[i] is CommentLine) continue;
       if (seen == realIdx) return i;
       seen++;
     }
@@ -391,7 +383,7 @@ class TraceStore extends ChangeNotifier {
 
   Future<void> _validateConfigNow() async {
     if (_configValidating) return;
-    if (configJson == null || configPath.isEmpty) return;
+    if (_astRoot == null || configPath.isEmpty) return;
     if (isSaving) return; // saveConfig runs its own validation
     final raw = _rawConfigInput;
     if (raw == null) return;
@@ -404,17 +396,16 @@ class TraceStore extends ChangeNotifier {
       final out = await BxpProcessClient.loadConfig(tmpPath);
       final parsed = jsonDecode(out);
       if (parsed is! Map) return;
-      // Sync only $err_* diagnostic markers from the reparsed tree into
-      // the live tree, instead of replacing configJson wholesale. The
-      // wholesale replace was causing $comm_<N> ID drift across reparse:
-      // bxp-fmt assigns IDs by source order on every reparse, but the
-      // OpLog and the LIVE tree must agree on which comment is "$comm_3"
-      // for follow-up ops to land on the right entry. Keeping the tree
-      // mutated in place by user ops only (live edits in trace_store +
-      // AST patcher on save) makes IDs stable for the duration of the
-      // session — fresh IDs only on save+reload.
-      _syncErrMarkers(configJson!, parsed);
-      _recomputeDirty();
+      // Phase 5c-D: rebuild the path-keyed `_validationErrors` map from
+      // the reparsed tree. The AST itself stays untouched; the UI looks
+      // up errors at render time via `errorsAt` / `hasErrorIn`.
+      //
+      // _loadedWithErrors is intentionally NOT touched here — it gates
+      // *all* edits, and a transient mid-edit error (e.g. user just
+      // inserted an empty object that the schema rejects) must not lock
+      // the user out of finishing their edit. The flag is owned by
+      // loadConfig; live validation only populates the marker map.
+      _validationErrors = _extractValidationErrors(parsed);
       notifyListeners();
     } catch (_) {
       // Best-effort: a transient parse failure shouldn't block edits.
@@ -426,124 +417,78 @@ class TraceStore extends ChangeNotifier {
     }
   }
 
-  /// Phase 5c-C3: collect every `$err_*` marker on the named node at
-  /// [path] in `configJson`. Returns a map of `$err_<name>` → message
-  /// (typically `$err_trace`); empty when the node has no diagnostics.
-  /// UI renders these as red banner rows; called from json_tree once it
-  /// walks AST instead of Map.
-  Map<String, String> errorsAt(List<String> path) {
-    dynamic cur = configJson;
-    for (final seg in path) {
-      if (cur is Map && cur.containsKey(seg)) {
-        cur = cur[seg];
-      } else if (cur is List) {
-        final i = int.tryParse(seg);
-        if (i == null || i < 0 || i >= cur.length) return const {};
-        cur = cur[i];
-      } else {
-        return const {};
-      }
-    }
-    if (cur is! Map) return const {};
-    final out = <String, String>{};
-    for (final e in cur.entries) {
-      final k = e.key.toString();
-      if (k.startsWith(r'$err_')) {
-        out[k] = e.value?.toString() ?? '';
-      }
-    }
-    return out;
-  }
+  /// Phase 5c-D: encode a path for `_validationErrors` lookup. NUL is
+  /// safe — JSON5 keys can't contain it, array indices are decimal ints.
+  static String _encodePath(List<String> path) => path.join('\x00');
+
+  /// Diagnostics on the node at [path]. Returns the `$err_<name>` →
+  /// message map captured by the most recent `bxp-fmt --config` run, or
+  /// an empty map when the node has no errors.
+  Map<String, String> errorsAt(List<String> path) =>
+      _validationErrors[_encodePath(path)] ?? const {};
 
   /// True if any descendant of the node at [path] (inclusive) carries a
   /// `$err_*` marker. Used by composite-row renderers to surface a small
-  /// red dot when a collapsed subtree contains diagnostics. O(subtree).
+  /// red dot when a collapsed subtree contains diagnostics. O(errors).
   bool hasErrorIn(List<String> path) {
-    dynamic cur = configJson;
-    for (final seg in path) {
-      if (cur is Map && cur.containsKey(seg)) {
-        cur = cur[seg];
-      } else if (cur is List) {
-        final i = int.tryParse(seg);
-        if (i == null || i < 0 || i >= cur.length) return false;
-        cur = cur[i];
-      } else {
-        return false;
-      }
+    if (_validationErrors.isEmpty) return false;
+    if (path.isEmpty) return true;
+    final key = _encodePath(path);
+    final prefix = '$key\x00';
+    for (final k in _validationErrors.keys) {
+      if (k == key || k.startsWith(prefix)) return true;
     }
-    bool walk(dynamic node) {
-      if (node is Map) {
-        for (final e in node.entries) {
-          final k = e.key.toString();
-          if (k.startsWith(r'$err_')) return true;
-        }
-        for (final e in node.entries) {
-          final k = e.key.toString();
-          if (k.startsWith(r'$')) continue;
-          if (walk(e.value)) return true;
-        }
-      } else if (node is List) {
-        for (final v in node) {
-          if (walk(v)) return true;
-        }
-      }
-      return false;
-    }
-    return walk(cur);
+    return false;
   }
 
-  /// Walk [src] (the reparsed tree) and copy any `$err_*` markers into [dst]
-  /// (the live tree) at structurally-matching paths. Also drop stale
-  /// `$err_*` from [dst] where [src] has none. Skips `$comm_*`/`$meta_*`
-  /// entries since their IDs may differ between trees.
-  static void _syncErrMarkers(dynamic dst, dynamic src) {
-    if (dst is Map && src is Map) {
-      // Drop existing $err_* from dst — they'll be repopulated below.
-      final stale = dst.keys
-          .where((k) => k.toString().startsWith(r'$err_'))
-          .toList();
-      for (final k in stale) {
-        dst.remove(k);
-      }
-      // Copy $err_* from src; recurse into matching real-key children.
-      src.forEach((k, v) {
-        final key = k.toString();
-        if (key.startsWith(r'$err_')) {
-          dst[key] = v;
-        } else if (!key.startsWith(r'$')) {
-          if (dst.containsKey(key)) {
-            _syncErrMarkers(dst[key], v);
-          }
+  /// Quick predicate: any `$err_*` anywhere in [src]? Used by the save
+  /// pre-flight validator (which would otherwise pass through "annotated
+  /// JSON with errors" silently because bxp-fmt exits with stdout even
+  /// then). Mirrors the old `_findFirstErrTrace` behaviour without
+  /// rebuilding the full path map.
+  static String? _firstErrTraceIn(dynamic src) {
+    if (src is Map) {
+      for (final e in src.entries) {
+        final k = e.key.toString();
+        if (k.startsWith(r'$err_') && e.value is String) {
+          return e.value as String;
         }
-      });
-    } else if (dst is List && src is List) {
-      // Best-effort: walk by index. New/removed elements throw off the
-      // alignment; on misalignment we just skip (no live $err_ for that
-      // sub-tree until next op + reparse).
-      final n = dst.length < src.length ? dst.length : src.length;
-      for (int i = 0; i < n; i++) {
-        _syncErrMarkers(dst[i], src[i]);
+      }
+      for (final e in src.entries) {
+        final k = e.key.toString();
+        if (k.startsWith(r'$')) continue;
+        final found = _firstErrTraceIn(e.value);
+        if (found != null) return found;
+      }
+    } else if (src is List) {
+      for (final v in src) {
+        final found = _firstErrTraceIn(v);
+        if (found != null) return found;
       }
     }
+    return null;
   }
 
-  /// Phase 5c-A: collect every `$err_*` map entry currently attached to
-  /// [tree], keyed by the path of its parent map. Used before regenerating
-  /// `configJson` from the AST adapter (which produces a fresh tree with
-  /// no error markers) so the markers can be re-spliced afterwards. Without
-  /// this, every keystroke would briefly clear the red dots until the
-  /// debounced bxp-fmt validator fires again.
-  static Map<String, Map<String, dynamic>> _collectErrMarkers(dynamic tree) {
-    final out = <String, Map<String, dynamic>>{};
+  /// Walk a parsed `bxp-fmt --config` tree, collecting every `$err_*`
+  /// marker indexed by the encoded path of its parent. Replaces the old
+  /// `_syncErrMarkers` Map-merge — diagnostics now live in a dedicated
+  /// path-keyed structure rather than smuggled into a parallel Map tree.
+  static Map<String, Map<String, String>> _extractValidationErrors(dynamic src) {
+    final out = <String, Map<String, String>>{};
     void walk(dynamic node, List<String> path) {
       if (node is Map) {
+        Map<String, String>? errs;
         for (final e in node.entries) {
-          final key = e.key.toString();
-          if (key.startsWith(r'$err_')) {
-            final pathKey = path.join(' ');
-            (out[pathKey] ??= <String, dynamic>{})[key] = e.value;
-          } else if (!key.startsWith(r'$')) {
-            walk(e.value, [...path, key]);
+          final k = e.key.toString();
+          if (k.startsWith(r'$err_')) {
+            (errs ??= {})[k] = e.value?.toString() ?? '';
+          }
+        }
+        if (errs != null) out[_encodePath(path)] = errs;
+        for (final e in node.entries) {
+          final k = e.key.toString();
+          if (!k.startsWith(r'$')) {
+            walk(e.value, [...path, k]);
           }
         }
       } else if (node is List) {
@@ -552,42 +497,8 @@ class TraceStore extends ChangeNotifier {
         }
       }
     }
-    walk(tree, const []);
+    walk(src, const []);
     return out;
-  }
-
-  /// Splice [markers] (keyed by parent-path joined with ` `) back into
-  /// the freshly-regenerated [tree]. Skips entries whose parent path no
-  /// longer exists or no longer points at a Map (e.g. the user deleted the
-  /// containing entry between marker capture and re-merge).
-  static void _reapplyErrMarkers(
-      dynamic tree, Map<String, Map<String, dynamic>> markers) {
-    if (markers.isEmpty) return;
-    for (final entry in markers.entries) {
-      final pathSegs =
-          entry.key.isEmpty ? const <String>[] : entry.key.split(' ');
-      dynamic cur = tree;
-      var ok = true;
-      for (final seg in pathSegs) {
-        if (cur is Map && cur.containsKey(seg)) {
-          cur = cur[seg];
-        } else if (cur is List) {
-          final idx = int.tryParse(seg);
-          if (idx == null || idx < 0 || idx >= cur.length) {
-            ok = false;
-            break;
-          }
-          cur = cur[idx];
-        } else {
-          ok = false;
-          break;
-        }
-      }
-      if (!ok || cur is! Map) continue;
-      for (final m in entry.value.entries) {
-        cur[m.key] = m.value;
-      }
-    }
   }
 
   void clearSelectedExpr() {
@@ -877,10 +788,17 @@ class TraceStore extends ChangeNotifier {
   Future<void> loadConfig() async {
     devTrace('loadConfig.start', {'path': configPath});
     isLoadingConfig = true;
+    // Reset transient state from any previous load so errors don't stick:
+    // a fresh load starts assumed-clean and the parse / validator paths
+    // below set these back to error states only as needed.
+    configError = null;
+    _loadedWithErrors = false;
+    _validationErrors = const {};
     notifyListeners();
     try {
       if (configPath.isEmpty) {
-        configJson = null;
+        _astRoot = null;
+        _validationErrors = const {};
         configError = null;
         _rawConfigInput = null;
         _templateInfos = const [];
@@ -888,25 +806,22 @@ class TraceStore extends ChangeNotifier {
         return;
       }
 
-      // Phase 5a: AST is the primary loader. Parse the file via the Dart
-      // JSON5 AST library; the resulting tree's source-order numbering of
-      // comments drives every subsequent `$comm_<N>` label in configJson,
-      // which in turn matches what the AST patcher walks at save time.
-      // No more dual-numbering between bxp-fmt and AST.
+      // AST is the primary loader. Parse the file via the Dart JSON5 AST
+      // library; bxp-fmt runs alongside as a background validator that
+      // contributes only `$err_*` diagnostics (mapped into the path-keyed
+      // `_validationErrors` table).
       final astResult = await AstLoader.loadFromFile(configPath);
       _rawConfigInput = utf8.encode(astResult.rawText);
 
       if (astResult.root == null) {
-        // JSON5 syntax error from the AST parser. bxp-fmt would fail too;
-        // skip its call and surface the diagnostic directly.
         final firstErr = astResult.diagnostics.isNotEmpty
             ? astResult.diagnostics.first
             : null;
         configError = firstErr != null
             ? 'JSON5 parse error at ${firstErr.span.startLine}:${firstErr.span.startCol}: ${firstErr.message}'
             : 'JSON5 parse error';
-        configJson = null;
         _astRoot = null;
+        _validationErrors = const {};
         _loadedWithErrors = true;
         _templateInfos = const [];
         devTrace('loadConfig.astParseFail',
@@ -914,20 +829,11 @@ class TraceStore extends ChangeNotifier {
         return;
       }
 
-      // Phase 5c-A: AST is the live source of truth. Stash it; mutations
-      // operate on this tree and regenerate configJson via the adapter.
       _astRoot = astResult.root;
 
-      // Convert AST → bxp-fmt-shaped configJson via the legacy adapter.
-      // `$comm_<N>` numbering in this Map matches the AST's source-order
-      // walk; this is the contract that ends comment-move regressions.
-      configJson =
-          AstToLegacyMap.convert(_astRoot!) as Map<String, dynamic>;
-
-      // bxp-fmt --config still runs as a background validator: parses for
-      // schema / expr / pre_pass / cross-field issues that the AST parser
-      // (pure JSON5) doesn't know about. We extract its `$err_*` markers
-      // and merge them into our configJson at matching real-key paths.
+      // Background validator: bxp-fmt --config gives us schema / expr /
+      // pre_pass diagnostics that the AST parser (pure JSON5) doesn't
+      // know about. Parse its output, build the path-keyed error map.
       try {
         final jsonOutput = await BxpProcessClient.loadConfig(configPath);
         final bxpTree = jsonDecode(jsonOutput);
@@ -938,17 +844,19 @@ class TraceStore extends ChangeNotifier {
             // bxp-fmt error so the user knows about the deeper failure;
             // the editor stays openable since AST has a tree.
             configError = bxpFatal;
+            _validationErrors = const {};
           } else {
-            _syncErrMarkers(configJson!, bxpTree);
+            _validationErrors = _extractValidationErrors(bxpTree);
           }
         }
       } catch (e) {
         // bxp-fmt invocation itself failed (binary missing, crash, etc.).
         // Don't block editing on validator failures.
         configError ??= 'bxp-fmt validator unavailable: $e';
+        _validationErrors = const {};
       }
 
-      _loadedWithErrors = _findFirstErrTrace(configJson) != null;
+      _loadedWithErrors = _validationErrors.isNotEmpty;
       devTrace('loadConfig.ok', {
         'rawBytes': _rawConfigInput?.length ?? 0,
         'loadedWithErrors': _loadedWithErrors,
@@ -960,7 +868,8 @@ class TraceStore extends ChangeNotifier {
       _templateInfos = await BxpProcessClient.listTemplates(configPath);
     } catch (e, st) {
       configError = e.toString();
-      configJson = null;
+      _astRoot = null;
+      _validationErrors = const {};
       _rawConfigInput = null;
       _templateInfos = const [];
       devTrace('loadConfig.fail', {'err': e.toString(), 'stack': st.toString().split('\n').take(3).join(' | ')});
@@ -978,23 +887,17 @@ class TraceStore extends ChangeNotifier {
     }
     // Fresh load establishes a new "clean" baseline. Everything edited
     // after this point counts as dirty until the user saves.
-    _savedBaseline = _deepCopy(configJson);
     _astBaseline = _astRoot?.clone();
     _isDirty = false;
-    _history.clear();
     _astHistory.clear();
     _historyIndex = 0;
-    _history.add(_deepCopy(configJson));
     if (_astRoot != null) _astHistory.add(_astRoot!.clone());
     configSaveError = null;
-    // Add to MRU when the load reached bxp-fmt and produced a parseable
-    // response — including configs that have $err_* markers (the user
-    // can still reopen them later to retry after external edits).
-    // We skip the case where the spawn itself crashed (configJson=null
-    // AND configError set) so paths to nonexistent / unreadable files
-    // don't pollute the quick-pick list. Fire-and-forget — persistence
-    // write is non-critical.
-    if (configPath.isNotEmpty && configJson != null) {
+    // Add to MRU when the AST parsed (even if bxp-fmt found errors —
+    // user can still re-open later). Skip when the spawn itself crashed
+    // so paths to nonexistent / unreadable files don't pollute the
+    // quick-pick list. Fire-and-forget — persistence write is non-critical.
+    if (configPath.isNotEmpty && _astRoot != null) {
       // ignore: discarded_futures
       _addRecentFile(configPath);
     }
@@ -1021,14 +924,6 @@ class TraceStore extends ChangeNotifier {
           {'err': e.toString(), if (traceData != null) ...traceData});
       return false;
     }
-    final priorErrs = _collectErrMarkers(configJson);
-    final regen = AstToLegacyMap.convert(_astRoot!);
-    if (regen is! Map<String, dynamic>) {
-      devTrace('$traceEvent.fail', {'err': 'adapter returned non-Map root'});
-      return false;
-    }
-    configJson = regen;
-    _reapplyErrMarkers(configJson, priorErrs);
     _opLog.truncate(_historyIndex);
     devTrace(traceEvent, traceData);
     _opLog.record(op);
@@ -1036,7 +931,7 @@ class TraceStore extends ChangeNotifier {
   }
 
   void editConfigNode(List<String> path, dynamic newValue) {
-    if (configJson == null) return;
+    if (_astRoot == null) return;
     // Mirror bxp-ui's `readOnly = configHasErrors`: when the loaded tree
     // contains $err_* diagnostic markers, all mutations are blocked. The
     // ConfigView toolbar already greys out edit buttons, but the inline
@@ -1060,51 +955,47 @@ class TraceStore extends ChangeNotifier {
   bool _isDirty = false;
   bool get isDirty => _isDirty;
 
-  // History for Undo/Redo. [_savedBaseline] is the config as it exists on
-  // disk (or as it was last loaded). Dirty status is computed by structural
-  // comparison against this baseline — NOT by history index — so undoing
-  // back to the loaded state correctly clears the dirty flag even after
-  // the user has poked around.
-  final List<dynamic> _history = [];
-  int _historyIndex = -1;
-  dynamic _savedBaseline;
-
-  // Phase 5c-A: AST snapshots parallel to _history / _savedBaseline.
-  // Restored on undo/redo/resetDraft so the live AST stays in lockstep
-  // with the visible configJson Map.
+  // History for Undo/Redo. AST snapshots are the only state — every
+  // mutation pushes a clone, undo/redo restores from the slot. Index 0
+  // is always the last loaded/saved baseline; `_isDirty` derives from
+  // `_historyIndex > 0` since (a) loadConfig and saveConfig both reset
+  // the history to a single baseline entry and (b) every mutation
+  // pushes, so the only way to be at index 0 is "exactly at baseline".
   final List<JsonAstNode> _astHistory = [];
+  int _historyIndex = -1;
   JsonAstNode? _astBaseline;
 
   bool get canUndo => _historyIndex > 0;
-  bool get canRedo => _historyIndex < _history.length - 1;
+  bool get canRedo => _historyIndex < _astHistory.length - 1;
 
   void _pushHistory() {
-    if (_historyIndex < _history.length - 1) {
-      _history.removeRange(_historyIndex + 1, _history.length);
+    if (_historyIndex < _astHistory.length - 1) {
       _astHistory.removeRange(_historyIndex + 1, _astHistory.length);
     }
-    _history.add(_deepCopy(configJson));
     if (_astRoot != null) _astHistory.add(_astRoot!.clone());
-    _historyIndex = _history.length - 1;
+    _historyIndex = _astHistory.length - 1;
+    // Dirty derives from history index: reaching index 0 means we're
+    // at the saved baseline. Mutation methods used to call
+    // _recomputeDirty BEFORE _pushHistory; that left them stale on the
+    // first edit (index hadn't bumped yet). Folding the recompute into
+    // _pushHistory removes that ordering footgun for free.
+    _recomputeDirty();
   }
 
   void _recomputeDirty() {
-    _isDirty = !_deepEquals(configJson, _savedBaseline);
+    _isDirty = _historyIndex > 0;
   }
 
-  /// Discard all unsaved edits and snap configJson back to the last
-  /// loaded/saved baseline. Cheaper than [loadConfig] because it doesn't
-  /// re-spawn bxp-fmt — just clones `_savedBaseline` and resets the undo
-  /// history. Mirrors bxp-ui's `resetDraft` action; bound to Ctrl+T.
+  /// Discard all unsaved edits and snap the AST back to the last
+  /// loaded/saved baseline. Cheaper than [loadConfig] because it
+  /// doesn't re-spawn bxp-fmt — just clones `_astBaseline` and resets
+  /// the undo history. Mirrors bxp-ui's `resetDraft` action; bound to
+  /// Ctrl+T.
   void resetDraft() {
-    if (_savedBaseline == null) return;
+    if (_astBaseline == null) return;
     if (_loadedWithErrors) return; // edits are blocked anyway in this state
-    configJson = _deepCopy(_savedBaseline);
     _astRoot = _astBaseline?.clone();
     _isDirty = false;
-    _history
-      ..clear()
-      ..add(_deepCopy(configJson));
     _astHistory.clear();
     if (_astRoot != null) _astHistory.add(_astRoot!.clone());
     _historyIndex = 0;
@@ -1119,10 +1010,7 @@ class TraceStore extends ChangeNotifier {
   void undo() {
     if (canUndo) {
       _historyIndex--;
-      configJson = _deepCopy(_history[_historyIndex]);
-      if (_historyIndex < _astHistory.length) {
-        _astRoot = _astHistory[_historyIndex].clone();
-      }
+      _astRoot = _astHistory[_historyIndex].clone();
       _recomputeDirty();
       if (selectedExprPath != null) {
         final val = _getAt(selectedExprPath!);
@@ -1137,10 +1025,7 @@ class TraceStore extends ChangeNotifier {
   void redo() {
     if (canRedo) {
       _historyIndex++;
-      configJson = _deepCopy(_history[_historyIndex]);
-      if (_historyIndex < _astHistory.length) {
-        _astRoot = _astHistory[_historyIndex].clone();
-      }
+      _astRoot = _astHistory[_historyIndex].clone();
       _recomputeDirty();
       if (selectedExprPath != null) {
         final val = _getAt(selectedExprPath!);
@@ -1152,64 +1037,66 @@ class TraceStore extends ChangeNotifier {
     }
   }
 
-  bool _deepEquals(dynamic a, dynamic b) {
-    if (identical(a, b)) return true;
-    if (a is Map && b is Map) {
-      if (a.length != b.length) return false;
-      // Map-key INSERTION ORDER must match. Reordering top-level templates
-      // or output_schema entries is a key-swap that leaves the set + values
-      // identical, so an order-blind comparison would treat the post-move
-      // tree as equal to the saved baseline and `_isDirty` would never
-      // flip — Save and Apply stay greyed out and the move silently
-      // disappears. Walking entries in lockstep catches that.
-      final aIt = a.entries.iterator;
-      final bIt = b.entries.iterator;
-      while (aIt.moveNext() && bIt.moveNext()) {
-        if (aIt.current.key != bIt.current.key) return false;
-        if (!_deepEquals(aIt.current.value, bIt.current.value)) return false;
-      }
-      return true;
-    }
-    if (a is List && b is List) {
-      if (a.length != b.length) return false;
-      for (int i = 0; i < a.length; i++) {
-        if (!_deepEquals(a[i], b[i])) return false;
-      }
-      return true;
-    }
-    return a == b;
-  }
-
-  // Vrátí hlubokou kopii dynamické hodnoty
-  dynamic _deepCopy(dynamic v) {
-    if (v is Map) {
-      return Map<String, dynamic>.fromEntries(
-        v.entries.map((e) => MapEntry(e.key.toString(), _deepCopy(e.value)))
-      );
-    }
-    if (v is List) {
-      return v.map(_deepCopy).toList();
-    }
-    return v;
-  }
-
-  dynamic _getAt(List<String> path) {
-    dynamic cur = configJson;
-    for (final key in path) {
-      if (cur is Map) {
-        cur = cur[key];
-      } else if (cur is List) {
-        final i = int.tryParse(key);
-        if (i != null) {
-          cur = cur[i];
-        } else {
-          return null;
+  /// Walk the AST to the node at [path] and return it as a [JsonAstNode],
+  /// or null when the path doesn't resolve. Used by mutation methods to
+  /// branch on container shape (JsonObject vs JsonArray).
+  JsonAstNode? _astAt(List<String> path) {
+    final root = _astRoot;
+    if (root == null) return null;
+    JsonAstNode cur = root;
+    for (final seg in path) {
+      if (cur is JsonObject) {
+        JsonAstNode? next;
+        for (final p in cur.properties.whereType<JsonProperty>()) {
+          if (p.key == seg) {
+            next = p.value;
+            break;
+          }
         }
+        if (next == null) return null;
+        cur = next;
+      } else if (cur is JsonArray) {
+        final i = int.tryParse(seg);
+        if (i == null || i < 0 || i >= cur.elements.length) return null;
+        cur = cur.elements[i];
       } else {
         return null;
       }
     }
     return cur;
+  }
+
+  /// Walk the AST to the value at [path] and convert it to its plain-Dart
+  /// shape (String / num / bool / null) for callers that only need the
+  /// scalar. Returns null for missing paths and for container nodes.
+  dynamic _getAt(List<String> path) {
+    final root = _astRoot;
+    if (root == null) return null;
+    JsonAstNode cur = root;
+    for (final seg in path) {
+      if (cur is JsonObject) {
+        JsonAstNode? next;
+        for (final p in cur.properties.whereType<JsonProperty>()) {
+          if (p.key == seg) {
+            next = p.value;
+            break;
+          }
+        }
+        if (next == null) return null;
+        cur = next;
+      } else if (cur is JsonArray) {
+        final i = int.tryParse(seg);
+        if (i == null || i < 0 || i >= cur.elements.length) return null;
+        cur = cur.elements[i];
+      } else {
+        return null;
+      }
+    }
+    if (cur is JsonString) return cur.value;
+    if (cur is JsonNumber) return num.tryParse(cur.rawText);
+    if (cur is JsonBool) return cur.value;
+    if (cur is JsonNull) return null;
+    return null;
   }
 
   /// Apply [remap] to `selectedExprPath` after a structural array edit.
@@ -1259,14 +1146,14 @@ class TraceStore extends ChangeNotifier {
   }
 
   void deleteConfigNode(List<String> path) {
-    if (configJson == null || path.isEmpty || _loadedWithErrors) return;
+    if (_astRoot == null || path.isEmpty || _loadedWithErrors) return;
     // Schema-driven guard: required keys cannot be deleted from their parent
     // map. Array entries (parent is List) are always deletable — the array
     // itself may be required, but individual elements aren't.
     final parentPath = path.sublist(0, path.length - 1);
     final lastKey = path.last;
-    final parent = _getAt(parentPath);
-    if (parent is Map) {
+    final parent = _astAt(parentPath);
+    if (parent is JsonObject) {
       final doc = findSchemaDoc(path);
       if (doc != null && doc['required'] == true) return;
     }
@@ -1280,13 +1167,13 @@ class TraceStore extends ChangeNotifier {
       clearSelectedExpr();
     }
 
-    final removedIdx = parent is List ? int.tryParse(lastKey) : null;
-    if (parent is List && removedIdx == null) return;
+    final removedIdx = parent is JsonArray ? int.tryParse(lastKey) : null;
+    if (parent is JsonArray && removedIdx == null) return;
 
     if (!_applyOpToAst(DeleteOp(path), 'op.delete', {'path': path})) {
       return;
     }
-    if (parent is List) {
+    if (parent is JsonArray) {
       // Shift sibling-selections downward: indices > removedIdx slide
       // up by one; the removed index itself was already cleared above.
       _shiftSelectionOnArrayEdit(parentPath, (oldIdx) {
@@ -1302,24 +1189,27 @@ class TraceStore extends ChangeNotifier {
   }
 
   void duplicateConfigNode(List<String> path) {
-    if (configJson == null || path.isEmpty || _loadedWithErrors) return;
+    if (_astRoot == null || path.isEmpty || _loadedWithErrors) return;
     final parentPath = path.sublist(0, path.length - 1);
     final lastKey = path.last;
-    final parent = _getAt(parentPath);
-    if (parent is Map) {
+    final parent = _astAt(parentPath);
+    if (parent is JsonObject) {
       // Find unique key. The AST helper rejects collisions, but computing
       // it here keeps the op_log self-contained (replay-safe even if we
       // ever add a key-collision recovery upstream).
+      final existing = <String>{
+        for (final p in parent.properties.whereType<JsonProperty>()) p.key,
+      };
       String newKey = '${lastKey}_copy';
       int i = 2;
-      while (parent.containsKey(newKey)) { newKey = '${lastKey}_copy$i'; i++; }
+      while (existing.contains(newKey)) { newKey = '${lastKey}_copy$i'; i++; }
       if (!_applyOpToAst(DuplicateOp(path, newKey: newKey),
           'op.duplicate.map', {'path': path, 'newKey': newKey})) {
         return;
       }
       // Map duplicate: appended at end → no array-index shift, selection
       // unaffected (sibling keys keep their map keys).
-    } else if (parent is List) {
+    } else if (parent is JsonArray) {
       final idx = int.tryParse(lastKey);
       if (idx == null) return;
       if (!_applyOpToAst(DuplicateOp(path), 'op.duplicate.list', {'path': path})) {
@@ -1350,13 +1240,13 @@ class TraceStore extends ChangeNotifier {
   /// (Phase 5e). The list-side selection-shift logic still runs locally
   /// since it's a UI concern, not part of the underlying mutation.
   void moveConfigNode(List<String> path, int delta) {
-    if (configJson == null || path.isEmpty || _loadedWithErrors) return;
+    if (_astRoot == null || path.isEmpty || _loadedWithErrors) return;
     if (delta == 0) return;
     final parentPath = path.sublist(0, path.length - 1);
-    final parent = _getAt(parentPath);
+    final parent = _astAt(parentPath);
 
     int? listIdx;
-    if (parent is List) {
+    if (parent is JsonArray) {
       listIdx = int.tryParse(path.last);
       if (listIdx == null) return;
     }
@@ -1366,7 +1256,7 @@ class TraceStore extends ChangeNotifier {
       return;
     }
 
-    if (parent is List && listIdx != null) {
+    if (parent is JsonArray && listIdx != null) {
       // The two adjacent real elements swapped; selections on either
       // follow. (Comment peers are skipped from the index shift since
       // selectedExprPath only ever points at a real-key element.)
@@ -1399,17 +1289,16 @@ class TraceStore extends ChangeNotifier {
     dynamic defaultValue, {
     int? atIndex,
   }) {
-    if (configJson == null || _loadedWithErrors) return;
-    final target = _getAt(path);
-    if (target is Map && newKey != null) {
+    if (_astRoot == null || _loadedWithErrors) return;
+    final target = _astAt(path);
+    if (target is JsonObject && newKey != null) {
       if (!_applyOpToAst(InsertOp(path, newKey, defaultValue),
           'op.insert.map', {'parentPath': path, 'newKey': newKey})) {
         return;
       }
-    } else if (target is List) {
-      final clamped = atIndex == null
-          ? target.length
-          : atIndex.clamp(0, target.length);
+    } else if (target is JsonArray) {
+      final n = target.elements.length;
+      final clamped = atIndex == null ? n : atIndex.clamp(0, n);
       if (!_applyOpToAst(InsertOp(path, clamped.toString(), defaultValue),
           'op.insert.list',
           {'parentPath': path, 'index': clamped})) {
@@ -1432,7 +1321,7 @@ class TraceStore extends ChangeNotifier {
   /// Edit a comment's text body. [path] ends in `$comm_<N>`. [newText] is
   /// the body without `//` / `/* */` markers.
   void editCommentNode(List<String> path, String newText) {
-    if (configJson == null || _loadedWithErrors) return;
+    if (_astRoot == null || _loadedWithErrors) return;
     if (path.isEmpty || !path.last.startsWith(r'$comm_')) return;
     if (!_applyOpToAst(EditCommentOp(path, newText), 'op.editComment',
         {'path': path, 'newText': newText})) {
@@ -1446,7 +1335,7 @@ class TraceStore extends ChangeNotifier {
 
   /// Delete a standalone / leading / block comment.
   void deleteCommentNode(List<String> path) {
-    if (configJson == null || _loadedWithErrors) return;
+    if (_astRoot == null || _loadedWithErrors) return;
     if (path.isEmpty || !path.last.startsWith(r'$comm_')) return;
     if (!_applyOpToAst(DeleteCommentOp(path), 'op.deleteComment',
         {'path': path})) {
@@ -1461,7 +1350,7 @@ class TraceStore extends ChangeNotifier {
   /// Insert a fresh leading comment immediately above [anchorPath].
   /// [style] is `"//"` or `"/*"`. [text] is the body without markers.
   void insertCommentNode(List<String> anchorPath, String style, String text) {
-    if (configJson == null || _loadedWithErrors) return;
+    if (_astRoot == null || _loadedWithErrors) return;
     if (anchorPath.isEmpty) return;
     if (!_applyOpToAst(InsertCommentOp(anchorPath, style, text),
         'op.insertComment', {'anchorPath': anchorPath, 'style': style})) {
@@ -1488,7 +1377,7 @@ class TraceStore extends ChangeNotifier {
   bool isSaving = false;
 
   Future<void> saveConfig() async {
-    if (configJson == null || configPath.isEmpty) return;
+    if (_astRoot == null || configPath.isEmpty) return;
     if (isSaving) return; // re-entrancy guard against double-click
     devTrace('saveConfig.start',
         {'path': configPath, 'opCount': _activeOps.length});
@@ -1544,7 +1433,7 @@ class TraceStore extends ChangeNotifier {
         // it found `$err_*` markers inside the tree — exit code 1 + stdout.
         // Without this scan, a syntactically broken save would still go
         // through and trap the user in readonly-on-reload mode.
-        final treeErr = _findFirstErrTrace(parsed);
+        final treeErr = _firstErrTraceIn(parsed);
         if (treeErr != null) {
           await tmpFile.delete().catchError((_) => tmpFile);
           configSaveError = 'pre-save validation failed: $treeErr';
@@ -1581,10 +1470,9 @@ class TraceStore extends ChangeNotifier {
 
       // History compresses to a single "saved" baseline so the undo stack
       // starts fresh after a successful write.
-      _savedBaseline = _deepCopy(configJson);
-      _history
-        ..clear()
-        ..add(_deepCopy(configJson));
+      _astBaseline = _astRoot?.clone();
+      _astHistory.clear();
+      if (_astRoot != null) _astHistory.add(_astRoot!.clone());
       _historyIndex = 0;
       _isDirty = false;
       _opLog.clear();
@@ -1767,15 +1655,18 @@ class TraceStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Real template IDs from configJson (no synthetic entries). The empty
-  /// string is used separately in the UI to mean "all templates".
+  /// Real template IDs from the live AST (no synthetic entries). The
+  /// empty string is used separately in the UI to mean "all templates".
   List<String> get availableTemplates {
-    final ct = configJson?['conversion_templates'];
-    if (ct is Map) {
-      return ct.keys
-          .cast<String>()
-          .where((k) => !k.startsWith(r'$'))
-          .toList();
+    final root = _astRoot;
+    if (root is! JsonObject) return const [];
+    for (final p in root.properties.whereType<JsonProperty>()) {
+      if (p.key != 'conversion_templates') continue;
+      final v = p.value;
+      if (v is! JsonObject) return const [];
+      return [
+        for (final tp in v.properties.whereType<JsonProperty>()) tp.key,
+      ];
     }
     return const [];
   }
@@ -1787,36 +1678,17 @@ class TraceStore extends ChangeNotifier {
   List<TemplateInfo> _templateInfos = const [];
   List<TemplateInfo> get availableTemplateInfos => _templateInfos;
 
-  /// True if the last loaded config contains any `$err_*` diagnostic node.
-  /// Matches bxp-ui's `configHasErrors` — used to gate run buttons and
-  /// display the bxp-fmt error trace in the status bar.
-  bool get configHasErrors => _findFirstErrTrace(configJson) != null;
+  /// True if the last `bxp-fmt --config` run produced any `$err_*`
+  /// diagnostic. Used to gate run buttons and display the error trace
+  /// in the status bar.
+  bool get configHasErrors => _validationErrors.isNotEmpty;
 
-  /// Returns the first bxp-fmt `$err_*` string found anywhere in the tree,
-  /// or null if none. Matches bxp-ui's findFirstErrTrace(). Skips sibling
-  /// `$comm_*` / `$err_*` nodes during recursion to avoid confusing a
-  /// comment containing the word "error" for a real diagnostic.
-  String? get firstConfigErrorTrace => _findFirstErrTrace(configJson);
-
-  String? _findFirstErrTrace(dynamic v) {
-    if (v is Map) {
-      for (final e in v.entries) {
-        final k = e.key.toString();
-        if (k.startsWith(r'$err_') && e.value is String) return e.value as String;
-      }
-      for (final e in v.entries) {
-        final k = e.key.toString();
-        // Skip ALL $-prefixed keys during recursion: $err_, $comm_,
-        // $meta_, $elem_meta_, $meta_self never carry user-visible
-        // diagnostics in their nested structure.
-        if (k.startsWith(r'$')) continue;
-        final found = _findFirstErrTrace(e.value);
-        if (found != null) return found;
-      }
-    } else if (v is List) {
-      for (final item in v) {
-        final found = _findFirstErrTrace(item);
-        if (found != null) return found;
+  /// First `$err_*` message found across the validation map, or null
+  /// when the config is clean.
+  String? get firstConfigErrorTrace {
+    for (final entry in _validationErrors.values) {
+      for (final v in entry.values) {
+        if (v.isNotEmpty) return v;
       }
     }
     return null;
