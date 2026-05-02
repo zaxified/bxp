@@ -85,6 +85,13 @@ class TraceStore extends ChangeNotifier {
   /// plagued the Map-mutating earlier phases.
   JsonAstNode? _astRoot;
 
+  /// Phase 5c-C: read-only view of the live AST for UI components that
+  /// have been migrated off the legacy `configJson` Map (output_panel,
+  /// schema_gate, …). Components MUST NOT mutate the returned tree —
+  /// edits go through TraceStore mutation methods so op_log + history
+  /// stay coherent with the visible state.
+  JsonAstNode? get astRoot => _astRoot;
+
   /// Raw file bytes at load time. Kept verbatim so the AST patcher can
   /// replay the user's edit log against them at save time without
   /// re-rendering the whole file. Bytes (not String) — UTF-16 indexing on

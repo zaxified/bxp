@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:json_ast_proto/ast.dart';
 import 'package:provider/provider.dart';
 import '../../store/trace_store.dart';
 import '../theme/bxp_theme.dart';
@@ -42,7 +43,7 @@ class OutputPanel extends StatelessWidget {
     final file = model.files[fileId];
     if (row == null || file == null) return const SizedBox.shrink();
 
-    final cols = _resolveColumns(store.configJson, file.template, row.outputs);
+    final cols = _resolveColumns(store.astRoot, file.template, row.outputs);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -63,42 +64,52 @@ class OutputPanel extends StatelessWidget {
 
   /// Prefer config-declared schema (gives us `header` + `variable`),
   /// fall back to positional `[1]..[N]` placeholders when not available.
+  ///
+  /// Phase 5c-C1: walks the live AST (`TraceStore.astRoot`) directly.
+  /// CommentLine peers in `output_schema` are skipped naturally by the
+  /// `whereType<JsonProperty>` filter — no $-prefixed key blacklist
+  /// needed (the AST never had $comm_/$meta_/$elem_meta_ entries to
+  /// begin with, those were adapter artefacts).
   List<_ColDef> _resolveColumns(
-      Map<String, dynamic>? config, String templateId, List<List<String>> outputs) {
-    if (config != null) {
-      final templates = config['conversion_templates'];
-      if (templates is Map) {
-        final tpl = templates[templateId];
-        if (tpl is Map) {
-          final schema = tpl['output_schema'];
-          if (schema is Map && schema.isNotEmpty) {
-            // bxp-fmt's annotated JSON interleaves UI metadata keys with
-            // real schema pairs: `$comm_N` (comments), `$err_N`
-            // (diagnostics), `$meta_<key>` / `$elem_meta_<key>` /
-            // `$meta_self` (byte-span info from bxp-fmt). All `$`-prefixed
-            // entries are render-only artefacts and must not surface as
-            // output columns. Schema keys themselves start with `$`
-            // (`$action`, `$ticker`, …) so we exclude only the meta forms.
-            return schema.entries
-                .where((e) {
-                  final k = e.key.toString();
-                  return !k.startsWith(r'$comm_') &&
-                      !k.startsWith(r'$err_') &&
-                      !k.startsWith(r'$meta_') &&
-                      !k.startsWith(r'$elem_meta_') &&
-                      k != r'$meta_self';
-                })
-                .map((e) => _ColDef(
-                      header: e.key.toString(),
-                      variable: e.value?.toString() ?? '',
-                    ))
-                .toList();
-          }
-        }
-      }
+      JsonAstNode? root, String templateId, List<List<String>> outputs) {
+    final fallbackCols = outputs.isNotEmpty ? outputs.first.length : 0;
+    List<_ColDef> fallback() => List.generate(
+        fallbackCols, (i) => _ColDef(header: '[${i + 1}]', variable: ''));
+
+    if (root is! JsonObject) return fallback();
+    final templates = _findProp(root, 'conversion_templates');
+    if (templates is! JsonObject) return fallback();
+    final tpl = _findProp(templates, templateId);
+    if (tpl is! JsonObject) return fallback();
+    final schema = _findProp(tpl, 'output_schema');
+    if (schema is! JsonObject) return fallback();
+
+    final cols = <_ColDef>[];
+    for (final entry in schema.properties.whereType<JsonProperty>()) {
+      cols.add(_ColDef(
+        header: entry.key,
+        variable: _stringValueOf(entry.value),
+      ));
     }
-    final cols = outputs.isNotEmpty ? outputs.first.length : 0;
-    return List.generate(cols, (i) => _ColDef(header: '[${i + 1}]', variable: ''));
+    return cols.isEmpty ? fallback() : cols;
+  }
+
+  static JsonAstNode? _findProp(JsonObject obj, String key) {
+    for (final p in obj.properties.whereType<JsonProperty>()) {
+      if (p.key == key) return p.value;
+    }
+    return null;
+  }
+
+  /// Render a JSON5 scalar back to its string form for use as a column
+  /// "variable" label. Containers collapse to empty (the schema row's
+  /// value is always a scalar in well-formed configs).
+  static String _stringValueOf(JsonAstNode v) {
+    if (v is JsonString) return v.value;
+    if (v is JsonNumber) return v.rawText;
+    if (v is JsonBool) return v.value ? 'true' : 'false';
+    if (v is JsonNull) return 'null';
+    return '';
   }
 }
 
