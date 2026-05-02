@@ -132,15 +132,15 @@ class _ConfigViewState extends State<ConfigView> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                 // Left Pane: ConfigTree. Three exclusive states ordered
-                // by priority: configJson present → render tree (even
-                // when configError is set, so the user can still browse
-                // a partially-parsed file); spawn in flight → "Loading…"
+                // by priority: AST tree present → render (even when
+                // configError is set, so the user can still browse a
+                // partially-parsed file); spawn in flight → "Loading…"
                 // placeholder (mirrors bxp-ui's configStatus="loading");
                 // error without partial JSON → red error banner; nothing
                 // loaded yet → empty-state hint.
                 SizedBox(
                   width: leftWidth,
-                  child: store.configJson != null
+                  child: store.astRoot != null
                     ? _ConfigTreeScroll(json: store.configJson)
                     : store.isLoadingConfig
                       ? Padding(

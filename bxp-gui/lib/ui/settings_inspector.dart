@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:json_ast_proto/ast.dart';
 import 'package:provider/provider.dart';
 
 import '../services/bxp_process_client.dart';
@@ -102,12 +103,23 @@ class _Body extends StatelessWidget {
   Widget build(BuildContext context) {
     final store = context.watch<TraceStore>();
 
-    final templates =
-        (store.configJson?['conversion_templates'] as Map?)?.keys
-                .whereType<String>()
-                .where((k) => !k.startsWith(r'$'))
-                .toList() ??
-            const <String>[];
+    // Phase 5c-C2: walk the live AST for the template id list.
+    // CommentLine peers in `conversion_templates` are skipped naturally
+    // by `whereType<JsonProperty>`; FnDocs schema keys (`$action`, …)
+    // never appear here — they live in output_schema, not template names.
+    final templates = <String>[];
+    final root = store.astRoot;
+    if (root is JsonObject) {
+      for (final p in root.properties.whereType<JsonProperty>()) {
+        if (p.key != 'conversion_templates') continue;
+        final v = p.value;
+        if (v is! JsonObject) break;
+        for (final tp in v.properties.whereType<JsonProperty>()) {
+          templates.add(tp.key);
+        }
+        break;
+      }
+    }
 
     final fmtPath = BxpProcessClient.findBin('bxp-fmt');
     final cliPath = BxpProcessClient.findBin('bxp-cli');

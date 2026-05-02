@@ -183,7 +183,7 @@ class _StatusBarState extends State<_StatusBar> {
     } else if (store.configError != null || store.configHasErrors) {
       configStatusText = 'ERROR';
       configStatusColor = t.errorText;
-    } else if (store.configJson != null) {
+    } else if (store.astRoot != null) {
       configStatusText = 'LOADED';
       configStatusColor = t.okText;
     } else {
