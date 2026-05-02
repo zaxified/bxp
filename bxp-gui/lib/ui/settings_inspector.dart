@@ -195,6 +195,37 @@ class _Body extends StatelessWidget {
         children: [
           for (final (title, rows) in sections)
             _SectionTable(title: title, rows: rows),
+          _ExperimentalToggles(store: store),
+        ],
+      ),
+    );
+  }
+}
+
+class _ExperimentalToggles extends StatelessWidget {
+  final TraceStore store;
+  const _ExperimentalToggles({required this.store});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(bottom: 4),
+            child: Text('EXPERIMENTAL', style: BxpText.label(context)),
+          ),
+          SwitchListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Use Dart AST patcher on Save'),
+            subtitle: const Text(
+                'Phase 2 — replaces CST byte patcher; first save canonicalises style.'),
+            value: store.useDartAstPatcher,
+            onChanged: (v) => store.useDartAstPatcher = v,
+          ),
         ],
       ),
     );

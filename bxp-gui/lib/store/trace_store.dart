@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../services/ast_patch_client.dart';
 import '../services/bxp_process_client.dart';
 import '../services/op_apply.dart';
 import '../services/op_log.dart';
@@ -1467,6 +1468,19 @@ class TraceStore extends ChangeNotifier {
   /// `configSaveStatus === "saving"` state.
   bool isSaving = false;
 
+  /// PHASE-2 FLAG (revertable): when true, saveConfig routes through the
+  /// new Dart AST patcher in `ast_patch_client.dart`; when false (default)
+  /// it uses the legacy CST byte-patcher in `op_apply.dart`. Toggled via
+  /// SettingsInspector for parity testing. Phase 3 removes this flag and
+  /// the entire CST path.
+  bool _useDartAstPatcher = false;
+  bool get useDartAstPatcher => _useDartAstPatcher;
+  set useDartAstPatcher(bool v) {
+    if (_useDartAstPatcher == v) return;
+    _useDartAstPatcher = v;
+    notifyListeners();
+  }
+
   Future<void> saveConfig() async {
     if (configJson == null || configPath.isEmpty) return;
     if (isSaving) return; // re-entrancy guard against double-click
@@ -1489,7 +1503,18 @@ class TraceStore extends ChangeNotifier {
         notifyListeners();
         return;
       }
-      final outBytes = OpApply.apply(raw, orig, _activeOps);
+      // PHASE-2 FLAG: AST patcher (new) vs OpApply (legacy CST byte patch).
+      // The AST path doesn't need the annotated `orig` tree (no spans).
+      final Uint8List outBytes;
+      try {
+        outBytes = useDartAstPatcher
+            ? AstPatchClient.apply(raw, _activeOps)
+            : OpApply.apply(raw, orig, _activeOps);
+      } on AstPatchError catch (e) {
+        configSaveError = 'AST patch failed: ${e.message}';
+        notifyListeners();
+        return;
+      }
       final text = utf8.decode(outBytes);
 
       // Write to <path>.bxp-tmp first so we can validate before touching
