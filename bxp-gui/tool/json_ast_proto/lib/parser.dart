@@ -205,10 +205,15 @@ class Parser {
         _advance();
         hadComma = true;
       }
-      // trailing inline comment on same line (no newline between)
-      final trailing = _maybeTrailingComment();
-      if (trailing != null) prop.trailingComment = trailing;
       obj.properties.add(prop);
+      // Phase 5e: trailing inline comment on same line is emitted as
+      // a CommentLine with inlinePlacement=true — peer entry in the
+      // container, NOT a slot inside the property. Dumper restores
+      // the visual "key: val // comment" layout via the flag.
+      final trailing = _maybeTrailingComment();
+      if (trailing != null) {
+        obj.properties.add(CommentLine(trailing, inlinePlacement: true));
+      }
       if (!hadComma) {
         _skipNewlines();
         if (_peek().kind == TokKind.rbrace) {
@@ -240,9 +245,12 @@ class Parser {
         _advance();
         hadComma = true;
       }
-      final trailing = _maybeTrailingComment();
-      if (trailing != null) el.trailingComment = trailing;
       arr.elements.add(el);
+      // Phase 5e: trailing inline as peer CommentLine, not slot on `el`.
+      final trailing = _maybeTrailingComment();
+      if (trailing != null) {
+        arr.elements.add(CommentLine(trailing, inlinePlacement: true));
+      }
       if (!hadComma) {
         _skipNewlines();
         if (_peek().kind == TokKind.rbracket) {

@@ -53,14 +53,6 @@ class _Stats {
 _Stats _stats(JsonAstNode root) {
   final s = _Stats();
   void visit(JsonAstNode n) {
-    if (n.trailingComment != null) {
-      s.trailingComments++;
-      if (n.trailingComment!.style == CommentStyle.line) {
-        s.commentsLine++;
-      } else {
-        s.commentsBlock++;
-      }
-    }
     if (n is JsonObject) {
       s.objects++;
       for (final p in n.properties) {
@@ -88,6 +80,7 @@ _Stats _stats(JsonAstNode root) {
       } else {
         s.commentsBlock++;
       }
+      if (n.inlinePlacement) s.trailingComments++;
     }
   }
   visit(root);

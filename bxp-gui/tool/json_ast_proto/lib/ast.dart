@@ -21,11 +21,12 @@ class CommentNode {
 }
 
 abstract class JsonAstNode {
-  // No leadingComments field — standalone comments live as CommentLine
-  // pseudo-entries inside their parent container (JsonObject.properties /
-  // JsonArray.elements). Only inline trailing comments stay attached to
-  // their owning entry, since there's no place else for them.
-  CommentNode? trailingComment;
+  // Phase 5e: ALL comments live as `CommentLine` peer entries inside their
+  // parent container (`JsonObject.properties` / `JsonArray.elements`). No
+  // more `trailingComment` slot — trailing inline comments are encoded as
+  // CommentLine with `inlinePlacement: true`. This eliminates the
+  // map-vs-array and standalone-vs-trailing asymmetries that required the
+  // global $comm_<N> walker to compensate.
   SourceSpan? sourceSpan;
 
   JsonAstNode clone();
@@ -37,7 +38,6 @@ class JsonObject extends JsonAstNode {
   @override
   JsonObject clone() {
     final c = JsonObject();
-    c.trailingComment = trailingComment?.clone();
     for (final p in properties) {
       c.properties.add(p.clone());
     }
@@ -51,11 +51,7 @@ class JsonProperty extends JsonAstNode {
   JsonProperty(this.key, this.value);
 
   @override
-  JsonProperty clone() {
-    final c = JsonProperty(key, value.clone());
-    c.trailingComment = trailingComment?.clone();
-    return c;
-  }
+  JsonProperty clone() => JsonProperty(key, value.clone());
 }
 
 class JsonArray extends JsonAstNode {
@@ -64,7 +60,6 @@ class JsonArray extends JsonAstNode {
   @override
   JsonArray clone() {
     final c = JsonArray();
-    c.trailingComment = trailingComment?.clone();
     for (final e in elements) {
       c.elements.add(e.clone());
     }
@@ -77,11 +72,7 @@ class JsonString extends JsonAstNode {
   JsonString(this.value);
 
   @override
-  JsonString clone() {
-    final c = JsonString(value);
-    c.trailingComment = trailingComment?.clone();
-    return c;
-  }
+  JsonString clone() => JsonString(value);
 }
 
 class JsonNumber extends JsonAstNode {
@@ -89,11 +80,7 @@ class JsonNumber extends JsonAstNode {
   JsonNumber(this.rawText);
 
   @override
-  JsonNumber clone() {
-    final c = JsonNumber(rawText);
-    c.trailingComment = trailingComment?.clone();
-    return c;
-  }
+  JsonNumber clone() => JsonNumber(rawText);
 }
 
 class JsonBool extends JsonAstNode {
@@ -101,28 +88,28 @@ class JsonBool extends JsonAstNode {
   JsonBool(this.value);
 
   @override
-  JsonBool clone() {
-    final c = JsonBool(value);
-    c.trailingComment = trailingComment?.clone();
-    return c;
-  }
+  JsonBool clone() => JsonBool(value);
 }
 
 class JsonNull extends JsonAstNode {
   @override
-  JsonNull clone() {
-    final c = JsonNull();
-    c.trailingComment = trailingComment?.clone();
-    return c;
-  }
+  JsonNull clone() => JsonNull();
 }
 
 class CommentLine extends JsonAstNode {
   final CommentNode comment;
-  CommentLine(this.comment);
+
+  /// `true` when this comment was on the same source line as the previous
+  /// real entry (e.g. `key: val // c`). The dumper renders it inline,
+  /// attached to the preceding row, with a 2-space gap. `false` (default)
+  /// = standalone row.
+  bool inlinePlacement;
+
+  CommentLine(this.comment, {this.inlinePlacement = false});
 
   @override
-  CommentLine clone() => CommentLine(comment.clone());
+  CommentLine clone() =>
+      CommentLine(comment.clone(), inlinePlacement: inlinePlacement);
 }
 
 enum Severity { error, warning }

@@ -51,14 +51,14 @@ class _Converter {
     for (final entry in obj.properties) {
       if (entry is CommentLine) {
         _commCounter++;
-        out['\$comm_$_commCounter'] = _commToMap(entry.comment, 'leading');
+        // Phase 5e: a CommentLine with inlinePlacement=true is the
+        // source-level "trailing inline" comment — emit with
+        // placement:'trailing' so the existing UI keeps inlining it onto
+        // the preceding row. Standalone comments stay 'leading'.
+        final placement = entry.inlinePlacement ? 'trailing' : 'leading';
+        out['\$comm_$_commCounter'] = _commToMap(entry.comment, placement);
       } else if (entry is JsonProperty) {
         out[entry.key] = _node(entry.value);
-        if (entry.trailingComment != null) {
-          _commCounter++;
-          out['\$comm_$_commCounter'] =
-              _commToMap(entry.trailingComment!, 'trailing');
-        }
       }
     }
     return out;
@@ -69,18 +69,12 @@ class _Converter {
     for (final el in arr.elements) {
       if (el is CommentLine) {
         _commCounter++;
+        final placement = el.inlinePlacement ? 'trailing' : 'leading';
         out.add(<String, dynamic>{
-          '\$comm_$_commCounter': _commToMap(el.comment, 'leading'),
+          '\$comm_$_commCounter': _commToMap(el.comment, placement),
         });
       } else {
         out.add(_node(el));
-        if (el.trailingComment != null) {
-          _commCounter++;
-          out.add(<String, dynamic>{
-            '\$comm_$_commCounter':
-                _commToMap(el.trailingComment!, 'trailing'),
-          });
-        }
       }
     }
     return out;

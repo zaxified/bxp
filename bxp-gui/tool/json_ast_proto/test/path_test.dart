@@ -100,9 +100,11 @@ void main() {
 
     test('CommentLocation.delete removes from container', () {
       final root = parseOk('{\n  // c1\n  a: 1\n}');
-      // N=1 = standalone CommentLine before `a` (Phase 4: no more leading)
+      // Phase 5e: every comment is a CommentLine peer entry; the location
+      // returned points into its container. No more standalone-vs-trailing
+      // distinction at this layer.
       final loc = findCommentByGlobalN(root, 1)!;
-      expect(loc.kind, CommentLocationKind.standalone);
+      expect(loc.isInlineTrailing, isFalse);
       loc.delete();
       // After delete, no comments at all.
       expect(findCommentByGlobalN(root, 1), isNull);

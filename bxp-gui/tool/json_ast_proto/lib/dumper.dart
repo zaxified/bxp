@@ -17,6 +17,39 @@ class DumperOptions {
   });
 }
 
+/// Pre-rendered container entry: either a standalone row (`node` is the
+/// thing to emit, `inlineTrail` null) or a row with an inline-placement
+/// comment glued to its end (`inlineTrail` present).
+///
+/// Phase 5e: source-level "trailing inline" comments live as
+/// `CommentLine(inlinePlacement: true)` peer entries in the parent
+/// container. The dumper restructures consecutive
+/// `[mainNode, CommentLine(inlinePlacement: true)]` pairs into one
+/// rendered row to preserve the visual `key: val // comment` layout.
+class _RenderEntry {
+  final JsonAstNode node;
+  final CommentLine? inlineTrail;
+  _RenderEntry(this.node, this.inlineTrail);
+}
+
+List<_RenderEntry> _buildRenderEntries(List<JsonAstNode> raw) {
+  final out = <_RenderEntry>[];
+  for (var i = 0; i < raw.length; i++) {
+    final e = raw[i];
+    if (e is CommentLine &&
+        e.inlinePlacement &&
+        out.isNotEmpty &&
+        out.last.inlineTrail == null &&
+        out.last.node is! CommentLine) {
+      final prev = out.removeLast();
+      out.add(_RenderEntry(prev.node, e));
+    } else {
+      out.add(_RenderEntry(e, null));
+    }
+  }
+  return out;
+}
+
 class Dumper {
   final DumperOptions opt;
   // ignore: prefer_final_fields
@@ -77,43 +110,48 @@ class Dumper {
       return;
     }
     _b.write('{\n');
-    final alignW = _alignKeyWidth(obj);
-    final lastPropIdx = _lastJsonPropertyIndex(obj.properties);
+    final entries = _buildRenderEntries(obj.properties);
+    final alignW = _alignKeyWidth(entries);
+    final lastPropIdx = _lastJsonPropertyIndexInRender(entries);
     final mainLines = <String?>[];
     final saved = _b;
-    for (var i = 0; i < obj.properties.length; i++) {
-      final entry = obj.properties[i];
-      if (entry is JsonProperty) {
+    for (var i = 0; i < entries.length; i++) {
+      final e = entries[i];
+      if (e.node is JsonProperty) {
         final tmp = StringBuffer();
         _b = tmp;
-        _writeObjectPropertyMainLine(entry, depth, alignW, i == lastPropIdx);
+        _writeObjectPropertyMainLine(
+            e.node as JsonProperty, depth, alignW, i == lastPropIdx);
         _b = saved;
         mainLines.add(tmp.toString());
       } else {
         mainLines.add(null);
       }
     }
-    final commentCol = _commentColumn(obj.properties, mainLines);
-    for (var i = 0; i < obj.properties.length; i++) {
-      final entry = obj.properties[i];
-      if (entry is CommentLine) {
-        _writeCommentLine(entry.comment, depth + 1);
+    final commentCol = _commentColumn(entries, mainLines);
+    for (var i = 0; i < entries.length; i++) {
+      final e = entries[i];
+      final node = e.node;
+      if (node is CommentLine) {
+        // Standalone comment row (inline-placement entries are absorbed
+        // by _buildRenderEntries into the prev row).
+        _writeCommentLine(node.comment, depth + 1);
         continue;
       }
-      if (entry is JsonProperty) {
+      if (node is JsonProperty) {
         final ml = mainLines[i]!;
         _b.write(ml);
-        if (entry.trailingComment != null) {
+        if (e.inlineTrail != null) {
           final pad = commentCol > ml.length
               ? commentCol - ml.length
               : opt.alignKeyGap;
           _b.write(' ' * pad);
-          _writeInlineComment(entry.trailingComment!);
+          _writeInlineComment(e.inlineTrail!.comment);
         }
         _b.write('\n');
         continue;
       }
-      throw StateError('unexpected object child: ${entry.runtimeType}');
+      throw StateError('unexpected object child: ${node.runtimeType}');
     }
     _indent(depth);
     _b.write('}');
@@ -139,18 +177,18 @@ class Dumper {
     if (!isLast) _b.write(',');
   }
 
-  int _lastJsonPropertyIndex(List<JsonAstNode> entries) {
+  int _lastJsonPropertyIndexInRender(List<_RenderEntry> entries) {
     for (var i = entries.length - 1; i >= 0; i--) {
-      if (entries[i] is JsonProperty) return i;
+      if (entries[i].node is JsonProperty) return i;
     }
     return -1;
   }
 
-  int _commentColumn(List<JsonAstNode> entries, List<String?> mainLines) {
+  int _commentColumn(List<_RenderEntry> entries, List<String?> mainLines) {
     int maxLen = 0;
     for (var i = 0; i < entries.length; i++) {
       final e = entries[i];
-      if (e.trailingComment != null && mainLines[i] != null) {
+      if (e.inlineTrail != null && mainLines[i] != null) {
         final l = mainLines[i]!.length;
         if (l > maxLen) maxLen = l;
       }
@@ -185,38 +223,40 @@ class Dumper {
       return;
     }
     _b.write('[\n');
-    final lastElIdx = _lastNonCommentIndex(arr.elements);
+    final entries = _buildRenderEntries(arr.elements);
+    final lastNonCommentIdx = _lastNonCommentIndexInRender(entries);
     final mainLines = <String?>[];
     final saved = _b;
-    for (var i = 0; i < arr.elements.length; i++) {
-      final e = arr.elements[i];
-      if (e is CommentLine) {
+    for (var i = 0; i < entries.length; i++) {
+      final e = entries[i];
+      if (e.node is CommentLine) {
         mainLines.add(null);
       } else {
         final tmp = StringBuffer();
         _b = tmp;
         _indent(depth + 1);
-        _writeNode(e, depth + 1);
-        if (i != lastElIdx) _b.write(',');
+        _writeNode(e.node, depth + 1);
+        if (i != lastNonCommentIdx) _b.write(',');
         _b = saved;
         mainLines.add(tmp.toString());
       }
     }
-    final commentCol = _commentColumn(arr.elements, mainLines);
-    for (var i = 0; i < arr.elements.length; i++) {
-      final e = arr.elements[i];
-      if (e is CommentLine) {
-        _writeCommentLine(e.comment, depth + 1);
+    final commentCol = _commentColumn(entries, mainLines);
+    for (var i = 0; i < entries.length; i++) {
+      final e = entries[i];
+      final node = e.node;
+      if (node is CommentLine) {
+        _writeCommentLine(node.comment, depth + 1);
         continue;
       }
       final ml = mainLines[i]!;
       _b.write(ml);
-      if (e.trailingComment != null) {
+      if (e.inlineTrail != null) {
         final pad = commentCol > ml.length
             ? commentCol - ml.length
             : opt.alignKeyGap;
         _b.write(' ' * pad);
-        _writeInlineComment(e.trailingComment!);
+        _writeInlineComment(e.inlineTrail!.comment);
       }
       _b.write('\n');
     }
@@ -224,19 +264,20 @@ class Dumper {
     _b.write(']');
   }
 
-  int _lastNonCommentIndex(List<JsonAstNode> entries) {
+  int _lastNonCommentIndexInRender(List<_RenderEntry> entries) {
     for (var i = entries.length - 1; i >= 0; i--) {
-      if (entries[i] is! CommentLine) return i;
+      if (entries[i].node is! CommentLine) return i;
     }
     return -1;
   }
 
-  int _alignKeyWidth(JsonObject obj) {
+  int _alignKeyWidth(List<_RenderEntry> entries) {
     int m = 0;
-    for (final entry in obj.properties) {
-      if (entry is! JsonProperty) continue;
-      if (entry.value is JsonObject || entry.value is JsonArray) continue;
-      final k = _emitKey(entry.key).length;
+    for (final e in entries) {
+      final node = e.node;
+      if (node is! JsonProperty) continue;
+      if (node.value is JsonObject || node.value is JsonArray) continue;
+      final k = _emitKey(node.key).length;
       if (k > opt.alignKeyMaxLen) continue;
       if (k > m) m = k;
     }
@@ -244,9 +285,10 @@ class Dumper {
   }
 
   String? _inlineObjectIfShort(JsonObject obj) {
+    // Cheap rejection: any inline-trail or standalone comment forces multi-line.
     for (final entry in obj.properties) {
+      if (entry is CommentLine) return null;
       if (entry is! JsonProperty) return null;
-      if (entry.trailingComment != null) return null;
       final v = entry.value;
       if (v is JsonObject) return null;
       if (v is JsonArray) {
@@ -255,9 +297,7 @@ class Dumper {
             if (el.properties.isEmpty) continue;
             final inner = _inlineObjectIfShort(el);
             if (inner == null) return null;
-          } else if (el is JsonArray || el is CommentLine) {
-            return null;
-          } else if (el.trailingComment != null) {
+          } else if (el is JsonArray) {
             return null;
           }
         }
@@ -303,10 +343,10 @@ class Dumper {
   }
 
   bool _canInlineArray(JsonArray arr) {
+    // Any comment (standalone OR inline-trail) forces multi-line.
     for (final e in arr.elements) {
       if (e is CommentLine) return false;
       if (e is JsonObject || e is JsonArray) return false;
-      if (e.trailingComment != null) return false;
     }
     final probe = StringBuffer('[');
     for (var i = 0; i < arr.elements.length; i++) {

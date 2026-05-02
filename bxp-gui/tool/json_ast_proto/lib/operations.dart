@@ -28,12 +28,10 @@ void setValue(JsonAstNode root, List<String> path, JsonAstNode newValue) {
     // changes.
     prop.value = newValue;
   } else {
-    final old = ref.children[ref.index];
-    // Inherit the trailing inline comment from the replaced element so the
-    // surrounding visual layout doesn't shift. (Standalone leading comments
-    // live as separate CommentLine entries in the parent container — they
-    // stay put automatically.)
-    newValue.trailingComment = old.trailingComment;
+    // Phase 5e: trailing inline comments live as adjacent CommentLine
+    // entries in the container, NOT as a slot on the entry being replaced.
+    // So a List setValue is just an in-place swap; the comment row that
+    // followed the old element automatically follows the new one too.
     ref.children[ref.index] = newValue;
   }
 }
@@ -136,11 +134,11 @@ void moveCommentAt(JsonAstNode root, List<String> path, int delta) {
   if (loc == null) {
     throw AstOpError('no comment with global N=$n', path);
   }
-  if (loc.kind != CommentLocationKind.standalone) {
-    throw AstOpError(
-        'cannot move a trailing inline comment (kind=${loc.kind.name})',
-        path);
-  }
+  // Phase 5e: comment is always a CommentLine peer entry (standalone OR
+  // inline-trailing). Move = swap with adjacent container entry — uniform
+  // with how real props/elements move. The inlinePlacement flag travels
+  // with the comment; the dumper handles whether to render on its own row
+  // or attached to whatever it now neighbours.
   final children = loc.container is JsonObject
       ? (loc.container as JsonObject).properties
       : (loc.container as JsonArray).elements;

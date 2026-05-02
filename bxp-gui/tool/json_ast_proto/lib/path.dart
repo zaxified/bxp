@@ -147,75 +147,49 @@ int realElementCount(List<JsonAstNode> elements) {
   return c;
 }
 
-/// Where a comment lives in the AST. Needed to mutate it without
-/// re-walking the tree.
+/// Where a comment lives in the AST. After Phase 5e all comments
+/// (standalone + inline-trailing) are `CommentLine` peer entries in a
+/// container — there's only ONE kind of location now.
 class CommentLocation {
-  /// Two kinds:
-  ///   `standalone`: a `CommentLine` pseudo-entry in a container.
-  ///   `trailing`: a `JsonAstNode.trailingComment` slot on an entry.
-  /// (Phase 4: leading comments unified into standalone CommentLines —
-  /// no longer a separate kind.)
-  final CommentLocationKind kind;
-  final JsonAstNode container; // for kind=standalone: JsonObject/JsonArray
-  final int containerIndex;    // for kind=standalone: raw index of CommentLine
-  final JsonAstNode owner;     // for kind=trailing: the node owning the comment
+  final JsonAstNode container; // JsonObject or JsonArray
+  final int containerIndex;    // raw index of the CommentLine in the container
   final int globalN;           // 1-based global index in source order
 
-  CommentLocation.standalone(
-      this.container, this.containerIndex, this.globalN)
-      : kind = CommentLocationKind.standalone,
-        owner = container;
+  CommentLocation(this.container, this.containerIndex, this.globalN);
 
-  CommentLocation.trailing(this.owner, this.globalN)
-      : kind = CommentLocationKind.trailing,
-        container = owner,
-        containerIndex = -1;
-
-  CommentNode get comment {
-    switch (kind) {
-      case CommentLocationKind.standalone:
-        final list = container is JsonObject
-            ? (container as JsonObject).properties
-            : (container as JsonArray).elements;
-        return (list[containerIndex] as CommentLine).comment;
-      case CommentLocationKind.trailing:
-        return owner.trailingComment!;
-    }
+  CommentLine get _line {
+    final list = container is JsonObject
+        ? (container as JsonObject).properties
+        : (container as JsonArray).elements;
+    return list[containerIndex] as CommentLine;
   }
 
+  CommentNode get comment => _line.comment;
+  bool get isInlineTrailing => _line.inlinePlacement;
+
   void replaceText(String newText) {
-    final c = comment;
-    c.text = newText;
+    comment.text = newText;
   }
 
   void delete() {
-    switch (kind) {
-      case CommentLocationKind.standalone:
-        final list = container is JsonObject
-            ? (container as JsonObject).properties
-            : (container as JsonArray).elements;
-        list.removeAt(containerIndex);
-        break;
-      case CommentLocationKind.trailing:
-        owner.trailingComment = null;
-        break;
-    }
+    final list = container is JsonObject
+        ? (container as JsonObject).properties
+        : (container as JsonArray).elements;
+    list.removeAt(containerIndex);
   }
 }
 
-enum CommentLocationKind { standalone, trailing }
-
 /// Find the N-th comment in source order across the whole tree.
-/// N is 1-based to match `$comm_<N>` user-facing convention. Trailing
-/// inline comments ARE counted (deterministic source position) so the
-/// global N matches what bxp-fmt's annotated tree assigns.
+/// N is 1-based to match `$comm_<N>` user-facing convention.
 CommentLocation? findCommentByGlobalN(JsonAstNode root, int targetN) {
   final visitor = _CommentWalker(targetN);
   visitor.visit(root);
   return visitor.found;
 }
 
-/// Walk the tree in source order, count comments, return the N-th.
+/// Walk the tree in source order, count CommentLines, return the N-th.
+/// All comments (standalone + inline-trail) are uniform CommentLine peer
+/// entries after Phase 5e, so this is just a flat container walk.
 class _CommentWalker {
   final int target;
   int seen = 0;
@@ -226,58 +200,36 @@ class _CommentWalker {
     seen++;
     if (seen == target) {
       found = makeLoc();
-      return true; // stop
+      return true;
     }
     return false;
   }
 
-  /// Single source of truth: visit body then trailing in source order for
-  /// EVERY node type. Earlier versions special-cased scalars (skipping
-  /// the trailing visit) and then wrapped array elements in an outer
-  /// `_visitBodyThenTrailing` to compensate — that double-counted the
-  /// trailing of container array elements (object/array trailings were
-  /// bumped twice). Unifying here means every comment is bumped exactly
-  /// once, matching `AstToLegacyMap`'s synthesised `$comm_<N>` numbering.
   bool visit(JsonAstNode n) {
-    if (_body(n)) return true;
-    if (n.trailingComment != null) {
-      if (_bump(() => CommentLocation.trailing(n, seen))) return true;
-    }
-    return false;
-  }
-
-  bool _body(JsonAstNode n) {
     if (n is JsonObject) {
-      for (var i = 0; i < n.properties.length; i++) {
-        final entry = n.properties[i];
-        if (entry is CommentLine) {
-          final capturedIdx = i;
-          if (_bump(() => CommentLocation.standalone(n, capturedIdx, seen))) {
-            return true;
-          }
-        } else if (entry is JsonProperty) {
-          if (visit(entry)) return true;
-        }
-      }
-      return false;
+      return _walkContainer(n, n.properties);
     }
     if (n is JsonArray) {
-      for (var i = 0; i < n.elements.length; i++) {
-        final el = n.elements[i];
-        if (el is CommentLine) {
-          final capturedIdx = i;
-          if (_bump(() => CommentLocation.standalone(n, capturedIdx, seen))) {
-            return true;
-          }
-        } else {
-          if (visit(el)) return true;
-        }
-      }
-      return false;
+      return _walkContainer(n, n.elements);
     }
     if (n is JsonProperty) {
       return visit(n.value);
     }
-    return false; // scalar — body is empty, trailing handled by visit()
+    return false;
+  }
+
+  bool _walkContainer(JsonAstNode container, List<JsonAstNode> entries) {
+    for (var i = 0; i < entries.length; i++) {
+      final e = entries[i];
+      if (e is CommentLine) {
+        final capturedIdx = i;
+        if (_bump(() => CommentLocation(container, capturedIdx, seen))) {
+          return true;
+        }
+      } else {
+        if (visit(e)) return true;
+      }
+    }
+    return false;
   }
 }
