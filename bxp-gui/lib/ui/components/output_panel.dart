@@ -75,7 +75,7 @@ class OutputPanel extends StatelessWidget {
             // bxp-fmt's annotated JSON interleaves UI metadata keys with
             // real schema pairs: `$comm_N` (comments), `$err_N`
             // (diagnostics), `$meta_<key>` / `$elem_meta_<key>` /
-            // `$meta_self` (byte-span info for OpApply). All `$`-prefixed
+            // `$meta_self` (byte-span info from bxp-fmt). All `$`-prefixed
             // entries are render-only artefacts and must not surface as
             // output columns. Schema keys themselves start with `$`
             // (`$action`, `$ticker`, …) so we exclude only the meta forms.

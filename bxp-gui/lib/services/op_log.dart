@@ -1,9 +1,9 @@
 /// Log of high-level config edits the user performed since load.
 ///
 /// Each [ConfigOp] is one button-press worth of intent (edit / delete /
-/// duplicate / move / insert). At save time [OpApply] replays the log
-/// against the original raw bytes, using `$meta_*` / `$elem_meta_*` tags
-/// from the annotated tree to translate each op into one byte patch.
+/// duplicate / move / insert). At save time the AST patcher
+/// (`AstPatchClient`) replays the log against the original raw bytes via
+/// the Dart JSON5 AST library, then deterministic-dumps the result.
 library;
 
 /// Path component: `String` for Map keys, stringified int for List indices

@@ -1,8 +1,5 @@
-/// Phase 2 entry point for the new AST-based config patcher.
-///
-/// Mirrors the public surface of [OpApply.apply] in `op_apply.dart` so the
-/// `saveConfig` call site can swap implementations behind a feature flag
-/// without further changes.
+/// AST-based config patcher invoked from `TraceStore.saveConfig` and
+/// `_validateConfigNow`.
 ///
 /// Pipeline: rawBytes → parse to JsonAstNode → replay [ConfigOp] log via
 /// `applyConfigOp` → deterministic dump → UTF-8 bytes. No spans, no byte

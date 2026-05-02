@@ -189,8 +189,8 @@ class _JsonNodeState extends State<_JsonNode> {
   /// Pre-pass over a map's entries: trailing-placement `$comm_<N>` siblings
   /// attach to the preceding real key so they render inline. Other comment
   /// entries (leading / standalone / block) and all real keys keep their
-  /// own rows; `$meta_<key>`, `$elem_meta_<key>`, `$meta_self` carry byte
-  /// offsets for OpApply and are not displayed in the tree.
+  /// own rows; `$meta_<key>`, `$elem_meta_<key>`, `$meta_self` are byte
+  /// offsets emitted by bxp-fmt and are not displayed in the tree.
   List<Widget> _mapChildNodes(Map map) {
     final out = <Widget>[];
     int? lastRealIdx;
@@ -276,10 +276,9 @@ class _JsonNodeState extends State<_JsonNode> {
   /// rows.
   ///
   /// Path indexing follows the **Dart raw position** of the parsed list,
-  /// counting `$comm_*` wrappers as full slots. OpApply (`_emIndex`)
-  /// converts this to the real-only `$elem_meta_<key>` index when it
-  /// needs to splice CST byte spans, so paths must remain raw or save
-  /// will write to the wrong offsets and produce broken JSON.
+  /// counting `$comm_*` wrappers as full slots. The op_log records paths
+  /// in this raw form; the AST patcher converts to real-only indices when
+  /// it walks the parsed bytes on save.
   ///
   /// Visible labels (`keyName`) instead use a "real-only" counter so
   /// `[N]` in the tree matches the `rule_index` / `output_row_index`
@@ -324,8 +323,8 @@ class _JsonNodeState extends State<_JsonNode> {
             );
             continue;
           }
-          // Path includes the array index so op_apply._lookupCommentMetaRaw
-          // can walk through the wrapper to its $meta_comm_<N>.
+          // Path includes the array index so the AST patcher's $comm_<N>
+          // resolver can walk through the wrapper to the comment node.
           out.add(_JsonNode(
             keyName: commKey,
             value: inner,

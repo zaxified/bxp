@@ -6,7 +6,6 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/ast_patch_client.dart';
 import '../services/bxp_process_client.dart';
-import '../services/op_apply.dart';
 import '../services/op_log.dart';
 import 'trace_model.dart';
 import 'trace_builder.dart';
@@ -72,17 +71,11 @@ class TraceStore extends ChangeNotifier {
   
   Map<String, dynamic>? configJson;
 
-  /// Raw file bytes at load time. Kept verbatim so [OpApply] can replay
-  /// the user's edit log against them at save time without re-rendering
-  /// the whole file. Bytes (not String) — `$meta_*` offsets from bxp-fmt
-  /// are byte offsets, and UTF-16 indexing on a Dart String would corrupt
-  /// multi-byte UTF-8 (em dashes, accents, …).
+  /// Raw file bytes at load time. Kept verbatim so the AST patcher can
+  /// replay the user's edit log against them at save time without
+  /// re-rendering the whole file. Bytes (not String) — UTF-16 indexing on
+  /// a Dart String would corrupt multi-byte UTF-8 (em dashes, accents, …).
   List<int>? _rawConfigInput;
-
-  /// Annotated tree as it came back from `bxp-fmt --config` at load time
-  /// (with `$meta_*`, `$elem_meta_*`, `$meta_self`). [OpApply] reads spans
-  /// from this snapshot. `configJson` may diverge from this via UI edits.
-  Map<String, dynamic>? _originalAnnotated;
 
   /// Append-only log of edits since load. Replayed at save time.
   final OpLog _opLog = OpLog();
@@ -209,7 +202,7 @@ class TraceStore extends ChangeNotifier {
   ///     `rule_index: 2` for the third rule.
   ///   * `configJson` is the annotated parse tree where `$comm_*` wrappers
   ///     occupy real slots in the parsed list.
-  ///   * `JsonTree` paths and `OpApply` paths use the Dart raw index, so
+  ///   * `JsonTree` paths and op_log paths use the Dart raw index, so
   ///     the same rule may be at raw index 3 if a leading comment exists.
   int? _realToRawListIndex(List<String> parentPath, int realIdx) {
     final root = configJson;
@@ -231,9 +224,9 @@ class TraceStore extends ChangeNotifier {
     int seen = 0;
     for (int i = 0; i < cur.length; i++) {
       final v = cur[i];
-      // Match op_apply's "is comment wrapper?" predicate: a Map where
-      // every key starts with `$` (the only kind of element the parser
-      // emits as a wrapper rather than a real value).
+      // "Is comment wrapper?" predicate: a Map where every key starts with
+      // `$` (the only kind of element the parser emits as a wrapper rather
+      // than a real value).
       final isCommWrapper = v is Map &&
           v.keys.every((k) => k.toString().startsWith(r'$'));
       if (isCommWrapper) continue;
@@ -380,13 +373,12 @@ class TraceStore extends ChangeNotifier {
     if (configJson == null || configPath.isEmpty) return;
     if (isSaving) return; // saveConfig runs its own validation
     final raw = _rawConfigInput;
-    final orig = _originalAnnotated;
-    if (raw == null || orig == null) return;
+    if (raw == null) return;
     _configValidating = true;
     final tmpPath = '$configPath.bxp-live';
     final tmpFile = File(tmpPath);
     try {
-      final outBytes = OpApply.apply(raw, orig, _activeOps);
+      final outBytes = AstPatchClient.apply(raw, _activeOps);
       await tmpFile.writeAsString(utf8.decode(outBytes), flush: true);
       final out = await BxpProcessClient.loadConfig(tmpPath);
       final parsed = jsonDecode(out);
@@ -398,7 +390,7 @@ class TraceStore extends ChangeNotifier {
       // OpLog and the LIVE tree must agree on which comment is "$comm_3"
       // for follow-up ops to land on the right entry. Keeping the tree
       // mutated in place by user ops only (live edits in trace_store +
-      // OpApply on save) makes IDs stable for the duration of the
+      // AST patcher on save) makes IDs stable for the duration of the
       // session — fresh IDs only on save+reload.
       _syncErrMarkers(configJson!, parsed);
       _recomputeDirty();
@@ -740,18 +732,16 @@ class TraceStore extends ChangeNotifier {
       configJson = jsonDecode(jsonOutput) as Map<String, dynamic>;
       configError = configJson?['error'] as String?;
       if (configError != null) configJson = null;
-      // Capture raw bytes + the annotated snapshot (with $meta_*) so OpApply
-      // can replay edit ops without re-parsing on save.
+      // Capture raw bytes so the AST patcher can replay edit ops without
+      // re-rendering the file on save.
       if (configJson != null && configPath.isNotEmpty) {
         try {
           _rawConfigInput = await File(configPath).readAsBytes();
         } catch (_) {
           _rawConfigInput = null;
         }
-        _originalAnnotated = _deepCopy(configJson) as Map<String, dynamic>;
       } else {
         _rawConfigInput = null;
-        _originalAnnotated = null;
       }
       // Latch readonly mode based on the load-time tree only. Live edits
       // may introduce $err_* markers (caught by per-op revalidation) but
@@ -770,7 +760,6 @@ class TraceStore extends ChangeNotifier {
       configError = e.toString();
       configJson = null;
       _rawConfigInput = null;
-      _originalAnnotated = null;
       _templateInfos = const [];
     } finally {
       isLoadingConfig = false;
@@ -1148,16 +1137,12 @@ class TraceStore extends ChangeNotifier {
 
     // Map-key reorder: rebuild the parent map with the target key swapped
     // with its adjacent real-key sibling ($-prefixed pseudo-keys are
-    // skipped — they carry CST metadata, not config values). The CST
-    // patch in op_apply._moveMapKey replays this via $meta_<key>.block_span,
-    // so the on-disk byte-order stays in sync on Save.
+    // skipped — they carry CST metadata, not config values).
     if (parent is Map) {
       final key = path.last;
       // Row-by-row sibling list: real keys + $comm_<N>. Skip the
       // bookkeeping entries ($meta_*, $elem_meta_*, $meta_self, $err_*).
-      // This unified order matches what the GUI actually displays and
-      // mirrors op_apply._moveMapKey, so live tree and on-disk patch
-      // never disagree on neighbour relations.
+      // This unified order matches what the GUI actually displays.
       final siblings = parent.keys
           .map((k) => k.toString())
           .where((k) =>
@@ -1171,9 +1156,7 @@ class TraceStore extends ChangeNotifier {
       final targetPos = pos + delta;
       if (targetPos < 0 || targetPos >= siblings.length) return;
       final targetKey = siblings[targetPos];
-      // swapMapKeysInPlace now handles both real-keys and $comm_<N> as
-      // either side, swapping their (key, meta) pairs in insertion order.
-      swapMapKeysInPlace(parent, key, targetKey);
+      _swapMapEntriesInPlace(parent, key, targetKey);
       _opLog.truncate(_historyIndex);
       _opLog.record(MoveOp(path, delta));
       _recomputeDirty();
@@ -1418,7 +1401,9 @@ class TraceStore extends ChangeNotifier {
       'text': style == '/*' ? '/*$text*/' : '//$text',
       'placement': 'leading',
     };
-    // op_apply.dart will fill in real spans on save. UI doesn't need them.
+    // The AST patcher doesn't read these spans (it re-parses raw bytes);
+    // they're kept zero-valued only so the live-tree shape matches what
+    // bxp-fmt would emit on the next reload.
     final metaObj = <String, dynamic>{
       'value_span': {'start': 0, 'end': 0},
       'block_span': {'start': 0, 'end': 0},
@@ -1468,19 +1453,6 @@ class TraceStore extends ChangeNotifier {
   /// `configSaveStatus === "saving"` state.
   bool isSaving = false;
 
-  /// PHASE-2 FLAG (revertable): when true, saveConfig routes through the
-  /// new Dart AST patcher in `ast_patch_client.dart`; when false (default)
-  /// it uses the legacy CST byte-patcher in `op_apply.dart`. Toggled via
-  /// SettingsInspector for parity testing. Phase 3 removes this flag and
-  /// the entire CST path.
-  bool _useDartAstPatcher = false;
-  bool get useDartAstPatcher => _useDartAstPatcher;
-  set useDartAstPatcher(bool v) {
-    if (_useDartAstPatcher == v) return;
-    _useDartAstPatcher = v;
-    notifyListeners();
-  }
-
   Future<void> saveConfig() async {
     if (configJson == null || configPath.isEmpty) return;
     if (isSaving) return; // re-entrancy guard against double-click
@@ -1490,26 +1462,20 @@ class TraceStore extends ChangeNotifier {
     final tmpPath = '$configPath.bxp-tmp';
     final tmpFile = File(tmpPath);
     try {
-      // OpApply replays the user's edit log against the original raw bytes
-      // using `$meta_*` tags from the annotated snapshot. Each user button
-      // press is one byte splice; comments, indentation, alignment, and
-      // trailing-comma style round-trip byte-for-byte for everything that
-      // wasn't directly edited.
+      // AST patcher: parse the original raw bytes via the Dart JSON5 AST
+      // library, replay each ConfigOp from _opLog as an AST mutation, then
+      // dump back to bytes through the deterministic emitter. Style is
+      // canonicalised on first save; subsequent saves are stable.
       final raw = _rawConfigInput;
-      final orig = _originalAnnotated;
-      if (raw == null || orig == null) {
+      if (raw == null) {
         configSaveError =
             'cannot save: original raw input unavailable (load failure?)';
         notifyListeners();
         return;
       }
-      // PHASE-2 FLAG: AST patcher (new) vs OpApply (legacy CST byte patch).
-      // The AST path doesn't need the annotated `orig` tree (no spans).
       final Uint8List outBytes;
       try {
-        outBytes = useDartAstPatcher
-            ? AstPatchClient.apply(raw, _activeOps)
-            : OpApply.apply(raw, orig, _activeOps);
+        outBytes = AstPatchClient.apply(raw, _activeOps);
       } on AstPatchError catch (e) {
         configSaveError = 'AST patch failed: ${e.message}';
         notifyListeners();
@@ -1585,8 +1551,8 @@ class TraceStore extends ChangeNotifier {
       notifyListeners();
 
       // Re-run bxp-fmt so validation markers ($err_/$comm_) refresh against
-      // the new on-disk content. (Also rebuilds _originalAnnotated and
-      // resets the op log baseline.)
+      // the new on-disk content. (Also captures fresh raw bytes and resets
+      // the op log baseline.)
       await loadConfig();
     } catch (e) {
       // Clean up the tmp file if it leaked through an unexpected exception
@@ -1828,6 +1794,35 @@ class TraceStore extends ChangeNotifier {
       }
     } catch (_) {
       // Best-effort launch; don't surface transient errors to the UI.
+    }
+  }
+}
+
+/// Swap two map entries in [m] while keeping their `$meta_*` sibling
+/// (`$meta_<key>` for real keys, `$meta_comm_<N>` for `$comm_<N>` keys)
+/// adjacent. Either key may be a comment. Used by `moveConfigNode` to
+/// keep the live tree's insertion order in step with the user-visible
+/// row order; the AST patcher writes its own order on save independently.
+void _swapMapEntriesInPlace(Map m, String keyA, String keyB) {
+  String metaOf(String k) => k.startsWith(r'$comm_')
+      ? r'$meta_comm_' + k.substring(r'$comm_'.length)
+      : r'$meta_' + k;
+  final metaA = metaOf(keyA);
+  final metaB = metaOf(keyB);
+  final entries = m.entries.toList();
+  m.clear();
+  for (final e in entries) {
+    final k = e.key.toString();
+    if (k == keyA) {
+      m[keyB] = entries.firstWhere((x) => x.key.toString() == keyB).value;
+    } else if (k == keyB) {
+      m[keyA] = entries.firstWhere((x) => x.key.toString() == keyA).value;
+    } else if (k == metaA) {
+      m[metaB] = entries.firstWhere((x) => x.key.toString() == metaB).value;
+    } else if (k == metaB) {
+      m[metaA] = entries.firstWhere((x) => x.key.toString() == metaA).value;
+    } else {
+      m[e.key] = e.value;
     }
   }
 }

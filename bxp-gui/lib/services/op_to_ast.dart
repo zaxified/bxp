@@ -1,9 +1,8 @@
 /// Translates a [ConfigOp] log into AST mutations on a [JsonAstNode] tree.
 ///
-/// The shape decisions (Map vs List) are made by inspecting the parent in
-/// the live AST rather than by carrying a discriminator on the [ConfigOp]
-/// itself — same convention as the legacy `OpApply` patcher, which keeps
-/// the [op_log] schema unchanged across both backends.
+/// Shape decisions (Map vs List) are made by inspecting the parent in the
+/// live AST rather than carrying a discriminator on the [ConfigOp] — keeps
+/// the op_log schema independent of the patcher backend.
 library;
 
 import 'package:json_ast_proto/ast.dart';
