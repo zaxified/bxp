@@ -101,9 +101,6 @@ class Dumper {
         continue;
       }
       if (entry is JsonProperty) {
-        for (final lc in entry.leadingComments) {
-          _writeCommentLine(lc, depth + 1);
-        }
         final ml = mainLines[i]!;
         _b.write(ml);
         if (entry.trailingComment != null) {
@@ -212,9 +209,6 @@ class Dumper {
         _writeCommentLine(e.comment, depth + 1);
         continue;
       }
-      for (final lc in e.leadingComments) {
-        _writeCommentLine(lc, depth + 1);
-      }
       final ml = mainLines[i]!;
       _b.write(ml);
       if (e.trailingComment != null) {
@@ -252,7 +246,6 @@ class Dumper {
   String? _inlineObjectIfShort(JsonObject obj) {
     for (final entry in obj.properties) {
       if (entry is! JsonProperty) return null;
-      if (entry.leadingComments.isNotEmpty) return null;
       if (entry.trailingComment != null) return null;
       final v = entry.value;
       if (v is JsonObject) return null;
@@ -264,7 +257,7 @@ class Dumper {
             if (inner == null) return null;
           } else if (el is JsonArray || el is CommentLine) {
             return null;
-          } else if (el.leadingComments.isNotEmpty || el.trailingComment != null) {
+          } else if (el.trailingComment != null) {
             return null;
           }
         }
@@ -313,7 +306,6 @@ class Dumper {
     for (final e in arr.elements) {
       if (e is CommentLine) return false;
       if (e is JsonObject || e is JsonArray) return false;
-      if (e.leadingComments.isNotEmpty) return false;
       if (e.trailingComment != null) return false;
     }
     final probe = StringBuffer('[');

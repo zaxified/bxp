@@ -21,7 +21,10 @@ class CommentNode {
 }
 
 abstract class JsonAstNode {
-  final List<CommentNode> leadingComments = [];
+  // No leadingComments field — standalone comments live as CommentLine
+  // pseudo-entries inside their parent container (JsonObject.properties /
+  // JsonArray.elements). Only inline trailing comments stay attached to
+  // their owning entry, since there's no place else for them.
   CommentNode? trailingComment;
   SourceSpan? sourceSpan;
 
@@ -34,7 +37,6 @@ class JsonObject extends JsonAstNode {
   @override
   JsonObject clone() {
     final c = JsonObject();
-    c.leadingComments.addAll(leadingComments.map((x) => x.clone()));
     c.trailingComment = trailingComment?.clone();
     for (final p in properties) {
       c.properties.add(p.clone());
@@ -51,7 +53,6 @@ class JsonProperty extends JsonAstNode {
   @override
   JsonProperty clone() {
     final c = JsonProperty(key, value.clone());
-    c.leadingComments.addAll(leadingComments.map((x) => x.clone()));
     c.trailingComment = trailingComment?.clone();
     return c;
   }
@@ -63,7 +64,6 @@ class JsonArray extends JsonAstNode {
   @override
   JsonArray clone() {
     final c = JsonArray();
-    c.leadingComments.addAll(leadingComments.map((x) => x.clone()));
     c.trailingComment = trailingComment?.clone();
     for (final e in elements) {
       c.elements.add(e.clone());
@@ -79,7 +79,6 @@ class JsonString extends JsonAstNode {
   @override
   JsonString clone() {
     final c = JsonString(value);
-    c.leadingComments.addAll(leadingComments.map((x) => x.clone()));
     c.trailingComment = trailingComment?.clone();
     return c;
   }
@@ -92,7 +91,6 @@ class JsonNumber extends JsonAstNode {
   @override
   JsonNumber clone() {
     final c = JsonNumber(rawText);
-    c.leadingComments.addAll(leadingComments.map((x) => x.clone()));
     c.trailingComment = trailingComment?.clone();
     return c;
   }
@@ -105,7 +103,6 @@ class JsonBool extends JsonAstNode {
   @override
   JsonBool clone() {
     final c = JsonBool(value);
-    c.leadingComments.addAll(leadingComments.map((x) => x.clone()));
     c.trailingComment = trailingComment?.clone();
     return c;
   }
@@ -115,7 +112,6 @@ class JsonNull extends JsonAstNode {
   @override
   JsonNull clone() {
     final c = JsonNull();
-    c.leadingComments.addAll(leadingComments.map((x) => x.clone()));
     c.trailingComment = trailingComment?.clone();
     return c;
   }

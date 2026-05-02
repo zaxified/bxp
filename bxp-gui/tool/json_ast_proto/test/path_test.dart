@@ -100,9 +100,9 @@ void main() {
 
     test('CommentLocation.delete removes from container', () {
       final root = parseOk('{\n  // c1\n  a: 1\n}');
-      // N=1 = leading on `a`
+      // N=1 = standalone CommentLine before `a` (Phase 4: no more leading)
       final loc = findCommentByGlobalN(root, 1)!;
-      expect(loc.kind, CommentLocationKind.leading);
+      expect(loc.kind, CommentLocationKind.standalone);
       loc.delete();
       // After delete, no comments at all.
       expect(findCommentByGlobalN(root, 1), isNull);

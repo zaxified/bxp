@@ -23,7 +23,20 @@ class Parser {
     try {
       final leadingComments = p._collectStandaloneComments();
       root = p._parseValue();
-      root.leadingComments.insertAll(0, leadingComments);
+      // Top-of-file standalone comments: prepend as CommentLine pseudo-entries
+      // into the root container (Object/Array) so they live as siblings of
+      // the real entries — matching how mid-file standalone comments are
+      // represented. This unification is what enables `$comm_<N>` move ops
+      // to swap with adjacent rows without leading-vs-standalone special-casing.
+      if (root is JsonObject) {
+        for (var i = 0; i < leadingComments.length; i++) {
+          root.properties.insert(i, CommentLine(leadingComments[i]));
+        }
+      } else if (root is JsonArray) {
+        for (var i = 0; i < leadingComments.length; i++) {
+          root.elements.insert(i, CommentLine(leadingComments[i]));
+        }
+      }
       final tailComments = p._collectStandaloneComments();
       if (root is JsonObject) {
         for (final c in tailComments) {
@@ -150,12 +163,16 @@ class Parser {
     final obj = JsonObject();
     obj.sourceSpan = start.span;
     while (true) {
+      // Standalone comments (between props OR before close brace) are
+      // emitted as CommentLine pseudo-entries — same shape as in arrays,
+      // so move/edit/delete on `$comm_<N>` can treat the parent map and
+      // its children uniformly as a single insertion-ordered container.
       final leading = _collectStandaloneComments();
+      for (final c in leading) {
+        obj.properties.add(CommentLine(c));
+      }
       _skipNewlines();
       if (_peek().kind == TokKind.rbrace) {
-        for (final c in leading) {
-          obj.properties.add(CommentLine(c));
-        }
         _advance();
         return obj;
       }
@@ -182,19 +199,16 @@ class Parser {
       _skipNewlines();
       final value = _parseValue();
       final prop = JsonProperty(key, value);
-      prop.leadingComments.addAll(leading);
       // optional trailing comma
       bool hadComma = false;
       if (_peek().kind == TokKind.comma) {
         _advance();
         hadComma = true;
       }
-      // trailing comment on same line (no newline between)
+      // trailing inline comment on same line (no newline between)
       final trailing = _maybeTrailingComment();
       if (trailing != null) prop.trailingComment = trailing;
       obj.properties.add(prop);
-      // continue loop for next prop or rbrace
-      // (newlines/comments handled at next iteration's _collectStandalone)
       if (!hadComma) {
         _skipNewlines();
         if (_peek().kind == TokKind.rbrace) {

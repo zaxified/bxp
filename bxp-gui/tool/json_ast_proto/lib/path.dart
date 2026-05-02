@@ -150,32 +150,26 @@ int realElementCount(List<JsonAstNode> elements) {
 /// Where a comment lives in the AST. Needed to mutate it without
 /// re-walking the tree.
 class CommentLocation {
-  /// 1: `CommentLine` pseudo-entry inside a container (object or array).
-  /// 2: `leadingComments[i]` of a `JsonProperty` or array element.
-  /// 3: `trailingComment` of a node.
+  /// Two kinds:
+  ///   `standalone`: a `CommentLine` pseudo-entry in a container.
+  ///   `trailing`: a `JsonAstNode.trailingComment` slot on an entry.
+  /// (Phase 4: leading comments unified into standalone CommentLines —
+  /// no longer a separate kind.)
   final CommentLocationKind kind;
   final JsonAstNode container; // for kind=standalone: JsonObject/JsonArray
   final int containerIndex;    // for kind=standalone: raw index of CommentLine
-  final JsonAstNode owner;     // for kind=leading|trailing: the node owning the comment
-  final int leadingIndex;      // for kind=leading: index in owner.leadingComments
+  final JsonAstNode owner;     // for kind=trailing: the node owning the comment
   final int globalN;           // 1-based global index in source order
 
   CommentLocation.standalone(
       this.container, this.containerIndex, this.globalN)
       : kind = CommentLocationKind.standalone,
-        owner = container,
-        leadingIndex = -1;
-
-  CommentLocation.leading(this.owner, this.leadingIndex, this.globalN)
-      : kind = CommentLocationKind.leading,
-        container = owner,
-        containerIndex = -1;
+        owner = container;
 
   CommentLocation.trailing(this.owner, this.globalN)
       : kind = CommentLocationKind.trailing,
         container = owner,
-        containerIndex = -1,
-        leadingIndex = -1;
+        containerIndex = -1;
 
   CommentNode get comment {
     switch (kind) {
@@ -184,8 +178,6 @@ class CommentLocation {
             ? (container as JsonObject).properties
             : (container as JsonArray).elements;
         return (list[containerIndex] as CommentLine).comment;
-      case CommentLocationKind.leading:
-        return owner.leadingComments[leadingIndex];
       case CommentLocationKind.trailing:
         return owner.trailingComment!;
     }
@@ -204,9 +196,6 @@ class CommentLocation {
             : (container as JsonArray).elements;
         list.removeAt(containerIndex);
         break;
-      case CommentLocationKind.leading:
-        owner.leadingComments.removeAt(leadingIndex);
-        break;
       case CommentLocationKind.trailing:
         owner.trailingComment = null;
         break;
@@ -214,12 +203,12 @@ class CommentLocation {
   }
 }
 
-enum CommentLocationKind { standalone, leading, trailing }
+enum CommentLocationKind { standalone, trailing }
 
 /// Find the N-th comment in source order across the whole tree.
-/// N is 1-based to match `$comm_<N>` user-facing convention.
-/// Trailing comments ARE counted (they have a deterministic source
-/// position), but most user ops only address standalone+leading.
+/// N is 1-based to match `$comm_<N>` user-facing convention. Trailing
+/// inline comments ARE counted (deterministic source position) so the
+/// global N matches what bxp-fmt's annotated tree assigns.
 CommentLocation? findCommentByGlobalN(JsonAstNode root, int targetN) {
   final visitor = _CommentWalker(targetN);
   visitor.visit(root);
@@ -242,13 +231,9 @@ class _CommentWalker {
     return false;
   }
 
-  /// Visit any leading comments hanging off `n`, then `n` itself, then its
-  /// trailing comment. Returns true if target found (caller should stop).
-  bool _visitLeadingThenTrailing(JsonAstNode n, bool Function() inner) {
-    for (var i = 0; i < n.leadingComments.length; i++) {
-      final captured = i;
-      if (_bump(() => CommentLocation.leading(n, captured, seen))) return true;
-    }
+  /// Visit `n`'s body (via `inner`), then its trailing comment if any.
+  /// Returns true if the target was found (caller should stop).
+  bool _visitBodyThenTrailing(JsonAstNode n, bool Function() inner) {
     if (inner()) return true;
     if (n.trailingComment != null) {
       if (_bump(() => CommentLocation.trailing(n, seen))) return true;
@@ -258,7 +243,7 @@ class _CommentWalker {
 
   bool visit(JsonAstNode n) {
     if (n is JsonObject) {
-      return _visitLeadingThenTrailing(n, () {
+      return _visitBodyThenTrailing(n, () {
         for (var i = 0; i < n.properties.length; i++) {
           final entry = n.properties[i];
           if (entry is CommentLine) {
@@ -267,7 +252,7 @@ class _CommentWalker {
               return true;
             }
           } else if (entry is JsonProperty) {
-            if (_visitLeadingThenTrailing(entry, () => visit(entry.value))) {
+            if (_visitBodyThenTrailing(entry, () => visit(entry.value))) {
               return true;
             }
           }
@@ -276,7 +261,7 @@ class _CommentWalker {
       });
     }
     if (n is JsonArray) {
-      return _visitLeadingThenTrailing(n, () {
+      return _visitBodyThenTrailing(n, () {
         for (var i = 0; i < n.elements.length; i++) {
           final el = n.elements[i];
           if (el is CommentLine) {
@@ -285,14 +270,13 @@ class _CommentWalker {
               return true;
             }
           } else {
-            if (_visitLeadingThenTrailing(el, () => visit(el))) return true;
+            if (_visitBodyThenTrailing(el, () => visit(el))) return true;
           }
         }
         return false;
       });
     }
-    // Scalar — has no children, only its own leading/trailing already
-    // visited by caller.
+    // Scalar — has no children; its trailing comment is visited by caller.
     return false;
   }
 }

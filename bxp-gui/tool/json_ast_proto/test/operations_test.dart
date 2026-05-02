@@ -278,21 +278,43 @@ void main() {
           throwsA(isA<AstOpError>()));
     });
 
-    test('List move carries leading CommentLine with element', () {
+    test('List move swaps with adjacent row (CommentLine peer)', () {
+      // Phase 4: move = swap with adjacent CONTAINER entry (real or comment).
+      // No group-swap. Real index 1 (value 2) lives at raw index 3 in
+      // [CommentLine(first), 1, CommentLine(second), 2, 3]. Move -1 swaps
+      // value 2 with the preceding CommentLine(second).
       final root = parseOk('[\n  // first\n  1,\n  // second\n  2,\n  3\n]');
-      // Move element at real index 1 (value 2) up to index 0.
       moveAt(root, ['1'], -1);
-      // Expected order: leading "// second", value 2, leading "// first",
-      // value 1, value 3.
+      // Expected order: // first, 1, 2, // second, 3.
       final dumped = Dumper.dump(root);
-      final secondPos = dumped.indexOf('// second');
       final firstPos = dumped.indexOf('// first');
-      final twoPos = dumped.indexOf('  2');
       final onePos = dumped.indexOf('  1');
-      expect(secondPos, lessThan(twoPos));
-      expect(twoPos, lessThan(firstPos));
+      final twoPos = dumped.indexOf('  2');
+      final secondPos = dumped.indexOf('// second');
       expect(firstPos, lessThan(onePos));
+      expect(onePos, lessThan(twoPos));
+      expect(twoPos, lessThan(secondPos));
       roundTrip(root);
+    });
+
+    test('moveCommentAt swaps comment with adjacent row', () {
+      // Map: real keys interleaved with standalone CommentLines.
+      // {"a": 1, // c, "b": 2}  parses as [JsonProperty(a), CommentLine(c),
+      // JsonProperty(b)] — Phase 4 unification.
+      final root = parseOk('{\n  a: 1,\n  // c\n  b: 2\n}');
+      // The comment is global N=1. Move it up: swap with JsonProperty(a).
+      moveAt(root, ['\$comm_1'], -1);
+      final dumped = Dumper.dump(root);
+      final cPos = dumped.indexOf('// c');
+      final aPos = dumped.indexOf('a:');
+      expect(cPos, lessThan(aPos));
+      roundTrip(root);
+    });
+
+    test('moveCommentAt down past last sibling throws out-of-bounds', () {
+      final root = parseOk('{\n  a: 1,\n  // c\n}');
+      expect(() => moveAt(root, ['\$comm_1'], 1),
+          throwsA(isA<AstOpError>()));
     });
 
     test('illegal delta throws', () {

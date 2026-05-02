@@ -29,11 +29,10 @@ void setValue(JsonAstNode root, List<String> path, JsonAstNode newValue) {
     prop.value = newValue;
   } else {
     final old = ref.children[ref.index];
-    // Inherit leading/trailing comments from the replaced element so the
-    // surrounding visual layout doesn't shift.
-    newValue.leadingComments
-      ..clear()
-      ..addAll(old.leadingComments);
+    // Inherit the trailing inline comment from the replaced element so the
+    // surrounding visual layout doesn't shift. (Standalone leading comments
+    // live as separate CommentLine entries in the parent container — they
+    // stay put automatically.)
     newValue.trailingComment = old.trailingComment;
     ref.children[ref.index] = newValue;
   }
@@ -89,98 +88,64 @@ JsonAstNode duplicateAt(JsonAstNode root, List<String> path, {String? newKey}) {
 
 // --------------------------------------------------------------------------
 // MoveOp — swap the entry at `path` with its previous (-1) or next (+1)
-// real sibling. CommentLine pseudo-entries are skipped (they don't move
-// independently; for arrays a leading CommentLine attached to the moved
-// element rides along — see _moveArrayElement).
+// container neighbour. Neighbours can be real props/elements OR CommentLine
+// pseudo-entries; both types are peers in the container after Phase 4's
+// model unification. This matches the bxp-fmt's flat row model that the GUI
+// uses for the live tree.
 // --------------------------------------------------------------------------
 
 void moveAt(JsonAstNode root, List<String> path, int delta) {
   if (delta != 1 && delta != -1) {
     throw AstOpError('move delta must be -1 or +1, got $delta', path);
   }
+  // Comment moves use the global $comm_<N> last segment. Dispatch to the
+  // dedicated walker — the path's prefix is informative but not needed
+  // for the swap itself (the walker's CommentLocation knows the container).
+  if (path.isNotEmpty && path.last.startsWith(r'$comm_')) {
+    moveCommentAt(root, path, delta);
+    return;
+  }
   final ref = resolveParent(root, path);
-  if (ref.parent is JsonObject) {
-    _moveObjectProperty(ref.parent as JsonObject, ref.index, delta, path);
-  } else {
-    _moveArrayElement(ref.parent as JsonArray, ref.index, delta, path);
-  }
+  _swapContainerEntries(ref.children, ref.index, ref.index + delta, path);
 }
 
-/// In a JsonObject, swap two adjacent JsonProperty entries (skipping
-/// CommentLine pseudo-entries between them — they stay where they are).
-void _moveObjectProperty(
-    JsonObject obj, int rawIdx, int delta, List<String> path) {
-  final targetRaw = _nextSiblingIndex(
-      obj.properties, rawIdx, delta,
-      isReal: (n) => n is JsonProperty);
-  if (targetRaw < 0) {
+/// Swap two container entries by raw index. Either side may be a CommentLine
+/// or a JsonProperty / element — they are peers in the container.
+void _swapContainerEntries(
+    List<JsonAstNode> children, int aIdx, int bIdx, List<String> path) {
+  if (bIdx < 0 || bIdx >= children.length) {
     throw AstOpError('move out of bounds', path);
   }
-  final tmp = obj.properties[rawIdx];
-  obj.properties[rawIdx] = obj.properties[targetRaw];
-  obj.properties[targetRaw] = tmp;
+  final tmp = children[aIdx];
+  children[aIdx] = children[bIdx];
+  children[bIdx] = tmp;
 }
 
-/// In a JsonArray, swap two adjacent real elements. Any CommentLine
-/// pseudo-entries between them shift around so they remain adjacent to
-/// their original sibling: leading comments hanging off the moved element
-/// (i.e. CommentLine entries immediately before it in source order) move
-/// with it. This matches user expectation for "move row up/down".
-void _moveArrayElement(
-    JsonArray arr, int rawIdx, int delta, List<String> path) {
-  final targetRaw = _nextSiblingIndex(
-      arr.elements, rawIdx, delta,
-      isReal: (n) => n is! CommentLine);
-  if (targetRaw < 0) {
-    throw AstOpError('move out of bounds', path);
+/// Move a comment (addressed via `$comm_<N>` last segment) ±1 row in its
+/// container. Trailing inline comments are not movable — they belong to a
+/// specific row's value.
+void moveCommentAt(JsonAstNode root, List<String> path, int delta) {
+  if (path.isEmpty || !path.last.startsWith(r'$comm_')) {
+    throw AstOpError('moveCommentAt requires \$comm_<N> last segment', path);
   }
-  // Group A = leading comments + the moved element at rawIdx.
-  // Group B = leading comments + the swap target at targetRaw.
-  // Swap groups in place. Order is preserved within each group.
-  final aStart = _groupStart(arr.elements, rawIdx);
-  final aEnd = rawIdx; // inclusive
-  final bStart = _groupStart(arr.elements, targetRaw);
-  final bEnd = targetRaw; // inclusive
-
-  if (delta == 1) {
-    // A is before B. Splice them.
-    final aSlice = arr.elements.sublist(aStart, aEnd + 1);
-    final bSlice = arr.elements.sublist(bStart, bEnd + 1);
-    arr.elements.replaceRange(aStart, bEnd + 1, [...bSlice, ...aSlice]);
-  } else {
-    // delta == -1, B is before A.
-    final bSlice = arr.elements.sublist(bStart, bEnd + 1);
-    final aSlice = arr.elements.sublist(aStart, aEnd + 1);
-    arr.elements.replaceRange(bStart, aEnd + 1, [...aSlice, ...bSlice]);
+  final n = int.tryParse(path.last.substring(r'$comm_'.length));
+  if (n == null) {
+    throw AstOpError("invalid \$comm_N segment '${path.last}'", path);
   }
-}
-
-/// Walk backwards from `rawIdx` and include any contiguous CommentLine
-/// pseudo-entries directly before — these are the "leading comments"
-/// belonging to the element at `rawIdx` in source layout terms.
-int _groupStart(List<JsonAstNode> entries, int rawIdx) {
-  var s = rawIdx;
-  while (s > 0 && entries[s - 1] is CommentLine) {
-    s--;
+  final loc = findCommentByGlobalN(root, n);
+  if (loc == null) {
+    throw AstOpError('no comment with global N=$n', path);
   }
-  return s;
-}
-
-/// Find the index of the next sibling in `entries` from `rawIdx` going by
-/// `delta` (±1), skipping entries for which `isReal` is false. Returns -1
-/// if no such sibling exists.
-int _nextSiblingIndex(
-  List<JsonAstNode> entries,
-  int rawIdx,
-  int delta, {
-  required bool Function(JsonAstNode) isReal,
-}) {
-  var i = rawIdx + delta;
-  while (i >= 0 && i < entries.length) {
-    if (isReal(entries[i])) return i;
-    i += delta;
+  if (loc.kind != CommentLocationKind.standalone) {
+    throw AstOpError(
+        'cannot move a trailing inline comment (kind=${loc.kind.name})',
+        path);
   }
-  return -1;
+  final children = loc.container is JsonObject
+      ? (loc.container as JsonObject).properties
+      : (loc.container as JsonArray).elements;
+  _swapContainerEntries(children, loc.containerIndex,
+      loc.containerIndex + delta, path);
 }
 
 // --------------------------------------------------------------------------
@@ -253,15 +218,10 @@ void deleteComment(JsonAstNode root, List<String> path) {
   loc.delete();
 }
 
-/// Insert a leading comment immediately before the entry at `anchorPath`.
-/// For Map property anchors: prepends to `JsonProperty.leadingComments`
-/// (well — appends, so it becomes the last leading comment, closest to
-/// the property in source order). For Array element anchors: inserts a
-/// CommentLine pseudo-entry right before the element.
-///
-/// Choice rationale: the existing UI ("insert comment above this row")
-/// always means a NEW comment placed adjacent to the anchor. Map vs List
-/// is a structural detail — both produce the same visual outcome.
+/// Insert a CommentLine immediately before the entry at `anchorPath` in
+/// its container. Works the same way for Map and List anchors — both have
+/// `properties` / `elements` as ordered containers that accept CommentLine
+/// pseudo-entries (Phase 4 unification).
 void insertLeadingComment(
   JsonAstNode root,
   List<String> anchorPath,
@@ -275,12 +235,7 @@ void insertLeadingComment(
   }
   final ref = resolveParent(root, anchorPath);
   final newComment = CommentNode(style, text);
-  if (ref.parent is JsonObject) {
-    final prop = ref.children[ref.index] as JsonProperty;
-    prop.leadingComments.add(newComment);
-  } else {
-    ref.children.insert(ref.index, CommentLine(newComment));
-  }
+  ref.children.insert(ref.index, CommentLine(newComment));
 }
 
 CommentLocation _resolveCommentByPath(JsonAstNode root, List<String> path) {
