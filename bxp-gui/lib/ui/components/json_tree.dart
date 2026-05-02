@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import '../../services/schema_gate.dart';
 import '../../store/trace_store.dart';
 import '../theme/bxp_theme.dart';
 import '../theme/bxp_text.dart';
@@ -664,12 +665,20 @@ class _JsonNodeState extends State<_JsonNode> {
   }
 
   void _showAddDialog() {
+    final store = context.read<TraceStore>();
+    final isMap = widget.value is Map;
+    final parentChildren = isMap
+        ? (widget.value as Map).cast<String, dynamic>()
+        : <String, dynamic>{};
     showDialog(
       context: context,
       builder: (ctx) => _AddChildDialog(
-        isMap: widget.value is Map,
+        isMap: isMap,
+        suggestions: isMap
+            ? SchemaGate(store).validInsertKeys(widget.path, parentChildren)
+            : const <InsertKeyCandidate>[],
         onConfirm: (key, value) {
-          context.read<TraceStore>().insertConfigNode(widget.path, key, value);
+          store.insertConfigNode(widget.path, key, value);
         },
       ),
     );
@@ -734,7 +743,18 @@ class _CommentRowState extends State<_CommentRow> {
   }
 
   void _commit() {
-    final body = controller.text;
+    var body = controller.text;
+    final fullText = (widget.commObj is Map && widget.commObj['text'] is String)
+        ? widget.commObj['text'] as String
+        : '';
+    final isBlock = fullText.startsWith('/*');
+    if (!isBlock) {
+      // Phase 5b: line comments cannot contain newlines — they would
+      // terminate the `//` comment in the source. Strip on commit
+      // (paste-from-clipboard guard; the inputFormatters block typed
+      // newlines but pasted multiline strings sneak through).
+      body = body.replaceAll(RegExp(r'[\r\n]+'), ' ');
+    }
     setState(() => isEditing = false);
     final orig = _bodyOf(widget.commObj);
     if (body != orig) {
@@ -792,6 +812,12 @@ class _CommentRowState extends State<_CommentRow> {
             maxLines: isBlock ? null : 1,
             minLines: isBlock ? 1 : 1,
             keyboardType: isBlock ? TextInputType.multiline : TextInputType.text,
+            // Phase 5b: line comments must not contain raw newlines.
+            // Block them at input — paste-from-clipboard is sanitised on
+            // commit (see _commit).
+            inputFormatters: isBlock
+                ? null
+                : [FilteringTextInputFormatter.deny(RegExp(r'[\r\n]'))],
             onSubmitted: isBlock ? null : (_) => _commit(),
             onTapOutside: (_) => _commit(),
             style: BxpText.body(context, color: t.codeComment, size: BxpSize.md),
@@ -915,7 +941,12 @@ class _InlineCommentEditState extends State<_InlineCommentEdit> {
   }
 
   void _commit() {
-    final body = controller.text;
+    var body = controller.text;
+    final isBlock = widget.text.startsWith('/*');
+    if (!isBlock) {
+      // Phase 5b: line comment cannot contain newlines.
+      body = body.replaceAll(RegExp(r'[\r\n]+'), ' ');
+    }
     setState(() => isEditing = false);
     if (body != _bodyOf(widget.text)) {
       context.read<TraceStore>().editCommentNode(widget.path, body);
@@ -956,6 +987,10 @@ class _InlineCommentEditState extends State<_InlineCommentEdit> {
           controller: controller,
           autofocus: true,
           maxLines: isBlock ? null : 1,
+          // Phase 5b: line comments must not contain raw newlines.
+          inputFormatters: isBlock
+              ? null
+              : [FilteringTextInputFormatter.deny(RegExp(r'[\r\n]'))],
           onSubmitted: isBlock ? null : (_) => _commit(),
           onTapOutside: (_) => _commit(),
           style: BxpText.body(context, color: t.codeComment, size: BxpSize.sm),
@@ -1007,9 +1042,14 @@ class _ActionBtn extends StatelessWidget {
 // ── Dialog pro přidání nového uzlu ─────────────────────────────────
 class _AddChildDialog extends StatefulWidget {
   final bool isMap;
+  final List<InsertKeyCandidate> suggestions;
   final void Function(String? key, dynamic value) onConfirm;
 
-  const _AddChildDialog({required this.isMap, required this.onConfirm});
+  const _AddChildDialog({
+    required this.isMap,
+    required this.onConfirm,
+    this.suggestions = const <InsertKeyCandidate>[],
+  });
 
   @override
   State<_AddChildDialog> createState() => _AddChildDialogState();
@@ -1019,6 +1059,7 @@ class _AddChildDialogState extends State<_AddChildDialog> {
   final _keyController = TextEditingController();
   String _type = 'string';
   String? _error;
+  InsertKeyCandidate? _pickedSuggestion;
 
   @override
   void dispose() {
@@ -1027,6 +1068,12 @@ class _AddChildDialogState extends State<_AddChildDialog> {
   }
 
   dynamic _defaultValue() {
+    final picked = _pickedSuggestion;
+    if (picked != null) {
+      // Use FnDoc-supplied default + correct shape for the picked schema
+      // entry — guarantees the new key starts in a parser-acceptable state.
+      return SchemaGate.scaffoldFor(picked);
+    }
     switch (_type) {
       case 'string': return '';
       case 'number': return 0;
@@ -1047,6 +1094,21 @@ class _AddChildDialogState extends State<_AddChildDialog> {
     }
     widget.onConfirm(key, _defaultValue());
     Navigator.of(context).pop();
+  }
+
+  void _pickSuggestion(InsertKeyCandidate c) {
+    setState(() {
+      _pickedSuggestion = c;
+      _type = c.typeName;
+      _error = null;
+      if (!c.isFreeForm) {
+        _keyController.text = c.key;
+      } else {
+        // Wildcard candidate (parent accepts any key name) — clear text
+        // so user can type freely; keep the type pre-selected.
+        _keyController.text = '';
+      }
+    });
   }
 
   @override
@@ -1078,6 +1140,49 @@ class _AddChildDialogState extends State<_AddChildDialog> {
                   Text('Add entry to ${widget.isMap ? 'object' : 'array'}',
                       style: BxpText.title(context)),
                   const SizedBox(height: 12),
+                  if (widget.isMap && widget.suggestions.isNotEmpty) ...[
+                    Text('Schema-defined keys',
+                        style: BxpText.body(context,
+                            color: th.textMuted, size: BxpSize.sm)),
+                    const SizedBox(height: 6),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 6,
+                      children: [
+                        for (final s in widget.suggestions)
+                          InkWell(
+                            onTap: () => _pickSuggestion(s),
+                            child: Tooltip(
+                              message: s.description ?? '',
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 8, vertical: 4),
+                                decoration: BoxDecoration(
+                                  border: Border.all(
+                                      color: identical(_pickedSuggestion, s)
+                                          ? th.accentHighlight
+                                          : borderColor),
+                                  color: identical(_pickedSuggestion, s)
+                                      ? th.selectionBg
+                                      : Colors.transparent,
+                                ),
+                                child: Text(
+                                  s.isFreeForm
+                                      ? '<custom> (${s.typeName})'
+                                      : '${s.key} (${s.typeName})${s.required ? ' *' : ''}',
+                                  style: BxpText.body(context,
+                                      color: identical(_pickedSuggestion, s)
+                                          ? th.selectionText
+                                          : th.textMuted,
+                                      size: BxpSize.sm),
+                                ),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                  ],
                   if (widget.isMap) ...[
                     Text('Key',
                         style: BxpText.body(context,
