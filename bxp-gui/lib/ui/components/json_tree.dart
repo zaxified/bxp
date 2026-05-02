@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:json_ast_proto/ast.dart';
+import 'package:json_ast_proto/path.dart' as ast_path;
 import 'package:provider/provider.dart';
 import '../../services/schema_gate.dart';
 import '../../store/trace_store.dart';
@@ -7,12 +9,18 @@ import '../theme/bxp_theme.dart';
 import '../theme/bxp_text.dart';
 import 'expr_highlight.dart';
 
+/// Phase 5c-C3: walks the live AST (`TraceStore.astRoot`) directly.
+/// `$err_*` diagnostic markers are looked up via `TraceStore.errorsAt` /
+/// `TraceStore.hasErrorIn` at render time — they live in `configJson`
+/// (still maintained as a Map by the adapter) until Phase 5c-D folds
+/// them into a dedicated path-keyed structure.
 class JsonTree extends StatefulWidget {
-  final dynamic json;
+  final JsonAstNode? root;
   final bool expandAll;
   final bool readOnly;
 
-  const JsonTree({super.key, required this.json, this.expandAll = false, this.readOnly = false});
+  const JsonTree(
+      {super.key, required this.root, this.expandAll = false, this.readOnly = false});
 
   @override
   State<JsonTree> createState() => _JsonTreeState();
@@ -21,12 +29,17 @@ class JsonTree extends StatefulWidget {
 class _JsonTreeState extends State<JsonTree> {
   @override
   Widget build(BuildContext context) {
+    final root = widget.root;
+    if (root == null) return const SizedBox.shrink();
+    // Compute global $comm_<N> numbering once per build; pass down.
+    final numbering = ast_path.globalCommentNumbering(root);
     return _JsonNode(
       keyName: 'config',
-      value: widget.json,
+      value: root,
       expandAll: widget.expandAll,
       depth: 0,
       path: const [],
+      commentN: numbering,
     );
   }
 }
@@ -36,24 +49,26 @@ class _JsonTreeState extends State<JsonTree> {
 /// store without re-walking the tree.
 class _TrailingComment {
   final List<String> path;
-  final String text; // includes `//` or `/* */` markers
-  const _TrailingComment({required this.path, required this.text});
+  final CommentNode comment;
+  const _TrailingComment({required this.path, required this.comment});
 }
 
 class _JsonNode extends StatefulWidget {
   final String? keyName;
-  final dynamic value;
+  final JsonAstNode? value;
   final bool expandAll;
   final int depth;
   final List<String> path;
 
-  /// Comments with `placement: "trailing"` that the parent attached to this
+  /// Identity-keyed map from each [CommentLine] in the whole tree to its
+  /// 1-based source-order `$comm_<N>` index. Computed once at the root and
+  /// threaded through every child so comment-row click handlers can build
+  /// op_log paths without re-walking the tree per render.
+  final Map<CommentLine, int> commentN;
+
+  /// Comments with `inlinePlacement: true` that the parent attached to this
   /// node so they render inline (after the value, before the action buttons)
-  /// instead of on their own row. Each entry carries the comment's path so
-  /// the inline editor can commit edits via TraceStore.editCommentNode.
-  /// Pre-pass logic lives in [_buildMap] / [_buildList]; comments without a
-  /// preceding real key still render as standalone rows via the `\$comm_`
-  /// branch in [build].
+  /// instead of on their own row.
   final List<_TrailingComment> trailingComments;
 
   const _JsonNode({
@@ -62,6 +77,7 @@ class _JsonNode extends StatefulWidget {
     required this.expandAll,
     required this.depth,
     required this.path,
+    required this.commentN,
     this.trailingComments = const [],
   });
 
@@ -114,58 +130,20 @@ class _JsonNodeState extends State<_JsonNode> {
 
   @override
   Widget build(BuildContext context) {
-    final keyName = widget.keyName;
-
-    final t = context.bxpTheme;
-
-    // Comments — editable when parent is `ordered: true`. Reorder/delete
-    // buttons follow the same gate as real keys so users only see them
-    // where they make sense.
-    if (keyName != null && keyName.startsWith('\$comm_')) {
-      return _CommentRow(
-        path: widget.path,
-        commObj: widget.value,
-      );
-    }
-
-    // Errors
-    if (keyName != null && keyName.startsWith('\$err_')) {
-      return Padding(
-        padding: const EdgeInsets.only(left: 24.0, top: 2, bottom: 2),
-        child: Container(
-          decoration: BoxDecoration(
-            color: t.errorBg,
-            border: Border(left: BorderSide(color: t.errorBorder, width: 2)),
-          ),
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-          child: Text(
-            widget.value?.toString() ?? '',
-            style: BxpText.body(context,color: t.errorText, size: BxpSize.xs)
-                .copyWith(fontStyle: FontStyle.italic),
-          ),
-        ),
-      );
-    }
-
-    if (widget.value is Map) {
-      return _buildMap(widget.value as Map);
-    } else if (widget.value is List) {
-      return _buildList(widget.value as List);
-    } else {
-      return _buildPrimitive();
-    }
+    final v = widget.value;
+    if (v is JsonObject) return _buildMap(v);
+    if (v is JsonArray) return _buildList(v);
+    return _buildPrimitive();
   }
 
-  Widget _buildMap(Map map) {
+  Widget _buildMap(JsonObject obj) {
     final t = context.bxpTheme;
-    if (map.isEmpty) {
+    final realCount =
+        obj.properties.whereType<JsonProperty>().length;
+    if (realCount == 0 && obj.properties.isEmpty) {
       return _buildRow(Text('(empty object)', style: BxpText.italic(context)));
     }
-    final children = _mapChildNodes(map);
-    // Count "real" children (skip $meta_/$elem_meta_/$meta_self/$err_/$comm_).
-    final realCount = map.keys
-        .where((k) => !k.toString().startsWith(r'$'))
-        .length;
+    final children = _mapChildNodes(obj);
     final showChildren = expanded || _isOnRevealPath(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -187,74 +165,78 @@ class _JsonNodeState extends State<_JsonNode> {
     );
   }
 
-  /// Pre-pass over a map's entries: trailing-placement `$comm_<N>` siblings
-  /// attach to the preceding real key so they render inline. Other comment
-  /// entries (leading / standalone / block) and all real keys keep their
-  /// own rows; `$meta_<key>`, `$elem_meta_<key>`, `$meta_self` are byte
-  /// offsets emitted by bxp-fmt and are not displayed in the tree.
-  List<Widget> _mapChildNodes(Map map) {
+  /// Walk a JsonObject's properties in source order. Each [JsonProperty]
+  /// becomes a `_JsonNode` row; each [CommentLine] becomes either an
+  /// inline trailing tag on the previous row (when `inlinePlacement` is
+  /// true) or a standalone `_CommentRow`. After the row is built, any
+  /// `$err_*` markers that the validator attached to the row's path
+  /// follow as red banner widgets — looked up via TraceStore so the AST
+  /// itself stays unburdened by diagnostic state.
+  List<Widget> _mapChildNodes(JsonObject obj) {
     final out = <Widget>[];
-    int? lastRealIdx;
-    for (final e in map.entries) {
-      final k = e.key.toString();
-      if (k.startsWith(r'$meta_') ||
-          k.startsWith(r'$elem_meta_') ||
-          k == r'$meta_self') {
-        continue;
-      }
-      if (k.startsWith(r'$comm_')) {
-        final v = e.value;
-        final placement = (v is Map) ? v['placement']?.toString() : null;
-        final text = (v is Map && v['text'] is String) ? v['text'] as String : '';
-        if (placement == 'trailing' && lastRealIdx != null) {
-          // Re-emit the previous node with this comment appended inline.
-          final prev = out[lastRealIdx] as _JsonNode;
-          out[lastRealIdx] = _JsonNode(
+    int? lastRowIdx;
+    for (final entry in obj.properties) {
+      if (entry is CommentLine) {
+        final n = widget.commentN[entry];
+        final commKey = n == null ? r'$comm_?' : '\$comm_$n';
+        final commPath = [...widget.path, commKey];
+        if (entry.inlinePlacement && lastRowIdx != null) {
+          // Attach inline to the preceding row by rebuilding its
+          // _JsonNode with an added trailing tag.
+          final prev = out[lastRowIdx] as _JsonNode;
+          out[lastRowIdx] = _JsonNode(
             keyName: prev.keyName,
             value: prev.value,
             expandAll: prev.expandAll || _recursiveExpand,
             depth: prev.depth,
             path: prev.path,
+            commentN: prev.commentN,
             trailingComments: [
               ...prev.trailingComments,
-              _TrailingComment(path: [...widget.path, k], text: text),
+              _TrailingComment(path: commPath, comment: entry.comment),
             ],
           );
           continue;
         }
-        // Leading / standalone / block — render as its own row.
-        out.add(_JsonNode(
-          keyName: k,
-          value: v,
-          expandAll: widget.expandAll || _recursiveExpand,
-          depth: widget.depth + 1,
-          path: [...widget.path, k],
-        ));
+        out.add(_CommentRow(path: commPath, comment: entry.comment));
         continue;
       }
-      out.add(_JsonNode(
-        keyName: k,
-        value: e.value,
-        expandAll: widget.expandAll || _recursiveExpand,
-        depth: widget.depth + 1,
-        path: [...widget.path, k],
-      ));
-      lastRealIdx = out.length - 1;
+      if (entry is JsonProperty) {
+        final childPath = [...widget.path, entry.key];
+        out.add(_JsonNode(
+          keyName: entry.key,
+          value: entry.value,
+          expandAll: widget.expandAll || _recursiveExpand,
+          depth: widget.depth + 1,
+          path: childPath,
+          commentN: widget.commentN,
+        ));
+        lastRowIdx = out.length - 1;
+        // Surface any validator $err_* markers attached to this child.
+        final errors = context.read<TraceStore>().errorsAt(childPath);
+        if (errors.isNotEmpty) {
+          for (final msg in errors.values) {
+            out.add(_ErrorRow(message: msg));
+          }
+        }
+      }
     }
     return out;
   }
 
-  Widget _buildList(List list) {
+  Widget _buildList(JsonArray arr) {
     final t = context.bxpTheme;
-    if (list.isEmpty) {
+    final realCount =
+        arr.elements.where((e) => e is! CommentLine).length;
+    if (realCount == 0 && arr.elements.isEmpty) {
       return _buildRow(Text('(empty array)', style: BxpText.italic(context)));
     }
-    final children = _listChildNodes(list);
+    final children = _listChildNodes(arr);
     final showChildren = expanded || _isOnRevealPath(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _buildExpandableRow('[ ${list.length} ]', true),
+        _buildExpandableRow('[ $realCount ]', true),
         if (showChildren)
           Container(
             margin: const EdgeInsets.only(left: 6.0),
@@ -271,93 +253,55 @@ class _JsonNodeState extends State<_JsonNode> {
     );
   }
 
-  /// In-array comments live as single-key `{$comm_<N>: {text, placement}}`
-  /// pseudo-objects between real elements. Trailing-placement comments
-  /// inline onto the preceding real element; the rest render as their own
-  /// rows.
-  ///
-  /// Path indexing follows the **Dart raw position** of the parsed list,
-  /// counting `$comm_*` wrappers as full slots. The op_log records paths
-  /// in this raw form; the AST patcher converts to real-only indices when
-  /// it walks the parsed bytes on save.
-  ///
-  /// Visible labels (`keyName`) instead use a "real-only" counter so
-  /// `[N]` in the tree matches the `rule_index` / `output_row_index`
-  /// values bxp-cli emits in trace events. Without this divergence, a
-  /// comment before `row_rules[0]` would push the user-visible label to
-  /// `[1]` for what trace calls rule 0.
-  List<Widget> _listChildNodes(List list) {
+  /// Walk a JsonArray's elements. Path segments are RAW positions in
+  /// `elements` (matching the convention enforced by the path resolver);
+  /// visible labels stay real-only so `[N]` aligns with the
+  /// `rule_index` / `output_row_index` values bxp-cli emits in trace
+  /// events.
+  List<Widget> _listChildNodes(JsonArray arr) {
     final out = <Widget>[];
-    int? lastRealIdx;
-    int realCount = 0;
-    for (int i = 0; i < list.length; i++) {
-      final v = list[i];
-      // Pseudo-comment wrapper: `{$comm_<N>: {...}, $meta_comm_<N>: {...}}`.
-      // Recognised by all keys starting with `$comm_` or `$meta_comm_`.
-      if (v is Map && _isCommWrapper(v)) {
-        String? commKey;
-        for (final k in v.keys) {
-          if (k.toString().startsWith(r'$comm_')) {
-            commKey = k.toString();
-            break;
-          }
-        }
-        if (commKey != null) {
-          final inner = v[commKey];
-          final placement = (inner is Map) ? inner['placement']?.toString() : null;
-          final text = (inner is Map && inner['text'] is String) ? inner['text'] as String : '';
-          if (placement == 'trailing' && lastRealIdx != null) {
-            final prev = out[lastRealIdx] as _JsonNode;
-            out[lastRealIdx] = _JsonNode(
-              keyName: prev.keyName,
-              value: prev.value,
-              expandAll: prev.expandAll || _recursiveExpand,
-              depth: prev.depth,
-              path: prev.path,
-              trailingComments: [
-                ...prev.trailingComments,
-                _TrailingComment(
-                  path: [...widget.path, i.toString(), commKey],
-                  text: text,
-                ),
-              ],
-            );
-            continue;
-          }
-          // Path includes the array index so the AST patcher's $comm_<N>
-          // resolver can walk through the wrapper to the comment node.
-          out.add(_JsonNode(
-            keyName: commKey,
-            value: inner,
-            expandAll: widget.expandAll || _recursiveExpand,
-            depth: widget.depth + 1,
-            path: [...widget.path, i.toString(), commKey],
-          ));
+    int? lastRowIdx;
+    int realLabel = 0;
+    for (var i = 0; i < arr.elements.length; i++) {
+      final el = arr.elements[i];
+      if (el is CommentLine) {
+        final n = widget.commentN[el];
+        final commKey = n == null ? r'$comm_?' : '\$comm_$n';
+        final commPath = [...widget.path, commKey];
+        if (el.inlinePlacement && lastRowIdx != null) {
+          final prev = out[lastRowIdx] as _JsonNode;
+          out[lastRowIdx] = _JsonNode(
+            keyName: prev.keyName,
+            value: prev.value,
+            expandAll: prev.expandAll || _recursiveExpand,
+            depth: prev.depth,
+            path: prev.path,
+            commentN: prev.commentN,
+            trailingComments: [
+              ...prev.trailingComments,
+              _TrailingComment(path: commPath, comment: el.comment),
+            ],
+          );
           continue;
         }
+        out.add(_CommentRow(path: commPath, comment: el.comment));
+        continue;
       }
-      if (v is Map && v.length == 1) {
-        final k0 = v.keys.first.toString();
-        if (k0.startsWith(r'$err_')) {
-          out.add(_JsonNode(
-            keyName: k0,
-            value: v.values.first,
-            expandAll: widget.expandAll || _recursiveExpand,
-            depth: widget.depth + 1,
-            path: [...widget.path, k0],
-          ));
-          continue;
-        }
-      }
+      final childPath = [...widget.path, i.toString()];
       out.add(_JsonNode(
-        keyName: realCount.toString(),
-        value: v,
+        keyName: realLabel.toString(),
+        value: el,
         expandAll: widget.expandAll || _recursiveExpand,
         depth: widget.depth + 1,
-        path: [...widget.path, i.toString()],
+        path: childPath,
+        commentN: widget.commentN,
       ));
-      lastRealIdx = out.length - 1;
-      realCount++;
+      lastRowIdx = out.length - 1;
+      realLabel++;
+      final errors = context.read<TraceStore>().errorsAt(childPath);
+      for (final msg in errors.values) {
+        out.add(_ErrorRow(message: msg));
+      }
     }
     return out;
   }
@@ -391,12 +335,12 @@ class _JsonNodeState extends State<_JsonNode> {
   Widget _buildPrimitive() {
     final t = context.bxpTheme;
     Widget valWidget;
-    final isComment = widget.keyName?.startsWith('//') == true;
+    final v = widget.value;
 
-    if (widget.value is String) {
+    if (v is JsonString) {
       if (_isExprPath) {
         valWidget = _ExprLeaf(
-          text: widget.value as String,
+          text: v.value,
           path: widget.path,
         );
       } else {
@@ -407,42 +351,43 @@ class _JsonNodeState extends State<_JsonNode> {
         final enumValues = (doc?['enum_values'] as List?)?.cast<String>();
         if (enumValues != null && enumValues.isNotEmpty) {
           valWidget = _EditableEnum(
-            value: widget.value as String,
+            value: v.value,
             values: enumValues,
-            color: isComment ? t.codeComment : t.codeString,
+            color: t.codeString,
             onCommit: (val) {
               context.read<TraceStore>().editConfigNode(widget.path, val);
             },
           );
         } else {
           valWidget = _EditableString(
-            value: widget.value,
-            color: isComment ? t.codeComment : t.codeString,
+            value: v.value,
+            color: t.codeString,
             onCommit: (val) {
               context.read<TraceStore>().editConfigNode(widget.path, val);
             },
           );
         }
       }
-    } else if (widget.value is num) {
+    } else if (v is JsonNumber) {
+      final parsed = num.tryParse(v.rawText) ?? 0;
       valWidget = _EditableNumber(
-        value: widget.value,
-        color: isComment ? t.codeComment : t.codeNumber,
+        value: parsed,
+        color: t.codeNumber,
         onCommit: (val) {
           context.read<TraceStore>().editConfigNode(widget.path, val);
         },
       );
-    } else if (widget.value is bool) {
+    } else if (v is JsonBool) {
       valWidget = _EditableBoolean(
-        value: widget.value,
-        color: isComment ? t.codeComment : t.valueBool,
+        value: v.value,
+        color: t.valueBool,
         onCommit: (val) {
           context.read<TraceStore>().editConfigNode(widget.path, val);
         },
       );
     } else {
       valWidget = Text('null',
-          style: BxpText.body(context,color: t.textMuted, size: BxpSize.md)
+          style: BxpText.body(context, color: t.textMuted, size: BxpSize.md)
               .copyWith(fontStyle: FontStyle.italic));
     }
 
@@ -489,7 +434,7 @@ class _JsonNodeState extends State<_JsonNode> {
       for (final c in widget.trailingComments)
         Padding(
           padding: const EdgeInsets.only(left: 8.0),
-          child: _InlineCommentEdit(path: c.path, text: c.text),
+          child: _InlineCommentEdit(path: c.path, comment: c.comment),
         ),
     ];
   }
@@ -530,7 +475,8 @@ class _JsonNodeState extends State<_JsonNode> {
                 Text(' : ', style: muted),
               ],
               Text(summary, style: muted),
-              if (isComposite && _hasDescendantError(widget.value))
+              if (isComposite &&
+                  context.read<TraceStore>().hasErrorIn(widget.path))
                 Padding(
                   padding: const EdgeInsets.only(left: 6.0),
                   child: Container(
@@ -640,42 +586,23 @@ class _JsonNodeState extends State<_JsonNode> {
     );
   }
 
-  /// Recursively scans [node] for any `$err_*` key. Sibling `$comm_*`
-  /// nodes are skipped during recursion to avoid mistaking a comment
-  /// containing the literal text "$err_" for an actual diagnostic.
-  bool _hasDescendantError(dynamic node) {
-    if (node is Map) {
-      for (final e in node.entries) {
-        final k = e.key.toString();
-        if (k.startsWith(r'$err_')) return true;
-      }
-      for (final e in node.entries) {
-        final k = e.key.toString();
-        if (k.startsWith(r'$')) continue; // skip ALL $-prefixed UI metadata
-        if (_hasDescendantError(e.value)) return true;
-      }
-      return false;
-    }
-    if (node is List) {
-      for (final v in node) {
-        if (_hasDescendantError(v)) return true;
-      }
-    }
-    return false;
-  }
-
   void _showAddDialog() {
     final store = context.read<TraceStore>();
-    final isMap = widget.value is Map;
-    final parentChildren = isMap
-        ? (widget.value as Map).cast<String, dynamic>()
-        : <String, dynamic>{};
+    final v = widget.value;
+    final isMap = v is JsonObject;
+    // SchemaGate consults FnDocs for valid keys + skips ones already
+    // present. We pass the existing top-level property keys so it can do
+    // that without re-walking the AST.
+    final existing = <String>{
+      if (v is JsonObject)
+        for (final p in v.properties.whereType<JsonProperty>()) p.key,
+    };
     showDialog(
       context: context,
       builder: (ctx) => _AddChildDialog(
         isMap: isMap,
         suggestions: isMap
-            ? SchemaGate(store).validInsertKeys(widget.path, parentChildren)
+            ? SchemaGate(store).validInsertKeys(widget.path, existing)
             : const <InsertKeyCandidate>[],
         onConfirm: (key, value) {
           store.insertConfigNode(widget.path, key, value);
@@ -685,29 +612,39 @@ class _JsonNodeState extends State<_JsonNode> {
   }
 }
 
-/// True if [v] is the pseudo-object emitted by preprocessAnnotated for
-/// in-array comments — keys are exclusively `$comm_*` and `$meta_comm_*`.
-bool _isCommWrapper(Map v) {
-  bool sawComm = false;
-  for (final k in v.keys) {
-    final s = k.toString();
-    if (s.startsWith(r'$comm_')) {
-      sawComm = true;
-      continue;
-    }
-    if (s.startsWith(r'$meta_comm_')) continue;
-    return false;
+/// Inline diagnostic row rendered beneath a `_JsonNode` whose path
+/// carries one or more `$err_*` markers from the background validator.
+class _ErrorRow extends StatelessWidget {
+  final String message;
+  const _ErrorRow({required this.message});
+  @override
+  Widget build(BuildContext context) {
+    final t = context.bxpTheme;
+    return Padding(
+      padding: const EdgeInsets.only(left: 24.0, top: 2, bottom: 2),
+      child: Container(
+        decoration: BoxDecoration(
+          color: t.errorBg,
+          border: Border(left: BorderSide(color: t.errorBorder, width: 2)),
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+        child: Text(
+          message,
+          style: BxpText.body(context, color: t.errorText, size: BxpSize.xs)
+              .copyWith(fontStyle: FontStyle.italic),
+        ),
+      ),
+    );
   }
-  return sawComm;
 }
 
-/// Editable comment row. Rendered for `$comm_<N>` keys (leading / standalone /
-/// block placement). Trailing comments render inline via `_inlineTrailingWidgets`
-/// on the owning row and are not handled here.
+/// Editable standalone comment row. Rendered for each non-inline
+/// [CommentLine] peer in a container. Inline trailing comments render via
+/// `_inlineTrailingWidgets` on the owning row and use [_InlineCommentEdit].
 class _CommentRow extends StatefulWidget {
   final List<String> path;
-  final dynamic commObj;
-  const _CommentRow({required this.path, required this.commObj});
+  final CommentNode comment;
+  const _CommentRow({required this.path, required this.comment});
   @override
   State<_CommentRow> createState() => _CommentRowState();
 }
@@ -720,34 +657,18 @@ class _CommentRowState extends State<_CommentRow> {
   @override
   void initState() {
     super.initState();
-    controller = TextEditingController(text: _bodyOf(widget.commObj));
+    controller = TextEditingController(text: widget.comment.text);
   }
 
   @override
   void didUpdateWidget(covariant _CommentRow old) {
     super.didUpdateWidget(old);
-    if (!isEditing) controller.text = _bodyOf(widget.commObj);
-  }
-
-  static String _bodyOf(dynamic obj) {
-    final fullText = (obj is Map && obj['text'] is String) ? obj['text'] as String : '';
-    final isBlock = fullText.startsWith('/*');
-    if (isBlock) {
-      var s = fullText;
-      if (s.startsWith('/*')) s = s.substring(2);
-      if (s.endsWith('*/')) s = s.substring(0, s.length - 2);
-      return s;
-    }
-    if (fullText.startsWith('//')) return fullText.substring(2);
-    return fullText;
+    if (!isEditing) controller.text = widget.comment.text;
   }
 
   void _commit() {
     var body = controller.text;
-    final fullText = (widget.commObj is Map && widget.commObj['text'] is String)
-        ? widget.commObj['text'] as String
-        : '';
-    final isBlock = fullText.startsWith('/*');
+    final isBlock = widget.comment.style == CommentStyle.block;
     if (!isBlock) {
       // Phase 5b: line comments cannot contain newlines — they would
       // terminate the `//` comment in the source. Strip on commit
@@ -756,14 +677,13 @@ class _CommentRowState extends State<_CommentRow> {
       body = body.replaceAll(RegExp(r'[\r\n]+'), ' ');
     }
     setState(() => isEditing = false);
-    final orig = _bodyOf(widget.commObj);
-    if (body != orig) {
+    if (body != widget.comment.text) {
       context.read<TraceStore>().editCommentNode(widget.path, body);
     }
   }
 
   void _cancel() {
-    controller.text = _bodyOf(widget.commObj);
+    controller.text = widget.comment.text;
     setState(() => isEditing = false);
   }
 
@@ -771,11 +691,8 @@ class _CommentRowState extends State<_CommentRow> {
   Widget build(BuildContext context) {
     final t = context.bxpTheme;
     final store = context.read<TraceStore>();
-    final fullText = (widget.commObj is Map && widget.commObj['text'] is String)
-        ? widget.commObj['text'] as String
-        : '';
-    final isBlock = fullText.startsWith('/*');
-    final body = _bodyOf(widget.commObj);
+    final isBlock = widget.comment.style == CommentStyle.block;
+    final body = widget.comment.text;
 
     // Move gate (↑/↓): only in ordered containers — match real-key reorder.
     // Edit / delete / insert are always allowed: text-only changes don't
@@ -908,8 +825,8 @@ class _CommentRowState extends State<_CommentRow> {
 /// tap-outside commits; Escape cancels.
 class _InlineCommentEdit extends StatefulWidget {
   final List<String> path;
-  final String text; // includes `//` or `/* */` markers
-  const _InlineCommentEdit({required this.path, required this.text});
+  final CommentNode comment;
+  const _InlineCommentEdit({required this.path, required this.comment});
   @override
   State<_InlineCommentEdit> createState() => _InlineCommentEditState();
 }
@@ -921,40 +838,30 @@ class _InlineCommentEditState extends State<_InlineCommentEdit> {
   @override
   void initState() {
     super.initState();
-    controller = TextEditingController(text: _bodyOf(widget.text));
+    controller = TextEditingController(text: widget.comment.text);
   }
 
   @override
   void didUpdateWidget(covariant _InlineCommentEdit old) {
     super.didUpdateWidget(old);
-    if (!isEditing) controller.text = _bodyOf(widget.text);
-  }
-
-  static String _bodyOf(String full) {
-    if (full.startsWith('/*')) {
-      var s = full.substring(2);
-      if (s.endsWith('*/')) s = s.substring(0, s.length - 2);
-      return s;
-    }
-    if (full.startsWith('//')) return full.substring(2);
-    return full;
+    if (!isEditing) controller.text = widget.comment.text;
   }
 
   void _commit() {
     var body = controller.text;
-    final isBlock = widget.text.startsWith('/*');
+    final isBlock = widget.comment.style == CommentStyle.block;
     if (!isBlock) {
       // Phase 5b: line comment cannot contain newlines.
       body = body.replaceAll(RegExp(r'[\r\n]+'), ' ');
     }
     setState(() => isEditing = false);
-    if (body != _bodyOf(widget.text)) {
+    if (body != widget.comment.text) {
       context.read<TraceStore>().editCommentNode(widget.path, body);
     }
   }
 
   void _cancel() {
-    controller.text = _bodyOf(widget.text);
+    controller.text = widget.comment.text;
     setState(() => isEditing = false);
   }
 
@@ -963,18 +870,21 @@ class _InlineCommentEditState extends State<_InlineCommentEdit> {
     final t = context.bxpTheme;
     final style = BxpText.body(context, color: t.codeComment, size: BxpSize.sm)
         .copyWith(fontStyle: FontStyle.italic);
+    final isBlock = widget.comment.style == CommentStyle.block;
     if (!isEditing) {
+      final marker = isBlock
+          ? '/*${widget.comment.text}*/'
+          : '//${widget.comment.text}';
       return InkWell(
         onTap: () {
           setState(() {
-            controller.text = _bodyOf(widget.text);
+            controller.text = widget.comment.text;
             isEditing = true;
           });
         },
-        child: Text(widget.text, style: style),
+        child: Text(marker, style: style),
       );
     }
-    final isBlock = widget.text.startsWith('/*');
     return SizedBox(
       width: 400,
       child: CallbackShortcuts(

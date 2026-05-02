@@ -426,6 +426,72 @@ class TraceStore extends ChangeNotifier {
     }
   }
 
+  /// Phase 5c-C3: collect every `$err_*` marker on the named node at
+  /// [path] in `configJson`. Returns a map of `$err_<name>` → message
+  /// (typically `$err_trace`); empty when the node has no diagnostics.
+  /// UI renders these as red banner rows; called from json_tree once it
+  /// walks AST instead of Map.
+  Map<String, String> errorsAt(List<String> path) {
+    dynamic cur = configJson;
+    for (final seg in path) {
+      if (cur is Map && cur.containsKey(seg)) {
+        cur = cur[seg];
+      } else if (cur is List) {
+        final i = int.tryParse(seg);
+        if (i == null || i < 0 || i >= cur.length) return const {};
+        cur = cur[i];
+      } else {
+        return const {};
+      }
+    }
+    if (cur is! Map) return const {};
+    final out = <String, String>{};
+    for (final e in cur.entries) {
+      final k = e.key.toString();
+      if (k.startsWith(r'$err_')) {
+        out[k] = e.value?.toString() ?? '';
+      }
+    }
+    return out;
+  }
+
+  /// True if any descendant of the node at [path] (inclusive) carries a
+  /// `$err_*` marker. Used by composite-row renderers to surface a small
+  /// red dot when a collapsed subtree contains diagnostics. O(subtree).
+  bool hasErrorIn(List<String> path) {
+    dynamic cur = configJson;
+    for (final seg in path) {
+      if (cur is Map && cur.containsKey(seg)) {
+        cur = cur[seg];
+      } else if (cur is List) {
+        final i = int.tryParse(seg);
+        if (i == null || i < 0 || i >= cur.length) return false;
+        cur = cur[i];
+      } else {
+        return false;
+      }
+    }
+    bool walk(dynamic node) {
+      if (node is Map) {
+        for (final e in node.entries) {
+          final k = e.key.toString();
+          if (k.startsWith(r'$err_')) return true;
+        }
+        for (final e in node.entries) {
+          final k = e.key.toString();
+          if (k.startsWith(r'$')) continue;
+          if (walk(e.value)) return true;
+        }
+      } else if (node is List) {
+        for (final v in node) {
+          if (walk(v)) return true;
+        }
+      }
+      return false;
+    }
+    return walk(cur);
+  }
+
   /// Walk [src] (the reparsed tree) and copy any `$err_*` markers into [dst]
   /// (the live tree) at structurally-matching paths. Also drop stale
   /// `$err_*` from [dst] where [src] has none. Skips `$comm_*`/`$meta_*`

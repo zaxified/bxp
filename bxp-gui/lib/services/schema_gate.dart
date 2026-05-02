@@ -73,13 +73,14 @@ class SchemaGate {
   /// wildcard (`key == ""`, meaning the user names it).
   ///
   /// Already-present keys are filtered out so the dropdown doesn't offer
-  /// duplicates. [parentChildren] is the current Map contents (used to
-  /// skip existing keys); pass `configJson` Map at [parentPath].
+  /// duplicates. [existingKeys] is the set of property names currently
+  /// present in the parent object — typically derived by the caller via
+  /// `JsonObject.properties.whereType<JsonProperty>().map((p) => p.key)`.
   ///
   /// Returns empty list if no schema covers this parent path — the caller
   /// should fall back to a free-form text input.
   List<InsertKeyCandidate> validInsertKeys(
-      List<String> parentPath, Map<String, dynamic> parentChildren) {
+      List<String> parentPath, Set<String> existingKeys) {
     final out = <InsertKeyCandidate>[];
     final seen = <String>{};
     for (final f in store.docConfigSchema) {
@@ -98,7 +99,7 @@ class SchemaGate {
       if (!ok) continue;
       final lastSeg = segs.last;
       final key = lastSeg == '*' ? '' : lastSeg;
-      if (key.isNotEmpty && parentChildren.containsKey(key)) continue;
+      if (key.isNotEmpty && existingKeys.contains(key)) continue;
       if (!seen.add(key)) continue;
       out.add(InsertKeyCandidate(
         key: key,
@@ -116,12 +117,12 @@ class SchemaGate {
   /// — useful when the caller already knows the key (e.g. from dropdown
   /// selection) and wants the metadata to scaffold a default value.
   InsertKeyCandidate? candidateFor(
-      List<String> parentPath, String key, Map<String, dynamic> parentChildren) {
-    for (final c in validInsertKeys(parentPath, parentChildren)) {
+      List<String> parentPath, String key, Set<String> existingKeys) {
+    for (final c in validInsertKeys(parentPath, existingKeys)) {
       if (c.key == key) return c;
     }
     // Wildcard fallback: no literal match, but a `*` candidate covers any name.
-    final wildcard = validInsertKeys(parentPath, parentChildren)
+    final wildcard = validInsertKeys(parentPath, existingKeys)
         .where((c) => c.isFreeForm)
         .firstOrNull;
     return wildcard;

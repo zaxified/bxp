@@ -152,4 +152,19 @@ void main() {
           throwsA(isA<AstPathError>()));
     });
   });
+
+  group('globalCommentNumbering', () {
+    test('round-trips against findCommentByGlobalN source order', () {
+      final root = parseOk(
+          '{\n  // a\n  x: 1,\n  arr: [\n    // b\n    "v"\n  ],\n  y: 2 // c\n}');
+      final numbering = globalCommentNumbering(root);
+      expect(numbering.length, 3);
+      numbering.forEach((cl, n) {
+        final loc = findCommentByGlobalN(root, n);
+        expect(loc, isNotNull);
+        expect(identical(loc!.comment, cl.comment), isTrue,
+            reason: 'numbering N=$n must round-trip via findCommentByGlobalN');
+      });
+    });
+  });
 }

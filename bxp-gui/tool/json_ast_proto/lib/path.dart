@@ -179,6 +179,38 @@ CommentLocation? findCommentByGlobalN(JsonAstNode root, int targetN) {
   return visitor.found;
 }
 
+/// Inverse of [findCommentByGlobalN]: walk the whole tree once and return
+/// an identity-keyed map from each [CommentLine] to its 1-based source-
+/// order index. Used by the UI when constructing `$comm_<N>` paths for
+/// comment-row click handlers — a single O(N) walk per build avoids the
+/// O(N×comments) cost of looking up each comment via a global walker.
+Map<CommentLine, int> globalCommentNumbering(JsonAstNode root) {
+  final out = <CommentLine, int>{};
+  void walk(JsonAstNode n) {
+    if (n is JsonObject) {
+      for (final c in n.properties) {
+        if (c is CommentLine) {
+          out[c] = out.length + 1;
+        } else {
+          walk(c);
+        }
+      }
+    } else if (n is JsonArray) {
+      for (final c in n.elements) {
+        if (c is CommentLine) {
+          out[c] = out.length + 1;
+        } else {
+          walk(c);
+        }
+      }
+    } else if (n is JsonProperty) {
+      walk(n.value);
+    }
+  }
+  walk(root);
+  return out;
+}
+
 /// Walk the tree in source order, count CommentLines, return the N-th.
 /// All comments (standalone + inline-trail) are uniform CommentLine peer
 /// entries after Phase 5e, so this is just a flat container walk.

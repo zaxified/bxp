@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:json_ast_proto/ast.dart';
 import 'package:provider/provider.dart';
 import '../store/trace_store.dart';
 import 'components/json_tree.dart';
@@ -141,7 +142,7 @@ class _ConfigViewState extends State<ConfigView> {
                 SizedBox(
                   width: leftWidth,
                   child: store.astRoot != null
-                    ? _ConfigTreeScroll(json: store.configJson)
+                    ? _ConfigTreeScroll(root: store.astRoot)
                     : store.isLoadingConfig
                       ? Padding(
                           padding: const EdgeInsets.all(16.0),
@@ -231,8 +232,8 @@ class _ToolbarBtn extends StatelessWidget {
 /// `Axis.horizontal` nested inside a vertical one prevents the
 /// Scrollbar from latching onto either axis cleanly.
 class _ConfigTreeScroll extends StatefulWidget {
-  final dynamic json;
-  const _ConfigTreeScroll({required this.json});
+  final JsonAstNode? root;
+  const _ConfigTreeScroll({required this.root});
 
   @override
   State<_ConfigTreeScroll> createState() => _ConfigTreeScrollState();
@@ -264,7 +265,7 @@ class _ConfigTreeScrollState extends State<_ConfigTreeScroll> {
           child: SingleChildScrollView(
             controller: _hCtrl,
             scrollDirection: Axis.horizontal,
-            child: JsonTree(json: widget.json, expandAll: false),
+            child: JsonTree(root: widget.root, expandAll: false),
           ),
         ),
       ),
