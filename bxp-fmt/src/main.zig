@@ -401,6 +401,13 @@ fn annotateRaw(a: std.mem.Allocator, raw: []const u8, path_label: []const u8) !A
     };
     var counter: u32 = ann.next_id - 1;
 
+    // If the annotated bytes don't even parse as JSON, that's a regression
+    // in `preprocessAnnotated` itself (its output is supposed to be valid
+    // JSON modulo the `$comm_*`/`$err_*` keys it injects). We discard the
+    // annotated value entirely and emit a standalone root error. The
+    // upstream `$err_*` markers in `ann.out` are lost — but they never
+    // reach the user because the standalone document replaces them; see
+    // `formatRootErr` doc-comment for why this can't collide.
     var value = std.json.parseFromSliceLeaky(std.json.Value, a, ann.out, .{
         .duplicate_field_behavior = .use_last,
     }) catch |err| {
@@ -431,9 +438,25 @@ fn annotateRaw(a: std.mem.Allocator, raw: []const u8, path_label: []const u8) !A
     return .{ .json = try valueToJsonString(a, value), .exit_code = 1 };
 }
 
-/// Build `{"$err_1":"<msg>"}` as an allocated JSON string. Mirrors what
-/// `emitRootErr` writes to stdout, but returns the bytes for the
-/// annotation pipeline to package up.
+/// Build `{"$err_1":"<msg>"}` as a **standalone** JSON document.
+///
+/// Used by `annotateRaw`'s three fail paths (file-read fail, json5
+/// preprocess fail, post-preprocess JSON parse fail) to produce a clean
+/// fallback output when the annotation pipeline cannot proceed. The
+/// returned bytes **replace** any annotated value the pipeline may have
+/// built so far — they are never merged into a tree that already
+/// contains `$comm_<N>` / `$err_<N>` siblings.
+///
+/// Counter `1` is hard-coded because the output object holds exactly
+/// one key. There is no collision with annotated `$err_1` even when
+/// `preprocessAnnotated` already emitted a different `$err_1` upstream:
+/// the upstream annotated text gets discarded by the caller, so the two
+/// `$err_1` strings live on disjoint output paths and never coexist
+/// inside a single JSON document.
+///
+/// In-tree injection (mid-pipeline validation errors) goes through
+/// `insertErrBefore` + a shared counter from `preprocessAnnotated`'s
+/// `next_id`; that path NEVER calls `formatRootErr`.
 fn formatRootErr(a: std.mem.Allocator, msg: []const u8) ![]u8 {
     var root: std.json.Value = .{ .object = .init(a) };
     try root.object.put("$err_1", .{ .string = msg });
@@ -455,7 +478,13 @@ fn serializeValue(stdout: *std.Io.Writer, value: std.json.Value) !void {
     try stdout.flush();
 }
 
-/// Emit {"$err_1":"<msg>"} to stdout with newline + flush, then caller exits.
+/// Emit `{"$err_1":"<msg>"}` to stdout with newline + flush, then caller
+/// exits. Used by non-`--config` actions (`--list-templates`,
+/// `--fetch-template`, `--expr-trace` config-loading guard) where the
+/// output never contains annotated `$comm_*`/`$err_*` siblings — this is
+/// the **only** entry in the emitted document, so counter `1` cannot
+/// collide with anything. Mirrors `formatRootErr`'s contract on the
+/// stdout-writer side.
 fn emitRootErr(stdout: *std.Io.Writer, msg: []const u8) !void {
     try stdout.print("{{\"$err_1\":", .{});
     try writeJsonString(stdout, msg);
