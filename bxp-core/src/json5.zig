@@ -15,6 +15,7 @@ const std = @import("std");
 /// Preprocess JSON5 source and return a new slice owned by alloc.
 pub fn preprocess(alloc: std.mem.Allocator, input: []const u8) ![]u8 {
     var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(alloc);
     var nest: std.ArrayList(u8) = .empty; // '{' or '[' per nesting level
     defer nest.deinit(alloc);
     var key_pos = false; // true when next identifier is an object key

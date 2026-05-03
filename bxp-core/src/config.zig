@@ -166,6 +166,9 @@ pub const XlsxSheet = struct {
 
     /// Schema docs for this struct's fields. Bound at
     /// `conversion_templates.*.xlsx_sheet` by `bxp-core/src/docs.zig`.
+    /// All three keys are required — the loader treats `xlsx_sheet` as
+    /// all-or-nothing; any missing/wrong-typed sub-key silently aborts
+    /// xlsx parsing for the whole template.
     pub const fields = [_]FieldDoc{
         .{
             .key = "name",
@@ -176,16 +179,14 @@ pub const XlsxSheet = struct {
         .{
             .key = "header_row",
             .type_name = "number",
-            .required = false,
-            .default = "1",
+            .required = true,
             .description = "1-based row number that contains the column headers within this sheet.",
         },
         .{
             .key = "output_suffix",
             .type_name = "string",
-            .required = false,
-            .default = "",
-            .description = "Appended before \".csv\" in the intermediate filename (e.g. \"_3\").",
+            .required = true,
+            .description = "Appended before \".csv\" in the intermediate filename (e.g. \"_3\"). Use \"\" for no suffix.",
         },
     };
 
@@ -626,14 +627,18 @@ pub const BrokerConfig = struct {
             }
         }
         const rules = self.row_rules orelse &.{};
-        for (self.output_schema.items, 0..) |col, i| {
+        for (self.output_schema.items) |col| {
             if (self.input_schema.contains(col.variable)) continue;
             for (rules) |rule| {
                 for (rule.rows) |row_override| {
                     if (!row_override.contains(col.variable)) {
                         const msg = try std.fmt.allocPrint(alloc, "'{s}' is not in input_schema and not set by all row_rules rows", .{col.variable});
                         defer alloc.free(msg);
-                        const field = try std.fmt.allocPrint(alloc, "output_schema.{d}.variable", .{i});
+                        // The path uses the JSON5-side header (the object key under
+                        // output_schema), not the OutputColumn array index — bxp-fmt's
+                        // path resolver navigates the loaded JSON tree, where
+                        // output_schema is `{ header: "$variable", ... }`.
+                        const field = try std.fmt.allocPrint(alloc, "output_schema.{s}", .{col.header});
                         defer alloc.free(field);
                         try errors.append(alloc, try ValidationError.init(alloc, base, field, msg));
                         break;
@@ -1172,7 +1177,17 @@ pub fn load(alloc: std.mem.Allocator, config_path: []const u8) !Config {
                                 return error.InvalidConfig;
                             },
                             .object => |obj| obj,
-                            else => continue,
+                            // Bad type (number, null, array, ...) — hard error rather than `continue`.
+                            // `continue` here would jump out of the broker-construction loop body
+                            // and skip `config.brokers.put(...)` below, leaking every string already
+                            // duped for this broker (data_dir, file_pattern_in/out, input_schema entries).
+                            else => {
+                                std.debug.print(
+                                    "error: template '{s}': ticker_map must be a string (named-map ref) or an object, got {s}\n",
+                                    .{ b_entry.key_ptr.*, @tagName(tm_val) },
+                                );
+                                return error.InvalidConfig;
+                            },
                         };
                         var tm_it = src_obj.iterator();
                         while (tm_it.next()) |te| {

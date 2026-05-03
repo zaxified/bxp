@@ -510,6 +510,10 @@ fn insertErrBefore(
 
 /// Navigate the Value tree by dot-separated path, returning a mutable pointer
 /// to the node at that path, or null if the path does not exist.
+///
+/// Segments that are decimal integers index into a `.array` node; everything
+/// else looks up a key on a `.object` node. `BrokerConfig.validateCollect`
+/// emits paths like `row_rules.0.when` for ordered arrays.
 fn getPtrAtPath(root: *std.json.Value, path: []const u8) ?*std.json.Value {
     if (path.len == 0) return root;
     var node = root;
@@ -518,6 +522,11 @@ fn getPtrAtPath(root: *std.json.Value, path: []const u8) ?*std.json.Value {
         switch (node.*) {
             .object => |*obj| {
                 node = obj.getPtr(seg) orelse return null;
+            },
+            .array => |*arr| {
+                const idx = std.fmt.parseInt(usize, seg, 10) catch return null;
+                if (idx >= arr.items.len) return null;
+                node = &arr.items[idx];
             },
             else => return null,
         }
@@ -564,6 +573,9 @@ fn readFileCapped(a: std.mem.Allocator, path: []const u8) ![]u8 {
 }
 
 /// Write a JSON-encoded string (with surrounding quotes and escaped special chars).
+/// Per RFC 8259 §7, control characters U+0000..U+001F MUST be escaped — broker CSV
+/// exports occasionally carry stray bytes (e.g. `\x07` bell) and emitting them raw
+/// would produce invalid JSON for the GUI to consume.
 fn writeJsonString(writer: *std.Io.Writer, s: []const u8) !void {
     try writer.writeByte('"');
     for (s) |c| {
@@ -573,6 +585,7 @@ fn writeJsonString(writer: *std.Io.Writer, s: []const u8) !void {
             '\n' => try writer.writeAll("\\n"),
             '\r' => try writer.writeAll("\\r"),
             '\t' => try writer.writeAll("\\t"),
+            0x00...0x08, 0x0B, 0x0C, 0x0E...0x1F => try writer.print("\\u{x:0>4}", .{c}),
             else => try writer.writeByte(c),
         }
     }
