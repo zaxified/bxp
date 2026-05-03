@@ -71,7 +71,8 @@ void _applyInsert(JsonAstNode root, InsertOp op) {
       op.parentPath.isEmpty ? root : resolveNode(root, op.parentPath);
   final newValue = astFromValue(op.value);
   if (parent is JsonObject) {
-    ast_ops.insertProperty(root, op.parentPath, op.keyOrIndex, newValue);
+    ast_ops.insertProperty(root, op.parentPath, op.keyOrIndex, newValue,
+        atIndex: op.atIndex);
   } else if (parent is JsonArray) {
     final idx = int.tryParse(op.keyOrIndex);
     if (idx == null) {

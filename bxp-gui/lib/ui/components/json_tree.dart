@@ -661,15 +661,28 @@ class _JsonNodeState extends State<_JsonNode> {
       if (v is JsonObject)
         for (final p in v.properties.whereType<JsonProperty>()) p.key,
     };
+    // Phase 5f: for arrays, surface the wildcard child's schema candidate
+    // as a single suggestion so its `insert_template` (e.g. row_rules.* →
+    // { when, rows }) is visible as a chip and auto-pre-selected.
+    final List<InsertKeyCandidate> sugg;
+    if (isMap) {
+      sugg = SchemaGate(store).validInsertKeys(widget.path, existing);
+    } else {
+      final wildcards = SchemaGate(store)
+          .validInsertKeys(widget.path, const <String>{})
+          .where((c) => c.isFreeForm)
+          .toList();
+      sugg = wildcards;
+    }
     showDialog(
       context: context,
       builder: (ctx) => _AddChildDialog(
         isMap: isMap,
-        suggestions: isMap
-            ? SchemaGate(store).validInsertKeys(widget.path, existing)
-            : const <InsertKeyCandidate>[],
-        onConfirm: (key, value) {
-          store.insertConfigNode(widget.path, key, value);
+        parent: v is JsonObject ? v : null,
+        parentPath: widget.path,
+        suggestions: sugg,
+        onConfirm: (key, value, atIndex) {
+          store.insertConfigNode(widget.path, key, value, atIndex: atIndex);
         },
       ),
     );
@@ -1170,11 +1183,19 @@ class _ActionBtn extends StatelessWidget {
 class _AddChildDialog extends StatefulWidget {
   final bool isMap;
   final List<InsertKeyCandidate> suggestions;
-  final void Function(String? key, dynamic value) onConfirm;
+  final void Function(String? key, dynamic value, int? atIndex) onConfirm;
+
+  /// Phase 5f: parent AST node + path used by `SchemaGate.insertIndexFor`
+  /// to compute the canonical insertion position. `parent` is null for
+  /// list-target inserts (which always append).
+  final JsonObject? parent;
+  final List<String> parentPath;
 
   const _AddChildDialog({
     required this.isMap,
     required this.onConfirm,
+    required this.parentPath,
+    this.parent,
     this.suggestions = const <InsertKeyCandidate>[],
   });
 
@@ -1183,10 +1204,57 @@ class _AddChildDialog extends StatefulWidget {
 }
 
 class _AddChildDialogState extends State<_AddChildDialog> {
+  static const _uiTypes = ['string', 'number', 'boolean', 'object', 'array'];
+
   final _keyController = TextEditingController();
   String _type = 'string';
   String? _error;
   InsertKeyCandidate? _pickedSuggestion;
+
+  /// Map a schema `type_name` (which can be "string", "expression",
+  /// "string | object", …) to the subset of [_uiTypes] that the user is
+  /// allowed to pick. Restricts the type-button row to whatever the
+  /// schema accepts under this path.
+  List<String> _normalizeTypes(String typeName) {
+    final out = <String>[];
+    for (final raw in typeName.split('|')) {
+      final t = raw.trim();
+      // expression is stored as a JSON string; treat it as such for the
+      // UI's purpose of picking a value shape.
+      final canonical = (t == 'expression') ? 'string' : t;
+      if (_uiTypes.contains(canonical) && !out.contains(canonical)) {
+        out.add(canonical);
+      }
+    }
+    return out.isEmpty ? const ['string'] : out;
+  }
+
+  /// Allowed UI types for the current dialog state. Picked chip wins;
+  /// otherwise the wildcard suggestion (if any) constrains choice;
+  /// otherwise all five basic types.
+  List<String> _allowedTypes() {
+    final picked = _pickedSuggestion;
+    if (picked != null) return _normalizeTypes(picked.typeName);
+    for (final s in widget.suggestions) {
+      if (s.isFreeForm) return _normalizeTypes(s.typeName);
+    }
+    return _uiTypes;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    // Phase 5f: when there's exactly one schema candidate (typically a
+    // wildcard for array element or for a free-form Map child like
+    // output_schema.*), auto-pre-pick it so its insert_template applies
+    // on Confirm without a manual chip click. With multiple candidates
+    // (e.g. conversion_templates.* with named children) the user must
+    // pick one explicitly.
+    if (widget.suggestions.length == 1) {
+      _pickedSuggestion = widget.suggestions.first;
+      _type = _normalizeTypes(widget.suggestions.first.typeName).first;
+    }
+  }
 
   @override
   void dispose() {
@@ -1219,14 +1287,20 @@ class _AddChildDialogState extends State<_AddChildDialog> {
       setState(() => _error = 'Key name cannot be empty');
       return;
     }
-    widget.onConfirm(key, _defaultValue());
+    int? atIndex;
+    if (widget.isMap && widget.parent != null && key != null) {
+      final store = context.read<TraceStore>();
+      atIndex = SchemaGate(store)
+          .insertIndexFor(widget.parentPath, key, widget.parent!);
+    }
+    widget.onConfirm(key, _defaultValue(), atIndex);
     Navigator.of(context).pop();
   }
 
   void _pickSuggestion(InsertKeyCandidate c) {
     setState(() {
       _pickedSuggestion = c;
-      _type = c.typeName;
+      _type = _normalizeTypes(c.typeName).first;
       _error = null;
       if (!c.isFreeForm) {
         _keyController.text = c.key;
@@ -1267,8 +1341,10 @@ class _AddChildDialogState extends State<_AddChildDialog> {
                   Text('Add entry to ${widget.isMap ? 'object' : 'array'}',
                       style: BxpText.title(context)),
                   const SizedBox(height: 12),
-                  if (widget.isMap && widget.suggestions.isNotEmpty) ...[
-                    Text('Schema-defined keys',
+                  if (widget.suggestions.isNotEmpty) ...[
+                    Text(widget.isMap
+                        ? 'Schema-defined keys'
+                        : 'Schema template',
                         style: BxpText.body(context,
                             color: th.textMuted, size: BxpSize.sm)),
                     const SizedBox(height: 6),
@@ -1343,17 +1419,23 @@ class _AddChildDialogState extends State<_AddChildDialog> {
                     ),
                     const SizedBox(height: 12),
                   ],
-                  Text('Type',
-                      style: BxpText.body(context,
-                          color: th.textMuted, size: BxpSize.sm)),
-                  const SizedBox(height: 6),
-                  Wrap(
-                    spacing: 6,
-                    children: ['string', 'number', 'boolean', 'object', 'array']
-                        .map((typ) {
+                  if (_allowedTypes().length > 1) ...[
+                    Text('Type',
+                        style: BxpText.body(context,
+                            color: th.textMuted, size: BxpSize.sm)),
+                    const SizedBox(height: 6),
+                    Wrap(
+                      spacing: 6,
+                      children: _allowedTypes().map((typ) {
                       final sel = _type == typ;
                       return InkWell(
-                        onTap: () => setState(() => _type = typ),
+                        onTap: () => setState(() {
+                          _type = typ;
+                          // Manual type pick overrides any auto-selected
+                          // schema template — fall back to type-default
+                          // scaffold ({}, [], "", 0, false).
+                          _pickedSuggestion = null;
+                        }),
                         child: Container(
                           padding: const EdgeInsets.symmetric(
                               horizontal: 8, vertical: 4),
@@ -1373,7 +1455,8 @@ class _AddChildDialogState extends State<_AddChildDialog> {
                         ),
                       );
                     }).toList(),
-                  ),
+                    ),
+                  ],
                   if (_error != null) ...[
                     const SizedBox(height: 8),
                     Text(_error!,

@@ -1364,8 +1364,9 @@ class TraceStore extends ChangeNotifier {
 
   /// Insert a child into the container at [path].
   ///
-  /// For Map containers: [newKey] is required; the entry is appended
-  /// (Map has no positional concept).
+  /// For Map containers: [newKey] is required. When [atIndex] is null the
+  /// entry is appended; non-null inserts at that raw peer position
+  /// (Phase 5f canonical placement, computed by `SchemaGate.insertIndexFor`).
   ///
   /// For List containers: when [atIndex] is null the value is appended;
   /// otherwise it's clamped into `[0, list.length]` and inserted at that
@@ -1380,8 +1381,9 @@ class TraceStore extends ChangeNotifier {
     if (_astRoot == null || _loadedWithErrors) return;
     final target = _astAt(path);
     if (target is JsonObject && newKey != null) {
-      if (!_applyOpToAst(InsertOp(path, newKey, defaultValue),
-          'op.insert.map', {'parentPath': path, 'newKey': newKey})) {
+      if (!_applyOpToAst(InsertOp(path, newKey, defaultValue, atIndex: atIndex),
+          'op.insert.map',
+          {'parentPath': path, 'newKey': newKey, 'atIndex': atIndex})) {
         return;
       }
     } else if (target is JsonArray) {

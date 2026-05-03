@@ -88,14 +88,16 @@ class InsertInlineCommentOp extends ConfigOp {
 
 /// Insert a fresh entry into the parent at [parentPath].
 ///
-/// For Maps: [keyOrIndex] is the new key. Insertion happens after the
-/// last existing real key.
+/// For Maps: [keyOrIndex] is the new key. When [atIndex] is null the
+/// entry appends after the last existing peer; non-null inserts at that
+/// raw peer position (Phase 5f canonical placement).
 /// For Lists: [keyOrIndex] is the stringified target index (clamped to end).
 class InsertOp extends ConfigOp {
   final ConfigPath parentPath;
   final String keyOrIndex;
   final Object? value;
-  const InsertOp(this.parentPath, this.keyOrIndex, this.value);
+  final int? atIndex;
+  const InsertOp(this.parentPath, this.keyOrIndex, this.value, {this.atIndex});
 }
 
 /// Append-only ledger of ops since load. Cleared on save.

@@ -185,7 +185,7 @@ pub fn main() !void {
         return;
     }
     if (emit_docs) {
-        try runDocs();
+        try runDocs(alloc);
         return;
     }
     if (config_path) |p| {
@@ -204,11 +204,16 @@ pub fn main() !void {
 
 // ── --docs ──────────────────────────────────────────────────────────────────
 
-fn runDocs() !void {
+fn runDocs(gpa: std.mem.Allocator) !void {
+    // Arena owns the json5/parseFromSlice scratch space for every
+    // insert_template snippet. Freed wholesale on return.
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+
     var stdout_buf: [4096]u8 = undefined;
     var stdout_fw = std.fs.File.stdout().writer(&stdout_buf);
     const stdout = &stdout_fw.interface;
-    try docs_mod.writeDocs(stdout);
+    try docs_mod.writeDocs(arena.allocator(), stdout);
     try stdout.flush();
 }
 
