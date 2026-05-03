@@ -1,74 +1,87 @@
-// xtb1_closed_to_wealthfolio sample template
 {
   ticker_maps: {
     xtb: {
-      "ASML.NL":  "ASML.AS",
-      "BNTX.US":  "BNTX",
-      "BP.UK":    "BP.L",
-      "CSG.NL":   "CSG.AS",
-      "CZG.CZ":   "CZG.PR",
-      "FOUR.US":  "FOUR",
-      "KOMB.CZ":  "KOMB.PR",
-      "MRNA.US":  "MRNA",
-      "NESN.CH":  "NESN.SW",
-      "NOVN.CH":  "NOVN.SW",
-      "O.US":     "O",
-      "PFE.US":   "PFE",
-      "ROG.CH":   "ROG.SW",
-      "TABAK.CZ": "TABAK.PR",
-      "VICI.US":  "VICI",
-      "VWRA.UK":  "VWRA.L"
+      "ASML.NL":   "ASML.AS",
+      "BNTX.US":   "BNTX",
+      "BP.UK":     "BP.L",
+      "CSG.NL":    "CSG.AS",
+      "CZG.CZ":    "CZG.PR",
+      "FOUR.US":   "FOUR",
+      "KOMB.CZ":   "KOMB.PR",
+      "MRNA.US":   "MRNA",
+      "NESN.CH":   "NESN.SW",
+      "NOVN.CH":   "NOVN.SW",
+      "O.US":      "O",
+      "PFE.US":    "PFE",
+      "ROG.CH":    "ROG.SW",
+      "TABAK.CZ":  "TABAK.PR",
+      "VICI.US":   "VICI",
+      "VWRA.UK":   "VWRA.L"
     }
   },
   conversion_templates: {
     xtb1_closed_to_wealthfolio: {
-      data_dir:                  ".",
-      xlsx_sheet:                { name: "CLOSED POSITION", header_row: 13, output_suffix: "_closed.csv" },
-      file_type_in:              "csv",
-      file_type_out:             "csv",
-      file_pattern_in:           "_closed.csv",
-      file_pattern_out:          "_closed.csvx",
-      csv_delimiter_in:          ",",
-      csv_delimiter_out:         ",",
-      csv_decimal_separator_in:  ".",
+      data_dir:            ".",
+      xlsx_sheet: {
+        name:           "CLOSED POSITION",
+        header_row:     13,
+        output_suffix:  "_closed.csv"
+      },
+      file_type_in:        "csv",
+      file_type_out:       "csv",
+      file_pattern_in:     "_closed.csv",
+      file_pattern_out:    "_closed.csvx",
+      csv_delimiter_in:    ",",
+      csv_delimiter_out:   ",",
+      csv_decimal_separator_in: ".",
       csv_decimal_separator_out: ".",
-      csv_text_quote_in:         "none",
-      csv_text_quote_out:        "double",
+      csv_text_quote_in:   "none",
+      csv_text_quote_out:  "double",
       date_filter_from_filename: false,
-      ticker_map:                "xtb",
+      ticker_map:          "xtb",
       input_schema: {
-        $date:             "[Close time]",
-        $ticker:           "TICKER([Symbol])",
-        $quantity:         "[Volume]",
-        $unitprice:        "[Sale value] / [Volume]",
-        $currency:         "'CZK'",
-        $fee:              "",
-        $amount:           "[Sale value]",
-        $account:          "",
-        $fxRate:           "",
-        $subtype:          "",
-        $instrumentType:   "",
-        $comment:          "''' & [Position] & '_' & [Open time] & '''"
+        $date:            "[Close time]",
+        $ticker:          "TICKER([Symbol])",
+        $quantity:        "[Volume]",
+        $unitprice:       "[Sale value] / [Volume]",
+        $currency:        "'CZK'",
+        $fee:             "",
+        $amount:          "[Sale value]",
+        $account:         "",
+        $fxRate:          "",
+        $subtype:         "",
+        $instrumentType:  "",
+        $comment:         "''' & [Position] & '_' & [Open time] & '''"
       },
       row_rules_debug_missing: true,
       row_rules: [
-        { when: "[Type] = 'BUY'",    rows: [ { $action: "'SELL'" } ] },
-        { when: "[Symbol] = ''",     rows: [] }
+        {
+          when:  "[Type] = 'BUY'",
+          rows: [
+            {
+              $action:  "'SELL'"
+            }
+          ]
+        },
+        {
+          when:  "[Symbol] = ''",
+          rows: []
+        }
       ],
       output_schema: {
-        date:             "$date",
-        symbol:           "$ticker",
-        quantity:         "$quantity",
-        activityType:     "$action",
-        unitPrice:        "$unitprice",
-        currency:         "$currency",
-        fee:              "$fee",
-        amount:           "$amount",
-        account:          "$account",
-        fxRate:           "$fxRate",
-        subtype:          "$subtype",
-        instrumentType:   "$instrumentType",
-        comment:          "$comment"
+        date:            "$date",
+        symbol:          "$ticker",
+        quantity:        "$quantity",
+        activityType:    "$action",
+        unitPrice:       "$unitprice",
+        currency:        "$currency",
+        fee:             "$fee",
+        amount:          "$amount",
+        account:         "$account",
+        fxRate:          "$fxRate",
+        subtype:         "$subtype",
+        instrumentType:  "$instrumentType",
+        comment:         "$comment"
       }
     }
   }
