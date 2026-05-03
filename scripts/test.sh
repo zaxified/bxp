@@ -56,6 +56,16 @@ fi
 echo "bxp-fmt OK"
 echo ""
 
+# Dart JSON5 AST library — covers tokenizer, parser, dumper, mutations,
+# path navigation, value builder, and round-trip canonicalisation.
+JSON5_AST="$MONO_ROOT/bxp-gui/packages/json5_ast"
+if [[ -d "$JSON5_AST" ]] && command -v dart > /dev/null; then
+    echo "Running unit tests (json5_ast)..."
+    (cd "$JSON5_AST" && dart test) > /dev/null
+    echo "json5_ast OK"
+    echo ""
+fi
+
 PASS=0
 FAIL=0
 FAILED=()

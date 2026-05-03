@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:json_ast_proto/ast.dart';
+import 'package:json5_ast/ast.dart';
 import 'package:provider/provider.dart';
 import '../store/trace_store.dart';
 import 'components/json_tree.dart';

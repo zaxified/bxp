@@ -9,8 +9,8 @@ library;
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:json_ast_proto/ast.dart';
-import 'package:json_ast_proto/parser.dart';
+import 'package:json5_ast/ast.dart';
+import 'package:json5_ast/parser.dart';
 
 class AstLoadResult {
   final JsonAstNode? root;

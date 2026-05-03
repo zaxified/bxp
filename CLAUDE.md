@@ -32,7 +32,10 @@ bxp/
 ├── bxp-gui/              # Flutter desktop app (replaces bxp-ui; uses bxp-cli/bxp-fmt via subprocess)
 │   ├── lib/              # Dart source (services/, store/, ui/)
 │   ├── linux/, macos/, windows/, web/  # platform configs
-│   ├── tool/json_ast_proto/             # standalone Dart JSON5 AST prototype
+│   ├── packages/json5_ast/             # Path-dep Dart JSON5 AST library
+│   │                                    # (post-Phase-5e CST replacement; not bxp-specific —
+│   │                                    # candidate for extraction to a standalone repo when
+│   │                                    # a second Dart consumer materialises)
 │   └── pubspec.yaml
 ├── resources/            # Example config (bxp-cli.examples.json) and user readme
 ├── datasets/             # Anonymized sample data + expected outputs for regression tests

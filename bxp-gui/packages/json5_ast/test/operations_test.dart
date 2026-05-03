@@ -1,11 +1,11 @@
 import 'package:test/test.dart';
 
-import 'package:json_ast_proto/ast.dart';
-import 'package:json_ast_proto/parser.dart';
-import 'package:json_ast_proto/dumper.dart';
-import 'package:json_ast_proto/operations.dart';
-import 'package:json_ast_proto/path.dart';
-import 'package:json_ast_proto/value_builder.dart';
+import 'package:json5_ast/ast.dart';
+import 'package:json5_ast/parser.dart';
+import 'package:json5_ast/dumper.dart';
+import 'package:json5_ast/operations.dart';
+import 'package:json5_ast/path.dart';
+import 'package:json5_ast/value_builder.dart';
 
 JsonAstNode parseOk(String src) {
   final r = Parser.parse(src);

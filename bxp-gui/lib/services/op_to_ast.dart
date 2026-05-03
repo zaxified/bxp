@@ -5,10 +5,10 @@
 /// the op_log schema independent of the patcher backend.
 library;
 
-import 'package:json_ast_proto/ast.dart';
-import 'package:json_ast_proto/operations.dart' as ast_ops;
-import 'package:json_ast_proto/path.dart';
-import 'package:json_ast_proto/value_builder.dart';
+import 'package:json5_ast/ast.dart';
+import 'package:json5_ast/operations.dart' as ast_ops;
+import 'package:json5_ast/path.dart';
+import 'package:json5_ast/value_builder.dart';
 
 import 'op_log.dart';
 

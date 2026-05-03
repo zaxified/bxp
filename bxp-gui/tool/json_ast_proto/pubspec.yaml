@@ -1,9 +1,0 @@
-name: json_ast_proto
-description: Phase 0 prototype — Dart JSON5 parser + deterministic dumper
-publish_to: none
-
-environment:
-  sdk: ^3.0.0
-
-dev_dependencies:
-  test: ^1.24.0

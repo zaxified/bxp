@@ -56,11 +56,16 @@ bxp-gui/
 │           ├── panel_header.dart    # Reusable header chrome
 │           ├── resize_handle.dart   # Splitter drag handle
 │           └── open_dialog.dart     # Recent-files / file picker
-├── tool/json_ast_proto/             # Standalone Dart JSON5 AST library
-│   └── lib/
-│       ├── parser.dart, tokenizer.dart, ast.dart, dumper.dart,
-│       │   operations.dart, path.dart, value_builder.dart
-│       └── (round-trips bxp-cli configs preserving comments + formatting)
+├── packages/json5_ast/              # Path-dep Dart JSON5 AST library
+│   ├── lib/                         # parser, tokenizer, ast, dumper,
+│   │                                # operations, path, value_builder —
+│   │                                # all pure Dart, no bxp-specific code
+│   ├── test/                        # ~69 unit tests incl. round-trip
+│   │                                # canonicalisation
+│   ├── pubspec.yaml                 # name: json5_ast — candidate for
+│   │                                # extraction to a standalone repo
+│   │                                # once a second Dart consumer exists
+│   └── (post-Phase-5e replacement for the deleted CST byte-patcher)
 ├── linux/, macos/, windows/, web/   # Per-platform Flutter shells
 ├── test/
 │   ├── bxp_gui_test.dart
@@ -163,8 +168,8 @@ preference to shell calls:
 
 - All code comments and documentation in English.
 - Layout: every resizable splitter holds **fractions**, not pixels —
-  `lib/ui/layout_defaults.dart` is the single source. 3-pane = 2 fractions
-  + middle by subtraction.
+  `lib/ui/layout_defaults.dart` is the single source. 3-pane layout = 2
+  fractions plus the middle by subtraction.
 - Live validation must NOT lock undo/redo on `$err_*` from edited state —
   only on load-time errors (otherwise the user gets trapped editing).
 - `--docs` JSON is the single source of truth for FnDoc/FieldDoc — no

@@ -1,0 +1,13 @@
+name: json5_ast
+description: >-
+  JSON5 parser, comment-preserving AST, and mutation API. Pure Dart, no
+  Flutter or bxp-specific dependencies. Dumps deterministic JSON5 text;
+  preserves leading/trailing/block/standalone comments across edits.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.0.0
+
+dev_dependencies:
+  test: ^1.24.0

@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:json_ast_proto/ast.dart';
-import 'package:json_ast_proto/path.dart' as ast_path;
+import 'package:json5_ast/ast.dart';
+import 'package:json5_ast/path.dart' as ast_path;
 import 'package:provider/provider.dart';
 import '../../services/dev_trace.dart';
 import '../../services/schema_gate.dart';

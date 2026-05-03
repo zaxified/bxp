@@ -2,7 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:json_ast_proto/ast.dart';
+import 'package:json5_ast/ast.dart';
 import 'package:provider/provider.dart';
 
 import '../services/bxp_process_client.dart';

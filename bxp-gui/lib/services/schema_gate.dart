@@ -10,7 +10,7 @@ library;
 
 import 'dart:convert';
 
-import 'package:json_ast_proto/ast.dart';
+import 'package:json5_ast/ast.dart';
 
 import '../store/trace_store.dart';
 
