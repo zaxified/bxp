@@ -1041,19 +1041,34 @@ fn parsePrePassBlock(alloc: std.mem.Allocator, ppobj: std.json.ObjectMap) !PrePa
 /// Missing file → returns an empty Config (no error).
 /// Malformed JSON5 → returns an error.
 pub fn load(alloc: std.mem.Allocator, config_path: []const u8) !Config {
-    var config = Config{
-        .brokers = std.StringArrayHashMap(BrokerConfig).init(alloc),
-        ._alloc = alloc,
-    };
-
     const file = std.fs.cwd().openFile(config_path, .{}) catch |err| {
-        if (err == error.FileNotFound) return config;
+        if (err == error.FileNotFound) {
+            return Config{
+                .brokers = std.StringArrayHashMap(BrokerConfig).init(alloc),
+                ._alloc = alloc,
+            };
+        }
         return err;
     };
     defer file.close();
 
     const raw = try file.readToEndAlloc(alloc, CONFIG_MAX_FILE_SIZE);
     defer alloc.free(raw);
+    return loadFromBytes(alloc, raw, config_path);
+}
+
+/// Parse + validate a config from in-memory JSON5 bytes. The path label
+/// is only used in diagnostic messages — pass an arbitrary marker
+/// (`"<inline>"`, `"test"`, …) when the source isn't a real file. Carved
+/// out of `load()` so `bxp-fmt --config` can avoid double-reading the
+/// file (it already has the raw bytes for `preprocessAnnotated`) and so
+/// inline tests can exercise the loader without touching disk.
+pub fn loadFromBytes(alloc: std.mem.Allocator, raw: []const u8, config_path: []const u8) !Config {
+    var config = Config{
+        .brokers = std.StringArrayHashMap(BrokerConfig).init(alloc),
+        ._alloc = alloc,
+    };
+
     const content = try json5.preprocess(alloc, raw);
     defer alloc.free(content);
 

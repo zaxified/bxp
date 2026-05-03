@@ -382,18 +382,25 @@ const AnnotateResult = struct {
     exit_code: u8,
 };
 
-/// Pure annotation pipeline — read JSON5 from `path`, preserve comments
-/// as `$comm_<N>` siblings, inject `$err_<N>` markers for syntax and
-/// semantic errors, return the serialized JSON.
-///
-/// Never writes to stdout / stderr. Never calls `std.process.exit`. This
-/// is what makes the inline test below possible: it builds the same
-/// output runConfig would, but as a string the test can inspect.
+/// File-loading wrapper around `annotateRaw`. Reads `path`, then runs
+/// the same pure pipeline as the inline tests use.
 fn annotateConfigFromFile(a: std.mem.Allocator, path: []const u8) !AnnotateResult {
     const raw = readFileCapped(a, path) catch |err| {
         return .{ .json = try formatRootErr(a, @errorName(err)), .exit_code = 1 };
     };
+    return annotateRaw(a, raw, path);
+}
 
+/// Pure annotation pipeline — takes JSON5 source bytes, preserves
+/// comments as `$comm_<N>` siblings, injects `$err_<N>` markers for
+/// syntax and semantic errors, returns the serialized JSON.
+///
+/// Never reads files. Never writes to stdout / stderr. Never calls
+/// `std.process.exit`. `path_label` is used only in diagnostic
+/// messages (the validator embeds it in `<path>: config error: ...`
+/// strings) — pass `"<inline>"` or any marker when the source isn't
+/// from a real file.
+fn annotateRaw(a: std.mem.Allocator, raw: []const u8, path_label: []const u8) !AnnotateResult {
     const ann = json5_mod.preprocessAnnotated(a, raw) catch |err| {
         return .{ .json = try formatRootErr(a, @errorName(err)), .exit_code = 1 };
     };
@@ -405,7 +412,7 @@ fn annotateConfigFromFile(a: std.mem.Allocator, path: []const u8) !AnnotateResul
         return .{ .json = try formatRootErr(a, @errorName(err)), .exit_code = 1 };
     };
 
-    var cfg = config_mod.load(a, path) catch |err| {
+    var cfg = config_mod.loadFromBytes(a, raw, path_label) catch |err| {
         try insertErrBefore(a, &value, "", @errorName(err), &counter);
         return .{ .json = try valueToJsonString(a, value), .exit_code = 1 };
     };
@@ -798,12 +805,11 @@ fn runExprTrace(
 
 // ── Tests ────────────────────────────────────────────────────────────────────
 
-test "annotateConfigFromFile: comments preserved + missing conversion_templates → \\$err_1" {
+test "annotateRaw: comments preserved + missing conversion_templates → \\$err_1" {
     // Replaces the previous shell-driven `Annotated JSON regression`
     // phase in scripts/test.sh + the gitted fixtures under
-    // datasets/_annotated_fixtures/. The same input shape is exercised
-    // here against `annotateConfigFromFile` directly so the test is
-    // self-contained and runs as part of `zig build test`.
+    // datasets/_annotated_fixtures/. Pure string-in / value-out — no
+    // disk involvement.
     const testing = std.testing;
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -830,15 +836,9 @@ test "annotateConfigFromFile: comments preserved + missing conversion_templates 
         \\}
     ;
 
-    var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
-    try tmp.dir.writeFile(.{ .sub_path = "sample.json5", .data = fixture });
-    const path = try tmp.dir.realpathAlloc(a, "sample.json5");
-
-    const result = try annotateConfigFromFile(a, path);
+    const result = try annotateRaw(a, fixture, "<inline>");
     try testing.expectEqual(@as(u8, 1), result.exit_code);
 
-    // Round-trip the produced JSON to assert structural properties.
     const parsed = try std.json.parseFromSliceLeaky(std.json.Value, a, result.json, .{});
     try testing.expect(parsed == .object);
 
@@ -847,8 +847,7 @@ test "annotateConfigFromFile: comments preserved + missing conversion_templates 
     // and the unquoted key landed at the right place.
     const xtb = parsed.object.get("xtb") orelse return error.MissingXtb;
     try testing.expect(xtb == .object);
-    const fp = xtb.object.get("file_pattern_in") orelse return error.MissingFilePattern;
-    try testing.expectEqualStrings(".csv", fp.string);
+    try testing.expectEqualStrings(".csv", xtb.object.get("file_pattern_in").?.string);
     const items = xtb.object.get("items") orelse return error.MissingItems;
     try testing.expect(items == .array);
     try testing.expectEqual(@as(usize, 2), items.array.items.len);
@@ -861,7 +860,7 @@ test "annotateConfigFromFile: comments preserved + missing conversion_templates 
     try testing.expect(std.mem.indexOf(u8, err1.string, "no conversion_templates") != null);
 }
 
-test "annotateConfigFromFile: clean config exits 0" {
+test "annotateRaw: clean config exits 0 with no \\$err_* markers" {
     const testing = std.testing;
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -884,15 +883,9 @@ test "annotateConfigFromFile: clean config exits 0" {
         \\}
     ;
 
-    var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
-    try tmp.dir.writeFile(.{ .sub_path = "sample.json5", .data = fixture });
-    const path = try tmp.dir.realpathAlloc(a, "sample.json5");
-
-    const result = try annotateConfigFromFile(a, path);
+    const result = try annotateRaw(a, fixture, "<inline>");
     try testing.expectEqual(@as(u8, 0), result.exit_code);
 
-    // No `$err_*` markers on a clean config.
     const parsed = try std.json.parseFromSliceLeaky(std.json.Value, a, result.json, .{});
     try testing.expect(parsed == .object);
     var it = parsed.object.iterator();
