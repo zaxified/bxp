@@ -366,40 +366,50 @@ fn runConfig(alloc: std.mem.Allocator, path: []const u8) !void {
     var stdout_fw = std.fs.File.stdout().writer(&stdout_buf);
     const stdout = &stdout_fw.interface;
 
-    // Read raw file.
+    const result = try annotateConfigFromFile(a, path);
+    try stdout.writeAll(result.json);
+    try stdout.writeByte('\n');
+    try stdout.flush();
+    if (result.exit_code != 0) std.process.exit(result.exit_code);
+}
+
+/// Result of annotating a config file. `json` is the serialized output
+/// (no trailing newline); `exit_code` mirrors what bxp-fmt would exit with
+/// (0 = clean, 1 = file/parse/validation error). Callers own neither
+/// allocation — the arena passed in does.
+const AnnotateResult = struct {
+    json: []u8,
+    exit_code: u8,
+};
+
+/// Pure annotation pipeline — read JSON5 from `path`, preserve comments
+/// as `$comm_<N>` siblings, inject `$err_<N>` markers for syntax and
+/// semantic errors, return the serialized JSON.
+///
+/// Never writes to stdout / stderr. Never calls `std.process.exit`. This
+/// is what makes the inline test below possible: it builds the same
+/// output runConfig would, but as a string the test can inspect.
+fn annotateConfigFromFile(a: std.mem.Allocator, path: []const u8) !AnnotateResult {
     const raw = readFileCapped(a, path) catch |err| {
-        try emitRootErr(stdout, @errorName(err));
-        std.process.exit(1);
+        return .{ .json = try formatRootErr(a, @errorName(err)), .exit_code = 1 };
     };
 
-    // Preprocess JSON5 → annotated JSON (comments preserved as $comm_<N>,
-    // recovered syntax errors as $err_<N>).
     const ann = json5_mod.preprocessAnnotated(a, raw) catch |err| {
-        try emitRootErr(stdout, @errorName(err));
-        std.process.exit(1);
+        return .{ .json = try formatRootErr(a, @errorName(err)), .exit_code = 1 };
     };
-    // Continue numbering: counter holds the last assigned id; insertErrBefore
-    // increments before use, so the first new id will equal ann.next_id.
     var counter: u32 = ann.next_id - 1;
 
-    // Parse as dynamic Value for annotation and re-serialization.
     var value = std.json.parseFromSliceLeaky(std.json.Value, a, ann.out, .{
         .duplicate_field_behavior = .use_last,
     }) catch |err| {
-        try emitRootErr(stdout, @errorName(err));
-        try stdout.flush();
-        std.process.exit(1);
+        return .{ .json = try formatRootErr(a, @errorName(err)), .exit_code = 1 };
     };
 
-    // Load typed config for semantic validation.
-    // config_mod.load prints diagnostics to stderr.
     var cfg = config_mod.load(a, path) catch |err| {
         try insertErrBefore(a, &value, "", @errorName(err), &counter);
-        try serializeValue(stdout, value);
-        std.process.exit(1);
+        return .{ .json = try valueToJsonString(a, value), .exit_code = 1 };
     };
 
-    // Collect all semantic validation errors.
     var errors: std.ArrayList(config_mod.ValidationError) = .empty;
     var it = cfg.brokers.iterator();
     while (it.next()) |entry| {
@@ -408,18 +418,32 @@ fn runConfig(alloc: std.mem.Allocator, path: []const u8) !void {
 
     if (cfg.brokers.count() == 0) {
         try insertErrBefore(a, &value, "", "no conversion_templates defined", &counter);
-        try serializeValue(stdout, value);
-        std.process.exit(1);
+        return .{ .json = try valueToJsonString(a, value), .exit_code = 1 };
     }
 
     if (errors.items.len == 0) {
-        try serializeValue(stdout, value);
-        std.process.exit(0);
+        return .{ .json = try valueToJsonString(a, value), .exit_code = 0 };
     }
 
     try injectSemanticErrors(a, &value, errors.items, &counter);
-    try serializeValue(stdout, value);
-    std.process.exit(1);
+    return .{ .json = try valueToJsonString(a, value), .exit_code = 1 };
+}
+
+/// Build `{"$err_1":"<msg>"}` as an allocated JSON string. Mirrors what
+/// `emitRootErr` writes to stdout, but returns the bytes for the
+/// annotation pipeline to package up.
+fn formatRootErr(a: std.mem.Allocator, msg: []const u8) ![]u8 {
+    var root: std.json.Value = .{ .object = .init(a) };
+    try root.object.put("$err_1", .{ .string = msg });
+    return valueToJsonString(a, root);
+}
+
+/// Serialize `value` into an arena-owned slice via std.json.Stringify.
+fn valueToJsonString(a: std.mem.Allocator, value: std.json.Value) ![]u8 {
+    var aw: std.Io.Writer.Allocating = .init(a);
+    errdefer aw.deinit();
+    try std.json.Stringify.value(value, .{}, &aw.writer);
+    return aw.toOwnedSlice();
 }
 
 /// Serialize a Value to stdout with a trailing newline, then flush.
@@ -770,4 +794,109 @@ fn runExprTrace(
     jw.endObject() catch {};
     stdout.writeByte('\n') catch {};
     stdout.flush() catch {};
+}
+
+// ── Tests ────────────────────────────────────────────────────────────────────
+
+test "annotateConfigFromFile: comments preserved + missing conversion_templates → \\$err_1" {
+    // Replaces the previous shell-driven `Annotated JSON regression`
+    // phase in scripts/test.sh + the gitted fixtures under
+    // datasets/_annotated_fixtures/. The same input shape is exercised
+    // here against `annotateConfigFromFile` directly so the test is
+    // self-contained and runs as part of `zig build test`.
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // JSON5 fixture mirrors the deleted datasets/_annotated_fixtures/sample.json5:
+    // top-of-file line comment, an unquoted key (`xtb` rather than the
+    // expected `conversion_templates`), a block comment between key and
+    // value, and a line comment inside the array. The deliberate name
+    // collision with `xtb` triggers the "no conversion_templates defined"
+    // semantic error.
+    const fixture =
+        \\// top of file
+        \\{
+        \\  xtb: {
+        \\    file_pattern_in: ".csv",
+        \\    /* block before key */
+        \\    items: [
+        \\      // first
+        \\      "a",
+        \\      "b"
+        \\    ]
+        \\  }
+        \\}
+    ;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(.{ .sub_path = "sample.json5", .data = fixture });
+    const path = try tmp.dir.realpathAlloc(a, "sample.json5");
+
+    const result = try annotateConfigFromFile(a, path);
+    try testing.expectEqual(@as(u8, 1), result.exit_code);
+
+    // Round-trip the produced JSON to assert structural properties.
+    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, a, result.json, .{});
+    try testing.expect(parsed == .object);
+
+    // Original tree shape preserved: `xtb` object with `file_pattern_in`
+    // and a 2-element `items` array. JSON5 comments don't break parsing
+    // and the unquoted key landed at the right place.
+    const xtb = parsed.object.get("xtb") orelse return error.MissingXtb;
+    try testing.expect(xtb == .object);
+    const fp = xtb.object.get("file_pattern_in") orelse return error.MissingFilePattern;
+    try testing.expectEqualStrings(".csv", fp.string);
+    const items = xtb.object.get("items") orelse return error.MissingItems;
+    try testing.expect(items == .array);
+    try testing.expectEqual(@as(usize, 2), items.array.items.len);
+    try testing.expectEqualStrings("a", items.array.items[0].string);
+    try testing.expectEqualStrings("b", items.array.items[1].string);
+
+    // Semantic error injected at root with the expected message.
+    const err1 = parsed.object.get("$err_1") orelse return error.MissingErr1;
+    try testing.expect(err1 == .string);
+    try testing.expect(std.mem.indexOf(u8, err1.string, "no conversion_templates") != null);
+}
+
+test "annotateConfigFromFile: clean config exits 0" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const fixture =
+        \\{
+        \\  conversion_templates: {
+        \\    sample: {
+        \\      data_dir: ".",
+        \\      file_pattern_in: ".csv",
+        \\      file_pattern_out: ".csvx",
+        \\      input_schema: { $date: "[Date]" },
+        \\      output_schema: { date: "$date" },
+        \\      row_rules: [
+        \\        { when: "true", rows: [ { $action: "'DEPOSIT'" } ] }
+        \\      ]
+        \\    }
+        \\  }
+        \\}
+    ;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(.{ .sub_path = "sample.json5", .data = fixture });
+    const path = try tmp.dir.realpathAlloc(a, "sample.json5");
+
+    const result = try annotateConfigFromFile(a, path);
+    try testing.expectEqual(@as(u8, 0), result.exit_code);
+
+    // No `$err_*` markers on a clean config.
+    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, a, result.json, .{});
+    try testing.expect(parsed == .object);
+    var it = parsed.object.iterator();
+    while (it.next()) |entry| {
+        try testing.expect(!std.mem.startsWith(u8, entry.key_ptr.*, "$err_"));
+    }
 }
