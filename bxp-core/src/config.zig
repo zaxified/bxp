@@ -540,20 +540,38 @@ pub const BrokerConfig = struct {
             return error.InvalidConfig;
         }
         {
+            // Legacy single-block form lives under the synthetic `_default`
+            // name; users never type `_default` themselves, so we strip the
+            // name segment from the error path for legacy blocks. Mirrors
+            // `validateCollect` (4A.2 alignment) — both validation paths
+            // now emit identical text for the same fault.
             var pp_it = self.pre_passes.iterator();
             while (pp_it.next()) |pp_entry| {
                 const name = pp_entry.key_ptr.*;
                 const pp = pp_entry.value_ptr.*;
+                const is_legacy = std.mem.eql(u8, name, "_default");
                 if (pp.when.len == 0) {
-                    try writer.print("---\n# {s}: config error: template '{s}': pre_pass.{s}.when must not be empty\n", .{ config_path, template_id, name });
+                    if (is_legacy) {
+                        try writer.print("---\n# {s}: config error: template '{s}': pre_pass.when must not be empty\n", .{ config_path, template_id });
+                    } else {
+                        try writer.print("---\n# {s}: config error: template '{s}': pre_pass.{s}.when must not be empty\n", .{ config_path, template_id, name });
+                    }
                     return error.InvalidConfig;
                 }
                 if (pp.key.len == 0) {
-                    try writer.print("---\n# {s}: config error: template '{s}': pre_pass.{s}.key must not be empty\n", .{ config_path, template_id, name });
+                    if (is_legacy) {
+                        try writer.print("---\n# {s}: config error: template '{s}': pre_pass.key must not be empty\n", .{ config_path, template_id });
+                    } else {
+                        try writer.print("---\n# {s}: config error: template '{s}': pre_pass.{s}.key must not be empty\n", .{ config_path, template_id, name });
+                    }
                     return error.InvalidConfig;
                 }
                 if (pp.values.count() == 0) {
-                    try writer.print("---\n# {s}: config error: template '{s}': pre_pass.{s}.values must not be empty\n", .{ config_path, template_id, name });
+                    if (is_legacy) {
+                        try writer.print("---\n# {s}: config error: template '{s}': pre_pass.values must not be empty\n", .{ config_path, template_id });
+                    } else {
+                        try writer.print("---\n# {s}: config error: template '{s}': pre_pass.{s}.values must not be empty\n", .{ config_path, template_id, name });
+                    }
                     return error.InvalidConfig;
                 }
             }
@@ -1164,22 +1182,71 @@ pub fn loadFromBytes(alloc: std.mem.Allocator, raw: []const u8, config_path: []c
                         }
                     }
 
-                    // xlsx_sheet: object with { name, header_row, output_suffix }
-                    if (bobj.get("xlsx_sheet")) |xs_val| parse_sheet: {
-                        if (xs_val != .object) break :parse_sheet;
+                    // xlsx_sheet: object with { name, header_row, output_suffix }.
+                    // All three keys are required; a missing/wrong-typed sub-key is
+                    // a hard config error (was silent until 4A.1) — silent fallthrough
+                    // produced mystery "no .csv files" failures downstream when the
+                    // user typed `sheet_name` instead of `name`, or supplied a number
+                    // for `header_row` as a string. To intentionally disable xlsx
+                    // pre-pass for a template, remove the entire `xlsx_sheet` block.
+                    if (bobj.get("xlsx_sheet")) |xs_val| {
+                        if (xs_val != .object) {
+                            std.debug.print(
+                                "---\n# {s}: config error: template '{s}': xlsx_sheet must be an object, got {s}\n",
+                                .{ config_path, b_entry.key_ptr.*, @tagName(xs_val) },
+                            );
+                            return error.InvalidConfig;
+                        }
                         const obj = xs_val.object;
-                        const name = if (obj.get("name")) |v|
-                            if (v == .string) try alloc.dupe(u8, v.string) else break :parse_sheet
-                        else break :parse_sheet;
-                        const header_row: u32 = if (obj.get("header_row")) |v|
-                            switch (v) {
-                                .integer => |n| @intCast(n),
-                                else => break :parse_sheet,
-                            }
-                        else break :parse_sheet;
-                        const output_suffix = if (obj.get("output_suffix")) |v|
-                            if (v == .string) try alloc.dupe(u8, v.string) else break :parse_sheet
-                        else break :parse_sheet;
+                        const name = if (obj.get("name")) |v| switch (v) {
+                            .string => |s| try alloc.dupe(u8, s),
+                            else => {
+                                std.debug.print(
+                                    "---\n# {s}: config error: template '{s}': xlsx_sheet.name must be a string, got {s}\n",
+                                    .{ config_path, b_entry.key_ptr.*, @tagName(v) },
+                                );
+                                return error.InvalidConfig;
+                            },
+                        } else {
+                            std.debug.print(
+                                "---\n# {s}: config error: template '{s}': xlsx_sheet missing required key 'name'\n",
+                                .{ config_path, b_entry.key_ptr.* },
+                            );
+                            return error.InvalidConfig;
+                        };
+                        errdefer alloc.free(name);
+                        const header_row: u32 = if (obj.get("header_row")) |v| switch (v) {
+                            .integer => |n| @intCast(n),
+                            else => {
+                                std.debug.print(
+                                    "---\n# {s}: config error: template '{s}': xlsx_sheet.header_row must be a number, got {s}\n",
+                                    .{ config_path, b_entry.key_ptr.*, @tagName(v) },
+                                );
+                                return error.InvalidConfig;
+                            },
+                        } else {
+                            std.debug.print(
+                                "---\n# {s}: config error: template '{s}': xlsx_sheet missing required key 'header_row'\n",
+                                .{ config_path, b_entry.key_ptr.* },
+                            );
+                            return error.InvalidConfig;
+                        };
+                        const output_suffix = if (obj.get("output_suffix")) |v| switch (v) {
+                            .string => |s| try alloc.dupe(u8, s),
+                            else => {
+                                std.debug.print(
+                                    "---\n# {s}: config error: template '{s}': xlsx_sheet.output_suffix must be a string, got {s}\n",
+                                    .{ config_path, b_entry.key_ptr.*, @tagName(v) },
+                                );
+                                return error.InvalidConfig;
+                            },
+                        } else {
+                            std.debug.print(
+                                "---\n# {s}: config error: template '{s}': xlsx_sheet missing required key 'output_suffix'\n",
+                                .{ config_path, b_entry.key_ptr.* },
+                            );
+                            return error.InvalidConfig;
+                        };
                         xlsx_sheet = XlsxSheet{
                             .name          = name,
                             .header_row    = header_row,

@@ -158,7 +158,7 @@ const envelope_entries = [_]FieldDoc{
         .key = "conversion_templates.*.pre_pass.*",
         .type_name = "object",
         .required = false,
-        .description = "Named pre_pass block. The map key is the block name and becomes part of the LOOKUP namespace; different names cannot collide.",
+        .description = "Named pre_pass block. The map key is the block name (typed by the user in the GUI's Add-Child dialog or written directly in JSON5) and becomes part of the LOOKUP namespace; different names cannot collide. The `insert_template` below is the inner `{ when, key, values }` body — the outer `name1: { ... }` wrapper is supplied by whatever creates the entry (free-form key input in the GUI; verbatim JSON5 syntax for hand-edited configs).",
         .insert_order = "schema",
         .insert_template = config.PrePass.scaffold_template,
     },
