@@ -252,6 +252,23 @@ class _ConfigTreeScrollState extends State<_ConfigTreeScroll> {
 
   @override
   Widget build(BuildContext context) {
+    // Save flow is async: write tmp → bxp-fmt validate → backup → rename →
+    // post-save loadConfig. Anywhere from a few hundred ms to a second.
+    // Edits made during that window race the final loadConfig, which
+    // discards `_opLog` — the user's mid-flight changes silently
+    // disappear. Cheapest fix: lock the tree (and visually grey it) so
+    // the race window simply isn't reachable from the UI.
+    final isSaving = context.select<TraceStore, bool>((s) => s.isSaving);
+    return IgnorePointer(
+      ignoring: isSaving,
+      child: Opacity(
+        opacity: isSaving ? 0.55 : 1.0,
+        child: _buildTree(context),
+      ),
+    );
+  }
+
+  Widget _buildTree(BuildContext context) {
     return Scrollbar(
       controller: _vCtrl,
       thumbVisibility: true,
@@ -259,14 +276,31 @@ class _ConfigTreeScrollState extends State<_ConfigTreeScroll> {
         controller: _hCtrl,
         thumbVisibility: true,
         notificationPredicate: (n) => n.depth == 1,
-        child: SingleChildScrollView(
-          controller: _vCtrl,
-          padding: const EdgeInsets.all(16.0),
-          child: SingleChildScrollView(
-            controller: _hCtrl,
-            scrollDirection: Axis.horizontal,
-            child: JsonTree(root: widget.root, expandAll: false),
-          ),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            // Each tree row stretches its min-width to the viewport so
+            // action buttons can right-align against the scrollbar
+            // edge regardless of how short the row's content is. 16+16
+            // accounts for the outer SingleChildScrollView padding +
+            // the vertical scrollbar's thumb area.
+            final viewportRowWidth = constraints.maxWidth - 32;
+            return SingleChildScrollView(
+              controller: _vCtrl,
+              padding: const EdgeInsets.all(16.0),
+              child: SingleChildScrollView(
+                controller: _hCtrl,
+                scrollDirection: Axis.horizontal,
+                child: JsonTree(
+                  key: ValueKey(context.select<TraceStore, int>(
+                      (s) => s.treeLoadGen)),
+                  root: widget.root,
+                  expandAll: false,
+                  rowMinWidth:
+                      viewportRowWidth > 0 ? viewportRowWidth : null,
+                ),
+              ),
+            );
+          },
         ),
       ),
     );

@@ -19,9 +19,19 @@ class JsonTree extends StatefulWidget {
   final JsonAstNode? root;
   final bool expandAll;
   final bool readOnly;
+  /// Minimum width forced on every row so per-row trailing action buttons
+  /// can right-align against the same X column near the vertical
+  /// scrollbar — without it, rows take only their intrinsic width and
+  /// the buttons hop horizontally with each row's content length. Null
+  /// means "no min-width constraint" (legacy/embedded use).
+  final double? rowMinWidth;
 
   const JsonTree(
-      {super.key, required this.root, this.expandAll = false, this.readOnly = false});
+      {super.key,
+      required this.root,
+      this.expandAll = false,
+      this.readOnly = false,
+      this.rowMinWidth});
 
   @override
   State<JsonTree> createState() => _JsonTreeState();
@@ -34,15 +44,30 @@ class _JsonTreeState extends State<JsonTree> {
     if (root == null) return const SizedBox.shrink();
     // Compute global $comm_<N> numbering once per build; pass down.
     final numbering = ast_path.globalCommentNumbering(root);
-    return _JsonNode(
-      keyName: 'config',
-      value: root,
-      expandAll: widget.expandAll,
-      depth: 0,
-      path: const [],
-      commentN: numbering,
+    return _RowMinWidth(
+      width: widget.rowMinWidth,
+      child: _JsonNode(
+        keyName: 'config',
+        value: root,
+        expandAll: widget.expandAll,
+        depth: 0,
+        path: const [],
+        commentN: numbering,
+      ),
     );
   }
+}
+
+/// Threads the viewport-derived min-width to every descendant row.
+class _RowMinWidth extends InheritedWidget {
+  final double? width;
+  const _RowMinWidth({required this.width, required super.child});
+  static double? of(BuildContext ctx) {
+    final i = ctx.dependOnInheritedWidgetOfExactType<_RowMinWidth>();
+    return i?.width;
+  }
+  @override
+  bool updateShouldNotify(_RowMinWidth old) => old.width != width;
 }
 
 /// Trailing comment payload threaded from parent into [_JsonNode] so the
@@ -173,7 +198,22 @@ class _JsonNodeState extends State<_JsonNode> {
   List<Widget> _mapChildNodes(JsonObject obj) {
     final out = <Widget>[];
     int? lastRowIdx;
-    for (final entry in obj.properties) {
+    // Index of the first entry in the "trailing block" — the suffix of
+    // the container that contains only comments (no more JsonProperty
+    // entries follow). Standalone comments inside the trailing block
+    // render with the deeper indent (the user manually parked them at
+    // the end of the object); standalone comments BEFORE it lead a real
+    // sibling and align with that sibling.
+    int firstTrailingIdx = obj.properties.length;
+    for (var i = obj.properties.length - 1; i >= 0; i--) {
+      if (obj.properties[i] is JsonProperty) {
+        firstTrailingIdx = i + 1;
+        break;
+      }
+      if (i == 0) firstTrailingIdx = 0; // container is comments-only
+    }
+    for (var entryIdx = 0; entryIdx < obj.properties.length; entryIdx++) {
+      final entry = obj.properties[entryIdx];
       if (entry is CommentLine) {
         final n = widget.commentN[entry];
         final commKey = n == null ? r'$comm_?' : '\$comm_$n';
@@ -196,7 +236,12 @@ class _JsonNodeState extends State<_JsonNode> {
           );
           continue;
         }
-        out.add(_CommentRow(path: commPath, comment: entry.comment));
+        out.add(_CommentRow(
+          path: commPath,
+          comment: entry.comment,
+          depth: widget.depth + 1,
+          deepIndent: entryIdx >= firstTrailingIdx,
+        ));
         continue;
       }
       if (entry is JsonProperty) {
@@ -257,6 +302,15 @@ class _JsonNodeState extends State<_JsonNode> {
     final out = <Widget>[];
     int? lastRowIdx;
     int realLabel = 0;
+    // Same trailing-block logic as the map walker — see _mapChildNodes.
+    int firstTrailingIdx = arr.elements.length;
+    for (var i = arr.elements.length - 1; i >= 0; i--) {
+      if (arr.elements[i] is! CommentLine) {
+        firstTrailingIdx = i + 1;
+        break;
+      }
+      if (i == 0) firstTrailingIdx = 0;
+    }
     for (var i = 0; i < arr.elements.length; i++) {
       final el = arr.elements[i];
       if (el is CommentLine) {
@@ -279,7 +333,12 @@ class _JsonNodeState extends State<_JsonNode> {
           );
           continue;
         }
-        out.add(_CommentRow(path: commPath, comment: el.comment));
+        out.add(_CommentRow(
+          path: commPath,
+          comment: el.comment,
+          depth: widget.depth + 1,
+          deepIndent: i >= firstTrailingIdx,
+        ));
         continue;
       }
       final childPath = [...widget.path, i.toString()];
@@ -398,8 +457,10 @@ class _JsonNodeState extends State<_JsonNode> {
       child: Container(
         color: isHovered ? t.withHover(t.surfaceBg) : Colors.transparent,
         padding: const EdgeInsets.symmetric(vertical: 2.0),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        child: _RowEnvelope(
+          depth: widget.depth,
+          trailingActions: _buildActionButtons(isComposite: false),
+          actionsVisible: isHovered,
           children: [
             const SizedBox(width: 16),
             if (widget.keyName != null && int.tryParse(widget.keyName!)?.toString() != widget.keyName) ...[
@@ -412,11 +473,6 @@ class _JsonNodeState extends State<_JsonNode> {
             ],
             valueWidget,
             ..._inlineTrailingWidgets(),
-            const SizedBox(width: 40),
-            Opacity(
-              opacity: isHovered ? 1.0 : 0.0,
-              child: _buildActionButtons(isComposite: false),
-            ),
           ],
         ),
       ),
@@ -450,8 +506,12 @@ class _JsonNodeState extends State<_JsonNode> {
         child: Container(
           color: isHovered ? t.withHover(t.surfaceBg) : Colors.transparent,
           padding: const EdgeInsets.symmetric(vertical: 2.0),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
+          child: _RowEnvelope(
+            depth: widget.depth,
+            trailingActions: widget.keyName == 'config'
+                ? const SizedBox.shrink()
+                : _buildActionButtons(isComposite: true),
+            actionsVisible: isHovered && widget.keyName != 'config',
             children: [
               SizedBox(
                 width: 16,
@@ -484,14 +544,6 @@ class _JsonNodeState extends State<_JsonNode> {
                   ),
                 ),
               ..._inlineTrailingWidgets(),
-              // 5-char gap before the action buttons so they don't crowd
-              // the value/summary text.
-              const SizedBox(width: 40),
-              if (widget.keyName != 'config')
-                Opacity(
-                  opacity: isHovered ? 1.0 : 0.0,
-                  child: _buildActionButtons(isComposite: true),
-                ),
             ],
           ),
         ),
@@ -546,16 +598,26 @@ class _JsonNodeState extends State<_JsonNode> {
               onTap: () => store.moveConfigNode(widget.path, 1),
             ),
           ],
-          // "+ comment" inserts a fresh leading comment immediately above
-          // this row. Available everywhere — adding a label-style comment
-          // doesn't depend on container ordering.
-          if (widget.path.isNotEmpty)
+          // "comment above" inserts a fresh leading comment immediately
+          // above this row; "comment inline" attaches a trailing
+          // `// note` to the same source line. Available everywhere —
+          // adding a label-style comment doesn't depend on container
+          // ordering.
+          if (widget.path.isNotEmpty) ...[
             _ActionBtn(
               icon: '✎',
               tooltip: 'Add comment above',
               color: t.textMuted,
               onTap: () => store.insertCommentNode(widget.path, '//', ' '),
             ),
+            _ActionBtn(
+              icon: '⊳',
+              tooltip: 'Add inline comment',
+              color: t.textMuted,
+              onTap: () =>
+                  store.insertInlineCommentNode(widget.path, '//', ' '),
+            ),
+          ],
           if (isComposite)
             _ActionBtn(
               icon: '+',
@@ -575,7 +637,10 @@ class _JsonNodeState extends State<_JsonNode> {
             color: isRequired ? t.textMuted : t.errorText,
             onTap: isRequired ? null : () => store.deleteConfigNode(widget.path),
           ),
-          const SizedBox(width: 4),
+          // No internal trailing gap — `_RowEnvelope` adds the single
+          // 4 px gap between the last button and the row's right edge.
+          // Doubling that here would push key-row × buttons 4 px LEFT
+          // of the comment-row × button at the same depth.
         ],
       ),
     );
@@ -643,7 +708,20 @@ class _ErrorRow extends StatelessWidget {
 class _CommentRow extends StatefulWidget {
   final List<String> path;
   final CommentNode comment;
-  const _CommentRow({required this.path, required this.comment});
+  /// `true` when this comment lives in the trailing-block of its container
+  /// (no real key follows). Renders with extra left padding to read as a
+  /// "container-bottom" annotation. `false` (default) aligns the comment
+  /// with the next sibling row — the user wrote it as a label.
+  final bool deepIndent;
+  /// Tree depth of this row (matches sibling `_JsonNode.depth`). Used by
+  /// `_RowEnvelope` to compute the per-row right-edge anchor.
+  final int depth;
+  const _CommentRow({
+    required this.path,
+    required this.comment,
+    required this.depth,
+    this.deepIndent = false,
+  });
   @override
   State<_CommentRow> createState() => _CommentRowState();
 }
@@ -652,11 +730,21 @@ class _CommentRowState extends State<_CommentRow> {
   bool isHovered = false;
   bool isEditing = false;
   late TextEditingController controller;
+  final FocusNode _focus = FocusNode();
 
   @override
   void initState() {
     super.initState();
     controller = TextEditingController(text: widget.comment.text);
+    _focus.addListener(_onFocusChange);
+  }
+
+  @override
+  void dispose() {
+    _focus.removeListener(_onFocusChange);
+    _focus.dispose();
+    controller.dispose();
+    super.dispose();
   }
 
   @override
@@ -665,7 +753,33 @@ class _CommentRowState extends State<_CommentRow> {
     if (!isEditing) controller.text = widget.comment.text;
   }
 
+  // Focus-loss commit covers click-outside / tab-out / programmatic
+  // defocus uniformly — Flutter's `onTapOutside` misfires when the
+  // outside tap lands on widgets that absorb the pointer event before
+  // the TextFieldTapRegion sees it (sibling rows in this tree).
+  void _onFocusChange() {
+    if (!_focus.hasFocus && isEditing) _commit();
+  }
+
+  void _enterEdit() {
+    final body = widget.comment.text;
+    controller.value = TextEditingValue(
+      text: body,
+      // Select the whole body so the user can immediately retype to
+      // replace, or arrow-key out of the selection to position the
+      // cursor. Multi-line `TextField`s would otherwise leave the
+      // cursor at offset 0; single-line autofocus selects all by
+      // platform default — explicit select-all unifies both shapes.
+      selection: TextSelection(baseOffset: 0, extentOffset: body.length),
+    );
+    setState(() => isEditing = true);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _focus.requestFocus();
+    });
+  }
+
   void _commit() {
+    if (!isEditing) return;
     var body = controller.text;
     final isBlock = widget.comment.style == CommentStyle.block;
     if (!isBlock) {
@@ -676,14 +790,17 @@ class _CommentRowState extends State<_CommentRow> {
       body = body.replaceAll(RegExp(r'[\r\n]+'), ' ');
     }
     setState(() => isEditing = false);
+    _focus.unfocus();
     if (body != widget.comment.text) {
       context.read<TraceStore>().editCommentNode(widget.path, body);
     }
   }
 
   void _cancel() {
+    if (!isEditing) return;
     controller.text = widget.comment.text;
     setState(() => isEditing = false);
+    _focus.unfocus();
   }
 
   @override
@@ -693,18 +810,9 @@ class _CommentRowState extends State<_CommentRow> {
     final isBlock = widget.comment.style == CommentStyle.block;
     final body = widget.comment.text;
 
-    // Move gate (↑/↓): only in ordered containers — match real-key reorder.
-    // Edit / delete / insert are always allowed: text-only changes don't
-    // require a stable order.
-    List<String> orderedCheckPath = widget.path.length > 1
-        ? widget.path.sublist(0, widget.path.length - 1)
-        : const <String>[];
-    if (orderedCheckPath.isNotEmpty &&
-        int.tryParse(orderedCheckPath.last) != null) {
-      orderedCheckPath = orderedCheckPath.sublist(0, orderedCheckPath.length - 1);
-    }
-    final containerDoc = store.findSchemaDoc(orderedCheckPath);
-    final canMove = containerDoc != null && containerDoc['ordered'] == true;
+    // Comments are always positionally moveable / duplicable regardless
+    // of the surrounding container's `ordered` schema flag — that flag
+    // governs real-key semantics, not annotative noise.
 
     final commentStyle = BxpText.body(context, color: t.codeComment, size: BxpSize.md)
         .copyWith(fontStyle: FontStyle.italic);
@@ -724,7 +832,7 @@ class _CommentRowState extends State<_CommentRow> {
           },
           child: TextField(
             controller: controller,
-            autofocus: true,
+            focusNode: _focus,
             maxLines: isBlock ? null : 1,
             minLines: isBlock ? 1 : 1,
             keyboardType: isBlock ? TextInputType.multiline : TextInputType.text,
@@ -735,7 +843,6 @@ class _CommentRowState extends State<_CommentRow> {
                 ? null
                 : [FilteringTextInputFormatter.deny(RegExp(r'[\r\n]'))],
             onSubmitted: isBlock ? null : (_) => _commit(),
-            onTapOutside: (_) => _commit(),
             style: BxpText.body(context, color: t.codeComment, size: BxpSize.md),
             cursorColor: t.accentHighlight,
             decoration: InputDecoration(
@@ -750,15 +857,14 @@ class _CommentRowState extends State<_CommentRow> {
         ),
       );
     } else {
+      // No `minWidth` — that used to force a 300 px hit-area for empty
+      // comments but bloated the row's intrinsic past the envelope's
+      // depth-aware minWidth, which pushed the action slot off the
+      // right edge (delete × clipped). Empty placeholder still reads
+      // `(click to edit)` (~98 px) which is plenty to click on.
       bodyWidget = InkWell(
-        onTap: () {
-          setState(() {
-            controller.text = body;
-            isEditing = true;
-          });
-        },
-        child: Container(
-          constraints: const BoxConstraints(minWidth: 300),
+        onTap: _enterEdit,
+        child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 2),
           child: Text(
             body.trim().isEmpty ? '(click to edit)' : body,
@@ -775,43 +881,49 @@ class _CommentRowState extends State<_CommentRow> {
       onExit: (_) => setState(() => isHovered = false),
       child: Container(
         color: isHovered ? t.withHover(t.surfaceBg) : Colors.transparent,
-        padding: const EdgeInsets.only(left: 24.0, top: 2, bottom: 2),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        // Vertical padding only — the leading indent is provided as the
+        // first child of the envelope's row so the envelope's right edge
+        // still aligns with the scrollbar (`Container.padding.left` would
+        // grow the envelope past minWidth, pushing the action slot off
+        // the viewport and clipping the trailing × button).
+        padding: const EdgeInsets.symmetric(vertical: 2),
+        child: _RowEnvelope(
+          depth: widget.depth,
+          actionsVisible: isHovered,
+          trailingActions: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _ActionBtn(
+                icon: '↑',
+                tooltip: 'Move up',
+                color: t.textMuted,
+                onTap: () => store.moveConfigNode(widget.path, -1),
+              ),
+              _ActionBtn(
+                icon: '↓',
+                tooltip: 'Move down',
+                color: t.textMuted,
+                onTap: () => store.moveConfigNode(widget.path, 1),
+              ),
+              _ActionBtn(
+                icon: '⎘',
+                tooltip: 'Duplicate comment',
+                color: t.textMuted,
+                onTap: () => store.duplicateCommentNode(widget.path),
+              ),
+              _ActionBtn(
+                icon: '×',
+                tooltip: 'Delete comment',
+                color: t.errorText,
+                onTap: () => store.deleteCommentNode(widget.path),
+              ),
+            ],
+          ),
           children: [
+            SizedBox(width: widget.deepIndent ? 24.0 : 16.0),
             Text(isBlock ? '/*' : '//', style: commentStyle),
             bodyWidget,
             if (isBlock) Text('*/', style: commentStyle),
-            const SizedBox(width: 40),
-            Opacity(
-              opacity: isHovered ? 1.0 : 0.0,
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (canMove) ...[
-                    _ActionBtn(
-                      icon: '↑',
-                      tooltip: 'Move up',
-                      color: t.textMuted,
-                      onTap: () => store.moveConfigNode(widget.path, -1),
-                    ),
-                    _ActionBtn(
-                      icon: '↓',
-                      tooltip: 'Move down',
-                      color: t.textMuted,
-                      onTap: () => store.moveConfigNode(widget.path, 1),
-                    ),
-                  ],
-                  _ActionBtn(
-                    icon: '×',
-                    tooltip: 'Delete comment',
-                    color: t.errorText,
-                    onTap: () => store.deleteCommentNode(widget.path),
-                  ),
-                  const SizedBox(width: 4),
-                ],
-              ),
-            ),
           ],
         ),
       ),
@@ -833,11 +945,21 @@ class _InlineCommentEdit extends StatefulWidget {
 class _InlineCommentEditState extends State<_InlineCommentEdit> {
   bool isEditing = false;
   late TextEditingController controller;
+  final FocusNode _focus = FocusNode();
 
   @override
   void initState() {
     super.initState();
     controller = TextEditingController(text: widget.comment.text);
+    _focus.addListener(_onFocusChange);
+  }
+
+  @override
+  void dispose() {
+    _focus.removeListener(_onFocusChange);
+    _focus.dispose();
+    controller.dispose();
+    super.dispose();
   }
 
   @override
@@ -846,7 +968,24 @@ class _InlineCommentEditState extends State<_InlineCommentEdit> {
     if (!isEditing) controller.text = widget.comment.text;
   }
 
+  void _onFocusChange() {
+    if (!_focus.hasFocus && isEditing) _commit();
+  }
+
+  void _enterEdit() {
+    final body = widget.comment.text;
+    controller.value = TextEditingValue(
+      text: body,
+      selection: TextSelection(baseOffset: 0, extentOffset: body.length),
+    );
+    setState(() => isEditing = true);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _focus.requestFocus();
+    });
+  }
+
   void _commit() {
+    if (!isEditing) return;
     var body = controller.text;
     final isBlock = widget.comment.style == CommentStyle.block;
     if (!isBlock) {
@@ -854,14 +993,25 @@ class _InlineCommentEditState extends State<_InlineCommentEdit> {
       body = body.replaceAll(RegExp(r'[\r\n]+'), ' ');
     }
     setState(() => isEditing = false);
+    _focus.unfocus();
+    // Empty inline comment → delete the comment entirely. An inline
+    // `// ` with no body is visual noise on the row it trails; the
+    // standalone CommentRow has its own placeholder and this would only
+    // appear there as `(click to edit)`.
+    if (body.trim().isEmpty) {
+      context.read<TraceStore>().deleteCommentNode(widget.path);
+      return;
+    }
     if (body != widget.comment.text) {
       context.read<TraceStore>().editCommentNode(widget.path, body);
     }
   }
 
   void _cancel() {
+    if (!isEditing) return;
     controller.text = widget.comment.text;
     setState(() => isEditing = false);
+    _focus.unfocus();
   }
 
   @override
@@ -875,12 +1025,7 @@ class _InlineCommentEditState extends State<_InlineCommentEdit> {
           ? '/*${widget.comment.text}*/'
           : '//${widget.comment.text}';
       return InkWell(
-        onTap: () {
-          setState(() {
-            controller.text = widget.comment.text;
-            isEditing = true;
-          });
-        },
+        onTap: _enterEdit,
         child: Text(marker, style: style),
       );
     }
@@ -894,14 +1039,13 @@ class _InlineCommentEditState extends State<_InlineCommentEdit> {
         },
         child: TextField(
           controller: controller,
-          autofocus: true,
+          focusNode: _focus,
           maxLines: isBlock ? null : 1,
           // Phase 5b: line comments must not contain raw newlines.
           inputFormatters: isBlock
               ? null
               : [FilteringTextInputFormatter.deny(RegExp(r'[\r\n]'))],
           onSubmitted: isBlock ? null : (_) => _commit(),
-          onTapOutside: (_) => _commit(),
           style: BxpText.body(context, color: t.codeComment, size: BxpSize.sm),
           cursorColor: t.accentHighlight,
           decoration: InputDecoration(
@@ -921,6 +1065,80 @@ class _InlineCommentEditState extends State<_InlineCommentEdit> {
 }
 
 // ── Action button helper ────────────────────────────────────────────
+/// Wraps a tree-row's content in a min-width envelope so trailing
+/// action buttons right-align against a constant X near the vertical
+/// scrollbar instead of hopping with content length. The min-width is
+/// supplied by [_RowMinWidth] (set from the viewport's LayoutBuilder
+/// in `_ConfigTreeScroll`); rows wider than the viewport (long
+/// expressions) just grow past the envelope and their buttons trail
+/// the content end as before.
+///
+/// Action visibility (hover gate) uses Opacity rather than removing
+/// the buttons, so layout doesn't shift when the row hover state
+/// flips.
+class _RowEnvelope extends StatelessWidget {
+  final List<Widget> children;
+  final Widget trailingActions;
+  final bool actionsVisible;
+  /// Depth of the row in the tree (root = 0). Used to subtract the
+  /// per-level indent from the inherited viewport-row width so the
+  /// envelope's right edge aligns with the scrollbar at every depth.
+  final int depth;
+  const _RowEnvelope({
+    required this.children,
+    required this.trailingActions,
+    required this.actionsVisible,
+    required this.depth,
+  });
+
+  /// Combined `margin (6) + padding (16) + border (1)` of the indented
+  /// `Container` that wraps every nested level — see `_buildMap` /
+  /// `_buildList`. Drift this and the right-edge alignment breaks.
+  static const double _indentPerLevel = 23.0;
+
+  @override
+  Widget build(BuildContext context) {
+    final viewportRowWidth = _RowMinWidth.of(context);
+    final actions =
+        Opacity(opacity: actionsVisible ? 1.0 : 0.0, child: trailingActions);
+    if (viewportRowWidth == null || viewportRowWidth <= 0) {
+      // No viewport context (e.g. snapshot tree in tests): fall back to
+      // the legacy "buttons trail content end" layout.
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ...children,
+          const SizedBox(width: 40),
+          actions,
+          const SizedBox(width: 4),
+        ],
+      );
+    }
+    final minWidth = (viewportRowWidth - depth * _indentPerLevel)
+        .clamp(0.0, double.infinity);
+    return ConstrainedBox(
+      constraints: BoxConstraints(minWidth: minWidth),
+      child: IntrinsicWidth(
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            ...children,
+            // Spacer = Flexible(fit: tight) — fills any leftover space
+            // inside the envelope so trailing actions snap to the
+            // envelope's right edge (≈ scrollbar). Long rows whose
+            // intrinsic width exceeds minWidth get Spacer = 0; their
+            // buttons trail content end as before.
+            const Spacer(),
+            actions,
+            const SizedBox(width: 4),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _ActionBtn extends StatelessWidget {
   final String icon;
   final String tooltip;
@@ -1302,15 +1520,42 @@ class _EditableString extends StatefulWidget {
 class _EditableStringState extends State<_EditableString> {
   bool isEditing = false;
   late TextEditingController controller;
+  final FocusNode _focus = FocusNode();
 
   @override
   void initState() {
     super.initState();
     controller = TextEditingController(text: widget.value);
+    _focus.addListener(_onFocusChange);
+  }
+
+  @override
+  void dispose() {
+    _focus.removeListener(_onFocusChange);
+    _focus.dispose();
+    controller.dispose();
+    super.dispose();
+  }
+
+  void _onFocusChange() {
+    if (!_focus.hasFocus && isEditing) _commit();
+  }
+
+  void _enterEdit() {
+    controller.value = TextEditingValue(
+      text: widget.value,
+      selection: TextSelection(baseOffset: 0, extentOffset: widget.value.length),
+    );
+    setState(() => isEditing = true);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _focus.requestFocus();
+    });
   }
 
   void _commit() {
+    if (!isEditing) return;
     setState(() => isEditing = false);
+    _focus.unfocus();
     if (controller.text != widget.value) {
       widget.onCommit(controller.text);
     }
@@ -1319,8 +1564,10 @@ class _EditableStringState extends State<_EditableString> {
   /// Discard pending edits and leave edit mode without firing onCommit.
   /// Mirrors bxp-ui's EditableString Escape handler.
   void _cancel() {
+    if (!isEditing) return;
     controller.text = widget.value;
     setState(() => isEditing = false);
+    _focus.unfocus();
   }
 
   @override
@@ -1328,28 +1575,34 @@ class _EditableStringState extends State<_EditableString> {
     final t = context.bxpTheme;
     if (!isEditing) {
       return InkWell(
-        onTap: () {
-          setState(() {
-            isEditing = true;
-            controller.text = widget.value;
-          });
-        },
+        onTap: _enterEdit,
         child: Text('"${widget.value}"',
             style: BxpText.body(context,color: widget.color, size: BxpSize.md)),
       );
     }
 
+    // Field width = intrinsic text width + 20 % headroom for typing,
+    // floored at 150 px so very short values still get a usable field.
+    // Without this the previous fixed 150 px clipped any value >~18
+    // chars and the user couldn't see what they were editing.
+    final textStyle =
+        BxpText.body(context, color: widget.color, size: BxpSize.md);
+    final tp = TextPainter(
+      text: TextSpan(text: widget.value, style: textStyle),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    final fieldWidth = (tp.width * 1.2 + 24).clamp(150.0, 800.0);
     return SizedBox(
       height: 20,
-      width: 150,
+      width: fieldWidth,
       child: CallbackShortcuts(
         bindings: {
           const SingleActivator(LogicalKeyboardKey.escape): _cancel,
         },
         child: TextField(
           controller: controller,
-          autofocus: true,
-          style: BxpText.body(context,color: widget.color, size: BxpSize.md),
+          focusNode: _focus,
+          style: textStyle,
           cursorColor: t.accentHighlight,
           decoration: InputDecoration(
             isDense: true,
@@ -1363,7 +1616,6 @@ class _EditableStringState extends State<_EditableString> {
                 borderSide: BorderSide(color: t.inputBorderFocused)),
           ),
           onSubmitted: (_) => _commit(),
-          onTapOutside: (_) => _commit(),
         ),
       ),
     );
@@ -1384,15 +1636,43 @@ class _EditableNumber extends StatefulWidget {
 class _EditableNumberState extends State<_EditableNumber> {
   bool isEditing = false;
   late TextEditingController controller;
+  final FocusNode _focus = FocusNode();
 
   @override
   void initState() {
     super.initState();
     controller = TextEditingController(text: widget.value.toString());
+    _focus.addListener(_onFocusChange);
+  }
+
+  @override
+  void dispose() {
+    _focus.removeListener(_onFocusChange);
+    _focus.dispose();
+    controller.dispose();
+    super.dispose();
+  }
+
+  void _onFocusChange() {
+    if (!_focus.hasFocus && isEditing) _commit();
+  }
+
+  void _enterEdit() {
+    final s = widget.value.toString();
+    controller.value = TextEditingValue(
+      text: s,
+      selection: TextSelection(baseOffset: 0, extentOffset: s.length),
+    );
+    setState(() => isEditing = true);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _focus.requestFocus();
+    });
   }
 
   void _commit() {
+    if (!isEditing) return;
     setState(() => isEditing = false);
+    _focus.unfocus();
     final n = num.tryParse(controller.text);
     if (n != null && n != widget.value) {
       widget.onCommit(n);
@@ -1404,8 +1684,10 @@ class _EditableNumberState extends State<_EditableNumber> {
   /// Discard pending edits and leave edit mode without firing onCommit.
   /// Mirrors bxp-ui's EditableNumber Escape handler.
   void _cancel() {
+    if (!isEditing) return;
     controller.text = widget.value.toString();
     setState(() => isEditing = false);
+    _focus.unfocus();
   }
 
   @override
@@ -1413,12 +1695,7 @@ class _EditableNumberState extends State<_EditableNumber> {
     final t = context.bxpTheme;
     if (!isEditing) {
       return InkWell(
-        onTap: () {
-          setState(() {
-            isEditing = true;
-            controller.text = widget.value.toString();
-          });
-        },
+        onTap: _enterEdit,
         child: Text('${widget.value}',
             style: BxpText.body(context,color: widget.color, size: BxpSize.md)),
       );
@@ -1433,7 +1710,7 @@ class _EditableNumberState extends State<_EditableNumber> {
         },
         child: TextField(
           controller: controller,
-          autofocus: true,
+          focusNode: _focus,
           keyboardType: TextInputType.number,
           style: BxpText.body(context,color: widget.color, size: BxpSize.md),
           cursorColor: t.accentHighlight,
@@ -1449,7 +1726,6 @@ class _EditableNumberState extends State<_EditableNumber> {
                 borderSide: BorderSide(color: t.inputBorderFocused)),
           ),
           onSubmitted: (_) => _commit(),
-          onTapOutside: (_) => _commit(),
         ),
       ),
     );

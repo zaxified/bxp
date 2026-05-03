@@ -217,6 +217,27 @@ void deleteComment(JsonAstNode root, List<String> path) {
   loc.delete();
 }
 
+/// Clone the comment addressed by `path` (last segment `$comm_<N>`) and
+/// insert the copy as the next peer in the same container. Mirrors
+/// [duplicateAt]'s "insert right after the source" semantics so the user
+/// gets the new entry in the position they expect, not at the tail.
+void duplicateCommentAt(JsonAstNode root, List<String> path) {
+  final loc = _resolveCommentByPath(root, path);
+  final children = loc.container is JsonObject
+      ? (loc.container as JsonObject).properties
+      : (loc.container as JsonArray).elements;
+  final orig = children[loc.containerIndex] as CommentLine;
+  // Standalone vs inline: the duplicate inherits the source's
+  // inlinePlacement (lives on CommentLine, not CommentNode) so duplicating
+  // an inline trailing comment yields another inline-style entry, not a
+  // standalone block.
+  final cloneLine = CommentLine(
+    CommentNode(orig.comment.style, orig.comment.text),
+    inlinePlacement: orig.inlinePlacement,
+  );
+  children.insert(loc.containerIndex + 1, cloneLine);
+}
+
 /// Insert a CommentLine immediately before the entry at `anchorPath` in
 /// its container. Works the same way for Map and List anchors — both have
 /// `properties` / `elements` as ordered containers that accept CommentLine
@@ -235,6 +256,30 @@ void insertLeadingComment(
   final ref = resolveParent(root, anchorPath);
   final newComment = CommentNode(style, text);
   ref.children.insert(ref.index, CommentLine(newComment));
+}
+
+/// Insert a trailing INLINE comment that attaches to the row at
+/// `anchorPath` — renders on the same source line (`key: value, // note`).
+/// Lives as the next peer entry in the container with
+/// `inlinePlacement: true`; the dumper picks that up and emits it inline
+/// instead of on its own row.
+void insertTrailingInlineComment(
+  JsonAstNode root,
+  List<String> anchorPath,
+  CommentStyle style,
+  String text,
+) {
+  if (anchorPath.isEmpty) {
+    throw AstOpError(
+        'insertTrailingInlineComment: anchor path empty (cannot attach to root)',
+        anchorPath);
+  }
+  final ref = resolveParent(root, anchorPath);
+  final newComment = CommentNode(style, text);
+  ref.children.insert(
+    ref.index + 1,
+    CommentLine(newComment, inlinePlacement: true),
+  );
 }
 
 CommentLocation _resolveCommentByPath(JsonAstNode root, List<String> path) {

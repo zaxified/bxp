@@ -7,6 +7,17 @@ import 'expr_editor.dart';
 import 'expr_highlight.dart';
 import 'expr_playground.dart';
 
+/// Width of the trailing slot (Cancel + gap + Apply) at the bottom of
+/// the in-panel editor. Reused by ExprPlayground as an empty
+/// reservation so the shared error box wraps to the same width in both
+/// modes — without it the playground's error would span full width
+/// while the panel's would visually stop short of the buttons.
+const double exprButtonsSlotWidth = 170;
+
+/// Height of the bottom row that hosts the error box + buttons. Tall
+/// enough for two-line wrapped error text plus button vertical padding.
+const double exprBottomRowHeight = 60;
+
 class ExprPanel extends StatefulWidget {
   const ExprPanel({super.key});
 
@@ -14,8 +25,47 @@ class ExprPanel extends StatefulWidget {
   State<ExprPanel> createState() => _ExprPanelState();
 }
 
+/// Capped + scrollable error display reused by both the in-panel editor
+/// and the ExprPlayground. When [message] is null/empty the widget
+/// renders a transparent placeholder of the same shape so the
+/// surrounding row layout doesn't jump as errors appear/disappear.
+class _ExprErrorBox extends StatelessWidget {
+  final String? message;
+  const _ExprErrorBox({required this.message});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.bxpTheme;
+    if (message == null || message!.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    // Align(topLeft) keeps the red background hugging the text — without
+    // it the Container would stretch to fill the Expanded slot and paint
+    // a giant red rectangle next to a short error message. ConstrainedBox
+    // caps the painted box at [exprBottomRowHeight] so an unusually long
+    // diagnostic doesn't blow up the bottom row.
+    return Align(
+      alignment: Alignment.topLeft,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxHeight: exprBottomRowHeight),
+        child: Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(color: t.errorBg),
+          child: SingleChildScrollView(
+            child: SelectableText(
+              message!,
+              style: BxpText.body(context, color: t.errorText, size: BxpSize.sm),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _ExprPanelState extends State<ExprPanel> {
   final _controller = ExprTextEditingController();
+  final _focusNode = FocusNode();
   int _lastGen = -1;
 
   @override
@@ -30,18 +80,35 @@ class _ExprPanelState extends State<ExprPanel> {
           offset: _controller.text.length,
         );
       }
+      // Selecting a new expr (tree click, click-to-jump from row-detail)
+      // should drop the user straight into typing — same UX as opening
+      // any inline tree editor. Defer to post-frame so the TextField is
+      // mounted before we requestFocus.
+      if (store.selectedExprPath != null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _focusNode.requestFocus();
+        });
+      }
     }
   }
 
   @override
   void dispose() {
+    _focusNode.dispose();
     _controller.dispose();
     super.dispose();
   }
 
+  /// Newlines in the editor are a typing aid (the user can press Enter
+  /// to split a long expression across visual lines while editing).
+  /// They are stripped before validation and before commit so neither
+  /// `bxp-fmt --expr validate` nor the persisted config sees them — both
+  /// would reject a literal newline mid-token.
+  String _strip(String s) => s.replaceAll(RegExp(r'[\r\n]+'), ' ');
+
   void _commit(TraceStore store) {
-    final text = _controller.text;
     if (store.selectedExprPath == null) return;
+    final text = _strip(_controller.text);
     store.editConfigNode(store.selectedExprPath!, text);
     store.setSelectedExpr(store.selectedExprPath!, text);
   }
@@ -54,21 +121,16 @@ class _ExprPanelState extends State<ExprPanel> {
     final dividerColor = t.borderColor;
 
     if (!hasExpr) {
-      // Playground sits in its own scrollable Flexible slice (1/3 of the
-      // column by default) so a narrow ExprPanel — e.g. when the user has
-      // dragged the divider tight or zoomed in — can still render the
-      // DocsPanel below it instead of overflowing the column. DocsPanel
-      // keeps its 2/3 Expanded share and its own internal column scrollers.
+      // Both slices are tight-flex so the column always fills its parent
+      // top-to-bottom. The playground manages its own internal layout —
+      // editor expands to fill, scrollbar stays inside the editor box,
+      // not on the whole slice.
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Flexible(
-            child: SingleChildScrollView(
-              child: const ExprPlayground(),
-            ),
-          ),
+          const Expanded(flex: 25, child: ExprPlayground()),
           Expanded(
-            flex: 2,
+            flex: 75,
             child: DecoratedBox(
               decoration: BoxDecoration(
                 border: Border(top: BorderSide(color: dividerColor)),
@@ -83,21 +145,23 @@ class _ExprPanelState extends State<ExprPanel> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Flexible(
-          child: SingleChildScrollView(
-            child: Container(
-              // Padding matches ExprPlayground (all: 16) so the editor box
-              // sits at the same Y in both modes — toggling ✕/Esc keeps
-              // the box visually pinned.
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                border: Border(bottom: BorderSide(color: dividerColor)),
-              ),
-              child: _buildEditor(context, store, dividerColor),
+        Expanded(
+          flex: 25,
+          child: Container(
+            // Padding matches ExprPlayground (LTR 16, no bottom) so the
+            // buttons row sits flush against the docs divider — without
+            // a trailing 16 px the user used to see a ~1 cm gap before
+            // the docs columns started. The TextField inside is
+            // `expands: true` and scrolls its own content, leaving
+            // header / error / buttons anchored.
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+            decoration: BoxDecoration(
+              border: Border(bottom: BorderSide(color: dividerColor)),
             ),
+            child: _buildEditor(context, store, dividerColor),
           ),
         ),
-        const Expanded(flex: 2, child: _DocsPanel()),
+        const Expanded(flex: 75, child: _DocsPanel()),
       ],
     );
   }
@@ -155,17 +219,13 @@ class _ExprPanelState extends State<ExprPanel> {
               // ValidationBadge (idle/pending/ok/error) so the user sees a
               // "checking" pulse during the 200ms debounce + bxp-fmt spawn
               // instead of stale flicker between "valid" and "invalid".
-              // Fixed-width slot prevents the breadcrumb / ✕ button from
-              // hopping when the label changes length (idle→checking→valid→
-              // invalid have different glyph widths in monospace).
-              ExprValidationBadgeSlot(state: store.exprValidationState),
-              const SizedBox(width: 8),
-              InkWell(
-                onTap: () => store.clearSelectedExpr(),
-                child: Text(
-                  '✕',
-                  style: TextStyle(color: t.textMuted, fontSize: 12),
-                ),
+              // Muted to "idle" while the autocomplete popup is up: the
+              // user is mid-completion, a stale INVALID from the previous
+              // partial keystroke shouts at them while they're picking.
+              ExprValidationBadgeSlot(
+                state: store.isExprAutocompleteOpen
+                    ? ExprValidationState.idle
+                    : store.exprValidationState,
               ),
             ],
           ),
@@ -181,57 +241,91 @@ class _ExprPanelState extends State<ExprPanel> {
         // (b) clobber the baseline before Reset has a chance to run
         // (the Reset button is "outside" the textfield, so a tap-
         // outside fires *before* its own onPressed).
-        ExprEditor(
-          controller: _controller,
-          hasError: store.exprValidationError != null,
-          minLines: 4,
-          onChanged: (text) => store.updateSelectedExprText(text),
-        ),
-
-        // Error message
-        if (store.exprValidationError != null) ...[
-          const SizedBox(height: 6),
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(color: t.errorBg),
-            child: SelectableText(
-              store.exprValidationError!,
-              style: BxpText.body(
-                context,
-                color: t.errorText,
-                size: BxpSize.sm,
-              ),
-            ),
+        Expanded(
+          child: ExprEditor(
+            controller: _controller,
+            focusNode: _focusNode,
+            // Same masking as the badge: a red border while the popup
+            // is open reads as "you're wrong" exactly when the user is
+            // about to type the right thing.
+            hasError: !store.isExprAutocompleteOpen &&
+                store.exprValidationError != null,
+            expands: true,
+            onChanged: (text) => store.updateSelectedExprText(_strip(text)),
+            onAutocompleteVisibilityChanged: store.setExprAutocompleteOpen,
           ),
-        ],
+        ),
 
         const SizedBox(height: 8),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.end,
-          children: [
-            _ExprActionButton(
-              label: 'Reset',
-              primary: false,
-              onPressed: store.selectedExprText == store.selectedExprBaseline
-                  ? null
-                  : () {
-                      _controller.text = store.selectedExprBaseline;
-                      _controller.selection = TextSelection.collapsed(
-                        offset: _controller.text.length,
-                      );
-                      store.updateSelectedExprText(store.selectedExprBaseline);
-                    },
-            ),
-            const SizedBox(width: 6),
-            _ExprActionButton(
-              label: 'Apply',
-              primary: true,
-              onPressed: store.exprValidationError == null
-                  ? () => _commit(store)
-                  : null,
-            ),
-          ],
+        // Error box + Cancel/Apply share one row: the error widget gets
+        // the leftover space (Expanded) while the buttons take a
+        // fixed [exprButtonsSlotWidth] slot on the right. The
+        // ExprPlayground reuses the same row but with an empty slot in
+        // place of the buttons, so the error wraps to the same width
+        // in both modes — no visual divergence between
+        // has-expr / scratchpad. Row sizes to its taller child (button
+        // height 28 px or wrapped error text up to its internal cap),
+        // so an absent error doesn't waste vertical space above the
+        // docs divider.
+        IntrinsicHeight(
+          child: Row(
+            // `stretch` makes each cell fill the row's intrinsic height
+            // (= max(error_height, button_height)). Inside, the error
+            // cell uses Align(topLeft) so it stays anchored at the top
+            // and the buttons cell uses Align(bottomRight) so the
+            // buttons stay glued to the row's bottom edge — without
+            // that pairing, growing/shrinking the error visibly hops
+            // the buttons by a few pixels each time it toggles.
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
+                child: _ExprErrorBox(
+                  message: store.isExprAutocompleteOpen
+                      ? null
+                      : store.exprValidationError,
+                ),
+              ),
+              const SizedBox(width: 8),
+              SizedBox(
+                width: exprButtonsSlotWidth,
+                child: Align(
+                  alignment: Alignment.bottomRight,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                    // Cancel = discard pending edits + close the editor
+                    // pane. Always enabled: even with no pending edits
+                    // it lets the user back out of the editor with one
+                    // click.
+                    _ExprActionButton(
+                      label: 'Cancel',
+                      primary: false,
+                      onPressed: () => store.clearSelectedExpr(),
+                    ),
+                    const SizedBox(width: 6),
+                    _ExprActionButton(
+                      label: 'Apply',
+                      primary: true,
+                      // Apply stays disabled if the last validation said
+                      // INVALID. While the popup is up the badge is
+                      // muted but the underlying error is still real,
+                      // so we keep Apply gated on it — clicking Apply
+                      // mid-completion would commit a partial expression.
+                      onPressed: store.exprValidationError == null
+                          ? () => _commit(store)
+                          : null,
+                    ),
+                  ],
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
+        // Small gap below the buttons so they don't sit flush against
+        // the docs divider (which reads as cramped at typical zoom).
+        const SizedBox(height: 6),
       ],
     );
   }

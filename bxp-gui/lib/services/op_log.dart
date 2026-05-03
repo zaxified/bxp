@@ -59,6 +59,13 @@ class DeleteCommentOp extends ConfigOp {
   const DeleteCommentOp(this.path);
 }
 
+/// Clone the comment at [path] (`$comm_<N>`) into the next peer slot.
+/// Mirrors [DuplicateOp] for real keys/elements.
+class DuplicateCommentOp extends ConfigOp {
+  final ConfigPath path;
+  const DuplicateCommentOp(this.path);
+}
+
 /// Insert a new comment immediately above the entry at [anchorPath].
 /// [style] is `"//"` or `"/*"`. [text] is the body (no markers).
 /// `MoveOp` with a `$comm_<N>` last-segment handles reordering.
@@ -67,6 +74,16 @@ class InsertCommentOp extends ConfigOp {
   final String style;
   final String text;
   const InsertCommentOp(this.anchorPath, this.style, this.text);
+}
+
+/// Insert a trailing INLINE comment glued to the row at [anchorPath]
+/// (`key: value, // note`). Mirrors [InsertCommentOp] but the resulting
+/// CommentLine carries `inlinePlacement: true`.
+class InsertInlineCommentOp extends ConfigOp {
+  final ConfigPath anchorPath;
+  final String style;
+  final String text;
+  const InsertInlineCommentOp(this.anchorPath, this.style, this.text);
 }
 
 /// Insert a fresh entry into the parent at [parentPath].

@@ -43,9 +43,16 @@ void applyConfigOp(JsonAstNode root, ConfigOp op) {
     case DeleteCommentOp d:
       ast_ops.deleteComment(root, d.path);
 
+    case DuplicateCommentOp d:
+      ast_ops.duplicateCommentAt(root, d.path);
+
     case InsertCommentOp i:
       final style = i.style == '/*' ? CommentStyle.block : CommentStyle.line;
       ast_ops.insertLeadingComment(root, i.anchorPath, style, i.text);
+
+    case InsertInlineCommentOp i:
+      final style = i.style == '/*' ? CommentStyle.block : CommentStyle.line;
+      ast_ops.insertTrailingInlineComment(root, i.anchorPath, style, i.text);
   }
 }
 

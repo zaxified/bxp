@@ -7,7 +7,13 @@ import '../theme/bxp_theme.dart';
 import '../theme/bxp_text.dart';
 import 'expr_editor.dart';
 import 'expr_highlight.dart';
-import 'expr_panel.dart' show ExprValidationBadgeSlot;
+import 'expr_panel.dart'
+    show
+        ExprValidationBadgeSlot,
+        exprButtonsSlotWidth,
+        exprBottomRowHeight;
+// `exprBottomRowHeight` is intentionally re-exported to keep the cap on
+// `_PlaygroundErrorBox` height in sync with the panel-side `_ExprErrorBox`.
 
 /// Standalone expression scratchpad — mirrors bxp-ui's ExprPlayground.
 ///
@@ -42,6 +48,10 @@ class _ExprPlaygroundState extends State<ExprPlayground> {
   Timer? _debounce;
   ExprValidationState _state = ExprValidationState.idle;
   String _errorMessage = '';
+  /// Mirrors the panel-side suspension flag: while the autocomplete
+  /// popup is up, skip the bxp-fmt spawn so partial-input typing
+  /// doesn't flicker an INVALID badge during selection.
+  bool _autocompleteOpen = false;
 
   @override
   void initState() {
@@ -59,10 +69,17 @@ class _ExprPlaygroundState extends State<ExprPlayground> {
     super.dispose();
   }
 
+  /// Same newline rule as the in-panel editor: a typing aid only —
+  /// stripped before validation so bxp-fmt sees a single-line input
+  /// in both modes. Without this, the playground would surface a
+  /// `UnexpectedChar '\n'` error the moment the user pressed Enter,
+  /// while the panel silently accepted the same input — divergent UX.
+  String _stripNewlines(String s) =>
+      s.replaceAll(RegExp(r'[\r\n]+'), ' ');
+
   void _onChanged() {
-    // Debounce 300ms so rapid typing doesn't spawn bxp-fmt on every char.
     _debounce?.cancel();
-    final text = _ctrl.text;
+    final text = _stripNewlines(_ctrl.text);
     if (text.trim().isEmpty) {
       setState(() {
         _state = ExprValidationState.idle;
@@ -70,11 +87,28 @@ class _ExprPlaygroundState extends State<ExprPlayground> {
       });
       return;
     }
+    if (_autocompleteOpen) {
+      // User is mid-completion — leave the badge alone, the actual
+      // validate fires when the popup closes (see _onAutocompleteVisibility).
+      return;
+    }
     setState(() => _state = ExprValidationState.pending);
-    _debounce = Timer(const Duration(milliseconds: 300), () => _validate(text));
+    _debounce = Timer(const Duration(milliseconds: 500), () => _validate(text));
+  }
+
+  void _onAutocompleteVisibility(bool open) {
+    setState(() => _autocompleteOpen = open);
+    if (open) {
+      _debounce?.cancel();
+    } else {
+      // Popup closed — re-validate the final text so the badge catches
+      // up to whatever the user picked / typed past the suggestions.
+      _onChanged();
+    }
   }
 
   Future<void> _validate(String text) async {
+    text = _stripNewlines(text);
     if (text.trim().isEmpty) {
       setState(() {
         _state = ExprValidationState.idle;
@@ -83,8 +117,9 @@ class _ExprPlaygroundState extends State<ExprPlayground> {
       return;
     }
     final err = await BxpProcessClient.validateExpr(text);
-    // Guard against races: caller may have replaced text in the meantime.
-    if (!mounted || _ctrl.text != text) return;
+    // Guard against races: caller may have replaced text in the meantime
+    // — compare the stripped version since `_ctrl.text` keeps newlines.
+    if (!mounted || _stripNewlines(_ctrl.text) != text) return;
     setState(() {
       if (err == null) {
         _state = ExprValidationState.ok;
@@ -104,14 +139,19 @@ class _ExprPlaygroundState extends State<ExprPlayground> {
   @override
   Widget build(BuildContext context) {
     context.watch<TraceStore>();
-    final t = context.bxpTheme;
-    final isError = _state == ExprValidationState.error;
+    // Mute INVALID badge / red border / error box while the autocomplete
+    // popup is up — same rationale as the in-panel editor.
+    final isError =
+        !_autocompleteOpen && _state == ExprValidationState.error;
+    final shownState = _autocompleteOpen ? ExprValidationState.idle : _state;
 
     return Padding(
-      padding: const EdgeInsets.all(16),
+      // No bottom padding — matches the panel-mode container so the
+      // playground's bottom row sits at the same Y as the panel's,
+      // with a uniform 6 px gap added below before the docs divider.
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
-        mainAxisSize: MainAxisSize.min,
         children: [
           // Fixed header height matches the ExprPanel breadcrumb row so
           // the editor box below does not jump when the user toggles
@@ -138,29 +178,77 @@ class _ExprPlaygroundState extends State<ExprPlayground> {
                   ),
                 ),
                 const SizedBox(width: 8),
-                ExprValidationBadgeSlot(state: _state),
+                ExprValidationBadgeSlot(state: shownState),
               ],
             ),
           ),
           const SizedBox(height: 10),
 
-          ExprEditor(
-            controller: _ctrl,
-            hasError: isError,
-            minLines: 5,
-          ),
-          if (isError) ...[
-            const SizedBox(height: 10),
-            Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(color: t.errorBg),
-              child: SelectableText(
-                _errorMessage,
-                style: BxpText.body(context, color: t.errorText, size: BxpSize.sm),
-              ),
+          // Editor fills the playground slot vertically; its TextField
+          // scrolls its own content when the user adds many newlines —
+          // the surrounding column does not push the error box out.
+          Expanded(
+            child: ExprEditor(
+              controller: _ctrl,
+              hasError: isError,
+              expands: true,
+              onAutocompleteVisibilityChanged: _onAutocompleteVisibility,
             ),
-          ],
+          ),
+          const SizedBox(height: 8),
+          // Mirrors the panel's bottom row: error box on the left
+          // (Expanded) + a fixed-width slot on the right that's empty
+          // here (no Cancel/Apply in scratchpad). IntrinsicHeight lets
+          // the row collapse when there's no error so the playground
+          // doesn't reserve dead space above the docs divider.
+          IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: _PlaygroundErrorBox(
+                    message: isError ? _errorMessage : null,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                const SizedBox(width: exprButtonsSlotWidth),
+              ],
+            ),
+          ),
+          const SizedBox(height: 6),
         ],
+      ),
+    );
+  }
+}
+
+/// Same shape as the in-panel `_ExprErrorBox` but lives here to keep the
+/// panel-side widget private. Cosmetics are identical so the two modes
+/// render the same red box for the same diagnostic text.
+class _PlaygroundErrorBox extends StatelessWidget {
+  final String? message;
+  const _PlaygroundErrorBox({required this.message});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.bxpTheme;
+    if (message == null || message!.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    return Align(
+      alignment: Alignment.topLeft,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxHeight: exprBottomRowHeight),
+        child: Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(color: t.errorBg),
+          child: SingleChildScrollView(
+            child: SelectableText(
+              message!,
+              style: BxpText.body(context, color: t.errorText, size: BxpSize.sm),
+            ),
+          ),
+        ),
       ),
     );
   }

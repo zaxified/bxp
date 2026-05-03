@@ -104,7 +104,14 @@ class TraceStore extends ChangeNotifier {
   // placeholder instead of momentarily flashing "Config not parsed."
   // when the bxp-fmt spawn takes more than a frame to return.
   bool isLoadingConfig = false;
-  
+
+  /// Bumps every time `loadConfig` completes. ConfigView keys the json-tree
+  /// subtree with this counter so each reload throws away per-row UI state
+  /// (manual expand/collapse on `_JsonNode`s) — without it Flutter reuses
+  /// State across loads and the tree visually inherits the previous shape
+  /// even though the AST is fresh.
+  int treeLoadGen = 0;
+
   // Data
   TraceModel? traceModel;
   
@@ -306,6 +313,35 @@ class TraceStore extends ChangeNotifier {
   // against CPU load and feels instant to the typist.
   Timer? _validationDebounce;
 
+  /// True while the in-panel autocomplete popup is visible. Validation
+  /// is suspended in that window — the user is mid-completion, the
+  /// expression is intentionally partial, and a `bxp-fmt --expr` spawn
+  /// would just flicker an "INVALID" badge that flips back to "VALID"
+  /// the moment they pick a function.
+  bool _exprAutocompleteOpen = false;
+  bool get isExprAutocompleteOpen => _exprAutocompleteOpen;
+
+  /// Called by ExprEditor when its autocomplete popup opens or closes.
+  /// Open → cancel pending validation; closed → re-run validation on
+  /// the current text so the badge catches up to the final input.
+  void setExprAutocompleteOpen(bool open) {
+    if (_exprAutocompleteOpen == open) return;
+    _exprAutocompleteOpen = open;
+    if (open) {
+      _validationDebounce?.cancel();
+      // Notify so the editor's badge / red border can mute themselves —
+      // a stale "INVALID" from the previous keystroke would otherwise
+      // shout at the user while they're choosing from the popup.
+      notifyListeners();
+    } else if (selectedExprText.trim().isNotEmpty) {
+      exprValidationState = ExprValidationState.pending;
+      notifyListeners();
+      _validateNow(selectedExprText);
+    } else {
+      notifyListeners();
+    }
+  }
+
   void setSelectedExpr(List<String> path, String text) {
     devTrace('action.expr.select', {'path': path});
     selectedExprPath = path;
@@ -324,21 +360,41 @@ class TraceStore extends ChangeNotifier {
   }
 
   void updateSelectedExprText(String text) {
+    // Newlines are a UI typing aid only — the editor lets the user split
+    // long expressions visually. bxp-fmt's expr parser would reject a
+    // literal newline mid-token, so strip them defensively here so any
+    // caller (including legacy paths) feeds a clean validator input.
+    text = text.replaceAll(RegExp(r'[\r\n]+'), ' ');
     selectedExprText = text;
+    if (_exprAutocompleteOpen) {
+      // While the popup is up, leave the badge state as-is and don't
+      // schedule a spawn; the user is selecting from the list, not
+      // committing to typed text. `setExprAutocompleteOpen(false)` will
+      // re-validate when the popup closes.
+      notifyListeners();
+      return;
+    }
     // Flip to pending immediately so the user sees "checking…" the
-    // moment they start typing — not after the 200ms debounce + spawn.
+    // moment they start typing — not after the 500ms debounce + spawn.
     exprValidationState = text.trim().isEmpty
         ? ExprValidationState.idle
         : ExprValidationState.pending;
     notifyListeners();
     // Typing: debounce the spawn so rapid keystrokes don't queue runs.
     _validationDebounce?.cancel();
-    _validationDebounce = Timer(const Duration(milliseconds: 200), () {
-      if (selectedExprText == text) _validateNow(text);
+    _validationDebounce = Timer(const Duration(milliseconds: 500), () {
+      if (selectedExprText == text && !_exprAutocompleteOpen) {
+        _validateNow(text);
+      }
     });
   }
 
   void _validateNow(String text) async {
+    // Belt-and-suspenders: strip newlines on the validator boundary too,
+    // matching `updateSelectedExprText`. Anything getting here from
+    // `setSelectedExpr` (file load) is already newline-free, but a stray
+    // direct caller can't accidentally feed a multi-line string.
+    text = text.replaceAll(RegExp(r'[\r\n]+'), ' ');
     if (text.trim().isEmpty) {
       exprValidationError = null;
       exprValidationState = ExprValidationState.idle;
@@ -798,7 +854,16 @@ class TraceStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> loadConfig() async {
+  /// Reload the active config from disk.
+  ///
+  /// [preserveTreeState] suppresses the `treeLoadGen` bump so the
+  /// json-tree's per-row expansion state survives the reload. Used by
+  /// `saveConfig` whose post-write reload is internal bookkeeping
+  /// (refresh raw bytes, validator markers, op-log baseline) — not a
+  /// user-visible "fresh file" event. Manual Reload (Ctrl+R / toolbar)
+  /// leaves the default `false` so the tree resets to defaults as
+  /// before.
+  Future<void> loadConfig({bool preserveTreeState = false}) async {
     devTrace('loadConfig.start', {'path': configPath});
     isLoadingConfig = true;
     // Reset transient state from any previous load so errors don't stick:
@@ -807,6 +872,12 @@ class TraceStore extends ChangeNotifier {
     configError = null;
     _loadedWithErrors = false;
     _validationErrors = const {};
+    // Drop the active expr selection — pointing at a stale path from the
+    // previous file would leave the editor populated with the old text.
+    // Skipped on save-driven reloads: the user's selection is still
+    // valid (we just wrote the file we're re-reading) and clearing it
+    // would jarringly close the editor mid-session.
+    if (!preserveTreeState) clearSelectedExpr();
     notifyListeners();
     try {
       if (configPath.isEmpty) {
@@ -914,6 +985,7 @@ class TraceStore extends ChangeNotifier {
       // ignore: discarded_futures
       _addRecentFile(configPath);
     }
+    if (!preserveTreeState) treeLoadGen++;
     notifyListeners();
   }
 
@@ -1363,6 +1435,42 @@ class TraceStore extends ChangeNotifier {
     _scheduleConfigValidation();
   }
 
+  /// Duplicate a comment in place — the clone is inserted as the next
+  /// peer entry of [path]. Mirrors [duplicateConfigNode] for real-key
+  /// duplicates so users get the same "right after the source" behaviour
+  /// for either kind of row.
+  void duplicateCommentNode(List<String> path) {
+    if (_astRoot == null || path.isEmpty || _loadedWithErrors) return;
+    if (!path.last.startsWith(r'$comm_')) return;
+    if (!_applyOpToAst(DuplicateCommentOp(path),
+        'op.duplicateComment', {'path': path})) {
+      return;
+    }
+    _recomputeDirty();
+    _pushHistory();
+    notifyListeners();
+    _scheduleConfigValidation();
+  }
+
+  /// Insert a fresh trailing INLINE comment attached to [anchorPath]
+  /// (`key: value, // text`). Mirrors [insertCommentNode] but produces
+  /// an inline-placement CommentLine instead of a leading standalone
+  /// row.
+  void insertInlineCommentNode(
+      List<String> anchorPath, String style, String text) {
+    if (_astRoot == null || _loadedWithErrors) return;
+    if (anchorPath.isEmpty) return;
+    if (!_applyOpToAst(InsertInlineCommentOp(anchorPath, style, text),
+        'op.insertInlineComment',
+        {'anchorPath': anchorPath, 'style': style})) {
+      return;
+    }
+    _recomputeDirty();
+    _pushHistory();
+    notifyListeners();
+    _scheduleConfigValidation();
+  }
+
   /// Insert a fresh leading comment immediately above [anchorPath].
   /// [style] is `"//"` or `"/*"`. [text] is the body without markers.
   void insertCommentNode(List<String> anchorPath, String style, String text) {
@@ -1496,8 +1604,10 @@ class TraceStore extends ChangeNotifier {
 
       // Re-run bxp-fmt so validation markers ($err_/$comm_) refresh against
       // the new on-disk content. (Also captures fresh raw bytes and resets
-      // the op log baseline.)
-      await loadConfig();
+      // the op log baseline.) `preserveTreeState: true` keeps the user's
+      // expansion state and active expr selection — Save isn't a "fresh
+      // file" event from their perspective, just internal bookkeeping.
+      await loadConfig(preserveTreeState: true);
     } catch (e, st) {
       // Clean up the tmp file if it leaked through an unexpected exception
       // path (e.g. rename failed after validation passed).

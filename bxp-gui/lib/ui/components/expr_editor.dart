@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -28,6 +30,23 @@ class ExprEditor extends StatefulWidget {
   final ValueChanged<PointerDownEvent>? onTapOutside;
   final bool hasError;
   final int minLines;
+  /// Optional caller-owned focus node. When supplied, the caller can
+  /// `requestFocus()` programmatically (used by ExprPanel to focus the
+  /// editor after the user clicks an expr leaf in the tree). When null,
+  /// the editor falls back to its own internal node.
+  final FocusNode? focusNode;
+  /// When true, the underlying TextField fills the parent's available
+  /// height and scrolls its content internally — used inside a fixed
+  /// Expanded slot (ExprPanel / ExprPlayground) so newlines don't push
+  /// the surrounding buttons out of view. Requires a bounded-height
+  /// parent. When false (default), TextField sizes to its content using
+  /// `minLines` as the floor.
+  final bool expands;
+  /// Fires `true` when the autocomplete popup transitions to visible
+  /// and `false` when it hides. Callers use this to pause expensive
+  /// per-keystroke side-effects (validation spawns) while the user is
+  /// picking from the popup — see `TraceStore.setExprAutocompleteOpen`.
+  final ValueChanged<bool>? onAutocompleteVisibilityChanged;
 
   const ExprEditor({
     super.key,
@@ -38,6 +57,9 @@ class ExprEditor extends StatefulWidget {
     this.onTapOutside,
     this.hasError = false,
     this.minLines = 4,
+    this.focusNode,
+    this.expands = false,
+    this.onAutocompleteVisibilityChanged,
   });
 
   @override
@@ -45,7 +67,7 @@ class ExprEditor extends StatefulWidget {
 }
 
 class _ExprEditorState extends State<ExprEditor> {
-  final _focusNode = FocusNode();
+  late final FocusNode _focusNode = widget.focusNode ?? FocusNode();
   final _editorLink = LayerLink();
 
   // Autocomplete popup state. Lives in an OverlayEntry anchored to the
@@ -58,6 +80,14 @@ class _ExprEditorState extends State<ExprEditor> {
   int _acIndex = 0;
   int _acReplaceStart = 0;
   int _acReplaceEnd = 0;
+  /// Debouncer for the typing-driven autocomplete refresh. Lifted to
+  /// 500 ms (matching the bxp-fmt validation cadence) so the popup
+  /// rebuild + docs filter pass don't run on every keystroke — the
+  /// previous immediate refresh produced the noticeable typing lag in
+  /// the editor. Ctrl+Space and selection-driven hides bypass the
+  /// debounce so the user gets immediate feedback when explicitly
+  /// asking for completions.
+  Timer? _acDebounce;
 
   @override
   void initState() {
@@ -78,10 +108,11 @@ class _ExprEditorState extends State<ExprEditor> {
 
   @override
   void dispose() {
+    _acDebounce?.cancel();
     _hidePopup();
     widget.controller.removeListener(_onEdit);
     _focusNode.removeListener(_onFocusChange);
-    _focusNode.dispose();
+    if (widget.focusNode == null) _focusNode.dispose();
     super.dispose();
   }
 
@@ -123,7 +154,18 @@ class _ExprEditorState extends State<ExprEditor> {
     return KeyEventResult.ignored;
   }
 
-  void _onEdit() => _refreshAutocomplete();
+  void _onEdit() {
+    // Debounce so the docs-list scan + overlay rebuild don't fire on
+    // every keystroke. 500 ms matches the validation debounce —
+    // popup pops up only when the user pauses, not while they're
+    // mid-type. Ctrl+Space (`force: true`) bypasses the debounce in
+    // `_onKeyEvent` for instant on-demand completion.
+    _acDebounce?.cancel();
+    _acDebounce = Timer(const Duration(milliseconds: 500), () {
+      if (!mounted) return;
+      _refreshAutocomplete();
+    });
+  }
 
   /// Recompute the popup's item list based on the identifier under the
   /// cursor. Opens the popup if there are matches, otherwise hides it.
@@ -207,14 +249,17 @@ class _ExprEditorState extends State<ExprEditor> {
     if (_popup == null) {
       _popup = OverlayEntry(builder: _buildPopup);
       Overlay.of(context).insert(_popup!);
+      widget.onAutocompleteVisibilityChanged?.call(true);
     } else {
       _popup!.markNeedsBuild();
     }
   }
 
   void _hidePopup() {
+    if (_popup == null) return;
     _popup?.remove();
     _popup = null;
+    widget.onAutocompleteVisibilityChanged?.call(false);
   }
 
   void _applyAutocomplete(_AcItem item) {
@@ -233,15 +278,52 @@ class _ExprEditorState extends State<ExprEditor> {
     _hidePopup();
   }
 
+  /// Pixel offset of the cursor inside the editor's content area, so the
+  /// autocomplete popup can anchor at the caret position rather than at
+  /// the editor's bottom-left corner. Measured by laying out a
+  /// [TextPainter] over the prefix `controller.text[0..selection.start]`
+  /// using the same font metrics the TextField uses (see `build()`).
+  /// Adds `contentPadding` (12) and one line-height so the popup sits
+  /// just below the line the cursor is on, mirroring CodeMirror's hint
+  /// menu behaviour.
+  Offset _caretOffsetInEditor(BuildContext ctx) {
+    final controller = widget.controller;
+    final sel = controller.selection;
+    if (!sel.isValid) return const Offset(12, 12);
+    final ts = ctx.read<TraceStore>().textScheme;
+    final style = TextStyle(
+      fontFamily: ts.fontFamily,
+      fontFamilyFallback: ts.fontFamilyFallback,
+      fontSize: 13,
+      letterSpacing: ts.trackBody,
+    );
+    final textBefore = controller.text.substring(0, sel.start);
+    final tp = TextPainter(
+      text: TextSpan(text: textBefore, style: style),
+      textDirection: TextDirection.ltr,
+      textWidthBasis: TextWidthBasis.longestLine,
+    );
+    tp.layout();
+    final caret = tp.getOffsetForCaret(
+      TextPosition(offset: textBefore.length),
+      Rect.zero,
+    );
+    // contentPadding 12 (see TextField below) + ~1 line-height so the
+    // popup hangs just below the active line. fontSize 13 × ~1.4 = 18.
+    const lineH = 18.0;
+    return Offset(12 + caret.dx, 12 + caret.dy + lineH);
+  }
+
   Widget _buildPopup(BuildContext ctx) {
     final t = ctx.bxpTheme;
+    final caretOffset = _caretOffsetInEditor(ctx);
     return Positioned(
       width: 520,
       child: CompositedTransformFollower(
         link: _editorLink,
         showWhenUnlinked: false,
-        targetAnchor: Alignment.bottomLeft,
-        offset: const Offset(0, 2),
+        targetAnchor: Alignment.topLeft,
+        offset: caretOffset,
         child: Material(
           color: Colors.transparent,
           child: Container(
@@ -350,7 +432,9 @@ class _ExprEditorState extends State<ExprEditor> {
           focusNode: _focusNode,
           autofocus: false,
           maxLines: null,
-          minLines: widget.minLines,
+          minLines: widget.expands ? null : widget.minLines,
+          expands: widget.expands,
+          textAlignVertical: TextAlignVertical.top,
           style: BxpText.body(context, color: t.textPrimary, sizePx: 13),
           cursorColor: t.accentHighlight,
           decoration: const InputDecoration(
