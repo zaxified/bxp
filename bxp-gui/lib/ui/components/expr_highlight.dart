@@ -17,23 +17,31 @@ import '../theme/bxp_text.dart';
 /// Never empty in normal operation: the startup gate refuses to launch
 /// MainView until `bxp-fmt --docs` populates `TraceStore.docFunctions`
 /// and `docKeywords`.
-Set<String> _activeFunctions = const {};
-Set<String> _activeKeywords = const {};
+/// Per-build snapshot of the live function/keyword sets. Captured locally
+/// each call instead of mutated at module scope — the highlighter is run
+/// from multiple builds simultaneously in test fixtures, and shared
+/// mutable state caused subtle keyword-class bleed between stores.
+class _LiveSets {
+  final Set<String> functions;
+  final Set<String> keywords;
+  const _LiveSets(this.functions, this.keywords);
+}
 
-void _refreshLiveSets(BuildContext context) {
+_LiveSets _liveSets(BuildContext context) {
   final store = context.watch<TraceStore>();
-  _activeFunctions = store.docFunctions
+  final functions = store.docFunctions
       .map((f) => f['name']?.toString() ?? '')
       .where((s) => s.isNotEmpty)
       .toSet();
   // Always keep boolean/null literals — they're tokenised as keywords for
   // highlighting even though the docs catalog only lists AND/OR.
-  _activeKeywords = {
+  final keywords = {
     'true', 'false', 'null',
     ...store.docKeywords
         .map((k) => k['name']?.toString() ?? '')
         .where((s) => s.isNotEmpty),
   };
+  return _LiveSets(functions, keywords);
 }
 
 enum _Tok {
@@ -55,7 +63,7 @@ class _Span {
   const _Span(this.kind, this.text);
 }
 
-List<_Span> _tokenize(String src) {
+List<_Span> _tokenize(String src, _LiveSets sets) {
   final out = <_Span>[];
   int i = 0;
 
@@ -114,9 +122,9 @@ List<_Span> _tokenize(String src) {
     }
     if ((m = id.firstMatch(rest)) != null) {
       final word = m!.group(0)!;
-      final kind = _activeFunctions.contains(word)
+      final kind = sets.functions.contains(word)
           ? _Tok.function_
-          : _activeKeywords.contains(word)
+          : sets.keywords.contains(word)
           ? _Tok.keyword
           : _Tok.ident;
       out.add(_Span(kind, word));
@@ -184,11 +192,11 @@ class ExprHighlight extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    _refreshLiveSets(context);
+    final sets = _liveSets(context);
     final t = context.bxpTheme;
     final store = context.watch<TraceStore>();
     final ts = store.textScheme;
-    final spans = _tokenize(text);
+    final spans = _tokenize(text, sets);
     final px = sizePx ?? resolveBxpSize(ts, size);
 
     if (!hoverContext) {
@@ -377,10 +385,10 @@ class ExprTextEditingController extends TextEditingController {
     TextStyle? style,
     required bool withComposing,
   }) {
-    _refreshLiveSets(context);
+    final sets = _liveSets(context);
     final t = context.bxpTheme;
     final ts = context.watch<TraceStore>().textScheme;
-    final spans = _tokenize(text);
+    final spans = _tokenize(text, sets);
     return TextSpan(
       style: (style ?? const TextStyle()).copyWith(
         fontFamily: ts.fontFamily,

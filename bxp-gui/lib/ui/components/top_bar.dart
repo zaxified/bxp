@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../../services/dev_trace.dart';
 import '../../store/trace_store.dart';
 import '../theme/bxp_theme.dart';
 import '../theme/bxp_text.dart';
@@ -52,13 +53,34 @@ class TopBar extends StatelessWidget {
     );
   }
 
-  void _openGithub() {
-    if (Platform.isLinux) {
-      Process.run('xdg-open', [_githubUrl]);
-    } else if (Platform.isMacOS) {
-      Process.run('open', [_githubUrl]);
-    } else if (Platform.isWindows) {
-      Process.run('cmd', ['/c', 'start', _githubUrl]);
+  Future<void> _openGithub() async {
+    // Surface failures via devTrace — fire-and-forget Process.run swallows
+    // the missing-binary case (no xdg-open on minimal Linux installs, no
+    // `open` if the macOS user nuked it). Without this, a click that does
+    // nothing looks like a UI bug.
+    final (cmd, args) = switch (Platform.operatingSystem) {
+      'linux' => ('xdg-open', [_githubUrl]),
+      'macos' => ('open', [_githubUrl]),
+      'windows' => ('cmd', ['/c', 'start', _githubUrl]),
+      _ => (null, <String>[]),
+    };
+    if (cmd == null) {
+      devTrace('topBar.openGithub.unsupported',
+          {'platform': Platform.operatingSystem});
+      return;
+    }
+    try {
+      final result = await Process.run(cmd, args);
+      if (result.exitCode != 0) {
+        devTrace('topBar.openGithub.fail', {
+          'cmd': cmd,
+          'exitCode': result.exitCode,
+          'stderr': result.stderr.toString(),
+        });
+      }
+    } catch (e) {
+      devTrace('topBar.openGithub.spawnFail',
+          {'cmd': cmd, 'error': e.toString()});
     }
   }
 }

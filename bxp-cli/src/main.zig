@@ -7,43 +7,60 @@ const config_mod = @import("config");
 const pipeline = @import("pipeline.zig");
 const build_options = @import("build_options");
 
-const Stdout = pipeline.Stdout;
 const SectionStats = pipeline.SectionStats;
 const Output = pipeline.Output;
 
 const DEFAULT_CONFIG_PATH: []const u8 = "bxp-cli.json";
 
-/// Prints CLI help text to stderr.
-fn usage(prog: []const u8) void {
-    std.debug.print(
-        \\Broker eXchange Parser (BXP)
-        \\
-        \\  CLI tool to convert fiscal CSV exports from your favorite brokers to your favorite portfolio trackers.
-        \\  If you don't know how to start, just tell your AI agent to generate a JSON template for you.
-        \\
-        \\Usage:
-        \\  {s}                                    process all templates in config file
-        \\  {s} --template <id>                    process single template
-        \\  {s} --template <id> --data <path>      override templates's data_dir
-        \\
-        \\Options:
-        \\  --config <path>    load custom config instead of default bxp-cli.json
-        \\  --template <id>    choose single template
-        \\  --data <path>      override templates's data_dir (requires --template)
-        \\  --fresh            skip existing files
-        \\  --dry-run          run the pipeline in memory without writing output files
-        \\  --trace            emit per-row NDJSON events on stdout (forces --quiet; conflicts with --debug)
-        \\  --debug            print debugging info and skipped rows as JSON
-        \\  --quiet            suppress all output
-        \\  --version          print version and exit
-        \\  --help             print this help and exit
-        \\
-        \\Exit codes:
-        \\  0 - success
-        \\  1 - error
-        \\  2 - warnings
-        \\
-    , .{ prog, prog, prog });
+/// Help text body. The two stream variants below pick which file
+/// descriptor it lands on:
+///   * `printHelp` — `--help` requested explicitly: stdout, so callers
+///     piping `bxp-cli --help | grep` work without `2>&1`.
+///   * `usageErr`  — argument-validation failures: stderr, alongside
+///     the error message they accompany.
+const USAGE_TEMPLATE =
+    \\Broker eXchange Parser (BXP)
+    \\
+    \\  CLI tool to convert fiscal CSV exports from your favorite brokers to your favorite portfolio trackers.
+    \\  If you don't know how to start, just tell your AI agent to generate a JSON template for you.
+    \\
+    \\Usage:
+    \\  {s}                                    process all templates in config file
+    \\  {s} --template <id>                    process single template
+    \\  {s} --template <id> --data <path>      override templates's data_dir
+    \\
+    \\Options:
+    \\  --config <path>    load custom config instead of default bxp-cli.json
+    \\  --template <id>    choose single template
+    \\  --data <path>      override templates's data_dir (requires --template)
+    \\  --fresh            skip files whose output already exists (atomic O_EXCL)
+    \\  --dry-run          run the pipeline in memory without writing output files
+    \\  --trace            emit per-row NDJSON events on stdout (forces --quiet; conflicts with --debug)
+    \\  --debug            suppresses informational stdout summaries; prints unmatched rows as JSON when row_rules_debug_missing is set
+    \\  --quiet            suppress informational stdout (errors still go to stderr)
+    \\  --version          print version and exit
+    \\  --help             print this help and exit
+    \\
+    \\Exit codes:
+    \\  0 - success
+    \\  1 - error
+    \\  2 - warnings
+    \\
+;
+
+/// Print the help text to stdout. Used for `--help`.
+fn printHelp(prog: []const u8) void {
+    var buf: [4096]u8 = undefined;
+    var fw = std.fs.File.stdout().writer(&buf);
+    const w = &fw.interface;
+    w.print(USAGE_TEMPLATE, .{ prog, prog, prog }) catch {};
+    w.flush() catch {};
+}
+
+/// Print the help text to stderr. Used after an argument-validation
+/// failure where we want the help to accompany the error message.
+fn usageErr(prog: []const u8) void {
+    std.debug.print(USAGE_TEMPLATE, .{ prog, prog, prog });
 }
 
 /// Rejects paths that contain dangerous shell metacharacters or more than one "../" component.
@@ -97,7 +114,7 @@ pub fn main() !void {
             return;
         }
         if (std.mem.eql(u8, arg, "--help")) {
-            usage(args[0]);
+            printHelp(args[0]);
             return;
         }
         if (std.mem.eql(u8, arg, "--debug")) debug = true;
@@ -151,7 +168,7 @@ fn run(args: [][:0]u8, out: Output, fresh: bool, alloc: std.mem.Allocator) !Sect
             if (std.mem.eql(u8, args[i], "--config")) {
                 i += 1;
                 if (i >= args.len) {
-                    usage(args[0]);
+                    usageErr(args[0]);
                     return error.Fatal;
                 }
                 config_path = args[i];
@@ -227,14 +244,14 @@ fn run(args: [][:0]u8, out: Output, fresh: bool, alloc: std.mem.Allocator) !Sect
         if (std.mem.eql(u8, args[i], "--template")) {
             i += 1;
             if (i >= args.len) {
-                usage(args[0]);
+                usageErr(args[0]);
                 return error.Fatal;
             }
             template_id = args[i];
         } else if (std.mem.eql(u8, args[i], "--data")) {
             i += 1;
             if (i >= args.len) {
-                usage(args[0]);
+                usageErr(args[0]);
                 return error.Fatal;
             }
             dir_path_arg = args[i];
@@ -250,7 +267,7 @@ fn run(args: [][:0]u8, out: Output, fresh: bool, alloc: std.mem.Allocator) !Sect
             // known flags — no action needed here
         } else {
             out.fatal("error: unknown argument: {s}\n", .{args[i]});
-            usage(args[0]);
+            usageErr(args[0]);
             overall.has_fatal = true;
             return error.Fatal;
         }
@@ -258,7 +275,7 @@ fn run(args: [][:0]u8, out: Output, fresh: bool, alloc: std.mem.Allocator) !Sect
 
     if (dir_path_arg != null and template_id == null) {
         out.fatal("error: --data requires --template\n", .{});
-        usage(args[0]);
+        usageErr(args[0]);
         overall.has_fatal = true;
         return error.Fatal;
     }

@@ -18,7 +18,11 @@ const VAL_BUF_SIZE: usize = 64;
 /// Runtime key for the date variable in the merged vars map (JSON5 converts @date → $date).
 const VAR_DATE: []const u8 = "$date";
 
-pub const Stdout = std.Io.Writer;
+/// Writer abstraction used throughout the pipeline. Named for the role
+/// (the **output file** the pipeline writes to), not the destination —
+/// callers also pass a Discarding writer for `--dry-run`. Not stdout
+/// despite the historic name. `pub` because main.zig wires it through.
+pub const Writer = std.Io.Writer;
 
 /// Accumulated warnings and errors for one processing section (xlsx preprocessing,
 /// per-template processing, or overall).
@@ -40,7 +44,7 @@ pub const SectionStats = struct {
 /// When --trace is active, human-readable lines are suppressed so that stdout
 /// contains only newline-delimited JSON (NDJSON) trace events.
 pub const Output = struct {
-    writer: *Stdout,
+    writer: *Writer,
     quiet: bool,
     debug: bool,
     trace: bool = false,
@@ -214,8 +218,16 @@ fn isNumericValue(s: []const u8) bool {
 ///
 /// When decimal_sep_out != '.', numeric values have their '.' replaced with
 /// decimal_sep_out before writing.
-fn writeSafeValue(out: *Stdout, value: []const u8, delimiter_out: u8, decimal_sep_out: u8, quote_out: u8, buf: []u8) !void {
+fn writeSafeValue(out: *Writer, value: []const u8, delimiter_out: u8, decimal_sep_out: u8, quote_out: u8, buf: []u8) !void {
     // Apply decimal separator conversion for numeric output values.
+    //
+    // Values longer than `buf.len` (VAL_BUF_SIZE = 64) are passed through
+    // unchanged when a non-default decimal separator is configured —
+    // intentional: real numeric outputs are short ("123456.78"), and
+    // anything longer is either non-numeric (caught by isNumericValue) or
+    // a malformed value that the user should see verbatim. If a caller
+    // ever needs > 64-char numeric conversion, switch to a heap buffer
+    // sourced from `line_alloc`.
     const s = blk: {
         if (decimal_sep_out != '.' and value.len <= buf.len and isNumericValue(value)) {
             @memcpy(buf[0..value.len], value);
@@ -257,9 +269,12 @@ fn writeSafeValue(out: *Stdout, value: []const u8, delimiter_out: u8, decimal_se
         }
     }
     // No quoting applied: formula-injection prefix + \n→\n literal replacement.
+    // Tab (`\t`) is also a known Excel/LibreOffice formula trigger when the
+    // cell parser hits it on the leading edge — broker exports rarely emit
+    // a tab-leading value but the prefix is cheap insurance.
     if (s.len > 0) {
         switch (s[0]) {
-            '=', '+', '@' => try out.writeByte('\''),
+            '=', '+', '@', '\t' => try out.writeByte('\''),
             '-' => {
                 const next_is_numeric = s.len > 1 and
                     (std.ascii.isDigit(s[1]) or s[1] == decimal_sep_out);
@@ -281,7 +296,7 @@ fn writeSafeValue(out: *Stdout, value: []const u8, delimiter_out: u8, decimal_se
 /// Format: {"col1":"val1","col2":"val2",...}
 /// All values are emitted as JSON strings.  Special characters are escaped.
 fn writeJsonRow(
-    out: *Stdout,
+    out: *Writer,
     columns: []const config_mod.OutputColumn,
     vars: *const std.StringHashMap([]const u8),
 ) !void {
@@ -298,7 +313,7 @@ fn writeJsonRow(
 }
 
 /// Writes s to out with JSON string escaping (RFC 8259 §7).
-fn writeJsonString(out: *Stdout, s: []const u8) !void {
+fn writeJsonString(out: *Writer, s: []const u8) !void {
     for (s) |ch| {
         switch (ch) {
             '"' => try out.writeAll("\\\""),
@@ -499,17 +514,23 @@ pub fn processBroker(
             // file_alloc so they persist for the full file lifetime (pre_pass + main loop).
             const all_records = try csv.splitRecords(content, bc.csv_text_quote_in, file_alloc);
             if (all_records.items.len > 0) {
-                const hdr_buf = try file_alloc.alloc([]const u8, MAX_COLUMNS);
-                const header_fields = try csv.splitFields(
+                // Allocate one extra slot so a CSV with exactly MAX_COLUMNS
+                // columns parses without spuriously tripping the truncation
+                // warning. The warning fires only when the input genuinely
+                // overflowed past MAX_COLUMNS.
+                const hdr_buf = try file_alloc.alloc([]const u8, MAX_COLUMNS + 1);
+                const header_fields_full = try csv.splitFields(
                     all_records.items[0],
                     hdr_buf,
                     bc.csv_delimiter_in,
                     bc.csv_text_quote_in,
                     file_alloc,
                 );
-                if (header_fields.len == hdr_buf.len) {
+                const truncated = header_fields_full.len > MAX_COLUMNS;
+                const header_fields = if (truncated) header_fields_full[0..MAX_COLUMNS] else header_fields_full;
+                if (truncated) {
                     stats.warnings += 1;
-                    out.warning("warning: '{s}' has {d}+ columns; extra columns beyond {d} are ignored\n", .{ filename, MAX_COLUMNS, MAX_COLUMNS });
+                    out.warning("warning: '{s}' has more than {d} columns; extra columns are ignored\n", .{ filename, MAX_COLUMNS });
                 }
                 for (header_fields, 0..) |name, idx| {
                     // Intentional RFC 4180 deviation: trim spaces from column header
@@ -632,8 +653,9 @@ pub fn processBroker(
             })
         else
             try std.mem.concat(file_alloc, u8, &.{ filename, "x" });
-        // --fresh: skip this file if the output already exists.
-        if (fresh) {
+        // --fresh under dry-run: still meaningful for the user to see which
+        // files would be skipped, so check via access() — no file is created.
+        if (fresh and out.dry_run) {
             const exists = blk: {
                 dir.access(out_name, .{}) catch |e| {
                     if (e == error.FileNotFound) break :blk false;
@@ -648,6 +670,9 @@ pub fn processBroker(
         }
 
         // Output sink: real file, or Discarding writer under --dry-run.
+        // Under --fresh, the real-write path uses an atomic O_EXCL create
+        // so another process racing the access()→createFile() window
+        // can't make us silently overwrite their output.
         var out_file: std.fs.File = undefined;
         var out_file_buf: [OUT_FILE_BUF_SIZE]u8 = undefined;
         var out_fw: std.fs.File.Writer = undefined;
@@ -656,7 +681,17 @@ pub fn processBroker(
             discarding = .init(&out_file_buf);
             break :blk &discarding.writer;
         } else blk: {
-            out_file = try dir.createFile(out_name, .{});
+            if (fresh) {
+                out_file = dir.createFile(out_name, .{ .exclusive = true }) catch |e| {
+                    if (e == error.PathAlreadyExists) {
+                        out.info("  skipping '{s}' (output exists)\n", .{filename});
+                        continue;
+                    }
+                    return e;
+                };
+            } else {
+                out_file = try dir.createFile(out_name, .{});
+            }
             out_fw = out_file.writer(&out_file_buf);
             break :blk &out_fw.interface;
         };
@@ -785,9 +820,9 @@ pub fn processBroker(
                         continue;
                     }
                     // Collect output values for trace emission.
-                    var out_values: std.ArrayList([]const u8) = .empty;
+                    var out_values = std.array_list.Managed([]const u8).init(line_alloc);
                     for (bc.output_schema.items) |col| {
-                        try out_values.append(line_alloc, merged.get(col.variable) orelse "");
+                        try out_values.append(merged.get(col.variable) orelse "");
                     }
                     if (bc.file_type_out == .json) {
                         if (!json_first_row) try fout.writeAll(",\n");

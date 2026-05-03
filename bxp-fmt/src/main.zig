@@ -708,10 +708,10 @@ fn runExprTrace(
 
     // Decode headers/fields JSON arrays. Mismatched lengths or non-array
     // shapes are usage errors (exit 2) — the GUI sends a known-good pair.
-    var headers_list = std.array_list.Managed([]const u8).init(alloc);
-    defer headers_list.deinit();
-    var fields_list = std.array_list.Managed([]const u8).init(alloc);
-    defer fields_list.deinit();
+    var headers_list: std.ArrayList([]const u8) = .empty;
+    defer headers_list.deinit(alloc);
+    var fields_list: std.ArrayList([]const u8) = .empty;
+    defer fields_list.deinit(alloc);
     if (headers_json) |hj| {
         const parsed = std.json.parseFromSlice(std.json.Value, alloc, hj, .{}) catch {
             std.debug.print("error: --row-headers must be a JSON array of strings\n", .{});
@@ -727,7 +727,10 @@ fn runExprTrace(
                 std.debug.print("error: --row-headers entries must be strings\n", .{});
                 std.process.exit(2);
             }
-            try headers_list.append(try alloc.dupe(u8, item.string));
+            // `parsed.deinit()` (deferred above) frees the original
+            // string bytes pointed to by `item.string`, so we must dupe
+            // the slice into the arena before storing the reference.
+            try headers_list.append(alloc, try alloc.dupe(u8, item.string));
         }
     }
     if (fields_json) |fj| {
@@ -745,7 +748,8 @@ fn runExprTrace(
                 std.debug.print("error: --row-fields entries must be strings\n", .{});
                 std.process.exit(2);
             }
-            try fields_list.append(try alloc.dupe(u8, item.string));
+            // See headers_list above — same lifetime caveat applies here.
+            try fields_list.append(alloc, try alloc.dupe(u8, item.string));
         }
     }
     if (headers_list.items.len != fields_list.items.len) {

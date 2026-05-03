@@ -40,4 +40,15 @@ class LayoutDefaults {
   // Single fraction shared by both so they look identical-width regardless
   // of which the user toggled.
   static const sidePanelFrac = 0.40;
+
+  // JsonTree: combined `margin (6) + padding (16) + border (1)` of the
+  // indented `Container` that wraps every nested level. Drift this and
+  // the right-edge alignment breaks.
+  static const treeIndentPerLevel = 23.0;
+
+  // JsonTree _EditableString field-width formula.
+  // Cell width grows linearly with character count, capped at ~800px so
+  // a runaway expression doesn't hijack the entire row.
+  static const editableMinWidth = 150.0;
+  static const editableMaxWidth = 800.0;
 }

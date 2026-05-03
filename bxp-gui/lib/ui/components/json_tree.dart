@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../../services/dev_trace.dart';
 import '../../services/schema_gate.dart';
 import '../../store/trace_store.dart';
+import '../layout_defaults.dart';
 import '../theme/bxp_theme.dart';
 import '../theme/bxp_text.dart';
 import 'expr_highlight.dart';
@@ -1106,10 +1107,10 @@ class _RowEnvelope extends StatelessWidget {
     required this.depth,
   });
 
-  /// Combined `margin (6) + padding (16) + border (1)` of the indented
-  /// `Container` that wraps every nested level — see `_buildMap` /
-  /// `_buildList`. Drift this and the right-edge alignment breaks.
-  static const double _indentPerLevel = 23.0;
+  /// Single source of the indent constant lives in
+  /// [LayoutDefaults.treeIndentPerLevel]. Re-exported here for the
+  /// minWidth formula below — see `_buildMap` / `_buildList`.
+  static const double _indentPerLevel = LayoutDefaults.treeIndentPerLevel;
 
   @override
   Widget build(BuildContext context) {
@@ -1724,7 +1725,8 @@ class _EditableStringState extends State<_EditableString> {
       text: TextSpan(text: widget.value, style: textStyle),
       textDirection: TextDirection.ltr,
     )..layout();
-    final fieldWidth = (tp.width * 1.2 + 24).clamp(150.0, 800.0);
+    final fieldWidth = (tp.width * 1.2 + 24)
+        .clamp(LayoutDefaults.editableMinWidth, LayoutDefaults.editableMaxWidth);
     return SizedBox(
       height: 20,
       width: fieldWidth,

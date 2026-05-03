@@ -260,10 +260,13 @@ pub const BrokerConfig = struct {
     /// Configured via "file_type_out": "csv" | "json".
     file_type_out: FileType,
 
-    pub const file_type_values = [_][]const u8{ "csv", "json" };
-    pub const csv_quote_values = [_][]const u8{ "none", "single", "double" };
-    pub const csv_delimiter_values = [_][]const u8{ ",", ";", "\t", "|" };
-    pub const csv_decimal_values = [_][]const u8{ ".", "," };
+    // Enum-value tables for FieldDoc.enum_values below. File-scope only —
+    // sole consumers are the FieldDoc entries in this struct's `fields`
+    // table, so the `pub` qualifier was incidental.
+    const file_type_values = [_][]const u8{ "csv", "json" };
+    const csv_quote_values = [_][]const u8{ "none", "single", "double" };
+    const csv_delimiter_values = [_][]const u8{ ",", ";", "\t", "|" };
+    const csv_decimal_values = [_][]const u8{ ".", "," };
 
     /// Schema docs for this struct's fields. Bound at
     /// `conversion_templates.*` by `bxp-core/src/docs.zig`.
