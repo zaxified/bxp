@@ -13,7 +13,7 @@ as a local path dependency.
 ## Module overview
 
 | Module | File | Public API |
-|---|---|---|
+| --- | --- | --- |
 | `csv` | `csv.zig` | `splitRecords()`, `splitFields()` |
 | `xlsx` | `xlsx.zig` | `xlsxToCsv()`, `SheetSpec` |
 | `expr` | `expr.zig` | `eval()`, `evalString()`, `Context`, `Value`, `FnDoc` catalog |
@@ -25,6 +25,7 @@ as a local path dependency.
 ## Module details
 
 ### csv.zig
+
 RFC 4180 CSV parser.
 
 - `splitRecords(content, quote_ch, alloc)` — splits raw file content into record slices
@@ -36,6 +37,7 @@ RFC 4180 CSV parser.
 - Unit tests inline (`zig build test`).
 
 ### xlsx.zig
+
 Converts `.xlsx` files (ZIP + XML) to intermediate CSV files.
 
 - `xlsxToCsv(alloc, xlsx_file, sheets, out_dir, stem)` — extracts selected sheets to CSV.
@@ -47,6 +49,7 @@ Converts `.xlsx` files (ZIP + XML) to intermediate CSV files.
 - No unit tests (tested via bxp-cli integration tests).
 
 ### expr.zig
+
 Expression evaluator for `input_schema` and `row_rules` in bxp-cli.json.
 
 - `eval(expr, ctx)` — parse and evaluate expression, returns `Value`.
@@ -67,6 +70,7 @@ a new builtin means writing the impl + `FnDoc` here once, no separate doc
 file to keep in sync.
 
 ### config.zig
+
 JSON5 configuration loader.
 
 - `load(alloc, config_path)` — reads and parses bxp-cli.json; returns `Config`.
@@ -86,6 +90,7 @@ its `fields` table in one place. Aggregated by `docs.zig`; serves
 `bxp-fmt --docs`.
 
 ### docs.zig
+
 Aggregator for `bxp-fmt --docs`. Single source of truth that the GUI
 (bxp-gui) consumes at startup.
 
@@ -100,6 +105,7 @@ Aggregator for `bxp-fmt --docs`. Single source of truth that the GUI
 - Inline test guards the entry count and known paths against drift.
 
 ### json.zig
+
 Reads a JSON array-of-objects file into a unified row representation for use in the pipeline.
 
 - `readJsonRecords(alloc, content, col_names, all_rows)` — fills `col_names` (union of all
@@ -107,6 +113,7 @@ Reads a JSON array-of-objects file into a unified row representation for use in 
 - Handles missing keys per object (fills with empty string).
 
 ### json5.zig
+
 Preprocessor that converts JSON5 source to standard JSON.
 
 - `preprocess(alloc, input)` — strips `//` and `/* */` comments, converts unquoted keys

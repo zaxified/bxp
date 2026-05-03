@@ -121,6 +121,7 @@ All broker logic is defined in `bxp-cli.json` — there are no compiled-in broke
 ### Variable naming convention
 
 All template-internal variables use the `$` prefix:
+
 - `$date` — datetime string (required when `date_filter_from_filename` is `true`)
 - `$action` — activity type (set exclusively by `row_rules`, never in `input_schema`)
 - `$ticker`, `$quantity`, `$unitprice`, `$currency`, `$fee`, `$amount` — trade data
@@ -180,7 +181,7 @@ Expressions are evaluated per row. Operator precedence (high → low):
 `unary -` → `* /` → `&` (concat) → `+ -` → `= != < > <= >=` → `AND` → `OR`
 
 | Syntax | Description |
-|---|---|
+| --- | --- |
 | `[ColumnName]` | Field value by CSV header name |
 | `[n]` | Field value by 1-based column index |
 | `FIELDS(n)` | Same as `[n]` but via function call |
@@ -210,7 +211,7 @@ Type coercions: empty string → `0` in numeric context; any non-empty string �
 Used in `DATE_CONVERT(f, from_fmt, to_fmt)`. Both `from_fmt` and `to_fmt` use the same token set.
 
 | Token | Meaning | Example |
-|---|---|---|
+| --- | --- | --- |
 | `YYYY` | 4-digit year | `2024` |
 | `YY` | 2-digit year (00–69 → 2000–2069, 70–99 → 1970–1999) | `24` |
 | `MM` | 2-digit month (01–12) | `03` |
@@ -236,6 +237,7 @@ Used in `DATE_CONVERT(f, from_fmt, to_fmt)`. Both `from_fmt` and `to_fmt` use th
 | `[*]` | Wildcard — skip until next token | skips timezone suffix |
 
 **Gotchas:**
+
 - `mm` = minute, `MM` = month — easy to mix up
 - `MMM` expects exactly 3 chars; `normalizeMonthAbbrev` in `expr.zig` pre-processes 4-char variants like `Sept`, `June`
 - Parse rejects years before 1970 (`OutOfRange`)
@@ -244,7 +246,7 @@ Used in `DATE_CONVERT(f, from_fmt, to_fmt)`. Both `from_fmt` and `to_fmt` use th
 ## Conversion templates
 
 | ID | data_dir | Input format |
-|---|---|---|
+| --- | --- | --- |
 | `revolutx_to_wealthfolio` | `../data/revolutx_to_wealthfolio` | `Symbol,Type,Quantity,Price,Value,Fees,Date` — date as `"26 Jun 2022, 16:02:36"`, prices with trailing `CZK` unit |
 | `trading212_to_wealthfolio` | `../data/trading212_to_wealthfolio` | `Action,Time,ISIN,Ticker,...` — Trading 212 export; multi-row expansion for Currency conversion, ADR Fee, Result/Dividend adjustment |
 | `anycoin_to_wealthfolio` | `../data/anycoin_to_wealthfolio` | `Date,Type,Amount,Currency,Order ID` — ISO datetime; paired rows (`trade payment` + `trade fill`) joined via `pre_pass` on `Order ID` |
