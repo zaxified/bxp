@@ -44,7 +44,9 @@ pub fn xlsxToCsv(
     out_basename: []const u8,
 ) !void {
 
-    // Create a temporary directory next to the output files.
+    // Create a temporary directory next to the output files. The name is
+    // derived from `out_basename` alone — safe because bxp-cli runs templates
+    // serially, so two concurrent calls with the same basename can't collide.
     const tmp_name = try std.fmt.allocPrint(alloc, ".{s}.xlstmp", .{out_basename});
     defer alloc.free(tmp_name);
 

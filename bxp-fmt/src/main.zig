@@ -1,14 +1,9 @@
 /// bxp-fmt — small developer utility binary sibling to bxp-cli.
 ///
-/// Exactly one action flag per invocation:
-///   --config <path>  parse JSON5 config, validate, and emit annotated JSON to stdout.
-///                    Comments are preserved as "$comm_<N>" sibling entries; syntax
-///                    and semantic errors are embedded as "$err_<N>" sibling entries
-///                    inserted at their parent object (semantic errors are placed
-///                    immediately before the offending key). Exit 0 on success,
-///                    exit 1 on any error.
-///   --expr '<text>'  parse and validate one expression.
-///                    On failure, a single JSON line is written to stderr.
+/// Six action flags (mutually exclusive); see `usage()` for the full list:
+/// --config / --expr / --expr-trace / --docs / --list-templates /
+/// --fetch-template. `--config` emits annotated JSON with `$comm_<N>` and
+/// `$err_<N>` sibling entries; the others emit plain JSON.
 ///
 /// Exit codes: 0 = OK, 1 = validation failure, 2 = usage error.
 const std = @import("std");

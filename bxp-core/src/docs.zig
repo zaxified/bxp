@@ -294,7 +294,10 @@ test "config_schema covers known paths" {
     const testing = std.testing;
 
     // Total flattened entry count — guard against accidental drift when
-    // adding/removing struct fields or envelope entries.
+    // adding/removing struct fields or envelope entries. The exact number
+    // is part of the contract with bxp-gui (`lib/store/schema_gate.dart`
+    // expects this many keys). When updating, bump both this assertion
+    // and the GUI-side expectation in lockstep.
     var total: usize = envelope_entries.len;
     for (struct_bindings) |bind| total += bind.fields.len;
     try testing.expectEqual(@as(usize, 41), total);
@@ -338,4 +341,144 @@ test "config_schema covers known paths" {
         };
         try testing.expect(found);
     }
+}
+
+test "FieldDoc.key matches a real struct field" {
+    // Catches drift when a struct field is renamed but the FieldDoc table
+    // isn't updated (or vice versa). Each entry pairs a struct with its
+    // FieldDoc table and an explicit override list for legitimate
+    // schema-key vs struct-field mismatches.
+    const Override = struct { schema_key: []const u8, field_name: []const u8 };
+    const RowRule = config.RowRule;
+    const PrePass = config.PrePass;
+    const XlsxSheet = config.XlsxSheet;
+    const BrokerConfig = config.BrokerConfig;
+
+    inline for (.{
+        .{ RowRule, &[_]Override{} },
+        .{ PrePass, &[_]Override{} },
+        .{ XlsxSheet, &[_]Override{} },
+        .{ BrokerConfig, &[_]Override{
+            // User-facing JSON5 key is `pre_pass`; struct field is
+            // `pre_passes` because the loader supports legacy single-block
+            // and named-block forms under the same JSON key.
+            .{ .schema_key = "pre_pass", .field_name = "pre_passes" },
+        } },
+    }) |pair| {
+        const T = pair[0];
+        const overrides: []const Override = pair[1];
+        const struct_fields = @typeInfo(T).@"struct".fields;
+        for (T.fields) |fd| {
+            const expected = blk: {
+                for (overrides) |o| {
+                    if (std.mem.eql(u8, o.schema_key, fd.key)) break :blk o.field_name;
+                }
+                break :blk fd.key;
+            };
+            var found = false;
+            inline for (struct_fields) |f| {
+                if (std.mem.eql(u8, f.name, expected)) found = true;
+            }
+            if (!found) {
+                std.debug.print(
+                    "FieldDoc.key '{s}' on {s} has no matching struct field (looked for '{s}')\n",
+                    .{ fd.key, @typeName(T), expected },
+                );
+                try std.testing.expect(false);
+            }
+        }
+    }
+}
+
+test "every insert_template / scaffold_template parses as JSON5" {
+    // Schema templates ship as JSON5 source strings — a typo in any of them
+    // surfaces only at `bxp-fmt --docs` runtime. Parse each template here so
+    // breakage is caught at `zig build test` time.
+    const Source = struct { origin: []const u8, src: []const u8 };
+    var templates: std.array_list.Managed(Source) = .init(std.testing.allocator);
+    defer templates.deinit();
+
+    // Templates from envelope_entries.
+    for (envelope_entries) |fd| {
+        if (fd.insert_template) |t| try templates.append(.{ .origin = fd.key, .src = t });
+    }
+    // Templates from each per-struct fields table.
+    for (struct_bindings) |bind| {
+        for (bind.fields) |fd| {
+            if (fd.insert_template) |t| {
+                try templates.append(.{ .origin = fd.key, .src = t });
+            }
+        }
+    }
+    // Top-level scaffold_template strings.
+    try templates.append(.{ .origin = "RowRule.scaffold", .src = config.RowRule.scaffold_template });
+    try templates.append(.{ .origin = "PrePass.scaffold", .src = config.PrePass.scaffold_template });
+    try templates.append(.{ .origin = "XlsxSheet.scaffold", .src = config.XlsxSheet.scaffold_template });
+    try templates.append(.{ .origin = "BrokerConfig.scaffold", .src = config.BrokerConfig.scaffold_template });
+
+    for (templates.items) |t| {
+        const preprocessed = json5.preprocess(std.testing.allocator, t.src) catch |err| {
+            std.debug.print("template '{s}' failed json5.preprocess: {s}\n", .{ t.origin, @errorName(err) });
+            return err;
+        };
+        defer std.testing.allocator.free(preprocessed);
+        // Wrap bare scaffold fragments (e.g. `[]`, `{}`, `{ k: v }`) so
+        // `std.json.parseFromSlice` treats them as a top-level value.
+        var parsed = std.json.parseFromSlice(std.json.Value, std.testing.allocator, preprocessed, .{}) catch |err| {
+            std.debug.print("template '{s}' failed json parse: {s}\nsrc: {s}\npreprocessed: {s}\n", .{ t.origin, @errorName(err), t.src, preprocessed });
+            return err;
+        };
+        parsed.deinit();
+    }
+}
+
+test "BrokerConfig defaults match FieldDoc.default" {
+    // A minimal config that supplies only the required fields surfaces the
+    // loader's actual defaults for every optional field. We then compare
+    // against each FieldDoc.default string to guard against drift between
+    // the loader and the schema docs.
+    const config_mod = @import("config");
+    const alloc = std.testing.allocator;
+
+    // Write minimal config to a temp file.
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = "minimal.json";
+    {
+        var f = try tmp.dir.createFile(path, .{});
+        defer f.close();
+        try f.writeAll(
+            \\{
+            \\  "conversion_templates": {
+            \\    "t": {
+            \\      "data_dir": ".",
+            \\      "file_pattern_in": ".csv",
+            \\      "file_pattern_out": ".csv",
+            \\      "input_schema": { "$a": "1" },
+            \\      "output_schema": { "col": "$a" }
+            \\    }
+            \\  }
+            \\}
+        );
+    }
+    // Resolve realpath so config.load can read it (it expects a
+    // filesystem-visible path, not a tmpDir-relative one).
+    const real_path = try tmp.dir.realpathAlloc(alloc, path);
+    defer alloc.free(real_path);
+
+    var loaded = try config_mod.load(alloc, real_path);
+    defer loaded.deinit();
+    const broker = loaded.brokers.get("t") orelse return error.MissingTemplate;
+
+    // Each entry: FieldDoc.default text → live struct value.
+    try std.testing.expectEqual(config_mod.FileType.csv, broker.file_type_in); // "csv"
+    try std.testing.expectEqual(config_mod.FileType.csv, broker.file_type_out); // "csv"
+    try std.testing.expectEqual(@as(u8, ','), broker.csv_delimiter_in); // ","
+    try std.testing.expectEqual(@as(u8, ','), broker.csv_delimiter_out); // ","
+    try std.testing.expectEqual(@as(u8, '.'), broker.csv_decimal_separator_in); // "."
+    try std.testing.expectEqual(@as(u8, '.'), broker.csv_decimal_separator_out); // "."
+    try std.testing.expectEqual(@as(u8, '"'), broker.csv_text_quote_in); // "double"
+    try std.testing.expectEqual(@as(u8, 0), broker.csv_text_quote_out); // "none"
+    try std.testing.expectEqual(false, broker.date_filter_from_filename); // "false"
+    try std.testing.expectEqual(false, broker.row_rules_debug_missing); // "false"
 }

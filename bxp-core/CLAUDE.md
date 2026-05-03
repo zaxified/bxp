@@ -32,8 +32,12 @@ RFC 4180 CSV parser.
   (no allocation per record; slices into `content`).
 - `splitFields(record, buf, delim, quote_ch, alloc)` — splits one record into field strings,
   up to `buf.len` fields. Unquotes quoted fields.
-- Intentional RFC 4180 deviation: leading/trailing spaces are trimmed from field values
-  and header names (broker exports frequently pad fields).
+- Spaces are preserved per RFC 4180. The bxp pipeline intentionally trims them
+  *outside* csv.zig: field values at access time in `expr.Context.field`
+  (`expr.zig:138`), header names when building `col_index` in
+  `bxp-cli/src/pipeline.zig:517`. Brokers frequently pad fields, so the rest
+  of the pipeline (date parsing, numeric conversion, comparisons) sees clean
+  values without csv.zig having to mutate the slices it returns.
 - Unit tests inline (`zig build test`).
 
 ### xlsx.zig

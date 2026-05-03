@@ -554,6 +554,98 @@ void main() {
           'third');
     });
   });
+
+  // ============================================================
+  // Comment ownership across delete / duplicate
+  // ============================================================
+  group('deleteAt with adjacent comments', () {
+    test('removes leading standalone comment together with property', () {
+      final root = parseOk('{\n  // about a\n  a: 1,\n  b: 2\n}\n');
+      deleteAt(root, ['a']);
+      final dumped = Dumper.dump(root);
+      // Leading comment must vanish with `a`, not re-attach to `b`.
+      expect(dumped, isNot(contains('about a')));
+      expect(dumped, matches(RegExp(r'b:\s+2')));
+    });
+
+    test('removes trailing inline comment together with property', () {
+      final root = parseOk('{\n  a: 1, // trail-a\n  b: 2\n}\n');
+      deleteAt(root, ['a']);
+      final dumped = Dumper.dump(root);
+      // Trailing inline comment is owned by the deleted entry.
+      expect(dumped, isNot(contains('trail-a')));
+      expect(dumped, matches(RegExp(r'b:\s+2')));
+    });
+
+    test('preserves comments on neighbouring property', () {
+      final root = parseOk(
+          '{\n  // about a\n  a: 1,\n  // about b\n  b: 2\n}\n');
+      deleteAt(root, ['a']);
+      final dumped = Dumper.dump(root);
+      expect(dumped, isNot(contains('about a')));
+      expect(dumped, contains('about b'));
+      expect(dumped, matches(RegExp(r'b:\s+2')));
+    });
+  });
+
+  group('duplicateAt with adjacent comments', () {
+    test('Map duplicate does NOT clone source comments (current behaviour)',
+        () {
+      // Documented in audit-followup-todo.md: duplicate appears naked.
+      // Test pins down today's behaviour so future changes are visible.
+      final root = parseOk('{\n  // about a\n  a: 1\n}\n');
+      duplicateAt(root, ['a'], newKey: 'a_copy');
+      final dumped = Dumper.dump(root);
+      // Original comment still belongs to `a`; not cloned for `a_copy`.
+      expect('about a'.allMatches(dumped).length, 1);
+      expect(dumped, contains('a_copy'));
+    });
+
+    test('List duplicate does NOT clone source comments (current behaviour)',
+        () {
+      final root = parseOk('[\n  // about 0\n  10,\n  20\n]\n');
+      duplicateAt(root, ['1']);
+      final dumped = Dumper.dump(root);
+      expect('about 0'.allMatches(dumped).length, 1);
+    });
+  });
+
+  // ============================================================
+  // Path ops on a CommentLine peer (raw array indexing)
+  // ============================================================
+  //
+  // path.dart uses RAW indexing — list path '1' refers to elements[1],
+  // which can be a CommentLine peer. Audit-followup recommends throwing
+  // AstOpError instead of silently corrupting. Tests below pin down the
+  // *desired* future behaviour — skipped until the path.dart guards land
+  // in Phase 4.
+  group('CommentLine peer guards (Phase 4 corpus)', () {
+    test('setValue on a CommentLine peer throws AstOpError', () {
+      // Source: `[ // c\n 1, 2 ]` — elements[0] is the CommentLine,
+      // elements[1] is the number 1, elements[2] is the number 2.
+      final root = parseOk('[\n  // c\n  1,\n  2\n]\n');
+      expect(
+        () => setValue(root, ['0'], JsonNumber('99')),
+        throwsA(anyOf(isA<AstOpError>(), isA<AstPathError>())),
+      );
+    }, skip: 'pending Phase 4 path.dart CommentLine peer guards');
+
+    test('deleteAt on a CommentLine peer throws AstOpError', () {
+      final root = parseOk('[\n  // c\n  1,\n  2\n]\n');
+      expect(
+        () => deleteAt(root, ['0']),
+        throwsA(anyOf(isA<AstOpError>(), isA<AstPathError>())),
+      );
+    }, skip: 'pending Phase 4 path.dart CommentLine peer guards');
+
+    test('duplicateAt on a CommentLine peer throws AstOpError', () {
+      final root = parseOk('[\n  // c\n  1,\n  2\n]\n');
+      expect(
+        () => duplicateAt(root, ['0']),
+        throwsA(anyOf(isA<AstOpError>(), isA<AstPathError>())),
+      );
+    }, skip: 'pending Phase 4 path.dart CommentLine peer guards');
+  });
 }
 
 extension _Let<T> on T {

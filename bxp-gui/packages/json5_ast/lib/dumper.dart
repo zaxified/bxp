@@ -3,6 +3,11 @@ import 'ast.dart';
 class DumperOptions {
   final String indent;
   final int inlineArrayMax;
+  /// Max characters for collapsing `{ k: v, ... }` onto a single line. The
+  /// default of 0 disables the feature: every object is emitted multi-line.
+  /// bxp-gui keeps it disabled because the canonical config style is one
+  /// property per line; future consumers may opt in by passing a positive
+  /// value.
   final int inlineObjectMax;
   final int alignKeyMaxLen;
   final int alignKeyGap;

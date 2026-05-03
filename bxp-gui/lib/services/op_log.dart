@@ -91,7 +91,8 @@ class InsertInlineCommentOp extends ConfigOp {
 /// For Maps: [keyOrIndex] is the new key. When [atIndex] is null the
 /// entry appends after the last existing peer; non-null inserts at that
 /// raw peer position (Phase 5f canonical placement).
-/// For Lists: [keyOrIndex] is the stringified target index (clamped to end).
+/// For Lists: [keyOrIndex] is the stringified target index (clamped to
+/// end); [atIndex] is ignored — list position lives in [keyOrIndex].
 class InsertOp extends ConfigOp {
   final ConfigPath parentPath;
   final String keyOrIndex;

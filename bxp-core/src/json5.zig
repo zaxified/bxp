@@ -282,7 +282,9 @@ fn whitespaceKind(slice: []const u8) []const u8 {
     return "whitespace";
 }
 
-/// Decide whether a // comment that begins at `comment_start` is leading or
+/// True iff the next entry appended to `out` needs a leading comma — i.e.
+/// `out` ends with a value rather than with `{`, `[`, `,`, or `:` (after
+/// trailing whitespace).
 fn needsLeadingComma(out: []const u8) bool {
     var k = out.len;
     while (k > 0) {
@@ -295,7 +297,6 @@ fn needsLeadingComma(out: []const u8) bool {
     return false;
 }
 
-// 5d-CANDIDATE: $comm_<N> + $meta_comm_<N> emission. GUI no longer
 /// Errors discovered after a value has already been emitted (unterminated
 /// strings, invalid bare-identifier literals). Flushed as `, "$err_<N>": "..."`
 /// sibling entries before the next `,` or `}` in the parent object. Only
@@ -325,10 +326,6 @@ fn dropValueErrs(alloc: std.mem.Allocator, errs: *std.ArrayList([]u8)) void {
 
 fn isInObject(nest: []const u8) bool {
     return nest.len > 0 and nest[nest.len - 1] == '{';
-}
-
-fn isInArray(nest: []const u8) bool {
-    return nest.len > 0 and nest[nest.len - 1] == '[';
 }
 
 /// Like preprocess, but emits recovered syntax errors as `$err_<N>` entries.
