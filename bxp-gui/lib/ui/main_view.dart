@@ -199,6 +199,18 @@ class _StatusBarState extends State<_StatusBar> {
     final bg = t.panelBg;
     final borderColor = t.borderColor;
 
+    // If stderrText drained out from under us (new run started, or store
+    // reloaded) collapse the expanded panel — otherwise the next chunk of
+    // stderr makes the panel snap open without the user clicking it.
+    if (store.stderrText.isEmpty && _stderrExpanded) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        if (store.stderrText.isEmpty && _stderrExpanded) {
+          setState(() => _stderrExpanded = false);
+        }
+      });
+    }
+
     // Config-level status: IDLE (nothing loaded) / LOADED / ERROR.
     final String configStatusText;
     final Color configStatusColor;

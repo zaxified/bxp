@@ -1525,7 +1525,7 @@ class _ExprLeafState extends State<_ExprLeaf> {
     for (var i = 0; i < p.length; i++) {
       if (pending[i] != p[i]) return;
     }
-    store.pendingFocusPath.value = null;
+    store.clearPendingFocus();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) store.setSelectedExpr(widget.path, widget.text);
     });
@@ -1656,7 +1656,7 @@ class _EditableStringState extends State<_EditableString> {
     }
     // Consume the request — clear so other matching cells don't also
     // try to enter edit (insert always targets exactly one new node).
-    store.pendingFocusPath.value = null;
+    store.clearPendingFocus();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _enterEdit();
     });
@@ -1795,7 +1795,7 @@ class _EditableNumberState extends State<_EditableNumber> {
     for (var i = 0; i < p.length; i++) {
       if (pending[i] != p[i]) return;
     }
-    store.pendingFocusPath.value = null;
+    store.clearPendingFocus();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _enterEdit();
     });

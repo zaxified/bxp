@@ -112,6 +112,11 @@ class _ExprEditorState extends State<ExprEditor> {
     _hidePopup();
     widget.controller.removeListener(_onEdit);
     _focusNode.removeListener(_onFocusChange);
+    // If we attached our key handler to a parent-owned focus node, detach
+    // it — otherwise the parent reuses the FocusNode and our (now-dead)
+    // _onKeyEvent fires on the next key press, calling into a torn-down
+    // state.
+    if (widget.focusNode != null) _focusNode.onKeyEvent = null;
     if (widget.focusNode == null) _focusNode.dispose();
     super.dispose();
   }

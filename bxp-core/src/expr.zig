@@ -1356,6 +1356,7 @@ fn normalizeMonthAbbrev(s: []const u8, alloc: std.mem.Allocator) ![]const u8 {
 
     // Second pass: build a new string with 4-char abbreviations trimmed to 3.
     var out = std.array_list.Managed(u8).init(alloc);
+    errdefer out.deinit();
     i = 0;
     while (i < s.len) {
         if (!std.ascii.isAlphabetic(s[i])) {

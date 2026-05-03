@@ -15,7 +15,21 @@ import 'package:flutter/foundation.dart';
 /// optional map of key/value details (paths, lengths, error messages).
 void devTrace(String event, [Map<String, Object?>? data]) {
   if (!kDebugMode) return;
-  final payload = data == null ? event : '$event ${jsonEncode(data)}';
+  String payload;
+  if (data == null) {
+    payload = event;
+  } else {
+    // jsonEncode can throw on cycles, non-encodable types, or recursive
+    // toJson chains. devTrace is best-effort instrumentation and must
+    // never break the calling code path.
+    String encoded;
+    try {
+      encoded = jsonEncode(data);
+    } catch (e) {
+      encoded = '<unencodable: $e>';
+    }
+    payload = '$event $encoded';
+  }
   // ignore: avoid_print
   print('[bxp_gui] $payload');
 }

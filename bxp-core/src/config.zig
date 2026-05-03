@@ -1108,8 +1108,11 @@ pub fn loadFromBytes(alloc: std.mem.Allocator, raw: []const u8, config_path: []c
             while (b_it.next()) |b_entry| {
                 // Defaults — overridden by any matching JSON key found below.
                 var data_dir: []const u8 = try alloc.dupe(u8, ".");
+                errdefer alloc.free(data_dir);
                 var file_pattern_in: []const u8 = try alloc.dupe(u8, "");
+                errdefer alloc.free(file_pattern_in);
                 var file_pattern_out: []const u8 = try alloc.dupe(u8, "");
+                errdefer alloc.free(file_pattern_out);
                 var xlsx_sheet: ?XlsxSheet = null;
                 var ticker_map = std.StringHashMap([]const u8).init(alloc);
                 var input_schema = std.StringHashMap([]const u8).init(alloc);
@@ -1132,24 +1135,29 @@ pub fn loadFromBytes(alloc: std.mem.Allocator, raw: []const u8, config_path: []c
 
                     if (bobj.get("data_dir")) |v| {
                         if (v == .string) {
-                            alloc.free(data_dir);
-                            // Resolve data_dir relative to the config file's directory.
+                            // Allocate before freeing the old default — if join
+                            // OOMs, the errdefer above must still see a valid
+                            // pointer in `data_dir`.
                             const cfg_dir = std.fs.path.dirname(config_path) orelse ".";
-                            data_dir = try std.fs.path.join(alloc, &.{ cfg_dir, v.string });
+                            const new_data_dir = try std.fs.path.join(alloc, &.{ cfg_dir, v.string });
+                            alloc.free(data_dir);
+                            data_dir = new_data_dir;
                         }
                     }
 
                     if (bobj.get("file_pattern_in")) |v| {
                         if (v == .string) {
+                            const new_pat = try alloc.dupe(u8, v.string);
                             alloc.free(file_pattern_in);
-                            file_pattern_in = try alloc.dupe(u8, v.string);
+                            file_pattern_in = new_pat;
                         }
                     }
 
                     if (bobj.get("file_pattern_out")) |v| {
                         if (v == .string) {
+                            const new_pat = try alloc.dupe(u8, v.string);
                             alloc.free(file_pattern_out);
-                            file_pattern_out = try alloc.dupe(u8, v.string);
+                            file_pattern_out = new_pat;
                         }
                     }
 

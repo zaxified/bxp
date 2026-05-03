@@ -24,6 +24,12 @@ enum RunStatus { idle, running, done, error }
 enum ExprValidationState { idle, pending, ok, error }
 
 class TraceStore extends ChangeNotifier {
+  // Set in dispose(); guards every async-tail notifyListeners against
+  // setState-after-dispose when the store outlives a fast tear-down
+  // (e.g. provider replaced under the running app, or hot-restart in
+  // dev tree).
+  bool _disposed = false;
+
   // Config
   String configPath = '';
   String templateId = '';
@@ -56,25 +62,32 @@ class TraceStore extends ChangeNotifier {
   String? runError;
   String stderrText = '';
   int rawLines = 0;
-  // Live trace-line counter exposed as a ValueNotifier so the StatusBar's
+  // Live trace-line counter exposed as a ValueListenable so the StatusBar's
   // "trace lines" cell can rebuild at ~10 Hz during a stream WITHOUT
   // calling main `notifyListeners()` (which would also rebuild RowList /
   // FileList / OutputPanel and turn the dry-run into an O(N²) PlutoGrid
-  // re-allocation storm).
-  final ValueNotifier<int> traceLinesCounter = ValueNotifier(0);
+  // re-allocation storm). Mutation is internal-only.
+  final ValueNotifier<int> _traceLinesCounter = ValueNotifier(0);
+  ValueListenable<int> get traceLinesCounter => _traceLinesCounter;
+
   // Bumped on every `file_start` event so FileList can grow live during a
   // stream without main `notifyListeners()`. RowList does NOT listen to
   // this — once the first file's auto-select fires (single main notify on
   // first `file_end`), the grid renders once and stays put for the rest
-  // of the run.
-  final ValueNotifier<int> fileGen = ValueNotifier(0);
+  // of the run. Mutation is internal-only.
+  final ValueNotifier<int> _fileGen = ValueNotifier(0);
+  ValueListenable<int> get fileGen => _fileGen;
 
   /// Phase 5h: path of the most recently inserted config node, set by
   /// `insertConfigNode`. The matching tree row's editable cell consumes
-  /// it on first build (post-frame `_enterEdit` + clears the notifier),
+  /// it on first build (post-frame `_enterEdit` + [clearPendingFocus]),
   /// so the user lands directly in edit mode after Confirm rather than
   /// having to click the new row.
-  final ValueNotifier<List<String>?> pendingFocusPath = ValueNotifier(null);
+  final ValueNotifier<List<String>?> _pendingFocusPath = ValueNotifier(null);
+  ValueListenable<List<String>?> get pendingFocusPath => _pendingFocusPath;
+  void clearPendingFocus() {
+    _pendingFocusPath.value = null;
+  }
   // Exit code from the most recent dry-run / full-run, captured so the
   // status bar can show "done · exit N" with the right colour:
   //   0 → success (emerald), 2 → completed with warnings (amber),
@@ -201,6 +214,7 @@ class TraceStore extends ChangeNotifier {
         headers: headers,
         fields: fields,
       );
+      if (_disposed) return;
       _exprCallCache[key] = calls;
       _exprCallInFlight.remove(key);
       notifyListeners();
@@ -409,6 +423,7 @@ class TraceStore extends ChangeNotifier {
       return;
     }
     final err = await BxpProcessClient.validateExpr(text);
+    if (_disposed) return;
     // Guard against races: the selected expression may have changed while
     // the spawn was in flight.
     if (selectedExprText != text) return;
@@ -794,7 +809,9 @@ class TraceStore extends ChangeNotifier {
       _recentFiles = _recentFiles.sublist(0, _recentMax);
     }
     final prefs = await SharedPreferences.getInstance();
+    if (_disposed) return;
     await prefs.setStringList('bxp-ui.recent', _recentFiles);
+    if (_disposed) return;
     notifyListeners();
   }
 
@@ -1415,7 +1432,7 @@ class TraceStore extends ChangeNotifier {
           {'parentPath': path, 'newKey': newKey, 'atIndex': atIndex})) {
         return;
       }
-      pendingFocusPath.value = [...path, newKey];
+      _pendingFocusPath.value = [...path, newKey];
     } else if (target is JsonArray) {
       final n = target.elements.length;
       final clamped = atIndex == null ? n : atIndex.clamp(0, n);
@@ -1424,7 +1441,7 @@ class TraceStore extends ChangeNotifier {
           {'parentPath': path, 'index': clamped})) {
         return;
       }
-      pendingFocusPath.value = [...path, clamped.toString()];
+      _pendingFocusPath.value = [...path, clamped.toString()];
       // Selections under the same array at indices >= clamped shifted up.
       _shiftSelectionOnArrayEdit(path, (oldIdx) {
         if (oldIdx >= clamped) return oldIdx + 1;
@@ -1581,7 +1598,7 @@ class TraceStore extends ChangeNotifier {
         final parsed = jsonDecode(validation);
         final err = parsed is Map ? parsed['error'] as String? : null;
         if (err != null) {
-          await tmpFile.delete().catchError((_) => tmpFile);
+          try { await tmpFile.delete(); } catch (_) {}
           configSaveError = 'pre-save validation failed: $err';
           notifyListeners();
           return;
@@ -1592,14 +1609,14 @@ class TraceStore extends ChangeNotifier {
         // through and trap the user in readonly-on-reload mode.
         final treeErr = _firstErrTraceIn(parsed);
         if (treeErr != null) {
-          await tmpFile.delete().catchError((_) => tmpFile);
+          try { await tmpFile.delete(); } catch (_) {}
           configSaveError = 'pre-save validation failed: $treeErr';
           notifyListeners();
           return;
         }
       } catch (_) {
         // bxp-fmt printed something unparseable — treat as failure.
-        await tmpFile.delete().catchError((_) => tmpFile);
+        try { await tmpFile.delete(); } catch (_) {}
         configSaveError = 'pre-save validation produced unreadable output';
         notifyListeners();
         return;
@@ -1707,7 +1724,7 @@ class TraceStore extends ChangeNotifier {
     runError = null;
     stderrText = '';
     rawLines = 0;
-    traceLinesCounter.value = 0;
+    _traceLinesCounter.value = 0;
     lastExitCode = null;
     selectedFileId = null;
     selectedRowId = null;
@@ -1716,15 +1733,15 @@ class TraceStore extends ChangeNotifier {
     final builder = TraceBuilder();
     traceModel = builder.model;
     // One main notify to flip status to running and clear stale model.
-    fileGen.value++;
+    _fileGen.value++;
     notifyListeners();
 
     // Counter ticker — only refreshes the `trace lines` ValueNotifier.
     // Crucially does NOT call main `notifyListeners()`, so RowList /
     // OutputPanel / status-bar aggregates do not rebuild per tick.
     final ticker = Timer.periodic(const Duration(milliseconds: 100), (_) {
-      if (traceLinesCounter.value != rawLines) {
-        traceLinesCounter.value = rawLines;
+      if (_traceLinesCounter.value != rawLines) {
+        _traceLinesCounter.value = rawLines;
       }
     });
 
@@ -1745,7 +1762,7 @@ class TraceStore extends ChangeNotifier {
           final fc = builder.model.fileOrder.length;
           if (fc != prevFileCount) {
             prevFileCount = fc;
-            fileGen.value++;
+            _fileGen.value++;
           }
 
           // Auto-select happens exactly ONCE, on the FIRST `file_end`
@@ -1799,8 +1816,8 @@ class TraceStore extends ChangeNotifier {
       // closing batch of lines arrived, leaving the counter short of
       // the true total. Without this the displayed number is
       // non-deterministic (varies per run).
-      if (traceLinesCounter.value != rawLines) {
-        traceLinesCounter.value = rawLines;
+      if (_traceLinesCounter.value != rawLines) {
+        _traceLinesCounter.value = rawLines;
       }
     }
 
@@ -1826,18 +1843,34 @@ class TraceStore extends ChangeNotifier {
 
   /// Real template IDs from the live AST (no synthetic entries). The
   /// empty string is used separately in the UI to mean "all templates".
+  ///
+  /// Memoised against [treeLoadGen]: `_AddChildDialog` and the template
+  /// picker hit this on every rebuild, and walking `properties` linearly
+  /// for a deeply-nested config adds up. Cache invalidates whenever the
+  /// tree is reloaded (load / save / external edit).
+  int _availableTemplatesGen = -1;
+  List<String> _availableTemplatesCache = const [];
   List<String> get availableTemplates {
-    final root = _astRoot;
-    if (root is! JsonObject) return const [];
-    for (final p in root.properties.whereType<JsonProperty>()) {
-      if (p.key != 'conversion_templates') continue;
-      final v = p.value;
-      if (v is! JsonObject) return const [];
-      return [
-        for (final tp in v.properties.whereType<JsonProperty>()) tp.key,
-      ];
+    if (_availableTemplatesGen == treeLoadGen) {
+      return _availableTemplatesCache;
     }
-    return const [];
+    final root = _astRoot;
+    List<String> result = const [];
+    if (root is JsonObject) {
+      for (final p in root.properties.whereType<JsonProperty>()) {
+        if (p.key != 'conversion_templates') continue;
+        final v = p.value;
+        if (v is JsonObject) {
+          result = [
+            for (final tp in v.properties.whereType<JsonProperty>()) tp.key,
+          ];
+        }
+        break;
+      }
+    }
+    _availableTemplatesCache = result;
+    _availableTemplatesGen = treeLoadGen;
+    return result;
   }
 
   /// Rich template metadata (data_dir / file_pattern_in / description)
@@ -1892,11 +1925,12 @@ class TraceStore extends ChangeNotifier {
   /// `setState/notifyListeners called after dispose`.
   @override
   void dispose() {
+    _disposed = true;
     _validationDebounce?.cancel();
     _configValidateDebounce?.cancel();
-    traceLinesCounter.dispose();
-    fileGen.dispose();
-    pendingFocusPath.dispose();
+    _traceLinesCounter.dispose();
+    _fileGen.dispose();
+    _pendingFocusPath.dispose();
     super.dispose();
   }
 }

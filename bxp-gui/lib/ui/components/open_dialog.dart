@@ -100,7 +100,9 @@ class _OpenDialogState extends State<OpenDialog> {
 
     try {
       final dir = Directory(path);
-      if (!await dir.exists()) {
+      final exists = await dir.exists();
+      if (!mounted) return;
+      if (!exists) {
         setState(() {
           loadError = 'Directory does not exist';
           loading = false;
@@ -109,6 +111,7 @@ class _OpenDialogState extends State<OpenDialog> {
       }
 
       final list = await dir.list().toList();
+      if (!mounted) return;
       // Only the always-on filter (hidden entries) is applied here — the
       // file-extension filter lives in _recomputeVisible so toggling
       // showAllFiles doesn't require re-listing the directory.
@@ -139,6 +142,7 @@ class _OpenDialogState extends State<OpenDialog> {
       });
       _refocusRootIfSearchInactive();
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         loadError = e.toString();
         loading = false;

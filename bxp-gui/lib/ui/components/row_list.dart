@@ -389,7 +389,15 @@ class _RowListInnerState extends State<_RowListInner> {
               // moves focus into a filter input — otherwise the last
               // clicked cell keeps its border, making it look like the
               // grid still owns input focus.
-              onFocus: () => _stateManager?.clearCurrentCell(),
+              //
+              // Guard `mounted`: the focus listener can fire after this
+              // RowList state has been disposed (e.g. tab switch under a
+              // pending IME commit) — calling into a torn-down PlutoGrid
+              // state manager throws asserts in debug builds.
+              onFocus: () {
+                if (!mounted) return;
+                _stateManager?.clearCurrentCell();
+              },
             ),
           ),
         ),

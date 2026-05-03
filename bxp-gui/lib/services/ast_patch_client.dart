@@ -64,6 +64,16 @@ class AstPatchClient {
           'opPath': e.path,
         });
         throw AstPatchError(e.toString());
+      } on ArgumentError catch (e) {
+        // value_builder.astFromValue throws ArgumentError when handed an
+        // unsupported Dart value (BigInt, Set, Future, …). Wrap so callers
+        // see a uniform AstPatchError instead of a raw stdlib exception.
+        devTrace('astPatch.opThrew', {
+          'opIndex': i,
+          'opType': op.runtimeType.toString(),
+          'message': e.toString(),
+        });
+        throw AstPatchError('op rejected: ${e.toString()}');
       }
     }
     final out = Dumper.dump(root);

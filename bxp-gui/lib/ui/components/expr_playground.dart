@@ -132,8 +132,13 @@ class _ExprPlaygroundState extends State<ExprPlayground> {
   }
 
   void _loadExample(String expr) {
-    _ctrl.text = expr;
-    _ctrl.selection = TextSelection.collapsed(offset: expr.length);
+    // Build text+selection in one TextEditingValue so the controller fires
+    // listeners once — assigning .text then .selection emits two notifies
+    // and forces an extra ExprEditor rebuild for every example tap.
+    _ctrl.value = TextEditingValue(
+      text: expr,
+      selection: TextSelection.collapsed(offset: expr.length),
+    );
   }
 
   @override
