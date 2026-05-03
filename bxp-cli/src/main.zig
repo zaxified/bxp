@@ -108,13 +108,11 @@ pub fn main() !void {
     }
 
     if (quiet and debug) {
-        stdout.print("error: --quiet and --debug cannot be used together\n", .{}) catch {};
-        stdout.flush() catch {};
+        std.debug.print("error: --quiet and --debug cannot be used together\n", .{});
         std.process.exit(1);
     }
     if (trace and debug) {
-        stdout.print("error: --trace and --debug cannot be used together\n", .{}) catch {};
-        stdout.flush() catch {};
+        std.debug.print("error: --trace and --debug cannot be used together\n", .{});
         std.process.exit(1);
     }
 

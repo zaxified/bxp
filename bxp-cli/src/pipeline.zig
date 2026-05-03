@@ -53,27 +53,24 @@ pub const Output = struct {
         self.writer.flush() catch {};
     }
 
-    /// Print a warning line. Suppressed in --quiet mode. In --trace mode
-    /// the line is redirected to stderr because stdout is reserved for the
-    /// NDJSON event stream — interleaving raw text would break the GUI's
-    /// line-by-line JSON parser. The GUI captures stderr separately and
-    /// surfaces it via the status bar's clickable warn/err panel, so the
-    /// human-readable warning is preserved.
+    /// Print a warning line. Suppressed in --quiet mode. Goes to stderr in
+    /// every mode: in --trace mode stdout is reserved for the NDJSON event
+    /// stream (interleaving raw text would break the GUI's line-by-line
+    /// parser); in normal mode diagnostic output belongs on stderr per
+    /// Unix convention so users redirecting stdout to a file don't get
+    /// warnings inlined into their data.
     pub fn warning(self: Output, comptime fmt: []const u8, args: anytype) void {
         if (self.quiet) return;
-        if (self.trace) {
-            std.debug.print(fmt, args);
-            return;
-        }
-        self.writer.print(fmt, args) catch {};
-        self.writer.flush() catch {};
+        std.debug.print(fmt, args);
     }
 
-    /// Print a fatal-error line. Suppressed in --quiet or --trace mode.
+    /// Print a fatal-error line. Suppressed in --quiet mode. Goes to stderr
+    /// for the same reasons as `warning` above — the GUI's NDJSON parser
+    /// must see only events on stdout, and CLI users running e.g.
+    /// `bxp-cli > out.csvx` need diagnostics out-of-band from the data.
     pub fn fatal(self: Output, comptime fmt: []const u8, args: anytype) void {
-        if (self.quiet or self.trace) return;
-        self.writer.print(fmt, args) catch {};
-        self.writer.flush() catch {};
+        if (self.quiet) return;
+        std.debug.print(fmt, args);
     }
 
     /// Print a per-section summary line. Suppressed in --quiet or --trace mode.
@@ -117,8 +114,45 @@ pub const Output = struct {
     }
 };
 
-/// Returns true if s looks like a valid YYYY-MM-DD date string.
+/// Returns true if s is a valid YYYY-MM-DD date string. Checks digit shape
+/// AND component ranges (month 01–12, day 01–31). Rejects shapes like
+/// `2026-13-99` so a malformed filename does not silently flip the row
+/// filter into "min > max → drop everything" mode.
 fn isDate(s: []const u8) bool {
+    if (s.len != 10) return false;
+    if (s[4] != '-' or s[7] != '-') return false;
+    for (s[0..4]) |c| if (!std.ascii.isDigit(c)) return false;
+    for (s[5..7]) |c| if (!std.ascii.isDigit(c)) return false;
+    for (s[8..10]) |c| if (!std.ascii.isDigit(c)) return false;
+    const month = (s[5] - '0') * 10 + (s[6] - '0');
+    if (month < 1 or month > 12) return false;
+    const day = (s[8] - '0') * 10 + (s[9] - '0');
+    if (day < 1 or day > 31) return false;
+    return true;
+}
+
+const DateRange = struct { min: []const u8, max: []const u8 };
+
+const DateRangeResult = union(enum) {
+    /// No `YYYY-MM-DD_YYYY-MM-DD` substring in the stem. This is documented
+    /// behaviour: when `date_filter_from_filename` is on but the filename
+    /// has no range, every row is processed unfiltered (test fixtures rely
+    /// on this).
+    none,
+    /// A range was found but rejected: `min > max`, or one of the two dates
+    /// has an out-of-range month/day. Caller should warn — silent
+    /// `min > max` would filter every row out and produce empty output.
+    invalid,
+    /// Valid range; `min` <= `max` lexically (and therefore chronologically
+    /// for ISO-8601 dates).
+    valid: DateRange,
+};
+
+/// Returns true when `s` matches the digit/dash shape of a date but does
+/// not necessarily have valid component values. Used to distinguish "user
+/// clearly tried to put a range here but typo'd" (.invalid) from "no
+/// range present at all" (.none).
+fn isDateShape(s: []const u8) bool {
     if (s.len != 10) return false;
     if (s[4] != '-' or s[7] != '-') return false;
     for (s[0..4]) |c| if (!std.ascii.isDigit(c)) return false;
@@ -127,20 +161,29 @@ fn isDate(s: []const u8) bool {
     return true;
 }
 
-const DateRange = struct { min: []const u8, max: []const u8 };
-
-/// Searches for "YYYY-MM-DD_YYYY-MM-DD" anywhere in the file stem (without extension).
-/// Returns slices into stem — no allocation.
-fn extractDateRange(stem: []const u8) ?DateRange {
-    if (stem.len < 21) return null;
+/// Searches for "YYYY-MM-DD_YYYY-MM-DD" anywhere in the file stem (without
+/// extension). Returns slices into stem — no allocation.
+fn extractDateRange(stem: []const u8) DateRangeResult {
+    if (stem.len < 21) return .none;
     var i: usize = 0;
     while (i + 21 <= stem.len) : (i += 1) {
         const s = stem[i..];
+        // Pass 1: full validation (component ranges checked too).
         if (isDate(s[0..10]) and s[10] == '_' and isDate(s[11..21])) {
-            return .{ .min = s[0..10], .max = s[11..21] };
+            const min = s[0..10];
+            const max = s[11..21];
+            if (std.mem.order(u8, min, max) == .gt) return .invalid;
+            return .{ .valid = .{ .min = min, .max = max } };
+        }
+        // Pass 2: shape-only match. A `\d{4}-\d{2}-\d{2}_\d{4}-\d{2}-\d{2}`
+        // pattern with invalid components (e.g. `2026-13-99`) is almost
+        // certainly an intended-but-typo'd range, not random data — flag
+        // it so silent filter-by-no-range doesn't drop every row.
+        if (isDateShape(s[0..10]) and s[10] == '_' and isDateShape(s[11..21])) {
+            return .invalid;
         }
     }
-    return null;
+    return .none;
 }
 
 /// Returns true when s is a plain decimal number: optional '-', digits,
@@ -276,13 +319,17 @@ fn writeJsonString(out: *Stdout, s: []const u8) !void {
 
 /// Evaluates all input_schema expressions for the current row into a variable map.
 /// Keys are variable names (owned by config); values are allocated with ctx.alloc.
-/// On expression error the variable is stored as empty string.
+/// On expression error the variable is stored as empty string and `error_count`
+/// is incremented — the caller bumps `stats.warnings` once per file when the
+/// counter exceeds zero, so silent expression failures still flip the binary's
+/// exit code to 2 and surface in the summary.
 /// In debug mode, every error is printed before being suppressed.
 /// Saves and restores ctx.error_detail so the caller's detail buffer is unaffected.
 fn evalAllVars(
     schema: std.StringHashMap([]const u8),
     ctx: *expr_mod.Context,
     out: Output,
+    error_count: *u32,
 ) !std.StringHashMap([]const u8) {
     var vars = std.StringHashMap([]const u8).init(ctx.alloc);
     var detail: []const u8 = "";
@@ -293,6 +340,7 @@ fn evalAllVars(
     while (it.next()) |e| {
         detail = "";
         const val = expr_mod.evalString(e.value_ptr.*, ctx) catch |err| blk: {
+            error_count.* += 1;
             if (out.debug) {
                 if (detail.len > 0) {
                     out.writer.print("[expr error] {s} = \"{s}\": {s} ({s})\n  fields:", .{ e.key_ptr.*, e.value_ptr.*, @errorName(err), detail }) catch {};
@@ -380,6 +428,13 @@ pub fn processBroker(
         defer file_arena.deinit();
         const file_alloc = file_arena.allocator();
 
+        // Counts input_schema expression failures across all rows of THIS file.
+        // Bumps `stats.warnings` once when > 0 at file end so a config typo
+        // that empties every $ticker (or any other variable) flips the
+        // exit code to 2 and surfaces in the summary, instead of silently
+        // producing useless output with exit 0.
+        var file_expr_errors: u32 = 0;
+
         // Extract date range from filename when date_filter_from_filename is enabled.
         // Strip file_pattern_in from the filename to get the stem for date extraction.
         // Empty strings = no filtering.
@@ -387,13 +442,29 @@ pub fn processBroker(
             filename[0 .. filename.len - bc.file_pattern_in.len]
         else
             filename;
-        const dr = if (bc.date_filter_from_filename) extractDateRange(stem) else null;
-        const date_min: []const u8 = if (dr) |r| r.min else "";
-        const date_max: []const u8 = if (dr) |r| r.max else "";
-        if (dr) |r| {
-            out.info("processing '{s}' with date range from {s} to {s}\n", .{ filename, r.min, r.max });
-        } else {
-            out.info("processing '{s}'\n", .{filename});
+        const dr: DateRangeResult = if (bc.date_filter_from_filename)
+            extractDateRange(stem)
+        else
+            .none;
+        const date_min: []const u8 = switch (dr) {
+            .valid => |r| r.min,
+            else => "",
+        };
+        const date_max: []const u8 = switch (dr) {
+            .valid => |r| r.max,
+            else => "",
+        };
+        switch (dr) {
+            .valid => |r| out.info("processing '{s}' with date range from {s} to {s}\n", .{ filename, r.min, r.max }),
+            .invalid => {
+                // A range was found but min > max (or a bad month/day made
+                // it unparseable). Silent filtering here would drop every
+                // row — warn and process unfiltered so the user notices.
+                out.warning("warning: '{s}' has a malformed YYYY-MM-DD_YYYY-MM-DD range (min > max or bad component); processing all rows\n", .{filename});
+                stats.warnings += 1;
+                out.info("processing '{s}'\n", .{filename});
+            },
+            .none => out.info("processing '{s}'\n", .{filename}),
         }
 
         // Read entire input file into memory (max 16 MB).
@@ -626,7 +697,7 @@ pub fn processBroker(
             };
 
             // Evaluate all input_schema variables for this row.
-            var vars = try evalAllVars(bc.input_schema, &row_ctx, out);
+            var vars = try evalAllVars(bc.input_schema, &row_ctx, out, &file_expr_errors);
 
             // Row rules: first matching rule determines what to emit.
             const rules = bc.row_rules orelse &.{};
@@ -760,6 +831,15 @@ pub fn processBroker(
         if (bc.file_type_out == .json) try fout.writeAll("\n]\n");
         try fout.flush();
 
+        // Surface silent expression errors. Bump stats.warnings ONCE per
+        // file (not per error) so a clean run is exit 0 but any file with
+        // expression failures flips to exit 2 and gets an actionable line
+        // (the GUI also picks up the warning text via the stderr pane).
+        if (file_expr_errors > 0) {
+            out.warning("warning: {d} input_schema expression error(s) in '{s}' (run with --debug to see details)\n", .{ file_expr_errors, filename });
+            stats.warnings += 1;
+        }
+
         out.event("file_end", .{
             .template = bid,
             .path = full_path,
@@ -767,7 +847,7 @@ pub fn processBroker(
                 .rows = all_rows.items.len,
                 .written = file_rows_written,
                 .errors = @as(u32, 0),
-                .warnings = @as(u32, 0),
+                .warnings = file_expr_errors,
             },
         });
     }
