@@ -54,6 +54,15 @@ class _MainViewState extends State<MainView> {
     super.dispose();
   }
 
+  /// True when keyboard focus is inside an editable text field (TextField,
+  /// CodeMirror-style editor, etc.). Used to opt out of global Ctrl+Z/Y so
+  /// in-field typo-undo / redo keep their native meaning.
+  bool _focusInEditableText() {
+    final ctx = FocusManager.instance.primaryFocus?.context;
+    if (ctx == null) return false;
+    return ctx.widget is EditableText;
+  }
+
   bool _handleKey(KeyEvent event) {
     if (event is! KeyDownEvent) return false;
     final keys = HardwareKeyboard.instance.logicalKeysPressed;
@@ -89,11 +98,16 @@ class _MainViewState extends State<MainView> {
         store.saveConfig();
         return true;
       case LogicalKeyboardKey.keyZ:
+        // Ctrl+Z inside any editable text field must keep its native
+        // typo-undo meaning. Only intercept for the global config undo
+        // when focus is somewhere structural (tree, panels, top bar).
+        if (_focusInEditableText()) return false;
         if (readOnly || !store.canUndo) return true;
         devTrace('action.shortcut', {'combo': 'Ctrl+Z', 'action': 'undo'});
         store.undo();
         return true;
       case LogicalKeyboardKey.keyY:
+        if (_focusInEditableText()) return false;
         if (readOnly || !store.canRedo) return true;
         devTrace('action.shortcut', {'combo': 'Ctrl+Y', 'action': 'redo'});
         store.redo();

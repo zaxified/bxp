@@ -428,6 +428,10 @@ class TraceStore extends ChangeNotifier {
   // chance to undo, trapping them in readonly-on-reload mode.
   Timer? _configValidateDebounce;
   bool _configValidating = false;
+  // Set when an edit lands while a validation pass is already in flight.
+  // The pass re-runs once on completion so the marker map can never lag
+  // permanently behind the AST when validation is slower than typing.
+  bool _configRevalidatePending = false;
 
   /// Snapshot of "did this file contain `$err_*` at load time?" Drives the
   /// readonly toolbar gate. Live errors introduced by edits do NOT flip
@@ -448,13 +452,23 @@ class TraceStore extends ChangeNotifier {
 
   void _scheduleConfigValidation() {
     _configValidateDebounce?.cancel();
+    // If a validation pass is already running, just mark "another one
+    // needed" — the running pass will trigger it on completion. Otherwise
+    // arm the normal debounce.
+    if (_configValidating) {
+      _configRevalidatePending = true;
+      return;
+    }
     _configValidateDebounce = Timer(const Duration(milliseconds: 250), () {
       _validateConfigNow();
     });
   }
 
   Future<void> _validateConfigNow() async {
-    if (_configValidating) return;
+    if (_configValidating) {
+      _configRevalidatePending = true;
+      return;
+    }
     if (_astRoot == null || configPath.isEmpty) return;
     if (isSaving) return; // saveConfig runs its own validation
     final raw = _rawConfigInput;
@@ -486,6 +500,14 @@ class TraceStore extends ChangeNotifier {
         if (await tmpFile.exists()) await tmpFile.delete();
       } catch (_) {}
       _configValidating = false;
+      // If edits arrived during this pass, run once more so the marker
+      // map catches up. We schedule rather than recurse — that re-arms
+      // the 250ms debounce and folds together any further edits that
+      // land in the next quarter-second.
+      if (_configRevalidatePending) {
+        _configRevalidatePending = false;
+        _scheduleConfigValidation();
+      }
     }
   }
 
@@ -1859,6 +1881,23 @@ class TraceStore extends ChangeNotifier {
     } catch (_) {
       // Best-effort launch; don't surface transient errors to the UI.
     }
+  }
+
+  /// Release every resource the store owns.
+  ///
+  /// In normal app lifetime the store is created once in `main` and lives
+  /// to process exit, so the OS reaps everything anyway. The override
+  /// matters under hot-restart and in tests, where a half-disposed
+  /// instance with live timers / value notifiers would log
+  /// `setState/notifyListeners called after dispose`.
+  @override
+  void dispose() {
+    _validationDebounce?.cancel();
+    _configValidateDebounce?.cancel();
+    traceLinesCounter.dispose();
+    fileGen.dispose();
+    pendingFocusPath.dispose();
+    super.dispose();
   }
 }
 

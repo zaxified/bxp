@@ -209,17 +209,28 @@ class BxpProcessClient {
       for (final line in out.split('\n')) {
         final trimmed = line.trim();
         if (trimmed.isEmpty) continue;
-        final parsed = jsonDecode(trimmed);
-        if (parsed is! Map) continue;
-        // Skip the final-result sentinel `{"t":"final","value":"..."}` —
-        // the per-call entries omit `t` and have a `fn` field.
-        if (parsed['fn'] is! String) continue;
-        calls.add(ExprCallTrace(
-          fn: parsed['fn'] as String,
-          srcStart: (parsed['src_start'] as num).toInt(),
-          srcEnd: (parsed['src_end'] as num).toInt(),
-          value: parsed['value']?.toString() ?? '',
-        ));
+        // One bad NDJSON line must NOT discard the rest of the trace —
+        // per-line try/catch so a malformed sentinel from a future bxp-fmt
+        // doesn't drop the 200 lines that came before it.
+        try {
+          final parsed = jsonDecode(trimmed);
+          if (parsed is! Map) continue;
+          // Skip the final-result sentinel `{"t":"final","value":"..."}` —
+          // the per-call entries omit `t` and have a `fn` field.
+          if (parsed['fn'] is! String) continue;
+          final ss = parsed['src_start'];
+          final se = parsed['src_end'];
+          if (ss is! num || se is! num) continue;
+          calls.add(ExprCallTrace(
+            fn: parsed['fn'] as String,
+            srcStart: ss.toInt(),
+            srcEnd: se.toInt(),
+            value: parsed['value']?.toString() ?? '',
+          ));
+        } catch (_) {
+          // Skip this line, keep the rest.
+          continue;
+        }
       }
       return calls;
     } catch (_) {

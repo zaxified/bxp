@@ -50,7 +50,30 @@ void deleteAt(JsonAstNode root, List<String> path) {
     throw AstOpError('cannot delete root', path);
   }
   final ref = resolveParent(root, path);
-  ref.children.removeAt(ref.index);
+  // Phase 5e made every comment a peer entry, so a deleted row's leading
+  // and trailing comments are siblings — not part of the JsonProperty.
+  // Remove them too, otherwise a `// doc-for-row-X` re-attaches visually
+  // to whatever sibling follows once X is gone (silent doc corruption).
+  //
+  // Convention: any contiguous run of CommentLine peers immediately
+  // *preceding* the deleted entry, with `inlinePlacement == false`,
+  // belongs to it (until the previous real entry or container start).
+  // A single CommentLine immediately *after* with `inlinePlacement == true`
+  // is the row's trailing inline comment.
+  var start = ref.index;
+  while (start > 0) {
+    final prev = ref.children[start - 1];
+    if (prev is! CommentLine || prev.inlinePlacement) break;
+    start -= 1;
+  }
+  var endExclusive = ref.index + 1;
+  if (endExclusive < ref.children.length) {
+    final next = ref.children[endExclusive];
+    if (next is CommentLine && next.inlinePlacement) {
+      endExclusive += 1;
+    }
+  }
+  ref.children.removeRange(start, endExclusive);
 }
 
 // --------------------------------------------------------------------------

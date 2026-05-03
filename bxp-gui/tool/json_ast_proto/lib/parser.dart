@@ -16,11 +16,14 @@ class Parser {
   Parser(this._toks);
 
   static ParseResult parse(String src) {
-    final tokens = Tokenizer(src).tokenize();
-    final p = Parser(tokens);
     final diagnostics = <ParseDiagnostic>[];
     JsonAstNode? root;
     try {
+      // Tokenization is inside the try so common user typos (unterminated
+      // string, bad `\u` escape, `+` with no digit, unclosed `/* ... */`)
+      // surface as a `ParseDiagnostic` rather than crashing the loader.
+      final tokens = Tokenizer(src).tokenize();
+      final p = Parser(tokens);
       final leadingComments = p._collectStandaloneComments();
       root = p._parseValue();
       // Top-of-file standalone comments: prepend as CommentLine pseudo-entries

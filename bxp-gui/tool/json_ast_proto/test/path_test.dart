@@ -65,7 +65,13 @@ void main() {
       // (and friends) to silently target the wrong element when a
       // standalone CommentLine sat before the addressed real entry.
       // trace_store records RAW indices; the resolver must agree.
-      final root = parseOk('[\n  "r0",\n  // comment\n  "r1",\n  "r2"\n]');
+      //
+      // Comment-ownership rule (added in the audit follow-up): a
+      // standalone CommentLine immediately preceding the deleted entry
+      // is treated as that entry's leading comment and removed too —
+      // otherwise it visually re-attaches to whatever sibling follows
+      // and silently mis-documents it.
+      final root = parseOk('[\n  "r0",\n  // doc-for-r1\n  "r1",\n  "r2"\n]');
       // UI path for r1 (raw index 2 in elements/adapter Map list).
       deleteAt(root, ['2']);
       final dumped = Dumper.dump(root);
@@ -73,7 +79,25 @@ void main() {
           reason: 'r1 must be deleted, not r2');
       expect(dumped.contains('"r0"'), isTrue);
       expect(dumped.contains('"r2"'), isTrue);
-      expect(dumped.contains('// comment'), isTrue);
+      expect(dumped.contains('// doc-for-r1'), isFalse,
+          reason: "r1's leading comment must vanish with it");
+    });
+
+    test('deleteAt keeps unrelated leading comments above siblings', () {
+      // Only the contiguous run of CommentLines immediately preceding
+      // the deleted entry travels with it. A comment owned by an earlier
+      // sibling (separated by that sibling's value) must stay put.
+      // Raw layout: 0=comment, 1=r0, 2=r1, 3=r2.
+      final root = parseOk(
+        '[\n  // doc-for-r0\n  "r0",\n  "r1",\n  "r2"\n]',
+      );
+      deleteAt(root, ['2']); // delete r1 — no leading comment of its own
+      final dumped = Dumper.dump(root);
+      expect(dumped.contains('"r1"'), isFalse);
+      expect(dumped.contains('"r0"'), isTrue);
+      expect(dumped.contains('"r2"'), isTrue);
+      expect(dumped.contains('// doc-for-r0'), isTrue,
+          reason: "r0's leading comment is unrelated and must remain");
     });
 
     test('non-numeric segment throws', () {
