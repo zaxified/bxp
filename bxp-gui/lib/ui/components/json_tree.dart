@@ -1511,6 +1511,27 @@ class _ExprLeafState extends State<_ExprLeaf> {
   int _lastScrolledGen = -1;
 
   @override
+  void initState() {
+    super.initState();
+    // Phase 5h: expression cells aren't edited inline — clicking them
+    // brings up the right-side ExprPanel via `setSelectedExpr`. So if
+    // this leaf is the freshly-inserted node, mirror the click here so
+    // the user lands in the panel (where the ExprEditor auto-focuses)
+    // instead of having to click the leaf themselves.
+    final p = widget.path;
+    final store = context.read<TraceStore>();
+    final pending = store.pendingFocusPath.value;
+    if (pending == null || pending.length != p.length) return;
+    for (var i = 0; i < p.length; i++) {
+      if (pending[i] != p[i]) return;
+    }
+    store.pendingFocusPath.value = null;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) store.setSelectedExpr(widget.path, widget.text);
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
     final store = context.watch<TraceStore>();
     final isActive = store.selectedExprPath != null &&
