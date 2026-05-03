@@ -6,7 +6,9 @@ For monorepo-level context see [`../CLAUDE.md`](../CLAUDE.md).
 ## Purpose
 
 **bxp-core** — shared Zig modules for CSV parsing, xlsx conversion, expression evaluation,
-JSON/JSON5 handling, and configuration loading. Consumed by bxp-cli as a local path dependency.
+JSON/JSON5 handling, configuration loading, and documentation aggregation.
+Consumed by bxp-cli (conversion engine) and bxp-fmt (validator + docs emitter)
+as a local path dependency.
 
 ## Module overview
 
@@ -14,10 +16,11 @@ JSON/JSON5 handling, and configuration loading. Consumed by bxp-cli as a local p
 |---|---|---|
 | `csv` | `csv.zig` | `splitRecords()`, `splitFields()` |
 | `xlsx` | `xlsx.zig` | `xlsxToCsv()`, `SheetSpec` |
-| `expr` | `expr.zig` | `eval()`, `evalString()`, `Context`, `Value` |
-| `config` | `config.zig` | `Config`, `BrokerConfig`, `load()`, `validate()` |
+| `expr` | `expr.zig` | `eval()`, `evalString()`, `Context`, `Value`, `FnDoc` catalog |
+| `config` | `config.zig` | `Config`, `BrokerConfig`, `load()`, `validate()`, `FieldDoc` |
 | `json` | `json.zig` | `readJsonRecords()` |
 | `json5` | `json5.zig` | `preprocess()` (internal; also exported for direct use) |
+| `docs` | `docs.zig` | `writeDocs(alloc, writer)` — emits the `bxp-fmt --docs` JSON |
 
 ## Module details
 
@@ -57,6 +60,12 @@ Expression evaluator for `input_schema` and `row_rules` in bxp-cli.json.
 **Built-in functions:** IF, ABS, DATE_CONVERT, PRICE_VALUE, PRICE_CURRENCY, TICKER,
 LOOKUP, SPLIT_PART, CONTAINS, REPLACE, TRIM, ROUND, FLOOR, CEILING, NOW, RAND, COALESCE, FIELDS.
 
+**Doc catalog** (`pub const builtins`, `keywords`, `operators`, `tokens`): each
+builtin sits next to its `FnDoc` declaration (search for `── <NAME> ──`
+section headers). The `docs` module re-exports these tables verbatim — adding
+a new builtin means writing the impl + `FnDoc` here once, no separate doc
+file to keep in sync.
+
 ### config.zig
 JSON5 configuration loader.
 
@@ -68,6 +77,27 @@ JSON5 configuration loader.
   when `date_filter_from_filename=true`).
 - Config file size limit: `CONFIG_MAX_FILE_SIZE=1MB`.
 - Internally uses `json5.zig` to preprocess JSON5 → standard JSON before `std.json` parsing.
+
+**Doc catalog** (`pub const FieldDoc`, plus `pub const fields = [_]FieldDoc{...}`
+on each public struct + `pub const scaffold_template` where a struct can be
+scaffolded by the GUI): co-located with the struct each entry describes —
+same pattern as `expr.FnDoc`. Adding a config field = update the struct AND
+its `fields` table in one place. Aggregated by `docs.zig`; serves
+`bxp-fmt --docs`.
+
+### docs.zig
+Aggregator for `bxp-fmt --docs`. Single source of truth that the GUI
+(bxp-gui) consumes at startup.
+
+- `writeDocs(alloc, writer)` — emits the full JSON: `functions`, `keywords`,
+  `operators`, `tokens` (re-exported live from `expr.zig`), and
+  `config_schema` (flattened from per-struct `FieldDoc` tables in `config.zig`
+  plus envelope entries declared inline for top-level keys, map wildcards,
+  and the legacy `pre_pass` single-block form).
+- The output JSON shape is a stable contract with bxp-gui's
+  `lib/store/trace_store.dart` and `lib/store/schema_gate.dart`. Verify
+  refactors via `jq -S '.config_schema |= sort_by(.key)'` byte-diff before/after.
+- Inline test guards the entry count and known paths against drift.
 
 ### json.zig
 Reads a JSON array-of-objects file into a unified row representation for use in the pipeline.
@@ -90,12 +120,13 @@ Preprocessor that converts JSON5 source to standard JSON.
 # Build all modules (no standalone binary):
 cd bxp-core && zig build
 
-# Run unit tests (csv, expr, json5):
+# Run unit tests (csv, expr, json5, docs):
 cd bxp-core && zig build test
 ```
 
-Module exports in `build.zig`: `csv`, `json`, `json5`, `xlsx`, `expr`, `config`.
-`expr` imports `sunrise`; `config` imports `json5` (as `"json5.zig"` — internal import name).
+Module exports in `build.zig`: `csv`, `json`, `json5`, `xlsx`, `expr`, `config`, `docs`.
+`expr` imports `sunrise`; `config` imports `json5` (as `"json5.zig"` — internal import name);
+`docs` imports `config`, `expr`, `json5`.
 
 ## Coding conventions
 

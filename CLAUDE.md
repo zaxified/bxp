@@ -12,30 +12,35 @@ bxp/
 │   │   └── pipeline.zig  # Processing: processBroker(), xlsxPrePass()
 │   ├── build.zig
 │   └── build.zig.zon     # depends on bxp-core (path dep)
-├── bxp-fmt/              # Developer utility binary: --config validate, --expr validate
-│   ├── src/main.zig      # arg dispatcher; config verbatim round-trip + expr check
+├── bxp-fmt/              # Developer utility binary used by bxp-gui and scripts/test.sh
+│   ├── src/main.zig      # 6 subcommands: --config / --expr / --expr-trace / --docs /
+│   │                     # --list-templates / --fetch-template
 │   ├── build.zig
 │   └── build.zig.zon     # depends on bxp-core (path dep)
 ├── bxp-core/             # Internal Zig library (shared modules)
 │   ├── src/
 │   │   ├── csv.zig       # RFC 4180 CSV parser + splitRecords()
 │   │   ├── xlsx.zig      # .xlsx → CSV converter (ZIP+XML)
-│   │   ├── expr.zig      # Expression evaluator (IF, DATE_CONVERT, TICKER, ...)
-│   │   ├── config.zig    # JSON5 config loader (BrokerConfig, PrePass, ...)
+│   │   ├── expr.zig      # Expression evaluator + per-builtin FnDoc catalog
+│   │   ├── config.zig    # JSON5 config loader + per-struct FieldDoc tables
 │   │   ├── json.zig      # JSON array-of-objects → CSV rows
-│   │   └── json5.zig     # JSON5 preprocessor (comments, unquoted keys, ...)
+│   │   ├── json5.zig     # JSON5 preprocessor (comments, unquoted keys, ...)
+│   │   └── docs.zig      # Aggregator: re-exports expr catalog + flattens
+│   │                     # config FieldDoc tables; serves bxp-fmt --docs
 │   ├── build.zig         # exports each file as a named Zig module
 │   └── build.zig.zon     # depends on sunrise (datetime library)
 ├── bxp-gui/              # Flutter desktop app (replaces bxp-ui; uses bxp-cli/bxp-fmt via subprocess)
 │   ├── lib/              # Dart source (services/, store/, ui/)
-│   ├── linux/            # Linux CMake platform config
+│   ├── linux/, macos/, windows/, web/  # platform configs
+│   ├── tool/json_ast_proto/             # standalone Dart JSON5 AST prototype
 │   └── pubspec.yaml
 ├── resources/            # Example config (bxp-cli.examples.json) and user readme
 ├── datasets/             # Anonymized sample data + expected outputs for regression tests
 ├── scripts/
-│   ├── test.sh           # Full test suite (bxp-core unit tests + bxp-cli regression)
+│   ├── test.sh           # Full test suite (bxp-core unit + bxp-fmt smoke + bxp-cli regression)
 │   └── release.sh        # Cross-compile + package bxp-cli releases
-├── docs/                 # Developer documentation  [planned]
+├── docs/                 # Developer documentation (architecture.md, devel.md, bxp-ui-trace-protocol.md)
+├── DEV/                  # Developer scratch space — sample data, in-flight plans, AST prototypes
 ├── CLAUDE.md             # This file
 ├── LICENCE.md            # Apache 2.0
 └── README.md             # Project overview
@@ -62,9 +67,12 @@ cd bxp-core && zig build test
 ```text
 bxp-cli  --[path dep]--> bxp-core  --[url dep]--> sunrise
 bxp-fmt  --[path dep]--> bxp-core
+bxp-gui  --[subprocess]-> bxp-cli, bxp-fmt
 ```
 
 `bxp-core` is a local path dependency (`../bxp-core`) — no network fetch needed.
+bxp-gui ships both bxp-cli and bxp-fmt binaries inside the Flutter bundle and
+invokes them via `Process.run` for conversions, validation, docs, etc.
 
 ## Coding conventions
 
@@ -75,15 +83,18 @@ bxp-fmt  --[path dep]--> bxp-core
 ## Detailed documentation
 
 - [`bxp-cli/CLAUDE.md`](bxp-cli/CLAUDE.md) — full configuration reference, expression syntax,
-  template guide, broker list, and test/release instructions.
-- [`bxp-fmt/CLAUDE.md`](bxp-fmt/CLAUDE.md) — `--config` / `--expr` flags, exit codes, scope.
+  template guide, broker list.
+- [`bxp-fmt/CLAUDE.md`](bxp-fmt/CLAUDE.md) — all subcommands, `--docs` JSON shape,
+  `$comm_*`/`$err_*` output format.
 - [`bxp-core/CLAUDE.md`](bxp-core/CLAUDE.md) — module API overview, build details, test coverage.
+- [`bxp-gui/CLAUDE.md`](bxp-gui/CLAUDE.md) — Flutter app structure, services/store/ui split,
+  bxp-cli/bxp-fmt subprocess wiring.
 
 ## CLAUDE.md files
 
-New CLAUDE.md files may be created anywhere inside `bxp/` as needed to match the project
-structure and support efficient workflow.
-Existing files: `bxp/CLAUDE.md` (this file), `bxp/bxp-cli/CLAUDE.md`, `bxp/bxp-core/CLAUDE.md`.
+New CLAUDE.md files may be created anywhere inside `bxp/` as needed.
+Existing files: `bxp/CLAUDE.md` (this file), `bxp/bxp-cli/CLAUDE.md`,
+`bxp/bxp-core/CLAUDE.md`, `bxp/bxp-fmt/CLAUDE.md`, `bxp/bxp-gui/CLAUDE.md`.
 
 ## Git & GitHub
 

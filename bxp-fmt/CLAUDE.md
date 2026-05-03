@@ -6,62 +6,94 @@ For monorepo-level context see [`../CLAUDE.md`](../CLAUDE.md).
 ## Purpose
 
 **bxp-fmt** — small developer utility binary sibling to bxp-cli. Holds anything
-that isn't "run a conversion": config validation, expression validation, future
-schema helpers. Consumed by bxp-ui (short-lived `Bun.spawn` calls) and by
-`scripts/test.sh`.
+that isn't "run a conversion": config validation, expression validation,
+expression-trace evaluation, schema/docs emission, template lookup. Consumed
+by bxp-gui (via `Process.run` from Dart) and by `scripts/test.sh`.
 
-## Flags (exactly one action per invocation)
+The binary is intentionally a thin shim: every subcommand delegates to a
+bxp-core module (`config`, `expr`, `docs`). bxp-fmt's own job is arg parsing,
+arena setup, and JSON serialization on stdout/stderr.
+
+## Subcommands (exactly one action per invocation)
 
 - `bxp-fmt --config <path>` — read JSON5 config, validate structure via
-  `config_mod.load()` + `BrokerConfig.validate()`, and emit annotated JSON to
-  stdout (see "Output format" below).
-- `bxp-fmt --expr '<text>'` — parse and evaluate the expression with an empty
-  `Context` (no fields, empty column index). Success → exit 0. Failure → one
-  JSON line on stderr: `{"error":"<ErrorName>","detail":"<detail>"}`; exit 1.
+  `config_mod.load()` + `BrokerConfig.validate()`, emit annotated JSON to
+  stdout (see "Annotated JSON output" below). Exit 0 on success, 1 on any
+  validation error.
+- `bxp-fmt --expr '<text>'` — parse and evaluate the expression with an
+  empty `Context` (no fields, empty column index). Success → exit 0.
+  Failure → one JSON line on stderr:
+  `{"error":"<ErrorName>","detail":"<detail>"}`; exit 1.
+- `bxp-fmt --expr-trace '<text>' [--row-headers <json>] [--row-fields <json>]`
+  — evaluate one expression with optional fake-row context and stream
+  per-call NDJSON traces to stdout. Used by bxp-gui's expression playground.
+- `bxp-fmt --docs` — emit the full language + schema documentation JSON
+  to stdout. Top-level keys: `functions`, `keywords`, `operators`,
+  `tokens`, `config_schema`. Source of truth lives in
+  `bxp-core/src/docs.zig` (which re-exports `expr.zig`'s `FnDoc` catalog and
+  flattens `config.zig`'s per-struct `FieldDoc` tables). bxp-fmt is a
+  passthrough — see [`../bxp-core/CLAUDE.md`](../bxp-core/CLAUDE.md) for the
+  authoring rules.
+- `bxp-fmt --config <path> --list-templates` — emit a JSON array of every
+  template id declared in the config (no semantic validation). Used by
+  bxp-gui's template picker.
+- `bxp-fmt --config <path> --fetch-template <id>` — emit the raw JSON5
+  block for a single template as JSON.
 - `--version`, `--help` — standard.
 
-## Output format (`--config`)
+`--list-templates` and `--fetch-template` are **modifiers** on `--config`;
+all other subcommands are mutually exclusive with each other and with the
+modifiers. The `--version` output goes to stdout (not stderr) so callers
+that capture it (e.g. bxp-gui's runtime info panel) get the version.
 
-Standard JSON with two reserved key prefixes that bxp-ui consumes:
+## Annotated JSON output (`--config`)
 
-- `$comm_<N>: { "text": "<original>", "placement": "<pos>" }` — one entry per
-  preserved comment. `placement` ∈ `leading` (own line before key), `trailing`
-  (after value on same line), `block` (`/* ... */`), `standalone` (block at end
-  of object before `}`).
-- `$err_<N>: "<message>"` — one entry per syntax or semantic error. Inserted as
-  a sibling immediately before the offending key in its parent object; if the
-  offending field doesn't exist (e.g. missing required field), appended at the
-  end of the parent.
+Standard JSON with two reserved key prefixes:
 
-`<N>` is a single monotonically-increasing counter shared between `$comm_` and
-`$err_` so all keys are unique across the entire output. Original key order is
+- `$comm_<N>: { "text": "<original>", "placement": "<pos>" }` — one entry
+  per preserved comment. `placement` ∈ `leading` (own line before key),
+  `trailing` (after value on same line), `block` (`/* ... */`),
+  `standalone` (block at end of object before `}`).
+- `$err_<N>: "<message>"` — one entry per syntax or semantic error.
+  Inserted as a sibling immediately before the offending key in its parent
+  object; if the offending field doesn't exist (e.g. missing required
+  field), appended at the end of the parent.
+
+`<N>` is a single monotonically-increasing counter shared between
+`$comm_` and `$err_` so all keys are unique. Original key order is
 preserved (insertion order via `std.json.ObjectMap`).
 
-The runtime config loader (`bxp-cli`) uses `json5_mod.preprocess` (the
-non-annotated variant), so `$comm_<N>`/`$err_<N>` never reach the data tree
-consumed by the conversion pipeline.
+The runtime config loader (`bxp-cli`) uses `json5.preprocess` (the
+non-annotated variant), so `$comm_<N>`/`$err_<N>` never reach the data
+tree consumed by the conversion pipeline.
 
 ## Exit codes
 
 - `0` — success
-- `1` — validation failure (config diagnostic or expression error)
-- `2` — usage error (unknown flag, missing argument, both/neither action flag)
+- `1` — validation failure (config diagnostic, expression error, template id
+  not found)
+- `2` — usage error (unknown flag, missing argument, mutually-exclusive
+  actions, missing `--config` for a modifier)
 
 ## Why a separate binary
 
 - bxp-cli's job is "run a conversion against broker data"; mixing validate /
   format subcommands in dilutes that contract.
 - Matches the Go/Rust convention (`gofmt` vs `go build`, `rustfmt` vs `cargo`).
-- Small, focused binaries compose well — bxp-ui calls both; future scripts can
-  call just one.
+- Small, focused binaries compose well — bxp-gui spawns both bxp-cli (for
+  conversions) and bxp-fmt (for everything else).
 
 ## Source layout
 
 ```text
 bxp-fmt/
   src/
-    main.zig      ← arg parsing + subcommand dispatch (single file, ~140 lines)
-  build.zig       ← depends on bxp-core (path dep ../bxp-core)
+    main.zig      ← single file: arg parsing + 6 subcommand dispatchers
+                    (~760 lines — each runX function is short, the bulk is
+                     JSON serialization helpers and `--config` annotation
+                     glue)
+  build.zig       ← depends on bxp-core path dep (../bxp-core); imports
+                    the `config`, `expr`, `json5`, and `docs` modules
   build.zig.zon
 ```
 
@@ -73,6 +105,8 @@ zig build
 
 ./zig-out/bin/bxp-fmt --config ../datasets/xtb2_cash_to_wealthfolio/sample.json
 ./zig-out/bin/bxp-fmt --expr "IF([Qty] > 0, 'BUY', 'SELL')"
+./zig-out/bin/bxp-fmt --docs | jq '.config_schema | length'
+./zig-out/bin/bxp-fmt --config ../DEV/bxp-cli.json --list-templates
 ```
 
 ## Notes
@@ -80,5 +114,8 @@ zig build
 - All code comments and documentation in English.
 - Zig 0.15.2 API — use the zig skill before writing new code.
 - Scope is intentionally tiny; the real work lives in bxp-core.
-- Future flags (`--schema`, `--diff`, migration helpers) are added when a
-  concrete need appears, not speculatively.
+- Every `runX` function wraps the input GPA in an `ArenaAllocator` —
+  `expr.Context.alloc` and JSON parse helpers don't garbage-collect, so
+  using a raw GPA leaks per call.
+- New flags get added when bxp-gui or scripts have a concrete need, not
+  speculatively.

@@ -98,11 +98,15 @@ All broker logic is defined in `bxp-cli.json` — there are no compiled-in broke
   before `.csv` in the output filename (e.g. `"_3"` → `"<stem>_3.csv"`).
   Templates sharing the same `data_dir` — each with their own `xlsx_sheet` — share the xlsx
   extraction pass (each xlsx file is extracted only once).
-- `pre_pass` — optional first-pass lookup table. Iterates all rows before the main loop,
-  collects rows matching `when`, stores `values` expressions keyed by `key`.
-  Accessible via `LOOKUP(key_expr, 'field_name')` in `input_schema`.
-  Note: `pre_pass.values` keys are lookup field names (plain strings, no `$` prefix) —
-  they are not template variables.
+- `pre_pass` — optional first-pass lookup table(s). Iterates all rows before the main loop,
+  collects rows matching `when`, stores `values` expressions keyed by `key`. Two accepted shapes:
+  - **Legacy single block** `{ when, key, values }` — accessible via 2-arg
+    `LOOKUP(key_expr, 'field_name')`. Internally bound to a synthetic `_default` namespace.
+  - **Named blocks** `{ name1: { when, key, values }, name2: { ... } }` — each block is its own
+    namespace. Accessed via 3-arg `LOOKUP('name1', key_expr, 'field_name')`. Use this when one
+    template needs multiple independent lookup tables.
+  Note: `values` keys are lookup field names (plain strings, no `$` prefix) — they are not
+  template variables.
 - `input_schema` — **required** — variable definitions: `$name` → expression string.
   All variable names use the `$` prefix convention (e.g. `$date`, `$ticker`, `$amount`).
 - `row_rules_debug_missing` — optional boolean (default `false`). When `true`, rows that
@@ -187,7 +191,7 @@ Expressions are evaluated per row. Operator precedence (high → low):
 | `PRICE_VALUE(f)` | Strip currency symbol/code, return numeric string (`"24.00 CZK"` → `"24.00"`) |
 | `PRICE_CURRENCY(f)` | Extract currency code (`"24.00 CZK"` → `"CZK"`, `"$100"` → `"USD"`) |
 | `TICKER(f)` | Map field through broker's `ticker_map`; returns as-is if not found |
-| `LOOKUP(key, 'field')` | Retrieve value stored by `pre_pass` table |
+| `LOOKUP(key, 'field')` / `LOOKUP('name', key, 'field')` | Retrieve value from `pre_pass` table — 2-arg form for legacy single block, 3-arg form for named blocks |
 | `SPLIT_PART(f, delim, n)` | Split `f` by `delim`, return nth part (1-based); `""` if fewer than n parts |
 | `CONTAINS(f, sub)` | `true` when `sub` is found inside `f` |
 | `REPLACE(f, old, new)` | Replace all occurrences of `old` with `new` in `f`; returns `f` unchanged if `old` is empty |
