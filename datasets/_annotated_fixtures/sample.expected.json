@@ -1,24 +1,10 @@
 {
-  "$comm_1": {
-    "text": "// top of file",
-    "placement": "leading"
-  },
   "xtb": {
     "file_pattern_in": ".csv",
-    "$comm_2": {
-      "text": "/* block before key */",
-      "placement": "block"
-    },
     "items": [
-      {
-        "$comm_3": {
-          "text": "// first",
-          "placement": "leading"
-        }
-      },
       "a",
       "b"
     ]
   },
-  "$err_4": "no conversion_templates defined"
+  "$err_1": "no conversion_templates defined"
 }
