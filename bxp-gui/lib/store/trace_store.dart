@@ -68,6 +68,13 @@ class TraceStore extends ChangeNotifier {
   // first `file_end`), the grid renders once and stays put for the rest
   // of the run.
   final ValueNotifier<int> fileGen = ValueNotifier(0);
+
+  /// Phase 5h: path of the most recently inserted config node, set by
+  /// `insertConfigNode`. The matching tree row's editable cell consumes
+  /// it on first build (post-frame `_enterEdit` + clears the notifier),
+  /// so the user lands directly in edit mode after Confirm rather than
+  /// having to click the new row.
+  final ValueNotifier<List<String>?> pendingFocusPath = ValueNotifier(null);
   // Exit code from the most recent dry-run / full-run, captured so the
   // status bar can show "done · exit N" with the right colour:
   //   0 → success (emerald), 2 → completed with warnings (amber),
@@ -1386,6 +1393,7 @@ class TraceStore extends ChangeNotifier {
           {'parentPath': path, 'newKey': newKey, 'atIndex': atIndex})) {
         return;
       }
+      pendingFocusPath.value = [...path, newKey];
     } else if (target is JsonArray) {
       final n = target.elements.length;
       final clamped = atIndex == null ? n : atIndex.clamp(0, n);
@@ -1394,6 +1402,7 @@ class TraceStore extends ChangeNotifier {
           {'parentPath': path, 'index': clamped})) {
         return;
       }
+      pendingFocusPath.value = [...path, clamped.toString()];
       // Selections under the same array at indices >= clamped shifted up.
       _shiftSelectionOnArrayEdit(path, (oldIdx) {
         if (oldIdx >= clamped) return oldIdx + 1;

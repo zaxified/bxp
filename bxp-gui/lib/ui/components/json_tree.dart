@@ -416,6 +416,7 @@ class _JsonNodeState extends State<_JsonNode> {
           valWidget = _EditableString(
             value: v.value,
             color: t.codeString,
+            path: widget.path,
             onCommit: (val) {
               context.read<TraceStore>().editConfigNode(widget.path, val);
             },
@@ -427,6 +428,7 @@ class _JsonNodeState extends State<_JsonNode> {
       valWidget = _EditableNumber(
         value: parsed,
         color: t.codeNumber,
+        path: widget.path,
         onCommit: (val) {
           context.read<TraceStore>().editConfigNode(widget.path, val);
         },
@@ -1593,8 +1595,17 @@ class _EditableString extends StatefulWidget {
   final String value;
   final Color color;
   final ValueChanged<String> onCommit;
+  /// Phase 5h: when set, this cell consults `TraceStore.pendingFocusPath`
+  /// on first build and — if the path matches — auto-enters edit mode so
+  /// the user lands directly in this field after a fresh `+` insert.
+  final List<String>? path;
 
-  const _EditableString({required this.value, required this.color, required this.onCommit});
+  const _EditableString({
+    required this.value,
+    required this.color,
+    required this.onCommit,
+    this.path,
+  });
 
   @override
   State<_EditableString> createState() => _EditableStringState();
@@ -1610,6 +1621,24 @@ class _EditableStringState extends State<_EditableString> {
     super.initState();
     controller = TextEditingController(text: widget.value);
     _focus.addListener(_onFocusChange);
+    _maybeAutoFocusPendingPath();
+  }
+
+  void _maybeAutoFocusPendingPath() {
+    final p = widget.path;
+    if (p == null) return;
+    final store = context.read<TraceStore>();
+    final pending = store.pendingFocusPath.value;
+    if (pending == null || pending.length != p.length) return;
+    for (var i = 0; i < p.length; i++) {
+      if (pending[i] != p[i]) return;
+    }
+    // Consume the request — clear so other matching cells don't also
+    // try to enter edit (insert always targets exactly one new node).
+    store.pendingFocusPath.value = null;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _enterEdit();
+    });
   }
 
   @override
@@ -1709,8 +1738,15 @@ class _EditableNumber extends StatefulWidget {
   final num value;
   final Color color;
   final ValueChanged<num> onCommit;
+  /// Phase 5h: see [_EditableString.path].
+  final List<String>? path;
 
-  const _EditableNumber({required this.value, required this.color, required this.onCommit});
+  const _EditableNumber({
+    required this.value,
+    required this.color,
+    required this.onCommit,
+    this.path,
+  });
 
   @override
   State<_EditableNumber> createState() => _EditableNumberState();
@@ -1726,6 +1762,22 @@ class _EditableNumberState extends State<_EditableNumber> {
     super.initState();
     controller = TextEditingController(text: widget.value.toString());
     _focus.addListener(_onFocusChange);
+    _maybeAutoFocusPendingPath();
+  }
+
+  void _maybeAutoFocusPendingPath() {
+    final p = widget.path;
+    if (p == null) return;
+    final store = context.read<TraceStore>();
+    final pending = store.pendingFocusPath.value;
+    if (pending == null || pending.length != p.length) return;
+    for (var i = 0; i < p.length; i++) {
+      if (pending[i] != p[i]) return;
+    }
+    store.pendingFocusPath.value = null;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _enterEdit();
+    });
   }
 
   @override
