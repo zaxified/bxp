@@ -15,7 +15,7 @@ const std = @import("std");
 const config_mod = @import("config");
 const expr_mod = @import("expr");
 const json5_mod = @import("json5");
-const docs_mod = @import("docs.zig");
+const docs_mod = @import("docs");
 const build_options = @import("build_options");
 
 const CONFIG_MAX_FILE_SIZE = 1024 * 1024; // 1 MB

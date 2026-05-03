@@ -20,6 +20,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "config",        .module = core_dep.module("config") },
                 .{ .name = "expr",          .module = core_dep.module("expr") },
                 .{ .name = "json5",         .module = core_dep.module("json5") },
+                .{ .name = "docs",          .module = core_dep.module("docs") },
                 .{ .name = "build_options", .module = options.createModule() },
             },
         }),

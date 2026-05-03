@@ -14,6 +14,38 @@ const json5 = @import("json5.zig");
 
 const CONFIG_MAX_FILE_SIZE: usize = 1024 * 1024;
 
+/// Per-field documentation entry. Co-located with the config struct it
+/// describes (search for `pub const fields` below); aggregated and
+/// serialized by `bxp-core/src/docs.zig` as the `config_schema` array
+/// inside `bxp-fmt --docs` output.
+///
+/// `key` is the dotted path segment for this entry. Per-struct tables
+/// hold the local field name (e.g. "data_dir"); the docs aggregator
+/// prepends the binding prefix (e.g. "conversion_templates.*") when
+/// flattening. Top-level envelope entries declared directly in docs.zig
+/// store the full path here.
+///
+/// `insert_order` (Phase 5f) controls how the GUI orders new keys when
+/// inserting INTO this object: "schema" = match this `fields` table's
+/// declaration order; "alpha" = alphabetical; "append" (or null) = end
+/// of object. Arrays always append.
+///
+/// `insert_template` (Phase 5f) is a JSON5 snippet used as the scaffold
+/// when the GUI inserts a new value matching this entry. The string is
+/// preprocessed to JSON via bxp-core's json5 module at serialize time
+/// and emitted as a nested JSON value.
+pub const FieldDoc = struct {
+    key: []const u8,
+    type_name: []const u8,
+    required: bool,
+    default: ?[]const u8 = null,
+    description: []const u8,
+    enum_values: ?[]const []const u8 = null,
+    ordered: bool = false,
+    insert_order: ?[]const u8 = null,
+    insert_template: ?[]const u8 = null,
+};
+
 /// Per-row variable overrides produced by a row rule.
 /// Keys are variable names; values are expression strings evaluated against raw fields.
 pub const RowOverride = std.StringHashMap([]const u8);
@@ -26,6 +58,29 @@ pub const RowRule = struct {
     when: []const u8,
     /// Variable override maps — one per desired output row.  Empty = skip row.
     rows: []RowOverride,
+
+    /// Schema docs for this struct's fields. Bound at
+    /// `conversion_templates.*.row_rules.*` by `bxp-core/src/docs.zig`.
+    pub const fields = [_]FieldDoc{
+        .{
+            .key = "when",
+            .type_name = "expression",
+            .required = true,
+            .description = "Condition expression. Rule applies when this evaluates to truthy (non-empty, non-zero, non-\"false\").",
+        },
+        .{
+            .key = "rows",
+            .type_name = "array",
+            .required = true,
+            .description = "Output rows produced when `when` matches. Each entry is an object overriding $variables; rows: [] silently skips the row, rows: [{}] emits one row using input_schema variables verbatim.",
+            .insert_template = "[{}]",
+        },
+    };
+
+    /// JSON5 scaffold the GUI inserts for a new `row_rules` entry.
+    pub const scaffold_template =
+        \\{ when: "[column1] = 'test-condition1'", rows: [ { $action: "'DEPOSIT'" } ] }
+    ;
 };
 
 /// Optional first-pass lookup table configuration.
@@ -42,6 +97,44 @@ pub const PrePass = struct {
     key: []const u8,
     /// Maps field names to expressions evaluated for each collected row.
     values: std.StringHashMap([]const u8),
+
+    /// Schema docs for the named-block form. Bound at
+    /// `conversion_templates.*.pre_pass.*` by `bxp-core/src/docs.zig`.
+    /// Legacy single-block (`pre_pass.when` / `pre_pass.key` / `pre_pass.values`)
+    /// is documented as separate envelope entries in docs.zig.
+    pub const fields = [_]FieldDoc{
+        .{
+            .key = "when",
+            .type_name = "expression",
+            .required = true,
+            .description = "Filter — only rows matching this condition are added to the named lookup table.",
+        },
+        .{
+            .key = "key",
+            .type_name = "expression",
+            .required = true,
+            .description = "Expression evaluated per row to produce the lookup key string for this named block.",
+        },
+        .{
+            .key = "values",
+            .type_name = "object",
+            .required = true,
+            .description = "Map of field_name -> expression evaluated per pre-pass row, retrieved via 3-arg LOOKUP('name', key, 'field_name').",
+            .insert_order = "append",
+        },
+    };
+
+    /// JSON5 scaffold the GUI inserts for a new named pre_pass block.
+    pub const scaffold_template =
+        \\{
+        \\  when: "[column1] = 'stock buy order detail'",
+        \\  key: "[order-id]",
+        \\  values: {
+        \\    amount: "ABS([amount])",
+        \\    currency: "[currency]"
+        \\  }
+        \\}
+    ;
 };
 
 /// One column in the output CSV.
@@ -70,6 +163,36 @@ pub const XlsxSheet = struct {
     header_row: u32,
     /// Appended before ".csv" in the output filename (e.g. "_3").
     output_suffix: []const u8,
+
+    /// Schema docs for this struct's fields. Bound at
+    /// `conversion_templates.*.xlsx_sheet` by `bxp-core/src/docs.zig`.
+    pub const fields = [_]FieldDoc{
+        .{
+            .key = "name",
+            .type_name = "string",
+            .required = true,
+            .description = "Sheet name as it appears in the xlsx workbook (e.g. \"CASH OPERATION\").",
+        },
+        .{
+            .key = "header_row",
+            .type_name = "number",
+            .required = false,
+            .default = "1",
+            .description = "1-based row number that contains the column headers within this sheet.",
+        },
+        .{
+            .key = "output_suffix",
+            .type_name = "string",
+            .required = false,
+            .default = "",
+            .description = "Appended before \".csv\" in the intermediate filename (e.g. \"_3\").",
+        },
+    };
+
+    /// JSON5 scaffold the GUI inserts for a new `xlsx_sheet` block.
+    pub const scaffold_template =
+        \\{ name: "SHEET_NAME", header_row: 1 }
+    ;
 };
 
 /// Per-template configuration loaded from a single entry inside "conversion_templates" in bxp-cli.json.
@@ -135,6 +258,202 @@ pub const BrokerConfig = struct {
     /// Set to .json to write JSON array-of-objects instead of CSV.
     /// Configured via "file_type_out": "csv" | "json".
     file_type_out: FileType,
+
+    pub const file_type_values = [_][]const u8{ "csv", "json" };
+    pub const csv_quote_values = [_][]const u8{ "none", "single", "double" };
+    pub const csv_delimiter_values = [_][]const u8{ ",", ";", "\t", "|" };
+    pub const csv_decimal_values = [_][]const u8{ ".", "," };
+
+    /// Schema docs for this struct's fields. Bound at
+    /// `conversion_templates.*` by `bxp-core/src/docs.zig`.
+    pub const fields = [_]FieldDoc{
+        .{
+            .key = "data_dir",
+            .type_name = "string",
+            .required = true,
+            .description = "Path to input files, relative to this config file. e.g. \"my_broker\", \"../data/broker\", or an absolute path.",
+        },
+        .{
+            .key = "file_type_in",
+            .type_name = "string",
+            .required = false,
+            .default = "csv",
+            .description = "Input file format. \"json\" reads an array-of-objects.",
+            .enum_values = &file_type_values,
+        },
+        .{
+            .key = "file_type_out",
+            .type_name = "string",
+            .required = false,
+            .default = "csv",
+            .description = "Output file format. \"json\" writes an array-of-objects.",
+            .enum_values = &file_type_values,
+        },
+        .{
+            .key = "file_pattern_in",
+            .type_name = "string",
+            .required = true,
+            .description = "Suffix filter for input files in data_dir. e.g. \".csv\" (all), \"_cash.csv\" (specific suffix).",
+        },
+        .{
+            .key = "file_pattern_out",
+            .type_name = "string",
+            .required = true,
+            .description = "Output filename suffix. Replaces file_pattern_in in the output filename.",
+        },
+        .{
+            .key = "csv_delimiter_in",
+            .type_name = "string",
+            .required = false,
+            .default = ",",
+            .description = "Input CSV field separator (single character).",
+            .enum_values = &csv_delimiter_values,
+        },
+        .{
+            .key = "csv_delimiter_out",
+            .type_name = "string",
+            .required = false,
+            .default = ",",
+            .description = "Output CSV field separator (single character).",
+            .enum_values = &csv_delimiter_values,
+        },
+        .{
+            .key = "csv_decimal_separator_in",
+            .type_name = "string",
+            .required = false,
+            .default = ".",
+            .description = "Decimal separator in input numeric fields. Set to \",\" for European-style CSV. Must differ from csv_delimiter_in.",
+            .enum_values = &csv_decimal_values,
+        },
+        .{
+            .key = "csv_decimal_separator_out",
+            .type_name = "string",
+            .required = false,
+            .default = ".",
+            .description = "Decimal separator written in numeric output fields.",
+            .enum_values = &csv_decimal_values,
+        },
+        .{
+            .key = "csv_text_quote_in",
+            .type_name = "string",
+            .required = false,
+            .default = "double",
+            .description = "Input CSV text quoting style. Use ''' in expressions for a literal single-quote.",
+            .enum_values = &csv_quote_values,
+        },
+        .{
+            .key = "csv_text_quote_out",
+            .type_name = "string",
+            .required = false,
+            .default = "none",
+            .description = "Output CSV text quoting style.",
+            .enum_values = &csv_quote_values,
+        },
+        .{
+            .key = "ticker_map",
+            .type_name = "string | object",
+            .required = false,
+            .description = "Ticker remapping for this template. String = reference to a named ticker_maps entry. Object = inline map { broker_symbol: yahoo_symbol }.",
+        },
+        .{
+            .key = "date_filter_from_filename",
+            .type_name = "boolean",
+            .required = false,
+            .default = "false",
+            .description = "When true, rows whose $date falls outside the date range encoded in the filename (YYYY-MM-DD_YYYY-MM-DD) are silently skipped. Requires $date in input_schema.",
+        },
+        .{
+            .key = "row_rules_debug_missing",
+            .type_name = "boolean",
+            .required = false,
+            .default = "false",
+            .description = "When true, rows that match no row_rules entry are printed in --debug output.",
+        },
+        .{
+            .key = "xlsx_sheet",
+            .type_name = "object",
+            .required = false,
+            .description = "When set, the xlsx file in data_dir is converted to an intermediate CSV before the normal CSV processing loop.",
+            .insert_order = "schema",
+            .insert_template = XlsxSheet.scaffold_template,
+        },
+        .{
+            .key = "input_schema",
+            .type_name = "object",
+            .required = true,
+            .description = "Map of $variable -> expression. Each expression is evaluated per input row. Variables are referenced in output_schema and row_rules. Iteration order does not affect results.",
+            .insert_order = "append",
+            .insert_template =
+            \\{ $variable1: "value1" }
+            ,
+        },
+        .{
+            .key = "output_schema",
+            .type_name = "object",
+            .required = true,
+            .description = "Output CSV column headers mapped to $variable values. Insertion order determines column order in the output file.",
+            .ordered = true,
+            .insert_order = "append",
+            .insert_template =
+            \\{ column1: "$variable1" }
+            ,
+        },
+        .{
+            .key = "row_rules",
+            .type_name = "array",
+            .required = false,
+            .description = "Ordered list of conditional routing rules. The first rule whose `when` matches produces the output rows; later rules are not evaluated. Rows matching no rule are silently skipped (or shown via row_rules_debug_missing).",
+            .ordered = true,
+            .insert_template = "[]",
+        },
+        .{
+            .key = "pre_pass",
+            .type_name = "object",
+            .required = false,
+            .description = "First-pass lookup table(s) built before the main loop. Two accepted shapes: legacy single block `{ when, key, values }` (detected by the presence of `when`) — accessed via 2-arg `LOOKUP(key, 'field')`; or named blocks `{ name1: { when, key, values }, ... }` — each block is its own namespace, accessed via 3-arg `LOOKUP('name', key, 'field')`.",
+            .insert_template = PrePass.scaffold_template,
+        },
+    };
+
+    /// JSON5 scaffold the GUI inserts for a new `conversion_templates` entry.
+    pub const scaffold_template =
+        \\{
+        \\  data_dir: ".",
+        \\  file_type_in: "csv",
+        \\  file_pattern_in: ".csv",
+        \\  file_pattern_out: ".csvx",
+        \\  csv_delimiter_in: ",",
+        \\  csv_delimiter_out: ",",
+        \\  csv_decimal_separator_in: ".",
+        \\  csv_decimal_separator_out: ".",
+        \\  csv_text_quote_in: "double",
+        \\  csv_text_quote_out: "none",
+        \\  input_schema: {
+        \\    $date: "",
+        \\    $ticker: "",
+        \\    $quantity: "",
+        \\    $unitprice: "",
+        \\    $currency: "",
+        \\    $fee: "",
+        \\    $amount: "",
+        \\    $account: ""
+        \\  },
+        \\  row_rules: [
+        \\    { when: "true", rows: [ { $action: "'DEPOSIT'" } ] }
+        \\  ],
+        \\  output_schema: {
+        \\    date: "$date",
+        \\    symbol: "$ticker",
+        \\    quantity: "$quantity",
+        \\    activityType: "$action",
+        \\    unitPrice: "$unitprice",
+        \\    currency: "$currency",
+        \\    fee: "$fee",
+        \\    amount: "$amount",
+        \\    account: "$account"
+        \\  }
+        \\}
+    ;
 
     /// Validates the structural integrity of this template configuration.
     /// Prints a descriptive error to writer and returns error.InvalidConfig on the first violation.

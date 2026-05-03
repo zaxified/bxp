@@ -24,7 +24,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/xlsx.zig"),
     });
 
-    _ = b.addModule("expr", .{
+    const expr_mod = b.addModule("expr", .{
         .root_source_file = b.path("src/expr.zig"),
         .imports = &.{
             .{ .name = "sunrise", .module = sunrise_mod },
@@ -32,10 +32,22 @@ pub fn build(b: *std.Build) void {
     });
 
     // config.zig uses @import("json5.zig") — the import name must match.
-    _ = b.addModule("config", .{
+    const config_mod = b.addModule("config", .{
         .root_source_file = b.path("src/config.zig"),
         .imports = &.{
             .{ .name = "json5.zig", .module = json5_mod },
+        },
+    });
+
+    // docs.zig aggregates the expression catalog (re-exported live from
+    // expr.zig) and the config schema (per-struct `pub const fields`
+    // tables co-located in config.zig). Consumed by bxp-fmt --docs.
+    _ = b.addModule("docs", .{
+        .root_source_file = b.path("src/docs.zig"),
+        .imports = &.{
+            .{ .name = "config", .module = config_mod },
+            .{ .name = "expr",   .module = expr_mod },
+            .{ .name = "json5",  .module = json5_mod },
         },
     });
 
@@ -72,8 +84,23 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    const docs_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/docs.zig"),
+            .target = target,
+            .optimize = optimize,
+            .strip = false,
+            .imports = &.{
+                .{ .name = "config", .module = config_mod },
+                .{ .name = "expr",   .module = expr_mod },
+                .{ .name = "json5",  .module = json5_mod },
+            },
+        }),
+    });
+
     const test_step = b.step("test", "Run bxp-core unit tests");
     test_step.dependOn(&b.addRunArtifact(csv_tests).step);
     test_step.dependOn(&b.addRunArtifact(expr_tests).step);
     test_step.dependOn(&b.addRunArtifact(json5_tests).step);
+    test_step.dependOn(&b.addRunArtifact(docs_tests).step);
 }
