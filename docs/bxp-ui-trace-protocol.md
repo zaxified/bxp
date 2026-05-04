@@ -143,6 +143,8 @@ are evaluated top-down, stopping at the first match).
 
 The `error` field on `rule_no_match` is present only when the `when` expression
 failed to evaluate. The rule is treated as non-matching in that case.
+Consumers MUST tolerate the field's absence (treat missing `error` as "rule
+evaluated cleanly to false") — do not require it.
 
 ### `row_filtered`
 

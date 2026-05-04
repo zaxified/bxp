@@ -29,6 +29,17 @@ abstract class JsonAstNode {
   // global $comm_<N> walker to compensate.
   SourceSpan? sourceSpan;
 
+  /// Deep copy of this node. The clone tree is fully detached — mutating
+  /// the clone never touches the original.
+  ///
+  /// **Note:** [sourceSpan] is intentionally NOT copied; clones come back
+  /// with `sourceSpan == null`. Spans only describe positions in the
+  /// originally-parsed source bytes, so a clone (which by definition has
+  /// no source location) cannot truthfully carry them. The same applies
+  /// to [JsonProperty.clone] and [JsonArray.clone] / [JsonObject.clone]
+  /// which propagate this contract recursively. Consumers that rely on
+  /// span info (e.g. error reporters) must operate on parsed nodes, not
+  /// on cloned ones.
   JsonAstNode clone();
 }
 

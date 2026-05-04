@@ -1,11 +1,8 @@
-/// bxp-fmt — small developer utility binary sibling to bxp-cli.
+/// bxp-fmt — config and expression utility for bxp-cli.
 ///
-/// Six action flags (mutually exclusive); see `usage()` for the full list:
-/// --config / --expr / --expr-trace / --docs / --list-templates /
-/// --fetch-template. `--config` emits annotated JSON with `$comm_<N>` and
-/// `$err_<N>` sibling entries; the others emit plain JSON.
-///
-/// Exit codes: 0 = OK, 1 = validation failure, 2 = usage error.
+/// See `../CLAUDE.md` for the authoritative subcommand reference, exit-code
+/// table, and annotated-JSON output spec. Run `bxp-fmt --help` for the
+/// runtime usage summary.
 const std = @import("std");
 const config_mod = @import("config");
 const expr_mod = @import("expr");

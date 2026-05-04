@@ -50,6 +50,14 @@ class SchemaGate {
 
   /// True when [path] resolves to a schema entry NOT marked `required`,
   /// or no schema match at all (free-form). False when explicitly required.
+  ///
+  /// Permissive-by-default policy: `findSchemaDoc` returns null for every
+  /// non-schema-covered path (template-internal user keys, expression
+  /// values, broker-specific blocks). Treating that as "may delete" lets
+  /// the user freely edit their own data and reserves rejection for paths
+  /// the schema explicitly protects. There is intentionally no `canEdit`
+  /// gate here — value editing is always allowed; the schema only
+  /// constrains structure (presence/order/required-ness), not contents.
   bool canDelete(List<String> path) {
     final doc = store.findSchemaDoc(path);
     if (doc == null) return true;
@@ -58,6 +66,13 @@ class SchemaGate {
 
   /// True when the parent at [parentPath] is `ordered` (or has no schema
   /// at all — default permissive). Lists are always orderable.
+  ///
+  /// Same permissive-by-default policy as [canDelete]: schema-uncovered
+  /// parents (e.g. inside user-authored row rules or input_schema) accept
+  /// reordering because the user owns those keys. Explicit `ordered: true`
+  /// on a schema entry opts a Map into reordering; absence keeps Map
+  /// reordering off (alphabetical / canonical Map keys are usually
+  /// cosmetic, not semantic).
   bool canMove(List<String> parentPath, {required bool isList}) {
     if (isList) return true;
     final doc = store.findSchemaDoc(parentPath);

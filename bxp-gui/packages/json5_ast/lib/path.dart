@@ -43,7 +43,12 @@ JsonAstNode resolveNode(JsonAstNode root, List<String> path) {
       throw AstPathError('no comment with global N=$n', path);
     }
     // Comment isn't a JsonAstNode; wrap into a transient CommentLine so the
-    // caller can read .text. For mutation, prefer findCommentByGlobalN.
+    // caller can read .text. The wrapper is read-only and intentionally
+    // drops `inlinePlacement` (defaults to false) — `$comm_<N>` callers
+    // only consume `.comment.text` for display, never the placement flag.
+    // For mutation (rewrite, delete, move) prefer findCommentByGlobalN
+    // which returns a CommentLocation with the live, fully-flagged
+    // CommentLine still in place inside its container.
     return CommentLine(loc.comment);
   }
   final ref = resolveParent(root, path);
@@ -159,6 +164,13 @@ class CommentLocation {
   CommentNode get comment => _line.comment;
   bool get isInlineTrailing => _line.inlinePlacement;
 
+  /// Mutate the live [CommentNode.text] in place. Any [CommentLine]
+  /// references held elsewhere observe the new text immediately because
+  /// they share the same [CommentNode]. Note that
+  /// [globalCommentNumbering]'s identity-keyed map keys on [CommentLine]
+  /// (not on text), so rewriting text does NOT invalidate it — and
+  /// numbering is rebuilt on every UI render anyway, so even structural
+  /// edits don't leak stale entries.
   void replaceText(String newText) {
     comment.text = newText;
   }

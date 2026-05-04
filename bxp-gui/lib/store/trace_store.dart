@@ -1887,6 +1887,15 @@ class TraceStore extends ChangeNotifier {
 
   /// First `$err_*` message found across the validation map, or null
   /// when the config is clean.
+  ///
+  /// Iteration order: `_validationErrors` is a `LinkedHashMap` keyed by
+  /// path string in the order entries were inserted by
+  /// `_extractValidationErrors` (DFS over the annotated `bxp-fmt --config`
+  /// output, top-down). Within each path, the inner map preserves
+  /// `$err_<N>` insertion order (i.e. emission order in the annotated
+  /// JSON). Callers may treat the first non-empty hit as "the visually
+  /// topmost error" — which is what the StatusBar pencil-icon shortcut
+  /// jumps to.
   String? get firstConfigErrorTrace {
     for (final entry in _validationErrors.values) {
       for (final v in entry.values) {

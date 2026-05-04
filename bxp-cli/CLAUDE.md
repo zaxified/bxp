@@ -88,6 +88,10 @@ All broker logic is defined in `bxp-cli.json` — there are no compiled-in broke
 - `date_filter_from_filename` — optional boolean (default `false`). When `true`, rows whose
   `$date` value falls outside the date range encoded in the filename (`YYYY-MM-DD_YYYY-MM-DD`)
   are silently skipped. Requires `$date` in `input_schema` — validated at startup.
+  The row-level filter is a lexical (string) prefix compare against the filename range, so
+  `$date` MUST evaluate to ISO `YYYY-MM-DD` (or longer ISO prefix like `YYYY-MM-DDTHH:MM:SS`).
+  Non-ISO formats (`DD.MM.YYYY`, `MM/DD/YYYY`, …) will mis-filter silently — use
+  `DATE_CONVERT` in `input_schema` to normalise first.
 - `ticker_map` — optional symbol remapping. Either an inline object `{ "BTC": "BTC-USD" }` or a
   string name referencing an entry in the top-level `ticker_maps` section (e.g. `"xtb"`).
 - `xlsx_sheet` — optional object `{ "name", "header_row", "output_suffix" }`.
@@ -254,6 +258,19 @@ Used in `DATE_CONVERT(f, from_fmt, to_fmt)`. Both `from_fmt` and `to_fmt` use th
 | `xtb1_cash_to_wealthfolio` | `xtb1_to_wealthfolio` | xlsx sheet `CASH OPERATION` (header row 11); file pattern `_cash.csv`; DIV/TAX/INTEREST/DEPOSIT + BUY from `Stock purchase` rows (qty+price from Comment via `SPLIT_PART`); old XTB format |
 | `xtb2_closed_to_wealthfolio` | `xtb2_to_wealthfolio` | xlsx sheet `Closed Positions` (header row 5); file pattern `_closed.csv`; SELL; new XTB format from 2026-07-01 |
 | `xtb2_cash_to_wealthfolio` | `xtb2_to_wealthfolio` | xlsx sheet `Cash Operations` (header row 5); file pattern `_cash.csv`; DIV/TAX/INTEREST/DEPOSIT + BUY from `Stock purchase` rows (qty+price from Comment via `SPLIT_PART`); new XTB format from 2026-07-01 |
+
+## Output stream routing
+
+bxp-cli splits its output across stdout and stderr by purpose, not by severity:
+
+- **stdout** — machine-consumable: human-readable per-template `summary` lines,
+  the final `overallLine`, and (in `--trace` mode) the NDJSON event stream.
+- **stderr** — diagnostics: `fatal` errors, `warning` text, panics, usage errors.
+
+Capture them separately. Piping `2>&1` interleaves them and breaks NDJSON
+consumers (the GUI's trace parser requires clean stdout). `--trace` implies
+`--quiet` so per-template summaries do not pollute the NDJSON stream; warnings
+still go to stderr in trace mode so a stderr badge can surface them in the GUI.
 
 ## Notes
 
