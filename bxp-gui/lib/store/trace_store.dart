@@ -375,6 +375,13 @@ class TraceStore extends ChangeNotifier {
     }
   }
 
+  // Selecting another leaf overwrites `selectedExprText` with the new leaf's
+  // content — by design. The expression panel commits typed changes to the
+  // tree as the user types (debounced), so anything not yet committed is
+  // intentional in-flight churn that belongs on the previous leaf, not
+  // ghost-pasted onto the new one. Adding a confirm dialog here would cost
+  // more than it saves: typing into one leaf and clicking another is a
+  // common navigation pattern (compare, reference) that should not prompt.
   void setSelectedExpr(List<String> path, String text) {
     devTrace('action.expr.select', {'path': path});
     selectedExprPath = path;
@@ -422,12 +429,21 @@ class TraceStore extends ChangeNotifier {
     });
   }
 
+  // Monotonic counter for in-flight expression validations. The string
+  // equality guard below catches the common A→B race, but breaks on
+  // A→B→A: a slow validateExpr(A) returning *after* a faster validateExpr(A)
+  // would still see selectedExprText == A and clobber the fresher result.
+  // The generation counter closes that gap atomically — only the most
+  // recently spawned call is allowed to write the result.
+  int _exprValidateGen = 0;
+
   void _validateNow(String text) async {
     // Belt-and-suspenders: strip newlines on the validator boundary too,
     // matching `updateSelectedExprText`. Anything getting here from
     // `setSelectedExpr` (file load) is already newline-free, but a stray
     // direct caller can't accidentally feed a multi-line string.
     text = text.replaceAll(RegExp(r'[\r\n]+'), ' ');
+    final gen = ++_exprValidateGen;
     if (text.trim().isEmpty) {
       exprValidationError = null;
       exprValidationState = ExprValidationState.idle;
@@ -436,8 +452,11 @@ class TraceStore extends ChangeNotifier {
     }
     final err = await BxpProcessClient.validateExpr(text);
     if (_disposed) return;
-    // Guard against races: the selected expression may have changed while
-    // the spawn was in flight.
+    // A newer validation has been spawned while we were awaiting — drop
+    // this result so it can't overwrite the fresher one.
+    if (gen != _exprValidateGen) return;
+    // Selected expression changed under us (e.g. user clicked a different
+    // leaf) — same drop rule.
     if (selectedExprText != text) return;
     exprValidationError = err;
     exprValidationState = err == null
@@ -636,6 +655,10 @@ class TraceStore extends ChangeNotifier {
     return out;
   }
 
+  // Full reset of the expression-editor state. Called when no leaf is
+  // selected (e.g. on file load with `preserveTreeState: false`). Mirrors
+  // `setSelectedExpr` in always nuking `selectedExprText` — the panel
+  // shows the most recently selected leaf's text, never lingering input.
   void clearSelectedExpr() {
     selectedExprPath = null;
     selectedExprText = '';
@@ -944,6 +967,20 @@ class TraceStore extends ChangeNotifier {
     configError = null;
     _loadedWithErrors = false;
     _validationErrors = const {};
+    // Run-state from a prior dry-run / full-run is also stale once the
+    // config is reloaded — the stderr badge, lastExitCode and runError
+    // describe a pipeline that no longer corresponds to the current
+    // file. Clear them too so a successful reload presents a clean
+    // slate. (Trace model is left in place; the user may still want to
+    // inspect rows from the previous run side-by-side with the freshly
+    // loaded config until they trigger another run.)
+    stderrText = '';
+    runError = null;
+    lastExitCode = null;
+    if (status != RunStatus.running) {
+      status = RunStatus.idle;
+      runMode = RunMode.none;
+    }
     // Drop the active expr selection — pointing at a stale path from the
     // previous file would leave the editor populated with the old text.
     // Skipped on save-driven reloads: the user's selection is still
@@ -1018,10 +1055,18 @@ class TraceStore extends ChangeNotifier {
         _validationErrors = const {};
       }
 
-      _loadedWithErrors = _validationErrors.isNotEmpty;
+      // Deliberately NOT flipping `_loadedWithErrors` on bxp-fmt errors:
+      // the readonly toolbar gate exists to keep the user from editing a
+      // file the AST parser couldn't understand at all. Schema / expression
+      // errors that bxp-fmt finds are surfaced as `$err_*` markers and the
+      // pre-save guard (`_firstErrTraceIn` in `saveConfig`) blocks bad
+      // saves from landing on disk — so the user can keep editing toward
+      // the fix without getting trapped. Re-flip only on AST parse fail
+      // (set above when `astResult.root == null`).
       devTrace('loadConfig.ok', {
         'rawBytes': _rawConfigInput?.length ?? 0,
         'loadedWithErrors': _loadedWithErrors,
+        'validationErrorPaths': _validationErrors.length,
         'configError': configError,
       });
 
@@ -1282,9 +1327,7 @@ class TraceStore extends ChangeNotifier {
     if (selectedExprPath == null) return;
     if (selectedExprPath!.length <= parentPath.length) return;
     // Selected path must live strictly under the parent array.
-    for (int i = 0; i < parentPath.length; i++) {
-      if (selectedExprPath![i] != parentPath[i]) return;
-    }
+    if (!_pathStartsWith(selectedExprPath!, parentPath)) return;
     final oldIdx = int.tryParse(selectedExprPath![parentPath.length]);
     if (oldIdx == null) return;
     final newIdx = remap(oldIdx);
@@ -1735,6 +1778,42 @@ class TraceStore extends ChangeNotifier {
     return _streamRun(dry: false);
   }
 
+  /// Live handle to the bxp-cli process spawned by `_streamRun`. Set inside
+  /// the spawn callback and cleared in the run's `finally` block, so a
+  /// non-null value means a streaming run is currently executing and can
+  /// be killed by [cancelRun].
+  Process? _runProcess;
+
+  /// True between `cancelRun()` and the moment `_runProcess` reaches
+  /// `exitCode`. Used by the toolbar to flip the run-button label to
+  /// "cancelling…" so the user sees that the click registered even before
+  /// bxp-cli actually exits.
+  bool _cancelRequested = false;
+  bool get isCancelling => _cancelRequested;
+
+  /// Sends SIGTERM to the running bxp-cli child. The streaming `_streamRun`
+  /// future then collapses to the post-loop cleanup with whatever lines
+  /// landed before the kill — partial output stays visible. No-op when no
+  /// run is in flight.
+  ///
+  /// When the user clicks Cancel between status=running and Process.start
+  /// returning, `_runProcess` is still null. We flip `_cancelRequested`
+  /// anyway so `onSpawn` (below) can kill the child the moment the handle
+  /// shows up — otherwise an early click would silently no-op and the
+  /// run would race to completion ignoring the user.
+  void cancelRun() {
+    if (status != RunStatus.running) return;
+    _cancelRequested = true;
+    final proc = _runProcess;
+    if (proc != null) {
+      devTrace('action.run.cancel', {'pid': proc.pid});
+      proc.kill(ProcessSignal.sigterm);
+    } else {
+      devTrace('action.run.cancel', {'pendingSpawn': true});
+    }
+    notifyListeners();
+  }
+
   void selectFile(String? id) {
     if (selectedFileId == id) return;
     devTrace('action.file.select', {'id': id});
@@ -1793,6 +1872,17 @@ class TraceStore extends ChangeNotifier {
       final result = await spawn(
         configPath: configPath,
         templateId: templateId,
+        onSpawn: (p) {
+          _runProcess = p;
+          // The user may have clicked Cancel during the brief window
+          // between status=running and Process.start completing. If so,
+          // honour the request now that we finally have the handle —
+          // otherwise the run would race to completion ignoring the
+          // pending cancellation.
+          if (_cancelRequested) {
+            p.kill(ProcessSignal.sigterm);
+          }
+        },
         onLine: (line) {
           rawLines++;
           builder.parseLine(line);
@@ -1839,6 +1929,14 @@ class TraceStore extends ChangeNotifier {
       // process crashed before any chunk arrived).
       if (stderrText.isEmpty) stderrText = result.stderr;
       lastExitCode = result.exitCode;
+      // SIGTERM/SIGKILL show up as negative exit codes too — treat a
+      // user-requested cancel as a clean done, not an error. Otherwise
+      // the toolbar would surface the kill signal as "spawn failed".
+      if (_cancelRequested) {
+        status = RunStatus.done;
+        runError = 'cancelled';
+        return;
+      }
       if (result.exitCode < 0) {
         runError = result.stderr.isEmpty ? 'spawn failed' : result.stderr;
         status = RunStatus.error;
@@ -1853,6 +1951,11 @@ class TraceStore extends ChangeNotifier {
       return;
     } finally {
       ticker.cancel();
+      // Drop the process handle so a stray cancelRun() click after the
+      // run completes is a harmless no-op instead of double-killing a
+      // dead PID (or worse, a recycled one).
+      _runProcess = null;
+      _cancelRequested = false;
       // Final sync — the last 100ms tick may have fired before the
       // closing batch of lines arrived, leaving the counter short of
       // the true total. Without this the displayed number is
@@ -1860,6 +1963,12 @@ class TraceStore extends ChangeNotifier {
       if (_traceLinesCounter.value != rawLines) {
         _traceLinesCounter.value = rawLines;
       }
+      // Always notify on exit. The error / cancel branches above do an
+      // early `return`, which would skip the closing notify below and
+      // leave the toolbar stuck in `isCancelling` (last notify came from
+      // `cancelRun()` with the flag set). Putting the notify in `finally`
+      // guarantees one final UI update regardless of which exit path ran.
+      notifyListeners();
     }
 
     status = RunStatus.done;
@@ -1944,6 +2053,23 @@ class TraceStore extends ChangeNotifier {
       }
     }
     return null;
+  }
+
+  /// Combined diagnostic text from every error source the UI surfaces:
+  /// load-side configError, save-side configSaveError, first bxp-fmt
+  /// `$err_*` trace, plus the runtime stderr stream from a dry/full
+  /// run. Drives the single clickable `stderr (NB)` badge in the bottom
+  /// status bar — the badge's byte count and its expansion panel both
+  /// read from this getter so config errors and pipeline stderr live in
+  /// one click target instead of three duplicated inline labels.
+  String get diagnosticBlob {
+    final parts = <String>[];
+    final firstErr = firstConfigErrorTrace;
+    if (firstErr != null) parts.add('bxp-fmt: $firstErr');
+    if (configError != null) parts.add('config: $configError');
+    if (configSaveError != null) parts.add('save: $configSaveError');
+    if (stderrText.isNotEmpty) parts.add(stderrText);
+    return parts.join('\n\n');
   }
 
   /// Opens [path] in the host's default application (`xdg-open` on Linux).

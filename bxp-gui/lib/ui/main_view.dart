@@ -199,13 +199,14 @@ class _StatusBarState extends State<_StatusBar> {
     final bg = t.panelBg;
     final borderColor = t.borderColor;
 
-    // If stderrText drained out from under us (new run started, or store
-    // reloaded) collapse the expanded panel — otherwise the next chunk of
-    // stderr makes the panel snap open without the user clicking it.
-    if (store.stderrText.isEmpty && _stderrExpanded) {
+    // If the diagnostic blob drained out from under us (new run started
+    // cleanly, or store reloaded) collapse the expanded panel — otherwise
+    // the next chunk of stderr would make it snap open without the user
+    // clicking it.
+    if (store.diagnosticBlob.isEmpty && _stderrExpanded) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
-        if (store.stderrText.isEmpty && _stderrExpanded) {
+        if (store.diagnosticBlob.isEmpty && _stderrExpanded) {
           setState(() => _stderrExpanded = false);
         }
       });
@@ -264,7 +265,7 @@ class _StatusBarState extends State<_StatusBar> {
     }
 
     void toggleStderr() {
-      if (store.stderrText.isEmpty) return;
+      if (store.diagnosticBlob.isEmpty) return;
       setState(() => _stderrExpanded = !_stderrExpanded);
     }
 
@@ -296,24 +297,22 @@ class _StatusBarState extends State<_StatusBar> {
         }
         final parseIssues = model?.issues.length ?? 0;
 
-        final firstErr = store.firstConfigErrorTrace;
-        final hasConfigError = store.configError != null ||
-            store.configSaveError != null ||
-            firstErr != null;
-        final hasStderr = store.stderrText.isNotEmpty;
-        final showErrRow = hasConfigError || hasStderr;
-        final stderrSuffix = hasStderr
-            ? '  ›  stderr (${store.stderrText.length}B)'
-            : '';
+        // Single source of truth for "is there anything wrong?": the
+        // combined diagnostic blob (config error, save error, bxp-fmt
+        // first trace, runtime stderr). One clickable `stderr (NB)`
+        // badge replaces the three inline labels we used to render
+        // (bxp-fmt: …, config: …, save: …). Same UX as the runner panel.
+        final diagBlob = store.diagnosticBlob;
+        final showErrRow = diagBlob.isNotEmpty;
 
         return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        // Expanded stderr lives ABOVE the err-msg row in the column flow
-        // (instead of as a Stack overlay) so the err-msg row stays
-        // visible and clickable while the panel is open — that's the
-        // user's only way to dismiss the panel.
-        if (_stderrExpanded && store.stderrText.isNotEmpty)
+        // Expanded diagnostic panel lives ABOVE the err-msg badge in the
+        // column flow (instead of as a Stack overlay) so the badge row
+        // stays visible and clickable while the panel is open — that's
+        // the user's only way to dismiss the panel.
+        if (_stderrExpanded && diagBlob.isNotEmpty)
           ConstrainedBox(
             constraints: BoxConstraints(
               maxHeight: MediaQuery.sizeOf(context).height *
@@ -332,7 +331,7 @@ class _StatusBarState extends State<_StatusBar> {
               padding: const EdgeInsets.all(12),
               child: SingleChildScrollView(
                 child: SelectableText(
-                  store.stderrText,
+                  diagBlob,
                   style: BxpText.body(context,
                       color: t.errorText, size: BxpSize.sm),
                 ),
@@ -341,9 +340,7 @@ class _StatusBarState extends State<_StatusBar> {
           ),
         if (showErrRow)
           MouseRegion(
-                cursor: hasStderr
-                    ? SystemMouseCursors.click
-                    : SystemMouseCursors.basic,
+                cursor: SystemMouseCursors.click,
                 child: GestureDetector(
                   onTap: toggleStderr,
                   child: Container(
@@ -354,46 +351,16 @@ class _StatusBarState extends State<_StatusBar> {
                     ),
                     padding: const EdgeInsets.symmetric(
                         horizontal: 12, vertical: 3),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        if (firstErr != null)
-                          Text(
-                            'bxp-fmt: $firstErr$stderrSuffix',
-                            style: BxpText.body(context,
-                                color: t.warnText, size: BxpSize.sm),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        if (store.configError != null)
-                          Text(
-                            firstErr == null
-                                ? '${store.configError!}$stderrSuffix'
-                                : store.configError!,
-                            style: BxpText.body(context,
-                                color: t.errorText, size: BxpSize.sm),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        if (store.configSaveError != null)
-                          Text(
-                            firstErr == null && store.configError == null
-                                ? 'save: ${store.configSaveError!}$stderrSuffix'
-                                : 'save: ${store.configSaveError!}',
-                            style: BxpText.body(context,
-                                color: t.errorText, size: BxpSize.sm),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        if (!hasConfigError && hasStderr)
-                          Text(
-                            'stderr (${store.stderrText.length}B)',
-                            style: BxpText.body(context,
-                                color: t.warnText, size: BxpSize.sm),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                      ],
+                    // Single clickable label. Same UX as the runner panel:
+                    // a count badge that hides the actual text behind one
+                    // click. Replaces the older trio (bxp-fmt: …, config:
+                    // …, save: …) that showed the same content inline.
+                    child: Text(
+                      'stderr (${diagBlob.length}B)',
+                      style: BxpText.body(context,
+                          color: t.warnText, size: BxpSize.sm),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
                   ),
                 ),
@@ -456,17 +423,10 @@ class _StatusBarState extends State<_StatusBar> {
                     style: BxpText.body(context,
                         color: t.errorText, size: BxpSize.sm)),
               ],
-              if (store.runError != null) ...[
-                const SizedBox(width: 12),
-                Flexible(
-                  child: Text(
-                    'rpc: ${store.runError}',
-                    style: BxpText.body(context,
-                        color: t.errorText, size: BxpSize.sm),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-              ],
+              // `runError` (rpc: …) intentionally NOT rendered here. The
+              // run status word above (`done - ERR` / `error`) flags that
+              // something failed; the clickable `stderr (NB)` badge below
+              // surfaces the actual diagnostic on click.
               const Spacer(),
             ],
           ),

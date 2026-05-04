@@ -257,7 +257,13 @@ class _JsonNodeState extends State<_JsonNode> {
         ));
         lastRowIdx = out.length - 1;
         // Surface any validator $err_* markers attached to this child.
-        final errors = context.read<TraceStore>().errorsAt(childPath);
+        // `select` (not `read`) so the row rebuilds the moment the
+        // validator's error map changes — without it, the banner only
+        // refreshed when `treeLoadGen` ticked, leaving stale errors
+        // showing for live edits between full reloads.
+        final errors = context.select<TraceStore, Map<String, String>>(
+          (s) => s.errorsAt(childPath),
+        );
         if (errors.isNotEmpty) {
           for (final msg in errors.values) {
             out.add(_ErrorRow(message: msg));
@@ -353,7 +359,11 @@ class _JsonNodeState extends State<_JsonNode> {
       ));
       lastRowIdx = out.length - 1;
       realLabel++;
-      final errors = context.read<TraceStore>().errorsAt(childPath);
+      // `select` keeps live $err_* banners reactive to per-child error
+      // changes — see the matching call in the map walker above.
+      final errors = context.select<TraceStore, Map<String, String>>(
+        (s) => s.errorsAt(childPath),
+      );
       for (final msg in errors.values) {
         out.add(_ErrorRow(message: msg));
       }
@@ -1210,6 +1220,11 @@ class _AddChildDialogState extends State<_AddChildDialog> {
   static const _uiTypes = ['string', 'number', 'boolean', 'object', 'array'];
 
   final _keyController = TextEditingController();
+  // Held explicitly so `_pickSuggestion` can yank focus back from a chip's
+  // InkWell — without it, clicking a chip moves focus to the InkWell and
+  // the next Enter press fires the chip's onTap again instead of the
+  // dialog's Enter→_confirm shortcut.
+  final _keyFocusNode = FocusNode();
   String _type = 'string';
   String? _error;
   InsertKeyCandidate? _pickedSuggestion;
@@ -1262,6 +1277,7 @@ class _AddChildDialogState extends State<_AddChildDialog> {
   @override
   void dispose() {
     _keyController.dispose();
+    _keyFocusNode.dispose();
     super.dispose();
   }
 
@@ -1313,6 +1329,10 @@ class _AddChildDialogState extends State<_AddChildDialog> {
         _keyController.text = '';
       }
     });
+    // Pull focus back into the key field so the next Enter fires _confirm
+    // (the dialog-level CallbackShortcuts) instead of re-triggering the
+    // chip InkWell that was just tapped.
+    _keyFocusNode.requestFocus();
   }
 
   @override
@@ -1396,6 +1416,7 @@ class _AddChildDialogState extends State<_AddChildDialog> {
                     const SizedBox(height: 4),
                     TextField(
                       controller: _keyController,
+                      focusNode: _keyFocusNode,
                       autofocus: true,
                       onChanged: (_) {
                         if (_error != null) setState(() => _error = null);

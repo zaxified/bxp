@@ -19,9 +19,39 @@ import 'theme/bxp_text.dart';
 /// Toggled from [MainView] via Ctrl+Shift+S. Click backdrop or press
 /// Escape to dismiss. Width is shared with [ThemeInspector] via
 /// [LayoutDefaults.sidePanelFrac].
-class SettingsInspector extends StatelessWidget {
+class SettingsInspector extends StatefulWidget {
   final VoidCallback onClose;
   const SettingsInspector({super.key, required this.onClose});
+
+  @override
+  State<SettingsInspector> createState() => _SettingsInspectorState();
+}
+
+class _SettingsInspectorState extends State<SettingsInspector> {
+  @override
+  void initState() {
+    super.initState();
+    // Same rationale as the global Ctrl+S/Z/Y handlers in MainView:
+    // CallbackShortcuts only fires when the focused widget bubbles the key
+    // event up. A drawer with nested SelectableText / Tables routinely sinks
+    // focus into a child that does not bubble Escape, leaving the user
+    // stuck without a keyboard dismiss. HardwareKeyboard sees every key
+    // before focus routing, so Escape always closes the drawer.
+    HardwareKeyboard.instance.addHandler(_handleKey);
+  }
+
+  @override
+  void dispose() {
+    HardwareKeyboard.instance.removeHandler(_handleKey);
+    super.dispose();
+  }
+
+  bool _handleKey(KeyEvent event) {
+    if (event is! KeyDownEvent) return false;
+    if (event.logicalKey != LogicalKeyboardKey.escape) return false;
+    widget.onClose();
+    return true;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -29,40 +59,32 @@ class SettingsInspector extends StatelessWidget {
     final width = MediaQuery.sizeOf(context).width *
         LayoutDefaults.sidePanelFrac;
 
-    return CallbackShortcuts(
-      bindings: {
-        const SingleActivator(LogicalKeyboardKey.escape): onClose,
-      },
-      child: Focus(
-        autofocus: true,
-        child: Stack(
-          children: [
-            Positioned.fill(
-              child: GestureDetector(
-                onTap: onClose,
-                child: Container(color: t.dialogBarrier.withValues(alpha: 0.3)),
-              ),
-            ),
-            Positioned(
-              right: 0,
-              top: 0,
-              bottom: 0,
-              width: width,
-              child: Material(
-                color: t.dialogBg,
-                elevation: 8,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    _Header(onClose: onClose),
-                    Expanded(child: _Body()),
-                  ],
-                ),
-              ),
-            ),
-          ],
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: GestureDetector(
+            onTap: widget.onClose,
+            child: Container(color: t.dialogBarrier.withValues(alpha: 0.3)),
+          ),
         ),
-      ),
+        Positioned(
+          right: 0,
+          top: 0,
+          bottom: 0,
+          width: width,
+          child: Material(
+            color: t.dialogBg,
+            elevation: 8,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _Header(onClose: widget.onClose),
+                Expanded(child: _Body()),
+              ],
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

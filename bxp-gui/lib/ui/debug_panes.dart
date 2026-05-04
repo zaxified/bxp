@@ -49,41 +49,49 @@ class _DebugPanesState extends State<DebugPanes> {
             ),
             child: Row(
               children: [
-                // DRY RUN button — label flips to "running…" while a dry
-                // run is in flight; mirrors bxp-ui's per-mode "running…"
-                // state so the user can see which button they pressed.
+                // DRY RUN button — same control doubles as Cancel while a
+                // dry-run is streaming. Re-clicking the button that started
+                // the run is the most obvious place for the user to look
+                // when they want to stop, so we re-purpose it instead of
+                // adding a separate Stop control. The other run-mode's
+                // button stays disabled so the user doesn't accidentally
+                // cancel by trying to switch modes mid-stream.
                 _RunBtn(
                   label: (isRunning && store.runMode == RunMode.dry)
-                      ? 'running…'
+                      ? (store.isCancelling ? 'cancelling…' : 'cancel')
                       : 'dry-run',
                   bgColor: t.okBg,
                   textColor: t.okText,
-                  disabled: isRunning || store.configPath.isEmpty,
-                  onTap: () => store.runDryRun(),
+                  disabled: store.configPath.isEmpty ||
+                      (isRunning && store.runMode != RunMode.dry) ||
+                      store.isCancelling,
+                  onTap: () => (isRunning && store.runMode == RunMode.dry)
+                      ? store.cancelRun()
+                      : store.runDryRun(),
                 ),
                 const SizedBox(width: 8),
-                // FULL RUN button — same per-mode "running…" treatment.
+                // FULL RUN button — same dual-purpose treatment as dry-run.
                 _RunBtn(
                   label: (isRunning && store.runMode == RunMode.full)
-                      ? 'running…'
+                      ? (store.isCancelling ? 'cancelling…' : 'cancel')
                       : 'full-run',
                   bgColor: t.infoBg,
                   textColor: t.infoText,
-                  disabled: isRunning || store.configPath.isEmpty,
-                  onTap: () => store.runFullRun(),
+                  disabled: store.configPath.isEmpty ||
+                      (isRunning && store.runMode != RunMode.full) ||
+                      store.isCancelling,
+                  onTap: () => (isRunning && store.runMode == RunMode.full)
+                      ? store.cancelRun()
+                      : store.runFullRun(),
                 ),
             const SizedBox(width: 8),
             if (store.availableTemplates.isNotEmpty)
               _TemplateSelect(store: store),
-            if (store.status == RunStatus.error && store.runError != null) ...[
-              const SizedBox(width: 16),
-              Flexible(
-                child: Text('⚠ ${store.runError}',
-                    style: BxpText.body(context,
-                        color: t.errorText, size: BxpSize.sm),
-                    overflow: TextOverflow.ellipsis),
-              ),
-            ],
+            // Error message intentionally NOT shown here. The clickable
+            // `stderr (NB)` badge in the bottom status bar already lets the
+            // user expand the full diagnostic; surfacing the same text in
+            // three places (here, the status bar, and the badge expander)
+            // was redundant clutter.
               ],
             ),
           ),

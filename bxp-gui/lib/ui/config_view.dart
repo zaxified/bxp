@@ -151,9 +151,19 @@ class _ConfigViewState extends State<ConfigView> {
                         )
                       : store.configError != null
                         ? Padding(
+                            // Error text intentionally NOT rendered inline
+                            // here. The clickable `stderr (NB)` badge in
+                            // the bottom status bar surfaces every
+                            // diagnostic source (configError, save error,
+                            // bxp-fmt $err_*, runtime stderr) on click.
+                            // Keep this branch only to suppress the empty
+                            // hint below — config IS in error, not "no
+                            // file loaded".
                             padding: const EdgeInsets.all(16.0),
-                            child: Text('Error: ${store.configError}',
-                                style: BxpText.body(context, color: t.errorText)),
+                            child: Text(
+                              '● load failed — see stderr badge',
+                              style: BxpText.italic(context, color: t.errorText),
+                            ),
                           )
                         : Padding(
                             padding: const EdgeInsets.all(16.0),

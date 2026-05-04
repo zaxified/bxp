@@ -76,6 +76,67 @@ class BxpProcessClient {
 
   // ── One-shot invocations (stdout captured) ─────────────────────────────
 
+  /// Per-call timeouts. A hung child (deadlock, missing-stdin wait, broken
+  /// pipe loop) used to freeze the GUI forever — every call below now
+  /// surfaces a synthetic non-zero exit code after these durations and
+  /// SIGTERMs the child to keep it from leaking. Numbers chosen to be
+  /// generous on the slowest realistic input we've seen and still way
+  /// shorter than "user gives up and quits the app".
+  static const Duration _versionTimeout = Duration(seconds: 5);
+  static const Duration _docsTimeout = Duration(seconds: 5);
+  static const Duration _exprTimeout = Duration(seconds: 15);
+  static const Duration _configTimeout = Duration(seconds: 15);
+  static const Duration _listTemplatesTimeout = Duration(seconds: 30);
+
+  /// `Process.run` + per-call timeout + child-process kill on timeout.
+  ///
+  /// A naive `Process.run(...).timeout(...)` would leave the child running
+  /// in the background after the Future resolves — so we spawn manually,
+  /// drain both streams, race the exitCode against the timeout, and kill
+  /// the child if it didn't finish. On timeout we synthesise a
+  /// `ProcessResult` whose stderr explains what happened so the caller's
+  /// existing error-rendering path picks it up unchanged.
+  static Future<ProcessResult> _runWithTimeout(
+    String executable,
+    List<String> arguments,
+    Duration timeout,
+  ) async {
+    final process = await Process.start(executable, arguments);
+    final stdoutFut = process.stdout.transform(utf8.decoder).join();
+    final stderrFut = process.stderr.transform(utf8.decoder).join();
+    try {
+      final exitCode = await process.exitCode.timeout(timeout);
+      final out = await stdoutFut;
+      final err = await stderrFut;
+      return ProcessResult(process.pid, exitCode, out, err);
+    } on TimeoutException {
+      process.kill(ProcessSignal.sigterm);
+      // Best-effort drain: if the child ignores SIGTERM, escalate to
+      // SIGKILL after a short grace window so we don't wait forever
+      // collecting streams that will never close.
+      try {
+        await process.exitCode.timeout(const Duration(seconds: 2));
+      } on TimeoutException {
+        process.kill(ProcessSignal.sigkill);
+        try { await process.exitCode; } catch (_) {}
+      }
+      // Streams should now be at EOF; drain them so the file descriptors
+      // get released. Errors here are not interesting to the caller.
+      String out = '';
+      String err = '';
+      try { out = await stdoutFut; } catch (_) {}
+      try { err = await stderrFut; } catch (_) {}
+      final timeoutNote =
+          '$executable timed out after ${timeout.inSeconds}s';
+      return ProcessResult(
+        process.pid,
+        ProcessRunResult.kExitTimeout,
+        out,
+        err.isEmpty ? timeoutNote : '$err\n$timeoutNote',
+      );
+    }
+  }
+
   /// Validates config via `bxp-fmt --config <path>`.
   /// Returns stdout (annotated JSON) on exit 0, throws on missing binary.
   /// Non-zero exit with stderr is returned wrapped in `{"error": "..."}`.
@@ -84,7 +145,8 @@ class BxpProcessClient {
     if (bin == null) {
       return '{"error": "bxp-fmt binary not found"}';
     }
-    final result = await Process.run(bin, ['--config', path]);
+    final result =
+        await _runWithTimeout(bin, ['--config', path], _configTimeout);
     if (result.exitCode == 0) {
       return result.stdout as String;
     }
@@ -103,7 +165,8 @@ class BxpProcessClient {
     final bin = findBin(name);
     if (bin == null) return null;
     try {
-      final result = await Process.run(bin, ['--version']);
+      final result =
+          await _runWithTimeout(bin, ['--version'], _versionTimeout);
       if (result.exitCode != 0) return null;
       final out = (result.stdout as String).trim();
       if (out.isEmpty) return null;
@@ -124,7 +187,7 @@ class BxpProcessClient {
     final bin = findBin('bxp-fmt');
     if (bin == null) return null;
     try {
-      final result = await Process.run(bin, ['--docs']);
+      final result = await _runWithTimeout(bin, ['--docs'], _docsTimeout);
       if (result.exitCode != 0) return null;
       final out = (result.stdout as String).trim();
       if (out.isEmpty) return null;
@@ -145,8 +208,11 @@ class BxpProcessClient {
     final bin = findBin('bxp-fmt');
     if (bin == null) return const [];
     try {
-      final result =
-          await Process.run(bin, ['--config', path, '--list-templates']);
+      final result = await _runWithTimeout(
+        bin,
+        ['--config', path, '--list-templates'],
+        _listTemplatesTimeout,
+      );
       if (result.exitCode != 0) return const [];
       final out = (result.stdout as String).trim();
       if (out.isEmpty) return const [];
@@ -175,7 +241,8 @@ class BxpProcessClient {
     if (expr.isEmpty) return null;
     final bin = findBin('bxp-fmt');
     if (bin == null) return 'bxp-fmt not found';
-    final result = await Process.run(bin, ['--expr', expr]);
+    final result =
+        await _runWithTimeout(bin, ['--expr', expr], _exprTimeout);
     if (result.exitCode == 0) return null;
     final stdout = (result.stdout as String).trim();
     final stderr = (result.stderr as String).trim();
@@ -214,11 +281,15 @@ class BxpProcessClient {
     final bin = findBin('bxp-fmt');
     if (bin == null) return const [];
     try {
-      final result = await Process.run(bin, [
-        '--expr-trace', expr,
-        '--row-headers', jsonEncode(headers),
-        '--row-fields', jsonEncode(fields),
-      ]);
+      final result = await _runWithTimeout(
+        bin,
+        [
+          '--expr-trace', expr,
+          '--row-headers', jsonEncode(headers),
+          '--row-fields', jsonEncode(fields),
+        ],
+        _exprTimeout,
+      );
       final out = (result.stdout as String);
       final calls = <ExprCallTrace>[];
       for (final line in out.split('\n')) {
@@ -264,11 +335,16 @@ class BxpProcessClient {
   /// the process exit code once the pipeline finishes. stderr is captured
   /// and returned via [onStderr] (all at once, at end) so the caller can
   /// surface it in the UI.
+  /// Optional `onSpawn` is called once with the [Process] handle as soon as
+  /// the child has been started. Caller uses it to wire a "cancel" button:
+  /// stash the handle, then invoke `kill()` from the UI to stop the run
+  /// mid-stream. Skipped for callers that only need fire-and-forget streaming.
   static Future<ProcessRunResult> runDryRun({
     required String configPath,
     required String templateId,
     required void Function(String line) onLine,
     void Function(String chunk)? onStderr,
+    void Function(Process)? onSpawn,
   }) =>
       _runCliTrace(
         configPath: configPath,
@@ -276,6 +352,7 @@ class BxpProcessClient {
         dryRun: true,
         onLine: onLine,
         onStderr: onStderr,
+        onSpawn: onSpawn,
       );
 
   static Future<ProcessRunResult> runFullRun({
@@ -283,6 +360,7 @@ class BxpProcessClient {
     required String templateId,
     required void Function(String line) onLine,
     void Function(String chunk)? onStderr,
+    void Function(Process)? onSpawn,
   }) =>
       _runCliTrace(
         configPath: configPath,
@@ -290,6 +368,7 @@ class BxpProcessClient {
         dryRun: false,
         onLine: onLine,
         onStderr: onStderr,
+        onSpawn: onSpawn,
       );
 
   static Future<ProcessRunResult> _runCliTrace({
@@ -298,6 +377,7 @@ class BxpProcessClient {
     required bool dryRun,
     required void Function(String line) onLine,
     void Function(String chunk)? onStderr,
+    void Function(Process)? onSpawn,
   }) async {
     final bin = findBin('bxp-cli');
     if (bin == null) {
@@ -316,24 +396,61 @@ class BxpProcessClient {
     ];
 
     // CWD = config dir so relative data_dir paths resolve identically to
-    // what the FFI did via chdir().
+    // what the FFI did via chdir(). Fail fast when the file is gone instead
+    // of silently spawning bxp-cli with the GUI binary's CWD.
     final configFile = File(configPath);
-    final workingDir = configFile.existsSync()
-        ? configFile.parent.path
-        : Directory.current.path;
+    if (!configFile.existsSync()) {
+      return ProcessRunResult(
+        exitCode: ProcessRunResult.kExitConfigMissing,
+        stderr: 'config file not found: $configPath',
+      );
+    }
+    final workingDir = configFile.parent.path;
 
     final process = await Process.start(
       bin,
       args,
       workingDirectory: workingDir,
     );
+    onSpawn?.call(process);
 
     final stderrBuffer = StringBuffer();
+
+    // Idle watchdog — different from the per-call timeouts on the
+    // one-shot Process.run paths above. Streaming runs can legitimately
+    // take minutes on large datasets, so a hard total-time deadline
+    // would make false positives. Instead we measure inactivity:
+    // every stdout line / stderr chunk resets the timer; if nothing
+    // arrives for `_streamIdleTimeout` the child is presumed stuck
+    // (deadlock, infinite loop on a malformed row, blocked write) and
+    // gets SIGTERM. The user keeps the stop-button cancel from P2 for
+    // earlier intervention.
+    bool watchdogFired = false;
+    Timer? watchdog;
+    Timer? watchdogEscalation;
+    void resetWatchdog() {
+      watchdog?.cancel();
+      watchdog = Timer(_streamIdleTimeout, () {
+        watchdogFired = true;
+        process.kill(ProcessSignal.sigterm);
+        // SIGTERM is queued for a SIGSTOP'd child and never delivered
+        // until SIGCONT — so a pause with `kill -STOP` would leave the
+        // GUI stuck waiting for an exit that can't happen. SIGKILL
+        // can't be blocked or queued, so we escalate after a short
+        // grace window to guarantee the process actually dies.
+        watchdogEscalation = Timer(const Duration(seconds: 2), () {
+          process.kill(ProcessSignal.sigkill);
+        });
+      });
+    }
+
+    resetWatchdog();
 
     final stdoutDone = process.stdout
         .transform(utf8.decoder)
         .transform(const LineSplitter())
         .listen((line) {
+      resetWatchdog();
       if (line.isEmpty) return;
       onLine(line);
     }).asFuture<void>();
@@ -341,6 +458,7 @@ class BxpProcessClient {
     final stderrDone = process.stderr
         .transform(utf8.decoder)
         .listen((chunk) {
+      resetWatchdog();
       stderrBuffer.write(chunk);
       // Stream stderr live to the caller — bxp-cli writes diagnostic
       // warnings (e.g. "[xlsx pre-pass] missing sheet") to stderr while
@@ -351,14 +469,32 @@ class BxpProcessClient {
     }).asFuture<void>();
 
     final exitCode = await process.exitCode;
+    watchdog?.cancel();
+    watchdogEscalation?.cancel();
     await stdoutDone;
     await stderrDone;
+
+    if (watchdogFired) {
+      final note = 'bxp-cli idle watchdog fired '
+          '(no output for ${_streamIdleTimeout.inSeconds}s — '
+          'process killed)';
+      stderrBuffer.writeln();
+      stderrBuffer.writeln(note);
+    }
 
     return ProcessRunResult(
       exitCode: exitCode,
       stderr: stderrBuffer.toString(),
     );
   }
+
+  /// Idle watchdog window for streaming runs. If neither stdout nor
+  /// stderr produces a byte for this long the child is presumed stuck
+  /// and SIGTERM'd. Tuned generously: bxp-cli normally emits trace
+  /// lines well below 1 Hz, so 10 s is dozens of lines of headroom
+  /// while still fast enough to recover from a deadlock without the
+  /// user reaching for `kill`.
+  static const Duration _streamIdleTimeout = Duration(seconds: 10);
 }
 
 class ProcessRunResult {
@@ -369,6 +505,20 @@ class ProcessRunResult {
   /// (which are always ≥ 0 for normal exit, or negative-signal-number
   /// when killed).
   static const int kExitBinaryMissing = -1;
+
+  /// Synthetic exit code for "the config path we were handed does not exist
+  /// on disk". Distinct from `kExitBinaryMissing` so the UI can show a
+  /// targeted message ("config file not found") instead of a generic
+  /// failure. Avoids the older silent fallback to `Directory.current.path`,
+  /// which would have spawned bxp-cli with the GUI binary's CWD — usually
+  /// the wrong place and a class of "the run looks fine but the output
+  /// landed somewhere unexpected" bugs.
+  static const int kExitConfigMissing = -2;
+
+  /// Synthetic exit code for "the child process exceeded its per-call
+  /// timeout and was killed". The caller surfaces a "timed out" message
+  /// in place of the usual stderr — see `BxpProcessClient._runWithTimeout`.
+  static const int kExitTimeout = -3;
 
   final int exitCode;
   final String stderr;
