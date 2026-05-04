@@ -44,6 +44,7 @@ pub fn build(b: *std.Build) void {
         .imports = &.{
             .{ .name = "json5.zig", .module = json5_mod },
             .{ .name = "diagnostics", .module = diagnostics_mod },
+            .{ .name = "expr", .module = expr_mod },
         },
     });
 

@@ -12,6 +12,7 @@
 const std = @import("std");
 const json5 = @import("json5.zig");
 const diagnostics = @import("diagnostics");
+const expr = @import("expr");
 
 pub const Diagnostic = diagnostics.Diagnostic;
 pub const Diagnostics = diagnostics.Diagnostics;
@@ -726,7 +727,188 @@ pub const BrokerConfig = struct {
             }
         }
     }
+
+    /// Phase G expression parse-time validation. Walks every expression
+    /// string the broker config holds (input_schema values + each
+    /// row_rules.when), invokes `expr.eval` against a bare Context (no
+    /// fields, no ticker_map, no lookup table) and surfaces any error
+    /// as a path-aware Diagnostic. Bare-Context evaluation catches the
+    /// errors that don't depend on row data: UnknownFunction
+    /// (`BLAH(...)`), syntax errors, mismatched parens, wrong arg
+    /// counts in builtins.
+    ///
+    /// What it doesn't catch (deferred to follow-ups):
+    ///   - `[FieldName]` cross-ref against input_schema keys (would
+    ///     need a Context with the right col_index)
+    ///   - `LOOKUP` resolution against pre_pass blocks
+    ///   - Any error that only fires once per-row data is present.
+    ///
+    /// Includes a tiny did-you-mean for `error.UnknownFunction`: parses
+    /// the bad function name out of `error_detail` (which expr.zig
+    /// formats as `unknown function 'NAME' — …`) and Levenshtein-
+    /// matches against the `expr.builtins` catalog. Suggestions only
+    /// emit when distance ≤ 2.
+    pub fn validateExprsCollect(
+        self: *const BrokerConfig,
+        template_id: []const u8,
+        alloc: std.mem.Allocator,
+        diag: ?*Diagnostics,
+    ) !void {
+        if (diag == null) return;
+
+        // input_schema values: $variable → expression
+        var is_it = self.input_schema.iterator();
+        while (is_it.next()) |entry| {
+            try checkOneExpr(
+                alloc,
+                diag,
+                template_id,
+                "input_schema",
+                entry.key_ptr.*,
+                entry.value_ptr.*,
+            );
+        }
+
+        // row_rules[i].when expressions
+        const rules = self.row_rules orelse &.{};
+        for (rules, 0..) |rule, i| {
+            const path_suffix = try std.fmt.allocPrint(alloc, "row_rules.{d}", .{i});
+            defer alloc.free(path_suffix);
+            try checkOneExpr(
+                alloc,
+                diag,
+                template_id,
+                path_suffix,
+                "when",
+                rule.when,
+            );
+        }
+    }
 };
+
+/// Run a single expression through `expr.eval` with a bare Context and
+/// emit a Diagnostic on failure. Empty source is treated as success
+/// (matches `eval`'s explicit empty-string short-circuit).
+fn checkOneExpr(
+    alloc: std.mem.Allocator,
+    diag: ?*Diagnostics,
+    template_id: []const u8,
+    field_prefix: []const u8,
+    field_leaf: []const u8,
+    src: []const u8,
+) !void {
+    if (src.len == 0) return;
+    const d = diag orelse return;
+
+    var col_index = std.StringHashMap(usize).init(alloc);
+    defer col_index.deinit();
+    var ticker_map_ = std.StringHashMap([]const u8).init(alloc);
+    defer ticker_map_.deinit();
+    var detail: []const u8 = "";
+    const ctx = expr.Context{
+        .fields = &.{},
+        .col_index = &col_index,
+        .ticker_map = &ticker_map_,
+        .lookup_table = null,
+        .alloc = alloc,
+        .error_detail = &detail,
+    };
+
+    _ = expr.eval(src, &ctx) catch |err| {
+        // Build the path: <prefix>.<leaf>. For input_schema/output_schema
+        // the leaf is the variable / header name; for row_rules.<idx>
+        // the prefix already encodes the index and the leaf is "when".
+        const full_field = try std.fmt.allocPrint(alloc, "{s}.{s}", .{ field_prefix, field_leaf });
+        defer alloc.free(full_field);
+
+        // Code mirrors the expr error name with a `expr.` prefix so the
+        // GUI can route by category (e.g. "expr.UnknownFunction" vs
+        // "expr.NotANumber"). detail (when set) carries the human
+        // wording from expr.zig's setDetail call.
+        const code = try std.fmt.allocPrint(alloc, "expr.{s}", .{@errorName(err)});
+        const message = if (detail.len > 0)
+            try std.fmt.allocPrint(alloc, "expression in {s}: {s}", .{ field_leaf, detail })
+        else
+            try std.fmt.allocPrint(alloc, "expression in {s}: {s}", .{ field_leaf, @errorName(err) });
+
+        // Did-you-mean for UnknownFunction. Parse the function name out
+        // of detail ("unknown function 'NAME' — …"), compute Levenshtein
+        // distance against every builtin, suggest the closest match
+        // when distance ≤ 2 (typo tolerance).
+        var suggest: ?[]const u8 = null;
+        if (err == error.UnknownFunction and detail.len > 0) {
+            if (extractQuotedName(detail)) |bad_name| {
+                if (closestBuiltin(bad_name)) |hint| {
+                    suggest = try std.fmt.allocPrint(alloc, "did you mean '{s}'?", .{hint});
+                }
+            }
+        }
+
+        const path = try std.fmt.allocPrint(alloc, "conversion_templates.{s}.{s}", .{ template_id, full_field });
+        try d.append(.{
+            .path = path,
+            .severity = .@"error",
+            .code = code,
+            .message = message,
+            .suggest = suggest,
+        });
+    };
+}
+
+/// Extract the first single-quoted name from `s`. Returns null when no
+/// matched pair is found. Used to recover the bad function name from
+/// expr.zig's `setDetail("unknown function '{s}' — …", ...)` output.
+fn extractQuotedName(s: []const u8) ?[]const u8 {
+    const start = std.mem.indexOfScalar(u8, s, '\'') orelse return null;
+    const after = start + 1;
+    if (after >= s.len) return null;
+    const end_rel = std.mem.indexOfScalar(u8, s[after..], '\'') orelse return null;
+    return s[after .. after + end_rel];
+}
+
+/// Return the builtin function name closest to `name` by Levenshtein
+/// distance, or null when the closest is more than 2 edits away. Only
+/// case-insensitive matches are considered.
+fn closestBuiltin(name: []const u8) ?[]const u8 {
+    var best: ?[]const u8 = null;
+    var best_dist: usize = std.math.maxInt(usize);
+    for (expr.builtins) |entry| {
+        const d = levenshteinIgnoreCase(name, entry.doc.name);
+        if (d < best_dist) {
+            best_dist = d;
+            best = entry.doc.name;
+        }
+    }
+    if (best_dist > 2) return null;
+    return best;
+}
+
+/// Classic O(m*n) Levenshtein distance, case-insensitive. Buffers are
+/// stack-allocated — function names are short (≤ 16 chars) so the
+/// 64-byte cap is plenty. Falls back to length-based estimate when a
+/// string overflows the buffer (theoretical; no real builtin name is
+/// that long).
+fn levenshteinIgnoreCase(a: []const u8, b: []const u8) usize {
+    const max_len: usize = 64;
+    if (a.len > max_len or b.len > max_len) {
+        return if (a.len > b.len) a.len - b.len else b.len - a.len;
+    }
+    var prev: [max_len + 1]usize = undefined;
+    var curr: [max_len + 1]usize = undefined;
+    for (0..b.len + 1) |j| prev[j] = j;
+    for (a, 0..) |ac, i| {
+        curr[0] = i + 1;
+        for (b, 0..) |bc, j| {
+            const same = std.ascii.toLower(ac) == std.ascii.toLower(bc);
+            const ins = curr[j] + 1;
+            const del = prev[j + 1] + 1;
+            const sub = prev[j] + @as(usize, if (same) 0 else 1);
+            curr[j + 1] = @min(@min(ins, del), sub);
+        }
+        @memcpy(prev[0 .. b.len + 1], curr[0 .. b.len + 1]);
+    }
+    return prev[b.len];
+}
 
 /// A single validation error with a dot-separated JSON path and a human-readable message.
 /// Both strings are owned by the allocator passed to init() and freed via deinit().

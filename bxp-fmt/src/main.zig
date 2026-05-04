@@ -445,6 +445,7 @@ fn annotateRaw(a: std.mem.Allocator, raw: []const u8, path_label: []const u8) !A
     var it = cfg.brokers.iterator();
     while (it.next()) |entry| {
         try entry.value_ptr.validateCollect(entry.key_ptr.*, a, &errors);
+        try entry.value_ptr.validateExprsCollect(entry.key_ptr.*, a, &diag);
     }
 
     // Cross-template invariants (file_pattern collision today). bxp-cli
@@ -997,7 +998,7 @@ test "annotateRaw: clean config exits 0 with no \\$err_* markers" {
         \\      input_schema: { $date: "[Date]" },
         \\      output_schema: { date: "$date" },
         \\      row_rules: [
-        \\        { when: "true", rows: [ { $action: "'DEPOSIT'" } ] }
+        \\        { when: "1", rows: [ { $action: "'DEPOSIT'" } ] }
         \\      ]
         \\    }
         \\  }
@@ -1359,6 +1360,97 @@ test "annotateRaw Phase F: missing data_dir surfaces \\$err_ at template" {
         }
     }
     try testing.expect(has_fs_err);
+}
+
+test "annotateRaw Phase G: unknown function in input_schema surfaces \\$err_" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // BLAH() is not a builtin — bare-Context eval raises
+    // error.UnknownFunction. Phase G must surface that as a path-aware
+    // marker on the input_schema entry, not a runtime fail-on-row-1.
+    const fixture =
+        \\{
+        \\  conversion_templates: {
+        \\    sample: {
+        \\      data_dir: ".",
+        \\      file_pattern_in: ".csv",
+        \\      file_pattern_out: ".csvx",
+        \\      input_schema: { $val: "BLAH([Value])" },
+        \\      output_schema: { val: "$val" },
+        \\    }
+        \\  }
+        \\}
+    ;
+
+    const result = try annotateRaw(a, fixture, "<inline>");
+    try testing.expectEqual(@as(u8, 1), result.exit_code);
+
+    var parsed = try std.json.parseFromSliceLeaky(std.json.Value, a, result.json, .{});
+    const ct = parsed.object.get("conversion_templates") orelse return error.MissingCT;
+    const sample = ct.object.get("sample") orelse return error.MissingSample;
+    const is = sample.object.get("input_schema") orelse return error.MissingIs;
+
+    var has_unknown_fn = false;
+    var it = is.object.iterator();
+    while (it.next()) |kv| {
+        if (std.mem.startsWith(u8, kv.key_ptr.*, "$err_") and
+            kv.value_ptr.* == .string and
+            std.mem.indexOf(u8, kv.value_ptr.string, "unknown function 'BLAH'") != null)
+        {
+            has_unknown_fn = true;
+            break;
+        }
+    }
+    try testing.expect(has_unknown_fn);
+}
+
+test "annotateRaw Phase G: did-you-mean suggests close builtin (LOOKUPP → LOOKUP)" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // LOOKUPP is one edit away from LOOKUP. Levenshtein ≤ 2 should
+    // surface a suggest field. Verifies via direct config_mod call so
+    // we can read the suggest field (which is internal to Diagnostic
+    // and not yet plumbed into the annotated JSON output keys today).
+    var diag: config_mod.Diagnostics = .init(a);
+    defer diag.deinit();
+
+    const fixture =
+        \\{
+        \\  conversion_templates: {
+        \\    sample: {
+        \\      data_dir: ".",
+        \\      file_pattern_in: ".csv",
+        \\      file_pattern_out: ".csvx",
+        \\      input_schema: { $key: "LOOKUPP('x', 'y')" },
+        \\      output_schema: { key: "$key" },
+        \\    }
+        \\  }
+        \\}
+    ;
+
+    var cfg = try config_mod.loadFromBytes(a, fixture, "<inline>", &diag);
+    defer cfg.deinit();
+
+    var it = cfg.brokers.iterator();
+    while (it.next()) |entry| {
+        try entry.value_ptr.validateExprsCollect(entry.key_ptr.*, a, &diag);
+    }
+
+    var saw_suggest = false;
+    for (diag.items.items) |d| {
+        if (std.mem.eql(u8, d.code, "expr.UnknownFunction")) {
+            try testing.expect(d.suggest != null);
+            try testing.expect(std.mem.indexOf(u8, d.suggest.?, "LOOKUP") != null);
+            saw_suggest = true;
+        }
+    }
+    try testing.expect(saw_suggest);
 }
 
 test "annotateRaw Phase B: output_schema missing attaches at template path" {
