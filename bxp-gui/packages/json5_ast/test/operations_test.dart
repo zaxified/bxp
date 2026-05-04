@@ -80,10 +80,16 @@ void main() {
     });
 
     test('replaces List element and inherits its comments', () {
+      // RAW indexing — path '0' is the leading CommentLine "// lead",
+      // path '1' is the actual JsonNumber(1) we want to replace.
+      // (4F.1 added a guard that throws if a setValue path lands on a
+      // CommentLine peer; this test now uses the correct real-element
+      // index and the leading comment must survive the replacement.)
       final root = parseOk('[\n  // lead\n  1, // trail\n  2\n]');
-      setValue(root, ['0'], JsonNumber('99'));
+      setValue(root, ['1'], JsonNumber('99'));
       final dumped = Dumper.dump(root);
       expect(dumped, contains('99'));
+      expect(dumped, contains('// lead'));
       expect(dumped, contains('// trail'));
     });
 
@@ -589,10 +595,9 @@ void main() {
   });
 
   group('duplicateAt with adjacent comments', () {
-    test('Map duplicate does NOT clone source comments (current behaviour)',
-        () {
-      // Documented in audit-followup-todo.md: duplicate appears naked.
-      // Test pins down today's behaviour so future changes are visible.
+    test('Map duplicate does NOT clone leading comments', () {
+      // Phase 1 pinned this — leading is a peer entry NOT structurally
+      // tied to the property, so the duplicate appears without it.
       final root = parseOk('{\n  // about a\n  a: 1\n}\n');
       duplicateAt(root, ['a'], newKey: 'a_copy');
       final dumped = Dumper.dump(root);
@@ -601,12 +606,31 @@ void main() {
       expect(dumped, contains('a_copy'));
     });
 
-    test('List duplicate does NOT clone source comments (current behaviour)',
-        () {
+    test('List duplicate does NOT clone leading comments', () {
       final root = parseOk('[\n  // about 0\n  10,\n  20\n]\n');
       duplicateAt(root, ['1']);
       final dumped = Dumper.dump(root);
       expect('about 0'.allMatches(dumped).length, 1);
+    });
+
+    test('Map duplicate clones trailing-inline comment to both rows', () {
+      // Phase 4F.4: without the fix the dumper attaches the trailing-
+      // inline to the duplicate (closer preceding row) and the original
+      // loses it (steal). With the clone in place both rows render
+      // their own copy.
+      final root = parseOk('{\n  a: 1, // trail of a\n  z: 99\n}\n');
+      duplicateAt(root, ['a'], newKey: 'a_copy');
+      final dumped = Dumper.dump(root);
+      expect('trail of a'.allMatches(dumped).length, 2,
+          reason: 'expected trail comment on both rows; got:\n$dumped');
+      expect(dumped, contains('a_copy'));
+    });
+
+    test('List duplicate clones trailing-inline comment to both rows', () {
+      final root = parseOk('[\n  10, // trail of 10\n  20\n]\n');
+      duplicateAt(root, ['0']);
+      final dumped = Dumper.dump(root);
+      expect('trail of 10'.allMatches(dumped).length, 2);
     });
   });
 
@@ -615,36 +639,35 @@ void main() {
   // ============================================================
   //
   // path.dart uses RAW indexing — list path '1' refers to elements[1],
-  // which can be a CommentLine peer. Audit-followup recommends throwing
-  // AstOpError instead of silently corrupting. Tests below pin down the
-  // *desired* future behaviour — skipped until the path.dart guards land
-  // in Phase 4.
-  group('CommentLine peer guards (Phase 4 corpus)', () {
+  // which can be a CommentLine peer. Phase 4F.1 added guards that throw
+  // AstOpError so a numeric path can no longer silently corrupt a
+  // comment.
+  group('CommentLine peer guards', () {
     test('setValue on a CommentLine peer throws AstOpError', () {
       // Source: `[ // c\n 1, 2 ]` — elements[0] is the CommentLine,
       // elements[1] is the number 1, elements[2] is the number 2.
       final root = parseOk('[\n  // c\n  1,\n  2\n]\n');
       expect(
         () => setValue(root, ['0'], JsonNumber('99')),
-        throwsA(anyOf(isA<AstOpError>(), isA<AstPathError>())),
+        throwsA(isA<AstOpError>()),
       );
-    }, skip: 'pending Phase 4 path.dart CommentLine peer guards');
+    });
 
     test('deleteAt on a CommentLine peer throws AstOpError', () {
       final root = parseOk('[\n  // c\n  1,\n  2\n]\n');
       expect(
         () => deleteAt(root, ['0']),
-        throwsA(anyOf(isA<AstOpError>(), isA<AstPathError>())),
+        throwsA(isA<AstOpError>()),
       );
-    }, skip: 'pending Phase 4 path.dart CommentLine peer guards');
+    });
 
     test('duplicateAt on a CommentLine peer throws AstOpError', () {
       final root = parseOk('[\n  // c\n  1,\n  2\n]\n');
       expect(
         () => duplicateAt(root, ['0']),
-        throwsA(anyOf(isA<AstOpError>(), isA<AstPathError>())),
+        throwsA(isA<AstOpError>()),
       );
-    }, skip: 'pending Phase 4 path.dart CommentLine peer guards');
+    });
   });
 }
 

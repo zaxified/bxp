@@ -28,6 +28,17 @@ void setValue(JsonAstNode root, List<String> path, JsonAstNode newValue) {
     // changes.
     prop.value = newValue;
   } else {
+    // Phase 4F.1: array path resolves by raw index (counts CommentLine
+    // peers). Refuse to overwrite a CommentLine peer — silent
+    // replacement would lose the comment text. Callers wanting to
+    // edit a comment should use the `$comm_<N>` path with
+    // editCommentNode / replaceText.
+    if (ref.children[ref.index] is CommentLine) {
+      throw AstOpError(
+          'cannot setValue over a CommentLine peer at array index '
+          "'${path.last}' — use \$comm_<N> path for comment ops",
+          path);
+    }
     // Phase 5e: trailing inline comments live as adjacent CommentLine
     // entries in the container, NOT as a slot on the entry being replaced.
     // So a List setValue is just an in-place swap; the comment row that
@@ -50,6 +61,15 @@ void deleteAt(JsonAstNode root, List<String> path) {
     throw AstOpError('cannot delete root', path);
   }
   final ref = resolveParent(root, path);
+  // Phase 4F.1: refuse to delete a CommentLine peer via numeric array
+  // index — `deleteAt` is for real entries; comment removal goes
+  // through `deleteComment` with a `$comm_<N>` path.
+  if (ref.parent is JsonArray && ref.children[ref.index] is CommentLine) {
+    throw AstOpError(
+        'cannot deleteAt over a CommentLine peer at array index '
+        "'${path.last}' — use \$comm_<N> path for comment ops",
+        path);
+  }
   // Phase 5e made every comment a peer entry, so a deleted row's leading
   // and trailing comments are siblings — not part of the JsonProperty.
   // Remove them too, otherwise a `// doc-for-row-X` re-attaches visually
@@ -87,6 +107,30 @@ JsonAstNode duplicateAt(JsonAstNode root, List<String> path, {String? newKey}) {
     throw AstOpError('cannot duplicate root', path);
   }
   final ref = resolveParent(root, path);
+  // Phase 4F.1: array branch never targets a CommentLine peer for
+  // duplication — a comment dup goes through duplicateCommentAt.
+  if (ref.parent is JsonArray && ref.children[ref.index] is CommentLine) {
+    throw AstOpError(
+        'cannot duplicateAt over a CommentLine peer at array index '
+        "'${path.last}' — use \$comm_<N> path for comment ops",
+        path);
+  }
+
+  // Phase 4F.4: if the original has a trailing-inline CommentLine
+  // peer immediately after it, clone that comment too. Without this
+  // fix the dumper's "attach inline-trail to nearest preceding row"
+  // rule silently transfers the comment from the original to the
+  // duplicate (steal). With the clone in place both rows render
+  // their own copy.
+  CommentLine? trailingClone;
+  final trailingIdx = ref.index + 1;
+  if (trailingIdx < ref.children.length) {
+    final next = ref.children[trailingIdx];
+    if (next is CommentLine && next.inlinePlacement) {
+      trailingClone = next.clone();
+    }
+  }
+
   if (ref.parent is JsonObject) {
     final orig = ref.children[ref.index] as JsonProperty;
     if (newKey == null) {
@@ -97,12 +141,23 @@ JsonAstNode duplicateAt(JsonAstNode root, List<String> path, {String? newKey}) {
     }
     final clone = orig.clone();
     clone.key = newKey;
-    ref.children.insert(ref.index + 1, clone);
+    if (trailingClone != null) {
+      // Order: orig, trailing-orig (already in place), clone, trailing-clone.
+      ref.children.insert(ref.index + 2, clone);
+      ref.children.insert(ref.index + 3, trailingClone);
+    } else {
+      ref.children.insert(ref.index + 1, clone);
+    }
     return clone;
   } else {
     final orig = ref.children[ref.index];
     final clone = orig.clone();
-    ref.children.insert(ref.index + 1, clone);
+    if (trailingClone != null) {
+      ref.children.insert(ref.index + 2, clone);
+      ref.children.insert(ref.index + 3, trailingClone);
+    } else {
+      ref.children.insert(ref.index + 1, clone);
+    }
     return clone;
   }
 }
@@ -113,6 +168,13 @@ JsonAstNode duplicateAt(JsonAstNode root, List<String> path, {String? newKey}) {
 // pseudo-entries; both types are peers in the container after Phase 4's
 // model unification. This matches the bxp-fmt's flat row model that the GUI
 // uses for the live tree.
+//
+// Phase 4F.5: this is a *raw-peer* swap — if the neighbour is a
+// CommentLine, the comment moves up/down through the container the same
+// way a real entry would. Callers who want "move past the next real
+// entry" semantics (skipping comment peers) must build that wrapper on
+// top — `moveAt` deliberately keeps a single, simple swap policy so the
+// `$comm_<N>` move flow can share the same implementation.
 // --------------------------------------------------------------------------
 
 void moveAt(JsonAstNode root, List<String> path, int delta) {
