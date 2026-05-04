@@ -955,6 +955,11 @@ class TraceStore extends ChangeNotifier {
       status = RunStatus.idle;
       runMode = RunMode.none;
     }
+    // Per-(row, expr) trace cache is invalidated by reload: expressions
+    // may have moved or changed text in the new file, and the cache key
+    // includes the expression body — old entries can't be reused.
+    _exprCallCache.clear();
+    _exprCallInFlight.clear();
     // Drop the active expr selection — pointing at a stale path from the
     // previous file would leave the editor populated with the old text.
     // Skipped on save-driven reloads: the user's selection is still
@@ -1112,6 +1117,7 @@ class TraceStore extends ChangeNotifier {
     _opLog.truncate(_historyIndex);
     devTrace(traceEvent, traceData);
     _opLog.record(op);
+    _invalidatePathKeyedState();
     return true;
   }
 
@@ -1184,6 +1190,7 @@ class TraceStore extends ChangeNotifier {
     _astHistory.clear();
     if (_astRoot != null) _astHistory.add(_astRoot!.clone());
     _historyIndex = 0;
+    _invalidatePathKeyedState();
     if (selectedExprPath != null) {
       final val = _getAt(selectedExprPath!);
       selectedExprText = val is String ? val : '';
@@ -1198,6 +1205,7 @@ class TraceStore extends ChangeNotifier {
       _historyIndex--;
       _astRoot = _astHistory[_historyIndex].clone();
       _recomputeDirty();
+      _invalidatePathKeyedState();
       if (selectedExprPath != null) {
         final val = _getAt(selectedExprPath!);
         selectedExprText = val is String ? val : '';
@@ -1213,6 +1221,7 @@ class TraceStore extends ChangeNotifier {
       _historyIndex++;
       _astRoot = _astHistory[_historyIndex].clone();
       _recomputeDirty();
+      _invalidatePathKeyedState();
       if (selectedExprPath != null) {
         final val = _getAt(selectedExprPath!);
         selectedExprText = val is String ? val : '';
@@ -1282,6 +1291,23 @@ class TraceStore extends ChangeNotifier {
     if (cur is JsonBool) return cur.value;
     if (cur is JsonNull) return null;
     return null;
+  }
+
+  /// Drop any path-keyed UI state whose AST node no longer resolves.
+  /// Generalises the original [_shiftSelectionOnArrayEdit] invalidator:
+  /// every AST mutation can orphan `selectedExprPath` (the user undoing
+  /// a fresh insert is the textbook case from Backlog 3) or
+  /// `_pendingFocusPath` (insert into a collapsed parent → target widget
+  /// never mounts to consume it). One walk per piece of state, only
+  /// when set, so this is cheap to call from every mutation site.
+  void _invalidatePathKeyedState() {
+    if (selectedExprPath != null && _astAt(selectedExprPath!) == null) {
+      clearSelectedExpr();
+    }
+    final pending = _pendingFocusPath.value;
+    if (pending != null && _astAt(pending) == null) {
+      _pendingFocusPath.value = null;
+    }
   }
 
   /// Apply [remap] to `selectedExprPath` after a structural array edit.
@@ -1824,6 +1850,11 @@ class TraceStore extends ChangeNotifier {
     lastExitCode = null;
     selectedFileId = null;
     selectedRowId = null;
+    // Drop the per-(row, expr) trace cache: the row IDs and expression
+    // texts a fresh run produces are unrelated to the previous run's
+    // entries, so keeping them around just leaks memory.
+    _exprCallCache.clear();
+    _exprCallInFlight.clear();
 
     // Fresh builder so subsequent runs start clean.
     final builder = TraceBuilder();
@@ -2007,13 +2038,31 @@ class TraceStore extends ChangeNotifier {
   List<TemplateInfo> _templateInfos = const [];
   List<TemplateInfo> get availableTemplateInfos => _templateInfos;
 
-  /// True if the last `bxp-fmt --config` run produced any `$err_*`
-  /// diagnostic. Used to gate run buttons and display the error trace
-  /// in the status bar.
-  bool get configHasErrors => _validationErrors.isNotEmpty;
+  /// True if a path encoded by [_encodePath] still resolves in the
+  /// current AST. Empty path is the root and is always alive. Used to
+  /// hide validation diagnostics whose target node has been deleted
+  /// since the last load/save — the validator only re-runs at those
+  /// boundaries, so without this filter the status bar keeps quoting
+  /// errors at paths the user can no longer see.
+  bool _validationPathAlive(String encodedPath) {
+    if (encodedPath.isEmpty) return true;
+    return _astAt(encodedPath.split('\x00')) != null;
+  }
 
-  /// First `$err_*` message found across the validation map, or null
-  /// when the config is clean.
+  /// True if the last `bxp-fmt --config` run produced any `$err_*`
+  /// diagnostic that still points at a live AST node. Used to gate
+  /// run buttons and display the error trace in the status bar.
+  bool get configHasErrors {
+    if (_validationErrors.isEmpty) return false;
+    for (final k in _validationErrors.keys) {
+      if (_validationPathAlive(k)) return true;
+    }
+    return false;
+  }
+
+  /// First `$err_*` message found across the validation map whose
+  /// path still resolves in the current AST, or null when the config
+  /// is clean (or every remaining error is an orphan).
   ///
   /// Iteration order: `_validationErrors` is a `LinkedHashMap` keyed by
   /// path string in the order entries were inserted by
@@ -2024,8 +2073,9 @@ class TraceStore extends ChangeNotifier {
   /// topmost error" — which is what the StatusBar pencil-icon shortcut
   /// jumps to.
   String? get firstConfigErrorTrace {
-    for (final entry in _validationErrors.values) {
-      for (final v in entry.values) {
+    for (final e in _validationErrors.entries) {
+      if (!_validationPathAlive(e.key)) continue;
+      for (final v in e.value.values) {
         if (v.isNotEmpty) return v;
       }
     }
