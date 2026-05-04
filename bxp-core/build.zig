@@ -12,6 +12,13 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/json5.zig"),
     });
 
+    // Structured diagnostic sink consumed by bxp-fmt's deep validation
+    // pass. config/expr/json5 modules accept an optional pointer to it
+    // so bxp-cli (which passes null) is unaffected.
+    const diagnostics_mod = b.addModule("diagnostics", .{
+        .root_source_file = b.path("src/diagnostics.zig"),
+    });
+
     _ = b.addModule("csv", .{
         .root_source_file = b.path("src/csv.zig"),
     });
@@ -36,6 +43,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/config.zig"),
         .imports = &.{
             .{ .name = "json5.zig", .module = json5_mod },
+            .{ .name = "diagnostics", .module = diagnostics_mod },
         },
     });
 
@@ -84,6 +92,15 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    const diagnostics_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/diagnostics.zig"),
+            .target = target,
+            .optimize = optimize,
+            .strip = false,
+        }),
+    });
+
     const docs_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/docs.zig"),
@@ -102,5 +119,6 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(csv_tests).step);
     test_step.dependOn(&b.addRunArtifact(expr_tests).step);
     test_step.dependOn(&b.addRunArtifact(json5_tests).step);
+    test_step.dependOn(&b.addRunArtifact(diagnostics_tests).step);
     test_step.dependOn(&b.addRunArtifact(docs_tests).step);
 }

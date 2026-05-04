@@ -17,6 +17,15 @@ import 'trace_model.dart';
 import 'trace_builder.dart';
 import '../ui/theme/bxp_text_scheme.dart';
 
+/// Per-severity diagnostic buckets produced by walking a `bxp-fmt
+/// --config` annotated tree. Outer key: encoded parent path. Inner map:
+/// `$err_<N>` / `$warn_<N>` / `$info_<N>` → message.
+typedef _DiagnosticBuckets = ({
+  Map<String, Map<String, String>> errors,
+  Map<String, Map<String, String>> warnings,
+  Map<String, Map<String, String>> info,
+});
+
 enum RunMode { none, dry, full }
 enum RunStatus { idle, running, done, error }
 
@@ -111,6 +120,15 @@ class TraceStore extends ChangeNotifier {
   /// each `bxp-fmt --config` run; consulted by `errorsAt` / `hasErrorIn`
   /// from the UI. Empty until the first validator response lands.
   Map<String, Map<String, String>> _validationErrors = const {};
+
+  /// Phase A plumbing for the `bxp-fmt --config` deep-validation
+  /// pass. `$warn_<N>` and `$info_<N>` siblings live in their own
+  /// path-keyed maps so the tree renderer can route them to a different
+  /// badge style and the save pre-flight (`_firstErrTraceIn`) stays
+  /// strict on `.@"error"` severity only. Populated by phases B+ that
+  /// add deep-validation emit sites — empty by design today.
+  Map<String, Map<String, String>> _validationWarnings = const {};
+  Map<String, Map<String, String>> _validationInfo = const {};
 
   /// AST is the single source of truth for the loaded config. Every
   /// mutation applies through `op_to_ast.applyConfigOp`; saves dump
@@ -545,7 +563,10 @@ class TraceStore extends ChangeNotifier {
       // inserted an empty object that the schema rejects) must not lock
       // the user out of finishing their edit. The flag is owned by
       // loadConfig; live validation only populates the marker map.
-      _validationErrors = _extractValidationErrors(parsed);
+      final buckets = _extractDiagnostics(parsed);
+      _validationErrors = buckets.errors;
+      _validationWarnings = buckets.warnings;
+      _validationInfo = buckets.info;
       notifyListeners();
     } catch (_) {
       // Best-effort: a transient parse failure shouldn't block edits.
@@ -574,6 +595,24 @@ class TraceStore extends ChangeNotifier {
   /// an empty map when the node has no errors.
   Map<String, String> errorsAt(List<String> path) =>
       _validationErrors[_encodePath(path)] ?? const {};
+
+  /// Phase A plumbing: same path-keyed lookup as `errorsAt` but for
+  /// `$warn_*` / `$info_*` siblings emitted by `bxp-fmt`'s deep
+  /// validation pass (none today; populated from phase B+ on).
+  Map<String, String> warningsAt(List<String> path) =>
+      _validationWarnings[_encodePath(path)] ?? const {};
+
+  Map<String, String> infoAt(List<String> path) =>
+      _validationInfo[_encodePath(path)] ?? const {};
+
+  /// Reset all three severity buckets in one call. Used by
+  /// loadConfig's reset paths so warnings / info don't leak across
+  /// loads even though no emit site populates them yet.
+  void _clearValidationDiagnostics() {
+    _validationErrors = const {};
+    _validationWarnings = const {};
+    _validationInfo = const {};
+  }
 
   /// True if any descendant of the node at [path] (inclusive) carries a
   /// `$err_*` marker. Used by composite-row renderers to surface a small
@@ -617,31 +656,51 @@ class TraceStore extends ChangeNotifier {
     return null;
   }
 
-  /// Walk a parsed `bxp-fmt --config` tree, collecting every `$err_*`
-  /// marker indexed by the encoded path of its parent. Replaces the old
-  /// `_syncErrMarkers` Map-merge — diagnostics now live in a dedicated
-  /// path-keyed structure rather than smuggled into a parallel Map tree.
-  static Map<String, Map<String, String>> _extractValidationErrors(dynamic src) {
-    final out = <String, Map<String, String>>{};
+  /// Walk a parsed `bxp-fmt --config` tree, collecting `$err_*`,
+  /// `$warn_*`, and `$info_*` markers into per-severity path-keyed maps.
+  /// Returns three buckets that share the same outer-key shape (encoded
+  /// parent path) so the renderer can route by severity.
+  ///
+  /// Phase A note: today bxp-fmt only emits `$err_*` (the existing
+  /// validateCollect path). Warning / info maps are empty until phases
+  /// B+ wire deep-validation emit sites in core. Walking still skips
+  /// the `$warn_*` / `$info_*` prefixes so future emissions are
+  /// captured directly without recursing into them as if they were
+  /// data nodes.
+  static _DiagnosticBuckets _extractDiagnostics(dynamic src) {
+    final errors = <String, Map<String, String>>{};
+    final warnings = <String, Map<String, String>>{};
+    final info = <String, Map<String, String>>{};
     void walk(dynamic node, List<String> path) {
       if (node is Map) {
         Map<String, String>? errs;
+        Map<String, String>? warns;
+        Map<String, String>? infos;
         for (final e in node.entries) {
           final k = e.key.toString();
           if (k.startsWith(r'$err_')) {
             (errs ??= {})[k] = e.value?.toString() ?? '';
+          } else if (k.startsWith(r'$warn_')) {
+            (warns ??= {})[k] = e.value?.toString() ?? '';
+          } else if (k.startsWith(r'$info_')) {
+            (infos ??= {})[k] = e.value?.toString() ?? '';
           }
         }
-        if (errs != null) out[_encodePath(path)] = errs;
+        final encoded = _encodePath(path);
+        if (errs != null) errors[encoded] = errs;
+        if (warns != null) warnings[encoded] = warns;
+        if (infos != null) info[encoded] = infos;
         for (final e in node.entries) {
           final k = e.key.toString();
           // Skip only the annotation prefixes bxp-fmt actually emits
-          // (`$err_*` and `$comm_*`). Walking into any future `$`-keys
-          // (e.g. user `$variable` names that surface in input_schema,
-          // or new annotation types like a hypothetical `$warn_*`) keeps
-          // them visible to consumers higher up the stack instead of
-          // silently dropped here.
-          if (!k.startsWith(r'$err_') && !k.startsWith(r'$comm_')) {
+          // (`$err_*`, `$warn_*`, `$info_*`, `$comm_*`). Walking into
+          // any future `$`-keys (e.g. user `$variable` names that
+          // surface in input_schema) keeps them visible to consumers
+          // higher up the stack instead of silently dropped here.
+          if (!k.startsWith(r'$err_') &&
+              !k.startsWith(r'$warn_') &&
+              !k.startsWith(r'$info_') &&
+              !k.startsWith(r'$comm_')) {
             walk(e.value, [...path, k]);
           }
         }
@@ -652,8 +711,9 @@ class TraceStore extends ChangeNotifier {
       }
     }
     walk(src, const []);
-    return out;
+    return (errors: errors, warnings: warnings, info: info);
   }
+
 
   // Full reset of the expression-editor state. Called when no leaf is
   // selected (e.g. on file load with `preserveTreeState: false`). Mirrors
@@ -966,7 +1026,7 @@ class TraceStore extends ChangeNotifier {
     // below set these back to error states only as needed.
     configError = null;
     _loadedWithErrors = false;
-    _validationErrors = const {};
+    _clearValidationDiagnostics();
     // Run-state from a prior dry-run / full-run is also stale once the
     // config is reloaded — the stderr badge, lastExitCode and runError
     // describe a pipeline that no longer corresponds to the current
@@ -991,7 +1051,7 @@ class TraceStore extends ChangeNotifier {
     try {
       if (configPath.isEmpty) {
         _astRoot = null;
-        _validationErrors = const {};
+        _clearValidationDiagnostics();
         configError = null;
         _rawConfigInput = null;
         _templateInfos = const [];
@@ -1014,7 +1074,7 @@ class TraceStore extends ChangeNotifier {
             ? 'JSON5 parse error at ${firstErr.span.startLine}:${firstErr.span.startCol}: ${firstErr.message}'
             : 'JSON5 parse error';
         _astRoot = null;
-        _validationErrors = const {};
+        _clearValidationDiagnostics();
         _loadedWithErrors = true;
         _templateInfos = const [];
         devTrace('loadConfig.astParseFail',
@@ -1037,22 +1097,25 @@ class TraceStore extends ChangeNotifier {
             // bxp-fmt error so the user knows about the deeper failure;
             // the editor stays openable since AST has a tree.
             configError = bxpFatal;
-            _validationErrors = const {};
+            _clearValidationDiagnostics();
           } else {
-            _validationErrors = _extractValidationErrors(bxpTree);
+            final buckets = _extractDiagnostics(bxpTree);
+            _validationErrors = buckets.errors;
+            _validationWarnings = buckets.warnings;
+            _validationInfo = buckets.info;
           }
         } else {
           // Unexpected top-level shape (List, scalar, null) — possible only
           // if bxp-fmt's contract changes. Clear any prior errors and log.
           devTrace('loadConfig.unexpectedShape',
               {'runtimeType': bxpTree.runtimeType.toString()});
-          _validationErrors = const {};
+          _clearValidationDiagnostics();
         }
       } catch (e) {
         // bxp-fmt invocation itself failed (binary missing, crash, etc.).
         // Don't block editing on validator failures.
         configError ??= 'bxp-fmt validator unavailable: $e';
-        _validationErrors = const {};
+        _clearValidationDiagnostics();
       }
 
       // Deliberately NOT flipping `_loadedWithErrors` on bxp-fmt errors:
@@ -1076,7 +1139,7 @@ class TraceStore extends ChangeNotifier {
     } catch (e, st) {
       configError = e.toString();
       _astRoot = null;
-      _validationErrors = const {};
+      _clearValidationDiagnostics();
       _rawConfigInput = null;
       _templateInfos = const [];
       devTrace('loadConfig.fail', {'err': e.toString(), 'stack': st.toString().split('\n').take(3).join(' | ')});

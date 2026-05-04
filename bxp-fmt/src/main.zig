@@ -8,6 +8,7 @@ const config_mod = @import("config");
 const expr_mod = @import("expr");
 const json5_mod = @import("json5");
 const docs_mod = @import("docs");
+const diagnostics_mod = @import("diagnostics");
 const build_options = @import("build_options");
 
 const CONFIG_MAX_FILE_SIZE = 1024 * 1024; // 1 MB
@@ -427,8 +428,16 @@ fn annotateRaw(a: std.mem.Allocator, raw: []const u8, path_label: []const u8) !A
         return .{ .json = try formatRootErr(a, @errorName(err)), .exit_code = 1 };
     };
 
-    var cfg = config_mod.loadFromBytes(a, raw, path_label) catch |err| {
+    // Structured diagnostic sink. In Phase A nothing emits to it yet
+    // (the parameter is reserved for upcoming path-aware deep-validation
+    // sites in config.zig / json5.zig / expr.zig). The bag is created,
+    // passed through, and rendered via `injectDiagnostics` after the
+    // existing ValidationError path runs — an empty bag is a no-op.
+    var diag: diagnostics_mod.Diagnostics = .init(a);
+
+    var cfg = config_mod.loadFromBytes(a, raw, path_label, &diag) catch |err| {
         try insertErrBefore(a, &value, "", @errorName(err), &counter);
+        try injectDiagnostics(a, &value, diag.items.items, &counter);
         return .{ .json = try valueToJsonString(a, value), .exit_code = 1 };
     };
 
@@ -440,15 +449,22 @@ fn annotateRaw(a: std.mem.Allocator, raw: []const u8, path_label: []const u8) !A
 
     if (cfg.brokers.count() == 0) {
         try insertErrBefore(a, &value, "", "no conversion_templates defined", &counter);
+        try injectDiagnostics(a, &value, diag.items.items, &counter);
         return .{ .json = try valueToJsonString(a, value), .exit_code = 1 };
     }
 
-    if (errors.items.len == 0) {
+    if (errors.items.len == 0 and diag.count() == 0) {
         return .{ .json = try valueToJsonString(a, value), .exit_code = 0 };
     }
 
     try injectSemanticErrors(a, &value, errors.items, &counter);
-    return .{ .json = try valueToJsonString(a, value), .exit_code = 1 };
+    try injectDiagnostics(a, &value, diag.items.items, &counter);
+
+    // Exit 1 if anything in the existing fail-list is non-empty OR if
+    // the structured sink contains any error-severity finding.
+    const has_error =
+        errors.items.len != 0 or diag.countBySeverity(.@"error") != 0;
+    return .{ .json = try valueToJsonString(a, value), .exit_code = if (has_error) 1 else 0 };
 }
 
 /// Build `{"$err_1":"<msg>"}` as a **standalone** JSON document.
@@ -548,17 +564,32 @@ fn insertErrBefore(
     msg: []const u8,
     counter: *u32,
 ) !void {
+    return insertNumberedBefore(a, parent, "$err_", target_key, msg, counter);
+}
+
+/// Generic prefix-aware variant. Used by `insertErrBefore` (prefix
+/// `"$err_"`) and the severity-routed `injectDiagnostics` path
+/// (`"$warn_"` / `"$info_"`). Counter is shared across prefixes so all
+/// emitted keys are unique within the document.
+fn insertNumberedBefore(
+    a: std.mem.Allocator,
+    parent: *std.json.Value,
+    prefix: []const u8,
+    target_key: []const u8,
+    msg: []const u8,
+    counter: *u32,
+) !void {
     if (parent.* != .object) return;
     counter.* += 1;
-    const err_key = try std.fmt.allocPrint(a, "$err_{d}", .{counter.*});
+    const new_key = try std.fmt.allocPrint(a, "{s}{d}", .{ prefix, counter.* });
     const duped_msg = try a.dupe(u8, msg);
 
     if (target_key.len == 0 or !parent.object.contains(target_key)) {
-        try parent.object.put(err_key, .{ .string = duped_msg });
+        try parent.object.put(new_key, .{ .string = duped_msg });
         return;
     }
 
-    // Rebuild ordering: collect entries, clear map, re-put with err key
+    // Rebuild ordering: collect entries, clear map, re-put with new key
     // inserted immediately before the target.
     const Entry = struct { k: []const u8, v: std.json.Value };
     var entries: std.ArrayList(Entry) = .empty;
@@ -570,9 +601,48 @@ fn insertErrBefore(
     parent.object.clearRetainingCapacity();
     for (entries.items) |e| {
         if (std.mem.eql(u8, e.k, target_key)) {
-            try parent.object.put(err_key, .{ .string = duped_msg });
+            try parent.object.put(new_key, .{ .string = duped_msg });
         }
         try parent.object.put(e.k, e.v);
+    }
+}
+
+/// Inject `$err_<N>` / `$warn_<N>` / `$info_<N>` entries for every
+/// Diagnostic into the Value tree. Each entry sits immediately before
+/// the offending key in its parent object (same placement contract as
+/// `injectSemanticErrors`). The shared `counter` keeps numbering unique
+/// across the existing ValidationError pass and any deep-validation
+/// findings, so the GUI can route by prefix without collisions.
+///
+/// Phase A is a plumbing-only pass: today no emit site populates the
+/// Diagnostics bag, so this function is invoked with an empty slice and
+/// is a no-op. Phase B+ start filling the bag.
+fn injectDiagnostics(
+    a: std.mem.Allocator,
+    root: *std.json.Value,
+    items: []const diagnostics_mod.Diagnostic,
+    counter: *u32,
+) !void {
+    for (items) |d| {
+        const parent_ptr: *std.json.Value = blk: {
+            if (d.path.len == 0) break :blk root;
+            const last_dot = std.mem.lastIndexOfScalar(u8, d.path, '.') orelse break :blk root;
+            const parent_path = d.path[0..last_dot];
+            break :blk getPtrAtPath(root, parent_path) orelse root;
+        };
+
+        const field_name: []const u8 = blk: {
+            const last_dot = std.mem.lastIndexOfScalar(u8, d.path, '.') orelse break :blk d.path;
+            break :blk d.path[last_dot + 1 ..];
+        };
+
+        const prefix: []const u8 = switch (d.severity) {
+            .@"error" => "$err_",
+            .warning => "$warn_",
+            .info => "$info_",
+        };
+
+        try insertNumberedBefore(a, parent_ptr, prefix, field_name, d.message, counter);
     }
 }
 

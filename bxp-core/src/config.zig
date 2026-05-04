@@ -11,6 +11,11 @@
 
 const std = @import("std");
 const json5 = @import("json5.zig");
+const diagnostics = @import("diagnostics");
+
+pub const Diagnostic = diagnostics.Diagnostic;
+pub const Diagnostics = diagnostics.Diagnostics;
+pub const Severity = diagnostics.Severity;
 
 const CONFIG_MAX_FILE_SIZE: usize = 1024 * 1024;
 
@@ -1065,6 +1070,9 @@ fn parsePrePassBlock(alloc: std.mem.Allocator, ppobj: std.json.ObjectMap) !PrePa
 ///
 /// Missing file → returns an empty Config (no error).
 /// Malformed JSON5 → returns an error.
+///
+/// bxp-cli calls this signature; the structured diagnostic sink stays
+/// null and the historical fail-fast / stderr behavior is preserved.
 pub fn load(alloc: std.mem.Allocator, config_path: []const u8) !Config {
     const file = std.fs.cwd().openFile(config_path, .{}) catch |err| {
         if (err == error.FileNotFound) {
@@ -1079,7 +1087,7 @@ pub fn load(alloc: std.mem.Allocator, config_path: []const u8) !Config {
 
     const raw = try file.readToEndAlloc(alloc, CONFIG_MAX_FILE_SIZE);
     defer alloc.free(raw);
-    return loadFromBytes(alloc, raw, config_path);
+    return loadFromBytes(alloc, raw, config_path, null);
 }
 
 /// Parse + validate a config from in-memory JSON5 bytes. The path label
@@ -1088,7 +1096,23 @@ pub fn load(alloc: std.mem.Allocator, config_path: []const u8) !Config {
 /// out of `load()` so `bxp-fmt --config` can avoid double-reading the
 /// file (it already has the raw bytes for `preprocessAnnotated`) and so
 /// inline tests can exercise the loader without touching disk.
-pub fn loadFromBytes(alloc: std.mem.Allocator, raw: []const u8, config_path: []const u8) !Config {
+///
+/// `diag` is an optional structured diagnostic sink. When non-null,
+/// future phases will append path-aware errors / warnings into it
+/// alongside the existing `std.debug.print` + `return error` behavior.
+/// bxp-cli passes null so its load path is unchanged bit by bit; only
+/// bxp-fmt's deep-validation pass passes a non-null sink today.
+pub fn loadFromBytes(
+    alloc: std.mem.Allocator,
+    raw: []const u8,
+    config_path: []const u8,
+    diag: ?*Diagnostics,
+) !Config {
+    // Phase A plumbing: parameter is reserved for upcoming
+    // path-aware emit sites (see audit-followup-todo Backlog 1).
+    // No emissions in this phase — bxp-cli + bxp-fmt outputs stay
+    // byte-identical with pre-Phase-A baselines.
+    _ = diag;
     var config = Config{
         .brokers = std.StringArrayHashMap(BrokerConfig).init(alloc),
         ._alloc = alloc,
