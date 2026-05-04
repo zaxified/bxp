@@ -451,6 +451,10 @@ fn annotateRaw(a: std.mem.Allocator, raw: []const u8, path_label: []const u8) !A
     // never calls this — it lives entirely on the bxp-fmt deep path.
     try config_mod.validateCrossTemplate(&cfg, a, &diag);
 
+    // Filesystem-touching invariants (data_dir existence today).
+    // Synchronous — async wrapper deferred (see config.zig docs).
+    try config_mod.validateFilesystem(&cfg, a, &diag);
+
     if (cfg.brokers.count() == 0) {
         try insertErrBefore(a, &value, "", "no conversion_templates defined", &counter);
         try injectDiagnostics(a, &value, diag.items.items, &counter);
@@ -1231,14 +1235,14 @@ test "annotateRaw Phase E: file_pattern_in collision warns at first template" {
         \\{
         \\  conversion_templates: {
         \\    alpha: {
-        \\      data_dir: "shared",
+        \\      data_dir: ".",
         \\      file_pattern_in: ".csv",
         \\      file_pattern_out: "_a.csvx",
         \\      input_schema: { $date: "[Date]" },
         \\      output_schema: { date: "$date" },
         \\    },
         \\    beta: {
-        \\      data_dir: "shared",
+        \\      data_dir: ".",
         \\      file_pattern_in: "_x.csv",
         \\      file_pattern_out: "_b.csvx",
         \\      input_schema: { $date: "[Date]" },
@@ -1283,14 +1287,14 @@ test "annotateRaw Phase E: distinct file_pattern_in suffixes do not warn" {
         \\{
         \\  conversion_templates: {
         \\    closed: {
-        \\      data_dir: "xtb",
+        \\      data_dir: ".",
         \\      file_pattern_in: "_closed.csv",
         \\      file_pattern_out: "_closed.csvx",
         \\      input_schema: { $date: "[Date]" },
         \\      output_schema: { date: "$date" },
         \\    },
         \\    cash: {
-        \\      data_dir: "xtb",
+        \\      data_dir: ".",
         \\      file_pattern_in: "_cash.csv",
         \\      file_pattern_out: "_cash.csvx",
         \\      input_schema: { $date: "[Date]" },
@@ -1312,6 +1316,49 @@ test "annotateRaw Phase E: distinct file_pattern_in suffixes do not warn" {
             try testing.expect(!std.mem.startsWith(u8, kv.key_ptr.*, "$warn_"));
         }
     }
+}
+
+test "annotateRaw Phase F: missing data_dir surfaces \\$err_ at template" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // Deliberately reference a path that cannot exist on the test
+    // machine — the FS check must fire and surface a path-aware error.
+    const fixture =
+        \\{
+        \\  conversion_templates: {
+        \\    sample: {
+        \\      data_dir: "/__bxp_phase_f_must_not_exist__",
+        \\      file_pattern_in: ".csv",
+        \\      file_pattern_out: ".csvx",
+        \\      input_schema: { $date: "[Date]" },
+        \\      output_schema: { date: "$date" },
+        \\    }
+        \\  }
+        \\}
+    ;
+
+    const result = try annotateRaw(a, fixture, "<inline>");
+    try testing.expectEqual(@as(u8, 1), result.exit_code);
+
+    var parsed = try std.json.parseFromSliceLeaky(std.json.Value, a, result.json, .{});
+    const ct = parsed.object.get("conversion_templates") orelse return error.MissingCT;
+    const sample = ct.object.get("sample") orelse return error.MissingSample;
+
+    var has_fs_err = false;
+    var it = sample.object.iterator();
+    while (it.next()) |kv| {
+        if (std.mem.startsWith(u8, kv.key_ptr.*, "$err_") and
+            kv.value_ptr.* == .string and
+            std.mem.indexOf(u8, kv.value_ptr.string, "data_dir does not exist") != null)
+        {
+            has_fs_err = true;
+            break;
+        }
+    }
+    try testing.expect(has_fs_err);
 }
 
 test "annotateRaw Phase B: output_schema missing attaches at template path" {

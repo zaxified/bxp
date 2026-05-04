@@ -872,6 +872,45 @@ pub fn validateCrossTemplate(
     }
 }
 
+/// Filesystem-touching invariants: today only `data_dir` existence
+/// (Phase F #33). Each broker's resolved `data_dir` is opened with
+/// `std.fs.cwd().openDir`; FileNotFound becomes an error-severity
+/// `fs.dir_not_found` Diagnostic, other open failures become a
+/// warning-severity `fs.dir_unreadable`. bxp-cli skips this entirely
+/// (early return on null sink); only bxp-fmt's deep pass invokes it.
+///
+/// Implementation is synchronous today — for typical configs (≤30
+/// brokers on local disk) the total stat cost is sub-millisecond. The
+/// plan reserves an async-with-2s-timeout wrapper for slow-network
+/// pathological cases; deferred until perf actually becomes a problem
+/// (tracked in DEV/audit-followup-todo.md "Phase F async wrapper").
+pub fn validateFilesystem(
+    cfg: *const Config,
+    alloc: std.mem.Allocator,
+    diag: ?*Diagnostics,
+) !void {
+    if (diag == null) return;
+
+    var it = cfg.brokers.iterator();
+    while (it.next()) |entry| {
+        const id = entry.key_ptr.*;
+        const broker = entry.value_ptr.*;
+        var dir = std.fs.cwd().openDir(broker.data_dir, .{}) catch |err| {
+            if (err == error.FileNotFound) {
+                try emitTemplateDiag(alloc, diag, .@"error", "fs.dir_not_found",
+                    id, "data_dir",
+                    "data_dir does not exist: '{s}'", .{broker.data_dir});
+            } else {
+                try emitTemplateDiag(alloc, diag, .warning, "fs.dir_unreadable",
+                    id, "data_dir",
+                    "data_dir cannot be opened ({s}): '{s}'", .{ @errorName(err), broker.data_dir });
+            }
+            continue;
+        };
+        dir.close();
+    }
+}
+
 /// True when one string is a suffix of the other (or they're equal).
 /// Used by `validateCrossTemplate` to detect `file_pattern_in`
 /// overlaps — `".csv"` and `"_closed.csv"` both match
