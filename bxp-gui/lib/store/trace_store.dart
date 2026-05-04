@@ -3,7 +3,6 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:package_info_plus/package_info_plus.dart';
-import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:json5_ast/ast.dart';
 import 'package:json5_ast/operations.dart' as ast_ops;
@@ -116,9 +115,10 @@ class TraceStore extends ChangeNotifier {
   int? lastExitCode;
   
   /// Phase 5c-D: validation diagnostics keyed by encoded path
-  /// (`segment\x00segment\x00…`). Populated by `_validateConfigNow` after
-  /// each `bxp-fmt --config` run; consulted by `errorsAt` / `hasErrorIn`
-  /// from the UI. Empty until the first validator response lands.
+  /// (`segment\x00segment\x00…`). Populated by `loadConfig` and the
+  /// pre-save validation in `saveConfig` from `bxp-fmt --config` output;
+  /// consulted by `errorsAt` / `hasErrorIn` from the UI. Empty until
+  /// the first validator response lands.
   Map<String, Map<String, String>> _validationErrors = const {};
 
   /// Phase A plumbing for the `bxp-fmt --config` deep-validation
@@ -483,20 +483,6 @@ class TraceStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  // ── Live config validation ───────────────────────────────────────────
-  //
-  // Each op (edit/insert/delete/duplicate/move) schedules a debounced
-  // re-spawn of `bxp-fmt --config` so the user sees `$err_*` markers in
-  // the tree as soon as a change breaks syntax. Without this, validation
-  // ran only at save — which wrote a broken file before the user had a
-  // chance to undo, trapping them in readonly-on-reload mode.
-  Timer? _configValidateDebounce;
-  bool _configValidating = false;
-  // Set when an edit lands while a validation pass is already in flight.
-  // The pass re-runs once on completion so the marker map can never lag
-  // permanently behind the AST when validation is slower than typing.
-  bool _configRevalidatePending = false;
-
   /// Snapshot of "did this file contain `$err_*` at load time?" Drives the
   /// readonly toolbar gate. Live errors introduced by edits do NOT flip
   /// this — the user needs to keep editing to fix them.
@@ -512,78 +498,6 @@ class TraceStore extends ChangeNotifier {
   List<ConfigOp> get _activeOps {
     final n = _historyIndex < 0 ? 0 : _historyIndex;
     return n >= _opLog.ops.length ? _opLog.ops : _opLog.ops.sublist(0, n);
-  }
-
-  void _scheduleConfigValidation() {
-    _configValidateDebounce?.cancel();
-    // If a validation pass is already running, just mark "another one
-    // needed" — the running pass will trigger it on completion. Otherwise
-    // arm the normal debounce.
-    if (_configValidating) {
-      _configRevalidatePending = true;
-      return;
-    }
-    _configValidateDebounce = Timer(const Duration(milliseconds: 250), () {
-      _validateConfigNow();
-    });
-  }
-
-  Future<void> _validateConfigNow() async {
-    if (_configValidating) {
-      _configRevalidatePending = true;
-      return;
-    }
-    if (_astRoot == null || configPath.isEmpty) return;
-    if (isSaving) return; // saveConfig runs its own validation
-    final raw = _rawConfigInput;
-    if (raw == null) return;
-    _configValidating = true;
-    // Validator-only path → systemTemp, NOT the user's config dir. Live
-    // validation runs every ~250 ms during edits; sprinkling
-    // `<config>.bxp-live` into the user's working tree (and risking it
-    // surviving a crash) is unnecessary because the round-trip never
-    // touches the real on-disk config. saveConfig still keeps its tmp
-    // in the config dir so the atomic rename is on the same filesystem.
-    final tmpName =
-        'bxp-live-$pid-${configPath.hashCode.toUnsigned(32).toRadixString(16)}.json5';
-    final tmpPath = p.join(Directory.systemTemp.path, tmpName);
-    final tmpFile = File(tmpPath);
-    try {
-      final outBytes = AstPatchClient.apply(raw, _activeOps);
-      await tmpFile.writeAsString(utf8.decode(outBytes), flush: true);
-      final out = await BxpProcessClient.loadConfig(tmpPath);
-      final parsed = jsonDecode(out);
-      if (parsed is! Map) return;
-      // Phase 5c-D: rebuild the path-keyed `_validationErrors` map from
-      // the reparsed tree. The AST itself stays untouched; the UI looks
-      // up errors at render time via `errorsAt` / `hasErrorIn`.
-      //
-      // _loadedWithErrors is intentionally NOT touched here — it gates
-      // *all* edits, and a transient mid-edit error (e.g. user just
-      // inserted an empty object that the schema rejects) must not lock
-      // the user out of finishing their edit. The flag is owned by
-      // loadConfig; live validation only populates the marker map.
-      final buckets = _extractDiagnostics(parsed);
-      _validationErrors = buckets.errors;
-      _validationWarnings = buckets.warnings;
-      _validationInfo = buckets.info;
-      notifyListeners();
-    } catch (_) {
-      // Best-effort: a transient parse failure shouldn't block edits.
-    } finally {
-      try {
-        if (await tmpFile.exists()) await tmpFile.delete();
-      } catch (_) {}
-      _configValidating = false;
-      // If edits arrived during this pass, run once more so the marker
-      // map catches up. We schedule rather than recurse — that re-arms
-      // the 250ms debounce and folds together any further edits that
-      // land in the next quarter-second.
-      if (_configRevalidatePending) {
-        _configRevalidatePending = false;
-        _scheduleConfigValidation();
-      }
-    }
   }
 
   /// Phase 5c-D: encode a path for `_validationErrors` lookup. NUL is
@@ -1220,7 +1134,6 @@ class TraceStore extends ChangeNotifier {
     _recomputeDirty();
     _pushHistory();
     notifyListeners();
-    _scheduleConfigValidation();
   }
 
   bool _isDirty = false;
@@ -1291,7 +1204,6 @@ class TraceStore extends ChangeNotifier {
         exprGeneration++;
       }
       notifyListeners();
-      _scheduleConfigValidation();
     }
   }
 
@@ -1307,7 +1219,6 @@ class TraceStore extends ChangeNotifier {
         exprGeneration++;
       }
       notifyListeners();
-      _scheduleConfigValidation();
     }
   }
 
@@ -1457,7 +1368,6 @@ class TraceStore extends ChangeNotifier {
     _recomputeDirty();
     _pushHistory();
     notifyListeners();
-    _scheduleConfigValidation();
   }
 
   void duplicateConfigNode(List<String> path) {
@@ -1500,7 +1410,6 @@ class TraceStore extends ChangeNotifier {
     _recomputeDirty();
     _pushHistory();
     notifyListeners();
-    _scheduleConfigValidation();
   }
 
   /// Reorder a sibling by swapping with its adjacent peer.
@@ -1543,7 +1452,6 @@ class TraceStore extends ChangeNotifier {
     _recomputeDirty();
     _pushHistory();
     notifyListeners();
-    _scheduleConfigValidation();
   }
 
   /// Insert a child into the container at [path].
@@ -1591,7 +1499,6 @@ class TraceStore extends ChangeNotifier {
     _recomputeDirty();
     _pushHistory();
     notifyListeners();
-    _scheduleConfigValidation();
   }
 
   /// Edit a comment's text body. [path] ends in `$comm_<N>`. [newText] is
@@ -1606,7 +1513,6 @@ class TraceStore extends ChangeNotifier {
     _recomputeDirty();
     _pushHistory();
     notifyListeners();
-    _scheduleConfigValidation();
   }
 
   /// Delete a standalone / leading / block comment.
@@ -1620,7 +1526,6 @@ class TraceStore extends ChangeNotifier {
     _recomputeDirty();
     _pushHistory();
     notifyListeners();
-    _scheduleConfigValidation();
   }
 
   /// Duplicate a comment in place — the clone is inserted as the next
@@ -1637,7 +1542,6 @@ class TraceStore extends ChangeNotifier {
     _recomputeDirty();
     _pushHistory();
     notifyListeners();
-    _scheduleConfigValidation();
   }
 
   /// Insert a fresh trailing INLINE comment attached to [anchorPath]
@@ -1656,7 +1560,6 @@ class TraceStore extends ChangeNotifier {
     _recomputeDirty();
     _pushHistory();
     notifyListeners();
-    _scheduleConfigValidation();
   }
 
   /// Insert a fresh leading comment immediately above [anchorPath].
@@ -1674,7 +1577,6 @@ class TraceStore extends ChangeNotifier {
     _recomputeDirty();
     _pushHistory();
     notifyListeners();
-    _scheduleConfigValidation();
   }
 
   /// Last error thrown during saveConfig, null when the save succeeded.
@@ -1738,15 +1640,30 @@ class TraceStore extends ChangeNotifier {
       // Pre-save validation: round-trip through bxp-fmt --config. If the
       // emitter produced something the parser rejects, abort and surface
       // the diagnostic — better than silently corrupting the user's file.
-      // Mirrors bxp-ui's saveConfig pre-flight check.
+      // Mirrors bxp-ui's saveConfig pre-flight check. On failure we also
+      // refresh the diagnostic maps from `parsed` so tree badges align with
+      // the tooltip; the unparseable-output branch leaves them alone (the
+      // AST is still well-formed and existing markers stay more useful
+      // than a wipe-to-empty on a transient blip).
+      Future<void> failPreSave(String msg, {dynamic parsedForDiag}) async {
+        try { await tmpFile.delete(); } catch (_) {}
+        if (parsedForDiag != null) {
+          final b = _extractDiagnostics(parsedForDiag);
+          _validationErrors = b.errors;
+          _validationWarnings = b.warnings;
+          _validationInfo = b.info;
+        }
+        configSaveError = msg;
+        notifyListeners();
+      }
+
       final validation = await BxpProcessClient.loadConfig(tmpPath);
       try {
         final parsed = jsonDecode(validation);
         final err = parsed is Map ? parsed['error'] as String? : null;
         if (err != null) {
-          try { await tmpFile.delete(); } catch (_) {}
-          configSaveError = 'pre-save validation failed: $err';
-          notifyListeners();
+          await failPreSave('pre-save validation failed: $err',
+              parsedForDiag: parsed);
           return;
         }
         // bxp-fmt exits with annotated JSON (no top-level "error") even when
@@ -1755,16 +1672,13 @@ class TraceStore extends ChangeNotifier {
         // through and trap the user in readonly-on-reload mode.
         final treeErr = _firstErrTraceIn(parsed);
         if (treeErr != null) {
-          try { await tmpFile.delete(); } catch (_) {}
-          configSaveError = 'pre-save validation failed: $treeErr';
-          notifyListeners();
+          await failPreSave('pre-save validation failed: $treeErr',
+              parsedForDiag: parsed);
           return;
         }
       } catch (_) {
         // bxp-fmt printed something unparseable — treat as failure.
-        try { await tmpFile.delete(); } catch (_) {}
-        configSaveError = 'pre-save validation produced unreadable output';
-        notifyListeners();
+        await failPreSave('pre-save validation produced unreadable output');
         return;
       }
 
@@ -2166,7 +2080,6 @@ class TraceStore extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _validationDebounce?.cancel();
-    _configValidateDebounce?.cancel();
     _traceLinesCounter.dispose();
     _fileGen.dispose();
     _pendingFocusPath.dispose();

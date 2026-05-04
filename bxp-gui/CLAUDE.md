@@ -7,7 +7,7 @@ For monorepo-level context see [`../CLAUDE.md`](../CLAUDE.md).
 
 **bxp-gui** — Flutter desktop app (Linux/macOS/Windows) that replaces the
 older Electrobun-based bxp-ui. Edits JSON5 conversion configs, validates
-them live, runs dry-runs and conversions through the bxp-cli engine, and
+them on load and save, runs dry-runs and conversions through the bxp-cli engine, and
 inspects per-row expression traces.
 
 The Flutter side does not parse JSON5 itself for runtime conversions —
@@ -170,8 +170,8 @@ preference to shell calls:
 - Layout: every resizable splitter holds **fractions**, not pixels —
   `lib/ui/layout_defaults.dart` is the single source. 3-pane layout = 2
   fractions plus the middle by subtraction.
-- Live validation must NOT lock undo/redo on `$err_*` from edited state —
-  only on load-time errors (otherwise the user gets trapped editing).
+- Load-time errors gate the readonly toolbar (`_loadedWithErrors`); mid-edit
+  errors do not lock undo/redo, since validation only runs on load and save.
 - `--docs` JSON is the single source of truth for FnDoc/FieldDoc — no
   hard-coded fallback catalogs. Startup gate fails fatally if the binary
   is missing.

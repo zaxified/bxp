@@ -191,7 +191,7 @@ class _Body extends StatelessWidget {
         ('path', store.configPath.isEmpty ? '(none)' : store.configPath),
         ('dirty', store.isDirty.toString()),
         ('saving', store.isSaving.toString()),
-        ('hasErrors (live)', store.configHasErrors.toString()),
+        ('hasErrors', store.configHasErrors.toString()),
         ('hadErrors (load)', store.configLoadHadErrors.toString()),
         if (store.configError != null)
           ('error', store.configError!),
