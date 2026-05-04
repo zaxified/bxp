@@ -1006,3 +1006,145 @@ test "annotateRaw: clean config exits 0 with no \\$err_* markers" {
         try testing.expect(!std.mem.startsWith(u8, entry.key_ptr.*, "$err_"));
     }
 }
+
+// Phase B — loadFromBytes per-template fail-fast errors are now also
+// path-aware in the structured Diagnostics sink. Each test fires a
+// single broken input and asserts the resulting `$err_*` marker landed
+// inside the offending parent object (not at root) — that's what the
+// GUI consumes via `errorsAt(path)` to render an inline banner.
+
+test "annotateRaw Phase B: xlsx_sheet missing 'name' attaches \\$err_ at xlsx_sheet path" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const fixture =
+        \\{
+        \\  conversion_templates: {
+        \\    sample: {
+        \\      data_dir: ".",
+        \\      file_pattern_in: ".csv",
+        \\      file_pattern_out: ".csvx",
+        \\      xlsx_sheet: { header_row: 1, output_suffix: ".csv" },
+        \\      input_schema: { $date: "[Date]" },
+        \\      output_schema: { date: "$date" },
+        \\    }
+        \\  }
+        \\}
+    ;
+
+    const result = try annotateRaw(a, fixture, "<inline>");
+    try testing.expectEqual(@as(u8, 1), result.exit_code);
+
+    var parsed = try std.json.parseFromSliceLeaky(std.json.Value, a, result.json, .{});
+    try testing.expect(parsed == .object);
+
+    // The diagnostic attaches as a sibling of xlsx_sheet (inside the
+    // template object). Same placement contract as validateCollect's
+    // path-injection — path "X.Y.field" means marker lives under X.Y
+    // immediately before the `field` key.
+    const ct = parsed.object.get("conversion_templates") orelse return error.MissingCT;
+    const sample = ct.object.get("sample") orelse return error.MissingSample;
+    const xlsx = sample.object.get("xlsx_sheet") orelse return error.MissingXlsx;
+    try testing.expect(xlsx == .object);
+
+    var has_err = false;
+    var it = sample.object.iterator();
+    while (it.next()) |kv| {
+        if (std.mem.startsWith(u8, kv.key_ptr.*, "$err_") and
+            kv.value_ptr.* == .string and
+            std.mem.indexOf(u8, kv.value_ptr.string, "missing required key 'name'") != null)
+        {
+            has_err = true;
+            break;
+        }
+    }
+    try testing.expect(has_err);
+}
+
+test "annotateRaw Phase B: ticker_map unknown named ref attaches at ticker_map path" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const fixture =
+        \\{
+        \\  conversion_templates: {
+        \\    sample: {
+        \\      data_dir: ".",
+        \\      file_pattern_in: ".csv",
+        \\      file_pattern_out: ".csvx",
+        \\      ticker_map: "missing_named_map",
+        \\      input_schema: { $date: "[Date]" },
+        \\      output_schema: { date: "$date" },
+        \\    }
+        \\  }
+        \\}
+    ;
+
+    const result = try annotateRaw(a, fixture, "<inline>");
+    try testing.expectEqual(@as(u8, 1), result.exit_code);
+
+    var parsed = try std.json.parseFromSliceLeaky(std.json.Value, a, result.json, .{});
+    const ct = parsed.object.get("conversion_templates") orelse return error.MissingCT;
+    const sample = ct.object.get("sample") orelse return error.MissingSample;
+
+    // For an "unknown named ref" the value is a string, so the
+    // diagnostic attaches to the parent (sample) immediately before the
+    // `ticker_map` field — same placement contract as
+    // `injectSemanticErrors`.
+    var has_err = false;
+    var it = sample.object.iterator();
+    while (it.next()) |kv| {
+        if (std.mem.startsWith(u8, kv.key_ptr.*, "$err_") and
+            kv.value_ptr.* == .string and
+            std.mem.indexOf(u8, kv.value_ptr.string, "unknown named map") != null)
+        {
+            has_err = true;
+            break;
+        }
+    }
+    try testing.expect(has_err);
+}
+
+test "annotateRaw Phase B: output_schema missing attaches at template path" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const fixture =
+        \\{
+        \\  conversion_templates: {
+        \\    sample: {
+        \\      data_dir: ".",
+        \\      file_pattern_in: ".csv",
+        \\      file_pattern_out: ".csvx",
+        \\      input_schema: { $date: "[Date]" },
+        \\    }
+        \\  }
+        \\}
+    ;
+
+    const result = try annotateRaw(a, fixture, "<inline>");
+    try testing.expectEqual(@as(u8, 1), result.exit_code);
+
+    var parsed = try std.json.parseFromSliceLeaky(std.json.Value, a, result.json, .{});
+    const ct = parsed.object.get("conversion_templates") orelse return error.MissingCT;
+    const sample = ct.object.get("sample") orelse return error.MissingSample;
+
+    var has_err = false;
+    var it = sample.object.iterator();
+    while (it.next()) |kv| {
+        if (std.mem.startsWith(u8, kv.key_ptr.*, "$err_") and
+            kv.value_ptr.* == .string and
+            std.mem.indexOf(u8, kv.value_ptr.string, "output_schema is required") != null)
+        {
+            has_err = true;
+            break;
+        }
+    }
+    try testing.expect(has_err);
+}

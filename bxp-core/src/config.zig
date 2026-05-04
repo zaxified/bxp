@@ -1102,17 +1102,42 @@ pub fn load(alloc: std.mem.Allocator, config_path: []const u8) !Config {
 /// alongside the existing `std.debug.print` + `return error` behavior.
 /// bxp-cli passes null so its load path is unchanged bit by bit; only
 /// bxp-fmt's deep-validation pass passes a non-null sink today.
+/// Emit a per-template diagnostic to the bag if non-null. The path is
+/// always rooted at `conversion_templates.<id>.<field_suffix>`. The
+/// message is built with `std.fmt.allocPrint` from the format string +
+/// args, mirroring the existing `std.debug.print` text so bxp-cli's
+/// stderr stays untouched and bxp-fmt's `$err_*` annotation gets the
+/// same human-readable wording.
+fn emitTemplateDiag(
+    alloc: std.mem.Allocator,
+    diag: ?*Diagnostics,
+    severity: Severity,
+    code: []const u8,
+    template_id: []const u8,
+    field_suffix: []const u8,
+    comptime fmt: []const u8,
+    args: anytype,
+) !void {
+    const d = diag orelse return;
+    const path = if (field_suffix.len > 0)
+        try std.fmt.allocPrint(alloc, "conversion_templates.{s}.{s}", .{ template_id, field_suffix })
+    else
+        try std.fmt.allocPrint(alloc, "conversion_templates.{s}", .{template_id});
+    const message = try std.fmt.allocPrint(alloc, fmt, args);
+    try d.append(.{
+        .path = path,
+        .severity = severity,
+        .code = code,
+        .message = message,
+    });
+}
+
 pub fn loadFromBytes(
     alloc: std.mem.Allocator,
     raw: []const u8,
     config_path: []const u8,
     diag: ?*Diagnostics,
 ) !Config {
-    // Phase A plumbing: parameter is reserved for upcoming
-    // path-aware emit sites (see audit-followup-todo Backlog 1).
-    // No emissions in this phase — bxp-cli + bxp-fmt outputs stay
-    // byte-identical with pre-Phase-A baselines.
-    _ = diag;
     var config = Config{
         .brokers = std.StringArrayHashMap(BrokerConfig).init(alloc),
         ._alloc = alloc,
@@ -1219,6 +1244,9 @@ pub fn loadFromBytes(
                     // pre-pass for a template, remove the entire `xlsx_sheet` block.
                     if (bobj.get("xlsx_sheet")) |xs_val| {
                         if (xs_val != .object) {
+                            try emitTemplateDiag(alloc, diag, .@"error", "config.wrong_type",
+                                b_entry.key_ptr.*, "xlsx_sheet",
+                                "xlsx_sheet must be an object, got {s}", .{@tagName(xs_val)});
                             std.debug.print(
                                 "---\n# {s}: config error: template '{s}': xlsx_sheet must be an object, got {s}\n",
                                 .{ config_path, b_entry.key_ptr.*, @tagName(xs_val) },
@@ -1229,6 +1257,9 @@ pub fn loadFromBytes(
                         const name = if (obj.get("name")) |v| switch (v) {
                             .string => |s| try alloc.dupe(u8, s),
                             else => {
+                                try emitTemplateDiag(alloc, diag, .@"error", "config.wrong_type",
+                                    b_entry.key_ptr.*, "xlsx_sheet.name",
+                                    "xlsx_sheet.name must be a string, got {s}", .{@tagName(v)});
                                 std.debug.print(
                                     "---\n# {s}: config error: template '{s}': xlsx_sheet.name must be a string, got {s}\n",
                                     .{ config_path, b_entry.key_ptr.*, @tagName(v) },
@@ -1236,6 +1267,9 @@ pub fn loadFromBytes(
                                 return error.InvalidConfig;
                             },
                         } else {
+                            try emitTemplateDiag(alloc, diag, .@"error", "config.missing_field",
+                                b_entry.key_ptr.*, "xlsx_sheet",
+                                "xlsx_sheet missing required key 'name'", .{});
                             std.debug.print(
                                 "---\n# {s}: config error: template '{s}': xlsx_sheet missing required key 'name'\n",
                                 .{ config_path, b_entry.key_ptr.* },
@@ -1246,6 +1280,9 @@ pub fn loadFromBytes(
                         const header_row: u32 = if (obj.get("header_row")) |v| switch (v) {
                             .integer => |n| @intCast(n),
                             else => {
+                                try emitTemplateDiag(alloc, diag, .@"error", "config.wrong_type",
+                                    b_entry.key_ptr.*, "xlsx_sheet.header_row",
+                                    "xlsx_sheet.header_row must be a number, got {s}", .{@tagName(v)});
                                 std.debug.print(
                                     "---\n# {s}: config error: template '{s}': xlsx_sheet.header_row must be a number, got {s}\n",
                                     .{ config_path, b_entry.key_ptr.*, @tagName(v) },
@@ -1253,6 +1290,9 @@ pub fn loadFromBytes(
                                 return error.InvalidConfig;
                             },
                         } else {
+                            try emitTemplateDiag(alloc, diag, .@"error", "config.missing_field",
+                                b_entry.key_ptr.*, "xlsx_sheet",
+                                "xlsx_sheet missing required key 'header_row'", .{});
                             std.debug.print(
                                 "---\n# {s}: config error: template '{s}': xlsx_sheet missing required key 'header_row'\n",
                                 .{ config_path, b_entry.key_ptr.* },
@@ -1262,6 +1302,9 @@ pub fn loadFromBytes(
                         const output_suffix = if (obj.get("output_suffix")) |v| switch (v) {
                             .string => |s| try alloc.dupe(u8, s),
                             else => {
+                                try emitTemplateDiag(alloc, diag, .@"error", "config.wrong_type",
+                                    b_entry.key_ptr.*, "xlsx_sheet.output_suffix",
+                                    "xlsx_sheet.output_suffix must be a string, got {s}", .{@tagName(v)});
                                 std.debug.print(
                                     "---\n# {s}: config error: template '{s}': xlsx_sheet.output_suffix must be a string, got {s}\n",
                                     .{ config_path, b_entry.key_ptr.*, @tagName(v) },
@@ -1269,6 +1312,9 @@ pub fn loadFromBytes(
                                 return error.InvalidConfig;
                             },
                         } else {
+                            try emitTemplateDiag(alloc, diag, .@"error", "config.missing_field",
+                                b_entry.key_ptr.*, "xlsx_sheet",
+                                "xlsx_sheet missing required key 'output_suffix'", .{});
                             std.debug.print(
                                 "---\n# {s}: config error: template '{s}': xlsx_sheet missing required key 'output_suffix'\n",
                                 .{ config_path, b_entry.key_ptr.* },
@@ -1291,6 +1337,9 @@ pub fn loadFromBytes(
                     if (bobj.get("ticker_map")) |tm_val| {
                         const src_obj: std.json.ObjectMap = switch (tm_val) {
                             .string => |name| named_ticker_maps.get(name) orelse {
+                                try emitTemplateDiag(alloc, diag, .@"error", "config.unknown_named_map",
+                                    b_entry.key_ptr.*, "ticker_map",
+                                    "ticker_map references unknown named map '{s}'", .{name});
                                 std.debug.print(
                                     "error: template '{s}': ticker_map references unknown named map '{s}'\n",
                                     .{ b_entry.key_ptr.*, name },
@@ -1303,6 +1352,9 @@ pub fn loadFromBytes(
                             // and skip `config.brokers.put(...)` below, leaking every string already
                             // duped for this broker (data_dir, file_pattern_in/out, input_schema entries).
                             else => {
+                                try emitTemplateDiag(alloc, diag, .@"error", "config.wrong_type",
+                                    b_entry.key_ptr.*, "ticker_map",
+                                    "ticker_map must be a string (named-map ref) or an object, got {s}", .{@tagName(tm_val)});
                                 std.debug.print(
                                     "error: template '{s}': ticker_map must be a string (named-map ref) or an object, got {s}\n",
                                     .{ b_entry.key_ptr.*, @tagName(tm_val) },
@@ -1422,6 +1474,9 @@ pub fn loadFromBytes(
                                 while (pp_it.next()) |pe| {
                                     const name = pe.key_ptr.*;
                                     if (name.len == 0 or std.mem.indexOfScalar(u8, name, 0) != null) {
+                                        try emitTemplateDiag(alloc, diag, .@"error", "config.invalid_pre_pass_name",
+                                            b_entry.key_ptr.*, "pre_pass",
+                                            "pre_pass name must be non-empty and free of NUL bytes", .{});
                                         std.debug.print(
                                             "---\n# {s}: config error: template '{s}': pre_pass name must be non-empty and free of NUL bytes\n",
                                             .{ config_path, b_entry.key_ptr.* },
@@ -1474,6 +1529,9 @@ pub fn loadFromBytes(
                 }
 
                 if (output_schema == null) {
+                    try emitTemplateDiag(alloc, diag, .@"error", "config.missing_field",
+                        b_entry.key_ptr.*, "output_schema",
+                        "output_schema is required", .{});
                     std.debug.print("---\n# {s}: config error: template '{s}': output_schema is required\n", .{ config_path, b_entry.key_ptr.* });
                     return error.MissingOutputSchema;
                 }
