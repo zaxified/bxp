@@ -284,3 +284,26 @@ still go to stderr in trace mode so a stderr badge can surface them in the GUI.
   leading/trailing spaces are trimmed from field values and header names (`expr.zig Context.field`,
   `main.zig` header parsing).  RFC 4180 §2 says spaces are part of the value; we trim them
   because broker exports frequently pad fields and downstream parsing (dates, numbers) requires clean values.
+
+## Known non-issues — deliberately not refactored
+
+Audit follow-up rationale captured here so future audits don't re-flag
+the same observations. If the rationale stops applying, revisit.
+
+- **No per-template "N expression errors" summary.** A previous audit
+  proposed surfacing a count whenever `evalAllVars` / row_rules `when`
+  / override eval / pre_pass eval silently substitutes `""`. Skipped
+  after empirical check on the real DEV/ corpus (5 brokers, 42 files,
+  5260 rows, ~70k variable evals): `var_error` count is **0**;
+  `rule_no_match` with `error` field is **0**. The ~30k empty
+  variable values that DO appear are entirely intentional —
+  literal `''` overrides for non-applicable fields (e.g. deposit rows
+  setting `$ticker: ''`), `IF(fee > 0, fee, '')` patterns explicitly
+  emitting empty for "doesn't apply", and `PRICE_CURRENCY([Value])`
+  on activity types where `[Value]` is genuinely absent. The audit
+  conflated **silent type coercion** (a designed feature: empty
+  fields → empty strings → `0` in numeric context) with **silent
+  error suppression** (a hypothetical bug). They're not the same.
+  A summary would either always print `0 errors` (useless noise)
+  or — if we counted empty results — print 30k+ on every run as
+  pure FUD against intentional emptiness.

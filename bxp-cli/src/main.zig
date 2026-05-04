@@ -63,11 +63,16 @@ fn usageErr(prog: []const u8) void {
     std.debug.print(USAGE_TEMPLATE, .{ prog, prog, prog });
 }
 
-/// Rejects paths that contain dangerous shell metacharacters or more than one "../" component.
+/// Rejects paths that contain dangerous shell metacharacters or more than one ".." component.
 /// One level up (e.g. "../data/...") is allowed to support the default data_dir layout.
 ///
 /// Rejected characters: $ | ; & > < ` ( ) \n \r \0
 /// Reason: prevent CSV formula injection and path traversal attacks on downstream tools.
+///
+/// The `..` traversal counter consults `std.fs.path.isSep` so the check
+/// is platform-aware: on Windows both `/` and `\` are recognised path
+/// separators, so `..\foo\..` is counted the same as `../foo/..`.
+/// On POSIX only `/` is a separator (the standard behaviour).
 fn validatePath(path: []const u8) error{InvalidPath}!void {
     for (path) |c| {
         switch (c) {
@@ -78,14 +83,46 @@ fn validatePath(path: []const u8) error{InvalidPath}!void {
     var count: usize = 0;
     var i: usize = 0;
     while (i + 3 <= path.len) : (i += 1) {
-        if (std.mem.eql(u8, path[i .. i + 3], "../")) {
+        if (path[i] == '.' and path[i + 1] == '.' and std.fs.path.isSep(path[i + 2])) {
             count += 1;
             if (count > 1) return error.InvalidPath;
         }
     }
-    // Also catch trailing ".." (path ends with "/.." or is exactly "..").
-    if (std.mem.endsWith(u8, path, "/..") or std.mem.eql(u8, path, "..")) {
+    // Also catch trailing ".." (path ends with "<sep>.." or is exactly "..").
+    const ends_with_dotdot = std.mem.eql(u8, path, "..") or
+        (path.len >= 3 and std.fs.path.isSep(path[path.len - 3]) and
+            path[path.len - 2] == '.' and path[path.len - 1] == '.');
+    if (ends_with_dotdot) {
         if (count + 1 > 1) return error.InvalidPath;
+    }
+}
+
+test "validatePath rejects shell metacharacters" {
+    try std.testing.expectError(error.InvalidPath, validatePath("foo;rm -rf /"));
+    try std.testing.expectError(error.InvalidPath, validatePath("a$(b)"));
+    try std.testing.expectError(error.InvalidPath, validatePath("a|b"));
+}
+
+test "validatePath allows one '..' but not two" {
+    try validatePath("../data/x.csv");
+    try validatePath("foo/../bar");
+    try validatePath("..");
+    try validatePath("foo/..");
+    try std.testing.expectError(error.InvalidPath, validatePath("../../etc/passwd"));
+    try std.testing.expectError(error.InvalidPath, validatePath("../foo/../bar"));
+    try std.testing.expectError(error.InvalidPath, validatePath("foo/../bar/.."));
+}
+
+test "validatePath: backslash separator counts as traversal on Windows builds" {
+    // On Windows `std.fs.path.isSep('\\')` is true, so `..\..` should
+    // reject. On POSIX `\\` is just a regular byte, `..\..` collapses
+    // to a single token and one `..` is allowed.
+    if (@import("builtin").os.tag == .windows) {
+        try std.testing.expectError(error.InvalidPath, validatePath("..\\..\\etc\\passwd"));
+        try std.testing.expectError(error.InvalidPath, validatePath("foo\\..\\bar\\.."));
+    } else {
+        // No backslash-separator semantics on POSIX — string is one segment.
+        try validatePath("..\\..\\etc\\passwd");
     }
 }
 
