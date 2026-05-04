@@ -24,9 +24,17 @@ class TraceBuilder {
       final ev = jsonDecode(line) as Map<String, dynamic>;
       apply(ev);
     } catch (e) {
-      model.issues.add('Parse error: $e on line: $line');
+      // Cap retained parse-error strings — a runaway producer (e.g.
+      // bxp-cli emitting non-NDJSON) must not let us OOM the store.
+      // We keep the first batch (most diagnostically useful) and drop
+      // the rest silently after the cap.
+      if (model.issues.length < _kMaxIssues) {
+        model.issues.add('Parse error: $e on line: $line');
+      }
     }
   }
+
+  static const int _kMaxIssues = 100;
 
   void apply(Map<String, dynamic> ev) {
     final t = ev['t'] as String?;

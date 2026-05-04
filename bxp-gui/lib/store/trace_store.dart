@@ -60,7 +60,18 @@ class TraceStore extends ChangeNotifier {
   RunStatus status = RunStatus.idle;
   RunMode runMode = RunMode.none;
   String? runError;
-  String stderrText = '';
+  // Internal buffer + cached materialisation. Avoids O(N²) `String +=`
+  // on every stderr chunk. The cache is invalidated on append and
+  // rebuilt lazily by the [stderrText] getter — UI reads are infrequent
+  // (only on `notifyListeners`), so toString() runs at most a handful
+  // of times per stream.
+  StringBuffer _stderrBuffer = StringBuffer();
+  String? _stderrCache;
+  String get stderrText => _stderrCache ??= _stderrBuffer.toString();
+  set stderrText(String v) {
+    _stderrBuffer = StringBuffer(v);
+    _stderrCache = v;
+  }
   int rawLines = 0;
   // Live trace-line counter exposed as a ValueListenable so the StatusBar's
   // "trace lines" cell can rebuild at ~10 Hz during a stream WITHOUT
@@ -978,6 +989,12 @@ class TraceStore extends ChangeNotifier {
           } else {
             _validationErrors = _extractValidationErrors(bxpTree);
           }
+        } else {
+          // Unexpected top-level shape (List, scalar, null) — possible only
+          // if bxp-fmt's contract changes. Clear any prior errors and log.
+          devTrace('loadConfig.unexpectedShape',
+              {'runtimeType': bxpTree.runtimeType.toString()});
+          _validationErrors = const {};
         }
       } catch (e) {
         // bxp-fmt invocation itself failed (binary missing, crash, etc.).
@@ -1553,6 +1570,14 @@ class TraceStore extends ChangeNotifier {
   Future<void> saveConfig() async {
     if (_astRoot == null || configPath.isEmpty) return;
     if (isSaving) return; // re-entrancy guard against double-click
+    // Nothing to save: the toolbar/Ctrl+S gates on `isDirty`, but a
+    // programmatic call with an empty op log would otherwise round-trip
+    // through tmp-write + bxp-fmt validation + backup + rename for
+    // bytes identical to the on-disk file. Skip the whole dance.
+    if (_activeOps.isEmpty) {
+      devTrace('saveConfig.noop', {'path': configPath});
+      return;
+    }
     devTrace('saveConfig.start',
         {'path': configPath, 'opCount': _activeOps.length});
     configSaveError = null;
@@ -1786,7 +1811,8 @@ class TraceStore extends ChangeNotifier {
         // the first-file-ready notify or at the final `done` notify so
         // we don't pay a rebuild per chunk.
         onStderr: (chunk) {
-          stderrText += chunk;
+          _stderrBuffer.write(chunk);
+          _stderrCache = null;
         },
       );
 

@@ -10,7 +10,18 @@ import 'ast.dart';
 /// "1.00" → "1" for non-integral display; if you need an exact rawText
 /// (e.g. preserving trailing zeros after Save → reload), construct a
 /// JsonNumber directly.
-JsonAstNode astFromValue(Object? v) {
+///
+/// Nesting deeper than [_kMaxDepth] throws [ArgumentError]. Real configs
+/// stay well below this; the limit guards against accidental cyclic
+/// structures that would otherwise stack-overflow.
+JsonAstNode astFromValue(Object? v) => _astFromValue(v, 0);
+
+const int _kMaxDepth = 64;
+
+JsonAstNode _astFromValue(Object? v, int depth) {
+  if (depth > _kMaxDepth) {
+    throw ArgumentError('astFromValue: nesting deeper than $_kMaxDepth');
+  }
   if (v == null) return JsonNull();
   if (v is bool) return JsonBool(v);
   if (v is num) return JsonNumber(v.toString());
@@ -19,14 +30,14 @@ JsonAstNode astFromValue(Object? v) {
   if (v is Map) {
     final obj = JsonObject();
     v.forEach((k, val) {
-      obj.properties.add(JsonProperty(k.toString(), astFromValue(val)));
+      obj.properties.add(JsonProperty(k.toString(), _astFromValue(val, depth + 1)));
     });
     return obj;
   }
   if (v is List) {
     final arr = JsonArray();
     for (final el in v) {
-      arr.elements.add(astFromValue(el));
+      arr.elements.add(_astFromValue(el, depth + 1));
     }
     return arr;
   }
