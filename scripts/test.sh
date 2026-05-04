@@ -22,20 +22,40 @@ MONO_ROOT="$(dirname "$SCRIPT_DIR")"
 BXP="$MONO_ROOT/bxp-cli/zig-out/bin/bxp-cli"
 DATASETS="$MONO_ROOT/datasets"
 
+# bxp-fmt's negative unit tests deliberately fire `loadFromBytes` paths
+# that emit a human-readable stderr line alongside the structured
+# Diagnostic. The structured assertion is what the test verifies; the
+# stderr line is harmless leakage that makes the success run look like
+# it failed. Capture stderr per zig invocation and only surface it when
+# the command actually fails.
+run_zig_quiet() {
+    local err
+    err=$(mktemp)
+    local rc=0
+    (cd "$1" && shift && zig "$@") 2>"$err" || rc=$?
+    if [ "$rc" -eq 0 ]; then
+        rm -f "$err"
+    else
+        cat "$err" >&2
+        rm -f "$err"
+        exit "$rc"
+    fi
+}
+
 echo "Running unit tests (bxp-core)..."
-(cd "$MONO_ROOT/bxp-core" && zig build test)
+run_zig_quiet "$MONO_ROOT/bxp-core" build test
 echo ""
 
 echo "Building bxp-cli..."
-(cd "$MONO_ROOT/bxp-cli" && zig build)
+run_zig_quiet "$MONO_ROOT/bxp-cli" build
 echo ""
 
 echo "Building bxp-fmt..."
-(cd "$MONO_ROOT/bxp-fmt" && zig build)
+run_zig_quiet "$MONO_ROOT/bxp-fmt" build
 echo ""
 
 echo "Running unit tests (bxp-fmt)..."
-(cd "$MONO_ROOT/bxp-fmt" && zig build test)
+run_zig_quiet "$MONO_ROOT/bxp-fmt" build test
 echo ""
 
 echo "Smoke-testing bxp-fmt..."
