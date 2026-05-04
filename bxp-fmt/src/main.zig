@@ -447,6 +447,10 @@ fn annotateRaw(a: std.mem.Allocator, raw: []const u8, path_label: []const u8) !A
         try entry.value_ptr.validateCollect(entry.key_ptr.*, a, &errors);
     }
 
+    // Cross-template invariants (file_pattern collision today). bxp-cli
+    // never calls this — it lives entirely on the bxp-fmt deep path.
+    try config_mod.validateCrossTemplate(&cfg, a, &diag);
+
     if (cfg.brokers.count() == 0) {
         try insertErrBefore(a, &value, "", "no conversion_templates defined", &counter);
         try injectDiagnostics(a, &value, diag.items.items, &counter);
@@ -1211,6 +1215,103 @@ test "annotateRaw Phase D: wrong-type-silent emits \\$warn_ at template" {
     try testing.expect(found_bool);
     try testing.expect(found_quote);
     try testing.expect(found_filetype);
+}
+
+test "annotateRaw Phase E: file_pattern_in collision warns at first template" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // Two clean templates with the same data_dir; pattern of A is a
+    // suffix of B (".csv" of "_x.csv"). Both match the same files
+    // when scanning the directory — runtime would process them twice.
+    // Phase E surfaces this as a `$warn_<N>` at template A.
+    const fixture =
+        \\{
+        \\  conversion_templates: {
+        \\    alpha: {
+        \\      data_dir: "shared",
+        \\      file_pattern_in: ".csv",
+        \\      file_pattern_out: "_a.csvx",
+        \\      input_schema: { $date: "[Date]" },
+        \\      output_schema: { date: "$date" },
+        \\    },
+        \\    beta: {
+        \\      data_dir: "shared",
+        \\      file_pattern_in: "_x.csv",
+        \\      file_pattern_out: "_b.csvx",
+        \\      input_schema: { $date: "[Date]" },
+        \\      output_schema: { date: "$date" },
+        \\    },
+        \\  }
+        \\}
+    ;
+
+    const result = try annotateRaw(a, fixture, "<inline>");
+    try testing.expectEqual(@as(u8, 0), result.exit_code);
+
+    var parsed = try std.json.parseFromSliceLeaky(std.json.Value, a, result.json, .{});
+    const ct = parsed.object.get("conversion_templates") orelse return error.MissingCT;
+    const alpha = ct.object.get("alpha") orelse return error.MissingAlpha;
+
+    var has_collision = false;
+    var it = alpha.object.iterator();
+    while (it.next()) |kv| {
+        if (std.mem.startsWith(u8, kv.key_ptr.*, "$warn_") and
+            kv.value_ptr.* == .string and
+            std.mem.indexOf(u8, kv.value_ptr.string, "matches the same files as template 'beta'") != null)
+        {
+            has_collision = true;
+            break;
+        }
+    }
+    try testing.expect(has_collision);
+}
+
+test "annotateRaw Phase E: distinct file_pattern_in suffixes do not warn" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // Same data_dir but disjoint suffixes ("_closed.csv" vs "_cash.csv")
+    // — neither is a suffix of the other. Runtime processes disjoint
+    // files; no warning. This mirrors the xtb1/xtb2 layout in
+    // DEV/bxp-cli.json so the regression check stays clean.
+    const fixture =
+        \\{
+        \\  conversion_templates: {
+        \\    closed: {
+        \\      data_dir: "xtb",
+        \\      file_pattern_in: "_closed.csv",
+        \\      file_pattern_out: "_closed.csvx",
+        \\      input_schema: { $date: "[Date]" },
+        \\      output_schema: { date: "$date" },
+        \\    },
+        \\    cash: {
+        \\      data_dir: "xtb",
+        \\      file_pattern_in: "_cash.csv",
+        \\      file_pattern_out: "_cash.csvx",
+        \\      input_schema: { $date: "[Date]" },
+        \\      output_schema: { date: "$date" },
+        \\    },
+        \\  }
+        \\}
+    ;
+
+    const result = try annotateRaw(a, fixture, "<inline>");
+    try testing.expectEqual(@as(u8, 0), result.exit_code);
+
+    var parsed = try std.json.parseFromSliceLeaky(std.json.Value, a, result.json, .{});
+    const ct = parsed.object.get("conversion_templates") orelse return error.MissingCT;
+    inline for (.{ "closed", "cash" }) |name| {
+        const tmpl = ct.object.get(name) orelse return error.MissingTemplate;
+        var it = tmpl.object.iterator();
+        while (it.next()) |kv| {
+            try testing.expect(!std.mem.startsWith(u8, kv.key_ptr.*, "$warn_"));
+        }
+    }
 }
 
 test "annotateRaw Phase B: output_schema missing attaches at template path" {

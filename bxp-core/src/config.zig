@@ -839,6 +839,49 @@ pub const Config = struct {
 };
 
 
+/// Cross-template invariants that aren't visible to per-template
+/// `validateCollect` (which sees only one BrokerConfig at a time).
+/// Today: pair-wise `file_pattern_in` overlap detection — two
+/// templates rooted at the same `data_dir` whose suffix patterns
+/// match a common subset of files. The runtime would silently process
+/// the same file twice (once per template), which is rarely intended.
+///
+/// Only emits warnings, never errors — bxp-cli's load path stays
+/// untouched (this function is only invoked by bxp-fmt's deep
+/// validation pass via a non-null diag sink). Returns immediately
+/// when `diag == null`.
+pub fn validateCrossTemplate(
+    cfg: *const Config,
+    alloc: std.mem.Allocator,
+    diag: ?*Diagnostics,
+) !void {
+    if (diag == null) return;
+
+    const ids = cfg.brokers.keys();
+    for (ids, 0..) |id_a, i| {
+        const a = cfg.brokers.get(id_a) orelse continue;
+        for (ids[i + 1 ..]) |id_b| {
+            const b = cfg.brokers.get(id_b) orelse continue;
+            if (!std.mem.eql(u8, a.data_dir, b.data_dir)) continue;
+            if (!suffixOverlap(a.file_pattern_in, b.file_pattern_in)) continue;
+            try emitTemplateDiag(alloc, diag, .warning, "config.pattern_collision",
+                id_a, "file_pattern_in",
+                "data_dir+file_pattern_in matches the same files as template '{s}' (data_dir='{s}', patterns: '{s}' vs '{s}')",
+                .{ id_b, a.data_dir, a.file_pattern_in, b.file_pattern_in });
+        }
+    }
+}
+
+/// True when one string is a suffix of the other (or they're equal).
+/// Used by `validateCrossTemplate` to detect `file_pattern_in`
+/// overlaps — `".csv"` and `"_closed.csv"` both match
+/// `"x_closed.csv"`, but `"_closed.csv"` and `"_cash.csv"` don't
+/// overlap (neither is a suffix of the other).
+fn suffixOverlap(a: []const u8, b: []const u8) bool {
+    if (a.len == 0 or b.len == 0) return false;
+    return std.mem.endsWith(u8, a, b) or std.mem.endsWith(u8, b, a);
+}
+
 /// Maps a std.json parse error to a human-readable description.
 fn jsonErrorDesc(err: anyerror) []const u8 {
     return switch (err) {
@@ -1226,11 +1269,11 @@ fn parseSingleCharCsvField(
     return default_value;
 }
 
-/// Parse the `csv_text_quote_in` / `csv_text_quote_out` enum field
-/// (`"single"` / `"double"` → '\'' / '"'). Anything else is silently
-/// mapped to `0` (no quoting); emits a `invalid_enum` warning so the
-/// GUI surfaces typos like `"singlle"` instead of mystery missing
-/// quotes in the output.
+/// Parse the `csv_text_quote_in` / `csv_text_quote_out` enum field.
+/// Accepts `"single"`, `"double"`, and `"none"` per the FieldDoc
+/// (`"none" | "single" | "double"`). Any other string surfaces an
+/// `invalid_enum` warning and falls back to no-quoting; non-string
+/// values are reported as `wrong_type_silent`.
 fn parseTextQuoteField(
     alloc: std.mem.Allocator,
     diag: ?*Diagnostics,
@@ -1243,15 +1286,16 @@ fn parseTextQuoteField(
     if (v != .string) {
         try emitTemplateDiag(alloc, diag, .warning, "config.wrong_type_silent",
             template_id, field,
-            "{s} must be a string ('single' or 'double'), got {s} — value ignored",
+            "{s} must be a string ('none' | 'single' | 'double'), got {s} — value ignored",
             .{ field, @tagName(v) });
         return default_value;
     }
     if (std.mem.eql(u8, v.string, "single")) return '\'';
     if (std.mem.eql(u8, v.string, "double")) return '"';
+    if (std.mem.eql(u8, v.string, "none")) return 0;
     try emitTemplateDiag(alloc, diag, .warning, "config.invalid_enum",
         template_id, field,
-        "{s} must be 'single' or 'double', got '{s}' — defaulting to none",
+        "{s} must be 'none' | 'single' | 'double', got '{s}' — defaulting to none",
         .{ field, v.string });
     return 0;
 }
