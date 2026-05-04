@@ -373,7 +373,18 @@ class Dumper {
 
   static final RegExp _identRx = RegExp(r'^[A-Za-z_$][A-Za-z0-9_$]*$');
 
+  /// JSON5 keyword-shaped keys must be force-quoted on emit. The
+  /// regex above would let them through as bare identifiers, but the
+  /// tokenizer recognises them as their own token kinds (`nullLit`,
+  /// `trueLit`, `infinityLit`, …) — emitting unquoted would make the
+  /// next parse fail with "expected key". Round-trip safety > minor
+  /// terseness.
+  static const _keywordKeys = {
+    'true', 'false', 'null', 'Infinity', 'NaN', 'undefined',
+  };
+
   String _emitKey(String k) {
+    if (_keywordKeys.contains(k)) return _encodeString(k);
     if (_identRx.hasMatch(k)) return k;
     return _encodeString(k);
   }

@@ -19,6 +19,12 @@ void main() {
       'EOF inside string escape': r'{ a: "\',
       'sign with no digit': '{ a: + }',
       'bad hex literal': '{ a: 0xZZ }',
+      // ECMAScript ExponentPart requires at least one digit after `e`/`E`.
+      // Phase 4E.1: tokenizer rejects the lenient form so other JSON5
+      // readers don't choke on json5_ast output.
+      'exponent with no digit': '{ a: 1e }',
+      'exponent with sign no digit': '{ a: 1E+ }',
+      'exponent negative no digit': '{ a: 2.5e- }',
     };
     for (final entry in inputs.entries) {
       test(entry.key, () {
@@ -206,6 +212,66 @@ void main() {
       for (var i = 0; i < 4; i++) {
         expect(dump2, contains('$i'));
       }
+    });
+  });
+
+  group('canonicalisation across parser/dumper boundary', () {
+    // Phase 4E: small spec-compliance touch-ups so json5_ast output is
+    // accepted by other (strict) JSON5 readers and so a key happens to
+    // collide with a JSON5 keyword cannot break round-trip.
+
+    test('exponent with digit parses (sanity)', () {
+      const src = '{ a: 1e2, b: 1.5E-3, c: 1E+0 }';
+      final r = Parser.parse(src);
+      expect(r.diagnostics, isEmpty);
+      // Round-trip preserves exponent form verbatim.
+      final dump = Dumper.dump(r.root!);
+      expect(dump, contains('1e2'));
+      expect(dump, contains('1.5E-3'));
+      expect(dump, contains('1E+0'));
+    });
+
+    test('keyword-shaped key emitted with quotes (round-trip safe)', () {
+      const src = '{ "null": 1 }';
+      final r = Parser.parse(src);
+      expect(r.diagnostics, isEmpty);
+      final dump1 = Dumper.dump(r.root!);
+      // Must be quoted on emit — bare `null:` would re-parse as nullLit
+      // and the parser would reject it as a key.
+      expect(dump1, contains('"null":'));
+      // Round-trip must succeed without diagnostics.
+      final r2 = Parser.parse(dump1);
+      expect(r2.diagnostics, isEmpty);
+      final dump2 = Dumper.dump(r2.root!);
+      expect(dump2, dump1);
+    });
+
+    test('multiple keyword keys all force-quoted', () {
+      const src =
+          '{ "true": 1, "false": 2, "null": 3, "Infinity": 4, "NaN": 5, "undefined": 6 }';
+      final r = Parser.parse(src);
+      expect(r.diagnostics, isEmpty);
+      final dump = Dumper.dump(r.root!);
+      for (final kw in ['true', 'false', 'null', 'Infinity', 'NaN', 'undefined']) {
+        expect(dump, contains('"$kw":'),
+            reason: 'expected "$kw": in dump, got:\n$dump');
+      }
+      // And idempotent.
+      final r2 = Parser.parse(dump);
+      expect(r2.diagnostics, isEmpty);
+      expect(Dumper.dump(r2.root!), dump);
+    });
+
+    test('non-keyword identifier keys stay bare', () {
+      const src = '{ data_dir: ".", null_count: 0, trueOrFalse: false }';
+      final r = Parser.parse(src);
+      expect(r.diagnostics, isEmpty);
+      final dump = Dumper.dump(r.root!);
+      // Plain identifiers (even those CONTAINING keyword substrings) are
+      // not quoted — the regex match is exact-keyword.
+      expect(dump, contains('data_dir:'));
+      expect(dump, contains('null_count:'));
+      expect(dump, contains('trueOrFalse:'));
     });
   });
 }

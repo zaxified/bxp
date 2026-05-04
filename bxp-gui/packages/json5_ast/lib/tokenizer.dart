@@ -331,6 +331,13 @@ class Tokenizer {
           (src.codeUnitAt(_i) == 0x2B || src.codeUnitAt(_i) == 0x2D)) {
         _advance();
       }
+      // ECMAScript ExponentPart requires at least one digit after the
+      // exponent indicator (and optional sign). `1e`, `1E+`, `1e-`
+      // without a trailing digit are rejected per spec — even though
+      // a tolerant reader could ingest them.
+      if (_i >= src.length || !_isDigit(src.codeUnitAt(_i))) {
+        throw TokenizerError("expected digit after exponent", _i, _line, _col);
+      }
       while (_i < src.length && _isDigit(src.codeUnitAt(_i))) {
         _advance();
       }
