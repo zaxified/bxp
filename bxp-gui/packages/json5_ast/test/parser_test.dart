@@ -89,16 +89,17 @@ void main() {
     }
   });
 
-  group('comments at every grammar position (Phase 4 corpus)', () {
-    // The JSON5 spec allows whitespace (including comments) at every
-    // grammar position. Today's parser (parser.dart:192-208) rejects
-    // comments between key/`:`, `:`/value, and value/`,`. Each test here
-    // documents the expected end-state (parses successfully, captures
-    // comment as peer) but is skipped until Phase 4 fixes the parser.
+  group('comments at every grammar position', () {
+    // The JSON5 spec — https://spec.json5.org/ — says "comments may
+    // appear before and after any JSON5Token". Each test here covers
+    // one inter-token gap; together they assert the parser is fully
+    // spec-compliant for whitespace-and-comment placement.
     //
-    // To track progress on the Phase 4 fix, drop the `skip:` argument and
-    // re-run.
-    test('comment between key and ":"', () {
+    // Phase 4D added `_skipNewlinesAndComments` to capture comments at
+    // every position; before that, three of these tests were skipped.
+
+    // ── Object positions ────────────────────────────────────────────
+    test('object: comment between key and ":"', () {
       const src = '{ a /* between */ : 1 }';
       final r = Parser.parse(src);
       expect(r.diagnostics, isEmpty);
@@ -106,26 +107,105 @@ void main() {
       final hasComment = root.properties.any((p) =>
           p is CommentLine && p.comment.text.contains('between'));
       expect(hasComment, isTrue);
-    }, skip: 'pending Phase 4 parser comment-position fix');
+    });
 
-    test('comment between ":" and value', () {
+    test('object: comment between ":" and value', () {
       const src = '{ a: /* between */ 1 }';
       final r = Parser.parse(src);
       expect(r.diagnostics, isEmpty);
-    }, skip: 'pending Phase 4 parser comment-position fix');
+      final root = r.root! as JsonObject;
+      final hasComment = root.properties.any((p) =>
+          p is CommentLine && p.comment.text.contains('between'));
+      expect(hasComment, isTrue);
+    });
 
-    test('comment between value and ","', () {
+    test('object: comment between value and ","', () {
       const src = '{ a: 1 /* between */ , b: 2 }';
       final r = Parser.parse(src);
       expect(r.diagnostics, isEmpty);
-    }, skip: 'pending Phase 4 parser comment-position fix');
+      final root = r.root! as JsonObject;
+      final hasComment = root.properties.any((p) =>
+          p is CommentLine && p.comment.text.contains('between'));
+      expect(hasComment, isTrue);
+    });
 
-    test('comment between "," and next key', () {
-      // This already works today (handled by _collectStandaloneComments)
-      // — included in the corpus to make the difference explicit.
+    test('object: comment between value and "}" (no trailing comma)', () {
+      const src = '{ a: 1 /* between */ }';
+      final r = Parser.parse(src);
+      expect(r.diagnostics, isEmpty);
+      final root = r.root! as JsonObject;
+      final hasComment = root.properties.any((p) =>
+          p is CommentLine && p.comment.text.contains('between'));
+      expect(hasComment, isTrue);
+    });
+
+    test('object: comment between "," and next key', () {
       const src = '{ a: 1, /* between */ b: 2 }';
       final r = Parser.parse(src);
       expect(r.diagnostics, isEmpty);
+    });
+
+    // ── Array positions ─────────────────────────────────────────────
+    test('array: comment between value and ","', () {
+      const src = '[ 1 /* between */ , 2 ]';
+      final r = Parser.parse(src);
+      expect(r.diagnostics, isEmpty);
+      final root = r.root! as JsonArray;
+      final hasComment = root.elements.any((e) =>
+          e is CommentLine && e.comment.text.contains('between'));
+      expect(hasComment, isTrue);
+    });
+
+    test('array: comment between value and "]" (no trailing comma)', () {
+      const src = '[ 1 /* between */ ]';
+      final r = Parser.parse(src);
+      expect(r.diagnostics, isEmpty);
+      final root = r.root! as JsonArray;
+      final hasComment = root.elements.any((e) =>
+          e is CommentLine && e.comment.text.contains('between'));
+      expect(hasComment, isTrue);
+    });
+
+    test('array: comment between "[" and first element', () {
+      const src = '[ /* between */ 1, 2 ]';
+      final r = Parser.parse(src);
+      expect(r.diagnostics, isEmpty);
+    });
+
+    // ── Stress: every position at once + idempotent canonicalisation
+    test('object: comments in every position simultaneously', () {
+      // Pre-grammar `{`, after-key, after-`:`, between value and `,`,
+      // before next key, mid-object — all in one source.
+      const src =
+          '{ /*0*/ a /*1*/ : /*2*/ 1 /*3*/ , /*4*/ b /*5*/ : /*6*/ 2 /*7*/ }';
+      final r = Parser.parse(src);
+      expect(r.diagnostics, isEmpty,
+          reason: 'every-position parse failed: ${r.diagnostics}');
+      final dump1 = Dumper.dump(r.root!);
+      // Idempotent: a second parse + dump must return the same bytes.
+      final r2 = Parser.parse(dump1);
+      expect(r2.diagnostics, isEmpty);
+      final dump2 = Dumper.dump(r2.root!);
+      expect(dump2, dump1, reason: 'second dump diverged from first');
+      // All eight comments must survive the round-trip.
+      for (var i = 0; i < 8; i++) {
+        expect(dump2, contains('$i'),
+            reason: 'comment /*$i*/ missing after round-trip');
+      }
+    });
+
+    test('array: comments in every position simultaneously', () {
+      const src = '[ /*0*/ 1 /*1*/ , /*2*/ 2 /*3*/ ]';
+      final r = Parser.parse(src);
+      expect(r.diagnostics, isEmpty);
+      final dump1 = Dumper.dump(r.root!);
+      final r2 = Parser.parse(dump1);
+      expect(r2.diagnostics, isEmpty);
+      final dump2 = Dumper.dump(r2.root!);
+      expect(dump2, dump1);
+      for (var i = 0; i < 4; i++) {
+        expect(dump2, contains('$i'));
+      }
     });
   });
 }

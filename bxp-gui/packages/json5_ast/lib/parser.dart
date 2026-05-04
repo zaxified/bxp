@@ -79,6 +79,40 @@ class Parser {
     }
   }
 
+  /// Consume any mix of newline / line-comment / block-comment tokens
+  /// and return the comments captured along the way. Used at every
+  /// inter-token whitespace position the JSON5 grammar permits — the
+  /// spec says "comments may appear before and after any JSON5Token",
+  /// so the parser captures them rather than rejecting at positions
+  /// like `key /*c*/ :` or `value /*c*/ ,`. Captured comments are
+  /// added by the caller to the nearest container as standalone
+  /// `CommentLine` peer entries (canonicalised to their own line on
+  /// the next dump; round-trip stays idempotent because the second
+  /// parse re-captures them in the same place).
+  List<CommentNode> _skipNewlinesAndComments() {
+    final out = <CommentNode>[];
+    while (true) {
+      final k = _peek().kind;
+      if (k == TokKind.newline) {
+        _advance();
+        continue;
+      }
+      if (k == TokKind.commentLine || k == TokKind.commentBlock) {
+        final tok = _advance();
+        out.add(CommentNode(
+          tok.kind == TokKind.commentLine
+              ? CommentStyle.line
+              : CommentStyle.block,
+          tok.value ?? '',
+          sourceSpan: tok.span,
+        ));
+        continue;
+      }
+      break;
+    }
+    return out;
+  }
+
   /// Collects sequence of comments that appear on their own lines.
   /// "Standalone" = preceded by a newline (or start of stream).
   /// Stops at the first real token.
@@ -192,16 +226,39 @@ class Parser {
             "expected key, got '${keyTok.raw}' (${keyTok.kind})",
             keyTok.span);
       }
-      _skipNewlines();
+      // Phase 4D: spec allows comments anywhere whitespace can appear,
+      // including between key and ':' / ':' and value / value and ','.
+      // Capture each gap and route into the parent container as
+      // standalone CommentLine peer entries; placement before vs after
+      // the property is chosen so the canonical dump renders the
+      // comment closest to where it was in the source.
+      final betweenKeyAndColon = _skipNewlinesAndComments();
+      for (final c in betweenKeyAndColon) {
+        obj.properties.add(CommentLine(c));
+      }
       if (_peek().kind != TokKind.colon) {
         throw ParserError(
             "expected ':' after key '$key', got '${_peek().raw}'",
             _peek().span);
       }
       _advance();
-      _skipNewlines();
+      final betweenColonAndValue = _skipNewlinesAndComments();
+      for (final c in betweenColonAndValue) {
+        obj.properties.add(CommentLine(c));
+      }
       final value = _parseValue();
       final prop = JsonProperty(key, value);
+      // Phase 4D: the gap between value and the comma/closer can contain
+      // both an inline same-line comment (e.g. `value // trail`) AND
+      // newline-separated standalone comments (e.g.
+      // `value\n  // alone\n  ,`). Order matters for round-trip:
+      //   1. `_maybeTrailingComment` — captures only if next token is a
+      //      comment immediately on the same line; preserves inline-trail
+      //      visual placement.
+      //   2. `_skipNewlinesAndComments` — captures any standalone
+      //      comments that follow on their own lines.
+      final inlineBeforeDelim = _maybeTrailingComment();
+      final standaloneBeforeDelim = _skipNewlinesAndComments();
       // optional trailing comma
       bool hadComma = false;
       if (_peek().kind == TokKind.comma) {
@@ -209,10 +266,16 @@ class Parser {
         hadComma = true;
       }
       obj.properties.add(prop);
-      // Phase 5e: trailing inline comment on same line is emitted as
-      // a CommentLine with inlinePlacement=true — peer entry in the
-      // container, NOT a slot inside the property. Dumper restores
-      // the visual "key: val // comment" layout via the flag.
+      if (inlineBeforeDelim != null) {
+        obj.properties.add(CommentLine(inlineBeforeDelim, inlinePlacement: true));
+      }
+      for (final c in standaloneBeforeDelim) {
+        obj.properties.add(CommentLine(c));
+      }
+      // Phase 5e: trailing inline comment on same line as the comma is
+      // emitted as a CommentLine with inlinePlacement=true — peer entry
+      // in the container, NOT a slot inside the property. Dumper
+      // restores the visual "key: val, // comment" layout via the flag.
       final trailing = _maybeTrailingComment();
       if (trailing != null) {
         obj.properties.add(CommentLine(trailing, inlinePlacement: true));
@@ -243,12 +306,24 @@ class Parser {
         return arr;
       }
       final el = _parseValue();
+      // Phase 4D: same as object's after-value handling — capture
+      // inline same-line trail first (preserves `value // trail` layout
+      // through the round-trip), then standalone comments before the
+      // delimiter.
+      final inlineBeforeDelim = _maybeTrailingComment();
+      final standaloneBeforeDelim = _skipNewlinesAndComments();
       bool hadComma = false;
       if (_peek().kind == TokKind.comma) {
         _advance();
         hadComma = true;
       }
       arr.elements.add(el);
+      if (inlineBeforeDelim != null) {
+        arr.elements.add(CommentLine(inlineBeforeDelim, inlinePlacement: true));
+      }
+      for (final c in standaloneBeforeDelim) {
+        arr.elements.add(CommentLine(c));
+      }
       // Phase 5e: trailing inline as peer CommentLine, not slot on `el`.
       final trailing = _maybeTrailingComment();
       if (trailing != null) {
