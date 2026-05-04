@@ -636,10 +636,11 @@ pub fn processBroker(
         const lookup_table_ptr: ?*const std.StringHashMap([]const u8) =
             if (has_prepass) &lookup_table else null;
         // Implicit name for 2-arg LOOKUP — only defined when exactly one block exists.
+        // ArrayHashMap exposes `.keys()` directly (slice of all keys in
+        // insertion order); use index 0 since count == 1.
         const single_prepass_name: ?[]const u8 = blk: {
             if (bc.pre_passes.count() != 1) break :blk null;
-            var only_it = bc.pre_passes.keyIterator();
-            break :blk only_it.next().?.*;
+            break :blk bc.pre_passes.keys()[0];
         };
 
         // Open output file and write the output header (CSV) or opening bracket (JSON).

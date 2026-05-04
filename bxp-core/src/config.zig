@@ -223,7 +223,11 @@ pub const BrokerConfig = struct {
     /// Named first-pass lookup tables.  Empty map when not defined in bxp-cli.json.
     /// Legacy single-block form is internally mapped to `_default`; multiple named
     /// blocks each occupy their own namespace inside `lookup_table`.
-    pre_passes: std.StringHashMap(PrePass),
+    /// `StringArrayHashMap` (not `StringHashMap`): preserves the JSON5
+    /// declaration order so `prepass_set` trace events, validation error
+    /// emit order, and any other iteration over `pre_passes.iterator()`
+    /// is deterministic per-run.
+    pre_passes: std.StringArrayHashMap(PrePass),
     /// Ordered list of row routing rules.  First matching rule wins.
     /// Empty rows = silent skip; no match + row_rules_debug_missing = debug output.
     /// Null when no "row_rules" key is present (all rows silently skipped).
@@ -1138,7 +1142,7 @@ pub fn loadFromBytes(alloc: std.mem.Allocator, raw: []const u8, config_path: []c
                 var ticker_map = std.StringHashMap([]const u8).init(alloc);
                 var input_schema = std.StringHashMap([]const u8).init(alloc);
                 var date_filter_from_filename: bool = false;
-                var pre_passes = std.StringHashMap(PrePass).init(alloc);
+                var pre_passes = std.StringArrayHashMap(PrePass).init(alloc);
                 var row_rules: ?[]RowRule = null;
                 var row_rules_debug_missing: bool = false;
                 var output_schema: ?std.array_list.Managed(OutputColumn) = null;
