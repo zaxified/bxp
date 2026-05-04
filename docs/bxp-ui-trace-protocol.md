@@ -185,9 +185,13 @@ Summary of one file.
 }
 ```
 
-Note: `errors` is currently always `0` — the CLI emits `var_error` events but
-does not aggregate them into the file summary yet. Consumers that want a
-per-file error count should derive it from `var_error` events.
+`errors` is the count of `input_schema` expression failures during this
+file's processing — populated from the same counter that drives the
+file-end warning text. (`var_error` events for `row_rules` overrides
+are not yet aggregated here; consumers wanting a complete count should
+also tally `var_error` events.) `warnings` is the count of non-fatal
+per-file issues (date-filter no-range, malformed `YYYY-MM-DD_YYYY-MM-DD`
+in filename). Both default to `0` for files that processed cleanly.
 
 ### `done`
 

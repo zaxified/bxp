@@ -190,6 +190,31 @@ fn extractDateRange(stem: []const u8) DateRangeResult {
     return .none;
 }
 
+/// Substring scan for `LOOKUP(` across every expression string in a
+/// BrokerConfig (input_schema vars, row_rules `when`, row_rules rows
+/// overrides). Used to decide whether the LOOKUP-without-pre_pass
+/// warning should fire for the template. Conservative: accepts false
+/// positives on string literals containing "LOOKUP(" — the warning is
+/// corrective either way.
+fn configMentionsLookup(bc: *const config_mod.BrokerConfig) bool {
+    var schema_it = bc.input_schema.valueIterator();
+    while (schema_it.next()) |expr| {
+        if (std.mem.indexOf(u8, expr.*, "LOOKUP(") != null) return true;
+    }
+    if (bc.row_rules) |rules| {
+        for (rules) |rule| {
+            if (std.mem.indexOf(u8, rule.when, "LOOKUP(") != null) return true;
+            for (rule.rows) |row| {
+                var row_it = row.valueIterator();
+                while (row_it.next()) |expr| {
+                    if (std.mem.indexOf(u8, expr.*, "LOOKUP(") != null) return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
 /// Returns true when s is a plain decimal number: optional '-', digits,
 /// optional '.' followed by more digits — nothing else.
 fn isNumericValue(s: []const u8) bool {
@@ -397,6 +422,17 @@ pub fn processBroker(
 
     out.info("\n=== template: {s} ===\n", .{bid});
 
+    // LOOKUP-without-pre_pass guard: bxp-fmt --config catches this at
+    // validate time, but a hot-swapped config skips that gate. Warn once
+    // per template so the silent runtime symptom (LOOKUP returning "")
+    // surfaces. Substring scan accepts false positives on string-literal
+    // mentions of "LOOKUP(" — acceptable, the warning text is corrective
+    // ("define a pre_pass or remove LOOKUP usage") regardless.
+    if (bc.pre_passes.count() == 0 and configMentionsLookup(bc)) {
+        out.warning("warning: template '{s}' uses LOOKUP() but has no pre_pass blocks defined; LOOKUP calls will silently return \"\"\n", .{bid});
+        stats.warnings += 1;
+    }
+
     // Open the data directory; print a clean message if it doesn't exist.
     var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch |err| {
         if (err == error.FileNotFound) {
@@ -449,6 +485,11 @@ pub fn processBroker(
         // exit code to 2 and surfaces in the summary, instead of silently
         // producing useless output with exit 0.
         var file_expr_errors: u32 = 0;
+        // Per-file non-fatal warnings (date-filter no-range, malformed range,
+        // …) so `file_end.stats.warnings` reports a meaningful per-file
+        // number instead of duplicating `file_expr_errors`. Aggregated into
+        // `stats.warnings` at file end alongside section-level bumps.
+        var file_warnings: u32 = 0;
 
         // Extract date range from filename when date_filter_from_filename is enabled.
         // Strip file_pattern_in from the filename to get the stem for date extraction.
@@ -477,9 +518,22 @@ pub fn processBroker(
                 // row — warn and process unfiltered so the user notices.
                 out.warning("warning: '{s}' has a malformed YYYY-MM-DD_YYYY-MM-DD range (min > max or bad component); processing all rows\n", .{filename});
                 stats.warnings += 1;
+                file_warnings += 1;
                 out.info("processing '{s}'\n", .{filename});
             },
-            .none => out.info("processing '{s}'\n", .{filename}),
+            .none => {
+                // `date_filter_from_filename: true` but no range present in
+                // the filename — every row processes unfiltered. This is
+                // documented behaviour (test fixtures rely on it), but
+                // production users almost always meant for filtering to
+                // happen, so surface a warning when the gap appears.
+                if (bc.date_filter_from_filename) {
+                    out.warning("warning: '{s}' has no YYYY-MM-DD_YYYY-MM-DD range in filename; date_filter_from_filename is enabled but no rows will be filtered\n", .{filename});
+                    stats.warnings += 1;
+                    file_warnings += 1;
+                }
+                out.info("processing '{s}'\n", .{filename});
+            },
         }
 
         // Read entire input file into memory (max 16 MB).
@@ -882,8 +936,16 @@ pub fn processBroker(
             .stats = .{
                 .rows = all_rows.items.len,
                 .written = file_rows_written,
-                .errors = @as(u32, 0),
-                .warnings = file_expr_errors,
+                // Per-file expression evaluation failures (input_schema
+                // vars). Previously hardcoded 0; now populated from the
+                // same counter that drives the file-end warning text. The
+                // GUI's per-file " · N err" badge becomes meaningful.
+                .errors = file_expr_errors,
+                // Non-fatal per-file warnings (date filter no-range,
+                // malformed filename range, …). Previously this field
+                // duplicated `file_expr_errors`; now it carries the
+                // distinct per-file warning count.
+                .warnings = file_warnings,
             },
         });
     }

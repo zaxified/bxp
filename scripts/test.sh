@@ -74,7 +74,20 @@ for sample_json in "$DATASETS"/*/sample.json; do
     template=$(basename "$(dirname "$sample_json")")
     printf "  %-48s " "[$template]"
 
+    # Tolerate exit 2 (warnings) — fixtures intentionally exercise paths
+    # that emit warnings (e.g. anycoin's no-range-filter-on). Output
+    # correctness is validated by the .expected diffs below; only a
+    # hard error (exit 1) should fail the regression step.
+    set +e
     "$BXP" --config "$sample_json" > /dev/null
+    rc=$?
+    set -e
+    if [[ $rc -eq 1 ]]; then
+        echo "FAIL (bxp-cli exited 1 — hard error)"
+        FAIL=$((FAIL + 1))
+        FAILED+=("$template")
+        continue
+    fi
 
     ok=true
     for expected in "$DATASETS/$template/"*.expected; do
