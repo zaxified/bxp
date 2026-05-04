@@ -859,16 +859,22 @@ fn jsonErrorDesc(err: anyerror) []const u8 {
 /// Tracks object/array nesting to distinguish keys from values.
 /// On success, prints a diagnostic with file, line, key name and source snippet.
 /// Returns true if a duplicate was found and printed.
+///
+/// When `diag` is non-null and a duplicate is found, also appends a
+/// structured Diagnostic with line/col + the duplicated key in the
+/// message. Path is root (`""`) — Phase C ships line/col precision;
+/// path-from-scanner-stack is a future micro-iteration.
 fn diagDuplicateKey(
     alloc: std.mem.Allocator,
     content: []const u8,
     raw: []const u8,
     config_path: []const u8,
+    diag: ?*Diagnostics,
 ) bool {
     var scanner = std.json.Scanner.initCompleteInput(alloc, content);
     defer scanner.deinit();
-    var diag: std.json.Diagnostics = .{};
-    scanner.enableDiagnostics(&diag);
+    var scan_diag: std.json.Diagnostics = .{};
+    scanner.enableDiagnostics(&scan_diag);
 
     // Per-level state: is_object=true → track keys; is_object=false → array (no keys).
     const Level = struct {
@@ -920,14 +926,36 @@ fn diagDuplicateKey(
                 const top = &stack.items[stack.items.len - 1];
                 if (!top.is_object) continue; // array element, not a key
                 if (top.expect_key) {
-                    // This string token is an object key.
                     // diag position is after the closing '"'; adjust back to the opening '"'.
-                    const col_end = diag.getColumn();
-                    const ln      = diag.getLine();
+                    const col_end = scan_diag.getColumn();
+                    const ln      = scan_diag.getLine();
                     const caret_col: u64 = if (col_end >= s.len + 2) col_end - s.len - 2 else 1;
 
                     if (top.keys.contains(s)) {
-                        // Found the first duplicate.
+                        // Found the first duplicate. Emit a structured
+                        // diagnostic for bxp-fmt before printing to
+                        // stderr (bxp-cli's existing behavior).
+                        if (diag) |d| {
+                            const msg = std.fmt.allocPrint(
+                                alloc,
+                                "duplicate key '{s}' — remove or rename the repeated key",
+                                .{s},
+                            ) catch {
+                                std.debug.print(
+                                    "# {s}:{d}:{d}: JSON error (line {d}, pos {d}) — duplicate key '{s}' — remove or rename the repeated key\n",
+                                    .{ config_path, ln, caret_col, ln, caret_col, s },
+                                );
+                                return true;
+                            };
+                            d.append(.{
+                                .path = "",
+                                .line = std.math.cast(u32, ln) orelse null,
+                                .col = std.math.cast(u32, caret_col) orelse null,
+                                .severity = .@"error",
+                                .code = "json5.duplicate_key",
+                                .message = msg,
+                            }) catch {};
+                        }
                         std.debug.print(
                             "# {s}:{d}:{d}: JSON error (line {d}, pos {d}) — duplicate key '{s}' — remove or rename the repeated key\n",
                             .{ config_path, ln, caret_col, ln, caret_col, s },
@@ -975,26 +1003,44 @@ fn diagDuplicateKey(
 /// preprocessor preserves newlines for single-line comments and unquoted keys.
 /// For semantic errors (e.g. DuplicateField) that pass the scanner, falls back to a
 /// description without position.
+///
+/// When `out_diag` is non-null, also appends a structured Diagnostic
+/// with line/col attributes mirroring the stderr output. Path is root
+/// (`""`).
 fn diagJsonError(
     alloc: std.mem.Allocator,
     content: []const u8,
     raw: []const u8,
     config_path: []const u8,
     err: anyerror,
+    out_diag: ?*Diagnostics,
 ) void {
     std.debug.print("---\n", .{});
     var scanner = std.json.Scanner.initCompleteInput(alloc, content);
     defer scanner.deinit();
-    var diag: std.json.Diagnostics = .{};
-    scanner.enableDiagnostics(&diag);
+    var scan_diag: std.json.Diagnostics = .{};
+    scanner.enableDiagnostics(&scan_diag);
     var found_pos = false;
     while (true) {
         const tok = scanner.next() catch |scan_err| {
             found_pos = true;
-            const ln = diag.getLine();    // 1-based
-            const col = diag.getColumn(); // 1-based
+            const ln = scan_diag.getLine();    // 1-based
+            const col = scan_diag.getColumn(); // 1-based
             // Use the scanner's own error for the description — it matches the shown position.
             // The `err` from parseFromSlice is only used in the no-position fallback below.
+            if (out_diag) |d| {
+                const msg = std.fmt.allocPrint(alloc, "{s}", .{jsonErrorDesc(scan_err)}) catch null;
+                if (msg) |m| {
+                    d.append(.{
+                        .path = "",
+                        .line = std.math.cast(u32, ln) orelse null,
+                        .col = std.math.cast(u32, col) orelse null,
+                        .severity = .@"error",
+                        .code = "json5.parse_error",
+                        .message = m,
+                    }) catch {};
+                }
+            }
             std.debug.print("# {s}:{d}:{d}: JSON error (line {d}, pos {d}) — {s}\n", .{ config_path, ln, col, ln, col, jsonErrorDesc(scan_err) });
             // Show the original source line (line numbers match content for typical JSON5)
             var line_iter = std.mem.splitScalar(u8, raw, '\n');
@@ -1017,11 +1063,29 @@ fn diagJsonError(
         // Semantic error — scanner found no position.
         // For DuplicateField, scan again to find key name and location.
         if (err == error.DuplicateField) {
-            if (!diagDuplicateKey(alloc, content, raw, config_path)) {
+            if (!diagDuplicateKey(alloc, content, raw, config_path, out_diag)) {
                 // Fallback if duplicate scan fails (should not happen).
+                if (out_diag) |d| {
+                    const msg = std.fmt.allocPrint(alloc, "{s}", .{jsonErrorDesc(err)}) catch null;
+                    if (msg) |m| d.append(.{
+                        .path = "",
+                        .severity = .@"error",
+                        .code = "json5.parse_error",
+                        .message = m,
+                    }) catch {};
+                }
                 std.debug.print("# {s}: JSON error — {s}\n", .{ config_path, jsonErrorDesc(err) });
             }
         } else {
+            if (out_diag) |d| {
+                const msg = std.fmt.allocPrint(alloc, "{s}", .{jsonErrorDesc(err)}) catch null;
+                if (msg) |m| d.append(.{
+                    .path = "",
+                    .severity = .@"error",
+                    .code = "json5.parse_error",
+                    .message = m,
+                }) catch {};
+            }
             std.debug.print("# {s}: JSON error — {s}\n", .{ config_path, jsonErrorDesc(err) });
         }
     }
@@ -1147,12 +1211,12 @@ pub fn loadFromBytes(
     defer alloc.free(content);
 
     // Detect duplicate object keys before parsing — std.json silently uses last value.
-    if (diagDuplicateKey(alloc, content, raw, config_path)) {
+    if (diagDuplicateKey(alloc, content, raw, config_path, diag)) {
         return error.InvalidConfig;
     }
 
     const parsed = std.json.parseFromSlice(std.json.Value, alloc, content, .{}) catch |err| {
-        diagJsonError(alloc, content, raw, config_path, err);
+        diagJsonError(alloc, content, raw, config_path, err, diag);
         return err;
     };
     defer parsed.deinit();

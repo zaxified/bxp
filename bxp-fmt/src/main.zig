@@ -1109,6 +1109,50 @@ test "annotateRaw Phase B: ticker_map unknown named ref attaches at ticker_map p
     try testing.expect(has_err);
 }
 
+test "annotateRaw Phase C: duplicate top-level key surfaces \\$err_ with key name" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // Two `data_dir` keys at the same object level — diagDuplicateKey
+    // should fire and bxp-fmt should still emit a usable annotated tree.
+    const fixture =
+        \\{
+        \\  conversion_templates: {
+        \\    sample: {
+        \\      data_dir: "first",
+        \\      file_pattern_in: ".csv",
+        \\      data_dir: "second",
+        \\      file_pattern_out: ".csvx",
+        \\      input_schema: { $date: "[Date]" },
+        \\      output_schema: { date: "$date" },
+        \\    }
+        \\  }
+        \\}
+    ;
+
+    const result = try annotateRaw(a, fixture, "<inline>");
+    try testing.expectEqual(@as(u8, 1), result.exit_code);
+
+    var parsed = try std.json.parseFromSliceLeaky(std.json.Value, a, result.json, .{});
+    try testing.expect(parsed == .object);
+
+    var has_dup = false;
+    var it = parsed.object.iterator();
+    while (it.next()) |kv| {
+        if (std.mem.startsWith(u8, kv.key_ptr.*, "$err_") and
+            kv.value_ptr.* == .string and
+            std.mem.indexOf(u8, kv.value_ptr.string, "duplicate key") != null and
+            std.mem.indexOf(u8, kv.value_ptr.string, "data_dir") != null)
+        {
+            has_dup = true;
+            break;
+        }
+    }
+    try testing.expect(has_dup);
+}
+
 test "annotateRaw Phase B: output_schema missing attaches at template path" {
     const testing = std.testing;
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
