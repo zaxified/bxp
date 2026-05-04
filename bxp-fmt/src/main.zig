@@ -1153,6 +1153,66 @@ test "annotateRaw Phase C: duplicate top-level key surfaces \\$err_ with key nam
     try testing.expect(has_dup);
 }
 
+test "annotateRaw Phase D: wrong-type-silent emits \\$warn_ at template" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // Three silent fall-through cases that today produce no diagnostic
+    // and silently use defaults: bool field gets a number, csv enum
+    // gets a typo, file_type enum gets garbage. Phase D surfaces all
+    // three as `$warn_<N>` warnings without changing the runtime
+    // behavior (still falls back to the default). Includes a clean
+    // output_schema so the load doesn't bail early on a hard error.
+    const fixture =
+        \\{
+        \\  conversion_templates: {
+        \\    sample: {
+        \\      data_dir: ".",
+        \\      file_pattern_in: ".csv",
+        \\      file_pattern_out: ".csvx",
+        \\      date_filter_from_filename: 1,
+        \\      csv_text_quote_in: "singlle",
+        \\      file_type_out: "jsno",
+        \\      input_schema: { $date: "[Date]" },
+        \\      output_schema: { date: "$date" },
+        \\    }
+        \\  }
+        \\}
+    ;
+
+    const result = try annotateRaw(a, fixture, "<inline>");
+    // exit 0 — warnings don't fail, only error-severity does
+    try testing.expectEqual(@as(u8, 0), result.exit_code);
+
+    var parsed = try std.json.parseFromSliceLeaky(std.json.Value, a, result.json, .{});
+    const ct = parsed.object.get("conversion_templates") orelse return error.MissingCT;
+    const sample = ct.object.get("sample") orelse return error.MissingSample;
+
+    var warn_count: usize = 0;
+    var found_bool = false;
+    var found_quote = false;
+    var found_filetype = false;
+    var it = sample.object.iterator();
+    while (it.next()) |kv| {
+        if (!std.mem.startsWith(u8, kv.key_ptr.*, "$warn_")) continue;
+        if (kv.value_ptr.* != .string) continue;
+        warn_count += 1;
+        const m = kv.value_ptr.string;
+        if (std.mem.indexOf(u8, m, "date_filter_from_filename") != null and
+            std.mem.indexOf(u8, m, "boolean") != null) found_bool = true;
+        if (std.mem.indexOf(u8, m, "csv_text_quote_in") != null and
+            std.mem.indexOf(u8, m, "singlle") != null) found_quote = true;
+        if (std.mem.indexOf(u8, m, "file_type_out") != null and
+            std.mem.indexOf(u8, m, "jsno") != null) found_filetype = true;
+    }
+    try testing.expectEqual(@as(usize, 3), warn_count);
+    try testing.expect(found_bool);
+    try testing.expect(found_quote);
+    try testing.expect(found_filetype);
+}
+
 test "annotateRaw Phase B: output_schema missing attaches at template path" {
     const testing = std.testing;
     var arena = std.heap.ArenaAllocator.init(testing.allocator);

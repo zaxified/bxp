@@ -1196,6 +1196,95 @@ fn emitTemplateDiag(
     });
 }
 
+/// Parse a single-character string config field (`csv_delimiter_in`,
+/// `csv_decimal_separator_out`, etc.). Returns the new char on a valid
+/// 1-char string; on any other shape (missing, wrong type, wrong
+/// length) returns the supplied default and emits a `wrong_type_silent`
+/// warning into the diagnostics bag if non-null.
+fn parseSingleCharCsvField(
+    alloc: std.mem.Allocator,
+    diag: ?*Diagnostics,
+    bobj: std.json.ObjectMap,
+    template_id: []const u8,
+    field: []const u8,
+    default_value: u8,
+) !u8 {
+    const v = bobj.get(field) orelse return default_value;
+    if (v == .string and v.string.len == 1) return v.string[0];
+
+    if (v == .string) {
+        try emitTemplateDiag(alloc, diag, .warning, "config.wrong_type_silent",
+            template_id, field,
+            "{s} must be a single character, got string of length {d} — value ignored",
+            .{ field, v.string.len });
+    } else {
+        try emitTemplateDiag(alloc, diag, .warning, "config.wrong_type_silent",
+            template_id, field,
+            "{s} must be a single-character string, got {s} — value ignored",
+            .{ field, @tagName(v) });
+    }
+    return default_value;
+}
+
+/// Parse the `csv_text_quote_in` / `csv_text_quote_out` enum field
+/// (`"single"` / `"double"` → '\'' / '"'). Anything else is silently
+/// mapped to `0` (no quoting); emits a `invalid_enum` warning so the
+/// GUI surfaces typos like `"singlle"` instead of mystery missing
+/// quotes in the output.
+fn parseTextQuoteField(
+    alloc: std.mem.Allocator,
+    diag: ?*Diagnostics,
+    bobj: std.json.ObjectMap,
+    template_id: []const u8,
+    field: []const u8,
+    default_value: u8,
+) !u8 {
+    const v = bobj.get(field) orelse return default_value;
+    if (v != .string) {
+        try emitTemplateDiag(alloc, diag, .warning, "config.wrong_type_silent",
+            template_id, field,
+            "{s} must be a string ('single' or 'double'), got {s} — value ignored",
+            .{ field, @tagName(v) });
+        return default_value;
+    }
+    if (std.mem.eql(u8, v.string, "single")) return '\'';
+    if (std.mem.eql(u8, v.string, "double")) return '"';
+    try emitTemplateDiag(alloc, diag, .warning, "config.invalid_enum",
+        template_id, field,
+        "{s} must be 'single' or 'double', got '{s}' — defaulting to none",
+        .{ field, v.string });
+    return 0;
+}
+
+/// Parse the `file_type_in` / `file_type_out` enum field (`"json"` /
+/// `"csv"`). Anything else silently defaults to `.csv` today; this
+/// helper preserves that behavior but surfaces a warning so users see
+/// when a typo (`"jsno"`) silently fell back.
+fn parseFileTypeField(
+    alloc: std.mem.Allocator,
+    diag: ?*Diagnostics,
+    bobj: std.json.ObjectMap,
+    template_id: []const u8,
+    field: []const u8,
+    default_value: FileType,
+) !FileType {
+    const v = bobj.get(field) orelse return default_value;
+    if (v != .string) {
+        try emitTemplateDiag(alloc, diag, .warning, "config.wrong_type_silent",
+            template_id, field,
+            "{s} must be a string ('json' or 'csv'), got {s} — value ignored",
+            .{ field, @tagName(v) });
+        return default_value;
+    }
+    if (std.mem.eql(u8, v.string, "json")) return .json;
+    if (std.mem.eql(u8, v.string, "csv")) return .csv;
+    try emitTemplateDiag(alloc, diag, .warning, "config.invalid_enum",
+        template_id, field,
+        "{s} must be 'json' or 'csv', got '{s}' — defaulting to 'csv'",
+        .{ field, v.string });
+    return .csv;
+}
+
 pub fn loadFromBytes(
     alloc: std.mem.Allocator,
     raw: []const u8,
@@ -1393,7 +1482,13 @@ pub fn loadFromBytes(
                     }
 
                     if (bobj.get("date_filter_from_filename")) |v| {
-                        if (v == .bool) date_filter_from_filename = v.bool;
+                        if (v == .bool) {
+                            date_filter_from_filename = v.bool;
+                        } else {
+                            try emitTemplateDiag(alloc, diag, .warning, "config.wrong_type_silent",
+                                b_entry.key_ptr.*, "date_filter_from_filename",
+                                "date_filter_from_filename must be a boolean, got {s} — value ignored", .{@tagName(v)});
+                        }
                     }
 
                     // ticker_map: symbol → Yahoo Finance ticker remapping.
@@ -1453,7 +1548,13 @@ pub fn loadFromBytes(
                     }
 
                     if (bobj.get("row_rules_debug_missing")) |v| {
-                        if (v == .bool) row_rules_debug_missing = v.bool;
+                        if (v == .bool) {
+                            row_rules_debug_missing = v.bool;
+                        } else {
+                            try emitTemplateDiag(alloc, diag, .warning, "config.wrong_type_silent",
+                                b_entry.key_ptr.*, "row_rules_debug_missing",
+                                "row_rules_debug_missing must be a boolean, got {s} — value ignored", .{@tagName(v)});
+                        }
                     }
 
                     // row_rules: ordered list of conditional routing rules.
@@ -1556,40 +1657,14 @@ pub fn loadFromBytes(
                     }
                     // csv_delimiter_in / csv_delimiter_out / csv_decimal_separator_in / csv_decimal_separator_out
                     // Each must be a single-character string; silently ignored if wrong length.
-                    if (bobj.get("csv_delimiter_in")) |v| {
-                        if (v == .string and v.string.len == 1) csv_delimiter_in = v.string[0];
-                    }
-                    if (bobj.get("csv_delimiter_out")) |v| {
-                        if (v == .string and v.string.len == 1) csv_delimiter_out = v.string[0];
-                    }
-                    if (bobj.get("csv_decimal_separator_in")) |v| {
-                        if (v == .string and v.string.len == 1) csv_decimal_separator_in = v.string[0];
-                    }
-                    if (bobj.get("csv_decimal_separator_out")) |v| {
-                        if (v == .string and v.string.len == 1) csv_decimal_separator_out = v.string[0];
-                    }
-                    if (bobj.get("csv_text_quote_in")) |v| {
-                        if (v == .string) {
-                            csv_text_quote_in = if (std.mem.eql(u8, v.string, "single")) '\''
-                                else if (std.mem.eql(u8, v.string, "double")) '"'
-                                else 0;
-                        }
-                    }
-                    if (bobj.get("csv_text_quote_out")) |v| {
-                        if (v == .string) {
-                            csv_text_quote_out = if (std.mem.eql(u8, v.string, "single")) '\''
-                                else if (std.mem.eql(u8, v.string, "double")) '"'
-                                else 0;
-                        }
-                    }
-                    if (bobj.get("file_type_in")) |v| {
-                        if (v == .string)
-                            file_type_in = if (std.mem.eql(u8, v.string, "json")) .json else .csv;
-                    }
-                    if (bobj.get("file_type_out")) |v| {
-                        if (v == .string)
-                            file_type_out = if (std.mem.eql(u8, v.string, "json")) .json else .csv;
-                    }
+                    csv_delimiter_in = try parseSingleCharCsvField(alloc, diag, bobj, b_entry.key_ptr.*, "csv_delimiter_in", csv_delimiter_in);
+                    csv_delimiter_out = try parseSingleCharCsvField(alloc, diag, bobj, b_entry.key_ptr.*, "csv_delimiter_out", csv_delimiter_out);
+                    csv_decimal_separator_in = try parseSingleCharCsvField(alloc, diag, bobj, b_entry.key_ptr.*, "csv_decimal_separator_in", csv_decimal_separator_in);
+                    csv_decimal_separator_out = try parseSingleCharCsvField(alloc, diag, bobj, b_entry.key_ptr.*, "csv_decimal_separator_out", csv_decimal_separator_out);
+                    csv_text_quote_in = try parseTextQuoteField(alloc, diag, bobj, b_entry.key_ptr.*, "csv_text_quote_in", csv_text_quote_in);
+                    csv_text_quote_out = try parseTextQuoteField(alloc, diag, bobj, b_entry.key_ptr.*, "csv_text_quote_out", csv_text_quote_out);
+                    file_type_in = try parseFileTypeField(alloc, diag, bobj, b_entry.key_ptr.*, "file_type_in", file_type_in);
+                    file_type_out = try parseFileTypeField(alloc, diag, bobj, b_entry.key_ptr.*, "file_type_out", file_type_out);
                 }
 
                 if (output_schema == null) {
