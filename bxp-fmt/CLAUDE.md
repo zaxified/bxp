@@ -119,3 +119,26 @@ zig build
   using a raw GPA leaks per call.
 - New flags get added when bxp-gui or scripts have a concrete need, not
   speculatively.
+
+## Known non-issues — deliberately not refactored
+
+Audit follow-up rationale captured here so future audits don't re-flag
+the same observations. If the rationale stops applying (e.g. caller
+count crosses the threshold), revisit.
+
+- **`runX` writer setup boilerplate.** Each of the five `runX` functions
+  starts with the same `ArenaAllocator.init` + `stdout.fwriter` setup.
+  Skipped: extracting into a `WriterSetup` helper would obscure
+  per-function specifics (different stdout buffer sizes, e.g. 4 KB for
+  `runDocs` vs 64 B for `--version`). Revisit only when a 7th caller
+  appears — the rule-of-three threshold is already hit but the
+  variation between callers makes the abstraction hurt more than it
+  helps today.
+
+- **`emitExprError` extraction.** `runExpr` (~ll. 696–707) and
+  `runExprTrace` (~ll. 834–844) each serialize a JSON `{"error":…,
+  "detail":…}` block to stderr — almost identical except `runExprTrace`
+  also writes `"t":"error"`. Skipped: only two call sites today.
+  Extract when a third caller (e.g. a future `runExprValidate`) shows
+  up; the gain is too modest to justify the cognitive cost of a
+  parameterised helper for two consumers.

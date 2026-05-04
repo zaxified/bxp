@@ -145,3 +145,16 @@ Module exports in `build.zig`: `csv`, `json`, `json5`, `xlsx`, `expr`, `config`,
 - Zig 0.15.2 API.
 - `processBroker()` in pipeline.zig and `load()` in config.zig are intentionally large
   (~320–336 lines) linear pipelines — do not split unless there is a concrete duplication problem.
+
+## Known non-issues — deliberately not refactored
+
+Audit follow-up rationale captured here so future audits don't re-flag
+the same observations. If the rationale stops applying, revisit.
+
+- **`expr.zig adaptReplace` OOM detail.** A previous audit suggested
+  routing OOM through the `setNotANumber` / `error_detail` convention so
+  callers see a friendly diagnostic. Skipped: that convention works for
+  type-mismatch errors (predictable, recoverable inputs), but OOM is
+  systemic — the next `allocPrint` for the diagnostic itself would also
+  OOM. We propagate `error.OutOfMemory` unchanged as a non-recoverable
+  failure.
