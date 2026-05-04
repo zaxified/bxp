@@ -146,14 +146,16 @@ class SchemaGate {
   /// selection) and wants the metadata to scaffold a default value.
   InsertKeyCandidate? candidateFor(
       List<String> parentPath, String key, Set<String> existingKeys) {
-    for (final c in validInsertKeys(parentPath, existingKeys)) {
+    // Compute the candidate list once — the previous version re-ran
+    // `validInsertKeys` to find a wildcard fallback, doubling the schema
+    // walk on every literal-match miss (the common case for free-form
+    // child keys like ticker_maps[*] or row_rules[*]).
+    final candidates = validInsertKeys(parentPath, existingKeys);
+    for (final c in candidates) {
       if (c.key == key) return c;
     }
     // Wildcard fallback: no literal match, but a `*` candidate covers any name.
-    final wildcard = validInsertKeys(parentPath, existingKeys)
-        .where((c) => c.isFreeForm)
-        .firstOrNull;
-    return wildcard;
+    return candidates.where((c) => c.isFreeForm).firstOrNull;
   }
 
   /// Default Dart value for a fresh insert based on a candidate's
@@ -234,17 +236,17 @@ class SchemaGate {
       // Build "key → canonical index" map by scanning every FieldDoc that
       // is a direct child of parentPath (path length = parentPath.length+1
       // and matches via `*` wildcard semantics). The position in
-      // docConfigSchema becomes the canonical index.
+      // docConfigSchema becomes the canonical index — the for-i loop here
+      // ensures `seqIdx` always tracks list position, regardless of which
+      // arm of the filter we hit.
       final canonical = <String, int>{};
       var wildcardIdx = 1 << 30;
-      var seqIdx = 0;
-      for (final f in store.docConfigSchema) {
+      final schema = store.docConfigSchema;
+      for (var seqIdx = 0; seqIdx < schema.length; seqIdx++) {
+        final f = schema[seqIdx];
         final pattern = f['key']?.toString() ?? '';
         final segs = pattern.split('.');
-        if (segs.length != parentPath.length + 1) {
-          seqIdx++;
-          continue;
-        }
+        if (segs.length != parentPath.length + 1) continue;
         var matches = true;
         for (var i = 0; i < parentPath.length; i++) {
           if (segs[i] == '*') continue;
@@ -261,7 +263,6 @@ class SchemaGate {
             canonical[last] = seqIdx;
           }
         }
-        seqIdx++;
       }
 
       final newIdx = canonical[newKey] ?? wildcardIdx;

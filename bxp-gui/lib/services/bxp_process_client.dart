@@ -2,7 +2,10 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:path/path.dart' as p;
+
 import '../store/trace_model.dart';
+import 'dev_trace.dart';
 
 /// Spawn-based client for `bxp-cli` and `bxp-fmt`.
 ///
@@ -35,7 +38,15 @@ class BxpProcessClient {
       _ => null,
     };
     if (envVar != null && envVar.isNotEmpty) {
-      return File(envVar).existsSync() ? envVar : null;
+      if (File(envVar).existsSync()) return envVar;
+      // Fail loud: the user explicitly pinned this path. Silently falling
+      // through to the bundle/dev-tree binary is exactly the failure mode
+      // the override exists to prevent. Surface via devTrace so the
+      // "(unknown)" / "binary not found" UI state has an explanation in
+      // the logs.
+      devTrace('findBin.envOverrideMissing',
+          {'name': name, 'path': envVar});
+      return null;
     }
 
     final exeDir = File(Platform.resolvedExecutable).parent.path;
@@ -43,13 +54,17 @@ class BxpProcessClient {
     if (File(sibling).existsSync()) return sibling;
 
     // Walk up looking for a `bxp-gui/` directory; its parent is the monorepo
-    // root that holds sibling packages `bxp-cli/` and `bxp-fmt/`.
+    // root that holds sibling packages `bxp-cli/` and `bxp-fmt/`. Use
+    // `p.basename` so the segment compare works on both POSIX (`/`) and
+    // Windows (`\`) — `endsWith('/bxp-gui')` would silently miss on
+    // Windows and could mismatch a path like `/foo/some-bxp-gui` on
+    // POSIX.
     Directory dir = Directory(exeDir);
     for (int i = 0; i < 10; i++) {
       final parent = dir.parent;
       if (parent.path == dir.path) break; // reached filesystem root
-      if (dir.path.endsWith('/bxp-gui')) {
-        final candidate = '${parent.path}/$name/zig-out/bin/$name';
+      if (p.basename(dir.path) == 'bxp-gui') {
+        final candidate = p.join(parent.path, name, 'zig-out', 'bin', name);
         if (File(candidate).existsSync()) return candidate;
         break;
       }
@@ -287,7 +302,7 @@ class BxpProcessClient {
     final bin = findBin('bxp-cli');
     if (bin == null) {
       return const ProcessRunResult(
-        exitCode: -1,
+        exitCode: ProcessRunResult.kExitBinaryMissing,
         stderr: 'bxp-cli binary not found',
       );
     }
@@ -347,6 +362,14 @@ class BxpProcessClient {
 }
 
 class ProcessRunResult {
+  /// Synthetic exit code for "the binary we needed could not be located"
+  /// (see [BxpProcessClient.findBin]). Negative so consumers that gate
+  /// on `exitCode < 0` continue to treat it as failure; named so call
+  /// sites and log readers can distinguish it from real OS exit codes
+  /// (which are always ≥ 0 for normal exit, or negative-signal-number
+  /// when killed).
+  static const int kExitBinaryMissing = -1;
+
   final int exitCode;
   final String stderr;
   const ProcessRunResult({required this.exitCode, required this.stderr});

@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:json5_ast/ast.dart';
 import 'package:json5_ast/operations.dart' as ast_ops;
@@ -500,7 +501,15 @@ class TraceStore extends ChangeNotifier {
     final raw = _rawConfigInput;
     if (raw == null) return;
     _configValidating = true;
-    final tmpPath = '$configPath.bxp-live';
+    // Validator-only path → systemTemp, NOT the user's config dir. Live
+    // validation runs every ~250 ms during edits; sprinkling
+    // `<config>.bxp-live` into the user's working tree (and risking it
+    // surviving a crash) is unnecessary because the round-trip never
+    // touches the real on-disk config. saveConfig still keeps its tmp
+    // in the config dir so the atomic rename is on the same filesystem.
+    final tmpName =
+        'bxp-live-$pid-${configPath.hashCode.toUnsigned(32).toRadixString(16)}.json5';
+    final tmpPath = p.join(Directory.systemTemp.path, tmpName);
     final tmpFile = File(tmpPath);
     try {
       final outBytes = AstPatchClient.apply(raw, _activeOps);
@@ -607,7 +616,13 @@ class TraceStore extends ChangeNotifier {
         if (errs != null) out[_encodePath(path)] = errs;
         for (final e in node.entries) {
           final k = e.key.toString();
-          if (!k.startsWith(r'$')) {
+          // Skip only the annotation prefixes bxp-fmt actually emits
+          // (`$err_*` and `$comm_*`). Walking into any future `$`-keys
+          // (e.g. user `$variable` names that surface in input_schema,
+          // or new annotation types like a hypothetical `$warn_*`) keeps
+          // them visible to consumers higher up the stack instead of
+          // silently dropped here.
+          if (!k.startsWith(r'$err_') && !k.startsWith(r'$comm_')) {
             walk(e.value, [...path, k]);
           }
         }
