@@ -403,6 +403,20 @@ const Parser = struct {
     /// Emit one NDJSON record describing a successful function call to
     /// `ctx.trace_writer` (no-op when the writer is null). Errors are
     /// swallowed — tracing must never disrupt evaluation.
+    ///
+    /// **Flush policy:** the writer is intentionally NOT flushed here.
+    /// Per-event flush would be one syscall per traced call, so a long
+    /// expression with N FN-calls translates to N writes. The callers
+    /// already flush at coarser boundaries:
+    ///   - bxp-cli pipeline's `Output.event()` flushes per top-level
+    ///     event (`row_start`, `var_eval`, `row_end`, …), so the bytes
+    ///     written here ride out on the next event's flush.
+    ///   - bxp-fmt `runExprTrace` flushes once at the end of evaluating
+    ///     a single expression.
+    /// Skipping the per-call flush is safe because the buffer auto-
+    /// flushes on overflow, and consumers don't see the trace until
+    /// either the next event boundary or end of stream — which is when
+    /// they'd actually act on it.
     fn emitCallTrace(
         self: *Parser,
         name: []const u8,
@@ -428,7 +442,6 @@ const Parser = struct {
         jw.write(value_str) catch return;
         jw.endObject() catch return;
         w.writeByte('\n') catch return;
-        w.flush() catch return;
     }
 
     /// Convenience wrapper for NotANumber — includes field name when known.

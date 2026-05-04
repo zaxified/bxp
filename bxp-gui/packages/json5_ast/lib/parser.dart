@@ -1,5 +1,5 @@
 import 'ast.dart';
-import 'tokenizer.dart';
+import 'src/tokenizer.dart';
 
 class ParserError implements Exception {
   final String message;

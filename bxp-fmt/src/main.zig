@@ -36,7 +36,13 @@ fn usage() void {
     , .{});
 }
 
-pub fn main() !void {
+// Returning `!u8` (rather than `!void` + `std.process.exit`) so the
+// process exits via main's natural return path. `std.process.exit` is
+// `_exit`-style — it skips every deferred cleanup, including
+// `gpa.deinit()`'s leak report. Routing failures through return values
+// lets the DebugAllocator catch leaks on every error path, not just
+// the success path. Subroutines (`runX`) follow the same convention.
+pub fn main() !u8 {
     var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
@@ -58,7 +64,7 @@ pub fn main() !void {
         const a = args[i];
         if (std.mem.eql(u8, a, "--help")) {
             usage();
-            return;
+            return 0;
         }
         if (std.mem.eql(u8, a, "--version")) {
             // Match bxp-cli: write to stdout, not stderr. Tooling that
@@ -69,7 +75,7 @@ pub fn main() !void {
             const stdout = &stdout_fw.interface;
             stdout.print("bxp-fmt {s}\n", .{build_options.version}) catch {};
             stdout.flush() catch {};
-            return;
+            return 0;
         }
         if (std.mem.eql(u8, a, "--docs")) {
             emit_docs = true;
@@ -79,7 +85,7 @@ pub fn main() !void {
             i += 1;
             if (i >= args.len) {
                 std.debug.print("error: --config requires a path\n", .{});
-                std.process.exit(2);
+                return 2;
             }
             config_path = args[i];
             continue;
@@ -88,7 +94,7 @@ pub fn main() !void {
             i += 1;
             if (i >= args.len) {
                 std.debug.print("error: --expr requires an expression string\n", .{});
-                std.process.exit(2);
+                return 2;
             }
             expr_src = args[i];
             continue;
@@ -97,7 +103,7 @@ pub fn main() !void {
             i += 1;
             if (i >= args.len) {
                 std.debug.print("error: --expr-trace requires an expression string\n", .{});
-                std.process.exit(2);
+                return 2;
             }
             expr_trace_src = args[i];
             continue;
@@ -106,7 +112,7 @@ pub fn main() !void {
             i += 1;
             if (i >= args.len) {
                 std.debug.print("error: --row-headers requires a JSON array string\n", .{});
-                std.process.exit(2);
+                return 2;
             }
             row_headers_json = args[i];
             continue;
@@ -115,7 +121,7 @@ pub fn main() !void {
             i += 1;
             if (i >= args.len) {
                 std.debug.print("error: --row-fields requires a JSON array string\n", .{});
-                std.process.exit(2);
+                return 2;
             }
             row_fields_json = args[i];
             continue;
@@ -128,14 +134,14 @@ pub fn main() !void {
             i += 1;
             if (i >= args.len) {
                 std.debug.print("error: --fetch-template requires a template id\n", .{});
-                std.process.exit(2);
+                return 2;
             }
             fetch_template_id = args[i];
             continue;
         }
         std.debug.print("error: unknown argument: {s}\n", .{a});
         usage();
-        std.process.exit(2);
+        return 2;
     }
 
     // --list-templates and --fetch-template are modifiers on --config; the
@@ -145,7 +151,7 @@ pub fn main() !void {
     const config_modifier_count = @as(u8, if (list_templates) 1 else 0) + @as(u8, if (fetch_active) 1 else 0);
     if (config_modifier_count > 1) {
         std.debug.print("error: --list-templates and --fetch-template are mutually exclusive\n", .{});
-        std.process.exit(2);
+        return 2;
     }
 
     const has_config_action = config_path != null and config_modifier_count == 0;
@@ -157,46 +163,44 @@ pub fn main() !void {
 
     if (action_count > 1) {
         std.debug.print("error: --config, --expr, --expr-trace, --docs, --list-templates, and --fetch-template are mutually exclusive\n", .{});
-        std.process.exit(2);
+        return 2;
     }
     if (action_count == 0) {
         usage();
-        std.process.exit(2);
+        return 2;
     }
 
     if (config_modifier_count > 0) {
         const path = config_path orelse {
             std.debug.print("error: --list-templates / --fetch-template require --config <path>\n", .{});
-            std.process.exit(2);
+            return 2;
         };
         if (fetch_active) {
-            try runFetchTemplate(alloc, path, fetch_template_id.?);
+            return try runFetchTemplate(alloc, path, fetch_template_id.?);
         } else {
-            try runListTemplates(alloc, path);
+            return try runListTemplates(alloc, path);
         }
-        return;
     }
     if (emit_docs) {
-        try runDocs(alloc);
-        return;
+        return try runDocs(alloc);
     }
     if (config_path) |p| {
-        try runConfig(alloc, p);
-        return;
+        return try runConfig(alloc, p);
     }
     if (expr_src) |e| {
-        try runExpr(alloc, e);
-        return;
+        return try runExpr(alloc, e);
     }
     if (expr_trace_src) |e| {
-        try runExprTrace(alloc, e, row_headers_json, row_fields_json);
-        return;
+        return try runExprTrace(alloc, e, row_headers_json, row_fields_json);
     }
+    // Unreachable — action_count > 0 ensures one of the above fires, but
+    // the compiler needs an explicit return for `!u8` exhaustiveness.
+    return 0;
 }
 
 // ── --docs ──────────────────────────────────────────────────────────────────
 
-fn runDocs(gpa: std.mem.Allocator) !void {
+fn runDocs(gpa: std.mem.Allocator) !u8 {
     // Arena owns the json5/parseFromSlice scratch space for every
     // insert_template snippet. Freed wholesale on return.
     var arena = std.heap.ArenaAllocator.init(gpa);
@@ -207,6 +211,7 @@ fn runDocs(gpa: std.mem.Allocator) !void {
     const stdout = &stdout_fw.interface;
     try docs_mod.writeDocs(arena.allocator(), stdout);
     try stdout.flush();
+    return 0;
 }
 
 // ── --list-templates / --fetch-template ─────────────────────────────────────
@@ -218,21 +223,24 @@ fn runDocs(gpa: std.mem.Allocator) !void {
 // in the listing so the GUI can show "(broken)" rows.
 
 /// Reads the config file and parses it into a std.json.Value tree.
-/// On any I/O or JSON5 error, prints `{"error":"<name>"}` and exits 1.
+/// On any I/O or JSON5 error, prints `{"error":"<name>"}` to `stdout`
+/// and returns `error.ConfigLoadFailed`. Callers translate that error
+/// into exit code 1 — propagating via error union (rather than calling
+/// `std.process.exit`) keeps `gpa.deinit()` in the picture.
 fn loadConfigValue(a: std.mem.Allocator, path: []const u8, stdout: *std.Io.Writer) !std.json.Value {
     const raw = readFileCapped(a, path) catch |err| {
         try emitRootErr(stdout, @errorName(err));
-        std.process.exit(1);
+        return error.ConfigLoadFailed;
     };
     const json_text = json5_mod.preprocess(a, raw) catch |err| {
         try emitRootErr(stdout, @errorName(err));
-        std.process.exit(1);
+        return error.ConfigLoadFailed;
     };
     return std.json.parseFromSliceLeaky(std.json.Value, a, json_text, .{
         .duplicate_field_behavior = .use_last,
     }) catch |err| {
         try emitRootErr(stdout, @errorName(err));
-        std.process.exit(1);
+        return error.ConfigLoadFailed;
     };
 }
 
@@ -245,7 +253,7 @@ fn optString(obj: std.json.ObjectMap, key: []const u8) ?[]const u8 {
     };
 }
 
-fn runListTemplates(alloc: std.mem.Allocator, path: []const u8) !void {
+fn runListTemplates(alloc: std.mem.Allocator, path: []const u8) !u8 {
     var arena = std.heap.ArenaAllocator.init(alloc);
     defer arena.deinit();
     const a = arena.allocator();
@@ -254,7 +262,10 @@ fn runListTemplates(alloc: std.mem.Allocator, path: []const u8) !void {
     var stdout_fw = std.fs.File.stdout().writer(&stdout_buf);
     const stdout = &stdout_fw.interface;
 
-    const root = try loadConfigValue(a, path, stdout);
+    const root = loadConfigValue(a, path, stdout) catch |err| switch (err) {
+        error.ConfigLoadFailed => return 1,
+        else => return err,
+    };
 
     var jw: std.json.Stringify = .{ .writer = stdout, .options = .{ .whitespace = .indent_2 } };
     try jw.beginObject();
@@ -297,9 +308,10 @@ fn runListTemplates(alloc: std.mem.Allocator, path: []const u8) !void {
     try jw.endObject();
     try stdout.writeByte('\n');
     try stdout.flush();
+    return 0;
 }
 
-fn runFetchTemplate(alloc: std.mem.Allocator, path: []const u8, id: []const u8) !void {
+fn runFetchTemplate(alloc: std.mem.Allocator, path: []const u8, id: []const u8) !u8 {
     var arena = std.heap.ArenaAllocator.init(alloc);
     defer arena.deinit();
     const a = arena.allocator();
@@ -308,32 +320,36 @@ fn runFetchTemplate(alloc: std.mem.Allocator, path: []const u8, id: []const u8) 
     var stdout_fw = std.fs.File.stdout().writer(&stdout_buf);
     const stdout = &stdout_fw.interface;
 
-    const root = try loadConfigValue(a, path, stdout);
+    const root = loadConfigValue(a, path, stdout) catch |err| switch (err) {
+        error.ConfigLoadFailed => return 1,
+        else => return err,
+    };
 
     if (root != .object) {
         try emitRootErr(stdout, "config root is not an object");
-        std.process.exit(1);
+        return 1;
     }
     const ct = root.object.get("conversion_templates") orelse {
         try emitRootErr(stdout, "no conversion_templates in config");
-        std.process.exit(1);
+        return 1;
     };
     if (ct != .object) {
         try emitRootErr(stdout, "conversion_templates is not an object");
-        std.process.exit(1);
+        return 1;
     }
     const t = ct.object.get(id) orelse {
         // stderr human message, stdout JSON error so callers can parse either.
         std.debug.print("error: template id '{s}' not found in {s}\n", .{ id, path });
         const msg = try std.fmt.allocPrint(a, "template id '{s}' not found", .{id});
         try emitRootErr(stdout, msg);
-        std.process.exit(1);
+        return 1;
     };
 
     var jw: std.json.Stringify = .{ .writer = stdout, .options = .{ .whitespace = .indent_2 } };
     try jw.write(t);
     try stdout.writeByte('\n');
     try stdout.flush();
+    return 0;
 }
 
 // ── --config ─────────────────────────────────────────────────────────────────
@@ -348,7 +364,7 @@ fn runFetchTemplate(alloc: std.mem.Allocator, path: []const u8, id: []const u8) 
 // keys are unique. stderr still receives human-readable diagnostics from the
 // JSON5/config parser.
 
-fn runConfig(alloc: std.mem.Allocator, path: []const u8) !void {
+fn runConfig(alloc: std.mem.Allocator, path: []const u8) !u8 {
     // Arena for all allocations — freed on exit.
     var arena = std.heap.ArenaAllocator.init(alloc);
     defer arena.deinit();
@@ -362,7 +378,7 @@ fn runConfig(alloc: std.mem.Allocator, path: []const u8) !void {
     try stdout.writeAll(result.json);
     try stdout.writeByte('\n');
     try stdout.flush();
-    if (result.exit_code != 0) std.process.exit(result.exit_code);
+    return result.exit_code;
 }
 
 /// Result of annotating a config file. `json` is the serialized output
@@ -649,7 +665,7 @@ fn writeJsonString(writer: *std.Io.Writer, s: []const u8) !void {
 /// Parse + evaluate the expression with an empty Context.
 /// Expressions that reference [ColumnName] or $var will fail because the context
 /// has no fields — that is the intended behavior for a bare syntax check.
-fn runExpr(gpa: std.mem.Allocator, src: []const u8) !void {
+fn runExpr(gpa: std.mem.Allocator, src: []const u8) !u8 {
     var stderr_buf: [4096]u8 = undefined;
     var stderr_fw = std.fs.File.stderr().writer(&stderr_buf);
     const stderr = &stderr_fw.interface;
@@ -687,9 +703,10 @@ fn runExpr(gpa: std.mem.Allocator, src: []const u8) !void {
         jw.endObject() catch {};
         stderr.writeByte('\n') catch {};
         stderr.flush() catch {};
-        std.process.exit(1);
+        return 1;
     };
-    // Success: no stdout output; exit 0 implicit.
+    // Success: no stdout output.
+    return 0;
 }
 
 // ── --expr-trace ─────────────────────────────────────────────────────────────
@@ -711,7 +728,7 @@ fn runExprTrace(
     src: []const u8,
     headers_json: ?[]const u8,
     fields_json: ?[]const u8,
-) !void {
+) !u8 {
     var stdout_buf: [4096]u8 = undefined;
     var stdout_fw = std.fs.File.stdout().writer(&stdout_buf);
     const stdout = &stdout_fw.interface;
@@ -741,17 +758,17 @@ fn runExprTrace(
     if (headers_json) |hj| {
         const parsed = std.json.parseFromSlice(std.json.Value, alloc, hj, .{}) catch {
             std.debug.print("error: --row-headers must be a JSON array of strings\n", .{});
-            std.process.exit(2);
+            return 2;
         };
         defer parsed.deinit();
         if (parsed.value != .array) {
             std.debug.print("error: --row-headers must be a JSON array of strings\n", .{});
-            std.process.exit(2);
+            return 2;
         }
         for (parsed.value.array.items) |item| {
             if (item != .string) {
                 std.debug.print("error: --row-headers entries must be strings\n", .{});
-                std.process.exit(2);
+                return 2;
             }
             // `parsed.deinit()` (deferred above) frees the original
             // string bytes pointed to by `item.string`, so we must dupe
@@ -762,17 +779,17 @@ fn runExprTrace(
     if (fields_json) |fj| {
         const parsed = std.json.parseFromSlice(std.json.Value, alloc, fj, .{}) catch {
             std.debug.print("error: --row-fields must be a JSON array of strings\n", .{});
-            std.process.exit(2);
+            return 2;
         };
         defer parsed.deinit();
         if (parsed.value != .array) {
             std.debug.print("error: --row-fields must be a JSON array of strings\n", .{});
-            std.process.exit(2);
+            return 2;
         }
         for (parsed.value.array.items) |item| {
             if (item != .string) {
                 std.debug.print("error: --row-fields entries must be strings\n", .{});
-                std.process.exit(2);
+                return 2;
             }
             // See headers_list above — same lifetime caveat applies here.
             try fields_list.append(alloc, try alloc.dupe(u8, item.string));
@@ -783,7 +800,7 @@ fn runExprTrace(
             "error: --row-headers ({d}) and --row-fields ({d}) length mismatch\n",
             .{ headers_list.items.len, fields_list.items.len },
         );
-        std.process.exit(2);
+        return 2;
     }
     for (headers_list.items, 0..) |h, idx| {
         try col_index.put(h, idx);
@@ -815,7 +832,7 @@ fn runExprTrace(
         jw.endObject() catch {};
         stderr.writeByte('\n') catch {};
         stderr.flush() catch {};
-        std.process.exit(1);
+        return 1;
     };
     var jw: std.json.Stringify = .{ .writer = stdout, .options = .{} };
     jw.beginObject() catch {};
@@ -826,6 +843,7 @@ fn runExprTrace(
     jw.endObject() catch {};
     stdout.writeByte('\n') catch {};
     stdout.flush() catch {};
+    return 0;
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────

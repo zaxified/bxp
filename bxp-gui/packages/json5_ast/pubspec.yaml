@@ -9,5 +9,8 @@ publish_to: none
 environment:
   sdk: ^3.0.0
 
+dependencies:
+  meta: ^1.15.0
+
 dev_dependencies:
   test: ^1.24.0

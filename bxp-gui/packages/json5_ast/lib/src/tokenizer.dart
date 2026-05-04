@@ -1,5 +1,8 @@
-import 'ast.dart';
+import 'package:meta/meta.dart';
 
+import '../ast.dart';
+
+@internal
 enum TokKind {
   lbrace, rbrace, lbracket, rbracket,
   colon, comma,
@@ -10,6 +13,7 @@ enum TokKind {
   eof,
 }
 
+@internal
 class Token {
   final TokKind kind;
   final String raw;
@@ -20,6 +24,7 @@ class Token {
   String toString() => '$kind(${value ?? raw})';
 }
 
+@internal
 class TokenizerError implements Exception {
   final String message;
   final int offset;
@@ -30,6 +35,7 @@ class TokenizerError implements Exception {
   String toString() => 'TokenizerError@$line:$col: $message';
 }
 
+@internal
 class Tokenizer {
   final String src;
   int _i = 0;
