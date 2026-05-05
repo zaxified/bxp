@@ -86,6 +86,16 @@ class _ConfigViewState extends State<ConfigView> {
                         disabled: readOnly || !store.canRedo,
                         onTap: () => store.redo()),
                     _ToolbarBtn(
+                        title: store.isValidating ? 'VALIDATING…' : 'VALIDATE',
+                        tooltip:
+                            'Run bxp-fmt --config --check-fs=2 (Ctrl+E)',
+                        disabled: store.configPath.isEmpty ||
+                            store.astRoot == null ||
+                            store.isValidating ||
+                            store.isSaving ||
+                            store.isLoadingConfig,
+                        onTap: () => store.runValidate()),
+                    _ToolbarBtn(
                       // "SAVING…" label mirrors bxp-ui's
                       // configSaveStatus === "saving" indicator. The
                       // re-entrancy guard in saveConfig() handles

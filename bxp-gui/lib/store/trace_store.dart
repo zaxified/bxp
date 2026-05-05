@@ -1675,6 +1675,10 @@ class TraceStore extends ChangeNotifier {
   /// Last error thrown during saveConfig, null when the save succeeded.
   /// StatusBar surfaces this to the user.
   String? configSaveError;
+  // True while a manual VALIDATE pass is in flight. Mirrors `isSaving`
+  // so the toolbar can grey the button and the Ctrl+V shortcut can no-op
+  // on re-press.
+  bool isValidating = false;
 
   /// True while a saveConfig is in flight — write tmp, spawn bxp-fmt
   /// validation, backup, rename, reload. The toolbar SAVE button uses
@@ -1832,6 +1836,81 @@ class TraceStore extends ChangeNotifier {
       // showing "SAVING…" — covers all early-return paths and the
       // exception path. notifyListeners is fired below to refresh.
       isSaving = false;
+      notifyListeners();
+    }
+  }
+
+  /// Manual deep-validation pass triggered by the VALIDATE toolbar button
+  /// (or Ctrl+V). Runs `bxp-fmt --config <path> --check-fs=2`, refreshes
+  /// the path-keyed `$err_*`/`$warn_*`/`$info_*` maps, and re-uses the
+  /// adaptive `[fs.timeout]` flag so a slow mount only pays the deadline
+  /// once per session. When the user has unsaved edits the current draft
+  /// is dumped to `<path>.bxp-tmp-validate` first; otherwise the on-disk
+  /// file is validated directly.
+  Future<void> runValidate() async {
+    if (_astRoot == null || configPath.isEmpty) return;
+    if (isValidating || isSaving || isLoadingConfig) return;
+    devTrace('runValidate.start',
+        {'path': configPath, 'dirty': _isDirty, 'opCount': _activeOps.length});
+    isValidating = true;
+    notifyListeners();
+    final tmpPath = '$configPath.bxp-tmp-validate';
+    File? tmpFile;
+    String pathToValidate = configPath;
+    try {
+      // Validate the current draft, not the on-disk file. If there are
+      // pending ops, dump the AST to a tmp file so the validator sees what
+      // the user is actually looking at; clean drafts validate the file
+      // directly to avoid the round-trip cost.
+      if (_isDirty && _activeOps.isNotEmpty && _rawConfigInput != null) {
+        try {
+          final outBytes = AstPatchClient.apply(_rawConfigInput!, _activeOps);
+          tmpFile = File(tmpPath);
+          await tmpFile.writeAsString(utf8.decode(outBytes), flush: true);
+          pathToValidate = tmpPath;
+        } on AstPatchError catch (e) {
+          configError = 'AST patch failed during validate: ${e.message}';
+          devTrace('runValidate.astPatchFail', {'message': e.message});
+          return;
+        }
+      }
+      final jsonOutput = await BxpProcessClient.loadConfig(
+        pathToValidate,
+        checkFsSeconds: 2,
+      );
+      final bxpTree = jsonDecode(jsonOutput);
+      if (bxpTree is Map<String, dynamic>) {
+        final fatal = bxpTree['error'] as String?;
+        if (fatal != null) {
+          configError = fatal;
+          _clearValidationDiagnostics();
+        } else {
+          final buckets = _extractDiagnostics(bxpTree);
+          _validationErrors = buckets.errors;
+          _validationWarnings = buckets.warnings;
+          _validationInfo = buckets.info;
+          _detectFsTimeout();
+          configError = null;
+        }
+      }
+      devTrace('runValidate.ok', {
+        'errors': _validationErrors.length,
+        'warnings': _validationWarnings.length,
+        'info': _validationInfo.length,
+      });
+    } catch (e, st) {
+      configError = 'validate failed: $e';
+      devTrace('runValidate.fail', {
+        'err': e.toString(),
+        'stack': st.toString().split('\n').take(3).join(' | '),
+      });
+    } finally {
+      if (tmpFile != null) {
+        try {
+          if (await tmpFile.exists()) await tmpFile.delete();
+        } catch (_) {}
+      }
+      isValidating = false;
       notifyListeners();
     }
   }

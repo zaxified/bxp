@@ -124,6 +124,20 @@ class _MainViewState extends State<MainView> {
         devTrace('action.shortcut', {'combo': 'Ctrl+R', 'action': 'reload'});
         store.loadConfig();
         return true;
+      case LogicalKeyboardKey.keyE:
+        // Ctrl+E for validate. Ctrl+V was the obvious mnemonic but
+        // collides with paste inside text fields; Ctrl+E has no native
+        // text-editing semantics and is unused by the rest of the app.
+        if (store.configPath.isEmpty ||
+            store.astRoot == null ||
+            store.isValidating ||
+            store.isSaving ||
+            store.isLoadingConfig) {
+          return true;
+        }
+        devTrace('action.shortcut', {'combo': 'Ctrl+E', 'action': 'validate'});
+        store.runValidate();
+        return true;
       case LogicalKeyboardKey.keyT:
         if (shift) {
           devTrace('action.shortcut',
