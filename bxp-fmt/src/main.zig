@@ -460,11 +460,20 @@ fn annotateRaw(a: std.mem.Allocator, raw: []const u8, path_label: []const u8, ch
     while (it.next()) |entry| {
         try entry.value_ptr.validateCollect(entry.key_ptr.*, a, &errors);
         try entry.value_ptr.validateExprsCollect(entry.key_ptr.*, a, &diag);
+        // Phase G8: dead-config detection (unused pre_pass blocks +
+        // unused input_schema $variables). Warning-severity, never
+        // blocks save.
+        try config_mod.validateUnusedCollect(entry.value_ptr, entry.key_ptr.*, a, &diag);
     }
 
     // Cross-template invariants (file_pattern collision today). bxp-cli
     // never calls this — it lives entirely on the bxp-fmt deep path.
     try config_mod.validateCrossTemplate(&cfg, a, &diag);
+
+    // Phase G7 (D2): unknown-key detection with did-you-mean. Walks the
+    // raw JSON5 tree (not the parsed BrokerConfig) so it can see typos
+    // in keys that the loader would otherwise silently ignore.
+    try config_mod.validateUnknownKeysCollect(&value, a, &diag);
 
     // Filesystem-touching invariants (data_dir + input-file existence).
     // Gated by `--check-fs=N` flag — N=0 (default) skips entirely;
@@ -1664,6 +1673,256 @@ test "annotateRaw Phase G5: SPLIT_PART literal-zero index → \\$warn_ at expres
         }
     }
     try testing.expect(saw_bad_warn);
+}
+
+test "annotateRaw Phase G7: unknown config key → \\$warn_ at offending path" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // Typo in `file_pattern_in` → `file_patter_in`. G7 walker must
+    // surface this as `config.unknown_key` warning at the broker level
+    // with a did-you-mean hint baked into the message.
+    const fixture =
+        \\{
+        \\  conversion_templates: {
+        \\    sample: {
+        \\      data_dir: ".",
+        \\      file_pattern_in: ".csv",
+        \\      file_pattern_out: ".csvx",
+        \\      file_patter_in: "typo",
+        \\      input_schema: { $a: "[X]" },
+        \\      output_schema: { a: "$a" },
+        \\    }
+        \\  }
+        \\}
+    ;
+
+    const result = try annotateRaw(a, fixture, "<inline>", 0);
+    // Warnings alone don't fail exit code.
+    try testing.expectEqual(@as(u8, 0), result.exit_code);
+
+    var parsed = try std.json.parseFromSliceLeaky(std.json.Value, a, result.json, .{});
+    const ct = parsed.object.get("conversion_templates") orelse return error.MissingCT;
+    const sample = ct.object.get("sample") orelse return error.MissingSample;
+
+    var saw_warn = false;
+    var it = sample.object.iterator();
+    while (it.next()) |kv| {
+        if (std.mem.startsWith(u8, kv.key_ptr.*, "$warn_") and
+            kv.value_ptr.* == .string and
+            std.mem.indexOf(u8, kv.value_ptr.string, "unknown config key 'file_patter_in'") != null and
+            std.mem.indexOf(u8, kv.value_ptr.string, "did you mean 'file_pattern_in'?") != null)
+        {
+            saw_warn = true;
+        }
+    }
+    try testing.expect(saw_warn);
+}
+
+test "annotateRaw Phase G7: $variable keys in input_schema are NOT flagged" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // input_schema is user-defined-key territory — every $variable
+    // is valid. Walker must skip the whole sub-tree.
+    const fixture =
+        \\{
+        \\  conversion_templates: {
+        \\    sample: {
+        \\      data_dir: ".",
+        \\      file_pattern_in: ".csv",
+        \\      file_pattern_out: ".csvx",
+        \\      input_schema: { $weird_name_user_picked: "[X]" },
+        \\      output_schema: { x: "$weird_name_user_picked" },
+        \\    }
+        \\  }
+        \\}
+    ;
+
+    const result = try annotateRaw(a, fixture, "<inline>", 0);
+    try testing.expectEqual(@as(u8, 0), result.exit_code);
+
+    var parsed = try std.json.parseFromSliceLeaky(std.json.Value, a, result.json, .{});
+    const ct = parsed.object.get("conversion_templates") orelse return error.MissingCT;
+    const sample = ct.object.get("sample") orelse return error.MissingSample;
+    const is = sample.object.get("input_schema") orelse return error.MissingIs;
+
+    // No $warn_* under input_schema referencing the user variable.
+    var found_false_positive = false;
+    var it = is.object.iterator();
+    while (it.next()) |kv| {
+        if (std.mem.startsWith(u8, kv.key_ptr.*, "$warn_") and
+            kv.value_ptr.* == .string and
+            std.mem.indexOf(u8, kv.value_ptr.string, "$weird_name_user_picked") != null)
+        {
+            found_false_positive = true;
+        }
+    }
+    try testing.expect(!found_false_positive);
+}
+
+test "annotateRaw Phase G8: unused pre_pass block → \\$warn_ at pre_pass.<name>" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // Two named pre_pass blocks; only `used` is referenced via LOOKUP.
+    // G8 must surface `unused_block` as a warning at the
+    // `pre_pass.unused_block` path.
+    const fixture =
+        \\{
+        \\  conversion_templates: {
+        \\    sample: {
+        \\      data_dir: ".",
+        \\      file_pattern_in: ".csv",
+        \\      file_pattern_out: ".csvx",
+        \\      pre_pass: {
+        \\        used: { when: "true", key: "[ID]", values: { x: "[X]" } },
+        \\        unused_block: { when: "true", key: "[Y]", values: { y: "[Y]" } }
+        \\      },
+        \\      input_schema: { $a: "LOOKUP('used', [ID], 'x')" },
+        \\      output_schema: { a: "$a" },
+        \\    }
+        \\  }
+        \\}
+    ;
+
+    const result = try annotateRaw(a, fixture, "<inline>", 0);
+    try testing.expectEqual(@as(u8, 0), result.exit_code);
+
+    var parsed = try std.json.parseFromSliceLeaky(std.json.Value, a, result.json, .{});
+    const ct = parsed.object.get("conversion_templates") orelse return error.MissingCT;
+    const sample = ct.object.get("sample") orelse return error.MissingSample;
+    const pp = sample.object.get("pre_pass") orelse return error.MissingPP;
+
+    var saw_unused = false;
+    var saw_used_warn = false;
+    var it = pp.object.iterator();
+    while (it.next()) |kv| {
+        if (!std.mem.startsWith(u8, kv.key_ptr.*, "$warn_")) continue;
+        if (kv.value_ptr.* != .string) continue;
+        const v = kv.value_ptr.string;
+        if (std.mem.indexOf(u8, v, "'unused_block'") != null and
+            std.mem.indexOf(u8, v, "never referenced") != null)
+        {
+            saw_unused = true;
+        }
+        if (std.mem.indexOf(u8, v, "'used'") != null and
+            std.mem.indexOf(u8, v, "never referenced") != null)
+        {
+            saw_used_warn = true;
+        }
+    }
+    try testing.expect(saw_unused);
+    try testing.expect(!saw_used_warn);
+}
+
+test "annotateRaw Phase G8: unused $variable in input_schema → \\$warn_" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // $unused_var is declared but never referenced anywhere.
+    const fixture =
+        \\{
+        \\  conversion_templates: {
+        \\    sample: {
+        \\      data_dir: ".",
+        \\      file_pattern_in: ".csv",
+        \\      file_pattern_out: ".csvx",
+        \\      input_schema: {
+        \\        $a: "[X]",
+        \\        $unused_var: "[Y]",
+        \\      },
+        \\      output_schema: { a: "$a" },
+        \\    }
+        \\  }
+        \\}
+    ;
+
+    const result = try annotateRaw(a, fixture, "<inline>", 0);
+    try testing.expectEqual(@as(u8, 0), result.exit_code);
+
+    var parsed = try std.json.parseFromSliceLeaky(std.json.Value, a, result.json, .{});
+    const ct = parsed.object.get("conversion_templates") orelse return error.MissingCT;
+    const sample = ct.object.get("sample") orelse return error.MissingSample;
+    const is = sample.object.get("input_schema") orelse return error.MissingIs;
+
+    var saw_unused = false;
+    var saw_a_warn = false;
+    var it = is.object.iterator();
+    while (it.next()) |kv| {
+        if (!std.mem.startsWith(u8, kv.key_ptr.*, "$warn_")) continue;
+        if (kv.value_ptr.* != .string) continue;
+        const v = kv.value_ptr.string;
+        if (std.mem.indexOf(u8, v, "'$unused_var'") != null) saw_unused = true;
+        if (std.mem.indexOf(u8, v, "'$a'") != null) saw_a_warn = true;
+    }
+    try testing.expect(saw_unused);
+    try testing.expect(!saw_a_warn);
+}
+
+test "annotateRaw Phase G8: 2-arg LOOKUP with single block → no false positive" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // Legacy single-block pre_pass + 2-arg LOOKUP. Walker must
+    // recognise the implicit `_default` namespace and not flag the
+    // block as unused.
+    const fixture =
+        \\{
+        \\  conversion_templates: {
+        \\    sample: {
+        \\      data_dir: ".",
+        \\      file_pattern_in: ".csv",
+        \\      file_pattern_out: ".csvx",
+        \\      pre_pass: { when: "true", key: "[ID]", values: { x: "[X]" } },
+        \\      input_schema: { $a: "LOOKUP([ID], 'x')" },
+        \\      output_schema: { a: "$a" },
+        \\    }
+        \\  }
+        \\}
+    ;
+
+    const result = try annotateRaw(a, fixture, "<inline>", 0);
+    try testing.expectEqual(@as(u8, 0), result.exit_code);
+
+    var parsed = try std.json.parseFromSliceLeaky(std.json.Value, a, result.json, .{});
+    const ct = parsed.object.get("conversion_templates") orelse return error.MissingCT;
+    const sample = ct.object.get("sample") orelse return error.MissingSample;
+
+    // No unused-pre_pass warning anywhere under sample.
+    var saw_unused = false;
+    const Walker = struct {
+        fn walk(node: std.json.Value, found: *bool) void {
+            switch (node) {
+                .object => |obj| {
+                    var it = obj.iterator();
+                    while (it.next()) |kv| {
+                        if (std.mem.startsWith(u8, kv.key_ptr.*, "$warn_") and
+                            kv.value_ptr.* == .string and
+                            std.mem.indexOf(u8, kv.value_ptr.string, "never referenced") != null)
+                        {
+                            found.* = true;
+                        }
+                        walk(kv.value_ptr.*, found);
+                    }
+                },
+                .array => |arr| for (arr.items) |child| walk(child, found),
+                else => {},
+            }
+        }
+    };
+    Walker.walk(sample, &saw_unused);
+    try testing.expect(!saw_unused);
 }
 
 test "annotateRaw Phase B: output_schema missing attaches at template path" {

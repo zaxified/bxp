@@ -415,6 +415,111 @@ pub fn staticCheckSplitPart(src: []const u8) ?i64 {
     }
 }
 
+/// Phase G8: collect static cross-reference data from an expression
+/// source. Walks tokens (no AST, no eval) and gathers:
+///   - `fields` set: every named `[ColumnName]` reference (numeric
+///     `[1]`-style indexes are skipped — they reference columns by
+///     position, not name).
+///   - `lookups` set: literal first-arg string of every 3-arg
+///     `LOOKUP("name", key, field)` call. Used to cross-walk against
+///     declared `pre_passes` block names.
+///   - `has_two_arg_lookup`: at least one `LOOKUP(key, field)` was
+///     observed. Caller resolves these to the implicit namespace
+///     (`_default` for legacy single block, the lone pre_pass key
+///     when exactly one block is defined).
+///   - `has_computed_lookup_name`: at least one 3-arg LOOKUP had a
+///     non-literal first arg (e.g. `LOOKUP(name_var, ...)`). Caller
+///     opts out of unused-pre_pass warnings entirely when this fires
+///     — we can't statically prove which block(s) are reached.
+///
+/// Owned hash sets — caller calls `deinit()` on the result.
+pub const StaticRefs = struct {
+    fields: std.StringHashMap(void),
+    lookups: std.StringHashMap(void),
+    has_two_arg_lookup: bool = false,
+    has_computed_lookup_name: bool = false,
+
+    pub fn deinit(self: *StaticRefs) void {
+        self.fields.deinit();
+        self.lookups.deinit();
+    }
+};
+
+pub fn staticReferences(src: []const u8, alloc: std.mem.Allocator) !StaticRefs {
+    var refs: StaticRefs = .{
+        .fields = std.StringHashMap(void).init(alloc),
+        .lookups = std.StringHashMap(void).init(alloc),
+    };
+    errdefer refs.deinit();
+
+    var tok = Tokenizer.init(src);
+    while (true) {
+        const t = tok.next() catch break;
+        if (t.kind == .eof) break;
+
+        // [Name] field references — record by name. Skip numeric
+        // indexes which reference position, not a header name.
+        if (t.kind == .field_ref) {
+            if (t.text.len == 0) continue;
+            if (std.ascii.isDigit(t.text[0])) continue;
+            try refs.fields.put(t.text, {});
+            continue;
+        }
+
+        if (t.kind != .ident) continue;
+        if (!std.mem.eql(u8, t.text, "LOOKUP")) continue;
+
+        // LOOKUP — must be followed by `(` to be a real call.
+        const lp = tok.next() catch break;
+        if (lp.kind != .lparen) continue;
+
+        // Walk inside the call counting top-level commas + tracking
+        // the first argument's tokens at depth 1.
+        var depth: u32 = 1;
+        var commas: u32 = 0;
+        var arg0_count: u32 = 0;
+        var arg0_token: Token = .{ .kind = .eof, .text = "" };
+        var arg0_done = false;
+        while (true) {
+            const inner = tok.next() catch break;
+            if (inner.kind == .eof) break;
+            if (inner.kind == .lparen) {
+                depth += 1;
+                if (depth == 2 and !arg0_done) arg0_count += 1;
+                continue;
+            }
+            if (inner.kind == .rparen) {
+                depth -= 1;
+                if (depth == 0) break;
+                continue;
+            }
+            if (inner.kind == .comma and depth == 1) {
+                commas += 1;
+                if (commas == 1) arg0_done = true;
+                continue;
+            }
+            if (depth == 1 and !arg0_done) {
+                if (arg0_count == 0) arg0_token = inner;
+                arg0_count += 1;
+            }
+        }
+
+        if (commas >= 2) {
+            // 3-arg form: first arg is the explicit pre_pass name.
+            if (arg0_count == 1 and arg0_token.kind == .string_lit) {
+                try refs.lookups.put(arg0_token.text, {});
+            } else {
+                refs.has_computed_lookup_name = true;
+            }
+        } else if (commas == 1) {
+            // 2-arg form: implicit namespace.
+            refs.has_two_arg_lookup = true;
+        }
+        // commas == 0 → malformed LOOKUP; let runtime catch it.
+    }
+    return refs;
+}
+
 // ---------------------------------------------------------------------------
 // Parser / Evaluator — recursive-descent; evaluates while parsing, no AST
 // ---------------------------------------------------------------------------

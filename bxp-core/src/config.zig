@@ -1320,6 +1320,373 @@ fn emitGlobalDiag(
     });
 }
 
+// ── Phase G8: unused pre_pass / input_schema cross-walk (D3) ──────────
+
+/// Phase G8: cross-walk every expression in the broker config to
+/// collect referenced `pre_pass` block names and `$variable` names,
+/// then emit a `config.unused_pre_pass` / `config.unused_input_var`
+/// warning for any declared item that nothing references.
+///
+/// Skipped when any expression contains a computed-name LOOKUP
+/// (`LOOKUP(name_var, ...)`) — we can't statically prove which block
+/// is reached, so flagging an apparent "unused" block could be wrong.
+///
+/// `[$var]` references are recorded under the literal `$var` key
+/// (with `$` prefix); `output_schema` values are treated as direct
+/// `$variable` references too — the values there are bare `$var`
+/// strings (e.g. `"date": "$date"`).
+pub fn validateUnusedCollect(
+    self: *const BrokerConfig,
+    template_id: []const u8,
+    alloc: std.mem.Allocator,
+    diag: ?*Diagnostics,
+) !void {
+    const d = diag orelse return;
+
+    var referenced_lookups = std.StringHashMap(void).init(alloc);
+    defer referenced_lookups.deinit();
+    var referenced_vars = std.StringHashMap(void).init(alloc);
+    defer referenced_vars.deinit();
+    var any_computed_lookup = false;
+    var any_two_arg_lookup = false;
+
+    // Helper closure-style: scan one expression source and merge into
+    // the union sets. Skips empty source.
+    const Scan = struct {
+        fn run(
+            src: []const u8,
+            a: std.mem.Allocator,
+            lookups_out: *std.StringHashMap(void),
+            vars_out: *std.StringHashMap(void),
+            computed_out: *bool,
+            two_arg_out: *bool,
+        ) !void {
+            if (src.len == 0) return;
+            var refs = try expr.staticReferences(src, a);
+            defer refs.deinit();
+            var f_it = refs.fields.iterator();
+            while (f_it.next()) |e| try vars_out.put(e.key_ptr.*, {});
+            var l_it = refs.lookups.iterator();
+            while (l_it.next()) |e| try lookups_out.put(e.key_ptr.*, {});
+            if (refs.has_computed_lookup_name) computed_out.* = true;
+            if (refs.has_two_arg_lookup) two_arg_out.* = true;
+        }
+    };
+
+    // Scan all expression-bearing fields:
+    //   - input_schema values
+    //   - output_schema values (each is a `$var` reference verbatim)
+    //   - row_rules[].when + row_rules[].rows[].$var
+    //   - pre_pass[name].when + .key + .values.*
+    var is_it = self.input_schema.iterator();
+    while (is_it.next()) |entry| {
+        try Scan.run(entry.value_ptr.*, alloc,
+            &referenced_lookups, &referenced_vars,
+            &any_computed_lookup, &any_two_arg_lookup);
+    }
+    for (self.output_schema.items) |col| {
+        // OutputColumn.variable is a `$variable` reference (not an
+        // expression — it's a verbatim `$var` lookup). Treat it as a
+        // direct ref so the unused-input-var pass sees it.
+        if (col.variable.len > 0) try referenced_vars.put(col.variable, {});
+    }
+    const rules = self.row_rules orelse &.{};
+    for (rules) |rule| {
+        try Scan.run(rule.when, alloc,
+            &referenced_lookups, &referenced_vars,
+            &any_computed_lookup, &any_two_arg_lookup);
+        for (rule.rows) |row| {
+            var ov_it = row.iterator();
+            while (ov_it.next()) |ov| {
+                try Scan.run(ov.value_ptr.*, alloc,
+                    &referenced_lookups, &referenced_vars,
+                    &any_computed_lookup, &any_two_arg_lookup);
+            }
+        }
+    }
+    var pp_it = self.pre_passes.iterator();
+    while (pp_it.next()) |pp_entry| {
+        const pp = pp_entry.value_ptr.*;
+        try Scan.run(pp.when, alloc,
+            &referenced_lookups, &referenced_vars,
+            &any_computed_lookup, &any_two_arg_lookup);
+        try Scan.run(pp.key, alloc,
+            &referenced_lookups, &referenced_vars,
+            &any_computed_lookup, &any_two_arg_lookup);
+        var v_it = pp.values.iterator();
+        while (v_it.next()) |v| {
+            try Scan.run(v.value_ptr.*, alloc,
+                &referenced_lookups, &referenced_vars,
+                &any_computed_lookup, &any_two_arg_lookup);
+        }
+    }
+
+    // Unused pre_pass detection — opt out when any computed-name
+    // LOOKUP exists (could reach any block).
+    if (!any_computed_lookup) {
+        // 2-arg LOOKUP resolves implicitly to the only block when count==1.
+        // Mark it as referenced so we don't false-positive.
+        if (any_two_arg_lookup and self.pre_passes.count() == 1) {
+            try referenced_lookups.put(self.pre_passes.keys()[0], {});
+        }
+        var pp_walk = self.pre_passes.iterator();
+        while (pp_walk.next()) |pp_entry| {
+            const name = pp_entry.key_ptr.*;
+            if (referenced_lookups.contains(name)) continue;
+            const is_legacy = std.mem.eql(u8, name, "_default");
+            const path_suffix = if (is_legacy)
+                try alloc.dupe(u8, "pre_pass")
+            else
+                try std.fmt.allocPrint(alloc, "pre_pass.{s}", .{name});
+            defer alloc.free(path_suffix);
+            try emitTemplateDiag(alloc, d, .warning, "config.unused_pre_pass",
+                template_id, path_suffix,
+                "pre_pass block '{s}' is declared but never referenced via LOOKUP",
+                .{name});
+        }
+    }
+
+    // Unused input_schema $variable detection — independent of LOOKUP
+    // computed-name caveat.
+    var iv_it = self.input_schema.iterator();
+    while (iv_it.next()) |entry| {
+        const var_name = entry.key_ptr.*;
+        if (referenced_vars.contains(var_name)) continue;
+        const path_suffix = try std.fmt.allocPrint(alloc, "input_schema.{s}", .{var_name});
+        defer alloc.free(path_suffix);
+        try emitTemplateDiag(alloc, d, .warning, "config.unused_input_var",
+            template_id, path_suffix,
+            "input_schema variable '{s}' is declared but never referenced in any expression or output_schema",
+            .{var_name});
+    }
+}
+
+// ── Phase G7: unknown-key detection (D2) ─────────────────────────────────
+
+/// Top-level keys recognized by the loader. Hardcoded because there's
+/// no Config.fields table — only `ticker_maps` and `conversion_templates`
+/// reach this level. Must stay in sync with `loadFromBytes`'s root
+/// dispatch (and `docs.zig`'s envelope_entries).
+const root_keys = [_][]const u8{ "ticker_maps", "conversion_templates" };
+
+/// Legacy single-block pre_pass form. `_default` synthetic name is
+/// detected by the presence of any of these literal child keys at the
+/// `pre_pass` level — they signal a flat block instead of a named-blocks
+/// map.
+const legacy_pre_pass_keys = [_][]const u8{ "when", "key", "values" };
+
+/// Phase G7: walk the raw JSON5 tree (the `std.json.Value` produced by
+/// `preprocessAnnotated` + `parseFromSliceLeaky` in bxp-fmt) and emit a
+/// `config.unknown_key` warning for every key that isn't in the
+/// FieldDoc whitelist for its schema path. Includes a Levenshtein-based
+/// `did_you_mean` hint when a sibling within distance 2 exists.
+///
+/// User-defined-key parents are skipped entirely:
+/// `input_schema`, `output_schema`, `ticker_map(s)`, `row_rules[].rows[]`,
+/// and `pre_pass.{values, *.values}` — those are typed by the user with
+/// custom names. Annotation siblings (`$comm_*`, `$err_*`, `$warn_*`,
+/// `$info_*`) are also silently skipped so the walker can run on the
+/// already-annotated tree without flagging its own injected entries.
+pub fn validateUnknownKeysCollect(
+    raw: *const std.json.Value,
+    alloc: std.mem.Allocator,
+    diag: ?*Diagnostics,
+) !void {
+    const d = diag orelse return;
+    if (raw.* != .object) return;
+
+    // Root-level keys.
+    try walkObjectKeys(raw, "", &root_keys, alloc, d);
+
+    // Recurse into conversion_templates → per-template trees.
+    if (raw.object.getPtr("conversion_templates")) |ct| {
+        if (ct.* == .object) {
+            var it = ct.object.iterator();
+            while (it.next()) |entry| {
+                const tmpl_id = entry.key_ptr.*;
+                if (isAnnotationKey(tmpl_id)) continue;
+                try walkBroker(entry.value_ptr, tmpl_id, alloc, d);
+            }
+        }
+    }
+    // ticker_maps children are user-defined names → user-defined values.
+    // No whitelist applies anywhere inside.
+}
+
+/// Emit `config.unknown_key` warning for every key in `node.object`
+/// that isn't in `whitelist` and isn't an annotation sibling. `path`
+/// is the dotted schema path *of `node` itself* (used as the parent
+/// path for the warning's full path).
+fn walkObjectKeys(
+    node: *const std.json.Value,
+    path: []const u8,
+    whitelist: []const []const u8,
+    alloc: std.mem.Allocator,
+    diag: *Diagnostics,
+) !void {
+    if (node.* != .object) return;
+    var it = node.object.iterator();
+    while (it.next()) |entry| {
+        const key = entry.key_ptr.*;
+        if (isAnnotationKey(key)) continue;
+        if (containsString(whitelist, key)) continue;
+        // Unknown — emit warning with optional did-you-mean.
+        const full_path = if (path.len > 0)
+            try std.fmt.allocPrint(alloc, "{s}.{s}", .{ path, key })
+        else
+            try alloc.dupe(u8, key);
+        // Did-you-mean is concatenated into `message` because the
+        // `$warn_*` marker today serializes only the message string
+        // (Diagnostic.suggest field isn't plumbed into the annotated
+        // JSON output yet — that's the Phase G1 contract change). Once
+        // G1 ships, both fields can be split into structured siblings.
+        const hint = closestKey(key, whitelist);
+        const message = if (hint) |h|
+            try std.fmt.allocPrint(
+                alloc,
+                "unknown config key '{s}' — did you mean '{s}'?",
+                .{ key, h },
+            )
+        else
+            try std.fmt.allocPrint(
+                alloc,
+                "unknown config key '{s}' — typo or extraneous entry",
+                .{key},
+            );
+        var suggest: ?[]const u8 = null;
+        if (hint) |h| {
+            suggest = try std.fmt.allocPrint(alloc, "did you mean '{s}'?", .{h});
+        }
+        try diag.append(.{
+            .path = full_path,
+            .severity = .warning,
+            .code = "config.unknown_key",
+            .message = message,
+            .suggest = suggest,
+        });
+    }
+}
+
+/// Recurse into a single broker's expected children.
+fn walkBroker(
+    broker: *const std.json.Value,
+    tmpl_id: []const u8,
+    alloc: std.mem.Allocator,
+    diag: *Diagnostics,
+) !void {
+    if (broker.* != .object) return;
+
+    const broker_path = try std.fmt.allocPrint(alloc, "conversion_templates.{s}", .{tmpl_id});
+    defer alloc.free(broker_path);
+
+    // Whitelist for direct broker keys.
+    var broker_keys: [BrokerConfig.fields.len][]const u8 = undefined;
+    inline for (BrokerConfig.fields, 0..) |f, i| broker_keys[i] = f.key;
+    try walkObjectKeys(broker, broker_path, &broker_keys, alloc, diag);
+
+    // Recurse into known children.
+    if (broker.object.getPtr("xlsx_sheet")) |xs| {
+        const path = try std.fmt.allocPrint(alloc, "{s}.xlsx_sheet", .{broker_path});
+        defer alloc.free(path);
+        var keys: [XlsxSheet.fields.len][]const u8 = undefined;
+        inline for (XlsxSheet.fields, 0..) |f, i| keys[i] = f.key;
+        try walkObjectKeys(xs, path, &keys, alloc, diag);
+    }
+    if (broker.object.getPtr("row_rules")) |rr| {
+        if (rr.* == .array) {
+            for (rr.array.items, 0..) |*rule, idx| {
+                const path = try std.fmt.allocPrint(alloc, "{s}.row_rules.{d}", .{ broker_path, idx });
+                defer alloc.free(path);
+                var keys: [RowRule.fields.len][]const u8 = undefined;
+                inline for (RowRule.fields, 0..) |f, i| keys[i] = f.key;
+                try walkObjectKeys(rule, path, &keys, alloc, diag);
+                // rows[].rows[] are user-defined $variable overrides — no whitelist.
+            }
+        }
+    }
+    if (broker.object.getPtr("pre_pass")) |pp| {
+        try walkPrePass(pp, broker_path, alloc, diag);
+    }
+    // input_schema / output_schema / ticker_map: user-defined-key
+    // territory — no recursion into per-key whitelist applies.
+}
+
+/// Recurse into `pre_pass` — branch on legacy single-block vs
+/// named-blocks form. Named form children are user-typed names whose
+/// values are PrePass structs; iterate each child as a PrePass.
+fn walkPrePass(
+    pp: *const std.json.Value,
+    broker_path: []const u8,
+    alloc: std.mem.Allocator,
+    diag: *Diagnostics,
+) !void {
+    if (pp.* != .object) return;
+
+    // Legacy detection: any direct child named `when` / `key` / `values`
+    // → flat block. Else assume named-blocks map.
+    var is_legacy = false;
+    var it_detect = pp.object.iterator();
+    while (it_detect.next()) |entry| {
+        const key = entry.key_ptr.*;
+        if (isAnnotationKey(key)) continue;
+        if (containsString(&legacy_pre_pass_keys, key)) {
+            is_legacy = true;
+            break;
+        }
+    }
+
+    if (is_legacy) {
+        // Whitelist matches PrePass.fields (which are when/key/values).
+        const path = try std.fmt.allocPrint(alloc, "{s}.pre_pass", .{broker_path});
+        defer alloc.free(path);
+        var keys: [PrePass.fields.len][]const u8 = undefined;
+        inline for (PrePass.fields, 0..) |f, i| keys[i] = f.key;
+        try walkObjectKeys(pp, path, &keys, alloc, diag);
+        // values children are user-defined field names — no recursion.
+    } else {
+        // Named-blocks: each child is a user-typed name with PrePass shape.
+        var it_walk = pp.object.iterator();
+        while (it_walk.next()) |entry| {
+            const block_name = entry.key_ptr.*;
+            if (isAnnotationKey(block_name)) continue;
+            const path = try std.fmt.allocPrint(alloc, "{s}.pre_pass.{s}", .{ broker_path, block_name });
+            defer alloc.free(path);
+            var keys: [PrePass.fields.len][]const u8 = undefined;
+            inline for (PrePass.fields, 0..) |f, i| keys[i] = f.key;
+            try walkObjectKeys(entry.value_ptr, path, &keys, alloc, diag);
+        }
+    }
+}
+
+fn isAnnotationKey(key: []const u8) bool {
+    return std.mem.startsWith(u8, key, "$err_") or
+        std.mem.startsWith(u8, key, "$warn_") or
+        std.mem.startsWith(u8, key, "$info_") or
+        std.mem.startsWith(u8, key, "$comm_");
+}
+
+fn containsString(haystack: []const []const u8, needle: []const u8) bool {
+    for (haystack) |s| if (std.mem.eql(u8, s, needle)) return true;
+    return false;
+}
+
+/// Levenshtein-based did-you-mean over a string list. Returns the
+/// closest match within edit distance ≤ 2, or null otherwise. Mirrors
+/// `closestBuiltin` but generalised over an explicit candidate list.
+fn closestKey(name: []const u8, candidates: []const []const u8) ?[]const u8 {
+    var best: ?[]const u8 = null;
+    var best_dist: usize = std.math.maxInt(usize);
+    for (candidates) |c| {
+        const d = levenshteinIgnoreCase(name, c);
+        if (d < best_dist) {
+            best_dist = d;
+            best = c;
+        }
+    }
+    if (best_dist > 2) return null;
+    return best;
+}
+
 /// True when one string is a suffix of the other (or they're equal).
 /// Used by `validateCrossTemplate` to detect `file_pattern_in`
 /// overlaps — `".csv"` and `"_closed.csv"` both match
