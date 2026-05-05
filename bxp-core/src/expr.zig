@@ -104,6 +104,13 @@ pub const Context = struct {
     /// or multiple pre_pass blocks exist; in the latter case 2-arg LOOKUP is an
     /// error and callers must use the explicit 3-arg form.
     single_prepass_name: ?[]const u8 = null,
+    /// Validate-mode whitelist of pre_pass block names. Set non-null
+    /// alongside `lookup_table == null` (the bxp-fmt --config deep
+    /// pass) so `builtinLookup` can flag unknown first arguments at
+    /// parse time — typo / undefined block — instead of silently
+    /// returning "". Runtime callers leave this null to preserve the
+    /// existing behaviour (silent "" on miss is intentional there).
+    pre_pass_names: ?*const std.StringHashMap(void) = null,
     /// Allocator for strings produced during expression evaluation.
     alloc: std.mem.Allocator,
     /// Decimal separator used in input CSV numeric fields (e.g. ',' for European format).
@@ -342,6 +349,71 @@ const Tokenizer = struct {
         return tok;
     }
 };
+
+/// Phase G5: static scan for `SPLIT_PART(_, _, <literal>)` where the
+/// literal-int third argument is ≤ 0. SPLIT_PART is 1-based per
+/// `expr.builtinSplitPart` semantics, so `0` and negative literals
+/// always return `""` — almost certainly a typo. Returns the offending
+/// integer value when one is found, null otherwise. Skips any
+/// SPLIT_PART whose third arg isn't a single bare number-literal token
+/// (variables, expressions, etc. are runtime-resolved).
+///
+/// Note: tokenizer treats a leading `-` on a number as part of the
+/// number literal (e.g. `-1` is a single `.number_lit` token), so this
+/// function does not need to handle a separate unary-minus case.
+pub fn staticCheckSplitPart(src: []const u8) ?i64 {
+    var tok = Tokenizer.init(src);
+    while (true) {
+        const t = tok.next() catch return null;
+        if (t.kind == .eof) return null;
+        if (t.kind != .ident) continue;
+        if (!std.mem.eql(u8, t.text, "SPLIT_PART")) continue;
+
+        // Must be a function call — skip bare-ident occurrences.
+        const lp = tok.next() catch return null;
+        if (lp.kind != .lparen) continue;
+
+        // Walk inside this call, tracking depth + top-level commas.
+        // Collect tokens belonging to the third (top-level) argument.
+        var depth: u32 = 1;
+        var commas_seen: u32 = 0;
+        var third_count: u32 = 0;
+        var third_first: Token = .{ .kind = .eof, .text = "" };
+        while (true) {
+            const inner = tok.next() catch return null;
+            if (inner.kind == .eof) return null;
+            if (inner.kind == .lparen) {
+                depth += 1;
+                if (commas_seen == 2 and depth >= 2) third_count += 1;
+                continue;
+            }
+            if (inner.kind == .rparen) {
+                depth -= 1;
+                if (depth == 0) {
+                    if (commas_seen == 2 and third_count == 1 and
+                        third_first.kind == .number_lit)
+                    {
+                        const f = std.fmt.parseFloat(f80, third_first.text) catch break;
+                        const v = @as(i64, @intFromFloat(f));
+                        if (v <= 0) return v;
+                    }
+                    break;
+                }
+                if (commas_seen == 2) third_count += 1;
+                continue;
+            }
+            if (inner.kind == .comma and depth == 1) {
+                commas_seen += 1;
+                third_count = 0;
+                continue;
+            }
+            if (commas_seen == 2 and depth == 1) {
+                if (third_count == 0) third_first = inner;
+                third_count += 1;
+            }
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Parser / Evaluator — recursive-descent; evaluates while parsing, no AST
@@ -997,6 +1069,20 @@ const lookup_doc: FnDoc = .{
 /// Returns empty string if no pre_pass table is present or key/field not found.
 fn builtinLookup(args: []Value, ctx: *const Context) !Value {
     if (args.len != 2 and args.len != 3) return error.WrongArgCount;
+    // Validate-mode (Phase G3): when the deep-pass deepens with a
+    // populated `pre_pass_names` whitelist, resolve the first argument
+    // immediately and flag unknown names. Runtime callers leave
+    // `pre_pass_names` null and skip this branch entirely, preserving
+    // the historical "silent '' on miss" contract that bxp-fmt --expr
+    // also relies on (LOOKUP in bare contexts must not blow up).
+    if (ctx.pre_pass_names) |names| {
+        const name: []const u8 = if (args.len == 3) switch (args[0]) {
+            .string => |v| v,
+            else => return error.StringExpected,
+        } else ctx.single_prepass_name orelse return error.LookupRequiresName;
+        if (!names.contains(name)) return error.LookupUnknownPrePass;
+        return Value{ .string = "" };
+    }
     // No lookup_table → either validation context (bxp-fmt --expr) or runtime
     // without any pre_pass defined. Both cases existed pre-namespacing and
     // returned empty so validators don't choke on bare LOOKUP(...) exprs.
@@ -1020,8 +1106,17 @@ fn builtinLookup(args: []Value, ctx: *const Context) !Value {
 }
 fn adaptLookup(p: *Parser, args: []Value) anyerror!Value {
     return builtinLookup(args, p.ctx) catch |err| {
-        if (err == error.LookupRequiresName) {
-            p.setDetail("LOOKUP requires explicit name when multiple pre_passes are defined", .{});
+        switch (err) {
+            error.LookupRequiresName => p.setDetail(
+                "LOOKUP requires explicit name when multiple pre_passes are defined", .{}),
+            error.LookupUnknownPrePass => {
+                const name: []const u8 = if (args.len == 3) switch (args[0]) {
+                    .string => |v| v,
+                    else => "",
+                } else (p.ctx.single_prepass_name orelse "");
+                p.setDetail("unknown pre_pass '{s}' — check pre_passes block name", .{name});
+            },
+            else => {},
         }
         return err;
     };
@@ -1045,8 +1140,12 @@ fn builtinSplitPart(args: []Value) !Value {
         .string => |v| v,
         else => return error.StringExpected,
     };
-    const n = @as(usize, @intFromFloat(try args[2].toNumber()));
-    if (n == 0 or delim.len == 0) return Value{ .string = "" };
+    // Gate negative / fractional / zero indexes BEFORE @intFromFloat —
+    // casting a negative or out-of-range f80 to usize is illegal-cast UB.
+    // SPLIT_PART is 1-based; anything < 1 returns "" by spec.
+    const f = try args[2].toNumber();
+    if (f < 1.0 or delim.len == 0) return Value{ .string = "" };
+    const n = @as(usize, @intFromFloat(f));
 
     var rest = s;
     var part: usize = 1;

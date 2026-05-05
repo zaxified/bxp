@@ -1476,6 +1476,196 @@ test "annotateRaw Phase G: did-you-mean suggests close builtin (LOOKUPP → LOOK
     try testing.expect(saw_suggest);
 }
 
+test "annotateRaw Phase G6: BLAH() in row_rules.rows.$var override → \\$err_ at deep path" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // Override expression typo in row_rules[0].rows[0].$ticker. G6
+    // walker must visit this path; without G6 the typo would slip
+    // through (only input_schema + row_rules[].when were validated).
+    const fixture =
+        \\{
+        \\  conversion_templates: {
+        \\    sample: {
+        \\      data_dir: ".",
+        \\      file_pattern_in: ".csv",
+        \\      file_pattern_out: ".csvx",
+        \\      input_schema: { $date: "[Date]" },
+        \\      row_rules: [
+        \\        { when: "true", rows: [ { $ticker: "BLAH([Sym])" } ] },
+        \\      ],
+        \\      output_schema: { date: "$date" },
+        \\    }
+        \\  }
+        \\}
+    ;
+
+    const result = try annotateRaw(a, fixture, "<inline>", 0);
+    try testing.expectEqual(@as(u8, 1), result.exit_code);
+
+    var parsed = try std.json.parseFromSliceLeaky(std.json.Value, a, result.json, .{});
+    const ct = parsed.object.get("conversion_templates") orelse return error.MissingCT;
+    const sample = ct.object.get("sample") orelse return error.MissingSample;
+    const rules = sample.object.get("row_rules") orelse return error.MissingRules;
+    const rule0 = rules.array.items[0];
+    const rows = rule0.object.get("rows") orelse return error.MissingRows;
+    const row0 = rows.array.items[0];
+
+    var has_err = false;
+    var it = row0.object.iterator();
+    while (it.next()) |kv| {
+        if (std.mem.startsWith(u8, kv.key_ptr.*, "$err_") and
+            kv.value_ptr.* == .string and
+            std.mem.indexOf(u8, kv.value_ptr.string, "unknown function 'BLAH'") != null)
+        {
+            has_err = true;
+            break;
+        }
+    }
+    try testing.expect(has_err);
+}
+
+test "annotateRaw Phase G6: BLAH() in pre_pass.values → \\$err_ at deep path" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const fixture =
+        \\{
+        \\  conversion_templates: {
+        \\    sample: {
+        \\      data_dir: ".",
+        \\      file_pattern_in: ".csv",
+        \\      file_pattern_out: ".csvx",
+        \\      pre_pass: {
+        \\        fees: { when: "true", key: "[ID]", values: { fee: "BLAH([F])" } }
+        \\      },
+        \\      input_schema: { $date: "[Date]" },
+        \\      output_schema: { date: "$date" },
+        \\    }
+        \\  }
+        \\}
+    ;
+
+    const result = try annotateRaw(a, fixture, "<inline>", 0);
+    try testing.expectEqual(@as(u8, 1), result.exit_code);
+
+    var parsed = try std.json.parseFromSliceLeaky(std.json.Value, a, result.json, .{});
+    const ct = parsed.object.get("conversion_templates") orelse return error.MissingCT;
+    const sample = ct.object.get("sample") orelse return error.MissingSample;
+    const pp = sample.object.get("pre_pass") orelse return error.MissingPP;
+    const fees = pp.object.get("fees") orelse return error.MissingFees;
+    const values = fees.object.get("values") orelse return error.MissingValues;
+
+    var has_err = false;
+    var it = values.object.iterator();
+    while (it.next()) |kv| {
+        if (std.mem.startsWith(u8, kv.key_ptr.*, "$err_") and
+            kv.value_ptr.* == .string and
+            std.mem.indexOf(u8, kv.value_ptr.string, "unknown function 'BLAH'") != null)
+        {
+            has_err = true;
+            break;
+        }
+    }
+    try testing.expect(has_err);
+}
+
+test "annotateRaw Phase G3: LOOKUP unknown pre_pass name → \\$err_ at expression leaf" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const fixture =
+        \\{
+        \\  conversion_templates: {
+        \\    sample: {
+        \\      data_dir: ".",
+        \\      file_pattern_in: ".csv",
+        \\      file_pattern_out: ".csvx",
+        \\      pre_pass: {
+        \\        real_name: { when: "true", key: "[ID]", values: { x: "[X]" } }
+        \\      },
+        \\      input_schema: { $bad: "LOOKUP('typo_name', [ID], 'x')" },
+        \\      output_schema: { bad: "$bad" },
+        \\    }
+        \\  }
+        \\}
+    ;
+
+    const result = try annotateRaw(a, fixture, "<inline>", 0);
+    try testing.expectEqual(@as(u8, 1), result.exit_code);
+
+    var parsed = try std.json.parseFromSliceLeaky(std.json.Value, a, result.json, .{});
+    const ct = parsed.object.get("conversion_templates") orelse return error.MissingCT;
+    const sample = ct.object.get("sample") orelse return error.MissingSample;
+    const is = sample.object.get("input_schema") orelse return error.MissingIs;
+
+    var has_err = false;
+    var it = is.object.iterator();
+    while (it.next()) |kv| {
+        if (std.mem.startsWith(u8, kv.key_ptr.*, "$err_") and
+            kv.value_ptr.* == .string and
+            std.mem.indexOf(u8, kv.value_ptr.string, "unknown pre_pass 'typo_name'") != null)
+        {
+            has_err = true;
+            break;
+        }
+    }
+    try testing.expect(has_err);
+}
+
+test "annotateRaw Phase G5: SPLIT_PART literal-zero index → \\$warn_ at expression leaf" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const fixture =
+        \\{
+        \\  conversion_templates: {
+        \\    sample: {
+        \\      data_dir: ".",
+        \\      file_pattern_in: ".csv",
+        \\      file_pattern_out: ".csvx",
+        \\      input_schema: {
+        \\        $bad:  "SPLIT_PART([X], '-', 0)",
+        \\        $good: "SPLIT_PART([X], '-', 1)",
+        \\      },
+        \\      output_schema: { bad: "$bad" },
+        \\    }
+        \\  }
+        \\}
+    ;
+
+    const result = try annotateRaw(a, fixture, "<inline>", 0);
+    // Warnings alone don't fail the exit code (exit 1 only on $err_).
+    // The fixture has no errors → exit 0; but a $warn_ marker must
+    // land on the input_schema.
+    try testing.expectEqual(@as(u8, 0), result.exit_code);
+
+    var parsed = try std.json.parseFromSliceLeaky(std.json.Value, a, result.json, .{});
+    const ct = parsed.object.get("conversion_templates") orelse return error.MissingCT;
+    const sample = ct.object.get("sample") orelse return error.MissingSample;
+    const is = sample.object.get("input_schema") orelse return error.MissingIs;
+
+    var saw_bad_warn = false;
+    var it = is.object.iterator();
+    while (it.next()) |kv| {
+        if (std.mem.startsWith(u8, kv.key_ptr.*, "$warn_") and
+            kv.value_ptr.* == .string and
+            std.mem.indexOf(u8, kv.value_ptr.string, "SPLIT_PART index is 1-based") != null)
+        {
+            saw_bad_warn = true;
+        }
+    }
+    try testing.expect(saw_bad_warn);
+}
+
 test "annotateRaw Phase B: output_schema missing attaches at template path" {
     const testing = std.testing;
     var arena = std.heap.ArenaAllocator.init(testing.allocator);

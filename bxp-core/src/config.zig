@@ -756,6 +756,22 @@ pub const BrokerConfig = struct {
     ) !void {
         if (diag == null) return;
 
+        // Phase G3 validate-mode whitelist: populate the set of pre_pass
+        // block names so `builtinLookup` can flag unknown first
+        // arguments. Empty broker (no pre_passes) → empty set; LOOKUP
+        // calls from such a broker still resolve the name and trip
+        // `error.LookupUnknownPrePass` if a name was mistakenly typed.
+        var pre_pass_names = std.StringHashMap(void).init(alloc);
+        defer pre_pass_names.deinit();
+        var pp_names_it = self.pre_passes.iterator();
+        while (pp_names_it.next()) |e| try pre_pass_names.put(e.key_ptr.*, {});
+        // Mirror pipeline.zig: when exactly one pre_pass block exists,
+        // 2-arg LOOKUP resolves to it implicitly.
+        const single_prepass_name: ?[]const u8 = if (self.pre_passes.count() == 1)
+            self.pre_passes.keys()[0]
+        else
+            null;
+
         // input_schema values: $variable → expression
         var is_it = self.input_schema.iterator();
         while (is_it.next()) |entry| {
@@ -766,22 +782,77 @@ pub const BrokerConfig = struct {
                 "input_schema",
                 entry.key_ptr.*,
                 entry.value_ptr.*,
+                &pre_pass_names,
+                single_prepass_name,
             );
         }
 
-        // row_rules[i].when expressions
+        // row_rules[i].when + row_rules[i].rows[j].$var override expressions.
         const rules = self.row_rules orelse &.{};
         for (rules, 0..) |rule, i| {
-            const path_suffix = try std.fmt.allocPrint(alloc, "row_rules.{d}", .{i});
-            defer alloc.free(path_suffix);
+            const when_prefix = try std.fmt.allocPrint(alloc, "row_rules.{d}", .{i});
+            defer alloc.free(when_prefix);
             try checkOneExpr(
                 alloc,
                 diag,
                 template_id,
-                path_suffix,
+                when_prefix,
                 "when",
                 rule.when,
+                &pre_pass_names,
+                single_prepass_name,
             );
+            // Phase G6: each rule.rows[j] is a RowOverride map ($var →
+            // expression). Typos here today silently emit "" into the
+            // output column; surfacing them at load time saves a dry-run.
+            for (rule.rows, 0..) |row, j| {
+                const row_prefix = try std.fmt.allocPrint(
+                    alloc, "row_rules.{d}.rows.{d}", .{ i, j });
+                defer alloc.free(row_prefix);
+                var ov_it = row.iterator();
+                while (ov_it.next()) |ov| {
+                    try checkOneExpr(
+                        alloc,
+                        diag,
+                        template_id,
+                        row_prefix,
+                        ov.key_ptr.*,
+                        ov.value_ptr.*,
+                        &pre_pass_names,
+                        single_prepass_name,
+                    );
+                }
+            }
+        }
+
+        // Phase G6: pre_passes[name].values entries (lookup-table value
+        // expressions). Path encoding mirrors the existing
+        // validateCollect logic above: legacy single block (`_default`
+        // synthetic name) collapses to `pre_pass.values.<field>`, named
+        // blocks expand to `pre_pass.<name>.values.<field>`.
+        var pp_it = self.pre_passes.iterator();
+        while (pp_it.next()) |pp_entry| {
+            const name = pp_entry.key_ptr.*;
+            const pp = pp_entry.value_ptr.*;
+            const is_legacy = std.mem.eql(u8, name, "_default");
+            const values_prefix = if (is_legacy)
+                try alloc.dupe(u8, "pre_pass.values")
+            else
+                try std.fmt.allocPrint(alloc, "pre_pass.{s}.values", .{name});
+            defer alloc.free(values_prefix);
+            var v_it = pp.values.iterator();
+            while (v_it.next()) |v| {
+                try checkOneExpr(
+                    alloc,
+                    diag,
+                    template_id,
+                    values_prefix,
+                    v.key_ptr.*,
+                    v.value_ptr.*,
+                    &pre_pass_names,
+                    single_prepass_name,
+                );
+            }
         }
     }
 };
@@ -796,6 +867,8 @@ fn checkOneExpr(
     field_prefix: []const u8,
     field_leaf: []const u8,
     src: []const u8,
+    pre_pass_names: *const std.StringHashMap(void),
+    single_prepass_name: ?[]const u8,
 ) !void {
     if (src.len == 0) return;
     const d = diag orelse return;
@@ -810,6 +883,8 @@ fn checkOneExpr(
         .col_index = &col_index,
         .ticker_map = &ticker_map_,
         .lookup_table = null,
+        .pre_pass_names = pre_pass_names,
+        .single_prepass_name = single_prepass_name,
         .alloc = alloc,
         .error_detail = &detail,
     };
@@ -853,6 +928,24 @@ fn checkOneExpr(
             .suggest = suggest,
         });
     };
+
+    // Phase G5: static check for SPLIT_PART(_, _, <literal-int>) where
+    // the literal is ≤ 0. Independent of expr.eval — purely token-level
+    // scan, runs even when eval succeeded (warnings don't block save).
+    if (expr.staticCheckSplitPart(src)) |bad_idx| {
+        const full_field = try std.fmt.allocPrint(alloc, "{s}.{s}", .{ field_prefix, field_leaf });
+        defer alloc.free(full_field);
+        const path = try std.fmt.allocPrint(alloc, "conversion_templates.{s}.{s}", .{ template_id, full_field });
+        const message = try std.fmt.allocPrint(alloc,
+            "expression in {s}: SPLIT_PART index is 1-based; literal {d} always returns \"\"",
+            .{ field_leaf, bad_idx });
+        try d.append(.{
+            .path = path,
+            .severity = .warning,
+            .code = "expr.SplitPartBadIndex",
+            .message = message,
+        });
+    }
 }
 
 /// Extract the first single-quoted name from `s`. Returns null when no
