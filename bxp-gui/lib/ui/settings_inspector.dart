@@ -193,6 +193,7 @@ class _Body extends StatelessWidget {
         ('saving', store.isSaving.toString()),
         ('hasErrors', store.configHasErrors.toString()),
         ('hadErrors (load)', store.configLoadHadErrors.toString()),
+        ('fsCheckSlow', store.fsCheckSlow.toString()),
         if (store.configError != null)
           ('error', store.configError!),
       ]),

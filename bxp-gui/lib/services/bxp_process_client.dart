@@ -140,13 +140,20 @@ class BxpProcessClient {
   /// Validates config via `bxp-fmt --config <path>`.
   /// Returns stdout (annotated JSON) on exit 0, throws on missing binary.
   /// Non-zero exit with stderr is returned wrapped in `{"error": "..."}`.
-  static Future<String> loadConfig(String path) async {
+  ///
+  /// [checkFsSeconds] controls bxp-fmt's optional FS validation pass:
+  /// 0 (default) skips it entirely, >0 enables it with that many seconds
+  /// total deadline. The TraceStore flips to 0 for the rest of the
+  /// session if a previous call surfaced an `[fs.timeout]` warning.
+  static Future<String> loadConfig(String path, {int checkFsSeconds = 0}) async {
     final bin = findBin('bxp-fmt');
     if (bin == null) {
       return '{"error": "bxp-fmt binary not found"}';
     }
-    final result =
-        await _runWithTimeout(bin, ['--config', path], _configTimeout);
+    final args = checkFsSeconds > 0
+        ? ['--config', path, '--check-fs=$checkFsSeconds']
+        : ['--config', path];
+    final result = await _runWithTimeout(bin, args, _configTimeout);
     if (result.exitCode == 0) {
       return result.stdout as String;
     }

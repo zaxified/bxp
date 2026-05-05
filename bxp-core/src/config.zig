@@ -1054,18 +1054,18 @@ pub fn validateCrossTemplate(
     }
 }
 
-/// Filesystem-touching invariants: today only `data_dir` existence
-/// (Phase F #33). Each broker's resolved `data_dir` is opened with
-/// `std.fs.cwd().openDir`; FileNotFound becomes an error-severity
-/// `fs.dir_not_found` Diagnostic, other open failures become a
-/// warning-severity `fs.dir_unreadable`. bxp-cli skips this entirely
-/// (early return on null sink); only bxp-fmt's deep pass invokes it.
+/// Filesystem-touching invariants: each broker's resolved `data_dir`
+/// is opened with `std.fs.cwd().openDir` (FileNotFound →
+/// `fs.dir_not_found` error, other open failures → `fs.dir_unreadable`
+/// warning), then iterated to count files whose name ends with
+/// `file_pattern_in` — zero matches → `fs.no_input_files` warning.
+/// bxp-cli skips this entirely (early return on null sink); the deep
+/// pass in bxp-fmt and the opt-in `--check-fs=N` path in bxp-cli both
+/// invoke it.
 ///
-/// Implementation is synchronous today — for typical configs (≤30
-/// brokers on local disk) the total stat cost is sub-millisecond. The
-/// plan reserves an async-with-2s-timeout wrapper for slow-network
-/// pathological cases; deferred until perf actually becomes a problem
-/// (tracked in DEV/audit-followup-todo.md "Phase F async wrapper").
+/// Implementation is synchronous; `validateFilesystemWithTimeout`
+/// wraps it in a worker thread + deadline for environments with slow
+/// network mounts.
 pub fn validateFilesystem(
     cfg: *const Config,
     alloc: std.mem.Allocator,
@@ -1077,7 +1077,7 @@ pub fn validateFilesystem(
     while (it.next()) |entry| {
         const id = entry.key_ptr.*;
         const broker = entry.value_ptr.*;
-        var dir = std.fs.cwd().openDir(broker.data_dir, .{}) catch |err| {
+        var dir = std.fs.cwd().openDir(broker.data_dir, .{ .iterate = true }) catch |err| {
             if (err == error.FileNotFound) {
                 try emitTemplateDiag(alloc, diag, .@"error", "fs.dir_not_found",
                     id, "data_dir",
@@ -1089,8 +1089,142 @@ pub fn validateFilesystem(
             }
             continue;
         };
-        dir.close();
+        defer dir.close();
+
+        // Scan for files matching file_pattern_in. Mirrors
+        // pipeline.zig's runtime suffix-match — one matched file is
+        // enough to confirm the template has work to do; we stop
+        // counting after the first hit. Iteration errors break the
+        // loop (rare on Linux) and fall through to the
+        // `fs.no_input_files` warning below.
+        var matched: u32 = 0;
+        var dir_it = dir.iterate();
+        while (dir_it.next() catch null) |dir_entry| {
+            if (dir_entry.kind != .file) continue;
+            if (std.mem.endsWith(u8, dir_entry.name, broker.file_pattern_in)) {
+                matched = 1;
+                break;
+            }
+        }
+        if (matched == 0) {
+            try emitTemplateDiag(alloc, diag, .warning, "fs.no_input_files",
+                id, "data_dir",
+                "data_dir '{s}' contains no files matching '{s}'",
+                .{ broker.data_dir, broker.file_pattern_in });
+        }
     }
+}
+
+/// Async wrapper around [validateFilesystem]: spawns a worker thread,
+/// waits up to `deadline_ms` for it to finish via a shared
+/// `ResetEvent`, and on timeout abandons the worker (detach + leak
+/// page-allocated context) while emitting one `fs.timeout` warning.
+///
+/// Total deadline applies across all brokers — per-broker timeout
+/// would need N worker threads or signal handling for marginal
+/// real-world benefit. Worker uses `std.heap.page_allocator` so
+/// allocations don't dangle when the caller returns first; on
+/// successful completion main copies diagnostics into the caller's
+/// allocator and frees the page-allocated context.
+///
+/// `deadline_ms == 0` short-circuits to a no-op (FS check disabled).
+pub fn validateFilesystemWithTimeout(
+    cfg: *const Config,
+    alloc: std.mem.Allocator,
+    diag: ?*Diagnostics,
+    deadline_ms: u64,
+) !void {
+    const sink = diag orelse return;
+    if (deadline_ms == 0) return;
+
+    const page = std.heap.page_allocator;
+    const ctx = try page.create(FsCheckCtx);
+    ctx.* = .{
+        .cfg = cfg,
+        .diag_buffer = .init(page),
+        .done = .{},
+    };
+
+    const thread = std.Thread.spawn(.{}, fsCheckWorker, .{ctx}) catch |err| {
+        // Spawn failure: leak nothing — clean ctx, fall back to sync.
+        ctx.diag_buffer.deinit();
+        page.destroy(ctx);
+        if (err == error.OutOfMemory) return err;
+        // Other spawn errors (system thread limit, etc.): degrade to
+        // sync call so the user still gets the validation result.
+        return validateFilesystem(cfg, alloc, sink);
+    };
+
+    ctx.done.timedWait(deadline_ms * std.time.ns_per_ms) catch {
+        // Timeout. Detach the worker (it will continue to completion in
+        // the background and exit when its syscall returns; OS reaps
+        // the thread on process exit). The ctx and its page-allocated
+        // diagnostics leak intentionally — bxp-fmt / bxp-cli are
+        // short-lived processes, the cost is negligible.
+        thread.detach();
+        try emitGlobalDiag(alloc, sink, .warning, "fs.timeout",
+            "[fs.timeout] filesystem check exceeded {d}ms — data_dir existence not verified",
+            .{deadline_ms});
+        return;
+    };
+
+    // Worker finished within deadline. Join, copy diagnostics into the
+    // caller's allocator (page-allocated originals are about to be
+    // freed), and clean up.
+    thread.join();
+    for (ctx.diag_buffer.items.items) |item| {
+        try sink.append(.{
+            .path = try alloc.dupe(u8, item.path),
+            .severity = item.severity,
+            .code = item.code, // codes are 'static-like string literals — safe to alias
+            .message = try alloc.dupe(u8, item.message),
+            .suggest = if (item.suggest) |s| try alloc.dupe(u8, s) else null,
+        });
+    }
+    ctx.diag_buffer.deinit();
+    page.destroy(ctx);
+}
+
+/// Heap-allocated worker context that survives both threads. Lives in
+/// `std.heap.page_allocator` so the worker can keep using it after
+/// the main thread has detached and moved on.
+const FsCheckCtx = struct {
+    cfg: *const Config,
+    diag_buffer: Diagnostics,
+    done: std.Thread.ResetEvent,
+};
+
+fn fsCheckWorker(ctx: *FsCheckCtx) void {
+    // Always signal completion, even on partial / errored validation —
+    // main side cares about "did the worker get this far in time", not
+    // about specific failure modes. Diagnostic emission errors
+    // (OutOfMemory) are silently dropped here; the partial diagnostics
+    // already in diag_buffer still get copied out by main.
+    defer ctx.done.set();
+    validateFilesystem(ctx.cfg, std.heap.page_allocator, &ctx.diag_buffer) catch {};
+}
+
+/// Root-level diagnostic (empty path). Sibling of [emitTemplateDiag]
+/// for findings that aren't tied to a specific template — today only
+/// `fs.timeout` from [validateFilesystemWithTimeout]. The empty path
+/// fits the `_validationPathAlive("")` true case in bxp-gui (commit
+/// `354769f`), so the warning is never filtered as an orphan.
+fn emitGlobalDiag(
+    alloc: std.mem.Allocator,
+    diag: ?*Diagnostics,
+    severity: Severity,
+    code: []const u8,
+    comptime fmt: []const u8,
+    args: anytype,
+) !void {
+    const d = diag orelse return;
+    const message = try std.fmt.allocPrint(alloc, fmt, args);
+    try d.append(.{
+        .path = "", // root-level diagnostic
+        .severity = severity,
+        .code = code,
+        .message = message,
+    });
 }
 
 /// True when one string is a suffix of the other (or they're equal).

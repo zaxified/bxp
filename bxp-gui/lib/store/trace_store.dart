@@ -130,6 +130,40 @@ class TraceStore extends ChangeNotifier {
   Map<String, Map<String, String>> _validationWarnings = const {};
   Map<String, Map<String, String>> _validationInfo = const {};
 
+  /// Default deadline (seconds) for bxp-fmt's FS validation pass on
+  /// load / save. 2s is plenty on local disk (sub-millisecond per
+  /// broker); the GUI degrades to 0 (skip) for the rest of the session
+  /// if any call surfaces an `[fs.timeout]` warning — see
+  /// [_fsCheckSlow] and [_activeFsCheckSeconds].
+  static const int _kFsCheckSeconds = 2;
+
+  /// Set true on the first `[fs.timeout]` warning observed in
+  /// `_validationWarnings`. Adaptive degradation: subsequent
+  /// loadConfig / saveConfig spawns drop the `--check-fs=N` flag so a
+  /// pathological NFS/SMB mount only pays the deadline once per app
+  /// session. Resets on app restart only — there's no UI toggle.
+  bool _fsCheckSlow = false;
+  bool get fsCheckSlow => _fsCheckSlow;
+
+  int _activeFsCheckSeconds() => _fsCheckSlow ? 0 : _kFsCheckSeconds;
+
+  /// Scan `_validationWarnings` for the `[fs.timeout]` prefix emitted
+  /// by `bxp-core`'s `validateFilesystemWithTimeout`. Sets
+  /// [_fsCheckSlow] on the first match. No-op once the flag is true.
+  /// Caller must already have updated `_validationWarnings`.
+  void _detectFsTimeout() {
+    if (_fsCheckSlow) return;
+    for (final entry in _validationWarnings.values) {
+      for (final v in entry.values) {
+        if (v.startsWith('[fs.timeout]')) {
+          _fsCheckSlow = true;
+          devTrace('config.fs_check_slow_detected');
+          return;
+        }
+      }
+    }
+  }
+
   /// AST is the single source of truth for the loaded config. Every
   /// mutation applies through `op_to_ast.applyConfigOp`; saves dump
   /// directly via the AST patcher.
@@ -1007,7 +1041,10 @@ class TraceStore extends ChangeNotifier {
       // pre_pass diagnostics that the AST parser (pure JSON5) doesn't
       // know about. Parse its output, build the path-keyed error map.
       try {
-        final jsonOutput = await BxpProcessClient.loadConfig(configPath);
+        final jsonOutput = await BxpProcessClient.loadConfig(
+          configPath,
+          checkFsSeconds: _activeFsCheckSeconds(),
+        );
         final bxpTree = jsonDecode(jsonOutput);
         if (bxpTree is Map<String, dynamic>) {
           final bxpFatal = bxpTree['error'] as String?;
@@ -1022,6 +1059,7 @@ class TraceStore extends ChangeNotifier {
             _validationErrors = buckets.errors;
             _validationWarnings = buckets.warnings;
             _validationInfo = buckets.info;
+            _detectFsTimeout();
           }
         } else {
           // Unexpected top-level shape (List, scalar, null) — possible only
@@ -1678,12 +1716,16 @@ class TraceStore extends ChangeNotifier {
           _validationErrors = b.errors;
           _validationWarnings = b.warnings;
           _validationInfo = b.info;
+          _detectFsTimeout();
         }
         configSaveError = msg;
         notifyListeners();
       }
 
-      final validation = await BxpProcessClient.loadConfig(tmpPath);
+      final validation = await BxpProcessClient.loadConfig(
+        tmpPath,
+        checkFsSeconds: _activeFsCheckSeconds(),
+      );
       try {
         final parsed = jsonDecode(validation);
         final err = parsed is Map ? parsed['error'] as String? : null;

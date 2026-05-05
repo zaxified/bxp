@@ -4,6 +4,7 @@
 /// to the processing pipeline (pipeline.zig) for per-broker file conversion.
 const std = @import("std");
 const config_mod = @import("config");
+const diagnostics_mod = @import("diagnostics");
 const pipeline = @import("pipeline.zig");
 const build_options = @import("build_options");
 
@@ -38,6 +39,8 @@ const USAGE_TEMPLATE =
     \\  --trace            emit per-row NDJSON events on stdout (forces --quiet; conflicts with --debug)
     \\  --debug            suppresses informational stdout summaries; prints unmatched rows as JSON when row_rules_debug_missing is set
     \\  --quiet            suppress informational stdout (errors still go to stderr)
+    \\  --check-fs=N       opt-in: validate data_dir + input-file existence before any processing,
+    \\                     with N-second total timeout (e.g. --check-fs=5). Default off.
     \\  --version          print version and exit
     \\  --help             print this help and exit
     \\
@@ -144,6 +147,7 @@ pub fn main() !void {
     var fresh = false;
     var trace = false;
     var dry_run = false;
+    var check_fs_seconds: u8 = 0;
     for (args[1..]) |arg| {
         if (std.mem.eql(u8, arg, "--version")) {
             stdout.print("bxp-cli {s}\n", .{build_options.version}) catch {};
@@ -159,6 +163,13 @@ pub fn main() !void {
         if (std.mem.eql(u8, arg, "--fresh")) fresh = true;
         if (std.mem.eql(u8, arg, "--trace")) trace = true;
         if (std.mem.eql(u8, arg, "--dry-run")) dry_run = true;
+        if (std.mem.startsWith(u8, arg, "--check-fs=")) {
+            const val = arg["--check-fs=".len..];
+            check_fs_seconds = std.fmt.parseUnsigned(u8, val, 10) catch {
+                std.debug.print("error: --check-fs requires a non-negative integer (seconds): got '{s}'\n", .{val});
+                std.process.exit(1);
+            };
+        }
     }
 
     if (quiet and debug) {
@@ -172,7 +183,7 @@ pub fn main() !void {
 
     const out = Output{ .writer = stdout, .quiet = quiet, .debug = debug, .trace = trace, .dry_run = dry_run };
 
-    const stats = run(args, out, fresh, alloc) catch |err| {
+    const stats = run(args, out, fresh, check_fs_seconds, alloc) catch |err| {
         if (err == error.Fatal) {
             out.event("done", .{ .exit_code = @as(u8, 1) });
             std.process.exit(1); // message already printed
@@ -192,7 +203,7 @@ pub fn main() !void {
 /// Parses CLI arguments, loads config, validates all templates, then dispatches
 /// to the processing pipeline for each selected template.
 /// Returns overall SectionStats; exit code is determined by the caller.
-fn run(args: [][:0]u8, out: Output, fresh: bool, alloc: std.mem.Allocator) !SectionStats {
+fn run(args: [][:0]u8, out: Output, fresh: bool, check_fs_seconds: u8, alloc: std.mem.Allocator) !SectionStats {
     var overall = SectionStats{};
     var timer = try std.time.Timer.start();
 
@@ -273,6 +284,40 @@ fn run(args: [][:0]u8, out: Output, fresh: bool, alloc: std.mem.Allocator) !Sect
         }
     }
 
+    // Opt-in filesystem check: verifies data_dir existence + at least
+    // one input file matching file_pattern_in for every template, with
+    // a total deadline of `check_fs_seconds`. Errors → fatal startup
+    // failure (silent empty-CSV is the alternative); warnings → print
+    // and continue. `check_fs_seconds == 0` (default) skips entirely.
+    if (check_fs_seconds > 0) {
+        var fs_diag: diagnostics_mod.Diagnostics = .init(alloc);
+        defer fs_diag.deinit();
+        try config_mod.validateFilesystemWithTimeout(
+            &cfg,
+            alloc,
+            &fs_diag,
+            @as(u64, check_fs_seconds) * 1000,
+        );
+        var has_fs_fatal = false;
+        for (fs_diag.items.items) |d| {
+            switch (d.severity) {
+                .@"error" => {
+                    out.fatal("error: {s}\n", .{d.message});
+                    has_fs_fatal = true;
+                },
+                .warning => out.warning("warning: {s}\n", .{d.message}),
+                .info => out.info("{s}\n", .{d.message}),
+            }
+        }
+        if (has_fs_fatal) {
+            overall.has_fatal = true;
+            out.info("\n=== overall summary ===\n", .{});
+            overall.time_ns = timer.read();
+            out.overallLine(overall);
+            return error.Fatal;
+        }
+    }
+
     // Parse --template and optional --data override.
     var template_id: ?[]const u8 = null;
     var dir_path_arg: ?[]const u8 = null;
@@ -299,7 +344,8 @@ fn run(args: [][:0]u8, out: Output, fresh: bool, alloc: std.mem.Allocator) !Sect
             std.mem.eql(u8, args[i], "--fresh") or
             std.mem.eql(u8, args[i], "--trace") or
             std.mem.eql(u8, args[i], "--dry-run") or
-            std.mem.eql(u8, args[i], "--help"))
+            std.mem.eql(u8, args[i], "--help") or
+            std.mem.startsWith(u8, args[i], "--check-fs="))
         {
             // known flags — no action needed here
         } else {

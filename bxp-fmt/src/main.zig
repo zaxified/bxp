@@ -59,6 +59,11 @@ pub fn main() !u8 {
     var emit_docs = false;
     var list_templates = false;
     var fetch_template_id: ?[]const u8 = null;
+    // Filesystem validation timeout in seconds. Zero = disabled (default).
+    // GUI passes `--check-fs=2` on every load/save; manual / scripted
+    // callers opt in only when they want load-time data_dir + input-file
+    // existence diagnostics.
+    var check_fs_seconds: u8 = 0;
 
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
@@ -140,6 +145,14 @@ pub fn main() !u8 {
             fetch_template_id = args[i];
             continue;
         }
+        if (std.mem.startsWith(u8, a, "--check-fs=")) {
+            const val = a["--check-fs=".len..];
+            check_fs_seconds = std.fmt.parseUnsigned(u8, val, 10) catch {
+                std.debug.print("error: --check-fs requires a non-negative integer (seconds): got '{s}'\n", .{val});
+                return 2;
+            };
+            continue;
+        }
         std.debug.print("error: unknown argument: {s}\n", .{a});
         usage();
         return 2;
@@ -186,7 +199,7 @@ pub fn main() !u8 {
         return try runDocs(alloc);
     }
     if (config_path) |p| {
-        return try runConfig(alloc, p);
+        return try runConfig(alloc, p, check_fs_seconds);
     }
     if (expr_src) |e| {
         return try runExpr(alloc, e);
@@ -365,7 +378,7 @@ fn runFetchTemplate(alloc: std.mem.Allocator, path: []const u8, id: []const u8) 
 // keys are unique. stderr still receives human-readable diagnostics from the
 // JSON5/config parser.
 
-fn runConfig(alloc: std.mem.Allocator, path: []const u8) !u8 {
+fn runConfig(alloc: std.mem.Allocator, path: []const u8, check_fs_seconds: u8) !u8 {
     // Arena for all allocations — freed on exit.
     var arena = std.heap.ArenaAllocator.init(alloc);
     defer arena.deinit();
@@ -375,7 +388,7 @@ fn runConfig(alloc: std.mem.Allocator, path: []const u8) !u8 {
     var stdout_fw = std.fs.File.stdout().writer(&stdout_buf);
     const stdout = &stdout_fw.interface;
 
-    const result = try annotateConfigFromFile(a, path);
+    const result = try annotateConfigFromFile(a, path, check_fs_seconds);
     try stdout.writeAll(result.json);
     try stdout.writeByte('\n');
     try stdout.flush();
@@ -392,12 +405,13 @@ const AnnotateResult = struct {
 };
 
 /// File-loading wrapper around `annotateRaw`. Reads `path`, then runs
-/// the same pure pipeline as the inline tests use.
-fn annotateConfigFromFile(a: std.mem.Allocator, path: []const u8) !AnnotateResult {
+/// the same pure pipeline as the inline tests use. `check_fs_seconds`
+/// is the deadline for the FS validation pass; 0 disables the check.
+fn annotateConfigFromFile(a: std.mem.Allocator, path: []const u8, check_fs_seconds: u8) !AnnotateResult {
     const raw = readFileCapped(a, path) catch |err| {
         return .{ .json = try formatRootErr(a, @errorName(err)), .exit_code = 1 };
     };
-    return annotateRaw(a, raw, path);
+    return annotateRaw(a, raw, path, check_fs_seconds);
 }
 
 /// Pure annotation pipeline — takes JSON5 source bytes, preserves
@@ -409,7 +423,7 @@ fn annotateConfigFromFile(a: std.mem.Allocator, path: []const u8) !AnnotateResul
 /// messages (the validator embeds it in `<path>: config error: ...`
 /// strings) — pass `"<inline>"` or any marker when the source isn't
 /// from a real file.
-fn annotateRaw(a: std.mem.Allocator, raw: []const u8, path_label: []const u8) !AnnotateResult {
+fn annotateRaw(a: std.mem.Allocator, raw: []const u8, path_label: []const u8, check_fs_seconds: u8) !AnnotateResult {
     const ann = json5_mod.preprocessAnnotated(a, raw) catch |err| {
         return .{ .json = try formatRootErr(a, @errorName(err)), .exit_code = 1 };
     };
@@ -452,9 +466,16 @@ fn annotateRaw(a: std.mem.Allocator, raw: []const u8, path_label: []const u8) !A
     // never calls this — it lives entirely on the bxp-fmt deep path.
     try config_mod.validateCrossTemplate(&cfg, a, &diag);
 
-    // Filesystem-touching invariants (data_dir existence today).
-    // Synchronous — async wrapper deferred (see config.zig docs).
-    try config_mod.validateFilesystem(&cfg, a, &diag);
+    // Filesystem-touching invariants (data_dir + input-file existence).
+    // Gated by `--check-fs=N` flag — N=0 (default) skips entirely;
+    // otherwise N is the deadline in seconds and the worker thread is
+    // detached on overrun. See `validateFilesystemWithTimeout` doc.
+    try config_mod.validateFilesystemWithTimeout(
+        &cfg,
+        a,
+        &diag,
+        @as(u64, check_fs_seconds) * 1000,
+    );
 
     if (cfg.brokers.count() == 0) {
         try insertErrBefore(a, &value, "", "no conversion_templates defined", &counter);
@@ -958,7 +979,7 @@ test "annotateRaw: comments preserved + missing conversion_templates → \\$err_
         \\}
     ;
 
-    const result = try annotateRaw(a, fixture, "<inline>");
+    const result = try annotateRaw(a, fixture, "<inline>", 0);
     try testing.expectEqual(@as(u8, 1), result.exit_code);
 
     const parsed = try std.json.parseFromSliceLeaky(std.json.Value, a, result.json, .{});
@@ -1005,7 +1026,7 @@ test "annotateRaw: clean config exits 0 with no \\$err_* markers" {
         \\}
     ;
 
-    const result = try annotateRaw(a, fixture, "<inline>");
+    const result = try annotateRaw(a, fixture, "<inline>", 0);
     try testing.expectEqual(@as(u8, 0), result.exit_code);
 
     const parsed = try std.json.parseFromSliceLeaky(std.json.Value, a, result.json, .{});
@@ -1043,7 +1064,7 @@ test "annotateRaw Phase B: xlsx_sheet missing 'name' attaches \\$err_ at xlsx_sh
         \\}
     ;
 
-    const result = try annotateRaw(a, fixture, "<inline>");
+    const result = try annotateRaw(a, fixture, "<inline>", 0);
     try testing.expectEqual(@as(u8, 1), result.exit_code);
 
     var parsed = try std.json.parseFromSliceLeaky(std.json.Value, a, result.json, .{});
@@ -1093,7 +1114,7 @@ test "annotateRaw Phase B: ticker_map unknown named ref attaches at ticker_map p
         \\}
     ;
 
-    const result = try annotateRaw(a, fixture, "<inline>");
+    const result = try annotateRaw(a, fixture, "<inline>", 0);
     try testing.expectEqual(@as(u8, 1), result.exit_code);
 
     var parsed = try std.json.parseFromSliceLeaky(std.json.Value, a, result.json, .{});
@@ -1141,7 +1162,7 @@ test "annotateRaw Phase C: duplicate top-level key surfaces \\$err_ with key nam
         \\}
     ;
 
-    const result = try annotateRaw(a, fixture, "<inline>");
+    const result = try annotateRaw(a, fixture, "<inline>", 0);
     try testing.expectEqual(@as(u8, 1), result.exit_code);
 
     var parsed = try std.json.parseFromSliceLeaky(std.json.Value, a, result.json, .{});
@@ -1191,7 +1212,7 @@ test "annotateRaw Phase D: wrong-type-silent emits \\$warn_ at template" {
         \\}
     ;
 
-    const result = try annotateRaw(a, fixture, "<inline>");
+    const result = try annotateRaw(a, fixture, "<inline>", 0);
     // exit 0 — warnings don't fail, only error-severity does
     try testing.expectEqual(@as(u8, 0), result.exit_code);
 
@@ -1253,7 +1274,7 @@ test "annotateRaw Phase E: file_pattern_in collision warns at first template" {
         \\}
     ;
 
-    const result = try annotateRaw(a, fixture, "<inline>");
+    const result = try annotateRaw(a, fixture, "<inline>", 0);
     try testing.expectEqual(@as(u8, 0), result.exit_code);
 
     var parsed = try std.json.parseFromSliceLeaky(std.json.Value, a, result.json, .{});
@@ -1305,7 +1326,7 @@ test "annotateRaw Phase E: distinct file_pattern_in suffixes do not warn" {
         \\}
     ;
 
-    const result = try annotateRaw(a, fixture, "<inline>");
+    const result = try annotateRaw(a, fixture, "<inline>", 0);
     try testing.expectEqual(@as(u8, 0), result.exit_code);
 
     var parsed = try std.json.parseFromSliceLeaky(std.json.Value, a, result.json, .{});
@@ -1341,7 +1362,9 @@ test "annotateRaw Phase F: missing data_dir surfaces \\$err_ at template" {
         \\}
     ;
 
-    const result = try annotateRaw(a, fixture, "<inline>");
+    // check_fs_seconds=5: opt-in path. With 0 the FS check is a
+    // no-op and this fixture would no longer flag the missing dir.
+    const result = try annotateRaw(a, fixture, "<inline>", 5);
     try testing.expectEqual(@as(u8, 1), result.exit_code);
 
     var parsed = try std.json.parseFromSliceLeaky(std.json.Value, a, result.json, .{});
@@ -1385,7 +1408,7 @@ test "annotateRaw Phase G: unknown function in input_schema surfaces \\$err_" {
         \\}
     ;
 
-    const result = try annotateRaw(a, fixture, "<inline>");
+    const result = try annotateRaw(a, fixture, "<inline>", 0);
     try testing.expectEqual(@as(u8, 1), result.exit_code);
 
     var parsed = try std.json.parseFromSliceLeaky(std.json.Value, a, result.json, .{});
@@ -1472,7 +1495,7 @@ test "annotateRaw Phase B: output_schema missing attaches at template path" {
         \\}
     ;
 
-    const result = try annotateRaw(a, fixture, "<inline>");
+    const result = try annotateRaw(a, fixture, "<inline>", 0);
     try testing.expectEqual(@as(u8, 1), result.exit_code);
 
     var parsed = try std.json.parseFromSliceLeaky(std.json.Value, a, result.json, .{});
