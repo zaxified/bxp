@@ -854,6 +854,56 @@ pub const BrokerConfig = struct {
                 );
             }
         }
+
+        // Phase G2 layer B: gather every expression source in this
+        // broker, run frequency clustering, surface a warning when one
+        // `[X]` looks like a typo of a high-frequency reference. Loads
+        // without a real CSV header (bxp-fmt and bxp-cli load path), so
+        // this complements the runtime header check (layer A) — both
+        // are warnings, both share the `expr.UnknownField` code.
+        var sources = std.array_list.Managed([]const u8).init(alloc);
+        defer sources.deinit();
+        var is2 = self.input_schema.iterator();
+        while (is2.next()) |e| try sources.append(e.value_ptr.*);
+        for (rules) |rule| {
+            try sources.append(rule.when);
+            for (rule.rows) |row| {
+                var ov = row.iterator();
+                while (ov.next()) |o| try sources.append(o.value_ptr.*);
+            }
+        }
+        var pp2 = self.pre_passes.iterator();
+        while (pp2.next()) |pp_entry| {
+            const pp = pp_entry.value_ptr.*;
+            try sources.append(pp.when);
+            try sources.append(pp.key);
+            var v_it = pp.values.iterator();
+            while (v_it.next()) |v| try sources.append(v.value_ptr.*);
+        }
+        if (try staticCheckFieldClustering(sources.items, alloc)) |outlier| {
+            const path = try std.fmt.allocPrint(
+                alloc,
+                "conversion_templates.{s}.input_schema",
+                .{template_id},
+            );
+            const message = try std.fmt.allocPrint(
+                alloc,
+                "field '{s}' is referenced once but '{s}' is used many times — possible typo",
+                .{ outlier.bad, outlier.suggest },
+            );
+            const suggest = try std.fmt.allocPrint(
+                alloc,
+                "did you mean '{s}'?",
+                .{outlier.suggest},
+            );
+            try diag.?.append(.{
+                .path = path,
+                .severity = .warning,
+                .code = "expr.UnknownField",
+                .message = message,
+                .suggest = suggest,
+            });
+        }
     }
 };
 
@@ -1017,6 +1067,76 @@ fn closestBuiltin(name: []const u8) ?[]const u8 {
 /// 64-byte cap is plenty. Falls back to length-based estimate when a
 /// string overflows the buffer (theoretical; no real builtin name is
 /// that long).
+/// Phase G2 layer B: load-time field-name clustering. Given a slice of
+/// expression sources from a single broker, collect every `[X]` named
+/// reference (via `expr.staticReferences`), build a frequency map, and
+/// return the first outlier — a name with `freq == 1` whose Levenshtein
+/// distance to some name with `freq >= 3` is `≤ 2`.
+///
+/// Threshold rationale:
+///   - `freq == 1`: low-frequency outlier candidate (typos rarely
+///     repeat).
+///   - `freq >= 3`: high-frequency cluster (3+ uses = intentional
+///     convention).
+///   - The gap (`freq == 2`) is neutral on purpose — neither outlier
+///     nor cluster.
+///
+/// Returned strings are slices into the input sources / hash map keys.
+/// Caller must ensure those outlive the result, or dupe before the
+/// per-broker arena tears down.
+pub const FieldOutlier = struct {
+    bad: []const u8,
+    suggest: []const u8,
+};
+
+pub fn staticCheckFieldClustering(
+    sources: []const []const u8,
+    alloc: std.mem.Allocator,
+) !?FieldOutlier {
+    var freq = std.StringHashMap(u32).init(alloc);
+    defer freq.deinit();
+
+    for (sources) |src| {
+        if (src.len == 0) continue;
+        var refs = try expr.staticReferences(src, alloc);
+        defer refs.deinit();
+        var it = refs.fields.iterator();
+        while (it.next()) |e| {
+            const gop = try freq.getOrPut(e.key_ptr.*);
+            if (!gop.found_existing) gop.value_ptr.* = 0;
+            gop.value_ptr.* += 1;
+        }
+    }
+
+    // Scan for outliers. Deterministic order: hash-map iteration is
+    // unordered, but the test signal is "is there at least one
+    // outlier" — caller surfaces just the first found, additional
+    // outliers (if any) get reported on the next run after the user
+    // fixes the first.
+    var f1 = freq.iterator();
+    while (f1.next()) |e1| {
+        if (e1.value_ptr.* != 1) continue;
+        const bad = e1.key_ptr.*;
+
+        var best: ?[]const u8 = null;
+        var best_d: usize = std.math.maxInt(usize);
+        var f2 = freq.iterator();
+        while (f2.next()) |e2| {
+            if (e2.value_ptr.* < 3) continue;
+            const cand = e2.key_ptr.*;
+            const d = levenshteinIgnoreCase(bad, cand);
+            if (d < best_d) {
+                best_d = d;
+                best = cand;
+            }
+        }
+        if (best != null and best_d <= 2) {
+            return .{ .bad = bad, .suggest = best.? };
+        }
+    }
+    return null;
+}
+
 pub fn levenshteinIgnoreCase(a: []const u8, b: []const u8) usize {
     const max_len: usize = 64;
     if (a.len > max_len or b.len > max_len) {

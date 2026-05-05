@@ -1865,6 +1865,100 @@ test "annotateRaw Phase G7: $variable keys in input_schema are NOT flagged" {
     try testing.expect(!found_false_positive);
 }
 
+test "annotateRaw Phase G2 layer B: clustering flags low-frequency outlier" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // [Symbol] used 3 times (high-frequency cluster), [Symbo] used
+    // once (low-frequency outlier, distance 1) → warning.
+    const fixture =
+        \\{
+        \\  conversion_templates: {
+        \\    sample: {
+        \\      data_dir: ".",
+        \\      file_pattern_in: ".csv",
+        \\      file_pattern_out: ".csvx",
+        \\      input_schema: {
+        \\        $a: "[Symbol]",
+        \\        $b: "[Symbol]",
+        \\        $c: "[Symbol]",
+        \\        $d: "[Symbo]"
+        \\      },
+        \\      output_schema: { a: "$a", b: "$b", c: "$c", d: "$d" }
+        \\    }
+        \\  }
+        \\}
+    ;
+
+    const result = try annotateRaw(a, fixture, "<inline>", 0);
+    // Warning severity → exit 0 from bxp-fmt --config (warnings don't
+    // flip exit code; only $err_* does).
+    try testing.expectEqual(@as(u8, 0), result.exit_code);
+
+    var parsed = try std.json.parseFromSliceLeaky(std.json.Value, a, result.json, .{});
+    const ct = parsed.object.get("conversion_templates") orelse return error.MissingCT;
+    const sample = ct.object.get("sample") orelse return error.MissingSample;
+
+    var saw = false;
+    var it = sample.object.iterator();
+    while (it.next()) |kv| {
+        if (std.mem.startsWith(u8, kv.key_ptr.*, "$warn_") and
+            diagHas(kv.value_ptr, "field 'Symbo' is referenced once"))
+        {
+            saw = true;
+        }
+    }
+    try testing.expect(saw);
+}
+
+test "annotateRaw Phase G2 layer B: high-distance optional column NOT flagged" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // [Symbol] used 3 times (cluster), [Stamp duty reserve tax] once
+    // — distance ≫ 2 from any cluster name, must NOT be flagged.
+    const fixture =
+        \\{
+        \\  conversion_templates: {
+        \\    sample: {
+        \\      data_dir: ".",
+        \\      file_pattern_in: ".csv",
+        \\      file_pattern_out: ".csvx",
+        \\      input_schema: {
+        \\        $a: "[Symbol]",
+        \\        $b: "[Symbol]",
+        \\        $c: "[Symbol]",
+        \\        $d: "[Stamp duty reserve tax]"
+        \\      },
+        \\      output_schema: { a: "$a", b: "$b", c: "$c", d: "$d" }
+        \\    }
+        \\  }
+        \\}
+    ;
+
+    const result = try annotateRaw(a, fixture, "<inline>", 0);
+    try testing.expectEqual(@as(u8, 0), result.exit_code);
+
+    var parsed = try std.json.parseFromSliceLeaky(std.json.Value, a, result.json, .{});
+    const ct = parsed.object.get("conversion_templates") orelse return error.MissingCT;
+    const sample = ct.object.get("sample") orelse return error.MissingSample;
+
+    var false_positive = false;
+    var it = sample.object.iterator();
+    while (it.next()) |kv| {
+        if (std.mem.startsWith(u8, kv.key_ptr.*, "$warn_") and
+            diagHas(kv.value_ptr, "Stamp duty"))
+        {
+            false_positive = true;
+        }
+    }
+    try testing.expect(!false_positive);
+}
+
 test "annotateRaw Phase G8: unused pre_pass block → \\$warn_ at pre_pass.<name>" {
     const testing = std.testing;
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
