@@ -195,7 +195,13 @@ pub fn main() !void {
         std.process.exit(1);
     };
 
-    const exit_code: u8 = if (stats.warnings > 0) 2 else 0;
+    // Exit code precedence: fatal beats warnings beats clean. `run()`
+    // can return stats with `has_fatal = true` without raising
+    // `error.Fatal` (e.g. `processBroker` flagging a dir-not-found per
+    // template and continuing on to the next), so we must check both
+    // signals here. Warnings-only configs (no fatal anywhere) still
+    // return 2 as documented.
+    const exit_code: u8 = if (stats.has_fatal) 1 else if (stats.warnings > 0) 2 else 0;
     out.event("done", .{ .exit_code = exit_code });
     if (exit_code != 0) std.process.exit(exit_code);
     // exit(0) implicit
