@@ -402,6 +402,133 @@ fn evalAllVars(
     return vars;
 }
 
+/// Phase G2: walk every `[FieldName]` reference in this broker's
+/// expressions (input_schema + row_rules + pre_passes) and check it
+/// against the actual file header in `col_index`. Returns true when
+/// a fatal was emitted (unknown name found) — caller marks
+/// `stats.has_fatal` and exits the per-file path. Levenshtein
+/// suggestion (edit distance ≤ 2) over real header names accompanies
+/// the diagnostic.
+fn checkUnknownFields(
+    bc: *const config_mod.BrokerConfig,
+    col_index: *const std.StringHashMap(usize),
+    alloc: std.mem.Allocator,
+    out: Output,
+    filename: []const u8,
+) !bool {
+    // Per-broker arena so transient hash sets in `staticReferences`
+    // free in one shot.
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    defer arena.deinit();
+    const ar = arena.allocator();
+
+    // Walks one expression. Returns the first unknown `[X]` name,
+    // or null. Numeric `[1]` indexes are already filtered by
+    // `staticReferences`.
+    const inner = struct {
+        fn check(
+            ar_: std.mem.Allocator,
+            ci: *const std.StringHashMap(usize),
+            src: []const u8,
+        ) !?[]const u8 {
+            if (src.len == 0) return null;
+            var refs = try expr_mod.staticReferences(src, ar_);
+            defer refs.deinit();
+            var it = refs.fields.iterator();
+            while (it.next()) |e| {
+                const name = e.key_ptr.*;
+                if (!ci.contains(name)) return name;
+            }
+            return null;
+        }
+    }.check;
+
+    // Helper to fire the fatal once we know the offending name.
+    // Picks the closest header (≤ 2 edits) for the did-you-mean hint.
+    const emit = struct {
+        fn fire(
+            o: Output,
+            fname: []const u8,
+            where: []const u8,
+            bad: []const u8,
+            ci: *const std.StringHashMap(usize),
+        ) void {
+            var best: ?[]const u8 = null;
+            var best_d: usize = std.math.maxInt(usize);
+            var ci_it = ci.iterator();
+            while (ci_it.next()) |ce| {
+                const d = config_mod.levenshteinIgnoreCase(bad, ce.key_ptr.*);
+                if (d < best_d) {
+                    best_d = d;
+                    best = ce.key_ptr.*;
+                }
+            }
+            if (best != null and best_d <= 2) {
+                o.fatal(
+                    "error: unknown field '{s}' referenced in {s} of '{s}' — did you mean '{s}'?\n",
+                    .{ bad, where, fname, best.? },
+                );
+            } else {
+                o.fatal(
+                    "error: unknown field '{s}' referenced in {s} of '{s}'\n",
+                    .{ bad, where, fname },
+                );
+            }
+        }
+    }.fire;
+
+    // input_schema
+    var is_it = bc.input_schema.iterator();
+    while (is_it.next()) |entry| {
+        if (try inner(ar, col_index, entry.value_ptr.*)) |bad| {
+            emit(out, filename, "input_schema", bad, col_index);
+            return true;
+        }
+    }
+
+    // row_rules.when + row_rules.rows[].$var
+    if (bc.row_rules) |rules| {
+        for (rules) |rule| {
+            if (try inner(ar, col_index, rule.when)) |bad| {
+                emit(out, filename, "row_rules.when", bad, col_index);
+                return true;
+            }
+            for (rule.rows) |row| {
+                var ov = row.iterator();
+                while (ov.next()) |o| {
+                    if (try inner(ar, col_index, o.value_ptr.*)) |bad| {
+                        emit(out, filename, "row_rules override", bad, col_index);
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+
+    // pre_passes[name].when / key / values
+    var pp_it = bc.pre_passes.iterator();
+    while (pp_it.next()) |pp_entry| {
+        const pp = pp_entry.value_ptr.*;
+        if (try inner(ar, col_index, pp.when)) |bad| {
+            emit(out, filename, "pre_pass.when", bad, col_index);
+            return true;
+        }
+        if (try inner(ar, col_index, pp.key)) |bad| {
+            emit(out, filename, "pre_pass.key", bad, col_index);
+            return true;
+        }
+        var v_it = pp.values.iterator();
+        while (v_it.next()) |v| {
+            if (try inner(ar, col_index, v.value_ptr.*)) |bad| {
+                emit(out, filename, "pre_pass.values", bad, col_index);
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
 /// Processes all matching input files in dir_path for the given template.
 /// For each file:
 ///   1. Extracts optional date range from the filename.
@@ -605,6 +732,17 @@ pub fn processBroker(
                     try all_rows.append(fields);
                 }
             }
+        }
+
+        // Phase G2: cross-reference [FieldName] expressions against the
+        // actual CSV / JSON header. `expr.fieldByName` silently returns
+        // "" for unknown names — typo `[Quantitty]` produces an empty
+        // output column with no diagnostic. Fatal at first unknown
+        // name with Levenshtein-based did-you-mean over real headers.
+        if (try checkUnknownFields(bc, &col_index, file_alloc, out, filename)) {
+            stats.has_fatal = true;
+            stats.time_ns = timer.read();
+            return stats;
         }
 
         // Warn if the file has no data rows. Always emits text — the count

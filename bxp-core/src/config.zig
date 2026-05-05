@@ -1017,7 +1017,7 @@ fn closestBuiltin(name: []const u8) ?[]const u8 {
 /// 64-byte cap is plenty. Falls back to length-based estimate when a
 /// string overflows the buffer (theoretical; no real builtin name is
 /// that long).
-fn levenshteinIgnoreCase(a: []const u8, b: []const u8) usize {
+pub fn levenshteinIgnoreCase(a: []const u8, b: []const u8) usize {
     const max_len: usize = 64;
     if (a.len > max_len or b.len > max_len) {
         return if (a.len > b.len) a.len - b.len else b.len - a.len;
