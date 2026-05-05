@@ -305,18 +305,27 @@ fn run(args: [][:0]u8, out: Output, fresh: bool, check_fs_seconds: u8, alloc: st
         var b_it = cfg.brokers.iterator();
         while (b_it.next()) |entry| {
             try entry.value_ptr.validateExprsCollect(entry.key_ptr.*, expr_alloc, &expr_diag);
+            // Phase G8: dead-config detection. Warning-severity, never
+            // blocks load — `unused_pre_pass` and `unused_input_var`
+            // are hygiene findings, not bugs that produce wrong output.
+            try config_mod.validateUnusedCollect(entry.value_ptr, entry.key_ptr.*, expr_alloc, &expr_diag);
         }
         var has_expr_fatal = false;
+        var any_warning = false;
         for (expr_diag.items.items) |d| {
             switch (d.severity) {
                 .@"error" => {
                     out.fatal("error: {s}\n", .{d.message});
                     has_expr_fatal = true;
                 },
-                .warning => out.warning("warning: {s}\n", .{d.message}),
+                .warning => {
+                    out.warning("warning: {s}\n", .{d.message});
+                    any_warning = true;
+                },
                 .info => out.info("{s}\n", .{d.message}),
             }
         }
+        if (any_warning) overall.warnings += 1;
         if (has_expr_fatal) {
             overall.has_fatal = true;
             out.info("\n=== overall summary ===\n", .{});
