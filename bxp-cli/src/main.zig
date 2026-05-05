@@ -5,6 +5,7 @@
 const std = @import("std");
 const config_mod = @import("config");
 const diagnostics_mod = @import("diagnostics");
+const json5_mod = @import("json5");
 const pipeline = @import("pipeline.zig");
 const build_options = @import("build_options");
 
@@ -258,6 +259,59 @@ fn run(args: [][:0]u8, out: Output, fresh: bool, check_fs_seconds: u8, alloc: st
         return error.Fatal;
     };
     defer cfg.deinit();
+
+    // Phase G7 unknown-key check promoted to bxp-cli load path. Walks
+    // the raw JSON5 tree (not the parsed BrokerConfig) so it can see
+    // typos in keys that the loader would otherwise silently ignore
+    // (`file_patter_in: ".csv"` → loader uses default empty pattern,
+    // pipeline produces empty CSV with no clue what went wrong).
+    //
+    // Re-reads the config file. The double-read is unavoidable without
+    // surgery on `config_mod.load`'s signature; cost is negligible
+    // (< 1 MB file, once per startup).
+    {
+        const file = std.fs.cwd().openFile(config_path, .{}) catch null;
+        if (file) |f| {
+            defer f.close();
+            const raw = f.readToEndAlloc(alloc, 1 << 20) catch null;
+            if (raw) |bytes| {
+                defer alloc.free(bytes);
+                var keys_arena = std.heap.ArenaAllocator.init(alloc);
+                defer keys_arena.deinit();
+                const ka = keys_arena.allocator();
+                if (json5_mod.preprocess(ka, bytes)) |content| {
+                    if (std.json.parseFromSliceLeaky(std.json.Value, ka, content, .{
+                        .duplicate_field_behavior = .use_last,
+                    })) |raw_tree| {
+                        var keys_diag: diagnostics_mod.Diagnostics = .init(ka);
+                        try config_mod.validateUnknownKeysCollect(&raw_tree, ka, &keys_diag);
+                        var has_keys_fatal = false;
+                        for (keys_diag.items.items) |d| {
+                            switch (d.severity) {
+                                .@"error" => {
+                                    // `did you mean ...?` is already
+                                    // baked into `d.message`; the
+                                    // `suggest` field is for structured
+                                    // GUI consumption, skip it here.
+                                    out.fatal("error: {s}\n", .{d.message});
+                                    has_keys_fatal = true;
+                                },
+                                .warning => out.warning("warning: {s}\n", .{d.message}),
+                                .info => out.info("{s}\n", .{d.message}),
+                            }
+                        }
+                        if (has_keys_fatal) {
+                            overall.has_fatal = true;
+                            out.info("\n=== overall summary ===\n", .{});
+                            overall.time_ns = timer.read();
+                            out.overallLine(overall);
+                            return error.Fatal;
+                        }
+                    } else |_| {}
+                } else |_| {}
+            }
+        }
+    }
 
     // Validate all templates before processing any data.
     if (cfg.brokers.count() == 0) {

@@ -1704,15 +1704,17 @@ test "annotateRaw Phase G5: SPLIT_PART literal-zero index → \\$err_ at express
     try testing.expect(saw_bad_err);
 }
 
-test "annotateRaw Phase G7: unknown config key → \\$warn_ at offending path" {
+test "annotateRaw Phase G7: unknown config key → \\$err_ at offending path" {
     const testing = std.testing;
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
 
     // Typo in `file_pattern_in` → `file_patter_in`. G7 walker must
-    // surface this as `config.unknown_key` warning at the broker level
-    // with a did-you-mean hint baked into the message.
+    // surface this as `config.unknown_key` error at the broker level
+    // with a did-you-mean hint baked into the message. Severity is
+    // `.error` because typo'd keys silently use defaults — wrong
+    // output without a diagnostic the user can act on.
     const fixture =
         \\{
         \\  conversion_templates: {
@@ -1729,24 +1731,23 @@ test "annotateRaw Phase G7: unknown config key → \\$warn_ at offending path" {
     ;
 
     const result = try annotateRaw(a, fixture, "<inline>", 0);
-    // Warnings alone don't fail exit code.
-    try testing.expectEqual(@as(u8, 0), result.exit_code);
+    try testing.expectEqual(@as(u8, 1), result.exit_code);
 
     var parsed = try std.json.parseFromSliceLeaky(std.json.Value, a, result.json, .{});
     const ct = parsed.object.get("conversion_templates") orelse return error.MissingCT;
     const sample = ct.object.get("sample") orelse return error.MissingSample;
 
-    var saw_warn = false;
+    var saw_err = false;
     var it = sample.object.iterator();
     while (it.next()) |kv| {
-        if (std.mem.startsWith(u8, kv.key_ptr.*, "$warn_") and
+        if (std.mem.startsWith(u8, kv.key_ptr.*, "$err_") and
             diagHas(kv.value_ptr, "unknown config key 'file_patter_in'") and
             diagHas(kv.value_ptr, "did you mean 'file_pattern_in'?"))
         {
-            saw_warn = true;
+            saw_err = true;
         }
     }
-    try testing.expect(saw_warn);
+    try testing.expect(saw_err);
 }
 
 test "annotateRaw Phase G7: $variable keys in input_schema are NOT flagged" {
@@ -1779,11 +1780,12 @@ test "annotateRaw Phase G7: $variable keys in input_schema are NOT flagged" {
     const sample = ct.object.get("sample") orelse return error.MissingSample;
     const is = sample.object.get("input_schema") orelse return error.MissingIs;
 
-    // No $warn_* under input_schema referencing the user variable.
+    // No $err_* / $warn_* under input_schema referencing the user variable.
     var found_false_positive = false;
     var it = is.object.iterator();
     while (it.next()) |kv| {
-        if (std.mem.startsWith(u8, kv.key_ptr.*, "$warn_") and
+        const k = kv.key_ptr.*;
+        if ((std.mem.startsWith(u8, k, "$err_") or std.mem.startsWith(u8, k, "$warn_")) and
             diagHas(kv.value_ptr, "$weird_name_user_picked"))
         {
             found_false_positive = true;

@@ -22,6 +22,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "expr",          .module = core_dep.module("expr") },
                 .{ .name = "xlsx",          .module = core_dep.module("xlsx") },
                 .{ .name = "json",          .module = core_dep.module("json") },
+                .{ .name = "json5",         .module = core_dep.module("json5") },
                 .{ .name = "diagnostics",   .module = core_dep.module("diagnostics") },
                 .{ .name = "build_options", .module = options.createModule() },
             },

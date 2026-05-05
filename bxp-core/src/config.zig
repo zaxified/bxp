@@ -1574,7 +1574,7 @@ fn walkObjectKeys(
         }
         try diag.append(.{
             .path = full_path,
-            .severity = .warning,
+            .severity = .@"error",
             .code = "config.unknown_key",
             .message = message,
             .suggest = suggest,
