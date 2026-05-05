@@ -213,6 +213,14 @@ class TraceStore extends ChangeNotifier {
   // copy because every keystroke flows through `selectedExprText`.
   String selectedExprBaseline = '';
   String? exprValidationError;
+  /// Phase G1: byte offset + length of the offending token in
+  /// `selectedExprText`. Set by `_validateNow` from
+  /// `bxp-fmt --expr` JSON's `off` / `len` fields. Both null when no
+  /// validation issue (or when the parser couldn't pin a span — old
+  /// errors, allocator failures, …). The ExprPanel renders these as
+  /// a token-level red underline instead of underlining the whole cell.
+  int? exprValidationOffset;
+  int? exprValidationLength;
   // Validation lifecycle. Mirrors bxp-ui's 4-state badge so the editor
   // and Playground can show "checking…" while a validateExpr spawn is
   // in flight (200ms debounce + bxp-fmt round-trip), then flip to
@@ -498,11 +506,13 @@ class TraceStore extends ChangeNotifier {
     final gen = ++_exprValidateGen;
     if (text.trim().isEmpty) {
       exprValidationError = null;
+      exprValidationOffset = null;
+      exprValidationLength = null;
       exprValidationState = ExprValidationState.idle;
       notifyListeners();
       return;
     }
-    final err = await BxpProcessClient.validateExpr(text);
+    final res = await BxpProcessClient.validateExpr(text);
     if (_disposed) return;
     // A newer validation has been spawned while we were awaiting — drop
     // this result so it can't overwrite the fresher one.
@@ -510,7 +520,10 @@ class TraceStore extends ChangeNotifier {
     // Selected expression changed under us (e.g. user clicked a different
     // leaf) — same drop rule.
     if (selectedExprText != text) return;
+    final err = res.error;
     exprValidationError = err;
+    exprValidationOffset = err == null ? null : res.offset;
+    exprValidationLength = err == null ? null : res.length;
     exprValidationState = err == null
         ? ExprValidationState.ok
         : ExprValidationState.error;
@@ -615,6 +628,20 @@ class TraceStore extends ChangeNotifier {
   /// the `$warn_*` / `$info_*` prefixes so future emissions are
   /// captured directly without recursing into them as if they were
   /// data nodes.
+  /// Phase G1: $err_/$warn_/$info_ values are objects
+  /// `{message, off?, len?, suggest?}` — extract the displayable message.
+  /// Falls back to the legacy plain-string shape for forward-compat with
+  /// any consumer still emitting bare strings.
+  static String _diagMessage(dynamic v) {
+    if (v is Map) {
+      final m = v['message'];
+      if (m is String) return m;
+      return '';
+    }
+    if (v is String) return v;
+    return v?.toString() ?? '';
+  }
+
   static _DiagnosticBuckets _extractDiagnostics(dynamic src) {
     final errors = <String, Map<String, String>>{};
     final warnings = <String, Map<String, String>>{};
@@ -627,11 +654,11 @@ class TraceStore extends ChangeNotifier {
         for (final e in node.entries) {
           final k = e.key.toString();
           if (k.startsWith(r'$err_')) {
-            (errs ??= {})[k] = e.value?.toString() ?? '';
+            (errs ??= {})[k] = _diagMessage(e.value);
           } else if (k.startsWith(r'$warn_')) {
-            (warns ??= {})[k] = e.value?.toString() ?? '';
+            (warns ??= {})[k] = _diagMessage(e.value);
           } else if (k.startsWith(r'$info_')) {
-            (infos ??= {})[k] = e.value?.toString() ?? '';
+            (infos ??= {})[k] = _diagMessage(e.value);
           }
         }
         final encoded = _encodePath(path);
@@ -672,6 +699,8 @@ class TraceStore extends ChangeNotifier {
     selectedExprText = '';
     selectedExprBaseline = '';
     exprValidationError = null;
+    exprValidationOffset = null;
+    exprValidationLength = null;
     exprValidationState = ExprValidationState.idle;
     notifyListeners();
   }

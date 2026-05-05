@@ -237,38 +237,46 @@ class BxpProcessClient {
   }
 
   /// Validates a single expression via `bxp-fmt --expr <text>`.
-  /// Returns null on success, human-readable message on failure.
+  /// Validate an expression via `bxp-fmt --expr`. Returns a record
+  /// with `error` (null on success), and optional `offset` / `length`
+  /// for token highlighting (Phase G1).
   ///
-  /// `bxp-fmt --expr` emits a structured `{"error":"X","detail":"Y"}` on
-  /// failure (currently on stdout, but we read both streams to stay
-  /// resilient to CLI version drift). We unwrap that into `"X: Y"` (or
-  /// just `"X"` when detail is empty) so the editor's error box reads
-  /// like a compiler diagnostic instead of leaking raw JSON.
-  static Future<String?> validateExpr(String expr) async {
-    if (expr.isEmpty) return null;
+  /// `bxp-fmt --expr` emits a structured
+  /// `{"error":"X","detail":"Y","off":N,"len":M}` on failure. We
+  /// unwrap that into `"X: Y"` (or just `"X"` when detail is empty).
+  static Future<({String? error, int? offset, int? length})> validateExpr(
+    String expr,
+  ) async {
+    if (expr.isEmpty) return (error: null, offset: null, length: null);
     final bin = findBin('bxp-fmt');
-    if (bin == null) return 'bxp-fmt not found';
+    if (bin == null) return (error: 'bxp-fmt not found', offset: null, length: null);
     final result =
         await _runWithTimeout(bin, ['--expr', expr], _exprTimeout);
-    if (result.exitCode == 0) return null;
+    if (result.exitCode == 0) return (error: null, offset: null, length: null);
     final stdout = (result.stdout as String).trim();
     final stderr = (result.stderr as String).trim();
     final raw = stdout.isNotEmpty ? stdout : stderr;
-    if (raw.isEmpty) return 'invalid expression';
+    if (raw.isEmpty) return (error: 'invalid expression', offset: null, length: null);
     try {
       final m = jsonDecode(raw);
       if (m is Map) {
         final err = m['error'];
         final detail = m['detail'];
+        final off = m['off'];
+        final len = m['len'];
+        final offset = off is int ? off : null;
+        final length = len is int ? len : null;
         if (err is String && err.isNotEmpty) {
-          if (detail is String && detail.isNotEmpty) return '$err: $detail';
-          return err;
+          final msg = (detail is String && detail.isNotEmpty)
+              ? '$err: $detail'
+              : err;
+          return (error: msg, offset: offset, length: length);
         }
       }
     } catch (_) {
       // Not JSON — fall through to the raw text.
     }
-    return raw;
+    return (error: raw, offset: null, length: null);
   }
 
   /// Re-evaluates an expression against a CSV row context and returns the

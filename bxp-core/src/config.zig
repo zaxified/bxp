@@ -878,6 +878,8 @@ fn checkOneExpr(
     var ticker_map_ = std.StringHashMap([]const u8).init(alloc);
     defer ticker_map_.deinit();
     var detail: []const u8 = "";
+    var err_offset: u32 = 0;
+    var err_len: u32 = 0;
     const ctx = expr.Context{
         .fields = &.{},
         .col_index = &col_index,
@@ -887,6 +889,8 @@ fn checkOneExpr(
         .single_prepass_name = single_prepass_name,
         .alloc = alloc,
         .error_detail = &detail,
+        .error_offset = &err_offset,
+        .error_len = &err_len,
     };
 
     _ = expr.eval(src, &ctx) catch |err| {
@@ -920,12 +924,20 @@ fn checkOneExpr(
         }
 
         const path = try std.fmt.allocPrint(alloc, "conversion_templates.{s}.{s}", .{ template_id, full_field });
+        // Phase G1: forward token offset/len from expr.zig so the GUI
+        // ExprPanel can highlight the offending token. Both are 0
+        // when the parser couldn't pin a specific span (early failure
+        // before any token consumed) — caller treats null-or-zero as
+        // "no highlight".
+        const has_span = err_len > 0;
         try d.append(.{
             .path = path,
             .severity = .@"error",
             .code = code,
             .message = message,
             .suggest = suggest,
+            .expr_off = if (has_span) err_offset else null,
+            .expr_len = if (has_span) err_len else null,
         });
     };
 

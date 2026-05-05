@@ -7,15 +7,17 @@
 /// sink — the existing fail-fast / stderr behavior is preserved bit by
 /// bit.
 ///
-/// Severity routing (in bxp-fmt's annotated JSON output):
-///   .@"error"  → "$err_<N>": "<message>"
-///   .warning   → "$warn_<N>": "<message>"
-///   .info      → "$info_<N>": "<message>"
+/// Severity routing (in bxp-fmt's annotated JSON output, Phase G1):
+///   .@"error"  → "$err_<N>":  { "message": ..., "off": N, "len": N, "suggest": "..." }
+///   .warning   → "$warn_<N>": { "message": ..., "off": N, "len": N, "suggest": "..." }
+///   .info      → "$info_<N>": { "message": ..., "off": N, "len": N, "suggest": "..." }
 ///
-/// Optional fields (line, col, expr_off, code, suggest) are surfaced via
-/// sibling metadata keys (e.g. `$err_<N>_meta: { ... }`) so the
-/// historical `$err_<N>: "<string>"` shape stays backwards-compatible
-/// for consumers that only inspect the message.
+/// `off` / `len` and `suggest` are emitted only when the corresponding
+/// Diagnostic fields are non-null. The historical "plain string"
+/// shape (`"$err_<N>": "message"`) was replaced by Phase G1 — the
+/// object shape lets the GUI ExprPanel highlight a specific token
+/// range and surface did-you-mean hints separately from the prose
+/// message.
 const std = @import("std");
 
 pub const Severity = enum { @"error", warning, info };

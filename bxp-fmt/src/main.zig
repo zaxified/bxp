@@ -603,28 +603,34 @@ fn insertErrBefore(
     msg: []const u8,
     counter: *u32,
 ) !void {
-    return insertNumberedBefore(a, parent, "$err_", target_key, msg, counter);
+    // Wrap legacy ValidationError / root-level errors in the same
+    // object shape as Phase G1 Diagnostics — `{message: "<msg>"}` —
+    // so every `$err_*` value the GUI parses is uniformly an object.
+    var obj = std.json.ObjectMap.init(a);
+    try obj.put("message", .{ .string = try a.dupe(u8, msg) });
+    return insertNumberedBefore(a, parent, "$err_", target_key, .{ .object = obj }, counter);
 }
 
 /// Generic prefix-aware variant. Used by `insertErrBefore` (prefix
 /// `"$err_"`) and the severity-routed `injectDiagnostics` path
 /// (`"$warn_"` / `"$info_"`). Counter is shared across prefixes so all
-/// emitted keys are unique within the document.
+/// emitted keys are unique within the document. `value` is inserted
+/// verbatim — Phase G1 always passes an object `{message, off?, len?,
+/// suggest?}`; never a bare string.
 fn insertNumberedBefore(
     a: std.mem.Allocator,
     parent: *std.json.Value,
     prefix: []const u8,
     target_key: []const u8,
-    msg: []const u8,
+    value: std.json.Value,
     counter: *u32,
 ) !void {
     if (parent.* != .object) return;
     counter.* += 1;
     const new_key = try std.fmt.allocPrint(a, "{s}{d}", .{ prefix, counter.* });
-    const duped_msg = try a.dupe(u8, msg);
 
     if (target_key.len == 0 or !parent.object.contains(target_key)) {
-        try parent.object.put(new_key, .{ .string = duped_msg });
+        try parent.object.put(new_key, value);
         return;
     }
 
@@ -640,7 +646,7 @@ fn insertNumberedBefore(
     parent.object.clearRetainingCapacity();
     for (entries.items) |e| {
         if (std.mem.eql(u8, e.k, target_key)) {
-            try parent.object.put(new_key, .{ .string = duped_msg });
+            try parent.object.put(new_key, value);
         }
         try parent.object.put(e.k, e.v);
     }
@@ -681,7 +687,16 @@ fn injectDiagnostics(
             .info => "$info_",
         };
 
-        try insertNumberedBefore(a, parent_ptr, prefix, field_name, d.message, counter);
+        // Phase G1: build an object value `{message, off?, len?,
+        // suggest?}`. Optional fields are emitted only when the
+        // Diagnostic has them — the GUI parser treats absence as
+        // "no highlight" / "no suggestion".
+        var obj = std.json.ObjectMap.init(a);
+        try obj.put("message", .{ .string = try a.dupe(u8, d.message) });
+        if (d.expr_off) |off| try obj.put("off", .{ .integer = @intCast(off) });
+        if (d.expr_len) |len| try obj.put("len", .{ .integer = @intCast(len) });
+        if (d.suggest) |s| try obj.put("suggest", .{ .string = try a.dupe(u8, s) });
+        try insertNumberedBefore(a, parent_ptr, prefix, field_name, .{ .object = obj }, counter);
     }
 }
 
@@ -793,6 +808,8 @@ fn runExpr(gpa: std.mem.Allocator, src: []const u8) !u8 {
     var ticker_map = std.StringHashMap([]const u8).init(alloc);
     defer ticker_map.deinit();
     var detail: []const u8 = "";
+    var err_offset: u32 = 0;
+    var err_len: u32 = 0;
     const ctx = expr_mod.Context{
         .fields = &.{},
         .col_index = &col_index,
@@ -800,6 +817,8 @@ fn runExpr(gpa: std.mem.Allocator, src: []const u8) !u8 {
         .lookup_table = null,
         .alloc = alloc,
         .error_detail = &detail,
+        .error_offset = &err_offset,
+        .error_len = &err_len,
     };
 
     _ = expr_mod.eval(src, &ctx) catch |err| {
@@ -809,6 +828,16 @@ fn runExpr(gpa: std.mem.Allocator, src: []const u8) !u8 {
         jw.write(@errorName(err)) catch {};
         jw.objectField("detail") catch {};
         jw.write(detail) catch {};
+        // Phase G1: token offset/len so the GUI ExprPanel can highlight
+        // the offending token in the live editor (BxpProcessClient.validateExpr
+        // parses these alongside `error` and `detail`). Emitted only when
+        // the parser pinned a span — len == 0 means "no specific token".
+        if (err_len > 0) {
+            jw.objectField("off") catch {};
+            jw.write(err_offset) catch {};
+            jw.objectField("len") catch {};
+            jw.write(err_len) catch {};
+        }
         jw.endObject() catch {};
         stderr.writeByte('\n') catch {};
         stderr.flush() catch {};
@@ -957,6 +986,18 @@ fn runExprTrace(
 
 // ── Tests ────────────────────────────────────────────────────────────────────
 
+/// Phase G1 assertion helper: `$err_*` / `$warn_*` / `$info_*` values
+/// are now objects `{message, off?, len?, suggest?}` instead of bare
+/// strings. This helper reads `value.object.message` (when shape
+/// matches) and substring-checks `needle` against it. Returns false
+/// for any non-Diagnostic value or non-matching substring.
+fn diagHas(v: *const std.json.Value, needle: []const u8) bool {
+    if (v.* != .object) return false;
+    const m = v.object.get("message") orelse return false;
+    if (m != .string) return false;
+    return std.mem.indexOf(u8, m.string, needle) != null;
+}
+
 test "annotateRaw: comments preserved + missing conversion_templates → \\$err_1" {
     // Replaces the previous shell-driven `Annotated JSON regression`
     // phase in scripts/test.sh + the gitted fixtures under
@@ -1007,9 +1048,9 @@ test "annotateRaw: comments preserved + missing conversion_templates → \\$err_
     try testing.expectEqualStrings("b", items.array.items[1].string);
 
     // Semantic error injected at root with the expected message.
+    // Phase G1: $err_<N> values are objects {message, off?, len?, suggest?}.
     const err1 = parsed.object.get("$err_1") orelse return error.MissingErr1;
-    try testing.expect(err1 == .string);
-    try testing.expect(std.mem.indexOf(u8, err1.string, "no conversion_templates") != null);
+    try testing.expect(diagHas(&err1, "no conversion_templates"));
 }
 
 test "annotateRaw: clean config exits 0 with no \\$err_* markers" {
@@ -1092,8 +1133,7 @@ test "annotateRaw Phase B: xlsx_sheet missing 'name' attaches \\$err_ at xlsx_sh
     var it = sample.object.iterator();
     while (it.next()) |kv| {
         if (std.mem.startsWith(u8, kv.key_ptr.*, "$err_") and
-            kv.value_ptr.* == .string and
-            std.mem.indexOf(u8, kv.value_ptr.string, "missing required key 'name'") != null)
+            diagHas(kv.value_ptr, "missing required key 'name'"))
         {
             has_err = true;
             break;
@@ -1138,8 +1178,7 @@ test "annotateRaw Phase B: ticker_map unknown named ref attaches at ticker_map p
     var it = sample.object.iterator();
     while (it.next()) |kv| {
         if (std.mem.startsWith(u8, kv.key_ptr.*, "$err_") and
-            kv.value_ptr.* == .string and
-            std.mem.indexOf(u8, kv.value_ptr.string, "unknown named map") != null)
+            diagHas(kv.value_ptr, "unknown named map"))
         {
             has_err = true;
             break;
@@ -1181,9 +1220,8 @@ test "annotateRaw Phase C: duplicate top-level key surfaces \\$err_ with key nam
     var it = parsed.object.iterator();
     while (it.next()) |kv| {
         if (std.mem.startsWith(u8, kv.key_ptr.*, "$err_") and
-            kv.value_ptr.* == .string and
-            std.mem.indexOf(u8, kv.value_ptr.string, "duplicate key") != null and
-            std.mem.indexOf(u8, kv.value_ptr.string, "data_dir") != null)
+            diagHas(kv.value_ptr, "duplicate key") and
+            diagHas(kv.value_ptr, "data_dir"))
         {
             has_dup = true;
             break;
@@ -1236,15 +1274,14 @@ test "annotateRaw Phase D: wrong-type-silent emits \\$warn_ at template" {
     var it = sample.object.iterator();
     while (it.next()) |kv| {
         if (!std.mem.startsWith(u8, kv.key_ptr.*, "$warn_")) continue;
-        if (kv.value_ptr.* != .string) continue;
+        if (kv.value_ptr.* != .object) continue;
         warn_count += 1;
-        const m = kv.value_ptr.string;
-        if (std.mem.indexOf(u8, m, "date_filter_from_filename") != null and
-            std.mem.indexOf(u8, m, "boolean") != null) found_bool = true;
-        if (std.mem.indexOf(u8, m, "csv_text_quote_in") != null and
-            std.mem.indexOf(u8, m, "singlle") != null) found_quote = true;
-        if (std.mem.indexOf(u8, m, "file_type_out") != null and
-            std.mem.indexOf(u8, m, "jsno") != null) found_filetype = true;
+        if (diagHas(kv.value_ptr, "date_filter_from_filename") and
+            diagHas(kv.value_ptr, "boolean")) found_bool = true;
+        if (diagHas(kv.value_ptr, "csv_text_quote_in") and
+            diagHas(kv.value_ptr, "singlle")) found_quote = true;
+        if (diagHas(kv.value_ptr, "file_type_out") and
+            diagHas(kv.value_ptr, "jsno")) found_filetype = true;
     }
     try testing.expectEqual(@as(usize, 3), warn_count);
     try testing.expect(found_bool);
@@ -1294,8 +1331,7 @@ test "annotateRaw Phase E: file_pattern_in collision warns at first template" {
     var it = alpha.object.iterator();
     while (it.next()) |kv| {
         if (std.mem.startsWith(u8, kv.key_ptr.*, "$warn_") and
-            kv.value_ptr.* == .string and
-            std.mem.indexOf(u8, kv.value_ptr.string, "matches the same files as template 'beta'") != null)
+            diagHas(kv.value_ptr, "matches the same files as template 'beta'"))
         {
             has_collision = true;
             break;
@@ -1384,8 +1420,7 @@ test "annotateRaw Phase F: missing data_dir surfaces \\$err_ at template" {
     var it = sample.object.iterator();
     while (it.next()) |kv| {
         if (std.mem.startsWith(u8, kv.key_ptr.*, "$err_") and
-            kv.value_ptr.* == .string and
-            std.mem.indexOf(u8, kv.value_ptr.string, "data_dir does not exist") != null)
+            diagHas(kv.value_ptr, "data_dir does not exist"))
         {
             has_fs_err = true;
             break;
@@ -1429,8 +1464,7 @@ test "annotateRaw Phase G: unknown function in input_schema surfaces \\$err_" {
     var it = is.object.iterator();
     while (it.next()) |kv| {
         if (std.mem.startsWith(u8, kv.key_ptr.*, "$err_") and
-            kv.value_ptr.* == .string and
-            std.mem.indexOf(u8, kv.value_ptr.string, "unknown function 'BLAH'") != null)
+            diagHas(kv.value_ptr, "unknown function 'BLAH'"))
         {
             has_unknown_fn = true;
             break;
@@ -1526,8 +1560,7 @@ test "annotateRaw Phase G6: BLAH() in row_rules.rows.$var override → \\$err_ a
     var it = row0.object.iterator();
     while (it.next()) |kv| {
         if (std.mem.startsWith(u8, kv.key_ptr.*, "$err_") and
-            kv.value_ptr.* == .string and
-            std.mem.indexOf(u8, kv.value_ptr.string, "unknown function 'BLAH'") != null)
+            diagHas(kv.value_ptr, "unknown function 'BLAH'"))
         {
             has_err = true;
             break;
@@ -1573,8 +1606,7 @@ test "annotateRaw Phase G6: BLAH() in pre_pass.values → \\$err_ at deep path" 
     var it = values.object.iterator();
     while (it.next()) |kv| {
         if (std.mem.startsWith(u8, kv.key_ptr.*, "$err_") and
-            kv.value_ptr.* == .string and
-            std.mem.indexOf(u8, kv.value_ptr.string, "unknown function 'BLAH'") != null)
+            diagHas(kv.value_ptr, "unknown function 'BLAH'"))
         {
             has_err = true;
             break;
@@ -1618,8 +1650,7 @@ test "annotateRaw Phase G3: LOOKUP unknown pre_pass name → \\$err_ at expressi
     var it = is.object.iterator();
     while (it.next()) |kv| {
         if (std.mem.startsWith(u8, kv.key_ptr.*, "$err_") and
-            kv.value_ptr.* == .string and
-            std.mem.indexOf(u8, kv.value_ptr.string, "unknown pre_pass 'typo_name'") != null)
+            diagHas(kv.value_ptr, "unknown pre_pass 'typo_name'"))
         {
             has_err = true;
             break;
@@ -1666,8 +1697,7 @@ test "annotateRaw Phase G5: SPLIT_PART literal-zero index → \\$warn_ at expres
     var it = is.object.iterator();
     while (it.next()) |kv| {
         if (std.mem.startsWith(u8, kv.key_ptr.*, "$warn_") and
-            kv.value_ptr.* == .string and
-            std.mem.indexOf(u8, kv.value_ptr.string, "SPLIT_PART index is 1-based") != null)
+            diagHas(kv.value_ptr, "SPLIT_PART index is 1-based"))
         {
             saw_bad_warn = true;
         }
@@ -1711,9 +1741,8 @@ test "annotateRaw Phase G7: unknown config key → \\$warn_ at offending path" {
     var it = sample.object.iterator();
     while (it.next()) |kv| {
         if (std.mem.startsWith(u8, kv.key_ptr.*, "$warn_") and
-            kv.value_ptr.* == .string and
-            std.mem.indexOf(u8, kv.value_ptr.string, "unknown config key 'file_patter_in'") != null and
-            std.mem.indexOf(u8, kv.value_ptr.string, "did you mean 'file_pattern_in'?") != null)
+            diagHas(kv.value_ptr, "unknown config key 'file_patter_in'") and
+            diagHas(kv.value_ptr, "did you mean 'file_pattern_in'?"))
         {
             saw_warn = true;
         }
@@ -1756,8 +1785,7 @@ test "annotateRaw Phase G7: $variable keys in input_schema are NOT flagged" {
     var it = is.object.iterator();
     while (it.next()) |kv| {
         if (std.mem.startsWith(u8, kv.key_ptr.*, "$warn_") and
-            kv.value_ptr.* == .string and
-            std.mem.indexOf(u8, kv.value_ptr.string, "$weird_name_user_picked") != null)
+            diagHas(kv.value_ptr, "$weird_name_user_picked"))
         {
             found_false_positive = true;
         }
@@ -1805,15 +1833,13 @@ test "annotateRaw Phase G8: unused pre_pass block → \\$warn_ at pre_pass.<name
     var it = pp.object.iterator();
     while (it.next()) |kv| {
         if (!std.mem.startsWith(u8, kv.key_ptr.*, "$warn_")) continue;
-        if (kv.value_ptr.* != .string) continue;
-        const v = kv.value_ptr.string;
-        if (std.mem.indexOf(u8, v, "'unused_block'") != null and
-            std.mem.indexOf(u8, v, "never referenced") != null)
+        if (diagHas(kv.value_ptr, "'unused_block'") and
+            diagHas(kv.value_ptr, "never referenced"))
         {
             saw_unused = true;
         }
-        if (std.mem.indexOf(u8, v, "'used'") != null and
-            std.mem.indexOf(u8, v, "never referenced") != null)
+        if (diagHas(kv.value_ptr, "'used'") and
+            diagHas(kv.value_ptr, "never referenced"))
         {
             saw_used_warn = true;
         }
@@ -1859,10 +1885,8 @@ test "annotateRaw Phase G8: unused $variable in input_schema → \\$warn_" {
     var it = is.object.iterator();
     while (it.next()) |kv| {
         if (!std.mem.startsWith(u8, kv.key_ptr.*, "$warn_")) continue;
-        if (kv.value_ptr.* != .string) continue;
-        const v = kv.value_ptr.string;
-        if (std.mem.indexOf(u8, v, "'$unused_var'") != null) saw_unused = true;
-        if (std.mem.indexOf(u8, v, "'$a'") != null) saw_a_warn = true;
+        if (diagHas(kv.value_ptr, "'$unused_var'")) saw_unused = true;
+        if (diagHas(kv.value_ptr, "'$a'")) saw_a_warn = true;
     }
     try testing.expect(saw_unused);
     try testing.expect(!saw_a_warn);
@@ -1908,8 +1932,7 @@ test "annotateRaw Phase G8: 2-arg LOOKUP with single block → no false positive
                     var it = obj.iterator();
                     while (it.next()) |kv| {
                         if (std.mem.startsWith(u8, kv.key_ptr.*, "$warn_") and
-                            kv.value_ptr.* == .string and
-                            std.mem.indexOf(u8, kv.value_ptr.string, "never referenced") != null)
+                            diagHas(kv.value_ptr, "never referenced"))
                         {
                             found.* = true;
                         }
@@ -1955,8 +1978,7 @@ test "annotateRaw Phase B: output_schema missing attaches at template path" {
     var it = sample.object.iterator();
     while (it.next()) |kv| {
         if (std.mem.startsWith(u8, kv.key_ptr.*, "$err_") and
-            kv.value_ptr.* == .string and
-            std.mem.indexOf(u8, kv.value_ptr.string, "output_schema is required") != null)
+            diagHas(kv.value_ptr, "output_schema is required"))
         {
             has_err = true;
             break;

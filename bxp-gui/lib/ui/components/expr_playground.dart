@@ -116,11 +116,12 @@ class _ExprPlaygroundState extends State<ExprPlayground> {
       });
       return;
     }
-    final err = await BxpProcessClient.validateExpr(text);
+    final res = await BxpProcessClient.validateExpr(text);
     // Guard against races: caller may have replaced text in the meantime
     // — compare the stripped version since `_ctrl.text` keeps newlines.
     if (!mounted || _stripNewlines(_ctrl.text) != text) return;
     setState(() {
+      final err = res.error;
       if (err == null) {
         _state = ExprValidationState.ok;
         _errorMessage = '';

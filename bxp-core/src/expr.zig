@@ -124,6 +124,14 @@ pub const Context = struct {
     /// error here before returning the error.  String is allocated with ctx.alloc.
     /// Caller sets this and resets the pointed value to "" before each eval call.
     error_detail: ?*[]const u8 = null,
+    /// Phase G1: byte offset of the offending token in the expression
+    /// source. Set by the Parser/Tokenizer alongside `error_detail` so
+    /// callers (bxp-fmt --expr stderr, bxp-fmt --config $err_* shape)
+    /// can pinpoint the location for the GUI ExprPanel highlight.
+    /// Both offset and len are zero when no specific token is at fault
+    /// (e.g. allocator failures, format-only complaints).
+    error_offset: ?*u32 = null,
+    error_len: ?*u32 = null,
     /// Per-call trace writer for the GUI hover-on-token feature. When set,
     /// every successful function call emits one NDJSON record:
     ///   {"fn": "ABS", "src_start": 4, "src_end": 14, "value": "1.50"}
@@ -225,9 +233,17 @@ const TokKind = enum {
     eof,
 };
 
+/// Tokens carry their byte position in the source so error sites can
+/// surface a precise highlight range up to the GUI ExprPanel (Phase G1).
+/// `text` is the inner / unquoted slice for `string_lit` / `field_ref`;
+/// `offset` and `len` always span the **outer** form including any
+/// delimiters (quotes, brackets) so the highlight covers the visible
+/// token in the editor. For `eof`, `offset == src.len` and `len == 0`.
 const Token = struct {
     kind: TokKind,
     text: []const u8,
+    offset: u32,
+    len: u32,
 };
 
 const Tokenizer = struct {
@@ -236,6 +252,13 @@ const Tokenizer = struct {
     /// Set before returning error.UnexpectedChar so the caller can build a detail message.
     error_char: u8 = 0,
     error_pos: usize = 0, // 0-based position of the bad character in src
+    /// Phase G1: span of the most recently produced token (or the
+    /// position of `error.UnexpectedChar`). Updated on every `mkTok`
+    /// call so the Parser's `setDetail` can populate
+    /// `Context.error_offset` / `error_len` without threading the
+    /// offending token through every parse-method call site.
+    last_offset: u32 = 0,
+    last_len: u32 = 0,
 
     fn init(src: []const u8) Tokenizer {
         return .{ .src = src, .pos = 0 };
@@ -246,10 +269,29 @@ const Tokenizer = struct {
             self.pos += 1;
     }
 
+    /// Build a token spanning [start, self.pos) — `start` is the byte
+    /// offset where the token began (before quotes / brackets are
+    /// consumed), `self.pos` points just past the last consumed byte.
+    /// Mutates `last_offset` / `last_len` so Parser error sites can
+    /// pick up the location of the just-read token.
+    fn mkTok(self: *Tokenizer, kind: TokKind, text: []const u8, start: usize) Token {
+        const offset: u32 = @intCast(start);
+        const len: u32 = @intCast(self.pos - start);
+        self.last_offset = offset;
+        self.last_len = len;
+        return .{
+            .kind = kind,
+            .text = text,
+            .offset = offset,
+            .len = len,
+        };
+    }
+
     fn next(self: *Tokenizer) !Token {
         self.skipWs();
-        if (self.pos >= self.src.len) return Token{ .kind = .eof, .text = "" };
+        if (self.pos >= self.src.len) return self.mkTok(.eof, "", self.pos);
 
+        const tok_start = self.pos;
         const c = self.src[self.pos];
 
         // String literal 'text'
@@ -261,82 +303,84 @@ const Tokenizer = struct {
                 self.src[self.pos] == '\'' and self.src[self.pos + 1] == '\'')
             {
                 self.pos += 2;
-                return Token{ .kind = .triple_quote, .text = "'''" };
+                return self.mkTok(.triple_quote, "'''", tok_start);
             }
-            const start = self.pos;
+            const inner_start = self.pos;
             while (self.pos < self.src.len and self.src[self.pos] != '\'')
                 self.pos += 1;
-            const text = self.src[start..self.pos];
+            const text = self.src[inner_start..self.pos];
             if (self.pos < self.src.len) self.pos += 1; // consume closing '
-            return Token{ .kind = .string_lit, .text = text };
+            return self.mkTok(.string_lit, text, tok_start);
         }
 
         // Field reference [Name] or [n]
         if (c == '[') {
             self.pos += 1;
-            const start = self.pos;
+            const inner_start = self.pos;
             while (self.pos < self.src.len and self.src[self.pos] != ']')
                 self.pos += 1;
-            const text = self.src[start..self.pos];
+            const text = self.src[inner_start..self.pos];
             if (self.pos < self.src.len) self.pos += 1; // consume ]
-            return Token{ .kind = .field_ref, .text = text };
+            return self.mkTok(.field_ref, text, tok_start);
         }
 
         // Number literal
         if (std.ascii.isDigit(c) or (c == '-' and self.pos + 1 < self.src.len and std.ascii.isDigit(self.src[self.pos + 1]))) {
-            const start = self.pos;
             if (c == '-') self.pos += 1;
             while (self.pos < self.src.len and (std.ascii.isDigit(self.src[self.pos]) or self.src[self.pos] == '.'))
                 self.pos += 1;
-            return Token{ .kind = .number_lit, .text = self.src[start..self.pos] };
+            return self.mkTok(.number_lit, self.src[tok_start..self.pos], tok_start);
         }
 
         // Identifier or keyword
         if (std.ascii.isAlphabetic(c) or c == '_') {
-            const start = self.pos;
             while (self.pos < self.src.len and (std.ascii.isAlphanumeric(self.src[self.pos]) or self.src[self.pos] == '_'))
                 self.pos += 1;
-            return Token{ .kind = .ident, .text = self.src[start..self.pos] };
+            return self.mkTok(.ident, self.src[tok_start..self.pos], tok_start);
         }
 
         // Operators
         self.pos += 1;
         return switch (c) {
-            '(' => Token{ .kind = .lparen, .text = "(" },
-            ')' => Token{ .kind = .rparen, .text = ")" },
-            ',' => Token{ .kind = .comma, .text = "," },
-            '+' => Token{ .kind = .plus, .text = "+" },
-            '-' => Token{ .kind = .minus, .text = "-" },
-            '*' => Token{ .kind = .star, .text = "*" },
-            '/' => Token{ .kind = .slash, .text = "/" },
-            '&' => Token{ .kind = .amp, .text = "&" },
-            '=' => Token{ .kind = .eq, .text = "=" },
+            '(' => self.mkTok(.lparen, "(", tok_start),
+            ')' => self.mkTok(.rparen, ")", tok_start),
+            ',' => self.mkTok(.comma, ",", tok_start),
+            '+' => self.mkTok(.plus, "+", tok_start),
+            '-' => self.mkTok(.minus, "-", tok_start),
+            '*' => self.mkTok(.star, "*", tok_start),
+            '/' => self.mkTok(.slash, "/", tok_start),
+            '&' => self.mkTok(.amp, "&", tok_start),
+            '=' => self.mkTok(.eq, "=", tok_start),
             '!' => blk: {
                 if (self.pos < self.src.len and self.src[self.pos] == '=') {
                     self.pos += 1;
-                    break :blk Token{ .kind = .neq, .text = "!=" };
+                    break :blk self.mkTok(.neq, "!=", tok_start);
                 }
                 self.error_char = '!';
                 self.error_pos = self.pos - 1; // self.pos was already incremented above
+                self.last_offset = @intCast(self.error_pos);
+                self.last_len = 1;
                 return error.UnexpectedChar;
             },
             '<' => blk: {
                 if (self.pos < self.src.len and self.src[self.pos] == '=') {
                     self.pos += 1;
-                    break :blk Token{ .kind = .lte, .text = "<=" };
+                    break :blk self.mkTok(.lte, "<=", tok_start);
                 }
-                break :blk Token{ .kind = .lt, .text = "<" };
+                break :blk self.mkTok(.lt, "<", tok_start);
             },
             '>' => blk: {
                 if (self.pos < self.src.len and self.src[self.pos] == '=') {
                     self.pos += 1;
-                    break :blk Token{ .kind = .gte, .text = ">=" };
+                    break :blk self.mkTok(.gte, ">=", tok_start);
                 }
-                break :blk Token{ .kind = .gt, .text = ">" };
+                break :blk self.mkTok(.gt, ">", tok_start);
             },
             else => {
                 self.error_char = c;
                 self.error_pos = self.pos - 1; // self.pos was already incremented above
+                self.last_offset = @intCast(self.error_pos);
+                self.last_len = 1;
                 return error.UnexpectedChar;
             },
         };
@@ -378,7 +422,7 @@ pub fn staticCheckSplitPart(src: []const u8) ?i64 {
         var depth: u32 = 1;
         var commas_seen: u32 = 0;
         var third_count: u32 = 0;
-        var third_first: Token = .{ .kind = .eof, .text = "" };
+        var third_first: Token = .{ .kind = .eof, .text = "", .offset = 0, .len = 0 };
         while (true) {
             const inner = tok.next() catch return null;
             if (inner.kind == .eof) return null;
@@ -478,7 +522,7 @@ pub fn staticReferences(src: []const u8, alloc: std.mem.Allocator) !StaticRefs {
         var depth: u32 = 1;
         var commas: u32 = 0;
         var arg0_count: u32 = 0;
-        var arg0_token: Token = .{ .kind = .eof, .text = "" };
+        var arg0_token: Token = .{ .kind = .eof, .text = "", .offset = 0, .len = 0 };
         var arg0_done = false;
         while (true) {
             const inner = tok.next() catch break;
@@ -572,9 +616,21 @@ const Parser = struct {
     /// Writes a formatted description to ctx.error_detail (if set by caller).
     /// Writing through the pointer is safe even with *const Context because
     /// we modify the pointed-to value, not the Context field itself.
+    ///
+    /// Phase G1: also writes the most-recently-tokenized span to
+    /// `ctx.error_offset` / `error_len` so the GUI ExprPanel can
+    /// underline the offending token. The "most recent" token is
+    /// usually the one that triggered the error (e.g. an unexpected
+    /// `)`); when the error is actually about the *next* token (e.g.
+    /// a missing `(`, where the next-tokenizer call returns `eof`),
+    /// the highlight covers whatever was last consumed — close enough
+    /// for editor UX, and never wider than the whole expression.
     fn setDetail(self: *const Parser, comptime fmt: []const u8, args: anytype) void {
-        const d = self.ctx.error_detail orelse return;
-        d.* = std.fmt.allocPrint(self.ctx.alloc, fmt, args) catch return;
+        if (self.ctx.error_detail) |d| {
+            d.* = std.fmt.allocPrint(self.ctx.alloc, fmt, args) catch return;
+        }
+        if (self.ctx.error_offset) |o| o.* = self.tok.last_offset;
+        if (self.ctx.error_len) |l| l.* = self.tok.last_len;
     }
 
     /// Emit one NDJSON record describing a successful function call to
@@ -802,7 +858,7 @@ const Parser = struct {
                 // self.tok.src, so subtraction gives the start offset.
                 const name = t.text;
                 const src_start = @intFromPtr(name.ptr) - @intFromPtr(self.tok.src.ptr);
-                const result = try self.evalCall(name);
+                const result = try self.evalCall(name, t.offset, t.len);
                 const src_end = self.tok.pos;
                 self.emitCallTrace(name, src_start, src_end, result);
                 return result;
@@ -879,7 +935,11 @@ const Parser = struct {
     /// truth — see "Catalog" section near end of file). IF is the only lazy
     /// (short-circuit) builtin and is handled inline; everything else flows
     /// through eager arg evaluation + a uniform adapter table.
-    fn evalCall(self: *Parser, name: []const u8) anyerror!Value {
+    /// `name_offset`/`name_len` carry the function-name token's source
+    /// span so the UnknownFunction error site can highlight the
+    /// function ident specifically rather than whatever token was
+    /// last consumed (typically the closing `)` after arg parsing).
+    fn evalCall(self: *Parser, name: []const u8, name_offset: u32, name_len: u32) anyerror!Value {
         // AND / OR handled as keywords in parseAnd/parseOr — if we see them
         // here as idents without a following '(', treat as boolean true/false.
         if (std.ascii.eqlIgnoreCase(name, "AND") or std.ascii.eqlIgnoreCase(name, "OR"))
@@ -932,6 +992,12 @@ const Parser = struct {
             }
         }
 
+        // Highlight the function-name ident specifically — by the
+        // time we get here we've already consumed the closing `)`,
+        // so `last_offset/len` would point at that. Override with
+        // the name span captured in parsePrimary.
+        self.tok.last_offset = name_offset;
+        self.tok.last_len = name_len;
         self.setDetail("unknown function '{s}' — check function name spelling", .{name});
         return error.UnknownFunction;
     }
