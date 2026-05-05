@@ -943,7 +943,10 @@ fn checkOneExpr(
 
     // Phase G5: static check for SPLIT_PART(_, _, <literal-int>) where
     // the literal is ≤ 0. Independent of expr.eval — purely token-level
-    // scan, runs even when eval succeeded (warnings don't block save).
+    // scan, runs even when eval succeeded. Severity is `.error` because
+    // `SPLIT_PART` is 1-indexed and a literal ≤ 0 unconditionally
+    // returns `""` — almost certainly a typo (the user meant `1` for
+    // the first part).
     if (expr.staticCheckSplitPart(src)) |bad_idx| {
         const full_field = try std.fmt.allocPrint(alloc, "{s}.{s}", .{ field_prefix, field_leaf });
         defer alloc.free(full_field);
@@ -953,7 +956,7 @@ fn checkOneExpr(
             .{ field_leaf, bad_idx });
         try d.append(.{
             .path = path,
-            .severity = .warning,
+            .severity = .@"error",
             .code = "expr.SplitPartBadIndex",
             .message = message,
         });

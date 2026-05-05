@@ -284,6 +284,48 @@ fn run(args: [][:0]u8, out: Output, fresh: bool, check_fs_seconds: u8, alloc: st
         }
     }
 
+    // Phase G expression validation promoted to bxp-cli load path: parses
+    // every input_schema / row_rules / pre_pass expression and surfaces
+    // load-time fatals for unknown functions, unknown LOOKUP block names,
+    // wrong arg counts, and `SPLIT_PART` literal indexes ≤ 0. Without
+    // this, the same problems would surface as silent `""` substitutions
+    // during row processing and produce empty-column output.
+    //
+    // Arena-scoped: `expr.eval`'s Context.alloc allocates intermediate
+    // strings (concat results, error_detail, etc.) that aren't tracked
+    // by callers — using the main GPA directly leaks across every
+    // expression. The arena is freed once after diagnostics are
+    // emitted; messages are printed before teardown so we don't need
+    // to dupe them onto the outer allocator.
+    {
+        var expr_arena = std.heap.ArenaAllocator.init(alloc);
+        defer expr_arena.deinit();
+        const expr_alloc = expr_arena.allocator();
+        var expr_diag: diagnostics_mod.Diagnostics = .init(expr_alloc);
+        var b_it = cfg.brokers.iterator();
+        while (b_it.next()) |entry| {
+            try entry.value_ptr.validateExprsCollect(entry.key_ptr.*, expr_alloc, &expr_diag);
+        }
+        var has_expr_fatal = false;
+        for (expr_diag.items.items) |d| {
+            switch (d.severity) {
+                .@"error" => {
+                    out.fatal("error: {s}\n", .{d.message});
+                    has_expr_fatal = true;
+                },
+                .warning => out.warning("warning: {s}\n", .{d.message}),
+                .info => out.info("{s}\n", .{d.message}),
+            }
+        }
+        if (has_expr_fatal) {
+            overall.has_fatal = true;
+            out.info("\n=== overall summary ===\n", .{});
+            overall.time_ns = timer.read();
+            out.overallLine(overall);
+            return error.Fatal;
+        }
+    }
+
     // Opt-in filesystem check: verifies data_dir existence + at least
     // one input file matching file_pattern_in for every template, with
     // a total deadline of `check_fs_seconds`. Errors → fatal startup

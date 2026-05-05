@@ -1659,7 +1659,7 @@ test "annotateRaw Phase G3: LOOKUP unknown pre_pass name → \\$err_ at expressi
     try testing.expect(has_err);
 }
 
-test "annotateRaw Phase G5: SPLIT_PART literal-zero index → \\$warn_ at expression leaf" {
+test "annotateRaw Phase G5: SPLIT_PART literal-zero index → \\$err_ at expression leaf" {
     const testing = std.testing;
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -1683,26 +1683,25 @@ test "annotateRaw Phase G5: SPLIT_PART literal-zero index → \\$warn_ at expres
     ;
 
     const result = try annotateRaw(a, fixture, "<inline>", 0);
-    // Warnings alone don't fail the exit code (exit 1 only on $err_).
-    // The fixture has no errors → exit 0; but a $warn_ marker must
-    // land on the input_schema.
-    try testing.expectEqual(@as(u8, 0), result.exit_code);
+    // Severity is `.error` (1-based index typo is a hard config bug,
+    // not a hint), so the marker is `$err_` and exit code is 1.
+    try testing.expectEqual(@as(u8, 1), result.exit_code);
 
     var parsed = try std.json.parseFromSliceLeaky(std.json.Value, a, result.json, .{});
     const ct = parsed.object.get("conversion_templates") orelse return error.MissingCT;
     const sample = ct.object.get("sample") orelse return error.MissingSample;
     const is = sample.object.get("input_schema") orelse return error.MissingIs;
 
-    var saw_bad_warn = false;
+    var saw_bad_err = false;
     var it = is.object.iterator();
     while (it.next()) |kv| {
-        if (std.mem.startsWith(u8, kv.key_ptr.*, "$warn_") and
+        if (std.mem.startsWith(u8, kv.key_ptr.*, "$err_") and
             diagHas(kv.value_ptr, "SPLIT_PART index is 1-based"))
         {
-            saw_bad_warn = true;
+            saw_bad_err = true;
         }
     }
-    try testing.expect(saw_bad_warn);
+    try testing.expect(saw_bad_err);
 }
 
 test "annotateRaw Phase G7: unknown config key → \\$warn_ at offending path" {
