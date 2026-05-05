@@ -459,6 +459,118 @@ pub fn staticCheckSplitPart(src: []const u8) ?i64 {
     }
 }
 
+/// Phase G4: static check for `DATE_CONVERT(_, '<from_fmt>', '<to_fmt>')`
+/// where either format string contains an unrecognized letter outside
+/// `[...]` brackets. Sunrise's format walker silently treats unknown
+/// letters as literals (per `format.zig`), so a typo like `'YYYY-MN-DD'`
+/// (`MN` instead of `MM`) produces garbage output without an error.
+///
+/// Vocabulary follows the sunrise 0.1.0 token table: `Y M D E A` /
+/// `a e h i m s`. Any other ASCII letter outside `[...]` is flagged.
+/// Bracketed literals (`[T]`, `[*]`) are skipped — sunrise spec
+/// requires bare-letter literals to be wrapped this way.
+///
+/// Returns the offending format string + 0-based offset of the bad
+/// character. Skips DATE_CONVERT calls whose 2nd / 3rd arg isn't a
+/// single bare string literal (variables / concatenations are
+/// runtime-resolved).
+pub const BadDateFormat = struct {
+    fmt: []const u8, // unquoted inner format text
+    pos: usize,      // 0-based offset of bad char within fmt
+};
+
+pub fn staticCheckDateFormat(src: []const u8) ?BadDateFormat {
+    var tok = Tokenizer.init(src);
+    while (true) {
+        const t = tok.next() catch return null;
+        if (t.kind == .eof) return null;
+        if (t.kind != .ident) continue;
+        if (!std.mem.eql(u8, t.text, "DATE_CONVERT")) continue;
+
+        const lp = tok.next() catch return null;
+        if (lp.kind != .lparen) continue;
+
+        // Walk inside DATE_CONVERT(...). For arg index 1 and 2 (the two
+        // format strings), if the arg is a single bare string-lit
+        // token, scan it. Track top-level commas to identify arg index.
+        var depth: u32 = 1;
+        var arg_idx: u32 = 0;
+        var arg_token_count: u32 = 0;
+        var arg_first: Token = .{ .kind = .eof, .text = "", .offset = 0, .len = 0 };
+
+        while (true) {
+            const inner = tok.next() catch return null;
+            if (inner.kind == .eof) return null;
+
+            if (inner.kind == .comma and depth == 1) {
+                if ((arg_idx == 1 or arg_idx == 2) and
+                    arg_token_count == 1 and arg_first.kind == .string_lit)
+                {
+                    if (scanDateFormat(arg_first.text)) |pos| {
+                        return .{ .fmt = arg_first.text, .pos = pos };
+                    }
+                }
+                arg_idx += 1;
+                arg_token_count = 0;
+                arg_first = .{ .kind = .eof, .text = "", .offset = 0, .len = 0 };
+                continue;
+            }
+
+            if (inner.kind == .lparen) {
+                depth += 1;
+                if (depth == 1) arg_token_count += 1;
+                continue;
+            }
+
+            if (inner.kind == .rparen) {
+                depth -= 1;
+                if (depth == 0) {
+                    if ((arg_idx == 1 or arg_idx == 2) and
+                        arg_token_count == 1 and arg_first.kind == .string_lit)
+                    {
+                        if (scanDateFormat(arg_first.text)) |pos| {
+                            return .{ .fmt = arg_first.text, .pos = pos };
+                        }
+                    }
+                    break;
+                }
+                continue;
+            }
+
+            if (depth == 1) {
+                if (arg_token_count == 0) arg_first = inner;
+                arg_token_count += 1;
+            }
+        }
+    }
+}
+
+/// Scan one sunrise format string. Returns 0-based offset of first
+/// ASCII letter outside `[...]` that's not in the vocabulary, or null
+/// when the string is clean. Unclosed `[` consumes to end of string
+/// (no false flag) — sunrise's runtime would error on such input.
+fn scanDateFormat(fmt: []const u8) ?usize {
+    var i: usize = 0;
+    while (i < fmt.len) : (i += 1) {
+        const c = fmt[i];
+        if (c == '[') {
+            i += 1;
+            while (i < fmt.len and fmt[i] != ']') : (i += 1) {}
+            continue;
+        }
+        // Sunrise vocabulary: Y M D E A / a e h i m s. Anything else
+        // ASCII-alpha outside brackets is suspect.
+        switch (c) {
+            'A', 'D', 'E', 'M', 'Y' => {},
+            'a', 'e', 'h', 'i', 'm', 's' => {},
+            'B'...'C', 'F'...'L', 'N'...'X', 'Z',
+            'b'...'d', 'f'...'g', 'j'...'l', 'n'...'r', 't'...'z' => return i,
+            else => {}, // non-letter (digit, separator, etc.) is fine
+        }
+    }
+    return null;
+}
+
 /// Phase G8: collect static cross-reference data from an expression
 /// source. Walks tokens (no AST, no eval) and gathers:
 ///   - `fields` set: every named `[ColumnName]` reference (numeric

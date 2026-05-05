@@ -961,6 +961,27 @@ fn checkOneExpr(
             .message = message,
         });
     }
+
+    // Phase G4: static check for `DATE_CONVERT(_, '<from>', '<to>')`
+    // where either format string contains an unrecognized letter
+    // outside `[...]` brackets. Sunrise treats unknown letters as
+    // silent literals — typos like `'YYYY-MN-DD'` produce garbage
+    // output. Severity is `.error` because the value is silently
+    // wrong (no parse error, just bad data).
+    if (expr.staticCheckDateFormat(src)) |bad| {
+        const full_field = try std.fmt.allocPrint(alloc, "{s}.{s}", .{ field_prefix, field_leaf });
+        defer alloc.free(full_field);
+        const path = try std.fmt.allocPrint(alloc, "conversion_templates.{s}.{s}", .{ template_id, full_field });
+        const message = try std.fmt.allocPrint(alloc,
+            "expression in {s}: DATE_CONVERT format '{s}' has unrecognized letter '{c}' at offset {d} — bracket bare-letter literals as `[T]` per sunrise spec",
+            .{ field_leaf, bad.fmt, bad.fmt[bad.pos], bad.pos });
+        try d.append(.{
+            .path = path,
+            .severity = .@"error",
+            .code = "expr.DateFormatBadToken",
+            .message = message,
+        });
+    }
 }
 
 /// Extract the first single-quoted name from `s`. Returns null when no

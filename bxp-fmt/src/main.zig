@@ -1704,6 +1704,77 @@ test "annotateRaw Phase G5: SPLIT_PART literal-zero index → \\$err_ at express
     try testing.expect(saw_bad_err);
 }
 
+test "annotateRaw Phase G4: DATE_CONVERT format with bare non-vocab letter → \\$err_" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // `MN` is a typo (user meant `MM`). The strict walker must flag
+    // any letter outside `[...]` not in the sunrise vocabulary.
+    const fixture =
+        \\{
+        \\  conversion_templates: {
+        \\    sample: {
+        \\      data_dir: ".",
+        \\      file_pattern_in: ".csv",
+        \\      file_pattern_out: ".csvx",
+        \\      input_schema: {
+        \\        $bad: "DATE_CONVERT([X], 'YYYY-MN-DD', 'YYYY-MM-DD')",
+        \\      },
+        \\      output_schema: { bad: "$bad" },
+        \\    }
+        \\  }
+        \\}
+    ;
+
+    const result = try annotateRaw(a, fixture, "<inline>", 0);
+    try testing.expectEqual(@as(u8, 1), result.exit_code);
+
+    var parsed = try std.json.parseFromSliceLeaky(std.json.Value, a, result.json, .{});
+    const ct = parsed.object.get("conversion_templates") orelse return error.MissingCT;
+    const sample = ct.object.get("sample") orelse return error.MissingSample;
+    const is = sample.object.get("input_schema") orelse return error.MissingIs;
+
+    var saw = false;
+    var it = is.object.iterator();
+    while (it.next()) |kv| {
+        if (std.mem.startsWith(u8, kv.key_ptr.*, "$err_") and
+            diagHas(kv.value_ptr, "unrecognized letter 'N'"))
+        {
+            saw = true;
+        }
+    }
+    try testing.expect(saw);
+}
+
+test "annotateRaw Phase G4: DATE_CONVERT with bracketed literal → no \\$err_" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // Real-world ISO format with bracketed `T` literal must NOT flag.
+    const fixture =
+        \\{
+        \\  conversion_templates: {
+        \\    sample: {
+        \\      data_dir: ".",
+        \\      file_pattern_in: ".csv",
+        \\      file_pattern_out: ".csvx",
+        \\      input_schema: {
+        \\        $ok: "DATE_CONVERT([X], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')",
+        \\      },
+        \\      output_schema: { ok: "$ok" },
+        \\    }
+        \\  }
+        \\}
+    ;
+
+    const result = try annotateRaw(a, fixture, "<inline>", 0);
+    try testing.expectEqual(@as(u8, 0), result.exit_code);
+}
+
 test "annotateRaw Phase G7: unknown config key → \\$err_ at offending path" {
     const testing = std.testing;
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
