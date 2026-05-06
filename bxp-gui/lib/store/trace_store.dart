@@ -3,7 +3,6 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:package_info_plus/package_info_plus.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:json5_ast/ast.dart';
 import 'package:json5_ast/operations.dart' as ast_ops;
 import '../services/ast_loader.dart';
@@ -11,6 +10,7 @@ import '../services/ast_patch_client.dart';
 import '../services/bxp_process_client.dart';
 import '../services/dart_validator.dart';
 import '../services/dev_trace.dart';
+import '../services/prefs_service.dart';
 import '../services/op_log.dart';
 import '../services/op_to_ast.dart';
 import 'trace_model.dart';
@@ -52,7 +52,7 @@ class TraceStore extends ChangeNotifier {
   String get themePresetName => _themePresetName;
 
   // Active sans/prose typography scheme. Resolved by BxpTextScheme in
-  // ui/theme/bxp_text_scheme.dart. Persisted via SharedPreferences key
+  // ui/theme/bxp_text_scheme.dart. Persisted under PrefsService key
   // `bxp-ui.textScheme`. Default 'roboto' = Material bundled, always
   // renders.
   String _textSchemeName = 'roboto';
@@ -866,30 +866,32 @@ class TraceStore extends ChangeNotifier {
   String? bxpCliVersion;
   String? bxpFmtVersion;
 
+  final PrefsService _prefs = PrefsService();
+
   Future<void> _init() async {
-    final prefs = await SharedPreferences.getInstance();
+    await _prefs.load();
     // Defensive reads — a corrupt/older prefs store should never crash
     // the app or leave it in a half-loaded state. On any single read
     // failure we silently keep the field's default value.
     try {
-      final stored = prefs.getString('bxp-ui.theme');
+      final stored = _prefs.getString('bxp-ui.theme');
       if (stored != null && stored.isNotEmpty) _themePresetName = stored;
     } catch (_) {}
     try {
-      final ts = prefs.getString('bxp-ui.textScheme');
+      final ts = _prefs.getString('bxp-ui.textScheme');
       if (ts != null && ts.isNotEmpty && bxpTextSchemes.containsKey(ts)) {
         _textSchemeName = ts;
       }
     } catch (_) {}
     try {
-      final z = prefs.getDouble('bxp-gui.zoom');
+      final z = _prefs.getDouble('bxp-gui.zoom');
       if (z != null && z.isFinite && z >= 0.5 && z <= 3.0) _zoom = z;
     } catch (_) {}
     try {
-      _recentFiles = prefs.getStringList('bxp-ui.recent') ?? [];
+      _recentFiles = _prefs.getStringList('bxp-ui.recent') ?? [];
     } catch (_) {}
     try {
-      _customPlaces = prefs.getStringList('bxp-gui.customPlaces') ?? [];
+      _customPlaces = _prefs.getStringList('bxp-gui.customPlaces') ?? [];
     } catch (_) {}
     notifyListeners();
 
@@ -1027,9 +1029,8 @@ class TraceStore extends ChangeNotifier {
     if (_recentFiles.length > _recentMax) {
       _recentFiles = _recentFiles.sublist(0, _recentMax);
     }
-    final prefs = await SharedPreferences.getInstance();
     if (_disposed) return;
-    await prefs.setStringList('bxp-ui.recent', _recentFiles);
+    await _prefs.setStringList('bxp-ui.recent', _recentFiles);
     if (_disposed) return;
     notifyListeners();
   }
@@ -1042,15 +1043,13 @@ class TraceStore extends ChangeNotifier {
   Future<void> addCustomPlace(String path) async {
     if (path.isEmpty || _customPlaces.contains(path)) return;
     _customPlaces.add(path);
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setStringList('bxp-gui.customPlaces', _customPlaces);
+    await _prefs.setStringList('bxp-gui.customPlaces', _customPlaces);
     notifyListeners();
   }
 
   Future<void> removeCustomPlace(String path) async {
     if (!_customPlaces.remove(path)) return;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setStringList('bxp-gui.customPlaces', _customPlaces);
+    await _prefs.setStringList('bxp-gui.customPlaces', _customPlaces);
     notifyListeners();
   }
 
@@ -1058,8 +1057,7 @@ class TraceStore extends ChangeNotifier {
   /// [cycleTheme] for the 5-preset rotation used by the new TopBar.
   void toggleTheme() async {
     _themePresetName = _themePresetName == 'slate' ? 'zinc' : 'slate';
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('bxp-ui.theme', _themePresetName);
+    await _prefs.setString('bxp-ui.theme', _themePresetName);
     notifyListeners();
   }
 
@@ -1070,8 +1068,7 @@ class TraceStore extends ChangeNotifier {
     if (_themePresetName == name) return;
     devTrace('action.theme.set', {'name': name});
     _themePresetName = name;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('bxp-ui.theme', _themePresetName);
+    await _prefs.setString('bxp-ui.theme', _themePresetName);
     notifyListeners();
   }
 
@@ -1084,8 +1081,7 @@ class TraceStore extends ChangeNotifier {
     if (!bxpTextSchemes.containsKey(name)) return;
     devTrace('action.textScheme.set', {'name': name});
     _textSchemeName = name;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('bxp-ui.textScheme', _textSchemeName);
+    await _prefs.setString('bxp-ui.textScheme', _textSchemeName);
     notifyListeners();
   }
 
@@ -1098,8 +1094,7 @@ class TraceStore extends ChangeNotifier {
     _zoom = clamped;
     notifyListeners();
     try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setDouble('bxp-gui.zoom', _zoom);
+      await _prefs.setDouble('bxp-gui.zoom', _zoom);
     } catch (_) {
       // Persistence is best-effort. The user has already seen the zoom
       // change; failing the write would only silently corrupt their next
