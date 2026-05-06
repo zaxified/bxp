@@ -103,9 +103,53 @@ order:
 
 **Linux dev tree gotcha:** the Linux CMake config copies `bxp-fmt` into
 the bundle at build time. After changing bxp-fmt, run a clean Flutter
-build (or maintain the symlink under `linux/`) — see
-[release pipeline TODO](../scripts/release.sh) for the equivalent
-production step.
+build (or maintain the symlink under `linux/`); the production release
+script (`scripts/release-desktop.sh`) overwrites both companions with
+release builds before packaging.
+
+## User preferences
+
+`PrefsService` ([lib/services/prefs_service.dart](lib/services/prefs_service.dart))
+persists 5 keys (`bxp-ui.theme`, `bxp-ui.textScheme`, `bxp-gui.zoom`,
+`bxp-ui.recent`, `bxp-gui.customPlaces`) to a single visible JSON file:
+
+- Linux: `~/.local/share/bxp-gui/bxp-gui.json`
+- macOS: `~/Library/Application Support/bxp-gui/bxp-gui.json`
+- Windows: `%APPDATA%\bxp-gui\bxp-gui.json`
+
+Path resolution is **manual** (HOME / APPDATA env vars), NOT
+`path_provider.getApplicationSupportDirectory()` — the latter appends
+the bundle-id and would couple the prefs path to the Phase 5 identifier
+rename. Keeping it bundle-id-independent means upgrades across
+identifier changes don't lose user state.
+
+`load()` runs a one-shot migration from the legacy `shared_preferences`
+plugin store on first launch after the v0.2 upgrade and clears the old
+store. Migration code is removed in v0.3; the `shared_preferences`
+pubspec dep follows.
+
+## Auto-updater
+
+`UpdaterService` ([lib/services/updater_service.dart](lib/services/updater_service.dart))
+polls `api.github.com/repos/zaxified/bxp/releases/latest` 5 s after
+launch and every 6 h thereafter; if a newer tag is found, surfaces an
+`UpdateInfo` via ChangeNotifier. The dialog
+([lib/ui/components/update_dialog.dart](lib/ui/components/update_dialog.dart))
+is mounted by `_UpdaterListener` in `main.dart` so it can fire from any
+route.
+
+On accept, the matching native installer is downloaded to the system
+temp dir, verified against `SHA256SUMS` published with the release, and
+dispatched to a platform-native install:
+
+- Windows: `setup.exe /S` (NSIS silent) + `exit(0)`; post-install
+  relaunches the GUI.
+- macOS: `hdiutil` mount → `cp -R` to `~/Applications/` → `open -n`.
+- Linux AppImage: atomic-replace the running AppImage + re-`exec()`.
+- Linux `.deb` / tarball: open release page via `url_launcher` (the
+  in-place self-update path is AppImage-only).
+
+`kDebugMode` skips the auto-check during dev runs.
 
 The client maps each subcommand to a method:
 
