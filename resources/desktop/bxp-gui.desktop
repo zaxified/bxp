@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=BXP GUI
+GenericName=Broker eXchange Parser
+Comment=Edit broker config files and dry-run conversions
+Exec=bxp-gui %f
+Icon=bxp-gui
+Categories=Office;Finance;Utility;
+Terminal=false
+MimeType=application/json;application/x-bxp-config;
+StartupWMClass=bxp-gui
+Keywords=broker;csv;wealthfolio;ghostfolio;portfolio;
