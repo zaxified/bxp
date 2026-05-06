@@ -103,6 +103,7 @@ const envelope_entries = [_]FieldDoc{
         .type_name = "expression",
         .required = true,
         .description = "Expression evaluated per input row. Result stored in the $variable. Use [ColumnName] to reference input CSV columns.",
+        .validator = .expr_string,
     },
     .{
         .key = "conversion_templates.*.output_schema.*",
@@ -110,6 +111,8 @@ const envelope_entries = [_]FieldDoc{
         .required = true,
         .description = "$variable whose evaluated value fills this output column. Must start with $.",
         .insert_template = "\"$variable\"",
+        .validator = .starts_with_dollar,
+        .autocomplete = .input_schema_keys,
     },
     .{
         .key = "conversion_templates.*.row_rules.*",
@@ -133,12 +136,14 @@ const envelope_entries = [_]FieldDoc{
         .type_name = "expression",
         .required = true,
         .description = "Legacy single-block form. Filter — only rows matching this condition are added to the lookup table.",
+        .validator = .expr_string,
     },
     .{
         .key = "conversion_templates.*.pre_pass.key",
         .type_name = "expression",
         .required = true,
         .description = "Legacy single-block form. Expression evaluated per row to produce the lookup key string.",
+        .validator = .expr_string,
     },
     .{
         .key = "conversion_templates.*.pre_pass.values",
@@ -152,6 +157,7 @@ const envelope_entries = [_]FieldDoc{
         .type_name = "expression",
         .required = true,
         .description = "Expression evaluated per pre-pass row. Result stored under the field name for LOOKUP retrieval.",
+        .validator = .expr_string,
     },
     // ── Named pre_pass blocks ───────────────────────────────────────────────
     .{
@@ -167,6 +173,7 @@ const envelope_entries = [_]FieldDoc{
         .type_name = "expression",
         .required = true,
         .description = "Expression evaluated per pre-pass row. Result stored under the field name for LOOKUP retrieval.",
+        .validator = .expr_string,
     },
 };
 
@@ -188,6 +195,21 @@ pub fn writeDocs(alloc: std.mem.Allocator, writer: *std.Io.Writer) !void {
         try jw.write(f.signature);
         try jw.objectField("description");
         try jw.write(f.description);
+        try jw.objectField("args");
+        try jw.beginArray();
+        for (f.args) |a| {
+            try jw.beginObject();
+            try jw.objectField("name");
+            try jw.write(a.name);
+            try jw.objectField("kind");
+            try jw.write(@tagName(a.kind));
+            try jw.endObject();
+        }
+        try jw.endArray();
+        try jw.objectField("min_args");
+        try jw.write(f.min_args);
+        try jw.objectField("max_args");
+        try jw.write(f.max_args);
         try jw.endObject();
     }
     try jw.endArray();
@@ -285,6 +307,10 @@ fn writeSchemaEntry(alloc: std.mem.Allocator, jw: *std.json.Stringify, full_key:
     } else {
         try jw.write(null);
     }
+    try jw.objectField("validator");
+    try jw.write(@tagName(f.validator));
+    try jw.objectField("autocomplete");
+    try jw.write(@tagName(f.autocomplete));
     try jw.endObject();
 }
 

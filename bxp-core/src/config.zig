@@ -40,6 +40,49 @@ const CONFIG_MAX_FILE_SIZE: usize = 1024 * 1024;
 /// when the GUI inserts a new value matching this entry. The string is
 /// preprocessed to JSON via bxp-core's json5 module at serialize time
 /// and emitted as a nested JSON value.
+/// Per-field semantic validator. Default `none` means "no special
+/// check"; specialized values drive the bxp-gui Dart-side tree
+/// validator + per-edit feedback. Pure metadata today — no Zig
+/// validator dispatches per `validator` (the existing per-struct
+/// `BrokerConfig.validate` and friends remain hardcoded; adding Zig
+/// dispatch is a follow-up). Adding a kind = add an enum variant +
+/// populate relevant FieldDoc entries; bxp-gui consumes via
+/// `bxp-fmt --docs`.
+pub const FieldValidator = enum {
+    /// No special check.
+    none,
+    /// String value must be non-empty (whitespace-only also empty).
+    non_empty,
+    /// String must start with `$` (input_schema $variable references).
+    starts_with_dollar,
+    /// Value is an expression — Dart routes to ExprPanel autocomplete
+    /// + delegates static checks to the FnArgDoc-driven path.
+    expr_string,
+};
+
+/// Per-field autocomplete data source used by the bxp-gui editors.
+/// Default `none` means "no source-specific suggestions"; specialized
+/// values name a live source (current AST, dry-run cache, top-level
+/// keys) the GUI cross-references at edit time.
+pub const AutocompleteSource = enum {
+    none,
+    /// Suggest names of pre_pass blocks declared in the active
+    /// template's `pre_pass` map.
+    pre_pass_names,
+    /// Suggest $variable identifiers declared in the active template's
+    /// `input_schema` map (e.g. for `output_schema.*` values).
+    input_schema_keys,
+    /// Suggest top-level `ticker_maps` entry names (e.g. for the
+    /// `ticker_map` field's string form).
+    ticker_map_names,
+    /// Suggest CSV header names cached from the most recent dry-run
+    /// `file_start` event (per active template).
+    csv_headers_via_dryrun,
+    /// Reuse the FieldDoc.enum_values list as the suggestion source.
+    /// Marker for the GUI; today already inferred from `enum_values`.
+    enum_values,
+};
+
 pub const FieldDoc = struct {
     key: []const u8,
     type_name: []const u8,
@@ -50,6 +93,12 @@ pub const FieldDoc = struct {
     ordered: bool = false,
     insert_order: ?[]const u8 = null,
     insert_template: ?[]const u8 = null,
+    /// Phase 1b — Dart-side per-edit validator hint. Default `.none`
+    /// preserves the historical "no check" behavior.
+    validator: FieldValidator = .none,
+    /// Phase 1b — Dart-side autocomplete source hint. Default `.none`
+    /// preserves the historical "no per-field suggestions" behavior.
+    autocomplete: AutocompleteSource = .none,
 };
 
 /// Per-row variable overrides produced by a row rule.
@@ -73,6 +122,7 @@ pub const RowRule = struct {
             .type_name = "expression",
             .required = true,
             .description = "Condition expression. Rule applies when this evaluates to truthy (non-empty, non-zero, non-\"false\").",
+            .validator = .expr_string,
         },
         .{
             .key = "rows",
@@ -114,12 +164,14 @@ pub const PrePass = struct {
             .type_name = "expression",
             .required = true,
             .description = "Filter — only rows matching this condition are added to the named lookup table.",
+            .validator = .expr_string,
         },
         .{
             .key = "key",
             .type_name = "expression",
             .required = true,
             .description = "Expression evaluated per row to produce the lookup key string for this named block.",
+            .validator = .expr_string,
         },
         .{
             .key = "values",
@@ -181,6 +233,7 @@ pub const XlsxSheet = struct {
             .type_name = "string",
             .required = true,
             .description = "Sheet name as it appears in the xlsx workbook (e.g. \"CASH OPERATION\").",
+            .validator = .non_empty,
         },
         .{
             .key = "header_row",
@@ -286,6 +339,7 @@ pub const BrokerConfig = struct {
             .type_name = "string",
             .required = true,
             .description = "Path to input files, relative to this config file. e.g. \"my_broker\", \"../data/broker\", or an absolute path.",
+            .validator = .non_empty,
         },
         .{
             .key = "file_type_in",
@@ -308,12 +362,14 @@ pub const BrokerConfig = struct {
             .type_name = "string",
             .required = true,
             .description = "Suffix filter for input files in data_dir. e.g. \".csv\" (all), \"_cash.csv\" (specific suffix).",
+            .validator = .non_empty,
         },
         .{
             .key = "file_pattern_out",
             .type_name = "string",
             .required = true,
             .description = "Output filename suffix. Replaces file_pattern_in in the output filename.",
+            .validator = .non_empty,
         },
         .{
             .key = "csv_delimiter_in",
@@ -368,6 +424,7 @@ pub const BrokerConfig = struct {
             .type_name = "string | object",
             .required = false,
             .description = "Ticker remapping for this template. String = reference to a named ticker_maps entry. Object = inline map { broker_symbol: yahoo_symbol }.",
+            .autocomplete = .ticker_map_names,
         },
         .{
             .key = "date_filter_from_filename",
@@ -991,13 +1048,17 @@ fn checkOneExpr(
         });
     };
 
-    // Phase G5: static check for SPLIT_PART(_, _, <literal-int>) where
-    // the literal is ≤ 0. Independent of expr.eval — purely token-level
-    // scan, runs even when eval succeeded. Severity is `.error` because
-    // `SPLIT_PART` is 1-indexed and a literal ≤ 0 unconditionally
-    // returns `""` — almost certainly a typo (the user meant `1` for
-    // the first part).
-    if (expr.staticCheckSplitPart(src)) |bad_idx| {
+    // Unified static-arg checker (replaces former staticCheckSplitPart
+    // + staticCheckDateFormat name-hardcoded scanners). Walks every
+    // call once, dispatches per FnDoc.args[i].kind. Severity for both
+    // hits is `.error` because both are silent-failure modes
+    // (1-indexed SPLIT_PART with ≤ 0 returns "" unconditionally;
+    // DATE_CONVERT with an unrecognized format letter produces
+    // garbage output). Adding a new ArgKind diagnostic = add a
+    // StaticCheckResult field + emit branch here, no dispatch
+    // changes elsewhere.
+    const sc = expr.staticCheckCalls(src);
+    if (sc.split_part) |bad_idx| {
         const full_field = try std.fmt.allocPrint(alloc, "{s}.{s}", .{ field_prefix, field_leaf });
         defer alloc.free(full_field);
         const path = try std.fmt.allocPrint(alloc, "conversion_templates.{s}.{s}", .{ template_id, full_field });
@@ -1011,14 +1072,7 @@ fn checkOneExpr(
             .message = message,
         });
     }
-
-    // Phase G4: static check for `DATE_CONVERT(_, '<from>', '<to>')`
-    // where either format string contains an unrecognized letter
-    // outside `[...]` brackets. Sunrise treats unknown letters as
-    // silent literals — typos like `'YYYY-MN-DD'` produce garbage
-    // output. Severity is `.error` because the value is silently
-    // wrong (no parse error, just bad data).
-    if (expr.staticCheckDateFormat(src)) |bad| {
+    if (sc.date_format) |bad| {
         const full_field = try std.fmt.allocPrint(alloc, "{s}.{s}", .{ field_prefix, field_leaf });
         defer alloc.free(full_field);
         const path = try std.fmt.allocPrint(alloc, "conversion_templates.{s}.{s}", .{ template_id, full_field });

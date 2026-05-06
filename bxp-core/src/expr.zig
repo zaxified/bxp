@@ -394,122 +394,88 @@ const Tokenizer = struct {
     }
 };
 
-/// Phase G5: static scan for `SPLIT_PART(_, _, <literal>)` where the
-/// literal-int third argument is ≤ 0. SPLIT_PART is 1-based per
-/// `expr.builtinSplitPart` semantics, so `0` and negative literals
-/// always return `""` — almost certainly a typo. Returns the offending
-/// integer value when one is found, null otherwise. Skips any
-/// SPLIT_PART whose third arg isn't a single bare number-literal token
-/// (variables, expressions, etc. are runtime-resolved).
-///
-/// Note: tokenizer treats a leading `-` on a number as part of the
-/// number literal (e.g. `-1` is a single `.number_lit` token), so this
-/// function does not need to handle a separate unary-minus case.
-pub fn staticCheckSplitPart(src: []const u8) ?i64 {
-    var tok = Tokenizer.init(src);
-    while (true) {
-        const t = tok.next() catch return null;
-        if (t.kind == .eof) return null;
-        if (t.kind != .ident) continue;
-        if (!std.mem.eql(u8, t.text, "SPLIT_PART")) continue;
-
-        // Must be a function call — skip bare-ident occurrences.
-        const lp = tok.next() catch return null;
-        if (lp.kind != .lparen) continue;
-
-        // Walk inside this call, tracking depth + top-level commas.
-        // Collect tokens belonging to the third (top-level) argument.
-        var depth: u32 = 1;
-        var commas_seen: u32 = 0;
-        var third_count: u32 = 0;
-        var third_first: Token = .{ .kind = .eof, .text = "", .offset = 0, .len = 0 };
-        while (true) {
-            const inner = tok.next() catch return null;
-            if (inner.kind == .eof) return null;
-            if (inner.kind == .lparen) {
-                depth += 1;
-                if (commas_seen == 2 and depth >= 2) third_count += 1;
-                continue;
-            }
-            if (inner.kind == .rparen) {
-                depth -= 1;
-                if (depth == 0) {
-                    if (commas_seen == 2 and third_count == 1 and
-                        third_first.kind == .number_lit)
-                    {
-                        const f = std.fmt.parseFloat(f80, third_first.text) catch break;
-                        const v = @as(i64, @intFromFloat(f));
-                        if (v <= 0) return v;
-                    }
-                    break;
-                }
-                if (commas_seen == 2) third_count += 1;
-                continue;
-            }
-            if (inner.kind == .comma and depth == 1) {
-                commas_seen += 1;
-                third_count = 0;
-                continue;
-            }
-            if (commas_seen == 2 and depth == 1) {
-                if (third_count == 0) third_first = inner;
-                third_count += 1;
-            }
-        }
-    }
-}
-
-/// Phase G4: static check for `DATE_CONVERT(_, '<from_fmt>', '<to_fmt>')`
-/// where either format string contains an unrecognized letter outside
-/// `[...]` brackets. Sunrise's format walker silently treats unknown
-/// letters as literals (per `format.zig`), so a typo like `'YYYY-MN-DD'`
-/// (`MN` instead of `MM`) produces garbage output without an error.
-///
-/// Vocabulary follows the sunrise 0.1.0 token table: `Y M D E A` /
-/// `a e h i m s`. Any other ASCII letter outside `[...]` is flagged.
-/// Bracketed literals (`[T]`, `[*]`) are skipped — sunrise spec
-/// requires bare-letter literals to be wrapped this way.
-///
-/// Returns the offending format string + 0-based offset of the bad
-/// character. Skips DATE_CONVERT calls whose 2nd / 3rd arg isn't a
-/// single bare string literal (variables / concatenations are
-/// runtime-resolved).
+/// Phase G4 sunrise-format diagnostic shape. Re-exported for external
+/// consumers of the unified static checker (kept public after the
+/// G4/G5 unification — `staticCheckSplitPart`/`staticCheckDateFormat`
+/// are gone, callers consume `StaticCheckResult` instead).
 pub const BadDateFormat = struct {
     fmt: []const u8, // unquoted inner format text
     pos: usize,      // 0-based offset of bad char within fmt
 };
 
-pub fn staticCheckDateFormat(src: []const u8) ?BadDateFormat {
+/// Result of the unified per-call static checker. At most one hit per
+/// kind, mirroring the pre-unification first-hit semantics of
+/// `staticCheckSplitPart` / `staticCheckDateFormat` (the linear walker
+/// stops recording further hits of the same kind once one is set).
+///
+/// Adding a new ArgKind that needs a static check = add a field here,
+/// add a case in `tryScanArg` below, populate FnDoc.args on the
+/// relevant builtin, and emit the diagnostic in `bxp-core/src/config.zig`.
+pub const StaticCheckResult = struct {
+    /// `literal_int_positive` violation — bad literal int (≤ 0).
+    /// Today populated by SPLIT_PART arg[2]; carries the offending
+    /// integer for the diagnostic message.
+    split_part: ?i64 = null,
+    /// `sunrise_format` violation — bad format string literal.
+    /// Today populated by DATE_CONVERT args[1]/[2]; carries the
+    /// offending format text + 0-based offset of the bad character.
+    date_format: ?BadDateFormat = null,
+};
+
+/// Walk every call in `src`, look up each by name in `builtins`, and
+/// dispatch per-arg static checks via FnDoc.args[i].kind. Replaces the
+/// pre-G4/G5-unification trio of name-hardcoded scanners with a single
+/// data-driven walker — adding a new specialized ArgKind no longer
+/// touches dispatch logic.
+///
+/// Behavior preserved verbatim from `staticCheckSplitPart` and
+/// `staticCheckDateFormat`:
+///   - Linear single-pass: tokens inside one call are consumed before
+///     the outer loop resumes, so nested calls (e.g. SPLIT_PART inside
+///     SPLIT_PART's first arg) are NOT re-scanned. This matches the
+///     pre-unification behavior; fixing nested coverage is a follow-up.
+///   - Single-bare-token gate: an arg only triggers its kind's
+///     scanner when it consists of exactly one top-level token of the
+///     expected kind. Variables, expressions, nested calls, and
+///     concatenations all push the count above 1 and are skipped
+///     (runtime-resolved).
+///   - First-hit semantics: at most one diagnostic per kind across
+///     the whole `src`. The walker keeps scanning so subsequent fields
+///     in the same diagnostic batch can still be checked, but later
+///     hits of an already-set kind are silently dropped.
+pub fn staticCheckCalls(src: []const u8) StaticCheckResult {
+    var out: StaticCheckResult = .{};
     var tok = Tokenizer.init(src);
     while (true) {
-        const t = tok.next() catch return null;
-        if (t.kind == .eof) return null;
+        const t = tok.next() catch return out;
+        if (t.kind == .eof) return out;
         if (t.kind != .ident) continue;
-        if (!std.mem.eql(u8, t.text, "DATE_CONVERT")) continue;
 
-        const lp = tok.next() catch return null;
+        // Look up FnDoc by name (case-insensitive, mirroring evalCall).
+        // Skip when no specialized arg kinds — saves the inner walk.
+        const fn_doc = lookupFnDocByName(t.text) orelse continue;
+        if (!hasSpecializedArgs(fn_doc)) continue;
+
+        // Must be followed by `(` to be a real call.
+        const lp = tok.next() catch return out;
         if (lp.kind != .lparen) continue;
 
-        // Walk inside DATE_CONVERT(...). For arg index 1 and 2 (the two
-        // format strings), if the arg is a single bare string-lit
-        // token, scan it. Track top-level commas to identify arg index.
+        // Walk arg list at depth 1; nested parens raise depth and
+        // their tokens don't contribute to the bare-token count of
+        // the enclosing arg. This matches `staticCheckDateFormat`'s
+        // counter logic and produces identical observable behavior to
+        // `staticCheckSplitPart` for every input we tested.
         var depth: u32 = 1;
         var arg_idx: u32 = 0;
         var arg_token_count: u32 = 0;
         var arg_first: Token = .{ .kind = .eof, .text = "", .offset = 0, .len = 0 };
 
         while (true) {
-            const inner = tok.next() catch return null;
-            if (inner.kind == .eof) return null;
+            const inner = tok.next() catch return out;
+            if (inner.kind == .eof) return out;
 
             if (inner.kind == .comma and depth == 1) {
-                if ((arg_idx == 1 or arg_idx == 2) and
-                    arg_token_count == 1 and arg_first.kind == .string_lit)
-                {
-                    if (scanDateFormat(arg_first.text)) |pos| {
-                        return .{ .fmt = arg_first.text, .pos = pos };
-                    }
-                }
+                tryScanArg(fn_doc, arg_idx, arg_token_count, arg_first, &out);
                 arg_idx += 1;
                 arg_token_count = 0;
                 arg_first = .{ .kind = .eof, .text = "", .offset = 0, .len = 0 };
@@ -518,20 +484,13 @@ pub fn staticCheckDateFormat(src: []const u8) ?BadDateFormat {
 
             if (inner.kind == .lparen) {
                 depth += 1;
-                if (depth == 1) arg_token_count += 1;
                 continue;
             }
 
             if (inner.kind == .rparen) {
                 depth -= 1;
                 if (depth == 0) {
-                    if ((arg_idx == 1 or arg_idx == 2) and
-                        arg_token_count == 1 and arg_first.kind == .string_lit)
-                    {
-                        if (scanDateFormat(arg_first.text)) |pos| {
-                            return .{ .fmt = arg_first.text, .pos = pos };
-                        }
-                    }
+                    tryScanArg(fn_doc, arg_idx, arg_token_count, arg_first, &out);
                     break;
                 }
                 continue;
@@ -542,6 +501,60 @@ pub fn staticCheckDateFormat(src: []const u8) ?BadDateFormat {
                 arg_token_count += 1;
             }
         }
+    }
+}
+
+/// Linear scan over `builtins` (case-insensitive name match) for
+/// FnDoc lookup. Returns null when `name` isn't a known builtin.
+fn lookupFnDocByName(name: []const u8) ?FnDoc {
+    for (builtins) |b| {
+        if (std.ascii.eqlIgnoreCase(name, b.doc.name)) return b.doc;
+    }
+    return null;
+}
+
+/// Quick early-exit helper: does `fn_doc.args` declare any arg whose
+/// kind triggers a static checker? Avoids walking the call's tokens
+/// when there's no work for any arg position.
+fn hasSpecializedArgs(fn_doc: FnDoc) bool {
+    for (fn_doc.args) |a| {
+        switch (a.kind) {
+            .literal_int_positive, .sunrise_format => return true,
+            else => {},
+        }
+    }
+    return false;
+}
+
+/// Per-arg dispatch: when the completed arg span is exactly one bare
+/// top-level token of the expected kind, run the kind-specific
+/// scanner and record into `out`. First-hit semantics mean later hits
+/// of the same kind are dropped silently.
+fn tryScanArg(
+    fn_doc: FnDoc,
+    arg_idx: u32,
+    count: u32,
+    first: Token,
+    out: *StaticCheckResult,
+) void {
+    if (count != 1) return;
+    if (arg_idx >= fn_doc.args.len) return; // variadic past declared args
+    switch (fn_doc.args[arg_idx].kind) {
+        .literal_int_positive => {
+            if (first.kind != .number_lit) return;
+            if (out.split_part != null) return;
+            const f = std.fmt.parseFloat(f80, first.text) catch return;
+            const v = @as(i64, @intFromFloat(f));
+            if (v <= 0) out.split_part = v;
+        },
+        .sunrise_format => {
+            if (first.kind != .string_lit) return;
+            if (out.date_format != null) return;
+            if (scanDateFormat(first.text)) |pos| {
+                out.date_format = .{ .fmt = first.text, .pos = pos };
+            }
+        },
+        .expr, .literal_string, .pre_pass_name => {},
     }
 }
 
@@ -1123,10 +1136,48 @@ const Parser = struct {
 // The bottom `builtins` array just lists references to those named docs.
 // ---------------------------------------------------------------------------
 
+/// Per-arg semantic kind. Default `expr` means "any expression, no
+/// special static check"; specialized kinds drive the generic
+/// FnArgDoc-based static checker (see `staticCheckCallsCollect` below).
+/// New kinds extend the catalog without touching dispatch sites in
+/// `bxp-core/src/config.zig`.
+pub const ArgKind = enum {
+    /// Any expression — no special static check applies.
+    expr,
+    /// Bare string literal expected (validators may scan literal text).
+    literal_string,
+    /// Bare integer literal expected, must be ≥ 1. Drives
+    /// `expr.SplitPartBadIndex` diagnostics for SPLIT_PART arg[2].
+    literal_int_positive,
+    /// Bare string literal containing a sunrise-format pattern. Drives
+    /// `expr.DateFormatBadToken` diagnostics for DATE_CONVERT arg[1]/arg[2].
+    sunrise_format,
+    /// Bare string literal naming a pre_pass block. Drives autocomplete
+    /// in bxp-gui (no static check today — runtime-resolved via
+    /// Context.pre_pass_names; documented for catalog completeness).
+    pre_pass_name,
+};
+
+pub const FnArgDoc = struct {
+    name: []const u8,
+    kind: ArgKind = .expr,
+};
+
 pub const FnDoc = struct {
     name: []const u8,
     signature: []const u8,
     description: []const u8,
+    /// Per-arg metadata. Empty (default) means "no per-arg static
+    /// checks / autocomplete hints declared". Populated entries drive
+    /// the generic static checker + Dart autocomplete.
+    args: []const FnArgDoc = &.{},
+    /// Minimum arg count. 0 = unspecified (legacy default — does not
+    /// drive WrongArgCount checks until populated). Set to args.len for
+    /// fixed-arity functions; smaller for variadic minimums.
+    min_args: u8 = 0,
+    /// Maximum arg count. 0 = unspecified. 255 (= 0xFF) = unbounded
+    /// (variadic). Otherwise set to args.len for fixed-arity.
+    max_args: u8 = 0,
 };
 
 pub const KeywordDoc = struct {
@@ -1165,6 +1216,13 @@ const if_doc: FnDoc = .{
     .name = "IF",
     .signature = "IF(cond, yes, no)",
     .description = "Short-circuit conditional. Returns `yes` if `cond` is truthy, else `no`.",
+    .args = &.{
+        .{ .name = "cond" },
+        .{ .name = "yes" },
+        .{ .name = "no" },
+    },
+    .min_args = 3,
+    .max_args = 3,
 };
 
 // ---------------------------------------------------------------------------
@@ -1224,6 +1282,9 @@ const abs_doc: FnDoc = .{
     .name = "ABS",
     .signature = "ABS(f)",
     .description = "Absolute numeric value.",
+    .args = &.{.{ .name = "f" }},
+    .min_args = 1,
+    .max_args = 1,
 };
 fn builtinAbs(args: []Value) !Value {
     if (args.len != 1) return error.WrongArgCount;
@@ -1241,6 +1302,9 @@ const fields_doc: FnDoc = .{
     .name = "FIELDS",
     .signature = "FIELDS(n)",
     .description = "Field value by 1-based column index (alternative to [ColumnName] when the header is unknown).",
+    .args = &.{.{ .name = "n" }},
+    .min_args = 1,
+    .max_args = 1,
 };
 fn builtinFields(args: []Value, ctx: *const Context) !Value {
     if (args.len != 1) return error.WrongArgCount;
@@ -1276,6 +1340,9 @@ const price_value_doc: FnDoc = .{
     .name = "PRICE_VALUE",
     .signature = "PRICE_VALUE(f)",
     .description = "Strip currency symbol or code from a price string, return the numeric part.",
+    .args = &.{.{ .name = "f" }},
+    .min_args = 1,
+    .max_args = 1,
 };
 /// PRICE_VALUE("$88744.27") → "88744.27"
 /// PRICE_VALUE("€24.00") → "24.00"
@@ -1300,6 +1367,9 @@ const price_currency_doc: FnDoc = .{
     .name = "PRICE_CURRENCY",
     .signature = "PRICE_CURRENCY(f)",
     .description = "Extract currency code from a price string (e.g. \"EUR\", \"USD\").",
+    .args = &.{.{ .name = "f" }},
+    .min_args = 1,
+    .max_args = 1,
 };
 /// PRICE_CURRENCY("$88744.27") → "USD"
 /// PRICE_CURRENCY("€24.00") → "EUR"
@@ -1324,6 +1394,9 @@ const ticker_doc: FnDoc = .{
     .name = "TICKER",
     .signature = "TICKER(f)",
     .description = "Map field value through the template's ticker_map. Returns value unchanged if not found.",
+    .args = &.{.{ .name = "f" }},
+    .min_args = 1,
+    .max_args = 1,
 };
 /// TICKER(field) — look up in ticker_map, return as-is if not found.
 fn builtinTicker(args: []Value, ctx: *const Context) !Value {
@@ -1343,6 +1416,18 @@ const lookup_doc: FnDoc = .{
     .name = "LOOKUP",
     .signature = "LOOKUP([name,] key, field)",
     .description = "Retrieve a value stored by a pre_pass table. 3-arg form `LOOKUP(name, key, field)` selects the named pre_pass block. 2-arg form `LOOKUP(key, field)` works only when exactly one pre_pass block is defined.",
+    // Variadic 2/3 args; per-arg roles depend on arity (3-arg: name/key/field,
+    // 2-arg: key/field with implicit name). The catalog declares the 3-arg
+    // shape — bxp-gui autocomplete suggests pre_pass names for arg[0] when
+    // the user is mid-typing a 3-arg call. Static name-resolution is
+    // runtime-only via Context.pre_pass_names (no static check here).
+    .args = &.{
+        .{ .name = "name", .kind = .pre_pass_name },
+        .{ .name = "key", .kind = .expr },
+        .{ .name = "field", .kind = .literal_string },
+    },
+    .min_args = 2,
+    .max_args = 3,
 };
 /// LOOKUP — reads a value stored by pre_pass.
 ///   3-arg: LOOKUP(name, key, field)  — explicit pre_pass name.
@@ -1410,6 +1495,13 @@ const split_part_doc: FnDoc = .{
     .name = "SPLIT_PART",
     .signature = "SPLIT_PART(s, delim, n)",
     .description = "Return the n-th part of `s` split by `delim` (1-based index).",
+    .args = &.{
+        .{ .name = "s" },
+        .{ .name = "delim" },
+        .{ .name = "n", .kind = .literal_int_positive },
+    },
+    .min_args = 3,
+    .max_args = 3,
 };
 /// SPLIT_PART(string, delimiter, n) — split string by delimiter, return nth part (1-based).
 /// Returns "" when fewer than n parts exist or delimiter is empty.
@@ -1455,6 +1547,12 @@ const contains_doc: FnDoc = .{
     .name = "CONTAINS",
     .signature = "CONTAINS(haystack, needle)",
     .description = "Returns \"true\" if `haystack` contains `needle`, else \"false\".",
+    .args = &.{
+        .{ .name = "haystack" },
+        .{ .name = "needle" },
+    },
+    .min_args = 2,
+    .max_args = 2,
 };
 /// CONTAINS(string, substring) → bool — true when substring is found inside string.
 fn builtinContains(args: []Value) !Value {
@@ -1478,6 +1576,13 @@ const replace_doc: FnDoc = .{
     .name = "REPLACE",
     .signature = "REPLACE(s, from, to)",
     .description = "Replace all occurrences of `from` in `s` with `to`.",
+    .args = &.{
+        .{ .name = "s" },
+        .{ .name = "from" },
+        .{ .name = "to" },
+    },
+    .min_args = 3,
+    .max_args = 3,
 };
 /// REPLACE(string, old, new) — replace all occurrences of old with new.
 fn builtinReplace(args: []Value, alloc: std.mem.Allocator) !Value {
@@ -1506,6 +1611,9 @@ const now_doc: FnDoc = .{
     .name = "NOW",
     .signature = "NOW()",
     .description = "Current UTC datetime as ISO 8601 string (YYYY-MM-DDTHH:MM:SSZ).",
+    .args = &.{},
+    .min_args = 0,
+    .max_args = 0,
 };
 /// NOW() — current UTC datetime as ISO 8601 string: YYYY-MM-DDTHH:MM:SSZ.
 fn builtinNow(args: []Value, alloc: std.mem.Allocator) !Value {
@@ -1535,6 +1643,9 @@ const trim_doc: FnDoc = .{
     .name = "TRIM",
     .signature = "TRIM(f)",
     .description = "Strip leading and trailing whitespace from a string.",
+    .args = &.{.{ .name = "f" }},
+    .min_args = 1,
+    .max_args = 1,
 };
 /// TRIM(f) — strip leading and trailing whitespace (spaces, tabs, CR, LF).
 fn builtinTrim(args: []Value) !Value {
@@ -1554,6 +1665,12 @@ const round_doc: FnDoc = .{
     .name = "ROUND",
     .signature = "ROUND(f, n)",
     .description = "Round `f` to `n` decimal places.",
+    .args = &.{
+        .{ .name = "f" },
+        .{ .name = "n" },
+    },
+    .min_args = 2,
+    .max_args = 2,
 };
 /// ROUND(f, n) — round f to n decimal places.
 /// n >= 0: round to n places after decimal point; n < 0: round to tens/hundreds/etc.
@@ -1581,6 +1698,9 @@ const floor_doc: FnDoc = .{
     .name = "FLOOR",
     .signature = "FLOOR(f)",
     .description = "Round `f` down to nearest integer.",
+    .args = &.{.{ .name = "f" }},
+    .min_args = 1,
+    .max_args = 1,
 };
 /// FLOOR(f) — largest integer less than or equal to f.
 fn builtinFloor(args: []Value) !Value {
@@ -1599,6 +1719,9 @@ const ceiling_doc: FnDoc = .{
     .name = "CEILING",
     .signature = "CEILING(f)",
     .description = "Round `f` up to nearest integer.",
+    .args = &.{.{ .name = "f" }},
+    .min_args = 1,
+    .max_args = 1,
 };
 /// CEILING(f) — smallest integer greater than or equal to f.
 fn builtinCeiling(args: []Value) !Value {
@@ -1617,6 +1740,9 @@ const rand_doc: FnDoc = .{
     .name = "RAND",
     .signature = "RAND()",
     .description = "Random float in [0, 1).",
+    .args = &.{},
+    .min_args = 0,
+    .max_args = 0,
 };
 /// RAND() — cryptographically random float in [0, 1).
 fn builtinRand(args: []Value) !Value {
@@ -1632,6 +1758,11 @@ const coalesce_doc: FnDoc = .{
     .name = "COALESCE",
     .signature = "COALESCE(a, b, ...)",
     .description = "First non-empty argument (empty = whitespace-only string). Returns last argument verbatim as fallback.",
+    // Variadic 1+ args, all expr. Catalog declares the first arg as
+    // documentation; trailing args inherit `kind = .expr` semantically.
+    .args = &.{.{ .name = "a" }},
+    .min_args = 1,
+    .max_args = 255,
 };
 /// COALESCE(a, b, ...) — return the first non-empty argument.
 /// A string is considered empty if its trimmed length is 0 (whitespace-only
@@ -1659,6 +1790,13 @@ const date_convert_doc: FnDoc = .{
     .name = "DATE_CONVERT",
     .signature = "DATE_CONVERT(f, from, to)",
     .description = "Reformat a date/time string. Format tokens use sunrise syntax (e.g. %Y-%m-%d, %d.%m.%Y, %H:%M:%S).",
+    .args = &.{
+        .{ .name = "f" },
+        .{ .name = "from", .kind = .sunrise_format },
+        .{ .name = "to", .kind = .sunrise_format },
+    },
+    .min_args = 3,
+    .max_args = 3,
 };
 /// Parses the input string according to from_fmt, then formats the result
 /// according to to_fmt.  Both format strings use sunrise token syntax:
