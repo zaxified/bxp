@@ -204,10 +204,17 @@ class _ExprEditorState extends State<ExprEditor> {
       if (headers.isNotEmpty) {
         final items = <_AcItem>[];
         final low = fragment.toLowerCase();
+        // Detect whether the source already has a closing `]` after
+        // the cursor. If yes, just insert the name; if no, append `]`
+        // so the user doesn't have to type it. Mirrors the fn-template
+        // approach where the function call's closing `)` is part of
+        // the inserted text.
+        final hasCloser = sel.start < text.length &&
+            text.codeUnitAt(sel.start) == 0x5D;
         for (final h in headers) {
           if (low.isEmpty || h.toLowerCase().startsWith(low)) {
             items.add(_AcItem(
-              insert: h,
+              insert: hasCloser ? h : '$h]',
               label: h,
               desc: 'CSV header (active template)',
               kind: _AcKind.col,
@@ -220,6 +227,25 @@ class _ExprEditorState extends State<ExprEditor> {
           _showItems(items, lbIdx + 1, sel.start);
           return;
         }
+      } else {
+        // Polish 4 — no headers cached for the active template means
+        // the user hasn't run a dry-run yet (or is editing a template
+        // that hasn't been exercised this session). Show a single
+        // info-only row in the popup so the user knows what to do
+        // instead of staring at silence after typing `[`. The row is
+        // marked `_AcKind.col` for the icon but its `insert` is empty
+        // so picking it (Enter / mouse) is a no-op aside from
+        // dismissing the popup — see _applyAutocomplete's empty-
+        // insert short-circuit.
+        _showItems([
+          _AcItem(
+            insert: '',
+            label: '(no CSV headers cached)',
+            desc: 'Run a dry-run to populate header autocomplete for this template.',
+            kind: _AcKind.col,
+          ),
+        ], lbIdx + 1, sel.start);
+        return;
       }
     }
 
@@ -488,6 +514,13 @@ class _ExprEditorState extends State<ExprEditor> {
   }
 
   void _applyAutocomplete(_AcItem item) {
+    // Polish 4 — info-only items (e.g. "(no CSV headers cached)")
+    // carry an empty `insert`; picking them is a no-op other than
+    // dismissing the popup so the user can keep typing.
+    if (item.insert.isEmpty) {
+      _hidePopup();
+      return;
+    }
     final text = widget.controller.text;
     String insert = item.insert;
     // Pre_pass picks live inside a LOOKUP first-arg literal — close

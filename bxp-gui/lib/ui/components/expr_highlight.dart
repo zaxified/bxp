@@ -70,6 +70,13 @@ List<_Span> _tokenize(String src, _LiveSets sets) {
   final ws = RegExp(r'^\s+');
   final col = RegExp(r'^\[[^\]]*\]');
   final varRef = RegExp(r'^\$[A-Za-z_][A-Za-z0-9_]*');
+  // `'''` (three single quotes) is a special placeholder token in
+  // bxp expression syntax — resolved at runtime to
+  // `csv_text_quote_out`. Match it BEFORE the normal string regex so
+  // `''' & [Field] & '''` highlights as 3 distinct tokens (placeholder
+  // + concat + field + concat + placeholder) instead of collapsing
+  // into one giant literal that hides the [Field] colour.
+  final tripleQuote = RegExp(r"^'''");
   final str = RegExp(r"^'([^'\\]|\\.)*'");
   final num = RegExp(r'^\d+(\.\d+)?');
   final op2 = RegExp(r'^(<=|>=|!=)');
@@ -92,6 +99,11 @@ List<_Span> _tokenize(String src, _LiveSets sets) {
     }
     if ((m = varRef.firstMatch(rest)) != null) {
       out.add(_Span(_Tok.variable, m!.group(0)!));
+      i += m.group(0)!.length;
+      continue;
+    }
+    if ((m = tripleQuote.firstMatch(rest)) != null) {
+      out.add(_Span(_Tok.string, m!.group(0)!));
       i += m.group(0)!.length;
       continue;
     }

@@ -602,11 +602,23 @@ class TraceStore extends ChangeNotifier {
   /// the combined inner map without mutating either input. Used by
   /// `errorsAt`/`warningsAt`/`infoAt` to overlay Phase-3 Dart-side
   /// diagnostics on top of bxp-fmt entries at query time.
+  ///
+  /// Polish 1 — dedupe by VALUE: when both maps carry the same
+  /// message text (e.g. bxp-fmt's `$err_1` and Dart's `$dart_1` both
+  /// say `unknown config key 'data_dir2' — did you mean 'data_dir'?`
+  /// because the wording is intentionally aligned), drop the
+  /// duplicate from the second map. Bxp-fmt's keys come first since
+  /// they reflect the saved file's authoritative state.
   static Map<String, String> _mergeMaps(
       Map<String, String>? a, Map<String, String>? b) {
     if (a == null || a.isEmpty) return b ?? const {};
     if (b == null || b.isEmpty) return a;
-    return {...a, ...b};
+    final seen = <String>{...a.values};
+    final out = <String, String>{...a};
+    for (final e in b.entries) {
+      if (seen.add(e.value)) out[e.key] = e.value;
+    }
+    return out;
   }
 
   /// Diagnostics on the node at [path]. Returns the `$err_<name>` →
@@ -641,6 +653,54 @@ class TraceStore extends ChangeNotifier {
     _dartErrors = const {};
     _dartWarnings = const {};
     _dartInfo = const {};
+  }
+
+  /// Polish 1 — dedup parent banner: returns true when [message]
+  /// appears at any STRICT descendant of [path] in the bucket
+  /// matching [severity]. Used by json_tree's banner renderer to
+  /// suppress a parent-level banner whose text is already shown
+  /// under a descendant leaf (the typical pattern when bxp-fmt
+  /// emits `$err_*` at the parent object level while the Dart-side
+  /// validator places the same diagnostic at the offending leaf).
+  ///
+  /// Strict descendant: a key that startsWith `<path>\x00` (so the
+  /// banner's own path doesn't dedup itself away).
+  bool _isDuplicatedAtDescendant(
+      List<String> path, DartSeverity severity, String message) {
+    final prefix = '${_encodePath(path)}\x00';
+    Map<String, Map<String, String>> bucket;
+    Map<String, Map<String, String>> dartBucket;
+    switch (severity) {
+      case DartSeverity.error:
+        bucket = _validationErrors;
+        dartBucket = _dartErrors;
+        break;
+      case DartSeverity.warning:
+        bucket = _validationWarnings;
+        dartBucket = _dartWarnings;
+        break;
+      case DartSeverity.info:
+        bucket = _validationInfo;
+        dartBucket = _dartInfo;
+        break;
+    }
+    bool any(Map<String, Map<String, String>> m) {
+      for (final e in m.entries) {
+        if (!e.key.startsWith(prefix)) continue;
+        if (e.value.values.contains(message)) return true;
+      }
+      return false;
+    }
+    return any(bucket) || any(dartBucket);
+  }
+
+  /// Filter [messages] to those NOT duplicated at a strict descendant
+  /// of [path] in the [severity] bucket. Returns the inputs verbatim
+  /// when no dedup is needed (typical case).
+  Iterable<String> dedupBannerMessages(
+      List<String> path, DartSeverity severity, Iterable<String> messages) {
+    return messages
+        .where((m) => !_isDuplicatedAtDescendant(path, severity, m));
   }
 
   /// True if any descendant of the node at [path] (inclusive) carries a
@@ -2459,20 +2519,47 @@ class TraceStore extends ChangeNotifier {
   }
 
   /// Combined diagnostic text from every error source the UI surfaces:
-  /// load-side configError, save-side configSaveError, first bxp-fmt
-  /// `$err_*` trace, plus the runtime stderr stream from a dry/full
+  /// load-side configError, save-side configSaveError, **all** bxp-fmt
+  /// `$err_*` / `$warn_*` / `$info_*` traces (stacked with one
+  /// per line, severity-prefixed), Dart-side `$dart_<N>` entries from
+  /// `_revalidateDart`, plus the runtime stderr stream from a dry/full
   /// run. Drives the single clickable `stderr (NB)` badge in the bottom
   /// status bar — the badge's byte count and its expansion panel both
   /// read from this getter so config errors and pipeline stderr live in
   /// one click target instead of three duplicated inline labels.
+  ///
+  /// Polish 2 — every diagnostic is listed (was: only the first
+  /// `$err_*` trace). Order: errors first, then warnings, then info,
+  /// each grouped by source bucket. Path is prefixed so the user can
+  /// jump from the badge text to the offending node.
   String get diagnosticBlob {
     final parts = <String>[];
-    final firstErr = firstConfigErrorTrace;
-    if (firstErr != null) parts.add('bxp-fmt: $firstErr');
+
+    void emitBucket(
+      String severity,
+      Map<String, Map<String, String>> bucket,
+    ) {
+      for (final e in bucket.entries) {
+        if (!_validationPathAlive(e.key)) continue;
+        final path = e.key.replaceAll('\x00', '.');
+        for (final msg in e.value.values) {
+          if (msg.isEmpty) continue;
+          parts.add('$severity $path: $msg');
+        }
+      }
+    }
+
+    emitBucket('[error]', _validationErrors);
+    emitBucket('[error]', _dartErrors);
+    emitBucket('[warn] ', _validationWarnings);
+    emitBucket('[warn] ', _dartWarnings);
+    emitBucket('[info] ', _validationInfo);
+    emitBucket('[info] ', _dartInfo);
+
     if (configError != null) parts.add('config: $configError');
     if (configSaveError != null) parts.add('save: $configSaveError');
     if (stderrText.isNotEmpty) parts.add(stderrText);
-    return parts.join('\n\n');
+    return parts.join('\n');
   }
 
   /// Opens [path] in the host's default application (`xdg-open` on Linux).

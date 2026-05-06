@@ -312,12 +312,23 @@ class DartValidator {
       // long-term promotion landed alongside SplitPartBadIndex). Same
       // bucket as bxp-fmt's `$err_*` so json_tree's existing leaf-level
       // error rendering picks it up without a separate warning path.
+      // Wording is byte-identical to bxp-core's emit so that when both
+      // validators flag the same key (live edit + saved file), the
+      // banner-merge path treats them as one message instead of
+      // showing two near-duplicate rows.
+      final message = suggest == null
+          ? "unknown config key '${p.key}' — typo or extraneous entry"
+          : "unknown config key '${p.key}' — did you mean '$suggest'?";
+      // Note: `suggest` is intentionally null here so the
+      // TraceStore-side displayable string doesn't double-append the
+      // hint that's already part of `message`. The same wording is
+      // emitted by `bxp-core/src/config.zig::validateUnknownKeysCollect`
+      // so the merge path collapses the two rows into one.
       out.add(DartDiagnostic(
         path: [...path, p.key],
         severity: DartSeverity.error,
         code: 'dart.config.UnknownKey',
-        message: "unknown key '${p.key}'",
-        suggest: suggest == null ? null : "did you mean '$suggest'?",
+        message: message,
       ));
     }
   }

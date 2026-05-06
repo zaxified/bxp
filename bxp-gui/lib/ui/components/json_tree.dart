@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:json5_ast/ast.dart';
 import 'package:json5_ast/path.dart' as ast_path;
 import 'package:provider/provider.dart';
+import '../../services/dart_validator.dart';
 import '../../services/dev_trace.dart';
 import '../../services/schema_gate.dart';
 import '../../store/trace_store.dart';
@@ -264,27 +265,35 @@ class _JsonNodeState extends State<_JsonNode> {
         // full reloads. Phase 3 — Dart-side `$dart_<N>` entries are
         // merged in alongside bxp-fmt's `$err_<N>` (same bucket, same
         // banner style).
-        final errors = context.select<TraceStore, Map<String, String>>(
-          (s) => s.errorsAt(childPath),
-        );
+        // Banners use `read` here (not `select`) because the dedup
+        // helper consults paths and bucket contents that change in
+        // lockstep with the diagnostic maps themselves — every map
+        // change goes through `notifyListeners` already, so the
+        // outer ConfigView rebuild covers the refresh path. `select`
+        // on `errorsAt(childPath)` alone wouldn't notice when a
+        // descendant's diagnostic flips and de-dups would go stale.
+        final store = context.read<TraceStore>();
+        final errors = store.errorsAt(childPath);
         if (errors.isNotEmpty) {
-          for (final msg in errors.values) {
+          final filtered = store.dedupBannerMessages(
+              childPath, DartSeverity.error, errors.values);
+          for (final msg in filtered) {
             out.add(_ErrorRow(message: msg, severity: _DiagSeverity.error));
           }
         }
-        final warnings = context.select<TraceStore, Map<String, String>>(
-          (s) => s.warningsAt(childPath),
-        );
+        final warnings = store.warningsAt(childPath);
         if (warnings.isNotEmpty) {
-          for (final msg in warnings.values) {
+          final filtered = store.dedupBannerMessages(
+              childPath, DartSeverity.warning, warnings.values);
+          for (final msg in filtered) {
             out.add(_ErrorRow(message: msg, severity: _DiagSeverity.warning));
           }
         }
-        final infos = context.select<TraceStore, Map<String, String>>(
-          (s) => s.infoAt(childPath),
-        );
+        final infos = store.infoAt(childPath);
         if (infos.isNotEmpty) {
-          for (final msg in infos.values) {
+          final filtered = store.dedupBannerMessages(
+              childPath, DartSeverity.info, infos.values);
+          for (final msg in filtered) {
             out.add(_ErrorRow(message: msg, severity: _DiagSeverity.info));
           }
         }
@@ -378,13 +387,30 @@ class _JsonNodeState extends State<_JsonNode> {
       ));
       lastRowIdx = out.length - 1;
       realLabel++;
-      // `select` keeps live $err_* banners reactive to per-child error
-      // changes — see the matching call in the map walker above.
-      final errors = context.select<TraceStore, Map<String, String>>(
-        (s) => s.errorsAt(childPath),
-      );
-      for (final msg in errors.values) {
-        out.add(_ErrorRow(message: msg));
+      // Same dedup-aware banner render as the map walker. Errors,
+      // warnings, infos all surface here; descendant duplicates are
+      // suppressed by `dedupBannerMessages`.
+      final store = context.read<TraceStore>();
+      final errors = store.errorsAt(childPath);
+      if (errors.isNotEmpty) {
+        for (final msg in store.dedupBannerMessages(
+            childPath, DartSeverity.error, errors.values)) {
+          out.add(_ErrorRow(message: msg, severity: _DiagSeverity.error));
+        }
+      }
+      final warnings = store.warningsAt(childPath);
+      if (warnings.isNotEmpty) {
+        for (final msg in store.dedupBannerMessages(
+            childPath, DartSeverity.warning, warnings.values)) {
+          out.add(_ErrorRow(message: msg, severity: _DiagSeverity.warning));
+        }
+      }
+      final infos = store.infoAt(childPath);
+      if (infos.isNotEmpty) {
+        for (final msg in store.dedupBannerMessages(
+            childPath, DartSeverity.info, infos.values)) {
+          out.add(_ErrorRow(message: msg, severity: _DiagSeverity.info));
+        }
       }
     }
     return out;
