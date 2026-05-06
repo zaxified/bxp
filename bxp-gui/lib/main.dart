@@ -2,7 +2,9 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter/services.dart';
+import 'services/updater_service.dart';
 import 'store/trace_store.dart';
+import 'ui/components/update_dialog.dart';
 import 'ui/main_view.dart';
 import 'ui/theme/bxp_theme.dart';
 import 'ui/theme/bxp_theme_animator.dart';
@@ -15,10 +17,17 @@ final GlobalKey<ScaffoldMessengerState> bxpMessengerKey =
 
 void main() {
   final traceStore = TraceStore();
+  final updaterService = UpdaterService();
   _installOverflowGuard(traceStore);
+  // Fire-and-forget — the periodic check runs even before the user
+  // interacts with the UI. Errors are caught inside initialize().
+  updaterService.initialize();
   runApp(
-    ChangeNotifierProvider<TraceStore>.value(
-      value: traceStore,
+    MultiProvider(
+      providers: [
+        ChangeNotifierProvider<TraceStore>.value(value: traceStore),
+        ChangeNotifierProvider<UpdaterService>.value(value: updaterService),
+      ],
       child: const BxpApp(),
     ),
   );
@@ -136,7 +145,7 @@ class BxpApp extends StatelessWidget {
           // the navigator+overlay subtree.
           builder: (context, child) =>
               ZoomContainer(child: child ?? const SizedBox.shrink()),
-          home: const _StartupGate(),
+          home: const _UpdaterListener(child: _StartupGate()),
         );
       }),
     );
@@ -249,6 +258,60 @@ class _ZoomContainerState extends State<ZoomContainer> {
       ),
     );
   }
+}
+
+/// Listens to UpdaterService.available and shows the [UpdateDialog] once
+/// per transition. Wraps the home subtree so the dialog can use the
+/// nearest Navigator/Overlay regardless of which route is active.
+class _UpdaterListener extends StatefulWidget {
+  final Widget child;
+  const _UpdaterListener({required this.child});
+
+  @override
+  State<_UpdaterListener> createState() => _UpdaterListenerState();
+}
+
+class _UpdaterListenerState extends State<_UpdaterListener> {
+  bool _showing = false;
+  UpdaterService? _svc;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final next = context.read<UpdaterService>();
+    if (identical(next, _svc)) return;
+    _svc?.removeListener(_onChange);
+    _svc = next;
+    _svc?.addListener(_onChange);
+  }
+
+  @override
+  void dispose() {
+    _svc?.removeListener(_onChange);
+    super.dispose();
+  }
+
+  void _onChange() {
+    if (_showing) return;
+    final info = _svc?.available;
+    if (info == null) return;
+    _showing = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) {
+        _showing = false;
+        return;
+      }
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => UpdateDialog(info: info),
+      );
+      _showing = false;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
 }
 
 /// Routes the home tab between three views:
