@@ -387,8 +387,71 @@ class ExprTextEditingController extends TextEditingController {
   }) {
     final sets = _liveSets(context);
     final t = context.bxpTheme;
-    final ts = context.watch<TraceStore>().textScheme;
+    final store = context.watch<TraceStore>();
+    final ts = store.textScheme;
     final spans = _tokenize(text, sets);
+
+    // Phase 5b token-level underline. When this controller is mirroring
+    // the selected expression and the store has a validation offset +
+    // length, split the spans crossing that range so we can paint a
+    // wavy red underline on just the offending token instead of
+    // colouring the whole cell red. The cell-level red border remains
+    // (drawn by ExprEditor's container) — the underline pinpoints
+    // *where*, the border tells the user the field is in error state.
+    final off = store.exprValidationOffset;
+    final len = store.exprValidationLength;
+    final showUnderline = off != null &&
+        len != null &&
+        len > 0 &&
+        off >= 0 &&
+        off + len <= text.length &&
+        text == store.selectedExprText;
+
+    final children = <TextSpan>[];
+    var cursor = 0;
+    for (final s in spans) {
+      final spanStart = cursor;
+      final spanEnd = cursor + s.text.length;
+      cursor = spanEnd;
+      final color = s.kind == _Tok.ws ? null : _colorFor(s.kind, t);
+      final weight = _boldFor(s.kind) ? ts.weightBold : ts.weightRegular;
+      final baseStyle = TextStyle(color: color, fontWeight: weight);
+
+      if (!showUnderline) {
+        children.add(TextSpan(text: s.text, style: baseStyle));
+        continue;
+      }
+      final badStart = off;
+      final badEnd = off + len;
+      if (spanEnd <= badStart || spanStart >= badEnd) {
+        children.add(TextSpan(text: s.text, style: baseStyle));
+        continue;
+      }
+      // Span overlaps the bad range — split into up-to-three sub-spans.
+      final overlapStart = spanStart > badStart ? spanStart : badStart;
+      final overlapEnd = spanEnd < badEnd ? spanEnd : badEnd;
+      final preLen = overlapStart - spanStart;
+      final overlapLen = overlapEnd - overlapStart;
+      final underlineStyle = baseStyle.copyWith(
+        decoration: TextDecoration.underline,
+        decorationStyle: TextDecorationStyle.wavy,
+        decorationColor: t.errorBorder,
+      );
+      if (preLen > 0) {
+        children.add(TextSpan(text: s.text.substring(0, preLen), style: baseStyle));
+      }
+      children.add(TextSpan(
+        text: s.text.substring(preLen, preLen + overlapLen),
+        style: underlineStyle,
+      ));
+      if (preLen + overlapLen < s.text.length) {
+        children.add(TextSpan(
+          text: s.text.substring(preLen + overlapLen),
+          style: baseStyle,
+        ));
+      }
+    }
+
     return TextSpan(
       style: (style ?? const TextStyle()).copyWith(
         fontFamily: ts.fontFamily,
@@ -396,19 +459,7 @@ class ExprTextEditingController extends TextEditingController {
         fontSize: fontSize,
         letterSpacing: ts.trackBody,
       ),
-      children: spans
-          .map(
-            (s) => TextSpan(
-              text: s.text,
-              style: TextStyle(
-                color: s.kind == _Tok.ws ? null : _colorFor(s.kind, t),
-                fontWeight: _boldFor(s.kind)
-                    ? ts.weightBold
-                    : ts.weightRegular,
-              ),
-            ),
-          )
-          .toList(),
+      children: children,
     );
   }
 }

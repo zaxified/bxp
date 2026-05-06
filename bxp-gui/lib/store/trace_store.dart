@@ -9,6 +9,7 @@ import 'package:json5_ast/operations.dart' as ast_ops;
 import '../services/ast_loader.dart';
 import '../services/ast_patch_client.dart';
 import '../services/bxp_process_client.dart';
+import '../services/dart_validator.dart';
 import '../services/dev_trace.dart';
 import '../services/op_log.dart';
 import '../services/op_to_ast.dart';
@@ -129,6 +130,16 @@ class TraceStore extends ChangeNotifier {
   /// add deep-validation emit sites — empty by design today.
   Map<String, Map<String, String>> _validationWarnings = const {};
   Map<String, Map<String, String>> _validationInfo = const {};
+
+  /// Phase 3 — native Dart-side per-edit diagnostics, populated by
+  /// `_revalidateDart()` from `_applyOpToAst`/undo/redo/resetDraft and
+  /// after each `loadConfig`. Same path-keyed shape as the bxp-fmt
+  /// buckets above; merged at query time in `errorsAt`/`warningsAt`/
+  /// `infoAt`. Inner keys are `$dart_<N>` so collisions with bxp-fmt's
+  /// `$err_<N>` are impossible.
+  Map<String, Map<String, String>> _dartErrors = const {};
+  Map<String, Map<String, String>> _dartWarnings = const {};
+  Map<String, Map<String, String>> _dartInfo = const {};
 
   /// Default deadline (seconds) for bxp-fmt's FS validation pass on
   /// load / save. 2s is plenty on local disk (sub-millisecond per
@@ -512,6 +523,42 @@ class TraceStore extends ChangeNotifier {
       notifyListeners();
       return;
     }
+
+    // Phase 4 — Dart-side first pass. Catches UnknownFunction,
+    // WrongArgCount, FnArgDoc statics (literal_int_positive,
+    // sunrise_format), and LOOKUP unknown pre_pass instantly without
+    // spawning a subprocess. Subprocess still runs afterward as the
+    // oracle for syntax/precedence errors that the Dart walker
+    // doesn't cover.
+    final root = _astRoot;
+    final d = docs;
+    // Prefer the template id encoded in the selected expression's path
+    // (path[1] when path[0] == 'conversion_templates'); fall back to
+    // _activeTemplateId() when a non-template leaf is being validated
+    // through Playground or similar standalone paths.
+    String? activeTid;
+    final sel = selectedExprPath;
+    if (sel != null && sel.length >= 2 && sel[0] == 'conversion_templates') {
+      activeTid = sel[1];
+    } else {
+      activeTid = _activeTemplateId();
+    }
+    if (root != null && d != null) {
+      final v = DartValidator(d);
+      final ed = v.validateExpr(text, root: root, activeTemplateId: activeTid);
+      if (ed != null) {
+        if (selectedExprText != text) return;
+        exprValidationError = ed.suggest == null
+            ? ed.message
+            : '${ed.message} — ${ed.suggest}';
+        exprValidationOffset = ed.offset;
+        exprValidationLength = ed.length;
+        exprValidationState = ExprValidationState.error;
+        notifyListeners();
+        return;
+      }
+    }
+
     final res = await BxpProcessClient.validateExpr(text);
     if (_disposed) return;
     // A newer validation has been spawned while we were awaiting — drop
@@ -551,42 +598,68 @@ class TraceStore extends ChangeNotifier {
   /// safe — JSON5 keys can't contain it, array indices are decimal ints.
   static String _encodePath(List<String> path) => path.join('\x00');
 
+  /// Merge two path-keyed diagnostic maps for the same path. Returns
+  /// the combined inner map without mutating either input. Used by
+  /// `errorsAt`/`warningsAt`/`infoAt` to overlay Phase-3 Dart-side
+  /// diagnostics on top of bxp-fmt entries at query time.
+  static Map<String, String> _mergeMaps(
+      Map<String, String>? a, Map<String, String>? b) {
+    if (a == null || a.isEmpty) return b ?? const {};
+    if (b == null || b.isEmpty) return a;
+    return {...a, ...b};
+  }
+
   /// Diagnostics on the node at [path]. Returns the `$err_<name>` →
-  /// message map captured by the most recent `bxp-fmt --config` run, or
-  /// an empty map when the node has no errors.
-  Map<String, String> errorsAt(List<String> path) =>
-      _validationErrors[_encodePath(path)] ?? const {};
+  /// message map captured by the most recent `bxp-fmt --config` run,
+  /// merged with `$dart_<N>` entries from the live Dart-side validator
+  /// (`_revalidateDart`). Empty map when the node has no errors.
+  Map<String, String> errorsAt(List<String> path) {
+    final key = _encodePath(path);
+    return _mergeMaps(_validationErrors[key], _dartErrors[key]);
+  }
 
   /// Phase A plumbing: same path-keyed lookup as `errorsAt` but for
   /// `$warn_*` / `$info_*` siblings emitted by `bxp-fmt`'s deep
-  /// validation pass (none today; populated from phase B+ on).
-  Map<String, String> warningsAt(List<String> path) =>
-      _validationWarnings[_encodePath(path)] ?? const {};
+  /// validation pass + Phase-3 Dart-side warnings/info.
+  Map<String, String> warningsAt(List<String> path) {
+    final key = _encodePath(path);
+    return _mergeMaps(_validationWarnings[key], _dartWarnings[key]);
+  }
 
-  Map<String, String> infoAt(List<String> path) =>
-      _validationInfo[_encodePath(path)] ?? const {};
+  Map<String, String> infoAt(List<String> path) {
+    final key = _encodePath(path);
+    return _mergeMaps(_validationInfo[key], _dartInfo[key]);
+  }
 
-  /// Reset all three severity buckets in one call. Used by
-  /// loadConfig's reset paths so warnings / info don't leak across
-  /// loads even though no emit site populates them yet.
+  /// Reset all six severity buckets (3 bxp-fmt + 3 Dart) in one call.
+  /// Used by loadConfig's reset paths so stale entries don't leak
+  /// across loads.
   void _clearValidationDiagnostics() {
     _validationErrors = const {};
     _validationWarnings = const {};
     _validationInfo = const {};
+    _dartErrors = const {};
+    _dartWarnings = const {};
+    _dartInfo = const {};
   }
 
   /// True if any descendant of the node at [path] (inclusive) carries a
-  /// `$err_*` marker. Used by composite-row renderers to surface a small
-  /// red dot when a collapsed subtree contains diagnostics. O(errors).
+  /// `$err_*` marker — either bxp-fmt's or a Dart-side `$dart_<N>` from
+  /// `_revalidateDart`. Used by composite-row renderers to surface a
+  /// small red dot when a collapsed subtree contains diagnostics.
+  /// O(errors) per bucket.
   bool hasErrorIn(List<String> path) {
-    if (_validationErrors.isEmpty) return false;
+    if (_validationErrors.isEmpty && _dartErrors.isEmpty) return false;
     if (path.isEmpty) return true;
     final key = _encodePath(path);
     final prefix = '$key\x00';
-    for (final k in _validationErrors.keys) {
-      if (k == key || k.startsWith(prefix)) return true;
+    bool any(Map<String, Map<String, String>> m) {
+      for (final k in m.keys) {
+        if (k == key || k.startsWith(prefix)) return true;
+      }
+      return false;
     }
-    return false;
+    return any(_validationErrors) || any(_dartErrors);
   }
 
   /// Quick predicate: any `$err_*` anywhere in [src]? Used by the save
@@ -1089,6 +1162,11 @@ class TraceStore extends ChangeNotifier {
             _validationWarnings = buckets.warnings;
             _validationInfo = buckets.info;
             _detectFsTimeout();
+            // Phase 3 — populate Dart-side buckets immediately on load
+            // so the very first frame of the editor shows native
+            // diagnostics (FieldValidator, unknown-keys, unused-vars,
+            // expression statics) without waiting for the first edit.
+            _revalidateDart();
           }
         } else {
           // Unexpected top-level shape (List, scalar, null) — possible only
@@ -1375,6 +1453,81 @@ class TraceStore extends ChangeNotifier {
     if (pending != null && _astAt(pending) == null) {
       _pendingFocusPath.value = null;
     }
+    _revalidateDart();
+  }
+
+  /// CSV headers cached from the most recent dry-run, indexed by
+  /// template id. Reads `traceModel.files` and unions every file
+  /// belonging to the template. Empty set when no dry-run has run yet
+  /// for the template (or `traceModel` is null mid-load).
+  Set<String> cachedHeadersForTemplate(String templateId) {
+    final m = traceModel;
+    if (m == null) return const {};
+    final out = <String>{};
+    for (final f in m.files.values) {
+      if (f.template == templateId) out.addAll(f.headers);
+    }
+    return out;
+  }
+
+  /// Phase 3 — rerun the native Dart validator over the live AST and
+  /// write its diagnostics into the `_dart*` buckets. No-op when docs
+  /// haven't loaded (startup gate would have refused MainView anyway)
+  /// or there's no AST. Always overwrites the previous Dart buckets so
+  /// stale diagnostics don't accumulate.
+  ///
+  /// Cheap to call from every edit hook: validator construction is O(1)
+  /// once docs are loaded, the walk is O(AST nodes) per pass. The
+  /// walker emits `dart.*`-prefixed codes so consumers can route by
+  /// source if needed.
+  void _revalidateDart() {
+    final root = _astRoot;
+    final d = docs;
+    if (root == null || d == null) {
+      _dartErrors = const {};
+      _dartWarnings = const {};
+      _dartInfo = const {};
+      return;
+    }
+    // Build a per-template CSV header map for the cluster check. Cheap
+    // — typical M < 10 templates × < 50 headers each.
+    final headersByTemplate = <String, Set<String>>{};
+    final m = traceModel;
+    if (m != null) {
+      for (final f in m.files.values) {
+        (headersByTemplate[f.template] ??= <String>{}).addAll(f.headers);
+      }
+    }
+
+    final validator = DartValidator(d, csvHeadersByTemplate: headersByTemplate);
+    final diags = validator.validate(root);
+
+    final errors = <String, Map<String, String>>{};
+    final warnings = <String, Map<String, String>>{};
+    final infos = <String, Map<String, String>>{};
+    final counters = <String, int>{};
+    for (final dg in diags) {
+      final key = _encodePath(dg.path);
+      final innerKey = '\$dart_${(counters[key] = (counters[key] ?? 0) + 1)}';
+      // The displayable string includes suggest text when present so
+      // existing consumers (StatusBar, TooltipKey) need no special
+      // routing — same shape as bxp-fmt $err_<N> messages.
+      final msg = dg.suggest == null ? dg.message : '${dg.message} — ${dg.suggest}';
+      switch (dg.severity) {
+        case DartSeverity.error:
+          (errors[key] ??= <String, String>{})[innerKey] = msg;
+          break;
+        case DartSeverity.warning:
+          (warnings[key] ??= <String, String>{})[innerKey] = msg;
+          break;
+        case DartSeverity.info:
+          (infos[key] ??= <String, String>{})[innerKey] = msg;
+          break;
+      }
+    }
+    _dartErrors = errors;
+    _dartWarnings = warnings;
+    _dartInfo = infos;
   }
 
   /// Apply [remap] to `selectedExprPath` after a structural array edit.
@@ -2199,12 +2352,16 @@ class TraceStore extends ChangeNotifier {
     return _astAt(encodedPath.split('\x00')) != null;
   }
 
-  /// True if the last `bxp-fmt --config` run produced any `$err_*`
+  /// True if the last `bxp-fmt --config` run OR the live Dart-side
+  /// validator (`_revalidateDart`) produced any `$err_*` / `$dart_<N>`
   /// diagnostic that still points at a live AST node. Used to gate
   /// run buttons and display the error trace in the status bar.
   bool get configHasErrors {
-    if (_validationErrors.isEmpty) return false;
+    if (_validationErrors.isEmpty && _dartErrors.isEmpty) return false;
     for (final k in _validationErrors.keys) {
+      if (_validationPathAlive(k)) return true;
+    }
+    for (final k in _dartErrors.keys) {
       if (_validationPathAlive(k)) return true;
     }
     return false;
@@ -2224,6 +2381,12 @@ class TraceStore extends ChangeNotifier {
   /// jumps to.
   String? get firstConfigErrorTrace {
     for (final e in _validationErrors.entries) {
+      if (!_validationPathAlive(e.key)) continue;
+      for (final v in e.value.values) {
+        if (v.isNotEmpty) return v;
+      }
+    }
+    for (final e in _dartErrors.entries) {
       if (!_validationPathAlive(e.key)) continue;
       for (final v in e.value.values) {
         if (v.isNotEmpty) return v;

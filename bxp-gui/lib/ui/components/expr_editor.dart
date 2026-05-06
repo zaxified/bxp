@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:json5_ast/ast.dart';
 import 'package:provider/provider.dart';
 import '../../store/trace_store.dart';
 import '../theme/bxp_theme.dart';
@@ -175,6 +176,14 @@ class _ExprEditorState extends State<ExprEditor> {
   /// Recompute the popup's item list based on the identifier under the
   /// cursor. Opens the popup if there are matches, otherwise hides it.
   /// With `force=true`, shows all completions (used by Ctrl+Space).
+  ///
+  /// Three completion contexts, checked in priority order:
+  ///   1. Inside `[Field]` — suggest CSV header names from the latest
+  ///      dry-run cache for the active template (Phase 5b).
+  ///   2. Inside `LOOKUP("..."` first arg — suggest pre_pass block
+  ///      names declared in the active template's `pre_passes` map
+  ///      (Phase 5b). Triggered also for `LOOKUP('`.
+  ///   3. Identifier prefix — function/keyword catalog (default).
   void _refreshAutocomplete({bool force = false}) {
     final text = widget.controller.text;
     final sel = widget.controller.selection;
@@ -183,6 +192,65 @@ class _ExprEditorState extends State<ExprEditor> {
       return;
     }
     final before = text.substring(0, sel.start);
+    final store = context.read<TraceStore>();
+
+    // ── Context 1: inside `[Field]` (no closing ']' between cursor and
+    //              the most recent unmatched '['). Insert just the
+    //              column name; the user types ']' to close.
+    final lbIdx = _findOpenBracket(before);
+    if (lbIdx != null) {
+      final fragment = before.substring(lbIdx + 1);
+      final headers = store.cachedHeadersForTemplate(_activeTid(store));
+      if (headers.isNotEmpty) {
+        final items = <_AcItem>[];
+        final low = fragment.toLowerCase();
+        for (final h in headers) {
+          if (low.isEmpty || h.toLowerCase().startsWith(low)) {
+            items.add(_AcItem(
+              insert: h,
+              label: h,
+              desc: 'CSV header (active template)',
+              kind: _AcKind.kw,
+            ));
+          }
+        }
+        if (items.isNotEmpty) {
+          _showItems(items, lbIdx + 1, sel.start);
+          return;
+        }
+      }
+    }
+
+    // ── Context 2: LOOKUP first arg literal string. Patterns matched:
+    //              LOOKUP("...   or   LOOKUP('...
+    //              (case-insensitive on LOOKUP, no closing quote yet).
+    final luMatch = _matchLookupFirstArg(before);
+    if (luMatch != null) {
+      final activeTid = _activeTid(store);
+      final names = activeTid.isEmpty
+          ? const <String>{}
+          : _prePassNamesFor(store, activeTid);
+      if (names.isNotEmpty) {
+        final items = <_AcItem>[];
+        final low = luMatch.fragment.toLowerCase();
+        for (final n in names) {
+          if (low.isEmpty || n.toLowerCase().startsWith(low)) {
+            items.add(_AcItem(
+              insert: n,
+              label: n,
+              desc: 'pre_pass block (active template)',
+              kind: _AcKind.kw,
+            ));
+          }
+        }
+        if (items.isNotEmpty) {
+          _showItems(items, luMatch.replaceStart, sel.start);
+          return;
+        }
+      }
+    }
+
+    // ── Context 3: identifier prefix → function/keyword catalog.
     final m = RegExp(r'[A-Za-z_$][A-Za-z0-9_$]*$').firstMatch(before);
     final prefix = m?.group(0) ?? '';
     final start = m?.start ?? sel.start;
@@ -195,7 +263,6 @@ class _ExprEditorState extends State<ExprEditor> {
 
     final items = <_AcItem>[];
     final up = prefix.toUpperCase();
-    final store = context.read<TraceStore>();
     // Live docs are guaranteed populated by the startup gate (see
     // _StartupGate in main.dart) — bxp-fmt --docs is the only catalog.
     final fnSrc = store.docFunctions
@@ -245,11 +312,18 @@ class _ExprEditorState extends State<ExprEditor> {
       _hidePopup();
       return;
     }
+    _showItems(items, start, end);
+  }
 
+  /// Show [items] in the autocomplete popup, anchored on the source
+  /// range `[replaceStart, replaceEnd)`. Extracted so the three
+  /// completion contexts (`[Field]`, `LOOKUP("..."`, ident prefix)
+  /// share one popup-mount path.
+  void _showItems(List<_AcItem> items, int replaceStart, int replaceEnd) {
     _acItems = items;
     if (_acIndex >= items.length) _acIndex = 0;
-    _acReplaceStart = start;
-    _acReplaceEnd = end;
+    _acReplaceStart = replaceStart;
+    _acReplaceEnd = replaceEnd;
 
     if (_popup == null) {
       _popup = OverlayEntry(builder: _buildPopup);
@@ -258,6 +332,94 @@ class _ExprEditorState extends State<ExprEditor> {
     } else {
       _popup!.markNeedsBuild();
     }
+  }
+
+  /// Find the nearest unmatched `[` walking back from the cursor.
+  /// Returns null if the most recent `[` is already paired with a `]`
+  /// (i.e. the cursor is OUTSIDE any open bracket pair). Single-quoted
+  /// strings are skipped so `'a [literal]'` doesn't trigger header
+  /// autocomplete inside a string token.
+  static int? _findOpenBracket(String before) {
+    var i = before.length - 1;
+    while (i >= 0) {
+      final c = before.codeUnitAt(i);
+      if (c == 0x5D /* ] */) return null; // closer comes first → outside
+      if (c == 0x5B /* [ */) return i;
+      if (c == 0x27 /* ' */) {
+        // Step back over a string literal so `'[x]'` doesn't trigger.
+        i--;
+        while (i >= 0 && before.codeUnitAt(i) != 0x27) {
+          i--;
+        }
+        i--;
+        continue;
+      }
+      i--;
+    }
+    return null;
+  }
+
+  /// Match `LOOKUP(<ws>* (' | ")<fragment>` at the end of [before],
+  /// case-insensitive on `LOOKUP`. Returns the start offset of the
+  /// fragment (just past the opening quote) and the unfinished
+  /// fragment text the user has typed so far. Null if not in the
+  /// LOOKUP first-arg position. Bails out as soon as the typed
+  /// fragment contains a closing quote (the literal is complete) or a
+  /// comma (cursor moved past arg 0).
+  static _LookupMatch? _matchLookupFirstArg(String before) {
+    final m = RegExp(
+      "LOOKUP\\s*\\(\\s*(['\"])([^,'\")\n]*)\$",
+      caseSensitive: false,
+    ).firstMatch(before);
+    if (m == null) return null;
+    final fragment = m.group(2) ?? '';
+    final replaceStart = m.start + (m.group(0)!.length - fragment.length);
+    return _LookupMatch(replaceStart, fragment);
+  }
+
+  /// Active template id derived from the selected expression's path
+  /// (`conversion_templates.<tid>....`); falls back to the global
+  /// template selector when the editor is opened standalone (Playground).
+  /// Empty string when no active template can be resolved.
+  String _activeTid(TraceStore store) {
+    final sel = store.selectedExprPath;
+    if (sel != null && sel.length >= 2 && sel[0] == 'conversion_templates') {
+      return sel[1];
+    }
+    return store.templateId;
+  }
+
+  /// Pre_pass block names declared in the active template's
+  /// `pre_pass` map. Mirrors the shape used by DartValidator: legacy
+  /// single-block (`{ when, key, values }`) → synthetic `_default`,
+  /// named blocks → their map keys.
+  static Set<String> _prePassNamesFor(TraceStore store, String tid) {
+    final root = store.astRoot;
+    if (root is! JsonObject) return const {};
+    final templates = _findChild(root, 'conversion_templates');
+    if (templates is! JsonObject) return const {};
+    final t = _findChild(templates, tid);
+    if (t is! JsonObject) return const {};
+    final prePass = _findChild(t, 'pre_pass');
+    if (prePass is! JsonObject) return const {};
+    final out = <String>{};
+    final hasLegacy = prePass.properties.any(
+        (e) => e is JsonProperty && (e.key == 'when' || e.key == 'key'));
+    if (hasLegacy) {
+      out.add('_default');
+    } else {
+      for (final p in prePass.properties) {
+        if (p is JsonProperty) out.add(p.key);
+      }
+    }
+    return out;
+  }
+
+  static JsonAstNode? _findChild(JsonObject obj, String key) {
+    for (final p in obj.properties) {
+      if (p is JsonProperty && p.key == key) return p.value;
+    }
+    return null;
   }
 
   void _hidePopup() {
@@ -472,5 +634,14 @@ class _AcItem {
     required this.desc,
     required this.kind,
   });
+}
+
+/// Result of `_matchLookupFirstArg`: where to anchor the autocomplete
+/// (just past the opening quote inside the LOOKUP first arg) plus the
+/// fragment the user has typed so far.
+class _LookupMatch {
+  final int replaceStart;
+  final String fragment;
+  const _LookupMatch(this.replaceStart, this.fragment);
 }
 
