@@ -1,9 +1,10 @@
-# bxp-ui Trace Protocol
+# bxp-cli Trace Protocol
 
 > Part of the [developer guide](devel.md).
 
 Defines the NDJSON event stream that `bxp-cli --trace` writes to stdout.
-The stream is consumed by [bxp-ui](../bxp-ui/) to drive the dry-run debugger.
+The stream is consumed by [bxp-gui](../bxp-gui/) to drive the dry-run debugger.
+(Originally introduced for the now-archived `bxp-ui` Electrobun frontend.)
 
 ---
 
@@ -250,9 +251,9 @@ should treat stderr as authoritative in that case.
 
 ## Consumer
 
-- TypeScript: [`bxp-ui/src/mainview/trace/types.ts`](../bxp-ui/src/mainview/trace/types.ts)
+- Dart: [`bxp-gui/lib/store/trace_model.dart`](../bxp-gui/lib/store/trace_model.dart)
   mirrors the event shapes.
-- TypeScript: [`bxp-ui/src/mainview/trace/parse.ts`](../bxp-ui/src/mainview/trace/parse.ts)
-  parses one NDJSON line to a discriminated union.
-- TypeScript: [`bxp-ui/src/mainview/trace/model.ts`](../bxp-ui/src/mainview/trace/model.ts)
-  folds events into the `TraceModel` the UI renders.
+- Dart: [`bxp-gui/lib/services/bxp_process_client.dart`](../bxp-gui/lib/services/bxp_process_client.dart)
+  spawns `bxp-cli --trace` and parses one NDJSON line at a time.
+- Dart: [`bxp-gui/lib/store/trace_builder.dart`](../bxp-gui/lib/store/trace_builder.dart)
+  folds events into the `TraceStore` the UI renders.

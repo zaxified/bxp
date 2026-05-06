@@ -50,7 +50,7 @@ bxp/
 │   ├── release-02-desktop.sh    # Host-OS-specific Flutter desktop bundle → .AppImage / .deb
 │   │                         # / .tar.gz / NSIS .exe / DMG (matrixed by GH Actions)
 │   └── release-03-checksums.sh    # Emit SHA256SUMS for every release artifact
-├── docs/                 # Developer documentation (architecture.md, devel.md, bxp-ui-trace-protocol.md)
+├── docs/                 # Developer documentation (architecture.md, devel.md, trace-protokol.md)
 ├── .github/workflows/
 │   └── release.yml       # Multi-host release pipeline triggered by `v*` tag push
 ├── DEV/                  # Developer scratch space — sample data, in-flight plans, AST prototypes

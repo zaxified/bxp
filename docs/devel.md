@@ -2,7 +2,7 @@
 
 > For end-user documentation see [`resources/console/readme.md`](../resources/console/readme.md) \
 > For architecture diagrams see [`docs/architecture.md`](architecture.md) \
-> For the bxp-ui NDJSON trace protocol see [`docs/bxp-ui-trace-protocol.md`](bxp-ui-trace-protocol.md)
+> For the `bxp-cli --trace` NDJSON protocol see [`docs/trace-protokol.md`](trace-protokol.md)
 
 ---
 
