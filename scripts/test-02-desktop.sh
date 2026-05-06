@@ -5,7 +5,7 @@
 # side don't need the SDK).
 #
 # Usage (from any directory):
-#   bash scripts/test-desktop.sh         — desktop suite alone
+#   bash scripts/test-02-desktop.sh         — desktop suite alone
 #   bash scripts/test.sh                 — wrapper runs both halves
 
 set -e
@@ -14,7 +14,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MONO_ROOT="$(dirname "$SCRIPT_DIR")"
 
 if ! command -v flutter >/dev/null 2>&1; then
-    echo "test-desktop.sh: flutter SDK not found — skipping"
+    echo "test-02-desktop.sh: flutter SDK not found — skipping"
     exit 0
 fi
 

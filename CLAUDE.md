@@ -42,14 +42,14 @@ bxp/
 │   └── desktop/          # bxp-gui.desktop template + readme bundled in desktop archives
 ├── datasets/             # Anonymized sample data + expected outputs for regression tests
 ├── scripts/
-│   ├── test.sh           # Wrapper — runs test-console.sh + test-desktop.sh
-│   ├── test-console.sh   # bxp-core unit + bxp-fmt smoke + bxp-cli regression
-│   ├── test-desktop.sh   # flutter analyze + flutter test + json5_ast dart test
-│   ├── release.sh        # Wrapper — runs release-console.sh + release-desktop.sh
-│   ├── release-console.sh    # Cross-compile bxp-cli, package bxp-console-* archives
-│   ├── release-desktop.sh    # Host-OS-specific Flutter desktop bundle → .AppImage / .deb
+│   ├── test.sh           # Wrapper — runs test-01-console.sh + test-02-desktop.sh
+│   ├── test-01-console.sh   # bxp-core unit + bxp-fmt smoke + bxp-cli regression
+│   ├── test-02-desktop.sh   # flutter analyze + flutter test + json5_ast dart test
+│   ├── release.sh        # Wrapper — runs release-01-console.sh + release-02-desktop.sh
+│   ├── release-01-console.sh    # Cross-compile bxp-cli, package bxp-console-* archives
+│   ├── release-02-desktop.sh    # Host-OS-specific Flutter desktop bundle → .AppImage / .deb
 │   │                         # / .tar.gz / NSIS .exe / DMG (matrixed by GH Actions)
-│   └── build-checksums.sh    # Emit SHA256SUMS for every release artifact
+│   └── release-03-checksums.sh    # Emit SHA256SUMS for every release artifact
 ├── docs/                 # Developer documentation (architecture.md, devel.md, bxp-ui-trace-protocol.md)
 ├── .github/workflows/
 │   └── release.yml       # Multi-host release pipeline triggered by `v*` tag push
@@ -66,7 +66,7 @@ bxp/
 bash scripts/test.sh
 
 # Just console-side (no Flutter dep):
-bash scripts/test-console.sh
+bash scripts/test-01-console.sh
 
 # Build bxp-cli:
 cd bxp-cli && zig build

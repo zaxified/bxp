@@ -7,8 +7,8 @@
 # macos) to produce the full matrix in parallel.
 #
 # Usage (from any directory):
-#   bash scripts/release-desktop.sh           — uses latest git tag as version
-#   bash scripts/release-desktop.sh v0.2.0    — uses the given version string
+#   bash scripts/release-02-desktop.sh           — uses latest git tag as version
+#   bash scripts/release-02-desktop.sh v0.2.0    — uses the given version string
 #
 # Output: releases/desktop/bxp-desktop-<version>-<platform>.<ext>
 #   Linux   — .tar.gz, .AppImage, .deb

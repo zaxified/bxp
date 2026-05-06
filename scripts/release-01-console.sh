@@ -2,8 +2,8 @@
 # Build console release archives for Linux, Windows, and macOS.
 #
 # Usage (from any directory):
-#   bash scripts/release-console.sh           — uses latest git tag as version
-#   bash scripts/release-console.sh v0.2.0    — uses the given version string
+#   bash scripts/release-01-console.sh           — uses latest git tag as version
+#   bash scripts/release-01-console.sh v0.2.0    — uses the given version string
 #
 # Also runs as part of `scripts/release.sh` (console + desktop wrapper).
 #

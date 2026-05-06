@@ -47,15 +47,15 @@ Run before tagging to catch obvious breakage:
 bash scripts/test.sh
 
 # Build the host platform's desktop bundle locally (no upload).
-bash scripts/release-desktop.sh v0.2.0-rc1
+bash scripts/release-02-desktop.sh v0.2.0-rc1
 ls releases/desktop/
 
 # Build all three console archives (cross-compiled via Zig).
-bash scripts/release-console.sh v0.2.0-rc1
+bash scripts/release-01-console.sh v0.2.0-rc1
 ls releases/console/
 ```
 
-`release-desktop.sh` only builds the host's branch — the other two
+`release-02-desktop.sh` only builds the host's branch — the other two
 platforms are exercised by GH Actions runners. Use `workflow_dispatch`
 to test the Windows / macOS branches without cutting a real tag:
 
@@ -84,7 +84,7 @@ gh workflow run release.yml -f version=v0.2.0-rc-test
   the macOS runner image's exact version. If `brew install create-dmg`
   no longer pins to a working version, fall back to a tarball-only
   macOS branch by commenting out the DMG step in
-  `release-desktop.sh::build_macos`.
+  `release-02-desktop.sh::build_macos`.
 - **NSIS install on Windows fails silently** — run the installer
   manually with `setup.exe /S` from PowerShell to surface stderr; check
   the `IfSilent` block in `bxp-gui/installer/bxp-desktop.nsi`.

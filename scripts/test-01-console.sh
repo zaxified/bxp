@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Run console-side unit and regression tests (bxp-core, bxp-cli, bxp-fmt,
-# json5_ast). Desktop-side Flutter tests live in scripts/test-desktop.sh.
+# json5_ast). Desktop-side Flutter tests live in scripts/test-02-desktop.sh.
 #
 # Usage (from any directory):
-#   bash scripts/test-console.sh         — console suite alone
+#   bash scripts/test-01-console.sh         — console suite alone
 #   bash scripts/test.sh                 — wrapper runs both halves
 #
 # Steps:

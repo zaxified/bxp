@@ -34,7 +34,7 @@ jobs:
         with:
           version: 0.15.2
       - name: Build console archives
-        run: bash scripts/release-console.sh "$RELEASE_VERSION"
+        run: bash scripts/release-01-console.sh "$RELEASE_VERSION"
       - uses: actions/upload-artifact@v4
         with:
           name: console
@@ -61,7 +61,7 @@ jobs:
           sudo apt-get install -y libgtk-3-dev liblzma-dev dpkg-dev \
               libstdc++-12-dev fuse libfuse2
       - name: Build desktop archives
-        run: bash scripts/release-desktop.sh "$RELEASE_VERSION"
+        run: bash scripts/release-02-desktop.sh "$RELEASE_VERSION"
       - uses: actions/upload-artifact@v4
         with:
           name: desktop-linux
@@ -73,7 +73,7 @@ jobs:
     runs-on: windows-latest
     defaults:
       run:
-        # release-desktop.sh is bash; Git Bash ships with windows-latest.
+        # release-02-desktop.sh is bash; Git Bash ships with windows-latest.
         shell: bash
     steps:
       - uses: actions/checkout@v4
@@ -86,7 +86,7 @@ jobs:
       - name: Install NSIS
         run: choco install nsis -y
       - name: Build desktop archives
-        run: bash scripts/release-desktop.sh "$RELEASE_VERSION"
+        run: bash scripts/release-02-desktop.sh "$RELEASE_VERSION"
       - uses: actions/upload-artifact@v4
         with:
           name: desktop-windows
@@ -107,7 +107,7 @@ jobs:
       - name: Install create-dmg
         run: brew install create-dmg
       - name: Build desktop archives
-        run: bash scripts/release-desktop.sh "$RELEASE_VERSION"
+        run: bash scripts/release-02-desktop.sh "$RELEASE_VERSION"
       - uses: actions/upload-artifact@v4
         with:
           name: desktop-macos
@@ -132,7 +132,7 @@ jobs:
           find artifacts -type f \
               \( -name 'bxp-console-*' -o -name 'bxp-desktop-*' \) \
               -exec cp {} staging/ \;
-          bash scripts/build-checksums.sh staging > staging/SHA256SUMS
+          bash scripts/release-03-checksums.sh staging > staging/SHA256SUMS
           ls -lh staging
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

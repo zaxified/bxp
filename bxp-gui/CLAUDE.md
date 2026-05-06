@@ -104,7 +104,7 @@ order:
 **Linux dev tree gotcha:** the Linux CMake config copies `bxp-fmt` into
 the bundle at build time. After changing bxp-fmt, run a clean Flutter
 build (or maintain the symlink under `linux/`); the production release
-script (`scripts/release-desktop.sh`) overwrites both companions with
+script (`scripts/release-02-desktop.sh`) overwrites both companions with
 release builds before packaging.
 
 ## User preferences

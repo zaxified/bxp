@@ -467,5 +467,6 @@ The release script cross-compiles `bxp-cli` for selected targets and packages ea
 | `x86_64-windows` | `bxp-console-<ver>-windows-x86_64.zip` |
 
 Outputs are placed in `releases/console/`. Desktop bundles
-(`bxp-desktop-...`) are produced by `scripts/release-desktop.sh` once
-that script lands in Phase 7 of the release-split plan.
+(`bxp-desktop-...`) are produced by `scripts/release-02-desktop.sh` on
+the host's native runner; both halves run together via the top-level
+`scripts/release.sh` wrapper or in parallel under `.github/workflows/release.yml`.
