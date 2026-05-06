@@ -129,6 +129,8 @@ class _OutputTable extends StatefulWidget {
 }
 
 class _OutputTableState extends State<_OutputTable> {
+  // Two independent controllers so vertical and horizontal Scrollbars
+  // latch onto distinct ScrollPositions and don't fight each other.
   final _vCtrl = ScrollController();
   final _hCtrl = ScrollController();
 
@@ -286,6 +288,10 @@ class _ValueCell extends StatelessWidget {
   const _ValueCell(this.value);
   @override
   Widget build(BuildContext context) {
+    // Empty cells render an invisible placeholder so the table border
+    // still draws correctly for that cell. SizedBox.shrink inside a Padding
+    // keeps row height consistent — a plain `const SizedBox.shrink()` without
+    // the padding collapses the cell to 0px and clips the border.
     if (value.isEmpty) {
       return const Padding(
         padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -293,6 +299,8 @@ class _ValueCell extends StatelessWidget {
       );
     }
     final t = context.bxpTheme;
+    // Type-aware colouring mirrors RowList's DataColorText and the JSON
+    // highlighter — all three should agree on what a "number" looks like.
     final Color color;
     if (value.toLowerCase() == 'true' || value.toLowerCase() == 'false') {
       color = t.valueBool;

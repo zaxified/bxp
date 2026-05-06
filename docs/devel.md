@@ -1,8 +1,6 @@
 # BXP - Developer Guide
 
-> For end-user documentation see [`resources/console/readme.md`](../resources/console/readme.md) \
-> For architecture diagrams see [`docs/architecture.md`](architecture.md) \
-> For the `bxp-cli --trace` NDJSON protocol see [`docs/trace-protokol.md`](trace-protokol.md)
+> [← docs/](README.md)
 
 ---
 
@@ -28,6 +26,7 @@
   - [Adding a new built-in function](#adding-a-new-built-in-function)
   - [Testing](#testing)
   - [Release process](#release-process)
+  - [GUI development](#gui-development)
 
 ---
 
@@ -69,7 +68,8 @@ zig version
 ### Claude Code setup
 
 BXP development in Zig works seamlessly with [Claude Code](https://claude.ai/code).
-The monorepo ships `CLAUDE.md` files at the root, `bxp-cli/`, and `bxp-core/` levels - Claude loads these automatically and reads project conventions.
+The monorepo ships `CLAUDE.md` files at four levels — root, `bxp-cli/`, `bxp-core/`,
+`bxp-fmt/`, and `bxp-gui/` — Claude loads these automatically and reads project conventions.
 
 ### Skills to use
 
@@ -94,31 +94,59 @@ bxp/                            # monorepo root (git root)
 │   │   └── pipeline.zig        # processBroker(), xlsxPrePass(), Output, SectionStats
 │   ├── build.zig               # imports bxp-core modules by name
 │   └── build.zig.zon           # depends on bxp-core (path dep)
+├── bxp-fmt/                    # developer utility binary (used by bxp-gui and scripts)
+│   ├── src/
+│   │   └── main.zig            # --config / --expr / --expr-trace / --docs /
+│   │                           # --list-templates / --fetch-template
+│   ├── build.zig
+│   └── build.zig.zon           # depends on bxp-core (path dep)
 ├── bxp-core/                   # internal shared library (no binary)
 │   ├── src/
 │   │   ├── csv.zig             # RFC 4180 CSV parser
 │   │   ├── xlsx.zig            # .xlsx → CSV (ZIP+XML)
-│   │   ├── expr.zig            # expression evaluator
-│   │   ├── config.zig          # JSON5 config loader
+│   │   ├── expr.zig            # expression evaluator + FnDoc catalog
+│   │   ├── config.zig          # JSON5 config loader + FieldDoc tables
 │   │   ├── json.zig            # JSON array-of-objects → row representation
-│   │   └── json5.zig           # JSON5 preprocessor (comments, unquoted keys, ...)
+│   │   ├── json5.zig           # JSON5 preprocessor (comments, unquoted keys, ...)
+│   │   ├── docs.zig            # --docs aggregator: re-exports expr + config catalogs
+│   │   └── diagnostics.zig     # structured validation collector (Severity, Diagnostic)
 │   ├── build.zig               # exports named Zig modules
 │   └── build.zig.zon           # depends on sunrise (url dep, auto-fetched)
+├── bxp-gui/                    # Flutter desktop app (Linux / macOS / Windows)
+│   ├── lib/
+│   │   ├── main.dart           # Flutter entry; window + theme + provider wiring
+│   │   ├── services/           # subprocess wrappers, AST loader, prefs, updater
+│   │   ├── store/              # TraceStore ChangeNotifier + trace data models
+│   │   └── ui/                 # widgets: tree editor, expr panel, row debugger, …
+│   ├── packages/json5_ast/     # standalone Dart JSON5 AST library (path dep)
+│   ├── linux/, macos/, windows/ # per-platform Flutter shells
+│   └── pubspec.yaml
 ├── datasets/                   # anonymized sample data + expected outputs
 │   └── <template_id>/
-│       ├── sample.csv          # .csv or .xlsx (then .csv is intermediate)
-│       ├── sample.csvx         # final output file
-│       └── sample.expected     # expected output - test.sh regression baseline (diff with csvx)
+│       ├── sample.csv / .xlsx  # input file
+│       ├── sample.json         # bxp-cli config for this dataset
+│       └── sample.expected     # expected .csvx output (regression baseline)
 ├── docs/
 │   ├── devel.md                # this file
-│   └── architecture.md         # Bird's-eye view, data flow, execution diagrams
+│   ├── architecture.md         # bird's-eye view + data-flow diagrams
+│   ├── gui.md                  # bxp-gui developer guide
+│   ├── release.md              # release process walkthrough
+│   ├── roadmap.md              # forward-looking milestones
+│   └── trace-protokol.md       # bxp-cli --trace NDJSON protocol spec
 ├── resources/
-│   ├── bxp-cli.examples.json   # example config (released alongside binary)
-│   └── readme.md               # end-user documentation (released alongside binary)
+│   ├── console/                # bxp-cli sample config + readme (bundled in console archives)
+│   └── desktop/                # bxp-gui.desktop template + readme (bundled in desktop archives)
 ├── scripts/
-│   ├── test.sh                 # test suite (unit + regression)
-│   └── release.sh              # cross-compile + package
-└── README.md                   # basic readme about project
+│   ├── test.sh                 # wrapper: test-01-console.sh + test-02-desktop.sh
+│   ├── test-01-console.sh      # bxp-core unit + bxp-fmt smoke + bxp-cli regression
+│   ├── test-02-desktop.sh      # flutter analyze + flutter test + json5_ast dart test
+│   ├── release.sh              # wrapper: release-01-console.sh + release-02-desktop.sh
+│   ├── release-01-console.sh   # cross-compile bxp-cli → bxp-console-* archives
+│   ├── release-02-desktop.sh   # Flutter bundle → AppImage / .deb / .exe / .dmg
+│   ├── release-03-checksums.sh # emit SHA256SUMS for all release artifacts
+│   ├── release-changelog.sh    # generate CHANGELOG entry for a release
+│   └── release-tag.sh          # bump versions + create + push git tag
+└── README.md                   # project overview
 ```
 
 ---
@@ -195,11 +223,17 @@ Consequences of this design:
 ```text
   bxp-cli  ── path dep ──►  bxp-core  ── url dep ──►  sunrise
   (binary)                  (library)                 (datetime)
+  bxp-fmt  ── path dep ──►  bxp-core
+  (binary)
+
+  bxp-gui  ── subprocess ──►  bxp-cli  (conversions, --trace stream)
+  (Flutter)  └─ subprocess ──►  bxp-fmt  (--config, --docs, --expr, --expr-trace)
 ```
 
-`bxp-core` is referenced as a **local path dependency** (`../bxp-core`) in
-`bxp-cli/build.zig.zon` - no network fetch needed during development.
-`sunrise` is a URL dependency fetched by Zig's package manager on first build.
+`bxp-core` is a **local path dependency** (`../bxp-core`) — no network fetch
+needed. `sunrise` is a URL dependency fetched automatically by `zig build` on
+first run. `bxp-gui` ships both `bxp-cli` and `bxp-fmt` inside the Flutter
+bundle and invokes them via `Process.run`.
 
 ---
 
@@ -207,12 +241,14 @@ Consequences of this design:
 
 | Module | File | Responsibility |
 | -- | -- | -- |
-| `csv` | `csv.zig` | RFC 4180 parser. `splitRecords()` slices raw content; `splitFields()` unquotes fields. Intentional deviation: leading/trailing whitespace trimmed (broker exports pad fields). |
+| `csv` | `csv.zig` | RFC 4180 parser. `splitRecords()` slices raw content; `splitFields()` unquotes fields. Spaces preserved — trimmed outside csv.zig at access time in `expr.Context`. |
 | `xlsx` | `xlsx.zig` | Converts `.xlsx` to intermediate `.csv`. Reads ZIP+XML, handles shared strings, formula results, dates (via `styles.xml` numFmtId). Max file size 10 MB. |
-| `expr` | `expr.zig` | Expression evaluator. Recursive-descent parser → evaluator. Per-row `Context` holds field values, ticker map, lookup table. `eval()` returns `Value` (number/string/bool); `evalString()` coerces to string. |
-| `config` | `config.zig` | Reads `bxp-cli.json` via `json5.zig` preprocessor then `std.json`. Returns `Config` owning all heap memory. `BrokerConfig.validate()` checks semantic constraints. |
+| `expr` | `expr.zig` | Expression evaluator. Recursive-descent parser → evaluator. Per-row `Context` holds field values, ticker map, lookup table. `eval()` returns `Value` (number/string/bool); `evalString()` coerces to string. Each built-in has a co-located `FnDoc` entry consumed by `docs.zig`. |
+| `config` | `config.zig` | Reads `bxp-cli.json` via `json5.zig` preprocessor then `std.json`. Returns `Config` owning all heap memory. `BrokerConfig.validate()` checks semantic constraints. Each struct has a co-located `FieldDoc` table consumed by `docs.zig`. |
 | `json` | `json.zig` | Reads a JSON array-of-objects into a flat row representation. Builds a union of all keys across all objects; fills missing keys with empty string. |
 | `json5` | `json5.zig` | Single-pass tokenizer that converts JSON5 → standard JSON. Strips comments, converts unquoted keys, removes trailing commas, normalizes single-quoted strings. |
+| `docs` | `docs.zig` | Aggregates `expr.zig` FnDoc catalog and `config.zig` FieldDoc tables into the `bxp-fmt --docs` JSON. Single source of truth consumed by bxp-gui at startup. |
+| `diagnostics` | `diagnostics.zig` | Structured validation collector. `Severity` (.error / .warning / .info), `Diagnostic` (path, position, code, message, suggest), `Diagnostics` (ArrayList collector). Used by bxp-fmt deep validation; bxp-cli passes a null sink. |
 
 ---
 
@@ -392,7 +428,9 @@ No code changes required. Add an entry to `bxp-cli.json`:
    - Functions receive already-evaluated `Value` arguments.
    - Return a `Value` or propagate an error.
 
-2. **Document it** in the expression reference table in `bxp-cli/CLAUDE.md` (and `resources/console/readme.md` if user-facing).
+2. **Add a `FnDoc` entry** co-located with the implementation — follow the `── MY_FUNC ──`
+   section-header pattern used by the existing built-ins. `docs.zig` re-exports the
+   catalog automatically; no separate doc file to update.
 
 3. **Add unit tests** inline in `expr.zig`:
 
@@ -415,58 +453,66 @@ No code changes required. Add an entry to `bxp-cli.json`:
 ```bash
 # run test
 ./scripts/test.sh
-
-# background process
-├── bxp-core unit tests  (zig build test in bxp-core)
-│   ├── csv.zig   - all test cases
-│   ├── expr.zig  - all test cases
-│   └── json5.zig - all test cases
-└── bxp-cli regression tests
-    └── datasets/<id>/  - diff output vs sample.expected
-
-# ... output ...
-Running unit tests (bxp-core)...
-
-Building bxp-cli...
-
-  [anycoin_to_wealthfolio]                         PASS
-  [revolutx_to_wealthfolio]                        PASS
-  [trading212_to_wealthfolio]                      PASS
-  [xtb1_cash_to_wealthfolio]                       PASS
-  [xtb1_closed_to_wealthfolio]                     PASS
-  [xtb2_cash_to_wealthfolio]                       PASS
-  [xtb2_closed_to_wealthfolio]                     PASS
-
-Results: 7 passed, 0 failed
-All tests passed.
-
 ```
 
-**Adding a regression test:**  
-Place `sample.csv` (or `.xlsx`) + `sample.expected` + `sample.json` in `datasets/<template_id>/`. \
+`test.sh` runs two sub-scripts in sequence:
+
+**`test-01-console.sh`** — Zig / CLI side:
+
+1. `zig build test` in `bxp-core` (unit tests for `csv.zig`, `expr.zig`, `json5.zig`, `docs.zig`).
+2. Builds `bxp-fmt`; runs smoke tests for each subcommand (`--config`, `--expr`, `--docs`, `--list-templates`, `--fetch-template`).
+3. Builds `bxp-cli`; iterates every `datasets/<id>/` directory and diffs output against `sample.expected`.
+
+**`test-02-desktop.sh`** — Flutter / Dart side:
+
+1. `flutter analyze` — static analysis of `bxp-gui/`.
+2. `flutter test` — widget tests in `bxp-gui/test/`.
+3. `dart test` inside `bxp-gui/packages/json5_ast/` — json5_ast unit + round-trip tests.
+
+Individual sub-suites:
+
+```bash
+cd bxp-core && zig build test           # Zig unit tests only
+bash scripts/test-01-console.sh        # console side only (no Flutter dep)
+bash scripts/test-02-desktop.sh        # Flutter side only
+```
+
+**Adding a regression test:**
+Place `sample.csv` (or `.xlsx`) + `sample.expected` + `sample.json` in `datasets/<template_id>/`.
 The test script picks them up automatically.
 
-**Anonymizing test data:**  
-Before committing `.csv` or `.xlsx` files in `datasets/`, strip real account or confidential informations .
+**Anonymizing test data:**
+Before committing `.csv` or `.xlsx` files in `datasets/`, strip real account or personal data.
 
 ---
 
 ### Release process
 
+See [`docs/release.md`](release.md) for the full operator walkthrough. Summary:
+
+Two release channels, distinct archives:
+
+| Channel | Archives | Content |
+| -- | -- | -- |
+| `bxp-console` | `bxp-console-<ver>-{linux-x86_64.tar.gz, macos-aarch64.tar.gz, windows-x86_64.zip}` | CLI binary only |
+| `bxp-desktop` | `bxp-desktop-<ver>-{linux.AppImage, linux.deb, linux.tar.gz, windows-setup.exe, macos.dmg}` | Flutter GUI + bundled bxp-cli + bxp-fmt |
+
 ```bash
-# run release
-./scripts/release.sh
+# Bump versions + tag + push (triggers GitHub Actions pipeline)
+bash scripts/release-tag.sh v0.3.0
+
+# Or build locally without tagging:
+bash scripts/release-01-console.sh v0.3.0-rc1   # console archives
+bash scripts/release-02-desktop.sh v0.3.0-rc1   # host-OS desktop bundle
 ```
 
-The release script cross-compiles `bxp-cli` for selected targets and packages each as a `bxp-console-<version>-<platform>` archive:
+The GitHub Actions pipeline fans out across ubuntu / windows / macos runners so
+all native installers come from real native builds.
 
-| Target | Archive |
-| -- | -- |
-| `x86_64-linux-musl` | `bxp-console-<ver>-linux-x86_64.tar.gz` |
-| `aarch64-macos` | `bxp-console-<ver>-macos-aarch64.tar.gz` |
-| `x86_64-windows` | `bxp-console-<ver>-windows-x86_64.zip` |
+---
 
-Outputs are placed in `releases/console/`. Desktop bundles
-(`bxp-desktop-...`) are produced by `scripts/release-02-desktop.sh` on
-the host's native runner; both halves run together via the top-level
-`scripts/release.sh` wrapper or in parallel under `.github/workflows/release.yml`.
+### GUI development
+
+See [`docs/gui.md`](gui.md) for a full bxp-gui developer guide covering Flutter
+architecture, subprocess wiring, the json5_ast AST library, dev-run workflow, and
+key patterns (ValueNotifier streaming, HardwareKeyboard shortcuts, fractional splitters).

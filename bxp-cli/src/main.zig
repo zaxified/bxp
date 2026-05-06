@@ -135,6 +135,8 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
 
+    // Buffered stdout writer. 4 KB is enough for --version / --help; the
+    // pipeline uses its own per-file OUT_FILE_BUF_SIZE buffer for bulk output.
     var stdout_buf: [4096]u8 = undefined;
     var stdout_fw = std.fs.File.stdout().writer(&stdout_buf);
     const stdout = &stdout_fw.interface;
@@ -143,6 +145,9 @@ pub fn main() !void {
     const args = try std.process.argsAlloc(alloc);
     defer std.process.argsFree(alloc, args);
 
+    // First pass: scan for flags that need to be known before `run()` is
+    // called. --version and --help short-circuit immediately; the rest are
+    // stored as booleans and forwarded via the Output struct.
     var debug = false;
     var quiet = false;
     var fresh = false;
@@ -173,6 +178,11 @@ pub fn main() !void {
         }
     }
 
+    // Conflicting-flag validation. These combinations produce contradictory
+    // output semantics and are rejected up-front rather than silently
+    // picking a winner: --quiet and --debug are opposites; --trace and
+    // --debug both affect raw row output in incompatible ways (NDJSON vs.
+    // human-readable JSON dumps).
     if (quiet and debug) {
         std.debug.print("error: --quiet and --debug cannot be used together\n", .{});
         std.process.exit(1);
@@ -184,6 +194,11 @@ pub fn main() !void {
 
     const out = Output{ .writer = stdout, .quiet = quiet, .debug = debug, .trace = trace, .dry_run = dry_run };
 
+    // `run()` returns `error.Fatal` when it has already printed a diagnostic
+    // and wants a clean exit-1 — no additional message needed. Any other
+    // propagated error is unexpected (e.g. OOM); in release mode we print
+    // the error name rather than crashing with an unformatted Zig trace. In
+    // --debug mode we re-throw so the Zig runtime prints its full stack trace.
     const stats = run(args, out, fresh, check_fs_seconds, alloc) catch |err| {
         if (err == error.Fatal) {
             out.event("done", .{ .exit_code = @as(u8, 1) });
@@ -255,6 +270,10 @@ fn run(args: [][:0]u8, out: Output, fresh: bool, check_fs_seconds: u8, alloc: st
         return error.Fatal;
     };
 
+    // `config_mod.load` parses the JSON5 file, resolves the BrokerConfig
+    // structs, and validates field types. On failure it has already written
+    // a human-readable diagnostic to stderr (`diagJsonError`), so we only
+    // need to flush stdout, update stats, and return the sentinel error.
     var cfg = config_mod.load(alloc, config_path) catch {
         // diagJsonError already printed the diagnostic to stderr.
         out.writer.flush() catch {};
@@ -319,7 +338,11 @@ fn run(args: [][:0]u8, out: Output, fresh: bool, check_fs_seconds: u8, alloc: st
         }
     }
 
-    // Validate all templates before processing any data.
+    // Validate all templates before processing any data. Doing this in a
+    // dedicated pass (rather than inside processBroker) means a config error
+    // in template B surfaces even when template A was selected via --template;
+    // it also gives the user a complete list of config problems in one run
+    // rather than failing on the first bad template.
     if (cfg.brokers.count() == 0) {
         out.fatal("error: {s} defines no conversion_templates\n", .{config_path});
         overall.has_fatal = true;
@@ -429,7 +452,11 @@ fn run(args: [][:0]u8, out: Output, fresh: bool, check_fs_seconds: u8, alloc: st
         }
     }
 
-    // Parse --template and optional --data override.
+    // Second argument-parsing pass: extract --template / --data values.
+    // These could not be parsed in `main()` because the Output struct (needed
+    // for error reporting) isn't available until after the config is loaded.
+    // --config is consumed here by skipping its value token; all other flags
+    // were already handled in the first pass inside `main()`.
     var template_id: ?[]const u8 = null;
     var dir_path_arg: ?[]const u8 = null;
     var i: usize = 1;
@@ -485,7 +512,11 @@ fn run(args: [][:0]u8, out: Output, fresh: bool, check_fs_seconds: u8, alloc: st
         };
     }
 
-    // Emit 'start' trace event once templates are resolved.
+    // Emit 'start' trace event once templates are resolved. The event carries
+    // the full list of template IDs the GUI uses to pre-populate its sidebar
+    // before the first `file_start` arrives. `schema_version` lets the GUI
+    // detect incompatible event-stream formats without a bxp-cli version
+    // check: increment it whenever the shape of any trace event changes.
     if (template_id) |bid| {
         const templates_arr = [_][]const u8{bid};
         out.event("start", .{ .schema_version = @as(u32, 1), .config = config_path, .templates = templates_arr[0..] });
@@ -511,6 +542,11 @@ fn run(args: [][:0]u8, out: Output, fresh: bool, check_fs_seconds: u8, alloc: st
     overall.merge(xlsx_stats);
 
     // Dispatch to processBroker for each selected template.
+    // When --template is given we look up the BrokerConfig by ID; the
+    // `cfg.brokers.getPtr` failure here is distinct from the validation-loop
+    // above: the user supplied an ID that exists in the file but is somehow
+    // missing from the loaded map (shouldn't happen, but is defensive). When
+    // processing all templates we iterate in insertion order (ArrayHashMap).
     if (template_id) |bid| {
         const bc = cfg.brokers.getPtr(bid) orelse {
             out.fatal("error: template '{s}' is not defined in {s}\n", .{ bid, config_path });

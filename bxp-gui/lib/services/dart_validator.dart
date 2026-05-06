@@ -166,13 +166,19 @@ class DartValidator {
     if (node is JsonObject) {
       for (final p in node.properties) {
         if (p is JsonProperty) {
+          // CommentLine peers inside properties are not JsonProperty, so
+          // the `is JsonProperty` guard naturally skips them.
           _walk(p.value, [...path, p.key], out);
         }
       }
+      // Check for keys not declared in the schema after visiting children,
+      // so the walk completes fully before adding unknown-key errors.
       _checkUnknownKeys(node, path, out);
     } else if (node is JsonArray) {
       for (var i = 0; i < node.elements.length; i++) {
         final e = node.elements[i];
+        // CommentLine nodes appear between array elements in the AST;
+        // they carry no value and must be skipped for path indexing.
         if (e is CommentLine) continue;
         _walk(e, [...path, i.toString()], out);
       }
@@ -188,6 +194,10 @@ class DartValidator {
     if (doc == null) return;
     final validator = doc['validator']?.toString() ?? 'none';
 
+    // Only JsonString nodes carry a text value we can inspect.
+    // JsonNumber / JsonBool / JsonNull fall through to `null` and the
+    // type-specific validators skip them (e.g. `non_empty` only fires
+    // when `value != null`).
     final value = node is JsonString ? node.value : null;
 
     switch (validator) {
@@ -254,6 +264,10 @@ class DartValidator {
   /// Standalone expression check that does not need the root AST (no
   /// LOOKUP pre_pass-name resolution). Used during tree walk where the
   /// per-template pre_pass set is folded in by `_crossRefs` afterwards.
+  ///
+  /// `dart.expr.LookupUnknownPrePass` is suppressed here because the
+  /// pre_pass set is not available mid-walk; that check runs later in
+  /// [_crossRefsInTemplate] with full template context.
   ExprDiagnostic? _validateExprStandalone(String src) {
     final tokens = _tokenize(src);
     final calls = _findCalls(tokens);
@@ -271,6 +285,11 @@ class DartValidator {
     // Build the set of valid child keys at this path from the schema
     // catalog. If any child entry uses a `*` wildcard, EVERY key is
     // valid — skip the check entirely (free-form map).
+    //
+    // When the schema has no entries for this path at all (`validKeys`
+    // stays empty and `hasWildcard` stays false), the check is also
+    // suppressed — schema-uncovered objects are treated as free-form
+    // (same permissive-by-default policy as SchemaGate.canDelete).
     final validKeys = <String>{};
     var hasWildcard = false;
     for (final f in _configSchema) {
@@ -334,6 +353,12 @@ class DartValidator {
   }
 
   // ── Cross-references (unused pre_pass / unused $vars) ─────────────────
+  //
+  // These checks require full template context (all expressions in scope)
+  // so they run in a second pass after _walk() has finished visiting every
+  // leaf. Running them per-template keeps the logic local and avoids
+  // accumulating a global "all used vars" set that would make cross-
+  // template accidental reuse invisible.
 
   void _crossRefs(JsonAstNode root, List<DartDiagnostic> out) {
     if (root is! JsonObject) return;
@@ -386,8 +411,15 @@ class DartValidator {
     // $vars + LOOKUP names + [Field] references for the cluster check.
     final usedVars = <String>{};
     final usedPrePass = <String>{};
+    // Set to true when any LOOKUP call uses a runtime-computed first arg
+    // (e.g. `LOOKUP($var & '_table', ...)`) — we can't statically resolve
+    // which pre_pass block it hits, so unused-prepass detection is skipped.
     var hasComputedLookupName = false;
+    // Set to true when at least one 2-arg LOOKUP is found. With a single
+    // declared pre_pass block the 2-arg form implicitly targets it.
     var hasTwoArgLookup = false;
+    // All [ColumnName] references in the template's expressions, used for
+    // the cluster-outlier (G2 layer-B equivalent) check.
     final fieldRefs = <String>[];
 
     void collect(String src) {
@@ -397,7 +429,9 @@ class DartValidator {
         if (t.kind == _TokKind.variable) {
           usedVars.add(t.text);
         } else if (t.kind == _TokKind.field) {
-          // Strip leading [ and trailing ]
+          // Strip leading [ and trailing ] to get the bare column name.
+          // Digit-leading tokens are numeric array indices (e.g. `[0]`)
+          // which are not CSV column references — skip them.
           final inner = t.text.substring(1, t.text.length - 1);
           if (inner.isNotEmpty && !_isDigit(inner.codeUnitAt(0))) {
             fieldRefs.add(inner);
@@ -481,7 +515,10 @@ class DartValidator {
     collectFromAny(outputSchema);
     collectFromAny(prePass);
 
-    // output_schema values (`"$variable"` strings) reference $vars.
+    // output_schema maps output column names → `"$variable"` strings.
+    // These are not expression strings (no function calls) but they do
+    // consume $vars. Count them as used so we don't raise spurious
+    // `UnusedVar` warnings for vars that are only mapped in output_schema.
     if (outputSchema is JsonObject) {
       for (final p in outputSchema.properties) {
         if (p is JsonProperty && p.value is JsonString) {
@@ -541,6 +578,11 @@ class DartValidator {
   }
 
   // ── Expression call-structure walker ──────────────────────────────────
+  //
+  // Mirrors the Zig `staticCheckCalls` walker: first-hit semantics
+  // (return on first error), single-token gate for literal arg checks.
+  // `src` and `tokens` are passed in for potential future offset-anchored
+  // diagnostics beyond the call-name span.
 
   ExprDiagnostic? _checkCall(
     _Call call,
@@ -576,6 +618,10 @@ class DartValidator {
         length: call.nameLength,
       );
     }
+    // `maxArgs == 255` is the sentinel used in FnDoc for truly variadic
+    // functions (COALESCE, CONCAT, …). Treat as unlimited — no upper-bound
+    // check. The `> 0` guard avoids firing on functions with max_args == 0
+    // which the Zig side uses to mean "no maximum" for some builtins.
     if (maxArgs > 0 && maxArgs < 255 && call.args.length > maxArgs) {
       return ExprDiagnostic(
         severity: DartSeverity.error,
@@ -653,6 +699,10 @@ class DartValidator {
 
   // ── Helpers ───────────────────────────────────────────────────────────
 
+  /// Linear scan over `_configSchema`, matching [path] against each
+  /// entry's dot-split pattern (with `*` wildcard support). Returns the
+  /// first hit or null. Identical semantics to [TraceStore.findSchemaDoc];
+  /// duplicated here to avoid a store reference in the validator.
   Map<String, dynamic>? _findSchemaDoc(List<String> path) {
     if (path.isEmpty) return null;
     for (final f in _configSchema) {
@@ -672,6 +722,12 @@ class DartValidator {
     return null;
   }
 
+  /// Resolve the set of pre_pass block names declared in template [tid].
+  ///
+  /// Two shapes are supported (mirrors `_crossRefsInTemplate`):
+  ///   - Legacy single-block: `pre_pass` has `when`/`key` children directly
+  ///     → synthesise the implicit name `"_default"`.
+  ///   - Named blocks: each top-level child of `pre_pass` is a block name.
   Set<String> _prePassNamesFor(JsonAstNode root, String tid) {
     final out = <String>{};
     if (root is! JsonObject) return out;
@@ -693,6 +749,7 @@ class DartValidator {
     return out;
   }
 
+  /// Return the value of property [key] inside [obj], or null if absent.
   static JsonAstNode? _findChild(JsonObject obj, String key) {
     for (final p in obj.properties) {
       if (p is JsonProperty && p.key == key) return p.value;
@@ -717,6 +774,7 @@ class DartValidator {
     return best;
   }
 
+  /// Classic O(n·m) Levenshtein distance with a two-row rolling buffer.
   static int _levenshtein(String a, String b) {
     if (a == b) return 0;
     if (a.isEmpty) return b.length;
@@ -734,6 +792,8 @@ class DartValidator {
         if (prev[j - 1] + cost < val) val = prev[j - 1] + cost;
         curr[j] = val;
       }
+      // Swap rows in-place using a temp pointer — avoids a new allocation
+      // on every outer iteration for inputs longer than a few characters.
       final tmp = prev;
       prev = curr;
       curr = tmp;
@@ -874,6 +934,9 @@ class DartValidator {
         continue;
       }
       // number (incl. leading -)
+      // The `- digit` lookahead avoids swallowing a binary minus operator
+      // (e.g. `$a - 1`) as part of a number token. Only `-` immediately
+      // followed by a digit is treated as a signed literal.
       if (_isDigit(c) ||
           (c == 0x2D /* - */ && i + 1 < src.length && _isDigit(src.codeUnitAt(i + 1)))) {
         final start = i;

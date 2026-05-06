@@ -4,6 +4,9 @@ import '../../store/trace_store.dart';
 import '../theme/bxp_theme.dart';
 import '../theme/bxp_text.dart';
 
+/// Single row in the file list. Manages its own hover state so only the
+/// hovered row repaints — lifting hover into the parent would cause the
+/// whole FileList to rebuild on every mouse move.
 class _FileRow extends StatefulWidget {
   final bool active;
   final Color activeBg;
@@ -73,6 +76,9 @@ class _FileListState extends State<FileList> {
     super.dispose();
   }
 
+  /// Extract the filename from an absolute path. Works on POSIX only —
+  /// Windows paths that contain `\` as separator are not normalised here
+  /// because bxp-cli always emits forward-slash paths in its NDJSON trace.
   String _basename(String path) {
     final i = path.lastIndexOf('/');
     return i >= 0 ? path.substring(i + 1) : path;

@@ -48,20 +48,23 @@ that capture it (e.g. bxp-gui's runtime info panel) get the version.
 
 ## Annotated JSON output (`--config`)
 
-Standard JSON with two reserved key prefixes:
+Standard JSON with reserved key prefixes:
 
 - `$comm_<N>: { "text": "<original>", "placement": "<pos>" }` — one entry
   per preserved comment. `placement` ∈ `leading` (own line before key),
   `trailing` (after value on same line), `block` (`/* ... */`),
   `standalone` (block at end of object before `}`).
-- `$err_<N>: "<message>"` — one entry per syntax or semantic error.
-  Inserted as a sibling immediately before the offending key in its parent
-  object; if the offending field doesn't exist (e.g. missing required
-  field), appended at the end of the parent.
+- `$err_<N>: { "message": "...", "off": N, "len": N, "suggest": "..." }` — error finding.
+- `$warn_<N>: { "message": "...", ... }` — warning finding.
+- `$info_<N>: { "message": "...", ... }` — info finding.
+  `off`, `len`, and `suggest` are present only when the diagnostic has them.
+  Each finding is inserted as a sibling immediately before the offending key
+  in its parent object; appended at the end of the parent when the offending
+  field doesn't exist (e.g. missing required field).
 
-`<N>` is a single monotonically-increasing counter shared between
-`$comm_` and `$err_` so all keys are unique. Original key order is
-preserved (insertion order via `std.json.ObjectMap`).
+`<N>` is a single monotonically-increasing counter shared across all
+prefixes so all keys are unique. Original key order is preserved
+(insertion order via `std.json.ObjectMap`).
 
 The runtime config loader (`bxp-cli`) uses `json5.preprocess` (the
 non-annotated variant), so `$comm_<N>`/`$err_<N>` never reach the data
@@ -89,11 +92,10 @@ tree consumed by the conversion pipeline.
 bxp-fmt/
   src/
     main.zig      ← single file: arg parsing + 6 subcommand dispatchers
-                    (~760 lines — each runX function is short, the bulk is
-                     JSON serialization helpers and `--config` annotation
-                     glue)
+                    (~2150 lines — bulk is JSON serialization helpers,
+                     `--config` annotation glue, and deep validation logic)
   build.zig       ← depends on bxp-core path dep (../bxp-core); imports
-                    the `config`, `expr`, `json5`, and `docs` modules
+                    the `config`, `expr`, `json5`, `docs`, and `diagnostics` modules
   build.zig.zon
 ```
 
@@ -135,10 +137,9 @@ count crosses the threshold), revisit.
   variation between callers makes the abstraction hurt more than it
   helps today.
 
-- **`emitExprError` extraction.** `runExpr` (~ll. 696–707) and
-  `runExprTrace` (~ll. 834–844) each serialize a JSON `{"error":…,
-  "detail":…}` block to stderr — almost identical except `runExprTrace`
-  also writes `"t":"error"`. Skipped: only two call sites today.
-  Extract when a third caller (e.g. a future `runExprValidate`) shows
-  up; the gain is too modest to justify the cognitive cost of a
-  parameterised helper for two consumers.
+- **`emitExprError` extraction.** `runExpr` and `runExprTrace` each
+  serialize a JSON error object to stderr — almost identical except
+  `runExprTrace` also writes `"t":"error"`, and both now include optional
+  `"off"`/`"len"` token-span fields (Phase G1). Skipped: only two call
+  sites today. Extract when a third caller shows up; the gain is too
+  modest to justify a parameterised helper for two consumers.

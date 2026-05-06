@@ -129,7 +129,7 @@ upgrade and clears the old store; the migration code is removed in v0.3.
 - [`bxp-cli/CLAUDE.md`](bxp-cli/CLAUDE.md) — full configuration reference, expression syntax,
   template guide, broker list.
 - [`bxp-fmt/CLAUDE.md`](bxp-fmt/CLAUDE.md) — all subcommands, `--docs` JSON shape,
-  `$comm_*`/`$err_*` output format.
+  `$comm_*`/`$err_*`/`$warn_*`/`$info_*` output format.
 - [`bxp-core/CLAUDE.md`](bxp-core/CLAUDE.md) — module API overview, build details, test coverage.
 - [`bxp-gui/CLAUDE.md`](bxp-gui/CLAUDE.md) — Flutter app structure, services/store/ui split,
   bxp-cli/bxp-fmt subprocess wiring.

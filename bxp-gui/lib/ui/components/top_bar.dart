@@ -8,6 +8,10 @@ import '../theme/bxp_text.dart';
 
 const _githubUrl = 'https://github.com/zaxified/bxp';
 
+/// Application-level navigation bar. Contains the CONFIG / RUNNER tab selectors
+/// on the left and the GITHUB link + theme-cycle button on the right.
+/// Active tab is tracked in TraceStore.activeTabIndex so the IndexedStack in
+/// MainView reacts automatically; this widget is purely presentation.
 class TopBar extends StatelessWidget {
   const TopBar({super.key});
 
@@ -19,6 +23,8 @@ class TopBar extends StatelessWidget {
 
     return Container(
       decoration: BoxDecoration(
+        // Slight transparency so the surface bleed-through helps the bar
+        // feel attached to the content column rather than floating above it.
         color: t.panelBg.withValues(alpha: 0.6),
         border: Border(bottom: BorderSide(color: t.borderColor)),
       ),
@@ -42,6 +48,8 @@ class TopBar extends StatelessWidget {
             tooltip: 'Open project on GitHub ($_githubUrl)',
             onTap: _openGithub,
           ),
+          // Theme cycle button: label shows the current preset's short name
+          // (e.g. "SLATE", "AMOLED") so the user knows what clicking will do.
           _TopTab(
             label: t.label,
             active: false,

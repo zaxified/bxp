@@ -12,12 +12,19 @@ import 'dart:io';
 import 'package:json5_ast/ast.dart';
 import 'package:json5_ast/parser.dart';
 
+/// Carries the parsed tree (or null on hard failure), the list of
+/// JSON5-syntax diagnostics emitted by the parser, and the raw source text.
+/// Callers keep [rawText] around so [AstPatchClient] can replay the op log
+/// against the identical bytes that were originally loaded, avoiding a
+/// re-read from disk between load and save.
 class AstLoadResult {
   final JsonAstNode? root;
   final List<ParseDiagnostic> diagnostics;
   final String rawText;
   AstLoadResult(this.root, this.diagnostics, this.rawText);
 
+  /// True when any diagnostic carries [Severity.error].
+  /// Warnings (e.g. trailing commas in strict mode) do NOT block editing.
   bool get hasErrors =>
       diagnostics.any((d) => d.severity == Severity.error);
 }

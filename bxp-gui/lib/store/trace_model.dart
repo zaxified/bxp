@@ -1,20 +1,37 @@
+/// One variable evaluation entry from a `var_eval` or `var_error` trace event.
+///
+/// A single CSV row can produce multiple VarEntries for the same variable name
+/// when row_rules override blocks re-evaluate it with a different expression.
+/// Callers group entries by [name] and filter by [origin] to separate the
+/// top-level Variables table from the Rule-Results breakdown.
 class VarEntry {
-  final String kind; // 'eval' or 'error'
+  /// `'eval'` for a successful evaluation, `'error'` for a failed one.
+  /// Drives the cell background colour in the Variables table.
+  final String kind;
   final String name;
+  /// The expression source text, as recorded in the trace event. Displayed
+  /// in the expr column of the Variables table; null for synthetic variables.
   final String? expr;
+  /// Evaluated string value, populated on `kind == 'eval'`. May be the
+  /// empty string — that's a valid output value, not a missing one.
   final String? value;
+  /// Short error code from the expression evaluator, populated on
+  /// `kind == 'error'`. Human-readable title, e.g. "UnexpectedToken".
   final String? error;
+  /// Longer detail string accompanying [error] where available.
   final String? detail;
-  // Where this variable was defined. 'input_schema' (default) for vars
-  // declared at the top of a conversion template, 'row_rules' for vars
-  // defined inside the matched row_rules[ruleIndex].rows[*] override block.
-  // Drives the split between the Variables table and the Rule-Results
-  // panel in row_detail.dart.
+  /// Where this variable was defined. `'input_schema'` (default) for vars
+  /// declared at the top of a conversion template, `'row_rules'` for vars
+  /// defined inside the matched `row_rules[ruleIndex].rows[*]` override block.
+  /// Drives the split between the Variables table and the Rule-Results
+  /// panel in row_detail.dart.
   final String origin;
+  /// Which row_rule index this variable came from. Null for `input_schema`
+  /// vars. Matches `rule_index` in the trace event (real-only count).
   final int? ruleIndex;
-  // Index inside `row_rules[ruleIndex].rows[]` for vars that came from a
-  // rule's per-output-row override block. Null for input_schema vars (and
-  // for older trace files without the field).
+  /// Index inside `row_rules[ruleIndex].rows[]` for vars that came from a
+  /// rule's per-output-row override block. Null for input_schema vars (and
+  /// for older trace files without the field).
   final int? outputRowIndex;
 
   VarEntry({
@@ -30,33 +47,84 @@ class VarEntry {
   });
 }
 
+/// One rule evaluation entry from a `rule_match` or `rule_no_match` event.
+///
+/// All rules for a given CSV row are recorded regardless of whether they
+/// matched — the UI shows the full decision tree so the user can debug
+/// why a specific rule did or didn't fire. Only the FIRST matched rule's
+/// [rows] are used for output generation; subsequent rule matches are
+/// informational.
 class RuleEntry {
+  /// The real-only rule index (position in `row_rules` excluding comments),
+  /// matching `rule_index` in the trace event.
   final int ruleIndex;
+  /// The `when` expression text as written in the config. Displayed in the
+  /// rule-match table header.
   final String when;
+  /// True if the `when` expression evaluated to a non-empty, non-zero string
+  /// for this row.
   final bool matched;
+  /// Output row templates from the `rows` array — each entry maps output-
+  /// schema variable names to expression strings. Empty for unmatched rules
+  /// and for rules with no `rows` block (filter-only rules).
   final List<Map<String, String>> rows;
 
   RuleEntry({required this.ruleIndex, required this.when, required this.matched, required this.rows});
 }
 
+/// All trace data collected for one input CSV row.
+///
+/// Populated incrementally as `var_eval`, `var_error`, `rule_match`,
+/// `rule_no_match`, `row_filtered`, and `row_output` events arrive. The
+/// [id] is a local synthetic key (`r0`, `r1`, …) assigned by `TraceBuilder`;
+/// it has no relation to `file_row` which is the 1-based physical line number
+/// in the source CSV.
 class RowModel {
+  /// Synthetic row key assigned by `TraceBuilder` in the order rows are
+  /// encountered across all files in this run. Used as the map key in
+  /// `TraceModel.rows`.
   final String id;
+  /// The parent `FileModel.id` this row belongs to.
   final String fileId;
+  /// 1-based physical row number in the source CSV (as reported by bxp-cli's
+  /// `file_row` field). Used for display; may differ from the position in
+  /// `FileModel.rowIds` if rows were filtered before tracing started.
   final int fileRow;
+  /// Raw CSV field values for this row, in column order matching
+  /// `FileModel.headers`.
   final List<String> fields;
+  /// Variable evaluations (input_schema + row_rules overrides), appended as
+  /// trace events arrive. May be empty for filtered rows.
   final List<VarEntry> vars = [];
+  /// Rule evaluations for this row. Includes both matched and unmatched rules
+  /// so the user can inspect the full decision tree.
   final List<RuleEntry> rules = [];
+  /// Non-null when this row was dropped by a filter expression; contains the
+  /// filter reason string from the `row_filtered` event.
   String? filteredReason;
+  /// Output rows produced by the matched rule's `rows` block. Each inner list
+  /// is one output CSV row, parallel to `FileModel.outputHeaders`.
   final List<List<String>> outputs = [];
+  /// Index of the first rule that matched, or null for filtered/unmatched rows.
   int? matchedRuleIndex;
+  /// True when any `var_error` event was received for this row.
   bool hasError = false;
 
   RowModel({required this.id, required this.fileId, required this.fileRow, required this.fields});
 }
 
+/// One entry from a `prepass_set` trace event, emitted by bxp-cli before
+/// the main row loop when a `pre_pass` block is configured.
+///
+/// The pre-pass builds a lookup table keyed by a CSV field's value (`key`);
+/// `field` is the column name that was indexed, `value` is the aggregate
+/// or verbatim value stored under that key for LOOKUP() access.
 class PrepassEntry {
+  /// The lookup key (value of the indexed CSV column for this entry).
   final String key;
+  /// The CSV column (header name) whose values were indexed to build this entry.
   final String field;
+  /// The stored aggregate or verbatim value, accessible via `LOOKUP(key)`.
   final String value;
   const PrepassEntry({required this.key, required this.field, required this.value});
 }
@@ -79,30 +147,65 @@ class ExprCallTrace {
   });
 }
 
+/// All trace data for one input file processed during a dry-run or full run.
+///
+/// The [id] is `"$template::$path"` — unique within a single run because
+/// the same physical file can appear under different templates if the user
+/// runs all templates. [rows] is the row count as reported in `file_start`
+/// (may differ from `rowIds.length` when rows are filtered before tracing).
 class FileModel {
+  /// Composite key: `"<templateId>::<filePath>"`.
   final String id;
+  /// The conversion template that processed this file.
   final String template;
+  /// Absolute path to the input CSV/XLSX file.
   final String path;
+  /// Row count as reported by bxp-cli in the `file_start` event. Includes
+  /// rows that will later be filtered; compare with `rowIds.length` to see
+  /// how many survived.
   final int rows;
-  final List<String> headers;      // input CSV headers
-  List<String> outputHeaders = []; // output schema headers (from row_output event)
+  /// Input CSV column headers in source order, from the `file_start` event.
+  final List<String> headers;
+  /// Output schema column headers, populated from the first `row_output`
+  /// event (all output rows share the same schema for a given file).
+  List<String> outputHeaders = [];
+  /// Ordered list of [RowModel.id] values for rows that were traced for
+  /// this file. Filtered rows are absent.
   final List<String> rowIds = [];
-  // Pre-pass lookup table entries collected from `prepass_set` events
-  // before the main row loop. Mirrors bxp-ui's `FileModel.prepass`.
-  // Surfaced in the UI via FileList expandable detail / future LOOKUP
-  // debug pane; for now we capture them so the trace round-trip is loss-
-  // less.
+  /// Pre-pass lookup table entries collected from `prepass_set` events
+  /// before the main row loop. Mirrors bxp-ui's `FileModel.prepass`.
+  /// Surfaced in the UI via FileList expandable detail / future LOOKUP
+  /// debug pane; for now we capture them so the trace round-trip is loss-
+  /// less.
   final List<PrepassEntry> prepass = [];
+  /// File-level stats from the `file_end` event (e.g. rows written, rows
+  /// filtered, warnings). Null until the event arrives.
   Map<String, dynamic>? stats;
 
   FileModel({required this.id, required this.template, required this.path, required this.rows, required this.headers});
 }
 
+/// Top-level container for all data produced by one bxp-cli `--trace` run.
+///
+/// Populated incrementally by `TraceBuilder.parseLine` as NDJSON events
+/// arrive from the streaming process. Consumers (RowList, FileList,
+/// OutputPanel) read from this model via `TraceStore.traceModel`; they must
+/// not hold direct references across runs because `TraceStore._streamRun`
+/// replaces the whole model at the start of each new run.
 class TraceModel {
+  /// Raw `start` event payload, null until the event arrives.
   Map<String, dynamic>? start;
+  /// Raw `done` event payload collapsed to `{exitCode: N}`, null until
+  /// the pipeline finishes.
   Map<String, dynamic>? done;
+  /// FileModel registry keyed by `FileModel.id` (composite template::path).
   final Map<String, FileModel> files = {};
+  /// Insertion-order list of file ids — used by FileList to maintain stable
+  /// display order independent of hash iteration.
   final List<String> fileOrder = [];
+  /// RowModel registry keyed by synthetic id (`r0`, `r1`, …).
   final Map<String, RowModel> rows = {};
+  /// Parse errors from malformed NDJSON lines, capped at `_kMaxIssues` to
+  /// prevent runaway producers from exhausting memory.
   final List<String> issues = [];
 }

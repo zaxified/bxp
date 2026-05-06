@@ -24,11 +24,18 @@ class OpenDialog extends StatefulWidget {
   State<OpenDialog> createState() => _OpenDialogState();
 }
 
+/// HOME is the standard on Linux/macOS; USERPROFILE is its Windows equivalent.
+/// Falls back to CWD (always available) when neither is set — that keeps the
+/// dialog functional in restricted environments without crashing.
 String _userHome() =>
     Platform.environment['HOME'] ??
     Platform.environment['USERPROFILE'] ??
     Directory.current.path;
 
+/// Enumerate present drive letters on Windows by probing A–Z.
+/// Directory.existsSync() returns false for unmounted or nonexistent drives
+/// without throwing, so the probe is safe even on machines with sparse drive
+/// letter assignments.
 List<String> _windowsDrives() => [
       for (var c = 65; c <= 90; c++)
         if (Directory('${String.fromCharCode(c)}:\\').existsSync())
@@ -67,6 +74,9 @@ class _OpenDialogState extends State<OpenDialog> {
   void initState() {
     super.initState();
     final store = context.read<TraceStore>();
+    // Prioritise the folder containing the already-open config — the user
+    // most likely wants a sibling or nearby file. Fall back to the most
+    // recently opened config's directory, then to HOME.
     String start;
     if (store.configPath.isNotEmpty &&
         File(store.configPath).existsSync()) {
@@ -88,6 +98,9 @@ class _OpenDialogState extends State<OpenDialog> {
     super.dispose();
   }
 
+  /// Return keyboard focus to the root handler after a sidebar / breadcrumb
+  /// click so arrow-key navigation and type-ahead continue to work. Skip when
+  /// the search TextField already has focus — it owns the keyboard for typing.
   void _refocusRootIfSearchInactive() {
     if (!_searchFocus.hasFocus) _rootFocus.requestFocus();
   }

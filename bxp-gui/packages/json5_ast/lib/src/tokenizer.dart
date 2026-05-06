@@ -2,6 +2,8 @@ import 'package:meta/meta.dart';
 
 import '../ast.dart';
 
+/// All token categories recognised by the JSON5 tokenizer.
+/// `@internal` — consumers must not reference these from outside the package.
 @internal
 enum TokKind {
   lbrace, rbrace, lbracket, rbracket,
@@ -9,10 +11,16 @@ enum TokKind {
   string, ident, number,
   trueLit, falseLit, nullLit, infinityLit, nanLit,
   commentLine, commentBlock,
+  // Newlines are emitted as explicit tokens (not silently consumed) so the
+  // parser can distinguish "trailing comment on the same line" (no newline
+  // between value and the `//`) from "standalone comment on its own line".
   newline,
   eof,
 }
 
+/// A single lexeme. [raw] is the literal source text; [value] is the decoded
+/// payload (unescaped string content for `string` tokens; `null` for
+/// structural tokens). Both share the same [SourceSpan].
 @internal
 class Token {
   final TokKind kind;
@@ -24,6 +32,9 @@ class Token {
   String toString() => '$kind(${value ?? raw})';
 }
 
+/// Thrown for hard tokenizer errors (unterminated string, bad escape, …).
+/// The [Parser] catches this and converts it to a [ParseDiagnostic] so the
+/// GUI can display it without crashing the loader.
 @internal
 class TokenizerError implements Exception {
   final String message;
@@ -35,6 +46,9 @@ class TokenizerError implements Exception {
   String toString() => 'TokenizerError@$line:$col: $message';
 }
 
+/// Single-pass lexer. Tracks line and column for diagnostic spans. Whitespace
+/// (space, tab, carriage-return) is consumed silently; `\n` emits a
+/// `TokKind.newline` token the parser relies on for comment placement.
 @internal
 class Tokenizer {
   final String src;

@@ -528,6 +528,10 @@ pub const BrokerConfig = struct {
 
     /// Validates the structural integrity of this template configuration.
     /// Prints a descriptive error to writer and returns error.InvalidConfig on the first violation.
+    ///
+    /// This is the bxp-cli fail-fast path: the first error aborts processing and
+    /// the user sees a single clear message. `validateCollect` is the bxp-fmt
+    /// deep-pass equivalent that accumulates all errors in one pass.
     pub fn validate(self: *const BrokerConfig, template_id: []const u8, config_path: []const u8, writer: anytype) !void {
         if (self.data_dir.len == 0) {
             try writer.print("---\n# {s}: config error: template '{s}': data_dir must not be empty\n", .{ config_path, template_id });
@@ -584,7 +588,12 @@ pub const BrokerConfig = struct {
                 }
             }
         }
-        // Every output_schema variable must be in input_schema or set by every row_rules rows entry.
+        // Cross-reference: every output_schema variable must be declared in input_schema
+        // OR explicitly set by every rows entry of every matching row_rules rule.
+        // The invariant catches copy-paste errors where a $variable is referenced in
+        // output_schema but forgotten in input_schema, which would produce a blank
+        // output column silently. When row_rules is empty (rules == &.{}), the inner
+        // loops are no-ops and only the input_schema check fires.
         const rules = self.row_rules orelse &.{};
         for (self.output_schema.items) |col| {
             if (self.input_schema.contains(col.variable)) continue;
@@ -660,6 +669,10 @@ pub const BrokerConfig = struct {
 
     /// Like validate() but collects ALL errors instead of stopping at the first one.
     /// Appends ValidationError items to `errors`; caller owns the strings (free via deinit).
+    ///
+    /// Used by bxp-fmt's deep validation pass so the user sees the complete picture
+    /// in one run. Error text is kept identical to validate() so both paths produce
+    /// the same wording — the only difference is accumulation vs. early-exit.
     pub fn validateCollect(
         self: *const BrokerConfig,
         template_id: []const u8,
@@ -714,6 +727,10 @@ pub const BrokerConfig = struct {
                 }
             }
         }
+        // Same cross-reference check as validate(), accumulating instead of aborting.
+        // The `break` after appending ensures we emit at most one error per output column
+        // rather than one per (rule × row_override) pair — the first missing row_override
+        // already tells the user which column needs fixing.
         const rules = self.row_rules orelse &.{};
         for (self.output_schema.items) |col| {
             if (self.input_schema.contains(col.variable)) continue;
@@ -813,17 +830,18 @@ pub const BrokerConfig = struct {
     ) !void {
         if (diag == null) return;
 
-        // Phase G3 validate-mode whitelist: populate the set of pre_pass
-        // block names so `builtinLookup` can flag unknown first
-        // arguments. Empty broker (no pre_passes) → empty set; LOOKUP
-        // calls from such a broker still resolve the name and trip
-        // `error.LookupUnknownPrePass` if a name was mistakenly typed.
+        // Build a validate-mode whitelist of pre_pass block names so that
+        // `builtinLookup` can flag 3-arg LOOKUP calls that reference a name
+        // not declared in this template. The whitelist is only active in the
+        // deep-validation pass (diag != null); runtime evals always see
+        // pre_pass_names==null and the existing "silent '' on miss" behaviour.
         var pre_pass_names = std.StringHashMap(void).init(alloc);
         defer pre_pass_names.deinit();
         var pp_names_it = self.pre_passes.iterator();
         while (pp_names_it.next()) |e| try pre_pass_names.put(e.key_ptr.*, {});
         // Mirror pipeline.zig: when exactly one pre_pass block exists,
-        // 2-arg LOOKUP resolves to it implicitly.
+        // 2-arg LOOKUP resolves to it implicitly — so the validator must
+        // also treat a 2-arg call as valid in that case.
         const single_prepass_name: ?[]const u8 = if (self.pre_passes.count() == 1)
             self.pre_passes.keys()[0]
         else
@@ -967,6 +985,12 @@ pub const BrokerConfig = struct {
 /// Run a single expression through `expr.eval` with a bare Context and
 /// emit a Diagnostic on failure. Empty source is treated as success
 /// (matches `eval`'s explicit empty-string short-circuit).
+///
+/// "Bare Context" means: no actual CSV fields, no ticker_map entries, no
+/// lookup table. This catches structural/syntax errors (unknown function,
+/// unbalanced parens, wrong arg count) without needing a real row. Errors
+/// that only fire on real data (e.g. type mismatches on specific field values)
+/// are intentionally not caught here — they surface at dry-run time.
 fn checkOneExpr(
     alloc: std.mem.Allocator,
     diag: ?*Diagnostics,
@@ -1009,8 +1033,9 @@ fn checkOneExpr(
 
         // Code mirrors the expr error name with a `expr.` prefix so the
         // GUI can route by category (e.g. "expr.UnknownFunction" vs
-        // "expr.NotANumber"). detail (when set) carries the human
-        // wording from expr.zig's setDetail call.
+        // "expr.NotANumber"). `detail` (when set) carries the human
+        // wording from expr.zig's setDetail call; when empty, we fall
+        // back to the raw error name so there's always something actionable.
         const code = try std.fmt.allocPrint(alloc, "expr.{s}", .{@errorName(err)});
         const message = if (detail.len > 0)
             try std.fmt.allocPrint(alloc, "expression in {s}: {s}", .{ field_leaf, detail })
@@ -1116,11 +1141,6 @@ fn closestBuiltin(name: []const u8) ?[]const u8 {
     return best;
 }
 
-/// Classic O(m*n) Levenshtein distance, case-insensitive. Buffers are
-/// stack-allocated — function names are short (≤ 16 chars) so the
-/// 64-byte cap is plenty. Falls back to length-based estimate when a
-/// string overflows the buffer (theoretical; no real builtin name is
-/// that long).
 /// Phase G2 layer B: load-time field-name clustering. Given a slice of
 /// expression sources from a single broker, collect every `[X]` named
 /// reference (via `expr.staticReferences`), build a frequency map, and
@@ -1162,11 +1182,12 @@ pub fn staticCheckFieldClustering(
         }
     }
 
-    // Scan for outliers. Deterministic order: hash-map iteration is
-    // unordered, but the test signal is "is there at least one
-    // outlier" — caller surfaces just the first found, additional
-    // outliers (if any) get reported on the next run after the user
-    // fixes the first.
+    // Scan for outliers. Hash-map iteration order is non-deterministic so
+    // which of several potential outliers gets reported first may vary
+    // between runs. This is acceptable: the user fixes the reported one
+    // and re-runs, seeing the next one. Reporting all at once would require
+    // a deterministic-order structure (e.g. sorting by name), adding
+    // complexity for a marginal benefit (typos are rare and usually singular).
     var f1 = freq.iterator();
     while (f1.next()) |e1| {
         if (e1.value_ptr.* != 1) continue;
@@ -1191,11 +1212,19 @@ pub fn staticCheckFieldClustering(
     return null;
 }
 
+/// Classic O(m*n) Levenshtein distance, case-insensitive. Buffers are
+/// stack-allocated — function/key names are short (≤ 16 chars) so the
+/// 64-byte cap is sufficient for all realistic inputs. Falls back to an
+/// absolute-difference length estimate for oversize strings (theoretical;
+/// no real builtin name or config key approaches 64 chars).
 pub fn levenshteinIgnoreCase(a: []const u8, b: []const u8) usize {
     const max_len: usize = 64;
     if (a.len > max_len or b.len > max_len) {
         return if (a.len > b.len) a.len - b.len else b.len - a.len;
     }
+    // Rolling two-row DP: `prev` holds the previous row, `curr` is built
+    // from it. After processing each character of `a`, `curr` is copied
+    // into `prev` for the next iteration.
     var prev: [max_len + 1]usize = undefined;
     var curr: [max_len + 1]usize = undefined;
     for (0..b.len + 1) |j| prev[j] = j;
@@ -1932,6 +1961,11 @@ fn jsonErrorDesc(err: anyerror) []const u8 {
 /// structured Diagnostic with line/col + the duplicated key in the
 /// message. Path is root (`""`) — Phase C ships line/col precision;
 /// path-from-scanner-stack is a future micro-iteration.
+///
+/// This scanner is separate from `diagJsonError` because std.json's
+/// `parseFromSlice` silently coalesces duplicate keys (last-value-wins),
+/// so the parse error path never fires for them. We must detect them
+/// before the parse so the user doesn't silently get wrong config values.
 fn diagDuplicateKey(
     alloc: std.mem.Allocator,
     content: []const u8,
@@ -1944,7 +1978,9 @@ fn diagDuplicateKey(
     var scan_diag: std.json.Diagnostics = .{};
     scanner.enableDiagnostics(&scan_diag);
 
-    // Per-level state: is_object=true → track keys; is_object=false → array (no keys).
+    // Per-level nesting state. The `expect_key` toggle alternates between
+    // "next string is a key" and "next string is a value" so we don't
+    // accidentally record a string-valued field as a duplicate key.
     const Level = struct {
         is_object: bool,
         expect_key: bool,               // true when the next string token is an object key
@@ -2000,9 +2036,11 @@ fn diagDuplicateKey(
                     const caret_col: u64 = if (col_end >= s.len + 2) col_end - s.len - 2 else 1;
 
                     if (top.keys.contains(s)) {
-                        // Found the first duplicate. Emit a structured
-                        // diagnostic for bxp-fmt before printing to
-                        // stderr (bxp-cli's existing behavior).
+                        // Found the first duplicate. We stop here — finding
+                        // further duplicates in the same document would just
+                        // confuse the user who hasn't fixed the first one yet.
+                        // Emit a structured diagnostic for bxp-fmt before
+                        // printing to stderr (bxp-cli's existing behavior).
                         if (diag) |d| {
                             const msg = std.fmt.allocPrint(
                                 alloc,
@@ -2162,7 +2200,9 @@ fn diagJsonError(
 /// Parses a single `{ when, key, values }` pre_pass block into a PrePass.
 /// Caller owns all heap-allocated strings (released by Config.deinit).
 /// Missing fields are silently treated as empty so that downstream validation
-/// can produce a descriptive error path including the block name.
+/// (`BrokerConfig.validate` / `validateCollect`) can produce a descriptive
+/// error path including the block name — e.g. "pre_pass.my_block.when must
+/// not be empty" — rather than a generic parse error here without context.
 fn parsePrePassBlock(alloc: std.mem.Allocator, ppobj: std.json.ObjectMap) !PrePass {
     var when: []const u8 = try alloc.dupe(u8, "");
     var pp_key: []const u8 = try alloc.dupe(u8, "");
@@ -2354,6 +2394,18 @@ fn parseFileTypeField(
     return .csv;
 }
 
+/// Parse + validate a config from in-memory JSON5 bytes. The path label
+/// is only used in diagnostic messages — pass an arbitrary marker
+/// (`"<inline>"`, `"test"`, ...) when the source isn't a real file. Carved
+/// out of `load()` so `bxp-fmt --config` can avoid double-reading the
+/// file (it already has the raw bytes for `preprocessAnnotated`) and so
+/// inline tests can exercise the loader without touching disk.
+///
+/// `diag` is an optional structured diagnostic sink. When non-null,
+/// future phases will append path-aware errors / warnings into it
+/// alongside the existing `std.debug.print` + `return error` behavior.
+/// bxp-cli passes null so its load path is unchanged bit by bit; only
+/// bxp-fmt's deep-validation pass passes a non-null sink today.
 pub fn loadFromBytes(
     alloc: std.mem.Allocator,
     raw: []const u8,
@@ -2368,7 +2420,10 @@ pub fn loadFromBytes(
     const content = try json5.preprocess(alloc, raw);
     defer alloc.free(content);
 
-    // Detect duplicate object keys before parsing — std.json silently uses last value.
+    // Detect duplicate object keys before parsing — std.json's parseFromSlice
+    // silently takes the *last* value for duplicate keys, which would let a
+    // user accidentally overwrite a setting without any feedback. We scan first
+    // with our own key-tracking scanner and fail early with a precise location.
     if (diagDuplicateKey(alloc, content, raw, config_path, diag)) {
         return error.InvalidConfig;
     }
@@ -2384,6 +2439,9 @@ pub fn loadFromBytes(
 
     // "ticker_maps": named, reusable ticker maps referenced by templates via string key.
     // Values are kept as raw JSON objects; entries are duped into each referencing template.
+    // We hold a reference to the parsed JSON tree's ObjectMap directly (no alloc per entry)
+    // because the `parsed` value is deferred-deinitialized at the end of this function —
+    // the map entries live long enough for the per-template duplication below.
     var named_ticker_maps = std.StringHashMap(std.json.ObjectMap).init(alloc);
     defer named_ticker_maps.deinit();
     if (root.object.get("ticker_maps")) |tm_root| {
@@ -2431,9 +2489,11 @@ pub fn loadFromBytes(
 
                     if (bobj.get("data_dir")) |v| {
                         if (v == .string) {
-                            // Allocate before freeing the old default — if join
-                            // OOMs, the errdefer above must still see a valid
-                            // pointer in `data_dir`.
+                            // Resolve data_dir relative to the config file's directory so that
+                            // a config in /home/user/bxp-cli.json with data_dir: "revolut" resolves
+                            // to /home/user/revolut regardless of the process's cwd. Allocate
+                            // the joined path BEFORE freeing the old default — if join OOMs,
+                            // the errdefer above must still see a valid pointer in `data_dir`.
                             const cfg_dir = std.fs.path.dirname(config_path) orelse ".";
                             const new_data_dir = try std.fs.path.join(alloc, &.{ cfg_dir, v.string });
                             alloc.free(data_dir);
@@ -2627,6 +2687,12 @@ pub fn loadFromBytes(
                     }
 
                     // row_rules: ordered list of conditional routing rules.
+                    // Non-object array elements (null, number, etc.) are silently skipped
+                    // rather than failing hard — they're almost certainly JSON5 trailing
+                    // commas that the preprocessor already stripped, or accidental blank
+                    // entries. Missing `when` is treated as empty string ("") so that
+                    // BrokerConfig.validate() can produce a helpful error message with
+                    // the rule index instead of failing here with a generic parse error.
                     if (bobj.get("row_rules")) |rr_val| {
                         if (rr_val == .array) {
                             var rr_list = std.array_list.Managed(RowRule).init(alloc);
@@ -2661,6 +2727,10 @@ pub fn loadFromBytes(
                                     .rows = try rows_list.toOwnedSlice(),
                                 });
                             }
+                            // Treat an empty `row_rules: []` as "not present" (null) so
+                            // that BrokerConfig.validate()'s row_rules_debug_missing check
+                            // can produce a clear error. An empty slice would otherwise
+                            // pass the null-check and quietly do nothing at runtime.
                             if (rr_list.items.len > 0) {
                                 row_rules = try rr_list.toOwnedSlice();
                             } else {
@@ -2696,6 +2766,10 @@ pub fn loadFromBytes(
                     //   New named blocks — `pre_pass: { name1: { when, key, values }, ... }`.
                     //     Each child is parsed as its own block; names are validated to be
                     //     non-empty and free of NUL bytes (the composite-key delimiter).
+                    //
+                    // NUL-byte validation is essential because lookup keys are composite
+                    // strings "name\x00key\x00field". A NUL in the block name would make
+                    // it impossible to distinguish where the name ends and the key begins.
                     if (bobj.get("pre_pass")) |pp_val| {
                         if (pp_val == .object) {
                             const ppobj = pp_val.object;

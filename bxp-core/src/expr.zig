@@ -68,6 +68,12 @@ pub const Value = union(enum) {
     pub fn toNumber(self: Value) !f80 {
         return switch (self) {
             .number => |n| n,
+            // Empty string is treated as zero so that optional/missing CSV
+            // fields don't cause arithmetic failures — callers can gate with
+            // COALESCE or IF if they need to distinguish "no value" from 0.
+            // American thousands-separated numbers ("1,234.56") are tried
+            // after the standard parseFloat fails, so they don't pay the
+            // parseAmericanNumber overhead when the input is a plain decimal.
             .string => |s| if (s.len == 0) 0 else
                 std.fmt.parseFloat(f80, s) catch
                 parseAmericanNumber(s) catch
@@ -80,6 +86,9 @@ pub const Value = union(enum) {
         return switch (self) {
             .boolean => |b| b,
             .number => |n| n != 0,
+            // A non-empty string — even "0" or "false" — is truthy.
+            // This matches typical template logic where field absence (empty
+            // string) is the only falsy state for string-typed data.
             .string => |s| s.len > 0,
         };
     }
@@ -264,6 +273,9 @@ const Tokenizer = struct {
         return .{ .src = src, .pos = 0 };
     }
 
+    // Only spaces are stripped — tabs/newlines are not valid in bxp
+    // expression strings (they are single-line JSON5 string values),
+    // so treating them as unexpected characters gives better errors.
     fn skipWs(self: *Tokenizer) void {
         while (self.pos < self.src.len and self.src[self.pos] == ' ')
             self.pos += 1;
@@ -297,6 +309,10 @@ const Tokenizer = struct {
         // String literal 'text'
         // Special case: triple single-quote ''' is a placeholder for the output
         // quote character defined by csv_text_quote_out ("none"/"single"/"double").
+        // The triple-quote check must come BEFORE the generic single-quote path
+        // so that ''' is never consumed as an empty string '' followed by a lone '.
+        // Unclosed strings (no closing ') consume to end of source and return
+        // whatever was scanned — the parser will fail at the next expected token.
         if (c == '\'') {
             self.pos += 1;
             if (self.pos + 1 < self.src.len and
@@ -324,7 +340,12 @@ const Tokenizer = struct {
             return self.mkTok(.field_ref, text, tok_start);
         }
 
-        // Number literal
+        // Number literal — leading '-' is absorbed here only when immediately
+        // followed by a digit, so it's always a negative literal rather than
+        // a subtraction operator. "-3.14" tokenizes as one number_lit; "x - 3"
+        // produces ident, minus, number_lit. This heuristic is unambiguous
+        // because expressions can't produce a result that serves as the left
+        // operand of a prefix '-' (the left side is already parenthesized).
         if (std.ascii.isDigit(c) or (c == '-' and self.pos + 1 < self.src.len and std.ascii.isDigit(self.src[self.pos + 1]))) {
             if (c == '-') self.pos += 1;
             while (self.pos < self.src.len and (std.ascii.isDigit(self.src[self.pos]) or self.src[self.pos] == '.'))
@@ -386,6 +407,12 @@ const Tokenizer = struct {
         };
     }
 
+    // Peek does NOT restore `last_offset`/`last_len` — only `pos`.
+    // Callers that call peek() followed by next() to confirm the token
+    // will see `last_offset`/`last_len` updated twice (once for the
+    // peek, once for the confirming next()). Both cover the same token,
+    // so the net result is correct. The Parser's `setDetail` always runs
+    // AFTER a confirming `next()`, so the span it picks up is accurate.
     fn peek(self: *Tokenizer) !Token {
         const saved = self.pos;
         const tok = try self.next();
@@ -843,6 +870,10 @@ const Parser = struct {
     }
 
     // cmp_expr := add_expr (op add_expr)?
+    // Comparisons are NOT chained: `a < b < c` parses as `(a < b) < c` which
+    // will usually fail with StringComparisonUnsupported (booleans don't
+    // convert to numbers for < / > / <= / >=). Use AND for range checks:
+    // `a > 0 AND a < 100`.
     fn parseCmp(self: *Parser) anyerror!Value {
         const left = try self.parseAdd();
         const t = try self.tok.peek();
@@ -852,7 +883,11 @@ const Parser = struct {
         _ = try self.tok.next();
         const right = try self.parseAdd();
 
-        // Try numeric comparison first, fall back to string comparison.
+        // Try numeric comparison first; fall back to string equality.
+        // When either operand fails toNumber(), both are stringified.
+        // Ordering operators (< > <= >=) don't support string operands —
+        // returning error.StringComparisonUnsupported is intentional
+        // so users see a clear error instead of silently wrong output.
         const ln = left.toNumber() catch null;
         const rn = right.toNumber() catch null;
         if (ln != null and rn != null) {
@@ -930,7 +965,12 @@ const Parser = struct {
                 return err;
             };
             if (t.kind == .slash) {
-                // Division by zero silently produces an empty string (no warning, no summary entry).
+                // Division by zero silently produces an empty string rather than
+                // crashing or surfacing an error. Many broker CSV files contain
+                // rows where the divisor field is blank (e.g. unit price on a
+                // cash deposit), and a crash or error message per row would be
+                // far more disruptive than a blank output cell. Users who need
+                // to detect zero-division can guard with IF([qty] != 0, ..., '').
                 if (r == 0) {
                     left = Value{ .string = "" };
                 } else {
@@ -1009,8 +1049,16 @@ const Parser = struct {
         else |_|
             self.ctx.fieldByName(name);
 
+        // Record the field name so setNotANumber can include it in error
+        // detail — "[Price]" in the message is far more actionable than
+        // a bare "not a number: '1.234,56'" when decimal_sep_in is wrong.
         self.last_field_name = name;
 
+        // Decimal separator normalisation: convert "1234,56" → "1234.56" before
+        // returning so that downstream toNumber() calls work without needing to
+        // know the separator. Only allocate a copy when the field actually
+        // contains the alternate separator AND looks numeric — avoids spurious
+        // allocations for strings like "N/A" that happen to contain a comma.
         if (self.ctx.decimal_sep_in != '.' and
             std.mem.indexOfScalar(u8, raw, self.ctx.decimal_sep_in) != null and
             isNumericWithSep(raw, self.ctx.decimal_sep_in))
@@ -1093,6 +1141,11 @@ const Parser = struct {
         }
 
         // Parse argument list (eagerly) for all other functions.
+        // Args are held in an arena-backed list; the individual Value.string
+        // slices may point into ctx.fields (no alloc) or into ctx.alloc-owned
+        // strings (concat, date-format results, etc.). The list itself is freed
+        // after the impl call; the strings it holds are either static or arena-
+        // owned and will outlive the call frame.
         var args = std.array_list.Managed(Value).init(self.ctx.alloc);
         defer args.deinit();
 
@@ -1232,6 +1285,11 @@ const if_doc: FnDoc = .{
 /// Parses a number in American thousands-separated format: "1,234.56", "-1,234,567", "1,000".
 /// Requires at least one thousands group (,ddd) — plain "123" is rejected (handled by parseFloat).
 /// Returns error.NotANumber if the string does not match the pattern.
+///
+/// The strict structural validation (1–3 leading digits, exactly 3 digits per
+/// group, no trailing non-numeric characters) is intentional. It prevents
+/// false positives on strings like "2025,06,01" (date components) or European
+/// decimal notation ("1.234,56" after decimal normalisation).
 fn parseAmericanNumber(s: []const u8) error{NotANumber}!f80 {
     var i: usize = 0;
     if (i < s.len and s[i] == '-') i += 1;
@@ -1261,7 +1319,10 @@ fn parseAmericanNumber(s: []const u8) error{NotANumber}!f80 {
         while (i < s.len and std.ascii.isDigit(s[i])) i += 1;
     }
     if (i != s.len) return error.NotANumber;
-    // Strip commas into a stack buffer and parse
+    // Strip commas into a stack buffer and re-parse with the standard
+    // parseFloat. The 32-byte buffer is generous — the longest valid input
+    // is "−" + 3 + 11×",ddd" = 46 chars, but 32 covers all values that
+    // fit in an f80 anyway (f80 max ≈ 1.18×10^4932, far beyond 3+11*4 digits).
     var buf: [32]u8 = undefined;
     var bi: usize = 0;
     for (s) |c| {
@@ -1347,6 +1408,9 @@ const price_value_doc: FnDoc = .{
 /// PRICE_VALUE("$88744.27") → "88744.27"
 /// PRICE_VALUE("€24.00") → "24.00"
 /// PRICE_VALUE("24.00 CZK") → "24.00"
+/// The trailing-space split handles "amount ISO" format (e.g. "24.00 CZK"):
+/// everything after the first space is dropped, returning just the numeric
+/// part. If no space is present, the whole trimmed string is returned.
 fn builtinPriceValue(args: []Value) !Value {
     if (args.len != 1) return error.WrongArgCount;
     const s = switch (args[0]) {
@@ -1374,6 +1438,11 @@ const price_currency_doc: FnDoc = .{
 /// PRICE_CURRENCY("$88744.27") → "USD"
 /// PRICE_CURRENCY("€24.00") → "EUR"
 /// PRICE_CURRENCY("24.00 CZK") → "CZK"
+/// For the symbol-prefix case the ISO code is hard-coded in stripCurrencySymbol.
+/// For the "amount ISO" trailing format the code is everything after the first
+/// space. If neither form is matched the field contains no identifiable currency
+/// symbol and the function returns "". Callers should use COALESCE or IF to
+/// supply a fallback when the format may be ambiguous.
 fn builtinPriceCurrency(args: []Value) !Value {
     if (args.len != 1) return error.WrongArgCount;
     const s = switch (args[0]) {
@@ -1769,6 +1838,10 @@ const coalesce_doc: FnDoc = .{
 /// counts as empty). Numbers and booleans are never empty — even 0 and false
 /// are returned. If every argument is empty, the last argument is returned
 /// verbatim so callers can supply a default: COALESCE(@a, @b, "0").
+///
+/// The loop intentionally excludes the last argument so it's always returned
+/// as-is — this guarantees that COALESCE(x, '') returns '' instead of the
+/// first non-empty, which matches the "last arg is the fallback" contract.
 fn builtinCoalesce(args: []Value) !Value {
     if (args.len == 0) return error.WrongArgCount;
     for (args[0 .. args.len - 1]) |v| {
@@ -1820,11 +1893,18 @@ fn builtinDateConvert(args: []Value, alloc: std.mem.Allocator) !Value {
         .string => |v| v,
         else => return error.StringExpected,
     };
+    // Pre-process 4-character month abbreviations (e.g. "Sept", "June") into
+    // the 3-character form that sunrise expects. Allocation happens only when
+    // the input actually contains a matching word — the common case (no MMM
+    // token in from_fmt) skips the work entirely.
     const normalized = if (containsMMM(from_fmt))
         try normalizeMonthAbbrev(input, alloc)
     else
         input;
     // Parse failures silently produce an empty string (no warning, no summary entry).
+    // Rationale: broker files frequently contain rows where a date field is blank
+    // (e.g. a cash row that has no settlement date). A silent "" is preferable to
+    // an error that aborts processing of every subsequent row in the file.
     const dt = sunrise.DateTime.parse(normalized, .{ .format = from_fmt }) catch {
         return Value{ .string = "" };
     };
@@ -1841,6 +1921,10 @@ fn adaptDateConvert(p: *Parser, args: []Value) anyerror!Value {
 }
 
 /// Returns true if fmt contains the MMM token (exactly 3 M's, not part of MMMM).
+/// MMMM is the full month-name token and does NOT trigger month-abbreviation
+/// normalisation — it expects the full name ("September") and sunrise handles it
+/// natively. Only MMM (abbreviated: "Sep") needs our pre-processing step because
+/// some brokers export 4-letter variants that sunrise doesn't recognise.
 fn containsMMM(fmt: []const u8) bool {
     var i: usize = 0;
     while (i + 3 <= fmt.len) {
@@ -1941,6 +2025,11 @@ pub fn eval(src: []const u8, ctx: *const Context) !Value {
 /// Evaluates src and returns the result as a string allocated with ctx.alloc.
 /// Numeric strings are normalized: non-integers get up to 8 decimal places
 /// with trailing zeros trimmed; integer-valued floats have no decimal point.
+///
+/// The re-parse + re-format step after toString() is what produces the
+/// "99.00" → "99" normalisation documented in the project notes. It only
+/// fires when the string looks like a valid float — non-numeric strings
+/// (e.g. "BUY") pass through unchanged.
 pub fn evalString(src: []const u8, ctx: *const Context) ![]const u8 {
     const v = try eval(src, ctx);
     const s = try v.toString(ctx.alloc);

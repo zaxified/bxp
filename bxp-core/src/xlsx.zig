@@ -47,6 +47,9 @@ pub fn xlsxToCsv(
     // Create a temporary directory next to the output files. The name is
     // derived from `out_basename` alone — safe because bxp-cli runs templates
     // serially, so two concurrent calls with the same basename can't collide.
+    // The leading dot makes the directory invisible to file_pattern_in globs
+    // that use "." as their data_dir, preventing the converter from trying to
+    // parse its own partially-written temporary XML files.
     const tmp_name = try std.fmt.allocPrint(alloc, ".{s}.xlstmp", .{out_basename});
     defer alloc.free(tmp_name);
 
@@ -59,7 +62,9 @@ pub fn xlsxToCsv(
         out_dir.deleteTree(tmp_name) catch {}; // best-effort cleanup — ignore errors
     }
 
-    // Extract the xlsx (which is a ZIP) to tmp_dir.
+    // Extract the xlsx (which is a ZIP) to tmp_dir. allow_backslashes is
+    // required because some Excel generators produce ZIP entries with
+    // Windows-style paths (xl\worksheets\sheet1.xml).
     var zip_buf: [ZIP_READ_BUF_SIZE]u8 = undefined;
     var zip_reader = xlsx_file.reader(&zip_buf);
     std.zip.extract(tmp_dir, &zip_reader, .{ .allow_backslashes = true }) catch |err| {
@@ -161,6 +166,11 @@ fn fixZipLocalVersionNeeded(
     // Scan for local file header signatures (PK\x03\x04) and patch
     // version_needed (u16 LE at offset +4) to match the compression method
     // (u16 LE at offset +8): 0=Store→10, 8=Deflate→20.
+    //
+    // We iterate byte-by-byte rather than using a known stride because the
+    // local file header length is variable (filename + extra field). A stride
+    // loop would require parsing the header fully; the linear scan is simpler
+    // and fast enough for files up to XLSX_MAX_FILE_SIZE.
     const local_sig = [4]u8{ 0x50, 0x4b, 0x03, 0x04 };
     var i: usize = 0;
     while (i + 30 <= data.len) : (i += 1) {
@@ -188,6 +198,12 @@ fn fixZipLocalVersionNeeded(
 /// Caller owns map and its key/value strings; use the deinit pattern below:
 ///   var it = map.iterator(); while (it.next()) |e| { free key, free value }
 ///   map.deinit();
+///
+/// The workbook XML and relationships file are parsed separately because the
+/// name→rId mapping and the rId→path mapping live in different XML files:
+///   xl/workbook.xml            → sheet name and relationship ID (r:id)
+///   xl/_rels/workbook.xml.rels → relationship ID and target worksheet path
+/// Two-phase join is required to get name→path.
 fn parseWorkbook(alloc: Allocator, tmp_dir: std.fs.Dir) !std.StringHashMap([]const u8) {
     // Use an arena for the intermediate name→rId and rId→path maps so that we
     // don't have to individually free every entry on the happy path.
@@ -257,6 +273,12 @@ fn parseWorkbook(alloc: Allocator, tmp_dir: std.fs.Dir) !std.StringHashMap([]con
 // ---------------------------------------------------------------------------
 
 /// Returns an ArrayList of owned strings, one per <si> element (index = cell value index).
+///
+/// An <si> (shared string item) can contain multiple <t> (text run) children,
+/// for example when parts of the string have different formatting. We
+/// concatenate all <t> runs into a single string per <si> because bxp-cli
+/// only cares about the plain text content, not the per-run formatting.
+/// The result is indexed by the integer value stored in the 's' cell attribute.
 fn parseSharedStrings(alloc: Allocator, tmp_dir: std.fs.Dir) !std.ArrayList([]u8) {
     var strings: std.ArrayList([]u8) = .empty;
 
@@ -311,6 +333,9 @@ fn parseDateStyles(alloc: Allocator, tmp_dir: std.fs.Dir) !std.AutoHashMap(u32, 
     defer alloc.free(xml);
 
     // First pass: collect custom numFmtIds that represent date/time formats.
+    // Excel defines built-in numFmtIds 14–22 and 45–47 as date/time; any id
+    // ≥ 164 is user-defined. We examine the formatCode string to decide
+    // whether a custom format is a date (contains d/y/h/m outside quoted runs).
     var custom_date_fmts = std.AutoHashMap(u32, void).init(alloc);
     defer custom_date_fmts.deinit();
     {
@@ -330,6 +355,9 @@ fn parseDateStyles(alloc: Allocator, tmp_dir: std.fs.Dir) !std.AutoHashMap(u32, 
     }
 
     // Second pass: find cellXfs entries and record which ones have date numFmtIds.
+    // cellXfs is an ordered list of cell format records; the 0-based index into
+    // this list is the value stored in the 's' attribute of each <c> cell element.
+    // We build a set of indices so that resolveCellValue can do an O(1) lookup.
     {
         var tok = XmlTok.init(xml);
         var in_cell_xfs = false;
@@ -366,12 +394,20 @@ fn parseDateStyles(alloc: Allocator, tmp_dir: std.fs.Dir) !std.AutoHashMap(u32, 
 
 /// Returns true if numFmtId is a built-in Excel date/time format.
 /// Built-in date format IDs: 14–22 (date/time variants) and 45–47 (time variants).
+/// IDs 0–13 are non-date built-ins (general, number, currency, etc.).
+/// IDs ≥ 164 are user-defined and tested separately via isDateFormatCode.
 fn isBuiltinDateFmt(id: u32) bool {
     return (id >= 14 and id <= 22) or (id >= 45 and id <= 47);
 }
 
 /// Returns true if the Excel format code describes a date or time value.
 /// Scans for d/y/h/m tokens outside quoted strings and bracket expressions.
+///
+/// Excel format codes use square brackets for locale or elapsed-time markers
+/// (e.g. [h] for elapsed hours, [$USD-409] for a currency locale). These must
+/// be skipped so that the 'h' in [h] doesn't trigger a false positive.
+/// Quoted substrings (both " and ' delimited) are also skipped because they
+/// contain literal text, not format tokens.
 fn isDateFormatCode(code: []const u8) bool {
     if (std.ascii.eqlIgnoreCase(code, "general")) return false;
     var i: usize = 0;
@@ -389,6 +425,7 @@ fn isDateFormatCode(code: []const u8) bool {
                 str_char = c;
             },
             '[' => {
+                // Skip bracket expression (locale, elapsed-time marker, etc.)
                 while (i < code.len and code[i] != ']') i += 1;
             },
             'd', 'D', 'y', 'Y', 'h', 'H', 'm', 'M' => return true,
@@ -428,6 +465,12 @@ fn parseSheet(
     var cell_val_buf: std.ArrayList(u8) = .empty;
     defer cell_val_buf.deinit(alloc);
 
+    // col_count and skip_cols are derived from the header row and then held
+    // constant for all subsequent data rows, ensuring every output row has
+    // the same number of columns regardless of how many cells Excel wrote.
+    // skip_cols handles workbooks where column A is intentionally left blank
+    // as a visual margin — the blank leading columns are stripped from both
+    // the header row and every data row so the CSV aligns correctly.
     var col_count: u32 = 0; // set from header row; used to pad/truncate data rows
     var skip_cols: u32 = 0; // leading empty columns stripped from header (e.g. xlsx column A)
     var current_row: u32 = 0;
@@ -491,6 +534,12 @@ fn parseSheet(
                             date_styles,
                         );
                         // Ensure the row_cells slice is large enough, padding with "".
+                        // Excel only emits <c> elements for non-empty cells, so sparse
+                        // rows need explicit gap-filling. We always alloc.free the
+                        // existing slot before storing the resolved value — the slot
+                        // may hold a padding "" that was allocated above, or a value
+                        // from a previous iteration if two cells share the same column
+                        // index (which shouldn't happen in valid xlsx, but is harmless).
                         while (row_cells.items.len <= cell_col) {
                             try row_cells.append(alloc, try alloc.dupe(u8, ""));
                         }
@@ -530,6 +579,15 @@ fn parseSheet(
 /// - Converts scientific notation to decimal when the value is a whole number:
 ///   "2.087960758E9" → "2087960758".
 /// - Leaves other forms unchanged.
+///
+/// Excel stores numeric values at full f64 precision in the XML (e.g. ISIN
+/// quantity "1000" may appear as "1000.0" or share counts as "2.087960758E9").
+/// Downstream bxp-cli expressions expect clean integers or minimal decimals,
+/// so normalization here prevents noise in rule comparisons and output values.
+///
+/// The 1e15 guard on scientific notation prevents precision loss: f64 has
+/// ~15–16 significant decimal digits, so integers beyond 1e15 cannot round-
+/// trip exactly through @intFromFloat and should be left in their raw form.
 fn normalizeNumber(alloc: Allocator, raw: []const u8) ![]u8 {
     // Scientific notation — parse and reformat as integer if the value is whole.
     if (std.mem.indexOfAny(u8, raw, "Ee")) |_| {
@@ -634,6 +692,13 @@ fn writeCsvField(out: *std.Io.Writer, value: []const u8) !void {
 // ---------------------------------------------------------------------------
 
 /// Converts a cell reference like "A1" or "BC23" to a 0-based column index.
+///
+/// Excel column letters use a bijective base-26 encoding: A=1, Z=26, AA=27.
+/// This differs from ordinary base-26 in that there is no zero digit — "A" is
+/// 1, not 0. The loop accumulates the 1-based column number and the final
+/// `col - 1` converts to 0-based for use as a slice index.
+/// The numeric row part of the reference (e.g. "23" in "BC23") is skipped
+/// because isAlphabetic returns false at the first digit character.
 fn colRefToIndex(ref: []const u8) u32 {
     var col: u32 = 0;
     for (ref) |c| {
@@ -650,7 +715,14 @@ fn colRefToIndex(ref: []const u8) u32 {
 /// Converts an Excel serial number to a "YYYY-MM-DD HH:MM:SS" string.
 ///
 /// Excel epoch: December 30, 1899 (accounting for the Lotus 1-2-3 1900 leap
-/// year bug).  Serial 25569 equals the Unix epoch 1970-01-01 00:00:00.
+/// year bug — Lotus incorrectly treated 1900 as a leap year, so Excel's epoch
+/// is shifted one day earlier than a naive Jan 1 1900 origin would produce).
+/// Serial 25569 equals the Unix epoch 1970-01-01 00:00:00.
+///
+/// The fractional part of the serial encodes time: 0.5 = noon, 0.75 = 18:00.
+/// We split floor(serial) for the date and (serial - floor) for the time so
+/// that floating-point rounding of large serials doesn't bleed into the time
+/// component.
 fn excelSerialToDatetime(serial: f64, buf: *[19]u8) []u8 {
     const EXCEL_UNIX_EPOCH: f64 = 25569.0;
     const unix_days: i64 = @intFromFloat(@floor(serial - EXCEL_UNIX_EPOCH));
@@ -673,6 +745,17 @@ const YMD = struct { y: i32, m: u8, d: u8 };
 /// Converts a Unix day count (days since 1970-01-01) to a Y/M/D triple.
 /// Uses Howard Hinnant's civil-from-days algorithm.
 /// Reference: https://howardhinnant.github.io/date_algorithms.html
+///
+/// The algorithm works in 400-year "eras" to avoid per-year leap-year
+/// conditional chains. Key invariants:
+///   z   = days since the proleptic Gregorian epoch Mar 1, 0000
+///   era = 400-year era number
+///   doe = day-of-era (0..146096 inclusive)
+///   yoe = year-of-era (0..399 inclusive)
+///   doy = day-of-year starting from March 1 (0..365)
+///   mp  = month position within the March-based year (0=Mar, 1=Apr, ..., 11=Feb)
+/// The month and year adjustment at the end converts from the March-1 base
+/// back to January-1 so that January and February belong to the correct year.
 fn unixDayToYMD(day: i64) YMD {
     const z: i64 = day + 719468;
     const era: i64 = @divFloor(if (z >= 0) z else z - 146096, 146097);
@@ -704,6 +787,15 @@ const XmlToken = union(enum) {
     text: []const u8,
 };
 
+/// Pull tokenizer for the xlsx XML files. Designed for single-forward-pass
+/// streaming: the caller calls `next()` in a loop until it returns null.
+///
+/// This tokenizer is intentionally minimal — it does not validate XML,
+/// does not handle CDATA sections, does not resolve XML entities (that
+/// is done separately by decodeEntities), and does not build a DOM tree.
+/// It exists solely to extract the attribute values and text content that
+/// the xlsx conversion needs, keeping code size small and avoiding any
+/// third-party XML library dependency.
 const XmlTok = struct {
     src: []const u8,
     pos: usize,
@@ -821,6 +913,12 @@ fn isWs(c: u8) bool {
 /// Returns a slice into attrs_raw (no allocation) or null if not found.
 /// Handles namespaced attributes: searching for "id" also matches "r:id",
 /// "x:id", etc.  Searching for "r:id" only matches "r:id" exactly.
+///
+/// The namespace-agnostic matching lets callers ask for "id" and get the
+/// value regardless of which XML namespace prefix (r:, x:, etc.) the
+/// generator used. The workbook.xml sheet element uses "r:id" while the
+/// relationships file uses plain "Id" — both resolve to the same rId value
+/// through this logic.
 fn getAttr(attrs_raw: []const u8, name: []const u8) ?[]const u8 {
     var pos: usize = 0;
     while (pos < attrs_raw.len) {
@@ -833,6 +931,8 @@ fn getAttr(attrs_raw: []const u8, name: []const u8) ?[]const u8 {
         if (pos >= attrs_raw.len) break;
 
         const q = attrs_raw[pos];
+        // Attributes without quotes (technically invalid XML but tolerated) are
+        // skipped rather than attempted to parse, avoiding misaligned reads.
         if (q != '"' and q != '\'') {
             while (pos < attrs_raw.len and !isWs(attrs_raw[pos])) pos += 1;
             continue;
@@ -865,6 +965,15 @@ fn stripNs(name: []const u8) []const u8 {
 // ---------------------------------------------------------------------------
 
 /// Decodes XML character and entity references in src, appending to out.
+///
+/// Handles the five predefined XML entities (&amp; &lt; &gt; &quot; &apos;)
+/// and numeric character references in both decimal (&#N;) and hexadecimal
+/// (&#xN;) forms. Unknown named entities are passed through unchanged so that
+/// cell text is preserved even when the workbook uses vendor-specific entities.
+/// An unterminated '&' (no ';' found) is treated as a literal ampersand.
+/// Invalid Unicode code points in &#N; fall back to the replacement character
+/// U+FFFD rather than returning an error, matching browser-like lenient
+/// decoding behavior.
 fn decodeEntities(src: []const u8, out: *std.ArrayList(u8), alloc: Allocator) !void {
     var i: usize = 0;
     while (i < src.len) {
@@ -874,6 +983,7 @@ fn decodeEntities(src: []const u8, out: *std.ArrayList(u8), alloc: Allocator) !v
             continue;
         }
         const semi = std.mem.indexOfScalarPos(u8, src, i + 1, ';') orelse {
+            // No closing ';' — treat '&' as literal and advance past it.
             try out.append(alloc, src[i]);
             i += 1;
             continue;
@@ -891,6 +1001,7 @@ fn decodeEntities(src: []const u8, out: *std.ArrayList(u8), alloc: Allocator) !v
         } else if (std.mem.eql(u8, entity, "apos")) {
             try out.append(alloc, '\'');
         } else if (entity.len > 1 and entity[0] == '#') {
+            // Numeric character reference: &#N; (decimal) or &#xN; (hex).
             const cp: u21 = if (entity.len > 2 and entity[1] == 'x')
                 std.fmt.parseInt(u21, entity[2..], 16) catch 0xFFFD
             else

@@ -33,6 +33,21 @@ enum RunStatus { idle, running, done, error }
 /// ExprPanel/Playground ValidationState union.
 enum ExprValidationState { idle, pending, ok, error }
 
+/// Central application state — the single `ChangeNotifier` that drives every
+/// pane in bxp-gui. Backed by a Provider registered in `main.dart`.
+///
+/// Responsibilities:
+///   - Config loading/saving via `AstLoader` + `AstPatchClient` + `BxpProcessClient`
+///   - Undo/redo history via AST snapshots
+///   - Validation: bxp-fmt `$err_*` buckets + native Dart-side `_revalidateDart`
+///   - Expression editor state (selection, validation lifecycle, autocomplete gating)
+///   - Streaming dry-run / full-run orchestration with live row-count updates
+///   - User preferences (theme, zoom, MRU list) via `PrefsService`
+///   - Schema docs cache from `bxp-fmt --docs`
+///
+/// Streaming invariant: NEVER call `notifyListeners()` per trace line — use
+/// `_traceLinesCounter` and `_fileGen` ValueNotifiers to update live counters
+/// without triggering the full PlutoGrid rebuild chain on every event.
 class TraceStore extends ChangeNotifier {
   // Set in dispose(); guards every async-tail notifyListeners against
   // setState-after-dispose when the store outlives a fast tear-down
@@ -1102,12 +1117,17 @@ class TraceStore extends ChangeNotifier {
     }
   }
 
+  /// Update [configPath] and notify listeners. Triggers no I/O on its own;
+  /// callers follow up with [loadConfig] once the path is ready.
   void setConfigPath(String path) {
     devTrace('action.config.setPath', {'path': path});
     configPath = path;
     notifyListeners();
   }
 
+  /// Set the active template filter. An empty string means "all templates"
+  /// — bxp-cli will process every template declared in the config when
+  /// `--template` is omitted.
   void setTemplateId(String id) {
     devTrace('action.template.set', {'id': id});
     templateId = id;
@@ -2157,6 +2177,10 @@ class TraceStore extends ChangeNotifier {
   static const int _validateToastMs = 8000;
   Timer? _validateToastTimer;
 
+  /// Build the validate toast summary string from the current diagnostic
+  /// bucket sizes and schedule its auto-clear after [_validateToastMs].
+  /// Counts both bxp-fmt and Dart-side buckets so the summary reflects all
+  /// active diagnostics, not just what the most recent VALIDATE run found.
   void _setValidateToast() {
     final errs = _validationErrors.length + _dartErrors.length;
     final warns = _validationWarnings.length + _dartWarnings.length;
@@ -2170,6 +2194,8 @@ class TraceStore extends ChangeNotifier {
       if (infos > 0) parts.add('$infos info');
       _validateToast = 'Validate: ${parts.join(', ')}';
     }
+    // Cancel any pending timer before starting a new one — avoids a double-
+    // clear if the user clicks VALIDATE twice in quick succession.
     _validateToastTimer?.cancel();
     _validateToastTimer = Timer(const Duration(milliseconds: _validateToastMs), () {
       if (_disposed) return;
@@ -2178,6 +2204,9 @@ class TraceStore extends ChangeNotifier {
     });
   }
 
+  /// Dismiss the validate toast before the auto-clear timer fires.
+  /// Called by the toolbar on any user action that invalidates the toast
+  /// (e.g. a new edit or run start) so it doesn't linger misleadingly.
   void clearValidateToast() {
     _validateToastTimer?.cancel();
     if (_validateToast != null) {
@@ -2193,10 +2222,16 @@ class TraceStore extends ChangeNotifier {
         '${two(t.hour)}${two(t.minute)}${two(t.second)}';
   }
 
+  /// Trigger a dry-run (no output files written, `--dry-run` flag passed to
+  /// bxp-cli). Idempotent — a second call while a run is in flight is a no-op
+  /// at the `_streamRun` level because it sets `status = running` first.
   Future<void> runDryRun() {
     devTrace('action.run.dry');
     return _streamRun(dry: true);
   }
+
+  /// Trigger a full run (output files written to `data_dir`). Same streaming
+  /// mechanics as [runDryRun] but without `--dry-run`.
   Future<void> runFullRun() {
     devTrace('action.run.full');
     return _streamRun(dry: false);
@@ -2238,6 +2273,9 @@ class TraceStore extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Select a file by its composite id. Automatically selects the first
+  /// row of the newly chosen file so RowDetail and OutputPanel are never
+  /// empty after a file-switch — mirrors bxp-ui's auto-select behaviour.
   void selectFile(String? id) {
     if (selectedFileId == id) return;
     devTrace('action.file.select', {'id': id});
@@ -2248,7 +2286,8 @@ class TraceStore extends ChangeNotifier {
     selectedRowId = file != null && file.rowIds.isNotEmpty ? file.rowIds.first : null;
     notifyListeners();
   }
-  
+
+  /// Select a row by its synthetic id (`r0`, `r1`, …). Null deselects.
   void selectRow(String? id) {
     if (selectedRowId == id) return;
     devTrace('action.row.select', {'id': id});

@@ -102,16 +102,27 @@ class InsertOp extends ConfigOp {
 }
 
 /// Append-only ledger of ops since load. Cleared on save.
+///
+/// The log is the source of truth for undo/redo in [TraceStore]:
+/// `_historyIndex` points to the op that would be undone next.
+/// After an undo the index steps back; after a redo it steps forward.
+/// On a new edit [truncate] is called at `_historyIndex` to discard any
+/// "future" ops that were re-doable, so redo history is pruned on branch.
 class OpLog {
   final List<ConfigOp> _ops = [];
+
+  /// Read-only view of the current op sequence; callers must not mutate it.
   List<ConfigOp> get ops => List.unmodifiable(_ops);
   bool get isEmpty => _ops.isEmpty;
   int get length => _ops.length;
 
+  /// Append [op] to the end of the log.
   void record(ConfigOp op) {
     _ops.add(op);
   }
 
+  /// Discard all ops. Called after a successful save so the next save
+  /// starts from a clean slate against the newly written bytes.
   void clear() {
     _ops.clear();
   }

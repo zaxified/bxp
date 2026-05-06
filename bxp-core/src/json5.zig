@@ -16,6 +16,9 @@ const std = @import("std");
 pub fn preprocess(alloc: std.mem.Allocator, input: []const u8) ![]u8 {
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(alloc);
+    // nest tracks the current container context ("{" or "[") per depth level.
+    // This is needed to set key_pos correctly after a comma: inside an object
+    // the next token is a key; inside an array it's a value.
     var nest: std.ArrayList(u8) = .empty; // '{' or '[' per nesting level
     defer nest.deinit(alloc);
     var key_pos = false; // true when next identifier is an object key
@@ -136,7 +139,10 @@ pub fn preprocess(alloc: std.mem.Allocator, input: []const u8) ![]u8 {
                         if (!std.ascii.isAlphanumeric(kc) and kc != '_' and kc != '$') break;
                         i += 1;
                     }
-                    // Peek ahead past whitespace to find ':'
+                    // Peek ahead past whitespace to find ':'. Only horizontal
+                    // whitespace here — a newline terminates the unquoted key
+                    // identifier in the simple preprocessor (annotated variant
+                    // handles newlines inside keys separately).
                     var j = i;
                     while (j < input.len and (input[j] == ' ' or input[j] == '\t')) : (j += 1) {}
                     if (j >= input.len or input[j] == ':') {
@@ -146,7 +152,11 @@ pub fn preprocess(alloc: std.mem.Allocator, input: []const u8) ![]u8 {
                         try out.append(alloc, '"');
                         key_pos = false;
                     } else {
-                        // Error recovery: junk before ':' (e.g. space inside unquoted key)
+                        // Error recovery: junk before ':' (e.g. space inside unquoted key).
+                        // We scan forward to find the colon, grab the raw value that follows,
+                        // and emit a synthetic $err_trace_N entry so the GUI can surface the
+                        // problem without crashing the JSON parser. The key+value pair is
+                        // consumed entirely so parsing continues from the next comma or '}'.
                         var colon = j;
                         while (colon < input.len and input[colon] != ':') : (colon += 1) {}
                         const raw_key = std.mem.trim(u8, input[key_start..colon], " \t\r\n");
@@ -154,6 +164,7 @@ pub fn preprocess(alloc: std.mem.Allocator, input: []const u8) ![]u8 {
                         while (vs < input.len and (input[vs] == ' ' or input[vs] == '\t')) : (vs += 1) {}
                         const val_end = skipValue(input, vs);
                         const raw_val_full = std.mem.trim(u8, input[vs..val_end], " \t\r\n");
+                        // Truncate to 30 chars so the error message stays compact in the GUI.
                         const raw_val = if (raw_val_full.len > 30) raw_val_full[0..30] else raw_val_full;
                         const err_line = lineOf(input, key_start);
                         const msg = try std.fmt.allocPrint(alloc, "{s}: '{s}' --> malformed key at line {d}", .{
@@ -181,6 +192,13 @@ pub fn preprocess(alloc: std.mem.Allocator, input: []const u8) ![]u8 {
 
 /// Scan backwards in `out` and remove the last comma if it is only followed
 /// by whitespace.  Called just before writing } or ].
+/// Scan backwards in `out` and remove the last comma if it is only followed
+/// by whitespace.  Called just before writing } or ].
+///
+/// Shrinking items.len directly (without a realloc) is intentional: the
+/// capacity stays allocated and will be reused for the closing bracket that
+/// follows immediately. The backing memory is not poisoned so this is safe
+/// with any allocator.
 fn removeTrailingComma(out: *std.ArrayList(u8)) void {
     var j = out.items.len;
     while (j > 0) {
@@ -204,6 +222,12 @@ fn lineOf(input: []const u8, pos: usize) usize {
 
 /// Skip one JSON5 value starting at `start`. Returns the index of the first
 /// delimiter character after the value (`,` `}` `]`) without consuming it.
+///
+/// Used only during error recovery: when a malformed key is detected we need
+/// to skip its associated value so that the remaining sibling keys can still
+/// be parsed. The function is intentionally lenient — it doesn't validate the
+/// value, just finds its end boundary. Nested objects/arrays are tracked via
+/// `depth` so that a comma inside `{a: {b: 1, c: 2}}` doesn't stop too early.
 fn skipValue(input: []const u8, start: usize) usize {
     var i = start;
     var depth: i32 = 0;
@@ -337,11 +361,19 @@ pub fn preprocessAnnotated(alloc: std.mem.Allocator, input: []const u8) !Annotat
     errdefer out.deinit(alloc);
     var nest: std.ArrayList(u8) = .empty;
     defer nest.deinit(alloc);
+    // pending_value_errs accumulates error strings discovered while emitting a
+    // value (unterminated strings, invalid bare literals). They cannot be
+    // flushed immediately because they must appear as sibling entries *after*
+    // the value they describe — the JSON key has already been emitted. They are
+    // flushed at the next ',' or '}' boundary. Errors inside arrays are dropped
+    // because inserting $err_* inside a JSON array would break its structure.
     var pending_value_errs: std.ArrayList([]u8) = .empty;
     defer {
         for (pending_value_errs.items) |m| alloc.free(m);
         pending_value_errs.deinit(alloc);
     }
+    // counter is the shared $err_<N> sequence. It is returned as next_id so
+    // bxp-fmt's outer annotation pass can continue numbering without collisions.
     var counter: u32 = 0;
     var key_pos = false;
     var i: usize = 0;
@@ -575,11 +607,15 @@ pub fn preprocessAnnotated(alloc: std.mem.Allocator, input: []const u8) !Annotat
                     }
                 } else if (!key_pos and std.ascii.isAlphabetic(c)) {
                     // Bare identifier in value position. Two cases:
-                    //   (a) followed by ':' inside an object → missing-comma
-                    //       recovery: emit synthetic ',' + $err_<N>, treat ident
-                    //       as the next key.
-                    //   (b) otherwise → invalid literal: wrap as a string, queue
-                    //       a value-error sibling. true/false/null pass through.
+                    //   (a) Followed by ':' inside an object → the comma between the
+                    //       previous entry and this one was omitted. Recovery: emit a
+                    //       synthetic $err_<N> describing the problem, then emit the
+                    //       identifier as the next key name so parsing continues.
+                    //   (b) Otherwise → invalid literal (not true/false/null). Wrap it
+                    //       as a string so the JSON stays valid, and queue a pending
+                    //       value error that will be emitted as a sibling $err_<N> at
+                    //       the next comma or closing brace. true/false/null are valid
+                    //       JSON keywords and pass through without an error.
                     const start = i;
                     var jp: usize = i;
                     while (jp < input.len) {
@@ -594,6 +630,8 @@ pub fn preprocessAnnotated(alloc: std.mem.Allocator, input: []const u8) !Annotat
                     const looks_like_key = p < input.len and input[p] == ':' and isInObject(nest.items);
 
                     if (looks_like_key) {
+                        // Case (a): flush any pending errors first so they are
+                        // associated with the previous value, then inject the separator.
                         try flushValueErrs(&out, alloc, &pending_value_errs, &counter);
                         if (needsLeadingComma(out.items)) try out.appendSlice(alloc, ", ");
                         const err_line = lineOf(input, start);
@@ -610,6 +648,7 @@ pub fn preprocessAnnotated(alloc: std.mem.Allocator, input: []const u8) !Annotat
                         i = jp;
                         key_pos = false;
                     } else {
+                        // Case (b): pass JSON keywords through; wrap anything else.
                         i = jp;
                         if (std.mem.eql(u8, ident, "true") or
                             std.mem.eql(u8, ident, "false") or
@@ -617,6 +656,8 @@ pub fn preprocessAnnotated(alloc: std.mem.Allocator, input: []const u8) !Annotat
                         {
                             try out.appendSlice(alloc, ident);
                         } else {
+                            // Wrap the bare word as a string so the output is valid JSON,
+                            // then queue an error to be emitted as a sibling entry.
                             try out.append(alloc, '"');
                             try out.appendSlice(alloc, ident);
                             try out.append(alloc, '"');

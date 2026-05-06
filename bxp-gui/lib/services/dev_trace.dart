@@ -13,6 +13,10 @@ import 'package:flutter/foundation.dart';
 /// Emit a structured trace event. `event` is the action name
 /// (e.g. 'loadConfig', 'op.move', 'saveConfig.fail'), `data` is an
 /// optional map of key/value details (paths, lengths, error messages).
+///
+/// Convention for `event` names: `<subsystem>.<verb>[.<outcome]`, e.g.
+/// `astPatch.start`, `astPatch.ok`, `astPatch.parseFail`.
+/// Uniform naming makes `grep '[bxp_gui] astPatch'` filtering effective.
 void devTrace(String event, [Map<String, Object?>? data]) {
   if (!kDebugMode) return;
   String payload;

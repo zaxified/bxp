@@ -13,6 +13,9 @@ const std = @import("std");
 pub fn splitFields(line: []const u8, buf: [][]const u8, delimiter: u8, quote: u8, alloc: std.mem.Allocator) ![][]const u8 {
     var count: usize = 0;
     var pos: usize = 0;
+    // Loop condition: pos <= line.len (one past end) lets the outer while
+    // reach the `if (pos == line.len) break` sentinel for the trailing-field
+    // case, avoiding a separate post-loop append.
     while (count < buf.len and pos <= line.len) {
         if (pos == line.len) break;
         if (quote != 0 and line[pos] == quote) {

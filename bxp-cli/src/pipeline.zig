@@ -11,9 +11,21 @@ const expr_mod = @import("expr");
 const xlsx_mod = @import("xlsx");
 const json_mod = @import("json");
 
+// 16 MB cap prevents runaway memory use on accidental binary input or very
+// wide broker exports. Real broker CSVs rarely exceed a few hundred KB.
 const MAX_FILE_SIZE_BYTES: usize = 16 * 1024 * 1024;
+// Broker exports typically have 10–30 columns; 64 is a generous ceiling that
+// still fits in a stack-allocated `hdr_buf`. Rows beyond this are truncated
+// with a warning — extra columns are always broker internals not referenced
+// by any expression in bxp-cli.json.
 const MAX_COLUMNS: usize = 64;
+// One 64 KB write buffer per output file. Kept in the per-file stack frame;
+// the OS then decides when to flush to disk. Smaller buffers cause noticeable
+// syscall overhead on files with thousands of short rows.
 const OUT_FILE_BUF_SIZE: usize = 65536;
+// Stack buffer for decimal-separator substitution in writeSafeValue.
+// Real numeric outputs are short ("123456789.12345678" = 18 chars); anything
+// longer is treated as non-numeric and passed through verbatim.
 const VAL_BUF_SIZE: usize = 64;
 /// Runtime key for the date variable in the merged vars map (JSON5 converts @date → $date).
 const VAR_DATE: []const u8 = "$date";
@@ -122,6 +134,11 @@ pub const Output = struct {
 /// AND component ranges (month 01–12, day 01–31). Rejects shapes like
 /// `2026-13-99` so a malformed filename does not silently flip the row
 /// filter into "min > max → drop everything" mode.
+///
+/// Note: day 31 is accepted for all months because tracking month lengths
+/// (including leap years) would add complexity with no practical benefit —
+/// broker filenames with day=32 or 99 are far more likely to be typos than
+/// genuine February-31 dates.
 fn isDate(s: []const u8) bool {
     if (s.len != 10) return false;
     if (s[4] != '-' or s[7] != '-') return false;
@@ -196,6 +213,10 @@ fn extractDateRange(stem: []const u8) DateRangeResult {
 /// warning should fire for the template. Conservative: accepts false
 /// positives on string literals containing "LOOKUP(" — the warning is
 /// corrective either way.
+///
+/// pre_pass.values expressions are intentionally excluded: they cannot
+/// contain LOOKUP() calls (the pre_pass evaluation context has no
+/// lookup_table pointer — self-referential pre_pass is undefined).
 fn configMentionsLookup(bc: *const config_mod.BrokerConfig) bool {
     var schema_it = bc.input_schema.valueIterator();
     while (schema_it.next()) |expr| {
@@ -297,6 +318,12 @@ fn writeSafeValue(out: *Writer, value: []const u8, delimiter_out: u8, decimal_se
     // Tab (`\t`) is also a known Excel/LibreOffice formula trigger when the
     // cell parser hits it on the leading edge — broker exports rarely emit
     // a tab-leading value but the prefix is cheap insurance.
+    //
+    // '-' is special: a leading minus is valid for negative numbers (e.g.
+    // "-12.34") and must NOT be prefixed — that would produce "'-12.34",
+    // which would then parse as a string in the portfolio tracker. Only
+    // prefix when '-' is followed by a non-digit (e.g. "-- comment"),
+    // which is an injection pattern, not a number.
     if (s.len > 0) {
         switch (s[0]) {
             '=', '+', '@', '\t' => try out.writeByte('\''),
@@ -587,7 +614,12 @@ pub fn processBroker(
     };
     defer dir.close();
 
-    // Collect matching .csv filenames first to avoid iterator/create conflicts.
+    // Collect all matching filenames into a sorted list before opening any
+    // output files. This avoids re-entrancy issues with the directory
+    // iterator (creating output files in the same directory while iterating
+    // is undefined on some platforms), and also gives us a deterministic
+    // processing order independent of the underlying filesystem's readdir
+    // ordering (which is inode-order on ext4, insertion-order on FAT, etc.).
     const csv_suffix: []const u8 = bc.file_pattern_in;
     var names = std.array_list.Managed([]u8).init(alloc);
     defer {
@@ -703,6 +735,10 @@ pub fn processBroker(
         var all_rows = std.array_list.Managed([][]const u8).init(file_alloc);
 
         if (bc.file_type_in == .json) {
+            // JSON array-of-objects path: readJsonRecords synthesizes a virtual
+            // header from the keys of the first object, then converts each
+            // subsequent object into a field-value array in the same column order.
+            // This allows input_schema to use [FieldName] the same way as CSV.
             try json_mod.readJsonRecords(file_alloc, content, &col_names, &all_rows);
             for (col_names.items, 0..) |name, idx| try col_index.put(name, idx);
         } else {
@@ -787,11 +823,21 @@ pub fn processBroker(
         });
 
         // Build pre_pass lookup table(s) if any are configured.
-        // Each named block iterates all rows, evaluates `when`, and stores values
-        // under composite keys "name\x00key\x00field_name" so different blocks
-        // share the table without colliding. LOOKUP() resolves the name either
-        // via its 3-arg form or via ctx.single_prepass_name when only one block
-        // is defined.
+        //
+        // Each named block does a full linear scan of all_rows (first pass).
+        // The composite key format is "name\x00key\x00field_name" — the NUL
+        // byte is used as separator because it cannot appear in any expression
+        // result, so different (name, key, field) triples can never collide.
+        //
+        // When a key expression produces the empty string the row is silently
+        // skipped — an empty key would produce a match for any LOOKUP call
+        // that evaluated its own key expression to "", which would be
+        // surprising and is almost always a config error (e.g. a `when`
+        // filter that is too broad).
+        //
+        // LOOKUP() resolves the name either via its 3-arg form or via
+        // ctx.single_prepass_name when only one block is defined (legacy
+        // 2-arg form for backward compatibility).
         var lookup_table = std.StringHashMap([]const u8).init(file_alloc);
         var pp_it = bc.pre_passes.iterator();
         while (pp_it.next()) |pp_entry| {
@@ -852,9 +898,14 @@ pub fn processBroker(
             break :blk bc.pre_passes.keys()[0];
         };
 
-        // Open output file and write the output header (CSV) or opening bracket (JSON).
-        // When file_pattern_out is set, strip file_pattern_in from the input filename
-        // and replace it with file_pattern_out; otherwise append "x" (foo.csv → foo.csvx).
+        // Derive output filename.
+        // Convention: strip file_pattern_in suffix and append file_pattern_out.
+        // Example: "export_3.csv" with file_pattern_in="_3.csv" and
+        // file_pattern_out="_3.csvx" → "export_3.csvx".
+        // When file_pattern_out is not set, the fallback appends a literal "x"
+        // to the full input filename: "export.csv" → "export.csvx". This keeps
+        // the output file distinguishable from the input in the same directory
+        // without requiring every template to spell out the suffix explicitly.
         const out_name = if (bc.file_pattern_out.len > 0 and
             std.mem.endsWith(u8, filename, bc.file_pattern_in))
             try std.mem.concat(file_alloc, u8, &.{
@@ -880,9 +931,16 @@ pub fn processBroker(
         }
 
         // Output sink: real file, or Discarding writer under --dry-run.
+        //
         // Under --fresh, the real-write path uses an atomic O_EXCL create
         // so another process racing the access()→createFile() window
         // can't make us silently overwrite their output.
+        //
+        // The Discarding writer under --dry-run still goes through the full
+        // pipeline (expression evaluation, row rules, output formatting),
+        // so timing and row counts in the trace events are representative
+        // of a real run. The write buffer is reused as scratch space for
+        // the Discarding sink — it's never flushed to disk.
         var out_file: std.fs.File = undefined;
         var out_file_buf: [OUT_FILE_BUF_SIZE]u8 = undefined;
         var out_fw: std.fs.File.Writer = undefined;
@@ -918,6 +976,11 @@ pub fn processBroker(
         }
 
         // Per-row arena: reset each iteration to reclaim expr evaluation allocations.
+        // Expression evaluation (concat, error_detail, LOOKUP key construction,
+        // DATE_CONVERT intermediates) allocates small strings that are only valid
+        // for one row and should not accumulate across the file. Resetting the
+        // arena with `.retain_capacity` keeps the already-mapped pages around so
+        // subsequent rows don't pay for mmap overhead on every allocation.
         var line_arena = std.heap.ArenaAllocator.init(alloc);
         defer line_arena.deinit();
         const line_alloc = line_arena.allocator();
@@ -945,6 +1008,11 @@ pub fn processBroker(
             var vars = try evalAllVars(bc.input_schema, &row_ctx, out, &file_expr_errors);
 
             // Row rules: first matching rule determines what to emit.
+            // Rules are evaluated in declaration order; the loop breaks as
+            // soon as one `when` condition is true. An error in a `when`
+            // expression (e.g. type mismatch) is treated as "false" in
+            // production mode (silent `""` substitution), but logged in
+            // --debug mode so the user can see which expression failed.
             const rules = bc.row_rules orelse &.{};
             var rule_matched = false;
             var matched_rule_index: usize = 0;
@@ -968,6 +1036,15 @@ pub fn processBroker(
                 }
                 rule_matched = true;
                 matched_rule_index = rule_index;
+                // Emit rule_match as a hand-built JSON object rather than
+                // via Output.event() because the `rows` field is a nested
+                // array-of-objects whose schema isn't known at compile time
+                // (StringArrayHashMap values). The generic `event()` helper
+                // uses `inline for` over a comptime-known struct, which
+                // cannot represent runtime-keyed maps. On any write error
+                // the labeled break abandons the partial object — the output
+                // stream may then be in an inconsistent state, but write
+                // errors on stdout are unrecoverable anyway.
                 if (out.trace) emit_rule_match: {
                     var jw: std.json.Stringify = .{ .writer = out.writer, .options = .{} };
                     jw.beginObject() catch break :emit_rule_match;
@@ -1017,7 +1094,16 @@ pub fn processBroker(
                         out.event("var_eval", .{ .name = e.key_ptr.*, .expr = e.value_ptr.*, .value = val, .origin = "row_rules", .rule_index = rule_index, .output_row_index = output_row_index });
                         try merged.put(e.key_ptr.*, val);
                     }
-                    // Date range filter.
+                    // Date range filter (date_filter_from_filename).
+                    // Compares only the first 10 bytes of $date so that
+                    // ISO-8601 datetime strings ("2026-03-15T14:00:00Z")
+                    // work alongside plain date strings ("2026-03-15") — the
+                    // lexical prefix comparison is correct for both because
+                    // ISO-8601 sorts chronologically as plain ASCII. When
+                    // $date is shorter than 10 bytes (e.g. empty string due
+                    // to an expression error), the guard `date_str.len >= 10`
+                    // skips filtering and the row is passed through unfiltered
+                    // rather than silently dropped.
                     const date_str = merged.get(VAR_DATE) orelse "";
                     if (date_min.len > 0 and date_str.len >= 10 and
                         std.mem.order(u8, date_str[0..10], date_min) == .lt) {
@@ -1052,6 +1138,11 @@ pub fn processBroker(
                 break; // first matching rule wins
             }
             // Emit rule_no_match for rules that were never evaluated (after the match).
+            // When a rule matched at index N, rules [N+1 ..] were short-circuited and
+            // never evaluated. The GUI expects a rule_no_match for every rule on every
+            // row so it can render all rows in the rules table, including the skipped
+            // ones. Emitting them here (after the match loop) avoids changing the
+            // loop's short-circuit semantics.
             if (rule_matched) {
                 for (rules[matched_rule_index + 1 ..], matched_rule_index + 1 ..) |rule, ri| {
                     out.event("rule_no_match", .{ .rule_index = ri, .when = rule.when });
@@ -1198,7 +1289,14 @@ pub fn xlsxPrePass(
         for (xlsx_names.items) |xlsx_name| {
             const stem = xlsx_name[0 .. xlsx_name.len - 5];
 
-            // --fresh: skip xlsx conversion if all expected csvx outputs already exist.
+            // --fresh: skip xlsx conversion if ALL expected intermediate CSV
+            // outputs already exist. The check uses an AND condition rather
+            // than OR: if even one output is missing the xlsx file is
+            // re-extracted in full. This is intentional — partial extraction
+            // (e.g. only _closed.csv present, _cash.csv missing) would leave
+            // the template with stale data for the missing sheet. The cost
+            // of a full re-extraction on a partial miss is negligible
+            // compared to processing an entire file directory.
             if (fresh) {
                 var all_exist = true;
                 for (specs) |spec| {

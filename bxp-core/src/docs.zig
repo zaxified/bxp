@@ -23,7 +23,9 @@ const json5 = @import("json5");
 const FieldDoc = config.FieldDoc;
 
 // Function list flattened from expr.builtins (keeping the iteration order
-// the GUI sees today).
+// the GUI sees today). expr.builtins is a comptime array of {impl, doc} pairs;
+// we extract only the doc side so that the serializer never touches function
+// pointers, which are not meaningful at the JSON output stage.
 const functions = blk: {
     var arr: [expr.builtins.len]expr.FnDoc = undefined;
     for (expr.builtins, 0..) |b, i| arr[i] = b.doc;
@@ -255,12 +257,21 @@ pub fn writeDocs(alloc: std.mem.Allocator, writer: *std.Io.Writer) !void {
     }
     try jw.endArray();
 
-    // config_schema
+    // config_schema: flat array of FieldDoc entries with full dotted-path keys.
+    // Order matters for the GUI's insert-position logic: envelope entries come
+    // first (they define the top-level shape), followed by struct-bound fields
+    // in prefix declaration order. Within each struct binding the field order
+    // mirrors the struct definition in config.zig, which determines the
+    // schema-ordered insert sequence used by the Add-Child dialog.
     try jw.objectField("config_schema");
     try jw.beginArray();
     for (envelope_entries) |f| try writeSchemaEntry(alloc, &jw, f.key, f);
     for (struct_bindings) |bind| {
         for (bind.fields) |f| {
+            // Construct the full key by joining the binding prefix with the
+            // per-struct field key (e.g. "conversion_templates.*" + "data_dir"
+            // → "conversion_templates.*.data_dir"). Freed immediately after
+            // the entry is written to cap peak allocation.
             const full = try std.fmt.allocPrint(alloc, "{s}.{s}", .{ bind.prefix, f.key });
             defer alloc.free(full);
             try writeSchemaEntry(alloc, &jw, full, f);
@@ -296,9 +307,12 @@ fn writeSchemaEntry(alloc: std.mem.Allocator, jw: *std.json.Stringify, full_key:
     if (f.insert_order) |s| try jw.write(s) else try jw.write(null);
     try jw.objectField("insert_template");
     if (f.insert_template) |snippet| {
-        // JSON5 (source-side) → JSON → std.json.Value → emit nested.
+        // Templates are stored as JSON5 source strings (allowing comments and
+        // unquoted keys for readability in config.zig). We preprocess → parse
+        // → re-emit so the GUI receives a proper JSON value, not a raw string.
         // Failures here surface as runtime errors during `bxp-fmt --docs`,
-        // catching template typos early.
+        // catching template typos early — the same templates are also validated
+        // by the "every insert_template parses as JSON5" unit test.
         const json_bytes = try json5.preprocess(alloc, snippet);
         defer alloc.free(json_bytes);
         var parsed = try std.json.parseFromSlice(std.json.Value, alloc, json_bytes, .{});

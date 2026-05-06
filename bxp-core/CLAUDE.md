@@ -21,6 +21,7 @@ as a local path dependency.
 | `json` | `json.zig` | `readJsonRecords()` |
 | `json5` | `json5.zig` | `preprocess()` (internal; also exported for direct use) |
 | `docs` | `docs.zig` | `writeDocs(alloc, writer)` — emits the `bxp-fmt --docs` JSON |
+| `diagnostics` | `diagnostics.zig` | `Diagnostics`, `Diagnostic`, `Severity` — structured validation collector |
 
 ## Module details
 
@@ -125,6 +126,24 @@ Preprocessor that converts JSON5 source to standard JSON.
 - Implemented as a single-pass tokenizer — no external dependencies.
 - Unit tests inline (~8 test cases).
 
+### diagnostics.zig
+
+Structured diagnostics collector for config/json5/expr validation.
+
+- `Severity` — enum `{ .@"error", .warning, .info }`.
+- `Diagnostic` — one finding: `path` (dot-separated config tree path), optional source
+  position (`line`, `col`, `end_line`, `end_col`), optional in-expression byte span
+  (`expr_off`, `expr_len`), `severity`, `code` (machine-readable, e.g. `"config.unknown_key"`),
+  `message`, and optional `suggest` (did-you-mean hint).
+- `Diagnostics` — owned `ArrayList(Diagnostic)` collector with `init`, `deinit`, `append`,
+  `count`, `countBySeverity`.
+- Used by bxp-fmt's `--config` deep validation pass. bxp-cli passes a null sink; existing
+  fail-fast/stderr behavior is preserved.
+- Severity routing in bxp-fmt annotated JSON: `.@"error"` → `$err_<N>` object,
+  `.warning` → `$warn_<N>` object, `.info` → `$info_<N>` object. Each object may contain
+  `message`, `off`, `len`, `suggest` fields.
+- Unit tests inline (1 test case).
+
 ## Build
 
 ```bash
@@ -135,9 +154,9 @@ cd bxp-core && zig build
 cd bxp-core && zig build test
 ```
 
-Module exports in `build.zig`: `csv`, `json`, `json5`, `xlsx`, `expr`, `config`, `docs`.
+Module exports in `build.zig`: `csv`, `json`, `json5`, `xlsx`, `expr`, `config`, `docs`, `diagnostics`.
 `expr` imports `sunrise`; `config` imports `json5` (as `"json5.zig"` — internal import name);
-`docs` imports `config`, `expr`, `json5`.
+`docs` imports `config`, `expr`, `json5`; `diagnostics` has no bxp-core dependencies.
 
 ## Coding conventions
 

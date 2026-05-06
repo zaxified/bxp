@@ -1,5 +1,7 @@
 # Cutting a release
 
+> [← docs/](README.md)
+
 Release artifacts are produced by `.github/workflows/release.yml` on
 every `v*` tag push. The pipeline fans out across three host runners
 (ubuntu, windows, macos) so all native installers come from real native
@@ -7,18 +9,26 @@ builds rather than cross-compilation tricks.
 
 ## Quick path
 
+```bash
+bash scripts/release-tag.sh v0.3.0
+```
+
+`release-tag.sh` bumps `version:` in `bxp-gui/pubspec.yaml` and
+`bxp-cli/build.zig.zon`, commits, tags, and pushes in one step.
+Wait ~10 min for the `release` workflow to finish. The GitHub
+Releases page will list the new tag with seven artifacts plus
+`SHA256SUMS`.
+
+Manual steps if needed:
+
 1. Bump `version:` in `bxp-gui/pubspec.yaml` and `bxp-cli/build.zig.zon`.
 2. Commit + push to master.
 3. Tag and push:
 
    ```bash
-   git tag v0.2.0
-   git push origin v0.2.0
+   git tag v0.3.0
+   git push origin v0.3.0
    ```
-
-4. Wait ~10 min for the `release` workflow to finish. The GitHub
-   Releases page now lists the new tag with seven artifacts plus
-   `SHA256SUMS`.
 
 ## What gets built
 

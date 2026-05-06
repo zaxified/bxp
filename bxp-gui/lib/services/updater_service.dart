@@ -123,6 +123,12 @@ class UpdaterService extends ChangeNotifier {
     }
   }
 
+  /// Fetch the latest GitHub release JSON for [repoSlug].
+  ///
+  /// Uses `dart:io HttpClient` directly (no http package dependency) because
+  /// the updater must work in production where pub deps are frozen. The User-
+  /// Agent header is required by GitHub's API ToS; without it requests may be
+  /// rate-limited at a lower threshold.
   Future<Map<String, dynamic>> _fetchLatestRelease() async {
     final uri = Uri.parse(
       'https://api.github.com/repos/$repoSlug/releases/latest',
@@ -139,10 +145,16 @@ class UpdaterService extends ChangeNotifier {
       final body = await res.transform(utf8.decoder).join();
       return jsonDecode(body) as Map<String, dynamic>;
     } finally {
+      // force:true closes the connection immediately even when the response body
+      // hasn't been drained — safe here because we awaited `.join()` above.
       client.close(force: true);
     }
   }
 
+  /// Select the release asset URL that matches the current platform.
+  /// Returns null when there is no suitable asset (e.g. Linux non-AppImage
+  /// or an unrecognised platform); the caller falls back to opening the
+  /// browser release page in that case.
   String? _pickAssetUrl(List assets) {
     final pattern = _platformAssetPattern();
     if (pattern == null) return null;
@@ -155,6 +167,9 @@ class UpdaterService extends ChangeNotifier {
     return null;
   }
 
+  /// Return the `browser_download_url` of the `SHA256SUMS` asset, or null
+  /// when the release doesn't publish one. Callers treat a missing checksum
+  /// file as "proceed without verification" (logged, not fatal).
   String? _pickChecksumUrl(List assets) {
     for (final a in assets) {
       final name = (a as Map)['name']?.toString() ?? '';
@@ -288,6 +303,17 @@ class UpdaterService extends ChangeNotifier {
     }
   }
 
+  /// Download the SHA256SUMS file, locate the line for [info.assetName], and
+  /// compare its hash against the locally-downloaded file at [filePath].
+  ///
+  /// Returns true on a match, or when the checksum file can't be fetched /
+  /// the asset name isn't in the file — both are treated as "proceed" to
+  /// avoid blocking users on transient infrastructure hiccups. Returns false
+  /// only when both the expected hash and the actual hash are available and
+  /// they differ (genuine mismatch → refuse install).
+  ///
+  /// SHA256SUMS format is the standard `sha256sum` output:
+  ///   `<64-hex-chars>  <filename>`  (two spaces as separator)
   Future<bool> _verifyChecksum(String filePath, UpdateInfo info) async {
     // Fetch SHA256SUMS, find line matching info.assetName, compare with
     // computed hash.
@@ -310,6 +336,9 @@ class UpdaterService extends ChangeNotifier {
       final t = line.trim();
       if (t.isEmpty) continue;
       // Format: "<hex>  <filename>" (two spaces, sha256sum-style).
+      // We split on the first space and trim the rest to handle both the
+      // two-space `sha256sum` convention and any single-space variants from
+      // hand-crafted SUMS files.
       final idx = t.indexOf(' ');
       if (idx < 0) continue;
       final hex = t.substring(0, idx).trim();
@@ -320,9 +349,14 @@ class UpdaterService extends ChangeNotifier {
       }
     }
     if (expected == null) {
+      // Asset name not found in the sums file — possible if the release was
+      // published without this platform's installer. Proceed without blocking.
       devTrace('updater.checksum.no-line', {'asset': info.assetName ?? ''});
       return true;
     }
+    // Read the local file in full — installers are 50–200 MB but this is
+    // a background operation. Streaming SHA-256 would save memory but adds
+    // complexity for a one-time operation.
     final bytes = await File(filePath).readAsBytes();
     final actual = sha256.convert(bytes).toString().toLowerCase();
     final ok = expected == actual;
@@ -385,6 +419,9 @@ open -n "\$DEST/\$(basename "\$APP")"
     return true;
   }
 
+  /// Strip the leading `v` from a tag name (e.g. "v0.2.0" → "0.2.0").
+  /// Tags without a prefix are returned unchanged — lets us compare against
+  /// `PackageInfo.version` which never carries a `v`.
   static String _stripVPrefix(String tag) =>
       tag.startsWith('v') ? tag.substring(1) : tag;
 

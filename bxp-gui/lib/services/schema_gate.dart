@@ -44,6 +44,14 @@ class InsertKeyCandidate {
   bool get isFreeForm => key.isEmpty;
 }
 
+/// Schema-aware UI advisor.
+///
+/// Consumes `TraceStore.findSchemaDoc` and `TraceStore.docConfigSchema`
+/// (populated from `bxp-fmt --docs`) to answer structural questions about
+/// a given tree path without coupling individual UI widgets to the raw docs
+/// format. The policy throughout is **permissive by default**: if the path
+/// is uncovered by the schema (e.g. user-authored broker-specific keys),
+/// every operation is allowed.
 class SchemaGate {
   final TraceStore store;
   SchemaGate(this.store);
@@ -81,6 +89,9 @@ class SchemaGate {
   }
 
   /// Field's enum_values, if the schema declares them.
+  ///
+  /// Used to populate dropdown pickers in the tree editor; returns null
+  /// when the field accepts free-form strings.
   List<String>? enumValuesFor(List<String> path) {
     final doc = store.findSchemaDoc(path);
     return (doc?['enum_values'] as List?)?.cast<String>();
@@ -225,6 +236,9 @@ class SchemaGate {
     if (order == null || order == 'append') return null;
 
     if (order == 'alpha') {
+      // Walk the raw peer list (includes CommentLines) but compare only
+      // JsonProperty nodes. The first real key that sorts strictly after
+      // `newKey` is the insertion point.
       for (var i = 0; i < parent.properties.length; i++) {
         final p = parent.properties[i];
         if (p is JsonProperty && p.key.compareTo(newKey) > 0) return i;
@@ -265,6 +279,9 @@ class SchemaGate {
         }
       }
 
+      // Keys not declared in the schema are treated as if they follow all
+      // schema-declared keys (`wildcardIdx = 1 << 30`). This places unknown
+      // (broker-specific / user-authored) entries after schema-managed ones.
       final newIdx = canonical[newKey] ?? wildcardIdx;
       for (var i = 0; i < parent.properties.length; i++) {
         final p = parent.properties[i];
@@ -280,6 +297,10 @@ class SchemaGate {
   }
 }
 
+// Polyfill for `Iterable.firstOrNull` — not available before Dart 3.3
+// and the SDK constraint in pubspec.yaml currently targets Dart 3.x only.
+// Can be removed once the min SDK raises above 3.3 and the stdlib version
+// is preferred throughout.
 extension<T> on Iterable<T> {
   T? get firstOrNull => isEmpty ? null : first;
 }

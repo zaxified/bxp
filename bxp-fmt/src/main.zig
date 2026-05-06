@@ -168,6 +168,10 @@ pub fn main() !u8 {
         return 2;
     }
 
+    // `has_config_action` is true only for bare --config (no modifier),
+    // so it counts as exactly one independent action alongside --expr /
+    // --docs / etc. A config modifier pair (--config + --list-templates)
+    // also counts as exactly one action via `config_modifier_count > 0`.
     const has_config_action = config_path != null and config_modifier_count == 0;
     const action_count = @as(u8, if (has_config_action) 1 else 0) +
         @as(u8, if (expr_src != null) 1 else 0) +
@@ -184,6 +188,9 @@ pub fn main() !u8 {
         return 2;
     }
 
+    // Dispatch: modifiers are checked first because they share --config
+    // but route to different handlers. Plain --config falls through to
+    // the `config_path` branch below.
     if (config_modifier_count > 0) {
         const path = config_path orelse {
             std.debug.print("error: --list-templates / --fetch-template require --config <path>\n", .{});
@@ -286,6 +293,11 @@ fn runListTemplates(alloc: std.mem.Allocator, path: []const u8) !u8 {
     try jw.objectField("templates");
     try jw.beginArray();
 
+    // Walk conversion_templates without semantic validation so that
+    // structurally broken templates still appear in the listing (the GUI
+    // renders them with an "(error)" badge rather than silently omitting
+    // them). Intentional double-guard: we check both root shape and ct
+    // shape individually so partial configs don't crash the listing.
     if (root == .object) {
         if (root.object.get("conversion_templates")) |ct| {
             if (ct == .object) {
@@ -297,12 +309,17 @@ fn runListTemplates(alloc: std.mem.Allocator, path: []const u8) !u8 {
 
                     if (entry.value_ptr.* == .object) {
                         const tobj = entry.value_ptr.object;
+                        // Emit nullable fields as JSON null when absent — the GUI
+                        // can distinguish "not set" from "empty string".
                         try jw.objectField("data_dir");
                         if (optString(tobj, "data_dir")) |s| try jw.write(s) else try jw.write(null);
                         try jw.objectField("file_pattern_in");
                         if (optString(tobj, "file_pattern_in")) |s| try jw.write(s) else try jw.write(null);
                         try jw.objectField("file_pattern_out");
                         if (optString(tobj, "file_pattern_out")) |s| try jw.write(s) else try jw.write(null);
+                        // file_type_{in,out} are enums with a "csv" default — emit
+                        // the default rather than null so the GUI picker always
+                        // shows a concrete value even for configs that omit the field.
                         try jw.objectField("file_type_in");
                         try jw.write(optString(tobj, "file_type_in") orelse "csv");
                         try jw.objectField("file_type_out");
@@ -310,6 +327,9 @@ fn runListTemplates(alloc: std.mem.Allocator, path: []const u8) !u8 {
                         try jw.objectField("description");
                         if (optString(tobj, "description")) |s| try jw.write(s) else try jw.write(null);
                     } else {
+                        // Template value is not an object (e.g. a bare string or
+                        // number). Surface the error as a field so the GUI can
+                        // show it inline in the template picker row.
                         try jw.objectField("error"); try jw.write("template entry is not an object");
                     }
                     try jw.endObject();
@@ -352,7 +372,9 @@ fn runFetchTemplate(alloc: std.mem.Allocator, path: []const u8, id: []const u8) 
         return 1;
     }
     const t = ct.object.get(id) orelse {
-        // stderr human message, stdout JSON error so callers can parse either.
+        // Dual output: stderr carries the human-readable message for
+        // interactive callers; stdout carries the machine-parseable JSON
+        // error for bxp-gui (which reads stdout and ignores stderr here).
         std.debug.print("error: template id '{s}' not found in {s}\n", .{ id, path });
         const msg = try std.fmt.allocPrint(a, "template id '{s}' not found", .{id});
         try emitRootErr(stdout, msg);
@@ -427,6 +449,11 @@ fn annotateRaw(a: std.mem.Allocator, raw: []const u8, path_label: []const u8, ch
     const ann = json5_mod.preprocessAnnotated(a, raw) catch |err| {
         return .{ .json = try formatRootErr(a, @errorName(err)), .exit_code = 1 };
     };
+    // `preprocessAnnotated` already inserted $comm_<N> and $err_<N>
+    // keys using its own internal counter, and exposes the next unused
+    // id as `next_id`. We seed `counter` one below that so the very
+    // first `counter.* += 1` inside `insertNumberedBefore` picks up
+    // exactly `next_id` — keeping the global sequence gap-free.
     var counter: u32 = ann.next_id - 1;
 
     // If the annotated bytes don't even parse as JSON, that's a regression
@@ -449,12 +476,20 @@ fn annotateRaw(a: std.mem.Allocator, raw: []const u8, path_label: []const u8, ch
     // existing ValidationError path runs — an empty bag is a no-op.
     var diag: diagnostics_mod.Diagnostics = .init(a);
 
+    // Load+parse the config into a BrokerConfig. On failure the
+    // annotated Value tree is still available (preprocessAnnotated
+    // succeeded), so we inject the parse error as a root-level $err_
+    // sibling inside the existing tree rather than replacing it — this
+    // lets the GUI show the partial tree with the error banner attached.
     var cfg = config_mod.loadFromBytes(a, raw, path_label, &diag) catch |err| {
         try insertErrBefore(a, &value, "", @errorName(err), &counter);
         try injectDiagnostics(a, &value, diag.items.items, &counter);
         return .{ .json = try valueToJsonString(a, value), .exit_code = 1 };
     };
 
+    // Per-template validation passes. Each pass appends to either
+    // `errors` (legacy ValidationError list) or `diag` (structured
+    // Diagnostics bag). They are unified at injection time below.
     var errors: std.ArrayList(config_mod.ValidationError) = .empty;
     var it = cfg.brokers.iterator();
     while (it.next()) |entry| {
@@ -486,21 +521,31 @@ fn annotateRaw(a: std.mem.Allocator, raw: []const u8, path_label: []const u8, ch
         @as(u64, check_fs_seconds) * 1000,
     );
 
+    // An empty broker map means the config has no conversion_templates
+    // object at all (or it exists but is empty). Treat as a hard error
+    // so the GUI's "no templates" state is caught at load time, not
+    // silently ignored during a run.
     if (cfg.brokers.count() == 0) {
         try insertErrBefore(a, &value, "", "no conversion_templates defined", &counter);
         try injectDiagnostics(a, &value, diag.items.items, &counter);
         return .{ .json = try valueToJsonString(a, value), .exit_code = 1 };
     }
 
+    // Fast path: no findings at all — skip injection and return early.
     if (errors.items.len == 0 and diag.count() == 0) {
         return .{ .json = try valueToJsonString(a, value), .exit_code = 0 };
     }
 
+    // Inject both legacy errors and structured diagnostics into the tree.
+    // Order matters for GUI rendering: semantic errors first (field-level),
+    // then diagnostics (may be at any path including root). Counter is
+    // shared so numbering is monotonic across both injections.
     try injectSemanticErrors(a, &value, errors.items, &counter);
     try injectDiagnostics(a, &value, diag.items.items, &counter);
 
     // Exit 1 if anything in the existing fail-list is non-empty OR if
     // the structured sink contains any error-severity finding.
+    // Warnings alone (diag.countBySeverity(.warning) > 0) keep exit 0.
     const has_error =
         errors.items.len != 0 or diag.countBySeverity(.@"error") != 0;
     return .{ .json = try valueToJsonString(a, value), .exit_code = if (has_error) 1 else 0 };
@@ -570,6 +615,11 @@ fn injectSemanticErrors(
     counter: *u32,
 ) !void {
     for (errors) |e| {
+        // Split "a.b.c.field_name" into parent path "a.b.c" and field
+        // "field_name". If no dot is found (top-level error), the whole
+        // path is the field name and the parent is root. If the path
+        // can't be resolved in the tree (e.g. the field was deleted by
+        // the user), fall back to root so the marker is still visible.
         const parent_ptr: *std.json.Value = blk: {
             if (e.path.len == 0) break :blk root;
             const last_dot = std.mem.lastIndexOfScalar(u8, e.path, '.') orelse break :blk root;
@@ -582,6 +632,10 @@ fn injectSemanticErrors(
             break :blk e.path[last_dot + 1 ..];
         };
 
+        // Embed the current field value in the annotation so the user can
+        // see what value triggered the error without opening the config
+        // manually. `fieldValueStr` returns "" on any error (missing key,
+        // wrong type) — the annotation still makes sense without the value.
         const field_val_str = fieldValueStr(a, parent_ptr, field_name) catch "";
         const annotation = try std.fmt.allocPrint(
             a,
@@ -625,17 +679,26 @@ fn insertNumberedBefore(
     value: std.json.Value,
     counter: *u32,
 ) !void {
+    // Non-object parents can't hold keyed siblings — silently drop the
+    // marker rather than propagating an error. This happens when a
+    // diagnostic path points into an array or scalar node; the GUI shows
+    // the parent-level marker as a fallback.
     if (parent.* != .object) return;
     counter.* += 1;
     const new_key = try std.fmt.allocPrint(a, "{s}{d}", .{ prefix, counter.* });
 
+    // If there is no target to insert before, append at end. This covers
+    // two cases: (1) target_key is empty (root-level diagnostic with no
+    // offending field), and (2) the target key doesn't exist in the tree
+    // (field never written, e.g. missing-required-field errors).
     if (target_key.len == 0 or !parent.object.contains(target_key)) {
         try parent.object.put(new_key, value);
         return;
     }
 
-    // Rebuild ordering: collect entries, clear map, re-put with new key
-    // inserted immediately before the target.
+    // std.json.ObjectMap is an ArrayHashMap that preserves insertion
+    // order. The only way to insert in the middle is to drain and refill.
+    // Keys are duped so the original slices survive the clearRetainingCapacity.
     const Entry = struct { k: []const u8, v: std.json.Value };
     var entries: std.ArrayList(Entry) = .empty;
     defer entries.deinit(a);
@@ -669,6 +732,9 @@ fn injectDiagnostics(
     counter: *u32,
 ) !void {
     for (items) |d| {
+        // Same parent/field resolution as injectSemanticErrors: split the
+        // dot-separated path at the last dot. Empty path → root. Unresolvable
+        // path (tree node missing) → fall back to root.
         const parent_ptr: *std.json.Value = blk: {
             if (d.path.len == 0) break :blk root;
             const last_dot = std.mem.lastIndexOfScalar(u8, d.path, '.') orelse break :blk root;
@@ -681,6 +747,8 @@ fn injectDiagnostics(
             break :blk d.path[last_dot + 1 ..];
         };
 
+        // Map severity to annotated-JSON prefix. The GUI routes display
+        // styling by prefix: $err_ → red, $warn_ → yellow, $info_ → grey.
         const prefix: []const u8 = switch (d.severity) {
             .@"error" => "$err_",
             .warning => "$warn_",
@@ -716,6 +784,10 @@ fn getPtrAtPath(root: *std.json.Value, path: []const u8) ?*std.json.Value {
                 node = obj.getPtr(seg) orelse return null;
             },
             .array => |*arr| {
+                // BrokerConfig.validateCollect uses 0-based integer segments
+                // for array elements (e.g. "row_rules.0.when"). Any non-integer
+                // or out-of-range index means the tree no longer matches the
+                // path — return null so the caller falls back to root.
                 const idx = std.fmt.parseInt(usize, seg, 10) catch return null;
                 if (idx >= arr.items.len) return null;
                 node = &arr.items[idx];
@@ -803,6 +875,11 @@ fn runExpr(gpa: std.mem.Allocator, src: []const u8) !u8 {
     defer arena.deinit();
     const alloc = arena.allocator();
 
+    // Empty column index and ticker map — --expr validates syntax only.
+    // Column references like [Date] and variable lookups will raise
+    // errors, which is intentional: the caller must supply real row
+    // context (via --expr-trace + --row-headers/--row-fields) if they
+    // need reference resolution.
     var col_index = std.StringHashMap(usize).init(alloc);
     defer col_index.deinit();
     var ticker_map = std.StringHashMap([]const u8).init(alloc);
@@ -822,6 +899,10 @@ fn runExpr(gpa: std.mem.Allocator, src: []const u8) !u8 {
     };
 
     _ = expr_mod.eval(src, &ctx) catch |err| {
+        // Error JSON goes to stderr, not stdout — stdout is empty on
+        // failure so the caller can check exit code without parsing.
+        // `catch {}` is intentional: if stderr itself fails there is
+        // nothing meaningful to report; the non-zero exit code is enough.
         var jw: std.json.Stringify = .{ .writer = stderr, .options = .{} };
         jw.beginObject() catch {};
         jw.objectField("error") catch {};
@@ -843,7 +924,7 @@ fn runExpr(gpa: std.mem.Allocator, src: []const u8) !u8 {
         stderr.flush() catch {};
         return 1;
     };
-    // Success: no stdout output.
+    // Success: no output. Callers rely on exit code 0.
     return 0;
 }
 
@@ -933,6 +1014,9 @@ fn runExprTrace(
             try fields_list.append(alloc, try alloc.dupe(u8, item.string));
         }
     }
+    // Length mismatch is a caller bug (bxp-gui always sends matched pairs).
+    // We exit 2 (usage error) rather than 1 so the GUI can distinguish
+    // "bad expression" from "we sent a malformed request".
     if (headers_list.items.len != fields_list.items.len) {
         std.debug.print(
             "error: --row-headers ({d}) and --row-fields ({d}) length mismatch\n",
@@ -940,6 +1024,9 @@ fn runExprTrace(
         );
         return 2;
     }
+    // Build col_index from headers so [ColumnName] references resolve to
+    // the correct field slot during eval. The index owns no allocations —
+    // the keys point into `headers_list` which lives in the arena.
     for (headers_list.items, 0..) |h, idx| {
         try col_index.put(h, idx);
     }
@@ -952,6 +1039,9 @@ fn runExprTrace(
         .lookup_table = null,
         .alloc = alloc,
         .error_detail = &detail,
+        // trace_writer receives one NDJSON line per function call.
+        // The GUI reads stdout line-by-line as a stream and renders each
+        // call in the Variables panel before the final sentinel arrives.
         .trace_writer = stdout,
     };
 
@@ -959,6 +1049,7 @@ fn runExprTrace(
         // Emit error sentinel on stderr then exit non-zero. Per-fn traces
         // already on stdout up to the point of failure are kept — the GUI
         // can surface partial results when an outer call blew up.
+        // `catch {}` mirrors runExpr: nothing useful to do if stderr write fails.
         var jw: std.json.Stringify = .{ .writer = stderr, .options = .{} };
         jw.beginObject() catch {};
         jw.objectField("t") catch {};
@@ -972,6 +1063,8 @@ fn runExprTrace(
         stderr.flush() catch {};
         return 1;
     };
+    // Emit the final sentinel on stdout so the GUI knows the stream is
+    // done and can close the "processing" indicator.
     var jw: std.json.Stringify = .{ .writer = stdout, .options = .{} };
     jw.beginObject() catch {};
     jw.objectField("t") catch {};
@@ -985,6 +1078,19 @@ fn runExprTrace(
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
+//
+// All tests call `annotateRaw` directly (no disk I/O, no subprocess).
+// Phase letters in test names correspond to validation passes added
+// incrementally during the audit:
+//   A  — basic structure (comments preserved, missing conversion_templates)
+//   B  — per-template hard errors (xlsx_sheet, ticker_map, output_schema)
+//   C  — duplicate key detection
+//   D  — wrong-type silent warnings (bool/enum fall-throughs)
+//   E  — cross-template pattern collision
+//   F  — filesystem existence (data_dir missing)
+//   G  — deep expr validation (G2 header clustering, G3 LOOKUP,
+//          G5 SPLIT_PART, G6 row_rules/pre_pass walker,
+//          G7 unknown-key did-you-mean, G8 unused pre_pass/$var)
 
 /// Phase G1 assertion helper: `$err_*` / `$warn_*` / `$info_*` values
 /// are now objects `{message, off?, len?, suggest?}` instead of bare

@@ -26,11 +26,15 @@ class _UpdateDialogState extends State<UpdateDialog> {
       // Most platforms exit immediately to let the installer take over;
       // give Linux non-AppImage (release-page launch) a beat then close.
       Navigator.of(context).pop();
-      // Best-effort exit so the running .exe / .app can be replaced.
+      // Best-effort exit so the running .exe / .app can be replaced. The
+      // delay gives the Navigator.pop frame time to paint before we kill
+      // the process; without it some window managers flash the old window.
       if (Platform.isWindows || Platform.isMacOS) {
         Future.delayed(const Duration(milliseconds: 500), () => exit(0));
       }
     } else {
+      // Reset so the user can retry — downloadAndInstall already set
+      // UpdaterService.lastError with a user-visible message.
       setState(() => _installing = false);
     }
   }
@@ -86,6 +90,10 @@ class _UpdateDialogState extends State<UpdateDialog> {
           onPressed: _installing ? null : _onLater,
           child: const Text('Later'),
         ),
+        // Label changes based on whether UpdaterService could resolve a
+        // native installer for this platform. When `assetUrl` is null (e.g.
+        // Linux .deb without an AppImage build), the button opens the GitHub
+        // release page instead of attempting an in-place self-install.
         FilledButton(
           onPressed: _installing ? null : _onUpdate,
           child: Text(widget.info.assetUrl == null ? 'Open page' : 'Update'),
