@@ -31,6 +31,8 @@ fn usage(prog: []const u8) void {
         \\  --template <id>    choose single template
         \\  --data <path>      override templates's data_dir (requires --template)
         \\  --fresh            skip existing files
+        \\  --dry-run          run the pipeline in memory without writing output files
+        \\  --trace            emit per-row NDJSON events on stdout (forces --quiet; conflicts with --debug)
         \\  --debug            print debugging info and skipped rows as JSON
         \\  --quiet            suppress all output
         \\  --version          print version and exit
@@ -86,6 +88,8 @@ pub fn main() !void {
     var debug = false;
     var quiet = false;
     var fresh = false;
+    var trace = false;
+    var dry_run = false;
     for (args[1..]) |arg| {
         if (std.mem.eql(u8, arg, "--version")) {
             stdout.print("bxp-cli {s}\n", .{build_options.version}) catch {};
@@ -99,6 +103,8 @@ pub fn main() !void {
         if (std.mem.eql(u8, arg, "--debug")) debug = true;
         if (std.mem.eql(u8, arg, "--quiet")) quiet = true;
         if (std.mem.eql(u8, arg, "--fresh")) fresh = true;
+        if (std.mem.eql(u8, arg, "--trace")) trace = true;
+        if (std.mem.eql(u8, arg, "--dry-run")) dry_run = true;
     }
 
     if (quiet and debug) {
@@ -106,17 +112,28 @@ pub fn main() !void {
         stdout.flush() catch {};
         std.process.exit(1);
     }
+    if (trace and debug) {
+        stdout.print("error: --trace and --debug cannot be used together\n", .{}) catch {};
+        stdout.flush() catch {};
+        std.process.exit(1);
+    }
 
-    const out = Output{ .writer = stdout, .quiet = quiet, .debug = debug };
+    const out = Output{ .writer = stdout, .quiet = quiet, .debug = debug, .trace = trace, .dry_run = dry_run };
 
     const stats = run(args, out, fresh, alloc) catch |err| {
-        if (err == error.Fatal) std.process.exit(1); // message already printed
+        if (err == error.Fatal) {
+            out.event("done", .{ .exit_code = @as(u8, 1) });
+            std.process.exit(1); // message already printed
+        }
         if (debug) return err; // propagate — Zig prints trace
         out.fatal("---\n# fatal error: {s}\n", .{@errorName(err)});
+        out.event("done", .{ .exit_code = @as(u8, 1) });
         std.process.exit(1);
     };
 
-    if (stats.warnings > 0) std.process.exit(2);
+    const exit_code: u8 = if (stats.warnings > 0) 2 else 0;
+    out.event("done", .{ .exit_code = exit_code });
+    if (exit_code != 0) std.process.exit(exit_code);
     // exit(0) implicit
 }
 
@@ -125,6 +142,7 @@ pub fn main() !void {
 /// Returns overall SectionStats; exit code is determined by the caller.
 fn run(args: [][:0]u8, out: Output, fresh: bool, alloc: std.mem.Allocator) !SectionStats {
     var overall = SectionStats{};
+    var timer = try std.time.Timer.start();
 
     // Determine config path from --config before loading.
     var config_path: []const u8 = DEFAULT_CONFIG_PATH;
@@ -148,7 +166,8 @@ fn run(args: [][:0]u8, out: Output, fresh: bool, alloc: std.mem.Allocator) !Sect
         out.fatal("error: --config path contains dangerous characters or too many '../': {s}\n", .{config_path});
         overall.has_fatal = true;
         out.info("\n=== overall summary ===\n", .{});
-        out.summary(overall);
+        overall.time_ns = timer.read();
+        out.overallLine(overall);
         return error.Fatal;
     };
 
@@ -161,7 +180,8 @@ fn run(args: [][:0]u8, out: Output, fresh: bool, alloc: std.mem.Allocator) !Sect
         }
         overall.has_fatal = true;
         out.info("\n=== overall summary ===\n", .{});
-        out.summary(overall);
+        overall.time_ns = timer.read();
+        out.overallLine(overall);
         return error.Fatal;
     };
 
@@ -170,7 +190,8 @@ fn run(args: [][:0]u8, out: Output, fresh: bool, alloc: std.mem.Allocator) !Sect
         out.writer.flush() catch {};
         overall.has_fatal = true;
         out.info("\n=== overall summary ===\n", .{});
-        out.summary(overall);
+        overall.time_ns = timer.read();
+        out.overallLine(overall);
         return error.Fatal;
     };
     defer cfg.deinit();
@@ -180,7 +201,8 @@ fn run(args: [][:0]u8, out: Output, fresh: bool, alloc: std.mem.Allocator) !Sect
         out.fatal("error: {s} defines no conversion_templates\n", .{config_path});
         overall.has_fatal = true;
         out.info("\n=== overall summary ===\n", .{});
-        out.summary(overall);
+        overall.time_ns = timer.read();
+        out.overallLine(overall);
         return error.Fatal;
     }
     {
@@ -192,7 +214,8 @@ fn run(args: [][:0]u8, out: Output, fresh: bool, alloc: std.mem.Allocator) !Sect
                 out.writer.flush() catch {};
                 overall.has_fatal = true;
                 out.info("\n=== overall summary ===\n", .{});
-                out.summary(overall);
+                overall.time_ns = timer.read();
+                out.overallLine(overall);
                 return error.Fatal;
             };
         }
@@ -222,6 +245,8 @@ fn run(args: [][:0]u8, out: Output, fresh: bool, alloc: std.mem.Allocator) !Sect
         } else if (std.mem.eql(u8, args[i], "--debug") or
             std.mem.eql(u8, args[i], "--quiet") or
             std.mem.eql(u8, args[i], "--fresh") or
+            std.mem.eql(u8, args[i], "--trace") or
+            std.mem.eql(u8, args[i], "--dry-run") or
             std.mem.eql(u8, args[i], "--help"))
         {
             // known flags — no action needed here
@@ -245,9 +270,24 @@ fn run(args: [][:0]u8, out: Output, fresh: bool, alloc: std.mem.Allocator) !Sect
             out.fatal("error: path argument contains dangerous characters or too many '../': {s}\n", .{p});
             overall.has_fatal = true;
             out.info("\n=== overall summary ===\n", .{});
-            out.summary(overall);
+            overall.time_ns = timer.read();
+            out.overallLine(overall);
             return error.Fatal;
         };
+    }
+
+    // Emit 'start' trace event once templates are resolved.
+    if (template_id) |bid| {
+        const templates_arr = [_][]const u8{bid};
+        out.event("start", .{ .schema_version = @as(u32, 1), .config = config_path, .templates = templates_arr[0..] });
+    } else {
+        var names: std.ArrayList([]const u8) = .empty;
+        defer names.deinit(alloc);
+        var it2 = cfg.brokers.iterator();
+        while (it2.next()) |entry| {
+            try names.append(alloc, entry.key_ptr.*);
+        }
+        out.event("start", .{ .schema_version = @as(u32, 1), .config = config_path, .templates = names.items });
     }
 
     // xlsx pre-pass: convert xlsx files to intermediate CSV before the main processing loop.
@@ -255,7 +295,8 @@ fn run(args: [][:0]u8, out: Output, fresh: bool, alloc: std.mem.Allocator) !Sect
     if (xlsx_stats.has_fatal) {
         overall.merge(xlsx_stats);
         out.info("\n=== overall summary ===\n", .{});
-        out.summary(overall);
+        overall.time_ns = timer.read();
+        out.overallLine(overall);
         return error.Fatal;
     }
     overall.merge(xlsx_stats);
@@ -266,7 +307,8 @@ fn run(args: [][:0]u8, out: Output, fresh: bool, alloc: std.mem.Allocator) !Sect
             out.fatal("error: template '{s}' is not defined in {s}\n", .{ bid, config_path });
             overall.has_fatal = true;
             out.info("\n=== overall summary ===\n", .{});
-            out.summary(overall);
+            overall.time_ns = timer.read();
+            out.overallLine(overall);
             return error.Fatal;
         };
         const dir_path = dir_path_arg orelse bc.data_dir;
@@ -283,6 +325,7 @@ fn run(args: [][:0]u8, out: Output, fresh: bool, alloc: std.mem.Allocator) !Sect
     }
 
     out.info("\n=== overall summary ===\n", .{});
-    out.summary(overall);
+    overall.time_ns = timer.read();
+    out.overallLine(overall);
     return overall;
 }

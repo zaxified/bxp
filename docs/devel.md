@@ -1,7 +1,8 @@
 # BXP - Developer Guide
 
 > For end-user documentation see [`resources/readme.md`](../resources/readme.md) \
-> For architecture diagrams see [`docs/architecture.md`](architecture.md)
+> For architecture diagrams see [`docs/architecture.md`](architecture.md) \
+> For the bxp-ui NDJSON trace protocol see [`docs/bxp-ui-trace-protocol.md`](bxp-ui-trace-protocol.md)
 
 ---
 
@@ -237,7 +238,7 @@ Consequences of this design:
   3. Main loop: evaluates `input_schema` expressions, matches `row_rules`, renders `output_schema` to produce output rows.
   4. Writes RFC 4180-compliant CSV to `.csvx` output files.
 - `Output` - thin wrapper around stdout that respects `--quiet` and `--debug` flags.
-- `SectionStats` - accumulates warning/error counts across templates.
+- `SectionStats` - accumulates warning/error counts and elapsed time across templates.
 
 ---
 

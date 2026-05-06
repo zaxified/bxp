@@ -1,0 +1,33 @@
+# Dart / Flutter
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+build/
+pubspec.lock
+
+# Platform ephemeral
+ios/Pods/
+ios/.symlinks/
+ios/Flutter/Flutter.framework
+ios/Flutter/Flutter.podspec
+linux/flutter/ephemeral/
+macos/Flutter/ephemeral/
+macos/Pods/
+windows/flutter/ephemeral/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+*.iws
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Sibling Zig projects copied into tree (1.2GB build artefacts).
+# If FFI needs source, link via path dep in pubspec instead.
+zig/

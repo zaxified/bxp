@@ -12,6 +12,10 @@ bxp/
 │   │   └── pipeline.zig  # Processing: processBroker(), xlsxPrePass()
 │   ├── build.zig
 │   └── build.zig.zon     # depends on bxp-core (path dep)
+├── bxp-fmt/              # Developer utility binary: --config validate, --expr validate
+│   ├── src/main.zig      # arg dispatcher; config verbatim round-trip + expr check
+│   ├── build.zig
+│   └── build.zig.zon     # depends on bxp-core (path dep)
 ├── bxp-core/             # Internal Zig library (shared modules)
 │   ├── src/
 │   │   ├── csv.zig       # RFC 4180 CSV parser + splitRecords()
@@ -22,6 +26,10 @@ bxp/
 │   │   └── json5.zig     # JSON5 preprocessor (comments, unquoted keys, ...)
 │   ├── build.zig         # exports each file as a named Zig module
 │   └── build.zig.zon     # depends on sunrise (datetime library)
+├── bxp-gui/              # Flutter desktop app (replaces bxp-ui; uses bxp-cli/bxp-fmt via subprocess)
+│   ├── lib/              # Dart source (services/, store/, ui/)
+│   ├── linux/            # Linux CMake platform config
+│   └── pubspec.yaml
 ├── resources/            # Example config (bxp-cli.examples.json) and user readme
 ├── datasets/             # Anonymized sample data + expected outputs for regression tests
 ├── scripts/
@@ -53,6 +61,7 @@ cd bxp-core && zig build test
 
 ```text
 bxp-cli  --[path dep]--> bxp-core  --[url dep]--> sunrise
+bxp-fmt  --[path dep]--> bxp-core
 ```
 
 `bxp-core` is a local path dependency (`../bxp-core`) — no network fetch needed.
@@ -67,6 +76,7 @@ bxp-cli  --[path dep]--> bxp-core  --[url dep]--> sunrise
 
 - [`bxp-cli/CLAUDE.md`](bxp-cli/CLAUDE.md) — full configuration reference, expression syntax,
   template guide, broker list, and test/release instructions.
+- [`bxp-fmt/CLAUDE.md`](bxp-fmt/CLAUDE.md) — `--config` / `--expr` flags, exit codes, scope.
 - [`bxp-core/CLAUDE.md`](bxp-core/CLAUDE.md) — module API overview, build details, test coverage.
 
 ## CLAUDE.md files

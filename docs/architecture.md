@@ -215,7 +215,7 @@ graph TD
     PRICE_VALUE, TICKER,
     LOOKUP, SPLIT_PART,
     CONTAINS, REPLACE,
-    TRIM, ROUND, ..."]
+    TRIM, ROUND, COALESCE, ..."]
     FUNC --> SUNRISE_CALL["sunrise
     (DATE_CONVERT only)"]
 ```
@@ -227,7 +227,7 @@ graph TD
 ```mermaid
 classDiagram
     class Config {
-        +brokers: StringHashMap~BrokerConfig~
+        +brokers: StringArrayHashMap~BrokerConfig~
         +ticker_maps: StringHashMap~TickerMap~
         +deinit()
     }

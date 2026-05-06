@@ -242,12 +242,132 @@ pub const BrokerConfig = struct {
             }
         }
     }
+
+    /// Like validate() but collects ALL errors instead of stopping at the first one.
+    /// Appends ValidationError items to `errors`; caller owns the strings (free via deinit).
+    pub fn validateCollect(
+        self: *const BrokerConfig,
+        template_id: []const u8,
+        alloc: std.mem.Allocator,
+        errors: *std.ArrayList(ValidationError),
+    ) !void {
+        const base = try std.fmt.allocPrint(alloc, "conversion_templates.{s}", .{template_id});
+        defer alloc.free(base);
+
+        if (self.data_dir.len == 0)
+            try errors.append(alloc, try ValidationError.init(alloc, base, "data_dir", "data_dir must not be empty"));
+        if (self.file_pattern_in.len == 0)
+            try errors.append(alloc, try ValidationError.init(alloc, base, "file_pattern_in", "file_pattern_in must not be empty (use \".csv\" to process all CSV files)"));
+        if (self.file_pattern_out.len == 0)
+            try errors.append(alloc, try ValidationError.init(alloc, base, "file_pattern_out", "file_pattern_out must not be empty"));
+        if (self.input_schema.count() == 0)
+            try errors.append(alloc, try ValidationError.init(alloc, base, "input_schema", "input_schema must not be empty"));
+        {
+            var it = self.input_schema.iterator();
+            while (it.next()) |e| {
+                if (e.key_ptr.*.len == 0 or e.key_ptr.*[0] != '$') {
+                    const msg = try std.fmt.allocPrint(alloc, "input_schema key '{s}' must start with '$'", .{e.key_ptr.*});
+                    defer alloc.free(msg);
+                    try errors.append(alloc, try ValidationError.init(alloc, base, "input_schema", msg));
+                }
+            }
+        }
+        if (self.output_schema.items.len == 0)
+            try errors.append(alloc, try ValidationError.init(alloc, base, "output_schema", "output_schema must not be empty"));
+        for (self.output_schema.items) |col| {
+            // output_schema is a JSON object; the key (header) is the path segment.
+            if (col.header.len == 0) {
+                try errors.append(alloc, try ValidationError.init(alloc, base, "output_schema", "output_schema header must not be empty"));
+            } else if (col.variable.len == 0 or col.variable[0] != '$') {
+                const msg = try std.fmt.allocPrint(alloc, "output_schema variable '{s}' must start with '$'", .{col.variable});
+                defer alloc.free(msg);
+                const field = try std.fmt.allocPrint(alloc, "output_schema.{s}", .{col.header});
+                defer alloc.free(field);
+                try errors.append(alloc, try ValidationError.init(alloc, base, field, msg));
+            }
+        }
+        if (self.date_filter_from_filename and !self.input_schema.contains("$date"))
+            try errors.append(alloc, try ValidationError.init(alloc, base, "date_filter_from_filename", "date_filter_from_filename requires '$date' in input_schema"));
+        if (self.row_rules_debug_missing and self.row_rules == null)
+            try errors.append(alloc, try ValidationError.init(alloc, base, "row_rules_debug_missing", "row_rules_debug_missing is true but row_rules is not defined"));
+        if (self.row_rules) |rules| {
+            for (rules, 0..) |rule, i| {
+                if (rule.when.len == 0) {
+                    const field = try std.fmt.allocPrint(alloc, "row_rules.{d}.when", .{i});
+                    defer alloc.free(field);
+                    try errors.append(alloc, try ValidationError.init(alloc, base, field, "row_rules entry has empty 'when'"));
+                }
+            }
+        }
+        const rules = self.row_rules orelse &.{};
+        for (self.output_schema.items, 0..) |col, i| {
+            if (self.input_schema.contains(col.variable)) continue;
+            for (rules) |rule| {
+                for (rule.rows) |row_override| {
+                    if (!row_override.contains(col.variable)) {
+                        const msg = try std.fmt.allocPrint(alloc, "'{s}' is not in input_schema and not set by all row_rules rows", .{col.variable});
+                        defer alloc.free(msg);
+                        const field = try std.fmt.allocPrint(alloc, "output_schema.{d}.variable", .{i});
+                        defer alloc.free(field);
+                        try errors.append(alloc, try ValidationError.init(alloc, base, field, msg));
+                        break;
+                    }
+                }
+            }
+        }
+        if (self.csv_delimiter_in == self.csv_decimal_separator_in)
+            try errors.append(alloc, try ValidationError.init(alloc, base, "csv_delimiter_in", "csv_delimiter_in and csv_decimal_separator_in must be different characters"));
+        if (self.pre_pass) |pp| {
+            if (pp.when.len == 0)
+                try errors.append(alloc, try ValidationError.init(alloc, base, "pre_pass.when", "pre_pass.when must not be empty"));
+            if (pp.key.len == 0)
+                try errors.append(alloc, try ValidationError.init(alloc, base, "pre_pass.key", "pre_pass.key must not be empty"));
+            if (pp.values.count() == 0)
+                try errors.append(alloc, try ValidationError.init(alloc, base, "pre_pass.values", "pre_pass.values must not be empty"));
+        }
+        {
+            var it = self.ticker_map.iterator();
+            while (it.next()) |e| {
+                if (e.key_ptr.*.len == 0)
+                    try errors.append(alloc, try ValidationError.init(alloc, base, "ticker_map", "ticker_map key must not be empty"));
+                if (e.value_ptr.*.len == 0) {
+                    const msg = try std.fmt.allocPrint(alloc, "ticker_map value for '{s}' must not be empty", .{e.key_ptr.*});
+                    defer alloc.free(msg);
+                    try errors.append(alloc, try ValidationError.init(alloc, base, "ticker_map", msg));
+                }
+            }
+        }
+    }
+};
+
+/// A single validation error with a dot-separated JSON path and a human-readable message.
+/// Both strings are owned by the allocator passed to init() and freed via deinit().
+pub const ValidationError = struct {
+    path: []u8,
+    message: []u8,
+    alloc: std.mem.Allocator,
+
+    /// path_base + "." + field_suffix → full dot path; message is duped.
+    pub fn init(alloc: std.mem.Allocator, path_base: []const u8, field_suffix: []const u8, message: []const u8) !ValidationError {
+        const path = if (field_suffix.len > 0)
+            try std.fmt.allocPrint(alloc, "{s}.{s}", .{ path_base, field_suffix })
+        else
+            try alloc.dupe(u8, path_base);
+        errdefer alloc.free(path);
+        const msg = try alloc.dupe(u8, message);
+        return .{ .path = path, .message = msg, .alloc = alloc };
+    }
+
+    pub fn deinit(self: *ValidationError) void {
+        self.alloc.free(self.path);
+        self.alloc.free(self.message);
+    }
 };
 
 /// Top-level configuration loaded from bxp-cli.json.
 pub const Config = struct {
     /// Map from user-defined template key (e.g. "revolutx_to_wealthfolio") to its configuration.
-    brokers: std.StringHashMap(BrokerConfig),
+    brokers: std.StringArrayHashMap(BrokerConfig),
     _alloc: std.mem.Allocator,
 
     /// Releases all heap memory owned by this Config.  Call once when done.
@@ -366,7 +486,11 @@ fn diagDuplicateKey(
     };
     var stack: std.ArrayList(Level) = .empty;
     defer {
-        for (stack.items) |*lvl| lvl.keys.deinit();
+        for (stack.items) |*lvl| {
+            var kit = lvl.keys.keyIterator();
+            while (kit.next()) |k| alloc.free(k.*);
+            lvl.keys.deinit();
+        }
         stack.deinit(alloc);
     }
 
@@ -388,6 +512,8 @@ fn diagDuplicateKey(
             .object_end, .array_end => {
                 if (stack.items.len > 0) {
                     var top = stack.pop().?;
+                    var kit = top.keys.keyIterator();
+                    while (kit.next()) |k| alloc.free(k.*);
                     top.keys.deinit();
                 }
                 // The container that just closed was a value in its parent object;
@@ -517,7 +643,7 @@ fn diagJsonError(
 /// Malformed JSON5 → returns an error.
 pub fn load(alloc: std.mem.Allocator, config_path: []const u8) !Config {
     var config = Config{
-        .brokers = std.StringHashMap(BrokerConfig).init(alloc),
+        .brokers = std.StringArrayHashMap(BrokerConfig).init(alloc),
         ._alloc = alloc,
     };
 
@@ -531,6 +657,11 @@ pub fn load(alloc: std.mem.Allocator, config_path: []const u8) !Config {
     defer alloc.free(raw);
     const content = try json5.preprocess(alloc, raw);
     defer alloc.free(content);
+
+    // Detect duplicate object keys before parsing — std.json silently uses last value.
+    if (diagDuplicateKey(alloc, content, raw, config_path)) {
+        return error.InvalidConfig;
+    }
 
     const parsed = std.json.parseFromSlice(std.json.Value, alloc, content, .{}) catch |err| {
         diagJsonError(alloc, content, raw, config_path, err);

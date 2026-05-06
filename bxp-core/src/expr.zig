@@ -25,6 +25,7 @@
 ///   FLOOR(f)                  — round f down to nearest integer
 ///   CEILING(f)                — round f up to nearest integer
 ///   RAND()                    — random float in [0, 1)
+///   COALESCE(a, b, ...)       — first non-empty argument (empty = whitespace-only string)
 ///   DATE_CONVERT(f, from, to) — reformat a date/time string; format tokens use sunrise syntax
 ///   PRICE_VALUE(f)            — strip currency symbol/code, return numeric string
 ///   PRICE_CURRENCY(f)         — extract currency code from a price string
@@ -67,7 +68,10 @@ pub const Value = union(enum) {
     pub fn toNumber(self: Value) !f80 {
         return switch (self) {
             .number => |n| n,
-            .string => |s| if (s.len == 0) 0 else std.fmt.parseFloat(f80, s) catch return error.NotANumber,
+            .string => |s| if (s.len == 0) 0 else
+                std.fmt.parseFloat(f80, s) catch
+                parseAmericanNumber(s) catch
+                return error.NotANumber,
             .boolean => |b| if (b) @as(f80, 1) else 0,
         };
     }
@@ -632,11 +636,60 @@ const Parser = struct {
             return err;
         };
         if (std.ascii.eqlIgnoreCase(name, "RAND")) return builtinRand(a);
+        if (std.ascii.eqlIgnoreCase(name, "COALESCE")) return builtinCoalesce(a);
 
         self.setDetail("unknown function '{s}' — check function name spelling", .{name});
         return error.UnknownFunction;
     }
 };
+
+// ---------------------------------------------------------------------------
+// Number parsing helpers
+// ---------------------------------------------------------------------------
+
+/// Parses a number in American thousands-separated format: "1,234.56", "-1,234,567", "1,000".
+/// Requires at least one thousands group (,ddd) — plain "123" is rejected (handled by parseFloat).
+/// Returns error.NotANumber if the string does not match the pattern.
+fn parseAmericanNumber(s: []const u8) error{NotANumber}!f80 {
+    var i: usize = 0;
+    if (i < s.len and s[i] == '-') i += 1;
+    // 1–3 leading digits before the first thousands group
+    const leading_start = i;
+    while (i < s.len and std.ascii.isDigit(s[i])) i += 1;
+    const leading = i - leading_start;
+    if (leading == 0 or leading > 3) return error.NotANumber;
+    // At least one ',ddd' group required
+    var groups: usize = 0;
+    while (i < s.len and s[i] == ',') {
+        if (s.len < i + 4) return error.NotANumber;
+        if (!std.ascii.isDigit(s[i + 1]) or
+            !std.ascii.isDigit(s[i + 2]) or
+            !std.ascii.isDigit(s[i + 3])) return error.NotANumber;
+        i += 4;
+        groups += 1;
+        // A digit immediately after the group means >3 digits between commas → invalid
+        if (i < s.len and std.ascii.isDigit(s[i])) return error.NotANumber;
+    }
+    if (groups == 0) return error.NotANumber;
+    // Optional decimal part
+    if (i < s.len) {
+        if (s[i] != '.') return error.NotANumber;
+        i += 1;
+        if (i >= s.len or !std.ascii.isDigit(s[i])) return error.NotANumber;
+        while (i < s.len and std.ascii.isDigit(s[i])) i += 1;
+    }
+    if (i != s.len) return error.NotANumber;
+    // Strip commas into a stack buffer and parse
+    var buf: [32]u8 = undefined;
+    var bi: usize = 0;
+    for (s) |c| {
+        if (c == ',') continue;
+        if (bi >= buf.len) return error.NotANumber;
+        buf[bi] = c;
+        bi += 1;
+    }
+    return std.fmt.parseFloat(f80, buf[0..bi]) catch return error.NotANumber;
+}
 
 // ---------------------------------------------------------------------------
 // Built-in function implementations
@@ -855,6 +908,24 @@ fn builtinRand(args: []Value) !Value {
     return Value{ .number = @floatCast(std.crypto.random.float(f64)) };
 }
 
+/// COALESCE(a, b, ...) — return the first non-empty argument.
+/// A string is considered empty if its trimmed length is 0 (whitespace-only
+/// counts as empty). Numbers and booleans are never empty — even 0 and false
+/// are returned. If every argument is empty, the last argument is returned
+/// verbatim so callers can supply a default: COALESCE(@a, @b, "0").
+fn builtinCoalesce(args: []Value) !Value {
+    if (args.len == 0) return error.WrongArgCount;
+    for (args[0 .. args.len - 1]) |v| {
+        switch (v) {
+            .string => |s| {
+                if (std.mem.trim(u8, s, " \t\r\n").len > 0) return v;
+            },
+            .number, .boolean => return v,
+        }
+    }
+    return args[args.len - 1];
+}
+
 // ---------------------------------------------------------------------------
 // DATE_CONVERT — reformat a date/time string from one pattern to another
 // ---------------------------------------------------------------------------
@@ -1068,6 +1139,33 @@ test "Value.toNumber: numeric string is parsed" {
 
 test "Value.toNumber: non-numeric string returns error" {
     try testing.expectError(error.NotANumber, (Value{ .string = "abc" }).toNumber());
+}
+
+test "Value.toNumber: American thousands-separated format" {
+    try testing.expectEqual(@as(f80, 1234.56),   try (Value{ .string = "1,234.56"     }).toNumber());
+    try testing.expectEqual(@as(f80, 1234567),   try (Value{ .string = "1,234,567"    }).toNumber());
+    try testing.expectEqual(@as(f80, -1234.5),   try (Value{ .string = "-1,234.5"     }).toNumber());
+    try testing.expectEqual(@as(f80, 1000),      try (Value{ .string = "1,000"        }).toNumber());
+    // Must still be a string when not used in arithmetic
+    try testing.expectEqualStrings("1,234.56", (Value{ .string = "1,234.56" }).toString(testing.allocator) catch unreachable);
+    // Invalid patterns must stay NotANumber
+    try testing.expectError(error.NotANumber, (Value{ .string = "1,23.45"   }).toNumber()); // group not 3 digits
+    try testing.expectError(error.NotANumber, (Value{ .string = "1,2345"    }).toNumber()); // 4 digits in group
+    try testing.expectError(error.NotANumber, (Value{ .string = "12345,678" }).toNumber()); // 5 leading digits
+}
+
+test "eval: American number arithmetic via field ref" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    try h.col_index.put("Amount", 0);
+    const ctx = h.ctx(&.{"1,234.56"}, a);
+    // Arithmetic triggers toNumber — should parse correctly
+    try testing.expectEqualStrings("1234.56", try evalString("[Amount] * 1", &ctx));
+    try testing.expectEqualStrings("2469.12", try evalString("[Amount] * 2", &ctx));
+    // Plain passthrough — string preserved as-is
+    try testing.expectEqualStrings("1,234.56", try evalString("[Amount]",     &ctx));
 }
 
 test "Value.toBool: empty string is false, non-empty is true (even '0')" {
@@ -1684,4 +1782,48 @@ test "eval: RAND rejects wrong arg count" {
     var h = TestHelper.init(a);
     const ctx = h.ctx(&.{}, a);
     try testing.expectError(error.WrongArgCount, eval("RAND(5)", &ctx));
+}
+
+// ------------------------------------------------------------
+// COALESCE
+// ------------------------------------------------------------
+
+test "eval: COALESCE returns first non-empty string" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    try testing.expectEqualStrings("first",    try evalString("COALESCE('first', 'second')", &ctx));
+    try testing.expectEqualStrings("fallback", try evalString("COALESCE('', 'fallback')", &ctx));
+    try testing.expectEqualStrings("x",        try evalString("COALESCE('', '   ', 'x', 'y')", &ctx));
+}
+
+test "eval: COALESCE returns last arg verbatim when all empty" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    try testing.expectEqualStrings("",  try evalString("COALESCE('', '', '')", &ctx));
+    try testing.expectEqualStrings("0", try evalString("COALESCE('', '', '0')", &ctx));
+}
+
+test "eval: COALESCE treats numbers and booleans as non-empty" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    try testing.expectEqualStrings("0", try evalString("COALESCE('', 0, 'x')", &ctx));
+    try testing.expectEqualStrings("7", try evalString("COALESCE('', 7)", &ctx));
+}
+
+test "eval: COALESCE rejects zero args" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    try testing.expectError(error.WrongArgCount, eval("COALESCE()", &ctx));
 }

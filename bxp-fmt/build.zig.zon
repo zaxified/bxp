@@ -1,0 +1,12 @@
+.{
+    .name = .bxp_fmt,
+    .fingerprint = 0xc7e9e578c43ce8ea,
+    .version = "0.1.0",
+    .dependencies = .{
+        .bxp_core = .{
+            .path = "../bxp-core",
+        },
+    },
+    .minimum_zig_version = "0.15.0",
+    .paths = .{"."},
+}

@@ -242,14 +242,14 @@ unary -    →    * /    →    & (concat)    →    + -    →    = != < > <= >
 
 #### Column and literal syntax
 
-| Syntax         | Description                                              |
-| ---            | ---                                                      |
+| Syntax | Description |
+| --- | --- |
 | `[ColumnName]` | Raw CSV field by header name (leading/trailing spaces trimmed) |
-| `[n]`          | Raw CSV field by 1-based column index                    |
-| `'text'`       | String literal                                           |
-| `123`, `-0.5`  | Numeric literal                                          |
-| `&`            | String concatenation (`'$CASH-' & [Currency]`)           |
-| `$variable`    | Reference to a variable set earlier in `input_schema`    |
+| `[n]` | Raw CSV field by 1-based column index |
+| `'text'` | String literal |
+| `123`, `-0.5` | Numeric literal |
+| `&` | String concatenation (`'$CASH-' & [Currency]`) |
+| `$variable` | Reference to a variable set earlier in `input_schema` |
 
 **Built-in functions** (all names are case-insensitive)
 
@@ -272,12 +272,14 @@ unary -    →    * /    →    & (concat)    →    + -    →    = != < > <= >
 | `FIELDS(n)`                  | string  | Same as `[n]` — raw field by 1-based index                                  |
 | `NOW()`                      | string  | Current UTC datetime, format `YYYY-MM-DDTHH:MM:SSZ`                         |
 | `RAND()`                     | number  | Cryptographically random float in `[0, 1)`                                  |
+| `COALESCE(a, b, ...)`        | any     | First non-empty argument (empty = whitespace-only string); falls back to last arg verbatim if all empty |
 
 #### Type coercions
 
 - Empty string → `0` in a numeric context.
 - Any non-empty string → `true` in a boolean context; empty string → `false`.
-- Numeric strings are parsed on demand; `csv_decimal_separator_in` controls which separator is accepted.
+- Numeric strings are parsed on demand; `csv_decimal_separator_in` controls which decimal separator is accepted.
+- American thousands-separated numbers (`1,234.56`, `-1,234,567`) are automatically parsed in arithmetic contexts; the original string is preserved when the field is passed through as-is to output.
 
 #### Minimal examples
 

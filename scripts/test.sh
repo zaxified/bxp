@@ -30,6 +30,28 @@ echo "Building bxp-cli..."
 (cd "$MONO_ROOT/bxp-cli" && zig build)
 echo ""
 
+echo "Building bxp-fmt..."
+(cd "$MONO_ROOT/bxp-fmt" && zig build)
+echo ""
+
+echo "Smoke-testing bxp-fmt..."
+BXP_FMT="$MONO_ROOT/bxp-fmt/zig-out/bin/bxp-fmt"
+for sample_json in "$DATASETS"/*/sample.json; do
+    # --config must succeed and emit valid JSON (annotated output contract).
+    if ! "$BXP_FMT" --config "$sample_json" 2>/dev/null | python3 -m json.tool > /dev/null; then
+        echo "FAIL: bxp-fmt --config did not produce valid JSON for $sample_json"
+        exit 1
+    fi
+done
+# --expr accepts valid syntax and rejects broken syntax.
+"$BXP_FMT" --expr "IF([Qty] > 0, 'BUY', 'SELL')" > /dev/null
+if "$BXP_FMT" --expr "IF([Qty" 2>/dev/null; then
+    echo "FAIL: bxp-fmt --expr did not reject broken expression"
+    exit 1
+fi
+echo "bxp-fmt OK"
+echo ""
+
 PASS=0
 FAIL=0
 FAILED=()
