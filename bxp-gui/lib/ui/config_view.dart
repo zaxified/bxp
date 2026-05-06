@@ -123,6 +123,23 @@ class _ConfigViewState extends State<ConfigView> {
                 else if (store.configError != null)
                   Text('● load error',
                       style: BxpText.label(context, color: t.errorText)),
+                // Phase 5b — VALIDATE button result toast. Transient
+                // (auto-clears after 3s in the store). Coloured by
+                // semantic meaning: green when clean, warn-yellow when
+                // any non-error diagnostic, red when any error.
+                if (store.validateToast != null) ...[
+                  const SizedBox(width: 12),
+                  Builder(builder: (ctx) {
+                    final msg = store.validateToast!;
+                    final isOk = msg == 'Validation OK';
+                    final hasErr = msg.contains('error');
+                    final color = isOk
+                        ? t.okText
+                        : (hasErr ? t.errorText : t.warnText);
+                    return Text('● $msg',
+                        style: BxpText.label(context, color: color));
+                  }),
+                ],
                 const Spacer(),
               ],
             ),

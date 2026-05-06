@@ -1077,7 +1077,7 @@ fn checkOneExpr(
         defer alloc.free(full_field);
         const path = try std.fmt.allocPrint(alloc, "conversion_templates.{s}.{s}", .{ template_id, full_field });
         const message = try std.fmt.allocPrint(alloc,
-            "expression in {s}: DATE_CONVERT format '{s}' has unrecognized letter '{c}' at offset {d} — bracket bare-letter literals as `[T]` per sunrise spec",
+            "expression in {s}: DATE_CONVERT format '{s}' has unrecognized letter '{c}' at offset {d} — wrap any literal letters in brackets, e.g. '[T]'",
             .{ field_leaf, bad.fmt, bad.fmt[bad.pos], bad.pos });
         try d.append(.{
             .path = path,

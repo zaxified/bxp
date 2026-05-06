@@ -1502,12 +1502,24 @@ class TraceStore extends ChangeNotifier {
     final validator = DartValidator(d, csvHeadersByTemplate: headersByTemplate);
     final diags = validator.validate(root);
 
+    // Suppress diagnostics that target the actively-edited expression
+    // while the autocomplete popup is open. Reason: the user mid-types
+    // intermediate states like `LOOKUP('_default', ` that intentionally
+    // fail WrongArgCount / UnknownFunction until they finish typing.
+    // Firing the error during typing closes / hides the autocomplete
+    // and feels noisy. Other paths still validate normally — only the
+    // leaf at `selectedExprPath` is suppressed.
+    final suppressPath = (_exprAutocompleteOpen && selectedExprPath != null)
+        ? _encodePath(selectedExprPath!)
+        : null;
+
     final errors = <String, Map<String, String>>{};
     final warnings = <String, Map<String, String>>{};
     final infos = <String, Map<String, String>>{};
     final counters = <String, int>{};
     for (final dg in diags) {
       final key = _encodePath(dg.path);
+      if (suppressPath != null && key == suppressPath) continue;
       final innerKey = '\$dart_${(counters[key] = (counters[key] ?? 0) + 1)}';
       // The displayable string includes suggest text when present so
       // existing consumers (StatusBar, TooltipKey) need no special
@@ -2063,7 +2075,58 @@ class TraceStore extends ChangeNotifier {
           if (await tmpFile.exists()) await tmpFile.delete();
         } catch (_) {}
       }
+      // Refresh Dart-side diagnostics so the toolbar's combined view
+      // reflects native checks alongside the bxp-fmt result that the
+      // VALIDATE button is primarily about. _revalidateDart()
+      // already runs from edit hooks; this extra call covers the
+      // case where the user clicks VALIDATE without any pending
+      // edits and expects ALL diagnostics to refresh in lockstep.
+      _revalidateDart();
       isValidating = false;
+      // Surface the post-validate transient toast so the user gets a
+      // visible confirmation when the run is fast (sub-100ms on local
+      // disk the in-flight badge barely flickers). Cleared on the
+      // next user action or by `_clearValidateToast` after a short
+      // timeout — see lastValidateToast below.
+      _setValidateToast();
+      notifyListeners();
+    }
+  }
+
+  /// Transient summary string emitted by [runValidate] for the toolbar
+  /// snackbar. Null = no toast pending; non-null = display + auto-clear
+  /// after [_validateToastMs]. Mirrors the path-keyed buckets so the
+  /// caller can reach the same numbers via diagnosticsCount.
+  String? _validateToast;
+  String? get validateToast => _validateToast;
+  static const int _validateToastMs = 8000;
+  Timer? _validateToastTimer;
+
+  void _setValidateToast() {
+    final errs = _validationErrors.length + _dartErrors.length;
+    final warns = _validationWarnings.length + _dartWarnings.length;
+    final infos = _validationInfo.length + _dartInfo.length;
+    if (errs == 0 && warns == 0 && infos == 0) {
+      _validateToast = 'Validation OK';
+    } else {
+      final parts = <String>[];
+      if (errs > 0) parts.add('$errs error${errs == 1 ? '' : 's'}');
+      if (warns > 0) parts.add('$warns warning${warns == 1 ? '' : 's'}');
+      if (infos > 0) parts.add('$infos info');
+      _validateToast = 'Validate: ${parts.join(', ')}';
+    }
+    _validateToastTimer?.cancel();
+    _validateToastTimer = Timer(const Duration(milliseconds: _validateToastMs), () {
+      if (_disposed) return;
+      _validateToast = null;
+      notifyListeners();
+    });
+  }
+
+  void clearValidateToast() {
+    _validateToastTimer?.cancel();
+    if (_validateToast != null) {
+      _validateToast = null;
       notifyListeners();
     }
   }

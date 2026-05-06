@@ -210,11 +210,13 @@ class _ExprEditorState extends State<ExprEditor> {
               insert: h,
               label: h,
               desc: 'CSV header (active template)',
-              kind: _AcKind.kw,
+              kind: _AcKind.col,
             ));
           }
         }
         if (items.isNotEmpty) {
+          items.sort((a, b) =>
+              a.label.toLowerCase().compareTo(b.label.toLowerCase()));
           _showItems(items, lbIdx + 1, sel.start);
           return;
         }
@@ -239,11 +241,13 @@ class _ExprEditorState extends State<ExprEditor> {
               insert: n,
               label: n,
               desc: 'pre_pass block (active template)',
-              kind: _AcKind.kw,
+              kind: _AcKind.pp,
             ));
           }
         }
         if (items.isNotEmpty) {
+          items.sort((a, b) =>
+              a.label.toLowerCase().compareTo(b.label.toLowerCase()));
           _showItems(items, luMatch.replaceStart, sel.start);
           return;
         }
@@ -263,17 +267,14 @@ class _ExprEditorState extends State<ExprEditor> {
 
     final items = <_AcItem>[];
     final up = prefix.toUpperCase();
+    final activeTid = _activeTid(store);
+    final prePassNames = activeTid.isEmpty
+        ? const <String>{}
+        : _prePassNamesFor(store, activeTid);
     // Live docs are guaranteed populated by the startup gate (see
     // _StartupGate in main.dart) — bxp-fmt --docs is the only catalog.
     final fnSrc = store.docFunctions
-        .map(
-          (f) => (
-            f['name']?.toString() ?? '',
-            f['signature']?.toString() ?? '',
-            f['description']?.toString() ?? '',
-          ),
-        )
-        .where((e) => e.$1.isNotEmpty)
+        .where((f) => (f['name']?.toString() ?? '').isNotEmpty)
         .toList();
     final kwSrc = store.docKeywords
         .map(
@@ -285,16 +286,19 @@ class _ExprEditorState extends State<ExprEditor> {
         .where((e) => e.$1.isNotEmpty)
         .toList();
     for (final f in fnSrc) {
-      if (f.$1.toUpperCase().startsWith(up)) {
-        items.add(
-          _AcItem(
-            insert: '${f.$1}(',
-            label: f.$2,
-            desc: f.$3,
-            kind: _AcKind.fn,
-          ),
-        );
-      }
+      final name = f['name']?.toString() ?? '';
+      if (!name.toUpperCase().startsWith(up)) continue;
+      final signature = f['signature']?.toString() ?? '';
+      final description = f['description']?.toString() ?? '';
+      final template = _buildFnTemplate(f, prePassNames);
+      items.add(
+        _AcItem(
+          insert: template,
+          label: signature,
+          desc: description,
+          kind: _AcKind.fn,
+        ),
+      );
     }
     for (final k in kwSrc) {
       if (k.$1.toUpperCase().startsWith(up)) {
@@ -312,6 +316,8 @@ class _ExprEditorState extends State<ExprEditor> {
       _hidePopup();
       return;
     }
+    items.sort((a, b) =>
+        a.label.toLowerCase().compareTo(b.label.toLowerCase()));
     _showItems(items, start, end);
   }
 
@@ -389,6 +395,58 @@ class _ExprEditorState extends State<ExprEditor> {
     return store.templateId;
   }
 
+  /// Build a complete function-call template from FnDoc metadata
+  /// (Phase 1 `args` / `min_args` / `max_args`). Each declared arg
+  /// becomes a placeholder `<argname>` (or `'<argname>'` when the kind
+  /// implies a string literal). Pre_pass-name args are auto-filled
+  /// when exactly one block is declared in the active template — the
+  /// only unambiguous case where we can substitute without losing
+  /// information.
+  ///
+  /// Variadic functions (max_args == 255 → COALESCE) emit only the
+  /// declared positional args; the user appends extras manually.
+  static String _buildFnTemplate(
+      Map<String, dynamic> fn, Set<String> prePassNames) {
+    final name = fn['name']?.toString() ?? '';
+    final args = ((fn['args'] as List?) ?? const [])
+        .cast<Map<String, dynamic>>();
+    if (args.isEmpty) return '$name()';
+    final parts = <String>[];
+    for (final a in args) {
+      final argName = a['name']?.toString() ?? 'arg';
+      final kind = a['kind']?.toString() ?? 'expr';
+      switch (kind) {
+        case 'pre_pass_name':
+          if (prePassNames.length == 1) {
+            parts.add("'${prePassNames.first}'");
+          } else {
+            parts.add("'<$argName>'");
+          }
+          break;
+        case 'literal_string':
+        case 'sunrise_format':
+          parts.add("'<$argName>'");
+          break;
+        default:
+          parts.add('<$argName>');
+      }
+    }
+    return '$name(${parts.join(', ')})';
+  }
+
+  /// Locate the first `<placeholder>` token in [text] starting at
+  /// [from]. Returns the inclusive start + exclusive end of the token
+  /// (covering the angle brackets), or null when the text has no
+  /// placeholders left. Used by `_applyAutocomplete` to position the
+  /// cursor on the first arg the user is expected to fill in.
+  static (int, int)? _firstPlaceholder(String text, int from) {
+    final lt = text.indexOf('<', from);
+    if (lt < 0) return null;
+    final gt = text.indexOf('>', lt + 1);
+    if (gt < 0) return null;
+    return (lt, gt + 1);
+  }
+
   /// Pre_pass block names declared in the active template's
   /// `pre_pass` map. Mirrors the shape used by DartValidator: legacy
   /// single-block (`{ when, key, values }`) → synthetic `_default`,
@@ -431,18 +489,67 @@ class _ExprEditorState extends State<ExprEditor> {
 
   void _applyAutocomplete(_AcItem item) {
     final text = widget.controller.text;
+    String insert = item.insert;
+    // Pre_pass picks live inside a LOOKUP first-arg literal — close
+    // the quote the user opened, append `, `, and move the cursor
+    // there so the next argument flows naturally (no trailing quote
+    // typing). Mirrors how `fn` insertion ends with `(` so the user
+    // is already inside the call. Detection: the char immediately
+    // before `_acReplaceStart` is the opener (' or "), set by
+    // `_matchLookupFirstArg`.
+    if (item.kind == _AcKind.pp && _acReplaceStart > 0) {
+      final opener = text.codeUnitAt(_acReplaceStart - 1);
+      if (opener == 0x27 /* ' */ || opener == 0x22 /* " */) {
+        insert = '${item.insert}${String.fromCharCode(opener)}, ';
+      }
+    }
     final newText = text.replaceRange(
       _acReplaceStart,
       _acReplaceEnd,
-      item.insert,
+      insert,
     );
+    // For fn picks, locate the first `<placeholder>` token and select
+    // it so the user can immediately type to overwrite. Cursor lands
+    // at end-of-insert when no placeholder remains (no-arg fns or
+    // fully pre-filled signatures like LOOKUP with a single
+    // pre_pass — except we always emit `<key>`/`<field>` placeholders
+    // so this rarely fires for fn picks).
+    TextSelection nextSelection;
+    if (item.kind == _AcKind.fn) {
+      final ph = _firstPlaceholder(newText, _acReplaceStart);
+      if (ph != null) {
+        nextSelection = TextSelection(baseOffset: ph.$1, extentOffset: ph.$2);
+      } else {
+        nextSelection = TextSelection.collapsed(
+          offset: _acReplaceStart + insert.length,
+        );
+      }
+    } else {
+      nextSelection = TextSelection.collapsed(
+        offset: _acReplaceStart + insert.length,
+      );
+    }
     widget.controller.value = TextEditingValue(
       text: newText,
-      selection: TextSelection.collapsed(
-        offset: _acReplaceStart + item.insert.length,
-      ),
+      selection: nextSelection,
     );
-    _hidePopup();
+    // Pre_pass picks chain into the next arg — keep the popup alive
+    // (refresh items in place via post-frame callback instead of
+    // hide/re-show). Hiding flips `_exprAutocompleteOpen` to false
+    // which lets `_revalidateDart` fire WrongArgCount on the
+    // mid-typed `LOOKUP('_default', ` before the popup re-opens; the
+    // suppression gate only works while the flag is true. Other
+    // kinds (fn / kw / col) commit the value with a complete-enough
+    // expression for the validator to make sense of, so a normal
+    // hide is fine.
+    if (item.kind == _AcKind.pp) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _refreshAutocomplete(force: true);
+      });
+    } else {
+      _hidePopup();
+    }
   }
 
   /// Pixel offset of the cursor inside the editor's content area, so the
@@ -511,8 +618,23 @@ class _ExprEditorState extends State<ExprEditor> {
                 // fndoc strings stay legible. Non-selected rows stay
                 // single-line (label only) so the popup can list more
                 // items at a glance.
-                return InkWell(
-                  onTap: () => _applyAutocomplete(it),
+                // GestureDetector with onTapDown fires before focus
+                // shifts away from the TextField (InkWell.onTap waits
+                // for the tap-up gesture, which lands AFTER the
+                // overlay's focus-loss path closed the popup → click
+                // appeared dead). HitTestBehavior.opaque ensures the
+                // hit registers on the whole row, not just the painted
+                // child. Wrapped in Material for the ripple-on-hover
+                // affordance.
+                final (kindLabel, kindColor) = switch (it.kind) {
+                  _AcKind.fn => ('fn', t.codeFunction),
+                  _AcKind.kw => ('key', t.codeKeyword),
+                  _AcKind.col => ('col', t.codeColumn),
+                  _AcKind.pp => ('pre', t.codeKeyword),
+                };
+                return GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTapDown: (_) => _applyAutocomplete(it),
                   child: Container(
                     color: selected ? t.selectionBg : Colors.transparent,
                     padding: const EdgeInsets.symmetric(
@@ -525,12 +647,10 @@ class _ExprEditorState extends State<ExprEditor> {
                         Padding(
                           padding: const EdgeInsets.only(top: 2),
                           child: Text(
-                            it.kind == _AcKind.fn ? 'fn' : 'kw',
+                            kindLabel,
                             style: BxpText.body(
                               ctx,
-                              color: it.kind == _AcKind.fn
-                                  ? t.codeFunction
-                                  : t.codeKeyword,
+                              color: kindColor,
                               sizePx: 9,
                             ),
                           ),
@@ -621,7 +741,7 @@ class _ExprEditorState extends State<ExprEditor> {
 
 // ── Autocomplete item types ─────────────────────────────────────────────────
 
-enum _AcKind { fn, kw }
+enum _AcKind { fn, kw, col, pp }
 
 class _AcItem {
   final String insert;

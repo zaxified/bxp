@@ -1789,7 +1789,7 @@ fn adaptCoalesce(_: *Parser, args: []Value) anyerror!Value {
 const date_convert_doc: FnDoc = .{
     .name = "DATE_CONVERT",
     .signature = "DATE_CONVERT(f, from, to)",
-    .description = "Reformat a date/time string. Format tokens use sunrise syntax (e.g. %Y-%m-%d, %d.%m.%Y, %H:%M:%S).",
+    .description = "Reformat a date/time string. Format tokens: YYYY (year), MM/M (month), MMM/MMMM (month name), DD/D (day), hh/h (hour), mm/m (minute), ss/s (second), [literal] (literal characters), [*] (wildcard).",
     .args = &.{
         .{ .name = "f" },
         .{ .name = "from", .kind = .sunrise_format },

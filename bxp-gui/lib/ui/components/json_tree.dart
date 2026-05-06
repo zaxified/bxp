@@ -256,17 +256,36 @@ class _JsonNodeState extends State<_JsonNode> {
           commentN: widget.commentN,
         ));
         lastRowIdx = out.length - 1;
-        // Surface any validator $err_* markers attached to this child.
-        // `select` (not `read`) so the row rebuilds the moment the
-        // validator's error map changes — without it, the banner only
-        // refreshed when `treeLoadGen` ticked, leaving stale errors
-        // showing for live edits between full reloads.
+        // Surface any validator $err_* / $warn_* / $info_* markers
+        // attached to this child. `select` (not `read`) so the row
+        // rebuilds the moment the validator's diagnostic maps change —
+        // without it, the banner only refreshed when `treeLoadGen`
+        // ticked, leaving stale entries showing for live edits between
+        // full reloads. Phase 3 — Dart-side `$dart_<N>` entries are
+        // merged in alongside bxp-fmt's `$err_<N>` (same bucket, same
+        // banner style).
         final errors = context.select<TraceStore, Map<String, String>>(
           (s) => s.errorsAt(childPath),
         );
         if (errors.isNotEmpty) {
           for (final msg in errors.values) {
-            out.add(_ErrorRow(message: msg));
+            out.add(_ErrorRow(message: msg, severity: _DiagSeverity.error));
+          }
+        }
+        final warnings = context.select<TraceStore, Map<String, String>>(
+          (s) => s.warningsAt(childPath),
+        );
+        if (warnings.isNotEmpty) {
+          for (final msg in warnings.values) {
+            out.add(_ErrorRow(message: msg, severity: _DiagSeverity.warning));
+          }
+        }
+        final infos = context.select<TraceStore, Map<String, String>>(
+          (s) => s.infoAt(childPath),
+        );
+        if (infos.isNotEmpty) {
+          for (final msg in infos.values) {
+            out.add(_ErrorRow(message: msg, severity: _DiagSeverity.info));
           }
         }
       }
@@ -704,23 +723,37 @@ class _JsonNodeState extends State<_JsonNode> {
 
 /// Inline diagnostic row rendered beneath a `_JsonNode` whose path
 /// carries one or more `$err_*` markers from the background validator.
+enum _DiagSeverity { error, warning, info }
+
 class _ErrorRow extends StatelessWidget {
   final String message;
-  const _ErrorRow({required this.message});
+  final _DiagSeverity severity;
+  const _ErrorRow({
+    required this.message,
+    this.severity = _DiagSeverity.error,
+  });
   @override
   Widget build(BuildContext context) {
     final t = context.bxpTheme;
+    // Phase 3: warning + info banners reuse the error chrome but pull
+    // softer palette tokens. Falls through to error styling for any
+    // future severity not in the switch — safe default.
+    final (bg, border, fg) = switch (severity) {
+      _DiagSeverity.error => (t.errorBg, t.errorBorder, t.errorText),
+      _DiagSeverity.warning => (t.warnBg, t.warnBorder, t.warnText),
+      _DiagSeverity.info => (t.infoBg, t.infoBorder, t.infoText),
+    };
     return Padding(
       padding: const EdgeInsets.only(left: 24.0, top: 2, bottom: 2),
       child: Container(
         decoration: BoxDecoration(
-          color: t.errorBg,
-          border: Border(left: BorderSide(color: t.errorBorder, width: 2)),
+          color: bg,
+          border: Border(left: BorderSide(color: border, width: 2)),
         ),
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
         child: Text(
           message,
-          style: BxpText.body(context, color: t.errorText, size: BxpSize.xs)
+          style: BxpText.body(context, color: fg, size: BxpSize.xs)
               .copyWith(fontStyle: FontStyle.italic),
         ),
       ),

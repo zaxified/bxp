@@ -307,9 +307,14 @@ class DartValidator {
         continue;
       }
       final suggest = _closestKey(p.key, validKeys);
+      // Severity mirrors `bxp-core`'s post-promotion contract for
+      // `validateUnknownKeysCollect` (warning → error after the
+      // long-term promotion landed alongside SplitPartBadIndex). Same
+      // bucket as bxp-fmt's `$err_*` so json_tree's existing leaf-level
+      // error rendering picks it up without a separate warning path.
       out.add(DartDiagnostic(
         path: [...path, p.key],
-        severity: DartSeverity.warning,
+        severity: DartSeverity.error,
         code: 'dart.config.UnknownKey',
         message: "unknown key '${p.key}'",
         suggest: suggest == null ? null : "did you mean '$suggest'?",
@@ -388,16 +393,46 @@ class DartValidator {
           }
         }
       }
-      // LOOKUP scan
-      final calls = _findCalls(toks);
-      for (final c in calls) {
-        if (c.name.toUpperCase() != 'LOOKUP') continue;
-        if (c.args.length == 2) {
-          hasTwoArgLookup = true;
-          continue;
+      // LOOKUP scan — must reach every call regardless of nesting,
+      // because anycoin-style configs embed `LOOKUP(...)` inside
+      // `IF(..., ..., LOOKUP(...) / ...)`. `_findCalls` is linear and
+      // would skip the inner LOOKUP after consuming the outer IF's
+      // tokens. Walk the flat token list looking for LOOKUP+lparen
+      // pairs at any depth and scan each call's args independently.
+      for (var i = 0; i < toks.length - 1; i++) {
+        final t = toks[i];
+        if (t.kind != _TokKind.ident) continue;
+        if (t.text.toUpperCase() != 'LOOKUP') continue;
+        if (toks[i + 1].kind != _TokKind.lparen) continue;
+        // Walk this LOOKUP call's args (top-level commas at depth 1).
+        var j = i + 2;
+        var depth = 1;
+        var arg = <_Tok>[];
+        final args = <List<_Tok>>[];
+        while (j < toks.length && depth > 0) {
+          final tt = toks[j];
+          if (tt.kind == _TokKind.lparen) {
+            depth++;
+            arg.add(tt);
+          } else if (tt.kind == _TokKind.rparen) {
+            depth--;
+            if (depth == 0) {
+              if (arg.isNotEmpty || args.isNotEmpty) args.add(arg);
+              break;
+            }
+            arg.add(tt);
+          } else if (tt.kind == _TokKind.comma && depth == 1) {
+            args.add(arg);
+            arg = <_Tok>[];
+          } else {
+            arg.add(tt);
+          }
+          j++;
         }
-        if (c.args.length >= 3) {
-          final first = c.args[0];
+        if (args.length == 2) {
+          hasTwoArgLookup = true;
+        } else if (args.length >= 3) {
+          final first = args[0];
           if (first.length == 1 && first.first.kind == _TokKind.string) {
             final name = _unquoteSingle(first.first.text);
             usedPrePass.add(name);
@@ -408,26 +443,32 @@ class DartValidator {
       }
     }
 
-    void collectFromObject(JsonAstNode? n) {
-      if (n is! JsonObject) return;
-      for (final p in n.properties) {
-        if (p is! JsonProperty) continue;
-        final v = p.value;
-        if (v is JsonString) collect(v.value);
-        if (v is JsonObject) collectFromObject(v);
-        if (v is JsonArray) {
-          for (final e in v.elements) {
-            if (e is JsonObject) collectFromObject(e);
-            if (e is JsonString) collect(e.value);
-          }
+    void collectFromAny(JsonAstNode? n) {
+      if (n == null) return;
+      if (n is JsonString) {
+        collect(n.value);
+        return;
+      }
+      if (n is JsonObject) {
+        for (final p in n.properties) {
+          if (p is! JsonProperty) continue;
+          collectFromAny(p.value);
         }
+        return;
+      }
+      if (n is JsonArray) {
+        for (final e in n.elements) {
+          if (e is CommentLine) continue;
+          collectFromAny(e);
+        }
+        return;
       }
     }
 
-    collectFromObject(inputSchema);
-    collectFromObject(rowRules);
-    collectFromObject(outputSchema);
-    collectFromObject(prePass);
+    collectFromAny(inputSchema);
+    collectFromAny(rowRules);
+    collectFromAny(outputSchema);
+    collectFromAny(prePass);
 
     // output_schema values (`"$variable"` strings) reference $vars.
     if (outputSchema is JsonObject) {
@@ -572,7 +613,7 @@ class DartValidator {
               severity: DartSeverity.error,
               code: 'dart.expr.DateFormatBadToken',
               message:
-                  "${call.name} format '$inner' has unrecognized letter '${inner[pos]}' at offset $pos — bracket bare-letter literals as `[T]` per sunrise spec",
+                  "${call.name} format '$inner' has unrecognized letter '${inner[pos]}' at offset $pos — wrap any literal letters in brackets, e.g. '[T]'",
               offset: t.offset,
               length: t.text.length,
             );
@@ -785,8 +826,25 @@ class DartValidator {
         out.add(_Tok(_TokKind.variable, src.substring(start, i), start));
         continue;
       }
-      // 'string'
+      // 'string' — bxp expr syntax has TWO single-quote forms:
+      //   - `'''` (three single quotes) is a SPECIAL token: placeholder
+      //     for csv_text_quote_out. Tokenized as a single string-kind
+      //     token of length 3 so the surrounding `[Field]` references
+      //     don't get swallowed (typical xtb1/xtb2 `$comment`:
+      //     `''' & [Field] & '''`).
+      //   - Otherwise, a normal `'...'` literal — scan to the next
+      //     unescaped `'`. Backslash `\` escapes the following char.
+      // No CSV-style `''` doubling exists; that interpretation would
+      // break the triple-quote placeholder.
       if (c == 0x27) {
+        // Triple-quote placeholder: three consecutive `'`.
+        if (i + 2 < src.length &&
+            src.codeUnitAt(i + 1) == 0x27 &&
+            src.codeUnitAt(i + 2) == 0x27) {
+          out.add(_Tok(_TokKind.string, "'''", i));
+          i += 3;
+          continue;
+        }
         final start = i;
         i++;
         while (i < src.length) {
