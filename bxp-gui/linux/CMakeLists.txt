@@ -4,10 +4,10 @@ project(runner LANGUAGES CXX)
 
 # The name of the executable created for the application. Change this to change
 # the on-disk name of your application.
-set(BINARY_NAME "bxp_gui")
+set(BINARY_NAME "bxp-gui")
 # The unique GTK application identifier for this application. See:
 # https://wiki.gnome.org/HowDoI/ChooseApplicationID
-set(APPLICATION_ID "com.example.bxp_gui")
+set(APPLICATION_ID "io.github.bxp.gui")
 
 # Explicitly opt in to modern CMake behaviors to avoid warnings with recent
 # versions of CMake.
@@ -127,7 +127,7 @@ if(NOT CMAKE_BUILD_TYPE MATCHES "Debug")
     COMPONENT Runtime)
 endif()
 
-# Symlink bxp-fmt next to the bxp_gui binary so BxpProcessClient.findBin's
+# Symlink bxp-fmt next to the bxp-gui binary so BxpProcessClient.findBin's
 # sibling-lookup succeeds on `flutter run` builds. The bundle directory is
 # nuked at the start of every install (line 88), so a manually-created
 # symlink doesn't survive — recreating it here is the only stable way.

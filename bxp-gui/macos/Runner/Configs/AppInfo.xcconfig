@@ -5,10 +5,10 @@
 // 'flutter create' template.
 
 // The application's name. By default this is also the title of the Flutter window.
-PRODUCT_NAME = bxp_gui
+PRODUCT_NAME = bxp-gui
 
 // The application's bundle identifier
-PRODUCT_BUNDLE_IDENTIFIER = com.example.bxpGui
+PRODUCT_BUNDLE_IDENTIFIER = io.github.bxp.gui
 
 // The copyright displayed in application information
-PRODUCT_COPYRIGHT = Copyright © 2026 com.example. All rights reserved.
+PRODUCT_COPYRIGHT = Apache-2.0 licensed. See LICENCE.md.
