@@ -1,7 +1,7 @@
 .{
     .name = .bxp_fmt,
     .fingerprint = 0xc7e9e578c43ce8ea,
-    .version = "0.1.0",
+    .version = "0.2.0",
     .dependencies = .{
         .bxp_core = .{
             .path = "../bxp-core",

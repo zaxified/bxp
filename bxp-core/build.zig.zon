@@ -1,7 +1,7 @@
 .{
     .name = .bxp_core,
     .fingerprint = 0xd3c3e96b8303f761,
-    .version = "0.1.1",
+    .version = "0.2.0",
     .dependencies = .{
         .sunrise = .{
             .url = "https://github.com/HARMONICOM/sunrise/archive/refs/tags/v0.1.0.tar.gz",
