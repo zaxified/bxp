@@ -1,0 +1,74 @@
+# Roadmap
+
+Forward-looking milestones. Hand-maintained — `CHANGELOG.md` is the
+shipped history; this file is what's planned. Items move out of here
+into a `CHANGELOG.md` entry when their PRs land + a release is cut.
+
+## v0.2.0 (about to ship)
+
+The Phase 1–10 release-split refactor (`~/.claude/plans/q4-jde-o-validated-falcon.md`).
+Code already merged on master; just needs a tag.
+
+- Visible `bxp-gui.json` prefs file with one-shot `shared_preferences` migration
+- Pure-Dart auto-updater (`UpdaterService`)
+- `bxp-console` / `bxp-desktop` archive split via two `releases/` subdirs
+- GitHub Actions multi-host release pipeline (ubuntu / windows / macos)
+- Numbered `scripts/` layout + `release-changelog.sh` / `release-tag.sh` helpers
+- `sand-60` icon set across all three platforms
+- New `io.github.bxp.gui` bundle ID (replaces `flutter create` placeholder)
+
+## v0.3.0
+
+Drop the migration scaffolding once everyone has had one launch under
+v0.2.x to migrate their hidden plugin store into `bxp-gui.json`.
+
+- Remove `shared_preferences: ^2.5.5` dep from `bxp-gui/pubspec.yaml`
+- Delete `_maybeMigrateFromSharedPreferences` from `prefs_service.dart`
+- Simplify `PrefsService.load()` (no migration branch)
+
+## Later (no specific version)
+
+### CI hardening
+
+- `.github/workflows/ci.yml` — run `scripts/test.sh` on every PR. Today
+  only the release workflow exists; PRs go untested by CI.
+- Flutter `integration_test` smoke run inside CI (Xvfb on Linux runners,
+  headless setup on Mac / Win).
+
+### Distribution polish
+
+- Apple Developer ID notarisation for macOS `.app` (~$99/year).
+  Eliminates the first-launch Gatekeeper warning.
+- Windows Authenticode signing for the NSIS installer (~$200/year cert).
+  Eliminates the SmartScreen warning.
+- Linux `.rpm` package for Fedora / RHEL users — adds `rpmbuild` + spec
+  file alongside the existing `.deb` and AppImage.
+- Flatpak publishing on Flathub. Review process takes weeks; defer
+  until app is more stable.
+- AppImageUpdate (zsync delta downloads). Current Linux updater
+  re-downloads the full AppImage; zsync would do binary deltas.
+
+### bxp-fmt
+
+- Granular `--doc-*` API: `bxp-fmt --doc-fn LOOKUP` /
+  `--doc-field input_schema.<key>` per-query lookup instead of dumping
+  the full catalog. Backend already supports the lookup; just need the
+  CLI surface (deferred 2026-05-03).
+
+### bxp-cli
+
+- `xlsx_sheet.name` validation under the `--check-fs` umbrella. Verify
+  the named sheet exists inside the `.xlsx` file during the filesystem
+  check phase.
+
+### Tooling
+
+- Zig 0.16 migration. Currently pinned to 0.15.2; 0.16 shipped
+  2026-04-15 with breaking I/O API changes (~100–150 LOC affected).
+  Assessment in `project_zig16_migration` memory.
+
+## Done
+
+Historical milestones live in `CHANGELOG.md`. This section stays empty
+on purpose — once a roadmap item ships, it moves to the changelog
+entry for that release and the line here is deleted.
