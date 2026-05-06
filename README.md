@@ -62,7 +62,7 @@ zig build
 ./zig-out/bin/bxp-cli --help
 ```
 
-See [`resources/readme.md`](resources/readme.md) for full usage, configuration reference.
+See [`resources/console/readme.md`](resources/console/readme.md) for full usage, configuration reference.
 
 ## Supported brokers
 

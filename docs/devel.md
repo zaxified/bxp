@@ -1,6 +1,6 @@
 # BXP - Developer Guide
 
-> For end-user documentation see [`resources/readme.md`](../resources/readme.md) \
+> For end-user documentation see [`resources/console/readme.md`](../resources/console/readme.md) \
 > For architecture diagrams see [`docs/architecture.md`](architecture.md) \
 > For the bxp-ui NDJSON trace protocol see [`docs/bxp-ui-trace-protocol.md`](bxp-ui-trace-protocol.md)
 
@@ -392,7 +392,7 @@ No code changes required. Add an entry to `bxp-cli.json`:
    - Functions receive already-evaluated `Value` arguments.
    - Return a `Value` or propagate an error.
 
-2. **Document it** in the expression reference table in `bxp-cli/CLAUDE.md` (and `resources/readme.md` if user-facing).
+2. **Document it** in the expression reference table in `bxp-cli/CLAUDE.md` (and `resources/console/readme.md` if user-facing).
 
 3. **Add unit tests** inline in `expr.zig`:
 
@@ -458,12 +458,14 @@ Before committing `.csv` or `.xlsx` files in `datasets/`, strip real account or 
 ./scripts/release.sh
 ```
 
-The release script cross-compiles `bxp-cli` for selected targets:
+The release script cross-compiles `bxp-cli` for selected targets and packages each as a `bxp-console-<version>-<platform>` archive:
 
-| Target | Output |
+| Target | Archive |
 | -- | -- |
-| `x86_64-linux-gnu` | `bxp-cli-linux-x86_64` |
-| `aarch64-macos` | `bxp-cli-macos-aarch64` |
-| `x86_64-windows` | `bxp-cli-windows-x86_64.exe` |
+| `x86_64-linux-musl` | `bxp-console-<ver>-linux-x86_64.tar.gz` |
+| `aarch64-macos` | `bxp-console-<ver>-macos-aarch64.tar.gz` |
+| `x86_64-windows` | `bxp-console-<ver>-windows-x86_64.zip` |
 
-Outputs are placed in releases/.
+Outputs are placed in `releases/console/`. Desktop bundles
+(`bxp-desktop-...`) are produced by `scripts/release-desktop.sh` once
+that script lands in Phase 7 of the release-split plan.
