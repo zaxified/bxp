@@ -158,7 +158,7 @@ mcp__dart__get_app_logs()
 # Widget + unit tests (bxp-gui)
 flutter test
 
-# json5_ast unit tests (69 cases + round-trip suite)
+# json5_ast unit tests (~114 cases + round-trip suite)
 dart test packages/json5_ast/
 
 # Full desktop suite: flutter analyze + flutter test + dart test
@@ -243,15 +243,16 @@ bxp-gui/
 │           └── update_dialog.dart   # In-app updater prompt
 ├── packages/json5_ast/             # Dart JSON5 AST library (path dep)
 │   ├── lib/
+│   │   ├── json5_ast.dart          # Top-level umbrella export
 │   │   ├── ast.dart                # JsonAstNode hierarchy + public API
+│   │   ├── parser.dart             # JSON5 → AST
+│   │   ├── dumper.dart             # AST → JSON5 text
+│   │   ├── operations.dart         # Insert / delete / move / set mutations
+│   │   ├── path.dart               # Dot-path resolver
+│   │   ├── value_builder.dart      # Typed value constructors
 │   │   └── src/
-│   │       ├── parser.dart         # JSON5 → AST
-│   │       ├── tokenizer.dart      # JSON5 tokenizer
-│   │       ├── dumper.dart         # AST → JSON5 text
-│   │       ├── operations.dart     # Insert / delete / move / set mutations
-│   │       ├── path.dart           # Dot-path resolver
-│   │       └── value_builder.dart  # Typed value constructors
-│   └── test/                       # ~69 unit tests + round-trip suite
+│   │       └── tokenizer.dart      # JSON5 tokenizer (private)
+│   └── test/                       # ~114 unit tests + round-trip suite
 ├── linux/, macos/, windows/, web/  # Per-platform Flutter shells
 ├── test/                           # Widget tests
 └── pubspec.yaml
@@ -300,6 +301,14 @@ fallback (option 3 above) which reads directly from `bxp-fmt/zig-out/bin/`.
 A standalone Dart package (`packages/json5_ast/`) that parses JSON5 to a
 comment-preserving AST, applies mutations, and dumps back to text. Used to
 edit the user's `bxp-cli.json` without reformatting comments or key order.
+
+> **Standalone-library candidate.** `json5_ast` has no bxp-specific concepts —
+> no `BrokerConfig`, no `FieldDoc`, nothing from the bxp domain. It lives
+> inside the monorepo only because no second Dart consumer exists yet. When
+> contributing here, prefer full JSON5 spec compliance over bxp-convenience
+> shortcuts so future extraction stays cheap. See
+> [`bxp-gui/packages/json5_ast/CLAUDE.md`](../bxp-gui/packages/json5_ast/CLAUDE.md)
+> for the extraction recipe.
 
 ### Mutation model
 
@@ -395,3 +404,18 @@ catalogs — the startup gate fails fatally if the binary is missing.
    via `SchemaGate` + `FnDoc`/`FieldDoc`.
 4. **Tests** — add a dataset fixture if the field affects output; add a
    bxp-fmt smoke test if it adds a new validation path.
+
+---
+
+## Deeper reference
+
+This guide covers structure, dev workflow, and the patterns a new contributor
+needs to ship a first change. Internal-API contracts and design-decision
+rationales live in:
+
+- [`bxp-gui/CLAUDE.md`](../bxp-gui/CLAUDE.md) — Flutter side: services /
+  store / ui split, BxpProcessClient binary resolution, prefs path policy,
+  auto-updater install paths, MCP debug workflow, conventions enforced.
+- [`bxp-gui/packages/json5_ast/CLAUDE.md`](../bxp-gui/packages/json5_ast/CLAUDE.md) —
+  json5_ast public API, comment-ownership rules, round-trip / idempotent
+  canonicalisation contract, future extraction recipe.

@@ -200,7 +200,7 @@ Summary of one file.
   "t": "file_end",
   "template": "xtb2_cash",
   "path": "data/xtb/2026.csv",
-  "stats": {"rows": 42, "written": 38, "errors": 0}
+  "stats": {"rows": 42, "written": 38, "errors": 0, "warnings": 0}
 }
 ```
 

@@ -18,15 +18,19 @@
   - [Package dependency graph](#package-dependency-graph)
   - [bxp-core modules](#bxp-core-modules)
   - [bxp-cli internals](#bxp-cli-internals)
+  - [bxp-fmt internals](#bxp-fmt-internals)
   - [Two-pass processing pipeline](#two-pass-processing-pipeline)
   - [Expression evaluator (expr.zig)](#expression-evaluator-exprzig)
   - [Configuration system (config.zig + json5.zig)](#configuration-system-configzig--json5zig)
   - [Memory model](#memory-model)
+  - [Error handling philosophy](#error-handling-philosophy)
+  - [Debugging workflow](#debugging-workflow)
   - [Adding a new conversion template](#adding-a-new-conversion-template)
   - [Adding a new built-in function](#adding-a-new-built-in-function)
   - [Testing](#testing)
   - [Release process](#release-process)
   - [GUI development](#gui-development)
+  - [Where to dig deeper (CLAUDE.md map)](#where-to-dig-deeper-claudemd-map)
 
 ---
 
@@ -276,6 +280,41 @@ bundle and invokes them via `Process.run`.
 - `Output` - thin wrapper around stdout that respects `--quiet` and `--debug` flags.
 - `SectionStats` - accumulates warning/error counts and elapsed time across templates.
 
+Deeper detail: [`bxp-cli/CLAUDE.md`](../bxp-cli/CLAUDE.md).
+
+---
+
+### bxp-fmt internals
+
+`bxp-fmt` is a small developer-utility binary sibling to `bxp-cli`. It holds
+everything that isn't "run a conversion": config validation, expression
+evaluation, schema/docs emission, template lookup. Consumed by `bxp-gui` (via
+`Process.run`) and by `scripts/test.sh`.
+
+The binary is intentionally a thin shim — every subcommand delegates to a
+`bxp-core` module. bxp-fmt's own job is arg parsing, arena setup, and JSON
+serialization.
+
+| Subcommand | Backed by | Purpose |
+| -- | -- | -- |
+| `--config <path>` | `config.load` + `config.validateCollect` | Annotated JSON output with `$comm_<N>` / `$err_<N>` / `$warn_<N>` / `$info_<N>` siblings |
+| `--config <path> --list-templates` | `config.load` | JSON array of template ids |
+| `--config <path> --fetch-template <id>` | `config.load` | Raw JSON5 block of one template |
+| `--expr '<text>'` | `expr.eval` (empty `Context`) | One-shot expression validation |
+| `--expr-trace '<text>' [--row-headers …] [--row-fields …]` | `expr.evalTrace` | Per-call NDJSON trace stream (used by ExprPlayground) |
+| `--docs` | `docs.writeDocs` | Full FnDoc / FieldDoc catalog (single source for bxp-gui startup) |
+| `--version`, `--help` | — | Standard. `--version` writes to stdout, not stderr |
+
+Subcommands are mutually exclusive (one action per invocation). Each `runX`
+function wraps the input GPA in an `ArenaAllocator` — `expr.Context.alloc`
+doesn't garbage-collect, so a raw GPA leaks per call.
+
+Adding a subcommand: write a new `runX` in `bxp-fmt/src/main.zig`, dispatch
+from arg parsing, delegate the real work to a `bxp-core` module. No new
+business logic should land here.
+
+Deeper detail: [`bxp-fmt/CLAUDE.md`](../bxp-fmt/CLAUDE.md).
+
 ---
 
 ### Two-pass processing pipeline
@@ -374,49 +413,107 @@ The root GPA (`std.heap.DebugAllocator`) catches leaks in debug builds.
 
 ---
 
+### Error handling philosophy
+
+Three concerns, three mechanisms:
+
+**1. Exit codes (CLI contract).** `bxp-cli`:
+
+| Code | Meaning |
+| -- | -- |
+| `0` | Success |
+| `1` | Fatal error (invalid config, file not found, broken expression at load) |
+| `2` | Warnings (typo'd field, unknown column, no input rows) |
+
+Exit `2` runs to completion — the user gets converted output AND a warning
+text on stderr. CI scripts treat `2` as failure (see "datasets are exemplary"
+convention).
+
+**2. Diagnostics (deep validation).** `bxp-core/diagnostics.zig` defines a
+structured collector consumed by `bxp-fmt --config`:
+
+```text
+Severity   ∈ { .error, .warning, .info }
+Diagnostic = { path, off?, len?, severity, code, message, suggest? }
+```
+
+`config.zig`, `json5.zig`, and `expr.zig` accept an optional `*Diagnostics`
+sink — `bxp-cli` passes `null` (fail-fast / stderr behaviour preserved),
+`bxp-fmt` passes a real bag and renders findings as `$err_<N>` / `$warn_<N>` /
+`$info_<N>` siblings in the annotated JSON output. The GUI reads those keys
+to decorate the tree with inline error markers.
+
+**3. User-facing messages.** Use `std.process.exit(1)` for fatal CLI
+errors — no Zig stack trace leaks to the user. Severity routing in `--trace`
+mode: `Output.warning()` writes to stderr (stdout is reserved for NDJSON);
+fatal errors also stderr.
+
+---
+
+### Debugging workflow
+
+**bxp-cli verbosity flags** — composable, all on the same binary:
+
+| Flag | What it does |
+| -- | -- |
+| `--debug` | Prints unmatched rows when `row_rules_debug_missing: true` |
+| `--quiet` | Suppresses per-template summaries (exit code still reflects result) |
+| `--trace` | Emits NDJSON event stream on stdout (consumed by `bxp-gui`'s dry-run debugger). Implies `--quiet` |
+| `--check-fs=N` | Adds filesystem-existence checks (templates' `data_dir`, etc.) with N-second timeout |
+
+**Inspecting an expression in isolation:**
+
+```bash
+# Validate syntax only (no row context)
+./zig-out/bin/bxp-fmt --expr "IF([Qty] > 0, 'BUY', 'SELL')"
+
+# Trace per-call values against a fake row
+./zig-out/bin/bxp-fmt --expr-trace "[Price] * [Qty]" \
+    --row-headers '["Price","Qty"]' \
+    --row-fields  '["12.50","100"]'
+```
+
+**bxp-gui live debug (Claude Code MCP loop):** see [`gui.md`](gui.md#debugging-with-print)
+for the `mcp__dart__launch_app` → `hot_reload` → `get_app_logs` cycle. Quick
+tip: `print()` from Dart is captured; `developer.log()` is not.
+
+**Settings inspector (Ctrl+Shift+S in bxp-gui):** opens an internal-state
+drawer showing the loaded config, parsed AST, schema docs, op log, and
+validation errors. The fastest way to confirm "is the GUI seeing what I
+think it's seeing?".
+
+---
+
 ### Adding a new conversion template
 
-No code changes required. Add an entry to `bxp-cli.json`:
+No code changes required — adding a broker is purely configuration work. The
+full config schema, expression reference, and field-by-field walkthrough live
+in the user-facing guide:
+
+→ [`resources/console/readme.md`](../resources/console/readme.md)
+
+That document is what gets shipped inside `bxp-console` archives, so it
+double-serves new contributors and end users. The short skeleton:
 
 ```json
 "broker_to_tracker": {
-  "data_dir": "../data/broker_to_tracker",
+  "data_dir":     "../data/broker_to_tracker",
   "file_pattern_in": ".csv",
-  "ticker_map": {},
-  "input_schema": {
-    "$date":      "DATE_CONVERT([Date], 'DD/MM/YYYY', 'YYYY-MM-DD')",
-    "$ticker":    "TICKER([Symbol])",
-    "$quantity":  "[Quantity]",
-    "$unitprice": "PRICE_VALUE([Price])",
-    "$currency":  "PRICE_CURRENCY([Price])",
-    "$fee":       "[Fee]",
-    "$amount":    "[Total]"
-  },
-  "row_rules_debug_missing": true,                  // false if all rows handled
-  "row_rules": [
-    { "when": "[Type] = 'buy'",  "rows": [ { "$action": "'BUY'" } ] },
-    { "when": "[Type] = 'sell'", "rows": [ { "$action": "'SELL'" } ] },
-    { "when": "1",               "rows": [] }       // skip everything else
-  ],
-  "output_schema": {
-    "date":         "$date",
-    "symbol":       "$ticker",
-    "quantity":     "$quantity",
-    "activityType": "$action",
-    "unitPrice":    "$unitprice",
-    "currency":     "$currency",
-    "fee":          "$fee",
-    "amount":       "$amount"
-  }
+  "input_schema": { "$date": "...", "$ticker": "...", /* ... */ },
+  "row_rules":    [ { "when": "...", "rows": [ { "$action": "'BUY'" } ] } ],
+  "output_schema": { "date": "$date", /* ... */ }
 }
 ```
 
-**Tips:**
+Dev-only tips (not in the user guide):
 
-- Start with `"row_rules_debug_missing": true` and run with `--debug` to see which rows are not matched by any rule.
-- Use `[ColumnName]` to reference raw CSV columns by header name.
-- Use `PRICE_VALUE` / `PRICE_CURRENCY` for columns like `"24.00 CZK"` or `"$100.50"`.
-- `pre_pass` is needed when values from one row are needed in another (e.g. AnyCoin pairs a `trade payment` row with a `trade fill` row via `Order ID`).
+- Start with `row_rules_debug_missing: true` + run with `--debug` to surface
+  rows that match no rule.
+- For paired-row brokers (one row references another via an order ID),
+  use `pre_pass` + `LOOKUP()`. AnyCoin is the reference template.
+- Drop a `datasets/<template_id>/{sample.csv, sample.json, sample.expected}`
+  triple to wire the template into the regression suite — `scripts/test.sh`
+  picks it up automatically.
 
 ---
 
@@ -516,3 +613,21 @@ all native installers come from real native builds.
 See [`docs/gui.md`](gui.md) for a full bxp-gui developer guide covering Flutter
 architecture, subprocess wiring, the json5_ast AST library, dev-run workflow, and
 key patterns (ValueNotifier streaming, HardwareKeyboard shortcuts, fractional splitters).
+
+---
+
+### Where to dig deeper (CLAUDE.md map)
+
+`docs/` covers orientation and cross-module flow. The deepest reference for
+each module — internal API contracts, design decisions, "known non-issue"
+rationales — lives in per-module `CLAUDE.md` files. They're loaded
+automatically by Claude Code, but you can read them directly any time.
+
+| Module | File | What's in it |
+| -- | -- | -- |
+| Monorepo | [`CLAUDE.md`](../CLAUDE.md) | Top-level layout + package dep graph + cross-cutting conventions |
+| `bxp-cli` | [`bxp-cli/CLAUDE.md`](../bxp-cli/CLAUDE.md) | Full config reference, expression syntax, broker list, exit codes, output stream routing |
+| `bxp-fmt` | [`bxp-fmt/CLAUDE.md`](../bxp-fmt/CLAUDE.md) | Subcommands, annotated JSON shape (`$comm_*`/`$err_*`/…), exit codes |
+| `bxp-core` | [`bxp-core/CLAUDE.md`](../bxp-core/CLAUDE.md) | Per-module API surface, build details, "known non-issues" rationale |
+| `bxp-gui` | [`bxp-gui/CLAUDE.md`](../bxp-gui/CLAUDE.md) | Flutter app structure, services/store/ui split, MCP debug workflow |
+| `json5_ast` | [`bxp-gui/packages/json5_ast/CLAUDE.md`](../bxp-gui/packages/json5_ast/CLAUDE.md) | Standalone-library-candidate status, comment ownership, future extraction recipe |

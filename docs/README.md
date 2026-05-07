@@ -2,7 +2,17 @@
 
 Developer documentation for the BXP monorepo.
 
-**End-user documentation** (bundled with releases):
+## New here? Read in this order
+
+1. [`devel.md`](devel.md) — repo layout, build, test suite, design philosophy.
+2. [`architecture.md`](architecture.md) — visual data-flow diagrams (skim).
+3. [`gui.md`](gui.md) — only if you're touching Flutter.
+4. Module-level [`CLAUDE.md`](../CLAUDE.md) files — deepest reference, one per
+   module (`bxp-cli/CLAUDE.md`, `bxp-core/CLAUDE.md`, `bxp-fmt/CLAUDE.md`,
+   `bxp-gui/CLAUDE.md`). Loaded automatically by Claude Code, read directly
+   when you need internal-API detail.
+
+**End-user documentation** (bundled with releases, not for new devs):
 
 - [`resources/console/readme.md`](../resources/console/readme.md) — bxp-cli user guide (config syntax, expression reference, broker list)
 - [`resources/desktop/readme.md`](../resources/desktop/readme.md) — bxp-gui user guide (installation, first run, update process)

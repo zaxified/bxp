@@ -8,11 +8,17 @@
   - [Per-File Processing (processBroker)](#per-file-processing-processbroker)
   - [Two-Pass Pipeline Detail](#two-pass-pipeline-detail)
   - [Expression Evaluator - Call Stack](#expression-evaluator---call-stack)
+- bxp-fmt
+  - [Validation Pipeline](#bxp-fmt-validation-pipeline)
 - bxp-gui
   - [Layers and Components](#bxp-gui-layers-and-components)
   - [Dry-run / Runner Flow](#dry-run--runner-flow)
+  - [Cancellation and watchdog](#cancellation-and-watchdog)
+  - [Config Loading and Parse Pipeline](#config-loading-and-parse-pipeline)
   - [Config Editing and AST](#config-editing-and-ast)
+  - [Undo / Redo](#undo--redo)
   - [Expr Playground](#expr-playground)
+  - [Auto-updater Flow](#auto-updater-flow)
 - [Data Structures](#data-structures)
 
 ---
@@ -96,6 +102,10 @@ graph TD
     FMTMAIN --> EXPR
     FMTMAIN --> DOCS
     FMTMAIN --> DIAG
+    FMTMAIN --> JSON5
+
+    DOCS -.re-exports.-> EXPR
+    DOCS -.re-exports.-> CFG2
 
     SVCS -->|subprocess --trace| CLI
     SVCS -->|subprocess --config / --docs / --expr / --expr-trace| FMT
@@ -103,6 +113,15 @@ graph TD
     STORE --> TB
     STORE --> AST_LIB
 ```
+
+`docs.zig` is an aggregator — it owns no schema of its own. The dotted arrows
+indicate that it re-exports `expr.builtins` (the `FnDoc` catalog) and flattens
+each `config.zig` struct's `fields[]` table into the `bxp-fmt --docs` JSON.
+Adding a new built-in or config field updates the docs automatically.
+
+`bxp-fmt`'s `--config` path also calls `json5.preprocessAnnotated` directly to
+emit `$comm_*` / `$err_*` siblings — that's the source of the FMT → JSON5
+arrow that bypasses the normal config loader.
 
 ---
 
@@ -184,6 +203,23 @@ flowchart TD
     warnings / empty_csv]
 ```
 
+A single input row can produce **0, 1, or N output rows** depending on
+`row_rules`:
+
+- `rows: []` — silent skip (e.g. internal accounting events that don't
+  belong in the activity log).
+- `rows: [{...}]` — one-to-one (the typical buy/sell/deposit case).
+- `rows: [{...}, {...}, ...]` — multi-row expansion. Used when a single
+  source event represents multiple Wealthfolio activities — e.g. a Trading
+  212 dividend with adjustment may emit separate `DIVIDEND` and
+  `DIV_TAX` rows from one input line.
+
+The `--debug` flag prints rows that match no rule when
+`row_rules_debug_missing: true` is set on the template — useful when
+authoring a new template. xlsx files take an earlier path: `xlsxPrePass`
+extracts each sheet to an intermediate `.csv` before this loop runs, so
+xlsx and csv inputs follow the same code from `csv.splitRecords` onwards.
+
 ---
 
 ## Two-Pass Pipeline Detail
@@ -229,6 +265,22 @@ row holds the ticker and quantity. Both share an `Order ID`. `pre_pass` indexes 
 rows by `Order ID`; the main loop uses `LOOKUP([Order ID], 'currency')` when processing
 fill rows.
 
+### Single block vs named blocks
+
+`pre_pass` accepts two shapes:
+
+- **Legacy single block** — `{ when, key, values }` directly. Internally bound
+  to the synthetic namespace `_default`; accessed via 2-arg
+  `LOOKUP(key_expr, 'field')`.
+- **Named blocks** — `{ name1: { when, key, values }, name2: { ... } }`. Each
+  block is its own namespace; accessed via 3-arg
+  `LOOKUP('name1', key_expr, 'field')`. Use this when one template needs
+  multiple independent lookup tables.
+
+The lookup table is keyed internally by a composite `name\x00key\x00field`
+string, which is why both forms share the same `LookupTable` storage —
+the legacy 2-arg form just gets `_default` synthesized as the namespace.
+
 ---
 
 ## Expression Evaluator - Call Stack
@@ -265,7 +317,34 @@ graph TD
     FIELDS"]
     FUNC --> SUNRISE_CALL["sunrise
     (DATE_CONVERT only)"]
+
+    FIELD -->|reads| CTX_FIELDS["Context.fields
+    Context.col_index"]
+    FUNC -.LOOKUP.-> CTX_LT["Context.lookup_table"]
+    FUNC -.TICKER.-> CTX_TM["Context.ticker_map"]
 ```
+
+Side context dependencies (dotted lines): `[ColumnName]` and `[n]` references
+read `Context.fields` via `Context.col_index`; `LOOKUP(...)` reads
+`Context.lookup_table` populated by the pre-pass; `TICKER(...)` reads
+`Context.ticker_map` (resolved at config-load time from inline objects or the
+top-level `ticker_maps` registry).
+
+### Static analysis path (parallel to runtime eval)
+
+`bxp-fmt`'s validation passes don't run expressions — they walk the parse
+tree to find typos and dead references. Three top-level entry points in
+`expr.zig`:
+
+| Function | What it returns | Used by |
+| -- | -- | -- |
+| `staticReferences(src, alloc)` | Set of every `[X]` and `$var` referenced | `validateUnknownKeysCollect`, `validateUnusedCollect` |
+| `staticCheckCalls(src, …)` | Per-call FnArg arity + signature errors | `bxp-fmt --config` (added in Phase G6) |
+| `staticCheckSplitPart(src, …)` | Token-scan for `SPLIT_PART(_, _, ≤0)` literals | `bxp-fmt --config` |
+
+These share the parser front-end with `eval()` — same recursive descent, no
+duplicated grammar — but emit `Diagnostic` records into a `*Diagnostics` sink
+instead of producing values.
 
 ---
 
@@ -307,6 +386,18 @@ graph TD
         BPC["BxpProcessClient
         spawns bxp-cli / bxp-fmt
         parses stdout / stderr streams"]
+        ASTL["ast_loader.dart
+        parse user config → JsonAstNode tree"]
+        ASTP["ast_patch_client.dart
+        apply mutations + dump back to disk"]
+        OPL["op_log.dart
+        undo / redo ledger of ConfigOps"]
+        OP2A["op_to_ast.dart
+        translate ConfigOp → AST mutation calls"]
+        SDL["schema_doc_lookup.dart
+        path matching with * wildcard"]
+        DT["dev_trace.dart
+        kDebugMode print() helper"]
         PS["PrefsService
         JSON prefs file at OS-canonical path"]
         UPD["UpdaterService
@@ -329,7 +420,16 @@ graph TD
     TS --> DV
     TS --> AST
     TS -->|spawn subprocess| BPC
+    TS --> ASTL
+    TS --> ASTP
+    TS --> OPL
+    TS --> OP2A
     TS --> PS
+    TS --> UPD
+    SG -.uses.-> SDL
+    DV -.uses.-> SDL
+    ASTP --> AST
+    OP2A --> AST
 ```
 
 Key invariants:
@@ -349,9 +449,12 @@ Key invariants:
 
 ## Dry-run / Runner Flow
 
-Clicking **Run** (or pressing Ctrl+R) triggers a full broker conversion with
-`bxp-cli --trace`. Events stream back as NDJSON lines; `TraceBuilder` folds
-each event into `TraceStore`. To avoid a rebuild storm (PlutoGrid reallocates
+Two toolbar buttons spawn `bxp-cli`: **dry-run** runs `--trace` only (no
+`.csvx` files written, just the NDJSON event stream for the debugger);
+**full-run** writes real output. Neither has a keyboard shortcut — both
+share the same plumbing, only the `dry: bool` argument to `_streamRun`
+differs. Events stream back as NDJSON lines; `TraceBuilder` folds each event
+into `TraceStore`. To avoid a rebuild storm (PlutoGrid reallocates
 quadratically on every `notifyListeners`), incremental row updates go through
 `ValueNotifier<int>` counters; the full `notifyListeners()` fires only twice:
 at stream start and after the `done` event.
@@ -364,9 +467,9 @@ sequenceDiagram
     participant BPC as BxpProcessClient
     participant CLI as bxp-cli --trace
 
-    UI->>TS: runBroker() [Run / Ctrl+R]
+    UI->>TS: runDryRun() / runFullRun()
     TS->>TS: write draft config to tmp file
-    TS->>BPC: streamRun(configPath, template?)
+    TS->>BPC: runDryRun / runFullRun (configPath, template?)
     BPC->>CLI: Process.start(--trace --config ...)
     CLI-->>BPC: {"t":"start",...}
     BPC-->>TS: raw JSON line
@@ -390,8 +493,133 @@ sequenceDiagram
     TS-->>UI: notifyListeners() [final render]
 ```
 
-A 10-second streaming idle watchdog fires `SIGTERM` → `SIGKILL` if no events
-arrive for 10 seconds, preventing a hung subprocess from blocking the UI.
+### Cancellation and watchdog
+
+The user can cancel a run mid-stream (the run-button label flips to `cancel`
+while a stream is active); a hung subprocess is also caught by an internal
+idle watchdog. Both paths share the same termination plumbing:
+
+```mermaid
+stateDiagram-v2
+    [*] --> idle
+    idle --> running: runDryRun() / runFullRun()
+    running --> running: NDJSON event arrives
+    running --> cancelling: cancelRun() [user] OR\n10 s idle [watchdog]
+    cancelling --> done: child exits
+    cancelling --> killed: 2 s grace expires\n→ SIGKILL
+    killed --> done: process reaped
+    running --> done: {"t":"done"} received
+    done --> idle: notifyListeners()
+```
+
+Step detail:
+
+- **User cancel.** `cancelRun()` sets `_cancelRequested = true` and sends
+  `SIGTERM` to the bxp-cli child. The streaming loop in `_streamRun` detects
+  the flag, drains remaining stdout, and exits.
+- **Watchdog.** A periodic timer in `_streamRun` measures time since the last
+  NDJSON line. If the gap exceeds 10 seconds, it triggers the same SIGTERM
+  path. This catches a child stuck before emitting `done` (rare but seen
+  during early `--check-fs=N` development).
+- **SIGKILL escalation.** If the process doesn't exit within 2 seconds of
+  SIGTERM, the watchdog escalates to SIGKILL. Negative exit codes from
+  signal-driven termination are treated as cancellation, not a fault.
+- **Final notify.** `notifyListeners()` fires once in the `finally` block so
+  the toolbar transitions out of `cancelling` regardless of how the run
+  ended (clean done, cancel, kill, error).
+
+---
+
+## Config loading and parse pipeline
+
+Symmetric counterpart to **Config Editing and AST** below. Triggered by
+opening a file (`Ctrl+O`), pressing `Ctrl+R` (reload), or being called as
+post-save reload from `saveConfig`. Two parallel parses run on the same
+bytes:
+
+```mermaid
+sequenceDiagram
+    participant UI as open_dialog.dart / Ctrl+O / Ctrl+R
+    participant TS as TraceStore
+    participant ASTL as ast_loader (Dart JSON5 AST)
+    participant BPC as BxpProcessClient
+    participant FMT as bxp-fmt --config
+
+    UI->>TS: setConfigPath(path) + loadConfig()
+    TS->>TS: clear stale state\n(diagnostics, run-state, expr cache)
+    TS->>TS: notifyListeners() [isLoadingConfig=true]
+    TS->>ASTL: AstLoader.loadFromFile(path)
+    ASTL-->>TS: { rawText, root, diagnostics }
+    alt astResult.root == null (parse fail)
+        TS->>TS: configError + _loadedWithErrors=true
+        TS-->>UI: notifyListeners() [readonly toolbar]
+    else AST parsed OK
+        TS->>TS: _astRoot = root
+        TS->>BPC: loadConfig(path, checkFsSeconds?)
+        BPC->>FMT: Process.run(--config <path> [--check-fs=N])
+        FMT-->>BPC: annotated JSON ($comm/$err/$warn/$info siblings)
+        BPC-->>TS: jsonOutput
+        TS->>TS: extractDiagnostics(bxpTree)\n→ path-keyed buckets
+        TS->>TS: _revalidateDart() [synchronous Dart-side overlay]
+        TS-->>UI: notifyListeners() [tree + inline markers]
+    end
+```
+
+Key points:
+
+- **AST is the primary loader.** Even if `bxp-fmt --config` fails or is slow,
+  the user can still see the tree because `ast_loader` only depends on the
+  Dart JSON5 library — no subprocess.
+- **AST parse failure is the only readonly trigger.** `_loadedWithErrors` is
+  flipped only when AST can't build a tree at all; bxp-fmt diagnostics are
+  shown as inline `$err_*` markers and the pre-save guard blocks bad saves —
+  but the user can keep editing toward the fix.
+- **Diagnostics are path-keyed.** `$err_*` siblings in the annotated JSON are
+  flattened into `Map<String, List<Diagnostic>>` keyed by dot-path. The tree
+  renderer queries this map per-node to draw inline error chips.
+- **Dart re-validation runs synchronously after the bxp-fmt response.** It
+  populates a separate set of buckets driven by `FnDoc.args` + `FieldDoc`
+  validators — instant feedback even for buckets bxp-fmt didn't surface yet.
+
+---
+
+## bxp-fmt validation pipeline
+
+When the GUI calls `bxp-fmt --config <path>`, the binary runs a sequence of
+diagnostic passes against the loaded config. Each pass appends to either the
+legacy `errors[]` list or the structured `Diagnostics` bag; both are merged
+into the annotated JSON output before exit.
+
+```mermaid
+flowchart TD
+    INPUT([raw config bytes]) --> P1[json5.preprocessAnnotated\n$comm/$err keys for parse-level findings]
+    P1 --> P2[std.json.parseFromSliceLeaky\nstructural JSON parse]
+    P2 --> P3[config.loadFromBytes\n→ Config + BrokerConfig structs]
+
+    P3 --> V1[BrokerConfig.validateCollect\nschema constraints per template]
+    V1 --> V2[validateExprsCollect\nexpression statics: refs, calls, SPLIT_PART]
+    V2 --> V3[validateUnusedCollect\ndead pre_passes, unused $variables]
+    V3 --> V4[validateCrossTemplate\nfile_pattern_in collisions across templates]
+    V4 --> V5[validateUnknownKeysCollect\ntypo'd keys + did-you-mean]
+    V5 --> V6{--check-fs=N\nflag set?}
+    V6 -->|N>0| V7[validateFilesystemWithTimeout\ndata_dir + input file existence\nworker thread + N-second deadline]
+    V6 -->|N=0| MERGE
+    V7 --> MERGE[Merge errors[] + Diagnostics\ninto annotated JSON tree]
+    MERGE --> EXIT{any error?}
+    EXIT -->|yes| OUT1([annotated JSON\nexit 1])
+    EXIT -->|no| OUT0([annotated JSON\nexit 0])
+```
+
+Severity routing in the merged JSON: `.error` → `$err_<N>`, `.warning` →
+`$warn_<N>`, `.info` → `$info_<N>`. All three carry an optional `off` / `len`
+byte span and `suggest` did-you-mean string. Each finding is inserted as a
+sibling immediately before the offending key in its parent object (or
+appended to the parent when the offending field doesn't exist).
+
+`bxp-cli` runs only the first three passes (load) and skips the entire
+diagnostic chain — its job is to convert files, not validate. Hence the same
+typo that surfaces as a `$warn_*` sibling in `bxp-fmt`'s JSON appears as a
+plain stderr warning line during a real run.
 
 ---
 
@@ -434,9 +662,54 @@ sequenceDiagram
 validation logic — it reads the single-source-of-truth catalog so that adding a
 new built-in function automatically extends the live validator.
 
-Undo / redo is implemented as an op log (`_opLog` / `_redoStack`) on top of the
-AST. Each `ConfigOp` is invertible; undo re-applies the inverse op and
-re-validates the same way as a forward edit.
+### Undo / redo
+
+The op log is the canonical record of "what the user did since the last
+load." Every applied `ConfigOp` is paired with its inverse so undo doesn't
+require re-parsing — it just reapplies the inverse against the live AST.
+
+```mermaid
+sequenceDiagram
+    participant UI as editor / Ctrl+Z / Ctrl+Y
+    participant TS as TraceStore
+    participant LOG as _opLog
+    participant REDO as _redoStack
+    participant AST as json5_ast
+
+    Note over UI,AST: Forward edit
+    UI->>TS: applyOp(op)
+    TS->>AST: ops.apply(op, root)
+    TS->>LOG: push (op, inverseOp)
+    TS->>REDO: clear()
+    TS-->>UI: notifyListeners() [canUndo=true, canRedo=false]
+
+    Note over UI,AST: Undo (Ctrl+Z)
+    UI->>TS: undo()
+    TS->>LOG: pop (op, inverseOp)
+    TS->>AST: ops.apply(inverseOp, root)
+    TS->>REDO: push (op, inverseOp)
+    TS->>TS: re-run DartValidator + diagnostic refresh
+    TS-->>UI: notifyListeners() [canRedo=true]
+
+    Note over UI,AST: Redo (Ctrl+Y)
+    UI->>TS: redo()
+    TS->>REDO: pop (op, inverseOp)
+    TS->>AST: ops.apply(op, root)
+    TS->>LOG: push (op, inverseOp)
+    TS->>TS: re-run DartValidator + diagnostic refresh
+    TS-->>UI: notifyListeners()
+```
+
+Edge cases handled:
+
+- **Ctrl+Z inside a text field** falls through to native typo-undo. The
+  global handler only fires when focus is somewhere structural (tree, panel,
+  top bar). See `_focusInEditableText()` in `main_view.dart`.
+- **Save clears the redo stack but keeps the undo log.** The user can still
+  undo edits made before the save — the AST mutations are reversible
+  regardless of disk persistence.
+- **Reset draft (Ctrl+T)** clears both stacks and re-loads from disk —
+  it's a hard reset, not an undo.
 
 ---
 
@@ -477,6 +750,59 @@ sequenceDiagram
     BPC-->>TS: final value or error
     TS-->>UI: exprFinalValue / exprTraceError
 ```
+
+---
+
+## Auto-updater flow
+
+`UpdaterService` runs in the background from app launch onwards. It polls
+GitHub Releases, surfaces newer versions through a `ChangeNotifier`, and on
+user accept downloads → verifies → installs the matching native artifact.
+
+```mermaid
+sequenceDiagram
+    participant Timer as 5 s + 6 h tick
+    participant UPD as UpdaterService
+    participant GH as api.github.com
+    participant DLG as update_dialog
+    participant FS as system temp dir
+    participant OS as platform installer
+
+    Timer->>UPD: check()
+    UPD->>GH: GET /repos/zaxified/bxp/releases/latest
+    GH-->>UPD: { tag_name, assets[] }
+    UPD->>UPD: compare against current version
+    alt newer release found
+        UPD->>UPD: pick asset by platform regex\n(setup.exe / .dmg / .AppImage)
+        UPD-->>DLG: notifyListeners() [UpdateInfo available]
+        DLG->>UPD: user clicks Install
+        UPD->>FS: download asset → tmp dir
+        UPD->>GH: GET SHA256SUMS
+        UPD->>UPD: verify SHA256 of asset
+        alt hash matches
+            UPD->>OS: platform-specific install
+            Note right of OS: Windows: setup.exe /S → exit(0)\nmacOS: hdiutil mount → cp -R → open -n\nLinux AppImage: atomic-replace + exec()\nLinux .deb / tarball: open release page
+            OS-->>UPD: success / failure
+        else hash mismatch
+            UPD-->>DLG: error: corrupted download
+        end
+    else current is latest
+        UPD->>UPD: schedule next tick (6 h)
+    end
+```
+
+Notes:
+
+- **Initial poll fires 5 s after launch.** Avoids slowing app startup; a 6 h
+  recurring tick handles long-running sessions.
+- **macOS DMGs target ARM only.** Intel Macs get `assetUrl == null` and the
+  dialog redirects to the GitHub release page — no auto-install path. The
+  release workflow doesn't produce an x86_64 DMG.
+- **Linux dual path.** AppImage is atomically replaced and `exec()`'d back
+  in-place; `.deb` and `.tar.gz` users go to the release page since
+  in-place self-update doesn't fit those formats.
+- **`kDebugMode` skips the auto-check.** Dev runs don't accidentally
+  download installers over the working tree.
 
 ---
 
@@ -552,10 +878,50 @@ classDiagram
         +quote_out: u8
     }
 
+    class TickerMap {
+        +entries: StringHashMap~string~
+    }
+
+    class LookupTable {
+        +map: StringHashMap~string~
+    }
+
+    class SectionStats {
+        +warnings: u32
+        +errors: u32
+        +empty_csv: u32
+        +elapsed_ns: u64
+        +merge(other)
+    }
+
+    class SheetSpec {
+        +name: string
+        +header_row: u32
+        +output_suffix: string
+    }
+
     Config "1" *-- "many" BrokerConfig
+    Config "1" *-- "many" TickerMap
     BrokerConfig "1" *-- "0..*" PrePass
     BrokerConfig "1" *-- "many" RowRule
     BrokerConfig "1" *-- "0..1" XlsxSheet
+    BrokerConfig --> TickerMap : ticker_map ref
     Context --> Value : eval returns
+    Context --> LookupTable : Context.lookup_table
+    Context --> TickerMap : Context.ticker_map
+    XlsxSheet ..> SheetSpec : runtime form\nfor xlsx.zig
     Diagnostics "1" *-- "many" Diagnostic
 ```
+
+`SectionStats` is bxp-cli's per-section accumulator (one per template, plus
+a top-level total). Warnings tick the exit code from 0 → 2 even when the run
+completes; errors push it to 1.
+
+`LookupTable` is owned by `Context` for the duration of one file's main
+loop. The composite key encoding keeps multi-namespace `pre_passes` sharing
+one storage map without needing nested structures.
+
+`TickerMap` can be inline (per-template `ticker_map: { ... }`) or a named
+reference into the top-level `ticker_maps: { name: { ... } }` registry —
+config loader resolves the reference at load time, so by the time `Context`
+gets it, it's always a flat `StringHashMap`.
