@@ -24,6 +24,11 @@ on:
 env:
   RELEASE_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
 
+# Default the GITHUB_TOKEN to read-only; the aggregate-and-publish job
+# overrides this to `contents: write` for the release upload step.
+permissions:
+  contents: read
+
 jobs:
   console:
     name: console (cross-compile via Zig)
