@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+import 'package:path/path.dart' as p;
 import 'package:json5_ast/ast.dart';
 import 'package:json5_ast/operations.dart' as ast_ops;
 import '../services/ast_loader.dart';
@@ -934,7 +935,8 @@ class TraceStore extends ChangeNotifier {
           'config schema). Without it nothing in the editor would work.\n\n'
           'Searched (in order):\n'
           '  • \$BXP_FMT_PATH environment variable = $envPath\n'
-          '  • bxp-fmt in the same directory as bxp_gui = $exeDir/bxp-fmt\n\n'
+          '  • bxp-fmt in the same directory as bxp_gui = '
+          '${p.join(exeDir, BxpProcessClient.binaryFileName('bxp-fmt'))}\n\n'
           'Diagnostics:\n'
           '  • Platform.resolvedExecutable = $exe\n'
           '  • Directory.current (PWD) = $cwd';

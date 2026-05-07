@@ -4,6 +4,16 @@ All notable changes to BXP. New entries are prepended at the top by
 `scripts/release-changelog.sh`; pre-existing release tags (v0.1.0,
 v0.1.1) are hand-stubbed since they pre-date the automation.
 
+## 2026.05.07 — bxp-cli 0.2.1, bxp-fmt 0.2.1, bxp-gui 0.2.1
+
+### Bug fixes
+
+- fix(bxp-gui): resolve sibling `bxp-cli` / `bxp-fmt` binaries via
+  `path.join` and append `.exe` on Windows, so installed Windows
+  builds can find the bundled companion binaries instead of failing
+  startup with `bxp-fmt binary not found` and a malformed
+  `C:\Program Files\BXP/bxp-fmt` search-path message.
+
 ## 2026.05.06 — bxp-cli 0.2.0, bxp-fmt 0.2.0, bxp-gui 0.2.0
 
 ### Features

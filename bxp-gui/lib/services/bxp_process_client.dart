@@ -30,6 +30,15 @@ class BxpProcessClient {
   ///      lets `flutter run` work without copying/symlinking binaries every
   ///      time the bundle is wiped by an install rebuild.
   ///
+  /// Platform-aware binary filename: appends `.exe` on Windows, leaves
+  /// other platforms untouched. The release packager copies bxp-cli /
+  /// bxp-fmt as `*.exe` into the Windows bundle (release-02-desktop.sh),
+  /// so a bare 'bxp-fmt' lookup misses on disk and the GUI used to bail
+  /// out at startup with the misleading message
+  /// `same directory as bxp_gui = C:\Program Files\BXP/bxp-fmt`.
+  static String binaryFileName(String name) =>
+      Platform.isWindows ? '$name.exe' : name;
+
   /// Returns null when no candidate exists on disk.
   static String? findBin(String name) {
     final envVar = switch (name) {
@@ -50,7 +59,7 @@ class BxpProcessClient {
     }
 
     final exeDir = File(Platform.resolvedExecutable).parent.path;
-    final sibling = '$exeDir/$name';
+    final sibling = p.join(exeDir, binaryFileName(name));
     if (File(sibling).existsSync()) return sibling;
 
     // Walk up looking for a `bxp-gui/` directory; its parent is the monorepo
@@ -64,7 +73,8 @@ class BxpProcessClient {
       final parent = dir.parent;
       if (parent.path == dir.path) break; // reached filesystem root
       if (p.basename(dir.path) == 'bxp-gui') {
-        final candidate = p.join(parent.path, name, 'zig-out', 'bin', name);
+        final candidate =
+            p.join(parent.path, name, 'zig-out', 'bin', binaryFileName(name));
         if (File(candidate).existsSync()) return candidate;
         break;
       }
