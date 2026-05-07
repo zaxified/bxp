@@ -131,20 +131,25 @@ class BxpProcessClient {
     // then retry via shell on non-zero exit. The diagnostic captures
     // both attempts so we can confirm which branch is actually
     // load-bearing once we collect Windows reports.
+    String describe(String tag, ProcessResult r) {
+      final out = r.stdout as String;
+      final err = (r.stderr as String).trim();
+      return '$tag: exit ${r.exitCode}, stdout=${out.length} B'
+          ', stderr=${err.length} B'
+          '${err.isEmpty ? '' : ' "${_peek(err)}"'}';
+    }
     final r1 = await _runOnce(executable, arguments, timeout, runInShell: false);
     if (r1.exitCode == 0) {
-      _lastSubprocessDiag = 'direct: exit 0 OK';
+      _lastSubprocessDiag = describe('direct', r1);
       return r1;
     }
-    final diag1 = 'direct: exit ${r1.exitCode}'
-        ', stderr=${_peek((r1.stderr as String).trim())}';
+    final diag1 = describe('direct', r1);
     final r2 = await _runOnce(executable, arguments, timeout, runInShell: true);
     if (r2.exitCode == 0) {
-      _lastSubprocessDiag = '$diag1\n  shell: exit 0 OK';
+      _lastSubprocessDiag = '$diag1\n  ${describe('shell', r2)}';
       return r2;
     }
-    final diag2 = 'shell: exit ${r2.exitCode}'
-        ', stderr=${_peek((r2.stderr as String).trim())}';
+    final diag2 = describe('shell', r2);
     // Attempt 3: Dart's built-in Process.run, which drains pipes in
     // dart:io's native (C++) code without depending on the Dart event
     // loop attaching a listener. If the failure mode in attempts 1+2
@@ -153,12 +158,7 @@ class BxpProcessClient {
     // single-shot calls a stuck child is bounded by the Future.timeout.
     try {
       final r3 = await Process.run(executable, arguments).timeout(timeout);
-      if (r3.exitCode == 0) {
-        _lastSubprocessDiag = '$diag1\n  $diag2\n  processRun: exit 0 OK';
-        return r3;
-      }
-      _lastSubprocessDiag = '$diag1\n  $diag2\n  processRun: exit ${r3.exitCode}'
-          ', stderr=${_peek((r3.stderr as String).trim())}';
+      _lastSubprocessDiag = '$diag1\n  $diag2\n  ${describe('processRun', r3)}';
       return r3;
     } on TimeoutException {
       _lastSubprocessDiag =
