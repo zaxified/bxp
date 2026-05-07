@@ -39,7 +39,11 @@ bxp/
 │   └── pubspec.yaml
 ├── resources/
 │   ├── console/          # bxp-cli sample config + user-facing readme bundled in console archives
-│   └── desktop/          # bxp-gui.desktop template + readme bundled in desktop archives
+│   ├── desktop/          # bxp-gui.desktop template + readme bundled in desktop archives
+│   └── icons/            # 4 SVG variants + build-icons.sh — single source for app icons.
+│                         #   sand-80 = primary (rendered into bxp-gui/{linux,macos,windows}/...
+│                         #   for compile-time embed); all 4 PNGs ship in archive's icons/
+│                         #   for user-side shortcut icon swap.
 ├── datasets/             # Anonymized sample data + expected outputs for regression tests
 ├── scripts/
 │   ├── test.sh           # Wrapper — runs test-01-console.sh + test-02-desktop.sh
@@ -55,7 +59,7 @@ bxp/
 │   └── release.yml       # Multi-host release pipeline triggered by `v*` tag push
 ├── DEV/                  # Developer scratch space — sample data, in-flight plans, AST prototypes
 ├── CLAUDE.md             # This file
-├── LICENCE.md            # Apache 2.0
+├── LICENSE.md            # Apache 2.0
 └── README.md             # Project overview
 ```
 

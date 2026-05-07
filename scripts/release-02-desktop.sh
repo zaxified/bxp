@@ -64,9 +64,10 @@ build_linux() {
     cp "$MONO_ROOT/bxp-cli/zig-out/bin/bxp-cli" "$appdir/bxp-cli"
     cp "$MONO_ROOT/bxp-fmt/zig-out/bin/bxp-fmt" "$appdir/bxp-fmt"
 
-    # Linux-specific extras.
+    # Linux-specific extras. icons/ ships all four variants so users can
+    # repoint their shortcut's Icon= line (.desktop) at a different one.
     mkdir -p "$appdir/icons"
-    cp "$GUI_ROOT/linux/bxp-gui.png"           "$appdir/icons/bxp-gui.png"
+    cp "$MONO_ROOT/resources/icons"/*.png "$appdir/icons/"
     cp "$MONO_ROOT/resources/desktop/bxp-gui.desktop" "$appdir/bxp-gui.desktop"
     cp "$MONO_ROOT/resources/desktop/readme.md"       "$appdir/readme.md"
 
@@ -185,6 +186,9 @@ build_windows() {
     cp "$MONO_ROOT/bxp-cli/zig-out/bin/bxp-cli.exe" "$appdir/bxp-cli.exe"
     cp "$MONO_ROOT/bxp-fmt/zig-out/bin/bxp-fmt.exe" "$appdir/bxp-fmt.exe"
     cp "$MONO_ROOT/resources/desktop/readme.md"     "$appdir/readme.md"
+    # icons/ ships all four variants for shortcut-icon swap.
+    mkdir -p "$appdir/icons"
+    cp "$MONO_ROOT/resources/icons"/*.png "$appdir/icons/"
 
     if ! command -v makensis >/dev/null 2>&1; then
         echo "  ! makensis not found — skipping NSIS installer"
