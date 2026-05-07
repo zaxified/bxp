@@ -93,11 +93,106 @@ class BxpProcessClient {
   /// SIGTERMs the child to keep it from leaking. Numbers chosen to be
   /// generous on the slowest realistic input we've seen and still way
   /// shorter than "user gives up and quits the app".
+  ///
+  /// Note: timeouts only apply to the Process.start fallback path. The
+  /// FFI bridge is synchronous and has no built-in timeout; if a child
+  /// invoked via the bridge hangs, the calling isolate hangs with it.
+  /// Acceptable for the PoC because bxp-fmt one-shot calls finish in
+  /// milliseconds; if a future bxp-fmt subcommand acquires a way to
+  /// hang, we'll need to revisit (Isolate.run + cancel, or add a
+  /// timeout knob to bridge_run on the Zig side).
   static const Duration _versionTimeout = Duration(seconds: 5);
   static const Duration _docsTimeout = Duration(seconds: 5);
   static const Duration _exprTimeout = Duration(seconds: 15);
   static const Duration _configTimeout = Duration(seconds: 15);
   static const Duration _listTemplatesTimeout = Duration(seconds: 30);
+
+  /// Cached bridge client. The DLL is opened on first use and the
+  /// function pointers are looked up once; subsequent calls reuse them.
+  /// Null when the bridge is unavailable (non-Windows, DLL missing,
+  /// load failure). On non-Windows we deliberately leave this null so
+  /// every one-shot stays on the existing Process.start path — the
+  /// bridge is GUI-Windows-only by design.
+  static BridgeClient? _bridge;
+  static bool _bridgeProbed = false;
+  static BridgeClient? _getBridge() {
+    if (_bridgeProbed) return _bridge;
+    _bridgeProbed = true;
+    if (!Platform.isWindows) return null;
+    final dllPath = findBridgeLibrary();
+    if (dllPath == null) {
+      _lastSubprocessDiag = 'bridge: DLL not found next to bxp-gui';
+      return null;
+    }
+    try {
+      _bridge = BridgeClient(dllPath);
+      return _bridge;
+    } catch (e) {
+      _lastSubprocessDiag = 'bridge: load failed: $e';
+      return null;
+    }
+  }
+
+  /// One-shot run that prefers the FFI bridge on Windows and falls back
+  /// to [_runWithTimeout] elsewhere (or when the bridge is unavailable).
+  ///
+  /// Why the bridge wins on Windows: dart:io's Process pipe layer chokes
+  /// at ~8 KB on this platform (sdk#1727 + #51273), so any child that
+  /// emits more than that — `--docs` (30 KB), annotated --config output,
+  /// `--expr-trace` per-call values — silently truncates or hangs. The
+  /// bridge drains pipes from native Zig code, sidestepping Dart's event
+  /// loop entirely. We keep Process.start as the fallback so a missing
+  /// DLL degrades gracefully (small payloads still work) instead of
+  /// erroring out.
+  static Future<ProcessResult> _runOneShot(
+    String executable,
+    List<String> arguments,
+    Duration timeout,
+  ) async {
+    final bridge = _getBridge();
+    if (bridge != null) {
+      try {
+        // Yield one tick so the synchronous FFI call doesn't starve the
+        // immediate caller's microtask. The call itself still blocks
+        // the isolate, but pushing it past the next event-loop edge
+        // keeps UI animations from skipping a frame just before the
+        // bridge runs.
+        await Future<void>.delayed(Duration.zero);
+        final result = bridge.run(executable, arguments);
+        if (result.err != null) {
+          // Bridge-level failure (spawn failed, request parse failed,
+          // output exceeded the 4 MB cap). Don't fall back — the same
+          // failure would just repeat under Process.start with worse
+          // diagnostics. Surface a synthetic non-zero exit so callers
+          // hit their existing error path.
+          _lastSubprocessDiag = 'bridge ${bridge.bridgeVersion}: '
+              'err=${result.err}';
+          return ProcessResult(
+            0,
+            1,
+            '',
+            'bridge: ${result.err}',
+          );
+        }
+        _lastSubprocessDiag = 'bridge ${bridge.bridgeVersion}: '
+            'exit ${result.exitCode}, stdout=${result.stdout.length} B'
+            ', stderr=${result.stderr.length} B';
+        return ProcessResult(
+          0,
+          result.exitCode,
+          result.stdout,
+          result.stderr,
+        );
+      } catch (e) {
+        // FFI binding blew up (rare — mismatched DLL, OOM allocating
+        // the response buffer, ...). Fall back to Process.start so the
+        // call has a chance of succeeding on small payloads.
+        _lastSubprocessDiag = 'bridge: exception $e — '
+            'falling back to Process.start';
+      }
+    }
+    return _runWithTimeout(executable, arguments, timeout);
+  }
 
   /// `Process.run` + per-call timeout + child-process kill on timeout.
   ///
@@ -257,7 +352,7 @@ class BxpProcessClient {
     final args = checkFsSeconds > 0
         ? ['--config', path, '--check-fs=$checkFsSeconds']
         : ['--config', path];
-    final result = await _runWithTimeout(bin, args, _configTimeout);
+    final result = await _runOneShot(bin, args, _configTimeout);
     if (result.exitCode == 0) {
       return result.stdout as String;
     }
@@ -277,7 +372,7 @@ class BxpProcessClient {
     if (bin == null) return null;
     try {
       final result =
-          await _runWithTimeout(bin, ['--version'], _versionTimeout);
+          await _runOneShot(bin, ['--version'], _versionTimeout);
       if (result.exitCode != 0) return null;
       final out = (result.stdout as String).trim();
       if (out.isEmpty) return null;
@@ -297,19 +392,8 @@ class BxpProcessClient {
   static Future<Map<String, dynamic>?> getDocs() async {
     final bin = findBin('bxp-fmt');
     if (bin == null) return null;
-    // Windows: try the FFI bridge first. dart:io's Process pipe layer
-    // tops out around 8 KB on this platform (sdk#1727 + #51273), so
-    // --docs (~30 KB) doesn't survive the round-trip. The bridge drains
-    // pipes from Zig native code, sidestepping Dart's event loop.
-    if (Platform.isWindows) {
-      final viaBridge = _tryBridgeGetDocs(bin);
-      if (viaBridge != null) return viaBridge;
-      // Bridge unavailable or returned a non-zero exit — fall through
-      // to the direct Process.start path so the existing diagnostics
-      // (lastDocsError) capture the secondary failure mode too.
-    }
     try {
-      final result = await _runWithTimeout(bin, ['--docs'], _docsTimeout);
+      final result = await _runOneShot(bin, ['--docs'], _docsTimeout);
       if (result.exitCode != 0) {
         _lastDocsError = 'exit code ${result.exitCode}; '
             'stderr: ${_peek(result.stderr as String)}';
@@ -334,45 +418,6 @@ class BxpProcessClient {
       }
     } catch (e) {
       _lastDocsError = 'exception: $e';
-      return null;
-    }
-  }
-
-  /// Run `bxp-fmt --docs` through the FFI bridge if the DLL is available
-  /// next to bxp-gui. Returns the parsed docs JSON on success, or null
-  /// on any failure (DLL missing, bridge error, non-zero exit, JSON
-  /// parse failure). Updates [_lastSubprocessDiag] either way so the
-  /// caller can include the diagnostic in fatal-error screens.
-  static Map<String, dynamic>? _tryBridgeGetDocs(String bin) {
-    final dllPath = findBridgeLibrary();
-    if (dllPath == null) {
-      _lastSubprocessDiag = 'bridge: DLL not found next to bxp-gui';
-      return null;
-    }
-    try {
-      final client = BridgeClient(dllPath);
-      final result = client.run(bin, ['--docs']);
-      if (result.err != null) {
-        _lastSubprocessDiag = 'bridge ${client.bridgeVersion}: err=${result.err}';
-        return null;
-      }
-      if (result.exitCode != 0) {
-        _lastSubprocessDiag = 'bridge ${client.bridgeVersion}: '
-            'exit ${result.exitCode}, stdout=${result.stdout.length} B'
-            ', stderr=${_peek(result.stderr.trim())}';
-        return null;
-      }
-      final parsed = jsonDecode(result.stdout);
-      if (parsed is Map<String, dynamic>) {
-        _lastSubprocessDiag = 'bridge ${client.bridgeVersion}: '
-            'OK (${result.stdout.length} bytes)';
-        return parsed;
-      }
-      _lastSubprocessDiag = 'bridge ${client.bridgeVersion}: '
-          'parsed JSON is ${parsed.runtimeType}, expected Map';
-      return null;
-    } catch (e) {
-      _lastSubprocessDiag = 'bridge: exception $e';
       return null;
     }
   }
@@ -403,7 +448,7 @@ class BxpProcessClient {
     final bin = findBin('bxp-fmt');
     if (bin == null) return const [];
     try {
-      final result = await _runWithTimeout(
+      final result = await _runOneShot(
         bin,
         ['--config', path, '--list-templates'],
         _listTemplatesTimeout,
@@ -439,7 +484,7 @@ class BxpProcessClient {
     final bin = findBin('bxp-fmt');
     if (bin == null) return (error: 'bxp-fmt not found', offset: null, length: null);
     final result =
-        await _runWithTimeout(bin, ['--expr', expr], _exprTimeout);
+        await _runOneShot(bin, ['--expr', expr], _exprTimeout);
     if (result.exitCode == 0) return (error: null, offset: null, length: null);
     final stdout = (result.stdout as String).trim();
     final stderr = (result.stderr as String).trim();
@@ -484,7 +529,7 @@ class BxpProcessClient {
     final bin = findBin('bxp-fmt');
     if (bin == null) return const [];
     try {
-      final result = await _runWithTimeout(
+      final result = await _runOneShot(
         bin,
         [
           '--expr-trace', expr,
