@@ -1,11 +1,15 @@
 # Changelog
 
+All notable changes to BXP. New entries are prepended at the top by
+`scripts/release-changelog.sh`; pre-existing release tags (v0.1.0,
+v0.1.1) are hand-stubbed since they pre-date the automation.
+
 ## 2026.05.06 — bxp-cli 0.2.0, bxp-fmt 0.2.0, bxp-gui 0.2.0
 
 ### Features
 
 - feat: bxp-fmt $err_trace annotated JSON output + json5 error recovery
-- feat: bxp-fmt annotated JSON v2 — $comm_<N> + $err_<N> in-place
+- feat: bxp-fmt annotated JSON v2 — `$comm_<N>` + `$err_<N>` in-place
 - feat(bxp-cli): emit output_headers in file_start trace event
 - feat: add bxp-gui Flutter app, archive bxp-ui Electrobun
 - feat(bxp-gui): redesign OpenDialog with sidebar, search, and Places
@@ -70,7 +74,7 @@
 
 - fix(bxp-gui): keep JsonTree array paths raw, only labels go real-only
 - fix(bxp-gui): _deepEquals must compare Map keys in insertion order
-- fix(bxp-gui): remove unused _previousBlockEnd and _extendBlockBack methods
+- fix(bxp-gui): remove unused `_previousBlockEnd` and `_extendBlockBack` methods
 - fix(bxp-gui): final traceLinesCounter sync after stream end
 - fix(bxp-fmt): wrap runExpr allocator in arena to plug eval leaks
 - fix(bxp-gui): op_apply trailing-comma on dup/insert of last sibling
@@ -89,6 +93,7 @@
 - fix(bxp-cli): G2 layer A — Levenshtein-gated warning, drop fatal
 - fix(bxp-gui,bxp-core): Phase 5b polish from end-to-end testing
 - fix(bxp-gui): close Phase 5b polish backlog
+- perf(bxp-gui): kill quadratic PlutoGrid rebuild during dry-run streaming
 
 ### Internal
 
@@ -131,24 +136,10 @@
 
 ### Other
 
-- new icon test
-- archive: move bxp-gui (DVUI/SDL3) out of monorepo
-- bxp-ui: RUNNER tab, full-run button, keyboard shortcuts, save improvements
-- bxp-ui: tab state persistence, F11 fullscreen, release inspect block
-- bxp-ui: resizable panels via drag handles
-- mv bxp.code-workspace .git/COMMIT_EDITMSG
-- mv bxp.code-workspace bxp.code-workspace.bak
-- mv bxp.code-workspace bxp.code-workspace.bak
-- mv bxp.code-workspace bxp.code-workspace.bak
-- new dev run environment shell script
-- perf(bxp-gui): kill quadratic PlutoGrid rebuild during dry-run streaming
-- new version of the CLI examples file, with updated sample data for the datasets.
-- csv lines out of range added as showcase of filtration
-
-
-All notable changes to BXP. New entries are prepended at the top by
-`scripts/release-changelog.sh`; pre-existing release tags below are
-hand-stubbed since they pre-date the automation.
+- feat: add CSV out-of-range row filtering as a dataset showcase
+- chore: refresh `bxp-cli.examples.json` with updated sample data
+- chore: archive bxp-ui (Electrobun) and bxp-gui (DVUI/SDL3) prototypes
+  in favour of the Flutter rewrite
 
 ## v0.1.1 — 2026-04-15
 

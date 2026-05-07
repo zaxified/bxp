@@ -114,20 +114,41 @@ else
     echo "[2/3] Generating CHANGELOG entry from $COUNT commits since $LAST_TAG..."
 fi
 
-# Group commits by conventional-commit type. `chore`, `docs`, `refactor`
-# fall under Internal; `feat` → Features; `fix`, `bug` → Fixes; rest → Other.
+# Group commits by conventional-commit type. `chore`, `docs`, `refactor`,
+# `style`, `test`, `build`, `ci` fall under Internal; `feat` → Features;
+# `fix`, `bug`, `perf`, `revert` → Fixes; rest → Other (a sign the commit
+# message lacks a conventional prefix — fix the message rather than letting
+# it leak into the changelog).
 classify() {
     local subject=$1
     case "$subject" in
-        feat\(*|feat:*)             echo "Features" ;;
-        fix\(*|fix:*|bug\(*|bug:*)  echo "Fixes" ;;
+        feat\(*|feat:*)              echo "Features" ;;
+        fix\(*|fix:*|\
+        bug\(*|bug:*|\
+        perf\(*|perf:*|\
+        revert\(*|revert:*)          echo "Fixes" ;;
         chore\(*|chore:*|\
         docs\(*|docs:*|\
         refactor\(*|refactor:*|\
         style\(*|style:*|\
-        test\(*|test:*)             echo "Internal" ;;
-        *)                          echo "Other" ;;
+        test\(*|test:*|\
+        build\(*|build:*|\
+        ci\(*|ci:*)                  echo "Internal" ;;
+        *)                           echo "Other" ;;
     esac
+}
+
+# Skip-list — commits that should never appear in the changelog regardless
+# of their message. Match against the full subject line.
+should_skip() {
+    local subject=$1
+    case "$subject" in
+        # Mechanical file moves with no descriptive intent.
+        mv\ *|"Merge "*|"Revert"\ \"*) return 0 ;;
+        # Release-prep commits emitted by this very script.
+        "release: prepare "*) return 0 ;;
+    esac
+    return 1
 }
 
 NEW_ENTRY=$(mktemp)
@@ -142,6 +163,7 @@ NEW_ENTRY=$(mktemp)
 
     while IFS= read -r line; do
         [ -z "$line" ] && continue
+        if should_skip "$line"; then continue; fi
         cat=$(classify "$line")
         if [ -z "${order[$cat]+x}" ]; then
             order[$cat]=$idx
