@@ -106,12 +106,59 @@ class BxpProcessClient {
   /// the child if it didn't finish. On timeout we synthesise a
   /// `ProcessResult` whose stderr explains what happened so the caller's
   /// existing error-rendering path picks it up unchanged.
+  /// Diagnostic trace of the most recent _runWithTimeout fallback chain.
+  /// Captures whether the direct call succeeded or whether we had to
+  /// retry through the OS shell. Surfaced in fatal startup messages and
+  /// the SettingsInspector so a Windows bug reporter can paste the
+  /// concrete failure mode instead of "didn't work".
+  static String? _lastSubprocessDiag;
+  static String? get lastSubprocessDiag => _lastSubprocessDiag;
+
   static Future<ProcessResult> _runWithTimeout(
     String executable,
     List<String> arguments,
     Duration timeout,
   ) async {
-    final process = await Process.start(executable, arguments);
+    // Two-attempt diagnostic strategy. The default Process.start path
+    // races against Dart's deferred pipe-attach on Windows: bxp-fmt's
+    // 30 KB --docs output overflows the 4 KB Win pipe buffer before the
+    // listener is wired and the child trips its own flush with
+    // `error: WriteFailed` / exit 1. Falling back to runInShell:true
+    // routes through cmd /c (sh -c on POSIX), which drains the child
+    // pipe in native code without depending on the Dart event loop.
+    //
+    // We try direct first to keep the Linux/macOS happy path zero-cost,
+    // then retry via shell on non-zero exit. The diagnostic captures
+    // both attempts so we can confirm which branch is actually
+    // load-bearing once we collect Windows reports.
+    final r1 = await _runOnce(executable, arguments, timeout, runInShell: false);
+    if (r1.exitCode == 0) {
+      _lastSubprocessDiag = 'direct: exit 0 OK';
+      return r1;
+    }
+    final diag1 = 'direct: exit ${r1.exitCode}'
+        ', stderr=${_peek((r1.stderr as String).trim())}';
+    final r2 = await _runOnce(executable, arguments, timeout, runInShell: true);
+    if (r2.exitCode == 0) {
+      _lastSubprocessDiag = '$diag1\n  shell: exit 0 OK';
+      return r2;
+    }
+    _lastSubprocessDiag = '$diag1\n  shell: exit ${r2.exitCode}'
+        ', stderr=${_peek((r2.stderr as String).trim())}';
+    return r2;
+  }
+
+  static Future<ProcessResult> _runOnce(
+    String executable,
+    List<String> arguments,
+    Duration timeout, {
+    required bool runInShell,
+  }) async {
+    final process = await Process.start(
+      executable,
+      arguments,
+      runInShell: runInShell,
+    );
     // Subscribe to both streams BEFORE any further await. On Windows the
     // anonymous-pipe buffer is only ~4 KB, so a child that writes more
     // than that (e.g. `--docs` emits ~30 KB of JSON) blocks on WriteFile

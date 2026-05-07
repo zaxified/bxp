@@ -944,10 +944,13 @@ class TraceStore extends ChangeNotifier {
       final d = await BxpProcessClient.getDocs();
       if (d == null) {
         final detail = BxpProcessClient.lastDocsError ?? '(no detail captured)';
+        final subprocDiag =
+            BxpProcessClient.lastSubprocessDiag ?? '(no subprocess diag)';
         _fatalStartupError =
             'bxp-fmt --docs failed.\n\n'
             'Found bxp-fmt at: $fmtBin\n\n'
             'Failure detail: $detail\n\n'
+            'Subprocess fallback chain:\n  $subprocDiag\n\n'
             'Calling it with --docs returned no parseable JSON. The binary may '
             'be from an incompatible bxp-fmt version (the GUI requires the '
             '--docs flag), or its output is corrupted. Rebuild bxp-fmt from '
