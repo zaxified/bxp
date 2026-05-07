@@ -127,34 +127,44 @@ class BxpProcessClient {
     final stderrSub = process.stderr.listen(stderrChunks.add);
     String decode(List<List<int>> chunks) =>
         utf8.decode(chunks.expand((b) => b).toList(), allowMalformed: true);
+    // Yield one event-loop tick after exit so the listener's onData
+    // callbacks dispatch any chunks that landed in the OS pipe just
+    // before the child exited. We can't use `subscription.asFuture()` /
+    // `onDone` to wait for stream completion: on Windows the Stream
+    // backing `Process.stdout` doesn't reliably fire onDone after child
+    // exit (dart-lang/sdk#1727 has been open since 2012), so awaiting
+    // it would hang the call indefinitely.
+    Future<ProcessResult> finish(int exitCode, {String? extraStderr}) async {
+      await Future<void>.delayed(Duration.zero);
+      await stdoutSub.cancel();
+      await stderrSub.cancel();
+      final stdoutText = decode(stdoutChunks);
+      final stderrText = decode(stderrChunks);
+      return ProcessResult(
+        process.pid,
+        exitCode,
+        stdoutText,
+        extraStderr == null
+            ? stderrText
+            : (stderrText.isEmpty ? extraStderr : '$stderrText\n$extraStderr'),
+      );
+    }
     try {
       final exitCode = await process.exitCode.timeout(timeout);
-      // Wait for `onDone` so any in-flight chunks land in the lists.
-      await stdoutSub.asFuture<void>();
-      await stderrSub.asFuture<void>();
-      return ProcessResult(
-          process.pid, exitCode, decode(stdoutChunks), decode(stderrChunks));
+      return await finish(exitCode);
     } on TimeoutException {
       process.kill(ProcessSignal.sigterm);
       // Best-effort drain: if the child ignores SIGTERM, escalate to
-      // SIGKILL after a short grace window so we don't wait forever
-      // collecting streams that will never close.
+      // SIGKILL after a short grace window so we don't wait forever.
       try {
         await process.exitCode.timeout(const Duration(seconds: 2));
       } on TimeoutException {
         process.kill(ProcessSignal.sigkill);
         try { await process.exitCode; } catch (_) {}
       }
-      try { await stdoutSub.asFuture<void>(); } catch (_) {}
-      try { await stderrSub.asFuture<void>(); } catch (_) {}
-      final timeoutNote =
-          '$executable timed out after ${timeout.inSeconds}s';
-      final err = decode(stderrChunks);
-      return ProcessResult(
-        process.pid,
+      return await finish(
         ProcessRunResult.kExitTimeout,
-        decode(stdoutChunks),
-        err.isEmpty ? timeoutNote : '$err\n$timeoutNote',
+        extraStderr: '$executable timed out after ${timeout.inSeconds}s',
       );
     }
   }
