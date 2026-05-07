@@ -194,19 +194,11 @@ class DataColorText extends StatelessWidget {
   Widget build(BuildContext context) {
     if (text.isEmpty) return const SizedBox.shrink();
     final t = context.bxpTheme;
-    final Color color;
-    if (text.toLowerCase() == 'true' || text.toLowerCase() == 'false') {
-      color = t.valueBool;
-    } else if (num.tryParse(text) != null) {
-      color = t.valueNumber;
-    } else {
-      color = t.valueString;
-    }
     return Text(
       text,
       style: BxpText.body(
         context,
-        color: color,
+        color: t.valueColorOf(text),
         weight: BxpWeight.regular,
         size: size,
       ),

@@ -183,6 +183,8 @@ class UpdaterService extends ChangeNotifier {
       return RegExp(r'^bxp-desktop-.*-windows-x86_64-setup\.exe$');
     }
     if (Platform.isMacOS) {
+      // Only Apple Silicon (aarch64) DMGs are produced by the release
+      // workflow; Intel Macs fall through to the release-page redirect.
       return RegExp(r'^bxp-desktop-.*-macos-aarch64\.dmg$');
     }
     if (Platform.isLinux) {

@@ -511,6 +511,13 @@ fn checkUnknownFields(
         }
     }.fire;
 
+    // Caller uses the bool return purely as "did we emit any warning"
+    // so `stats.warnings` ticks once per file regardless of how many
+    // typos we surface. We therefore walk every section to fullness —
+    // a user fixing 5 typos sees them all in one run instead of one
+    // round-trip per fix. `inner` returns the FIRST typo per
+    // expression; multi-typo expressions still need a re-run, but
+    // that's a single expression, not a single section.
     var any = false;
 
     // input_schema
@@ -519,7 +526,6 @@ fn checkUnknownFields(
         if (try inner(ar, col_index, entry.value_ptr.*)) |m| {
             emit(out, filename, "input_schema", m);
             any = true;
-            return any;
         }
     }
 
@@ -529,7 +535,6 @@ fn checkUnknownFields(
             if (try inner(ar, col_index, rule.when)) |m| {
                 emit(out, filename, "row_rules.when", m);
                 any = true;
-                return any;
             }
             for (rule.rows) |row| {
                 var ov = row.iterator();
@@ -537,7 +542,6 @@ fn checkUnknownFields(
                     if (try inner(ar, col_index, o.value_ptr.*)) |m| {
                         emit(out, filename, "row_rules override", m);
                         any = true;
-                        return any;
                     }
                 }
             }
@@ -551,19 +555,16 @@ fn checkUnknownFields(
         if (try inner(ar, col_index, pp.when)) |m| {
             emit(out, filename, "pre_pass.when", m);
             any = true;
-            return any;
         }
         if (try inner(ar, col_index, pp.key)) |m| {
             emit(out, filename, "pre_pass.key", m);
             any = true;
-            return any;
         }
         var v_it = pp.values.iterator();
         while (v_it.next()) |v| {
             if (try inner(ar, col_index, v.value_ptr.*)) |m| {
                 emit(out, filename, "pre_pass.values", m);
                 any = true;
-                return any;
             }
         }
     }

@@ -76,11 +76,11 @@ class _FileListState extends State<FileList> {
     super.dispose();
   }
 
-  /// Extract the filename from an absolute path. Works on POSIX only —
-  /// Windows paths that contain `\` as separator are not normalised here
-  /// because bxp-cli always emits forward-slash paths in its NDJSON trace.
+  /// Extract the filename from an absolute path. Handles both POSIX `/`
+  /// and Windows `\` separators — bxp-cli builds paths via
+  /// `std.fs.path.join`, which on Windows yields backslash-separated paths.
   String _basename(String path) {
-    final i = path.lastIndexOf('/');
+    final i = path.lastIndexOf(RegExp(r'[\\/]'));
     return i >= 0 ? path.substring(i + 1) : path;
   }
 

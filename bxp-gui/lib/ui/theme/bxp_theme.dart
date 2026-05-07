@@ -682,6 +682,21 @@ BxpTheme _byName(String name) {
 
 BxpTheme themeByName(String name) => _byName(name);
 
+// ── Value type colouring ───────────────────────────────────────────────────
+
+extension BxpThemeValueColor on BxpTheme {
+  /// Pick a value-cell foreground colour from the string representation:
+  /// `'true'`/`'false'` → [valueBool], numeric-parseable → [valueNumber],
+  /// anything else → [valueString]. Empty input falls back to [valueString];
+  /// callers typically short-circuit empty before invoking.
+  Color valueColorOf(String text) {
+    final lower = text.toLowerCase();
+    if (lower == 'true' || lower == 'false') return valueBool;
+    if (num.tryParse(text) != null) return valueNumber;
+    return valueString;
+  }
+}
+
 // ── Context access ─────────────────────────────────────────────────────────
 
 extension BxpThemeContext on BuildContext {

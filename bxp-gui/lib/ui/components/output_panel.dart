@@ -299,21 +299,13 @@ class _ValueCell extends StatelessWidget {
       );
     }
     final t = context.bxpTheme;
-    // Type-aware colouring mirrors RowList's DataColorText and the JSON
-    // highlighter — all three should agree on what a "number" looks like.
-    final Color color;
-    if (value.toLowerCase() == 'true' || value.toLowerCase() == 'false') {
-      color = t.valueBool;
-    } else if (num.tryParse(value) != null) {
-      color = t.valueNumber;
-    } else {
-      color = t.valueString;
-    }
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       child: Text(value,
           style: BxpText.body(context,
-              color: color, weight: BxpWeight.regular, size: BxpSize.md)),
+              color: t.valueColorOf(value),
+              weight: BxpWeight.regular,
+              size: BxpSize.md)),
     );
   }
 }

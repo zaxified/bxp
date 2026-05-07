@@ -576,8 +576,8 @@ pub const BrokerConfig = struct {
             try writer.print("---\n# {s}: config error: template '{s}': date_filter_from_filename requires '$date' in input_schema\n", .{ config_path, template_id });
             return error.InvalidConfig;
         }
-        if (self.row_rules_debug_missing and self.row_rules == null) {
-            try writer.print("---\n# {s}: config error: template '{s}': row_rules_debug_missing is true but row_rules is not defined\n", .{ config_path, template_id });
+        if (self.row_rules_debug_missing and (self.row_rules == null or self.row_rules.?.len == 0)) {
+            try writer.print("---\n# {s}: config error: template '{s}': row_rules_debug_missing is true but row_rules is empty or not defined\n", .{ config_path, template_id });
             return error.InvalidConfig;
         }
         if (self.row_rules) |rules| {
@@ -716,8 +716,8 @@ pub const BrokerConfig = struct {
         }
         if (self.date_filter_from_filename and !self.input_schema.contains("$date"))
             try errors.append(alloc, try ValidationError.init(alloc, base, "date_filter_from_filename", "date_filter_from_filename requires '$date' in input_schema"));
-        if (self.row_rules_debug_missing and self.row_rules == null)
-            try errors.append(alloc, try ValidationError.init(alloc, base, "row_rules_debug_missing", "row_rules_debug_missing is true but row_rules is not defined"));
+        if (self.row_rules_debug_missing and (self.row_rules == null or self.row_rules.?.len == 0))
+            try errors.append(alloc, try ValidationError.init(alloc, base, "row_rules_debug_missing", "row_rules_debug_missing is true but row_rules is empty or not defined"));
         if (self.row_rules) |rules| {
             for (rules, 0..) |rule, i| {
                 if (rule.when.len == 0) {
@@ -2727,15 +2727,13 @@ pub fn loadFromBytes(
                                     .rows = try rows_list.toOwnedSlice(),
                                 });
                             }
-                            // Treat an empty `row_rules: []` as "not present" (null) so
-                            // that BrokerConfig.validate()'s row_rules_debug_missing check
-                            // can produce a clear error. An empty slice would otherwise
-                            // pass the null-check and quietly do nothing at runtime.
-                            if (rr_list.items.len > 0) {
-                                row_rules = try rr_list.toOwnedSlice();
-                            } else {
-                                rr_list.deinit();
-                            }
+                            // Preserve the user's original `row_rules: []` shape — the
+                            // distinction between "key absent" (null) and "key present
+                            // but empty" (`&.{}`) lets the validator surface the correct
+                            // hint (`row_rules is empty or not defined`) without lying
+                            // about which case we're in. Both shapes evaluate the same
+                            // at runtime via `row_rules orelse &.{}`.
+                            row_rules = try rr_list.toOwnedSlice();
                         }
                     }
 

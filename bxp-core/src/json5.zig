@@ -678,6 +678,26 @@ pub fn preprocessAnnotated(alloc: std.mem.Allocator, input: []const u8) !Annotat
         }
     }
 
+    // EOF recovery: flush any pending $err_<N> entries, then auto-close
+    // remaining containers. Without this, an input that ends mid-string
+    // or mid-object leaves the queued diagnostic stranded and emits
+    // syntactically invalid JSON — bxp-fmt's caller then falls back to a
+    // generic root error, losing the per-error context. Errs flush only
+    // when the immediate parent is `{` (array siblings would corrupt
+    // structure); array contexts drop their queued errs silently, mirroring
+    // the in-stream `]` handler.
+    if (isInObject(nest.items)) {
+        try flushValueErrs(&out, alloc, &pending_value_errs, &counter);
+    } else {
+        dropValueErrs(alloc, &pending_value_errs);
+    }
+    while (nest.items.len > 0) {
+        const top = nest.items[nest.items.len - 1];
+        removeTrailingComma(&out);
+        try out.append(alloc, if (top == '{') @as(u8, '}') else @as(u8, ']'));
+        _ = nest.pop();
+    }
+
     return .{ .out = try out.toOwnedSlice(alloc), .next_id = counter + 1 };
 }
 
@@ -865,13 +885,22 @@ test "annotated: unterminated string at EOF" {
     const src = "{a: \"no closing";
     const r = try preprocessAnnotated(alloc, src);
     defer alloc.free(r.out);
-    // After closing the string and skipping no more input we still need to
-    // close the object; preprocessAnnotated does not synthesize '}', so the
-    // raw output is invalid JSON. We assert the error was at least queued by
-    // searching the raw output bytes (which include the would-be sibling once
-    // a ',' or '}' is reached). Since there is no ',' or '}' here, the err
-    // remains unflushed — accept that as documented behavior. Ensure no crash.
-    try std.testing.expect(r.out.len > 0);
+    // EOF recovery: the queued unterminated-string diagnostic flushes as a
+    // sibling and the open `{` auto-closes, so the result parses as valid
+    // JSON with the $err_<N> preserved.
+    const parsed = try std.json.parseFromSlice(std.json.Value, alloc, r.out, .{});
+    defer parsed.deinit();
+    var found = false;
+    var it = parsed.value.object.iterator();
+    while (it.next()) |kv| {
+        if (std.mem.startsWith(u8, kv.key_ptr.*, "$err_")) {
+            if (std.mem.indexOf(u8, kv.value_ptr.string, "unterminated string") != null) {
+                found = true;
+                break;
+            }
+        }
+    }
+    try std.testing.expect(found);
 }
 
 test "annotated: invalid literal in value position" {

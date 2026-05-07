@@ -15,6 +15,8 @@ library;
 
 import 'package:json5_ast/ast.dart';
 
+import 'schema_doc_lookup.dart';
+
 /// One Dart-side diagnostic entry. Mirrors the path-keyed shape that
 /// `TraceStore._validationErrors / _validationWarnings / _validationInfo`
 /// expects so the caller can merge these into the same buckets that hold
@@ -222,22 +224,10 @@ class DartValidator {
         }
         break;
       case 'expr_string':
-        // Route to expr validator. The active template id is the second
-        // path segment when the field sits inside conversion_templates.*.
+        // Route to expr validator. LOOKUP pre_pass names need cross-template
+        // resolution and are handled by _crossRefs; static expr errors from
+        // the FnArgDoc-driven walker are template-independent.
         if (value != null && value.isNotEmpty) {
-          final templateId = (path.length >= 2 &&
-                  path[0] == 'conversion_templates')
-              ? path[1]
-              : null;
-          // The walk() caller passed the synthetic root via _walk's
-          // outermost frame; we re-fetch it indirectly by leaving the
-          // root resolution to the tree-walk caller. Phase 3 wiring
-          // passes the AST root to `validate()`, then this validator
-          // captures it via closure if needed. Today expr checks here
-          // do not consult the root cross-template (LOOKUP pre_pass
-          // names are resolved per-template in _crossRefs); a static
-          // expr error from the FnArgDoc-driven walker is template-
-          // independent and safe to emit here without root.
           final ed = _validateExprStandalone(value);
           if (ed != null) {
             out.add(DartDiagnostic(
@@ -250,9 +240,6 @@ class DartValidator {
               length: ed.length,
             ));
           }
-          // Intentionally unused — kept to clarify intent for readers
-          // following the path → templateId derivation.
-          (templateId);
         }
         break;
       case 'none':
@@ -699,28 +686,11 @@ class DartValidator {
 
   // ── Helpers ───────────────────────────────────────────────────────────
 
-  /// Linear scan over `_configSchema`, matching [path] against each
-  /// entry's dot-split pattern (with `*` wildcard support). Returns the
-  /// first hit or null. Identical semantics to [TraceStore.findSchemaDoc];
-  /// duplicated here to avoid a store reference in the validator.
-  Map<String, dynamic>? _findSchemaDoc(List<String> path) {
-    if (path.isEmpty) return null;
-    for (final f in _configSchema) {
-      final pattern = f['key']?.toString() ?? '';
-      final segs = pattern.split('.');
-      if (segs.length != path.length) continue;
-      var ok = true;
-      for (var i = 0; i < segs.length; i++) {
-        if (segs[i] == '*') continue;
-        if (segs[i] != path[i]) {
-          ok = false;
-          break;
-        }
-      }
-      if (ok) return f;
-    }
-    return null;
-  }
+  /// Match [path] against the cached `bxp-fmt --docs` config schema.
+  /// Thin wrapper over [findSchemaDocIn] — kept as a private method so
+  /// the validator stays free of a store reference.
+  Map<String, dynamic>? _findSchemaDoc(List<String> path) =>
+      findSchemaDocIn(_configSchema, path);
 
   /// Resolve the set of pre_pass block names declared in template [tid].
   ///

@@ -170,6 +170,16 @@ Module exports in `build.zig`: `csv`, `json`, `json5`, `xlsx`, `expr`, `config`,
 Audit follow-up rationale captured here so future audits don't re-flag
 the same observations. If the rationale stops applying, revisit.
 
+- **`xlsx.zig normalizeNumber` 1e15 guard.** A 2026-05-06 audit
+  flagged the `@abs(f) < 1e15` check as letting 16-digit f64 values
+  through. The example given (`9_999_999_999_999_999.0`) actually
+  exceeds 1e15, so the guard correctly rejects it. f64 represents
+  integers exactly up to `2^53 ≈ 9.007e15`; the 1e15 cap leaves a 9×
+  margin below that boundary. Anything passing both `f == rounded`
+  and `@abs(f) < 1e15` is bit-exact through `@intFromFloat` —
+  no precision loss possible. The guard could be raised to
+  `0x20000000000000` (`2^53`) but that's an optimisation, not a fix.
+
 - **`expr.zig adaptReplace` OOM detail.** A previous audit suggested
   routing OOM through the `setNotANumber` / `error_detail` convention so
   callers see a friendly diagnostic. Skipped: that convention works for

@@ -13,6 +13,7 @@ import '../services/dev_trace.dart';
 import '../services/prefs_service.dart';
 import '../services/op_log.dart';
 import '../services/op_to_ast.dart';
+import '../services/schema_doc_lookup.dart';
 import 'trace_model.dart';
 import 'trace_builder.dart';
 import '../ui/theme/bxp_text_scheme.dart';
@@ -1021,21 +1022,8 @@ class TraceStore extends ChangeNotifier {
   /// `"conversion_templates.*.data_dir"` matches every template's data_dir.
   /// Mirrors `_SchemaTooltipKey._matches` in json_tree.dart — kept here so
   /// the delete guard, enum dropdown, and reorder gate share one rule.
-  Map<String, dynamic>? findSchemaDoc(List<String> path) {
-    if (path.isEmpty) return null;
-    for (final f in docConfigSchema) {
-      final pattern = f['key']?.toString() ?? '';
-      final segs = pattern.split('.');
-      if (segs.length != path.length) continue;
-      var ok = true;
-      for (int i = 0; i < segs.length; i++) {
-        if (segs[i] == '*') continue;
-        if (segs[i] != path[i]) { ok = false; break; }
-      }
-      if (ok) return f;
-    }
-    return null;
-  }
+  Map<String, dynamic>? findSchemaDoc(List<String> path) =>
+      findSchemaDocIn(docConfigSchema, path);
 
   Future<void> _addRecentFile(String path) async {
     if (path.isEmpty) return;

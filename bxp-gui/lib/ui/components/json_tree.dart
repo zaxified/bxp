@@ -5,6 +5,7 @@ import 'package:json5_ast/path.dart' as ast_path;
 import 'package:provider/provider.dart';
 import '../../services/dart_validator.dart';
 import '../../services/dev_trace.dart';
+import '../../services/schema_doc_lookup.dart';
 import '../../services/schema_gate.dart';
 import '../../store/trace_store.dart';
 import '../layout_defaults.dart';
@@ -2074,23 +2075,8 @@ class _SchemaTooltipKey extends StatelessWidget {
   final List<String> path;
   const _SchemaTooltipKey({required this.keyName, required this.path});
 
-  static bool _matches(String pattern, List<String> p) {
-    final segs = pattern.split('.');
-    if (segs.length != p.length) return false;
-    for (int i = 0; i < segs.length; i++) {
-      if (segs[i] == '*') continue;
-      if (segs[i] != p[i]) return false;
-    }
-    return true;
-  }
-
-  Map<String, dynamic>? _findDoc(List<Map<String, dynamic>> schema) {
-    for (final f in schema) {
-      final k = f['key']?.toString() ?? '';
-      if (_matches(k, path)) return f;
-    }
-    return null;
-  }
+  Map<String, dynamic>? _findDoc(List<Map<String, dynamic>> schema) =>
+      findSchemaDocIn(schema, path);
 
   @override
   Widget build(BuildContext context) {
