@@ -79,13 +79,13 @@ to pre-process the file" or "skip the affected rows".
   `csv.zig` + `config.zig` + `pipeline.zig`. Decide on (a) vs (b)
   based on the user's actual file.
 
-- **Wealthfolio target spec vocabulary expansion.** The console / desktop
-  readmes' "Wealthfolio target spec" section enumerates 8 `$action`
-  values (`BUY`, `SELL`, `DEPOSIT`, `WITHDRAWAL`, `DIVIDEND`, `TAX`,
-  `INTEREST`, `FEE`). Real Wealthfolio supports more (`SPLIT`,
-  `TRANSFER_IN`, `TRANSFER_OUT`, `CONVERSION_IN`, `CONVERSION_OUT`,
-  `ADJUSTMENT`). Audit Wealthfolio's actual import contract,
-  document the full set in the readme. Pure docs change.
+- **Wealthfolio target spec vocabulary expansion (remaining).** The
+  readme now documents `TRANSFER_IN`, `TRANSFER_OUT`, and `SPLIT`
+  alongside the eight standard actions. Real Wealthfolio also accepts
+  `CONVERSION_IN`, `CONVERSION_OUT`, and `ADJUSTMENT` — confirm against
+  the import contract and add to the readme if the existing
+  `WITHDRAWAL`/`DEPOSIT` mapping for currency conversion is too lossy.
+  Pure docs change.
 
 - **Description-based ticker extraction.** Lime.co's dividend rows have
   empty `Symbol` and the ticker is embedded in `Description`

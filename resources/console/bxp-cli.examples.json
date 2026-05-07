@@ -1,5 +1,29 @@
 {
   /*
+   * BXP example configuration — 7 working broker templates that double as a
+   * pattern catalogue for AI assistants generating new templates. Pair each
+   * scenario below with the closest existing template and adapt:
+   *
+   *   simple stock broker, no pre_pass         → revolutx_to_wealthfolio
+   *   broker with embedded "$24.00 CZK" prices → revolutx_to_wealthfolio
+   *   paired trade rows joined by Order ID     → anycoin_to_wealthfolio
+   *   1 input row → multiple output rows       → trading212_to_wealthfolio
+   *   per-rule overrides for special events    → trading212_to_wealthfolio
+   *   .xlsx source (sheet + header_row)        → xtb1_closed_to_wealthfolio
+   *   shared data_dir across two templates     → xtb1_closed + xtb1_cash
+   *
+   * The first template (anycoin_to_wealthfolio) doubles as the field-level
+   * documentation reference — every field is annotated with its purpose and
+   * the values it accepts. Later templates only comment on broker-specific
+   * quirks; consult Anycoin if you need to know what a generic field does.
+   *
+   * European brokers (German / French / Italian) commonly export
+   * 5.000,00-style numbers; for the defensive
+   * `IF(CONTAINS([X], ','), strip+swap, [X])` wrapper see the readme's
+   * "Locale-aware number parsing" section.
+   */
+
+  /*
    * ticker_maps — optional; named, reusable symbol remapping tables.
    * Each entry: map_name → { broker_symbol: yahoo_symbol, ... }
    * Templates reference a map by name: ticker_map: anycoin
@@ -61,6 +85,13 @@
    */
   conversion_templates: {
     // ── Anycoin → Wealthfolio ──
+    //   Pattern: paired trade rows joined via pre_pass + LOOKUP. One trade
+    //   produces two CSV rows ("trade payment" + "trade fill" sharing an
+    //   Order ID); the pre_pass collects payment amounts and the input_schema
+    //   joins them onto the fill row. Cash deposits get the $CASH-XXX
+    //   placeholder ticker.
+    //   This template also serves as the field-level documentation
+    //   reference for the rest of the file.
     anycoin_to_wealthfolio: {
       // required; path to input files, relative to this config file
       // e.g. "anycoin_to_wealthfolio", "../data/anycoin", "/abs/path"
@@ -92,7 +123,7 @@
       // Requires $date in input_schema.
       date_filter_from_filename: true,
       // optional; ticker remapping — string = name from ticker_maps, object = inline map
-      // e.g. "anycoin", "xtb", { "BTC: "BTC-EUR" }, {}
+      // e.g. "anycoin", "xtb", { "BTC": "BTC-EUR" }, {}
       ticker_map:          "anycoin",
       /*
        * pre_pass — optional; first-pass lookup table built before the main loop.
@@ -118,7 +149,7 @@
        */
       input_schema: {
         // ISO datetime with timezone suffix → Wealthfolio format
-        $date:            "DATE_CONVERT([Date], 'YYYY-MM-DDThh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')",
+        $date:            "DATE_CONVERT([Date], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')",
         // deposit → cash placeholder symbol; trade fill → mapped ticker
         $ticker:          "IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))",
         $quantity:        "IF([Type] = 'deposit', 1, [Amount])",
@@ -200,6 +231,10 @@
       }
     },
     // ── Revolut X → Wealthfolio ──
+    //   Pattern: simple stock broker, no pre_pass. Price and Value fields
+    //   carry an embedded currency ("24.00 CZK", "$100"); PRICE_VALUE strips
+    //   it, PRICE_CURRENCY extracts the ISO code. "Other" type covers
+    //   non-trade events and routes to DEPOSIT.
     revolutx_to_wealthfolio: {
       data_dir:            "revolutx_to_wealthfolio",
       file_type_in:        "csv",
@@ -284,8 +319,8 @@
         unitPrice:       "$unitprice",
         currency:        "$currency",
         fee:             "$fee",
-        account:         "$account",
         amount:          "$amount",
+        account:         "$account",
         fxRate:          "$fxRate",
         subtype:         "$subtype",
         instrumentType:  "$instrumentType",
@@ -293,6 +328,14 @@
       }
     },
     // ── Trading 212 → Wealthfolio ──
+    //   Pattern: per-rule overrides + 1:N row routing. The input_schema
+    //   defines sane defaults that work for the majority of stock-trade
+    //   rows; row_rules then overrides $variables for special cases. A
+    //   "Currency conversion" row produces 3 output rows (FEE + WITHDRAWAL +
+    //   DEPOSIT), and "Stock split close" joins its sibling "Stock split
+    //   open" via pre_pass to compute the split ratio. Demonstrates the
+    //   extended Wealthfolio vocabulary: TRANSFER_IN, TRANSFER_OUT, SPLIT
+    //   (in addition to the eight standard actions).
     trading212_to_wealthfolio: {
       data_dir:            "trading212_to_wealthfolio",
       file_type_in:        "csv",
@@ -514,6 +557,11 @@
       }
     },
     // ── XTB (old format, closed positions) → Wealthfolio ──
+    //   Pattern: .xlsx source. xlsx_sheet extracts a single sheet from each
+    //   .xlsx file in data_dir, skips title/metadata rows, and writes an
+    //   intermediate CSV that the normal pipeline then processes. The same
+    //   data_dir is shared with xtb1_cash (the .xlsx is parsed once, two
+    //   sheets extracted).
     xtb1_closed_to_wealthfolio: {
       data_dir:            "xtb1_to_wealthfolio",
       /*
@@ -591,6 +639,11 @@
       }
     },
     // ── XTB (old format, cash operations) → Wealthfolio ──
+    //   Pattern: centralized cash branching in input_schema. Stock vs cash
+    //   rows are distinguished by [Symbol] != ''; cash rows get the
+    //   $CASH-CZK placeholder. A few row_rules entries override $variables
+    //   for special cases (Stock purchase parses qty/price out of the
+    //   Comment field via SPLIT_PART).
     xtb1_cash_to_wealthfolio: {
       data_dir:            "xtb1_to_wealthfolio",  // same dir as xtb1_closed; xlsx extracted once
       xlsx_sheet: {
@@ -721,6 +774,9 @@
       }
     },
     // ── XTB (new format from 2026-07-01, closed positions) → Wealthfolio ──
+    //   Same pattern as xtb1_closed but tracks XTB's renamed columns
+    //   ("Ticker" instead of "Symbol", "Close Time (UTC)" instead of
+    //   "Close time", "Closed Positions" sheet instead of "CLOSED POSITION").
     xtb2_closed_to_wealthfolio: {
       data_dir:            "xtb2_to_wealthfolio",
       xlsx_sheet: {
@@ -787,6 +843,9 @@
       }
     },
     // ── XTB (new format from 2026-07-01, cash operations) → Wealthfolio ──
+    //   Same pattern as xtb1_cash but tracks XTB's renamed columns and event
+    //   labels (e.g. "Dividend" instead of "DIVIDENT", "Stock sell" instead
+    //   of "Stock sale").
     xtb2_cash_to_wealthfolio: {
       data_dir:            "xtb2_to_wealthfolio",  // same dir as xtb2_closed; xlsx extracted once
       xlsx_sheet: {

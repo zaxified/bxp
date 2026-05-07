@@ -448,7 +448,7 @@ not in the sign of the amount.
 | `$fee` | Always positive (a cost). `ABS()` if needed. |
 
 **Activity-type vocabulary.** `$action` is set inside `row_rules`.
-Standard values used by the built-in templates:
+Eight values cover every event the built-in templates emit:
 
 | Action | When |
 | --- | --- |
@@ -461,10 +461,18 @@ Standard values used by the built-in templates:
 | `'INTEREST'` | Interest paid (e.g. on cash balance) |
 | `'FEE'` | Fee charged (e.g. monthly account fee, ADR fee) |
 
-If your broker emits an event that doesn't fit one of these, prefer
-`'INTEREST'` for any income-like cash event, `'FEE'` for any cost-like
-cash event, and skip the row (`rows: []`) if you can't classify it
-cleanly.
+Three additional values handle portfolio bookkeeping events that
+Wealthfolio also imports:
+
+| Action | When |
+| --- | --- |
+| `'TRANSFER_IN'` | Stock moved into the account from elsewhere (zero-cost arrival) |
+| `'TRANSFER_OUT'` | Stock moved out of the account to elsewhere |
+| `'SPLIT'` | Stock split — `$amount` carries the split ratio (e.g. `2` for 2-for-1) |
+
+If your broker emits an event that doesn't fit any of these, prefer
+`'INTEREST'` for income-like cash, `'FEE'` for cost-like cash, and skip
+the row (`rows: []`) if you can't classify it cleanly.
 
 **Non-trade row patterns.** Cash events (DEPOSIT, WITHDRAWAL, INTEREST,
 FEE, and DIVIDEND on a balance without a ticker) don't have a
@@ -472,13 +480,18 @@ meaningful symbol or unit price. The existing templates demonstrate
 two valid patterns — pick the one that matches your broker, do not
 invent a third:
 
-- **Anycoin pattern** — `$ticker: ''`, `$quantity: '1'`,
-  `$unitprice: '$amount'` (so quantity × price = amount). Compact,
-  works when one cash event = one output row.
-- **xtb_cash pattern** — per-action overrides inside
-  `row_rules[].rows[]` set ticker/quantity/price explicitly per event
-  type. Verbose but flexible when different cash events need different
-  shapes.
+- **Centralised in `input_schema`** (Anycoin, Revolut X, XTB cash) —
+  `IF([type] = 'cash', '$CASH-XXX', TICKER([Symbol]))` style branching
+  at variable definition time. `row_rules` then only sets `$action`.
+  Compact when most cash events take the same shape and the input has a
+  single column that distinguishes cash from stock rows.
+- **Per-rule overrides** (Trading 212) — `input_schema` defines
+  defaults that work for the trade rows, then individual
+  `row_rules[].rows[]` entries clear or override `$variables` per
+  event type (e.g. `$quantity: ""`, `$unitprice: ""` for a deposit;
+  three different `rows` for a currency conversion). Verbose but
+  flexible when different cash events need different shapes or when
+  one input row must produce multiple output rows.
 
 **Required vs optional output columns.**
 
