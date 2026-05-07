@@ -143,9 +143,33 @@ class BxpProcessClient {
       _lastSubprocessDiag = '$diag1\n  shell: exit 0 OK';
       return r2;
     }
-    _lastSubprocessDiag = '$diag1\n  shell: exit ${r2.exitCode}'
+    final diag2 = 'shell: exit ${r2.exitCode}'
         ', stderr=${_peek((r2.stderr as String).trim())}';
-    return r2;
+    // Attempt 3: Dart's built-in Process.run, which drains pipes in
+    // dart:io's native (C++) code without depending on the Dart event
+    // loop attaching a listener. If the failure mode in attempts 1+2
+    // really is the dart-lang/sdk#1727 spawn-vs-attach race, this path
+    // sidesteps it entirely. We give up kill control here, but for
+    // single-shot calls a stuck child is bounded by the Future.timeout.
+    try {
+      final r3 = await Process.run(executable, arguments).timeout(timeout);
+      if (r3.exitCode == 0) {
+        _lastSubprocessDiag = '$diag1\n  $diag2\n  processRun: exit 0 OK';
+        return r3;
+      }
+      _lastSubprocessDiag = '$diag1\n  $diag2\n  processRun: exit ${r3.exitCode}'
+          ', stderr=${_peek((r3.stderr as String).trim())}';
+      return r3;
+    } on TimeoutException {
+      _lastSubprocessDiag =
+          '$diag1\n  $diag2\n  processRun: timeout after ${timeout.inSeconds}s';
+      return ProcessResult(
+        0,
+        ProcessRunResult.kExitTimeout,
+        '',
+        '$executable timed out after ${timeout.inSeconds}s',
+      );
+    }
   }
 
   static Future<ProcessResult> _runOnce(
