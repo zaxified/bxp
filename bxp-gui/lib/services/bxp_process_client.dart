@@ -93,7 +93,12 @@ class BxpProcessClient {
   /// generous on the slowest realistic input we've seen and still way
   /// shorter than "user gives up and quits the app".
   static const Duration _versionTimeout = Duration(seconds: 5);
-  static const Duration _docsTimeout = Duration(seconds: 5);
+  // 30s rather than 5s: Windows cold-spawn for a freshly-installed
+  // bxp-fmt.exe (anti-virus inspection on first launch, paged-in from
+  // disk, ~30 KB of JSON to serialise) has been observed to push past
+  // the old 5s budget and trip the "no parseable JSON" fatal-startup
+  // path even though the binary itself works fine from a console.
+  static const Duration _docsTimeout = Duration(seconds: 30);
   static const Duration _exprTimeout = Duration(seconds: 15);
   static const Duration _configTimeout = Duration(seconds: 15);
   static const Duration _listTemplatesTimeout = Duration(seconds: 30);
@@ -203,17 +208,64 @@ class BxpProcessClient {
   static Future<Map<String, dynamic>?> getDocs() async {
     final bin = findBin('bxp-fmt');
     if (bin == null) return null;
+    // Two attempts: the first call races against Flutter's startup work
+    // (parsing prefs, building MainView, theme load) that can keep the
+    // event loop busy enough to delay pipe drain on Windows. A retry
+    // after a short pause lands on a quieter loop and gets through.
+    for (int attempt = 1; attempt <= 2; attempt++) {
+      final docs = await _getDocsOnce(bin);
+      if (docs != null) return docs;
+      if (attempt < 2) await Future<void>.delayed(const Duration(milliseconds: 250));
+    }
+    return null;
+  }
+
+  static Future<Map<String, dynamic>?> _getDocsOnce(String bin) async {
     try {
       final result = await _runWithTimeout(bin, ['--docs'], _docsTimeout);
-      if (result.exitCode != 0) return null;
+      if (result.exitCode != 0) {
+        _lastDocsError = 'exit code ${result.exitCode}; '
+            'stderr: ${_peek(result.stderr as String)}';
+        return null;
+      }
       final out = (result.stdout as String).trim();
-      if (out.isEmpty) return null;
-      final parsed = jsonDecode(out);
-      return parsed is Map<String, dynamic> ? parsed : null;
-    } catch (_) {
+      if (out.isEmpty) {
+        _lastDocsError = 'stdout was empty; '
+            'stderr: ${_peek(result.stderr as String)}';
+        return null;
+      }
+      try {
+        final parsed = jsonDecode(out);
+        if (parsed is Map<String, dynamic>) return parsed;
+        _lastDocsError = 'parsed JSON is ${parsed.runtimeType}, expected a Map; '
+            'stdout starts with: ${_peek(out)}';
+        return null;
+      } on FormatException catch (e) {
+        _lastDocsError = 'jsonDecode failed: ${e.message}; '
+            'stdout (${out.length} bytes) starts with: ${_peek(out)}';
+        return null;
+      }
+    } catch (e) {
+      _lastDocsError = 'exception: $e';
       return null;
     }
   }
+
+  /// Diagnostic detail captured on the most recent [getDocs] failure.
+  /// Surfaced in `trace_store._fatalStartupError` so the user-facing
+  /// "bxp-fmt --docs failed" screen can name the actual failure mode
+  /// (timeout, non-zero exit, JSON parse error, ...) instead of a
+  /// generic "no parseable JSON" message that gives the bug reporter
+  /// nothing to work with.
+  static String? _lastDocsError;
+  static String? get lastDocsError => _lastDocsError;
+
+  /// First [n] characters of [s], with a tail indicator when truncated.
+  /// Used for diagnostic snippets in [_lastDocsError] — keeps the fatal
+  /// error screen readable even when the binary returns megabytes of
+  /// garbage.
+  static String _peek(String s, {int n = 200}) =>
+      s.length <= n ? s : '${s.substring(0, n)}... (+${s.length - n} more)';
 
   /// Enumerates conversion templates declared in a config via
   /// `bxp-fmt --config <path> --list-templates`. Returns an empty list when
