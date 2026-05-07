@@ -1,81 +1,100 @@
-# BXP - Broker eXchange Parser
+# BXP — Broker eXchange Parser
 
-## Table of Contents
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE.md)
+[![Latest release](https://img.shields.io/github/v/release/zaxified/bxp)](https://github.com/zaxified/bxp/releases)
 
-- [About](#about)
-- [Quick start](#quick-start)
-- [Supported brokers](#supported-brokers)
-- [How to Contribute](#how-to-contribute)
-- [Licence](#licence)
+> Convert broker exports into [Wealthfolio](https://wealthfolio.app/) CSV
+> using declarative JSON5 templates. Privacy-respecting, single binary,
+> no runtime dependencies.
 
-## About
+![bxp-gui demo: load → edit → dry-run → validate](docs/demo.gif)
 
-BXP is a configuration-driven data pipeline tool written in Zig. It was born from my desire to try vibe coding with Zig language and need converting broker platform exports (CSV, XLSX, JSON) into a unified format for [Wealthfolio](https://wealthfolio.app/) portfolio tracker. Now the situation is a bit messi, every broker has a different export format, different columns, different conventions - and manual adjustments in a spreadsheet are time-consuming and error-prone. You can try to invent your own scripts and procedures to get the data you really need, but it doesn't always end in success.
+## What it does
 
-BXP solves this problem differently than most tools or scripts. Instead of a hard-coded parser for each broker, it uses **declarative configuration** in a fully supported [**JSON5 format**](https://json5.org/) (a superset of JSON - comments, trailing commas, unquoted keys) with its own **expression engine**. Adding a new data source
-means writing a JSON/JSON5 template - no code, no compilation.
+BXP turns broker statements (CSV, XLSX, JSON) into Wealthfolio's CSV
+import format. Adding a new broker is a JSON5 template — no code, no
+compilation. Two binaries ship together:
 
-**The expression language currently supports**:
+- **`bxp-cli`** — headless batch converter for scripts and pipelines.
+- **`bxp-gui`** — desktop editor with autocomplete, syntax check, and a
+  live dry-run debugger that streams per-row trace events.
 
-- conditionals **(IF, COALESCE)**
-- math **(ABS, ROUND, FLOOR, CEILING)**
-- string operations **(REPLACE, SPLIT_PART, TRIM, CONTAINS)**
-- price and currency extraction **(PRICE_VALUE, PRICE_CURRENCY)**
-- date format conversion **(DATE_CONVERT)**
-- identifier mapping **(TICKER)**
-- cross-row lookup tables **(LOOKUP)** for pairing
-related rows
+Inputs CSV / XLSX / JSON; outputs CSV (RFC 4180) or JSON. The two-pass
+pipeline supports cross-row joins (paired transaction legs, fee
+refunds), 1:N row routing (one input row → multiple output rows), and a
+small expression language with conditionals, math, string ops,
+date / currency parsing, and identifier mapping.
 
-Inputs can be CSV, JSON or XLSX and outputs can be CSV or JSON - BXP is not limited to one-directional conversion.
-The architecture is two-pass: the first pass (pre_pass) builds a lookup map from selected rows, the second pass performs transformation and routing - a single input row can generate 0, 1, or N output rows based on rules (row_rules).
-Output complies with the [**RFC 4180**](https://www.rfc-editor.org/rfc/rfc4180) standard and basic protection against formula injection.
+## Why use BXP
 
-But here is the key point: ***BXP no longer just looks like broker export converter.*** The combination of a generic expression engine, JSON5-driven configuration, and a two-pass pipeline makes it a universal [**ETL micro-tool**](https://w.wiki/32mw). The project is open-source and welcomes contributions from the community - whether it's new conversion templates, extending the expression engine with new functions or adding support for additional input/output formats or you just want to try vibe code in Zig language.
-
-**Future directions BXP can take with community help**:
-
-- **Bank statement normalization** - unifying exports from different banks into a single standard for accounting software or tax returns
-- **E-commerce data transformation** - converting orders/invoices between platforms (Shopify JSON --> internal ERP CSV, WooCommerce export --> accounting)
-- **Data migration** - reformatting CSV, XLSX, or JSON dumps when switching between systems (CRM, helpdesk, issue tracker) without writing throwaway scripts
-- **IoT / sensor data** - remapping columns and units from JSON API sensor platforms into a unified format for visualization or archiving
-- **Compliance reporting** - extracting and transforming data from various sources into a regulatory-required format (MiFID II, EMIR)
-
-BXP is a single binary with no external dependencies. Thanks to Zig cross-compilation, currently it runs on Linux, macOS, Windows.
-And if needed other platforms supported by the Zig toolchain. Configuration is human-readable, version-controllable, and shareable between users. No Python, no Docker, no runtime dependencies - just a binary and JSON5.
-
-An important aspect: thanks to the declarative nature of the configuration, users
-can create their own conversion templates with the help of an AI assistant
-(ChatGPT, Claude, etc.) - just describe the input format and the desired output.
-Data never leaves the machine, everything runs locally. No cloud, no API keys,
-no sending sensitive financial data to third parties.
+- **GUI with live debugger.** Edit a template, hit dry-run, watch every
+  row's variables / rule matches / output stream past in NDJSON. Click
+  any trace event to jump to the expression that produced it. Typos
+  surface as red underlines on the offending token before you save.
+- **Universal mini-ETL.** The primary target is broker → Wealthfolio,
+  but the engine is broker-agnostic and target-agnostic — anything
+  expressible as "tabular in, tabular out, with row-level rules" fits.
+- **AI-friendly.** Templates are JSON5 with comments. Paste a 5-row
+  sample of your broker's export into Claude / ChatGPT along with the
+  reference readme, get back a working template.
+- **Single binary, no dependencies.** No Python, no Docker, no Java
+  runtime. Linux, macOS, Windows — Zig cross-compilation handles the
+  rest.
+- **Local-only.** Your statements never leave the machine. No cloud, no
+  API keys, no telemetry.
+- **Apache 2.0.** Use commercially, fork, modify.
 
 ## Quick start
 
-Download last package from [`releases`](https://github.com/zaxified/bxp/releases), extract files and run.
+### Desktop (recommended)
 
-or you can build your own binary:
+Download from [`releases`](https://github.com/zaxified/bxp/releases)
+and pick the package for your OS:
+
+| OS | Format |
+| --- | --- |
+| Linux | `.AppImage`, `.deb`, `.tar.gz` |
+| macOS | `.dmg` (Apple Silicon) |
+| Windows | `setup.exe` (NSIS installer) |
+
+On macOS the first launch is **right-click → Open** so Gatekeeper
+allows the unsigned app.
+
+### CLI
 
 ```bash
+# Download a console archive from the releases page, or build from source:
 git clone https://github.com/zaxified/bxp.git
-cd ./bxp/bxp-cli
+cd bxp/bxp-cli
 zig build
 ./zig-out/bin/bxp-cli --help
 ```
 
-See [`resources/console/readme.md`](resources/console/readme.md) for full usage, configuration reference.
+## Documentation
+
+| For | Read |
+| --- | --- |
+| Using `bxp-cli` from a terminal | [`resources/console/readme.md`](resources/console/readme.md) |
+| Using `bxp-gui` (desktop) | [`resources/desktop/readme.md`](resources/desktop/readme.md) |
+| Developer / architecture / roadmap | [`docs/`](docs/README.md) |
+| Contributing | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
+| Release history | [`CHANGELOG.md`](CHANGELOG.md) |
 
 ## Supported brokers
 
-Revolut X, Trading 212, Anycoin, XTB and more will come soon.
+Built-in templates ship for Anycoin, Revolut X, Trading 212, and XTB
+(both old and new formats). The full list lives in
+[`resources/bxp-cli.examples.json`](resources/bxp-cli.examples.json) —
+each entry is a working template with inline comments you can copy and
+adapt. A new broker takes a JSON5 entry, not a code change.
 
-## How to Contribute
+## About
 
-We welcome contributions from the community! Specifically, we are looking for new **datasets** ( broker exports / expected results / json templates ) to make this tool better for everyone.
-
-For development documentation see [`docs/devel.md`](docs/devel.md)
-
----
+BXP started as an experiment in vibe-coding with Zig and grew into a
+general-purpose tabular ETL micro-tool. Contributions — broker
+templates, datasets, code, documentation — are welcome; see
+[`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## Licence
 
-This project is licensed under the **Apache License 2.0**. You are free to use, modify, and distribute the code, even for commercial purposes. See the [LICENSE.md](LICENSE.md) file for details.
+Apache License 2.0. See [`LICENSE.md`](LICENSE.md).
