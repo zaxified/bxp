@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 
 import '../store/trace_model.dart';
+import 'bridge_client.dart';
 import 'dev_trace.dart';
 
 /// Spawn-based client for `bxp-cli` and `bxp-fmt`.
@@ -296,6 +297,17 @@ class BxpProcessClient {
   static Future<Map<String, dynamic>?> getDocs() async {
     final bin = findBin('bxp-fmt');
     if (bin == null) return null;
+    // Windows: try the FFI bridge first. dart:io's Process pipe layer
+    // tops out around 8 KB on this platform (sdk#1727 + #51273), so
+    // --docs (~30 KB) doesn't survive the round-trip. The bridge drains
+    // pipes from Zig native code, sidestepping Dart's event loop.
+    if (Platform.isWindows) {
+      final viaBridge = _tryBridgeGetDocs(bin);
+      if (viaBridge != null) return viaBridge;
+      // Bridge unavailable or returned a non-zero exit — fall through
+      // to the direct Process.start path so the existing diagnostics
+      // (lastDocsError) capture the secondary failure mode too.
+    }
     try {
       final result = await _runWithTimeout(bin, ['--docs'], _docsTimeout);
       if (result.exitCode != 0) {
@@ -322,6 +334,45 @@ class BxpProcessClient {
       }
     } catch (e) {
       _lastDocsError = 'exception: $e';
+      return null;
+    }
+  }
+
+  /// Run `bxp-fmt --docs` through the FFI bridge if the DLL is available
+  /// next to bxp-gui. Returns the parsed docs JSON on success, or null
+  /// on any failure (DLL missing, bridge error, non-zero exit, JSON
+  /// parse failure). Updates [_lastSubprocessDiag] either way so the
+  /// caller can include the diagnostic in fatal-error screens.
+  static Map<String, dynamic>? _tryBridgeGetDocs(String bin) {
+    final dllPath = findBridgeLibrary();
+    if (dllPath == null) {
+      _lastSubprocessDiag = 'bridge: DLL not found next to bxp-gui';
+      return null;
+    }
+    try {
+      final client = BridgeClient(dllPath);
+      final result = client.run(bin, ['--docs']);
+      if (result.err != null) {
+        _lastSubprocessDiag = 'bridge ${client.bridgeVersion}: err=${result.err}';
+        return null;
+      }
+      if (result.exitCode != 0) {
+        _lastSubprocessDiag = 'bridge ${client.bridgeVersion}: '
+            'exit ${result.exitCode}, stdout=${result.stdout.length} B'
+            ', stderr=${_peek(result.stderr.trim())}';
+        return null;
+      }
+      final parsed = jsonDecode(result.stdout);
+      if (parsed is Map<String, dynamic>) {
+        _lastSubprocessDiag = 'bridge ${client.bridgeVersion}: '
+            'OK (${result.stdout.length} bytes)';
+        return parsed;
+      }
+      _lastSubprocessDiag = 'bridge ${client.bridgeVersion}: '
+          'parsed JSON is ${parsed.runtimeType}, expected Map';
+      return null;
+    } catch (e) {
+      _lastSubprocessDiag = 'bridge: exception $e';
       return null;
     }
   }

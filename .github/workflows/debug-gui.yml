@@ -42,22 +42,27 @@ jobs:
       # Companions are required for the Flutter CMake step to succeed
       # (CMakeLists.txt copies them into the bundle); we discard them
       # afterwards so the artifact stays GUI-only.
-      - name: Build companion binaries (windows target)
+      - name: Build companion binaries + bridge DLL (windows target)
         run: |
-          (cd bxp-cli && zig build -Dtarget=x86_64-windows -Doptimize=ReleaseSmall)
-          (cd bxp-fmt && zig build -Dtarget=x86_64-windows -Doptimize=ReleaseSmall)
+          (cd bxp-cli         && zig build -Dtarget=x86_64-windows -Doptimize=ReleaseSmall)
+          (cd bxp-fmt         && zig build -Dtarget=x86_64-windows -Doptimize=ReleaseSmall)
+          (cd bxp-gui-bridge  && zig build -Dtarget=x86_64-windows -Doptimize=ReleaseSmall)
       - name: Build Flutter Windows bundle
         run: |
           cd bxp-gui
           flutter pub get
           flutter build windows --release
-      - name: Stage GUI-only payload
+      - name: Stage GUI-only payload + bridge DLL
         run: |
           mkdir -p staging
           cp -r bxp-gui/build/windows/x64/runner/Release/* staging/
           # Drop companions: the user's installed BXP already has them
           # (and these were rebuilt only to satisfy the bundle copy step).
           rm -f staging/bxp-cli.exe staging/bxp-fmt.exe
+          # Ship the bridge DLL — bxp_process_client.findBridgeLibrary()
+          # looks for it next to bxp-gui.exe, the install will be missing
+          # it from the older v0.2.1 installer so we need to drop it in.
+          cp bxp-gui-bridge/zig-out/bin/bxp-gui-bridge.dll staging/
           ls -lh staging
       - uses: actions/upload-artifact@v4
         with:
