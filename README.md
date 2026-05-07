@@ -2,6 +2,7 @@
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE.md)
 [![Latest release](https://img.shields.io/github/v/release/zaxified/bxp)](https://github.com/zaxified/bxp/releases)
+[![CodeQL](https://github.com/zaxified/bxp/actions/workflows/github-code-scanning/codeql/badge.svg)](https://github.com/zaxified/bxp/security/code-scanning)
 
 > Convert broker exports into [Wealthfolio](https://wealthfolio.app/) CSV
 > using declarative JSON5 templates. Privacy-respecting, single binary,
