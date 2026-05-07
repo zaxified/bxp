@@ -93,11 +93,7 @@ class BxpProcessClient {
   /// generous on the slowest realistic input we've seen and still way
   /// shorter than "user gives up and quits the app".
   static const Duration _versionTimeout = Duration(seconds: 5);
-  // 30s vs 15s elsewhere: --docs only runs at startup, where Flutter's
-  // boot work can briefly steal the event loop. Worst case is a cold
-  // Windows spawn under antivirus inspection on a slow disk; 30s leaves
-  // headroom even after pipe-drain is fixed below.
-  static const Duration _docsTimeout = Duration(seconds: 30);
+  static const Duration _docsTimeout = Duration(seconds: 5);
   static const Duration _exprTimeout = Duration(seconds: 15);
   static const Duration _configTimeout = Duration(seconds: 15);
   static const Duration _listTemplatesTimeout = Duration(seconds: 30);
