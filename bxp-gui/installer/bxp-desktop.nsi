@@ -1,15 +1,21 @@
 ; NSIS installer for BXP Desktop on Windows.
 ;
-; Build with: makensis -DAPPVERSION=0.2.0 -DSTAGEDIR=path\to\stage bxp-desktop.nsi
+; Build with: makensis -DAPPVERSION=0.2.0 -DVERSIONTAG=v0.2.0 \
+;             -DSTAGEDIR=path\to\stage bxp-desktop.nsi
 ;
-; Outputs: bxp-desktop-<version>-windows-x86_64-setup.exe in the OUTDIR
-; environment variable (defaulted to the script directory).
+; Outputs: bxp-desktop-<VERSIONTAG>-windows-x86_64-setup.exe in OUTDIR.
+; APPVERSION is the bare SemVer string (NSIS Version property);
+; VERSIONTAG is the release-tag-shaped string used in artifact filenames
+; so they line up with the Linux/macOS bundles (bxp-desktop-v0.2.0-...).
 ;
 ; The installer is silent-capable via /S — UpdaterService relies on this
 ; to perform unattended self-updates.
 
 !ifndef APPVERSION
   !define APPVERSION "0.0.0"
+!endif
+!ifndef VERSIONTAG
+  !define VERSIONTAG "${APPVERSION}"
 !endif
 !ifndef STAGEDIR
   !error "STAGEDIR must be defined (path to staged Flutter Windows release)"
@@ -24,7 +30,7 @@
 !define INSTALLDIR_DEFAULT "$PROGRAMFILES64\BXP"
 
 Name "${APPNAME}"
-OutFile "${OUTDIR}\bxp-desktop-${APPVERSION}-windows-x86_64-setup.exe"
+OutFile "${OUTDIR}\bxp-desktop-${VERSIONTAG}-windows-x86_64-setup.exe"
 InstallDir "${INSTALLDIR_DEFAULT}"
 RequestExecutionLevel admin
 SetCompressor /SOLID lzma

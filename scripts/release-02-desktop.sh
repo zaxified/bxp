@@ -197,6 +197,7 @@ build_windows() {
     fi
     makensis \
         -DAPPVERSION="$VERSION_BARE" \
+        -DVERSIONTAG="$VERSION" \
         -DSTAGEDIR="$appdir" \
         -DOUTDIR="$OUTDIR" \
         "$GUI_ROOT/installer/bxp-desktop.nsi" >/dev/null
