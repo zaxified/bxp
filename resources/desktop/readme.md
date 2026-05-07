@@ -1024,4 +1024,4 @@ The project is open-source. For the newest built-in templates,
 community contributions, and issue tracking see the BXP GitHub
 repository: <https://github.com/zaxified/bxp>.
 
-Apache-2.0 licensed. See `LICENCE.md` in the source tree.
+Apache-2.0 licensed. See `LICENSE.md` in the source tree.
