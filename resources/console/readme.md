@@ -1,13 +1,50 @@
 # Broker eXchange Parser (bxp-cli)
 
-A single-binary CLI tool that converts broker export statements (CSV, XLSX, JSON) into
-[Wealthfolio](https://wealthfolio.app/) CSV format using declarative JSON5 templates.
-No code changes, no runtime dependencies — just the binary and a config file. Everything
-runs locally; your data never leaves the machine.
+A single-binary CLI tool that converts broker export statements (CSV,
+XLSX, JSON) into [Wealthfolio](https://wealthfolio.app/) CSV format
+using declarative JSON5 templates. No code changes, no runtime
+dependencies — just the binary and a config file. Everything runs
+locally; your data never leaves the machine.
 
 ---
 
 ## Basic usage
+
+### Three-step recipe
+
+1. Drop the broker's export file into the template's `data_dir`.
+2. Run `./bxp-cli --template <id>`.
+3. Pick up the generated `*.csvx` file next to the input — ready to
+   import into Wealthfolio.
+
+### Built-in templates
+
+| Template ID | Broker |
+| --- | --- |
+| `revolutx_to_wealthfolio` | Revolut X (crypto) |
+| `trading212_to_wealthfolio` | Trading 212 |
+| `anycoin_to_wealthfolio` | Anycoin (crypto) |
+| `xtb1_closed_to_wealthfolio` | XTB — closed positions (old) |
+| `xtb1_cash_to_wealthfolio` | XTB — cash operations (old) |
+| `xtb2_closed_to_wealthfolio` | XTB — closed positions (new) |
+| `xtb2_cash_to_wealthfolio` | XTB — cash operations (new) |
+
+### `bxp-cli` reference
+
+All flags are optional. Without arguments, bxp-cli reads `bxp-cli.json`
+from the current directory and processes every template in it.
+
+| Flag | Argument | What it does |
+| --- | --- | --- |
+| `--config <file>` | path | Use a specific config file. Default: `./bxp-cli.json` in the current directory. |
+| `--template <id>` | template id | Process only the named template. Without it, all templates run. |
+| `--data <dir>` | directory path | Override the template's `data_dir`. Useful for testing with files in a different location. |
+| `--debug` | — | Print rows no `row_rules` entry matched (when `row_rules_debug_missing: true`). JSON on stdout. |
+| `--quiet` | — | Suppress per-template summaries. Exit code still reflects success / warnings / failure. |
+| `--fresh` | — | Skip files whose output already exists. Useful when re-running on a folder where some `.csvx` files are already produced. |
+| `--check-fs=N` | seconds (0–60) | Run extra filesystem-existence checks (verifies `data_dir`, etc.). `N` is the deadline in seconds — `0` skips entirely (default). |
+| `--version` | — | Print the binary version to stdout and exit. |
+| `--help` | — | Print the built-in help to stdout and exit. |
 
 ```bash
 ./bxp-cli --help                                  # print usage
@@ -16,56 +53,69 @@ runs locally; your data never leaves the machine.
 ./bxp-cli --template <id> --data ./my-data/       # override data_dir for that template
 ```
 
-### Three-step recipe
+### Exit codes
 
-1. Drop the broker's export file into the template's `data_dir`.
-2. Run `./bxp-cli --template <id>`.
-3. Pick up the generated `*.csvx` file next to the input — ready to import into Wealthfolio.
+| Binary | Code | Meaning |
+| --- | --- | --- |
+| bxp-cli | `0` | Success — all matched rows converted, no warnings. |
+| bxp-cli | `1` | Fatal error — config invalid, file missing, expression failure. |
+| bxp-cli | `2` | Completed with warnings — output written but at least one warning emitted (typo'd field, no input rows, …). |
 
-### Built-in templates
+### Where output goes
 
-| Template ID                  | Broker                        |
-| ---                          | ---                           |
-| `revolutx_to_wealthfolio`    | Revolut X (crypto)            |
-| `trading212_to_wealthfolio`  | Trading 212                   |
-| `anycoin_to_wealthfolio`     | Anycoin (crypto)              |
-| `xtb1_closed_to_wealthfolio` | XTB — closed positions (old)  |
-| `xtb1_cash_to_wealthfolio`   | XTB — cash operations (old)   |
-| `xtb2_closed_to_wealthfolio` | XTB — closed positions (new)  |
-| `xtb2_cash_to_wealthfolio`   | XTB — cash operations (new)   |
+- **stdout** — per-template summaries, the final overall line, and
+  (in `--debug`) JSON dumps of unmatched rows.
+- **stderr** — fatal errors and warning text. Pipe `2>/dev/null` to
+  silence warnings while still capturing exit code.
 
-**CLI flags:** `--template <id>`, `--data <dir>`, `--config <file>`, `--debug`, `--quiet`, `--fresh`. \
-**Exit codes:** `0` = success, `1` = error, `2` = completed with warnings.
+Don't pipe `2>&1` if you intend to feed stdout to another tool —
+bxp-cli's streaming output assumes stdout and stderr stay separate.
 
-**Need a broker that isn't listed? Ask your AI assistant.** bxp-cli templates are plain
-JSON5 — a capable AI (Claude, ChatGPT, ...) can write one for you. Paste this prompt into
-your assistant, attach this readme and `bxp-cli.examples.json`, then drop in 5 rows of
-your broker's raw CSV:
+---
 
-> *"I use bxp-cli. Please read the **Advanced usage** section of `readme.md`
-> and the comments in `bxp-cli.examples.json`. Here is a sample of my broker's
-> export: `<paste 5 rows including the header>`. Add a new entry under
-> `conversion_templates` in my `bxp-cli.json` that converts this to Wealthfolio CSV,
-> following the same patterns as the existing templates. Follow the rules in the
-> 'Rules for an AI assistant' section."*
+## Need a broker that isn't listed?
+
+**Ask your AI assistant.** bxp-cli templates are plain JSON5 — a capable
+AI (Claude, ChatGPT, …) can write one for you. **Two files are required
+context:** this `readme.md` AND `bxp-cli.examples.json` (also at the
+project's GitHub repository). The readme defines the language and the
+target output spec; the examples.json carries working per-broker
+patterns the AI is expected to pattern-match against. If the AI doesn't
+have examples.json, it will refuse to guess.
+
+Paste this prompt into your assistant, attach both files, then drop in
+5 rows of your broker's raw CSV:
+
+> *"I use BXP. Please read the **Advanced usage** section of `readme.md`
+> and the comments in `bxp-cli.examples.json`. Here is a sample of my
+> broker's export: `<paste 5 rows including the header>`. Add a new
+> entry under `conversion_templates` in my `bxp-cli.json` that converts
+> this to Wealthfolio CSV, following the same patterns as the existing
+> templates. Follow the rules in the 'Rules for an AI assistant'
+> section: self-test your output (`bxp-fmt --config` + `bxp-cli
+> --debug`) before returning, return JSON5 with `//` comments
+> explaining non-obvious decisions, and end your reply with a 'Things
+> to check in bxp-gui' list for anything you couldn't fully verify."*
 
 ---
 
 ## Advanced usage
 
-This section is written so that a capable AI assistant can produce a working broker
-template given only this file and `bxp-cli.examples.json`. It is also useful
-as a human reference.
+This section is written so that a capable AI assistant can produce a
+working broker template given only this file and `bxp-cli.examples.json`.
+It is also useful as a human reference.
 
 ### Architecture in one paragraph
 
-bxp-cli is a two-pass declarative data pipeline. Pass one (optional `pre_pass`) scans
-all rows and builds a lookup table for cross-row joins. Pass two iterates rows, evaluates
-`input_schema` expressions into per-row `$variable`s, then routes each row through the
-ordered `row_rules` list — the first matching rule decides the row's activity type and
-whether it produces 0, 1, or N output rows. `output_schema` then projects the final
-`$variable`s into CSV columns in a fixed order. Input may be CSV, XLSX, or JSON; output
-is RFC 4180–compliant CSV or JSON.
+bxp-cli is a two-pass declarative data pipeline. Pass one (optional
+`pre_pass`) scans all rows and builds a lookup table for cross-row
+joins. Pass two iterates rows, evaluates `input_schema` expressions
+into per-row `$variable`s, then routes each row through the ordered
+`row_rules` list — the first matching rule decides the row's activity
+type and whether it produces 0, 1, or N output rows. `output_schema`
+then projects the final `$variable`s into CSV columns in a fixed order.
+Input may be CSV, XLSX, or JSON; output is RFC 4180–compliant CSV or
+JSON.
 
 ### `bxp-cli.json` layout
 
@@ -85,7 +135,8 @@ is RFC 4180–compliant CSV or JSON.
 }
 ```
 
-All `data_dir` paths are resolved relative to the location of `bxp-cli.json`.
+All `data_dir` paths are resolved relative to the location of
+`bxp-cli.json`.
 
 ### Blank template skeleton (copy, fill in, run)
 
@@ -185,56 +236,57 @@ mybroker_to_wealthfolio: {
 
 ### Template field reference
 
-| Field                       | Type              | Required | Default    | Purpose                                                         |
-| ---                         | ---               | ---      | ---        | ---                                                             |
-| `data_dir`                  | string            | yes      | —          | Directory with input files; relative to `bxp-cli.json`          |
-| `file_type_in`              | string            | no       | `"csv"`    | `"csv"` or `"json"` (array-of-objects)                          |
-| `file_type_out`             | string            | no       | `"csv"`    | `"csv"` or `"json"`                                             |
-| `file_pattern_in`           | string            | yes      | —          | Suffix filter, e.g. `".csv"`, `"_closed.csv"`                   |
-| `file_pattern_out`          | string            | no       | append `x` | Replaces `file_pattern_in` in output filename                   |
-| `csv_delimiter_in`          | string            | no       | `","`      | Field separator of input CSV                                    |
-| `csv_delimiter_out`         | string            | no       | `","`      | Field separator of output CSV                                   |
-| `csv_decimal_separator_in`  | string            | no       | `"."`      | Decimal separator in numeric fields (input)                     |
-| `csv_decimal_separator_out` | string            | no       | `"."`      | Decimal separator in numeric fields (output)                    |
-| `csv_text_quote_in`         | string            | no       | `"double"` | `"none"`, `"single"` (`'`), or `"double"` (`"`)                 |
-| `csv_text_quote_out`        | string            | no       | `"none"`   | Same values as `csv_text_quote_in`                              |
-| `date_filter_from_filename` | bool              | no       | `false`    | Filter rows by `YYYY-MM-DD_YYYY-MM-DD` range in filename        |
-| `ticker_map`                | string \| object  | no       | `{}`       | Name from `ticker_maps`, or inline `{ "SYM": "YAHOO" }`         |
-| `xlsx_sheet`                | object            | no       | —          | `{ name, header_row, output_suffix }` — convert xlsx before CSV |
-| `pre_pass`                  | object            | no       | —          | `{ when, key, values }` — first-pass lookup table               |
-| `input_schema`              | object            | yes      | —          | `$variable` → expression, evaluated per row                     |
-| `row_rules_debug_missing`   | bool              | no       | `false`    | Print unmatched rows with `--debug`                             |
-| `row_rules`                 | array             | yes      | —          | Ordered routing rules; first match wins                         |
-| `output_schema`             | object            | yes      | —          | Output CSV header → `$variable`; defines column order           |
+| Field | Type | Required | Default | Purpose |
+| --- | --- | --- | --- | --- |
+| `data_dir` | string | yes | — | Directory with input files; relative to `bxp-cli.json` |
+| `file_type_in` | string | no | `"csv"` | `"csv"` or `"json"` (array-of-objects) |
+| `file_type_out` | string | no | `"csv"` | `"csv"` or `"json"` |
+| `file_pattern_in` | string | yes | — | Suffix filter, e.g. `".csv"`, `"_closed.csv"` |
+| `file_pattern_out` | string | no | append `x` | Replaces `file_pattern_in` in output filename |
+| `csv_delimiter_in` | string | no | `","` | Field separator of input CSV |
+| `csv_delimiter_out` | string | no | `","` | Field separator of output CSV |
+| `csv_decimal_separator_in` | string | no | `"."` | Decimal separator in numeric fields (input) |
+| `csv_decimal_separator_out` | string | no | `"."` | Decimal separator in numeric fields (output) |
+| `csv_text_quote_in` | string | no | `"double"` | `"none"`, `"single"` (`'`), or `"double"` (`"`) |
+| `csv_text_quote_out` | string | no | `"none"` | Same values as `csv_text_quote_in` |
+| `date_filter_from_filename` | bool | no | `false` | Filter rows by `YYYY-MM-DD_YYYY-MM-DD` range in filename |
+| `ticker_map` | string \| object | no | `{}` | Name from `ticker_maps`, or inline `{ "SYM": "YAHOO" }` |
+| `xlsx_sheet` | object | no | — | `{ name, header_row, output_suffix }` — convert xlsx before CSV |
+| `pre_pass` | object | no | — | `{ when, key, values }` — first-pass lookup table |
+| `input_schema` | object | yes | — | `$variable` → expression, evaluated per row |
+| `row_rules_debug_missing` | bool | no | `false` | Print unmatched rows with `--debug` |
+| `row_rules` | array | yes | — | Ordered routing rules; first match wins |
+| `output_schema` | object | yes | — | Output CSV header → `$variable`; defines column order |
 
 ### Standard `$variable` reference
 
-Output `$variable`s that bxp-cli's Wealthfolio templates set. The first eight map 1:1 to
-Wealthfolio's import columns; the rest are optional.
+Output `$variable`s that bxp-cli's Wealthfolio templates set. The first
+eight map 1:1 to Wealthfolio's import columns; the rest are optional.
 
-| Variable          | Meaning                                                            |
-| ---               | ---                                                                |
-| `$date`           | Transaction datetime, format `YYYY-MM-DD hh:mm:ss`                 |
-| `$ticker`         | Yahoo Finance ticker (after `TICKER()` mapping)                    |
-| `$quantity`       | Number of units                                                    |
-| `$unitprice`      | Price per unit                                                     |
-| `$currency`       | Currency code (`USD`, `EUR`, `CZK`, …)                             |
-| `$fee`            | Fee amount (empty if broker does not report one)                   |
-| `$amount`         | Total transaction value                                            |
-| `$action`         | Activity type — **set only in `row_rules`**, never in `input_schema` |
-| `$account`        | Account tag (optional)                                             |
-| `$fxRate`         | FX rate (optional)                                                 |
-| `$subtype`        | Wealthfolio subtype (optional)                                     |
-| `$instrumentType` | e.g. `'Cryptocurrency'` (optional)                                 |
-| `$comment`        | Free-form comment (optional)                                       |
+| Variable | Meaning |
+| --- | --- |
+| `$date` | Transaction datetime, format `YYYY-MM-DD hh:mm:ss` |
+| `$ticker` | Yahoo Finance ticker (after `TICKER()` mapping) |
+| `$quantity` | Number of units |
+| `$unitprice` | Price per unit |
+| `$currency` | Currency code (`USD`, `EUR`, `CZK`, …) |
+| `$fee` | Fee amount (empty if broker does not report one) |
+| `$amount` | Total transaction value |
+| `$action` | Activity type — **set only in `row_rules`**, never in `input_schema` |
+| `$account` | Account tag (optional) |
+| `$fxRate` | FX rate (optional) |
+| `$subtype` | Wealthfolio subtype (optional) |
+| `$instrumentType` | e.g. `'Cryptocurrency'` (optional) |
+| `$comment` | Free-form comment (optional) |
 
-Typical `$action` values for Wealthfolio: `'BUY'`, `'SELL'`, `'DEPOSIT'`, `'WITHDRAWAL'`,
-`'DIVIDEND'`, `'TAX'`, `'INTEREST'`, `'FEE'`. An empty `""` expression omits the variable
-from output.
+Typical `$action` values for Wealthfolio: `'BUY'`, `'SELL'`, `'DEPOSIT'`,
+`'WITHDRAWAL'`, `'DIVIDEND'`, `'TAX'`, `'INTEREST'`, `'FEE'`. An empty
+`""` expression omits the variable from output.
 
 ### Expression language — full reference
 
-Expressions are strings evaluated once per row. Operator precedence, high → low:
+Expressions are strings evaluated once per row. Operator precedence,
+high → low:
 
 ```text
 unary -    →    * /    →    & (concat)    →    + -    →    = != < > <= >=    →    AND    →    OR
@@ -251,28 +303,34 @@ unary -    →    * /    →    & (concat)    →    + -    →    = != < > <= >
 | `&` | String concatenation (`'$CASH-' & [Currency]`) |
 | `$variable` | Reference to a variable set earlier in `input_schema` |
 
+Column header names may contain spaces, parentheses, currency symbols,
+and other punctuation — `[Price ($)]`, `[Run Date]`, and
+`[Stamp duty reserve tax]` are all valid references. The bracket
+syntax preserves the header verbatim; only the closing `]` itself is
+reserved.
+
 **Built-in functions** (all names are case-insensitive)
 
-| Function                     | Returns | Description                                                                 |
-| ---                          | ---     | ---                                                                         |
-| `IF(cond, yes, no)`          | any     | Short-circuit conditional; only the selected branch is evaluated            |
-| `ABS(x)`                     | number  | Absolute numeric value                                                      |
-| `ROUND(x, n)`                | number  | Round `x` to `n` decimal places (negative `n` rounds tens/hundreds)         |
-| `FLOOR(x)`                   | number  | Largest integer ≤ `x`                                                       |
-| `CEILING(x)`                 | number  | Smallest integer ≥ `x`                                                      |
-| `TRIM(s)`                    | string  | Strip leading/trailing whitespace                                           |
-| `REPLACE(s, old, new)`       | string  | Replace all occurrences of `old` with `new`; if `old` is empty, returns `s` |
-| `SPLIT_PART(s, delim, n)`    | string  | Split `s` by `delim`, return 1-based nth part; `""` if out of range         |
-| `CONTAINS(s, sub)`           | bool    | `true` when `sub` is found inside `s`                                       |
-| `PRICE_VALUE(s)`             | string  | Strip currency symbol/code: `"24.00 CZK"` → `"24.00"`, `"$100"` → `"100"`   |
-| `PRICE_CURRENCY(s)`          | string  | Extract ISO currency: `"24.00 CZK"` → `"CZK"`, `"$100"` → `"USD"`           |
-| `TICKER(s)`                  | string  | Map `s` through the template's `ticker_map`; pass through if not found      |
-| `DATE_CONVERT(s, from, to)`  | string  | Parse `s` using `from` format, emit using `to` format (tokens below)        |
-| `LOOKUP(key, 'field')`       | string  | Retrieve a value stored by `pre_pass` under `key` / `field`                 |
-| `FIELDS(n)`                  | string  | Same as `[n]` — raw field by 1-based index                                  |
-| `NOW()`                      | string  | Current UTC datetime, format `YYYY-MM-DDTHH:MM:SSZ`                         |
-| `RAND()`                     | number  | Cryptographically random float in `[0, 1)`                                  |
-| `COALESCE(a, b, ...)`        | any     | First non-empty argument (empty = whitespace-only string); falls back to last arg verbatim if all empty |
+| Function | Returns | Description |
+| --- | --- | --- |
+| `IF(cond, yes, no)` | any | Short-circuit conditional; only the selected branch is evaluated |
+| `ABS(x)` | number | Absolute numeric value |
+| `ROUND(x, n)` | number | Round `x` to `n` decimal places (negative `n` rounds tens/hundreds) |
+| `FLOOR(x)` | number | Largest integer ≤ `x` |
+| `CEILING(x)` | number | Smallest integer ≥ `x` |
+| `TRIM(s)` | string | Strip leading/trailing whitespace |
+| `REPLACE(s, old, new)` | string | Replace all occurrences of `old` with `new`; if `old` is empty, returns `s` |
+| `SPLIT_PART(s, delim, n)` | string | Split `s` by `delim`, return 1-based nth part; `""` if out of range |
+| `CONTAINS(s, sub)` | bool | `true` when `sub` is found inside `s` |
+| `PRICE_VALUE(s)` | string | Strip currency symbol/code: `"24.00 CZK"` → `"24.00"`, `"$100"` → `"100"` |
+| `PRICE_CURRENCY(s)` | string | Extract ISO currency: `"24.00 CZK"` → `"CZK"`, `"$100"` → `"USD"` |
+| `TICKER(s)` | string | Map `s` through the template's `ticker_map`; pass through if not found |
+| `DATE_CONVERT(s, from, to)` | string | Parse `s` using `from` format, emit using `to` format (tokens below) |
+| `LOOKUP(key, 'field')` | string | Retrieve a value stored by `pre_pass` under `key` / `field` |
+| `FIELDS(n)` | string | Same as `[n]` — raw field by 1-based index |
+| `NOW()` | string | Current UTC datetime, format `YYYY-MM-DDTHH:MM:SSZ` |
+| `RAND()` | number | Cryptographically random float in `[0, 1)` |
+| `COALESCE(a, b, ...)` | any | First non-empty argument (empty = whitespace-only string); falls back to last arg verbatim if all empty |
 
 #### Type coercions
 
@@ -291,44 +349,46 @@ DATE_CONVERT([Date], 'DD/MM/YYYY hh:mm:ss', 'YYYY-MM-DD hh:mm:ss')
 LOOKUP([Order ID], 'amount') / [Amount]                        → cross-row join via pre_pass
 PRICE_VALUE([Price])                                           → strip currency symbol
 SPLIT_PART([Comment], ' @ ', 2)                                → second part after " @ "
+[Commission ($)] + [Fees ($)]                                  → sum two raw numeric columns
 ```
 
 ### Date format tokens
 
-Both the `from` and `to` arguments of `DATE_CONVERT` use the same token set (from the
-`sunrise` library). Any characters that are not tokens are matched literally.
+Both the `from` and `to` arguments of `DATE_CONVERT` use the same token
+set (from the `sunrise` library). Any characters that are not tokens
+are matched literally.
 
-| Token        | Meaning                                           | Example    |
-| ---          | ---                                               | ---        |
-| `YYYY`       | 4-digit year                                      | `2026`     |
-| `YY`         | 2-digit year (00–69 → 2000s, 70–99 → 1970s)       | `26`       |
-| `MM`         | 2-digit month (01–12)                             | `03`       |
-| `M`          | 1–2 digit month                                   | `3`        |
-| `MMMM`       | Full month name                                   | `March`    |
-| `MMM`        | 3-char month abbreviation                         | `Mar`      |
-| `DD`         | 2-digit day                                       | `07`       |
-| `D`          | 1–2 digit day                                     | `7`        |
-| `hh`         | 2-digit hour, **24h** (00–23)                     | `14`       |
-| `h`          | 1–2 digit hour, 24h                               | `14`       |
-| `ii`         | 2-digit hour, **12h** (01–12)                     | `02`       |
-| `i`          | 1–2 digit hour, 12h                               | `2`        |
-| `mm`         | 2-digit minute                                    | `05`       |
-| `m`          | 1–2 digit minute                                  | `5`        |
-| `ss`         | 2-digit second                                    | `09`       |
-| `s`          | 1–2 digit second                                  | `9`        |
-| `A`          | AM/PM uppercase                                   | `PM`       |
-| `a`          | am/pm lowercase                                   | `pm`       |
-| `EEEE`       | Full day name                                     | `Monday`   |
-| `EEE`/`EE`/`E` | Short day name                                  | `Mon`      |
-| `e`          | Day of week as number (1 = Mon … 7 = Sun)         | `1`        |
-| `[text]`     | Literal text (escaped inside format string)       | `[T]` → `T` |
-| `[*]`        | Wildcard — skip until the next token              | skips `Z`, timezone suffix, etc. |
+| Token | Meaning | Example |
+| --- | --- | --- |
+| `YYYY` | 4-digit year | `2026` |
+| `YY` | 2-digit year (00–69 → 2000s, 70–99 → 1970s) | `26` |
+| `MM` | 2-digit month (01–12) | `03` |
+| `M` | 1–2 digit month | `3` |
+| `MMMM` | Full month name | `March` |
+| `MMM` | 3-char month abbreviation | `Mar` |
+| `DD` | 2-digit day | `07` |
+| `D` | 1–2 digit day | `7` |
+| `hh` | 2-digit hour, **24h** (00–23) | `14` |
+| `h` | 1–2 digit hour, 24h | `14` |
+| `ii` | 2-digit hour, **12h** (01–12) | `02` |
+| `i` | 1–2 digit hour, 12h | `2` |
+| `mm` | 2-digit minute | `05` |
+| `m` | 1–2 digit minute | `5` |
+| `ss` | 2-digit second | `09` |
+| `s` | 1–2 digit second | `9` |
+| `A` | AM/PM uppercase | `PM` |
+| `a` | am/pm lowercase | `pm` |
+| `EEEE` | Full day name | `Monday` |
+| `EEE`/`EE`/`E` | Short day name | `Mon` |
+| `e` | Day of week as number (1 = Mon … 7 = Sun) | `1` |
+| `[text]` | Literal text (escaped inside format string) | `[T]` → `T` |
+| `[*]` | Wildcard — skip until the next token | skips `Z`, timezone suffix, etc. |
 
 #### Gotchas
 
 - `mm` is minute; `MM` is month — easy to mix up.
-- `MMM` expects exactly 3 characters; 4-character variants like `Sept` and `June` are
-  pre-normalized automatically.
+- `MMM` expects exactly 3 characters; 4-character variants like `Sept`
+  and `June` are pre-normalized automatically.
 - Years before 1970 are rejected.
 - Components not present in the `from` format default to `1970-01-01 00:00:00`.
 
@@ -343,10 +403,11 @@ Both the `from` and `to` arguments of `DATE_CONVERT` use the same token set (fro
 
 ### `pre_pass` — cross-row joins
 
-Use `pre_pass` when an input row needs data that lives on **another row** (for example,
-Anycoin writes `trade payment` and `trade fill` as two rows sharing an `Order ID`).
-bxp-cli makes a first pass over the file, collects rows matching `when`, and stores
-`values` under `key`. Then `input_schema` can read them via `LOOKUP(key, 'field')`.
+Use `pre_pass` when an input row needs data that lives on **another
+row** (for example, Anycoin writes `trade payment` and `trade fill` as
+two rows sharing an `Order ID`). bxp-cli makes a first pass over the
+file, collects rows matching `when`, and stores `values` under `key`.
+Then `input_schema` can read them via `LOOKUP(key, 'field')`.
 
 ```json5
 pre_pass: {
@@ -364,72 +425,333 @@ input_schema: {
 },
 ```
 
-Note: keys inside `values` are **plain field names**, not `$variables`, and they are
-not visible to `row_rules` or `output_schema` directly — only through `LOOKUP()`.
+Note: keys inside `values` are **plain field names**, not `$variables`,
+and they are not visible to `row_rules` or `output_schema` directly —
+only through `LOOKUP()`.
+
+### Wealthfolio target spec
+
+The output `.csvx` is consumed by Wealthfolio. The conventions below
+are enforced by the existing built-in templates and are the canonical
+reference for new templates — Wealthfolio itself does not ship a
+machine-readable spec, so "what the existing templates do" is the
+de-facto contract.
+
+**Sign conventions.** All three numeric variables are always positive;
+direction (buy vs sell, deposit vs withdrawal) is encoded in `$action`,
+not in the sign of the amount.
+
+| Variable | Convention |
+| --- | --- |
+| `$amount` | Always positive — wrap raw broker values in `ABS()` if your broker reports signed values. |
+| `$quantity` | Always positive — `ABS()` if needed. |
+| `$fee` | Always positive (a cost). `ABS()` if needed. |
+
+**Activity-type vocabulary.** `$action` is set inside `row_rules`.
+Standard values used by the built-in templates:
+
+| Action | When |
+| --- | --- |
+| `'BUY'` | Buy / acquisition |
+| `'SELL'` | Sell / disposal |
+| `'DEPOSIT'` | Cash deposit into the account |
+| `'WITHDRAWAL'` | Cash withdrawal |
+| `'DIVIDEND'` | Dividend received |
+| `'TAX'` | Tax withheld |
+| `'INTEREST'` | Interest paid (e.g. on cash balance) |
+| `'FEE'` | Fee charged (e.g. monthly account fee, ADR fee) |
+
+If your broker emits an event that doesn't fit one of these, prefer
+`'INTEREST'` for any income-like cash event, `'FEE'` for any cost-like
+cash event, and skip the row (`rows: []`) if you can't classify it
+cleanly.
+
+**Non-trade row patterns.** Cash events (DEPOSIT, WITHDRAWAL, INTEREST,
+FEE, and DIVIDEND on a balance without a ticker) don't have a
+meaningful symbol or unit price. The existing templates demonstrate
+two valid patterns — pick the one that matches your broker, do not
+invent a third:
+
+- **Anycoin pattern** — `$ticker: ''`, `$quantity: '1'`,
+  `$unitprice: '$amount'` (so quantity × price = amount). Compact,
+  works when one cash event = one output row.
+- **xtb_cash pattern** — per-action overrides inside
+  `row_rules[].rows[]` set ticker/quantity/price explicitly per event
+  type. Verbose but flexible when different cash events need different
+  shapes.
+
+**Required vs optional output columns.**
+
+| Required | Optional |
+| --- | --- |
+| `date`, `symbol`, `quantity`, `activityType`, `unitPrice`, `currency`, `fee`, `amount` | `account`, `fxRate`, `subtype`, `instrumentType`, `comment` |
+
+**Date format.** `$date` should be `YYYY-MM-DD hh:mm:ss`. Brokers that
+report date-only (no time) result in `... 00:00:00` — that's accepted.
+
+### Locale-aware number parsing (European brokers)
+
+European brokers (Comdirect, DKB, Flatex, BoursoBank, Fineco, …)
+typically export numbers with `.` as thousands separator and `,` as
+decimal: `5.000,00` means five thousand. Setting
+`csv_decimal_separator_in: ","` handles **simple** comma decimals
+(`75,00` → `75.00` internally) but **leaves multi-`.`-multi-`,` values
+unchanged** because the field-access pre-converter can't tell which
+form the user used. The result is a mix of pre-normalised and raw
+strings flowing into expressions.
+
+The pattern that works for both cases:
+
+```text
+$amount: "ABS(IF(CONTAINS([Betrag in EUR], ','),
+                 REPLACE(REPLACE([Betrag in EUR], '.', ''), ',', '.'),
+                 [Betrag in EUR]))"
+```
+
+`CONTAINS([X], ',')` distinguishes raw values (still have `,`) from
+pre-converted values (already pure `.` decimal). For raw values, strip
+the `.` thousands then swap `,` to `.`; for pre-converted values, pass
+through unchanged. Apply the same wrapper to every numeric field (`$amount`,
+`$quantity`, `$unitprice`, `$fee`) when authoring a European broker
+template.
+
+US-style brokers (Schwab, Fidelity, Trading 212) use `.` decimal +
+optional `,` thousands — that path is handled automatically (see
+"American thousands-separated numbers" in the type-coercion notes).
 
 ### Rules for an AI assistant adding a new broker
 
-If you are an AI assistant reading this section to generate a new template, follow these
-rules strictly:
+If you are an AI assistant reading this section to generate a new
+template, follow these rules strictly:
 
-1. **Read `bxp-cli.examples.json` first.** It contains seven working templates
-   with rich inline comments. Pattern-match against the one closest to the target broker
-   (simple stock broker → Revolut X; paired rows → Anycoin; xlsx source → XTB).
-2. **Add, do not modify.** Insert a new entry under `conversion_templates` in the user's
-   `bxp-cli.json`. Never rewrite existing templates unless the user explicitly asks.
-3. **Match the real CSV format.** Look at the sample header and first data row the user
-   provided. Set `csv_delimiter_in`, `csv_decimal_separator_in`, and `csv_text_quote_in`
-   to match what the broker actually exports — do not guess.
-4. **Put activity-type logic in `row_rules`, not `input_schema`.** `$action` must be
-   assigned inside a `row_rules[].rows[]` entry (e.g. `$action: "'BUY'"`). The
-   `input_schema` only extracts and transforms neutral values.
-5. **Use `pre_pass` only for cross-row joins.** If one input row needs a value from
-   another row (paired transaction legs, fee refunds, order/fill pairs), use `pre_pass`
-   and `LOOKUP`. Otherwise omit it entirely.
-6. **Prefer named `ticker_map`s.** If the broker's symbols overlap an existing named
-   map (e.g. `xtb`, `trading212`), reference it by name. Otherwise define a small
-   inline map.
-7. **One-to-many rows.** When one input row must produce multiple output rows (currency
-   conversion = FEE + WITHDRAWAL + DEPOSIT; dividend with tax; split fees), return
-   multiple objects in the same `row_rules[].rows` array. Each object can override
-   `$variables` for that specific output row.
-8. **Match the broker's exact date shape.** Use `DATE_CONVERT` with sunrise tokens that
-   correspond to the input literally, character-by-character; use `[*]` to skip
-   fractional seconds, trailing `Z`, or timezone suffixes.
-9. **Prices with embedded currency.** For fields like `"$100.00"` or `"24.00 CZK"`, use
-   `PRICE_VALUE()` for the number and `PRICE_CURRENCY()` for the ISO code.
-10. **Empty values.** Set a `$variable` to `""` to leave that output column blank.
-    Drop a column from `output_schema` entirely to remove it.
-11. **Enable debug during development.** Set `row_rules_debug_missing: true` and run
-    with `--debug` so any unmatched rows surface on stdout as JSON.
-12. **Verify end-to-end.** Run `./bxp-cli --template <new_id> --debug`, confirm exit
-    code `0`, then open the `.csvx` output and spot-check at least one row of each
-    `$action` type.
+1. **`bxp-cli.examples.json` is required context.** It contains seven
+   working templates with rich inline comments. **If you don't have it
+   in your context, ask the user to provide it before generating any
+   template — do not guess at non-trade row patterns, action vocabulary,
+   or broker quirks.** Pattern-match against the closest existing
+   template (simple stock broker → Revolut X; paired rows → Anycoin;
+   xlsx source → XTB).
+2. **Add, do not modify.** Insert a new entry under
+   `conversion_templates` in the user's `bxp-cli.json`. Never rewrite
+   existing templates unless the user explicitly asks.
+3. **Match the real CSV format.** Look at the sample header and first
+   data row the user provided. Set `csv_delimiter_in`,
+   `csv_decimal_separator_in`, and `csv_text_quote_in` to match what
+   the broker actually exports — do not guess.
+4. **Put activity-type logic in `row_rules`, not `input_schema`.**
+   `$action` must be assigned inside a `row_rules[].rows[]` entry
+   (e.g. `$action: "'BUY'"`). The `input_schema` only extracts and
+   transforms neutral values.
+5. **Use `pre_pass` only for cross-row joins.** If one input row needs
+   a value from another row (paired transaction legs, fee refunds,
+   order/fill pairs), use `pre_pass` and `LOOKUP`. Otherwise omit it
+   entirely.
+6. **Prefer named `ticker_map`s.** If the broker's symbols overlap an
+   existing named map (e.g. `xtb`, `trading212`), reference it by name.
+   Otherwise define a small inline map.
+7. **One-to-many rows.** When one input row must produce multiple
+   output rows (currency conversion = FEE + WITHDRAWAL + DEPOSIT;
+   dividend with tax; split fees), return multiple objects in the same
+   `row_rules[].rows` array. Each object can override `$variables` for
+   that specific output row.
+8. **Match the broker's exact date shape.** Use `DATE_CONVERT` with
+   sunrise tokens that correspond to the input literally,
+   character-by-character; use `[*]` to skip fractional seconds,
+   trailing `Z`, or timezone suffixes.
+9. **Prices with embedded currency.** For fields like `"$100.00"` or
+   `"24.00 CZK"`, use `PRICE_VALUE()` for the number and
+   `PRICE_CURRENCY()` for the ISO code.
+10. **Empty values.** Set a `$variable` to `""` to leave that output
+    column blank. Drop a column from `output_schema` entirely to
+    remove it.
+11. **Enable debug during development.** Set `row_rules_debug_missing:
+    true` and run with `--debug` (CLI) or `dry-run` (GUI) so any
+    unmatched rows surface.
+12. **Self-test before returning.** See the **Self-testing the
+    generated template** section below — predict each sample row's
+    outcome, run `bxp-fmt --config` (validation) and the two
+    `bxp-cli` passes (`--debug` for problems, `--trace` for
+    understanding). Only return the template once `--debug` is
+    silent and every `row_output` matches prediction.
+
+13. **Return a commented JSON5, not bare JSON.** JSON5 supports `//`
+    comments — use them to explain non-obvious decisions: why a
+    particular date-format token was chosen, why a `pre_pass` was
+    needed, why a row type is skipped, why a workaround like the
+    European number-parsing branch is present. The user reads your
+    output as documentation; future-you (or another AI) reads it to
+    extend the template later.
+
+14. **Hand off the unfinished business in plain language.** When you
+    leave gaps the user must verify or finish in the GUI (the
+    template generation isn't always complete on the first pass —
+    Wealthfolio import quirks, exotic rows you couldn't classify,
+    broker-specific edge cases), end your reply with a numbered
+    "things to check in bxp-gui" list. See **Handing off to the
+    user** below for what each instruction should contain.
+
+### Handing off to the user (GUI-driven debug)
+
+The user is non-technical and is following your natural-language
+instructions. After you return the JSON, append a section like this
+when there's anything left to verify:
+
+```text
+## Things to check in bxp-gui
+
+1. **Open** your `bxp-cli.json` (Ctrl+O), select the new template
+   `<id>` in the toolbar dropdown, click **dry-run**.
+
+2. **DIVIDEND rows** (3 in your sample): the right-hand trace will
+   show `quantity = 0`, `unitPrice = (empty)`. Wealthfolio may or
+   may not accept this — try importing the resulting `.csvx` and tell
+   me if Wealthfolio rejects DIVIDEND rows. If yes, I'll switch the
+   template to set `$quantity = 1` and `$unitprice = $amount` for
+   DIVIDEND rows specifically.
+
+3. **Cash event description** (FEE, DEPOSIT rows): the `comment`
+   column reads `' ()'` (empty broker columns). If you'd prefer
+   blank, click any FEE row → expression panel → change `$comment`
+   to `IF([Wertpapier] = '', '', [Wertpapier] & ' (' & [WKN] & ')')`.
+
+4. **Splits / mergers / transfers** (skipped per readme): I added
+   `rows: []` for direction `in` / `out`. If your account had any
+   splits in the sample period, those rows produce no output — open
+   `--debug` (the Settings inspector → Last debug section) and tell
+   me which lines were skipped. I'll add explicit `'SPLIT'` handling
+   if Wealthfolio supports it.
+```
+
+Each instruction must be:
+
+- **Action-led** ("Open …", "Click …", "Tell me …") — the user
+  doesn't infer what to do from a description.
+- **Targeted** — name the specific GUI control (Ctrl+O, dropdown,
+  expression panel, Settings inspector). The desktop readme's
+  "Keyboard shortcuts" and "Advanced GUI features" sections list
+  every concrete location.
+- **Round-trip** — end with what the user should report back so you
+  can finish the template. Avoid open-ended "let me know if anything
+  looks wrong"; ask for specific cell values, exit codes, or `.csvx`
+  rows.
+
+If everything is verifiably correct (every sample row predicted
+exactly, no Wealthfolio-import gotchas you're aware of), say so
+explicitly: *"This template should be complete. Run a dry-run and
+import the `.csvx` into Wealthfolio; nothing else needs your
+attention."*
+
+### Self-testing the generated template
+
+After producing the JSON5 entry, validate it works as intended before
+returning to the user. Treat the steps like unit tests — predict the
+expected result before running, then compare against actual output.
+This is the same loop you would write in pytest or bash to assert
+behaviour didn't drift after a code change.
+
+**1. Schema + JSON5 syntax check.**
+
+```bash
+./bxp-fmt --config bxp-cli.json
+```
+
+- Expect exit `0` and no `$err_*` / `$warn_*` keys for the new
+  template's path in the output JSON.
+- If `$err_*` appears, fix the indicated error before going further.
+- For a stricter check that also verifies `data_dir` exists and
+  contains files, append `--check-fs=2` (2-second deadline).
+
+**2. Predict, then run two passes.**
+
+For each sample row the user provided, write down beforehand:
+
+- which `row_rules` entry should match (and therefore `$action`)
+- what each `$variable` should evaluate to (`$date`, `$ticker`,
+  `$amount`, …)
+- how many output rows the input row should produce (0 / 1 / N)
+
+Then run TWO separate commands — `--trace` and `--debug` are mutually
+exclusive (the binary refuses to combine them):
+
+```bash
+# Pass A — debug: surfaces unmatched rows + per-row expression errors
+./bxp-cli --config bxp-cli.json --template <new_id> --debug
+
+# Pass B — trace: NDJSON event stream of every row's evaluation
+./bxp-cli --config bxp-cli.json --template <new_id> --trace
+```
+
+Pass A's output: human-readable summary + `[expr error] $var = "expr": NotANumber (...)`
+lines for any expression that failed at runtime + JSON dumps of
+unmatched rows when `row_rules_debug_missing: true` is set. This is
+the fastest way to spot typos and locale-format bugs.
+
+Pass B's NDJSON stream reveals what bxp-cli actually computed:
+
+| Event | Use it to verify |
+| --- | --- |
+| `var_eval` | Each `$variable` evaluated to the predicted value |
+| `rule_match` / `rule_no_match` | The expected rule index matched |
+| `row_output` | The final CSV row contents match prediction |
+| `file_end` | `stats.errors == 0` and `stats.warnings == 0` |
+
+Use `--debug` to **find** problems and `--trace` to **understand**
+them. Iterate until pass A is silent (zero `[expr error]`, zero
+unmatched rows) and pass B's `row_output` events match every
+prediction.
+
+**3. Inspect the `.csvx` output.**
+
+```bash
+head -n 6 ../data/<new_id>/*.csvx
+```
+
+- Header row matches `output_schema` keys, in order.
+- Spot-check at least one row of each `$action` type the template emits.
+
+**4. If a prediction fails, diagnose by category.**
+
+| Symptom | Likely cause |
+| --- | --- |
+| `$date` empty or wrong | Date format token mismatch (`MM` vs `mm`, missing `[*]` for timezone, etc.) |
+| `[ColumnName]` resolves to empty | Column name typo / case mismatch / extra whitespace in source header |
+| `$amount` differs by sign | Missed `ABS()` — see Wealthfolio target spec |
+| `--debug` lists unmatched rows | Missing or wrong `row_rules` `when` condition |
+| `$ticker` empty for cash event | Non-trade row pattern not applied — see Wealthfolio target spec |
+
+Re-run from step 1 after each fix. Only return the template to the
+user once every prediction matches and `--debug` output is empty.
 
 ### Output format
 
-Wealthfolio-compatible CSV. Columns are controlled by `output_schema`; the default
-Wealthfolio set is:
+Wealthfolio-compatible CSV. Columns are controlled by `output_schema`;
+the default Wealthfolio set is:
 
-| Column           | Value           | Notes                                   |
-| ---              | ---             | ---                                     |
-| `date`           | `$date`         | `YYYY-MM-DD hh:mm:ss`                   |
-| `symbol`         | `$ticker`       | Yahoo Finance ticker                    |
-| `quantity`       | `$quantity`     | Number of units                         |
-| `activityType`   | `$action`       | `BUY`, `SELL`, `DEPOSIT`, `DIVIDEND`, … |
-| `unitPrice`      | `$unitprice`    | Price per unit                          |
-| `currency`       | `$currency`     | ISO currency code                       |
-| `fee`            | `$fee`          | Blank if not reported                   |
-| `amount`         | `$amount`       | Total value                             |
-| `account`        | `$account`      | Optional                                |
-| `fxRate`         | `$fxRate`       | Optional                                |
-| `subtype`        | `$subtype`      | Optional                                |
-| `instrumentType` | `$instrumentType` | Optional                              |
-| `comment`        | `$comment`      | Optional                                |
+| Column | Value | Notes |
+| --- | --- | --- |
+| `date` | `$date` | `YYYY-MM-DD hh:mm:ss` |
+| `symbol` | `$ticker` | Yahoo Finance ticker |
+| `quantity` | `$quantity` | Number of units |
+| `activityType` | `$action` | `BUY`, `SELL`, `DEPOSIT`, `DIVIDEND`, … |
+| `unitPrice` | `$unitprice` | Price per unit |
+| `currency` | `$currency` | ISO currency code |
+| `fee` | `$fee` | Blank if not reported |
+| `amount` | `$amount` | Total value |
+| `account` | `$account` | Optional |
+| `fxRate` | `$fxRate` | Optional |
+| `subtype` | `$subtype` | Optional |
+| `instrumentType` | `$instrumentType` | Optional |
+| `comment` | `$comment` | Optional |
 
-Output is RFC 4180–compliant with basic protection against spreadsheet formula injection.
+Output is RFC 4180–compliant with basic protection against spreadsheet
+formula injection.
 
-### Contributing and newer templates
+---
 
-The project is open-source. For the newest built-in templates, community contributions,
-and issue tracking see the BXP GitHub repository: <https://github.com/zaxified/bxp>.
+## Contributing and newer templates
+
+The project is open-source. For the newest built-in templates,
+community contributions, and issue tracking see the BXP GitHub
+repository: <https://github.com/zaxified/bxp>.
+
+Apache-2.0 licensed. See `LICENCE.md` in the source tree.
