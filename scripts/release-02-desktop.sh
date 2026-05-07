@@ -191,8 +191,9 @@ build_windows() {
     cp "$MONO_ROOT/resources/icons"/*.png "$appdir/icons/"
 
     if ! command -v makensis >/dev/null 2>&1; then
-        echo "  ! makensis not found — skipping NSIS installer"
-        return 0
+        echo "  ! makensis not found — Windows installer is the only release artifact, refusing to skip" >&2
+        echo "    install NSIS and ensure 'makensis' is on PATH (e.g. C:\\Program Files (x86)\\NSIS\\Bin)" >&2
+        exit 1
     fi
     makensis \
         -DAPPVERSION="$VERSION_BARE" \

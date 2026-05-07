@@ -84,7 +84,9 @@ jobs:
         with:
           channel: stable
       - name: Install NSIS
-        run: choco install nsis -y
+        run: |
+          choco install nsis -y
+          echo 'C:\Program Files (x86)\NSIS\Bin' >> $GITHUB_PATH
       - name: Build desktop archives
         run: bash scripts/release-02-desktop.sh "$RELEASE_VERSION"
       - uses: actions/upload-artifact@v4
