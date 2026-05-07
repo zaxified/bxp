@@ -93,11 +93,10 @@ class BxpProcessClient {
   /// generous on the slowest realistic input we've seen and still way
   /// shorter than "user gives up and quits the app".
   static const Duration _versionTimeout = Duration(seconds: 5);
-  // 30s rather than 5s: Windows cold-spawn for a freshly-installed
-  // bxp-fmt.exe (anti-virus inspection on first launch, paged-in from
-  // disk, ~30 KB of JSON to serialise) has been observed to push past
-  // the old 5s budget and trip the "no parseable JSON" fatal-startup
-  // path even though the binary itself works fine from a console.
+  // 30s vs 15s elsewhere: --docs only runs at startup, where Flutter's
+  // boot work can briefly steal the event loop. Worst case is a cold
+  // Windows spawn under antivirus inspection on a slow disk; 30s leaves
+  // headroom even after pipe-drain is fixed below.
   static const Duration _docsTimeout = Duration(seconds: 30);
   static const Duration _exprTimeout = Duration(seconds: 15);
   static const Duration _configTimeout = Duration(seconds: 15);
@@ -117,13 +116,28 @@ class BxpProcessClient {
     Duration timeout,
   ) async {
     final process = await Process.start(executable, arguments);
-    final stdoutFut = process.stdout.transform(utf8.decoder).join();
-    final stderrFut = process.stderr.transform(utf8.decoder).join();
+    // Subscribe to both streams BEFORE any further await. On Windows the
+    // anonymous-pipe buffer is only ~4 KB, so a child that writes more
+    // than that (e.g. `--docs` emits ~30 KB of JSON) blocks on WriteFile
+    // until the parent drains. `.transform(utf8.decoder).join()` returns
+    // a Future whose listener subscription is delayed by an event-loop
+    // tick; if Flutter's startup work fills that tick the child trips
+    // its own flush and exits with `error: WriteFailed` (exit 1) before
+    // we even reach the timeout. `Stream.listen` attaches synchronously
+    // so the OS pipe is drained from the first byte.
+    final stdoutChunks = <List<int>>[];
+    final stderrChunks = <List<int>>[];
+    final stdoutSub = process.stdout.listen(stdoutChunks.add);
+    final stderrSub = process.stderr.listen(stderrChunks.add);
+    String decode(List<List<int>> chunks) =>
+        utf8.decode(chunks.expand((b) => b).toList(), allowMalformed: true);
     try {
       final exitCode = await process.exitCode.timeout(timeout);
-      final out = await stdoutFut;
-      final err = await stderrFut;
-      return ProcessResult(process.pid, exitCode, out, err);
+      // Wait for `onDone` so any in-flight chunks land in the lists.
+      await stdoutSub.asFuture<void>();
+      await stderrSub.asFuture<void>();
+      return ProcessResult(
+          process.pid, exitCode, decode(stdoutChunks), decode(stderrChunks));
     } on TimeoutException {
       process.kill(ProcessSignal.sigterm);
       // Best-effort drain: if the child ignores SIGTERM, escalate to
@@ -135,18 +149,15 @@ class BxpProcessClient {
         process.kill(ProcessSignal.sigkill);
         try { await process.exitCode; } catch (_) {}
       }
-      // Streams should now be at EOF; drain them so the file descriptors
-      // get released. Errors here are not interesting to the caller.
-      String out = '';
-      String err = '';
-      try { out = await stdoutFut; } catch (_) {}
-      try { err = await stderrFut; } catch (_) {}
+      try { await stdoutSub.asFuture<void>(); } catch (_) {}
+      try { await stderrSub.asFuture<void>(); } catch (_) {}
       final timeoutNote =
           '$executable timed out after ${timeout.inSeconds}s';
+      final err = decode(stderrChunks);
       return ProcessResult(
         process.pid,
         ProcessRunResult.kExitTimeout,
-        out,
+        decode(stdoutChunks),
         err.isEmpty ? timeoutNote : '$err\n$timeoutNote',
       );
     }
@@ -208,19 +219,6 @@ class BxpProcessClient {
   static Future<Map<String, dynamic>?> getDocs() async {
     final bin = findBin('bxp-fmt');
     if (bin == null) return null;
-    // Two attempts: the first call races against Flutter's startup work
-    // (parsing prefs, building MainView, theme load) that can keep the
-    // event loop busy enough to delay pipe drain on Windows. A retry
-    // after a short pause lands on a quieter loop and gets through.
-    for (int attempt = 1; attempt <= 2; attempt++) {
-      final docs = await _getDocsOnce(bin);
-      if (docs != null) return docs;
-      if (attempt < 2) await Future<void>.delayed(const Duration(milliseconds: 250));
-    }
-    return null;
-  }
-
-  static Future<Map<String, dynamic>?> _getDocsOnce(String bin) async {
     try {
       final result = await _runWithTimeout(bin, ['--docs'], _docsTimeout);
       if (result.exitCode != 0) {
