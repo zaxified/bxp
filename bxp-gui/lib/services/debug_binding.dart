@@ -32,6 +32,21 @@ class DebugBinding extends WidgetsFlutterBinding {
   /// actually drops events.
   int _eventsForwarded = 0;
 
+  /// Total number of `PointerSignalEvent` (scroll-wheel / pan-zoom)
+  /// events. Tracked separately because Windows trackpoint emulation
+  /// of middle-button drag has been observed to wedge the renderer
+  /// even when the regular pointer-event rate is low — having a
+  /// dedicated counter helps distinguish "scroll burst" from
+  /// "general hover flood".
+  int _scrollEventsTotal = 0;
+
+  /// Total number of pointer events whose buttons mask included the
+  /// middle button (middle-button-down or move-while-middle-down).
+  /// Tracked because the user identified middle-button + drag as the
+  /// most reliable freeze trigger; this counter shows how many such
+  /// events flowed before the wedge.
+  int _middleButtonEventsTotal = 0;
+
   /// Last timestamp at which a hover/move event was forwarded —
   /// throttle reference.
   DateTime _lastForwarded = DateTime.fromMillisecondsSinceEpoch(0);
@@ -65,9 +80,21 @@ class DebugBinding extends WidgetsFlutterBinding {
   /// Total events that were not dropped by [DebugSettings] filtering.
   int get eventsForwarded => _eventsForwarded;
 
+  /// Cumulative scroll / pan-zoom events.
+  int get scrollEventsTotal => _scrollEventsTotal;
+
+  /// Cumulative events whose buttons mask included middle button.
+  int get middleButtonEventsTotal => _middleButtonEventsTotal;
+
   @override
   void handlePointerEvent(PointerEvent event) {
     _eventsTotal++;
+    if (event is PointerSignalEvent || event is PointerPanZoomUpdateEvent) {
+      _scrollEventsTotal++;
+    }
+    if ((event.buttons & kMiddleMouseButton) != 0) {
+      _middleButtonEventsTotal++;
+    }
 
     final s = DebugSettings.instance;
 

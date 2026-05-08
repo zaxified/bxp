@@ -207,9 +207,20 @@ class _ZoomContainerState extends State<ZoomContainer> {
 
   bool _handleKey(KeyEvent event) {
     if (event is KeyDownEvent || event is KeyRepeatEvent) {
+      final physical = event.physicalKey;
+      // F12 toggles the debug panel — layout-independent, doesn't
+      // require modifiers, no risk of a Czech keyboard remapping
+      // Shift+D to ď and missing the keyLabel comparison. Kept in
+      // addition to Ctrl+Shift+D so muscle memory still works on
+      // layouts where that combo lands.
+      if (physical == PhysicalKeyboardKey.f12 &&
+          !HardwareKeyboard.instance.isControlPressed &&
+          !HardwareKeyboard.instance.isAltPressed) {
+        _openDebugPanel();
+        return true;
+      }
       if (HardwareKeyboard.instance.isControlPressed) {
         final key = event.logicalKey.keyLabel;
-        final physical = event.physicalKey;
         if (key == '+' || key == '=' || physical == PhysicalKeyboardKey.numpadAdd || physical == PhysicalKeyboardKey.equal || physical == PhysicalKeyboardKey.bracketRight) {
           _bump(kZoomStep);
           return true;
@@ -220,23 +231,24 @@ class _ZoomContainerState extends State<ZoomContainer> {
           _store.setZoom(1.0);
           return true;
         } else if (HardwareKeyboard.instance.isShiftPressed &&
-            (key == 'D' || key == 'd' ||
-                physical == PhysicalKeyboardKey.keyD)) {
-          // Ctrl+Shift+D toggles the freeze-investigation debug panel.
-          // Only used during the Windows render-pipeline diagnosis;
-          // production users never see the dialog unless they happen
-          // to press the combo. The dialog is dismissable with Esc.
-          if (mounted) {
-            showDialog<void>(
-              context: context,
-              builder: (_) => const DebugPanelDialog(),
-            );
-          }
+            physical == PhysicalKeyboardKey.keyD) {
+          // Ctrl+Shift+D — physical key match (layout-independent so
+          // Czech / German / etc. layouts that remap Shift+D still
+          // trigger correctly). Esc dismisses.
+          _openDebugPanel();
           return true;
         }
       }
     }
     return false;
+  }
+
+  void _openDebugPanel() {
+    if (!mounted) return;
+    showDialog<void>(
+      context: context,
+      builder: (_) => const DebugPanelDialog(),
+    );
   }
 
   @override

@@ -26,9 +26,13 @@ class _CounterOverlayState extends State<CounterOverlay> {
   int _peLastSec = 0;
   int _peForwardedLastSec = 0;
   int _peDroppedLastSec = 0;
+  int _scrollLastSec = 0;
+  int _midBtnLastSec = 0;
   int _frLastSec = 0;
   int _peTotalAtLastTick = 0;
   int _peForwardedAtLastTick = 0;
+  int _scrollTotalAtLastTick = 0;
+  int _midBtnTotalAtLastTick = 0;
 
   // Frame counter. We bump on every persistent frame callback; the
   // ticker drains it once per second.
@@ -66,13 +70,19 @@ class _CounterOverlayState extends State<CounterOverlay> {
     if (binding is! DebugBinding) return;
     final total = binding.eventsTotal;
     final forwarded = binding.eventsForwarded;
+    final scrollTotal = binding.scrollEventsTotal;
+    final midBtnTotal = binding.middleButtonEventsTotal;
     if (!mounted) return;
     setState(() {
       _peLastSec = total - _peTotalAtLastTick;
       _peForwardedLastSec = forwarded - _peForwardedAtLastTick;
       _peDroppedLastSec = _peLastSec - _peForwardedLastSec;
+      _scrollLastSec = scrollTotal - _scrollTotalAtLastTick;
+      _midBtnLastSec = midBtnTotal - _midBtnTotalAtLastTick;
       _peTotalAtLastTick = total;
       _peForwardedAtLastTick = forwarded;
+      _scrollTotalAtLastTick = scrollTotal;
+      _midBtnTotalAtLastTick = midBtnTotal;
       _frLastSec = _frThisSec;
       _frThisSec = 0;
       // Don't reset peak — show the all-time max so the user can see
@@ -106,13 +116,17 @@ class _CounterOverlayState extends State<CounterOverlay> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
-            Text('PE/s: $_peLastSec', style: mono),
+            Text('PE/s:  $_peLastSec', style: mono),
             if (_peDroppedLastSec > 0)
-              Text('drop: $_peDroppedLastSec', style: mono),
-            Text('F/s:  $_frLastSec', style: mono),
-            Text('peak: $_peakPePerFrame /f', style: mono),
+              Text('drop:  $_peDroppedLastSec', style: mono),
+            if (_scrollLastSec > 0)
+              Text('scrl:  $_scrollLastSec', style: mono),
+            if (_midBtnLastSec > 0)
+              Text('midB:  $_midBtnLastSec', style: mono),
+            Text('F/s:   $_frLastSec', style: mono),
+            Text('peak:  $_peakPePerFrame /f', style: mono),
             const SizedBox(height: 2),
-            Text('Ctrl+Shift+D', style: mono.copyWith(fontSize: 9)),
+            Text('F12 / C+S+D', style: mono.copyWith(fontSize: 9)),
           ],
         ),
       ),
