@@ -510,17 +510,22 @@ class _JsonNodeState extends State<_JsonNode> {
   Widget _buildRow(Widget valueWidget) {
     final t = context.bxpTheme;
     final muted = BxpText.body(context,color: t.textMuted, size: BxpSize.md);
-    return MouseRegion(
-      onEnter: (_) => setState(() => isHovered = true),
-      onExit: (_) => setState(() => isHovered = false),
-      child: Container(
-        color: isHovered ? t.withHover(t.surfaceBg) : Colors.transparent,
-        padding: const EdgeInsets.symmetric(vertical: 2.0),
-        child: _RowEnvelope(
-          depth: widget.depth,
-          trailingActions: _buildActionButtons(isComposite: false),
-          actionsVisible: isHovered,
-          children: [
+    // DIAGNOSTIC iter7: hover state changes (onEnter/onExit setState +
+    // conditional background + conditional action-button opacity) are
+    // disabled to isolate whether the per-hover rebuild cascade itself
+    // is the Windows freeze culprit. iter6 ruled out Tooltip; this rules
+    // out the rebuild path. If hover stays smooth, iter8 puts hover
+    // back as a paint-only effect (no setState) — e.g. a custom
+    // RenderObject that listens to pointer events and repaints only
+    // its own layer, without dirtying the widget tree.
+    return Container(
+      color: Colors.transparent,
+      padding: const EdgeInsets.symmetric(vertical: 2.0),
+      child: _RowEnvelope(
+        depth: widget.depth,
+        trailingActions: _buildActionButtons(isComposite: false),
+        actionsVisible: false,
+        children: [
             const SizedBox(width: 16),
             if (widget.keyName != null && int.tryParse(widget.keyName!)?.toString() != widget.keyName) ...[
               _SchemaTooltipKey(keyName: widget.keyName!, path: widget.path),
@@ -530,10 +535,9 @@ class _JsonNodeState extends State<_JsonNode> {
               Text('[${widget.keyName}]', style: muted),
               Text(' : ', style: muted),
             ],
-            valueWidget,
-            ..._inlineTrailingWidgets(),
-          ],
-        ),
+          valueWidget,
+          ..._inlineTrailingWidgets(),
+        ],
       ),
     );
   }
@@ -552,26 +556,30 @@ class _JsonNodeState extends State<_JsonNode> {
   Widget _buildExpandableRow(String summary, bool isComposite) {
     final t = context.bxpTheme;
     final muted = BxpText.body(context,color: t.textMuted, size: BxpSize.md);
-    return MouseRegion(
-      onEnter: (_) => setState(() => isHovered = true),
-      onExit: (_) => setState(() => isHovered = false),
-      child: InkWell(
-        onTap: () => setState(() {
-          expanded = !expanded;
-          // Cascade: a single click on a collapsed node expands every
-          // descendant. Children read this via the expandAll prop below.
-          _recursiveExpand = expanded;
-        }),
-        child: Container(
-          color: isHovered ? t.withHover(t.surfaceBg) : Colors.transparent,
-          padding: const EdgeInsets.symmetric(vertical: 2.0),
-          child: _RowEnvelope(
-            depth: widget.depth,
-            trailingActions: widget.keyName == 'config'
-                ? const SizedBox.shrink()
-                : _buildActionButtons(isComposite: true),
-            actionsVisible: isHovered && widget.keyName != 'config',
-            children: [
+    // DIAGNOSTIC iter7: hover state changes disabled (see _buildRow).
+    // InkWell is kept because tree expand/collapse on tap depends on
+    // it; InkWell paints its own hover/highlight overlay using
+    // Material's internal hover detection without our setState — if
+    // that internal hover effect is what's freezing, we'll know
+    // because removing OUR onEnter/onExit didn't help and InkWell's
+    // hover stayed.
+    return InkWell(
+      onTap: () => setState(() {
+        expanded = !expanded;
+        // Cascade: a single click on a collapsed node expands every
+        // descendant. Children read this via the expandAll prop below.
+        _recursiveExpand = expanded;
+      }),
+      child: Container(
+        color: Colors.transparent,
+        padding: const EdgeInsets.symmetric(vertical: 2.0),
+        child: _RowEnvelope(
+          depth: widget.depth,
+          trailingActions: widget.keyName == 'config'
+              ? const SizedBox.shrink()
+              : _buildActionButtons(isComposite: true),
+          actionsVisible: false,
+          children: [
               SizedBox(
                 width: 16,
                 child: Center(
@@ -602,9 +610,8 @@ class _JsonNodeState extends State<_JsonNode> {
                     ),
                   ),
                 ),
-              ..._inlineTrailingWidgets(),
-            ],
-          ),
+            ..._inlineTrailingWidgets(),
+          ],
         ),
       ),
     );
@@ -962,21 +969,19 @@ class _CommentRowState extends State<_CommentRow> {
       );
     }
 
-    return MouseRegion(
-      onEnter: (_) => setState(() => isHovered = true),
-      onExit: (_) => setState(() => isHovered = false),
-      child: Container(
-        color: isHovered ? t.withHover(t.surfaceBg) : Colors.transparent,
-        // Vertical padding only — the leading indent is provided as the
-        // first child of the envelope's row so the envelope's right edge
-        // still aligns with the scrollbar (`Container.padding.left` would
-        // grow the envelope past minWidth, pushing the action slot off
-        // the viewport and clipping the trailing × button).
-        padding: const EdgeInsets.symmetric(vertical: 2),
-        child: _RowEnvelope(
-          depth: widget.depth,
-          actionsVisible: isHovered,
-          trailingActions: Row(
+    // DIAGNOSTIC iter7: hover state changes disabled (see _buildRow).
+    return Container(
+      color: Colors.transparent,
+      // Vertical padding only — the leading indent is provided as the
+      // first child of the envelope's row so the envelope's right edge
+      // still aligns with the scrollbar (`Container.padding.left` would
+      // grow the envelope past minWidth, pushing the action slot off
+      // the viewport and clipping the trailing × button).
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: _RowEnvelope(
+        depth: widget.depth,
+        actionsVisible: false,
+        trailingActions: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
               _ActionBtn(
@@ -1005,13 +1010,12 @@ class _CommentRowState extends State<_CommentRow> {
               ),
             ],
           ),
-          children: [
-            SizedBox(width: widget.deepIndent ? 24.0 : 16.0),
-            Text(isBlock ? '/*' : '//', style: commentStyle),
-            bodyWidget,
-            if (isBlock) Text('*/', style: commentStyle),
-          ],
-        ),
+        children: [
+          SizedBox(width: widget.deepIndent ? 24.0 : 16.0),
+          Text(isBlock ? '/*' : '//', style: commentStyle),
+          bodyWidget,
+          if (isBlock) Text('*/', style: commentStyle),
+        ],
       ),
     );
   }
