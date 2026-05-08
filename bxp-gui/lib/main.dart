@@ -270,6 +270,7 @@ class _ZoomContainerState extends State<ZoomContainer> {
   @override
   Widget build(BuildContext context) {
     final zoom = context.watch<TraceStore>().zoom;
+    final bypassZoom = context.watch<DebugSettings>().bypassZoom;
     final size = MediaQuery.of(context).size;
     // If the window has shrunk (or zoom was loaded from prefs) below the
     // safe maximum, clamp asynchronously after this frame paints. We
@@ -323,17 +324,25 @@ class _ZoomContainerState extends State<ZoomContainer> {
       // (inside its own widget) so it never participates in hit-test
       // — otherwise it would itself be a pointer-event sink and skew
       // the very measurements it shows.
+      // When `bypassZoom` is on, the app paints at native resolution
+      // with no Transform.scale layer — isolates whether the freeze is
+      // tied to compositor handling of the scaled subtree. The zoom
+      // shortcuts still fire (TraceStore.zoom updates) but visually
+      // nothing changes.
       child: Stack(
         children: [
-          Transform.scale(
-            scale: zoom,
-            alignment: Alignment.topLeft,
-            child: SizedBox(
-              width: size.width > 0 ? size.width / zoom : null,
-              height: size.height > 0 ? size.height / zoom : null,
-              child: widget.child,
+          if (bypassZoom)
+            widget.child
+          else
+            Transform.scale(
+              scale: zoom,
+              alignment: Alignment.topLeft,
+              child: SizedBox(
+                width: size.width > 0 ? size.width / zoom : null,
+                height: size.height > 0 ? size.height / zoom : null,
+                child: widget.child,
+              ),
             ),
-          ),
           Positioned(
             right: 8,
             bottom: 8,

@@ -47,19 +47,40 @@ class _CounterOverlayState extends State<CounterOverlay> {
   int _peakPePerFrame = 0;
   int _peThisFrameStart = 0;
 
+  // Frame timing diagnostics. `addTimingsCallback` delivers a batch of
+  // [FrameTiming] objects after each frame paints; we keep the maxes
+  // seen in the current 1-second bucket and the previous bucket. The
+  // previous-bucket value is what the overlay displays, so we don't
+  // flicker mid-tick.
+  int _buildUsThisSec = 0;
+  int _rasterUsThisSec = 0;
+  int _buildUsLastSec = 0;
+  int _rasterUsLastSec = 0;
+
   Timer? _ticker;
 
   @override
   void initState() {
     super.initState();
     SchedulerBinding.instance.addPersistentFrameCallback(_onFrame);
+    SchedulerBinding.instance.addTimingsCallback(_onTimings);
     _ticker = Timer.periodic(const Duration(seconds: 1), (_) => _tick());
   }
 
   @override
   void dispose() {
     _ticker?.cancel();
+    SchedulerBinding.instance.removeTimingsCallback(_onTimings);
     super.dispose();
+  }
+
+  void _onTimings(List<FrameTiming> timings) {
+    for (final t in timings) {
+      final b = t.buildDuration.inMicroseconds;
+      final r = t.rasterDuration.inMicroseconds;
+      if (b > _buildUsThisSec) _buildUsThisSec = b;
+      if (r > _rasterUsThisSec) _rasterUsThisSec = r;
+    }
   }
 
   void _onFrame(Duration _) {
@@ -92,6 +113,10 @@ class _CounterOverlayState extends State<CounterOverlay> {
       _midBtnTotalAtLastTick = midBtnTotal;
       _frLastSec = _frThisSec;
       _frThisSec = 0;
+      _buildUsLastSec = _buildUsThisSec;
+      _rasterUsLastSec = _rasterUsThisSec;
+      _buildUsThisSec = 0;
+      _rasterUsThisSec = 0;
       // Don't reset peak — show the all-time max so the user can see
       // their worst burst even after motion stops.
     });
@@ -131,6 +156,10 @@ class _CounterOverlayState extends State<CounterOverlay> {
               Text('midB:  $_midBtnLastSec', style: mono),
             Text('F/s:   $_frLastSec', style: mono),
             Text('peak:  $_peakPePerFrame /f', style: mono),
+            Text('build: ${(_buildUsLastSec / 1000).toStringAsFixed(1)} ms',
+                style: mono),
+            Text('rastr: ${(_rasterUsLastSec / 1000).toStringAsFixed(1)} ms',
+                style: mono),
             const SizedBox(height: 2),
             Text('tap → debug panel', style: mono.copyWith(fontSize: 9)),
           ],
@@ -236,6 +265,16 @@ class _DebugPanelDialogState extends State<DebugPanelDialog> {
                           ),
                       ],
                     ),
+                  ),
+                  const SizedBox(height: 8),
+                  const _SectionHeader('Render pipeline'),
+                  CheckboxListTile(
+                    dense: true,
+                    title: const Text('Bypass zoom (skip Transform.scale)'),
+                    subtitle: const Text(
+                        'Paint app at native resolution; isolates compositor cost'),
+                    value: s.bypassZoom,
+                    onChanged: (v) => s.bypassZoom = v ?? false,
                   ),
                   const SizedBox(height: 8),
                   const _SectionHeader('Stress tests'),

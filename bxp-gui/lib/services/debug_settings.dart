@@ -99,4 +99,21 @@ class DebugSettings extends ChangeNotifier {
     _pointerThrottleHz = v;
     notifyListeners();
   }
+
+  // ── Render pipeline diagnostics (production defaults: OFF) ──────────
+
+  /// Skip the `Transform.scale` wrapper in `ZoomContainer` so the app
+  /// content paints at native resolution with no transform layer. If
+  /// the freeze disappears with this on, the wedge is in compositor
+  /// handling of the scaled subtree — likely too many layers under a
+  /// single transform, or hit-test traversal cost through it. With
+  /// this on, the zoom keyboard shortcuts keep firing (the value gets
+  /// stored in TraceStore) but visually nothing changes.
+  bool _bypassZoom = false;
+  bool get bypassZoom => _bypassZoom;
+  set bypassZoom(bool v) {
+    if (_bypassZoom == v) return;
+    _bypassZoom = v;
+    notifyListeners();
+  }
 }
