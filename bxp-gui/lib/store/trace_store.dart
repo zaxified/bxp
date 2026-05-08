@@ -2627,5 +2627,12 @@ class TraceStore extends ChangeNotifier {
     _pendingFocusPath.dispose();
     super.dispose();
   }
+
+  /// Stress-test hook used by `DebugPanelDialog` to fire a long burst
+  /// of `notifyListeners()` calls without any actual state change.
+  /// Validates whether the render pipeline can keep up with a flood
+  /// of rebuild requests independent of pointer activity. Not for
+  /// production use.
+  void debugNotify() => notifyListeners();
 }
 

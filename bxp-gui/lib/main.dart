@@ -2,9 +2,12 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter/services.dart';
+import 'services/debug_binding.dart';
+import 'services/debug_settings.dart';
 import 'services/updater_service.dart';
 import 'store/trace_store.dart';
 import 'ui/components/update_dialog.dart';
+import 'ui/debug_overlay.dart';
 import 'ui/main_view.dart';
 import 'ui/theme/bxp_theme.dart';
 import 'ui/theme/bxp_theme_animator.dart';
@@ -16,6 +19,11 @@ final GlobalKey<ScaffoldMessengerState> bxpMessengerKey =
     GlobalKey<ScaffoldMessengerState>();
 
 void main() {
+  // Custom binding that intercepts pointer events for the freeze
+  // investigation (live counters + middle/right-button block + hover
+  // throttle). Behaves identically to WidgetsFlutterBinding when none
+  // of the toggles are flipped, so a default-config build is unchanged.
+  DebugBinding.ensureInitialized();
   final traceStore = TraceStore();
   final updaterService = UpdaterService();
   _installOverflowGuard(traceStore);
@@ -27,6 +35,8 @@ void main() {
       providers: [
         ChangeNotifierProvider<TraceStore>.value(value: traceStore),
         ChangeNotifierProvider<UpdaterService>.value(value: updaterService),
+        ChangeNotifierProvider<DebugSettings>.value(
+            value: DebugSettings.instance),
       ],
       child: const BxpApp(),
     ),
@@ -209,6 +219,20 @@ class _ZoomContainerState extends State<ZoomContainer> {
         } else if (key == '0' || physical == PhysicalKeyboardKey.numpad0 || physical == PhysicalKeyboardKey.digit0) {
           _store.setZoom(1.0);
           return true;
+        } else if (HardwareKeyboard.instance.isShiftPressed &&
+            (key == 'D' || key == 'd' ||
+                physical == PhysicalKeyboardKey.keyD)) {
+          // Ctrl+Shift+D toggles the freeze-investigation debug panel.
+          // Only used during the Windows render-pipeline diagnosis;
+          // production users never see the dialog unless they happen
+          // to press the combo. The dialog is dismissable with Esc.
+          if (mounted) {
+            showDialog<void>(
+              context: context,
+              builder: (_) => const DebugPanelDialog(),
+            );
+          }
+          return true;
         }
       }
     }
@@ -266,14 +290,28 @@ class _ZoomContainerState extends State<ZoomContainer> {
       // streams over the JSON tree — small constraint flickers from
       // overlay insertion would re-run the entire content subtree.
       // MediaQuery.size only changes on actual window-resize events.
-      child: Transform.scale(
-        scale: zoom,
-        alignment: Alignment.topLeft,
-        child: SizedBox(
-          width: size.width > 0 ? size.width / zoom : null,
-          height: size.height > 0 ? size.height / zoom : null,
-          child: widget.child,
-        ),
+      // Stack: scaled app content underneath, CounterOverlay pinned
+      // bottom-right on top. The overlay is wrapped in IgnorePointer
+      // (inside its own widget) so it never participates in hit-test
+      // — otherwise it would itself be a pointer-event sink and skew
+      // the very measurements it shows.
+      child: Stack(
+        children: [
+          Transform.scale(
+            scale: zoom,
+            alignment: Alignment.topLeft,
+            child: SizedBox(
+              width: size.width > 0 ? size.width / zoom : null,
+              height: size.height > 0 ? size.height / zoom : null,
+              child: widget.child,
+            ),
+          ),
+          const Positioned(
+            right: 8,
+            bottom: 8,
+            child: CounterOverlay(),
+          ),
+        ],
       ),
     );
   }

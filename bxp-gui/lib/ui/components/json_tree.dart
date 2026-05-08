@@ -4,6 +4,7 @@ import 'package:json5_ast/ast.dart';
 import 'package:json5_ast/path.dart' as ast_path;
 import 'package:provider/provider.dart';
 import '../../services/dart_validator.dart';
+import '../../services/debug_settings.dart';
 import '../../services/dev_trace.dart';
 import '../../services/schema_doc_lookup.dart';
 import '../../services/schema_gate.dart';
@@ -510,35 +511,46 @@ class _JsonNodeState extends State<_JsonNode> {
   Widget _buildRow(Widget valueWidget) {
     final t = context.bxpTheme;
     final muted = BxpText.body(context,color: t.textMuted, size: BxpSize.md);
-    // DIAGNOSTIC iter7: hover state changes (onEnter/onExit setState +
-    // conditional background + conditional action-button opacity) are
-    // disabled to isolate whether the per-hover rebuild cascade itself
-    // is the Windows freeze culprit. iter6 ruled out Tooltip; this rules
-    // out the rebuild path. If hover stays smooth, iter8 puts hover
-    // back as a paint-only effect (no setState) — e.g. a custom
-    // RenderObject that listens to pointer events and repaints only
-    // its own layer, without dirtying the widget tree.
-    return Container(
-      color: Colors.transparent,
+    // Hover wiring is gated by DebugSettings so the freeze-investigation
+    // panel can flip it live. When `hoverBackground` is OFF, no
+    // MouseRegion / setState — the row is purely static (no rebuild
+    // cascade per hover). `hoverActionButtons` controls whether the
+    // trailing buttons subtree is mounted at all (iter8 finding: the
+    // hidden-via-Opacity buttons were a 500+ pointer-event sink).
+    final debug = context.watch<DebugSettings>();
+    final inner = Container(
+      color: (debug.hoverBackground && isHovered)
+          ? t.withHover(t.surfaceBg)
+          : Colors.transparent,
       padding: const EdgeInsets.symmetric(vertical: 2.0),
       child: _RowEnvelope(
         depth: widget.depth,
         trailingActions: _buildActionButtons(isComposite: false),
-        actionsVisible: false,
+        actionsVisible: debug.hoverActionButtons && isHovered,
         children: [
-            const SizedBox(width: 16),
-            if (widget.keyName != null && int.tryParse(widget.keyName!)?.toString() != widget.keyName) ...[
-              _SchemaTooltipKey(keyName: widget.keyName!, path: widget.path),
-              Text(' : ',
-                  style: BxpText.body(context,color: t.borderColor, size: BxpSize.md)),
-            ] else if (widget.keyName != null) ...[
-              Text('[${widget.keyName}]', style: muted),
-              Text(' : ', style: muted),
-            ],
+          const SizedBox(width: 16),
+          if (widget.keyName != null && int.tryParse(widget.keyName!)?.toString() != widget.keyName) ...[
+            _SchemaTooltipKey(keyName: widget.keyName!, path: widget.path),
+            Text(' : ',
+                style: BxpText.body(context,color: t.borderColor, size: BxpSize.md)),
+          ] else if (widget.keyName != null) ...[
+            Text('[${widget.keyName}]', style: muted),
+            Text(' : ', style: muted),
+          ],
           valueWidget,
           ..._inlineTrailingWidgets(),
         ],
       ),
+    );
+    if (!debug.hoverBackground && !debug.hoverActionButtons) {
+      // No state cares about hover — skip the MouseRegion entirely so
+      // we don't add a pointer-event subscriber per row.
+      return inner;
+    }
+    return MouseRegion(
+      onEnter: (_) => setState(() => isHovered = true),
+      onExit: (_) => setState(() => isHovered = false),
+      child: inner,
     );
   }
 
@@ -556,66 +568,76 @@ class _JsonNodeState extends State<_JsonNode> {
   Widget _buildExpandableRow(String summary, bool isComposite) {
     final t = context.bxpTheme;
     final muted = BxpText.body(context,color: t.textMuted, size: BxpSize.md);
-    // DIAGNOSTIC iter9: InkWell replaced with GestureDetector. InkWell
-    // ships an internal MouseRegion + AnimationController per instance
-    // for the Material hover/ripple effect — across 100+ expandable
-    // rows that's 100+ pointer-event subscribers and 100+ active
-    // tickers, exactly the kind of pointer-event-driven layer churn
-    // the user's "frantic-mouse-movement → eventual freeze" symptom
-    // points at. GestureDetector handles taps without any MouseRegion
-    // or animation; we lose the (currently invisible anyway) ripple
-    // and hover overlay, but tap-to-expand still works.
-    return GestureDetector(
-      onTap: () => setState(() {
-        expanded = !expanded;
-        // Cascade: a single click on a collapsed node expands every
-        // descendant. Children read this via the expandAll prop below.
-        _recursiveExpand = expanded;
-      }),
-      child: Container(
-        color: Colors.transparent,
-        padding: const EdgeInsets.symmetric(vertical: 2.0),
-        child: _RowEnvelope(
-          depth: widget.depth,
-          trailingActions: widget.keyName == 'config'
-              ? const SizedBox.shrink()
-              : _buildActionButtons(isComposite: true),
-          actionsVisible: false,
-          children: [
-              SizedBox(
-                width: 16,
-                child: Center(
-                  child: Text(expanded ? '▾' : '▸', style: muted),
+    final debug = context.watch<DebugSettings>();
+    // Tap target — Material `InkWell` (with internal MouseRegion +
+    // AnimationController + ripple) when DebugSettings.useInkWell is
+    // ON; lighter-weight `GestureDetector` when OFF. The toggle exists
+    // because iter9 evidence pointed at InkWell internals as one of
+    // the load-bearing pointer-event subscribers in the freeze pattern.
+    void onTap() => setState(() {
+          expanded = !expanded;
+          // Cascade: a single click on a collapsed node expands every
+          // descendant. Children read this via the expandAll prop below.
+          _recursiveExpand = expanded;
+        });
+    final inner = Container(
+      color: (debug.hoverBackground && isHovered)
+          ? t.withHover(t.surfaceBg)
+          : Colors.transparent,
+      padding: const EdgeInsets.symmetric(vertical: 2.0),
+      child: _RowEnvelope(
+        depth: widget.depth,
+        trailingActions: widget.keyName == 'config'
+            ? const SizedBox.shrink()
+            : _buildActionButtons(isComposite: true),
+        actionsVisible: debug.hoverActionButtons &&
+            isHovered &&
+            widget.keyName != 'config',
+        children: [
+          SizedBox(
+            width: 16,
+            child: Center(
+              child: Text(expanded ? '▾' : '▸', style: muted),
+            ),
+          ),
+          if (widget.keyName != null && int.tryParse(widget.keyName!)?.toString() != widget.keyName) ...[
+            _SchemaTooltipKey(
+              keyName: widget.keyName!,
+              path: widget.path,
+            ),
+            Text(' : ', style: muted),
+          ] else if (widget.keyName != null) ...[
+            Text('[${widget.keyName}]', style: muted),
+            Text(' : ', style: muted),
+          ],
+          Text(summary, style: muted),
+          if (isComposite &&
+              context.read<TraceStore>().hasErrorIn(widget.path))
+            Padding(
+              padding: const EdgeInsets.only(left: 6.0),
+              child: Container(
+                width: 6,
+                height: 6,
+                decoration: BoxDecoration(
+                  color: t.errorBorder,
+                  shape: BoxShape.circle,
                 ),
               ),
-              if (widget.keyName != null && int.tryParse(widget.keyName!)?.toString() != widget.keyName) ...[
-                _SchemaTooltipKey(
-                  keyName: widget.keyName!,
-                  path: widget.path,
-                ),
-                Text(' : ', style: muted),
-              ] else if (widget.keyName != null) ...[
-                Text('[${widget.keyName}]', style: muted),
-                Text(' : ', style: muted),
-              ],
-              Text(summary, style: muted),
-              if (isComposite &&
-                  context.read<TraceStore>().hasErrorIn(widget.path))
-                Padding(
-                  padding: const EdgeInsets.only(left: 6.0),
-                  child: Container(
-                    width: 6,
-                    height: 6,
-                    decoration: BoxDecoration(
-                      color: t.errorBorder,
-                      shape: BoxShape.circle,
-                    ),
-                  ),
-                ),
-            ..._inlineTrailingWidgets(),
-          ],
-        ),
+            ),
+          ..._inlineTrailingWidgets(),
+        ],
       ),
+    );
+    final tappable = debug.useInkWell
+        ? InkWell(onTap: onTap, child: inner)
+        : GestureDetector(onTap: onTap, child: inner);
+    if (!debug.hoverBackground && !debug.hoverActionButtons) {
+      return tappable;
+    }
+    return MouseRegion(
+      onEnter: (_) => setState(() => isHovered = true),
+      onExit: (_) => setState(() => isHovered = false),
+      child: tappable,
     );
   }
 
@@ -971,9 +993,11 @@ class _CommentRowState extends State<_CommentRow> {
       );
     }
 
-    // DIAGNOSTIC iter7: hover state changes disabled (see _buildRow).
-    return Container(
-      color: Colors.transparent,
+    final debug = context.watch<DebugSettings>();
+    final inner = Container(
+      color: (debug.hoverBackground && isHovered)
+          ? t.withHover(t.surfaceBg)
+          : Colors.transparent,
       // Vertical padding only — the leading indent is provided as the
       // first child of the envelope's row so the envelope's right edge
       // still aligns with the scrollbar (`Container.padding.left` would
@@ -982,7 +1006,7 @@ class _CommentRowState extends State<_CommentRow> {
       padding: const EdgeInsets.symmetric(vertical: 2),
       child: _RowEnvelope(
         depth: widget.depth,
-        actionsVisible: false,
+        actionsVisible: debug.hoverActionButtons && isHovered,
         trailingActions: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -1019,6 +1043,14 @@ class _CommentRowState extends State<_CommentRow> {
           if (isBlock) Text('*/', style: commentStyle),
         ],
       ),
+    );
+    if (!debug.hoverBackground && !debug.hoverActionButtons) {
+      return inner;
+    }
+    return MouseRegion(
+      onEnter: (_) => setState(() => isHovered = true),
+      onExit: (_) => setState(() => isHovered = false),
+      child: inner,
     );
   }
 }
@@ -2107,33 +2139,67 @@ class _SchemaTooltipKey extends StatelessWidget {
       return Text(keyName, style: style);
     }
 
-    // DIAGNOSTIC iter6: only watch the store + walk the schema enough
-    // to know whether a doc EXISTS for this path (controls whether we
-    // show the dotted underline that hints "more info available"). We
-    // deliberately skip extracting type/required/default/desc/enum
-    // values + building a tooltip message because the original
-    // implementation wrapped this with `Tooltip(message: ..., ...)`
-    // and on Windows we observed a GUI freeze after a few hovers across
-    // the JSON tree — the cumulative cost of 100+ Tooltip widgets (one
-    // per tree key) plus their internal MouseRegion / Timer /
-    // OverlayEntry plumbing apparently overwhelms the platform's
-    // hover/repaint budget. iter6 drops the Tooltip to confirm the
-    // hypothesis; if it stays responsive, iter7 will restore the doc
-    // surface via a lightweight panel display (e.g. a status-bar slot
-    // that updates as the user hovers, no per-key overlay creation).
     final store = context.watch<TraceStore>();
     final doc = _findDoc(store.docConfigSchema);
     if (doc == null) return Text(keyName, style: style);
 
-    return MouseRegion(
-      cursor: SystemMouseCursors.help,
-      child: Text(
-        keyName,
-        style: style.copyWith(
-          decoration: TextDecoration.underline,
-          decorationStyle: TextDecorationStyle.dotted,
-          decorationColor: t.textMuted,
-        ),
+    final underlinedText = Text(
+      keyName,
+      style: style.copyWith(
+        decoration: TextDecoration.underline,
+        decorationStyle: TextDecorationStyle.dotted,
+        decorationColor: t.textMuted,
+      ),
+    );
+
+    // Gated by DebugSettings.tooltipsInTree. When OFF, render only the
+    // dotted-underline hint without wrapping in Tooltip — drops 100+
+    // Material Tooltip widgets and their internal MouseRegion + Timer
+    // plumbing from the tree. When ON (production default), full
+    // tooltip with the schema description + type / required / default
+    // / enum metadata.
+    final debug = context.watch<DebugSettings>();
+    if (!debug.tooltipsInTree) {
+      return MouseRegion(
+        cursor: SystemMouseCursors.help,
+        child: underlinedText,
+      );
+    }
+
+    final type = doc['type_name']?.toString() ?? '';
+    final required = doc['required'] == true;
+    final defaultVal = doc['default']?.toString();
+    final desc = doc['description']?.toString() ?? '';
+    final ordered = doc['ordered'] == true;
+    final enumValues = (doc['enum_values'] as List?)?.cast<String>();
+
+    final headerParts = <String>[
+      if (type.isNotEmpty) type,
+      if (required) 'required',
+      if (defaultVal != null && defaultVal != 'null') 'default: $defaultVal',
+      if (ordered) 'ordered',
+    ];
+    final extras = <String>[
+      if (enumValues != null && enumValues.isNotEmpty)
+        'one of: ${enumValues.map((v) => v == "\t" ? r"\t" : v).join(", ")}',
+    ];
+    final body = [desc, ...extras].where((s) => s.isNotEmpty).join('\n\n');
+    final tooltipMsg = headerParts.isEmpty
+        ? body
+        : '${headerParts.join(' · ')}\n\n$body';
+
+    return Tooltip(
+      message: tooltipMsg,
+      waitDuration: const Duration(milliseconds: 300),
+      preferBelow: true,
+      textStyle: BxpText.body(context, color: t.textPrimary, size: BxpSize.sm),
+      decoration: BoxDecoration(
+        color: t.dialogBg,
+        border: Border.all(color: t.borderColor),
+      ),
+      child: MouseRegion(
+        cursor: SystemMouseCursors.help,
+        child: underlinedText,
       ),
     );
   }
