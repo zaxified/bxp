@@ -3,9 +3,85 @@
 #include <dwmapi.h>
 #include <flutter_windows.h>
 
+#include <cstdarg>
+#include <cstdio>
+#include <ctime>
+#include <mutex>
+#include <string>
+
 #include "resource.h"
 
 namespace {
+
+// Diagnostic native-side log. Activated by `BXP_DIAGNOSTIC=1` in the
+// environment. Writes one timestamped line per Win32 message of
+// interest to `%APPDATA%\bxp-gui\diagnostic-native-YYYYMMDD-HHMMSS.log`.
+// Disabled by default; this file is only opened when the env var is
+// set, so a default-config build is unchanged.
+static std::FILE* g_diag_log = nullptr;
+static std::once_flag g_diag_init_once;
+static std::mutex g_diag_mutex;
+
+static void DiagInit() {
+  char buf[8];
+  size_t needed = 0;
+  if (getenv_s(&needed, buf, sizeof(buf), "BXP_DIAGNOSTIC") != 0) return;
+  if (needed == 0) return;
+  if (std::strncmp(buf, "1", 1) != 0) return;
+
+  // Resolve %APPDATA%\bxp-gui — same path the Dart side uses.
+  char appdata[MAX_PATH];
+  size_t adlen = 0;
+  if (getenv_s(&adlen, appdata, sizeof(appdata), "APPDATA") != 0) return;
+  if (adlen == 0) return;
+
+  std::string dir = std::string(appdata) + "\\bxp-gui";
+  CreateDirectoryA(dir.c_str(), nullptr);  // ignore EXISTS
+
+  std::time_t now = std::time(nullptr);
+  std::tm tm{};
+  localtime_s(&tm, &now);
+  char ts[32];
+  std::snprintf(ts, sizeof(ts), "%04d%02d%02d-%02d%02d%02d",
+                tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+                tm.tm_hour, tm.tm_min, tm.tm_sec);
+
+  std::string path = dir + "\\diagnostic-native-" + ts + ".log";
+  std::FILE* f = nullptr;
+  if (fopen_s(&f, path.c_str(), "ab") == 0 && f != nullptr) {
+    g_diag_log = f;
+    std::fprintf(g_diag_log, "[native] log opened: %s\n", path.c_str());
+    std::fflush(g_diag_log);
+  }
+}
+
+static void DiagLog(const char* fmt, ...) {
+  std::call_once(g_diag_init_once, DiagInit);
+  if (g_diag_log == nullptr) return;
+  std::lock_guard<std::mutex> lock(g_diag_mutex);
+  // Sub-second precision via GetSystemTimeAsFileTime → millis.
+  SYSTEMTIME st;
+  GetLocalTime(&st);
+  std::fprintf(g_diag_log, "[%02d:%02d:%02d.%03d] ",
+               st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
+  std::va_list ap;
+  va_start(ap, fmt);
+  std::vfprintf(g_diag_log, fmt, ap);
+  va_end(ap);
+  std::fputc('\n', g_diag_log);
+  std::fflush(g_diag_log);
+}
+
+static const char* WmSizeKind(WPARAM wp) {
+  switch (wp) {
+    case SIZE_RESTORED: return "RESTORED";
+    case SIZE_MINIMIZED: return "MINIMIZED";
+    case SIZE_MAXIMIZED: return "MAXIMIZED";
+    case SIZE_MAXSHOW: return "MAXSHOW";
+    case SIZE_MAXHIDE: return "MAXHIDE";
+    default: return "?";
+  }
+}
 
 /// Window attribute that enables dark mode window decorations.
 ///
@@ -160,6 +236,8 @@ LRESULT CALLBACK Win32Window::WndProc(HWND const window,
                                       LPARAM const lparam) noexcept {
   if (message == WM_NCCREATE) {
     auto window_struct = reinterpret_cast<CREATESTRUCT*>(lparam);
+    DiagLog("WM_NCCREATE hwnd=%p w=%d h=%d", window, window_struct->cx,
+            window_struct->cy);
     SetWindowLongPtr(window, GWLP_USERDATA,
                      reinterpret_cast<LONG_PTR>(window_struct->lpCreateParams));
 
@@ -180,6 +258,7 @@ Win32Window::MessageHandler(HWND hwnd,
                             LPARAM const lparam) noexcept {
   switch (message) {
     case WM_DESTROY:
+      DiagLog("WM_DESTROY hwnd=%p", hwnd);
       window_handle_ = nullptr;
       Destroy();
       if (quit_on_close_) {
@@ -191,6 +270,8 @@ Win32Window::MessageHandler(HWND hwnd,
       auto newRectSize = reinterpret_cast<RECT*>(lparam);
       LONG newWidth = newRectSize->right - newRectSize->left;
       LONG newHeight = newRectSize->bottom - newRectSize->top;
+      DiagLog("WM_DPICHANGED dpi=%u w=%ld h=%ld", LOWORD(wparam), newWidth,
+              newHeight);
 
       SetWindowPos(hwnd, nullptr, newRectSize->left, newRectSize->top, newWidth,
                    newHeight, SWP_NOZORDER | SWP_NOACTIVATE);
@@ -199,6 +280,10 @@ Win32Window::MessageHandler(HWND hwnd,
     }
     case WM_SIZE: {
       RECT rect = GetClientArea();
+      DiagLog("WM_SIZE %s w=%ld h=%ld child=%p",
+              WmSizeKind(wparam),
+              rect.right - rect.left, rect.bottom - rect.top,
+              child_content_);
       if (child_content_ != nullptr) {
         // Size and position the child window.
         MoveWindow(child_content_, rect.left, rect.top, rect.right - rect.left,
@@ -208,10 +293,32 @@ Win32Window::MessageHandler(HWND hwnd,
     }
 
     case WM_ACTIVATE:
+      DiagLog("WM_ACTIVATE wparam=%u (%s)", LOWORD(wparam),
+              LOWORD(wparam) == WA_INACTIVE
+                  ? "INACTIVE"
+                  : (LOWORD(wparam) == WA_ACTIVE ? "ACTIVE" : "CLICKACTIVE"));
       if (child_content_ != nullptr) {
         SetFocus(child_content_);
       }
       return 0;
+
+    case WM_WINDOWPOSCHANGED: {
+      auto* wp = reinterpret_cast<WINDOWPOS*>(lparam);
+      DiagLog("WM_WINDOWPOSCHANGED x=%d y=%d w=%d h=%d flags=0x%x",
+              wp->x, wp->y, wp->cx, wp->cy, wp->flags);
+      break;  // fall through to DefWindowProc
+    }
+
+    case WM_SHOWWINDOW:
+      DiagLog("WM_SHOWWINDOW shown=%d reason=%lld",
+              static_cast<int>(wparam), static_cast<long long>(lparam));
+      break;
+
+    case WM_DISPLAYCHANGE:
+      DiagLog("WM_DISPLAYCHANGE bpp=%u w=%d h=%d",
+              static_cast<unsigned>(wparam),
+              LOWORD(lparam), HIWORD(lparam));
+      break;
 
     case WM_DWMCOLORIZATIONCOLORCHANGED:
       UpdateTheme(hwnd);

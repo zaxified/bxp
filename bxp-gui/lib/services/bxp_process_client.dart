@@ -8,6 +8,7 @@ import 'package:path/path.dart' as p;
 import '../store/trace_model.dart';
 import 'bridge_client.dart';
 import 'dev_trace.dart';
+import 'diagnostic_log.dart';
 
 /// Spawn-based client for `bxp-cli` and `bxp-fmt`.
 ///
@@ -365,8 +366,13 @@ class BxpProcessClient {
   /// total deadline. The TraceStore flips to 0 for the rest of the
   /// session if a previous call surfaced an `[fs.timeout]` warning.
   static Future<String> loadConfig(String path, {int checkFsSeconds = 0}) async {
+    final endAction = DiagnosticLog.action('loadConfig', {
+      'path': path,
+      'check_fs': checkFsSeconds,
+    });
     final bin = findBin('bxp-fmt');
     if (bin == null) {
+      endAction({'result': 'binary_missing'});
       return '{"error": "bxp-fmt binary not found"}';
     }
     final args = checkFsSeconds > 0
@@ -374,11 +380,22 @@ class BxpProcessClient {
         : ['--config', path];
     final result = await _runOneShot(bin, args, _configTimeout);
     if (result.exitCode == 0) {
+      endAction({
+        'exit': 0,
+        'stdout_bytes': (result.stdout as String).length,
+      });
       return result.stdout as String;
     }
     // Exit 1 = validation failure; bxp-fmt still emits annotated JSON with $err_ nodes.
-    if ((result.stdout as String).isNotEmpty) return result.stdout as String;
+    if ((result.stdout as String).isNotEmpty) {
+      endAction({
+        'exit': result.exitCode,
+        'stdout_bytes': (result.stdout as String).length,
+      });
+      return result.stdout as String;
+    }
     final err = (result.stderr as String).trim();
+    endAction({'exit': result.exitCode, 'stderr': err});
     return '{"error": ${jsonEncode(err.isEmpty ? "unknown error" : err)}}';
   }
 
@@ -503,6 +520,7 @@ class BxpProcessClient {
     if (expr.isEmpty) return (error: null, offset: null, length: null);
     final bin = findBin('bxp-fmt');
     if (bin == null) return (error: 'bxp-fmt not found', offset: null, length: null);
+    DiagnosticLog.log('action.validateExpr', {'len': expr.length});
     final result =
         await _runOneShot(bin, ['--expr', expr], _exprTimeout);
     if (result.exitCode == 0) return (error: null, offset: null, length: null);
@@ -647,8 +665,13 @@ class BxpProcessClient {
     void Function(String chunk)? onStderr,
     void Function(Process)? onSpawn,
   }) async {
+    final endAction = DiagnosticLog.action(
+      dryRun ? 'runDryRun' : 'runFullRun',
+      {'config': configPath, 'template': templateId},
+    );
     final bin = findBin('bxp-cli');
     if (bin == null) {
+      endAction({'result': 'binary_missing'});
       return const ProcessRunResult(
         exitCode: ProcessRunResult.kExitBinaryMissing,
         stderr: 'bxp-cli binary not found',
@@ -668,6 +691,7 @@ class BxpProcessClient {
     // of silently spawning bxp-cli with the GUI binary's CWD.
     final configFile = File(configPath);
     if (!configFile.existsSync()) {
+      endAction({'result': 'config_missing'});
       return ProcessRunResult(
         exitCode: ProcessRunResult.kExitConfigMissing,
         stderr: 'config file not found: $configPath',
@@ -691,7 +715,7 @@ class BxpProcessClient {
     // bridge variant lands.
     final dllPath = _resolveBridgePath();
     if (dllPath != null) {
-      return _runCliTraceViaBridge(
+      final r = await _runCliTraceViaBridge(
         bin: bin,
         args: args,
         cwd: workingDir,
@@ -699,6 +723,12 @@ class BxpProcessClient {
         onLine: onLine,
         onStderr: onStderr,
       );
+      endAction({
+        'path': 'bridge',
+        'exit': r.exitCode,
+        'stderr_bytes': r.stderr.length,
+      });
+      return r;
     }
 
     final process = await Process.start(
@@ -776,6 +806,12 @@ class BxpProcessClient {
       stderrBuffer.writeln(note);
     }
 
+    endAction({
+      'path': 'native',
+      'exit': exitCode,
+      'stderr_bytes': stderrBuffer.length,
+      'watchdog_fired': watchdogFired,
+    });
     return ProcessRunResult(
       exitCode: exitCode,
       stderr: stderrBuffer.toString(),

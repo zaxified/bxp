@@ -1,9 +1,13 @@
+import 'dart:async';
+import 'dart:io';
+
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter/services.dart';
 import 'services/debug_binding.dart';
 import 'services/debug_settings.dart';
+import 'services/diagnostic_log.dart';
 import 'services/updater_service.dart';
 import 'store/trace_store.dart';
 import 'ui/components/update_dialog.dart';
@@ -32,23 +36,81 @@ void main() {
   // throttle). Behaves identically to WidgetsFlutterBinding when none
   // of the toggles are flipped, so a default-config build is unchanged.
   DebugBinding.ensureInitialized();
+
+  // Opt-in NDJSON diagnostic trace. Activated by `BXP_DIAGNOSTIC=1`.
+  // The init is async (file open) but small; we kick it off and wire
+  // the frame-timings hook once the sink is ready. runApp does not
+  // depend on the result — the trace just becomes a no-op if init
+  // fails or the env var is unset.
+  unawaited(DiagnosticLog.tryInit().then((enabled) {
+    if (!enabled) return;
+    // ignore: avoid_print
+    print('[bxp-gui] diagnostic trace -> ${DiagnosticLog.path}');
+    DiagnosticLog.log('startup', {
+      'platform': Platform.operatingSystem,
+      'os_version': Platform.operatingSystemVersion,
+      'dart_version': Platform.version,
+      'executable': Platform.resolvedExecutable,
+      'locale': Platform.localeName,
+      'cwd': Directory.current.path,
+    });
+    DiagnosticLog.wireFrameTimings();
+  }));
+
   final traceStore = TraceStore();
   final updaterService = UpdaterService();
   _installOverflowGuard(traceStore);
+  _installDiagnosticErrorHooks();
   // Fire-and-forget — the periodic check runs even before the user
   // interacts with the UI. Errors are caught inside initialize().
   updaterService.initialize();
-  runApp(
-    MultiProvider(
-      providers: [
-        ChangeNotifierProvider<TraceStore>.value(value: traceStore),
-        ChangeNotifierProvider<UpdaterService>.value(value: updaterService),
-        ChangeNotifierProvider<DebugSettings>.value(
-            value: DebugSettings.instance),
-      ],
-      child: const BxpApp(),
-    ),
-  );
+  // Wrap in runZonedGuarded so async exceptions in our code path land
+  // in the diagnostic log too (FlutterError.onError only catches sync
+  // exceptions thrown during the framework's own dispatch).
+  runZonedGuarded(() {
+    runApp(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider<TraceStore>.value(value: traceStore),
+          ChangeNotifierProvider<UpdaterService>.value(value: updaterService),
+          ChangeNotifierProvider<DebugSettings>.value(
+              value: DebugSettings.instance),
+        ],
+        child: const BxpApp(),
+      ),
+    );
+  }, (error, stack) {
+    DiagnosticLog.log('error.zone', {
+      'error': '$error',
+      'stack': '$stack',
+    });
+    // Re-raise into Flutter's standard error pipe so the existing
+    // overflow guard / debug console behaviour is unchanged.
+    FlutterError.reportError(FlutterErrorDetails(
+      exception: error,
+      stack: stack,
+    ));
+  });
+}
+
+/// Chains a diagnostic-log forwarder onto whatever [FlutterError.onError]
+/// is currently installed. Must run AFTER [_installOverflowGuard] so
+/// our forwarder wraps the overflow handler, not the other way round.
+void _installDiagnosticErrorHooks() {
+  final original = FlutterError.onError;
+  FlutterError.onError = (FlutterErrorDetails details) {
+    DiagnosticLog.log('error.flutter', {
+      'exception': '${details.exception}',
+      'library': details.library ?? '',
+      'context': details.context?.toDescription() ?? '',
+      if (details.stack != null) 'stack': '${details.stack}',
+    });
+    if (original != null) {
+      original(details);
+    } else {
+      FlutterError.presentError(details);
+    }
+  };
 }
 
 // Reactive regression guard: any RenderFlex overflow that occurs while the
