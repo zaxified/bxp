@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:path/path.dart' as p;
 
@@ -94,29 +95,29 @@ class BxpProcessClient {
   /// generous on the slowest realistic input we've seen and still way
   /// shorter than "user gives up and quits the app".
   ///
-  /// Note: timeouts only apply to the Process.start fallback path. The
-  /// FFI bridge is synchronous and has no built-in timeout; if a child
-  /// invoked via the bridge hangs, the calling isolate hangs with it.
-  /// Acceptable for the PoC because bxp-fmt one-shot calls finish in
-  /// milliseconds; if a future bxp-fmt subcommand acquires a way to
-  /// hang, we'll need to revisit (Isolate.run + cancel, or add a
-  /// timeout knob to bridge_run on the Zig side).
+  /// Note: timeouts also wrap the bridge worker isolate via
+  /// `Future.timeout` — if a child invoked through the bridge hangs the
+  /// main isolate sees the timeout and falls through. The worker
+  /// isolate technically leaks until the OS process exits, which is
+  /// fine because bxp-fmt one-shot calls don't hang in practice.
   static const Duration _versionTimeout = Duration(seconds: 5);
   static const Duration _docsTimeout = Duration(seconds: 5);
   static const Duration _exprTimeout = Duration(seconds: 15);
   static const Duration _configTimeout = Duration(seconds: 15);
   static const Duration _listTemplatesTimeout = Duration(seconds: 30);
 
-  /// Cached bridge client. The DLL is opened on first use and the
-  /// function pointers are looked up once; subsequent calls reuse them.
-  /// Null when the bridge is unavailable (non-Windows, DLL missing,
-  /// load failure). On non-Windows we deliberately leave this null so
-  /// every one-shot stays on the existing Process.start path — the
-  /// bridge is GUI-Windows-only by design.
-  static BridgeClient? _bridge;
+  /// Cached path to the bridge DLL — null when unavailable (non-Windows,
+  /// missing file, probe failed). Resolved once via [_resolveBridgePath]
+  /// so we don't re-stat the filesystem on every call. The DLL itself
+  /// gets opened freshly inside each worker isolate; we don't keep a
+  /// long-lived BridgeClient on the main isolate because all FFI work
+  /// must happen off the UI thread (see [_runOneShot]).
+  static String? _bridgeDllPath;
+  static String? _bridgeVersion;
   static bool _bridgeProbed = false;
-  static BridgeClient? _getBridge() {
-    if (_bridgeProbed) return _bridge;
+
+  static String? _resolveBridgePath() {
+    if (_bridgeProbed) return _bridgeDllPath;
     _bridgeProbed = true;
     if (!Platform.isWindows) return null;
     final dllPath = findBridgeLibrary();
@@ -124,11 +125,17 @@ class BxpProcessClient {
       _lastSubprocessDiag = 'bridge: DLL not found next to bxp-gui';
       return null;
     }
+    // One-time probe: load the DLL on the main isolate just to confirm
+    // it's loadable and read its version string for diagnostics. The
+    // BridgeClient itself is discarded — every actual call is handled
+    // by a worker isolate that re-opens the DLL on its own side.
     try {
-      _bridge = BridgeClient(dllPath);
-      return _bridge;
+      final probe = BridgeClient(dllPath);
+      _bridgeVersion = probe.bridgeVersion;
+      _bridgeDllPath = dllPath;
+      return dllPath;
     } catch (e) {
-      _lastSubprocessDiag = 'bridge: load failed: $e';
+      _lastSubprocessDiag = 'bridge: probe failed: $e';
       return null;
     }
   }
@@ -141,40 +148,40 @@ class BxpProcessClient {
   /// emits more than that — `--docs` (30 KB), annotated --config output,
   /// `--expr-trace` per-call values — silently truncates or hangs. The
   /// bridge drains pipes from native Zig code, sidestepping Dart's event
-  /// loop entirely. We keep Process.start as the fallback so a missing
-  /// DLL degrades gracefully (small payloads still work) instead of
-  /// erroring out.
+  /// loop entirely.
+  ///
+  /// Why a worker isolate: `bridge_run` is synchronous and blocks for
+  /// the duration of the child process (50–200 ms typical). Running it
+  /// on the main isolate freezes Flutter's frame loop and back-pressure
+  /// from queued mouse / keyboard events causes the GUI to stop
+  /// responding after a handful of fast hovers. `Isolate.run` offloads
+  /// the blocking call to a fresh worker isolate so the UI stays smooth.
+  /// The ~5 ms isolate-spawn overhead is negligible compared to the
+  /// pipe-drain time we're already paying.
+  ///
+  /// We keep Process.start as the fallback so a missing DLL degrades
+  /// gracefully (small payloads still work) instead of erroring out.
   static Future<ProcessResult> _runOneShot(
     String executable,
     List<String> arguments,
     Duration timeout,
   ) async {
-    final bridge = _getBridge();
-    if (bridge != null) {
+    final dllPath = _resolveBridgePath();
+    if (dllPath != null) {
       try {
-        // Yield one tick so the synchronous FFI call doesn't starve the
-        // immediate caller's microtask. The call itself still blocks
-        // the isolate, but pushing it past the next event-loop edge
-        // keeps UI animations from skipping a frame just before the
-        // bridge runs.
-        await Future<void>.delayed(Duration.zero);
-        final result = bridge.run(executable, arguments);
+        final result = await Isolate.run(
+          () => _bridgeRunInIsolate(dllPath, executable, arguments),
+        ).timeout(timeout);
         if (result.err != null) {
           // Bridge-level failure (spawn failed, request parse failed,
           // output exceeded the 4 MB cap). Don't fall back — the same
           // failure would just repeat under Process.start with worse
           // diagnostics. Surface a synthetic non-zero exit so callers
           // hit their existing error path.
-          _lastSubprocessDiag = 'bridge ${bridge.bridgeVersion}: '
-              'err=${result.err}';
-          return ProcessResult(
-            0,
-            1,
-            '',
-            'bridge: ${result.err}',
-          );
+          _lastSubprocessDiag = 'bridge $_bridgeVersion: err=${result.err}';
+          return ProcessResult(0, 1, '', 'bridge: ${result.err}');
         }
-        _lastSubprocessDiag = 'bridge ${bridge.bridgeVersion}: '
+        _lastSubprocessDiag = 'bridge $_bridgeVersion: '
             'exit ${result.exitCode}, stdout=${result.stdout.length} B'
             ', stderr=${result.stderr.length} B';
         return ProcessResult(
@@ -183,11 +190,24 @@ class BxpProcessClient {
           result.stdout,
           result.stderr,
         );
+      } on TimeoutException {
+        // The bridge worker is still chewing on the call. Synthesise a
+        // timeout result so the caller's existing error-rendering path
+        // picks it up. We can't kill the worker isolate from Isolate.run —
+        // it will finish on its own and the result gets discarded.
+        _lastSubprocessDiag =
+            'bridge $_bridgeVersion: timeout after ${timeout.inSeconds}s';
+        return ProcessResult(
+          0,
+          ProcessRunResult.kExitTimeout,
+          '',
+          '$executable timed out after ${timeout.inSeconds}s (bridge)',
+        );
       } catch (e) {
-        // FFI binding blew up (rare — mismatched DLL, OOM allocating
-        // the response buffer, ...). Fall back to Process.start so the
-        // call has a chance of succeeding on small payloads.
-        _lastSubprocessDiag = 'bridge: exception $e — '
+        // Worker-side exception (bad DLL, OOM allocating the response
+        // buffer, …). Fall back to Process.start so the call has a chance
+        // of succeeding on small payloads.
+        _lastSubprocessDiag = 'bridge: ${e.runtimeType} $e — '
             'falling back to Process.start';
       }
     }
@@ -743,6 +763,34 @@ class BxpProcessClient {
   /// while still fast enough to recover from a deadlock without the
   /// user reaching for `kill`.
   static const Duration _streamIdleTimeout = Duration(seconds: 10);
+}
+
+/// Worker-isolate entry point for FFI bridge calls. Top-level on purpose:
+/// `Isolate.run` requires the function (and its closure-captured values)
+/// to be sendable, and a top-level function never accidentally drags an
+/// enclosing class instance into the isolate boundary check.
+///
+/// Each invocation opens its own [BridgeClient] (the underlying
+/// DynamicLibrary is per-isolate; we can't share one with the main
+/// isolate). Re-opening costs a handful of milliseconds — well below
+/// the bridge's per-call pipe-drain cost — and lets us use the simple
+/// `Isolate.run` API instead of a long-lived worker with port plumbing.
+BridgeResult _bridgeRunInIsolate(
+  String dllPath,
+  String executable,
+  List<String> arguments,
+) {
+  try {
+    final client = BridgeClient(dllPath);
+    return client.run(executable, arguments);
+  } catch (e) {
+    return BridgeResult(
+      exitCode: -1,
+      stdout: '',
+      stderr: '',
+      err: 'bridge isolate exception: $e',
+    );
+  }
 }
 
 class ProcessRunResult {
