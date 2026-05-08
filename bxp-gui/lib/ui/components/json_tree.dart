@@ -2091,49 +2091,32 @@ class _SchemaTooltipKey extends StatelessWidget {
       return Text(keyName, style: style);
     }
 
+    // DIAGNOSTIC iter6: only watch the store + walk the schema enough
+    // to know whether a doc EXISTS for this path (controls whether we
+    // show the dotted underline that hints "more info available"). We
+    // deliberately skip extracting type/required/default/desc/enum
+    // values + building a tooltip message because the original
+    // implementation wrapped this with `Tooltip(message: ..., ...)`
+    // and on Windows we observed a GUI freeze after a few hovers across
+    // the JSON tree — the cumulative cost of 100+ Tooltip widgets (one
+    // per tree key) plus their internal MouseRegion / Timer /
+    // OverlayEntry plumbing apparently overwhelms the platform's
+    // hover/repaint budget. iter6 drops the Tooltip to confirm the
+    // hypothesis; if it stays responsive, iter7 will restore the doc
+    // surface via a lightweight panel display (e.g. a status-bar slot
+    // that updates as the user hovers, no per-key overlay creation).
     final store = context.watch<TraceStore>();
     final doc = _findDoc(store.docConfigSchema);
     if (doc == null) return Text(keyName, style: style);
 
-    final type = doc['type_name']?.toString() ?? '';
-    final required = doc['required'] == true;
-    final defaultVal = doc['default']?.toString();
-    final desc = doc['description']?.toString() ?? '';
-    final ordered = doc['ordered'] == true;
-    final enumValues = (doc['enum_values'] as List?)?.cast<String>();
-
-    final headerParts = <String>[
-      if (type.isNotEmpty) type,
-      if (required) 'required',
-      if (defaultVal != null && defaultVal != 'null') 'default: $defaultVal',
-      if (ordered) 'ordered',
-    ];
-    final extras = <String>[
-      if (enumValues != null && enumValues.isNotEmpty)
-        'one of: ${enumValues.map((v) => v == "\t" ? r"\t" : v).join(", ")}',
-    ];
-    final body = [desc, ...extras].where((s) => s.isNotEmpty).join('\n\n');
-    final tooltipMsg =
-        headerParts.isEmpty ? body : '${headerParts.join(' · ')}\n\n$body';
-
-    return Tooltip(
-      message: tooltipMsg,
-      waitDuration: const Duration(milliseconds: 300),
-      preferBelow: true,
-      textStyle: BxpText.body(context,color: t.textPrimary, size: BxpSize.sm),
-      decoration: BoxDecoration(
-        color: t.dialogBg,
-        border: Border.all(color: t.borderColor),
-      ),
-      child: MouseRegion(
-        cursor: SystemMouseCursors.help,
-        child: Text(
-          keyName,
-          style: style.copyWith(
-            decoration: TextDecoration.underline,
-            decorationStyle: TextDecorationStyle.dotted,
-            decorationColor: t.textMuted,
-          ),
+    return MouseRegion(
+      cursor: SystemMouseCursors.help,
+      child: Text(
+        keyName,
+        style: style.copyWith(
+          decoration: TextDecoration.underline,
+          decorationStyle: TextDecorationStyle.dotted,
+          decorationColor: t.textMuted,
         ),
       ),
     );
