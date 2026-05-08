@@ -36,9 +36,25 @@ class DebugBinding extends WidgetsFlutterBinding {
   /// throttle reference.
   DateTime _lastForwarded = DateTime.fromMillisecondsSinceEpoch(0);
 
+  /// Mimics `WidgetsFlutterBinding.ensureInitialized` but installs a
+  /// `DebugBinding` instead. Must be called from `main()` BEFORE
+  /// `runApp` — `runApp` internally calls
+  /// `WidgetsFlutterBinding.ensureInitialized()` which would create a
+  /// plain WidgetsFlutterBinding (no overrides) if no binding exists
+  /// yet, defeating the whole point of this subclass.
+  ///
+  /// Reading `WidgetsBinding.instance` throws if no binding has been
+  /// constructed yet, so the existence check is wrapped in try/catch.
+  /// On first call we land in the catch and construct ourselves; on
+  /// later calls (e.g. hot restart in dev) the cached singleton is
+  /// returned.
   static DebugBinding ensureInitialized() {
-    final existing = WidgetsBinding.instance;
-    if (existing is DebugBinding) return existing;
+    try {
+      final existing = WidgetsBinding.instance;
+      if (existing is DebugBinding) return existing;
+    } catch (_) {
+      // No binding initialised yet — fall through to construct one.
+    }
     return DebugBinding();
   }
 
