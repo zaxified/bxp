@@ -1189,8 +1189,14 @@ class _RowEnvelope extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final viewportRowWidth = _RowMinWidth.of(context);
-    final actions =
-        Opacity(opacity: actionsVisible ? 1.0 : 0.0, child: trailingActions);
+    // iter8: render trailing actions only when visible. The previous
+    // `Opacity(opacity: 0.0, child: trailingActions)` left the entire
+    // _ActionBtn subtree mounted with its MouseRegion + GestureDetector
+    // hot — 100+ tree rows × ~4 buttons each = 500+ hidden pointer
+    // listeners receiving every mouse-move event, plus 500+ layers in
+    // the render tree even though they paint nothing. On Windows that
+    // appears to overload the compositor; the GUI eventually wedges
+    // even when iter7 already removed the per-row hover setState.
     if (viewportRowWidth == null || viewportRowWidth <= 0) {
       // No viewport context (e.g. snapshot tree in tests): fall back to
       // the legacy "buttons trail content end" layout.
@@ -1199,9 +1205,11 @@ class _RowEnvelope extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           ...children,
-          const SizedBox(width: 40),
-          actions,
-          const SizedBox(width: 4),
+          if (actionsVisible) ...[
+            const SizedBox(width: 40),
+            trailingActions,
+            const SizedBox(width: 4),
+          ],
         ],
       );
     }
@@ -1220,8 +1228,10 @@ class _RowEnvelope extends StatelessWidget {
             // intrinsic width exceeds minWidth get Spacer = 0; their
             // buttons trail content end as before.
             const Spacer(),
-            actions,
-            const SizedBox(width: 4),
+            if (actionsVisible) ...[
+              trailingActions,
+              const SizedBox(width: 4),
+            ],
           ],
         ),
       ),
