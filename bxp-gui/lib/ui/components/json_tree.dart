@@ -556,14 +556,16 @@ class _JsonNodeState extends State<_JsonNode> {
   Widget _buildExpandableRow(String summary, bool isComposite) {
     final t = context.bxpTheme;
     final muted = BxpText.body(context,color: t.textMuted, size: BxpSize.md);
-    // DIAGNOSTIC iter7: hover state changes disabled (see _buildRow).
-    // InkWell is kept because tree expand/collapse on tap depends on
-    // it; InkWell paints its own hover/highlight overlay using
-    // Material's internal hover detection without our setState — if
-    // that internal hover effect is what's freezing, we'll know
-    // because removing OUR onEnter/onExit didn't help and InkWell's
-    // hover stayed.
-    return InkWell(
+    // DIAGNOSTIC iter9: InkWell replaced with GestureDetector. InkWell
+    // ships an internal MouseRegion + AnimationController per instance
+    // for the Material hover/ripple effect — across 100+ expandable
+    // rows that's 100+ pointer-event subscribers and 100+ active
+    // tickers, exactly the kind of pointer-event-driven layer churn
+    // the user's "frantic-mouse-movement → eventual freeze" symptom
+    // points at. GestureDetector handles taps without any MouseRegion
+    // or animation; we lose the (currently invisible anyway) ripple
+    // and hover overlay, but tap-to-expand still works.
+    return GestureDetector(
       onTap: () => setState(() {
         expanded = !expanded;
         // Cascade: a single click on a collapsed node expands every
