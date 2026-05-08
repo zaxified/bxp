@@ -18,6 +18,14 @@ import 'ui/zoom_limits.dart';
 final GlobalKey<ScaffoldMessengerState> bxpMessengerKey =
     GlobalKey<ScaffoldMessengerState>();
 
+/// Global navigator key so widgets above the navigator (ZoomContainer,
+/// CounterOverlay) can push dialogs without juggling Builder contexts.
+/// Used for the debug-panel `showDialog` call — without a navigator
+/// key we'd need a context from BELOW the navigator, which neither the
+/// keyboard handler nor the counter overlay (both wrapped via
+/// MaterialApp.builder) has.
+final GlobalKey<NavigatorState> bxpNavigatorKey = GlobalKey<NavigatorState>();
+
 void main() {
   // Custom binding that intercepts pointer events for the freeze
   // investigation (live counters + middle/right-button block + hover
@@ -104,6 +112,7 @@ class BxpApp extends StatelessWidget {
           title: 'BXP GUI',
           debugShowCheckedModeBanner: false,
           scaffoldMessengerKey: bxpMessengerKey,
+          navigatorKey: bxpNavigatorKey,
           theme: ThemeData(
             useMaterial3: true,
             brightness: t.brightness,
@@ -244,9 +253,16 @@ class _ZoomContainerState extends State<ZoomContainer> {
   }
 
   void _openDebugPanel() {
-    if (!mounted) return;
+    // ZoomContainer is wrapped via MaterialApp.builder, so its own
+    // BuildContext sits ABOVE the Navigator — using `context` here
+    // for showDialog silently no-ops because Navigator.of() can't
+    // find a navigator. Use the global navigator key instead, which
+    // points at the MaterialApp's root navigator regardless of where
+    // we're called from.
+    final ctx = bxpNavigatorKey.currentContext;
+    if (ctx == null) return;
     showDialog<void>(
-      context: context,
+      context: ctx,
       builder: (_) => const DebugPanelDialog(),
     );
   }
@@ -318,10 +334,10 @@ class _ZoomContainerState extends State<ZoomContainer> {
               child: widget.child,
             ),
           ),
-          const Positioned(
+          Positioned(
             right: 8,
             bottom: 8,
-            child: CounterOverlay(),
+            child: CounterOverlay(onTap: _openDebugPanel),
           ),
         ],
       ),

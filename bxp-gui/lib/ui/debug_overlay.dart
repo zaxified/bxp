@@ -10,12 +10,19 @@ import '../store/trace_store.dart';
 
 /// Always-visible counter widget pinned to the bottom-right of the app.
 /// Polls [DebugBinding] for raw event totals, computes 1-second rates,
-/// shows alongside frame paint count from the scheduler. Intentionally
-/// a simple Text + Container — no MouseRegion / GestureDetector / hover
-/// styling — so the overlay itself can't contribute to the freeze it's
-/// measuring.
+/// shows alongside frame paint count from the scheduler.
+///
+/// Tap anywhere on the overlay to open the [DebugPanelDialog] — gives
+/// the user a guaranteed way in even when the keyboard shortcut
+/// doesn't fire (Czech layout / Flutter framework intercepting F12 /
+/// engine-level remapping). The single tap target adds one MouseRegion
+/// to the widget tree, but it's confined to the small (~140×80 px)
+/// overlay rect at the screen edge, well outside the path of
+/// frantic-mouse-over-tree gestures.
 class CounterOverlay extends StatefulWidget {
-  const CounterOverlay({super.key});
+  /// Called when the user taps the overlay.
+  final VoidCallback? onTap;
+  const CounterOverlay({super.key, this.onTap});
 
   @override
   State<CounterOverlay> createState() => _CounterOverlayState();
@@ -99,10 +106,9 @@ class _CounterOverlayState extends State<CounterOverlay> {
       color: theme.colorScheme.onSurface,
       height: 1.2,
     );
-    return IgnorePointer(
-      // Critical: the overlay must NEVER capture pointer events itself.
-      // Otherwise it becomes a hit-test sink that contributes to the
-      // very flood it's trying to measure.
+    return GestureDetector(
+      onTap: widget.onTap,
+      behavior: HitTestBehavior.opaque,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
         decoration: BoxDecoration(
@@ -126,7 +132,7 @@ class _CounterOverlayState extends State<CounterOverlay> {
             Text('F/s:   $_frLastSec', style: mono),
             Text('peak:  $_peakPePerFrame /f', style: mono),
             const SizedBox(height: 2),
-            Text('F12 / C+S+D', style: mono.copyWith(fontSize: 9)),
+            Text('tap → debug panel', style: mono.copyWith(fontSize: 9)),
           ],
         ),
       ),
