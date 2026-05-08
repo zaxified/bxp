@@ -248,35 +248,32 @@ class _ZoomContainerState extends State<ZoomContainer> {
       },
       // The previous FractionallySizedBox + Transform.scale combo had a
       // subtle hit-test bug at zoom < 1.0: FractionallySizedBox uses
-      // widthFactor to size its CHILD but its own RenderBox stays clamped
-      // to the parent's maxWidth. RenderBox.hitTest rejects pointer
-      // positions outside the box's own size, so when the transform
-      // mapped a click to child-space x > parentWidth, the hit was
-      // dropped before reaching the child — the rightmost ~few buttons
-      // (GITHUB / theme cycle / playground examples) became unclickable
-      // until Ctrl+0 forced zoom = 1.0 (identity transform → problem
-      // disappears). Replacing it with an explicit SizedBox sized
-      // through LayoutBuilder gives the inner RenderBox a real
-      // expanded rect so transformed hit positions land within it.
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          // Fall back to identity sizing if the parent hasn't given us
-          // bounded constraints yet — Transform.scale on an unconstrained
-          // child would be ambiguous, and zoom 1.0 makes the math a no-op.
-          final hasW = constraints.hasBoundedWidth;
-          final hasH = constraints.hasBoundedHeight;
-          final w = hasW ? constraints.maxWidth / zoom : null;
-          final h = hasH ? constraints.maxHeight / zoom : null;
-          return Transform.scale(
-            scale: zoom,
-            alignment: Alignment.topLeft,
-            child: SizedBox(
-              width: w,
-              height: h,
-              child: widget.child,
-            ),
-          );
-        },
+      // widthFactor to size its CHILD but its own RenderBox stays
+      // clamped to the parent's maxWidth. RenderBox.hitTest rejects
+      // pointer positions outside the box's own size, so when the
+      // transform mapped a click to child-space x > parentWidth, the
+      // hit was dropped before reaching the child — the rightmost ~few
+      // buttons (GITHUB / theme cycle / playground examples) became
+      // unclickable until Ctrl+0 forced zoom = 1.0. Replacing with an
+      // explicit SizedBox sized to (size / zoom) gives the inner
+      // RenderBox a real expanded rect so transformed hit positions
+      // land within it.
+      //
+      // We use MediaQuery.size (already read above for the zoom clamp)
+      // instead of LayoutBuilder. LayoutBuilder rebuilds whenever its
+      // parent constraints change, which on Windows seemed to amplify
+      // a Tooltip/Overlay-related rebuild storm during fast hover
+      // streams over the JSON tree — small constraint flickers from
+      // overlay insertion would re-run the entire content subtree.
+      // MediaQuery.size only changes on actual window-resize events.
+      child: Transform.scale(
+        scale: zoom,
+        alignment: Alignment.topLeft,
+        child: SizedBox(
+          width: size.width > 0 ? size.width / zoom : null,
+          height: size.height > 0 ? size.height / zoom : null,
+          child: widget.child,
+        ),
       ),
     );
   }

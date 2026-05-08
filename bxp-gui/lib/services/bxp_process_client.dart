@@ -695,6 +695,7 @@ class BxpProcessClient {
         bin: bin,
         args: args,
         cwd: workingDir,
+        dllPath: dllPath,
         onLine: onLine,
         onStderr: onStderr,
       );
@@ -798,17 +799,17 @@ class BxpProcessClient {
     required String bin,
     required List<String> args,
     required String cwd,
+    required String dllPath,
     required void Function(String line) onLine,
     void Function(String chunk)? onStderr,
   }) async {
     try {
+      // dllPath captured as a local — class statics aren't shared across
+      // isolates, so referencing _bridgeDllPath inside the closure would
+      // crash with "Null check operator used on a null value" the first
+      // time the worker isolate evaluates it.
       final result = await Isolate.run(
-        () => _bridgeRunStreamingInIsolate(
-          _bridgeDllPath!,
-          bin,
-          args,
-          cwd,
-        ),
+        () => _bridgeRunStreamingInIsolate(dllPath, bin, args, cwd),
       );
       if (result.err != null) {
         _lastSubprocessDiag = 'bridge $_bridgeVersion: stream err=${result.err}';
