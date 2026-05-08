@@ -53,6 +53,20 @@ class BridgeResult {
 }
 
 class BridgeClient {
+  /// Response-buffer size for typical one-shot calls (bxp-fmt --docs /
+  /// --config / --expr*). 4 MB covers --docs (~30 KB), --config
+  /// annotations, and worst-case validation output with plenty of
+  /// headroom. Used as the [run] default so per-keystroke calls don't
+  /// allocate megabytes per validation tick.
+  static const int defaultBufSize = 4 * 1024 * 1024;
+
+  /// Response-buffer size for streaming runs (bxp-cli --trace), which
+  /// emit NDJSON proportional to row count. 64 MB matches the bridge's
+  /// max_output_bytes cap and covers ~300 K rows of trace output.
+  /// Allocated only for the duration of the call and freed afterwards,
+  /// so steady-state RAM cost is zero.
+  static const int largeBufSize = 64 * 1024 * 1024;
+
   final DynamicLibrary _lib;
   late final _BridgeRunDart _bridgeRun;
   late final _BridgeVersionDart _bridgeVersion;
@@ -73,12 +87,25 @@ class BridgeClient {
   /// per-keystroke callers should wrap this in `Isolate.run`. The
   /// bridge itself has no built-in timeout; if the child hangs the
   /// caller is on its own to abandon the future.
-  BridgeResult run(String exe, List<String> args) {
-    // 4 MB matches the bridge's `max_output_bytes` cap. --docs is ~30 KB
-    // today; this leaves ~100× headroom for future commands.
-    const bufSize = 4 * 1024 * 1024;
-
-    final request = jsonEncode({'exe': exe, 'args': args});
+  ///
+  /// `cwd` sets the working directory of the child — required for
+  /// bxp-cli runs so relative `data_dir` paths in the user's config
+  /// resolve against the config file rather than bxp-gui's own CWD.
+  /// `bufSize` controls the response-buffer allocation; default is
+  /// large enough for `bxp-fmt --docs` / `--config` payloads but
+  /// streaming runs should pass [largeBufSize] (~64 MB) so the cap
+  /// doesn't truncate big NDJSON dumps.
+  BridgeResult run(
+    String exe,
+    List<String> args, {
+    String? cwd,
+    int bufSize = defaultBufSize,
+  }) {
+    final request = jsonEncode({
+      'exe': exe,
+      'args': args,
+      if (cwd != null && cwd.isNotEmpty) 'cwd': cwd,
+    });
     final requestPtr = request.toNativeUtf8();
     final responseBuf = malloc.allocate<Uint8>(bufSize);
 

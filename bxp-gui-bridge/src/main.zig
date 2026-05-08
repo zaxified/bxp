@@ -20,18 +20,27 @@ const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
 
-/// Hard cap on combined stdout+stderr per call. ~30 KB --docs is the
-/// largest realistic payload today; 4 MB leaves headroom for big
-/// `--config` annotations or future commands without giving runaway
-/// children unbounded RAM.
-const max_output_bytes: usize = 4 * 1024 * 1024;
+/// Hard cap on combined stdout+stderr per call. Large enough to hold
+/// a full dry-run NDJSON stream for most realistic datasets without
+/// tripping the cap (one event per CSV row, ~200 B each → ~64 MB
+/// covers ~300 K rows). bxp-fmt outputs (--docs ~30 KB, --config ~MB)
+/// are well below this. The buffer is only allocated for the duration
+/// of one bridge_run call and freed when the response is written, so
+/// the steady-state RAM cost is zero.
+const max_output_bytes: usize = 64 * 1024 * 1024;
 
 /// Request shape: which executable to run with which arguments.
 /// Caller (Dart) is responsible for resolving the absolute path to
 /// bxp-fmt.exe / bxp-cli.exe; we don't probe PATH.
+///
+/// `cwd` is optional — when non-null the child runs with that working
+/// directory. Used by the streaming dry-run path so relative
+/// `data_dir` entries in the user's config resolve against the config
+/// file's directory instead of bxp-gui's own CWD (Program Files).
 const Request = struct {
     exe: []const u8,
     args: []const []const u8 = &.{},
+    cwd: ?[]const u8 = null,
 };
 
 /// Response shape mirrors dart:io ProcessResult conceptually:
@@ -103,6 +112,9 @@ export fn bridge_run(
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
     child.stdin_behavior = .Close;
+    if (req.cwd) |cwd| {
+        if (cwd.len > 0) child.cwd = cwd;
+    }
     // Suppress the briefly-visible cmd.exe window that Windows pops up
     // when a GUI parent (bxp-gui.exe) spawns a console-subsystem child
     // (bxp-fmt.exe). On non-Windows the field is a no-op. Maps to the
