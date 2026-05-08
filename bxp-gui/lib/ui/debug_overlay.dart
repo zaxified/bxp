@@ -57,6 +57,18 @@ class _CounterOverlayState extends State<CounterOverlay> {
   int _buildUsLastSec = 0;
   int _rasterUsLastSec = 0;
 
+  // TraceStore notifyListeners() counter. We register as a plain
+  // listener — the callback is called once per notifyListeners() call.
+  // _notifyThisSec / _notifyThisFrame bump on every callback;
+  // _onFrame / _tick drain them to last-bucket values for display.
+  // _peakNotifyPerFrame is max-ever, like _peakPePerFrame, so the
+  // user can see the worst burst even after the storm subsides.
+  TraceStore? _store;
+  int _notifyThisSec = 0;
+  int _notifyThisFrame = 0;
+  int _notifyLastSec = 0;
+  int _peakNotifyPerFrame = 0;
+
   Timer? _ticker;
 
   @override
@@ -68,10 +80,30 @@ class _CounterOverlayState extends State<CounterOverlay> {
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Pick up the TraceStore once it's available in the inherited tree.
+    // Provider.of with listen:false avoids a rebuild subscription —
+    // we attach a manual addListener that just bumps counters.
+    final store = Provider.of<TraceStore>(context, listen: false);
+    if (!identical(store, _store)) {
+      _store?.removeListener(_onStoreNotify);
+      _store = store;
+      _store!.addListener(_onStoreNotify);
+    }
+  }
+
+  @override
   void dispose() {
     _ticker?.cancel();
     SchedulerBinding.instance.removeTimingsCallback(_onTimings);
+    _store?.removeListener(_onStoreNotify);
     super.dispose();
+  }
+
+  void _onStoreNotify() {
+    _notifyThisSec++;
+    _notifyThisFrame++;
   }
 
   void _onTimings(List<FrameTiming> timings) {
@@ -91,6 +123,15 @@ class _CounterOverlayState extends State<CounterOverlay> {
       if (delta > _peakPePerFrame) _peakPePerFrame = delta;
       _peThisFrameStart = binding.eventsTotal;
     }
+    // Snapshot notify-per-frame burst before the next inter-frame
+    // notify cascade starts. _notifyThisFrame is bumped by
+    // _onStoreNotify between frames; here we record the worst-ever
+    // value (analogous to _peakPePerFrame) and reset for the next
+    // frame's count.
+    if (_notifyThisFrame > _peakNotifyPerFrame) {
+      _peakNotifyPerFrame = _notifyThisFrame;
+    }
+    _notifyThisFrame = 0;
   }
 
   void _tick() {
@@ -117,6 +158,8 @@ class _CounterOverlayState extends State<CounterOverlay> {
       _rasterUsLastSec = _rasterUsThisSec;
       _buildUsThisSec = 0;
       _rasterUsThisSec = 0;
+      _notifyLastSec = _notifyThisSec;
+      _notifyThisSec = 0;
       // Don't reset peak — show the all-time max so the user can see
       // their worst burst even after motion stops.
     });
@@ -160,6 +203,8 @@ class _CounterOverlayState extends State<CounterOverlay> {
                 style: mono),
             Text('rastr: ${(_rasterUsLastSec / 1000).toStringAsFixed(1)} ms',
                 style: mono),
+            Text('notif: $_notifyLastSec /s', style: mono),
+            Text('npeak: $_peakNotifyPerFrame /f', style: mono),
             const SizedBox(height: 2),
             Text('tap → debug panel', style: mono.copyWith(fontSize: 9)),
           ],
