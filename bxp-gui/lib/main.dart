@@ -12,6 +12,7 @@ import 'store/trace_store.dart';
 import 'ui/components/update_dialog.dart';
 import 'ui/debug_overlay.dart';
 import 'ui/main_view.dart';
+import 'ui/shader_warmup.dart';
 import 'ui/theme/bxp_theme.dart';
 import 'ui/theme/bxp_theme_animator.dart';
 import 'ui/zoom_limits.dart';
@@ -37,6 +38,14 @@ void main() {
   // together inside the guarded zone avoids the diagnostic and lets
   // async errors fall through to the zone error handler.
   runZonedGuarded(() {
+    // Pre-compile the Skia shader programs BXP uses on every screen so
+    // the (~100-300 ms) compile cost is paid once at startup instead of
+    // as scattered jank during the user's first interactions. Must run
+    // BEFORE the binding init below — `PaintingBinding.initInstances`
+    // dispatches the warm-up, and that fires from the first
+    // `WidgetsBinding.instance` construction in `DebugBinding()`.
+    PaintingBinding.shaderWarmUp = const BxpShaderWarmUp();
+
     // Custom binding that intercepts pointer events for the freeze
     // investigation (live counters + middle/right-button block +
     // hover throttle). Behaves identically to WidgetsFlutterBinding
