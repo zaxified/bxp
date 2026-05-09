@@ -1,0 +1,5 @@
+time=2026-05-08T17:23:18.469840
+BXP_DIAGNOSTIC=1
+marker_exists=false
+platform=windows "Windows 10 Pro" 10.0 (Build 19045)
+---

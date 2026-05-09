@@ -1,0 +1,22 @@
+{"t":"2026-05-08T14:46:15.170814Z","kind":"startup","platform":"windows","os_version":"\"Windows 10 Pro\" 10.0 (Build 19045)","dart_version":"3.11.5 (stable) (Wed Apr 15 00:36:32 2026 -0700) on \"windows_x64\"","executable":"C:\\Users\\<user>\\workspace\\bxp\\bxp-gui\\build\\windows\\x64\\runner\\Release\\bxp-gui.exe","locale":"cs_CZ","cwd":"C:\\Users\\<user>\\workspace\\bxp\\bxp-gui"}
+{"t":"2026-05-08T14:46:15.350797Z","kind":"action.validateExpr","len":44}
+{"t":"2026-05-08T14:46:15.839254Z","kind":"gpu","controllers":[{"Name":"Microsoft Remote Display Adapter","DriverVersion":"10.0.19041.5794","DriverDate":"/Date(1150848000000)/","AdapterCompatibility":"Microsoft","VideoProcessor":null,"AdapterRAM":null,"CurrentRefreshRate":32,"CurrentHorizontalResolution":1920,"CurrentVerticalResolution":1080},{"Name":"VMware SVGA 3D","DriverVersion":"9.17.11.1","DriverDate":"/Date(1752624000000)/","AdapterCompatibility":"Broadcom Inc.","VideoProcessor":"VMware Virtual SVGA 3D Graphics Adapter","AdapterRAM":268435456,"CurrentRefreshRate":60,"CurrentHorizontalResolution":1920,"CurrentVerticalResolution":1080}]}
+{"t":"2026-05-08T14:46:16.172400Z","kind":"frame","fps":1,"build_ms":4.04,"raster_ms":109.75,"pe":0,"pe_fwd":0,"scroll":0,"mid_btn":0}
+{"t":"2026-05-08T14:46:17.173561Z","kind":"frame","fps":6,"build_ms":60.4,"raster_ms":108.74,"pe":0,"pe_fwd":0,"scroll":0,"mid_btn":0}
+{"t":"2026-05-08T14:46:18.172227Z","kind":"frame","fps":0,"build_ms":0.0,"raster_ms":0.0,"pe":0,"pe_fwd":0,"scroll":0,"mid_btn":0}
+{"t":"2026-05-08T14:46:19.172972Z","kind":"frame","fps":2,"build_ms":2.2,"raster_ms":17.36,"pe":0,"pe_fwd":0,"scroll":0,"mid_btn":0}
+{"t":"2026-05-08T14:46:20.172031Z","kind":"frame","fps":0,"build_ms":0.0,"raster_ms":0.0,"pe":0,"pe_fwd":0,"scroll":0,"mid_btn":0}
+{"t":"2026-05-08T14:46:21.173219Z","kind":"frame","fps":2,"build_ms":1.25,"raster_ms":3.56,"pe":21,"pe_fwd":21,"scroll":0,"mid_btn":0}
+{"t":"2026-05-08T14:46:22.172194Z","kind":"frame","fps":2,"build_ms":1.29,"raster_ms":3.15,"pe":34,"pe_fwd":34,"scroll":0,"mid_btn":0}
+{"t":"2026-05-08T14:46:23.172199Z","kind":"frame","fps":0,"build_ms":0.0,"raster_ms":0.0,"pe":0,"pe_fwd":0,"scroll":0,"mid_btn":0}
+{"t":"2026-05-08T14:46:24.172097Z","kind":"frame","fps":2,"build_ms":1.47,"raster_ms":3.61,"pe":0,"pe_fwd":0,"scroll":0,"mid_btn":0}
+{"t":"2026-05-08T14:46:25.173534Z","kind":"frame","fps":0,"build_ms":0.0,"raster_ms":0.0,"pe":0,"pe_fwd":0,"scroll":0,"mid_btn":0}
+{"t":"2026-05-08T14:46:26.173427Z","kind":"frame","fps":2,"build_ms":1.0,"raster_ms":4.05,"pe":0,"pe_fwd":0,"scroll":0,"mid_btn":0}
+{"t":"2026-05-08T14:46:27.173380Z","kind":"frame","fps":0,"build_ms":0.0,"raster_ms":0.0,"pe":0,"pe_fwd":0,"scroll":0,"mid_btn":0}
+{"t":"2026-05-08T14:46:28.172120Z","kind":"frame","fps":2,"build_ms":3.66,"raster_ms":3.69,"pe":42,"pe_fwd":42,"scroll":0,"mid_btn":0}
+{"t":"2026-05-08T14:46:29.173144Z","kind":"frame","fps":0,"build_ms":0.0,"raster_ms":0.0,"pe":48,"pe_fwd":48,"scroll":0,"mid_btn":0}
+{"t":"2026-05-08T14:46:30.172272Z","kind":"frame","fps":2,"build_ms":1.56,"raster_ms":3.08,"pe":0,"pe_fwd":0,"scroll":0,"mid_btn":0}
+{"t":"2026-05-08T14:46:31.172282Z","kind":"frame","fps":0,"build_ms":0.0,"raster_ms":0.0,"pe":25,"pe_fwd":25,"scroll":0,"mid_btn":0}
+{"t":"2026-05-08T14:46:32.173130Z","kind":"frame","fps":2,"build_ms":1.71,"raster_ms":4.18,"pe":11,"pe_fwd":11,"scroll":0,"mid_btn":0}
+{"t":"2026-05-08T14:46:33.172120Z","kind":"frame","fps":0,"build_ms":0.0,"raster_ms":0.0,"pe":0,"pe_fwd":0,"scroll":0,"mid_btn":0}
+{"t":"2026-05-08T14:46:34.173108Z","kind":"frame","fps":2,"build_ms":1.6,"raster_ms":6.78,"pe":0,"pe_fwd":0,"scroll":0,"mid_btn":0}

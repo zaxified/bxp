@@ -38,3 +38,75 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  # Bundled Inter (primary) + Roboto (fallback) — single source of
+  # truth for text metrics across Linux/macOS/Windows. Without these,
+  # each platform falls back to its own system sans (DejaVu / SF Pro /
+  # Segoe UI) with different glyph widths, and fixed-width slots tuned
+  # on one platform overflow on another.
+  #
+  # Inter ships as one variable TTF (~880 KB) carrying the full weight
+  # axis (100–900); Flutter picks the right weight at render time via
+  # OpenType variations. Roboto is the declared fallback in
+  # `bxp_text_scheme.dart` for glyphs Inter would miss; it ships as
+  # five static files (one per weight we use: 300/400/500/600/700)
+  # because the canonical Roboto distribution doesn't ship as a
+  # plain-weight variable — Roboto Flex is variable but ~1.8 MB and
+  # carries axes we don't use.
+  #
+  # Source: github.com/rsms/inter (Inter, OFL-1.1) and
+  # fonts.google.com/specimen/Roboto (Roboto, Apache-2.0).
+  fonts:
+    - family: Inter
+      fonts:
+        # Same variable file repeated per weight so Flutter's font
+        # matcher resolves InterVariable for every weight we use
+        # (300/400/500/600/700). Without explicit `weight:` entries
+        # the matcher uses the file only for FontWeight.normal (400)
+        # and falls back to the family fallback chain for everything
+        # else, which on Windows means Segoe UI for w500/w600 labels
+        # — exactly the platform-specific metric we are bundling
+        # Inter to avoid. Flutter dedupes the file in the bundle so
+        # repeating the asset path doesn't grow the binary.
+        - asset: fonts/InterVariable.ttf
+          weight: 300
+        - asset: fonts/InterVariable.ttf
+          weight: 400
+        - asset: fonts/InterVariable.ttf
+          weight: 500
+        - asset: fonts/InterVariable.ttf
+          weight: 600
+        - asset: fonts/InterVariable.ttf
+          weight: 700
+    - family: Noto Sans
+      fonts:
+        # Static hinted weights — matches the file shipped by Debian's
+        # `fonts-noto-core` package (`/usr/share/fonts/truetype/noto/
+        # NotoSans-{Light,Regular,Medium,SemiBold,Bold}.ttf`). The whole
+        # bundling exercise was so the layout — tuned on Linux against
+        # exactly this file — would render with the same metrics on
+        # Windows; using the upstream variable build instead trades
+        # disk for "almost the same" glyph widths and breaks fixed-
+        # width slots by a couple of pixels per word. Hinted upstream
+        # from notofonts/latin-greek-cyrillic v2.015 hinted/ttf/.
+        - asset: fonts/NotoSans-Light.ttf
+          weight: 300
+        - asset: fonts/NotoSans-Regular.ttf
+          weight: 400
+        - asset: fonts/NotoSans-Medium.ttf
+          weight: 500
+        - asset: fonts/NotoSans-SemiBold.ttf
+          weight: 600
+        - asset: fonts/NotoSans-Bold.ttf
+          weight: 700
+    - family: Roboto
+      fonts:
+        - asset: fonts/Roboto-Light.ttf
+          weight: 300
+        - asset: fonts/Roboto-Regular.ttf
+          weight: 400
+        - asset: fonts/Roboto-Medium.ttf
+          weight: 500
+        - asset: fonts/Roboto-SemiBold.ttf
+          weight: 600
+        - asset: fonts/Roboto-Bold.ttf
+          weight: 700

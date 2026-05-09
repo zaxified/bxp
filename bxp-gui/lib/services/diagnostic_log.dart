@@ -4,15 +4,31 @@ import 'dart:io';
 
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/widgets.dart';
+import 'package:provider/provider.dart';
 
+import '../store/trace_store.dart';
+import 'bxp_process_client.dart';
 import 'debug_binding.dart';
+import 'debug_settings.dart';
 
 /// Opt-in NDJSON diagnostic log for the Windows freeze investigation.
 ///
-/// Activated by setting `BXP_DIAGNOSTIC=1` in the environment before
-/// launch. When inactive, every `log()` call is a single env-var-already-
-/// resolved null check and returns immediately, so adding hooks across
-/// the codebase costs nothing in default builds.
+/// Activated at launch by any of:
+///   1. `BXP_DIAGNOSTIC=1` environment variable.
+///   2. Existence of marker file `<prefs-dir>/.bxp-diagnostic`.
+///   3. Equivalent — the SettingsInspector master switch writes (and
+///      deletes) the marker, then auto-restarts the binary.
+///
+/// All three paths flip the same gate, so the behaviour is identical
+/// regardless of how the user (or developer) activates it. The native
+/// `DiagInit` in `windows/runner/win32_window.cpp` honours the same
+/// (1) + (2) — it must, otherwise toggling the switch would only
+/// produce the NDJSON and miss the native + engine stderr logs that
+/// require boot-time hooking.
+///
+/// When inactive, every `log()` call is a single null-check and
+/// returns immediately, so adding hooks across the codebase costs
+/// nothing in default builds.
 ///
 /// Output:   `<prefs-dir>/diagnostic-YYYYMMDD-HHMMSS.ndjson`
 ///   - Linux:   `~/.local/share/bxp-gui/`
@@ -51,13 +67,39 @@ class DiagnosticLog {
   static bool get isEnabled => _sink != null;
   static String? get path => _path;
 
-  /// Initialize the log if `BXP_DIAGNOSTIC=1` is set. Returns `true`
-  /// when activation succeeded, `false` otherwise (env var unset, dir
-  /// creation failed, ...). Safe to call repeatedly.
+  /// Path to the marker file whose existence activates diagnostic mode
+  /// at the next launch. The SettingsInspector master switch writes
+  /// (and deletes) this file so end-users don't have to know about
+  /// `BXP_DIAGNOSTIC=1` to capture a freeze report.
+  static String get markerPath =>
+      '${_resolveDir()}${Platform.pathSeparator}.bxp-diagnostic';
+
+  static Future<bool> markerExists() => File(markerPath).exists();
+
+  /// Create or remove the marker file. The file is empty — only its
+  /// existence matters. Creates the prefs dir if missing. Best-effort:
+  /// callers should surface failure via UI if user feedback matters.
+  static Future<void> setMarker(bool enabled) async {
+    final dir = _resolveDir();
+    try {
+      if (enabled) {
+        await Directory(dir).create(recursive: true);
+        await File(markerPath).writeAsString('');
+      } else {
+        final f = File(markerPath);
+        if (await f.exists()) await f.delete();
+      }
+    } catch (_) {
+      // ignored — callers can detect via subsequent markerExists().
+    }
+  }
+
+  /// Initialize the log if `BXP_DIAGNOSTIC=1` is set or the marker
+  /// file `$prefs-dir/.bxp-diagnostic` exists. Returns `true` when
+  /// activation succeeded, `false` otherwise. Safe to call repeatedly.
   ///
-  /// Must run AFTER any Flutter binding is initialized but BEFORE
-  /// [wireFrameTimings] — the latter pokes [SchedulerBinding] which
-  /// requires a binding to exist.
+  /// Must run AFTER any Flutter binding is initialized — the activation
+  /// path goes through [start] which pokes [SchedulerBinding].
   static Future<bool> tryInit() async {
     if (_sink != null) return true;
 
@@ -66,29 +108,31 @@ class DiagnosticLog {
     final markerPath =
         '$dirPath${Platform.pathSeparator}.bxp-diagnostic';
 
-    // Always write a probe file so we can diagnose silent failures of
-    // env-var propagation. Append-only so multiple launches accumulate.
-    try {
-      await Directory(dirPath).create(recursive: true);
-      await File('$dirPath${Platform.pathSeparator}diagnostic-probe.txt')
-          .writeAsString(
-        'time=${DateTime.now().toIso8601String()}\n'
-        'BXP_DIAGNOSTIC=${envValue ?? '<unset>'}\n'
-        'marker_exists=${File(markerPath).existsSync()}\n'
-        'platform=${Platform.operatingSystem} ${Platform.operatingSystemVersion}\n'
-        '---\n',
-        mode: FileMode.append,
-      );
-    } catch (_) {
-      // probe is best-effort; don't block init on probe failure.
-    }
-
     // Activation: env var = '1' OR marker file exists. Marker is a
     // fallback for environments where env-var propagation is awkward
     // (some launchers, double-click via shortcut, etc.).
     final markerExists = File(markerPath).existsSync();
     if (envValue != '1' && !markerExists) return false;
 
+    return await start();
+  }
+
+  /// Open a fresh diagnostic log file and wire frame timings + the
+  /// 1-second heartbeat. Skips the env-var / marker check that
+  /// [tryInit] performs — used by SettingsInspector when the user
+  /// flips the master "Diagnostic mode" switch mid-session. Returns
+  /// `true` on success, `false` if the directory or file could not be
+  /// created. Idempotent (calling twice is a no-op when already
+  /// running).
+  static Future<bool> start() async {
+    if (_sink != null) return true;
+
+    final dirPath = _resolveDir();
+    try {
+      await Directory(dirPath).create(recursive: true);
+    } catch (_) {
+      return false;
+    }
     final ts = _timestamp();
     _path = '$dirPath${Platform.pathSeparator}diagnostic-$ts.ndjson';
     try {
@@ -98,14 +142,19 @@ class DiagnosticLog {
       return false;
     }
     _bytesWritten = 0;
-    return true;
-  }
 
-  /// Subscribe to [SchedulerBinding] frame timings and start the 1 s
-  /// heartbeat that emits `frame` events combining build/raster
-  /// durations with [DebugBinding] pointer counters.
-  static void wireFrameTimings() {
-    if (_sink == null) return;
+    // One-line "this is a fresh session" header so log parsers can
+    // tell back-to-back trace files apart even when filenames clash
+    // on filesystems that round timestamps.
+    log('startup', {
+      'platform': Platform.operatingSystem,
+      'os_version': Platform.operatingSystemVersion,
+      'dart_version': Platform.version,
+      'executable': Platform.resolvedExecutable,
+      'locale': Platform.localeName,
+      'cwd': Directory.current.path,
+    });
+
     SchedulerBinding.instance.addTimingsCallback(_onTimings);
     _heartbeatTimer ??= Timer.periodic(
       const Duration(seconds: 1),
@@ -114,6 +163,41 @@ class DiagnosticLog {
     // Best-effort GPU enumeration. Async, fire-and-forget; result
     // appears in the log a couple of seconds after startup.
     unawaited(_captureGpuInfo());
+
+    DebugSettings.instance
+        .setDiagnosticTraceState(active: true, path: _path);
+    return true;
+  }
+
+  /// Stop the live trace: flush + close the file, remove the timings
+  /// callback, cancel the heartbeat. The next [start] call will open a
+  /// fresh file. Idempotent.
+  static Future<void> stop() async {
+    final s = _sink;
+    if (s == null) return;
+    log('shutdown', {});
+    SchedulerBinding.instance.removeTimingsCallback(_onTimings);
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = null;
+    try {
+      await s.flush();
+      await s.close();
+    } catch (_) {
+      // best effort
+    }
+    _sink = null;
+    _path = null;
+    _bytesWritten = 0;
+    _frames = 0;
+    _buildUs = 0;
+    _rasterUs = 0;
+    _prevPe = 0;
+    _prevPeFwd = 0;
+    _prevScroll = 0;
+    _prevMid = 0;
+
+    DebugSettings.instance
+        .setDiagnosticTraceState(active: false, path: null);
   }
 
   static void _onTimings(List<FrameTiming> timings) {
@@ -276,4 +360,47 @@ class DiagnosticLog {
     String p(int v, [int w = 2]) => v.toString().padLeft(w, '0');
     return '${n.year}${p(n.month)}${p(n.day)}-${p(n.hour)}${p(n.minute)}${p(n.second)}';
   }
+}
+
+/// Emit a one-shot snapshot of the current DebugSettings + TraceStore
+/// state right after the trace activates. Gives consumers a complete
+/// picture of how the GUI was configured at trace start without having
+/// to correlate with an external SettingsInspector dump. No-op when
+/// the trace is inactive. Reads the [TraceStore] from `context`'s
+/// Provider scope.
+void emitDiagnosticContextSnapshot(BuildContext context) {
+  if (!DiagnosticLog.isEnabled) return;
+  final s = DebugSettings.instance;
+  final store = Provider.of<TraceStore>(context, listen: false);
+
+  DiagnosticLog.log('settings', {
+    'overlayVisible': s.overlayVisible,
+    'tooltipsInTree': s.tooltipsInTree,
+    'hoverBackground': s.hoverBackground,
+    'hoverActionButtons': s.hoverActionButtons,
+    'useInkWell': s.useInkWell,
+    'blockMiddleButton': s.blockMiddleButton,
+    'blockRightButton': s.blockRightButton,
+    'pointerThrottleHz': s.pointerThrottleHz,
+    'bypassZoom': s.bypassZoom,
+  });
+
+  DiagnosticLog.log('runtime', {
+    'bxp_gui_version': store.bxpGuiVersion,
+    'bxp_fmt_version': store.bxpFmtVersion,
+    'bxp_cli_version': store.bxpCliVersion,
+    'bxp_fmt_path': BxpProcessClient.findBin('bxp-fmt'),
+    'bxp_cli_path': BxpProcessClient.findBin('bxp-cli'),
+    'env_BXP_FMT_PATH': Platform.environment['BXP_FMT_PATH'],
+    'env_BXP_CLI_PATH': Platform.environment['BXP_CLI_PATH'],
+    'config_path': store.configPath,
+    'config_dirty': store.isDirty,
+    'config_has_errors': store.configHasErrors,
+    'config_load_had_errors': store.configLoadHadErrors,
+    'fs_check_slow': store.fsCheckSlow,
+    'status': store.status.name,
+    'last_exit_code': store.lastExitCode,
+    'theme_preset': store.themePresetName,
+    'zoom': store.zoom,
+  });
 }

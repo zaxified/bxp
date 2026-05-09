@@ -4,9 +4,10 @@ import 'package:flutter/foundation.dart';
 /// All defaults match the production GUI baseline (everything on, no
 /// pointer filtering) so a fresh build behaves the same as v0.2.x.
 ///
-/// The user opens [DebugPanelDialog] via Ctrl+Shift+D and flips toggles
-/// to bisect which feature the freeze depends on. Counters live in
-/// [CounterOverlay] (always visible, bottom-right corner). Pointer-event
+/// The user opens the SettingsInspector via Ctrl+Shift+S; the Debug
+/// section there hosts the master "Diagnostic mode" switch (which
+/// controls both the floating [CounterOverlay] and the file-backed
+/// `DiagnosticLog`) plus per-feature investigation gates. Pointer-event
 /// filtering happens in [DebugBinding].
 ///
 /// Singleton because the binding overrides need access from a place
@@ -15,6 +16,45 @@ import 'package:flutter/foundation.dart';
 class DebugSettings extends ChangeNotifier {
   static final DebugSettings instance = DebugSettings._();
   DebugSettings._();
+
+  // ── Diagnostic mode (overlay + trace) ────────────────────────────────
+
+  /// Whether the floating [CounterOverlay] is rendered. Default OFF —
+  /// flipped on by the master "Diagnostic mode" switch in
+  /// SettingsInspector, or automatically on activation via
+  /// `BXP_DIAGNOSTIC=1` / marker file at startup.
+  bool _overlayVisible = false;
+  bool get overlayVisible => _overlayVisible;
+  set overlayVisible(bool v) {
+    if (_overlayVisible == v) return;
+    _overlayVisible = v;
+    notifyListeners();
+  }
+
+  /// Mirror of `DiagnosticLog.isEnabled`. The log itself is the source
+  /// of truth (only it knows whether the file open succeeded); we
+  /// shadow the state here so the SettingsInspector can react via the
+  /// existing ChangeNotifier wiring without subscribing separately.
+  /// Updated by `DiagnosticLog.start` / `DiagnosticLog.stop`.
+  bool _diagnosticTraceActive = false;
+  bool get diagnosticTraceActive => _diagnosticTraceActive;
+  String? _diagnosticTracePath;
+  String? get diagnosticTracePath => _diagnosticTracePath;
+
+  void setDiagnosticTraceState({required bool active, String? path}) {
+    if (_diagnosticTraceActive == active &&
+        _diagnosticTracePath == path) {
+      return;
+    }
+    _diagnosticTraceActive = active;
+    _diagnosticTracePath = path;
+    notifyListeners();
+  }
+
+  /// True when both the overlay and the file trace are active. The
+  /// SettingsInspector's master switch reads this and toggles both
+  /// at once.
+  bool get diagnosticMode => _overlayVisible && _diagnosticTraceActive;
 
   // ── Tree feature gates (production defaults: ON) ─────────────────────
 

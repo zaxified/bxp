@@ -121,6 +121,15 @@ class PrefsService {
     await _flush();
   }
 
+  /// Persist an integer and flush. Written to JSON as a bare integer
+  /// ("80"), not "80.0" — used by the zoom field where keeping the
+  /// on-disk value in clean integer percent units is the whole point
+  /// of storing it as `int` in memory.
+  Future<void> setInt(String key, int value) async {
+    _data[key] = value;
+    await _flush();
+  }
+
   /// Persist a string list and flush to disk atomically via a tmp rename.
   Future<void> setStringList(String key, List<String> value) async {
     _data[key] = value;
@@ -167,7 +176,33 @@ class PrefsService {
   /// real prefs file is never left half-written even if the app crashes
   /// between the write and the rename. The `.tmp` file is collected by
   /// the next successful flush if a previous flush was interrupted.
+  ///
+  /// Defensive merge: before writing, fold any keys that exist on disk
+  /// but are missing from the in-memory `_data` back into the map. The
+  /// constructor of `TraceStore` calls `_init()` without awaiting, so
+  /// `_prefs.load()` may still be running when an early
+  /// `setZoom(...)` / `setThemePreset(...)` fires from a postFrame
+  /// auto-clamp on a high-DPI screen — in that window, `_data` is
+  /// still empty (initial value), and a naïve flush would truncate
+  /// the existing on-disk file down to whatever single key the early
+  /// setter wrote. Reading the disk state here and unioning with
+  /// in-memory keys (in-memory wins on conflicts) makes the flush
+  /// safe regardless of init order. Cost is one extra read per
+  /// flush; flushes happen on user actions (theme cycle, zoom
+  /// change, recent files mutation) and are not hot-path.
   Future<void> _flush() async {
+    if (await _file.exists()) {
+      try {
+        final decoded = jsonDecode(await _file.readAsString());
+        if (decoded is Map<String, dynamic>) {
+          for (final entry in decoded.entries) {
+            _data.putIfAbsent(entry.key, () => entry.value);
+          }
+        }
+      } catch (_) {
+        // disk is unparseable — fall back to writing in-memory only.
+      }
+    }
     final tmp = File('${_file.path}.tmp');
     await tmp.writeAsString(jsonEncode(_data), flush: true);
     await tmp.rename(_file.path);

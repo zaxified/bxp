@@ -1,11 +1,14 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:json5_ast/ast.dart';
 import 'package:provider/provider.dart';
 
 import '../services/bxp_process_client.dart';
+import '../services/debug_settings.dart';
+import '../services/diagnostic_log.dart';
 import '../store/trace_store.dart';
 import 'layout_defaults.dart';
 import 'theme/bxp_theme.dart';
@@ -230,6 +233,460 @@ class _Body extends StatelessWidget {
         children: [
           for (final (title, rows) in sections)
             _SectionTable(title: title, rows: rows),
+          const _DebugSection(),
+        ],
+      ),
+    );
+  }
+}
+
+/// Master switch handler for the Diagnostic mode toggle. Confirms with
+/// the user (because the action restarts the app), saves any pending
+/// edits if the config is clean enough to save, flips the activation
+/// marker file, then spawns a fresh detached instance of the binary
+/// before exiting the current process.
+///
+/// In debug-mode dev runs (`flutter run`), `Platform.resolvedExecutable`
+/// points at a tooling shim, not at our exe — restarting it would
+/// either re-launch the wrong thing or fail silently. Detect that case
+/// and just toggle the marker, leaving the user to do their own hot
+/// restart.
+Future<void> _toggleDiagnosticMode(BuildContext context, bool enable) async {
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: Text(enable
+          ? 'Enable diagnostic mode?'
+          : 'Disable diagnostic mode?'),
+      content: Text(
+        enable
+            ? 'The app will restart so the diagnostic capture covers the '
+                'engine boot path (Dart NDJSON, native Win32 messages, '
+                'engine stderr cascade). Unsaved changes will be saved '
+                'first if the config is valid.'
+            : 'The app will restart to disable diagnostic capture. '
+                'Unsaved changes will be saved first if the config is '
+                'valid.',
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(ctx).pop(false),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(ctx).pop(true),
+          child: const Text('Restart'),
+        ),
+      ],
+    ),
+  );
+  if (confirmed != true) return;
+  if (!context.mounted) return;
+
+  final store = context.read<TraceStore>();
+  if (store.isDirty &&
+      !store.configHasErrors &&
+      !store.configLoadHadErrors &&
+      !store.isSaving) {
+    await store.saveConfig();
+  }
+
+  await DiagnosticLog.setMarker(enable);
+
+  // `Platform.resolvedExecutable` is reliable in release; in debug
+  // (`flutter run`) it points at the dart/flutter tooling shim, which
+  // we can detect by the kDebugMode flag. Skip the auto-restart there
+  // — the marker still flips, the user can hot-restart manually.
+  if (kDebugMode) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(
+          enable
+              ? 'Marker created. Restart the app to capture full '
+                  'diagnostic from boot.'
+              : 'Marker removed. Restart the app for a clean session.',
+        ),
+        duration: const Duration(seconds: 4),
+      ));
+    }
+    return;
+  }
+
+  try {
+    await Process.start(
+      Platform.resolvedExecutable,
+      const <String>[],
+      mode: ProcessStartMode.detached,
+    );
+  } catch (_) {
+    // Spawn failed — fall back to leaving the marker flipped and
+    // surfacing a notice. User can restart manually.
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(
+          'Could not relaunch automatically. '
+          'Marker is ${enable ? "set" : "cleared"}; close and reopen '
+          'the app to apply.',
+        ),
+        duration: const Duration(seconds: 5),
+      ));
+    }
+    return;
+  }
+  exit(0);
+}
+
+/// Interactive Debug section — master "Diagnostic mode" switch (overlay
+/// + file trace), the freeze-investigation feature gates, and a stress
+/// button. Lives at the bottom of the SettingsInspector body so the
+/// table-driven info above stays free of Material inputs that don't fit
+/// the IntrinsicColumnWidth grid.
+class _DebugSection extends StatelessWidget {
+  const _DebugSection();
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.bxpTheme;
+    final s = context.watch<DebugSettings>();
+    final store = context.watch<TraceStore>();
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(bottom: 4),
+            child: Text('DEBUG', style: BxpText.label(context)),
+          ),
+          // Live text-scheme switcher — used to compare bundled Inter
+          // vs. bundled Roboto without rebuilding. Both are registered
+          // in `pubspec.yaml`; switching here changes the active scheme
+          // immediately via TraceStore.setTextScheme + notifyListeners
+          // and persists under `bxp-ui.textScheme`.
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8, top: 2),
+            child: Row(
+              children: [
+                Text('Font scheme:',
+                    style: BxpText.body(context, color: t.textMuted)),
+                const SizedBox(width: 8),
+                for (final name in const ['noto', 'roboto', 'inter'])
+                  Padding(
+                    padding: const EdgeInsets.only(right: 6),
+                    child: GestureDetector(
+                      onTap: () => store.setTextScheme(name),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: store.textSchemeName == name
+                              ? t.accentHighlight.withValues(alpha: 0.2)
+                              : Colors.transparent,
+                          border: Border.all(
+                            color: store.textSchemeName == name
+                                ? t.accentHighlight
+                                : t.borderColor,
+                          ),
+                        ),
+                        child: Text(
+                          name,
+                          style: BxpText.body(context,
+                              color: store.textSchemeName == name
+                                  ? t.textPrimary
+                                  : t.textMuted),
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          // ── Master switch: overlay + file trace ─────────────────────
+          //
+          // Toggling the switch flips the persistent activation marker
+          // and restarts the binary so the diagnostic capture covers
+          // EVERY layer — Dart NDJSON, native Win32 messages, and the
+          // engine stderr (D3D11/EGL cascade). Mid-session activation
+          // would miss the engine boot path where most freeze triggers
+          // originate, and end-users can't reliably set environment
+          // variables, so the restart is the simplest sound flow.
+          _DebugSwitchRow(
+            label: 'Diagnostic mode',
+            subtitle:
+                'Writes NDJSON + native + engine logs to %APPDATA%\\'
+                'bxp-gui\\diagnostic-*; shows the live counter overlay. '
+                'Toggling restarts the app.',
+            value: s.diagnosticTraceActive,
+            onChanged: (v) => _toggleDiagnosticMode(context, v),
+          ),
+          if (s.diagnosticTraceActive && s.diagnosticTracePath != null)
+            Padding(
+              padding: const EdgeInsets.only(left: 56, top: 2, bottom: 4),
+              child: SelectableText(
+                s.diagnosticTracePath!,
+                style: BxpText.body(context,
+                    color: t.textMuted, size: BxpSize.xs),
+              ),
+            ),
+          const SizedBox(height: 8),
+          _Subheader('Investigation toggles'),
+          _DebugCheckRow(
+            label: 'Tooltips on tree keys',
+            subtitle: 'Material Tooltip wrapping each schema key',
+            value: s.tooltipsInTree,
+            onChanged: (v) => s.tooltipsInTree = v,
+          ),
+          _DebugCheckRow(
+            label: 'Hover background highlight',
+            subtitle: 'Per-row setState on mouse enter/exit',
+            value: s.hoverBackground,
+            onChanged: (v) => s.hoverBackground = v,
+          ),
+          _DebugCheckRow(
+            label: 'Hover-driven action buttons',
+            subtitle: '↑↓× appear when hovered (vs. never mounted)',
+            value: s.hoverActionButtons,
+            onChanged: (v) => s.hoverActionButtons = v,
+          ),
+          _DebugCheckRow(
+            label: 'InkWell on expandable rows',
+            subtitle: 'Material ripple + hover; off uses GestureDetector',
+            value: s.useInkWell,
+            onChanged: (v) => s.useInkWell = v,
+          ),
+          const SizedBox(height: 8),
+          _Subheader('Pointer event filters'),
+          _DebugCheckRow(
+            label: 'Block middle mouse button',
+            subtitle: 'Drop events whose button mask includes middle',
+            value: s.blockMiddleButton,
+            onChanged: (v) => s.blockMiddleButton = v,
+          ),
+          _DebugCheckRow(
+            label: 'Block right mouse button',
+            subtitle: 'Drop events whose button mask includes secondary',
+            value: s.blockRightButton,
+            onChanged: (v) => s.blockRightButton = v,
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            child: Row(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: Text('Hover throttle:',
+                      style: BxpText.body(context,
+                          color: t.textPrimary, size: BxpSize.sm)),
+                ),
+                for (final hz in const [0, 60, 30, 15])
+                  Padding(
+                    padding: const EdgeInsets.only(right: 4),
+                    child: ChoiceChip(
+                      label: Text(hz == 0 ? 'off' : '${hz}Hz'),
+                      selected: s.pointerThrottleHz == hz,
+                      onSelected: (_) => s.pointerThrottleHz = hz,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+          _Subheader('Render pipeline'),
+          _DebugCheckRow(
+            label: 'Disable Ctrl+/− zoom',
+            subtitle:
+                'Off (default): Transform.scale wraps the app, '
+                'Ctrl+/− changes zoom. On: paint at native resolution, '
+                'no scaling layer — used to isolate compositor cost.',
+            value: s.bypassZoom,
+            onChanged: (v) => s.bypassZoom = v,
+          ),
+          const SizedBox(height: 8),
+          _Subheader('Stress test'),
+          const _StressButton(),
+        ],
+      ),
+    );
+  }
+}
+
+class _Subheader extends StatelessWidget {
+  final String label;
+  const _Subheader(this.label);
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.bxpTheme;
+    return Padding(
+      padding: const EdgeInsets.only(top: 4, bottom: 4),
+      child: Text(
+        label,
+        style: BxpText.body(context,
+            color: t.textMuted,
+            size: BxpSize.xs,
+            weight: BxpWeight.semiBold),
+      ),
+    );
+  }
+}
+
+/// Compact inspector-style switch row. Avoids `SwitchListTile`'s built-in
+/// padding so the row aligns with the existing 16 px outer pad without
+/// double-indenting.
+class _DebugSwitchRow extends StatelessWidget {
+  final String label;
+  final String? subtitle;
+  final bool value;
+  final ValueChanged<bool> onChanged;
+  const _DebugSwitchRow({
+    required this.label,
+    this.subtitle,
+    required this.value,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.bxpTheme;
+    return InkWell(
+      onTap: () => onChanged(!value),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Switch(value: value, onChanged: onChanged),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(label,
+                      style: BxpText.body(context,
+                          color: t.textPrimary,
+                          size: BxpSize.sm,
+                          weight: BxpWeight.semiBold)),
+                  if (subtitle != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 2),
+                      child: Text(subtitle!,
+                          style: BxpText.body(context,
+                              color: t.textMuted, size: BxpSize.xs)),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Same shape as [_DebugSwitchRow] but a Checkbox + label/subtitle.
+class _DebugCheckRow extends StatelessWidget {
+  final String label;
+  final String? subtitle;
+  final bool value;
+  final ValueChanged<bool> onChanged;
+  const _DebugCheckRow({
+    required this.label,
+    this.subtitle,
+    required this.value,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.bxpTheme;
+    return InkWell(
+      onTap: () => onChanged(!value),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 2),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(
+              width: 32,
+              child: Checkbox(
+                value: value,
+                onChanged: (v) => onChanged(v ?? false),
+                visualDensity: VisualDensity.compact,
+              ),
+            ),
+            const SizedBox(width: 4),
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(label,
+                        style: BxpText.body(context,
+                            color: t.textPrimary, size: BxpSize.sm)),
+                    if (subtitle != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 1),
+                        child: Text(subtitle!,
+                            style: BxpText.body(context,
+                                color: t.textMuted, size: BxpSize.xs)),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// "Rebuild tree 100×" stress button — was the only action in the
+/// retired DebugPanelDialog. Drives `TraceStore.debugNotify` 100× with
+/// 16 ms gaps so the framework actually schedules a frame each
+/// iteration; back-to-back notifies otherwise collapse into a single
+/// dirty-mark before any frame paints.
+class _StressButton extends StatefulWidget {
+  const _StressButton();
+
+  @override
+  State<_StressButton> createState() => _StressButtonState();
+}
+
+class _StressButtonState extends State<_StressButton> {
+  bool _running = false;
+
+  Future<void> _run() async {
+    final store = context.read<TraceStore>();
+    setState(() => _running = true);
+    for (var i = 0; i < 100; i++) {
+      store.debugNotify();
+      await Future<void>.delayed(const Duration(milliseconds: 16));
+    }
+    if (!mounted) return;
+    setState(() => _running = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.bxpTheme;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          ElevatedButton(
+            onPressed: _running ? null : _run,
+            child: Text(_running ? 'running…' : 'Rebuild tree 100×'),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Watch the overlay (bottom-right): F/s drops while PE/s = 0 → '
+            'render is fragile independent of mouse input.',
+            style: BxpText.body(context,
+                color: t.textMuted, size: BxpSize.xs),
+          ),
         ],
       ),
     );

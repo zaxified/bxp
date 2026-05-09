@@ -4,6 +4,7 @@
 /// table, and annotated-JSON output spec. Run `bxp-fmt --help` for the
 /// runtime usage summary.
 const std = @import("std");
+const builtin = @import("builtin");
 const config_mod = @import("config");
 const expr_mod = @import("expr");
 const json5_mod = @import("json5");
@@ -12,6 +13,63 @@ const diagnostics_mod = @import("diagnostics");
 const build_options = @import("build_options");
 
 const CONFIG_MAX_FILE_SIZE = 1024 * 1024; // 1 MB
+
+/// Write `bytes` to stdout, handling Windows pipe-overflow correctly.
+///
+/// Why this exists: when bxp-fmt is launched as a child of bxp-gui (or
+/// any Dart `Process.run` consumer on Windows), the parent opens the
+/// stdout pipe with `FILE_FLAG_OVERLAPPED`. The kernel then returns
+/// `IO_PENDING` from `WriteFile` once the small ~4 KB pipe buffer
+/// fills, even though our handle is nominally synchronous. Zig 0.15.x
+/// std panics on this path (`std/os/windows.zig:699 IO_PENDING =>
+/// unreachable`), so any subcommand that emits more than one buffer's
+/// worth of output to a captured stdout would crash the binary with
+/// `STATUS_BREAKPOINT` partway through. `--docs` (~30 KB) reproduces
+/// this every launch.
+///
+/// Workaround: bypass `std.fs.File.write` entirely. Provide a real
+/// `OVERLAPPED` struct with an event handle on every `WriteFile` call
+/// so we can actually wait for `IO_PENDING` to complete via
+/// `WaitForSingleObject` + `GetOverlappedResult`. Outside Windows we
+/// fall back to the regular blocking write.
+fn writeAllToStdoutPipeAware(bytes: []const u8) error{WriteFailed}!void {
+    if (bytes.len == 0) return;
+    if (builtin.os.tag != .windows) {
+        std.fs.File.stdout().writeAll(bytes) catch return error.WriteFailed;
+        return;
+    }
+    const w = std.os.windows;
+    const k = w.kernel32;
+    const handle = w.GetStdHandle(w.STD_OUTPUT_HANDLE) catch return error.WriteFailed;
+
+    // Auto-reset event, initial state not-signaled. dwFlags = 0,
+    // EVENT_ALL_ACCESS = 0x1F0003.
+    const ev = k.CreateEventExW(null, null, 0, 0x1F0003) orelse return error.WriteFailed;
+    defer w.CloseHandle(ev);
+
+    var written: usize = 0;
+    while (written < bytes.len) {
+        var ovl: w.OVERLAPPED = std.mem.zeroes(w.OVERLAPPED);
+        ovl.hEvent = ev;
+        var bw: w.DWORD = 0;
+        const remaining = bytes.len - written;
+        const chunk_len: u32 = @intCast(@min(remaining, std.math.maxInt(u32)));
+        const rc = k.WriteFile(handle, bytes.ptr + written, chunk_len, &bw, &ovl);
+        if (rc == 0) {
+            const err = k.GetLastError();
+            if (err == .IO_PENDING) {
+                _ = k.WaitForSingleObject(ev, w.INFINITE);
+                if (k.GetOverlappedResult(handle, &ovl, &bw, 0) == 0) {
+                    return error.WriteFailed;
+                }
+            } else {
+                return error.WriteFailed;
+            }
+        }
+        if (bw == 0) return error.WriteFailed;
+        written += bw;
+    }
+}
 
 fn usage() void {
     std.debug.print(
@@ -227,11 +285,14 @@ fn runDocs(gpa: std.mem.Allocator) !u8 {
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
 
-    var stdout_buf: [4096]u8 = undefined;
-    var stdout_fw = std.fs.File.stdout().writer(&stdout_buf);
-    const stdout = &stdout_fw.interface;
-    try docs_mod.writeDocs(arena.allocator(), stdout);
-    try stdout.flush();
+    // Buffer the entire ~30 KB --docs JSON in memory before writing
+    // it to stdout. The single-shot dump goes through
+    // `writeAllToStdoutPipeAware`, which handles the Windows
+    // overlapped-pipe `IO_PENDING` case that std's buffered file
+    // writer panics on (see helper at the top of this file).
+    var aw: std.Io.Writer.Allocating = .init(arena.allocator());
+    try docs_mod.writeDocs(arena.allocator(), &aw.writer);
+    try writeAllToStdoutPipeAware(aw.writer.buffered());
     return 0;
 }
 

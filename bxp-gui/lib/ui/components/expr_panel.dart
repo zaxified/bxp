@@ -700,12 +700,20 @@ Color _syntaxColorFor(String kind, BxpTheme t) {
 
 
 /// Constant-width slot for the 4-state validation badge in the
-/// breadcrumb row. The label changes ("valid"/"invalid"/"checking"/—)
+/// breadcrumb row. The label changes ("VALID"/"INVALID"/"checking"/—)
 /// have different rendered widths; without a fixed envelope the
 /// surrounding breadcrumb path and ✕ button hop a few pixels with
 /// each state transition, which looks like a glitch.
 ///
-/// Width was sized to fit the longest label ("checking" at 10 px).
+/// Width is sized to fit the longest label in the bundled Inter font
+/// (see [pubspec.yaml] `flutter.fonts`) — that is the reason we bundle
+/// Inter rather than rely on the system sans: across Linux, macOS, and
+/// Windows the system fallback differs (DejaVu / SF Pro / Segoe UI),
+/// each metric a different width for "checking", and a slot tuned on
+/// one platform wraps to two lines on another. The trailing
+/// `softWrap:false`/`overflow:clip` guards make the slot resilient
+/// to a future font change too — an overflowing label gets clipped,
+/// never reflows.
 class ExprValidationBadgeSlot extends StatelessWidget {
   final ExprValidationState state;
   const ExprValidationBadgeSlot({required this.state});
@@ -720,14 +728,23 @@ class ExprValidationBadgeSlot extends StatelessWidget {
         child: switch (state) {
           ExprValidationState.ok => Text(
             'VALID',
+            maxLines: 1,
+            softWrap: false,
+            overflow: TextOverflow.clip,
             style: BxpText.label(context, color: t.okText),
           ),
           ExprValidationState.error => Text(
             'INVALID',
+            maxLines: 1,
+            softWrap: false,
+            overflow: TextOverflow.clip,
             style: BxpText.label(context, color: t.errorText),
           ),
           ExprValidationState.pending => Text(
             'checking',
+            maxLines: 1,
+            softWrap: false,
+            overflow: TextOverflow.clip,
             style: BxpText.label(context, color: t.infoText),
           ),
           ExprValidationState.idle => const SizedBox.shrink(),

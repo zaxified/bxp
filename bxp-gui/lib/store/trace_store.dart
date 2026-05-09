@@ -70,17 +70,44 @@ class TraceStore extends ChangeNotifier {
 
   // Active sans/prose typography scheme. Resolved by BxpTextScheme in
   // ui/theme/bxp_text_scheme.dart. Persisted under PrefsService key
-  // `bxp-ui.textScheme`. Default 'roboto' = Material bundled, always
-  // renders.
-  String _textSchemeName = 'roboto';
+  // `bxp-ui.textScheme`. Default 'noto' — the existing UI layout was
+  // tuned against Linux's pre-bundle build where the system sans
+  // fallback resolved to Noto; pinning the bundled Noto Sans as the
+  // default keeps fixed-width slots and label paddings intact while
+  // rendering the same metrics on Windows/macOS.
+  String _textSchemeName = 'noto';
   String get textSchemeName => _textSchemeName;
   BxpTextScheme get textScheme =>
-      bxpTextSchemes[_textSchemeName] ?? kBxpTextRoboto;
+      bxpTextSchemes[_textSchemeName] ?? kBxpTextNoto;
 
-  // Ctrl+/Ctrl-/Ctrl+wheel UI zoom factor. Persisted under `bxp-gui.zoom`
-  // so power users don't have to re-zoom after every restart.
-  double _zoom = 1.0;
-  double get zoom => _zoom;
+  // Ctrl+/Ctrl-/Ctrl+wheel UI zoom factor. Stored INTERNALLY as an
+  // integer percent (60, 80, 100, 125, …) and persisted under
+  // `bxp-gui.zoom` as the same integer. Repeated `+/- 10` bumps stay
+  // exact — `0.8 - 0.1 - 0.1` in IEEE 754 produces 0.6000000000000001
+  // because 0.1 isn't binary-exact, while `80 - 10 - 10` is just 60.
+  // The legacy double prefs (≤ v0.2) are auto-migrated on first
+  // read by [_init].
+  //
+  // The stored value is the user's INTENT at the canonical 100 % DPR
+  // baseline; the runtime divides by `MediaQuery.devicePixelRatio`
+  // before applying `Transform.scale` (see ZoomContainer in main.dart).
+  // That way `100` reads the same physical size on Linux 100 % DPI,
+  // Windows 125 % DPI, and macOS Retina — Flutter's native respect
+  // for OS scaling is undone by the DPR division so the layout looks
+  // identical regardless of platform. Ctrl+0 always resets to 100;
+  // `defaultZoomForPlatform` therefore returns 1.0 (= 100 /100).
+  static int defaultZoomPercentForPlatform() => 100;
+
+  /// Convenience: legacy doubles still call sites use. The same value
+  /// the internal int holds, divided by 100. Identity for callers that
+  /// previously read [zoom] as a `double` (Transform.scale, autoclamp
+  /// math, dialog labels).
+  static double defaultZoomForPlatform() =>
+      defaultZoomPercentForPlatform() / 100.0;
+
+  int _zoomPercent = defaultZoomPercentForPlatform();
+  int get zoomPercent => _zoomPercent;
+  double get zoom => _zoomPercent / 100.0;
 
 
   // Runtime State
@@ -901,8 +928,21 @@ class TraceStore extends ChangeNotifier {
       }
     } catch (_) {}
     try {
+      // Read as double for legacy compatibility. Pre-v0.3 prefs stored
+      // the zoom as a fractional double (`0.8`, `0.6000000000000001`);
+      // we promote to integer percent on read, and `_persistZoom()`
+      // writes back as int next time we save. `getDouble` accepts both
+      // ints and doubles in the JSON, so this also works for already-
+      // migrated values.
       final z = _prefs.getDouble('bxp-gui.zoom');
-      if (z != null && z.isFinite && z >= 0.5 && z <= 3.0) _zoom = z;
+      if (z != null && z.isFinite) {
+        // Legacy values < 5 are fractional (e.g. 0.8); ≥ 5 are int
+        // percent (e.g. 80). The cutoff sits well outside both ranges
+        // (legacy max 3.0, new min 50) so misclassification is
+        // impossible.
+        final pct = z < 5 ? (z * 100).round() : z.round();
+        if (pct >= 50 && pct <= 300) _zoomPercent = pct;
+      }
     } catch (_) {}
     try {
       _recentFiles = _prefs.getStringList('bxp-ui.recent') ?? [];
@@ -1095,16 +1135,21 @@ class TraceStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Set the UI zoom factor and persist under `bxp-gui.zoom`. Clamped to
-  /// [0.5, 3.0] — the same range the keyboard/scroll handler enforces.
+  /// Set the UI zoom factor and persist under `bxp-gui.zoom`. Accepts
+  /// the historical fractional API (1.0 = 100 %, 0.8 = 80 %, …) and
+  /// internally stores the integer percent — see [_zoomPercent] for
+  /// why. Clamped to [50 %, 300 %].
   void setZoom(double v) async {
     if (!v.isFinite) return;
-    final clamped = v.clamp(0.5, 3.0);
-    if (clamped == _zoom) return;
-    _zoom = clamped;
+    final pct = (v.clamp(0.5, 3.0) * 100).round();
+    if (pct == _zoomPercent) return;
+    _zoomPercent = pct;
     notifyListeners();
     try {
-      await _prefs.setDouble('bxp-gui.zoom', _zoom);
+      // Write as int so the file contains a clean "80", not "80.0".
+      // The reader in `_init` accepts both shapes (legacy `0.8` double
+      // and modern `80` int) and migrates on read.
+      await _prefs.setInt('bxp-gui.zoom', _zoomPercent);
     } catch (_) {
       // Persistence is best-effort. The user has already seen the zoom
       // change; failing the write would only silently corrupt their next

@@ -33,14 +33,32 @@ String _userHome() =>
     Directory.current.path;
 
 /// Enumerate present drive letters on Windows by probing A–Z.
-/// Directory.existsSync() returns false for unmounted or nonexistent drives
-/// without throwing, so the probe is safe even on machines with sparse drive
-/// letter assignments.
-List<String> _windowsDrives() => [
-      for (var c = 65; c <= 90; c++)
-        if (Directory('${String.fromCharCode(c)}:\\').existsSync())
-          '${String.fromCharCode(c)}:\\'
-    ];
+///
+/// `Directory.existsSync` returns `false` for unmapped letters but
+/// THROWS `FileSystemException` (errno 21, "device not ready") for
+/// mapped-but-empty volumes — typical CD-ROM drives, optical media
+/// readers, and offline network drives. Letting that exception
+/// propagate through `_QuickSidebar.build` would cause the
+/// OpenDialog tree to rebuild repeatedly trying to render an error
+/// widget; on Windows, that build storm has been observed to
+/// stress the D3D11 device into a TDR cascade
+/// (`DXGI_ERROR_DEVICE_REMOVED` → `EGL Context Lost` infinite
+/// recovery loop), wedging the app entirely. Treat any exception as
+/// "drive not present" so the sidebar lists only mounted, ready
+/// volumes.
+List<String> _windowsDrives() {
+  final drives = <String>[];
+  for (var c = 65; c <= 90; c++) {
+    final path = '${String.fromCharCode(c)}:\\';
+    try {
+      if (Directory(path).existsSync()) drives.add(path);
+    } catch (_) {
+      // Drive letter is mapped but the volume is offline / has no
+      // media — skip it.
+    }
+  }
+  return drives;
+}
 
 // Matches anything with "json" in the extension chain — `.json`, `.json5`,
 // `.jsonl`, `.jsonc`, `.json.bak`, etc. Case-insensitive.

@@ -42,7 +42,7 @@ date / currency parsing, and identifier mapping.
 
 Built-in templates ship for Anycoin, Revolut X, Trading 212, and XTB
 (both old and new formats). The full list lives in
-[`resources/bxp-cli.examples.json`](resources/bxp-cli.examples.json) -
+[`resources/console/bxp-cli.examples.json`](resources/console/bxp-cli.examples.json) -
 each entry is a working template with inline comments you can copy and
 adapt. A new broker takes a JSON5 entry, not a code change.
 

@@ -26,7 +26,14 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
 
   FlutterWindow window(project);
   Win32Window::Point origin(10, 10);
-  Win32Window::Size size(1280, 720);
+  // 1280x800 matches Linux/macOS runners and the kLogicalMinHeight=768
+  // baked into zoom_limits.dart's maxSafeZoom math. The previous 1280x720
+  // default forced zoom to clamp to 0.9375 (= 720/768) on first paint,
+  // pinned the SizedBox bigger than Stack's biggest constraint, and made
+  // the Transform.scale layer paint an ever-larger logical region as the
+  // window grew (eg. 2048x1152 logical at maximised 1920x1080 viewport)
+  // — the wheel-scroll lag in maximised mode came from that.
+  Win32Window::Size size(1280, 800);
   if (!window.Create(L"BXP GUI", origin, size)) {
     return EXIT_FAILURE;
   }

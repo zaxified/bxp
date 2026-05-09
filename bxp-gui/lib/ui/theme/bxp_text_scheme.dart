@@ -62,20 +62,41 @@ class BxpTextScheme {
   });
 }
 
-/// Default — Roboto (Flutter Material bundled, guaranteed to render).
-const kBxpTextRoboto = BxpTextScheme();
+/// Default — Noto Sans. All sans schemes are bundled in `pubspec.yaml`
+/// (`flutter.fonts:`); without an explicit `fontFamily` here Flutter
+/// would fall back to the platform's system sans (Segoe UI / SF Pro /
+/// DejaVu) and metrics would diverge by platform. Noto is the default
+/// because the existing UI layout — fixed-width slots, label widths,
+/// header padding — was tuned against Linux's pre-bundle build where
+/// `fontFamily` was unset and the system fallback resolved to Noto;
+/// pinning it as the bundled primary keeps that layout intact while
+/// also rendering identically on Windows/macOS.
+const kBxpTextNoto = BxpTextScheme(
+  fontFamily: 'Noto Sans',
+  fontFamilyFallback: ['Roboto', 'Inter', 'sans-serif'],
+);
 
-/// Inter system fallback — modernější neutral sans, requires user
-/// install (`apt install fonts-inter` etc.). Falls back to Roboto so
-/// missing install never blanks the app.
+/// Alternative scheme — Roboto primary. Material's reference font;
+/// slightly heavier and wider than Noto. Bundled as five static
+/// weight files (Roboto's canonical distribution doesn't ship a
+/// plain-weight variable, only Roboto Flex with axes we don't use).
+const kBxpTextRoboto = BxpTextScheme(
+  fontFamily: 'Roboto',
+  fontFamilyFallback: ['Noto Sans', 'Inter', 'sans-serif'],
+);
+
+/// Alternative scheme — Inter primary. Modern neutral sans. Bundled
+/// as one variable TTF; Flutter picks the right weight via OpenType
+/// variations.
 const kBxpTextInter = BxpTextScheme(
   fontFamily: 'Inter',
-  fontFamilyFallback: ['Roboto', 'sans-serif'],
+  fontFamilyFallback: ['Noto Sans', 'Roboto', 'sans-serif'],
 );
 
 /// Map name → scheme. Stored name persists in SharedPreferences as
 /// `bxp-ui.textScheme` (mirrors `bxp-ui.codeFont` for the mono picker).
 const Map<String, BxpTextScheme> bxpTextSchemes = {
+  'noto': kBxpTextNoto,
   'roboto': kBxpTextRoboto,
   'inter': kBxpTextInter,
 };

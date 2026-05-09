@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -31,43 +30,44 @@ final GlobalKey<ScaffoldMessengerState> bxpMessengerKey =
 final GlobalKey<NavigatorState> bxpNavigatorKey = GlobalKey<NavigatorState>();
 
 void main() {
-  // Custom binding that intercepts pointer events for the freeze
-  // investigation (live counters + middle/right-button block + hover
-  // throttle). Behaves identically to WidgetsFlutterBinding when none
-  // of the toggles are flipped, so a default-config build is unchanged.
-  DebugBinding.ensureInitialized();
-
-  // Opt-in NDJSON diagnostic trace. Activated by `BXP_DIAGNOSTIC=1`.
-  // The init is async (file open) but small; we kick it off and wire
-  // the frame-timings hook once the sink is ready. runApp does not
-  // depend on the result — the trace just becomes a no-op if init
-  // fails or the env var is unset.
-  unawaited(DiagnosticLog.tryInit().then((enabled) {
-    if (!enabled) return;
-    // ignore: avoid_print
-    print('[bxp-gui] diagnostic trace -> ${DiagnosticLog.path}');
-    DiagnosticLog.log('startup', {
-      'platform': Platform.operatingSystem,
-      'os_version': Platform.operatingSystemVersion,
-      'dart_version': Platform.version,
-      'executable': Platform.resolvedExecutable,
-      'locale': Platform.localeName,
-      'cwd': Directory.current.path,
-    });
-    DiagnosticLog.wireFrameTimings();
-  }));
-
-  final traceStore = TraceStore();
-  final updaterService = UpdaterService();
-  _installOverflowGuard(traceStore);
-  _installDiagnosticErrorHooks();
-  // Fire-and-forget — the periodic check runs even before the user
-  // interacts with the UI. Errors are caught inside initialize().
-  updaterService.initialize();
-  // Wrap in runZonedGuarded so async exceptions in our code path land
-  // in the diagnostic log too (FlutterError.onError only catches sync
-  // exceptions thrown during the framework's own dispatch).
+  // Everything must run in the same zone. Flutter's zone-mismatch
+  // assertion fires if the binding is initialized in one zone (root)
+  // and `runApp` later runs in a child zone — and `runZonedGuarded`
+  // creates such a child zone. Keeping the binding init + runApp
+  // together inside the guarded zone avoids the diagnostic and lets
+  // async errors fall through to the zone error handler.
   runZonedGuarded(() {
+    // Custom binding that intercepts pointer events for the freeze
+    // investigation (live counters + middle/right-button block +
+    // hover throttle). Behaves identically to WidgetsFlutterBinding
+    // when no toggles are flipped, so a default build is unchanged.
+    DebugBinding.ensureInitialized();
+
+    // Opt-in NDJSON diagnostic trace. Activated by `BXP_DIAGNOSTIC=1`
+    // or marker file `$prefs-dir/.bxp-diagnostic`. When activated at
+    // startup, also flip the floating CounterOverlay on. Mid-session
+    // toggling lives in the inspector (Ctrl+Shift+S → DEBUG).
+    unawaited(DiagnosticLog.tryInit().then((enabled) {
+      if (!enabled) return;
+      // ignore: avoid_print
+      print('[bxp-gui] diagnostic trace -> ${DiagnosticLog.path}');
+      DebugSettings.instance.overlayVisible = true;
+      // Defer the settings/runtime snapshot until after the first
+      // frame so providers (TraceStore) are reachable from the
+      // navigator context. Reading earlier would race runApp.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final ctx = bxpNavigatorKey.currentContext;
+        if (ctx != null) emitDiagnosticContextSnapshot(ctx);
+      });
+    }));
+
+    final traceStore = TraceStore();
+    final updaterService = UpdaterService();
+    _installOverflowGuard(traceStore);
+    _installDiagnosticErrorHooks();
+    // Fire-and-forget — the periodic check runs even before the user
+    // interacts with the UI. Errors are caught inside initialize().
+    updaterService.initialize();
     runApp(
       MultiProvider(
         providers: [
@@ -224,8 +224,40 @@ class BxpApp extends StatelessWidget {
           // render outside the scaled subtree and stay at 1×. Using
           // MaterialApp.builder is the standard way to get hold of
           // the navigator+overlay subtree.
-          builder: (context, child) =>
-              ZoomContainer(child: child ?? const SizedBox.shrink()),
+          // Text-size DPR compensation. Flutter rasterises glyphs at
+          // `fontSize × devicePixelRatio` physical pixels; on a Win 125 %
+          // scaled monitor a `fontSize: 10` logical request becomes a
+          // 12.5 px tall glyph on screen, while the same request on a
+          // Linux 100 % monitor is 10 px. The visible result is "Win
+          // text 25 % bigger than Linux" even though the widget tree
+          // is the same logical size on both platforms.
+          //
+          // Overriding `MediaQuery.textScaler` to `1 / devicePixelRatio`
+          // inverts that scaling at layout time: the engine now picks
+          // a 8-logical-px glyph for `fontSize: 10`, which renders to
+          // 10 physical px on the same Win 125 % monitor — matching
+          // Linux 100 %. The override sits at MaterialApp.builder so
+          // it propagates into every widget below the navigator.
+          //
+          // Why we don't piggy-back on the existing ZoomContainer
+          // Transform.scale: hypothesis from a stuck cross-platform
+          // test session — Transform.scale seems to NOT actually shrink
+          // glyph rasterisation (Skia caches at the unscaled physical
+          // size and the transform is just a layer composition), only
+          // the surrounding non-text geometry. textScaler is the
+          // correct lever for text. If this turns out double-counted
+          // (text suddenly too small), the ZoomContainer's DPR-aware
+          // `appliedZoom` math would need to drop its DPR divisor.
+          builder: (context, child) {
+            final mq = MediaQuery.of(context);
+            final dpr = mq.devicePixelRatio;
+            return MediaQuery(
+              data: mq.copyWith(
+                textScaler: TextScaler.linear(dpr > 0 ? 1.0 / dpr : 1.0),
+              ),
+              child: ZoomContainer(child: child ?? const SizedBox.shrink()),
+            );
+          },
           home: const _UpdaterListener(child: _StartupGate()),
         );
       }),
@@ -260,8 +292,16 @@ class _ZoomContainerState extends State<ZoomContainer> {
     final current = _store.zoom;
     final proposed = current + delta;
     if (delta > 0) {
-      final size = MediaQuery.of(context).size;
-      final maxSafe = maxSafeZoom(size);
+      final mq = MediaQuery.of(context);
+      final size = mq.size;
+      // textScaler shrinks every text run by 1/devicePixelRatio
+      // (see MaterialApp.builder), so the effective content footprint
+      // is smaller than the nominal `kLogicalMin*` constants assume.
+      // Multiply the safe ceiling by DPR so the user can zoom into
+      // the freed-up headroom — without this the clamp on Win 125 %
+      // pinned the user to a useless ~4 % range above default.
+      final dpr = mq.devicePixelRatio;
+      final maxSafe = maxSafeZoom(size) * (dpr > 0 ? dpr : 1.0);
       if (proposed > maxSafe + 1e-6) {
         bxpMessengerKey.currentState
           ?..hideCurrentSnackBar()
@@ -279,17 +319,6 @@ class _ZoomContainerState extends State<ZoomContainer> {
   bool _handleKey(KeyEvent event) {
     if (event is KeyDownEvent || event is KeyRepeatEvent) {
       final physical = event.physicalKey;
-      // F12 toggles the debug panel — layout-independent, doesn't
-      // require modifiers, no risk of a Czech keyboard remapping
-      // Shift+D to ď and missing the keyLabel comparison. Kept in
-      // addition to Ctrl+Shift+D so muscle memory still works on
-      // layouts where that combo lands.
-      if (physical == PhysicalKeyboardKey.f12 &&
-          !HardwareKeyboard.instance.isControlPressed &&
-          !HardwareKeyboard.instance.isAltPressed) {
-        _openDebugPanel();
-        return true;
-      }
       if (HardwareKeyboard.instance.isControlPressed) {
         final key = event.logicalKey.keyLabel;
         if (key == '+' || key == '=' || physical == PhysicalKeyboardKey.numpadAdd || physical == PhysicalKeyboardKey.equal || physical == PhysicalKeyboardKey.bracketRight) {
@@ -299,14 +328,14 @@ class _ZoomContainerState extends State<ZoomContainer> {
           _bump(-kZoomStep);
           return true;
         } else if (key == '0' || physical == PhysicalKeyboardKey.numpad0 || physical == PhysicalKeyboardKey.digit0) {
-          _store.setZoom(1.0);
-          return true;
-        } else if (HardwareKeyboard.instance.isShiftPressed &&
-            physical == PhysicalKeyboardKey.keyD) {
-          // Ctrl+Shift+D — physical key match (layout-independent so
-          // Czech / German / etc. layouts that remap Shift+D still
-          // trigger correctly). Esc dismisses.
-          _openDebugPanel();
+          // Reset to platform default, NOT a literal 1.0. On Windows the
+          // default is 0.8 (compensates for the typical 125 % display
+          // scaling); resetting to 1.0 there would just trip the
+          // ZoomContainer's post-frame `maxSafeZoom` auto-clamp and
+          // settle on whatever fits the current window — usually
+          // something like 0.99, which then gets persisted to prefs
+          // and looks like Ctrl+0 forgot the user's intent.
+          _store.setZoom(TraceStore.defaultZoomForPlatform());
           return true;
         }
       }
@@ -314,26 +343,21 @@ class _ZoomContainerState extends State<ZoomContainer> {
     return false;
   }
 
-  void _openDebugPanel() {
-    // ZoomContainer is wrapped via MaterialApp.builder, so its own
-    // BuildContext sits ABOVE the Navigator — using `context` here
-    // for showDialog silently no-ops because Navigator.of() can't
-    // find a navigator. Use the global navigator key instead, which
-    // points at the MaterialApp's root navigator regardless of where
-    // we're called from.
-    final ctx = bxpNavigatorKey.currentContext;
-    if (ctx == null) return;
-    showDialog<void>(
-      context: ctx,
-      builder: (_) => const DebugPanelDialog(),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
-    final zoom = context.watch<TraceStore>().zoom;
-    final bypassZoom = context.watch<DebugSettings>().bypassZoom;
+    final storedZoom = context.watch<TraceStore>().zoom;
+    final debug = context.watch<DebugSettings>();
+    final bypassZoom = debug.bypassZoom;
+    final overlayVisible = debug.overlayVisible;
     final size = MediaQuery.of(context).size;
+    // DPR compensation now lives at MaterialApp.builder via a
+    // `textScaler: 1 / devicePixelRatio` MediaQuery override — that's
+    // the lever that actually shrinks glyph rasterisation, where
+    // Transform.scale didn't reach. Here we therefore apply ONLY the
+    // user's zoom intent: `appliedZoom = storedZoom`. Doing both would
+    // shrink text twice (once via textScaler, once via Transform.scale)
+    // and the GUI was visibly under-sized in that combined state.
+    final appliedZoom = storedZoom;
     // If the window has shrunk (or zoom was loaded from prefs) below the
     // safe maximum, clamp asynchronously after this frame paints. We
     // can't call setZoom() directly during build — it would trigger a
@@ -341,8 +365,14 @@ class _ZoomContainerState extends State<ZoomContainer> {
     // after the current frame, and the persisted value updates via the
     // existing logic in TraceStore.setZoom.
     if (size.width > 0 && size.height > 0) {
-      final safe = maxSafeZoom(size);
-      if (zoom > safe + 1e-6) {
+      // Same textScaler-aware ceiling as `_bump`. The clamp is a
+      // last-resort autoshrink for users who load prefs from a
+      // larger window or shrink the OS window below the saved zoom;
+      // multiplying by DPR keeps that recovery rare on Win 125 %
+      // instead of firing on the first frame after a fresh launch.
+      final dpr = MediaQuery.of(context).devicePixelRatio;
+      final safe = maxSafeZoom(size) * (dpr > 0 ? dpr : 1.0);
+      if (appliedZoom > safe + 1e-6) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (!mounted) return;
           if (_store.zoom > safe + 1e-6) {
@@ -381,35 +411,52 @@ class _ZoomContainerState extends State<ZoomContainer> {
       // streams over the JSON tree — small constraint flickers from
       // overlay insertion would re-run the entire content subtree.
       // MediaQuery.size only changes on actual window-resize events.
-      // Stack: scaled app content underneath, CounterOverlay pinned
-      // bottom-right on top. The overlay is wrapped in IgnorePointer
-      // (inside its own widget) so it never participates in hit-test
-      // — otherwise it would itself be a pointer-event sink and skew
-      // the very measurements it shows.
-      // When `bypassZoom` is on, the app paints at native resolution
-      // with no Transform.scale layer — isolates whether the freeze is
-      // tied to compositor handling of the scaled subtree. The zoom
-      // shortcuts still fire (TraceStore.zoom updates) but visually
-      // nothing changes.
+      //
+      // Layout strategy:
+      // - The Transform.scale + SizedBox(size/zoom) pair gives the
+      //   transform's child a logical region matching the visible
+      //   viewport AFTER scaling. Stack's own constraints would clamp
+      //   that SizedBox down to the viewport size, which on zoom < 1
+      //   left a black strip along the bottom-right edges (and on a
+      //   manually-resized larger window the content stayed pinned to
+      //   the original viewport size). OverflowBox releases the upper
+      //   bound so the SizedBox can actually be larger than the parent
+      //   and Transform.scale shrinks it back to fill the viewport.
+      // - We keep the always-on path (no `zoom == 1.0` shortcut) so
+      //   the widget subtree identity is preserved across zoom changes
+      //   — toggling zoom across 1.0 must not detach widget state
+      //   like scroll positions or focused inputs. Transform.scale
+      //   with scale 1.0 is effectively free.
+      // - When `bypassZoom` is on we mount widget.child directly (no
+      //   Transform layer at all), used to isolate whether a suspected
+      //   freeze is tied to compositor handling of the scaled subtree.
       child: Stack(
         children: [
           if (bypassZoom)
             widget.child
           else
-            Transform.scale(
-              scale: zoom,
+            OverflowBox(
               alignment: Alignment.topLeft,
-              child: SizedBox(
-                width: size.width > 0 ? size.width / zoom : null,
-                height: size.height > 0 ? size.height / zoom : null,
-                child: widget.child,
+              minWidth: 0,
+              minHeight: 0,
+              maxWidth: size.width > 0 ? size.width / appliedZoom : double.infinity,
+              maxHeight: size.height > 0 ? size.height / appliedZoom : double.infinity,
+              child: Transform.scale(
+                scale: appliedZoom,
+                alignment: Alignment.topLeft,
+                child: SizedBox(
+                  width: size.width > 0 ? size.width / appliedZoom : null,
+                  height: size.height > 0 ? size.height / appliedZoom : null,
+                  child: widget.child,
+                ),
               ),
             ),
-          Positioned(
-            right: 8,
-            bottom: 8,
-            child: CounterOverlay(onTap: _openDebugPanel),
-          ),
+          if (overlayVisible)
+            const Positioned(
+              right: 8,
+              bottom: 8,
+              child: CounterOverlay(),
+            ),
         ],
       ),
     );
