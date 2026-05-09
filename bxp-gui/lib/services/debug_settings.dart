@@ -1,18 +1,19 @@
 import 'package:flutter/foundation.dart';
 
-/// Runtime-toggleable knobs used during the Windows freeze investigation.
-/// All defaults match the production GUI baseline (everything on, no
-/// pointer filtering) so a fresh build behaves the same as v0.2.x.
+/// Runtime-toggleable diagnostic knobs. Defaults match the production
+/// GUI baseline (all tree features on, no pointer filtering) so a fresh
+/// build behaves like v0.2.x. The flags are kept as opt-in regression
+/// knobs — toggling any of them strips a specific layer / listener
+/// pathway, which lets a future bug reporter narrow a hang or a
+/// rebuild storm without us shipping a debug build.
 ///
-/// The user opens the SettingsInspector via Ctrl+Shift+S; the Debug
-/// section there hosts the master "Diagnostic mode" switch (which
-/// controls both the floating [CounterOverlay] and the file-backed
-/// `DiagnosticLog`) plus per-feature investigation gates. Pointer-event
-/// filtering happens in [DebugBinding].
-///
-/// Singleton because the binding overrides need access from a place
-/// (handlePointerEvent) that doesn't have a Flutter BuildContext, and
-/// because there's only ever one set of debug settings per process.
+/// Surfaced in the SettingsInspector (Ctrl+Shift+S → Debug). The
+/// section there also hosts the master "Diagnostic mode" switch that
+/// arms the floating [CounterOverlay] + file-backed `DiagnosticLog`.
+/// Pointer-event filtering lives in [DebugBinding] because the binding
+/// override has to read these flags from a place
+/// (`handlePointerEvent`) that doesn't have a Flutter BuildContext —
+/// hence the singleton.
 class DebugSettings extends ChangeNotifier {
   static final DebugSettings instance = DebugSettings._();
   DebugSettings._();
@@ -59,8 +60,8 @@ class DebugSettings extends ChangeNotifier {
   // ── Tree feature gates (production defaults: ON) ─────────────────────
 
   /// Render the Material `Tooltip` wrapping each tree key in
-  /// `_SchemaTooltipKey`. Off was iter6 — confirmed not to fix the
-  /// freeze, but cumulatively contributes to layer count.
+  /// `_SchemaTooltipKey`. Off-state strips one Tooltip + MouseRegion per
+  /// tree key — kept as a layer-count knob for future regression work.
   bool _tooltipsInTree = true;
   bool get tooltipsInTree => _tooltipsInTree;
   set tooltipsInTree(bool v) {
@@ -69,8 +70,9 @@ class DebugSettings extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Per-row hover background highlight. Off was iter7 — substantial
-  /// improvement, suspected biggest contributor to the rebuild cascade.
+  /// Per-row hover background highlight. Off-state drops the per-row
+  /// MouseRegion + setState — eliminates a rebuild-per-hover pathway
+  /// that historically contributed to a Windows compositor stall.
   bool _hoverBackground = true;
   bool get hoverBackground => _hoverBackground;
   set hoverBackground(bool v) {
@@ -79,11 +81,12 @@ class DebugSettings extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Per-row trailing action buttons (↑↓×) appearing on hover. Off was
-  /// iter8 — fixed the "click expr value → freeze" pattern. With this
+  /// Per-row trailing action buttons (↑↓×) appearing on hover. With this
   /// off, buttons only render when the row's State.isHovered is true
   /// AND _hoverActionButtons is true; otherwise the entire button
-  /// subtree is unmounted (no Opacity wrapper).
+  /// subtree is unmounted (no Opacity wrapper). Eliminates ~500 hidden
+  /// pointer-event subscribers (≈100 rows × ~4 buttons) on a typical
+  /// expanded config tree.
   bool _hoverActionButtons = true;
   bool get hoverActionButtons => _hoverActionButtons;
   set hoverActionButtons(bool v) {
@@ -92,10 +95,10 @@ class DebugSettings extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Use Material `InkWell` for tap detection on expandable rows. Off
-  /// (iter9) replaces with `GestureDetector`, which has no internal
-  /// MouseRegion + AnimationController. Both the layer count and the
-  /// ticker count drop substantially with this off.
+  /// Use Material `InkWell` for tap detection on expandable rows. With
+  /// this off, the row falls back to `GestureDetector`, which has no
+  /// internal MouseRegion + AnimationController + ripple ticker. Both
+  /// the layer count and the active-ticker count drop substantially.
   bool _useInkWell = true;
   bool get useInkWell => _useInkWell;
   set useInkWell(bool v) {

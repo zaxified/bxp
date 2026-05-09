@@ -511,12 +511,13 @@ class _JsonNodeState extends State<_JsonNode> {
   Widget _buildRow(Widget valueWidget) {
     final t = context.bxpTheme;
     final muted = BxpText.body(context,color: t.textMuted, size: BxpSize.md);
-    // Hover wiring is gated by DebugSettings so the freeze-investigation
-    // panel can flip it live. When `hoverBackground` is OFF, no
-    // MouseRegion / setState — the row is purely static (no rebuild
-    // cascade per hover). `hoverActionButtons` controls whether the
-    // trailing buttons subtree is mounted at all (iter8 finding: the
-    // hidden-via-Opacity buttons were a 500+ pointer-event sink).
+    // Hover wiring is gated by DebugSettings so the diagnostic panel
+    // can flip it live. When `hoverBackground` is OFF, no MouseRegion
+    // / setState — the row is purely static (no rebuild cascade per
+    // hover). `hoverActionButtons` controls whether the trailing
+    // buttons subtree is mounted at all — when hidden via Opacity
+    // they remain a ~500-listener pointer-event sink (~100 rows ×
+    // ~4 buttons each).
     final debug = context.watch<DebugSettings>();
     final inner = Container(
       color: (debug.hoverBackground && isHovered)
@@ -572,8 +573,8 @@ class _JsonNodeState extends State<_JsonNode> {
     // Tap target — Material `InkWell` (with internal MouseRegion +
     // AnimationController + ripple) when DebugSettings.useInkWell is
     // ON; lighter-weight `GestureDetector` when OFF. The toggle exists
-    // because iter9 evidence pointed at InkWell internals as one of
-    // the load-bearing pointer-event subscribers in the freeze pattern.
+    // so a future regression can flip away from the heavier widget
+    // without touching the call site.
     void onTap() => setState(() {
           expanded = !expanded;
           // Cascade: a single click on a collapsed node expands every
@@ -1223,14 +1224,14 @@ class _RowEnvelope extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final viewportRowWidth = _RowMinWidth.of(context);
-    // iter8: render trailing actions only when visible. The previous
-    // `Opacity(opacity: 0.0, child: trailingActions)` left the entire
-    // _ActionBtn subtree mounted with its MouseRegion + GestureDetector
-    // hot — 100+ tree rows × ~4 buttons each = 500+ hidden pointer
-    // listeners receiving every mouse-move event, plus 500+ layers in
-    // the render tree even though they paint nothing. On Windows that
-    // appears to overload the compositor; the GUI eventually wedges
-    // even when iter7 already removed the per-row hover setState.
+    // Render trailing actions only when visible. A previous version
+    // wrapped them in `Opacity(opacity: 0.0, ...)`, which left the
+    // entire _ActionBtn subtree mounted with its MouseRegion +
+    // GestureDetector hot — 100+ tree rows × ~4 buttons each = 500+
+    // hidden pointer listeners receiving every mouse-move event, plus
+    // 500+ render-tree layers that paint nothing. On Windows that
+    // appears to overload the compositor and eventually wedges the GUI
+    // even after the per-row hover setState is gone.
     if (viewportRowWidth == null || viewportRowWidth <= 0) {
       // No viewport context (e.g. snapshot tree in tests): fall back to
       // the legacy "buttons trail content end" layout.

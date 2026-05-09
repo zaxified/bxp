@@ -4,17 +4,18 @@ import 'package:flutter/widgets.dart';
 import 'debug_settings.dart';
 
 /// Custom `WidgetsFlutterBinding` that intercepts pointer events before
-/// they reach the framework's hit-test + dispatch chain. Used for the
-/// Windows freeze investigation:
+/// they reach the framework's hit-test + dispatch chain. With every
+/// flag at its default the binding is behaviourally identical to
+/// `WidgetsFlutterBinding`; the overrides exist so a future bug reporter
+/// can narrow a hang or input-flood without rebuilding the app:
 ///
 ///   - **Counters**: every event arriving from the engine is counted
 ///     into a 1-second rolling bucket. The CounterOverlay polls those
 ///     buckets to render live "PE/s" / "PE/frame" stats.
 ///   - **Button block**: when [DebugSettings.blockMiddleButton] /
 ///     [blockRightButton] is on, events whose buttons mask includes the
-///     blocked button never reach the framework — the user can confirm
-///     whether middle-click + drag accelerates the freeze by toggling
-///     the gate live.
+///     blocked button never reach the framework — used to test whether
+///     a specific button gesture is involved in a stall.
 ///   - **Throttle**: when [DebugSettings.pointerThrottleHz] > 0, hover
 ///     and move events are coalesced down to that rate. Button presses
 ///     and signal events always pass.
@@ -33,18 +34,14 @@ class DebugBinding extends WidgetsFlutterBinding {
   int _eventsForwarded = 0;
 
   /// Total number of `PointerSignalEvent` (scroll-wheel / pan-zoom)
-  /// events. Tracked separately because Windows trackpoint emulation
-  /// of middle-button drag has been observed to wedge the renderer
-  /// even when the regular pointer-event rate is low — having a
-  /// dedicated counter helps distinguish "scroll burst" from
-  /// "general hover flood".
+  /// events. Counted separately so a bug report can distinguish a
+  /// scroll burst from a general hover flood.
   int _scrollEventsTotal = 0;
 
   /// Total number of pointer events whose buttons mask included the
   /// middle button (middle-button-down or move-while-middle-down).
-  /// Tracked because the user identified middle-button + drag as the
-  /// most reliable freeze trigger; this counter shows how many such
-  /// events flowed before the wedge.
+  /// Useful when triaging stalls that correlate with a specific
+  /// pointer gesture rather than overall input volume.
   int _middleButtonEventsTotal = 0;
 
   /// Last timestamp at which a hover/move event was forwarded —

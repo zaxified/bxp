@@ -337,8 +337,8 @@ Future<void> _toggleDiagnosticMode(BuildContext context, bool enable) async {
 }
 
 /// Interactive Debug section — master "Diagnostic mode" switch (overlay
-/// + file trace), the freeze-investigation feature gates, and a stress
-/// button. Lives at the bottom of the SettingsInspector body so the
+/// + file trace), per-feature regression knobs, and a stress button.
+/// Lives at the bottom of the SettingsInspector body so the
 /// table-driven info above stays free of Material inputs that don't fit
 /// the IntrinsicColumnWidth grid.
 class _DebugSection extends StatelessWidget {
@@ -429,7 +429,7 @@ class _DebugSection extends StatelessWidget {
               ),
             ),
           const SizedBox(height: 8),
-          _Subheader('Investigation toggles'),
+          _Subheader('Tree feature toggles'),
           _DebugCheckRow(
             label: 'Tooltips on tree keys',
             subtitle: 'Material Tooltip wrapping each schema key',
