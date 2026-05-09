@@ -190,6 +190,22 @@ class _Body extends StatelessWidget {
         if (cliEnv != null && cliEnv.isNotEmpty)
           (r'$BXP_CLI_PATH', cliEnv),
       ]),
+      ('Bridge', [
+        // Win-only path; on Linux/macOS the bridge is dormant and
+        // every subprocess call goes straight through dart:io. We
+        // still surface the row so a Linux user pasting an inspector
+        // dump shows that the bridge isn't load-bearing on their side.
+        if (!Platform.isWindows)
+          ('platform', '(disabled — Linux/macOS use Process.start)')
+        else ...[
+          ('version',
+              BxpProcessClient.bridgeVersion ?? '(not loaded)'),
+          ('dll',
+              BxpProcessClient.bridgeDllPath ?? '(not found)'),
+        ],
+        ('lastDiag',
+            BxpProcessClient.lastSubprocessDiag ?? '(none)'),
+      ]),
       ('Config', [
         ('path', store.configPath.isEmpty ? '(none)' : store.configPath),
         ('dirty', store.isDirty.toString()),

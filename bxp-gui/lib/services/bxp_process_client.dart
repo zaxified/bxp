@@ -117,6 +117,20 @@ class BxpProcessClient {
   static String? _bridgeVersion;
   static bool _bridgeProbed = false;
 
+  /// DLL self-reported version, populated on first call to
+  /// [_resolveBridgePath]. Null until the probe runs (which any
+  /// `findBin` / `loadConfig` / `runDryRun` call triggers via
+  /// [_runOneShot] / [_runCliTrace]). Surfaced in the
+  /// SettingsInspector so a reporter can confirm which bridge build
+  /// the GUI is talking to.
+  static String? get bridgeVersion => _bridgeVersion;
+
+  /// Cached path of the bridge DLL after a successful probe. Mainly a
+  /// diagnostic surface — the SettingsInspector renders it next to
+  /// [bridgeVersion] so both endpoints of the FFI pair are visible
+  /// when triaging "is the GUI using a stale DLL?" reports.
+  static String? get bridgeDllPath => _bridgeDllPath;
+
   static String? _resolveBridgePath() {
     if (_bridgeProbed) return _bridgeDllPath;
     _bridgeProbed = true;
@@ -141,15 +155,12 @@ class BxpProcessClient {
     }
   }
 
-  /// One-shot run that prefers the FFI bridge on Windows and falls back
-  /// to [_runWithTimeout] elsewhere (or when the bridge is unavailable).
-  ///
-  /// Why the bridge wins on Windows: dart:io's Process pipe layer chokes
-  /// at ~8 KB on this platform (sdk#1727 + #51273), so any child that
-  /// emits more than that — `--docs` (30 KB), annotated --config output,
-  /// `--expr-trace` per-call values — silently truncates or hangs. The
-  /// bridge drains pipes from native Zig code, sidestepping Dart's event
-  /// loop entirely.
+  /// One-shot run. On Windows the FFI bridge is the only path — the DLL
+  /// is mandatory; if probe failed we surface a synthetic error result
+  /// rather than falling back to dart:io's Process pipes (which would
+  /// silently truncate `--docs` / `--config` over the ~8 KB Win pipe
+  /// limit, dart-lang/sdk#1727). On Linux / macOS the bridge is dormant
+  /// and everything goes through [_runWithTimeout].
   ///
   /// Why a worker isolate: `bridge_run` is synchronous and blocks for
   /// the duration of the child process (50–200 ms typical). Running it
@@ -159,60 +170,78 @@ class BxpProcessClient {
   /// the blocking call to a fresh worker isolate so the UI stays smooth.
   /// The ~5 ms isolate-spawn overhead is negligible compared to the
   /// pipe-drain time we're already paying.
-  ///
-  /// We keep Process.start as the fallback so a missing DLL degrades
-  /// gracefully (small payloads still work) instead of erroring out.
   static Future<ProcessResult> _runOneShot(
     String executable,
     List<String> arguments,
     Duration timeout,
   ) async {
     final dllPath = _resolveBridgePath();
-    if (dllPath != null) {
-      try {
-        final result = await Isolate.run(
-          () => _bridgeRunInIsolate(dllPath, executable, arguments),
-        ).timeout(timeout);
-        if (result.err != null) {
-          // Bridge-level failure (spawn failed, request parse failed,
-          // output exceeded the 4 MB cap). Don't fall back — the same
-          // failure would just repeat under Process.start with worse
-          // diagnostics. Surface a synthetic non-zero exit so callers
-          // hit their existing error path.
-          _lastSubprocessDiag = 'bridge $_bridgeVersion: err=${result.err}';
-          return ProcessResult(0, 1, '', 'bridge: ${result.err}');
-        }
-        _lastSubprocessDiag = 'bridge $_bridgeVersion: '
-            'exit ${result.exitCode}, stdout=${result.stdout.length} B'
-            ', stderr=${result.stderr.length} B';
+    if (Platform.isWindows) {
+      if (dllPath == null) {
+        // Bridge probe failed at startup — `_lastSubprocessDiag` already
+        // describes why. Surface a synthetic non-zero exit so callers
+        // hit their existing error-rendering path; no Process.start
+        // fallback because dart:io can't be trusted with bxp-fmt's
+        // output volume on Windows.
         return ProcessResult(
-          0,
-          result.exitCode,
-          result.stdout,
-          result.stderr,
+          0, 1, '',
+          'bridge: ${_lastSubprocessDiag ?? "DLL unavailable"}',
         );
-      } on TimeoutException {
-        // The bridge worker is still chewing on the call. Synthesise a
-        // timeout result so the caller's existing error-rendering path
-        // picks it up. We can't kill the worker isolate from Isolate.run —
-        // it will finish on its own and the result gets discarded.
-        _lastSubprocessDiag =
-            'bridge $_bridgeVersion: timeout after ${timeout.inSeconds}s';
-        return ProcessResult(
-          0,
-          ProcessRunResult.kExitTimeout,
-          '',
-          '$executable timed out after ${timeout.inSeconds}s (bridge)',
-        );
-      } catch (e) {
-        // Worker-side exception (bad DLL, OOM allocating the response
-        // buffer, …). Fall back to Process.start so the call has a chance
-        // of succeeding on small payloads.
-        _lastSubprocessDiag = 'bridge: ${e.runtimeType} $e — '
-            'falling back to Process.start';
       }
+      return _runOneShotViaBridge(dllPath, executable, arguments, timeout);
     }
+    // Non-Windows: dart:io's pipes work, bridge isn't built into the
+    // bundle, and the cost of an Isolate.run hop per call would only
+    // pay off as a `--expr` per-keystroke optimisation we haven't
+    // landed yet.
     return _runWithTimeout(executable, arguments, timeout);
+  }
+
+  /// Bridge variant of [_runOneShot]. Hard error on any failure — no
+  /// fallback. Wraps [BridgeClient.run] in `Isolate.run` so the
+  /// blocking pipe drain doesn't stall the main isolate's frame loop.
+  static Future<ProcessResult> _runOneShotViaBridge(
+    String dllPath,
+    String executable,
+    List<String> arguments,
+    Duration timeout,
+  ) async {
+    try {
+      final result = await Isolate.run(
+        () => _bridgeRunInIsolate(dllPath, executable, arguments),
+      ).timeout(timeout);
+      if (result.err != null) {
+        _lastSubprocessDiag = 'bridge $_bridgeVersion: err=${result.err}';
+        return ProcessResult(0, 1, '', 'bridge: ${result.err}');
+      }
+      _lastSubprocessDiag = 'bridge $_bridgeVersion: '
+          'exit ${result.exitCode}, stdout=${result.stdout.length} B'
+          ', stderr=${result.stderr.length} B';
+      return ProcessResult(
+        0,
+        result.exitCode,
+        result.stdout,
+        result.stderr,
+      );
+    } on TimeoutException {
+      _lastSubprocessDiag =
+          'bridge $_bridgeVersion: timeout after ${timeout.inSeconds}s';
+      return ProcessResult(
+        0,
+        ProcessRunResult.kExitTimeout,
+        '',
+        '$executable timed out after ${timeout.inSeconds}s (bridge)',
+      );
+    } catch (e) {
+      // Worker-side exception (bad DLL, OOM allocating the response
+      // buffer, …). No fallback — the bridge is the only sanctioned
+      // path on Windows. Surface the failure.
+      _lastSubprocessDiag = 'bridge $_bridgeVersion: ${e.runtimeType} $e';
+      return ProcessResult(
+        0, 1, '',
+        'bridge ${e.runtimeType}: $e',
+      );
+    }
   }
 
   /// `Process.run` + per-call timeout + child-process kill on timeout.
@@ -699,21 +728,28 @@ class BxpProcessClient {
     }
     final workingDir = configFile.parent.path;
 
-    // Bridge path on Windows: dart:io's stream listener silently drops
-    // bytes past ~8 KB on this platform (sdk#1727 + #51273) — `--trace`
-    // emits NDJSON proportional to row count and gets brutally truncated,
-    // surfacing as "parse issues: 100" or worse. The bridge drains pipes
-    // from native Zig code, so the full stream survives.
-    //
-    // The bridge runs streaming on its own threads and reports stdout in
-    // batches of 1000 lines (plus a final flush at EOF), so file-list and
-    // per-row counters update progressively in the UI rather than
-    // appearing all at once at the end of the run. No onSpawn / cancel
-    // support yet: the bridge owns the child handle, and there's no
-    // FFI-level kill request to wire through. Cancel will land when the
-    // bridge gains a per-call cancellation token.
+    // Bridge is mandatory on Windows: dart:io's stream listener silently
+    // drops bytes past ~8 KB on this platform (sdk#1727 + #51273) and
+    // `--trace` would get brutally truncated. The bridge runs streaming
+    // on its own threads and reports stdout in batches of 1000 lines
+    // (plus a final flush at EOF), so file-list and per-row counters
+    // update progressively in the UI rather than appearing all at once
+    // at the end of the run. No onSpawn / cancel support yet: the bridge
+    // owns the child handle, and there's no FFI-level kill request to
+    // wire through. Cancel will land when the bridge gains a per-call
+    // cancellation token.
     final dllPath = _resolveBridgePath();
-    if (dllPath != null) {
+    if (Platform.isWindows) {
+      if (dllPath == null) {
+        endAction({
+          'path': 'bridge',
+          'result': 'dll_missing',
+        });
+        return ProcessRunResult(
+          exitCode: -1,
+          stderr: 'bridge: ${_lastSubprocessDiag ?? "DLL unavailable"}',
+        );
+      }
       final r = await _runCliTraceViaBridge(
         bin: bin,
         args: args,
@@ -836,6 +872,14 @@ class BxpProcessClient {
   /// `runStreaming` returns to its caller as soon as the bridge has armed
   /// its threads, so the main isolate stays responsive without isolate
   /// gymnastics.
+  ///
+  /// Mirrors the Process.start path's idle watchdog: every batch / chunk
+  /// resets a [_streamIdleTimeout] timer, and on fire we abandon the
+  /// bridge future and surface a synthetic timeout exit. The bridge
+  /// thread keeps running in the background until the orphaned child
+  /// eventually exits naturally; runStreaming's own try/finally then
+  /// closes the NativeCallables. We can't kill the child mid-flight
+  /// because the bridge doesn't expose a cancellation token yet.
   static Future<ProcessRunResult> _runCliTraceViaBridge({
     required String bin,
     required List<String> args,
@@ -846,30 +890,71 @@ class BxpProcessClient {
   }) async {
     final stderrBuffer = StringBuffer();
     final client = BridgeClient(dllPath);
-    try {
-      final exitCode = await client.runStreaming(
+
+    final result = Completer<int>();
+    bool watchdogFired = false;
+    Timer? watchdog;
+
+    void completeOnce(int code) {
+      if (!result.isCompleted) result.complete(code);
+    }
+
+    void resetWatchdog() {
+      watchdog?.cancel();
+      watchdog = Timer(_streamIdleTimeout, () {
+        if (!result.isCompleted) {
+          watchdogFired = true;
+          completeOnce(ProcessRunResult.kExitTimeout);
+        }
+      });
+    }
+
+    resetWatchdog();
+
+    // Kick off the streaming run in the background. Whichever resolves
+    // first — bridge's natural exit or the watchdog — wins.
+    unawaited(
+      client.runStreaming(
         bin,
         args,
         cwd: cwd,
-        onLine: onLine,
-        onStderr: (chunk) {
-          stderrBuffer.write(chunk);
-          onStderr?.call(chunk);
+        onLine: (line) {
+          resetWatchdog();
+          if (!result.isCompleted) onLine(line);
         },
-      );
+        onStderr: (chunk) {
+          resetWatchdog();
+          stderrBuffer.write(chunk);
+          if (!result.isCompleted) onStderr?.call(chunk);
+        },
+      ).then(
+        completeOnce,
+        onError: (Object e, StackTrace _) {
+          _lastSubprocessDiag = 'bridge $_bridgeVersion: '
+              'stream ${e.runtimeType}: $e';
+          completeOnce(-1);
+        },
+      ),
+    );
+
+    final exitCode = await result.future;
+    watchdog?.cancel();
+
+    if (watchdogFired) {
+      final note = 'bridge: stream watchdog fired '
+          '(no output for ${_streamIdleTimeout.inSeconds}s — '
+          'child still running, output orphaned)';
+      stderrBuffer.writeln();
+      stderrBuffer.writeln(note);
+      _lastSubprocessDiag = 'bridge $_bridgeVersion: $note';
+    } else if (exitCode >= 0) {
       _lastSubprocessDiag = 'bridge $_bridgeVersion: '
           'stream exit $exitCode, stderr=${stderrBuffer.length} B';
-      return ProcessRunResult(
-        exitCode: exitCode,
-        stderr: stderrBuffer.toString(),
-      );
-    } catch (e) {
-      _lastSubprocessDiag = 'bridge: stream ${e.runtimeType} $e';
-      return ProcessRunResult(
-        exitCode: -1,
-        stderr: 'bridge stream failed: $e',
-      );
     }
+    return ProcessRunResult(
+      exitCode: exitCode,
+      stderr: stderrBuffer.toString(),
+    );
   }
 }
 
