@@ -229,3 +229,42 @@ preference to shell calls:
 - Global keyboard shortcuts (Ctrl+S/Z/Y) use
   `HardwareKeyboard.instance.addHandler` in `initState`, not
   `CallbackShortcuts` — the latter only fires when focus bubbles up.
+
+## Windows performance notes
+
+Three Windows-only concerns shaped the current architecture:
+
+- **Skia shader pre-warmup** — `BxpShaderWarmUp`
+  ([lib/ui/shader_warmup.dart](lib/ui/shader_warmup.dart)) renders the
+  bxp paint mix (filled / stroked rect, divider line, shadow rounded
+  rect, AA circle, AA path, 3 text runs) onto an offscreen 100×100
+  canvas the first time `PaintingBinding` initialises. Wired in
+  [lib/main.dart](lib/main.dart) BEFORE the binding constructs itself —
+  otherwise `initInstances` runs the default empty warmup. Effect:
+  ~10 % startup latency reduction on release builds. Does NOT mitigate
+  the resize-event lag below — that path is GPU pipeline / swap chain,
+  not shader compilation.
+- **Bridge subprocess (Windows-only)** — `bxp-gui-bridge.dll` hosts the
+  bxp-cli / bxp-fmt subprocess pipeline because the default
+  `Process.start` path occasionally hangs the Flutter event loop on
+  stdout drain. The bridge is the ONLY path on Windows; DLL probe
+  failure at startup is fatal (synthetic error surfaced through the
+  normal startup gate). Linux and macOS still use `Process.start`
+  directly. Cross-platform consolidation is on the v0.3.0 roadmap.
+- **Engine stderr capture** —
+  [windows/runner/win32_window.cpp](windows/runner/win32_window.cpp)
+  redirects the Flutter engine's stderr through `CreatePipe` + a
+  detached reader thread before the engine boots. `freopen_s` would
+  break the engine under `/SUBSYSTEM:WINDOWS`. Captured output flows
+  into the diagnostic trace when `BXP_DIAGNOSTIC=1` is set.
+
+### Known limitation — VMware Workstation host
+
+VMware SVGA D3D11 driver exhibits a 1-3 s lag when the swap chain
+reallocates surfaces on transition to ultra-wide resolutions
+(maximize on >1920×1200 viewports). Initial paint at the same target
+resolution is fluid — only the size-change event triggers it.
+VirtualBox SVGA and bare-metal Windows are not affected. This is
+upstream Flutter / Win32 D3D11 behaviour, not patchable in the
+runner. User-facing note in
+[../docs/devel.md](../docs/devel.md#known-issues).

@@ -25,6 +25,7 @@
   - [Memory model](#memory-model)
   - [Error handling philosophy](#error-handling-philosophy)
   - [Debugging workflow](#debugging-workflow)
+  - [Known issues](#known-issues)
   - [Adding a new conversion template](#adding-a-new-conversion-template)
   - [Adding a new built-in function](#adding-a-new-built-in-function)
   - [Testing](#testing)
@@ -481,6 +482,26 @@ tip: `print()` from Dart is captured; `developer.log()` is not.
 drawer showing the loaded config, parsed AST, schema docs, op log, and
 validation errors. The fastest way to confirm "is the GUI seeing what I
 think it's seeing?".
+
+---
+
+### Known issues
+
+**VMware Workstation host: maximize lag on ultra-wide resolutions.**
+When running bxp-gui inside a VMware Workstation Windows guest,
+maximizing the window onto a viewport larger than ~1920×1200 produces a
+1-3 s freeze on the maximize transition. Bare-metal Windows, macOS,
+Linux, and VirtualBox guests are not affected.
+
+The freeze is the VMware SVGA D3D11 driver reallocating swap-chain
+surfaces on size change — initial paint at the same target resolution
+is fluid; only the size-change event triggers it. This is upstream
+Flutter / Win32 D3D11 behaviour and cannot be patched in the runner.
+
+**Workaround:** none required. The lag clears itself in 1-3 s, the
+window does not crash, and subsequent resizes within the same surface
+size are smooth. Documented here so a "maximize is laggy on VMware"
+report is not mistaken for a regression.
 
 ---
 

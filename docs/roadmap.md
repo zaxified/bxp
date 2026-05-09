@@ -17,6 +17,21 @@ v0.2.x to migrate their hidden plugin store into `bxp-gui.json`.
 - Delete `_maybeMigrateFromSharedPreferences` from `prefs_service.dart`
 - Simplify `PrefsService.load()` (no migration branch)
 
+### Cross-platform subprocess bridge
+
+bxp-gui currently uses `bxp-gui-bridge.dll` (a C++ shim hosting the
+bxp-cli / bxp-fmt subprocess pipeline) on Windows only — Linux and
+macOS still call `Process.start` directly. The Windows-only fork was
+introduced in v0.2.x to work around event-loop hangs on stdout drain
+and lack of clean engine stderr capture under `/SUBSYSTEM:WINDOWS`.
+
+Plan: extract the bridge as a cross-platform native plugin so all
+three hosts share one subprocess code path. Remove the
+platform-conditional `Process.start` branches and the binary-lookup
+fork in `bxp_process_client.dart`. Touches the bridge native sources,
+`bxp_process_client.dart`, and the per-platform Flutter shells
+(`linux/`, `macos/`, `windows/`).
+
 ## Later (no specific version)
 
 ### CI hardening
