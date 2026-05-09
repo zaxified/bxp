@@ -1,0 +1,10 @@
+# Dataset fixtures must keep LF line endings everywhere — bxp-cli
+# emits LF on every platform when generating *.csvx output, so a
+# CRLF-converted *.expected on a Windows checkout (default
+# core.autocrlf=true) would always diff against the freshly produced
+# *.csvx and break scripts/test.sh's regression loop.
+datasets/**/*.csv     text eol=lf
+datasets/**/*.csvx    text eol=lf
+datasets/**/*.expected text eol=lf
+datasets/**/*.json    text eol=lf
+datasets/**/*.json5   text eol=lf
