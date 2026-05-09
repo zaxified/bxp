@@ -36,10 +36,20 @@ build_companions() {
     (cd "$MONO_ROOT/bxp-fmt" && zig build -Dtarget="$target" -Doptimize=ReleaseSmall)
 }
 
+# Build the FFI bridge DLL for Windows. Standalone helper because the
+# bridge is currently Win-only (Plan A — Linux/macOS use Process.start
+# directly, which works there). Cross-platform bridge ships in v0.2.3.
+build_bridge_windows() {
+    echo "  Cross-compiling bxp-gui-bridge for x86_64-windows..."
+    (cd "$MONO_ROOT/bxp-gui-bridge" && \
+        zig build -Dtarget="x86_64-windows" -Doptimize=ReleaseSmall)
+}
+
 restore_native_companions() {
-    echo "  Restoring native bxp-cli + bxp-fmt..."
+    echo "  Restoring native bxp-cli + bxp-fmt + bxp-gui-bridge..."
     (cd "$MONO_ROOT/bxp-cli" && zig build)
     (cd "$MONO_ROOT/bxp-fmt" && zig build)
+    (cd "$MONO_ROOT/bxp-gui-bridge" && zig build)
 }
 
 # ─── Linux branch ───────────────────────────────────────────────────────
@@ -174,6 +184,7 @@ _build_deb() {
 build_windows() {
     echo "Building bxp-desktop ${VERSION} for windows-x86_64..."
     build_companions "x86_64-windows"
+    build_bridge_windows
 
     (cd "$GUI_ROOT" && flutter build windows --release)
     local bundle="$GUI_ROOT/build/windows/x64/runner/Release"
@@ -185,6 +196,11 @@ build_windows() {
     cp -R "$bundle"/* "$appdir/"
     cp "$MONO_ROOT/bxp-cli/zig-out/bin/bxp-cli.exe" "$appdir/bxp-cli.exe"
     cp "$MONO_ROOT/bxp-fmt/zig-out/bin/bxp-fmt.exe" "$appdir/bxp-fmt.exe"
+    # FFI bridge DLL — sidesteps dart:io's Windows pipe truncation
+    # (sdk#1727) on `--docs`, `--config`, and `--trace` reads. Found by
+    # findBridgeLibrary() as a sibling of bxp-gui.exe.
+    cp "$MONO_ROOT/bxp-gui-bridge/zig-out/bin/bxp-gui-bridge.dll" \
+       "$appdir/bxp-gui-bridge.dll"
     cp "$MONO_ROOT/resources/desktop/readme.md"     "$appdir/readme.md"
     # icons/ ships all four variants for shortcut-icon swap.
     mkdir -p "$appdir/icons"

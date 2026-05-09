@@ -14,6 +14,7 @@ import 'dart:ffi';
 import 'dart:io';
 
 import 'package:ffi/ffi.dart';
+import 'package:path/path.dart' as p;
 
 // C ABI signature: bridge_run(const char* req, char* resp_buf, int32_t resp_size) -> int32_t.
 // Returns # of bytes written, or -1 on bridge-level failure.
@@ -135,17 +136,54 @@ class BridgeClient {
   }
 }
 
-/// Resolves the bxp-gui-bridge shared library path next to
-/// `bxp-gui.exe` / `bxp_gui` binary. Returns null if the file is
-/// missing — callers should fall back to direct Process.start in
-/// that case (and surface a diagnostic).
+/// Resolves the bxp-gui-bridge shared library path. Search order:
+///
+///   1. **Sibling next to the GUI binary** — production / release build.
+///      The release packager copies the DLL/SO/DYLIB into the bundle
+///      alongside `bxp-gui(.exe)`, so this hits first on installed apps.
+///   2. **Dev-tree walk-up** — `flutter run` from the monorepo. Walks
+///      upward from `Platform.resolvedExecutable` looking for the
+///      `bxp-gui/` directory; its parent (the monorepo root) holds the
+///      sibling `bxp-gui-bridge/zig-out/{bin,lib}/<name>` produced by
+///      `zig build`. Mirrors the same pattern `findBin` uses for
+///      bxp-cli/bxp-fmt so the dev workflow doesn't need a CMake
+///      install step to make the bridge discoverable.
+///
+/// Returns null when no candidate exists on disk; callers fall back to
+/// direct Process.start in that case (and surface a diagnostic).
 String? findBridgeLibrary() {
-  final exeDir = File(Platform.resolvedExecutable).parent.path;
   final name = Platform.isWindows
       ? 'bxp-gui-bridge.dll'
       : Platform.isMacOS
           ? 'libbxp-gui-bridge.dylib'
           : 'libbxp-gui-bridge.so';
-  final path = '$exeDir${Platform.pathSeparator}$name';
-  return File(path).existsSync() ? path : null;
+
+  // (1) sibling next to the GUI binary — production layout.
+  final exeDir = File(Platform.resolvedExecutable).parent.path;
+  final sibling = '$exeDir${Platform.pathSeparator}$name';
+  if (File(sibling).existsSync()) return sibling;
+
+  // (2) dev-tree walk-up. Zig places shared libraries under `zig-out/bin`
+  // on Windows (DLL convention) and `zig-out/lib` on POSIX (.so/.dylib
+  // convention). Probe both so the same code path works whatever
+  // platform the developer is on.
+  final subdirs = Platform.isWindows
+      ? const ['bin']
+      : const ['lib', 'bin'];
+  Directory dir = Directory(exeDir);
+  for (int i = 0; i < 10; i++) {
+    final parent = dir.parent;
+    if (parent.path == dir.path) break; // reached filesystem root
+    if (p.basename(dir.path) == 'bxp-gui') {
+      for (final sub in subdirs) {
+        final candidate =
+            p.join(parent.path, 'bxp-gui-bridge', 'zig-out', sub, name);
+        if (File(candidate).existsSync()) return candidate;
+      }
+      break;
+    }
+    dir = parent;
+  }
+
+  return null;
 }
