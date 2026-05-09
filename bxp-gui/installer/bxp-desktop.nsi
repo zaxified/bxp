@@ -10,6 +10,10 @@
 ;
 ; The installer is silent-capable via /S — UpdaterService relies on this
 ; to perform unattended self-updates.
+;
+; UI: Modern UI 2 (built-in NSIS macro pack). Branding bitmaps live in
+; the same directory as this script and are regenerated from
+; resources/icons/ via `build-installer-assets.ps1`.
 
 !ifndef APPVERSION
   !define APPVERSION "0.0.0"
@@ -35,10 +39,43 @@ InstallDir "${INSTALLDIR_DEFAULT}"
 RequestExecutionLevel admin
 SetCompressor /SOLID lzma
 
-Page directory
-Page instfiles
-UninstPage uninstConfirm
-UninstPage instfiles
+; ── Modern UI 2 ──────────────────────────────────────────────────────────
+;
+; Reuses Flutter's app_icon.ico (sand-80 source via build-icons.sh) for
+; both setup.exe and Uninstall.exe. Branding BMPs are 24-bit BMP3 — MUI2
+; cannot render BMPv4/v5 correctly. See `build-installer-assets.ps1` for
+; regeneration when the source icon changes.
+!include "MUI2.nsh"
+
+!define MUI_ICON   "..\windows\runner\resources\app_icon.ico"
+!define MUI_UNICON "..\windows\runner\resources\app_icon.ico"
+
+!define MUI_HEADERIMAGE
+!define MUI_HEADERIMAGE_BITMAP        "header.bmp"
+!define MUI_WELCOMEFINISHPAGE_BITMAP  "welcome.bmp"
+
+; Tighten the welcome/finish page text — MUI2 defaults read like a
+; generic Win 95 Setup wizard otherwise.
+!define MUI_WELCOMEPAGE_TITLE   "Install ${APPNAME}"
+!define MUI_WELCOMEPAGE_TEXT    "This wizard installs ${APPNAME} ${APPVERSION} on your computer.$\r$\n$\r$\n${DESCRIPTION}.$\r$\n$\r$\nClick Next to continue."
+!define MUI_FINISHPAGE_TITLE    "${APPNAME} installed"
+!define MUI_FINISHPAGE_TEXT     "${APPNAME} ${APPVERSION} has been installed on your computer.$\r$\n$\r$\nClick Finish to close the wizard."
+!define MUI_FINISHPAGE_RUN      "$INSTDIR\bxp-gui.exe"
+!define MUI_FINISHPAGE_RUN_TEXT "Run ${APPNAME} now"
+
+!insertmacro MUI_PAGE_WELCOME
+!insertmacro MUI_PAGE_DIRECTORY
+!insertmacro MUI_PAGE_INSTFILES
+!insertmacro MUI_PAGE_FINISH
+
+!insertmacro MUI_UNPAGE_WELCOME
+!insertmacro MUI_UNPAGE_CONFIRM
+!insertmacro MUI_UNPAGE_INSTFILES
+!insertmacro MUI_UNPAGE_FINISH
+
+!insertmacro MUI_LANGUAGE "English"
+
+; ── Install / Uninstall sections ─────────────────────────────────────────
 
 Section "Install"
     SetOutPath "$INSTDIR"
@@ -65,7 +102,9 @@ Section "Install"
 
     ; Silent-install relaunch hook — UpdaterService runs setup.exe with /S
     ; and exits the running app. After install we relaunch the GUI so the
-    ; user sees the new version come up automatically.
+    ; user sees the new version come up automatically. The MUI2 Finish
+    ; page's MUI_FINISHPAGE_RUN handles the interactive case; this branch
+    ; covers the silent path that skips the wizard.
     IfSilent 0 +2
         Exec '"$INSTDIR\bxp-gui.exe"'
 SectionEnd

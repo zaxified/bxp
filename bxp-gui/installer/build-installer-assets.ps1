@@ -1,0 +1,117 @@
+#requires -Version 5.0
+<#
+.SYNOPSIS
+Regenerate the NSIS installer's branding bitmaps from the canonical
+icon source.
+
+.DESCRIPTION
+The MUI2 installer ([bxp-desktop.nsi]) needs two BMP files at fixed
+dimensions:
+
+  header.bmp   150 x 57   shown top-right on every wizard page
+  welcome.bmp  164 x 314  shown left side of Welcome + Finish pages
+
+Both must be BMP3 (24-bit, no alpha) — MUI2 cannot render BMPv4 / BMPv5
+correctly. We render them from `resources/icons/bxp-sand-80.png` (the
+primary 512×512 icon source) onto a white canvas using GDI+ via
+System.Drawing — no external tooling required.
+
+The .ico files reuse `bxp-gui/windows/runner/resources/app_icon.ico`
+which Flutter generates from the same source, so a single icon swap
+in `resources/icons/` propagates everywhere after a rerun of this
+script + `scripts/build-icons.sh`.
+
+.NOTES
+Run from the monorepo root:
+
+    pwsh -File bxp-gui/installer/build-installer-assets.ps1
+
+Outputs `bxp-gui/installer/header.bmp` and `welcome.bmp`.
+#>
+
+[CmdletBinding()]
+param(
+    [string]$SourcePng = (Join-Path $PSScriptRoot "..\..\resources\icons\bxp-sand-80.png"),
+    [string]$OutDir    = $PSScriptRoot
+)
+
+Add-Type -AssemblyName System.Drawing
+
+$ErrorActionPreference = 'Stop'
+
+if (-not (Test-Path $SourcePng)) {
+    throw "Source icon not found: $SourcePng"
+}
+
+$src = [System.Drawing.Image]::FromFile((Resolve-Path $SourcePng).Path)
+try {
+    # ── header.bmp 150x57 ──────────────────────────────────────────────
+    # Layout: white canvas, logo right-aligned at 50x50 (with 4 px pad).
+    # NSIS shows this on the upper-right corner of every wizard page.
+    $hw = 150; $hh = 57
+    $hbmp = New-Object System.Drawing.Bitmap $hw, $hh
+    $hg = [System.Drawing.Graphics]::FromImage($hbmp)
+    try {
+        $hg.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+        $hg.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+        $hg.Clear([System.Drawing.Color]::White)
+        $logoSize = 49
+        $padRight = 4
+        $padTop   = ($hh - $logoSize) / 2
+        $hg.DrawImage($src, ($hw - $logoSize - $padRight), $padTop,
+                      $logoSize, $logoSize)
+    } finally {
+        $hg.Dispose()
+    }
+    $headerPath = Join-Path $OutDir 'header.bmp'
+    # SaveAs Bmp emits 24-bit BMP3 by default for non-alpha source — but
+    # our source is RGBA, so first re-paint onto a 24bpp canvas to drop
+    # the alpha channel. MUI2 renders BMP3 only.
+    $h24 = New-Object System.Drawing.Bitmap $hw, $hh, ([System.Drawing.Imaging.PixelFormat]::Format24bppRgb)
+    $h24g = [System.Drawing.Graphics]::FromImage($h24)
+    try {
+        $h24g.Clear([System.Drawing.Color]::White)
+        $h24g.DrawImage($hbmp, 0, 0)
+    } finally {
+        $h24g.Dispose()
+    }
+    $h24.Save($headerPath, [System.Drawing.Imaging.ImageFormat]::Bmp)
+    $h24.Dispose()
+    $hbmp.Dispose()
+    Write-Host "  → $headerPath ($hw x $hh, 24-bit BMP)"
+
+    # ── welcome.bmp 164x314 ────────────────────────────────────────────
+    # Layout: subtle sand gradient top-to-bottom, logo centered top-third,
+    # bottom area left blank for MUI2's title/subtitle text overlay.
+    $ww = 164; $wh = 314
+    $wbmp = New-Object System.Drawing.Bitmap $ww, $wh, ([System.Drawing.Imaging.PixelFormat]::Format24bppRgb)
+    $wg = [System.Drawing.Graphics]::FromImage($wbmp)
+    try {
+        $wg.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+        $wg.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+        # Sand gradient top → near-white. Picked to harmonise with the
+        # sand-80 icon palette without competing with it.
+        $top    = [System.Drawing.Color]::FromArgb(255, 240, 220, 178)  # warm sand
+        $bottom = [System.Drawing.Color]::FromArgb(255, 252, 248, 240)  # near-white
+        $rect   = New-Object System.Drawing.Rectangle 0, 0, $ww, $wh
+        $brush  = New-Object System.Drawing.Drawing2D.LinearGradientBrush $rect, $top, $bottom, 90
+        $wg.FillRectangle($brush, $rect)
+        $brush.Dispose()
+        # Logo centered horizontally, ~25% from top.
+        $logoSize = 110
+        $logoX = ($ww - $logoSize) / 2
+        $logoY = 60
+        $wg.DrawImage($src, $logoX, $logoY, $logoSize, $logoSize)
+    } finally {
+        $wg.Dispose()
+    }
+    $welcomePath = Join-Path $OutDir 'welcome.bmp'
+    $wbmp.Save($welcomePath, [System.Drawing.Imaging.ImageFormat]::Bmp)
+    $wbmp.Dispose()
+    Write-Host "  → $welcomePath ($ww x $wh, 24-bit BMP)"
+} finally {
+    $src.Dispose()
+}
+
+Write-Host ""
+Write-Host "Done. Bitmaps regenerated in $OutDir"
