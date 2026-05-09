@@ -214,10 +214,13 @@ const StreamCallback = ?*const fn (data: [*]const u8, len: u32) callconv(.c) voi
 const ExitCallback = ?*const fn (exit_code: i32) callconv(.c) void;
 
 /// How many lines of stdout to buffer in the bridge before flushing a batch
-/// to Dart. Picked as a compromise: low enough that the user sees mid-run
-/// progress, high enough that a multi-thousand-line trace doesn't flood the
-/// Dart event loop with one message per line.
-const stdout_batch_lines: usize = 1000;
+/// to Dart. Lower means smoother UI (every batch monopolises the Dart event
+/// loop while utf8.decode + the per-line trace builder run, which on big
+/// runs starves the frame scheduler and visibly stutters the status-bar
+/// spinner). Higher means fewer FFI hops. 100 is the current knob value
+/// after dropping from 1000 — 1000 was producing perceptible spinner
+/// freezes on multi-thousand-line traces.
+const stdout_batch_lines: usize = 100;
 
 /// State shared between the bridge_run_streaming spawner and the three
 /// long-lived helper threads (stdout reader, stderr reader, wait thread).
