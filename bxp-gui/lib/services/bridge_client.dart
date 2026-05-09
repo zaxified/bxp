@@ -9,6 +9,7 @@
 // path so the eventual `--expr` per-keystroke optimisation (no spawn
 // overhead per call) lands cross-platform later.
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
@@ -34,6 +35,34 @@ typedef _BridgeRunDart = int Function(
 // some stale copy left over from an older install.
 typedef _BridgeVersionNative = Pointer<Utf8> Function();
 typedef _BridgeVersionDart = Pointer<Utf8> Function();
+
+// C ABI for the streaming entrypoint:
+//   bridge_run_streaming(req,
+//                        on_stdout_batch,
+//                        on_stderr_chunk,
+//                        on_exit) -> int32_t
+// Returns 0 on a successful start, -1 on any pre-spawn failure. The bridge
+// hands ownership of every batch / chunk pointer to Dart; Dart MUST call
+// bridge_free(ptr, len) once it has copied the bytes.
+typedef _StreamCallbackNative = Void Function(Pointer<Uint8>, Uint32);
+typedef _ExitCallbackNative = Void Function(Int32);
+typedef _BridgeRunStreamingNative = Int32 Function(
+  Pointer<Utf8>,
+  Pointer<NativeFunction<_StreamCallbackNative>>,
+  Pointer<NativeFunction<_StreamCallbackNative>>,
+  Pointer<NativeFunction<_ExitCallbackNative>>,
+);
+typedef _BridgeRunStreamingDart = int Function(
+  Pointer<Utf8>,
+  Pointer<NativeFunction<_StreamCallbackNative>>,
+  Pointer<NativeFunction<_StreamCallbackNative>>,
+  Pointer<NativeFunction<_ExitCallbackNative>>,
+);
+
+// bridge_free(ptr, len) — releases a buffer the bridge previously handed
+// to Dart through a streaming callback.
+typedef _BridgeFreeNative = Void Function(Pointer<Uint8>, Uint32);
+typedef _BridgeFreeDart = void Function(Pointer<Uint8>, int);
 
 /// Result of a bridge-mediated subprocess invocation. Mirrors dart:io
 /// `ProcessResult` conceptually; `err` is non-null only when the bridge
@@ -71,6 +100,8 @@ class BridgeClient {
   final DynamicLibrary _lib;
   late final _BridgeRunDart _bridgeRun;
   late final _BridgeVersionDart _bridgeVersion;
+  late final _BridgeRunStreamingDart _bridgeRunStreaming;
+  late final _BridgeFreeDart _bridgeFree;
 
   BridgeClient(String dllPath) : _lib = DynamicLibrary.open(dllPath) {
     _bridgeRun = _lib
@@ -78,6 +109,10 @@ class BridgeClient {
     _bridgeVersion = _lib
         .lookupFunction<_BridgeVersionNative, _BridgeVersionDart>(
             'bridge_version');
+    _bridgeRunStreaming = _lib.lookupFunction<_BridgeRunStreamingNative,
+        _BridgeRunStreamingDart>('bridge_run_streaming');
+    _bridgeFree =
+        _lib.lookupFunction<_BridgeFreeNative, _BridgeFreeDart>('bridge_free');
   }
 
   /// DLL self-reported version string, e.g. "0.2.1". Read once at load.
@@ -132,6 +167,118 @@ class BridgeClient {
     } finally {
       malloc.free(requestPtr);
       malloc.free(responseBuf);
+    }
+  }
+
+  /// Streaming variant of [run]. Spawns the child, returns a Future that
+  /// completes with its exit code, and reports stdout / stderr progressively
+  /// via [onLine] / [onStderr] callbacks. Designed for the GUI's `--trace`
+  /// dry-run path, where the user expects file-list + per-row counters to
+  /// update in real time.
+  ///
+  /// Threading model: the bridge runs the child + drainers on its own native
+  /// threads. Each batch / chunk fires through a `NativeCallable.listener`
+  /// which dispatches the call onto the calling isolate's event loop, so all
+  /// Dart-side work (UTF-8 decode, [onLine] / [onStderr], Completer.complete)
+  /// runs on this isolate without crossing isolate boundaries.
+  ///
+  /// Memory contract: the bridge heap-allocates each batch / chunk on the
+  /// C runtime (so does Dart's `package:ffi` malloc, but we still call the
+  /// bridge's own `bridge_free` for symmetry and forward-compatibility). Dart
+  /// must free promptly inside the callback — the buffer is single-owner
+  /// and never reused by the bridge after the callback fires.
+  ///
+  /// The on_exit native callback is the single signal "all callbacks have
+  /// drained, future can complete and NativeCallables can close". The bridge
+  /// joins both reader threads before invoking on_exit, so no callback ever
+  /// fires after the future resolves.
+  Future<int> runStreaming(
+    String exe,
+    List<String> args, {
+    String? cwd,
+    required void Function(String line) onLine,
+    void Function(String chunk)? onStderr,
+  }) async {
+    final completer = Completer<int>();
+
+    void handleStdoutBatch(Pointer<Uint8> ptr, int len) {
+      try {
+        if (len > 0) {
+          // Bridge guarantees the buffer is valid until we return; copy the
+          // bytes through utf8.decode + LineSplitter immediately, then free.
+          final text = utf8.decode(ptr.asTypedList(len), allowMalformed: true);
+          for (final line in const LineSplitter().convert(text)) {
+            if (line.isEmpty) continue;
+            onLine(line);
+          }
+        }
+      } finally {
+        _bridgeFree(ptr, len);
+      }
+    }
+
+    void handleStderrChunk(Pointer<Uint8> ptr, int len) {
+      try {
+        if (len > 0 && onStderr != null) {
+          final chunk =
+              utf8.decode(ptr.asTypedList(len), allowMalformed: true);
+          onStderr(chunk);
+        }
+      } finally {
+        _bridgeFree(ptr, len);
+      }
+    }
+
+    void handleExit(int code) {
+      if (!completer.isCompleted) completer.complete(code);
+    }
+
+    // NativeCallable.listener routes the native invocation through the
+    // owning isolate's event loop — so the handlers above run here, not on
+    // the bridge's reader thread.
+    final stdoutCb = NativeCallable<_StreamCallbackNative>.listener(
+      handleStdoutBatch,
+    );
+    final stderrCb = NativeCallable<_StreamCallbackNative>.listener(
+      handleStderrChunk,
+    );
+    final exitCb =
+        NativeCallable<_ExitCallbackNative>.listener(handleExit);
+
+    final request = jsonEncode({
+      'exe': exe,
+      'args': args,
+      if (cwd != null && cwd.isNotEmpty) 'cwd': cwd,
+    });
+    final requestPtr = request.toNativeUtf8();
+
+    int rc;
+    try {
+      rc = _bridgeRunStreaming(
+        requestPtr,
+        stdoutCb.nativeFunction,
+        stderrCb.nativeFunction,
+        exitCb.nativeFunction,
+      );
+    } finally {
+      malloc.free(requestPtr);
+    }
+
+    if (rc != 0) {
+      // Pre-spawn failure: bridge never armed any threads, so no exit
+      // callback will fire. Resolve immediately and tear down callables.
+      stdoutCb.close();
+      stderrCb.close();
+      exitCb.close();
+      return -1;
+    }
+
+    try {
+      return await completer.future;
+    } finally {
+      stdoutCb.close();
+      stderrCb.close();
+      exitCb.close();
     }
   }
 }

@@ -703,16 +703,15 @@ class BxpProcessClient {
     // bytes past ~8 KB on this platform (sdk#1727 + #51273) — `--trace`
     // emits NDJSON proportional to row count and gets brutally truncated,
     // surfacing as "parse issues: 100" or worse. The bridge drains pipes
-    // from native Zig code, so the full stream survives. Trade-off: the
-    // bridge is one-shot (full buffer drain → return after exit), so the
-    // GUI loses live trace-line streaming during the run — every line
-    // arrives at once at the end. Acceptable for now: correctness beats
-    // smoothness when the alternative is broken output.
+    // from native Zig code, so the full stream survives.
     //
-    // No onSpawn / cancel support: the bridge call is synchronous from
-    // the worker isolate and we can't hand back a Process handle for the
-    // user to kill. Cancel is sacrificed on Windows until the streaming
-    // bridge variant lands.
+    // The bridge runs streaming on its own threads and reports stdout in
+    // batches of 1000 lines (plus a final flush at EOF), so file-list and
+    // per-row counters update progressively in the UI rather than
+    // appearing all at once at the end of the run. No onSpawn / cancel
+    // support yet: the bridge owns the child handle, and there's no
+    // FFI-level kill request to wire through. Cancel will land when the
+    // bridge gains a per-call cancellation token.
     final dllPath = _resolveBridgePath();
     if (dllPath != null) {
       final r = await _runCliTraceViaBridge(
@@ -826,11 +825,17 @@ class BxpProcessClient {
   /// user reaching for `kill`.
   static const Duration _streamIdleTimeout = Duration(seconds: 10);
 
-  /// Bridge variant of [_runCliTrace]. Drains the child's pipes from
-  /// native Zig code (no dart:io truncation), then replays each NDJSON
-  /// line through [onLine] so the trace builder populates as if it had
-  /// been streamed. Lines arrive in one batch at the end of the run —
-  /// the trade-off for fixing the Windows pipe truncation.
+  /// Bridge variant of [_runCliTrace]. The bridge drains the child's pipes
+  /// from native Zig code (no dart:io truncation) and reports stdout in
+  /// batches of 1000 lines via FFI callbacks routed through
+  /// `NativeCallable.listener`, so trace rows appear in the UI as the
+  /// child produces them — not at the end of the run.
+  ///
+  /// Runs on the main isolate. Earlier batch-mode bridge calls hopped into
+  /// `Isolate.run` because they blocked for the entire child lifetime;
+  /// `runStreaming` returns to its caller as soon as the bridge has armed
+  /// its threads, so the main isolate stays responsive without isolate
+  /// gymnastics.
   static Future<ProcessRunResult> _runCliTraceViaBridge({
     required String bin,
     required List<String> args,
@@ -839,40 +844,24 @@ class BxpProcessClient {
     required void Function(String line) onLine,
     void Function(String chunk)? onStderr,
   }) async {
+    final stderrBuffer = StringBuffer();
+    final client = BridgeClient(dllPath);
     try {
-      // dllPath captured as a local — class statics aren't shared across
-      // isolates, so referencing _bridgeDllPath inside the closure would
-      // crash with "Null check operator used on a null value" the first
-      // time the worker isolate evaluates it.
-      final result = await Isolate.run(
-        () => _bridgeRunStreamingInIsolate(dllPath, bin, args, cwd),
+      final exitCode = await client.runStreaming(
+        bin,
+        args,
+        cwd: cwd,
+        onLine: onLine,
+        onStderr: (chunk) {
+          stderrBuffer.write(chunk);
+          onStderr?.call(chunk);
+        },
       );
-      if (result.err != null) {
-        _lastSubprocessDiag = 'bridge $_bridgeVersion: stream err=${result.err}';
-        return ProcessRunResult(
-          exitCode: -1,
-          stderr: 'bridge: ${result.err}',
-        );
-      }
       _lastSubprocessDiag = 'bridge $_bridgeVersion: '
-          'stream exit ${result.exitCode}, '
-          'stdout=${result.stdout.length} B, '
-          'stderr=${result.stderr.length} B';
-      // Surface stderr first so any fatal pre-trace warnings reach the
-      // status bar before the row deluge.
-      if (result.stderr.isNotEmpty && onStderr != null) {
-        onStderr(result.stderr);
-      }
-      // Replay every non-empty NDJSON line through onLine. The trace
-      // builder expects line-by-line input; we just don't get to do it
-      // progressively any more.
-      for (final line in const LineSplitter().convert(result.stdout)) {
-        if (line.isEmpty) continue;
-        onLine(line);
-      }
+          'stream exit $exitCode, stderr=${stderrBuffer.length} B';
       return ProcessRunResult(
-        exitCode: result.exitCode,
-        stderr: result.stderr,
+        exitCode: exitCode,
+        stderr: stderrBuffer.toString(),
       );
     } catch (e) {
       _lastSubprocessDiag = 'bridge: stream ${e.runtimeType} $e';
@@ -908,35 +897,6 @@ BridgeResult _bridgeRunInIsolate(
       stdout: '',
       stderr: '',
       err: 'bridge isolate exception: $e',
-    );
-  }
-}
-
-/// Worker-isolate entry for streaming bxp-cli runs (--trace dry-run /
-/// full run). Same pattern as [_bridgeRunInIsolate] but with a working
-/// directory (relative `data_dir` paths in the user's config resolve
-/// against the config file) and the larger response buffer needed for
-/// row-proportional NDJSON output.
-BridgeResult _bridgeRunStreamingInIsolate(
-  String dllPath,
-  String executable,
-  List<String> arguments,
-  String cwd,
-) {
-  try {
-    final client = BridgeClient(dllPath);
-    return client.run(
-      executable,
-      arguments,
-      cwd: cwd,
-      bufSize: BridgeClient.largeBufSize,
-    );
-  } catch (e) {
-    return BridgeResult(
-      exitCode: -1,
-      stdout: '',
-      stderr: '',
-      err: 'bridge streaming isolate exception: $e',
     );
   }
 }
