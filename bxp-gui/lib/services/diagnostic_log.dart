@@ -35,16 +35,41 @@ import 'debug_settings.dart';
 ///   - macOS:   `~/Library/Application Support/bxp-gui/`
 ///   - Windows: `%APPDATA%\bxp-gui\`
 ///
-/// One JSON object per line, fields:
-///   t     — ISO-8601 UTC timestamp
-///   kind  — event type (`startup`, `gpu`, `frame`, `action`, `error`, ...)
-///   ...   — kind-specific payload
+/// One JSON object per line. Common kinds:
+///
+///   startup           one per launch — platform, os_version, dart_version,
+///                     executable, cwd, locale
+///   gpu               WMI Win32_VideoController dump (Name, DriverVersion,
+///                     CurrentRefreshRate). First place to look on Windows
+///                     freeze reports.
+///   gpu_error         WMI query failed; rare.
+///   frame             1 Hz: fps, build_ms, raster_ms, pe, pe_fwd, scroll,
+///                     mid_btn. Sustained `fps=2` with `raster_ms<10ms` is
+///                     the signature of an engine stuck in EGL Context Lost
+///                     recovery (no actual painting).
+///   action.start      wraps loadConfig / runDryRun / runFullRun /
+///   action.end        validateExpr subprocess calls — name, ms, exit,
+///                     stdout_bytes...
+///   action.validateExpr  high frequency, emitted per keystroke.
+///   error.flutter     caught by `FlutterError.onError`.
+///   error.zone        caught by the top-level `runZonedGuarded`.
 ///
 /// Capped at 5 MB per session to prevent runaway disk use; further
 /// writes silently drop once the cap is reached. A new file is created
 /// for every launch — no in-place rotation. Heartbeat runs every 1 s
 /// and flushes the IOSink, so on a hard kill at most ~1 s of frame
 /// telemetry is lost.
+///
+/// Two parallel logs share the same activation gate (Windows only):
+///   `diagnostic-native-YYYYMMDD-HHMMSS.log`  — Win32 message log,
+///       one message per line prefixed with `[HH:MM:SS.mmm]`. Hooks are
+///       limited to window-lifecycle messages (WM_NCCREATE, WM_SIZE,
+///       WM_WINDOWPOSCHANGED, WM_DPICHANGED, WM_ACTIVATE, WM_SHOWWINDOW,
+///       WM_DISPLAYCHANGE, WM_DESTROY).
+///   `diagnostic-engine-YYYYMMDD-HHMMSS.log`  — Flutter engine stderr
+///       captured before the engine boots (CreatePipe + reader thread in
+///       win32_window.cpp). The only place engine errors survive in a
+///       /SUBSYSTEM:WINDOWS release binary launched without a console.
 class DiagnosticLog {
   static IOSink? _sink;
   static String? _path;
