@@ -34,7 +34,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   // window grew (eg. 2048x1152 logical at maximised 1920x1080 viewport)
   // — the wheel-scroll lag in maximised mode came from that.
   Win32Window::Size size(1280, 800);
-  if (!window.Create(L"BXP GUI", origin, size)) {
+  if (!window.Create(L"BXP", origin, size)) {
     return EXIT_FAILURE;
   }
   window.SetQuitOnClose(true);

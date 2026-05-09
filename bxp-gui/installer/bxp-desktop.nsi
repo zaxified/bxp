@@ -28,10 +28,13 @@
   !define OUTDIR "."
 !endif
 
-!define APPNAME "BXP GUI"
+!define APPNAME "BXP"
 !define COMPANYNAME "io.github.bxp"
-!define DESCRIPTION "Broker eXchange Parser — desktop config editor"
-!define INSTALLDIR_DEFAULT "$PROGRAMFILES64\BXP"
+; Plain ASCII hyphen, not em-dash. NSIS processes this script in ANSI
+; mode (codepage interpretation depends on the build host) and a UTF-8
+; em-dash here renders as three garbage bytes on the Welcome page.
+!define DESCRIPTION "Broker eXchange Parser - desktop config editor"
+!define INSTALLDIR_DEFAULT "$PROGRAMFILES64\bxp-gui"
 
 Name "${APPNAME}"
 OutFile "${OUTDIR}\bxp-desktop-${VERSIONTAG}-windows-x86_64-setup.exe"

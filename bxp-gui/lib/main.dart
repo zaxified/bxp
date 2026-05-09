@@ -171,7 +171,7 @@ class BxpApp extends StatelessWidget {
         // sans and ignore everything in BxpTextScheme.
         final ts = ctx.watch<TraceStore>().textScheme;
         return MaterialApp(
-          title: 'BXP GUI',
+          title: 'BXP',
           debugShowCheckedModeBanner: false,
           scaffoldMessengerKey: bxpMessengerKey,
           navigatorKey: bxpNavigatorKey,

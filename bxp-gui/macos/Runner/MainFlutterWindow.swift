@@ -7,6 +7,10 @@ class MainFlutterWindow: NSWindow {
     let windowFrame = self.frame
     self.contentViewController = flutterViewController
     self.setFrame(windowFrame, display: true)
+    // Window title override — the storyboard's default "Window" caption
+    // would otherwise show in the title bar even though the bundle name
+    // is "BXP".
+    self.title = "BXP"
 
     // Enforce a minimum content size of 1024x768. Mirrors the GTK
     // GdkGeometry hint in linux/runner/my_application.cc and the

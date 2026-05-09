@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Version=1.0
-Name=BXP GUI
+Name=BXP
 GenericName=Broker eXchange Parser
 Comment=Edit broker config files and dry-run conversions
 Exec=bxp-gui %f

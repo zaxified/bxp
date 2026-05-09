@@ -6,8 +6,8 @@ Architecture: amd64
 Depends: libgtk-3-0, libglib2.0-0, libstdc++6
 Maintainer: BXP project <noreply@github.com>
 Homepage: https://github.com/zaxified/bxp
-Description: Broker eXchange Parser — desktop config editor and debugger
- BXP GUI is a Flutter desktop application that edits the JSON5 conversion
+Description: Broker eXchange Parser - desktop config editor and debugger
+ BXP is a Flutter desktop application that edits the JSON5 conversion
  configs used by the bxp-cli engine and exposes a per-row dry-run trace
  debugger. Ships the bxp-cli + bxp-fmt companion binaries inside the
  installation prefix so the GUI is self-contained.

@@ -247,7 +247,7 @@ build_macos() {
     fi
     local out="$OUTDIR/bxp-desktop-${VERSION}-macos-aarch64.dmg"
     create-dmg \
-        --volname "BXP GUI" \
+        --volname "BXP" \
         --window-size 600 400 \
         --icon-size 100 \
         --icon "bxp-gui.app" 175 175 \
