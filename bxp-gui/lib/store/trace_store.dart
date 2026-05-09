@@ -2636,23 +2636,58 @@ class TraceStore extends ChangeNotifier {
     return parts.join('\n');
   }
 
-  /// Opens [path] in the host's default application (`xdg-open` on Linux).
-  /// Used by the StatusBar pencil-icon shortcut — mirrors bxp-ui's
-  /// `openInEditor` RPC.
+  /// Opens [path] in the host's default application. Used by the
+  /// StatusBar pencil-icon shortcut — mirrors bxp-ui's `openInEditor`
+  /// RPC.
+  ///
+  /// Per-platform launchers:
+  /// * **Linux** — `xdg-open`, the freedesktop entry point that hands
+  ///   off to the user's MIME-default app.
+  /// * **macOS** — `open`, which routes through Launch Services.
+  /// * **Windows** — `explorer.exe <path>` routes through Shell execute
+  ///   internally and triggers the user's default association for the
+  ///   extension. Earlier alternatives that we tried and dropped:
+  ///   - `Process.start('cmd', ['/c', 'start', '', path], detached)`
+  ///     — dart:io's argv→cmdline conversion combined with detached
+  ///     mode produced a command line that `start` rejected on a
+  ///     non-trivial fraction of paths.
+  ///   - `launchUrl(Uri.file(path))` from `url_launcher` — works for
+  ///     `http://` URIs but the Windows plugin's ShellExecute call
+  ///     consistently no-op'd on local file paths.
+  ///   - `rundll32.exe url.dll,FileProtocolHandler <path>` — the
+  ///     entry point's name suggests it'd handle file paths, but
+  ///     it actually only handles URL protocols and silently exits
+  ///     on plain file paths.
+  ///   `explorer.exe` is the simplest entry point that works
+  ///   everywhere. Its exit code is intentionally ignored (it always
+  ///   exits 1 on success), and we don't pass `detached` because the
+  ///   process self-exits as soon as ShellExecute hands off.
   Future<void> openInEditor(String path) async {
     if (path.isEmpty) return;
     devTrace('action.openInEditor', {'path': path});
     try {
       if (Platform.isLinux) {
-        await Process.start('xdg-open', [path], mode: ProcessStartMode.detached);
+        await Process.start('xdg-open', [path],
+            mode: ProcessStartMode.detached);
       } else if (Platform.isMacOS) {
         await Process.start('open', [path], mode: ProcessStartMode.detached);
       } else if (Platform.isWindows) {
-        await Process.start('cmd', ['/c', 'start', '', path],
-            mode: ProcessStartMode.detached);
+        // `explorer.exe path` is the canonical Windows "open this file
+        // with its default association" call — it routes through Shell
+        // execute internally and shows the OpenWith picker if no
+        // association exists. Earlier attempts (rundll32
+        // url.dll,FileProtocolHandler / Process.start cmd '/c' 'start')
+        // either silently no-op'd on file paths or got mangled by
+        // dart:io's argv→cmdline conversion when combined with
+        // ProcessStartMode.detached. explorer.exe's exit code is
+        // intentionally ignored (it always exits 1 on success), and
+        // not-detached so dart:io spawns it through a regular console
+        // child that hands off to ShellExecute and then dies.
+        await Process.start('explorer.exe', [path]);
       }
-    } catch (_) {
-      // Best-effort launch; don't surface transient errors to the UI.
+    } catch (e) {
+      devTrace('action.openInEditor.failed',
+          {'path': path, 'error': e.toString()});
     }
   }
 
