@@ -68,17 +68,11 @@ class TraceStore extends ChangeNotifier {
   String _themePresetName = 'slate';
   String get themePresetName => _themePresetName;
 
-  // Active sans/prose typography scheme. Resolved by BxpTextScheme in
-  // ui/theme/bxp_text_scheme.dart. Persisted under PrefsService key
-  // `bxp-ui.textScheme`. Default 'noto' — the existing UI layout was
-  // tuned against Linux's pre-bundle build where the system sans
-  // fallback resolved to Noto; pinning the bundled Noto Sans as the
-  // default keeps fixed-width slots and label paddings intact while
-  // rendering the same metrics on Windows/macOS.
-  String _textSchemeName = 'noto';
-  String get textSchemeName => _textSchemeName;
-  BxpTextScheme get textScheme =>
-      bxpTextSchemes[_textSchemeName] ?? kBxpTextNoto;
+  // Active sans/prose typography scheme. The app ships a single
+  // bundled font (Roboto) so the getter is a constant; the indirection
+  // is preserved so call sites stay shape `store.textScheme.fontFamily`
+  // and a future second scheme can be added back without rewrites.
+  BxpTextScheme get textScheme => kBxpTextRoboto;
 
   // Ctrl+/Ctrl-/Ctrl+wheel UI zoom factor. Stored INTERNALLY as an
   // integer percent (60, 80, 100, 125, …) and persisted under
@@ -922,12 +916,6 @@ class TraceStore extends ChangeNotifier {
       if (stored != null && stored.isNotEmpty) _themePresetName = stored;
     } catch (_) {}
     try {
-      final ts = _prefs.getString('bxp-ui.textScheme');
-      if (ts != null && ts.isNotEmpty && bxpTextSchemes.containsKey(ts)) {
-        _textSchemeName = ts;
-      }
-    } catch (_) {}
-    try {
       // Read as double for legacy compatibility. Pre-v0.3 prefs stored
       // the zoom as a fractional double (`0.8`, `0.6000000000000001`);
       // we promote to integer percent on read, and `_persistZoom()`
@@ -1122,20 +1110,7 @@ class TraceStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Pick a sans/prose typography scheme. Persisted under
-  /// `bxp-ui.textScheme`. Unknown names are ignored (silently kept on
-  /// previous value) — we never trust user input to map to a missing
-  /// scheme.
-  void setTextScheme(String name) async {
-    if (_textSchemeName == name) return;
-    if (!bxpTextSchemes.containsKey(name)) return;
-    devTrace('action.textScheme.set', {'name': name});
-    _textSchemeName = name;
-    await _prefs.setString('bxp-ui.textScheme', _textSchemeName);
-    notifyListeners();
-  }
-
-  /// Set the UI zoom factor and persist under `bxp-gui.zoom`. Accepts
+/// Set the UI zoom factor and persist under `bxp-gui.zoom`. Accepts
   /// the historical fractional API (1.0 = 100 %, 0.8 = 80 %, …) and
   /// internally stores the integer percent — see [_zoomPercent] for
   /// why. Clamped to [50 %, 300 %].

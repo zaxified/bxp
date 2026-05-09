@@ -364,7 +364,6 @@ class _DebugSection extends StatelessWidget {
   Widget build(BuildContext context) {
     final t = context.bxpTheme;
     final s = context.watch<DebugSettings>();
-    final store = context.watch<TraceStore>();
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: Column(
@@ -373,49 +372,6 @@ class _DebugSection extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.only(bottom: 4),
             child: Text('DEBUG', style: BxpText.label(context)),
-          ),
-          // Live text-scheme switcher — used to compare bundled Inter
-          // vs. bundled Roboto without rebuilding. Both are registered
-          // in `pubspec.yaml`; switching here changes the active scheme
-          // immediately via TraceStore.setTextScheme + notifyListeners
-          // and persists under `bxp-ui.textScheme`.
-          Padding(
-            padding: const EdgeInsets.only(bottom: 8, top: 2),
-            child: Row(
-              children: [
-                Text('Font scheme:',
-                    style: BxpText.body(context, color: t.textMuted)),
-                const SizedBox(width: 8),
-                for (final name in const ['noto', 'roboto', 'inter'])
-                  Padding(
-                    padding: const EdgeInsets.only(right: 6),
-                    child: GestureDetector(
-                      onTap: () => store.setTextScheme(name),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 8, vertical: 3),
-                        decoration: BoxDecoration(
-                          color: store.textSchemeName == name
-                              ? t.accentHighlight.withValues(alpha: 0.2)
-                              : Colors.transparent,
-                          border: Border.all(
-                            color: store.textSchemeName == name
-                                ? t.accentHighlight
-                                : t.borderColor,
-                          ),
-                        ),
-                        child: Text(
-                          name,
-                          style: BxpText.body(context,
-                              color: store.textSchemeName == name
-                                  ? t.textPrimary
-                                  : t.textMuted),
-                        ),
-                      ),
-                    ),
-                  ),
-              ],
-            ),
           ),
           // ── Master switch: overlay + file trace ─────────────────────
           //

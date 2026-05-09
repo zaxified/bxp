@@ -7,14 +7,16 @@ import 'package:flutter/material.dart';
 /// because they change with light/dark, while font metrics shouldn't.
 ///
 /// The scheme is theme-INDEPENDENT (same font/sizes across light/dark
-/// — fonts shouldn't flicker on theme change), but it is itself a
-/// class with named instances so swapping the entire app font is one
-/// literal edit (`setTextScheme('inter')`) without touching widgets.
+/// — fonts shouldn't flicker on theme change). bxp-gui ships exactly
+/// one scheme (Roboto) so the class is effectively a constant; it
+/// stays a class for future-proofing if a second font is ever added
+/// back, and so call sites stay shape `ts.fontFamily` / `ts.sizeMd`
+/// rather than imports of stand-alone constants.
 ///
 /// Single source of truth for typography across the entire app —
 /// code-style text (cell values, expression syntax, JSON tree keys)
-/// reads through the same scheme as prose. bxp-gui ships with Roboto
-/// only; there is no separate mono/code scheme.
+/// reads through the same scheme as prose. There is no separate
+/// mono/code scheme.
 class BxpTextScheme {
   /// Family — `null` means Material default (Flutter ships Roboto, so
   /// it always renders without external installs).
@@ -62,41 +64,13 @@ class BxpTextScheme {
   });
 }
 
-/// Default — Noto Sans. All sans schemes are bundled in `pubspec.yaml`
-/// (`flutter.fonts:`); without an explicit `fontFamily` here Flutter
-/// would fall back to the platform's system sans (Segoe UI / SF Pro /
-/// DejaVu) and metrics would diverge by platform. Noto is the default
-/// because the existing UI layout — fixed-width slots, label widths,
-/// header padding — was tuned against Linux's pre-bundle build where
-/// `fontFamily` was unset and the system fallback resolved to Noto;
-/// pinning it as the bundled primary keeps that layout intact while
-/// also rendering identically on Windows/macOS.
-const kBxpTextNoto = BxpTextScheme(
-  fontFamily: 'Noto Sans',
-  fontFamilyFallback: ['Roboto', 'Inter', 'sans-serif'],
-);
-
-/// Alternative scheme — Roboto primary. Material's reference font;
-/// slightly heavier and wider than Noto. Bundled as five static
-/// weight files (Roboto's canonical distribution doesn't ship a
-/// plain-weight variable, only Roboto Flex with axes we don't use).
+/// The (only) bundled scheme — Roboto. Material's reference font;
+/// shipped as five static weight files (300/400/500/600/700) under
+/// `bxp-gui/fonts/`. The explicit `fontFamily` is what makes
+/// rendering identical on Windows/macOS/Linux; without it Flutter
+/// would fall back to the platform's system sans (Segoe UI / SF Pro
+/// / DejaVu) and metrics would diverge by platform.
 const kBxpTextRoboto = BxpTextScheme(
   fontFamily: 'Roboto',
-  fontFamilyFallback: ['Noto Sans', 'Inter', 'sans-serif'],
+  fontFamilyFallback: ['sans-serif'],
 );
-
-/// Alternative scheme — Inter primary. Modern neutral sans. Bundled
-/// as one variable TTF; Flutter picks the right weight via OpenType
-/// variations.
-const kBxpTextInter = BxpTextScheme(
-  fontFamily: 'Inter',
-  fontFamilyFallback: ['Noto Sans', 'Roboto', 'sans-serif'],
-);
-
-/// Map name → scheme. Stored name persists in SharedPreferences as
-/// `bxp-ui.textScheme` (mirrors `bxp-ui.codeFont` for the mono picker).
-const Map<String, BxpTextScheme> bxpTextSchemes = {
-  'noto': kBxpTextNoto,
-  'roboto': kBxpTextRoboto,
-  'inter': kBxpTextInter,
-};
