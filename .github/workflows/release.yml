@@ -141,11 +141,25 @@ jobs:
               -exec cp {} staging/ \;
           bash scripts/release-03-checksums.sh staging > staging/SHA256SUMS
           ls -lh staging
+      # Extract the latest CHANGELOG.md entry (between the first two `## 2026`
+      # headings, with the heading line itself stripped) for use as the
+      # release body. CHANGELOG.md is the single source of truth — using
+      # `generate_release_notes: true` produced an empty body because the
+      # repo doesn't use PRs.
+      - name: Extract release notes from CHANGELOG.md
+        run: |
+          awk '/^## [0-9][0-9][0-9][0-9]\./{i++; if(i==2) exit; if(i==1) next} i==1' \
+              CHANGELOG.md > release_notes.md
+          if [ ! -s release_notes.md ]; then
+            echo "::warning::release_notes.md is empty — CHANGELOG.md heading pattern did not match"
+          fi
+          echo "--- release_notes.md preview (first 20 lines) ---"
+          head -20 release_notes.md
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_VERSION }}
           name: ${{ env.RELEASE_VERSION }}
-          generate_release_notes: true
+          body_path: release_notes.md
           files: |
             staging/*
