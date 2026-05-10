@@ -4,6 +4,103 @@ All notable changes to BXP. New entries are prepended at the top by
 `scripts/release-changelog.sh`; pre-existing release tags (v0.1.0,
 v0.1.1) are hand-stubbed since they pre-date the automation.
 
+## 2026.05.10 — bxp-cli 0.2.2, bxp-fmt 0.2.2, bxp-gui 0.2.2
+
+Windows-focused release. Adds an FFI subprocess bridge that fixes
+several pipe-truncation and freeze symptoms on Windows; everything
+else (Linux, macOS) is unchanged on the user-facing surface.
+
+### Features
+
+- feat(bxp-gui-bridge): introduce native FFI subprocess bridge
+  (`bxp-gui-bridge.dll`) — replaces `dart:io` Process pipes on Windows
+  to work around the ~8 KB pipe truncation that broke `--docs`,
+  `--config`, and `--trace` calls (dart-lang/sdk#1727). Bridge is
+  mandatory on Windows; Linux/macOS still use Process.start directly.
+- feat(bxp-gui): stream `--trace` output through the bridge in 100-line
+  batches so file-list and per-row counters update mid-run instead of
+  arriving as one final chunk after child exit.
+- feat(bxp-gui): opt-in NDJSON diagnostic trace
+  (`BXP_DIAGNOSTIC=1`) — writes engine stderr + bridge events to a
+  local file under `%APPDATA%\bxp-gui\` for Windows freeze
+  investigation.
+- feat(bxp-gui): pre-compile common Skia shaders via `PaintingBinding`
+  warm-up — ~10 % startup latency reduction on Windows release builds.
+- feat(bxp-gui): open the user config in the system default editor via
+  `explorer.exe` on Windows (the only Win launcher that respects the
+  default-app association reliably).
+- feat(bxp-gui): upgrade Windows installer to NSIS Modern UI 2 with
+  branding bitmaps regenerated from the canonical sand-80 icon.
+- feat(bxp-gui): rename "BXP GUI" → "BXP" and lowercase the install
+  path (`Program Files\bxp-gui\`, `/opt/bxp-gui/`,
+  `~/Library/Application Support/bxp-gui/`).
+- feat(bxp-gui): drop bundled Inter / Noto Sans fonts; ship Roboto
+  only — single text-metric source across Linux/macOS/Windows.
+
+### Fixes
+
+- fix(bxp-gui): drain subprocess stdout synchronously to survive the
+  Windows pipe race (early-bridge fix; bridge later replaces this
+  path entirely).
+- fix(bxp-gui): drop `subscription.asFuture<void>()` — yield+cancel
+  instead, sidestepping a hang on subscription teardown.
+- fix(bxp-gui): add idle watchdog to the streaming subprocess
+  pipeline — kills the child if no stdout arrives for 10 s
+  (SIGTERM → SIGKILL).
+- revert(bxp-gui): drop the 5 s → 30 s `--docs` timeout band-aid; the
+  bridge makes the original timeout sufficient.
+
+### Internal
+
+- chore(bxp-gui): reframe diagnostic-mode flags as opt-in regression
+  knobs (defaults match the production GUI baseline).
+- test: pin dataset fixtures to LF endings via `.gitattributes` —
+  Windows checkout default would CRLF-convert and break the dataset
+  diff loop in `scripts/test.sh`.
+- test: split `test.sh` into per-area phases with sub-second timing
+  (Console / Datasets / Desktop) and a shared section/step/summary
+  helper lib.
+- docs: synthesize Windows performance notes + VMware SVGA known
+  issue into `docs/devel.md` and `bxp-gui/CLAUDE.md`.
+- docs: refresh root + bxp-gui CLAUDE.md and README files for the new
+  `bxp-gui-bridge` module.
+- docs: clarify the Windows bridge subprocess transport split in
+  `docs/architecture.md` (key-invariant 4) and `docs/roadmap.md`
+  (cross-platform consolidation queued for v0.3.0).
+- docs: align stale code comments — Roboto in
+  `ExprValidationBadgeSlot`, bridge mandatory in `findBridgeLibrary`
+  docstring, batch-size constant in
+  `bxp-gui-bridge/src/main.zig`.
+- build: simplify the release flow —
+  `release-tag.sh` now derives the tag from
+  `bxp-cli/build.zig.zon`, dropping the CalVer fallback that drifted
+  out of sync with the manifest version. Single source of truth for
+  the next release cut.
+- build(bxp-gui-bridge): add to `release-changelog.sh` MANIFESTS so
+  the bridge bumps in lockstep with every other module on the next
+  release.
+- ci(bxp-gui): subprocess fallback diagnostics +
+  Windows `getDocs` retry workflow during pre-bridge investigation
+  (superseded by the bridge itself; kept in history for context).
+- chore(bxp-gui): freeze-investigation iteration series (iter6–iter14)
+  — exploratory commits that progressively stripped Tooltip, hover
+  state, hidden trailing-action buttons, and InkWell hit-testing
+  from tree rows; added a live debug panel, frame timing overlay,
+  and counter overlay. Root cause turned out to be VMware SVGA D3D11
+  TDR + Flutter engine recovery loop (see Known issues below), not
+  a tree-rendering bug.
+
+### Known issues
+
+- VMware Workstation SVGA D3D11 driver exhibits a 1–3 s lag on
+  swap-chain reallocation when transitioning to ultra-wide
+  resolutions (>1920×1200; e.g. maximize). Initial paint at the
+  same target resolution is fluid — only the size-change event
+  triggers it. VirtualBox SVGA and bare-metal Windows are
+  unaffected. Upstream Flutter / Win32 D3D11 behaviour, not
+  patchable in the runner. See
+  [`docs/devel.md`](docs/devel.md#known-issues) for the full note.
+
 ## 2026.05.07 — bxp-cli 0.2.1, bxp-fmt 0.2.1, bxp-gui 0.2.1
 
 ### Bug fixes

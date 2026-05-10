@@ -1,7 +1,7 @@
 .{
     .name = .bxp_cli,
     .fingerprint = 0xbb3f7a0b7bd4ca98,
-    .version = "0.2.1",
+    .version = "0.2.2",
     .dependencies = .{
         .bxp_core = .{
             .path = "../bxp-core",
