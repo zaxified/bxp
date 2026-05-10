@@ -42,6 +42,20 @@ fork in `bxp_process_client.dart`. Touches the bridge native sources,
 - Flutter `integration_test` smoke run inside CI (Xvfb on Linux runners,
   headless setup on Mac / Win).
 
+### Windows runner image redirect (monitor 2026-05-13)
+
+GitHub Actions is redirecting `windows-2025` → `windows-2025-vs2026`
+on 2026-05-12, swapping Visual Studio 2025 for Visual Studio 2026 on
+the `windows-latest` runner. The redirect is image-level so pinning
+to `windows-2025` does not avoid it. After 2026-05-13 a
+`workflow_dispatch` test of `release.yml` (e.g.
+`gh workflow run release.yml -f version=v0.2.2-rc-test`) should be
+run to confirm the Win build (Flutter MSVC, NSIS install) still
+works on the new image. If something breaks, options are
+(a) pin `runs-on: windows-2022` for the desktop-windows job,
+(b) fix whatever the VS 2026 swap broke. Drop this entry once a
+post-redirect release succeeds.
+
 ### Bridge unit test
 
 `bxp-gui-bridge` shipped in v0.2.2 with no test coverage —

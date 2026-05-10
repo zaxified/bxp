@@ -21,8 +21,16 @@ on:
 # Resolved once and threaded through the matrix so all jobs agree on the
 # label. On a real tag push it's `${{ github.ref_name }}`; on manual
 # dispatch it's the input.
+#
+# FORCE_JAVASCRIPT_ACTIONS_TO_NODE24 opts every Node-based action into the
+# Node 24 runtime ahead of GitHub's 2026-06-02 forcing date. We bump
+# actions/checkout, actions/upload-artifact, actions/download-artifact,
+# and softprops/action-gh-release to native Node 24 majors below;
+# mlugg/setup-zig and subosito/flutter-action still pin `using: node20`
+# in their action.yml, so this env var carries them through.
 env:
   RELEASE_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
 # Default the GITHUB_TOKEN to read-only; the aggregate-and-publish job
 # overrides this to `contents: write` for the release upload step.
@@ -34,13 +42,13 @@ jobs:
     name: console (cross-compile via Zig)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.15.2
       - name: Build console archives
         run: bash scripts/release-01-console.sh "$RELEASE_VERSION"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: console
           path: releases/console/*
@@ -53,7 +61,7 @@ jobs:
     # `ubuntu-latest` rolls forward.
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.15.2
@@ -67,7 +75,7 @@ jobs:
               libstdc++-12-dev fuse libfuse2
       - name: Build desktop archives
         run: bash scripts/release-02-desktop.sh "$RELEASE_VERSION"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: desktop-linux
           path: releases/desktop/*
@@ -81,7 +89,7 @@ jobs:
         # release-02-desktop.sh is bash; Git Bash ships with windows-latest.
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.15.2
@@ -94,7 +102,7 @@ jobs:
           echo 'C:\Program Files (x86)\NSIS\Bin' >> $GITHUB_PATH
       - name: Build desktop archives
         run: bash scripts/release-02-desktop.sh "$RELEASE_VERSION"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: desktop-windows
           path: releases/desktop/*
@@ -104,7 +112,7 @@ jobs:
     name: desktop (macos-aarch64)
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.15.2
@@ -115,7 +123,7 @@ jobs:
         run: brew install create-dmg
       - name: Build desktop archives
         run: bash scripts/release-02-desktop.sh "$RELEASE_VERSION"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: desktop-macos
           path: releases/desktop/*
@@ -128,9 +136,9 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           path: artifacts
       - name: Flatten + checksum
@@ -156,7 +164,7 @@ jobs:
           echo "--- release_notes.md preview (first 20 lines) ---"
           head -20 release_notes.md
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ env.RELEASE_VERSION }}
           name: ${{ env.RELEASE_VERSION }}
