@@ -10,17 +10,17 @@ wrappers ignore them.
 
 ## Use case → command
 
-| What I want to do | Command |
-| -- | -- |
-| Run the full test suite | `bash scripts/test.sh` |
-| Console tests only (faster) | `bash scripts/test-01-console.sh` |
-| Desktop tests only | `bash scripts/test-02-desktop.sh` |
-| Local smoke build (no publish) | `bash scripts/release.sh` |
-| Console build only | `bash scripts/release-01-console.sh` |
-| Desktop build only (host platform) | `bash scripts/release-02-desktop.sh` |
-| Generate `SHA256SUMS` for built artifacts | `bash scripts/release-03-checksums.sh releases/` |
-| **Publish — step 1**: bump versions + write CHANGELOG | `bash scripts/release-changelog.sh patch` |
-| **Publish — step 2**: tag CalVer + push (triggers CI) | `bash scripts/release-tag.sh` |
+| What I want to do                                     | Command                                          |
+| ----------------------------------------------------- | ------------------------------------------------ |
+| Run the full test suite                               | `bash scripts/test.sh`                           |
+| Console tests only (faster)                           | `bash scripts/test-01-console.sh`                |
+| Desktop tests only                                    | `bash scripts/test-02-desktop.sh`                |
+| Local smoke build (no publish)                        | `bash scripts/release.sh`                        |
+| Console build only                                    | `bash scripts/release-01-console.sh`             |
+| Desktop build only (host platform)                    | `bash scripts/release-02-desktop.sh`             |
+| Generate `SHA256SUMS` for built artifacts             | `bash scripts/release-03-checksums.sh releases/` |
+| **Publish — step 1**: bump versions + write CHANGELOG | `bash scripts/release-changelog.sh patch`        |
+| **Publish — step 2**: tag CalVer + push (triggers CI) | `bash scripts/release-tag.sh`                    |
 
 ## Publishing a release
 

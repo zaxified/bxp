@@ -265,18 +265,17 @@ class BxpProcessClient {
     List<String> arguments,
     Duration timeout,
   ) async {
-    // Two-attempt diagnostic strategy. The default Process.start path
-    // races against Dart's deferred pipe-attach on Windows: bxp-fmt's
-    // 30 KB --docs output overflows the 4 KB Win pipe buffer before the
-    // listener is wired and the child trips its own flush with
-    // `error: WriteFailed` / exit 1. Falling back to runInShell:true
-    // routes through cmd /c (sh -c on POSIX), which drains the child
-    // pipe in native code without depending on the Dart event loop.
-    //
-    // We try direct first to keep the Linux/macOS happy path zero-cost,
-    // then retry via shell on non-zero exit. The diagnostic captures
-    // both attempts so we can confirm which branch is actually
-    // load-bearing once we collect Windows reports.
+    // Three-attempt diagnostic chain (direct → runInShell → Process.run)
+    // exists for the dart-lang/sdk#1727 spawn-vs-attach race that makes
+    // bxp-fmt's --docs output (~30 KB) trip its own WriteFailed before
+    // Dart's stream listener attaches. The race is Windows-only — Linux
+    // pipe buffers are ~64 KB and macOS isn't affected. On those hosts
+    // a tool like bxp-fmt that legitimately exits 1 with stdout (config
+    // validation errors) would triple-run for no benefit, so the retry
+    // chain is gated on Platform.isWindows. Windows production is the
+    // bridge path anyway; this fallback only executes if the bridge DLL
+    // isn't loadable, in which case the retries are a worthwhile last
+    // resort before surfacing a hard failure.
     String describe(String tag, ProcessResult r) {
       final out = r.stdout as String;
       final err = (r.stderr as String).trim();
@@ -285,6 +284,10 @@ class BxpProcessClient {
           '${err.isEmpty ? '' : ' "${_peek(err)}"'}';
     }
     final r1 = await _runOnce(executable, arguments, timeout, runInShell: false);
+    if (!Platform.isWindows) {
+      _lastSubprocessDiag = describe('direct', r1);
+      return r1;
+    }
     if (r1.exitCode == 0) {
       _lastSubprocessDiag = describe('direct', r1);
       return r1;
@@ -874,12 +877,11 @@ class BxpProcessClient {
   /// gymnastics.
   ///
   /// Mirrors the Process.start path's idle watchdog: every batch / chunk
-  /// resets a [_streamIdleTimeout] timer, and on fire we abandon the
-  /// bridge future and surface a synthetic timeout exit. The bridge
-  /// thread keeps running in the background until the orphaned child
-  /// eventually exits naturally; runStreaming's own try/finally then
-  /// closes the NativeCallables. We can't kill the child mid-flight
-  /// because the bridge doesn't expose a cancellation token yet.
+  /// resets a [_streamIdleTimeout] timer, and on fire we deliver
+  /// `bridge_cancel(handle)` to SIGTERM the child. The bridge then drains
+  /// remaining buffered output, reaps exit, and the streaming future
+  /// resolves naturally with the signal exit code — no orphaned child,
+  /// no leaked output.
   static Future<ProcessRunResult> _runCliTraceViaBridge({
     required String bin,
     required List<String> args,
@@ -891,59 +893,54 @@ class BxpProcessClient {
     final stderrBuffer = StringBuffer();
     final client = BridgeClient(dllPath);
 
-    final result = Completer<int>();
+    int? streamHandle;
     bool watchdogFired = false;
     Timer? watchdog;
-
-    void completeOnce(int code) {
-      if (!result.isCompleted) result.complete(code);
-    }
 
     void resetWatchdog() {
       watchdog?.cancel();
       watchdog = Timer(_streamIdleTimeout, () {
-        if (!result.isCompleted) {
-          watchdogFired = true;
-          completeOnce(ProcessRunResult.kExitTimeout);
-        }
+        watchdogFired = true;
+        // Cancel the bridge's child via the new bridge_cancel API. The
+        // streaming future resolves naturally once the child reaps and
+        // on_exit fires; no abandonment, no orphaned process.
+        final h = streamHandle;
+        if (h != null) client.cancel(h);
       });
     }
 
     resetWatchdog();
 
-    // Kick off the streaming run in the background. Whichever resolves
-    // first — bridge's natural exit or the watchdog — wins.
-    unawaited(
-      client.runStreaming(
-        bin,
-        args,
-        cwd: cwd,
-        onLine: (line) {
-          resetWatchdog();
-          if (!result.isCompleted) onLine(line);
-        },
-        onStderr: (chunk) {
-          resetWatchdog();
-          stderrBuffer.write(chunk);
-          if (!result.isCompleted) onStderr?.call(chunk);
-        },
-      ).then(
-        completeOnce,
-        onError: (Object e, StackTrace _) {
-          _lastSubprocessDiag = 'bridge $_bridgeVersion: '
-              'stream ${e.runtimeType}: $e';
-          completeOnce(-1);
-        },
-      ),
-    );
+    final exitCode = await client.runStreaming(
+      bin,
+      args,
+      cwd: cwd,
+      onSpawn: (handle) {
+        streamHandle = handle;
+      },
+      onLine: (line) {
+        resetWatchdog();
+        onLine(line);
+      },
+      onStderr: (chunk) {
+        resetWatchdog();
+        stderrBuffer.write(chunk);
+        onStderr?.call(chunk);
+      },
+    ).catchError((Object e, StackTrace _) {
+      _lastSubprocessDiag = 'bridge $_bridgeVersion: '
+          'stream ${e.runtimeType}: $e';
+      return -1;
+    });
 
-    final exitCode = await result.future;
     watchdog?.cancel();
+
+    final reportedExit =
+        watchdogFired ? ProcessRunResult.kExitTimeout : exitCode;
 
     if (watchdogFired) {
       final note = 'bridge: stream watchdog fired '
-          '(no output for ${_streamIdleTimeout.inSeconds}s — '
-          'child still running, output orphaned)';
+          '(no output for ${_streamIdleTimeout.inSeconds}s — child killed)';
       stderrBuffer.writeln();
       stderrBuffer.writeln(note);
       _lastSubprocessDiag = 'bridge $_bridgeVersion: $note';
@@ -952,7 +949,7 @@ class BxpProcessClient {
           'stream exit $exitCode, stderr=${stderrBuffer.length} B';
     }
     return ProcessRunResult(
-      exitCode: exitCode,
+      exitCode: reportedExit,
       stderr: stderrBuffer.toString(),
     );
   }

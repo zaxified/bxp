@@ -8,6 +8,45 @@ into a `CHANGELOG.md` entry when their PRs land + a release is cut.
 `scripts/release-changelog.sh` generates the `CHANGELOG.md` entry
 automatically from `git log` when cutting a release.
 
+## v0.2.3
+
+### Bridge backpressure between native readers and Dart
+
+`bxp-gui-bridge`'s streaming path has no flow control between the Zig
+reader threads (which heap-allocate one batch per ~100 stdout lines)
+and the Dart event loop that consumes them. When Dart stutters (long
+frame, GC pause, user clicks something that triggers a heavy rebuild)
+the bridge keeps producing batches and they queue up in Dart's port,
+each holding a malloc'd buffer. On a pathologically large trace
+(100 k+ rows) on slow hardware, RSS can balloon before Dart catches up.
+
+Real-world repro hasn't surfaced — current bxp-cli output rates and
+typical dataset sizes don't exercise it. Plan: defer until we have a
+concrete profile showing the problem, then implement a ping-pong
+acknowledgement (Dart calls a `bridge_ack(handle, n_bytes)` after each
+batch; bridge throttles when ack lag exceeds a high-water mark). Less
+invasive: bound the in-flight queue size by blocking the native reader
+on a `std.Thread.Semaphore` when N un-acked batches are outstanding.
+
+Touches `bxp-gui-bridge/src/main.zig`,
+`bxp-gui/lib/services/bridge_client.dart`.
+
+### Dependency refresh (bxp-gui)
+
+`flutter pub outdated` on 2026-05-10 surfaced 13 stale packages, of
+which only two are actionable without a Flutter SDK bump:
+
+- `vm_service` 15.1.0 → 15.2.0 — lockfile-only, just `flutter pub upgrade`.
+- `package_info_plus` 8.3.1 → 10.1.0 — major bump in `pubspec.yaml`,
+  pulls `package_info_plus_platform_interface` 3→4 and `win32` 5→6
+  transitively. Used by `version_service.dart`; smoke-test the in-app
+  version display on all three hosts after upgrade.
+
+The remaining 9 (`analyzer`, `_fe_analyzer_shared`, `test`, `meta`,
+`matcher`, `test_api`, `test_core`, `native_toolchain_c`, `vector_math`)
+are pinned by Flutter 3.41.9 and will move with the next Flutter SDK
+bump.
+
 ## v0.3.0
 
 Drop the migration scaffolding once everyone has had one launch under
@@ -139,7 +178,7 @@ to pre-process the file" or "skip the affected rows".
 
 - **Readme polish** — add an `OR` example to "Minimal examples"
   (`[Action] = 'Buy' OR CONTAINS([Action], 'Buy to')   → catch all buy
-  variants`). Tiny.
+variants`). Tiny.
 
 - **`csv_decimal_separator_in: ","` consistency.** Surfaced by
   Comdirect-style German locale simulation (2026-05-07). The current

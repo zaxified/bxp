@@ -73,23 +73,23 @@ Download console package for your OS [`releases`](https://github.com/zaxified/bx
 
 ### 2. Desktop gui debugger
 
-Download desktop package for your OS [`releases`](https://github.com/zaxified/bxp/releases) 
+Download desktop package for your OS [`releases`](https://github.com/zaxified/bxp/releases)
 
-| OS | Format |
-| --- | --- |
-| Linux | `.AppImage`, `.deb`, `.tar.gz` |
-| macOS | `.dmg` (Apple Silicon) |
-| Windows | `setup.exe` (NSIS installer) |
+| OS      | Format                         |
+| ------- | ------------------------------ |
+| Linux   | `.AppImage`, `.deb`, `.tar.gz` |
+| macOS   | `.dmg` (Apple Silicon)         |
+| Windows | `setup.exe` (NSIS installer)   |
 
 ## Documentation
 
-| For | Read |
-| --- | --- |
-| Using `bxp-cli` from a terminal | [`resources/console/readme.md`](resources/console/readme.md) |
-| Using `bxp-gui` (desktop) | [`resources/desktop/readme.md`](resources/desktop/readme.md) |
-| Developer / architecture / roadmap | [`docs/`](docs/README.md) |
-| Contributing | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
-| Release history | [`CHANGELOG.md`](CHANGELOG.md) |
+| For                                | Read                                                         |
+| ---------------------------------- | ------------------------------------------------------------ |
+| Using `bxp-cli` from a terminal    | [`resources/console/readme.md`](resources/console/readme.md) |
+| Using `bxp-gui` (desktop)          | [`resources/desktop/readme.md`](resources/desktop/readme.md) |
+| Developer / architecture / roadmap | [`docs/`](docs/README.md)                                    |
+| Contributing                       | [`CONTRIBUTING.md`](CONTRIBUTING.md)                         |
+| Release history                    | [`CHANGELOG.md`](CHANGELOG.md)                               |
 
 ## Licence
 

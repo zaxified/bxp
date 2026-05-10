@@ -1,0 +1,42 @@
+# Generated / vendored — never owned by us.
+node_modules/
+build/
+.dart_tool/
+.zig-cache/
+zig-cache/
+zig-out/
+**/ephemeral/
+**/.plugin_symlinks/
+bxp-gui/macos/Runner/Assets.xcassets/
+bxp-gui/web/manifest.json
+bxp-gui/web/index.html
+bxp-gui/linux/flutter/
+bxp-gui/macos/Flutter/
+bxp-gui/windows/flutter/
+bxp-gui/.dart_tool/
+
+# Scratch — not shipped.
+DEV/
+
+# Apache 2.0 boilerplate — leave alone.
+LICENSE.md
+
+# JSON5 with intentional alignment + comments. Prettier treats these as
+# strict JSON and either crashes or strips the educational formatting.
+datasets/*/sample.json
+DEV/bxp-cli.json
+bxp-cli/bxp-cli.json
+bxp-gui/packages/json5_ast/test/fixtures/
+
+# User-facing tutorials — hand-formatted for readability (long copy-paste
+# blocks, manual alignment). Auto-reflow would degrade the UX.
+resources/console/readme.md
+resources/desktop/readme.md
+
+# Auto-generated CHANGELOG sections produced by scripts/release-changelog.sh —
+# regen overwrites manual reformat anyway.
+CHANGELOG.md
+bxp-gui/CHANGELOG.md
+
+# Claude Code's own config — owned by the harness, not us.
+.claude/

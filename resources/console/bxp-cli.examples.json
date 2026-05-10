@@ -30,51 +30,51 @@
    * Or define an inline map: ticker_map: { "BTC": "BTC-EUR" }
    * Symbols not found in the map are passed through unchanged.
    */
-  ticker_maps: {
-    anycoin: {
-      BTC:  "BTC-EUR"
+  "ticker_maps": {
+    "anycoin": {
+      "BTC": "BTC-EUR"
     },
-    revolutx: {
-      BTC:  "BTC-USD"
+    "revolutx": {
+      "BTC": "BTC-USD"
     },
-    trading212: {
-      ASML:  "ASML.AS",
-      CMBT:  "CMBT.BR",
-      CSPX:  "CSPX.L",
-      DIV:   "DIV.TO",
-      IMB:   "IMB.L",
-      LGEN:  "LGEN.L",
-      NESN:  "NESN.SW",
-      NG:    "NG.L",
-      NOVN:  "NOVN.SW",
-      RIO:   "RIO.L",
-      ROG:   "ROG.SW",
-      ROP:   "ROG.SW",
-      SMIF:  "SMIF.L",
-      UBSG:  "UBSG.SW",
-      UKW:   "UKW.L",
-      ZURN:  "ZURN.SW"
+    "trading212": {
+      "ASML": "ASML.AS",
+      "CMBT": "CMBT.BR",
+      "CSPX": "CSPX.L",
+      "DIV": "DIV.TO",
+      "IMB": "IMB.L",
+      "LGEN": "LGEN.L",
+      "NESN": "NESN.SW",
+      "NG": "NG.L",
+      "NOVN": "NOVN.SW",
+      "RIO": "RIO.L",
+      "ROG": "ROG.SW",
+      "ROP": "ROG.SW",
+      "SMIF": "SMIF.L",
+      "UBSG": "UBSG.SW",
+      "UKW": "UKW.L",
+      "ZURN": "ZURN.SW"
     },
-    xtb: {
-      "ASML.NL":   "ASML.AS",
-      "BNTX.US":   "BNTX",
-      "BP.UK":     "BP.L",
-      "CSG.NL":    "CSG.AS",
-      "CZG.CZ":    "COLT.PR",
-      "DSFIR.NL":  "DSFIR.AS",
-      "FOUR.US":   "FOUR",
-      "KOMB.CZ":   "KOMB.PR",
-      "MRNA.US":   "MRNA",
-      "NESN.CH":   "NESN.SW",
-      "NOVN.CH":   "NOVN.SW",
-      "O.US":      "O",
-      "PBR.US":    "PBR",
-      "PFE.US":    "PFE",
-      "PH.US":     "PH",
-      "ROG.CH":    "ROG.SW",
-      "TABAK.CZ":  "TABAK.PR",
-      "VICI.US":   "VICI",
-      "VWRA.UK":   "VWRA.L"
+    "xtb": {
+      "ASML.NL": "ASML.AS",
+      "BNTX.US": "BNTX",
+      "BP.UK": "BP.L",
+      "CSG.NL": "CSG.AS",
+      "CZG.CZ": "COLT.PR",
+      "DSFIR.NL": "DSFIR.AS",
+      "FOUR.US": "FOUR",
+      "KOMB.CZ": "KOMB.PR",
+      "MRNA.US": "MRNA",
+      "NESN.CH": "NESN.SW",
+      "NOVN.CH": "NOVN.SW",
+      "O.US": "O",
+      "PBR.US": "PBR",
+      "PFE.US": "PFE",
+      "PH.US": "PH",
+      "ROG.CH": "ROG.SW",
+      "TABAK.CZ": "TABAK.PR",
+      "VICI.US": "VICI",
+      "VWRA.UK": "VWRA.L"
     }
   },
   /*
@@ -83,7 +83,7 @@
    * Run one template:  bxp-cli --template anycoin_to_wealthfolio
    * Override data dir: bxp-cli --template ... --data ../my-data/
    */
-  conversion_templates: {
+  "conversion_templates": {
     // ── Anycoin → Wealthfolio ──
     //   Pattern: paired trade rows joined via pre_pass + LOOKUP. One trade
     //   produces two CSV rows ("trade payment" + "trade fill" sharing an
@@ -92,51 +92,51 @@
     //   placeholder ticker.
     //   This template also serves as the field-level documentation
     //   reference for the rest of the file.
-    anycoin_to_wealthfolio: {
+    "anycoin_to_wealthfolio": {
       // required; path to input files, relative to this config file
       // e.g. "anycoin_to_wealthfolio", "../data/anycoin", "/abs/path"
-      data_dir:            "anycoin_to_wealthfolio",
+      "data_dir": "anycoin_to_wealthfolio",
       // default: "csv"; options: "csv", "json" (array-of-objects)
-      file_type_in:        "csv",
+      "file_type_in": "csv",
       // default: "csv"; options: "csv", "json" (array-of-objects)
-      file_type_out:       "csv",
+      "file_type_out": "csv",
       // required; suffix filter for input files — all files in data_dir ending with this string
       // e.g. ".csv" (all), "_3.csv" (specific suffix), "_closed.csv"
-      file_pattern_in:     ".csv",
+      "file_pattern_in": ".csv",
       // required; replaces file_pattern_in in the output filename
       // e.g. ".csvx", "_closed.csvx"
-      file_pattern_out:    ".csvx",
+      "file_pattern_out": ".csvx",
       // default: ","; field separator for input CSV — options: ",", ";", "\t", "|" etc.
-      csv_delimiter_in:    ",",
+      "csv_delimiter_in": ",",
       // default: ","; field separator for output CSV
-      csv_delimiter_out:   ",",
+      "csv_delimiter_out": ",",
       // default: "."; decimal separator in input numeric fields — options: ".", ",", "|" etc.
-      csv_decimal_separator_in: ".",
+      "csv_decimal_separator_in": ".",
       // default: "."; decimal separator in output numeric fields — options: ".", ",", "|" etc.
-      csv_decimal_separator_out: ".",
+      "csv_decimal_separator_out": ".",
       // default: "double"; text quoting in input — options: "none", "single" ('), "double" (")
-      csv_text_quote_in:   "none",
+      "csv_text_quote_in": "none",
       // default: "none"; text quoting in output — options: "none", "single" ('), "double" (")
-      csv_text_quote_out:  "none",
+      "csv_text_quote_out": "none",
       // default: false; when true, rows whose $date falls outside the date range
       // encoded in the filename (YYYY-MM-DD_YYYY-MM-DD) are silently skipped.
       // Requires $date in input_schema.
-      date_filter_from_filename: true,
+      "date_filter_from_filename": true,
       // optional; ticker remapping — string = name from ticker_maps, object = inline map
       // e.g. "anycoin", "xtb", { "BTC": "BTC-EUR" }, {}
-      ticker_map:          "anycoin",
+      "ticker_map": "anycoin",
       /*
        * pre_pass — optional; first-pass lookup table built before the main loop.
        * Iterates all rows, collects those matching `when`, stores `values` keyed by `key`.
        * Access in input_schema via LOOKUP([key_col], 'field_name').
        * values keys are plain field names (no $ prefix).
        */
-      pre_pass: {
-        when:  "[Type] = 'trade payment'",  // filter: which rows to collect
-        key:   "[Order ID]",                // expression used as lookup key
-        values: {
-          amount:    "ABS([Amount])",  // field accessible via LOOKUP(..., 'amount')
-          currency:  "[Currency]"      // field accessible via LOOKUP(..., 'currency')
+      "pre_pass": {
+        "when": "[Type] = 'trade payment'", // filter: which rows to collect
+        "key": "[Order ID]", // expression used as lookup key
+        "values": {
+          "amount": "ABS([Amount])", // field accessible via LOOKUP(..., 'amount')
+          "currency": "[Currency]" // field accessible via LOOKUP(..., 'currency')
         }
       },
       /*
@@ -147,24 +147,24 @@
        *   TRIM, NOW, RAND
        * Empty string "" = variable is empty (omit from output or use as blank)
        */
-      input_schema: {
+      "input_schema": {
         // ISO datetime with timezone suffix → Wealthfolio format
-        $date:            "DATE_CONVERT([Date], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')",
+        "$date": "DATE_CONVERT([Date], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')",
         // deposit → cash placeholder symbol; trade fill → mapped ticker
-        $ticker:          "IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))",
-        $quantity:        "IF([Type] = 'deposit', 1, [Amount])",
-        $unitprice:       "IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount') / [Amount])",
-        $currency:        "IF([Type] = 'deposit', [Currency], LOOKUP([Order ID], 'currency'))",
-        $fee:             "",  // no fee column in this broker's export
-        $amount:          "IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount'))",
-        $account:         "",  // optional; e.g. "'Anycoin'", "[Account]"
-        $fxRate:          "",  // optional; FX rate if available
-        $subtype:         "",  // optional; Wealthfolio subtype field
-        $instrumentType:  "",  // optional; e.g. "'Cryptocurrency'"
-        $comment:         "[anycoin TX ID]"
+        "$ticker": "IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))",
+        "$quantity": "IF([Type] = 'deposit', 1, [Amount])",
+        "$unitprice": "IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount') / [Amount])",
+        "$currency": "IF([Type] = 'deposit', [Currency], LOOKUP([Order ID], 'currency'))",
+        "$fee": "", // no fee column in this broker's export
+        "$amount": "IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount'))",
+        "$account": "", // optional; e.g. "'Anycoin'", "[Account]"
+        "$fxRate": "", // optional; FX rate if available
+        "$subtype": "", // optional; Wealthfolio subtype field
+        "$instrumentType": "", // optional; e.g. "'Cryptocurrency'"
+        "$comment": "[anycoin TX ID]"
       },
       // default: false; when true, rows matching no row_rule are printed with --debug
-      row_rules_debug_missing: true,
+      "row_rules_debug_missing": true,
       /*
        * row_rules — ordered list of conditional routing rules; first match wins.
        * when: expression evaluated against raw CSV fields
@@ -174,39 +174,39 @@
        * $action must be set by row_rules (never in input_schema)
        * Valid $action values depends on output template e.g. Wealthfolio
        */
-      row_rules: [
+      "row_rules": [
         {
-          when:  "[Type] = 'deposit'",
-          rows: [
+          "when": "[Type] = 'deposit'",
+          "rows": [
             {
-              $action:  "'DEPOSIT'"
+              "$action": "'DEPOSIT'"
             }
           ]
         },
         {
-          when:  "[Type] = 'trade fill'",
-          rows: [
+          "when": "[Type] = 'trade fill'",
+          "rows": [
             {
-              $action:  "'BUY'"
+              "$action": "'BUY'"
             }
           ]
         },
         // paired with trade fill via pre_pass; skip
         {
-          when:  "[Type] = 'trade payment'",
-          rows: []
+          "when": "[Type] = 'trade payment'",
+          "rows": []
         },
         {
-          when:  "[Type] = 'withdrawal'",
-          rows: []
+          "when": "[Type] = 'withdrawal'",
+          "rows": []
         },
         {
-          when:  "[Type] = 'withdrawal_block'",
-          rows: []
+          "when": "[Type] = 'withdrawal_block'",
+          "rows": []
         },
         {
-          when:  "[Type] = 'withdrawal_unblock'",
-          rows: []
+          "when": "[Type] = 'withdrawal_unblock'",
+          "rows": []
         }
       ],
       /*
@@ -214,20 +214,20 @@
        * Determines both the columns present and their order in the output file.
        * Omit a column entirely by leaving it out of output_schema.
        */
-      output_schema: {
-        date:            "$date",
-        symbol:          "$ticker",
-        quantity:        "$quantity",
-        activityType:    "$action",
-        unitPrice:       "$unitprice",
-        currency:        "$currency",
-        fee:             "$fee",
-        amount:          "$amount",
-        account:         "$account",
-        fxRate:          "$fxRate",
-        subtype:         "$subtype",
-        instrumentType:  "$instrumentType",
-        comment:         "$comment"
+      "output_schema": {
+        "date": "$date",
+        "symbol": "$ticker",
+        "quantity": "$quantity",
+        "activityType": "$action",
+        "unitPrice": "$unitprice",
+        "currency": "$currency",
+        "fee": "$fee",
+        "amount": "$amount",
+        "account": "$account",
+        "fxRate": "$fxRate",
+        "subtype": "$subtype",
+        "instrumentType": "$instrumentType",
+        "comment": "$comment"
       }
     },
     // ── Revolut X → Wealthfolio ──
@@ -235,96 +235,96 @@
     //   carry an embedded currency ("24.00 CZK", "$100"); PRICE_VALUE strips
     //   it, PRICE_CURRENCY extracts the ISO code. "Other" type covers
     //   non-trade events and routes to DEPOSIT.
-    revolutx_to_wealthfolio: {
-      data_dir:            "revolutx_to_wealthfolio",
-      file_type_in:        "csv",
-      file_type_out:       "csv",
-      file_pattern_in:     ".csv",
-      file_pattern_out:    ".csvx",
-      csv_delimiter_in:    ",",
-      csv_delimiter_out:   ",",
-      csv_decimal_separator_in: ".",
-      csv_decimal_separator_out: ".",
-      csv_text_quote_in:   "double",  // Revolut wraps fields in double quotes
-      csv_text_quote_out:  "none",
-      date_filter_from_filename: true,
-      ticker_map:          "revolutx",
-      input_schema: {
+    "revolutx_to_wealthfolio": {
+      "data_dir": "revolutx_to_wealthfolio",
+      "file_type_in": "csv",
+      "file_type_out": "csv",
+      "file_pattern_in": ".csv",
+      "file_pattern_out": ".csvx",
+      "csv_delimiter_in": ",",
+      "csv_delimiter_out": ",",
+      "csv_decimal_separator_in": ".",
+      "csv_decimal_separator_out": ".",
+      "csv_text_quote_in": "double", // Revolut wraps fields in double quotes
+      "csv_text_quote_out": "none",
+      "date_filter_from_filename": true,
+      "ticker_map": "revolutx",
+      "input_schema": {
         // Revolut date: "26 Jun 2022, 16:02:36"
-        $date:            "DATE_CONVERT([Date], 'D MMM YYYY, hh:mm:ss', 'YYYY-MM-DD hh:mm:ss')",
+        "$date": "DATE_CONVERT([Date], 'D MMM YYYY, hh:mm:ss', 'YYYY-MM-DD hh:mm:ss')",
         // 'Other' type = cash movement → cash placeholder; otherwise map symbol
-        $ticker:          "IF([Type] = 'Other', '$CASH-' & PRICE_CURRENCY([Value]), TICKER([Symbol]))",
-        $quantity:        "IF([Type] = 'Other', 1, [Quantity])",
+        "$ticker": "IF([Type] = 'Other', '$CASH-' & PRICE_CURRENCY([Value]), TICKER([Symbol]))",
+        "$quantity": "IF([Type] = 'Other', 1, [Quantity])",
         // PRICE_VALUE strips currency symbol/code from values like "24.00 CZK" or "$100"
-        $unitprice:       "IF([Type] = 'Other', PRICE_VALUE([Value]), PRICE_VALUE([Price]))",
-        $currency:        "PRICE_CURRENCY([Value])",
+        "$unitprice": "IF([Type] = 'Other', PRICE_VALUE([Value]), PRICE_VALUE([Price]))",
+        "$currency": "PRICE_CURRENCY([Value])",
         // fee only when positive; empty string omits fee column
-        $fee:             "IF(PRICE_VALUE([Fees]) > 0, PRICE_VALUE([Fees]), '')",
-        $amount:          "PRICE_VALUE([Value])",
-        $account:         "",
-        $fxRate:          "",
-        $subtype:         "",
-        $instrumentType:  "",
+        "$fee": "IF(PRICE_VALUE([Fees]) > 0, PRICE_VALUE([Fees]), '')",
+        "$amount": "PRICE_VALUE([Value])",
+        "$account": "",
+        "$fxRate": "",
+        "$subtype": "",
+        "$instrumentType": "",
         // compact timestamp as unique comment/ID
-        $comment:         "DATE_CONVERT([Date], 'D MMM YYYY, hh:mm:ss', 'YYYYMMDDhhmmss')"
+        "$comment": "DATE_CONVERT([Date], 'D MMM YYYY, hh:mm:ss', 'YYYYMMDDhhmmss')"
       },
-      row_rules_debug_missing: true,
-      row_rules: [
+      "row_rules_debug_missing": true,
+      "row_rules": [
         {
-          when:  "[Type] = 'Buy' OR [Type] = 'Buy - Revolut X'",
-          rows: [
+          "when": "[Type] = 'Buy' OR [Type] = 'Buy - Revolut X'",
+          "rows": [
             {
-              $action:  "'BUY'"
+              "$action": "'BUY'"
             }
           ]
         },
         {
-          when:  "[Type] = 'Sell'",
-          rows: [
+          "when": "[Type] = 'Sell'",
+          "rows": [
             {
-              $action:  "'SELL'"
+              "$action": "'SELL'"
             }
           ]
         },
         {
-          when:  "[Type] = 'Other'",
-          rows: [
+          "when": "[Type] = 'Other'",
+          "rows": [
             {
-              $action:  "'DEPOSIT'"
+              "$action": "'DEPOSIT'"
             }
           ]
         },
         {
-          when:  "[Type] = 'Staking reward'",
-          rows: []
+          "when": "[Type] = 'Staking reward'",
+          "rows": []
         },
         {
-          when:  "[Type] = 'Stake'",
-          rows: []
+          "when": "[Type] = 'Stake'",
+          "rows": []
         },
         {
-          when:  "[Type] = 'Unstake'",
-          rows: []
+          "when": "[Type] = 'Unstake'",
+          "rows": []
         },
         {
-          when:  "[Type] = 'Learn reward'",
-          rows: []
+          "when": "[Type] = 'Learn reward'",
+          "rows": []
         }
       ],
-      output_schema: {
-        date:            "$date",
-        symbol:          "$ticker",
-        quantity:        "$quantity",
-        activityType:    "$action",
-        unitPrice:       "$unitprice",
-        currency:        "$currency",
-        fee:             "$fee",
-        amount:          "$amount",
-        account:         "$account",
-        fxRate:          "$fxRate",
-        subtype:         "$subtype",
-        instrumentType:  "$instrumentType",
-        comment:         "$comment"
+      "output_schema": {
+        "date": "$date",
+        "symbol": "$ticker",
+        "quantity": "$quantity",
+        "activityType": "$action",
+        "unitPrice": "$unitprice",
+        "currency": "$currency",
+        "fee": "$fee",
+        "amount": "$amount",
+        "account": "$account",
+        "fxRate": "$fxRate",
+        "subtype": "$subtype",
+        "instrumentType": "$instrumentType",
+        "comment": "$comment"
       }
     },
     // ── Trading 212 → Wealthfolio ──
@@ -336,224 +336,224 @@
     //   open" via pre_pass to compute the split ratio. Demonstrates the
     //   extended Wealthfolio vocabulary: TRANSFER_IN, TRANSFER_OUT, SPLIT
     //   (in addition to the eight standard actions).
-    trading212_to_wealthfolio: {
-      data_dir:            "trading212_to_wealthfolio",
-      file_type_in:        "csv",
-      file_type_out:       "csv",
-      file_pattern_in:     ".csv",
-      file_pattern_out:    ".csvx",
-      csv_delimiter_in:    ",",
-      csv_delimiter_out:   ",",
-      csv_decimal_separator_in: ".",
-      csv_decimal_separator_out: ".",
-      csv_text_quote_in:   "double",
-      csv_text_quote_out:  "none",
-      date_filter_from_filename: false,  // T212 export already scoped to date range
-      ticker_map:          "trading212",
+    "trading212_to_wealthfolio": {
+      "data_dir": "trading212_to_wealthfolio",
+      "file_type_in": "csv",
+      "file_type_out": "csv",
+      "file_pattern_in": ".csv",
+      "file_pattern_out": ".csvx",
+      "csv_delimiter_in": ",",
+      "csv_delimiter_out": ",",
+      "csv_decimal_separator_in": ".",
+      "csv_decimal_separator_out": ".",
+      "csv_text_quote_in": "double",
+      "csv_text_quote_out": "none",
+      "date_filter_from_filename": false, // T212 export already scoped to date range
+      "ticker_map": "trading212",
       // pair "Stock split open" rows so "Stock split close" can compute split ratio = open.shares / close.shares
-      pre_pass: {
-        when:  "[Action] = 'Stock split open'",
-        key:   "[Ticker] & '_' & [Time]",
-        values: {
-          shares:  "[No. of shares]"
+      "pre_pass": {
+        "when": "[Action] = 'Stock split open'",
+        "key": "[Ticker] & '_' & [Time]",
+        "values": {
+          "shares": "[No. of shares]"
         }
       },
-      input_schema: {
-        $date:            "[Time]",              // T212 already emits ISO datetime
+      "input_schema": {
+        "$date": "[Time]", // T212 already emits ISO datetime
         // stock row: map ticker; cash row (no ticker): cash placeholder
-        $ticker:          "IF([Ticker] != '', TICKER([Ticker]), '$CASH-' & [Currency (Total)])",
-        $isin:            "",                    // optional ISIN output column
-        $quantity:        "IF([Ticker] != '', [No. of shares], 1)",
+        "$ticker": "IF([Ticker] != '', TICKER([Ticker]), '$CASH-' & [Currency (Total)])",
+        "$isin": "", // optional ISIN output column
+        "$quantity": "IF([Ticker] != '', [No. of shares], 1)",
         // net price = total minus conversion fee and stamp duty, divided by share count
-        $unitprice:       "IF([Ticker] != '', (ABS([Total]) - ABS([Currency conversion fee]) - ABS([Stamp duty reserve tax])) / [No. of shares], ABS([Total]))",
-        $currency:        "[Currency (Total)]",
+        "$unitprice": "IF([Ticker] != '', (ABS([Total]) - ABS([Currency conversion fee]) - ABS([Stamp duty reserve tax])) / [No. of shares], ABS([Total]))",
+        "$currency": "[Currency (Total)]",
         // fee = sum of conversion fee + stamp duty; empty when both are zero
-        $fee:             "IF(ABS([Currency conversion fee]) + ABS([Stamp duty reserve tax]) > 0, ABS([Currency conversion fee]) + ABS([Stamp duty reserve tax]), '')",
-        $amount:          "IF([Ticker] != '', ABS([Total]) - ABS([Currency conversion fee]) - ABS([Stamp duty reserve tax]), ABS([Total]))",
-        $account:         "'T212'",              // hardcoded account tag; e.g. "'T212'", "[Account]", ""
-        $fxRate:          "",
-        $subtype:         "",
-        $instrumentType:  "",
-        $comment:         "[ID] & '_' & [Time]"  // unique identifier from T212 transaction ID
+        "$fee": "IF(ABS([Currency conversion fee]) + ABS([Stamp duty reserve tax]) > 0, ABS([Currency conversion fee]) + ABS([Stamp duty reserve tax]), '')",
+        "$amount": "IF([Ticker] != '', ABS([Total]) - ABS([Currency conversion fee]) - ABS([Stamp duty reserve tax]), ABS([Total]))",
+        "$account": "'T212'", // hardcoded account tag; e.g. "'T212'", "[Account]", ""
+        "$fxRate": "",
+        "$subtype": "",
+        "$instrumentType": "",
+        "$comment": "[ID] & '_' & [Time]" // unique identifier from T212 transaction ID
       },
-      row_rules_debug_missing: true,
-      row_rules: [
+      "row_rules_debug_missing": true,
+      "row_rules": [
         // zero-total buy = stock transfer (no cash exchanged)
         {
-          when:  "([Action] = 'Market buy' OR [Action] = 'Limit buy' OR [Action] = 'Stock distribution') AND [Total] = 0",
-          rows: [
+          "when": "([Action] = 'Market buy' OR [Action] = 'Limit buy' OR [Action] = 'Stock distribution') AND [Total] = 0",
+          "rows": [
             {
-              $action:  "'TRANSFER_IN'"
+              "$action": "'TRANSFER_IN'"
             }
           ]
         },
         {
-          when:  "[Action] = 'Market sell' AND [Total] = 0",
-          rows: [
+          "when": "[Action] = 'Market sell' AND [Total] = 0",
+          "rows": [
             {
-              $action:  "'TRANSFER_OUT'"
+              "$action": "'TRANSFER_OUT'"
             }
           ]
         },
         {
-          when:  "[Action] = 'Market buy' OR [Action] = 'Limit buy' OR [Action] = 'Stock distribution'",
-          rows: [
+          "when": "[Action] = 'Market buy' OR [Action] = 'Limit buy' OR [Action] = 'Stock distribution'",
+          "rows": [
             {
-              $action:  "'BUY'"
+              "$action": "'BUY'"
             }
           ]
         },
         {
-          when:  "[Action] = 'Market sell'",
-          rows: [
+          "when": "[Action] = 'Market sell'",
+          "rows": [
             {
-              $action:  "'SELL'"
+              "$action": "'SELL'"
             }
           ]
         },
         // deposits and withdrawals: clear quantity/unitprice (not applicable to cash)
         {
-          when:  "[Action] = 'Deposit'",
-          rows: [
+          "when": "[Action] = 'Deposit'",
+          "rows": [
             {
-              $action:     "'DEPOSIT'",
-              $quantity:   "",
-              $unitprice:  ""
+              "$action": "'DEPOSIT'",
+              "$quantity": "",
+              "$unitprice": ""
             }
           ]
         },
         {
-          when:  "[Action] = 'Withdrawal'",
-          rows: [
+          "when": "[Action] = 'Withdrawal'",
+          "rows": [
             {
-              $action:     "'WITHDRAWAL'",
-              $quantity:   "",
-              $unitprice:  ""
+              "$action": "'WITHDRAWAL'",
+              "$quantity": "",
+              "$unitprice": ""
             }
           ]
         },
         {
-          when:  "[Action] = 'Dividend (Dividend)' OR [Action] = 'Dividend (Dividend manufactured payment)' OR [Action] = 'Dividend (Tax exempted)'",
-          rows: [
+          "when": "[Action] = 'Dividend (Dividend)' OR [Action] = 'Dividend (Dividend manufactured payment)' OR [Action] = 'Dividend (Tax exempted)'",
+          "rows": [
             {
-              $action:  "'DIVIDEND'"
+              "$action": "'DIVIDEND'"
             }
           ]
         },
         {
-          when:  "[Action] = 'Interest on cash' OR [Action] = 'Lending interest'",
-          rows: [
+          "when": "[Action] = 'Interest on cash' OR [Action] = 'Lending interest'",
+          "rows": [
             {
-              $action:  "'INTEREST'"
+              "$action": "'INTEREST'"
             }
           ]
         },
         {
-          when:  "[Action] = 'SPLIT'",
-          rows: [
+          "when": "[Action] = 'SPLIT'",
+          "rows": [
             {
-              $action:  "'SPLIT'"
+              "$action": "'SPLIT'"
             }
           ]
         },
         // stock split: T212 emits two rows (close + open) at the same Time;
         // pre_pass collects open's share count, close emits the SPLIT row with ratio = open/close
         {
-          when:  "[Action] = 'Stock split close'",
-          rows: [
+          "when": "[Action] = 'Stock split close'",
+          "rows": [
             {
-              $action:     "'SPLIT'",
-              $date:       "[Time]",
-              $quantity:   "",
-              $unitprice:  "",
-              $fee:        "",
-              $amount:     "LOOKUP([Ticker] & '_' & [Time], 'shares') / [No. of shares]",
-              $comment:    "'split-correction-' & SPLIT_PART([Time], ' ', 1)"
+              "$action": "'SPLIT'",
+              "$date": "[Time]",
+              "$quantity": "",
+              "$unitprice": "",
+              "$fee": "",
+              "$amount": "LOOKUP([Ticker] & '_' & [Time], 'shares') / [No. of shares]",
+              "$comment": "'split-correction-' & SPLIT_PART([Time], ' ', 1)"
             }
           ]
         },
         {
-          when:  "[Action] = 'Stock split open'",
-          rows: []
+          "when": "[Action] = 'Stock split open'",
+          "rows": []
         },
         // currency conversion → 3 output rows: FEE + WITHDRAWAL (from currency) + DEPOSIT (to currency)
         {
-          when:  "[Action] = 'Currency conversion'",
-          rows: [
+          "when": "[Action] = 'Currency conversion'",
+          "rows": [
             {
-              $action:     "'FEE'",
-              $ticker:     "'$CASH-' & [Currency (Currency conversion fee)]",
-              $quantity:   "",
-              $unitprice:  "",
-              $currency:   "[Currency (Currency conversion fee)]",
-              $fee:        "",
-              $amount:     "ABS([Currency conversion fee])"
+              "$action": "'FEE'",
+              "$ticker": "'$CASH-' & [Currency (Currency conversion fee)]",
+              "$quantity": "",
+              "$unitprice": "",
+              "$currency": "[Currency (Currency conversion fee)]",
+              "$fee": "",
+              "$amount": "ABS([Currency conversion fee])"
             },
             {
-              $action:     "'WITHDRAWAL'",
-              $ticker:     "'$CASH-' & [Currency (Currency conversion from amount)]",
-              $quantity:   "",
-              $unitprice:  "",
-              $currency:   "[Currency (Currency conversion from amount)]",
-              $fee:        "",
-              $amount:     "ABS([Currency conversion from amount])"
+              "$action": "'WITHDRAWAL'",
+              "$ticker": "'$CASH-' & [Currency (Currency conversion from amount)]",
+              "$quantity": "",
+              "$unitprice": "",
+              "$currency": "[Currency (Currency conversion from amount)]",
+              "$fee": "",
+              "$amount": "ABS([Currency conversion from amount])"
             },
             {
-              $action:     "'DEPOSIT'",
-              $ticker:     "'$CASH-' & [Currency (Currency conversion to amount)]",
-              $quantity:   "",
-              $unitprice:  "",
-              $currency:   "[Currency (Currency conversion to amount)]",
-              $fee:        "",
-              $amount:     "ABS([Currency conversion to amount])"
+              "$action": "'DEPOSIT'",
+              "$ticker": "'$CASH-' & [Currency (Currency conversion to amount)]",
+              "$quantity": "",
+              "$unitprice": "",
+              "$currency": "[Currency (Currency conversion to amount)]",
+              "$fee": "",
+              "$amount": "ABS([Currency conversion to amount])"
             }
           ]
         },
         // result/dividend adjustment: direction from sign of Total
         {
-          when:  "[Action] = 'Result adjustment' OR [Action] = 'Dividend adjustment'",
-          rows: [
+          "when": "[Action] = 'Result adjustment' OR [Action] = 'Dividend adjustment'",
+          "rows": [
             {
-              $action:     "IF([Total] > 0, 'DEPOSIT', 'WITHDRAWAL')",
-              $ticker:     "'$CASH-' & [Currency (Total)]",
-              $quantity:   "1",
-              $unitprice:  "ABS([Total])",
-              $currency:   "[Currency (Total)]",
-              $fee:        "",
-              $amount:     "ABS([Total])"
+              "$action": "IF([Total] > 0, 'DEPOSIT', 'WITHDRAWAL')",
+              "$ticker": "'$CASH-' & [Currency (Total)]",
+              "$quantity": "1",
+              "$unitprice": "ABS([Total])",
+              "$currency": "[Currency (Total)]",
+              "$fee": "",
+              "$amount": "ABS([Total])"
             }
           ]
         },
         {
-          when:  "[Action] = 'ADR Fee'",
-          rows: [
+          "when": "[Action] = 'ADR Fee'",
+          "rows": [
             {
-              $action:     "'FEE'",
-              $ticker:     "'$CASH-' & [Currency (Price / share)]",
-              $quantity:   "1",
-              $unitprice:  "ABS([Total])",
-              $currency:   "[Currency (Price / share)]",
-              $fee:        "",
-              $amount:     "ABS([Total])"
+              "$action": "'FEE'",
+              "$ticker": "'$CASH-' & [Currency (Price / share)]",
+              "$quantity": "1",
+              "$unitprice": "ABS([Total])",
+              "$currency": "[Currency (Price / share)]",
+              "$fee": "",
+              "$amount": "ABS([Total])"
             }
           ]
         }
       ],
-      output_schema: {
-        date:            "$date",
-        symbol:          "$ticker",
-        isin:            "$isin",  // optional ISIN column; remove if not needed
-        quantity:        "$quantity",
-        activityType:    "$action",
-        unitPrice:       "$unitprice",
-        currency:        "$currency",
-        fee:             "$fee",
-        amount:          "$amount",
-        account:         "$account",
-        fxRate:          "$fxRate",
-        subtype:         "$subtype",
-        instrumentType:  "$instrumentType",
-        comment:         "$comment"
+      "output_schema": {
+        "date": "$date",
+        "symbol": "$ticker",
+        "isin": "$isin", // optional ISIN column; remove if not needed
+        "quantity": "$quantity",
+        "activityType": "$action",
+        "unitPrice": "$unitprice",
+        "currency": "$currency",
+        "fee": "$fee",
+        "amount": "$amount",
+        "account": "$account",
+        "fxRate": "$fxRate",
+        "subtype": "$subtype",
+        "instrumentType": "$instrumentType",
+        "comment": "$comment"
       }
     },
     // ── XTB (old format, closed positions) → Wealthfolio ──
@@ -562,8 +562,8 @@
     //   intermediate CSV that the normal pipeline then processes. The same
     //   data_dir is shared with xtb1_cash (the .xlsx is parsed once, two
     //   sheets extracted).
-    xtb1_closed_to_wealthfolio: {
-      data_dir:            "xtb1_to_wealthfolio",
+    "xtb1_closed_to_wealthfolio": {
+      "data_dir": "xtb1_to_wealthfolio",
       /*
        * xlsx_sheet — optional; extracts one sheet from each .xlsx file in data_dir
        * before running the normal CSV processing loop.
@@ -573,69 +573,69 @@
        *   e.g. "_closed" → "<stem>_closed.csv"
        * Multiple templates can share the same data_dir; each xlsx is extracted only once.
        */
-      xlsx_sheet: {
-        name:           "CLOSED POSITION",  // sheet name prefix in the .xlsx workbook
-        header_row:     13,                 // row 1–12 are title/metadata rows
-        output_suffix:  "_closed.csv"       // intermediate CSV filename suffix
+      "xlsx_sheet": {
+        "name": "CLOSED POSITION", // sheet name prefix in the .xlsx workbook
+        "header_row": 13, // row 1–12 are title/metadata rows
+        "output_suffix": "_closed.csv" // intermediate CSV filename suffix
       },
-      file_type_in:        "csv",
-      file_type_out:       "csv",
-      file_pattern_in:     "_closed.csv",  // matches xlsx_sheet output_suffix
-      file_pattern_out:    "_closed.csvx",
-      csv_delimiter_in:    ",",
-      csv_delimiter_out:   ",",
-      csv_decimal_separator_in: ".",
-      csv_decimal_separator_out: ".",
-      csv_text_quote_in:   "none",
-      csv_text_quote_out:  "double",       // wrap output fields in double quotes
-      date_filter_from_filename: false,
-      ticker_map:          "xtb",
-      input_schema: {
-        $date:            "[Close time]",
-        $ticker:          "TICKER([Symbol])",
-        $quantity:        "[Volume]",
+      "file_type_in": "csv",
+      "file_type_out": "csv",
+      "file_pattern_in": "_closed.csv", // matches xlsx_sheet output_suffix
+      "file_pattern_out": "_closed.csvx",
+      "csv_delimiter_in": ",",
+      "csv_delimiter_out": ",",
+      "csv_decimal_separator_in": ".",
+      "csv_decimal_separator_out": ".",
+      "csv_text_quote_in": "none",
+      "csv_text_quote_out": "double", // wrap output fields in double quotes
+      "date_filter_from_filename": false,
+      "ticker_map": "xtb",
+      "input_schema": {
+        "$date": "[Close time]",
+        "$ticker": "TICKER([Symbol])",
+        "$quantity": "[Volume]",
         // sale value divided by volume = per-share price
-        $unitprice:       "[Sale value] / [Volume]",
-        $currency:        "'CZK'",  // XTB account currency; adjust if different
-        $fee:             "",
-        $amount:          "[Sale value]",
-        $account:         "",
-        $fxRate:          "",
-        $subtype:         "",
-        $instrumentType:  "",
+        "$unitprice": "[Sale value] / [Volume]",
+        "$currency": "'CZK'", // XTB account currency; adjust if different
+        "$fee": "",
+        "$amount": "[Sale value]",
+        "$account": "",
+        "$fxRate": "",
+        "$subtype": "",
+        "$instrumentType": "",
         // single-quoted comment wrapping: ''' evaluates to one literal quote char
-        $comment:         "''' & [Position] & '_' & [Open time] & '''"
+        "$comment": "''' & [Position] & '_' & [Open time] & '''"
       },
-      row_rules_debug_missing: true,
-      row_rules: [
+      "row_rules_debug_missing": true,
+      "row_rules": [
         // XTB closed position: BUY direction = long position → SELL in Wealthfolio
         {
-          when:  "[Type] = 'BUY'",
-          rows: [
+          "when": "[Type] = 'BUY'",
+          "rows": [
             {
-              $action:  "'SELL'"
+              "$action": "'SELL'"
             }
           ]
         },
         {
-          when:  "[Symbol] = ''",
-          rows: []
-        }  // summary/total rows have no symbol
+          "when": "[Symbol] = ''",
+          "rows": []
+        } // summary/total rows have no symbol
       ],
-      output_schema: {
-        date:            "$date",
-        symbol:          "$ticker",
-        quantity:        "$quantity",
-        activityType:    "$action",
-        unitPrice:       "$unitprice",
-        currency:        "$currency",
-        fee:             "$fee",
-        amount:          "$amount",
-        account:         "$account",
-        fxRate:          "$fxRate",
-        subtype:         "$subtype",
-        instrumentType:  "$instrumentType",
-        comment:         "$comment"
+      "output_schema": {
+        "date": "$date",
+        "symbol": "$ticker",
+        "quantity": "$quantity",
+        "activityType": "$action",
+        "unitPrice": "$unitprice",
+        "currency": "$currency",
+        "fee": "$fee",
+        "amount": "$amount",
+        "account": "$account",
+        "fxRate": "$fxRate",
+        "subtype": "$subtype",
+        "instrumentType": "$instrumentType",
+        "comment": "$comment"
       }
     },
     // ── XTB (old format, cash operations) → Wealthfolio ──
@@ -644,350 +644,350 @@
     //   $CASH-CZK placeholder. A few row_rules entries override $variables
     //   for special cases (Stock purchase parses qty/price out of the
     //   Comment field via SPLIT_PART).
-    xtb1_cash_to_wealthfolio: {
-      data_dir:            "xtb1_to_wealthfolio",  // same dir as xtb1_closed; xlsx extracted once
-      xlsx_sheet: {
-        name:           "CASH OPERATION",
-        header_row:     11,  // rows 1–10 are title/metadata rows
-        output_suffix:  "_cash.csv"
+    "xtb1_cash_to_wealthfolio": {
+      "data_dir": "xtb1_to_wealthfolio", // same dir as xtb1_closed; xlsx extracted once
+      "xlsx_sheet": {
+        "name": "CASH OPERATION",
+        "header_row": 11, // rows 1–10 are title/metadata rows
+        "output_suffix": "_cash.csv"
       },
-      file_type_in:        "csv",
-      file_type_out:       "csv",
-      file_pattern_in:     "_cash.csv",
-      file_pattern_out:    "_cash.csvx",
-      csv_delimiter_in:    ",",
-      csv_delimiter_out:   ",",
-      csv_decimal_separator_in: ".",
-      csv_decimal_separator_out: ".",
-      csv_text_quote_in:   "none",
-      csv_text_quote_out:  "double",
-      date_filter_from_filename: false,
-      ticker_map:          "xtb",
-      input_schema: {
-        $date:            "[Time]",
+      "file_type_in": "csv",
+      "file_type_out": "csv",
+      "file_pattern_in": "_cash.csv",
+      "file_pattern_out": "_cash.csvx",
+      "csv_delimiter_in": ",",
+      "csv_delimiter_out": ",",
+      "csv_decimal_separator_in": ".",
+      "csv_decimal_separator_out": ".",
+      "csv_text_quote_in": "none",
+      "csv_text_quote_out": "double",
+      "date_filter_from_filename": false,
+      "ticker_map": "xtb",
+      "input_schema": {
+        "$date": "[Time]",
         // cash rows without symbol → cash placeholder; stock rows → mapped ticker
-        $ticker:          "IF([Symbol] != '', TICKER([Symbol]), '$CASH-CZK')",
-        $quantity:        "'1'",  // cash operations have no share quantity
-        $unitprice:       "ABS([Amount])",
-        $currency:        "'CZK'",
-        $fee:             "",
-        $amount:          "ABS([Amount])",
-        $account:         "",
-        $fxRate:          "",
-        $subtype:         "",
-        $instrumentType:  "",
-        $comment:         "''' & [ID] & '_' & [Time] & '_' & [Comment] & '''"
+        "$ticker": "IF([Symbol] != '', TICKER([Symbol]), '$CASH-CZK')",
+        "$quantity": "'1'", // cash operations have no share quantity
+        "$unitprice": "ABS([Amount])",
+        "$currency": "'CZK'",
+        "$fee": "",
+        "$amount": "ABS([Amount])",
+        "$account": "",
+        "$fxRate": "",
+        "$subtype": "",
+        "$instrumentType": "",
+        "$comment": "''' & [ID] & '_' & [Time] & '_' & [Comment] & '''"
       },
-      row_rules_debug_missing: true,
-      row_rules: [
+      "row_rules_debug_missing": true,
+      "row_rules": [
         // note: typo in XTB export
         {
-          when:  "[Type] = 'DIVIDENT'",
-          rows: [
+          "when": "[Type] = 'DIVIDENT'",
+          "rows": [
             {
-              $action:  "'DIVIDEND'"
+              "$action": "'DIVIDEND'"
             }
           ]
         },
         {
-          when:  "[Type] = 'Withholding Tax'",
-          rows: [
+          "when": "[Type] = 'Withholding Tax'",
+          "rows": [
             {
-              $action:  "'TAX'"
+              "$action": "'TAX'"
             }
           ]
         },
         {
-          when:  "[Type] = 'Stamp Duty'",
-          rows: [
+          "when": "[Type] = 'Stamp Duty'",
+          "rows": [
             {
-              $action:  "'TAX'"
+              "$action": "'TAX'"
             }
           ]
         },
         {
-          when:  "[Type] = 'Free-funds Interest'",
-          rows: [
+          "when": "[Type] = 'Free-funds Interest'",
+          "rows": [
             {
-              $action:  "'INTEREST'"
+              "$action": "'INTEREST'"
             }
           ]
         },
         {
-          when:  "[Type] = 'Free-funds Interest Tax'",
-          rows: [
+          "when": "[Type] = 'Free-funds Interest Tax'",
+          "rows": [
             {
-              $action:  "'TAX'"
+              "$action": "'TAX'"
             }
           ]
         },
         {
-          when:  "[Type] = 'deposit'",
-          rows: [
+          "when": "[Type] = 'deposit'",
+          "rows": [
             {
-              $action:  "'DEPOSIT'"
+              "$action": "'DEPOSIT'"
             }
           ]
         },
         {
           // Stock purchase: quantity and unit price extracted from Comment field
           // Comment format: "Buy TICKER QTY/PRICE ..." → SPLIT_PART parses position 3
-          when:  "[Type] = 'Stock purchase'",
-          rows: [
+          "when": "[Type] = 'Stock purchase'",
+          "rows": [
             {
-              $action:     "'BUY'",
-              $ticker:     "TICKER([Symbol])",
-              $quantity:   "SPLIT_PART(SPLIT_PART([Comment], ' ', 3), '/', 1)",
-              $unitprice:  "ABS([Amount]) / SPLIT_PART(SPLIT_PART([Comment], ' ', 3), '/', 1)",
-              $comment:    "''' & [ID] & '_' & [Time] & '_' & [Comment] & '''"
+              "$action": "'BUY'",
+              "$ticker": "TICKER([Symbol])",
+              "$quantity": "SPLIT_PART(SPLIT_PART([Comment], ' ', 3), '/', 1)",
+              "$unitprice": "ABS([Amount]) / SPLIT_PART(SPLIT_PART([Comment], ' ', 3), '/', 1)",
+              "$comment": "''' & [ID] & '_' & [Time] & '_' & [Comment] & '''"
             }
           ]
         },
         {
-          when:  "[Type] = 'Stock sale'",
-          rows: []
+          "when": "[Type] = 'Stock sale'",
+          "rows": []
         },
         // covered by xtb1_closed
         {
-          when:  "[Type] = 'close trade'",
-          rows: []
+          "when": "[Type] = 'close trade'",
+          "rows": []
         },
         {
-          when:  "[Type] = ''",
-          rows: []
+          "when": "[Type] = ''",
+          "rows": []
         }
       ],
-      output_schema: {
-        date:            "$date",
-        symbol:          "$ticker",
-        quantity:        "$quantity",
-        activityType:    "$action",
-        unitPrice:       "$unitprice",
-        currency:        "$currency",
-        fee:             "$fee",
-        amount:          "$amount",
-        account:         "$account",
-        fxRate:          "$fxRate",
-        subtype:         "$subtype",
-        instrumentType:  "$instrumentType",
-        comment:         "$comment"
+      "output_schema": {
+        "date": "$date",
+        "symbol": "$ticker",
+        "quantity": "$quantity",
+        "activityType": "$action",
+        "unitPrice": "$unitprice",
+        "currency": "$currency",
+        "fee": "$fee",
+        "amount": "$amount",
+        "account": "$account",
+        "fxRate": "$fxRate",
+        "subtype": "$subtype",
+        "instrumentType": "$instrumentType",
+        "comment": "$comment"
       }
     },
     // ── XTB (new format from 2026-07-01, closed positions) → Wealthfolio ──
     //   Same pattern as xtb1_closed but tracks XTB's renamed columns
     //   ("Ticker" instead of "Symbol", "Close Time (UTC)" instead of
     //   "Close time", "Closed Positions" sheet instead of "CLOSED POSITION").
-    xtb2_closed_to_wealthfolio: {
-      data_dir:            "xtb2_to_wealthfolio",
-      xlsx_sheet: {
-        name:           "Closed Positions",  // new format uses different sheet name
-        header_row:     5,                   // rows 1–4 are header/metadata
-        output_suffix:  "_closed.csv"
+    "xtb2_closed_to_wealthfolio": {
+      "data_dir": "xtb2_to_wealthfolio",
+      "xlsx_sheet": {
+        "name": "Closed Positions", // new format uses different sheet name
+        "header_row": 5, // rows 1–4 are header/metadata
+        "output_suffix": "_closed.csv"
       },
-      file_type_in:        "csv",
-      file_type_out:       "csv",
-      file_pattern_in:     "_closed.csv",
-      file_pattern_out:    "_closed.csvx",
-      csv_delimiter_in:    ",",
-      csv_delimiter_out:   ",",
-      csv_decimal_separator_in: ".",
-      csv_decimal_separator_out: ".",
-      csv_text_quote_in:   "none",
-      csv_text_quote_out:  "double",
-      date_filter_from_filename: false,
-      ticker_map:          "xtb",
-      input_schema: {
-        $date:            "[Close Time (UTC)]",  // new format uses UTC timestamps
-        $ticker:          "TICKER([Ticker])",    // new format uses "Ticker" column (was "Symbol")
-        $quantity:        "[Volume]",
-        $unitprice:       "[Sale Value] / [Volume]",
-        $currency:        "'CZK'",
-        $fee:             "",
-        $amount:          "[Sale Value]",
-        $account:         "",
-        $fxRate:          "",
-        $subtype:         "",
-        $instrumentType:  "",
-        $comment:         "''' & [Position ID] & '_' & [Open Time (UTC)] & '''"
+      "file_type_in": "csv",
+      "file_type_out": "csv",
+      "file_pattern_in": "_closed.csv",
+      "file_pattern_out": "_closed.csvx",
+      "csv_delimiter_in": ",",
+      "csv_delimiter_out": ",",
+      "csv_decimal_separator_in": ".",
+      "csv_decimal_separator_out": ".",
+      "csv_text_quote_in": "none",
+      "csv_text_quote_out": "double",
+      "date_filter_from_filename": false,
+      "ticker_map": "xtb",
+      "input_schema": {
+        "$date": "[Close Time (UTC)]", // new format uses UTC timestamps
+        "$ticker": "TICKER([Ticker])", // new format uses "Ticker" column (was "Symbol")
+        "$quantity": "[Volume]",
+        "$unitprice": "[Sale Value] / [Volume]",
+        "$currency": "'CZK'",
+        "$fee": "",
+        "$amount": "[Sale Value]",
+        "$account": "",
+        "$fxRate": "",
+        "$subtype": "",
+        "$instrumentType": "",
+        "$comment": "''' & [Position ID] & '_' & [Open Time (UTC)] & '''"
       },
-      row_rules_debug_missing: true,
-      row_rules: [
+      "row_rules_debug_missing": true,
+      "row_rules": [
         {
-          when:  "[Type] = 'BUY'",
-          rows: [
+          "when": "[Type] = 'BUY'",
+          "rows": [
             {
-              $action:  "'SELL'"
+              "$action": "'SELL'"
             }
           ]
         },
         // P/L summary rows
         {
-          when:  "[Instrument] = 'Profit/loss'",
-          rows: []
+          "when": "[Instrument] = 'Profit/loss'",
+          "rows": []
         }
       ],
-      output_schema: {
-        date:            "$date",
-        symbol:          "$ticker",
-        quantity:        "$quantity",
-        activityType:    "$action",
-        unitPrice:       "$unitprice",
-        currency:        "$currency",
-        fee:             "$fee",
-        amount:          "$amount",
-        account:         "$account",
-        fxRate:          "$fxRate",
-        subtype:         "$subtype",
-        instrumentType:  "$instrumentType",
-        comment:         "$comment"
+      "output_schema": {
+        "date": "$date",
+        "symbol": "$ticker",
+        "quantity": "$quantity",
+        "activityType": "$action",
+        "unitPrice": "$unitprice",
+        "currency": "$currency",
+        "fee": "$fee",
+        "amount": "$amount",
+        "account": "$account",
+        "fxRate": "$fxRate",
+        "subtype": "$subtype",
+        "instrumentType": "$instrumentType",
+        "comment": "$comment"
       }
     },
     // ── XTB (new format from 2026-07-01, cash operations) → Wealthfolio ──
     //   Same pattern as xtb1_cash but tracks XTB's renamed columns and event
     //   labels (e.g. "Dividend" instead of "DIVIDENT", "Stock sell" instead
     //   of "Stock sale").
-    xtb2_cash_to_wealthfolio: {
-      data_dir:            "xtb2_to_wealthfolio",  // same dir as xtb2_closed; xlsx extracted once
-      xlsx_sheet: {
-        name:           "Cash Operations",  // new format sheet name
-        header_row:     5,
-        output_suffix:  "_cash.csv"
+    "xtb2_cash_to_wealthfolio": {
+      "data_dir": "xtb2_to_wealthfolio", // same dir as xtb2_closed; xlsx extracted once
+      "xlsx_sheet": {
+        "name": "Cash Operations", // new format sheet name
+        "header_row": 5,
+        "output_suffix": "_cash.csv"
       },
-      file_type_in:        "csv",
-      file_type_out:       "csv",
-      file_pattern_in:     "_cash.csv",
-      file_pattern_out:    "_cash.csvx",
-      csv_delimiter_in:    ",",
-      csv_delimiter_out:   ",",
-      csv_decimal_separator_in: ".",
-      csv_decimal_separator_out: ".",
-      csv_text_quote_in:   "none",
-      csv_text_quote_out:  "double",
-      date_filter_from_filename: false,
-      ticker_map:          "xtb",
-      input_schema: {
-        $date:            "[Time]",
-        $ticker:          "IF([Ticker] != '', TICKER([Ticker]), '$CASH-CZK')",
-        $quantity:        "'1'",
-        $unitprice:       "ABS([Amount])",
-        $currency:        "'CZK'",
-        $fee:             "",
-        $amount:          "ABS([Amount])",
-        $account:         "",
-        $fxRate:          "",
-        $subtype:         "",
-        $instrumentType:  "",
-        $comment:         "''' & [ID] & '_' & [Time] & '_' & [Comment] & '''"
+      "file_type_in": "csv",
+      "file_type_out": "csv",
+      "file_pattern_in": "_cash.csv",
+      "file_pattern_out": "_cash.csvx",
+      "csv_delimiter_in": ",",
+      "csv_delimiter_out": ",",
+      "csv_decimal_separator_in": ".",
+      "csv_decimal_separator_out": ".",
+      "csv_text_quote_in": "none",
+      "csv_text_quote_out": "double",
+      "date_filter_from_filename": false,
+      "ticker_map": "xtb",
+      "input_schema": {
+        "$date": "[Time]",
+        "$ticker": "IF([Ticker] != '', TICKER([Ticker]), '$CASH-CZK')",
+        "$quantity": "'1'",
+        "$unitprice": "ABS([Amount])",
+        "$currency": "'CZK'",
+        "$fee": "",
+        "$amount": "ABS([Amount])",
+        "$account": "",
+        "$fxRate": "",
+        "$subtype": "",
+        "$instrumentType": "",
+        "$comment": "''' & [ID] & '_' & [Time] & '_' & [Comment] & '''"
       },
-      row_rules_debug_missing: true,
-      row_rules: [
+      "row_rules_debug_missing": true,
+      "row_rules": [
         {
-          when:  "[Type] = 'Dividend'",
-          rows: [
+          "when": "[Type] = 'Dividend'",
+          "rows": [
             {
-              $action:  "'DIVIDEND'"
+              "$action": "'DIVIDEND'"
             }
           ]
         },
         {
-          when:  "[Type] = 'Withholding tax'",
-          rows: [
+          "when": "[Type] = 'Withholding tax'",
+          "rows": [
             {
-              $action:  "'TAX'"
+              "$action": "'TAX'"
             }
           ]
         },
         {
-          when:  "[Type] = 'Stamp duty'",
-          rows: [
+          "when": "[Type] = 'Stamp duty'",
+          "rows": [
             {
-              $action:  "'TAX'"
+              "$action": "'TAX'"
             }
           ]
         },
         {
-          when:  "[Type] = 'Free funds interest'",
-          rows: [
+          "when": "[Type] = 'Free funds interest'",
+          "rows": [
             {
-              $action:  "'INTEREST'"
+              "$action": "'INTEREST'"
             }
           ]
         },
         {
-          when:  "[Type] = 'Free funds interest tax'",
-          rows: [
+          "when": "[Type] = 'Free funds interest tax'",
+          "rows": [
             {
-              $action:  "'TAX'"
+              "$action": "'TAX'"
             }
           ]
         },
         {
           // same Comment parsing as xtb1; format unchanged in new XTB export
-          when:  "[Type] = 'Stock purchase'",
-          rows: [
+          "when": "[Type] = 'Stock purchase'",
+          "rows": [
             {
-              $action:     "'BUY'",
-              $ticker:     "TICKER([Ticker])",
-              $quantity:   "SPLIT_PART(SPLIT_PART([Comment], ' ', 3), '/', 1)",
-              $unitprice:  "ABS([Amount]) / SPLIT_PART(SPLIT_PART([Comment], ' ', 3), '/', 1)",
-              $comment:    "''' & [ID] & '_' & [Time] & '_' & [Comment] & '''"
+              "$action": "'BUY'",
+              "$ticker": "TICKER([Ticker])",
+              "$quantity": "SPLIT_PART(SPLIT_PART([Comment], ' ', 3), '/', 1)",
+              "$unitprice": "ABS([Amount]) / SPLIT_PART(SPLIT_PART([Comment], ' ', 3), '/', 1)",
+              "$comment": "''' & [ID] & '_' & [Time] & '_' & [Comment] & '''"
             }
           ]
         },
         {
-          when:  "[Type] = 'Stock sell'",
-          rows: []
+          "when": "[Type] = 'Stock sell'",
+          "rows": []
         },
         // covered by xtb2_closed
         {
-          when:  "[Type] = 'Stock sale'",
-          rows: []
+          "when": "[Type] = 'Stock sale'",
+          "rows": []
         },
         {
-          when:  "[Type] = 'Deposit'",
-          rows: [
+          "when": "[Type] = 'Deposit'",
+          "rows": [
             {
-              $action:  "'DEPOSIT'"
+              "$action": "'DEPOSIT'"
             }
           ]
         },
         // lowercase variant
         {
-          when:  "[Type] = 'deposit'",
-          rows: [
+          "when": "[Type] = 'deposit'",
+          "rows": [
             {
-              $action:  "'DEPOSIT'"
+              "$action": "'DEPOSIT'"
             }
           ]
         },
         {
-          when:  "[Type] = 'close trade'",
-          rows: []
+          "when": "[Type] = 'close trade'",
+          "rows": []
         },
         {
-          when:  "[Type] = 'Total'",
-          rows: []
+          "when": "[Type] = 'Total'",
+          "rows": []
         },
         // summary row at end of sheet
         {
-          when:  "[Type] = ''",
-          rows: []
+          "when": "[Type] = ''",
+          "rows": []
         }
       ],
-      output_schema: {
-        date:            "$date",
-        symbol:          "$ticker",
-        quantity:        "$quantity",
-        activityType:    "$action",
-        unitPrice:       "$unitprice",
-        currency:        "$currency",
-        fee:             "$fee",
-        amount:          "$amount",
-        account:         "$account",
-        fxRate:          "$fxRate",
-        subtype:         "$subtype",
-        instrumentType:  "$instrumentType",
-        comment:         "$comment"
+      "output_schema": {
+        "date": "$date",
+        "symbol": "$ticker",
+        "quantity": "$quantity",
+        "activityType": "$action",
+        "unitPrice": "$unitprice",
+        "currency": "$currency",
+        "fee": "$fee",
+        "amount": "$amount",
+        "account": "$account",
+        "fxRate": "$fxRate",
+        "subtype": "$subtype",
+        "instrumentType": "$instrumentType",
+        "comment": "$comment"
       }
     }
   }

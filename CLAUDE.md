@@ -123,8 +123,8 @@ invokes them via `Process.run` for conversions, validation, docs, etc.
 bxp-gui persists user state (theme, recent files, custom places, zoom)
 to a visible JSON file at a canonical OS path:
 
-- Linux:   `~/.local/share/bxp-gui/bxp-gui.json`
-- macOS:   `~/Library/Application Support/bxp-gui/bxp-gui.json`
+- Linux: `~/.local/share/bxp-gui/bxp-gui.json`
+- macOS: `~/Library/Application Support/bxp-gui/bxp-gui.json`
 - Windows: `%APPDATA%\bxp-gui\bxp-gui.json`
 
 The file is auto-created on first write. Implementation: `bxp-gui/lib/

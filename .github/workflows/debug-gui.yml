@@ -18,9 +18,9 @@ on:
   workflow_dispatch:
     inputs:
       label:
-        description: 'Short label for this build (filename suffix)'
+        description: "Short label for this build (filename suffix)"
         required: false
-        default: 'debug'
+        default: "debug"
 
 permissions:
   contents: read

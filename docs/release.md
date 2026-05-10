@@ -34,13 +34,13 @@ Both scripts accept `--dry-run` to preview without mutating anything.
 
 ## What gets built
 
-| job | runner | output |
-| -- | -- | -- |
-| `console` | ubuntu-latest | `bxp-console-<ver>-{linux-x86_64.tar.gz, windows-x86_64.zip, macos-aarch64.tar.gz}` |
-| `desktop-linux` | ubuntu-22.04 | `bxp-desktop-<ver>-linux-x86_64.{tar.gz, AppImage, deb}` |
-| `desktop-windows` | windows-latest | `bxp-desktop-<ver>-windows-x86_64-setup.exe` |
-| `desktop-macos` | macos-latest | `bxp-desktop-<ver>-macos-aarch64.dmg` |
-| `release` | ubuntu-latest | aggregates above + `SHA256SUMS`, publishes Release |
+| job               | runner         | output                                                                              |
+| ----------------- | -------------- | ----------------------------------------------------------------------------------- |
+| `console`         | ubuntu-latest  | `bxp-console-<ver>-{linux-x86_64.tar.gz, windows-x86_64.zip, macos-aarch64.tar.gz}` |
+| `desktop-linux`   | ubuntu-22.04   | `bxp-desktop-<ver>-linux-x86_64.{tar.gz, AppImage, deb}`                            |
+| `desktop-windows` | windows-latest | `bxp-desktop-<ver>-windows-x86_64-setup.exe`                                        |
+| `desktop-macos`   | macos-latest   | `bxp-desktop-<ver>-macos-aarch64.dmg`                                               |
+| `release`         | ubuntu-latest  | aggregates above + `SHA256SUMS`, publishes Release                                  |
 
 `bxp-console` archives are CLI-only (small, no GUI deps). `bxp-desktop`
 archives ship the Flutter GUI plus bundled `bxp-cli`, `bxp-fmt`, and

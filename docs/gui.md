@@ -16,7 +16,7 @@ pair. Runs on Linux, macOS, and Windows.
 - [Architecture overview](#architecture-overview)
 - [Source layout](#source-layout)
 - [Subprocess wiring](#subprocess-wiring)
-- [json5\_ast library](#json5_ast-library)
+- [json5_ast library](#json5_ast-library)
 - [State management](#state-management)
 - [Key patterns](#key-patterns)
 - [Adding a new config field to the UI](#adding-a-new-config-field-to-the-ui)
@@ -55,12 +55,12 @@ and decoupled from the Zig internals.
 
 ### Prerequisites
 
-| Tool | Version | Notes |
-| --- | --- | --- |
-| Flutter SDK | ≥ 3.x | See `bxp-gui/pubspec.yaml` `environment.flutter` for the minimum. Install from [flutter.dev](https://flutter.dev) or via `fvm`. |
-| Dart SDK | bundled | Ships with Flutter; no separate install. |
-| Zig | 0.15.2 | To build bxp-cli and bxp-fmt. See [devel.md](devel.md) for the pinned version. |
-| VS Code | any | + [Flutter extension](https://marketplace.visualstudio.com/items?itemName=Dart-Code.flutter). IntelliJ / Android Studio work too. |
+| Tool        | Version | Notes                                                                                                                             |
+| ----------- | ------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| Flutter SDK | ≥ 3.x   | See `bxp-gui/pubspec.yaml` `environment.flutter` for the minimum. Install from [flutter.dev](https://flutter.dev) or via `fvm`.   |
+| Dart SDK    | bundled | Ships with Flutter; no separate install.                                                                                          |
+| Zig         | 0.15.2  | To build bxp-cli and bxp-fmt. See [devel.md](devel.md) for the pinned version.                                                    |
+| VS Code     | any     | + [Flutter extension](https://marketplace.visualstudio.com/items?itemName=Dart-Code.flutter). IntelliJ / Android Studio work too. |
 
 ### First run
 
@@ -278,15 +278,15 @@ Resolved in this order:
 
 ### Client methods
 
-| Method | Binary | Notes |
-| -- | -- | -- |
-| `validateConfig(path)` | `bxp-fmt --config` | Returns annotated JSON with `$err_*`/`$warn_*` siblings |
-| `getDocs()` | `bxp-fmt --docs` | Cached at startup; drives FnDoc tooltips + SchemaGate |
-| `listTemplates(path)` | `bxp-fmt --config … --list-templates` | Template id array |
-| `validateExpr(text)` | `bxp-fmt --expr` | Returns `{error, offset, length}` on failure |
-| `traceExpr(text, …)` | `bxp-fmt --expr-trace` | NDJSON stream of per-call values |
-| `runDryRun(path, tmpl)` | `bxp-cli --trace` | NDJSON stream → `trace_builder.dart` |
-| `getVersion(name)` | `bxp-cli --version` / `bxp-fmt --version` | Both write to stdout |
+| Method                  | Binary                                    | Notes                                                   |
+| ----------------------- | ----------------------------------------- | ------------------------------------------------------- |
+| `validateConfig(path)`  | `bxp-fmt --config`                        | Returns annotated JSON with `$err_*`/`$warn_*` siblings |
+| `getDocs()`             | `bxp-fmt --docs`                          | Cached at startup; drives FnDoc tooltips + SchemaGate   |
+| `listTemplates(path)`   | `bxp-fmt --config … --list-templates`     | Template id array                                       |
+| `validateExpr(text)`    | `bxp-fmt --expr`                          | Returns `{error, offset, length}` on failure            |
+| `traceExpr(text, …)`    | `bxp-fmt --expr-trace`                    | NDJSON stream of per-call values                        |
+| `runDryRun(path, tmpl)` | `bxp-cli --trace`                         | NDJSON stream → `trace_builder.dart`                    |
+| `getVersion(name)`      | `bxp-cli --version` / `bxp-fmt --version` | Both write to stdout                                    |
 
 ### Linux dev-tree gotcha
 
@@ -296,7 +296,7 @@ fallback (option 3 above) which reads directly from `bxp-fmt/zig-out/bin/`.
 
 ---
 
-## json5\_ast library
+## json5_ast library
 
 A standalone Dart package (`packages/json5_ast/`) that parses JSON5 to a
 comment-preserving AST, applies mutations, and dumps back to text. Used to

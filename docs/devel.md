@@ -41,13 +41,13 @@
 
 Install these extensions for a productive experience:
 
-| Extension | ID | Purpose |
-| -- | -- | -- |
-| **Zig Language** | `ziglang.vscode-zig` | Zig language, Syntax highlighting, ZLS integration, build tasks |
-| **Rainbow CSV** | `mechatroner.rainbow-csv` | Column-aware CSV viewer - helpful when reading broker exports |
-| **JSON5** | `blueglassblock.better-json5` | Syntax highlighting for `JSON5` config files |
-| **Mermaid preview** | `bierner.markdown-mermaid` | Renders Mermaid diagrams in Markdown preview (useful for `architecture.md`) |
-| **Mermaid syntax** | `bpruitt-goddard.mermaid-markdown-syntax-highlighting` | Syntax highlighting for Mermaid diagrams (useful for `architecture.md`) |
+| Extension           | ID                                                     | Purpose                                                                     |
+| ------------------- | ------------------------------------------------------ | --------------------------------------------------------------------------- |
+| **Zig Language**    | `ziglang.vscode-zig`                                   | Zig language, Syntax highlighting, ZLS integration, build tasks             |
+| **Rainbow CSV**     | `mechatroner.rainbow-csv`                              | Column-aware CSV viewer - helpful when reading broker exports               |
+| **JSON5**           | `blueglassblock.better-json5`                          | Syntax highlighting for `JSON5` config files                                |
+| **Mermaid preview** | `bierner.markdown-mermaid`                             | Renders Mermaid diagrams in Markdown preview (useful for `architecture.md`) |
+| **Mermaid syntax**  | `bpruitt-goddard.mermaid-markdown-syntax-highlighting` | Syntax highlighting for Mermaid diagrams (useful for `architecture.md`)     |
 
 **ZLS (Zig Language Server)** and **Zig language** is bundled with the `ziglang.vscode-zig` extension in recent versions - it provides completions, go-to-definition and inline error diagnostics out of the box.
 
@@ -55,9 +55,9 @@ Install these extensions for a productive experience:
 
 ### Verify Zig language version
 
-| Tool | Version | Notes |
-| -- | -- | -- |
-| Zig | **0.15.2** | Exact version - `build.zig.zon` sets `minimum_zig_version = "0.15.0"` |
+| Tool | Version    | Notes                                                                 |
+| ---- | ---------- | --------------------------------------------------------------------- |
+| Zig  | **0.15.2** | Exact version - `build.zig.zon` sets `minimum_zig_version = "0.15.0"` |
 
 No other runtime dependencies. `bxp-core` fetches `sunrise` (datetime library) automatically via `zig build` on first run.
 
@@ -80,12 +80,12 @@ The monorepo ships `CLAUDE.md` files at four levels — root, `bxp-cli/`, `bxp-c
 
 Install Zig skills from <https://github.com/rudedogg/zig-skills>
 
-| Skill | When to use |
-| -- | -- |
-| `/zig` | Before writing any new Zig code - loads Zig 0.15.2 API patterns |
-| `/zig-build` | Compile the project and get structured error analysis |
-| `/zig-check` | Fast syntax/type check without full build |
-| `/zig-test` | Run the test suite and analyze failures |
+| Skill        | When to use                                                     |
+| ------------ | --------------------------------------------------------------- |
+| `/zig`       | Before writing any new Zig code - loads Zig 0.15.2 API patterns |
+| `/zig-build` | Compile the project and get structured error analysis           |
+| `/zig-check` | Fast syntax/type check without full build                       |
+| `/zig-test`  | Run the test suite and analyze failures                         |
 
 ---
 
@@ -176,7 +176,7 @@ The typical dev workflow:
 
 ```bash
 # From the monorepo root
-./bxp-cli/zig-out/bin/bxp-cli --config ./datasets/anycoin_to_wealthfolio/sample.json --debug 
+./bxp-cli/zig-out/bin/bxp-cli --config ./datasets/anycoin_to_wealthfolio/sample.json --debug
 ```
 
 ---
@@ -244,16 +244,16 @@ bundle and invokes them via `Process.run`.
 
 ### bxp-core modules
 
-| Module | File | Responsibility |
-| -- | -- | -- |
-| `csv` | `csv.zig` | RFC 4180 parser. `splitRecords()` slices raw content; `splitFields()` unquotes fields. Spaces preserved — trimmed outside csv.zig at access time in `expr.Context`. |
-| `xlsx` | `xlsx.zig` | Converts `.xlsx` to intermediate `.csv`. Reads ZIP+XML, handles shared strings, formula results, dates (via `styles.xml` numFmtId). Max file size 10 MB. |
-| `expr` | `expr.zig` | Expression evaluator. Recursive-descent parser → evaluator. Per-row `Context` holds field values, ticker map, lookup table. `eval()` returns `Value` (number/string/bool); `evalString()` coerces to string. Each built-in has a co-located `FnDoc` entry consumed by `docs.zig`. |
-| `config` | `config.zig` | Reads `bxp-cli.json` via `json5.zig` preprocessor then `std.json`. Returns `Config` owning all heap memory. `BrokerConfig.validate()` checks semantic constraints. Each struct has a co-located `FieldDoc` table consumed by `docs.zig`. |
-| `json` | `json.zig` | Reads a JSON array-of-objects into a flat row representation. Builds a union of all keys across all objects; fills missing keys with empty string. |
-| `json5` | `json5.zig` | Single-pass tokenizer that converts JSON5 → standard JSON. Strips comments, converts unquoted keys, removes trailing commas, normalizes single-quoted strings. |
-| `docs` | `docs.zig` | Aggregates `expr.zig` FnDoc catalog and `config.zig` FieldDoc tables into the `bxp-fmt --docs` JSON. Single source of truth consumed by bxp-gui at startup. |
-| `diagnostics` | `diagnostics.zig` | Structured validation collector. `Severity` (.error / .warning / .info), `Diagnostic` (path, position, code, message, suggest), `Diagnostics` (ArrayList collector). Used by bxp-fmt deep validation; bxp-cli passes a null sink. |
+| Module        | File              | Responsibility                                                                                                                                                                                                                                                                    |
+| ------------- | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `csv`         | `csv.zig`         | RFC 4180 parser. `splitRecords()` slices raw content; `splitFields()` unquotes fields. Spaces preserved — trimmed outside csv.zig at access time in `expr.Context`.                                                                                                               |
+| `xlsx`        | `xlsx.zig`        | Converts `.xlsx` to intermediate `.csv`. Reads ZIP+XML, handles shared strings, formula results, dates (via `styles.xml` numFmtId). Max file size 10 MB.                                                                                                                          |
+| `expr`        | `expr.zig`        | Expression evaluator. Recursive-descent parser → evaluator. Per-row `Context` holds field values, ticker map, lookup table. `eval()` returns `Value` (number/string/bool); `evalString()` coerces to string. Each built-in has a co-located `FnDoc` entry consumed by `docs.zig`. |
+| `config`      | `config.zig`      | Reads `bxp-cli.json` via `json5.zig` preprocessor then `std.json`. Returns `Config` owning all heap memory. `BrokerConfig.validate()` checks semantic constraints. Each struct has a co-located `FieldDoc` table consumed by `docs.zig`.                                          |
+| `json`        | `json.zig`        | Reads a JSON array-of-objects into a flat row representation. Builds a union of all keys across all objects; fills missing keys with empty string.                                                                                                                                |
+| `json5`       | `json5.zig`       | Single-pass tokenizer that converts JSON5 → standard JSON. Strips comments, converts unquoted keys, removes trailing commas, normalizes single-quoted strings.                                                                                                                    |
+| `docs`        | `docs.zig`        | Aggregates `expr.zig` FnDoc catalog and `config.zig` FieldDoc tables into the `bxp-fmt --docs` JSON. Single source of truth consumed by bxp-gui at startup.                                                                                                                       |
+| `diagnostics` | `diagnostics.zig` | Structured validation collector. `Severity` (.error / .warning / .info), `Diagnostic` (path, position, code, message, suggest), `Diagnostics` (ArrayList collector). Used by bxp-fmt deep validation; bxp-cli passes a null sink.                                                 |
 
 ---
 
@@ -296,15 +296,15 @@ The binary is intentionally a thin shim — every subcommand delegates to a
 `bxp-core` module. bxp-fmt's own job is arg parsing, arena setup, and JSON
 serialization.
 
-| Subcommand | Backed by | Purpose |
-| -- | -- | -- |
-| `--config <path>` | `config.load` + `config.validateCollect` | Annotated JSON output with `$comm_<N>` / `$err_<N>` / `$warn_<N>` / `$info_<N>` siblings |
-| `--config <path> --list-templates` | `config.load` | JSON array of template ids |
-| `--config <path> --fetch-template <id>` | `config.load` | Raw JSON5 block of one template |
-| `--expr '<text>'` | `expr.eval` (empty `Context`) | One-shot expression validation |
-| `--expr-trace '<text>' [--row-headers …] [--row-fields …]` | `expr.evalTrace` | Per-call NDJSON trace stream (used by ExprPlayground) |
-| `--docs` | `docs.writeDocs` | Full FnDoc / FieldDoc catalog (single source for bxp-gui startup) |
-| `--version`, `--help` | — | Standard. `--version` writes to stdout, not stderr |
+| Subcommand                                                 | Backed by                                | Purpose                                                                                  |
+| ---------------------------------------------------------- | ---------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `--config <path>`                                          | `config.load` + `config.validateCollect` | Annotated JSON output with `$comm_<N>` / `$err_<N>` / `$warn_<N>` / `$info_<N>` siblings |
+| `--config <path> --list-templates`                         | `config.load`                            | JSON array of template ids                                                               |
+| `--config <path> --fetch-template <id>`                    | `config.load`                            | Raw JSON5 block of one template                                                          |
+| `--expr '<text>'`                                          | `expr.eval` (empty `Context`)            | One-shot expression validation                                                           |
+| `--expr-trace '<text>' [--row-headers …] [--row-fields …]` | `expr.evalTrace`                         | Per-call NDJSON trace stream (used by ExprPlayground)                                    |
+| `--docs`                                                   | `docs.writeDocs`                         | Full FnDoc / FieldDoc catalog (single source for bxp-gui startup)                        |
+| `--version`, `--help`                                      | —                                        | Standard. `--version` writes to stdout, not stderr                                       |
 
 Subcommands are mutually exclusive (one action per invocation). Each `runX`
 function wraps the input GPA in an `ArenaAllocator` — `expr.Context.alloc`
@@ -405,10 +405,10 @@ input/output schemas, and row rules.
 
 Two arena allocators are used during processing:
 
-| Allocator | Lifetime | Owns |
-| -- | -- | -- |
+| Allocator                     | Lifetime                    | Owns                                          |
+| ----------------------------- | --------------------------- | --------------------------------------------- |
 | `file_alloc` (ArenaAllocator) | Reset after each input file | File content, parsed rows, expression results |
-| `line_alloc` (ArenaAllocator) | Reset after each row | Per-row expression evaluation scratch space |
+| `line_alloc` (ArenaAllocator) | Reset after each row        | Per-row expression evaluation scratch space   |
 
 The root GPA (`std.heap.DebugAllocator`) catches leaks in debug builds.
 
@@ -420,11 +420,11 @@ Three concerns, three mechanisms:
 
 **1. Exit codes (CLI contract).** `bxp-cli`:
 
-| Code | Meaning |
-| -- | -- |
-| `0` | Success |
-| `1` | Fatal error (invalid config, file not found, broken expression at load) |
-| `2` | Warnings (typo'd field, unknown column, no input rows) |
+| Code | Meaning                                                                 |
+| ---- | ----------------------------------------------------------------------- |
+| `0`  | Success                                                                 |
+| `1`  | Fatal error (invalid config, file not found, broken expression at load) |
+| `2`  | Warnings (typo'd field, unknown column, no input rows)                  |
 
 Exit `2` runs to completion — the user gets converted output AND a warning
 text on stderr. CI scripts treat `2` as failure (see "datasets are exemplary"
@@ -455,12 +455,12 @@ fatal errors also stderr.
 
 **bxp-cli verbosity flags** — composable, all on the same binary:
 
-| Flag | What it does |
-| -- | -- |
-| `--debug` | Prints unmatched rows when `row_rules_debug_missing: true` |
-| `--quiet` | Suppresses per-template summaries (exit code still reflects result) |
-| `--trace` | Emits NDJSON event stream on stdout (consumed by `bxp-gui`'s dry-run debugger). Implies `--quiet` |
-| `--check-fs=N` | Adds filesystem-existence checks (templates' `data_dir`, etc.) with N-second timeout |
+| Flag           | What it does                                                                                      |
+| -------------- | ------------------------------------------------------------------------------------------------- |
+| `--debug`      | Prints unmatched rows when `row_rules_debug_missing: true`                                        |
+| `--quiet`      | Suppresses per-template summaries (exit code still reflects result)                               |
+| `--trace`      | Emits NDJSON event stream on stdout (consumed by `bxp-gui`'s dry-run debugger). Implies `--quiet` |
+| `--check-fs=N` | Adds filesystem-existence checks (templates' `data_dir`, etc.) with N-second timeout              |
 
 **Inspecting an expression in isolation:**
 
@@ -610,9 +610,9 @@ See [`docs/release.md`](release.md) for the full operator walkthrough. Summary:
 
 Two release channels, distinct archives:
 
-| Channel | Archives | Content |
-| -- | -- | -- |
-| `bxp-console` | `bxp-console-<ver>-{linux-x86_64.tar.gz, macos-aarch64.tar.gz, windows-x86_64.zip}` | CLI binary only |
+| Channel       | Archives                                                                                    | Content                                 |
+| ------------- | ------------------------------------------------------------------------------------------- | --------------------------------------- |
+| `bxp-console` | `bxp-console-<ver>-{linux-x86_64.tar.gz, macos-aarch64.tar.gz, windows-x86_64.zip}`         | CLI binary only                         |
 | `bxp-desktop` | `bxp-desktop-<ver>-{linux.AppImage, linux.deb, linux.tar.gz, windows-setup.exe, macos.dmg}` | Flutter GUI + bundled bxp-cli + bxp-fmt |
 
 ```bash
@@ -644,11 +644,11 @@ each module — internal API contracts, design decisions, "known non-issue"
 rationales — lives in per-module `CLAUDE.md` files. They're loaded
 automatically by Claude Code, but you can read them directly any time.
 
-| Module | File | What's in it |
-| -- | -- | -- |
-| Monorepo | [`CLAUDE.md`](../CLAUDE.md) | Top-level layout + package dep graph + cross-cutting conventions |
-| `bxp-cli` | [`bxp-cli/CLAUDE.md`](../bxp-cli/CLAUDE.md) | Full config reference, expression syntax, broker list, exit codes, output stream routing |
-| `bxp-fmt` | [`bxp-fmt/CLAUDE.md`](../bxp-fmt/CLAUDE.md) | Subcommands, annotated JSON shape (`$comm_*`/`$err_*`/…), exit codes |
-| `bxp-core` | [`bxp-core/CLAUDE.md`](../bxp-core/CLAUDE.md) | Per-module API surface, build details, "known non-issues" rationale |
-| `bxp-gui` | [`bxp-gui/CLAUDE.md`](../bxp-gui/CLAUDE.md) | Flutter app structure, services/store/ui split, MCP debug workflow |
-| `json5_ast` | [`bxp-gui/packages/json5_ast/CLAUDE.md`](../bxp-gui/packages/json5_ast/CLAUDE.md) | Standalone-library-candidate status, comment ownership, future extraction recipe |
+| Module      | File                                                                              | What's in it                                                                             |
+| ----------- | --------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| Monorepo    | [`CLAUDE.md`](../CLAUDE.md)                                                       | Top-level layout + package dep graph + cross-cutting conventions                         |
+| `bxp-cli`   | [`bxp-cli/CLAUDE.md`](../bxp-cli/CLAUDE.md)                                       | Full config reference, expression syntax, broker list, exit codes, output stream routing |
+| `bxp-fmt`   | [`bxp-fmt/CLAUDE.md`](../bxp-fmt/CLAUDE.md)                                       | Subcommands, annotated JSON shape (`$comm_*`/`$err_*`/…), exit codes                     |
+| `bxp-core`  | [`bxp-core/CLAUDE.md`](../bxp-core/CLAUDE.md)                                     | Per-module API surface, build details, "known non-issues" rationale                      |
+| `bxp-gui`   | [`bxp-gui/CLAUDE.md`](../bxp-gui/CLAUDE.md)                                       | Flutter app structure, services/store/ui split, MCP debug workflow                       |
+| `json5_ast` | [`bxp-gui/packages/json5_ast/CLAUDE.md`](../bxp-gui/packages/json5_ast/CLAUDE.md) | Standalone-library-candidate status, comment ownership, future extraction recipe         |

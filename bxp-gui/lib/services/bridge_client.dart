@@ -40,13 +40,14 @@ typedef _BridgeVersionDart = Pointer<Utf8> Function();
 //   bridge_run_streaming(req,
 //                        on_stdout_batch,
 //                        on_stderr_chunk,
-//                        on_exit) -> int32_t
-// Returns 0 on a successful start, -1 on any pre-spawn failure. The bridge
-// hands ownership of every batch / chunk pointer to Dart; Dart MUST call
-// bridge_free(ptr, len) once it has copied the bytes.
+//                        on_exit) -> int64_t
+// Returns a positive opaque handle on success (use with bridge_cancel to
+// abort), -1 on any pre-spawn failure. The bridge hands ownership of every
+// batch / chunk pointer to Dart; Dart MUST call bridge_free(ptr, len) once
+// it has copied the bytes.
 typedef _StreamCallbackNative = Void Function(Pointer<Uint8>, Uint32);
 typedef _ExitCallbackNative = Void Function(Int32);
-typedef _BridgeRunStreamingNative = Int32 Function(
+typedef _BridgeRunStreamingNative = Int64 Function(
   Pointer<Utf8>,
   Pointer<NativeFunction<_StreamCallbackNative>>,
   Pointer<NativeFunction<_StreamCallbackNative>>,
@@ -59,6 +60,12 @@ typedef _BridgeRunStreamingDart = int Function(
   Pointer<NativeFunction<_ExitCallbackNative>>,
 );
 
+// bridge_cancel(handle) -> int32_t. Sends SIGTERM / TerminateProcess to a
+// running stream's child. Returns 0 on signal sent, -1 if the handle is
+// unknown (already exited, or never valid). Idempotent.
+typedef _BridgeCancelNative = Int32 Function(Int64);
+typedef _BridgeCancelDart = int Function(int);
+
 // bridge_free(ptr, len) — releases a buffer the bridge previously handed
 // to Dart through a streaming callback.
 typedef _BridgeFreeNative = Void Function(Pointer<Uint8>, Uint32);
@@ -66,19 +73,23 @@ typedef _BridgeFreeDart = void Function(Pointer<Uint8>, int);
 
 /// Result of a bridge-mediated subprocess invocation. Mirrors dart:io
 /// `ProcessResult` conceptually; `err` is non-null only when the bridge
-/// itself couldn't run the child (e.g. malformed request, spawn failed,
-/// output exceeded the 4 MB cap).
+/// itself couldn't run the child (e.g. malformed request, spawn failed).
+/// `truncated` is set when stdout or stderr exceeded the bridge's
+/// per-stream cap (64 MB) — the captured prefix is still in stdout /
+/// stderr so callers can render whatever fits.
 class BridgeResult {
   final int exitCode;
   final String stdout;
   final String stderr;
   final String? err;
+  final bool truncated;
 
   const BridgeResult({
     required this.exitCode,
     required this.stdout,
     required this.stderr,
     this.err,
+    this.truncated = false,
   });
 }
 
@@ -101,6 +112,7 @@ class BridgeClient {
   late final _BridgeRunDart _bridgeRun;
   late final _BridgeVersionDart _bridgeVersion;
   late final _BridgeRunStreamingDart _bridgeRunStreaming;
+  late final _BridgeCancelDart _bridgeCancel;
   late final _BridgeFreeDart _bridgeFree;
 
   BridgeClient(String dllPath) : _lib = DynamicLibrary.open(dllPath) {
@@ -111,6 +123,8 @@ class BridgeClient {
             'bridge_version');
     _bridgeRunStreaming = _lib.lookupFunction<_BridgeRunStreamingNative,
         _BridgeRunStreamingDart>('bridge_run_streaming');
+    _bridgeCancel = _lib
+        .lookupFunction<_BridgeCancelNative, _BridgeCancelDart>('bridge_cancel');
     _bridgeFree =
         _lib.lookupFunction<_BridgeFreeNative, _BridgeFreeDart>('bridge_free');
   }
@@ -143,18 +157,45 @@ class BridgeClient {
       if (cwd != null && cwd.isNotEmpty) 'cwd': cwd,
     });
     final requestPtr = request.toNativeUtf8();
-    final responseBuf = malloc.allocate<Uint8>(bufSize);
-
     try {
-      final len = _bridgeRun(requestPtr, responseBuf, bufSize);
-      if (len < 0) {
+      final firstAttempt = _runWithBuffer(requestPtr, bufSize);
+      if (firstAttempt != null) return firstAttempt;
+      // Buffer too small for the encoded response. The bridge captures up
+      // to [largeBufSize] bytes of child output, so a single retry with
+      // the larger buffer is guaranteed to fit any non-truncated payload.
+      // Skip the retry when the caller already passed [largeBufSize] —
+      // that means the bridge truncated and the response really is too
+      // big for any fixed-size response shape we care to allocate.
+      if (bufSize >= largeBufSize) {
         return const BridgeResult(
           exitCode: -1,
           stdout: '',
           stderr: '',
-          err: 'bridge: buffer overflow or fixed-writer failed',
+          err: 'bridge: response exceeds largeBufSize',
         );
       }
+      final retried = _runWithBuffer(requestPtr, largeBufSize);
+      if (retried != null) return retried;
+      return const BridgeResult(
+        exitCode: -1,
+        stdout: '',
+        stderr: '',
+        err: 'bridge: response exceeds largeBufSize after retry',
+      );
+    } finally {
+      malloc.free(requestPtr);
+    }
+  }
+
+  /// Single bridge_run call with a freshly allocated response buffer.
+  /// Returns null on overflow (-1 from the bridge) so [run] can decide
+  /// whether to retry with a larger buffer; returns a parsed result on
+  /// any other outcome (success or bridge-level error).
+  BridgeResult? _runWithBuffer(Pointer<Utf8> requestPtr, int bufSize) {
+    final responseBuf = malloc.allocate<Uint8>(bufSize);
+    try {
+      final len = _bridgeRun(requestPtr, responseBuf, bufSize);
+      if (len < 0) return null;
       final bytes = responseBuf.asTypedList(len);
       final responseJson = utf8.decode(bytes);
       final response = jsonDecode(responseJson) as Map<String, dynamic>;
@@ -163,12 +204,19 @@ class BridgeClient {
         stdout: response['stdout'] as String? ?? '',
         stderr: response['stderr'] as String? ?? '',
         err: response['err'] as String?,
+        truncated: response['truncated'] as bool? ?? false,
       );
     } finally {
-      malloc.free(requestPtr);
       malloc.free(responseBuf);
     }
   }
+
+  /// Signal cancellation to a streaming run. [handle] is the value
+  /// returned by [_bridgeRunStreaming] (positive on success). Returns
+  /// `true` if the kill signal was delivered, `false` if the handle is
+  /// unknown (already exited, or never valid). Idempotent — calling
+  /// after natural exit is a safe no-op.
+  bool cancel(int handle) => _bridgeCancel(handle) == 0;
 
   /// Streaming variant of [run]. Spawns the child, returns a Future that
   /// completes with its exit code, and reports stdout / stderr progressively
@@ -198,6 +246,7 @@ class BridgeClient {
     String? cwd,
     required void Function(String line) onLine,
     void Function(String chunk)? onStderr,
+    void Function(int handle)? onSpawn,
   }) async {
     final completer = Completer<int>();
 
@@ -252,9 +301,9 @@ class BridgeClient {
     });
     final requestPtr = request.toNativeUtf8();
 
-    int rc;
+    int handle;
     try {
-      rc = _bridgeRunStreaming(
+      handle = _bridgeRunStreaming(
         requestPtr,
         stdoutCb.nativeFunction,
         stderrCb.nativeFunction,
@@ -264,7 +313,7 @@ class BridgeClient {
       malloc.free(requestPtr);
     }
 
-    if (rc != 0) {
+    if (handle <= 0) {
       // Pre-spawn failure: bridge never armed any threads, so no exit
       // callback will fire. Resolve immediately and tear down callables.
       stdoutCb.close();
@@ -272,6 +321,8 @@ class BridgeClient {
       exitCb.close();
       return -1;
     }
+
+    onSpawn?.call(handle);
 
     try {
       return await completer.future;

@@ -12,15 +12,15 @@ as a local path dependency.
 
 ## Module overview
 
-| Module | File | Public API |
-| --- | --- | --- |
-| `csv` | `csv.zig` | `splitRecords()`, `splitFields()` |
-| `xlsx` | `xlsx.zig` | `xlsxToCsv()`, `SheetSpec` |
-| `expr` | `expr.zig` | `eval()`, `evalString()`, `Context`, `Value`, `FnDoc` catalog |
-| `config` | `config.zig` | `Config`, `BrokerConfig`, `load()`, `validate()`, `FieldDoc` |
-| `json` | `json.zig` | `readJsonRecords()` |
-| `json5` | `json5.zig` | `preprocess()` (internal; also exported for direct use) |
-| `docs` | `docs.zig` | `writeDocs(alloc, writer)` — emits the `bxp-fmt --docs` JSON |
+| Module        | File              | Public API                                                                |
+| ------------- | ----------------- | ------------------------------------------------------------------------- |
+| `csv`         | `csv.zig`         | `splitRecords()`, `splitFields()`                                         |
+| `xlsx`        | `xlsx.zig`        | `xlsxToCsv()`, `SheetSpec`                                                |
+| `expr`        | `expr.zig`        | `eval()`, `evalString()`, `Context`, `Value`, `FnDoc` catalog             |
+| `config`      | `config.zig`      | `Config`, `BrokerConfig`, `load()`, `validate()`, `FieldDoc`              |
+| `json`        | `json.zig`        | `readJsonRecords()`                                                       |
+| `json5`       | `json5.zig`       | `preprocess()` (internal; also exported for direct use)                   |
+| `docs`        | `docs.zig`        | `writeDocs(alloc, writer)` — emits the `bxp-fmt --docs` JSON              |
 | `diagnostics` | `diagnostics.zig` | `Diagnostics`, `Diagnostic`, `Severity` — structured validation collector |
 
 ## Module details
@@ -34,7 +34,7 @@ RFC 4180 CSV parser.
 - `splitFields(record, buf, delim, quote_ch, alloc)` — splits one record into field strings,
   up to `buf.len` fields. Unquotes quoted fields.
 - Spaces are preserved per RFC 4180. The bxp pipeline intentionally trims them
-  *outside* csv.zig: field values at access time in `expr.Context.field`
+  _outside_ csv.zig: field values at access time in `expr.Context.field`
   (`expr.zig:138`), header names when building `col_index` in
   `bxp-cli/src/pipeline.zig:517`. Brokers frequently pad fields, so the rest
   of the pipeline (date parsing, numeric conversion, comparisons) sees clean

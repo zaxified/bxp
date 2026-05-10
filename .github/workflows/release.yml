@@ -10,13 +10,13 @@ name: release
 
 on:
   push:
-    tags: ['v*']
+    tags: ["v*"]
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version string (e.g. v0.2.0-test)'
+        description: "Version string (e.g. v0.2.0-test)"
         required: true
-        default: 'v0.0.0-test'
+        default: "v0.0.0-test"
 
 # Resolved once and threaded through the matrix so all jobs agree on the
 # label. On a real tag push it's `${{ github.ref_name }}`; on manual
@@ -30,7 +30,7 @@ on:
 # in their action.yml, so this env var carries them through.
 env:
   RELEASE_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 # Default the GITHUB_TOKEN to read-only; the aggregate-and-publish job
 # overrides this to `contents: write` for the release upload step.

@@ -109,8 +109,8 @@ All broker logic is defined in `bxp-cli.json` — there are no compiled-in broke
   - **Named blocks** `{ name1: { when, key, values }, name2: { ... } }` — each block is its own
     namespace. Accessed via 3-arg `LOOKUP('name1', key_expr, 'field_name')`. Use this when one
     template needs multiple independent lookup tables.
-  Note: `values` keys are lookup field names (plain strings, no `$` prefix) — they are not
-  template variables.
+    Note: `values` keys are lookup field names (plain strings, no `$` prefix) — they are not
+    template variables.
 - `input_schema` — **required** — variable definitions: `$name` → expression string.
   All variable names use the `$` prefix convention (e.g. `$date`, `$ticker`, `$amount`).
 - `row_rules_debug_missing` — optional boolean (default `false`). When `true`, rows that
@@ -184,29 +184,29 @@ is `true`, those dates are used to filter rows by `$date`. Otherwise all records
 Expressions are evaluated per row. Operator precedence (high → low):
 `unary -` → `* /` → `&` (concat) → `+ -` → `= != < > <= >=` → `AND` → `OR`
 
-| Syntax | Description |
-| --- | --- |
-| `[ColumnName]` | Field value by CSV header name |
-| `[n]` | Field value by 1-based column index |
-| `FIELDS(n)` | Same as `[n]` but via function call |
-| `'text'` | String literal |
-| `IF(cond, yes, no)` | Short-circuit conditional |
-| `ABS(f)` | Absolute numeric value |
-| `DATE_CONVERT(f, from, to)` | Reformat date/time; format tokens use sunrise syntax (see section below) |
-| `PRICE_VALUE(f)` | Strip currency symbol/code, return numeric string (`"24.00 CZK"` → `"24.00"`) |
-| `PRICE_CURRENCY(f)` | Extract currency code (`"24.00 CZK"` → `"CZK"`, `"$100"` → `"USD"`) |
-| `TICKER(f)` | Map field through broker's `ticker_map`; returns as-is if not found |
-| `LOOKUP(key, 'field')` / `LOOKUP('name', key, 'field')` | Retrieve value from `pre_pass` table — 2-arg form for legacy single block, 3-arg form for named blocks |
-| `SPLIT_PART(f, delim, n)` | Split `f` by `delim`, return nth part (1-based); `""` if fewer than n parts |
-| `CONTAINS(f, sub)` | `true` when `sub` is found inside `f` |
-| `REPLACE(f, old, new)` | Replace all occurrences of `old` with `new` in `f`; returns `f` unchanged if `old` is empty |
-| `TRIM(f)` | Strip leading and trailing whitespace (space, tab, CR, LF) |
-| `ROUND(f, n)` | Round `f` to `n` decimal places (`n` may be negative for tens/hundreds) |
-| `FLOOR(f)` | Largest integer ≤ `f` |
-| `CEILING(f)` | Smallest integer ≥ `f` |
-| `NOW()` | Current UTC datetime as `"YYYY-MM-DDTHH:MM:SSZ"` |
-| `RAND()` | Cryptographically random float in `[0, 1)` |
-| `COALESCE(a, b, ...)` | Return first non-empty argument (empty = whitespace-only string; numbers/booleans are never empty). If all args are empty, returns the last arg verbatim — use `COALESCE(@a, @b, "0")` for a guaranteed default |
+| Syntax                                                  | Description                                                                                                                                                                                                     |
+| ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `[ColumnName]`                                          | Field value by CSV header name                                                                                                                                                                                  |
+| `[n]`                                                   | Field value by 1-based column index                                                                                                                                                                             |
+| `FIELDS(n)`                                             | Same as `[n]` but via function call                                                                                                                                                                             |
+| `'text'`                                                | String literal                                                                                                                                                                                                  |
+| `IF(cond, yes, no)`                                     | Short-circuit conditional                                                                                                                                                                                       |
+| `ABS(f)`                                                | Absolute numeric value                                                                                                                                                                                          |
+| `DATE_CONVERT(f, from, to)`                             | Reformat date/time; format tokens use sunrise syntax (see section below)                                                                                                                                        |
+| `PRICE_VALUE(f)`                                        | Strip currency symbol/code, return numeric string (`"24.00 CZK"` → `"24.00"`)                                                                                                                                   |
+| `PRICE_CURRENCY(f)`                                     | Extract currency code (`"24.00 CZK"` → `"CZK"`, `"$100"` → `"USD"`)                                                                                                                                             |
+| `TICKER(f)`                                             | Map field through broker's `ticker_map`; returns as-is if not found                                                                                                                                             |
+| `LOOKUP(key, 'field')` / `LOOKUP('name', key, 'field')` | Retrieve value from `pre_pass` table — 2-arg form for legacy single block, 3-arg form for named blocks                                                                                                          |
+| `SPLIT_PART(f, delim, n)`                               | Split `f` by `delim`, return nth part (1-based); `""` if fewer than n parts                                                                                                                                     |
+| `CONTAINS(f, sub)`                                      | `true` when `sub` is found inside `f`                                                                                                                                                                           |
+| `REPLACE(f, old, new)`                                  | Replace all occurrences of `old` with `new` in `f`; returns `f` unchanged if `old` is empty                                                                                                                     |
+| `TRIM(f)`                                               | Strip leading and trailing whitespace (space, tab, CR, LF)                                                                                                                                                      |
+| `ROUND(f, n)`                                           | Round `f` to `n` decimal places (`n` may be negative for tens/hundreds)                                                                                                                                         |
+| `FLOOR(f)`                                              | Largest integer ≤ `f`                                                                                                                                                                                           |
+| `CEILING(f)`                                            | Smallest integer ≥ `f`                                                                                                                                                                                          |
+| `NOW()`                                                 | Current UTC datetime as `"YYYY-MM-DDTHH:MM:SSZ"`                                                                                                                                                                |
+| `RAND()`                                                | Cryptographically random float in `[0, 1)`                                                                                                                                                                      |
+| `COALESCE(a, b, ...)`                                   | Return first non-empty argument (empty = whitespace-only string; numbers/booleans are never empty). If all args are empty, returns the last arg verbatim — use `COALESCE(@a, @b, "0")` for a guaranteed default |
 
 Type coercions: empty string → `0` in numeric context; any non-empty string → `true` in boolean context.
 
@@ -214,31 +214,31 @@ Type coercions: empty string → `0` in numeric context; any non-empty string �
 
 Used in `DATE_CONVERT(f, from_fmt, to_fmt)`. Both `from_fmt` and `to_fmt` use the same token set.
 
-| Token | Meaning | Example |
-| --- | --- | --- |
-| `YYYY` | 4-digit year | `2024` |
-| `YY` | 2-digit year (00–69 → 2000–2069, 70–99 → 1970–1999) | `24` |
-| `MM` | 2-digit month (01–12) | `03` |
-| `M` | 1–2 digit month | `3` |
-| `MMMM` | Full month name | `March` |
-| `MMM` | 3-char month abbreviation | `Mar` |
-| `DD` | 2-digit day (01–31) | `07` |
-| `D` | 1–2 digit day | `7` |
-| `hh` | 2-digit hour, **24h** (00–23) | `14` |
-| `h` | 1–2 digit hour, 24h | `14` |
-| `ii` | 2-digit hour, **12h** (01–12) | `02` |
-| `i` | 1–2 digit hour, 12h | `2` |
-| `mm` | 2-digit minute | `05` |
-| `m` | 1–2 digit minute | `5` |
-| `ss` | 2-digit second | `09` |
-| `s` | 1–2 digit second | `9` |
-| `A` | AM/PM uppercase | `PM` |
-| `a` | am/pm lowercase | `pm` |
-| `EEEE` | Full day name | `Monday` |
-| `EEE`/`EE`/`E` | Short day name | `Mon` |
-| `e` | Day of week as number (1=Mon … 7=Sun) | `1` |
-| `[text]` | Literal string (escaped) | `[T]` → matches `T` |
-| `[*]` | Wildcard — skip until next token | skips timezone suffix |
+| Token          | Meaning                                             | Example               |
+| -------------- | --------------------------------------------------- | --------------------- |
+| `YYYY`         | 4-digit year                                        | `2024`                |
+| `YY`           | 2-digit year (00–69 → 2000–2069, 70–99 → 1970–1999) | `24`                  |
+| `MM`           | 2-digit month (01–12)                               | `03`                  |
+| `M`            | 1–2 digit month                                     | `3`                   |
+| `MMMM`         | Full month name                                     | `March`               |
+| `MMM`          | 3-char month abbreviation                           | `Mar`                 |
+| `DD`           | 2-digit day (01–31)                                 | `07`                  |
+| `D`            | 1–2 digit day                                       | `7`                   |
+| `hh`           | 2-digit hour, **24h** (00–23)                       | `14`                  |
+| `h`            | 1–2 digit hour, 24h                                 | `14`                  |
+| `ii`           | 2-digit hour, **12h** (01–12)                       | `02`                  |
+| `i`            | 1–2 digit hour, 12h                                 | `2`                   |
+| `mm`           | 2-digit minute                                      | `05`                  |
+| `m`            | 1–2 digit minute                                    | `5`                   |
+| `ss`           | 2-digit second                                      | `09`                  |
+| `s`            | 1–2 digit second                                    | `9`                   |
+| `A`            | AM/PM uppercase                                     | `PM`                  |
+| `a`            | am/pm lowercase                                     | `pm`                  |
+| `EEEE`         | Full day name                                       | `Monday`              |
+| `EEE`/`EE`/`E` | Short day name                                      | `Mon`                 |
+| `e`            | Day of week as number (1=Mon … 7=Sun)               | `1`                   |
+| `[text]`       | Literal string (escaped)                            | `[T]` → matches `T`   |
+| `[*]`          | Wildcard — skip until next token                    | skips timezone suffix |
 
 **Gotchas:**
 
@@ -249,15 +249,15 @@ Used in `DATE_CONVERT(f, from_fmt, to_fmt)`. Both `from_fmt` and `to_fmt` use th
 
 ## Conversion templates
 
-| ID | data_dir | Input format |
-| --- | --- | --- |
-| `revolutx_to_wealthfolio` | `../data/revolutx_to_wealthfolio` | `Symbol,Type,Quantity,Price,Value,Fees,Date` — date as `"26 Jun 2022, 16:02:36"`, prices with trailing `CZK` unit |
-| `trading212_to_wealthfolio` | `../data/trading212_to_wealthfolio` | `Action,Time,ISIN,Ticker,...` — Trading 212 export; multi-row expansion for Currency conversion, ADR Fee, Result/Dividend adjustment |
-| `anycoin_to_wealthfolio` | `../data/anycoin_to_wealthfolio` | `Date,Type,Amount,Currency,Order ID` — ISO datetime; paired rows (`trade payment` + `trade fill`) joined via `pre_pass` on `Order ID` |
-| `xtb1_closed_to_wealthfolio` | `xtb1_to_wealthfolio` | xlsx sheet `CLOSED POSITION` (header row 13); file pattern `_closed.csv`; SELL; old XTB format |
-| `xtb1_cash_to_wealthfolio` | `xtb1_to_wealthfolio` | xlsx sheet `CASH OPERATION` (header row 11); file pattern `_cash.csv`; DIV/TAX/INTEREST/DEPOSIT + BUY from `Stock purchase` rows (qty+price from Comment via `SPLIT_PART`); old XTB format |
-| `xtb2_closed_to_wealthfolio` | `xtb2_to_wealthfolio` | xlsx sheet `Closed Positions` (header row 5); file pattern `_closed.csv`; SELL; new XTB format from 2026-07-01 |
-| `xtb2_cash_to_wealthfolio` | `xtb2_to_wealthfolio` | xlsx sheet `Cash Operations` (header row 5); file pattern `_cash.csv`; DIV/TAX/INTEREST/DEPOSIT + BUY from `Stock purchase` rows (qty+price from Comment via `SPLIT_PART`); new XTB format from 2026-07-01 |
+| ID                           | data_dir                            | Input format                                                                                                                                                                                               |
+| ---------------------------- | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `revolutx_to_wealthfolio`    | `../data/revolutx_to_wealthfolio`   | `Symbol,Type,Quantity,Price,Value,Fees,Date` — date as `"26 Jun 2022, 16:02:36"`, prices with trailing `CZK` unit                                                                                          |
+| `trading212_to_wealthfolio`  | `../data/trading212_to_wealthfolio` | `Action,Time,ISIN,Ticker,...` — Trading 212 export; multi-row expansion for Currency conversion, ADR Fee, Result/Dividend adjustment                                                                       |
+| `anycoin_to_wealthfolio`     | `../data/anycoin_to_wealthfolio`    | `Date,Type,Amount,Currency,Order ID` — ISO datetime; paired rows (`trade payment` + `trade fill`) joined via `pre_pass` on `Order ID`                                                                      |
+| `xtb1_closed_to_wealthfolio` | `xtb1_to_wealthfolio`               | xlsx sheet `CLOSED POSITION` (header row 13); file pattern `_closed.csv`; SELL; old XTB format                                                                                                             |
+| `xtb1_cash_to_wealthfolio`   | `xtb1_to_wealthfolio`               | xlsx sheet `CASH OPERATION` (header row 11); file pattern `_cash.csv`; DIV/TAX/INTEREST/DEPOSIT + BUY from `Stock purchase` rows (qty+price from Comment via `SPLIT_PART`); old XTB format                 |
+| `xtb2_closed_to_wealthfolio` | `xtb2_to_wealthfolio`               | xlsx sheet `Closed Positions` (header row 5); file pattern `_closed.csv`; SELL; new XTB format from 2026-07-01                                                                                             |
+| `xtb2_cash_to_wealthfolio`   | `xtb2_to_wealthfolio`               | xlsx sheet `Cash Operations` (header row 5); file pattern `_cash.csv`; DIV/TAX/INTEREST/DEPOSIT + BUY from `Stock purchase` rows (qty+price from Comment via `SPLIT_PART`); new XTB format from 2026-07-01 |
 
 ## Output stream routing
 
@@ -282,7 +282,7 @@ still go to stderr in trace mode so a stderr badge can surface them in the GUI.
 - Test data with expected outputs lives in `../datasets/<template_id>/`.
 - CSV parser (`csv.zig` + `main.zig`) is RFC 4180 compliant with one intentional deviation:
   leading/trailing spaces are trimmed from field values and header names (`expr.zig Context.field`,
-  `main.zig` header parsing).  RFC 4180 §2 says spaces are part of the value; we trim them
+  `main.zig` header parsing). RFC 4180 §2 says spaces are part of the value; we trim them
   because broker exports frequently pad fields and downstream parsing (dates, numbers) requires clean values.
 
 ## Known non-issues — deliberately not refactored

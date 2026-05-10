@@ -336,11 +336,11 @@ top-level `ticker_maps` registry).
 tree to find typos and dead references. Three top-level entry points in
 `expr.zig`:
 
-| Function | What it returns | Used by |
-| -- | -- | -- |
-| `staticReferences(src, alloc)` | Set of every `[X]` and `$var` referenced | `validateUnknownKeysCollect`, `validateUnusedCollect` |
-| `staticCheckCalls(src, …)` | Per-call FnArg arity + signature errors | `bxp-fmt --config` (added in Phase G6) |
-| `staticCheckSplitPart(src, …)` | Token-scan for `SPLIT_PART(_, _, ≤0)` literals | `bxp-fmt --config` |
+| Function                       | What it returns                                | Used by                                               |
+| ------------------------------ | ---------------------------------------------- | ----------------------------------------------------- |
+| `staticReferences(src, alloc)` | Set of every `[X]` and `$var` referenced       | `validateUnknownKeysCollect`, `validateUnusedCollect` |
+| `staticCheckCalls(src, …)`     | Per-call FnArg arity + signature errors        | `bxp-fmt --config` (added in Phase G6)                |
+| `staticCheckSplitPart(src, …)` | Token-scan for `SPLIT_PART(_, _, ≤0)` literals | `bxp-fmt --config`                                    |
 
 These share the parser front-end with `eval()` — same recursive descent, no
 duplicated grammar — but emit `Diagnostic` records into a `*Diagnostics` sink
