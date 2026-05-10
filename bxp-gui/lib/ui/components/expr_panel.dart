@@ -705,9 +705,9 @@ Color _syntaxColorFor(String kind, BxpTheme t) {
 /// surrounding breadcrumb path and ✕ button hop a few pixels with
 /// each state transition, which looks like a glitch.
 ///
-/// Width is sized to fit the longest label in the bundled Inter font
+/// Width is sized to fit the longest label in the bundled Roboto font
 /// (see [pubspec.yaml] `flutter.fonts`) — that is the reason we bundle
-/// Inter rather than rely on the system sans: across Linux, macOS, and
+/// Roboto rather than rely on the system sans: across Linux, macOS, and
 /// Windows the system fallback differs (DejaVu / SF Pro / Segoe UI),
 /// each metric a different width for "checking", and a slot tuned on
 /// one platform wraps to two lines on another. The trailing

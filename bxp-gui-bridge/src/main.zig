@@ -194,8 +194,9 @@ fn writeErr(out_buf: []u8, comptime fmt: []const u8, args: anytype) i32 {
 // / exit progressively via Dart-side callbacks. The motivation is the GUI's
 // `--trace` dry-run path — with the batch entrypoint, every NDJSON event
 // arrived only after the child exited, so file-list + per-row counters never
-// updated mid-run. With this entrypoint, batches of 1000 stdout lines stream
-// up in real time (plus a final flush at EOF for the trailing partial batch).
+// updated mid-run. With this entrypoint, batches of `stdout_batch_lines`
+// stream up in real time (plus a final flush at EOF for the trailing
+// partial batch).
 //
 // Memory ownership across the FFI boundary: each batch / chunk is heap-
 // allocated on the bridge side via `c_allocator` and handed to Dart as a raw

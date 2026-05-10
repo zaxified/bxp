@@ -296,8 +296,11 @@ class BridgeClient {
 ///      bxp-cli/bxp-fmt so the dev workflow doesn't need a CMake
 ///      install step to make the bridge discoverable.
 ///
-/// Returns null when no candidate exists on disk; callers fall back to
-/// direct Process.start in that case (and surface a diagnostic).
+/// Returns null when probing fails. Windows: bridge is mandatory —
+/// callers must surface a synthetic error rather than fall back to
+/// Process.start (dart-lang/sdk#1727 truncates --docs/--config over
+/// the ~8 KB Win pipe limit). Linux/macOS: bridge is dormant; this
+/// returns null and callers go through Process.start directly.
 String? findBridgeLibrary() {
   final name = Platform.isWindows
       ? 'bxp-gui-bridge.dll'
