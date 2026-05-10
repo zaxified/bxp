@@ -11,8 +11,12 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/test-lib.sh"
+export BXP_TEST_T0="$(_now)"
 
 shopt -s nullglob
 for phase in "$SCRIPT_DIR"/test-[0-9][0-9]-*.sh; do
     bash "$phase" "$@"
 done
+
+summary

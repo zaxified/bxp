@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Run desktop-side tests: flutter analyze + flutter test for bxp-gui plus
+# Dart unit tests for the embedded json5_ast package. Skips cleanly if
+# Flutter is not installed (so contributors who only touch the console
+# side don't need the SDK).
+#
+# Usage (from any directory):
+#   bash scripts/test-03-desktop.sh   — this phase alone
+#   bash scripts/test.sh              — wrapper runs every phase
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MONO_ROOT="$(dirname "$SCRIPT_DIR")"
+source "$SCRIPT_DIR/test-lib.sh"
+
+if ! command -v flutter >/dev/null 2>&1; then
+    echo "test-03-desktop.sh: flutter SDK not found — skipping"
+    exit 0
+fi
+
+GUI_ROOT="$MONO_ROOT/bxp-gui"
+
+_flutter_in() {
+    local sub="$1"; shift
+    (cd "$GUI_ROOT" && flutter "$sub" "$@")
+}
+
+_dart_in() {
+    local dir="$1"; shift
+    (cd "$dir" && dart "$@")
+}
+
+section "Desktop"
+step "$(_lab flutter    'analyze')"     _flutter_in analyze
+step "$(_lab flutter    'test')"        _flutter_in test
+step "$(_lab json5_ast  'dart test')"   _dart_in "$GUI_ROOT/packages/json5_ast" test
