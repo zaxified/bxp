@@ -28,6 +28,7 @@ MANIFESTS=(
     "$MONO_ROOT/bxp-core/build.zig.zon"
     "$MONO_ROOT/bxp-cli/build.zig.zon"
     "$MONO_ROOT/bxp-fmt/build.zig.zon"
+    "$MONO_ROOT/bxp-gui-bridge/build.zig.zon"
     "$MONO_ROOT/bxp-gui/pubspec.yaml"
     "$MONO_ROOT/bxp-gui/packages/json5_ast/pubspec.yaml"
 )

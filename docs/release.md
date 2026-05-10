@@ -7,28 +7,30 @@ every `v*` tag push. The pipeline fans out across three host runners
 (ubuntu, windows, macos) so all native installers come from real native
 builds rather than cross-compilation tricks.
 
-## Quick path
+## The release flow
+
+Three commands, in order. The first two are local; the third triggers
+the GitHub Actions matrix and waits for it to finish (~10 min).
 
 ```bash
-bash scripts/release-tag.sh v0.3.0
+# 1. Bump every manifest in lockstep + generate the CHANGELOG entry
+#    + commit as "release: prepare X.Y.Z (YYYY.MM.DD)".
+bash scripts/release-changelog.sh patch        # or `minor` / `major` / `0.3.0`
+
+# 2. Push the bump commit so the tag points at a public ref.
+git push origin master
+
+# 3. Tag from the version just bumped + push the tag.
+bash scripts/release-tag.sh
 ```
 
-`release-tag.sh` bumps `version:` in `bxp-gui/pubspec.yaml` and
-`bxp-cli/build.zig.zon`, commits, tags, and pushes in one step.
-Wait ~10 min for the `release` workflow to finish. The GitHub
-Releases page will list the new tag with seven artifacts plus
-`SHA256SUMS`.
+`release-tag.sh` reads the version from `bxp-cli/build.zig.zon` (the
+canonical reference; `release-changelog.sh` keeps every manifest in
+lockstep with it) and tags as `v$VERSION`. It refuses on a dirty tree
+or if the tag already exists, so order matters: changelog first,
+push, then tag.
 
-Manual steps if needed:
-
-1. Bump `version:` in `bxp-gui/pubspec.yaml` and `bxp-cli/build.zig.zon`.
-2. Commit + push to master.
-3. Tag and push:
-
-   ```bash
-   git tag v0.3.0
-   git push origin v0.3.0
-   ```
+Both scripts accept `--dry-run` to preview without mutating anything.
 
 ## What gets built
 
@@ -41,8 +43,9 @@ Manual steps if needed:
 | `release` | ubuntu-latest | aggregates above + `SHA256SUMS`, publishes Release |
 
 `bxp-console` archives are CLI-only (small, no GUI deps). `bxp-desktop`
-archives ship the Flutter GUI plus bundled `bxp-cli` and `bxp-fmt`
-companion binaries so the GUI is self-contained.
+archives ship the Flutter GUI plus bundled `bxp-cli`, `bxp-fmt`, and
+(on Windows) `bxp-gui-bridge.dll` companion binaries so the GUI is
+self-contained.
 
 The Linux desktop runner is pinned to `ubuntu-22.04` (glibc 2.35
 baseline) so AppImages run on anything from 2022+. Bumping past glibc
@@ -53,15 +56,15 @@ baseline) so AppImages run on anything from 2022+. Bumping past glibc
 Run before tagging to catch obvious breakage:
 
 ```bash
-# Full console + desktop suite (skips desktop if Flutter is missing).
+# Full console + desktop test suite (skips desktop if Flutter is missing).
 bash scripts/test.sh
 
 # Build the host platform's desktop bundle locally (no upload).
-bash scripts/release-02-desktop.sh v0.2.0-rc1
+bash scripts/release-02-desktop.sh v0.2.2-rc1
 ls releases/desktop/
 
 # Build all three console archives (cross-compiled via Zig).
-bash scripts/release-01-console.sh v0.2.0-rc1
+bash scripts/release-01-console.sh v0.2.2-rc1
 ls releases/console/
 ```
 
@@ -70,12 +73,12 @@ platforms are exercised by GH Actions runners. Use `workflow_dispatch`
 to test the Windows / macOS branches without cutting a real tag:
 
 ```bash
-gh workflow run release.yml -f version=v0.2.0-rc-test
+gh workflow run release.yml -f version=v0.2.2-rc-test
 ```
 
 ## Verifying a published release
 
-1. Open `https://github.com/zaxified/bxp/releases/tag/v0.2.0`.
+1. Open `https://github.com/zaxified/bxp/releases/tag/vX.Y.Z`.
 2. Confirm 7 artifacts + `SHA256SUMS` are listed.
 3. Download a desktop installer for your host, run it, and verify the
    GUI launches. The startup screen should show the version in

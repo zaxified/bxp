@@ -1,14 +1,13 @@
 #!/usr/bin/env bash
-# Cut a release: create a CalVer tag (YYYY.MM.DD with -N suffix when
-# multiple releases happen on the same day) and push it. The
+# Cut a release tag from the version already written into the manifests
+# by `release-changelog.sh`, and push it. The
 # `.github/workflows/release.yml` workflow picks up the tag and builds
 # both bxp-console and bxp-desktop archives, then publishes a GitHub
 # Release.
 #
 # Usage (from any directory):
-#   bash scripts/release-tag.sh              # auto-derive YYYY.MM.DD[-N]
-#   bash scripts/release-tag.sh 2026.05.06   # explicit tag (without "v" prefix)
-#   bash scripts/release-tag.sh --dry-run    # show what would be tagged
+#   bash scripts/release-tag.sh             # tag = v<bxp-cli/build.zig.zon version>
+#   bash scripts/release-tag.sh --dry-run   # show what would be tagged
 #
 # Run AFTER `release-changelog.sh` has bumped versions and prepared
 # CHANGELOG.md, and after that commit has been pushed to master.
@@ -18,37 +17,41 @@ set -e
 MONO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 DRY_RUN=false
-EXPLICIT=""
 for arg in "$@"; do
     case "$arg" in
         --dry-run) DRY_RUN=true ;;
-        *) EXPLICIT="$arg" ;;
+        *)
+            echo "error: unrecognised argument '$arg'" >&2
+            echo "usage: $(basename "$0") [--dry-run]" >&2
+            exit 1
+            ;;
     esac
 done
 
-# ─── Derive the tag ─────────────────────────────────────────────────
+# ─── Read the canonical version ──────────────────────────────────────
+#
+# bxp-cli/build.zig.zon is the single source of truth for "current
+# version" — release-changelog.sh bumps every manifest in lockstep, so
+# any of them works, and this matches the canonical reference used
+# there.
 
-if [ -n "$EXPLICIT" ]; then
-    BASE="${EXPLICIT#v}"   # strip "v" if user typed it
-    TAG="v$BASE"
-else
-    BASE=$(date +%Y.%m.%d)
-    # Find existing same-day tags; suffix `-N` for the next free counter.
-    EXISTING=$(git -C "$MONO_ROOT" tag --list "v$BASE*" | sort)
-    if [ -z "$EXISTING" ]; then
-        TAG="v$BASE"
-    else
-        # Highest existing -N suffix (or 0 if only `v$BASE` exists).
-        N=$(echo "$EXISTING" | grep -oE -- "-[0-9]+\$" | sort -t- -k2 -n | tail -n1 | tr -d -)
-        N=${N:-0}
-        TAG="v$BASE-$((N + 1))"
-    fi
+CANON="$MONO_ROOT/bxp-cli/build.zig.zon"
+VERSION=$(grep -E '^\s*\.version\s*=\s*"' "$CANON" \
+    | head -n1 \
+    | sed -E 's/^\s*\.version\s*=\s*"([^"]+)".*/\1/')
+
+if [ -z "$VERSION" ]; then
+    echo "error: could not read .version from $CANON" >&2
+    exit 1
 fi
 
-# ─── Sanity check ───────────────────────────────────────────────────
+TAG="v$VERSION"
+
+# ─── Sanity checks ──────────────────────────────────────────────────
 
 if git -C "$MONO_ROOT" rev-parse "$TAG" >/dev/null 2>&1; then
     echo "error: tag $TAG already exists locally" >&2
+    echo "       did you forget to run release-changelog.sh first?" >&2
     exit 1
 fi
 

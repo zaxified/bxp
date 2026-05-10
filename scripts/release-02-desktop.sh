@@ -38,7 +38,8 @@ build_companions() {
 
 # Build the FFI bridge DLL for Windows. Standalone helper because the
 # bridge is currently Win-only (Plan A — Linux/macOS use Process.start
-# directly, which works there). Cross-platform bridge ships in v0.2.3.
+# directly, which works there). Cross-platform consolidation is on the
+# v0.3.0 roadmap (see docs/roadmap.md).
 build_bridge_windows() {
     echo "  Cross-compiling bxp-gui-bridge for x86_64-windows..."
     (cd "$MONO_ROOT/bxp-gui-bridge" && \
