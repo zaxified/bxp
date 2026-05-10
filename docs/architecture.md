@@ -444,6 +444,17 @@ Key invariants:
 - **No fallback FnDocs.** bxp-fmt `--docs` is the single source for the
   language catalog. If the binary is missing at startup, the app shows a fatal
   error gate; there are no hardcoded fallback catalogs.
+- **Subprocess transport is platform-split.** On Linux and macOS,
+  `BxpProcessClient` calls `Process.start` / `Process.run` directly — every
+  `Process.start(...)` arrow in the diagrams below is a literal `dart:io`
+  call. **On Windows, all those arrows route through `bxp-gui-bridge.dll`**
+  (a Zig FFI shim, see [`../bxp-gui-bridge/`](../../bxp-gui-bridge/)) —
+  the protocol on the wire is identical (same args, same NDJSON), but the
+  transport sidesteps a dart:io pipe-truncation bug
+  (dart-lang/sdk#1727) on `--docs` / `--config` / `--trace`. The DLL is
+  mandatory on Windows; probe failure at startup is fatal. Cross-platform
+  consolidation is on the v0.3.0 roadmap (see
+  [`roadmap.md`](roadmap.md)).
 
 ---
 

@@ -19,11 +19,12 @@ v0.2.x to migrate their hidden plugin store into `bxp-gui.json`.
 
 ### Cross-platform subprocess bridge
 
-bxp-gui currently uses `bxp-gui-bridge.dll` (a C++ shim hosting the
-bxp-cli / bxp-fmt subprocess pipeline) on Windows only — Linux and
-macOS still call `Process.start` directly. The Windows-only fork was
-introduced in v0.2.x to work around event-loop hangs on stdout drain
-and lack of clean engine stderr capture under `/SUBSYSTEM:WINDOWS`.
+bxp-gui currently uses `bxp-gui-bridge.dll` (a Zig FFI shim hosting
+the bxp-cli / bxp-fmt subprocess pipeline) on Windows only — Linux and
+macOS still call `Process.start` directly. The Windows-only fork
+shipped in v0.2.2 to work around event-loop hangs on stdout drain
+(dart-lang/sdk#1727) and the lack of clean engine stderr capture under
+`/SUBSYSTEM:WINDOWS`.
 
 Plan: extract the bridge as a cross-platform native plugin so all
 three hosts share one subprocess code path. Remove the
@@ -40,6 +41,17 @@ fork in `bxp_process_client.dart`. Touches the bridge native sources,
   only the release workflow exists; PRs go untested by CI.
 - Flutter `integration_test` smoke run inside CI (Xvfb on Linux runners,
   headless setup on Mac / Win).
+
+### Bridge unit test
+
+`bxp-gui-bridge` shipped in v0.2.2 with no test coverage —
+bxp-core / bxp-cli / bxp-fmt / json5_ast all have phases in
+`scripts/test.sh`, but the bridge is verified only via the release-time
+smoke build. Add `scripts/test-04-bridge.sh` that exercises
+`bridge_run` / `bridge_run_streaming` against a real `bxp-fmt --version`
+invocation, asserts the FFI memory-ownership contract
+(allocator-paired free), and verifies reader-thread cleanup on the
+streaming path.
 
 ### Distribution polish
 
