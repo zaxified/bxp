@@ -23,15 +23,19 @@ bxp-gui/
 ├── lib/
 │   ├── main.dart           # Flutter entry; window + theme + provider wiring
 │   ├── services/
-│   │   ├── bxp_process_client.dart  # Process.run wrappers for bxp-cli/bxp-fmt
+│   │   ├── bxp_process_client.dart  # Subprocess wrapper — bridge on Windows, Process.start elsewhere
+│   │   ├── bridge_client.dart       # Dart FFI shim for bxp-gui-bridge.dll (Windows only)
 │   │   ├── ast_loader.dart          # Parse the user config to a JsonAstNode tree
 │   │   ├── ast_patch_client.dart    # Apply AST mutations + dump back to disk
 │   │   ├── op_log.dart              # In-memory record of user edits since load
 │   │   ├── op_to_ast.dart           # Translate ConfigOp → AST mutations
 │   │   ├── schema_gate.dart         # Schema-aware "may the user do X here?"
-│   │   ├── dart_validator.dart      # Dart-side per-edit expression validator (DartValidator)
+│   │   ├── dart_validator.dart     # Dart-side per-edit expression validator (DartValidator)
 │   │   ├── prefs_service.dart       # User preferences persistence
 │   │   ├── updater_service.dart     # GitHub release poller + download/verify/install
+│   │   ├── debug_binding.dart       # WidgetsFlutterBinding hook for diagnostic capture
+│   │   ├── debug_settings.dart      # Opt-in regression knobs (paint, hover, scroll filters)
+│   │   ├── diagnostic_log.dart      # Opt-in NDJSON trace + engine stderr capture (BXP_DIAGNOSTIC=1)
 │   │   └── dev_trace.dart           # kDebugMode-gated print() helper
 │   ├── store/
 │   │   ├── trace_store.dart         # ChangeNotifier — central state (~2k lines)
@@ -96,14 +100,30 @@ Three layers, top-down:
 ## Subprocess wiring
 
 `BxpProcessClient` ([lib/services/bxp_process_client.dart](lib/services/bxp_process_client.dart)) is the
-single entry point for binary calls. Binary location is resolved in this
-order:
+single entry point for binary calls. Two transport paths exist; the
+choice is hard-coded by host OS:
+
+- **Windows** — every call goes through `bxp-gui-bridge.dll` (a Zig
+  shared library, see [`../bxp-gui-bridge/`](../bxp-gui-bridge/)).
+  The DLL is mandatory; probe failure at startup is fatal (synthetic
+  error surfaced through the normal startup gate). The bridge sidesteps
+  dart:io's Win pipe truncation (dart-lang/sdk#1727) on `--docs` /
+  `--config` / `--trace`.
+- **Linux / macOS** — direct `Process.start`. The bridge is dormant on
+  these hosts (cross-platform consolidation is on the v0.3.0 roadmap).
+
+Binary location for `bxp-cli` / `bxp-fmt` is resolved in this order on
+both transports:
 
 1. `BXP_CLI_PATH` / `BXP_FMT_PATH` env vars (developer override)
 2. Sibling binaries inside the Flutter bundle (`bundle/data/flutter_assets/`
    / Linux `bundle/lib/`)
 3. Workspace-root fallback when running `flutter run` from a dev tree
    (`../bxp-cli/zig-out/bin/bxp-cli`, etc.)
+
+The bridge DLL itself (Windows) is resolved by `findBridgeLibrary()` in
+[lib/services/bridge_client.dart](lib/services/bridge_client.dart)
+using the same sibling-then-dev-tree walk.
 
 **Linux dev tree gotcha:** the Linux CMake config copies `bxp-fmt` into
 the bundle at build time. After changing bxp-fmt, run a clean Flutter
@@ -188,9 +208,6 @@ cd bxp-gui && flutter pub get
 
 # Linux desktop dev run
 flutter run -d linux
-
-# Or via the helper script (sets up paths, --debug, etc.)
-./DEV-run.sh
 
 # Tests
 flutter test

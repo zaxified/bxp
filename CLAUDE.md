@@ -37,6 +37,14 @@ bxp/
 │   │                                    # candidate for extraction to a standalone repo when
 │   │                                    # a second Dart consumer materialises)
 │   └── pubspec.yaml
+├── bxp-gui-bridge/       # Zig FFI shared library (bxp-gui-bridge.dll on Windows,
+│   │                     # libbxp-gui-bridge.{so,dylib} on Linux/macOS — currently
+│   │                     # built and shipped only on Windows; Linux/macOS use
+│   │                     # Process.start directly. Sidesteps dart:io's Win pipe
+│   │                     # truncation (dart-lang/sdk#1727) on --docs/--config/--trace.)
+│   ├── src/main.zig      # C-ABI entrypoints: bridge_run, bridge_run_streaming, bridge_free
+│   ├── build.zig
+│   └── build.zig.zon
 ├── resources/
 │   ├── console/          # bxp-cli sample config + user-facing readme bundled in console archives
 │   ├── desktop/          # bxp-gui.desktop template + readme bundled in desktop archives
@@ -46,9 +54,11 @@ bxp/
 │                         #   for user-side shortcut icon swap.
 ├── datasets/             # Anonymized sample data + expected outputs for regression tests
 ├── scripts/
-│   ├── test.sh           # Wrapper — runs test-01-console.sh + test-02-desktop.sh
-│   ├── test-01-console.sh   # bxp-core unit + bxp-fmt smoke + bxp-cli regression
-│   ├── test-02-desktop.sh   # flutter analyze + flutter test + json5_ast dart test
+│   ├── test.sh           # Wrapper — runs every test-NN-*.sh in numeric order
+│   ├── test-lib.sh       # Shared section/step/summary helpers (sourced)
+│   ├── test-01-console.sh   # bxp-core unit + bxp-cli/fmt build + bxp-fmt smoke + json5_ast unit
+│   ├── test-02-datasets.sh  # bxp-cli regression vs datasets/*/*.expected
+│   ├── test-03-desktop.sh   # flutter analyze + flutter test + json5_ast dart test
 │   ├── release.sh        # Wrapper — runs release-01-console.sh + release-02-desktop.sh
 │   ├── release-01-console.sh    # Cross-compile bxp-cli, package bxp-console-* archives
 │   ├── release-02-desktop.sh    # Host-OS-specific Flutter desktop bundle → .AppImage / .deb
