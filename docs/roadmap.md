@@ -63,12 +63,8 @@ post-redirect release succeeds.
   Eliminates the first-launch Gatekeeper warning.
 - Windows Authenticode signing for the NSIS installer (~$200/year cert).
   Eliminates the SmartScreen warning.
-- Linux `.rpm` package for Fedora / RHEL users — adds `rpmbuild` + spec
-  file alongside the existing `.deb` and AppImage.
 - Flatpak publishing on Flathub. Review process takes weeks; defer
   until app is more stable.
-- AppImageUpdate (zsync delta downloads). Current Linux updater
-  re-downloads the full AppImage; zsync would do binary deltas.
 
 ### bxp-cli
 
