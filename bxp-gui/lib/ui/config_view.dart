@@ -279,11 +279,21 @@ class _ConfigTreeScroll extends StatefulWidget {
 class _ConfigTreeScrollState extends State<_ConfigTreeScroll> {
   final _vCtrl = ScrollController();
   final _hCtrl = ScrollController();
+  /// Drives the sticky row-action overlay anchored to the tree pane's
+  /// right edge. Hovered rows publish their `trailingActions` + Y
+  /// offset here; a single `Positioned` listens and paints the toolbox
+  /// over the horizontally-scrollable row content underneath.
+  final TreeActionsController _actionsCtrl = TreeActionsController();
+  /// `RenderObject` anchor for `_RowEnvelope.localToGlobal` — must be
+  /// the same `Stack` that owns the overlay so per-row Y coordinates
+  /// land in the overlay's coord space without scroll-offset drift.
+  final GlobalKey _stackKey = GlobalKey();
 
   @override
   void dispose() {
     _vCtrl.dispose();
     _hCtrl.dispose();
+    _actionsCtrl.dispose();
     super.dispose();
   }
 
@@ -312,41 +322,128 @@ class _ConfigTreeScrollState extends State<_ConfigTreeScroll> {
       // toolbar's bottom border or the vertical splitter (read as
       // "hover leaks into the menu / expr-panel").
       padding: const EdgeInsets.only(top: 6, right: 6),
-      child: Scrollbar(
-      controller: _vCtrl,
-      thumbVisibility: true,
-      child: Scrollbar(
-        controller: _hCtrl,
-        thumbVisibility: true,
-        notificationPredicate: (n) => n.depth == 1,
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            // Each tree row stretches its min-width to the viewport so
-            // action buttons can right-align against the scrollbar
-            // edge regardless of how short the row's content is. 16+16
-            // accounts for the outer SingleChildScrollView padding +
-            // the vertical scrollbar's thumb area.
-            final viewportRowWidth = constraints.maxWidth - 32;
-            return SingleChildScrollView(
-              controller: _vCtrl,
-              padding: const EdgeInsets.all(16.0),
-              child: SingleChildScrollView(
-                controller: _hCtrl,
-                scrollDirection: Axis.horizontal,
-                child: JsonTree(
-                  key: ValueKey(context.select<TraceStore, int>(
-                      (s) => s.treeLoadGen)),
-                  root: widget.root,
-                  expandAll: false,
-                  rowMinWidth:
-                      viewportRowWidth > 0 ? viewportRowWidth : null,
-                ),
-              ),
-            );
-          },
+      child: TreeActionsBinding(
+        controller: _actionsCtrl,
+        stackKey: _stackKey,
+        child: Scrollbar(
+          controller: _vCtrl,
+          thumbVisibility: true,
+          child: Scrollbar(
+            controller: _hCtrl,
+            thumbVisibility: true,
+            notificationPredicate: (n) => n.depth == 1,
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                // Each tree row stretches its min-width to the viewport
+                // so the sticky action toolbox right-aligns against the
+                // same X near the scrollbar regardless of the row's own
+                // intrinsic content length. 16+16 accounts for the
+                // SingleChildScrollView padding plus the vertical
+                // scrollbar's thumb area.
+                final viewportRowWidth = constraints.maxWidth - 32;
+                return SingleChildScrollView(
+                  controller: _vCtrl,
+                  padding: const EdgeInsets.all(16.0),
+                  // Stack hosts the row content (scrollable horizontally
+                  // via the inner SingleChildScrollView) and a single
+                  // overlay `Positioned` that paints the hovered row's
+                  // action toolbox pinned to the right edge. The Stack
+                  // sits INSIDE the vertical SCV so its coord space
+                  // scrolls with the content — per-row Y stays stable
+                  // and the overlay tracks the row through vertical
+                  // scroll without listening to scroll events.
+                  child: Stack(
+                    key: _stackKey,
+                    children: [
+                      SingleChildScrollView(
+                        controller: _hCtrl,
+                        scrollDirection: Axis.horizontal,
+                        child: JsonTree(
+                          key: ValueKey(context.select<TraceStore, int>(
+                              (s) => s.treeLoadGen)),
+                          root: widget.root,
+                          expandAll: false,
+                          rowMinWidth:
+                              viewportRowWidth > 0 ? viewportRowWidth : null,
+                        ),
+                      ),
+                      _TreeActionsOverlay(controller: _actionsCtrl),
+                    ],
+                  ),
+                );
+              },
+            ),
+          ),
         ),
       ),
-    ),
+    );
+  }
+}
+
+/// Listens to the per-tree [TreeActionsController] and paints the
+/// currently-published row action toolbox at `right: 0` of its parent
+/// `Stack`, vertically aligned to the row's `y` (in Stack coord space).
+/// Returns a zero-sized placeholder when nothing is published so the
+/// Stack's non-positioned sibling alone determines its size.
+class _TreeActionsOverlay extends StatelessWidget {
+  final TreeActionsController controller;
+  const _TreeActionsOverlay({required this.controller});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.bxpTheme;
+    return ListenableBuilder(
+      listenable: controller,
+      builder: (ctx, _) {
+        final y = controller.y;
+        final actions = controller.actions;
+        if (y == null || actions == null) {
+          return const SizedBox.shrink();
+        }
+        // `y` is already row-top compensated in `_RowEnvelopeState`
+        // (`_rowPaddingTopCompensation`) so the overlay aligns with the
+        // hover-rect top, not the text baseline — no extra Padding here.
+        // Opaque elevated "card" — distinct from the tree's
+        // `surfaceBg` background so the toolbox reads as a floating
+        // overlay rather than blending into the row content underneath.
+        // Accent-tinted border + soft drop shadow reinforce the
+        // elevation; full alpha on the fill masks any long-row glyphs
+        // behind the icons.
+        return Positioned(
+          top: y,
+          right: 0,
+          // `opaque: false` lets pointer hit-testing fall through to the
+          // row's own MouseRegion underneath, so the row stays "entered"
+          // while the cursor is over the toolbox. Without it the
+          // opaque-by-default Stack overlay absorbs the hit, the row
+          // fires onExit → clear → toolbox vanishes → cursor lands back
+          // on the row → onEnter → publish → toolbox reappears, in a
+          // tight flicker loop. The InkWells inside still register
+          // their own hover/tap normally — they're descendants, not
+          // siblings in the Stack hit-test.
+          child: MouseRegion(
+            opaque: false,
+            child: Container(
+              decoration: BoxDecoration(
+                color: t.panelBg,
+                border: Border.all(
+                    color: t.accentHighlight.withValues(alpha: 0.55)),
+                borderRadius: BorderRadius.circular(4),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.35),
+                    blurRadius: 6,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
+              ),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 3, vertical: 1),
+              child: actions,
+            ),
+          ),
+        );
+      },
     );
   }
 }

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:json5_ast/ast.dart';
@@ -74,6 +76,96 @@ class _RowMinWidth extends InheritedWidget {
   bool updateShouldNotify(_RowMinWidth old) => old.width != width;
 }
 
+/// Sticky action toolbox controller. `_RowEnvelope` publishes its own
+/// trailing-actions widget + Y position (in the tree's overlay Stack
+/// coord space) whenever the row enters its hovered/visible state, and
+/// clears the entry on exit. A single overlay above the horizontal
+/// `SingleChildScrollView` reads this controller and renders the
+/// currently-published actions pinned to the tree pane's right edge —
+/// the row content still scrolls horizontally underneath it.
+class TreeActionsController extends ChangeNotifier {
+  Object? _ownerId;
+  Widget? _actions;
+  double? _y;
+
+  Object? get ownerId => _ownerId;
+  Widget? get actions => _actions;
+  double? get y => _y;
+
+  void publish(Object id, Widget actions, double y) {
+    if (_ownerId == id && identical(_actions, actions) && _y == y) return;
+    _ownerId = id;
+    _actions = actions;
+    _y = y;
+    notifyListeners();
+  }
+
+  /// Idempotent — only clears when `id` matches the current owner so a
+  /// late `onExit` after a sibling's `onEnter` doesn't wipe the new
+  /// owner's payload.
+  void clear(Object id) {
+    if (_ownerId != id) return;
+    _ownerId = null;
+    _actions = null;
+    _y = null;
+    notifyListeners();
+  }
+}
+
+/// Provides the per-tree [TreeActionsController] and the
+/// `RenderObject`-anchor [GlobalKey] of the overlay `Stack` to deeply
+/// nested rows. Rows look it up non-dependently (via
+/// `getInheritedWidgetOfExactType`) so they don't rebuild on controller
+/// notifications — they only call `publish` / `clear`.
+class TreeActionsBinding extends InheritedWidget {
+  final TreeActionsController controller;
+  final GlobalKey stackKey;
+  const TreeActionsBinding({
+    super.key,
+    required this.controller,
+    required this.stackKey,
+    required super.child,
+  });
+
+  static TreeActionsBinding? maybeOf(BuildContext c) =>
+      c.getInheritedWidgetOfExactType<TreeActionsBinding>();
+
+  /// Synchronously publishes a row's action toolbox. **Call from a
+  /// pointer-event handler** (`MouseRegion.onEnter`), NOT from `build`
+  /// / `didUpdateWidget`: the underlying `notifyListeners` would mark
+  /// the overlay's `ListenableBuilder` dirty mid-build and trip
+  /// Flutter's "markNeedsBuild during build" assertion. Returns `false`
+  /// when the row's `RenderBox` isn't laid out yet — in practice this
+  /// only happens on the very first build of a row that mounts already
+  /// under the cursor.
+  static bool publishFromRow(
+    BuildContext context,
+    GlobalKey rowKey,
+    Object id,
+    Widget actions,
+  ) {
+    final binding = maybeOf(context);
+    if (binding == null) return false;
+    final rowBox = rowKey.currentContext?.findRenderObject() as RenderBox?;
+    final stackBox =
+        binding.stackKey.currentContext?.findRenderObject() as RenderBox?;
+    if (rowBox == null || stackBox == null) return false;
+    if (!rowBox.attached || !stackBox.attached) return false;
+    if (!rowBox.hasSize) return false;
+    final offset = rowBox.localToGlobal(Offset.zero, ancestor: stackBox);
+    binding.controller.publish(id, actions, offset.dy);
+    return true;
+  }
+
+  static void clearFromRow(BuildContext context, Object id) {
+    maybeOf(context)?.controller.clear(id);
+  }
+
+  @override
+  bool updateShouldNotify(TreeActionsBinding old) =>
+      controller != old.controller || stackKey != old.stackKey;
+}
+
 /// Trailing comment payload threaded from parent into [_JsonNode] so the
 /// inline `// foo` rendering can wire its own commit path back to the
 /// store without re-walking the tree.
@@ -118,6 +210,18 @@ class _JsonNode extends StatefulWidget {
 class _JsonNodeState extends State<_JsonNode> {
   late bool expanded;
   bool isHovered = false;
+  /// Anchor the row Container's `RenderBox` so `TreeActionsBinding`
+  /// can sample the row's Y in the overlay Stack's coord space.
+  /// Shared across the leaf / expandable render paths — only one is
+  /// active at any given time.
+  final GlobalKey _rowKey = GlobalKey();
+  /// Stable identity for `TreeActionsController.publish` / `clear` so
+  /// a late `onExit` after a sibling's `onEnter` is a no-op.
+  final Object _actionId = Object();
+  /// Cached controller ref so `dispose()` can clear our overlay slot
+  /// without a context lookup — during unmount the element is no
+  /// longer active and the inherited-widget asserts would fire.
+  TreeActionsController? _actionsCtrl;
   /// True between an expand-click and a collapse-click. When set, child
   /// nodes are constructed with `expandAll: true` so a single click on a
   /// collapsed parent cascades down to every descendant. Reset on collapse
@@ -148,6 +252,28 @@ class _JsonNodeState extends State<_JsonNode> {
     // for a typical bxp-cli config the user lands on the inside of each
     // template (data_dir, file_pattern_in, …) without an extra click.
     expanded = widget.expandAll || widget.depth < 2;
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _actionsCtrl = TreeActionsBinding.maybeOf(context)?.controller;
+  }
+
+  @override
+  void dispose() {
+    // Defer the toolbox clear past `BuildOwner.finalizeTree`: clear
+    // notifies the overlay's `ListenableBuilder`, and setState while
+    // the tree is unmount-locked tripped the framework. Post-frame
+    // runs in the idle phase where setState is legal. Owner-id gated
+    // inside `clear`, so a sibling row that took ownership in the
+    // meantime won't have its slot wiped.
+    final ctrl = _actionsCtrl;
+    final id = _actionId;
+    if (ctrl != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => ctrl.clear(id));
+    }
+    super.dispose();
   }
 
   @override
@@ -520,14 +646,13 @@ class _JsonNodeState extends State<_JsonNode> {
     // ~4 buttons each).
     final debug = context.watch<DebugSettings>();
     final inner = Container(
+      key: _rowKey,
       color: (debug.hoverBackground && isHovered)
           ? t.withHover(t.surfaceBg)
           : Colors.transparent,
       padding: const EdgeInsets.symmetric(vertical: 2.0),
       child: _RowEnvelope(
         depth: widget.depth,
-        trailingActions: _buildActionButtons(isComposite: false),
-        actionsVisible: debug.hoverActionButtons && isHovered,
         children: [
           const SizedBox(width: 16),
           if (widget.keyName != null && int.tryParse(widget.keyName!)?.toString() != widget.keyName) ...[
@@ -549,8 +674,17 @@ class _JsonNodeState extends State<_JsonNode> {
       return inner;
     }
     return MouseRegion(
-      onEnter: (_) => setState(() => isHovered = true),
-      onExit: (_) => setState(() => isHovered = false),
+      onEnter: (_) {
+        if (debug.hoverActionButtons) {
+          TreeActionsBinding.publishFromRow(context, _rowKey, _actionId,
+              _buildActionButtons(isComposite: false));
+        }
+        setState(() => isHovered = true);
+      },
+      onExit: (_) {
+        TreeActionsBinding.clearFromRow(context, _actionId);
+        setState(() => isHovered = false);
+      },
       child: inner,
     );
   }
@@ -582,18 +716,13 @@ class _JsonNodeState extends State<_JsonNode> {
           _recursiveExpand = expanded;
         });
     final inner = Container(
+      key: _rowKey,
       color: (debug.hoverBackground && isHovered)
           ? t.withHover(t.surfaceBg)
           : Colors.transparent,
       padding: const EdgeInsets.symmetric(vertical: 2.0),
       child: _RowEnvelope(
         depth: widget.depth,
-        trailingActions: widget.keyName == 'config'
-            ? const SizedBox.shrink()
-            : _buildActionButtons(isComposite: true),
-        actionsVisible: debug.hoverActionButtons &&
-            isHovered &&
-            widget.keyName != 'config',
         children: [
           SizedBox(
             width: 16,
@@ -630,14 +759,30 @@ class _JsonNodeState extends State<_JsonNode> {
       ),
     );
     final tappable = debug.useInkWell
-        ? InkWell(onTap: onTap, child: inner)
+        // Disable Material's default hoverColor — the row already
+        // paints its own MouseRegion + Container hover background, and
+        // the InkWell overlay otherwise double-shaded the tap target
+        // (visible as a second darker rectangle bleeding under long
+        // keys / values past the viewport edge).
+        ? InkWell(onTap: onTap, hoverColor: Colors.transparent, child: inner)
         : GestureDetector(onTap: onTap, child: inner);
     if (!debug.hoverBackground && !debug.hoverActionButtons) {
       return tappable;
     }
     return MouseRegion(
-      onEnter: (_) => setState(() => isHovered = true),
-      onExit: (_) => setState(() => isHovered = false),
+      onEnter: (_) {
+        // Root `config` row has no actions — skip publish so the
+        // overlay doesn't render an empty toolbox card.
+        if (debug.hoverActionButtons && widget.keyName != 'config') {
+          TreeActionsBinding.publishFromRow(context, _rowKey, _actionId,
+              _buildActionButtons(isComposite: true));
+        }
+        setState(() => isHovered = true);
+      },
+      onExit: (_) {
+        TreeActionsBinding.clearFromRow(context, _actionId);
+        setState(() => isHovered = false);
+      },
       child: tappable,
     );
   }
@@ -670,56 +815,80 @@ class _JsonNodeState extends State<_JsonNode> {
     final selfDoc = store.findSchemaDoc(widget.path);
     final isRequired = !isArrayEntry && selfDoc != null && selfDoc['required'] == true;
 
+    // Fixed slot order (left → right): comment-inline, comment-above,
+    // add-child, move-up, move-down, duplicate, delete. Conditional
+    // buttons render greyed-out (`onTap: null`) instead of being
+    // skipped so the toolbox doesn't shift horizontally between rows
+    // with different schemas — the rightmost glyph stays at the same
+    // X position regardless of which actions are currently legal.
+    final isNonRoot = widget.path.isNotEmpty;
     return SizedBox(
       height: 16,
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          if (canReorder) ...[
-            _ActionBtn(
-              icon: '↑',
-              tooltip: 'Move up',
-              color: t.textMuted,
-              onTap: () => store.moveConfigNode(widget.path, -1),
-            ),
-            _ActionBtn(
-              icon: '↓',
-              tooltip: 'Move down',
-              color: t.textMuted,
-              onTap: () => store.moveConfigNode(widget.path, 1),
-            ),
-          ],
           // "comment above" inserts a fresh leading comment immediately
           // above this row; "comment inline" attaches a trailing
-          // `// note` to the same source line. Available everywhere —
-          // adding a label-style comment doesn't depend on container
-          // ordering.
-          if (widget.path.isNotEmpty) ...[
+          // `// note` to the same source line. Root rows can't host
+          // either, so we drop both for the root entry only.
+          if (isNonRoot) ...[
+            _ActionBtn(
+              icon: '✐',
+              tooltip: 'Add inline comment',
+              color: t.textMuted,
+              onTap: () =>
+                  store.insertInlineCommentNode(widget.path, '//', ' '),
+            ),
             _ActionBtn(
               icon: '✎',
               tooltip: 'Add comment above',
               color: t.textMuted,
               onTap: () => store.insertCommentNode(widget.path, '//', ' '),
             ),
-            _ActionBtn(
-              icon: '⊳',
-              tooltip: 'Add inline comment',
-              color: t.textMuted,
-              onTap: () =>
-                  store.insertInlineCommentNode(widget.path, '//', ' '),
-            ),
           ],
-          if (isComposite)
-            _ActionBtn(
-              icon: '+',
-              tooltip: 'Add child',
-              color: t.textMuted,
-              onTap: () => _showAddDialog(),
-            ),
           _ActionBtn(
-            icon: '⧉',
+            icon: '+',
+            tooltip: isComposite
+                ? 'Add child'
+                : 'Add child — leaf rows can\'t host children',
+            // `codeNumber` (active) vs `textMuted` (disabled) —
+            // amber/gold sits clearly between the accent-blue move
+            // arrows and the error-red delete glyph; the prior
+            // `okText` green was visually too close to the accent
+            // hue to read as a distinct "create" affordance.
+            color: isComposite ? t.codeNumber : t.textMuted,
+            onTap: isComposite ? () => _showAddDialog() : null,
+          ),
+          _ActionBtn(
+            icon: '↑',
+            tooltip: canReorder
+                ? 'Move up'
+                : 'Move up — order is not significant here',
+            color: canReorder ? t.accentHighlight : t.textMuted,
+            onTap: canReorder
+                ? () => store.moveConfigNode(widget.path, -1)
+                : null,
+          ),
+          _ActionBtn(
+            icon: '↓',
+            tooltip: canReorder
+                ? 'Move down'
+                : 'Move down — order is not significant here',
+            color: canReorder ? t.accentHighlight : t.textMuted,
+            onTap: canReorder
+                ? () => store.moveConfigNode(widget.path, 1)
+                : null,
+          ),
+          _ActionBtn(
+            icon: '⎘',
             tooltip: 'Duplicate',
-            color: t.textMuted,
+            // Vibrant rose — hard-coded so it stays visibly distinct
+            // from `textMuted` (greyed-out) across every preset theme.
+            // Theme-driven options collided in at least one theme:
+            // `codeNumber` blends with FTX's amber `textMuted`,
+            // `okText`/`codeString` greens read as accent-blue
+            // neighbours.
+            color: t.codeFunction,
             onTap: () => store.duplicateConfigNode(widget.path),
           ),
           _ActionBtn(
@@ -728,10 +897,6 @@ class _JsonNodeState extends State<_JsonNode> {
             color: isRequired ? t.textMuted : t.errorText,
             onTap: isRequired ? null : () => store.deleteConfigNode(widget.path),
           ),
-          // No internal trailing gap — `_RowEnvelope` adds the single
-          // 4 px gap between the last button and the row's right edge.
-          // Doubling that here would push key-row × buttons 4 px LEFT
-          // of the comment-row × button at the same depth.
         ],
       ),
     );
@@ -849,6 +1014,18 @@ class _CommentRowState extends State<_CommentRow> {
   bool isEditing = false;
   late TextEditingController controller;
   final FocusNode _focus = FocusNode();
+  /// Anchor the row Container's `RenderBox` so `TreeActionsBinding`
+  /// can compute the row's Y in the overlay Stack's coord space.
+  final GlobalKey _rowKey = GlobalKey();
+  /// Stable identity for `TreeActionsController.publish` / `clear` so
+  /// a stale `onExit` after a sibling's `onEnter` is a no-op.
+  final Object _actionId = Object();
+  /// Cached controller ref so `dispose()` can clear our overlay slot
+  /// without doing a `context.getInheritedWidgetOfExactType` lookup —
+  /// during unmount the element is no longer active and Flutter's
+  /// debug assert "calling dependOnInheritedWidgetOfExactType in
+  /// didChangeDependencies" fires.
+  TreeActionsController? _actionsCtrl;
 
   @override
   void initState() {
@@ -858,7 +1035,24 @@ class _CommentRowState extends State<_CommentRow> {
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _actionsCtrl = TreeActionsBinding.maybeOf(context)?.controller;
+  }
+
+  @override
   void dispose() {
+    // Defer the toolbox clear to the next frame — `clear` notifies the
+    // overlay's `ListenableBuilder`, which would call `setState` while
+    // `BuildOwner.finalizeTree` has the widget tree locked (we're
+    // running inside `_InactiveElements._unmount` right now). The
+    // post-frame callback runs in the idle scheduler phase, when
+    // setState is legal again.
+    final ctrl = _actionsCtrl;
+    final id = _actionId;
+    if (ctrl != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => ctrl.clear(id));
+    }
     _focus.removeListener(_onFocusChange);
     _focus.dispose();
     controller.dispose();
@@ -1002,6 +1196,7 @@ class _CommentRowState extends State<_CommentRow> {
 
     final debug = context.watch<DebugSettings>();
     final inner = Container(
+      key: _rowKey,
       color: (debug.hoverBackground && isHovered)
           ? t.withHover(t.surfaceBg)
           : Colors.transparent,
@@ -1013,36 +1208,6 @@ class _CommentRowState extends State<_CommentRow> {
       padding: const EdgeInsets.symmetric(vertical: 2),
       child: _RowEnvelope(
         depth: widget.depth,
-        actionsVisible: debug.hoverActionButtons && isHovered,
-        trailingActions: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              _ActionBtn(
-                icon: '↑',
-                tooltip: 'Move up',
-                color: t.textMuted,
-                onTap: () => store.moveConfigNode(widget.path, -1),
-              ),
-              _ActionBtn(
-                icon: '↓',
-                tooltip: 'Move down',
-                color: t.textMuted,
-                onTap: () => store.moveConfigNode(widget.path, 1),
-              ),
-              _ActionBtn(
-                icon: '⎘',
-                tooltip: 'Duplicate comment',
-                color: t.textMuted,
-                onTap: () => store.duplicateCommentNode(widget.path),
-              ),
-              _ActionBtn(
-                icon: '×',
-                tooltip: 'Delete comment',
-                color: t.errorText,
-                onTap: () => store.deleteCommentNode(widget.path),
-              ),
-            ],
-          ),
         children: [
           SizedBox(width: widget.deepIndent ? 24.0 : 16.0),
           Text(isBlock ? '/*' : '//', style: commentStyle),
@@ -1055,9 +1220,59 @@ class _CommentRowState extends State<_CommentRow> {
       return inner;
     }
     return MouseRegion(
-      onEnter: (_) => setState(() => isHovered = true),
-      onExit: (_) => setState(() => isHovered = false),
+      onEnter: (_) {
+        if (debug.hoverActionButtons) {
+          TreeActionsBinding.publishFromRow(
+              context, _rowKey, _actionId, _buildCommentActions(store, t));
+        }
+        setState(() => isHovered = true);
+      },
+      onExit: (_) {
+        TreeActionsBinding.clearFromRow(context, _actionId);
+        setState(() => isHovered = false);
+      },
       child: inner,
+    );
+  }
+
+  /// Trailing action toolbox for this comment row. Built fresh on each
+  /// hover-enter so `widget.path` always reflects the row's current AST
+  /// location (the row instance may have been re-keyed by a structural
+  /// rebuild while the cursor was over it). Colour scheme mirrors
+  /// `_JsonNode._buildActionButtons` — accent-blue for move,
+  /// `textMuted` for neutral, error-red for destructive.
+  Widget _buildCommentActions(TraceStore store, BxpTheme t) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _ActionBtn(
+          icon: '↑',
+          tooltip: 'Move up',
+          color: t.accentHighlight,
+          onTap: () => store.moveConfigNode(widget.path, -1),
+        ),
+        _ActionBtn(
+          icon: '↓',
+          tooltip: 'Move down',
+          color: t.accentHighlight,
+          onTap: () => store.moveConfigNode(widget.path, 1),
+        ),
+        _ActionBtn(
+          icon: '⎘',
+          tooltip: 'Duplicate comment',
+          // Matches `_buildActionButtons` — hard-coded rose for
+          // cross-theme distinguishability from `textMuted` (the
+          // greyed-out fallback used elsewhere in the toolbox).
+          color: t.codeFunction,
+          onTap: () => store.duplicateCommentNode(widget.path),
+        ),
+        _ActionBtn(
+          icon: '×',
+          tooltip: 'Delete comment',
+          color: t.errorText,
+          onTap: () => store.deleteCommentNode(widget.path),
+        ),
+      ],
     );
   }
 }
@@ -1157,6 +1372,10 @@ class _InlineCommentEditState extends State<_InlineCommentEdit> {
           : '//${widget.comment.text}';
       return InkWell(
         onTap: _enterEdit,
+        // See `_CommentRow.bodyWidget` — row-level MouseRegion owns the
+        // hover bg; InkWell's default Material hover overlay would
+        // paint a second layer that leaks past the SCV clip.
+        hoverColor: Colors.transparent,
         child: Text(marker, style: style),
       );
     }
@@ -1195,63 +1414,42 @@ class _InlineCommentEditState extends State<_InlineCommentEdit> {
   }
 }
 
-// ── Action button helper ────────────────────────────────────────────
-/// Wraps a tree-row's content in a min-width envelope so trailing
-/// action buttons right-align against a constant X near the vertical
-/// scrollbar instead of hopping with content length. The min-width is
-/// supplied by [_RowMinWidth] (set from the viewport's LayoutBuilder
-/// in `_ConfigTreeScroll`); rows wider than the viewport (long
-/// expressions) just grow past the envelope and their buttons trail
-/// the content end as before.
+// ── Row envelope ────────────────────────────────────────────────────
+/// Wraps a tree-row's content in a min-width envelope so the row
+/// stretches out to the viewport edge — the sticky action toolbox
+/// painted by `_TreeActionsOverlay` then right-aligns against the
+/// same X near the scrollbar regardless of the row's own intrinsic
+/// content length. Rows wider than the viewport grow past the
+/// envelope and scroll horizontally inside the parent SCV; the
+/// toolbox stays fixed because it lives outside the horizontal SCV.
 ///
-/// Action visibility (hover gate) uses Opacity rather than removing
-/// the buttons, so layout doesn't shift when the row hover state
-/// flips.
+/// Pure layout — publication / clearing of the toolbox itself is
+/// handled by each row's hover handler via
+/// [TreeActionsBinding.publishFromRow] / [clearFromRow].
 class _RowEnvelope extends StatelessWidget {
   final List<Widget> children;
-  final Widget trailingActions;
-  final bool actionsVisible;
   /// Depth of the row in the tree (root = 0). Used to subtract the
   /// per-level indent from the inherited viewport-row width so the
   /// envelope's right edge aligns with the scrollbar at every depth.
   final int depth;
   const _RowEnvelope({
     required this.children,
-    required this.trailingActions,
-    required this.actionsVisible,
     required this.depth,
   });
 
   /// Single source of the indent constant lives in
-  /// [LayoutDefaults.treeIndentPerLevel]. Re-exported here for the
-  /// minWidth formula below — see `_buildMap` / `_buildList`.
+  /// [LayoutDefaults.treeIndentPerLevel].
   static const double _indentPerLevel = LayoutDefaults.treeIndentPerLevel;
 
   @override
   Widget build(BuildContext context) {
     final viewportRowWidth = _RowMinWidth.of(context);
-    // Render trailing actions only when visible. A previous version
-    // wrapped them in `Opacity(opacity: 0.0, ...)`, which left the
-    // entire _ActionBtn subtree mounted with its MouseRegion +
-    // GestureDetector hot — 100+ tree rows × ~4 buttons each = 500+
-    // hidden pointer listeners receiving every mouse-move event, plus
-    // 500+ render-tree layers that paint nothing. On Windows that
-    // appears to overload the compositor and eventually wedges the GUI
-    // even after the per-row hover setState is gone.
     if (viewportRowWidth == null || viewportRowWidth <= 0) {
-      // No viewport context (e.g. snapshot tree in tests): fall back to
-      // the legacy "buttons trail content end" layout.
+      // No viewport context (e.g. snapshot tree in tests): plain Row.
       return Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
-        children: [
-          ...children,
-          if (actionsVisible) ...[
-            const SizedBox(width: 40),
-            trailingActions,
-            const SizedBox(width: 4),
-          ],
-        ],
+        children: children,
       );
     }
     final minWidth = (viewportRowWidth - depth * _indentPerLevel)
@@ -1261,19 +1459,7 @@ class _RowEnvelope extends StatelessWidget {
       child: IntrinsicWidth(
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            ...children,
-            // Spacer = Flexible(fit: tight) — fills any leftover space
-            // inside the envelope so trailing actions snap to the
-            // envelope's right edge (≈ scrollbar). Long rows whose
-            // intrinsic width exceeds minWidth get Spacer = 0; their
-            // buttons trail content end as before.
-            const Spacer(),
-            if (actionsVisible) ...[
-              trailingActions,
-              const SizedBox(width: 4),
-            ],
-          ],
+          children: children,
         ),
       ),
     );
@@ -1695,13 +1881,14 @@ class _ExprLeafState extends State<_ExprLeaf> {
     // validating every expression on load would require one spawn per leaf.
     final showError = isActive && store.exprValidationError != null;
 
-    return Tooltip(
-      message: 'click to edit in panel',
-      waitDuration: const Duration(milliseconds: 400),
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
-        child: InkWell(
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: InkWell(
       onTap: () => context.read<TraceStore>().setSelectedExpr(path, text),
+      // Row-level MouseRegion owns the hover bg; suppress the InkWell's
+      // own overlay so long expression cells don't paint a second hover
+      // layer past the SCV clip.
+      hoverColor: Colors.transparent,
       child: Builder(builder: (ctx) {
         final t = ctx.bxpTheme;
         final quoteStyle = BxpText.body(context,color: t.textMuted, size: BxpSize.md);
@@ -1735,8 +1922,7 @@ class _ExprLeafState extends State<_ExprLeaf> {
         );
       }),
         ),
-      ),
-    );
+      );
   }
 
   static bool _listEq(List<String> a, List<String> b) {
@@ -1846,6 +2032,8 @@ class _EditableStringState extends State<_EditableString> {
     if (!isEditing) {
       return InkWell(
         onTap: _enterEdit,
+        // Row-level MouseRegion owns the hover bg.
+        hoverColor: Colors.transparent,
         child: Text('"${widget.value}"',
             style: BxpText.body(context,color: widget.color, size: BxpSize.md)),
       );
@@ -1990,6 +2178,8 @@ class _EditableNumberState extends State<_EditableNumber> {
     if (!isEditing) {
       return InkWell(
         onTap: _enterEdit,
+        // Row-level MouseRegion owns the hover bg.
+        hoverColor: Colors.transparent,
         child: Text('${widget.value}',
             style: BxpText.body(context,color: widget.color, size: BxpSize.md)),
       );
@@ -2035,16 +2225,14 @@ class _EditableBoolean extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Tooltip(
-      message: 'click to toggle',
-      waitDuration: const Duration(milliseconds: 400),
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
-        child: InkWell(
-          onTap: () => onCommit(!value),
-          child: Text('$value',
-              style: BxpText.body(context,color: color, size: BxpSize.md)),
-        ),
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: InkWell(
+        onTap: () => onCommit(!value),
+        // Row-level MouseRegion owns the hover bg.
+        hoverColor: Colors.transparent,
+        child: Text('$value',
+            style: BxpText.body(context, color: color, size: BxpSize.md)),
       ),
     );
   }
@@ -2106,7 +2294,14 @@ class _EditableEnum extends StatelessWidget {
         if (val != value) onCommit(val);
       },
       itemBuilder: (_) => menuItems,
-      tooltip: 'pick value',
+      // `tooltip: ''` suppresses PopupMenuButton's default "Show menu"
+      // tooltip; null falls back to the localised default.
+      tooltip: '',
+      // Default `_kMenuDuration` of 300 ms makes the menu visibly
+      // linger after the user picks an item before the underlying
+      // value updates — reads as input lag. 80 ms is fast enough to
+      // feel instant while still keeping the close animation visible.
+      popUpAnimationStyle: AnimationStyle.noAnimation,
       child: Text('"${_displayLabel(value)}"',
           style: BxpText.body(context, color: color, size: BxpSize.md)
               .copyWith(
@@ -2125,10 +2320,105 @@ class _EditableEnum extends StatelessWidget {
 /// underline + help cursor and a hover tooltip — matches bxp-ui's
 /// LabelSpan + findSchemaDoc behaviour. When no doc is found (or docs
 /// haven't loaded yet), the label renders unchanged.
-class _SchemaTooltipKey extends StatelessWidget {
+class _SchemaTooltipKey extends StatefulWidget {
   final String keyName;
   final List<String> path;
   const _SchemaTooltipKey({required this.keyName, required this.path});
+
+  @override
+  State<_SchemaTooltipKey> createState() => _SchemaTooltipKeyState();
+}
+
+class _SchemaTooltipKeyState extends State<_SchemaTooltipKey> {
+  /// Backing fields previously held in [_SchemaTooltipKey] — exposed on
+  /// `widget.<name>` after the StatelessWidget → StatefulWidget split.
+  String get keyName => widget.keyName;
+  List<String> get path => widget.path;
+
+  /// Pending show timer (debounce so a quick pass over the key doesn't
+  /// pop a tooltip).
+  Timer? _showTimer;
+  /// Active overlay entry. Null = no popup currently visible.
+  OverlayEntry? _entry;
+  /// Layer link anchoring the popup to this row's render box.
+  final LayerLink _link = LayerLink();
+  /// Captured at hover-enter so the overlay builder doesn't re-derive
+  /// the schema lookup every frame.
+  String? _pendingMessage;
+
+  static const Duration _showDelay = Duration(milliseconds: 200);
+
+  @override
+  void dispose() {
+    _showTimer?.cancel();
+    _hide();
+    super.dispose();
+  }
+
+  void _scheduleShow(String message) {
+    _pendingMessage = message;
+    _showTimer?.cancel();
+    _showTimer = Timer(_showDelay, () {
+      if (!mounted) return;
+      _show();
+    });
+  }
+
+  void _show() {
+    if (_entry != null || _pendingMessage == null) return;
+    final overlay = Overlay.maybeOf(context);
+    if (overlay == null) return;
+    final message = _pendingMessage!;
+    final t = context.bxpTheme;
+    final entry = OverlayEntry(
+      builder: (ctx) {
+        // `IgnorePointer` keeps the popup out of hit-testing — no
+        // `_ExclusiveMouseRegion` "keep-alive" trap like Flutter's
+        // built-in `Tooltip` (raw_tooltip.dart:795). Cursor-leaves-key =
+        // popup dismisses synchronously via `onExit` below.
+        return Positioned(
+          left: 0,
+          top: 0,
+          child: CompositedTransformFollower(
+            link: _link,
+            showWhenUnlinked: false,
+            offset: const Offset(0, 20),
+            child: IgnorePointer(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 360),
+                child: Material(
+                  color: Colors.transparent,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: t.dialogBg,
+                      border: Border.all(color: t.borderColor),
+                    ),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 8, vertical: 6),
+                    child: Text(
+                      message,
+                      style: BxpText.body(context,
+                          color: t.textPrimary, size: BxpSize.sm),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+    overlay.insert(entry);
+    _entry = entry;
+  }
+
+  void _hide() {
+    _showTimer?.cancel();
+    _showTimer = null;
+    _entry?.remove();
+    _entry = null;
+    _pendingMessage = null;
+  }
 
   Map<String, dynamic>? _findDoc(List<Map<String, dynamic>> schema) =>
       findSchemaDocIn(schema, path);
@@ -2195,17 +2485,21 @@ class _SchemaTooltipKey extends StatelessWidget {
         ? body
         : '${headerParts.join(' · ')}\n\n$body';
 
-    return Tooltip(
-      message: tooltipMsg,
-      waitDuration: const Duration(milliseconds: 300),
-      preferBelow: true,
-      textStyle: BxpText.body(context, color: t.textPrimary, size: BxpSize.sm),
-      decoration: BoxDecoration(
-        color: t.dialogBg,
-        border: Border.all(color: t.borderColor),
-      ),
+    // Custom hover popup — Flutter's `Tooltip` would install a
+    // `_RenderExclusiveMouseRegion` around BOTH the trigger and the
+    // popup (raw_tooltip.dart:795), and the popup's mouse-region
+    // "steals" focus from the row's MouseRegion, killing the row
+    // hover-bg and blocking the tree's scroll wheel. Our overlay is
+    // wrapped in `IgnorePointer` and pinned via `LayerLink`, so the
+    // popup never participates in hit-testing — mouse leaves key,
+    // `onExit` fires synchronously, popup is removed in the same
+    // frame.
+    return CompositedTransformTarget(
+      link: _link,
       child: MouseRegion(
         cursor: SystemMouseCursors.help,
+        onEnter: (_) => _scheduleShow(tooltipMsg),
+        onExit: (_) => _hide(),
         child: underlinedText,
       ),
     );

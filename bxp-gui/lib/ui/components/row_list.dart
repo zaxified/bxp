@@ -95,6 +95,14 @@ class _RowListInner extends StatefulWidget {
 
 class _RowListInnerState extends State<_RowListInner> {
   PlutoGridStateManager? _stateManager;
+  /// Previous-frame `activeTabIndex` snapshot. When the user swaps to a
+  /// non-Runner tab and returns, PlutoGrid's keyboard focus snaps back
+  /// to (row 0, row_num) instead of the previously selected row — a
+  /// stale highlight rectangle that doesn't match what RowDetail /
+  /// OutputPanel are showing. Detecting the tab transition lets us
+  /// drop the grid focus on the way out so the return doesn't render
+  /// the wrong cell as focused.
+  int? _lastTabIndex;
 
   /// Per-column substring filter (case-insensitive). Empty string = no
   /// filter on that column. Mirrors bxp-ui's RowList filter inputs.
@@ -246,6 +254,30 @@ class _RowListInnerState extends State<_RowListInner> {
   @override
   Widget build(BuildContext context) {
     final t = context.bxpTheme;
+    // Detect Runner ↔ other-tab transitions. When the user swaps
+    // *away* from Runner, drop PlutoGrid's keyboard focus + current
+    // cell so the eventual return doesn't render a stale focus
+    // rectangle on (row 0, row_num) instead of the previously
+    // selected row. Re-syncing back to `selectedRowId` on return
+    // would also be valid, but the user said "either restore or
+    // clear" — clearing is simpler and matches the "tab switch is a
+    // context switch" mental model.
+    final tabIndex = context.select<TraceStore, int>((s) => s.activeTabIndex);
+    const runnerTabIndex = 1;
+    if (_lastTabIndex != null &&
+        _lastTabIndex == runnerTabIndex &&
+        tabIndex != runnerTabIndex) {
+      // Leaving Runner — drop focus on the next frame (we're mid-build).
+      final sm = _stateManager;
+      if (sm != null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          sm.clearCurrentCell();
+          sm.gridFocusNode.unfocus();
+        });
+      }
+    }
+    _lastTabIndex = tabIndex;
     // Cache measurement styles — used later in the post-frame callback
     // _autoFitDataColumns where context.watch would be illegal.
     _cachedHeaderStyle = BxpText.body(

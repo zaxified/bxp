@@ -393,22 +393,32 @@ class _StatusBarState extends State<_StatusBar> {
                   style: BxpText.status(context, color: configStatusColor)),
               if (store.configPath.isNotEmpty) ...[
                 const SizedBox(width: 8),
-                // File icon: open the config in the host's default editor.
-                MouseRegion(
-                  cursor: SystemMouseCursors.click,
-                  child: GestureDetector(
-                    onTap: () => store.openInEditor(store.configPath),
-                    child: Icon(Icons.description_outlined,
-                        size: 13, color: t.textMuted),
-                  ),
-                ),
-                const SizedBox(width: 4),
+                // Click target spans icon + full file path so the user
+                // doesn't have to aim at the 13 px icon to open the
+                // config in the host's default editor.
                 Flexible(
-                  child: Text(
-                    store.configPath,
-                    style: BxpText.body(context,
-                        color: t.textSubtle, size: BxpSize.sm),
-                    overflow: TextOverflow.ellipsis,
+                  child: MouseRegion(
+                    cursor: SystemMouseCursors.click,
+                    child: GestureDetector(
+                      onTap: () => store.openInEditor(store.configPath),
+                      behavior: HitTestBehavior.opaque,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.description_outlined,
+                              size: 13, color: t.textMuted),
+                          const SizedBox(width: 4),
+                          Flexible(
+                            child: Text(
+                              store.configPath,
+                              style: BxpText.body(context,
+                                  color: t.textSubtle, size: BxpSize.sm),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
                 ),
               ],
