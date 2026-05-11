@@ -982,6 +982,12 @@ class _CommentRowState extends State<_CommentRow> {
       // `(click to edit)` (~98 px) which is plenty to click on.
       bodyWidget = InkWell(
         onTap: _enterEdit,
+        // Disable Material's default hoverColor — `_CommentRow` already
+        // paints a row-level hover background via MouseRegion +
+        // Container, and the InkWell overlay double-shaded the text
+        // body (visible as a second darker rectangle ~30 px inside the
+        // first one when the mouse crossed the body's left edge).
+        hoverColor: Colors.transparent,
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 2),
           child: Text(

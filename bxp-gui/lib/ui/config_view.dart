@@ -306,7 +306,13 @@ class _ConfigTreeScrollState extends State<_ConfigTreeScroll> {
   }
 
   Widget _buildTree(BuildContext context) {
-    return Scrollbar(
+    return Padding(
+      // Non-scrolling top + right gutter so the hover background of the
+      // topmost / rightmost visible row can never sit flush against the
+      // toolbar's bottom border or the vertical splitter (read as
+      // "hover leaks into the menu / expr-panel").
+      padding: const EdgeInsets.only(top: 6, right: 6),
+      child: Scrollbar(
       controller: _vCtrl,
       thumbVisibility: true,
       child: Scrollbar(
@@ -340,6 +346,7 @@ class _ConfigTreeScrollState extends State<_ConfigTreeScroll> {
           },
         ),
       ),
+    ),
     );
   }
 }
