@@ -8,8 +8,10 @@ import 'package:provider/provider.dart';
 
 import '../services/bxp_process_client.dart';
 import '../services/debug_settings.dart';
+import '../services/desktop_integration_service.dart';
 import '../services/diagnostic_log.dart';
 import '../store/trace_store.dart';
+import 'components/integrate_dialog.dart';
 import 'layout_defaults.dart';
 import 'theme/bxp_theme.dart';
 import 'theme/bxp_text.dart';
@@ -249,6 +251,7 @@ class _Body extends StatelessWidget {
         children: [
           for (final (title, rows) in sections)
             _SectionTable(title: title, rows: rows),
+          const _IntegrationSection(),
           const _DebugSection(),
         ],
       ),
@@ -350,6 +353,86 @@ Future<void> _toggleDiagnosticMode(BuildContext context, bool enable) async {
     return;
   }
   exit(0);
+}
+
+/// Linux AppImage desktop-integration toggle. Lets the user install or
+/// remove the `~/.local/share/applications/bxp-gui.desktop` entry and
+/// hicolor icons after the fact. Renders empty on Windows / macOS /
+/// non-AppImage builds, so the section header itself does not appear.
+class _IntegrationSection extends StatefulWidget {
+  const _IntegrationSection();
+
+  @override
+  State<_IntegrationSection> createState() => _IntegrationSectionState();
+}
+
+class _IntegrationSectionState extends State<_IntegrationSection> {
+  final DesktopIntegrationService _svc = DesktopIntegrationService();
+  bool _busy = false;
+
+  Future<void> _onUninstall() async {
+    setState(() => _busy = true);
+    await _svc.uninstall();
+    if (!mounted) return;
+    setState(() => _busy = false);
+  }
+
+  Future<void> _onInstall() async {
+    final store = context.read<TraceStore>();
+    setState(() => _busy = true);
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => IntegrateDialog(integration: _svc, prefs: store.prefs),
+    );
+    if (!mounted) return;
+    setState(() => _busy = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_svc.isAvailable()) return const SizedBox.shrink();
+    final t = context.bxpTheme;
+    final integrated = _svc.isIntegrated();
+    final desktopPath = _svc.describePaths().desktopFile;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(bottom: 4),
+            child: Text('DESKTOP INTEGRATION', style: BxpText.label(context)),
+          ),
+          Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: SelectableText(
+              integrated
+                  ? 'Installed → $desktopPath'
+                  : 'Not installed — BXP is not in the application menu.',
+              style: BxpText.body(
+                context,
+                color: t.textMuted,
+                size: BxpSize.xs,
+              ),
+            ),
+          ),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: integrated
+                ? OutlinedButton(
+                    onPressed: _busy ? null : _onUninstall,
+                    child: const Text('Uninstall integration'),
+                  )
+                : FilledButton(
+                    onPressed: _busy ? null : _onInstall,
+                    child: const Text('Install desktop integration'),
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 /// Interactive Debug section — master "Diagnostic mode" switch (overlay

@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
+import 'app_runtime.dart';
 import 'dev_trace.dart';
 
 // Pure-Dart cross-platform auto-updater.
@@ -193,17 +194,12 @@ class UpdaterService extends ChangeNotifier {
       // Linux is AppImage-only — the .deb / tarball release channels were
       // retired in v0.3.0. Builds running outside an AppImage surface a
       // "manual update required" message via the null return.
-      if (_isRunningAsAppImage()) {
+      if (isRunningAsAppImage()) {
         return RegExp(r'^bxp-desktop-linux-x86_64\.AppImage$');
       }
       return null;
     }
     return null;
-  }
-
-  static bool _isRunningAsAppImage() {
-    if (Platform.environment['APPIMAGE'] != null) return true;
-    return Platform.resolvedExecutable.contains('.mount_');
   }
 
   /// Download the platform installer, verify SHA-256 against SHA256SUMS,

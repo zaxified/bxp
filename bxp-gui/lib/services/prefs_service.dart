@@ -15,12 +15,20 @@ import 'dev_trace.dart';
 ///   macOS:   ~/Library/Application Support/bxp-gui/bxp-gui.json
 ///   Windows: %APPDATA%\bxp-gui\bxp-gui.json
 class PrefsService {
+  /// Override for the parent directory of `bxp-gui.json`. Tests pass a
+  /// temp dir; production uses the OS-canonical path resolved at
+  /// [load] time. Null means "resolve from HOME / APPDATA".
+  final String? _dirOverride;
+
+  PrefsService({String? dirOverride}) : _dirOverride = dirOverride;
+
   Map<String, dynamic> _data = {};
   late File _file;
 
   /// Resolve the OS-specific storage directory for bxp-gui preferences.
   /// Throws [UnsupportedError] on unsupported platforms (web, Fuchsia).
-  static String _resolveDir() {
+  String _resolveDir() {
+    if (_dirOverride != null) return _dirOverride;
     if (Platform.isLinux) {
       final home = Platform.environment['HOME'] ?? '.';
       return '$home/.local/share/bxp-gui';
@@ -111,6 +119,29 @@ class PrefsService {
   /// Persist a string list and flush to disk atomically via a tmp rename.
   Future<void> setStringList(String key, List<String> value) async {
     _data[key] = value;
+    await _flush();
+  }
+
+  /// Synchronous probe for whether the prefs file exists on disk.
+  ///
+  /// Used by the AppImage first-run integration flow to decide whether
+  /// to surface the integration dialog — when the prefs file is
+  /// missing, the user has not yet been through the dialog at all, so
+  /// it appears. After either choice the dialog calls [ensureExists]
+  /// which creates the file and silences the prompt on subsequent
+  /// launches.
+  bool prefsFileExists() => _file.existsSync();
+
+  /// Returns the canonical on-disk location of the prefs file. Used by
+  /// the integration dialog to disclose the path to the user before
+  /// creating it.
+  String get configFilePath => _file.path;
+
+  /// Ensures the prefs file exists on disk, writing the current
+  /// in-memory `_data` map (which may be empty for a fresh install).
+  /// Idempotent — no-op when the file is already present.
+  Future<void> ensureExists() async {
+    if (await _file.exists()) return;
     await _flush();
   }
 

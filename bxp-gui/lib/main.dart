@@ -6,9 +6,11 @@ import 'package:provider/provider.dart';
 import 'package:flutter/services.dart';
 import 'services/debug_binding.dart';
 import 'services/debug_settings.dart';
+import 'services/desktop_integration_service.dart';
 import 'services/diagnostic_log.dart';
 import 'services/updater_service.dart';
 import 'store/trace_store.dart';
+import 'ui/components/integrate_dialog.dart';
 import 'ui/components/update_dialog.dart';
 import 'ui/debug_overlay.dart';
 import 'ui/main_view.dart';
@@ -267,7 +269,9 @@ class BxpApp extends StatelessWidget {
               child: ZoomContainer(child: child ?? const SizedBox.shrink()),
             );
           },
-          home: const _UpdaterListener(child: _StartupGate()),
+          home: const _UpdaterListener(
+            child: _IntegrationListener(child: _StartupGate()),
+          ),
         );
       }),
     );
@@ -519,6 +523,76 @@ class _UpdaterListenerState extends State<_UpdaterListener> {
         builder: (_) => UpdateDialog(info: info),
       );
       _showing = false;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
+}
+
+/// Listens for TraceStore initialisation completion and, on Linux
+/// AppImage builds where `bxp-gui.json` does not yet exist on disk,
+/// surfaces the [IntegrateDialog] once. The dialog itself is
+/// responsible for creating the prefs file (via [PrefsService.ensureExists])
+/// on either choice, so the dialog only fires for a true fresh install.
+class _IntegrationListener extends StatefulWidget {
+  final Widget child;
+  const _IntegrationListener({required this.child});
+
+  @override
+  State<_IntegrationListener> createState() => _IntegrationListenerState();
+}
+
+class _IntegrationListenerState extends State<_IntegrationListener> {
+  final DesktopIntegrationService _integration = DesktopIntegrationService();
+  bool _checked = false;
+  TraceStore? _store;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final next = context.read<TraceStore>();
+    if (identical(next, _store)) return;
+    _store?.removeListener(_onStoreChanged);
+    _store = next;
+    _store?.addListener(_onStoreChanged);
+    _onStoreChanged();
+  }
+
+  @override
+  void dispose() {
+    _store?.removeListener(_onStoreChanged);
+    super.dispose();
+  }
+
+  void _onStoreChanged() {
+    if (_checked) return;
+    final store = _store;
+    if (store == null || !store.initialized) return;
+    _checked = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      // Windows / macOS / `flutter run` builds — nothing to do.
+      if (!_integration.isAvailable()) return;
+      // Already integrated — silently reconcile a stale Exec= path
+      // (user moved the AppImage) and stop.
+      if (_integration.isIntegrated()) {
+        await _integration.reconcileExecPath();
+        return;
+      }
+      // Prefs file already on disk → user previously went through the
+      // dialog (or this is a re-install over their settings dir).
+      // Either way: don't nag.
+      if (store.prefs.prefsFileExists()) return;
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => IntegrateDialog(
+          integration: _integration,
+          prefs: store.prefs,
+        ),
+      );
     });
   }
 

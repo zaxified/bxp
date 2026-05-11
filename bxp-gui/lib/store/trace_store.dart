@@ -906,6 +906,11 @@ class TraceStore extends ChangeNotifier {
 
   final PrefsService _prefs = PrefsService();
 
+  /// Read-only access to the prefs service. Used by the AppImage
+  /// first-run integration flow to probe `prefsFileExists()` and call
+  /// `ensureExists()` from outside the store.
+  PrefsService get prefs => _prefs;
+
   Future<void> _init() async {
     await _prefs.load();
     // Defensive reads — a corrupt/older prefs store should never crash
