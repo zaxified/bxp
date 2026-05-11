@@ -166,7 +166,7 @@ class DesktopIntegrationService {
   String _desktopFileContent(String execPath) => '[Desktop Entry]\n'
       'Type=Application\n'
       'Name=BXP\n'
-      'Comment=Broker eXchange Parser — convert broker exports to Wealthfolio\n'
+      'Comment=Broker eXchange Parser - convert broker exports to portfolio trackers\n'
       'Exec=$execPath %F\n'
       'Icon=bxp-gui\n'
       'Terminal=false\n'

@@ -8,6 +8,30 @@ into a `CHANGELOG.md` entry when their PRs land + a release is cut.
 `scripts/release-changelog.sh` generates the `CHANGELOG.md` entry
 automatically from `git log` when cutting a release.
 
+## v0.2.5
+
+### External template JSON files
+
+Today the conversion templates are baked into `bxp-cli` (and surfaced
+through `bxp-fmt --list-templates` / `--fetch-template`). Move them out
+to user-editable JSON files shipped alongside the binary so users can:
+
+- Add or tweak templates without rebuilding bxp-cli.
+- Ship per-broker variants without bloating the core binary.
+- Override built-in templates locally (user dir wins over bundle dir).
+
+Open design questions to resolve before implementation:
+
+- Discovery path order — bundled `templates/*.json` next to the binary,
+  then `~/.config/bxp/templates/` (Linux) / `%APPDATA%\bxp\templates\`
+  (Windows) / `~/Library/Application Support/bxp/templates/` (macOS)?
+- JSON5 or strict JSON for template files? (consistency with config
+  loader argues JSON5).
+- Migration path for the templates currently embedded in `bxp-cli` —
+  generate them out at release time vs ship as a one-shot extractor.
+- `--list-templates` / `--fetch-template` semantics when the same name
+  exists in bundle + user dir.
+
 ## v0.3.0
 
 ### Flip bridge proxy to default on Linux/macOS
@@ -33,6 +57,48 @@ Plan for v0.3.0:
   no regressions.
 - Audit the per-host Flutter shells (`linux/`, `macos/`) for any
   remaining `Process.start`-specific assumptions before the flip.
+
+### Auto-updater security audit & hardening
+
+Shipped in v0.2.4 (planned): switched `_verifyChecksum` to fail-closed —
+missing `SHA256SUMS`, fetch failure, asset not listed in SUMS, and hash
+mismatch all now refuse the install with a specific message. Release
+page link in the dialog remains as the user's escape hatch.
+
+Remaining hardening for v0.3.0 — treat as one cohesive audit pass:
+
+- **Sign `SHA256SUMS`** (biggest gap). Checksum-only verification fails
+  if a release is compromised wholesale (leaked PAT, account takeover):
+  attacker uploads matching installer + matching SUMS. Add minisign /
+  cosign signature (`SHA256SUMS.sig`) + embed public key in the binary;
+  verify signature before trusting the SUMS contents. Trade-off: key
+  storage + rotation policy on the release side.
+- **Release-time tests so a broken release fails loudly.** Post-release
+  smoke job in `.github/workflows/release.yml` that fetches
+  `releases/latest`, asserts `SHA256SUMS` exists, and asserts every
+  installer asset (`bxp-desktop-{windows-x86_64.exe, macos-arm64.dmg,
+linux-x86_64.AppImage}`) has a matching line. Local gate inside
+  `scripts/release-03-checksums.sh` to re-verify hashes + count lines
+  before upload. Dart unit test for `UpdaterService` covering all four
+  `_ChecksumResult` variants.
+- **Shell injection surface in macOS installer dispatch.**
+  `_installMacOS` uses `bash -c` with `$dmgPath` interpolated; today
+  the asset-name regex blocks anything weird, but defensively switch
+  to `Process.run('hdiutil', [...])` with argument arrays, or validate
+  `assetName` against `[A-Za-z0-9._-]+` before use.
+- **Path-traversal hardening on `assetName`.** `info.assetName` comes
+  from the GitHub API and is joined into `tmpDir`; wrap with
+  `p.basename(...)` so a malformed asset name can't escape the temp
+  directory.
+- **TOCTOU window on the AppImage path.** `_installLinuxAppImage`
+  re-reads the verified file with `readAsBytes` after the hash check,
+  reopening a swap window in `/tmp`. Either reuse the bytes already
+  read during verification or stream both the hash and the write from
+  one `RandomAccessFile`.
+
+Track as a single "auto-update hardening" workstream — these layer on
+each other (e.g. signed SUMS removes the need for parts of the CI
+test, path validation removes part of the shell-injection concern).
 
 ## Later (no specific version)
 

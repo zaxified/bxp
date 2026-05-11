@@ -90,7 +90,7 @@ BEGIN
         BLOCK "040904e4"
         BEGIN
             VALUE "CompanyName", "io.github.bxp" "\0"
-            VALUE "FileDescription", "BXP" "\0"
+            VALUE "FileDescription", "Broker eXchange Parser - convert broker exports to portfolio trackers" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
             VALUE "InternalName", "bxp-gui" "\0"
             VALUE "LegalCopyright", "Apache-2.0 licensed. See LICENCE.md." "\0"

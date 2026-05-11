@@ -234,17 +234,29 @@ class UpdaterService extends ChangeNotifier {
       );
       await _downloadFile(info.assetUrl!, assetPath, onProgress);
 
-      // Verify checksum if SHA256SUMS is published; otherwise log and
-      // proceed (release may be temporarily missing the sums file).
-      if (info.checksumUrl != null) {
-        final ok = await _verifyChecksum(assetPath, info);
-        if (!ok) {
-          _lastError = 'Checksum mismatch — refusing to install';
-          notifyListeners();
-          return false;
-        }
-      } else {
+      // Fail-closed: every verification failure refuses the install and
+      // surfaces a specific message. The release page link in the dialog
+      // is the user's escape hatch when the release itself is broken.
+      if (info.checksumUrl == null) {
         devTrace('updater.checksum.missing', {'asset': info.assetName ?? ''});
+        _lastError = 'Release is missing SHA256SUMS — refusing to install. '
+            'Please update manually from the release page.';
+        notifyListeners();
+        return false;
+      }
+      final result = await _verifyChecksum(assetPath, info);
+      if (result != _ChecksumResult.ok) {
+        _lastError = switch (result) {
+          _ChecksumResult.fetchFailed =>
+            'Could not fetch SHA256SUMS — refusing to install.',
+          _ChecksumResult.assetNotListed =>
+            'Asset is not listed in SHA256SUMS — refusing to install.',
+          _ChecksumResult.mismatch =>
+            'Checksum mismatch — refusing to install.',
+          _ChecksumResult.ok => '',
+        };
+        notifyListeners();
+        return false;
       }
 
       // Dispatch.
@@ -307,17 +319,15 @@ class UpdaterService extends ChangeNotifier {
   /// Download the SHA256SUMS file, locate the line for [info.assetName], and
   /// compare its hash against the locally-downloaded file at [filePath].
   ///
-  /// Returns true on a match, or when the checksum file can't be fetched /
-  /// the asset name isn't in the file — both are treated as "proceed" to
-  /// avoid blocking users on transient infrastructure hiccups. Returns false
-  /// only when both the expected hash and the actual hash are available and
-  /// they differ (genuine mismatch → refuse install).
+  /// Fail-closed: every non-`ok` result refuses the install. The caller maps
+  /// each variant to a user-visible message.
   ///
   /// SHA256SUMS format is the standard `sha256sum` output:
   ///   `<64-hex-chars>  <filename>`  (two spaces as separator)
-  Future<bool> _verifyChecksum(String filePath, UpdateInfo info) async {
-    // Fetch SHA256SUMS, find line matching info.assetName, compare with
-    // computed hash.
+  Future<_ChecksumResult> _verifyChecksum(
+    String filePath,
+    UpdateInfo info,
+  ) async {
     final client = HttpClient();
     String body;
     try {
@@ -326,9 +336,12 @@ class UpdaterService extends ChangeNotifier {
       final res = await req.close();
       if (res.statusCode != 200) {
         devTrace('updater.checksum.fetch', {'status': res.statusCode});
-        return true; // Unable to verify — proceed defensively.
+        return _ChecksumResult.fetchFailed;
       }
       body = await res.transform(utf8.decoder).join();
+    } catch (e) {
+      devTrace('updater.checksum.fetch-error', {'error': '$e'});
+      return _ChecksumResult.fetchFailed;
     } finally {
       client.close(force: true);
     }
@@ -350,22 +363,20 @@ class UpdaterService extends ChangeNotifier {
       }
     }
     if (expected == null) {
-      // Asset name not found in the sums file — possible if the release was
-      // published without this platform's installer. Proceed without blocking.
       devTrace('updater.checksum.no-line', {'asset': info.assetName ?? ''});
-      return true;
+      return _ChecksumResult.assetNotListed;
     }
     // Read the local file in full — installers are 50–200 MB but this is
     // a background operation. Streaming SHA-256 would save memory but adds
     // complexity for a one-time operation.
     final bytes = await File(filePath).readAsBytes();
     final actual = sha256.convert(bytes).toString().toLowerCase();
-    final ok = expected == actual;
-    if (!ok) {
+    if (expected != actual) {
       devTrace('updater.checksum.mismatch',
           {'expected': expected, 'actual': actual});
+      return _ChecksumResult.mismatch;
     }
-    return ok;
+    return _ChecksumResult.ok;
   }
 
   Future<bool> _installWindows(String assetPath) async {
@@ -458,6 +469,8 @@ open -n "\$DEST/\$(basename "\$APP")"
     return (a as String).compareTo(b as String);
   }
 }
+
+enum _ChecksumResult { ok, fetchFailed, assetNotListed, mismatch }
 
 class UpdateInfo {
   final String version;     // stripped of "v" prefix
