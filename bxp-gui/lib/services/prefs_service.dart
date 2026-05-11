@@ -1,10 +1,9 @@
 import 'dart:convert';
 import 'dart:io';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'dev_trace.dart';
 
 /// User-prefs persistence backed by a visible JSON file at a canonical OS
-/// path. Replaces the hidden, plugin-managed `shared_preferences` store.
+/// path.
 ///
 /// Path resolution is deliberately manual (HOME / APPDATA env vars) rather
 /// than `path_provider.getApplicationSupportDirectory()` — the latter
@@ -15,24 +14,9 @@ import 'dev_trace.dart';
 ///   Linux:   ~/.local/share/bxp-gui/bxp-gui.json
 ///   macOS:   ~/Library/Application Support/bxp-gui/bxp-gui.json
 ///   Windows: %APPDATA%\bxp-gui\bxp-gui.json
-///
-/// On first launch after upgrade from a shared_preferences-based build, the
-/// 5 known keys are migrated one-shot into the new file and the legacy
-/// store is cleared. Migration code lives here and is removed in v0.3.0.
 class PrefsService {
   Map<String, dynamic> _data = {};
   late File _file;
-
-  /// Keys copied from the legacy `shared_preferences` store during the v0.2
-  /// one-shot migration. Ordering matches historical preference of first-
-  /// written keys, not read frequency — stable between migration runs.
-  static const _migrationKeys = <String>[
-    'bxp-ui.theme',
-    'bxp-ui.textScheme',
-    'bxp-gui.zoom',
-    'bxp-ui.recent',
-    'bxp-gui.customPlaces',
-  ];
 
   /// Resolve the OS-specific storage directory for bxp-gui preferences.
   /// Throws [UnsupportedError] on unsupported platforms (web, Fuchsia).
@@ -56,9 +40,8 @@ class PrefsService {
   ///
   /// Must be called once at startup (before any get/set). Creates the
   /// parent directory if it does not yet exist. If the file is absent
-  /// (first launch after install), attempts a one-shot migration from the
-  /// legacy `shared_preferences` store; a missing or empty legacy store
-  /// is silently skipped, leaving `_data` empty and starting fresh.
+  /// (fresh install) `_data` stays empty and the app starts with
+  /// default settings.
   ///
   /// A corrupt/partial JSON file is treated as empty (parse exception is
   /// swallowed) so a bad byte in the prefs file never prevents app launch.
@@ -74,12 +57,7 @@ class PrefsService {
         devTrace('prefs.load.error', {'error': '$e'});
         _data = {};
       }
-      return;
     }
-    // File doesn't exist yet — try to migrate from the old shared_preferences
-    // plugin store. Creates the new file on success; no-ops when the old
-    // store is empty (fresh install).
-    await _maybeMigrateFromSharedPreferences();
   }
 
   /// Returns the stored string for [key], or null when absent or not a string.
@@ -134,39 +112,6 @@ class PrefsService {
   Future<void> setStringList(String key, List<String> value) async {
     _data[key] = value;
     await _flush();
-  }
-
-  /// One-shot migration from the legacy `shared_preferences` plugin store.
-  ///
-  /// Copies all recognised keys into `_data`, writes the new JSON file, then
-  /// clears the old store so subsequent launches skip this code path entirely.
-  /// The clear happens only when at least one key was found so fresh installs
-  /// (empty legacy store) don't trigger a spurious clear.
-  ///
-  /// Swallows all exceptions — the migration is best-effort, and a failure
-  /// here must never block the app from starting. If migration fails silently,
-  /// the user just loses their old preferences (theme/recent etc.) and starts
-  /// fresh; that's better than a crash.
-  Future<void> _maybeMigrateFromSharedPreferences() async {
-    try {
-      final p = await SharedPreferences.getInstance();
-      var migrated = 0;
-      for (final k in _migrationKeys) {
-        final v = p.get(k);
-        if (v != null) {
-          _data[k] = v;
-          migrated++;
-        }
-      }
-      if (migrated > 0) {
-        await _flush();
-        // Clear the old store so subsequent launches don't re-migrate.
-        await p.clear();
-        devTrace('prefs.migrated', {'keys': migrated});
-      }
-    } catch (e) {
-      devTrace('prefs.migrate.error', {'error': '$e'});
-    }
   }
 
   /// Write the in-memory `_data` map to disk atomically.

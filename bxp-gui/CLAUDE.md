@@ -147,11 +147,6 @@ the bundle-id and would couple the prefs path to the Phase 5 identifier
 rename. Keeping it bundle-id-independent means upgrades across
 identifier changes don't lose user state.
 
-`load()` runs a one-shot migration from the legacy `shared_preferences`
-plugin store on first launch after the v0.2 upgrade and clears the old
-store. Migration code is removed in v0.3; the `shared_preferences`
-pubspec dep follows.
-
 ## Auto-updater
 
 `UpdaterService` ([lib/services/updater_service.dart](lib/services/updater_service.dart))

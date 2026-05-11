@@ -15,11 +15,6 @@ dependencies:
   path: ^1.9.0
   path_provider: ^2.1.5
   provider: ^6.1.5+1
-  # Used only by PrefsService._maybeMigrateFromSharedPreferences during the
-  # v0.1 → v0.2 transition. Remove in v0.3.0 once existing installs have had
-  # one launch under v0.2 to migrate their hidden plugin store into the new
-  # visible bxp-gui.json file.
-  shared_preferences: ^2.5.5
   split_view: ^3.2.2
   package_info_plus: ^10.0.0
   pluto_grid: ^8.1.0

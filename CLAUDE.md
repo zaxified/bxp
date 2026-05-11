@@ -128,9 +128,7 @@ to a visible JSON file at a canonical OS path:
 - Windows: `%APPDATA%\bxp-gui\bxp-gui.json`
 
 The file is auto-created on first write. Implementation: `bxp-gui/lib/
-services/prefs_service.dart`. A one-shot migration from the legacy
-`shared_preferences` plugin store runs on first launch after the v0.2
-upgrade and clears the old store; the migration code is removed in v0.3.
+services/prefs_service.dart`.
 
 ## Coding conventions
 
