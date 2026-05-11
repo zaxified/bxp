@@ -73,13 +73,22 @@ Download console package for your OS [`releases`](https://github.com/zaxified/bx
 
 ### 2. Desktop gui debugger
 
-Download desktop package for your OS [`releases`](https://github.com/zaxified/bxp/releases)
+One artefact per platform, downloadable via stable GitHub URLs that
+always point at the latest version:
 
-| OS      | Format                         |
-| ------- | ------------------------------ |
-| Linux   | `.AppImage`, `.deb`, `.tar.gz` |
-| macOS   | `.dmg` (Apple Silicon)         |
-| Windows | `setup.exe` (NSIS installer)   |
+```bash
+# Linux (AppImage)
+sudo apt install libfuse2t64   # libfuse2 on older distros
+wget https://github.com/zaxified/bxp/releases/latest/download/bxp-desktop-linux-x86_64.AppImage
+chmod +x bxp-desktop-linux-x86_64.AppImage
+./bxp-desktop-linux-x86_64.AppImage   # first launch prompts to install menu + icons
+```
+
+Direct downloads:
+
+- Linux — [`bxp-desktop-linux-x86_64.AppImage`](https://github.com/zaxified/bxp/releases/latest/download/bxp-desktop-linux-x86_64.AppImage)
+- macOS — [`bxp-desktop-macos-arm64.dmg`](https://github.com/zaxified/bxp/releases/latest/download/bxp-desktop-macos-arm64.dmg) (Apple Silicon)
+- Windows — [`bxp-desktop-windows-x86_64.exe`](https://github.com/zaxified/bxp/releases/latest/download/bxp-desktop-windows-x86_64.exe) (NSIS installer)
 
 ## Documentation
 

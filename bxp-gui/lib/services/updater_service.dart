@@ -6,7 +6,6 @@ import 'package:flutter/foundation.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
-import 'package:url_launcher/url_launcher.dart';
 import 'dev_trace.dart';
 
 // Pure-Dart cross-platform auto-updater.
@@ -21,7 +20,10 @@ import 'dev_trace.dart';
 //   Windows: `setup.exe /S` + exit(0); the NSIS post-install relaunches.
 //   macOS:   mount DMG → copy `.app` → unmount → `open -n` → exit(0).
 //   Linux (AppImage): atomic-replace the running AppImage + exec.
-//   Linux (.deb / tarball): launch the GitHub release page; manual install.
+//
+// Linux non-AppImage builds and macOS Intel surface a "manual update
+// required" message — the only supported Linux distribution channel is
+// the AppImage shipped from the GitHub release.
 //
 // No plugins — uses dart:io HttpClient + Process.run only.
 class UpdaterService extends ChangeNotifier {
@@ -180,18 +182,19 @@ class UpdaterService extends ChangeNotifier {
 
   RegExp? _platformAssetPattern() {
     if (Platform.isWindows) {
-      return RegExp(r'^bxp-desktop-.*-windows-x86_64-setup\.exe$');
+      return RegExp(r'^bxp-desktop-windows-x86_64\.exe$');
     }
     if (Platform.isMacOS) {
-      // Only Apple Silicon (aarch64) DMGs are produced by the release
-      // workflow; Intel Macs fall through to the release-page redirect.
-      return RegExp(r'^bxp-desktop-.*-macos-aarch64\.dmg$');
+      // Only Apple Silicon (arm64) DMGs are produced by the release
+      // workflow; Intel Macs fall through to the manual-update message.
+      return RegExp(r'^bxp-desktop-macos-arm64\.dmg$');
     }
     if (Platform.isLinux) {
-      // AppImage path is preferred when running as an AppImage; otherwise
-      // we fall back to the release page (no asset auto-install).
+      // Linux is AppImage-only — the .deb / tarball release channels were
+      // retired in v0.3.0. Builds running outside an AppImage surface a
+      // "manual update required" message via the null return.
       if (_isRunningAsAppImage()) {
-        return RegExp(r'^bxp-desktop-.*-linux-x86_64\.AppImage$');
+        return RegExp(r'^bxp-desktop-linux-x86_64\.AppImage$');
       }
       return null;
     }
@@ -216,13 +219,13 @@ class UpdaterService extends ChangeNotifier {
     if (info == null) return false;
     _lastError = null;
 
-    // Linux non-AppImage: just open the release page.
+    // No matching asset for this platform/host combination — e.g. Linux
+    // build running outside an AppImage, or macOS Intel. Surface a clear
+    // message in the dialog rather than silently dispatching elsewhere.
     if (info.assetUrl == null) {
-      if (info.htmlUrl.isNotEmpty) {
-        await launchUrl(Uri.parse(info.htmlUrl));
-        return true;
-      }
-      _lastError = 'No installer asset for this platform';
+      _lastError =
+          'No installer for this platform — please update manually from '
+          'the release page.';
       notifyListeners();
       return false;
     }

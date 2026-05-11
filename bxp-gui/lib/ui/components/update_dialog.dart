@@ -23,8 +23,6 @@ class _UpdateDialogState extends State<UpdateDialog> {
     final ok = await svc.downloadAndInstall();
     if (!mounted) return;
     if (ok) {
-      // Most platforms exit immediately to let the installer take over;
-      // give Linux non-AppImage (release-page launch) a beat then close.
       Navigator.of(context).pop();
       // Best-effort exit so the running .exe / .app can be replaced. The
       // delay gives the Navigator.pop frame time to paint before we kill
@@ -77,6 +75,15 @@ class _UpdateDialogState extends State<UpdateDialog> {
                 const SizedBox(height: 6),
                 const Text('Installing — the app will restart.'),
               ],
+              if (widget.info.assetUrl == null) ...[
+                const SizedBox(height: 8),
+                const Text(
+                  'No installer for this platform — please update '
+                  'manually from the release page:',
+                ),
+                const SizedBox(height: 4),
+                SelectableText(widget.info.htmlUrl),
+              ],
               if (err != null) ...[
                 const SizedBox(height: 8),
                 Text(err, style: const TextStyle(color: Colors.red)),
@@ -90,13 +97,14 @@ class _UpdateDialogState extends State<UpdateDialog> {
           onPressed: _installing ? null : _onLater,
           child: const Text('Later'),
         ),
-        // Label changes based on whether UpdaterService could resolve a
-        // native installer for this platform. When `assetUrl` is null (e.g.
-        // Linux .deb without an AppImage build), the button opens the GitHub
-        // release page instead of attempting an in-place self-install.
         FilledButton(
-          onPressed: _installing ? null : _onUpdate,
-          child: Text(widget.info.assetUrl == null ? 'Open page' : 'Update'),
+          // Disabled when no native installer is available for this
+          // platform — the user must follow the release-page link shown
+          // in the dialog body.
+          onPressed: (_installing || widget.info.assetUrl == null)
+              ? null
+              : _onUpdate,
+          child: const Text('Update'),
         ),
       ],
     );

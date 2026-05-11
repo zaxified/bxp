@@ -83,23 +83,7 @@ build_linux() {
     cp "$MONO_ROOT/bxp-gui-bridge/zig-out/lib/libbxp-gui-bridge.so" \
        "$appdir/libbxp-gui-bridge.so"
 
-    # Linux-specific extras. icons/ ships all four variants so users can
-    # repoint their shortcut's Icon= line (.desktop) at a different one.
-    mkdir -p "$appdir/icons"
-    cp "$MONO_ROOT/resources/icons"/*.png "$appdir/icons/"
-    cp "$MONO_ROOT/resources/desktop/bxp-gui.desktop" "$appdir/bxp-gui.desktop"
-    cp "$MONO_ROOT/resources/desktop/readme.md"       "$appdir/readme.md"
-
-    # ── (a) plain tarball ──
-    local tgz="$OUTDIR/bxp-desktop-${VERSION}-linux-x86_64.tar.gz"
-    tar -czf "$tgz" -C "$stage" bxp-desktop
-    echo "  → $tgz"
-
-    # ── (b) AppImage ──
     _build_appimage "$appdir" "$stage"
-
-    # ── (c) .deb ──
-    _build_deb "$appdir" "$stage"
 
     rm -rf "$stage"
     restore_native_companions
@@ -128,14 +112,24 @@ _build_appimage() {
     tool=$(_appimagetool) || return 1
 
     local appdir="$stage/AppDir"
-    mkdir -p "$appdir/usr/bin" "$appdir/usr/lib" "$appdir/usr/share/icons/hicolor/256x256/apps"
+    mkdir -p "$appdir/usr/bin" "$appdir/usr/lib"
 
     # Layout per AppImage convention.
     cp -R "$appdir_src"/* "$appdir/usr/bin/"
     cp "$GUI_ROOT/linux/bxp-gui.png"                    "$appdir/bxp-gui.png"
-    cp "$GUI_ROOT/linux/bxp-gui.png"                    \
-        "$appdir/usr/share/icons/hicolor/256x256/apps/bxp-gui.png"
     cp "$MONO_ROOT/resources/desktop/bxp-gui.desktop"   "$appdir/bxp-gui.desktop"
+
+    # Ship the full hicolor icon tree inside the AppImage so the first-run
+    # desktop-integration logic in bxp-gui can copy all sizes into
+    # ~/.local/share/icons/hicolor/ — no sudo, user-owned destinations only.
+    for size in 16 32 48 64 128 256 512 1024; do
+        local src="$GUI_ROOT/linux/icons/hicolor/${size}x${size}/apps/bxp-gui.png"
+        local dst="$appdir/usr/share/icons/hicolor/${size}x${size}/apps/bxp-gui.png"
+        if [ -f "$src" ]; then
+            mkdir -p "$(dirname "$dst")"
+            cp "$src" "$dst"
+        fi
+    done
 
     # AppRun: cd into usr/bin and exec the binary.
     cat > "$appdir/AppRun" <<'EOF'
@@ -146,45 +140,8 @@ exec "$HERE/usr/bin/bxp-gui" "$@"
 EOF
     chmod +x "$appdir/AppRun"
 
-    local out="$OUTDIR/bxp-desktop-${VERSION}-linux-x86_64.AppImage"
+    local out="$OUTDIR/bxp-desktop-linux-x86_64.AppImage"
     ARCH=x86_64 "$tool" --no-appstream "$appdir" "$out" >/dev/null
-    echo "  → $out"
-}
-
-_build_deb() {
-    local appdir_src=$1
-    local stage=$2
-    local pkg="$stage/deb/bxp-gui_${VERSION_BARE}_amd64"
-    mkdir -p "$pkg/DEBIAN" "$pkg/opt/bxp-gui" "$pkg/usr/bin" \
-             "$pkg/usr/share/applications"
-
-    # Payload under /opt to avoid clashing with system FHS dirs.
-    cp -R "$appdir_src"/* "$pkg/opt/bxp-gui/"
-
-    # /usr/bin shim so users can run `bxp-gui` from the terminal.
-    ln -sf /opt/bxp-gui/bxp-gui "$pkg/usr/bin/bxp-gui"
-
-    # Desktop entry + multi-size hicolor icons.
-    cp "$MONO_ROOT/resources/desktop/bxp-gui.desktop" \
-       "$pkg/usr/share/applications/bxp-gui.desktop"
-    for size in 16 32 48 64 128 256 512 1024; do
-        local src="$GUI_ROOT/linux/icons/hicolor/${size}x${size}/apps/bxp-gui.png"
-        local dst="$pkg/usr/share/icons/hicolor/${size}x${size}/apps/bxp-gui.png"
-        if [ -f "$src" ]; then
-            mkdir -p "$(dirname "$dst")"
-            cp "$src" "$dst"
-        fi
-    done
-
-    # DEBIAN metadata — substitute version into the templated control file.
-    sed "s/^Version: .*/Version: $VERSION_BARE/" \
-        "$GUI_ROOT/installer/debian/control" > "$pkg/DEBIAN/control"
-    cp "$GUI_ROOT/installer/debian/postinst" "$pkg/DEBIAN/postinst"
-    cp "$GUI_ROOT/installer/debian/prerm"    "$pkg/DEBIAN/prerm"
-    chmod 0755 "$pkg/DEBIAN/postinst" "$pkg/DEBIAN/prerm"
-
-    local out="$OUTDIR/bxp-desktop-${VERSION}-linux-x86_64.deb"
-    dpkg-deb --build --root-owner-group "$pkg" "$out" >/dev/null
     echo "  → $out"
 }
 
@@ -226,7 +183,7 @@ build_windows() {
         -DSTAGEDIR="$appdir" \
         -DOUTDIR="$OUTDIR" \
         "$GUI_ROOT/installer/bxp-desktop.nsi" >/dev/null
-    echo "  → $OUTDIR/bxp-desktop-${VERSION}-windows-x86_64-setup.exe"
+    echo "  → $OUTDIR/bxp-desktop-windows-x86_64.exe"
 
     rm -rf "$stage"
     restore_native_companions
@@ -235,7 +192,7 @@ build_windows() {
 # ─── macOS branch ───────────────────────────────────────────────────────
 
 build_macos() {
-    echo "Building bxp-desktop ${VERSION} for macos-aarch64..."
+    echo "Building bxp-desktop ${VERSION} for macos-arm64..."
     build_companions "aarch64-macos"
     build_bridge "aarch64-macos"
 
@@ -262,7 +219,7 @@ build_macos() {
         echo "  ! create-dmg not found — skipping DMG packaging"
         return 0
     fi
-    local out="$OUTDIR/bxp-desktop-${VERSION}-macos-aarch64.dmg"
+    local out="$OUTDIR/bxp-desktop-macos-arm64.dmg"
     create-dmg \
         --volname "BXP" \
         --window-size 600 400 \
@@ -289,4 +246,4 @@ esac
 
 echo ""
 echo "Done. Packages in releases/desktop/:"
-ls -lh "$OUTDIR"/bxp-desktop-"${VERSION}"-* 2>/dev/null || echo "  (no artifacts produced)"
+ls -lh "$OUTDIR"/bxp-desktop-* 2>/dev/null || echo "  (no artifacts produced)"

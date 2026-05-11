@@ -3,10 +3,12 @@
 ; Build with: makensis -DAPPVERSION=0.2.0 -DVERSIONTAG=v0.2.0 \
 ;             -DSTAGEDIR=path\to\stage bxp-desktop.nsi
 ;
-; Outputs: bxp-desktop-<VERSIONTAG>-windows-x86_64-setup.exe in OUTDIR.
+; Outputs: bxp-desktop-windows-x86_64.exe in OUTDIR. The artifact name is
+; version-less so the README can link to a stable GitHub release URL
+; (releases/latest/download/bxp-desktop-windows-x86_64.exe); the version
+; lives in the release tag and in the NSIS Version property.
 ; APPVERSION is the bare SemVer string (NSIS Version property);
-; VERSIONTAG is the release-tag-shaped string used in artifact filenames
-; so they line up with the Linux/macOS bundles (bxp-desktop-v0.2.0-...).
+; VERSIONTAG is the release-tag-shaped string used in install metadata.
 ;
 ; The installer is silent-capable via /S — UpdaterService relies on this
 ; to perform unattended self-updates.
@@ -37,7 +39,7 @@
 !define INSTALLDIR_DEFAULT "$PROGRAMFILES64\bxp-gui"
 
 Name "${APPNAME}"
-OutFile "${OUTDIR}\bxp-desktop-${VERSIONTAG}-windows-x86_64-setup.exe"
+OutFile "${OUTDIR}\bxp-desktop-windows-x86_64.exe"
 InstallDir "${INSTALLDIR_DEFAULT}"
 RequestExecutionLevel admin
 SetCompressor /SOLID lzma

@@ -26,16 +26,33 @@ workflow and bxp-fmt-specific sections.
 
 ## Installation
 
-| Platform | Format | Install |
-| --- | --- | --- |
-| Linux | `.AppImage` | Mark executable, double-click |
-| Linux | `.deb` | `sudo apt install ./bxp-desktop-*.deb` |
-| Linux | `.tar.gz` | Extract, run `./bxp-gui` |
-| Windows | `setup.exe` | Run installer, follow prompts |
-| macOS | `.dmg` | Open, drag `bxp-gui.app` to Applications |
+Each release ships one artefact per platform, downloadable via stable
+GitHub URLs that always point at the latest version:
 
-On macOS the first launch must be **right-click → Open** so Gatekeeper
-allows the unsigned app. Subsequent launches start normally.
+```bash
+# Linux (AppImage)
+sudo apt install libfuse2t64   # libfuse2 on older distros
+wget https://github.com/zaxified/bxp/releases/latest/download/bxp-desktop-linux-x86_64.AppImage
+chmod +x bxp-desktop-linux-x86_64.AppImage
+./bxp-desktop-linux-x86_64.AppImage   # first launch prompts to install menu + icons
+
+# Windows
+# Download bxp-desktop-windows-x86_64.exe from
+#   https://github.com/zaxified/bxp/releases/latest
+# Run the installer; SmartScreen may warn — "More info" → "Run anyway".
+
+# macOS (Apple Silicon)
+# Download bxp-desktop-macos-arm64.dmg from
+#   https://github.com/zaxified/bxp/releases/latest
+# Open it, drag bxp-gui.app to /Applications, first launch:
+# right-click → Open to bypass Gatekeeper.
+```
+
+The Linux AppImage is the only Linux distribution channel; `.deb` and
+plain tarballs were retired in v0.3.0 to keep one update path. On
+first launch the AppImage offers to write `~/.local/share/applications/bxp-gui.desktop`
+plus `hicolor` icons so the app shows up in the system menu — no
+`sudo` needed, reversible from the Settings drawer.
 
 ---
 
@@ -199,20 +216,19 @@ Delete the file to reset everything to defaults.
 
 ## Auto-updates
 
-The app polls `github.com/zaxified/bxp` for new releases 5 seconds after
-launch and every 6 hours thereafter. When a newer version is available a
-dialog offers a one-click update that downloads, SHA256-verifies, and
-installs the matching native installer:
+The app polls `github.com/zaxified/bxp` for new releases 5 seconds
+after launch and every 6 hours thereafter. When a newer version is
+available a dialog offers a one-click update that downloads,
+SHA256-verifies, and dispatches to the platform-native installer:
 
 - **Windows** — silent NSIS reinstall, GUI relaunches automatically.
-- **macOS** — DMG mount, copy to `~/Applications/`, relaunch.
+- **macOS** — DMG mount, copy to `/Applications/`, relaunch.
 - **Linux AppImage** — atomic in-place replace + re-`exec()`.
-- **Linux .deb / tarball** — opens the release page in a browser
-  (in-place self-update only works on AppImage).
 
-The updater is skipped during development builds. Intel Macs always
-fall through to the release page since the workflow only produces ARM
-DMGs.
+The updater is skipped during development builds. Linux builds running
+outside an AppImage (rare — only when someone runs `flutter run`
+locally) and macOS Intel surface a "manual update required" message
+with the release page URL.
 
 ---
 
