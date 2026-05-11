@@ -8,69 +8,31 @@ into a `CHANGELOG.md` entry when their PRs land + a release is cut.
 `scripts/release-changelog.sh` generates the `CHANGELOG.md` entry
 automatically from `git log` when cutting a release.
 
-## v0.2.3
-
-### Bridge backpressure between native readers and Dart
-
-`bxp-gui-bridge`'s streaming path has no flow control between the Zig
-reader threads (which heap-allocate one batch per ~100 stdout lines)
-and the Dart event loop that consumes them. When Dart stutters (long
-frame, GC pause, user clicks something that triggers a heavy rebuild)
-the bridge keeps producing batches and they queue up in Dart's port,
-each holding a malloc'd buffer. On a pathologically large trace
-(100 k+ rows) on slow hardware, RSS can balloon before Dart catches up.
-
-Real-world repro hasn't surfaced — current bxp-cli output rates and
-typical dataset sizes don't exercise it. Plan: defer until we have a
-concrete profile showing the problem, then implement a ping-pong
-acknowledgement (Dart calls a `bridge_ack(handle, n_bytes)` after each
-batch; bridge throttles when ack lag exceeds a high-water mark). Less
-invasive: bound the in-flight queue size by blocking the native reader
-on a `std.Thread.Semaphore` when N un-acked batches are outstanding.
-
-Touches `bxp-gui-bridge/src/main.zig`,
-`bxp-gui/lib/services/bridge_client.dart`.
-
-### Dependency refresh (bxp-gui)
-
-`flutter pub outdated` on 2026-05-10 surfaced 13 stale packages, of
-which only two are actionable without a Flutter SDK bump:
-
-- `vm_service` 15.1.0 → 15.2.0 — lockfile-only, just `flutter pub upgrade`.
-- `package_info_plus` 8.3.1 → 10.1.0 — major bump in `pubspec.yaml`,
-  pulls `package_info_plus_platform_interface` 3→4 and `win32` 5→6
-  transitively. Used by `version_service.dart`; smoke-test the in-app
-  version display on all three hosts after upgrade.
-
-The remaining 9 (`analyzer`, `_fe_analyzer_shared`, `test`, `meta`,
-`matcher`, `test_api`, `test_core`, `native_toolchain_c`, `vector_math`)
-are pinned by Flutter 3.41.9 and will move with the next Flutter SDK
-bump.
-
 ## v0.3.0
 
-Drop the migration scaffolding once everyone has had one launch under
-v0.2.x to migrate their hidden plugin store into `bxp-gui.json`.
+### Flip bridge proxy to default on Linux/macOS
 
-- Remove `shared_preferences: ^2.5.5` dep from `bxp-gui/pubspec.yaml`
-- Delete `_maybeMigrateFromSharedPreferences` from `prefs_service.dart`
-- Simplify `PrefsService.load()` (no migration branch)
+Foundation shipped in v0.2.3: `bxp-gui-bridge.{so,dylib}` builds and
+ships alongside `bxp-gui` on all three hosts; `bridge_eval_expr` /
+`bridge_eval_expr_trace` already run in-process on every platform; the
+subprocess proxy path (`bridge_run` / `bridge_run_streaming` for
+spawning `bxp-cli` / `bxp-fmt`) compiles and works cross-platform
+behind a `BXP_FORCE_BRIDGE_PROXY=1` smoke gate. Windows has used the
+bridge proxy as its mandatory and only path since v0.2.2 to sidestep
+dart-lang/sdk#1727 (Win pipe truncation) and engine-stderr capture
+under `/SUBSYSTEM:WINDOWS`.
 
-### Cross-platform subprocess bridge
+Plan for v0.3.0:
 
-bxp-gui currently uses `bxp-gui-bridge.dll` (a Zig FFI shim hosting
-the bxp-cli / bxp-fmt subprocess pipeline) on Windows only — Linux and
-macOS still call `Process.start` directly. The Windows-only fork
-shipped in v0.2.2 to work around event-loop hangs on stdout drain
-(dart-lang/sdk#1727) and the lack of clean engine stderr capture under
-`/SUBSYSTEM:WINDOWS`.
-
-Plan: extract the bridge as a cross-platform native plugin so all
-three hosts share one subprocess code path. Remove the
-platform-conditional `Process.start` branches and the binary-lookup
-fork in `bxp_process_client.dart`. Touches the bridge native sources,
-`bxp_process_client.dart`, and the per-platform Flutter shells
-(`linux/`, `macos/`, `windows/`).
+- Make the bridge proxy the default on Linux/macOS, removing the
+  `Platform.isWindows` branches in
+  [`bxp_process_client.dart`](../bxp-gui/lib/services/bxp_process_client.dart)
+  and the `BXP_FORCE_BRIDGE_PROXY` opt-in.
+- Drop the `Process.start` code path entirely once the bridge proxy
+  has shipped in at least one production release on Linux/macOS with
+  no regressions.
+- Audit the per-host Flutter shells (`linux/`, `macos/`) for any
+  remaining `Process.start`-specific assumptions before the flip.
 
 ## Later (no specific version)
 
@@ -95,17 +57,6 @@ works on the new image. If something breaks, options are
 (b) fix whatever the VS 2026 swap broke. Drop this entry once a
 post-redirect release succeeds.
 
-### Bridge unit test
-
-`bxp-gui-bridge` shipped in v0.2.2 with no test coverage —
-bxp-core / bxp-cli / bxp-fmt / json5_ast all have phases in
-`scripts/test.sh`, but the bridge is verified only via the release-time
-smoke build. Add `scripts/test-04-bridge.sh` that exercises
-`bridge_run` / `bridge_run_streaming` against a real `bxp-fmt --version`
-invocation, asserts the FFI memory-ownership contract
-(allocator-paired free), and verifies reader-thread cleanup on the
-streaming path.
-
 ### Distribution polish
 
 - Apple Developer ID notarisation for macOS `.app` (~$99/year).
@@ -118,13 +69,6 @@ streaming path.
   until app is more stable.
 - AppImageUpdate (zsync delta downloads). Current Linux updater
   re-downloads the full AppImage; zsync would do binary deltas.
-
-### bxp-fmt
-
-- Granular `--doc-*` API: `bxp-fmt --doc-fn LOOKUP` /
-  `--doc-field input_schema.<key>` per-query lookup instead of dumping
-  the full catalog. Backend already supports the lookup; just need the
-  CLI surface (deferred 2026-05-03).
 
 ### bxp-cli
 
