@@ -21,7 +21,7 @@ dependencies:
   # visible bxp-gui.json file.
   shared_preferences: ^2.5.5
   split_view: ^3.2.2
-  package_info_plus: ^8.0.0
+  package_info_plus: ^10.0.0
   pluto_grid: ^8.1.0
   pluto_menu_bar: ^3.0.1
   flex_seed_scheme: ^4.0.1
