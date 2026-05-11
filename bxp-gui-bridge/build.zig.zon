@@ -2,7 +2,9 @@
     .name = .bxp_gui_bridge,
     .fingerprint = 0xd87f20dd69ca32b5,
     .version = "0.2.2",
-    .dependencies = .{},
+    .dependencies = .{
+        .bxp_core = .{ .path = "../bxp-core" },
+    },
     .minimum_zig_version = "0.15.0",
     .paths = .{"."},
 }

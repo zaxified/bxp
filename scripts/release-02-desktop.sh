@@ -36,14 +36,17 @@ build_companions() {
     (cd "$MONO_ROOT/bxp-fmt" && zig build -Dtarget="$target" -Doptimize=ReleaseSmall)
 }
 
-# Build the FFI bridge DLL for Windows. Standalone helper because the
-# bridge is currently Win-only (Plan A — Linux/macOS use Process.start
-# directly, which works there). Cross-platform consolidation is on the
-# v0.3.0 roadmap (see docs/roadmap.md).
-build_bridge_windows() {
-    echo "  Cross-compiling bxp-gui-bridge for x86_64-windows..."
+# Build the FFI bridge for a given target. Windows: load-bearing for the
+# subprocess proxy (sdk#1727 pipe truncation workaround). Linux/macOS:
+# hosts the in-process expression evaluator family (bridge_eval_expr /
+# bridge_eval_expr_trace) so per-keystroke expr validation runs sub-ms
+# instead of paying a ~50 ms subprocess spawn. Absence on Linux/macOS is
+# non-fatal — BxpProcessClient falls back to subprocess.
+build_bridge() {
+    local target=$1
+    echo "  Cross-compiling bxp-gui-bridge for $target..."
     (cd "$MONO_ROOT/bxp-gui-bridge" && \
-        zig build -Dtarget="x86_64-windows" -Doptimize=ReleaseSmall)
+        zig build -Dtarget="$target" -Doptimize=ReleaseSmall)
 }
 
 restore_native_companions() {
@@ -58,6 +61,7 @@ restore_native_companions() {
 build_linux() {
     echo "Building bxp-desktop ${VERSION} for linux-x86_64..."
     build_companions "x86_64-linux-musl"
+    build_bridge "x86_64-linux-gnu"
 
     (cd "$GUI_ROOT" && flutter build linux --release)
     local bundle="$GUI_ROOT/build/linux/x64/release/bundle"
@@ -74,6 +78,10 @@ build_linux() {
     # would have placed when run via `flutter run`).
     cp "$MONO_ROOT/bxp-cli/zig-out/bin/bxp-cli" "$appdir/bxp-cli"
     cp "$MONO_ROOT/bxp-fmt/zig-out/bin/bxp-fmt" "$appdir/bxp-fmt"
+    # FFI bridge — hosts in-process expr eval. Sibling to bxp-gui so
+    # findBridgeLibrary() picks it up.
+    cp "$MONO_ROOT/bxp-gui-bridge/zig-out/lib/libbxp-gui-bridge.so" \
+       "$appdir/libbxp-gui-bridge.so"
 
     # Linux-specific extras. icons/ ships all four variants so users can
     # repoint their shortcut's Icon= line (.desktop) at a different one.
@@ -185,7 +193,7 @@ _build_deb() {
 build_windows() {
     echo "Building bxp-desktop ${VERSION} for windows-x86_64..."
     build_companions "x86_64-windows"
-    build_bridge_windows
+    build_bridge "x86_64-windows"
 
     (cd "$GUI_ROOT" && flutter build windows --release)
     local bundle="$GUI_ROOT/build/windows/x64/runner/Release"
@@ -229,6 +237,7 @@ build_windows() {
 build_macos() {
     echo "Building bxp-desktop ${VERSION} for macos-aarch64..."
     build_companions "aarch64-macos"
+    build_bridge "aarch64-macos"
 
     (cd "$GUI_ROOT" && flutter build macos --release)
     local app="$GUI_ROOT/build/macos/Build/Products/Release/bxp-gui.app"
@@ -237,9 +246,16 @@ build_macos() {
     # binary, so BxpProcessClient.findBin finds them as siblings.
     cp "$MONO_ROOT/bxp-cli/zig-out/bin/bxp-cli" "$app/Contents/MacOS/bxp-cli"
     cp "$MONO_ROOT/bxp-fmt/zig-out/bin/bxp-fmt" "$app/Contents/MacOS/bxp-fmt"
+    # FFI bridge — hosts in-process expr eval. Sibling to bxp-gui so
+    # findBridgeLibrary() picks it up via the same dev-tree probe order
+    # as the Win/Linux paths.
+    cp "$MONO_ROOT/bxp-gui-bridge/zig-out/lib/libbxp-gui-bridge.dylib" \
+       "$app/Contents/MacOS/libbxp-gui-bridge.dylib"
 
     # Ad-hoc codesign — Gatekeeper still warns on first launch but the app
     # is otherwise loadable. Proper Developer ID signing is out of scope.
+    # --deep applies the signature to all nested binaries including the
+    # bridge .dylib, so we don't need a separate codesign pass.
     codesign --deep --force --sign - "$app"
 
     if ! command -v create-dmg >/dev/null 2>&1; then

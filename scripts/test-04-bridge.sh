@@ -8,6 +8,29 @@
 # Usage (from any directory):
 #   bash scripts/test-04-bridge.sh    — this phase alone
 #   bash scripts/test.sh              — wrapper runs every phase
+#
+# ── Linux/macOS pre-release proxy smoke ─────────────────────────────────
+# Before tagging a release that includes the cross-platform bridge build,
+# verify the subprocess proxy path works on Linux (and macOS, when
+# available) by manually running:
+#
+#   cd bxp-gui
+#   BXP_FORCE_BRIDGE_PROXY=1 flutter run -d linux
+#
+# Then in the GUI: open a sample config, run a dry-run, and verify NDJSON
+# events stream into the UI via the bridge (file list populates, per-row
+# counters update, exit code surfaces normally). The env-var gate routes
+# `_runOneShot` / `_runCliTrace` through `bridge_run` / `bridge_run_streaming`
+# instead of the default `Process.start` path — same code path Windows
+# always takes. Default Linux/macOS behaviour (no env var) stays on
+# Process.start, so end users never see the smoke routing.
+#
+# This step is manual because the existing `flutter test` corpus is pure
+# logic (no FFI path coverage) and there's no automated way to validate
+# end-to-end GUI behaviour without a display server + sample data wired
+# up. Drop the smoke ritual + the `BXP_FORCE_BRIDGE_PROXY` env gate in
+# `bxp_process_client.dart` once production traffic has exercised the
+# cross-platform proxy build for at least one release cycle.
 
 set -euo pipefail
 

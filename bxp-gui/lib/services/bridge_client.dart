@@ -66,10 +66,69 @@ typedef _BridgeRunStreamingDart = int Function(
 typedef _BridgeCancelNative = Int32 Function(Int64);
 typedef _BridgeCancelDart = int Function(int);
 
+// bridge_ack(handle) -> int32_t. Releases one permit on the stream's
+// backpressure semaphore. Dart calls this after processing each stdout
+// batch (decode + onLine + free) so the bridge can dispatch the next.
+// Without acks, the reader thread blocks after `default_queue_permits`
+// in-flight batches, bounding worst-case in-flight memory.
+typedef _BridgeAckNative = Int32 Function(Int64);
+typedef _BridgeAckDart = int Function(int);
+
 // bridge_free(ptr, len) — releases a buffer the bridge previously handed
 // to Dart through a streaming callback.
 typedef _BridgeFreeNative = Void Function(Pointer<Uint8>, Uint32);
 typedef _BridgeFreeDart = void Function(Pointer<Uint8>, int);
+
+// C ABI for the in-process expression evaluator family
+// (see DEV/plan-bridge-ffi-conventions.md). Stateless, caller-owned
+// buffers, no Dart-side bridge_free required.
+//
+//   bridge_eval_expr(text_ptr, text_len, out_buf, out_size) -> int32_t
+//     0 = valid expression
+//     >0 = bytes_written of JSON error in out_buf
+//          (shape mirrors `bxp-fmt --expr` stderr — `{"error","detail","off","len"}`)
+//     -1 OOM, -2 BUF_TOO_SMALL, -3 INVALID_INPUT
+typedef _BridgeEvalExprNative = Int32 Function(
+  Pointer<Uint8>,
+  Uint32,
+  Pointer<Uint8>,
+  Uint32,
+);
+typedef _BridgeEvalExprDart = int Function(
+  Pointer<Uint8>,
+  int,
+  Pointer<Uint8>,
+  int,
+);
+
+//   bridge_eval_expr_trace(text_ptr, text_len,
+//                          headers_json_ptr, headers_json_len,
+//                          fields_json_ptr, fields_json_len,
+//                          out_buf, out_size) -> int32_t
+//     0 = empty input (no payload)
+//     >0 = bytes_written of NDJSON in out_buf
+//          (per-call lines + {"t":"final"|"error",...} sentinel)
+//     -1 OOM, -2 BUF_TOO_SMALL, -3 INVALID_INPUT
+typedef _BridgeEvalExprTraceNative = Int32 Function(
+  Pointer<Uint8>,
+  Uint32,
+  Pointer<Uint8>,
+  Uint32,
+  Pointer<Uint8>,
+  Uint32,
+  Pointer<Uint8>,
+  Uint32,
+);
+typedef _BridgeEvalExprTraceDart = int Function(
+  Pointer<Uint8>,
+  int,
+  Pointer<Uint8>,
+  int,
+  Pointer<Uint8>,
+  int,
+  Pointer<Uint8>,
+  int,
+);
 
 /// Result of a bridge-mediated subprocess invocation. Mirrors dart:io
 /// `ProcessResult` conceptually; `err` is non-null only when the bridge
@@ -113,7 +172,10 @@ class BridgeClient {
   late final _BridgeVersionDart _bridgeVersion;
   late final _BridgeRunStreamingDart _bridgeRunStreaming;
   late final _BridgeCancelDart _bridgeCancel;
+  late final _BridgeAckDart _bridgeAck;
   late final _BridgeFreeDart _bridgeFree;
+  late final _BridgeEvalExprDart _bridgeEvalExpr;
+  late final _BridgeEvalExprTraceDart _bridgeEvalExprTrace;
 
   BridgeClient(String dllPath) : _lib = DynamicLibrary.open(dllPath) {
     _bridgeRun = _lib
@@ -125,8 +187,14 @@ class BridgeClient {
         _BridgeRunStreamingDart>('bridge_run_streaming');
     _bridgeCancel = _lib
         .lookupFunction<_BridgeCancelNative, _BridgeCancelDart>('bridge_cancel');
+    _bridgeAck = _lib
+        .lookupFunction<_BridgeAckNative, _BridgeAckDart>('bridge_ack');
     _bridgeFree =
         _lib.lookupFunction<_BridgeFreeNative, _BridgeFreeDart>('bridge_free');
+    _bridgeEvalExpr = _lib.lookupFunction<_BridgeEvalExprNative,
+        _BridgeEvalExprDart>('bridge_eval_expr');
+    _bridgeEvalExprTrace = _lib.lookupFunction<_BridgeEvalExprTraceNative,
+        _BridgeEvalExprTraceDart>('bridge_eval_expr_trace');
   }
 
   /// DLL self-reported version string, e.g. "0.2.1". Read once at load.
@@ -218,6 +286,139 @@ class BridgeClient {
   /// after natural exit is a safe no-op.
   bool cancel(int handle) => _bridgeCancel(handle) == 0;
 
+  /// Default out_buf size for the in-process expression family. 4 KB
+  /// covers a typical expr error JSON (typically < 1 KB) with headroom.
+  /// On overflow we retry once with [_evalLargeBufSize] before giving up.
+  static const int _evalDefaultBufSize = 4 * 1024;
+
+  /// Retry buffer size when 4 KB overflows. 64 KB fits even pathological
+  /// expr-trace outputs (hundreds of nested function calls).
+  static const int _evalLargeBufSize = 64 * 1024;
+
+  /// In-process counterpart to `bxp-fmt --expr <text>` — validates an
+  /// expression's syntax + semantic correctness without spawning a
+  /// subprocess. Sub-ms latency, safe to call from the main isolate.
+  ///
+  /// Return shape mirrors [BxpProcessClient.validateExpr]:
+  ///   * `error == null` — valid expression
+  ///   * `error != null` — invalid; `offset`/`length` populated when the
+  ///     parser pinned the offending token span (for inline UI highlight)
+  ({String? error, int? offset, int? length}) evalExpr(String text) {
+    if (text.isEmpty) {
+      return (error: null, offset: null, length: null);
+    }
+    final firstAttempt = _evalExprWithBuffer(text, _evalDefaultBufSize);
+    if (firstAttempt != null) return firstAttempt;
+    final retried = _evalExprWithBuffer(text, _evalLargeBufSize);
+    if (retried != null) return retried;
+    return (error: 'bridge: eval response exceeds 64 KB', offset: null, length: null);
+  }
+
+  /// Single bridge_eval_expr call with a freshly allocated buffer.
+  /// Returns null on BUF_TOO_SMALL (-2) so [evalExpr] can retry larger;
+  /// otherwise returns the parsed result (success or error).
+  ({String? error, int? offset, int? length})? _evalExprWithBuffer(
+    String text,
+    int bufSize,
+  ) {
+    final textBytes = utf8.encode(text);
+    final textPtr = malloc.allocate<Uint8>(textBytes.length);
+    final outBuf = malloc.allocate<Uint8>(bufSize);
+    try {
+      textPtr.asTypedList(textBytes.length).setAll(0, textBytes);
+      final n =
+          _bridgeEvalExpr(textPtr, textBytes.length, outBuf, bufSize);
+      if (n == 0) {
+        return (error: null, offset: null, length: null);
+      }
+      if (n == -2) return null; // BUF_TOO_SMALL → caller retries
+      if (n < 0) {
+        return (error: 'bridge: eval error code $n', offset: null, length: null);
+      }
+      final bytes = outBuf.asTypedList(n);
+      final json = jsonDecode(utf8.decode(bytes));
+      if (json is! Map) {
+        return (error: 'bridge: malformed eval response', offset: null, length: null);
+      }
+      final err = json['error'];
+      final detail = json['detail'];
+      final off = json['off'];
+      final len = json['len'];
+      final offset = off is int ? off : null;
+      final length = len is int ? len : null;
+      if (err is String && err.isNotEmpty) {
+        final msg = (detail is String && detail.isNotEmpty)
+            ? '$err: $detail'
+            : err;
+        return (error: msg, offset: offset, length: length);
+      }
+      return (error: null, offset: null, length: null);
+    } finally {
+      malloc.free(textPtr);
+      malloc.free(outBuf);
+    }
+  }
+
+  /// In-process counterpart to `bxp-fmt --expr-trace TEXT --row-headers
+  /// HEADERS_JSON --row-fields FIELDS_JSON`. Returns the raw NDJSON payload — per-fn
+  /// call lines plus a final `{"t":"final"|"error",...}` sentinel — for
+  /// the caller to parse. Sub-ms latency, safe from the main isolate.
+  ///
+  /// Returns null on bridge-level failure (OOM, INVALID_INPUT,
+  /// BUF_TOO_SMALL after retry); caller should fall back to subprocess.
+  String? evalExprTrace({
+    required String text,
+    required List<String> headers,
+    required List<String> fields,
+  }) {
+    if (text.isEmpty) return '';
+    final headersJson = jsonEncode(headers);
+    final fieldsJson = jsonEncode(fields);
+    final firstAttempt =
+        _evalExprTraceWithBuffer(text, headersJson, fieldsJson, _evalDefaultBufSize);
+    if (firstAttempt != null) return firstAttempt;
+    return _evalExprTraceWithBuffer(text, headersJson, fieldsJson, _evalLargeBufSize);
+  }
+
+  String? _evalExprTraceWithBuffer(
+    String text,
+    String headersJson,
+    String fieldsJson,
+    int bufSize,
+  ) {
+    final textBytes = utf8.encode(text);
+    final headersBytes = utf8.encode(headersJson);
+    final fieldsBytes = utf8.encode(fieldsJson);
+    final textPtr = malloc.allocate<Uint8>(textBytes.length);
+    final headersPtr = malloc.allocate<Uint8>(headersBytes.length);
+    final fieldsPtr = malloc.allocate<Uint8>(fieldsBytes.length);
+    final outBuf = malloc.allocate<Uint8>(bufSize);
+    try {
+      textPtr.asTypedList(textBytes.length).setAll(0, textBytes);
+      headersPtr.asTypedList(headersBytes.length).setAll(0, headersBytes);
+      fieldsPtr.asTypedList(fieldsBytes.length).setAll(0, fieldsBytes);
+      final n = _bridgeEvalExprTrace(
+        textPtr,
+        textBytes.length,
+        headersPtr,
+        headersBytes.length,
+        fieldsPtr,
+        fieldsBytes.length,
+        outBuf,
+        bufSize,
+      );
+      if (n == 0) return '';
+      if (n == -2) return null; // BUF_TOO_SMALL → caller retries
+      if (n < 0) return null; // OOM / INVALID_INPUT → caller falls back
+      return utf8.decode(outBuf.asTypedList(n));
+    } finally {
+      malloc.free(textPtr);
+      malloc.free(headersPtr);
+      malloc.free(fieldsPtr);
+      malloc.free(outBuf);
+    }
+  }
+
   /// Streaming variant of [run]. Spawns the child, returns a Future that
   /// completes with its exit code, and reports stdout / stderr progressively
   /// via [onLine] / [onStderr] callbacks. Designed for the GUI's `--trace`
@@ -249,6 +450,12 @@ class BridgeClient {
     void Function(int handle)? onSpawn,
   }) async {
     final completer = Completer<int>();
+    // Captured by `handleStdoutBatch` so each batch acks the bridge's
+    // backpressure semaphore after we've processed + freed it. Stays
+    // null until [_bridgeRunStreaming] returns a positive handle —
+    // callbacks can't fire before then, so the null-check is purely
+    // defensive against the pre-spawn failure path.
+    int? streamHandle;
 
     void handleStdoutBatch(Pointer<Uint8> ptr, int len) {
       try {
@@ -263,6 +470,12 @@ class BridgeClient {
         }
       } finally {
         _bridgeFree(ptr, len);
+        // Release one permit on the bridge's per-stream queue semaphore
+        // so the reader thread can dispatch the next batch. Without this
+        // the reader blocks after `default_queue_permits` (32) in-flight
+        // batches and the stream stalls.
+        final h = streamHandle;
+        if (h != null) _bridgeAck(h);
       }
     }
 
@@ -321,6 +534,7 @@ class BridgeClient {
       exitCb.close();
       return -1;
     }
+    streamHandle = handle;
 
     onSpawn?.call(handle);
 
@@ -347,11 +561,15 @@ class BridgeClient {
 ///      bxp-cli/bxp-fmt so the dev workflow doesn't need a CMake
 ///      install step to make the bridge discoverable.
 ///
-/// Returns null when probing fails. Windows: bridge is mandatory —
-/// callers must surface a synthetic error rather than fall back to
-/// Process.start (dart-lang/sdk#1727 truncates --docs/--config over
-/// the ~8 KB Win pipe limit). Linux/macOS: bridge is dormant; this
-/// returns null and callers go through Process.start directly.
+/// Returns null when probing fails. Windows: bridge is mandatory for the
+/// subprocess proxy path — callers must surface a synthetic error rather
+/// than fall back to Process.start (dart-lang/sdk#1727 truncates
+/// --docs/--config over the ~8 KB Win pipe limit). Linux/macOS: the
+/// subprocess proxy still goes through Process.start, but the in-process
+/// expr family (bridge_eval_expr / bridge_eval_expr_trace) loads the
+/// library here when it's deployed alongside the GUI — callers receive
+/// the path so they can opt in to FFI eval and fall back to subprocess
+/// when the lib is absent.
 String? findBridgeLibrary() {
   final name = Platform.isWindows
       ? 'bxp-gui-bridge.dll'

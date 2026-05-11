@@ -145,3 +145,21 @@ install(CODE "
     message(WARNING \"bxp-fmt not found at ${BXP_FMT_SRC_ABS}; UI will fail at startup\")
   endif()
   " COMPONENT Runtime)
+
+# Same dev-tree copy for the bxp-gui-bridge shared library. The bridge
+# hosts the in-process expression evaluator (bridge_eval_expr family) so
+# the GUI's per-keystroke validation runs sub-ms instead of paying a
+# ~50 ms subprocess spawn per call. The bridge is OPTIONAL on Linux —
+# absence just falls back to subprocess via BxpProcessClient.validateExpr.
+get_filename_component(BXP_BRIDGE_SRC_ABS
+  "${CMAKE_SOURCE_DIR}/../../bxp-gui-bridge/zig-out/lib/libbxp-gui-bridge.so" ABSOLUTE)
+install(CODE "
+  if(EXISTS \"${BXP_BRIDGE_SRC_ABS}\")
+    execute_process(COMMAND \${CMAKE_COMMAND} -E copy
+      \"${BXP_BRIDGE_SRC_ABS}\"
+      \"${CMAKE_INSTALL_PREFIX}/libbxp-gui-bridge.so\")
+    message(STATUS \"Copied libbxp-gui-bridge.so to ${CMAKE_INSTALL_PREFIX}/\")
+  else()
+    message(STATUS \"bxp-gui-bridge.so not found at ${BXP_BRIDGE_SRC_ABS}; expr eval will fall back to subprocess\")
+  endif()
+  " COMPONENT Runtime)

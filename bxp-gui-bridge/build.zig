@@ -3,10 +3,34 @@ const zon = @import("build.zig.zon");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
-    const optimize = b.standardOptimizeOption(.{});
+    // Force-upgrade Debug to ReleaseSafe. Zig 0.15.2 Debug-mode codegen
+    // produces broken register allocation for `mem.Allocator.remap` and
+    // `json.Scanner.next` on x86-64 — both surface as a NULL deref at
+    // offset 0x30 when the bridge's reader thread and `bridge_eval_expr_trace`
+    // run under realistic streaming load (137 K rows from `bxp-cli --trace`
+    // against DEV/bxp-cli.json). The bug does not reproduce in ReleaseSafe
+    // (same runtime safety checks: overflow, bounds, null-deref asserts;
+    // different codegen path). Release builds from
+    // `scripts/release-02-desktop.sh` already use `-Doptimize=ReleaseSmall`,
+    // so production artefacts have never tripped this; only the dev flow
+    // (`flutter run` → CMake hook copies whatever is in `zig-out/lib`) was
+    // affected. `-Doptimize=ReleaseSmall|ReleaseFast` still selects those
+    // modes; only Debug is rewritten to ReleaseSafe.
+    const requested_optimize = b.standardOptimizeOption(.{});
+    const optimize: std.builtin.OptimizeMode = switch (requested_optimize) {
+        .Debug => .ReleaseSafe,
+        else => requested_optimize,
+    };
 
     const options = b.addOptions();
     options.addOption([]const u8, "version", zon.version);
+
+    // bxp-core: shared library with the actual expression evaluator,
+    // config parser, etc. The bridge calls into it directly for in-process
+    // operations (e.g. `bridge_eval_expr`) so the Dart GUI can avoid the
+    // ~50 ms spawn cost of `bxp-fmt --expr` per keystroke.
+    const bxp_core = b.dependency("bxp_core", .{ .target = target, .optimize = optimize });
+    const expr_mod = bxp_core.module("expr");
 
     // Shared library: bxp-gui-bridge.dll on Windows, libbxp-gui-bridge.so
     // on Linux, libbxp-gui-bridge.dylib on macOS. Loaded at runtime by
@@ -20,6 +44,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "build_options", .module = options.createModule() },
+                .{ .name = "expr", .module = expr_mod },
             },
         }),
     });
@@ -55,6 +80,7 @@ pub fn build(b: *std.Build) void {
             .imports = &.{
                 .{ .name = "build_options", .module = options.createModule() },
                 .{ .name = "test_options", .module = test_options.createModule() },
+                .{ .name = "expr", .module = expr_mod },
             },
         }),
     });

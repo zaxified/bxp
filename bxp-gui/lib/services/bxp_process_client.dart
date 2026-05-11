@@ -131,10 +131,21 @@ class BxpProcessClient {
   /// when triaging "is the GUI using a stale DLL?" reports.
   static String? get bridgeDllPath => _bridgeDllPath;
 
+  /// Pre-release smoke gate: setting `BXP_FORCE_BRIDGE_PROXY=1` in the
+  /// environment opts Linux / macOS dev runs into the bridge subprocess
+  /// proxy path (same route Windows always takes), so we can validate
+  /// the cross-platform bridge build before shipping it. The flag is
+  /// intentionally cumbersome to enable (env var, not a checkbox) — it's
+  /// a developer testing knob, not a user-facing toggle. Drop this gate
+  /// once the bridge proxy is exercised on Linux/macOS via production
+  /// traffic.
+  static bool _forceBridgeProxy() =>
+      Platform.environment['BXP_FORCE_BRIDGE_PROXY'] == '1';
+
   static String? _resolveBridgePath() {
     if (_bridgeProbed) return _bridgeDllPath;
     _bridgeProbed = true;
-    if (!Platform.isWindows) return null;
+    if (!Platform.isWindows && !_forceBridgeProxy()) return null;
     final dllPath = findBridgeLibrary();
     if (dllPath == null) {
       _lastSubprocessDiag = 'bridge: DLL not found next to bxp-gui';
@@ -151,6 +162,46 @@ class BxpProcessClient {
       return dllPath;
     } catch (e) {
       _lastSubprocessDiag = 'bridge: probe failed: $e';
+      return null;
+    }
+  }
+
+  /// Long-lived [BridgeClient] dedicated to the in-process expression
+  /// family (`bridge_eval_expr` / `bridge_eval_expr_trace`). Unlike the
+  /// subprocess-proxy path that re-opens the DLL inside each
+  /// [Isolate.run] worker, the eval calls are sub-ms and run direct on
+  /// the main isolate — keeping one cached client avoids paying the
+  /// `DynamicLibrary.open` cost per keystroke.
+  ///
+  /// Probed independently from [_resolveBridgePath] because the eval
+  /// family is intended to land on Linux/macOS too (once the build
+  /// pipeline ships the `.so`/`.dylib` alongside the GUI bundle), while
+  /// the subprocess proxy stays Win-only. Returns null when the library
+  /// can't be located — callers fall back to subprocess.
+  static BridgeClient? _evalBridgeClient;
+  static bool _evalBridgeProbed = false;
+
+  /// Probe + cache the eval-bridge client. Deliberately does NOT touch
+  /// `_bridgeDllPath` — that cache is reserved for the subprocess-proxy
+  /// path (Win mandatory + `BXP_FORCE_BRIDGE_PROXY` smoke). Mixing them
+  /// caused a Linux crash when `_runCliTrace`'s routing saw a non-null
+  /// `_bridgeDllPath` without the env var being set, and tried to route
+  /// dry-run through the untested cross-platform proxy code.
+  static BridgeClient? _resolveEvalBridgeClient() {
+    if (_evalBridgeProbed) return _evalBridgeClient;
+    _evalBridgeProbed = true;
+    final libPath = findBridgeLibrary();
+    if (libPath == null) return null;
+    try {
+      _evalBridgeClient = BridgeClient(libPath);
+      // Mirror the bridge version into the shared `_bridgeVersion`
+      // getter (used by SettingsInspector) only if the proxy probe
+      // didn't already populate it. The path itself stays out of
+      // `_bridgeDllPath` to keep proxy routing predictable.
+      _bridgeVersion ??= _evalBridgeClient!.bridgeVersion;
+      return _evalBridgeClient;
+    } catch (e) {
+      _lastSubprocessDiag = 'bridge: eval probe failed: $e';
       return null;
     }
   }
@@ -190,10 +241,16 @@ class BxpProcessClient {
       }
       return _runOneShotViaBridge(dllPath, executable, arguments, timeout);
     }
-    // Non-Windows: dart:io's pipes work, bridge isn't built into the
-    // bundle, and the cost of an Isolate.run hop per call would only
-    // pay off as a `--expr` per-keystroke optimisation we haven't
-    // landed yet.
+    // Non-Windows: by default dart:io's pipes work, so we stay on
+    // Process.start. The pre-release smoke gate (`BXP_FORCE_BRIDGE_PROXY=1`)
+    // routes through bridge_run instead to validate the cross-platform
+    // bridge build. Gate explicitly on the env var rather than `dllPath`
+    // alone — `_resolveEvalBridgeClient` (in-process expr family) also
+    // populates `_bridgeDllPath` on all platforms, so a non-null path
+    // doesn't imply the user asked for the proxy smoke.
+    if (_forceBridgeProxy() && dllPath != null) {
+      return _runOneShotViaBridge(dllPath, executable, arguments, timeout);
+    }
     return _runWithTimeout(executable, arguments, timeout);
   }
 
@@ -550,9 +607,17 @@ class BxpProcessClient {
     String expr,
   ) async {
     if (expr.isEmpty) return (error: null, offset: null, length: null);
+    // Prefer the in-process FFI path when the bridge library is loadable.
+    // Sub-ms latency vs ~50 ms spawn of `bxp-fmt --expr`. Sync FFI call
+    // is safe on the main isolate (well under one frame budget).
+    final evalClient = _resolveEvalBridgeClient();
+    if (evalClient != null) {
+      DiagnosticLog.log('action.validateExpr', {'len': expr.length, 'path': 'bridge'});
+      return evalClient.evalExpr(expr);
+    }
     final bin = findBin('bxp-fmt');
     if (bin == null) return (error: 'bxp-fmt not found', offset: null, length: null);
-    DiagnosticLog.log('action.validateExpr', {'len': expr.length});
+    DiagnosticLog.log('action.validateExpr', {'len': expr.length, 'path': 'subprocess'});
     final result =
         await _runOneShot(bin, ['--expr', expr], _exprTimeout);
     if (result.exitCode == 0) return (error: null, offset: null, length: null);
@@ -596,6 +661,16 @@ class BxpProcessClient {
     required List<String> headers,
     required List<String> fields,
   }) async {
+    // Prefer in-process FFI when available. The trace NDJSON shape is
+    // identical to `bxp-fmt --expr-trace` stdout so the per-line parser
+    // below works on both payloads.
+    final evalClient = _resolveEvalBridgeClient();
+    if (evalClient != null) {
+      final ndjson =
+          evalClient.evalExprTrace(text: expr, headers: headers, fields: fields);
+      if (ndjson != null) return _parseTraceNdjson(ndjson);
+      // null = bridge-level failure → fall through to subprocess
+    }
     final bin = findBin('bxp-fmt');
     if (bin == null) return const [];
     try {
@@ -609,37 +684,45 @@ class BxpProcessClient {
         _exprTimeout,
       );
       final out = (result.stdout as String);
-      final calls = <ExprCallTrace>[];
-      for (final line in out.split('\n')) {
-        final trimmed = line.trim();
-        if (trimmed.isEmpty) continue;
-        // One bad NDJSON line must NOT discard the rest of the trace —
-        // per-line try/catch so a malformed sentinel from a future bxp-fmt
-        // doesn't drop the 200 lines that came before it.
-        try {
-          final parsed = jsonDecode(trimmed);
-          if (parsed is! Map) continue;
-          // Skip the final-result sentinel `{"t":"final","value":"..."}` —
-          // the per-call entries omit `t` and have a `fn` field.
-          if (parsed['fn'] is! String) continue;
-          final ss = parsed['src_start'];
-          final se = parsed['src_end'];
-          if (ss is! num || se is! num) continue;
-          calls.add(ExprCallTrace(
-            fn: parsed['fn'] as String,
-            srcStart: ss.toInt(),
-            srcEnd: se.toInt(),
-            value: parsed['value']?.toString() ?? '',
-          ));
-        } catch (_) {
-          // Skip this line, keep the rest.
-          continue;
-        }
-      }
-      return calls;
+      return _parseTraceNdjson(out);
     } catch (_) {
       return const [];
     }
+  }
+
+  /// Parse NDJSON from `bxp-fmt --expr-trace` (or the bridge equivalent)
+  /// into a per-call list, dropping the final/error sentinel and any
+  /// malformed lines. Shared between the bridge and subprocess paths so
+  /// the same payload shape produces identical parsed results.
+  static List<ExprCallTrace> _parseTraceNdjson(String out) {
+    final calls = <ExprCallTrace>[];
+    for (final line in out.split('\n')) {
+      final trimmed = line.trim();
+      if (trimmed.isEmpty) continue;
+      // One bad NDJSON line must NOT discard the rest of the trace —
+      // per-line try/catch so a malformed sentinel from a future bxp-fmt
+      // doesn't drop the 200 lines that came before it.
+      try {
+        final parsed = jsonDecode(trimmed);
+        if (parsed is! Map) continue;
+        // Skip the final-result sentinel `{"t":"final","value":"..."}` —
+        // the per-call entries omit `t` and have a `fn` field.
+        if (parsed['fn'] is! String) continue;
+        final ss = parsed['src_start'];
+        final se = parsed['src_end'];
+        if (ss is! num || se is! num) continue;
+        calls.add(ExprCallTrace(
+          fn: parsed['fn'] as String,
+          srcStart: ss.toInt(),
+          srcEnd: se.toInt(),
+          value: parsed['value']?.toString() ?? '',
+        ));
+      } catch (_) {
+        // Skip this line, keep the rest.
+        continue;
+      }
+    }
+    return calls;
   }
 
   // ── Streaming invocations (stdout emitted as NDJSON events) ───────────
@@ -734,13 +817,14 @@ class BxpProcessClient {
     // Bridge is mandatory on Windows: dart:io's stream listener silently
     // drops bytes past ~8 KB on this platform (sdk#1727 + #51273) and
     // `--trace` would get brutally truncated. The bridge runs streaming
-    // on its own threads and reports stdout in batches of 1000 lines
-    // (plus a final flush at EOF), so file-list and per-row counters
-    // update progressively in the UI rather than appearing all at once
-    // at the end of the run. No onSpawn / cancel support yet: the bridge
-    // owns the child handle, and there's no FFI-level kill request to
-    // wire through. Cancel will land when the bridge gains a per-call
-    // cancellation token.
+    // on its own threads and reports stdout in batches (default 100
+    // newline-terminated lines, plus a final flush at EOF), so file-list
+    // and per-row counters update progressively in the UI rather than
+    // appearing all at once at the end of the run. Backpressure is
+    // bounded by a per-stream semaphore — the bridge blocks the reader
+    // thread after `default_queue_permits` (32) un-acked batches, and
+    // Dart releases a permit via `bridge_ack` after processing each
+    // batch (handled inside `BridgeClient.runStreaming`).
     final dllPath = _resolveBridgePath();
     if (Platform.isWindows) {
       if (dllPath == null) {
@@ -763,6 +847,27 @@ class BxpProcessClient {
       );
       endAction({
         'path': 'bridge',
+        'exit': r.exitCode,
+        'stderr_bytes': r.stderr.length,
+      });
+      return r;
+    }
+    // Non-Windows pre-release smoke path: when BXP_FORCE_BRIDGE_PROXY=1
+    // and the bridge library is loadable, route the streaming trace
+    // through bridge_run_streaming instead of Process.start to exercise
+    // the cross-platform bridge build end-to-end. Gate on the env var
+    // explicitly (see `_runOneShot` for the same caveat).
+    if (_forceBridgeProxy() && dllPath != null) {
+      final r = await _runCliTraceViaBridge(
+        bin: bin,
+        args: args,
+        cwd: workingDir,
+        dllPath: dllPath,
+        onLine: onLine,
+        onStderr: onStderr,
+      );
+      endAction({
+        'path': 'bridge-smoke',
         'exit': r.exitCode,
         'stderr_bytes': r.stderr.length,
       });
