@@ -279,6 +279,13 @@ pub const BrokerConfig = struct {
     /// the input filename (YYYY-MM-DD_YYYY-MM-DD) are silently skipped.
     /// Default: false — no date filtering unless explicitly enabled.
     date_filter_from_filename: bool,
+    /// When true, all input files in data_dir produce a single combined
+    /// output file `1-{template_id}-combined.csvx` instead of one output
+    /// per input file. Header is written once (CSV) or wrapped in one
+    /// JSON array (JSON). Files are processed in alphabetical name order
+    /// (same sort as the per-file mode), so the combined row order is
+    /// deterministic.  Default: false.
+    combined_output: bool,
     /// Named first-pass lookup tables.  Empty map when not defined in bxp-cli.json.
     /// Legacy single-block form is internally mapped to `_default`; multiple named
     /// blocks each occupy their own namespace inside `lookup_table`.
@@ -432,6 +439,13 @@ pub const BrokerConfig = struct {
             .required = false,
             .default = "false",
             .description = "When true, rows whose $date falls outside the date range encoded in the filename (YYYY-MM-DD_YYYY-MM-DD) are silently skipped. Requires $date in input_schema.",
+        },
+        .{
+            .key = "combined_output",
+            .type_name = "boolean",
+            .required = false,
+            .default = "false",
+            .description = "When true, all input files in data_dir produce a single combined output file '1-<template_id>-combined.csvx' instead of one output per input. Files are processed in alphabetical order so combined row order is deterministic.",
         },
         .{
             .key = "row_rules_debug_missing",
@@ -2471,6 +2485,7 @@ pub fn loadFromBytes(
                 var ticker_map = std.StringHashMap([]const u8).init(alloc);
                 var input_schema = std.StringHashMap([]const u8).init(alloc);
                 var date_filter_from_filename: bool = false;
+                var combined_output: bool = false;
                 var pre_passes = std.StringArrayHashMap(PrePass).init(alloc);
                 var row_rules: ?[]RowRule = null;
                 var row_rules_debug_missing: bool = false;
@@ -2617,6 +2632,16 @@ pub fn loadFromBytes(
                             try emitTemplateDiag(alloc, diag, .warning, "config.wrong_type_silent",
                                 b_entry.key_ptr.*, "date_filter_from_filename",
                                 "date_filter_from_filename must be a boolean, got {s} — value ignored", .{@tagName(v)});
+                        }
+                    }
+
+                    if (bobj.get("combined_output")) |v| {
+                        if (v == .bool) {
+                            combined_output = v.bool;
+                        } else {
+                            try emitTemplateDiag(alloc, diag, .warning, "config.wrong_type_silent",
+                                b_entry.key_ptr.*, "combined_output",
+                                "combined_output must be a boolean, got {s} — value ignored", .{@tagName(v)});
                         }
                     }
 
@@ -2827,6 +2852,7 @@ pub fn loadFromBytes(
                         .ticker_map                = ticker_map,
                         .input_schema              = input_schema,
                         .date_filter_from_filename = date_filter_from_filename,
+                        .combined_output           = combined_output,
                         .pre_passes                = pre_passes,
                         .row_rules                 = row_rules,
                         .row_rules_debug_missing   = row_rules_debug_missing,
