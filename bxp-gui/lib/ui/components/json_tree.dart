@@ -245,6 +245,11 @@ class _JsonNodeState extends State<_JsonNode> {
     return true;
   }
 
+  /// Cached TraceStore ref captured on first build so we can detach the
+  /// pendingAddChild listener during dispose without an InheritedWidget
+  /// lookup (which is forbidden once the element starts unmounting).
+  TraceStore? _storeRef;
+
   @override
   void initState() {
     super.initState();
@@ -258,6 +263,41 @@ class _JsonNodeState extends State<_JsonNode> {
   void didChangeDependencies() {
     super.didChangeDependencies();
     _actionsCtrl = TreeActionsBinding.maybeOf(context)?.controller;
+    // Subscribe to the Ctrl+Shift+Insert request channel. When the
+    // shortcut fires in main_view with this node's path, pop the
+    // Add-Child dialog from here — the dialog needs `widget.value`
+    // (the parent JsonObject) and `_showAddDialog`'s local schema
+    // walk, which only this State can supply.
+    final store = context.read<TraceStore>();
+    if (!identical(_storeRef, store)) {
+      _storeRef?.pendingAddChildPath.removeListener(_onAddChildPending);
+      _storeRef = store;
+      store.pendingAddChildPath.addListener(_onAddChildPending);
+    }
+  }
+
+  void _onAddChildPending() {
+    final store = _storeRef;
+    if (store == null || !mounted) return;
+    final pending = store.pendingAddChildPath.value;
+    if (pending == null || pending.length != widget.path.length) return;
+    for (var i = 0; i < widget.path.length; i++) {
+      if (pending[i] != widget.path[i]) return;
+    }
+    // Guard scalar leaves: Add-Child only makes sense for object/array
+    // containers. Silently drop the request so a stray Ctrl+Shift+Insert
+    // on a `$ticker: ""` cell doesn't pop a malformed dialog.
+    final v = widget.value;
+    if (v is! JsonObject && v is! JsonArray) {
+      store.clearPendingAddChild();
+      return;
+    }
+    // Consume the request so other matching nodes (none should exist —
+    // path identity is unique — but defensively) don't also pop a dialog.
+    store.clearPendingAddChild();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _showAddDialog();
+    });
   }
 
   @override
@@ -273,6 +313,7 @@ class _JsonNodeState extends State<_JsonNode> {
     if (ctrl != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) => ctrl.clear(id));
     }
+    _storeRef?.pendingAddChildPath.removeListener(_onAddChildPending);
     super.dispose();
   }
 
@@ -704,22 +745,47 @@ class _JsonNodeState extends State<_JsonNode> {
     final t = context.bxpTheme;
     final muted = BxpText.body(context,color: t.textMuted, size: BxpSize.md);
     final debug = context.watch<DebugSettings>();
+    // Keyboard-focus highlight: thin left-border accent when this row is
+    // the active target of structural shortcuts. Watching ensures we
+    // re-render on focus changes; the path comparison is O(depth) per
+    // row but depth is small (config tree rarely exceeds ~6 levels).
+    final focusedPath = context.watch<TraceStore>().focusedNodePath;
+    final isFocused = focusedPath != null &&
+        focusedPath.length == widget.path.length &&
+        () {
+          for (var i = 0; i < widget.path.length; i++) {
+            if (focusedPath[i] != widget.path[i]) return false;
+          }
+          return true;
+        }();
     // Tap target — Material `InkWell` (with internal MouseRegion +
     // AnimationController + ripple) when DebugSettings.useInkWell is
     // ON; lighter-weight `GestureDetector` when OFF. The toggle exists
     // so a future regression can flip away from the heavier widget
     // without touching the call site.
-    void onTap() => setState(() {
-          expanded = !expanded;
-          // Cascade: a single click on a collapsed node expands every
-          // descendant. Children read this via the expandAll prop below.
-          _recursiveExpand = expanded;
-        });
+    void onTap() {
+      // Mark this row as the keyboard-focused tree node so global
+      // shortcuts (Ctrl+Shift+↑/↓/Del/Insert) target it without requiring
+      // a separate explicit-focus click. Setting focus on tap matches the
+      // mouse user's mental model: "I clicked it, so it's selected."
+      context.read<TraceStore>().setFocusedNode(widget.path);
+      setState(() {
+        expanded = !expanded;
+        // Cascade: a single click on a collapsed node expands every
+        // descendant. Children read this via the expandAll prop below.
+        _recursiveExpand = expanded;
+      });
+    }
     final inner = Container(
       key: _rowKey,
-      color: (debug.hoverBackground && isHovered)
-          ? t.withHover(t.surfaceBg)
-          : Colors.transparent,
+      decoration: BoxDecoration(
+        color: (debug.hoverBackground && isHovered)
+            ? t.withHover(t.surfaceBg)
+            : Colors.transparent,
+        border: isFocused
+            ? Border(left: BorderSide(color: t.accentHighlight, width: 2))
+            : null,
+      ),
       padding: const EdgeInsets.symmetric(vertical: 2.0),
       child: _RowEnvelope(
         depth: widget.depth,
@@ -1570,8 +1636,17 @@ class _AddChildDialogState extends State<_AddChildDialog> {
     // (e.g. conversion_templates.* with named children) the user must
     // pick one explicitly.
     if (widget.suggestions.length == 1) {
-      _pickedSuggestion = widget.suggestions.first;
-      _type = _normalizeTypes(widget.suggestions.first.typeName).first;
+      final only = widget.suggestions.first;
+      _pickedSuggestion = only;
+      _type = _normalizeTypes(only.typeName).first;
+      // When the single candidate has a literal key (e.g. `xlsx_sheet`,
+      // `pre_pass`), pre-fill the key field so the user just confirms
+      // with Enter instead of clicking the suggestion chip or retyping
+      // the key. Free-form (`isFreeForm`) candidates keep the field
+      // empty — the user names the key themselves.
+      if (!only.isFreeForm) {
+        _keyController.text = only.key;
+      }
     }
   }
 

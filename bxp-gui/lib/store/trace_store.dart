@@ -147,6 +147,22 @@ class TraceStore extends ChangeNotifier {
   void clearPendingFocus() {
     _pendingFocusPath.value = null;
   }
+
+  /// Path of the tree row whose Add-Child dialog should be opened next
+  /// frame. Fired by the Ctrl+Shift+Insert shortcut so that the dialog
+  /// pops over the focused row even though the shortcut handler lives in
+  /// `main_view` (which can't `showDialog` the row's local widget tree
+  /// without losing the parent JsonObject reference held by
+  /// `_JsonNodeState`). The matching node consumes and clears it in the
+  /// same way `_pendingFocusPath` works.
+  final ValueNotifier<List<String>?> _pendingAddChildPath = ValueNotifier(null);
+  ValueListenable<List<String>?> get pendingAddChildPath => _pendingAddChildPath;
+  void requestAddChildAt(List<String> path) {
+    _pendingAddChildPath.value = path;
+  }
+  void clearPendingAddChild() {
+    _pendingAddChildPath.value = null;
+  }
   // Exit code from the most recent dry-run / full-run, captured so the
   // status bar can show "done · exit N" with the right colour:
   //   0 → success (emerald), 2 → completed with warnings (amber),
@@ -255,6 +271,15 @@ class TraceStore extends ChangeNotifier {
   // Expression editor state
   List<String>? selectedExprPath;
   String selectedExprText = '';
+
+  /// Path of the tree row that currently has "keyboard focus" — the target
+  /// of structural shortcuts (Ctrl+Shift+↑/↓/Del/Insert). Set when the user
+  /// taps any tree row; cleared when focus leaves the tree. Independent of
+  /// [selectedExprPath]: the latter governs the right-rail ExprPanel and is
+  /// only set when the tapped node is an expression leaf, whereas this
+  /// field tracks ANY clickable tree row (object/array container, scalar,
+  /// expression — all of them).
+  List<String>? focusedNodePath;
   // The text the editor was opened with — i.e. the value committed in
   // configJson at the time of selection, plus whatever Apply has pushed
   // since. The Reset button restores the editor to this baseline; without
@@ -491,11 +516,34 @@ class TraceStore extends ChangeNotifier {
   // ghost-pasted onto the new one. Adding a confirm dialog here would cost
   // more than it saves: typing into one leaf and clicking another is a
   // common navigation pattern (compare, reference) that should not prompt.
+  /// Set the tree node currently receiving keyboard focus for structural
+  /// shortcuts. Called by every tappable tree row (json_tree's
+  /// `_buildExpandableRow`, scalar leaves, expression leaves).
+  /// A null path clears focus (e.g. when the user clicks outside the tree).
+  void setFocusedNode(List<String>? path) {
+    if (focusedNodePath == null && path == null) return;
+    if (focusedNodePath != null &&
+        path != null &&
+        focusedNodePath!.length == path.length) {
+      var same = true;
+      for (var i = 0; i < path.length; i++) {
+        if (focusedNodePath![i] != path[i]) {
+          same = false;
+          break;
+        }
+      }
+      if (same) return;
+    }
+    focusedNodePath = path;
+    notifyListeners();
+  }
+
   void setSelectedExpr(List<String> path, String text) {
     devTrace('action.expr.select', {'path': path});
     selectedExprPath = path;
     selectedExprText = text;
     selectedExprBaseline = text;
+    focusedNodePath = path;
     exprGeneration++;
     // Opening a new leaf: start in pending state so the badge reads
     // "checking" instead of stale-flashing the previous result.
@@ -2685,6 +2733,7 @@ class TraceStore extends ChangeNotifier {
     _traceLinesCounter.dispose();
     _fileGen.dispose();
     _pendingFocusPath.dispose();
+    _pendingAddChildPath.dispose();
     super.dispose();
   }
 

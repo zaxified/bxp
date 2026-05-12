@@ -12,8 +12,21 @@ library;
 Map<String, dynamic>? findSchemaDocIn(
   List<Map<String, dynamic>> schema,
   List<String> path,
+) =>
+    findSchemaDocMatchIn(schema, path).doc;
+
+/// Result of a schema-doc match, exposing whether the path's last segment
+/// matched a literal key or a wildcard `*`. The distinction matters for
+/// `canDelete`: `required: true` on a wildcard entry refers to the slot's
+/// VALUE (the expression / sub-object), not the entry's presence — user-
+/// named children of wildcards are always free to remove from the parent.
+typedef SchemaDocMatch = ({Map<String, dynamic>? doc, bool wildcardLast});
+
+SchemaDocMatch findSchemaDocMatchIn(
+  List<Map<String, dynamic>> schema,
+  List<String> path,
 ) {
-  if (path.isEmpty) return null;
+  if (path.isEmpty) return (doc: null, wildcardLast: false);
   for (final f in schema) {
     final pattern = f['key']?.toString() ?? '';
     final segs = pattern.split('.');
@@ -26,7 +39,7 @@ Map<String, dynamic>? findSchemaDocIn(
         break;
       }
     }
-    if (ok) return f;
+    if (ok) return (doc: f, wildcardLast: segs.last == '*');
   }
-  return null;
+  return (doc: null, wildcardLast: false);
 }

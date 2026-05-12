@@ -3,6 +3,7 @@ import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../services/dev_trace.dart';
+import '../services/schema_gate.dart';
 import '../store/trace_store.dart';
 import 'debug_panes.dart';
 import 'config_view.dart';
@@ -149,8 +150,66 @@ class _MainViewState extends State<MainView> {
         devTrace('action.shortcut', {'combo': 'Ctrl+T', 'action': 'resetDraft'});
         store.resetDraft();
         return true;
+      case LogicalKeyboardKey.arrowUp:
+        if (!shift) return false;
+        return _moveFocused(store, -1);
+      case LogicalKeyboardKey.arrowDown:
+        if (!shift) return false;
+        return _moveFocused(store, 1);
+      case LogicalKeyboardKey.delete:
+        if (!shift) return false;
+        return _deleteFocused(store);
+      case LogicalKeyboardKey.insert:
+        if (!shift) return false;
+        return _addChildFocused(store);
     }
     return false;
+  }
+
+  /// Move the keyboard-focused tree node by [delta] positions. Mirrors
+  /// the toolbox up/down arrow buttons.
+  bool _moveFocused(TraceStore store, int delta) {
+    final path = store.focusedNodePath;
+    if (path == null || path.isEmpty) return true;
+    if (store.configLoadHadErrors) return true;
+    devTrace('action.shortcut', {
+      'combo': delta < 0 ? 'Ctrl+Shift+Up' : 'Ctrl+Shift+Down',
+      'action': 'moveFocused',
+      'path': path,
+    });
+    store.moveConfigNode(path, delta);
+    return true;
+  }
+
+  /// Delete the keyboard-focused tree node. Mirrors the toolbox × button
+  /// — silently no-ops on required keys (so a held-down Ctrl+Shift+Del
+  /// doesn't accidentally wipe sibling content past the required gate).
+  bool _deleteFocused(TraceStore store) {
+    final path = store.focusedNodePath;
+    if (path == null || path.isEmpty) return true;
+    if (store.configLoadHadErrors) return true;
+    if (!SchemaGate(store).canDelete(path)) return true;
+    devTrace('action.shortcut',
+        {'combo': 'Ctrl+Shift+Del', 'action': 'deleteFocused', 'path': path});
+    store.deleteConfigNode(path);
+    return true;
+  }
+
+  /// Request the Add-Child dialog over the keyboard-focused tree node.
+  /// The dialog needs the parent JsonObject reference held by the
+  /// matching `_JsonNodeState` — we signal via `requestAddChildAt` and
+  /// the node consumes the request in its `pendingAddChildPath` listener.
+  bool _addChildFocused(TraceStore store) {
+    final path = store.focusedNodePath;
+    if (path == null) return true;
+    if (store.configLoadHadErrors) return true;
+    devTrace('action.shortcut', {
+      'combo': 'Ctrl+Shift+Insert',
+      'action': 'addChildFocused',
+      'path': path,
+    });
+    store.requestAddChildAt(path);
+    return true;
   }
 
   @override

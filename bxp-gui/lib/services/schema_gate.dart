@@ -13,6 +13,7 @@ import 'dart:convert';
 import 'package:json5_ast/ast.dart';
 
 import '../store/trace_store.dart';
+import 'schema_doc_lookup.dart';
 
 /// Suggestion entry for the "Add property" dropdown.
 class InsertKeyCandidate {
@@ -66,10 +67,19 @@ class SchemaGate {
   /// the schema explicitly protects. There is intentionally no `canEdit`
   /// gate here — value editing is always allowed; the schema only
   /// constrains structure (presence/order/required-ness), not contents.
+  ///
+  /// Wildcard-slot caveat: when the path's last segment matched a schema
+  /// wildcard (`*`), the schema entry's `required: true` refers to the
+  /// slot's VALUE (the expression must be non-empty), not to the entry's
+  /// presence in the parent map. User-named children of wildcards (e.g.
+  /// `input_schema.$ticker`, `output_schema.symbol`, `pre_pass.values.foo`)
+  /// are always free to remove — the validator will flag the absence
+  /// downstream if it matters.
   bool canDelete(List<String> path) {
-    final doc = store.findSchemaDoc(path);
-    if (doc == null) return true;
-    return doc['required'] != true;
+    final match = findSchemaDocMatchIn(store.docConfigSchema, path);
+    if (match.doc == null) return true;
+    if (match.wildcardLast) return true;
+    return match.doc!['required'] != true;
   }
 
   /// True when the parent at [parentPath] is `ordered` (or has no schema
