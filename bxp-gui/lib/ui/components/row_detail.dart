@@ -657,12 +657,19 @@ class _RulesTableState extends State<_RulesTable> {
               final isHovered = _hoverIdx == idx;
               // Hover background uses the same `withHover` token as the
               // variables table above so both row-transform tables share
-              // one visual idiom. When a row is the matched one its tint
-              // still wins — hover would otherwise wash out the green
-              // highlight that anchors the user's eye to the active rule.
-              final bg = isMatched
-                  ? t.matchedRowTint
-                  : (isHovered ? t.withHover(t.surfaceBg) : Colors.transparent);
+              // one visual idiom. On the matched row we lift the tint
+              // through `withHover` instead of dropping it so the green
+              // anchor stays visible and hover still gives feedback.
+              final Color bg;
+              if (isMatched && isHovered) {
+                bg = t.withHover(t.matchedRowTint);
+              } else if (isMatched) {
+                bg = t.matchedRowTint;
+              } else if (isHovered) {
+                bg = t.withHover(t.surfaceBg);
+              } else {
+                bg = Colors.transparent;
+              }
               return MouseRegion(
                 onEnter: (_) => setState(() => _hoverIdx = idx),
                 onExit: (_) {

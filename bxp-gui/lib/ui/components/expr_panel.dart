@@ -441,57 +441,14 @@ class _DocsPanel extends StatelessWidget {
                     'to see its docstring inline.'),
                 const _TipDoc('Ctrl+Scroll zooms the whole UI; Ctrl+0 '
                     'resets, Ctrl++/Ctrl+- step.'),
-                const SizedBox(height: 16),
-                const _SectionLabel('SHORTCUTS'),
-                const SizedBox(height: 8),
-                const _ShortcutDoc('Ctrl+S',       'Save config'),
-                const _ShortcutDoc('Ctrl+O',       'Open config'),
-                const _ShortcutDoc('Ctrl+R',       'Reload config from disk'),
-                const _ShortcutDoc('Ctrl+Z',       'Undo'),
-                const _ShortcutDoc('Ctrl+Y',       'Redo'),
-                const _ShortcutDoc('Ctrl+T',       'Reset draft'),
-                const _ShortcutDoc('Ctrl+Shift+T', 'Toggle theme inspector'),
-                const _ShortcutDoc('Ctrl+Shift+S', 'Toggle settings / runtime inspector'),
-                const _ShortcutDoc('Esc',          'Close open dialog or inspector'),
+                const _TipDoc('Ctrl+Shift+S opens the settings / runtime '
+                    'inspector — it lists every keyboard shortcut, the '
+                    'binary paths, and the active config status.'),
               ],
             ),
           ),
         ),
       ],
-    );
-  }
-}
-
-class _ShortcutDoc extends StatelessWidget {
-  final String keys;
-  final String desc;
-  const _ShortcutDoc(this.keys, this.desc);
-  @override
-  Widget build(BuildContext context) {
-    final t = context.bxpTheme;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 5),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            constraints: const BoxConstraints(minWidth: 100, maxWidth: 110),
-            child: Text(
-              keys,
-              style: BxpText.body(
-                context,
-                color: t.codeKeyword,
-                size: BxpSize.sm,
-                weight: BxpWeight.bold,
-              ),
-            ),
-          ),
-          const SizedBox(width: 4),
-          Expanded(
-            child: Text(desc, style: BxpText.muted(context, size: BxpSize.xs)),
-          ),
-        ],
-      ),
     );
   }
 }

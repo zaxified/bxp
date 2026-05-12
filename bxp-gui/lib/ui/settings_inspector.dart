@@ -234,6 +234,19 @@ class _Body extends StatelessWidget {
       ('Theme', [
         ('preset', store.themePresetName),
       ]),
+      ('Keyboard shortcuts', [
+        ('Save', 'Ctrl+S'),
+        ('Reload from disk', 'Ctrl+R'),
+        ('Undo / Redo', 'Ctrl+Z / Ctrl+Y'),
+        ('Discard unsaved changes', 'Ctrl+T'),
+        ('Validate', 'Ctrl+E'),
+        ('Move focused node', 'Ctrl+Shift+↑/↓'),
+        ('Delete focused node', 'Ctrl+Shift+Del'),
+        ('Add child to focused node', 'Ctrl+Shift+Insert'),
+        ('Rename map key (focused row)', 'double-click on the key chip'),
+        ('Open settings inspector', 'Ctrl+Shift+S'),
+        ('Open theme inspector', 'Ctrl+Shift+T'),
+      ]),
     ];
 
     // Per-section Tables — each computes its own `IntrinsicColumnWidth` for

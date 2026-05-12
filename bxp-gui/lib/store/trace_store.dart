@@ -157,7 +157,22 @@ class TraceStore extends ChangeNotifier {
   /// same way `_pendingFocusPath` works.
   final ValueNotifier<List<String>?> _pendingAddChildPath = ValueNotifier(null);
   ValueListenable<List<String>?> get pendingAddChildPath => _pendingAddChildPath;
+  // Monotonic ticket so that exactly one listener consumes each request
+  // even when multiple `_JsonNodeState` instances share a path (a property
+  // row and its expanded container can both match). `requestAddChildAt`
+  // bumps `_addChildTicket`; the first matching listener calls
+  // `consumeAddChildTicket(ticket)` — returns true once, false thereafter
+  // for the same ticket, so siblings short-circuit.
+  int _addChildTicket = 0;
+  int _addChildTicketConsumed = 0;
+  int get addChildTicket => _addChildTicket;
+  bool consumeAddChildTicket(int ticket) {
+    if (ticket <= _addChildTicketConsumed) return false;
+    _addChildTicketConsumed = ticket;
+    return true;
+  }
   void requestAddChildAt(List<String> path) {
+    _addChildTicket++;
     _pendingAddChildPath.value = path;
   }
   void clearPendingAddChild() {
@@ -867,24 +882,40 @@ class TraceStore extends ChangeNotifier {
     final info = <String, Map<String, String>>{};
     void walk(dynamic node, List<String> path) {
       if (node is Map) {
-        Map<String, String>? errs;
-        Map<String, String>? warns;
-        Map<String, String>? infos;
-        for (final e in node.entries) {
-          final k = e.key.toString();
-          if (k.startsWith(r'$err_')) {
-            (errs ??= {})[k] = _diagMessage(e.value);
-          } else if (k.startsWith(r'$warn_')) {
-            (warns ??= {})[k] = _diagMessage(e.value);
-          } else if (k.startsWith(r'$info_')) {
-            (infos ??= {})[k] = _diagMessage(e.value);
+        // bxp-fmt's contract (see bxp-fmt/CLAUDE.md): each `$err_<N>` /
+        // `$warn_<N>` / `$info_<N>` is inserted "as a sibling immediately
+        // before the offending key in its parent object"; when the
+        // offending field is absent, the marker is appended at the end.
+        // Translate that placement back into a leaf path so banners render
+        // adjacent to the offending property row instead of after the
+        // whole parent subtree.
+        final entries = node.entries.toList();
+        String? targetAt(int i) {
+          for (var j = i + 1; j < entries.length; j++) {
+            final nk = entries[j].key.toString();
+            if (!nk.startsWith(r'$')) return nk;
           }
+          return null;
         }
-        final encoded = _encodePath(path);
-        if (errs != null) errors[encoded] = errs;
-        if (warns != null) warnings[encoded] = warns;
-        if (infos != null) info[encoded] = infos;
-        for (final e in node.entries) {
+        for (var i = 0; i < entries.length; i++) {
+          final k = entries[i].key.toString();
+          Map<String, Map<String, String>>? bucket;
+          if (k.startsWith(r'$err_')) {
+            bucket = errors;
+          } else if (k.startsWith(r'$warn_')) {
+            bucket = warnings;
+          } else if (k.startsWith(r'$info_')) {
+            bucket = info;
+          } else {
+            continue;
+          }
+          final target = targetAt(i);
+          final attachPath = target != null ? [...path, target] : path;
+          final encoded = _encodePath(attachPath);
+          (bucket.putIfAbsent(encoded, () => {}))[k] =
+              _diagMessage(entries[i].value);
+        }
+        for (final e in entries) {
           final k = e.key.toString();
           // Skip only the annotation prefixes bxp-fmt actually emits
           // (`$err_*`, `$warn_*`, `$info_*`, `$comm_*`). Walking into
@@ -1738,8 +1769,15 @@ class TraceStore extends ChangeNotifier {
     final lastKey = path.last;
     final parent = _astAt(parentPath);
     if (parent is JsonObject) {
-      final doc = findSchemaDoc(path);
-      if (doc != null && doc['required'] == true) return;
+      // `required: true` on a wildcard-slot schema entry refers to the
+      // VALUE (must be non-empty), not the entry's presence in the
+      // parent. User-named children of wildcards are always deletable.
+      final match = findSchemaDocMatchIn(docConfigSchema, path);
+      if (match.doc != null &&
+          !match.wildcardLast &&
+          match.doc!['required'] == true) {
+        return;
+      }
     }
 
     // Selection invalidation BEFORE the mutation so we can still inspect

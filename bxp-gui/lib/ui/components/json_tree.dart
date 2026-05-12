@@ -301,10 +301,16 @@ class _JsonNodeState extends State<_JsonNode> {
       store.clearPendingAddChild();
       return;
     }
-    // Consume the request so other matching nodes (none should exist —
-    // path identity is unique — but defensively) don't also pop a dialog.
+    // Store-level ticket gate — siblings sharing this path (e.g. a
+    // property row and its expanded container) would otherwise each pop
+    // their own dialog. The first to call `consumeAddChildTicket` wins.
+    if (!store.consumeAddChildTicket(store.addChildTicket)) return;
     store.clearPendingAddChild();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    // Microtask defer — leaves the current ValueNotifier-notify pass
+    // before `showDialog`, but doesn't wait for the next frame the way
+    // `addPostFrameCallback` would (the latter can stall ~1-2 s when a
+    // notifyListeners-driven rebuild is in flight on a debug build).
+    scheduleMicrotask(() {
       if (mounted) _showAddDialog();
     });
   }
@@ -826,18 +832,40 @@ class _JsonNodeState extends State<_JsonNode> {
     // they remain a ~500-listener pointer-event sink (~100 rows ×
     // ~4 buttons each).
     final debug = context.watch<DebugSettings>();
+    final focusedPath = context.watch<TraceStore>().focusedNodePath;
+    final isFocused = focusedPath != null &&
+        focusedPath.length == widget.path.length &&
+        () {
+          for (var i = 0; i < widget.path.length; i++) {
+            if (focusedPath[i] != widget.path[i]) return false;
+          }
+          return true;
+        }();
     final inner = Container(
       key: _rowKey,
-      color: (debug.hoverBackground && isHovered)
-          ? t.withHover(t.surfaceBg)
-          : Colors.transparent,
+      decoration: BoxDecoration(
+        color: (debug.hoverBackground && isHovered)
+            ? t.withHover(t.surfaceBg)
+            : Colors.transparent,
+        border: isFocused
+            ? Border(left: BorderSide(color: t.accentHighlight, width: 2))
+            : null,
+      ),
       padding: const EdgeInsets.symmetric(vertical: 2.0),
       child: _RowEnvelope(
         depth: widget.depth,
         children: [
           const SizedBox(width: 16),
           if (widget.keyName != null && int.tryParse(widget.keyName!)?.toString() != widget.keyName) ...[
-            _SchemaTooltipKey(keyName: widget.keyName!, path: widget.path),
+            if (_renamingKey)
+              _buildRenameField(t)
+            else
+              GestureDetector(
+                onDoubleTap: _enterRenameKey,
+                behavior: HitTestBehavior.opaque,
+                child: _SchemaTooltipKey(
+                    keyName: widget.keyName!, path: widget.path),
+              ),
             Text(' : ',
                 style: BxpText.body(context,color: t.borderColor, size: BxpSize.md)),
           ] else if (widget.keyName != null) ...[
@@ -849,12 +877,22 @@ class _JsonNodeState extends State<_JsonNode> {
         ],
       ),
     );
+    // Translucent tap layer — marks this leaf as the focused node for
+    // Ctrl+Shift+↑/↓/Del/Insert without consuming the tap (inline value
+    // editors below still receive it). Mirrors the focus-on-tap behaviour
+    // of `_buildExpandableRow` so keyboard shortcuts work on every row.
+    Widget withTapFocus(Widget child) => GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onTap: () =>
+              context.read<TraceStore>().setFocusedNode(widget.path),
+          child: child,
+        );
     if (!debug.hoverBackground && !debug.hoverActionButtons) {
       // No state cares about hover — skip the MouseRegion entirely so
       // we don't add a pointer-event subscriber per row.
-      return inner;
+      return withTapFocus(inner);
     }
-    return MouseRegion(
+    return withTapFocus(MouseRegion(
       onEnter: (_) {
         if (debug.hoverActionButtons) {
           TreeActionsBinding.publishFromRow(context, _rowKey, _actionId,
@@ -867,7 +905,7 @@ class _JsonNodeState extends State<_JsonNode> {
         setState(() => isHovered = false);
       },
       child: inner,
-    );
+    ));
   }
 
   List<Widget> _inlineTrailingWidgets() {
@@ -1025,8 +1063,10 @@ class _JsonNodeState extends State<_JsonNode> {
       // marked ordered. Maps default to unordered in JSON semantics.
       canReorder = parentDoc != null && parentDoc['ordered'] == true;
     }
-    final selfDoc = store.findSchemaDoc(widget.path);
-    final isRequired = !isArrayEntry && selfDoc != null && selfDoc['required'] == true;
+    // Use SchemaGate.canDelete (single source of truth) — it accounts for
+    // wildcard-slot semantics where `required: true` refers to the value,
+    // not the entry's presence in the parent map.
+    final isRequired = !isArrayEntry && !SchemaGate(store).canDelete(widget.path);
 
     // Fixed slot order (left → right): comment-inline, comment-above,
     // add-child, move-up, move-down, duplicate, delete. Conditional
@@ -1062,7 +1102,7 @@ class _JsonNodeState extends State<_JsonNode> {
           _ActionBtn(
             icon: '+',
             tooltip: isComposite
-                ? 'Add child'
+                ? 'Add child  (Ctrl+Shift+Insert)'
                 : 'Add child — leaf rows can\'t host children',
             // `codeNumber` (active) vs `textMuted` (disabled) —
             // amber/gold sits clearly between the accent-blue move
@@ -1075,7 +1115,7 @@ class _JsonNodeState extends State<_JsonNode> {
           _ActionBtn(
             icon: '↑',
             tooltip: canReorder
-                ? 'Move up'
+                ? 'Move up  (Ctrl+Shift+↑)'
                 : 'Move up — order is not significant here',
             color: canReorder ? t.accentHighlight : t.textMuted,
             onTap: canReorder
@@ -1085,7 +1125,7 @@ class _JsonNodeState extends State<_JsonNode> {
           _ActionBtn(
             icon: '↓',
             tooltip: canReorder
-                ? 'Move down'
+                ? 'Move down  (Ctrl+Shift+↓)'
                 : 'Move down — order is not significant here',
             color: canReorder ? t.accentHighlight : t.textMuted,
             onTap: canReorder
@@ -1106,7 +1146,9 @@ class _JsonNodeState extends State<_JsonNode> {
           ),
           _ActionBtn(
             icon: '×',
-            tooltip: isRequired ? 'Required key — cannot delete' : 'Delete',
+            tooltip: isRequired
+                ? 'Required key — cannot delete'
+                : 'Delete  (Ctrl+Shift+Del)',
             color: isRequired ? t.textMuted : t.errorText,
             onTap: isRequired ? null : () => store.deleteConfigNode(widget.path),
           ),
@@ -1837,14 +1879,16 @@ class _AddChildDialogState extends State<_AddChildDialog> {
   static const _uiTypes = ['string', 'number', 'boolean', 'object', 'array'];
 
   final _keyController = TextEditingController();
-  // Held explicitly so `_pickSuggestion` can yank focus back from a chip's
-  // InkWell — without it, clicking a chip moves focus to the InkWell and
-  // the next Enter press fires the chip's onTap again instead of the
-  // dialog's Enter→_confirm shortcut.
   final _keyFocusNode = FocusNode();
   String _type = 'string';
   String? _error;
   InsertKeyCandidate? _pickedSuggestion;
+  // Bumped on every chip / type-button click so the key TextField below
+  // remounts — `autofocus: true` fires on each fresh mount, putting the
+  // caret back into the field. A plain `_keyFocusNode.requestFocus()`
+  // after the InkWell's tap is silently rejected by the modal scope's
+  // focus rebalancing on Linux.
+  int _keyFieldRemount = 0;
 
   /// Map a schema `type_name` (which can be "string", "expression",
   /// "string | object", …) to the subset of [_uiTypes] that the user is
@@ -1898,6 +1942,20 @@ class _AddChildDialogState extends State<_AddChildDialog> {
         _keyController.text = only.key;
       }
     }
+    // The triggering InkWell often retains focus past the dialog's first
+    // frame, so TextField.autofocus alone is unreliable — pull focus into
+    // the key field explicitly and select any pre-filled text so the user
+    // can immediately overtype.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _keyFocusNode.requestFocus();
+      if (_keyController.text.isNotEmpty) {
+        _keyController.selection = TextSelection(
+          baseOffset: 0,
+          extentOffset: _keyController.text.length,
+        );
+      }
+    });
   }
 
   @override
@@ -1954,11 +2012,18 @@ class _AddChildDialogState extends State<_AddChildDialog> {
         // so user can type freely; keep the type pre-selected.
         _keyController.text = '';
       }
+      // Bump the TextField's key so it remounts — `autofocus: true` fires
+      // again on mount, putting the caret back into the key field. Direct
+      // `_keyFocusNode.requestFocus()` after a chip tap is silently
+      // rejected by the modal scope's focus rebalancing on Linux.
+      _keyFieldRemount++;
     });
-    // Pull focus back into the key field so the next Enter fires _confirm
-    // (the dialog-level CallbackShortcuts) instead of re-triggering the
-    // chip InkWell that was just tapped.
-    _keyFocusNode.requestFocus();
+    if (_keyController.text.isNotEmpty) {
+      _keyController.selection = TextSelection(
+        baseOffset: 0,
+        extentOffset: _keyController.text.length,
+      );
+    }
   }
 
   @override
@@ -2041,6 +2106,7 @@ class _AddChildDialogState extends State<_AddChildDialog> {
                             color: th.textMuted, size: BxpSize.sm)),
                     const SizedBox(height: 4),
                     TextField(
+                      key: ValueKey('addChildKey-$_keyFieldRemount'),
                       controller: _keyController,
                       focusNode: _keyFocusNode,
                       autofocus: true,
@@ -2085,6 +2151,11 @@ class _AddChildDialogState extends State<_AddChildDialog> {
                           // schema template — fall back to type-default
                           // scaffold ({}, [], "", 0, false).
                           _pickedSuggestion = null;
+                          // Remount the key field so its autofocus fires
+                          // again — direct requestFocus is silently
+                          // rejected after the InkWell's tap. Lets the
+                          // user start typing the key name immediately.
+                          _keyFieldRemount++;
                         }),
                         child: Container(
                           padding: const EdgeInsets.symmetric(
