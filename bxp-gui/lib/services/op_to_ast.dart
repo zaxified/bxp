@@ -23,6 +23,9 @@ void applyConfigOp(JsonAstNode root, ConfigOp op) {
     case EditValueOp e:
       ast_ops.setValueFromPlain(root, e.path, e.newValue);
 
+    case RenameKeyOp r:
+      ast_ops.renameProperty(root, r.path, r.newKey);
+
     case DeleteOp d:
       ast_ops.deleteAt(root, d.path);
 

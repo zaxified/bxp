@@ -251,6 +251,14 @@ class _JsonNodeState extends State<_JsonNode> {
   /// lookup (which is forbidden once the element starts unmounting).
   TraceStore? _storeRef;
 
+  /// True while the user is renaming this row's Map key via inline
+  /// TextField. Double-click on the key chip flips it on; commit or
+  /// cancel flips it off. Only meaningful when the parent is a Map.
+  bool _renamingKey = false;
+  TextEditingController? _renameController;
+  FocusNode? _renameFocus;
+  String? _renameError;
+
   @override
   void initState() {
     super.initState();
@@ -315,7 +323,138 @@ class _JsonNodeState extends State<_JsonNode> {
       WidgetsBinding.instance.addPostFrameCallback((_) => ctrl.clear(id));
     }
     _storeRef?.pendingAddChildPath.removeListener(_onAddChildPending);
+    _renameController?.dispose();
+    _renameFocus?.dispose();
     super.dispose();
+  }
+
+  /// Switch this row into rename-key edit mode. Pre-fills the controller
+  /// with the current key and selects all so the user can immediately
+  /// overtype or amend.
+  void _enterRenameKey() {
+    if (widget.keyName == null) return;
+    if (widget.path.isEmpty) return;
+    _renameController?.dispose();
+    _renameFocus?.dispose();
+    _renameController = TextEditingController(text: widget.keyName);
+    _renameController!.selection = TextSelection(
+      baseOffset: 0,
+      extentOffset: widget.keyName!.length,
+    );
+    _renameFocus = FocusNode();
+    setState(() {
+      _renamingKey = true;
+      _renameError = null;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _renameFocus?.requestFocus();
+    });
+  }
+
+  /// Commit the rename if validation passes. Duplicate keys among
+  /// siblings and empty input are rejected inline (red error text); the
+  /// validator catches semantic problems (e.g. dangling references) on
+  /// the next Validate run, mirroring the permissive policy the plan
+  /// settled on.
+  void _commitRenameKey() {
+    final c = _renameController;
+    if (c == null) return;
+    final newKey = c.text.trim();
+    if (newKey.isEmpty) {
+      setState(() => _renameError = 'Key must not be empty');
+      return;
+    }
+    if (newKey == widget.keyName) {
+      _cancelRenameKey();
+      return;
+    }
+    final store = context.read<TraceStore>();
+    final parentPath = widget.path.sublist(0, widget.path.length - 1);
+    final parent = store.astAtPublic(parentPath);
+    if (parent is JsonObject) {
+      for (final p in parent.properties.whereType<JsonProperty>()) {
+        if (p.key == newKey) {
+          setState(() => _renameError =
+              "Key '$newKey' already exists in this object");
+          return;
+        }
+      }
+    }
+    store.renameConfigKey(widget.path, newKey);
+    setState(() {
+      _renamingKey = false;
+      _renameError = null;
+    });
+  }
+
+  void _cancelRenameKey() {
+    setState(() {
+      _renamingKey = false;
+      _renameError = null;
+    });
+  }
+
+  /// Inline TextField swapped in for the key chip while [_renamingKey]
+  /// is true. Enter commits, Escape cancels, focus loss commits (the
+  /// user clicking away from the row reads as "I'm done"). Sized to
+  /// match the average key width so the row doesn't reflow on toggle.
+  Widget _buildRenameField(BxpTheme t) {
+    final hasError = _renameError != null;
+    return ConstrainedBox(
+      constraints: const BoxConstraints(minWidth: 120, maxWidth: 280),
+      child: CallbackShortcuts(
+        bindings: {
+          const SingleActivator(LogicalKeyboardKey.enter): _commitRenameKey,
+          const SingleActivator(LogicalKeyboardKey.numpadEnter):
+              _commitRenameKey,
+          const SingleActivator(LogicalKeyboardKey.escape): _cancelRenameKey,
+        },
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: _renameController,
+              focusNode: _renameFocus,
+              autofocus: true,
+              onSubmitted: (_) => _commitRenameKey(),
+              onTapOutside: (_) => _commitRenameKey(),
+              onChanged: (_) {
+                if (_renameError != null) {
+                  setState(() => _renameError = null);
+                }
+              },
+              style: BxpText.body(context,
+                  color: t.codeVariable, size: BxpSize.md),
+              cursorColor: t.accentHighlight,
+              decoration: InputDecoration(
+                isDense: true,
+                border: OutlineInputBorder(
+                    borderSide:
+                        BorderSide(color: hasError ? t.errorBorder : t.inputBorder)),
+                enabledBorder: OutlineInputBorder(
+                    borderSide:
+                        BorderSide(color: hasError ? t.errorBorder : t.inputBorder)),
+                focusedBorder: OutlineInputBorder(
+                    borderSide: BorderSide(
+                        color: hasError ? t.errorBorder : t.inputBorderFocused)),
+                contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 6, vertical: 4),
+              ),
+            ),
+            if (hasError)
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Text(
+                  _renameError!,
+                  style: BxpText.body(context,
+                      color: t.errorText, size: BxpSize.xs),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -798,10 +937,17 @@ class _JsonNodeState extends State<_JsonNode> {
             ),
           ),
           if (widget.keyName != null && int.tryParse(widget.keyName!)?.toString() != widget.keyName) ...[
-            _SchemaTooltipKey(
-              keyName: widget.keyName!,
-              path: widget.path,
-            ),
+            if (_renamingKey)
+              _buildRenameField(t)
+            else
+              GestureDetector(
+                onDoubleTap: _enterRenameKey,
+                behavior: HitTestBehavior.opaque,
+                child: _SchemaTooltipKey(
+                  keyName: widget.keyName!,
+                  path: widget.path,
+                ),
+              ),
             Text(' : ', style: muted),
           ] else if (widget.keyName != null) ...[
             Text('[${widget.keyName}]', style: muted),

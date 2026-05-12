@@ -1771,6 +1771,65 @@ class TraceStore extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Public AST navigator. Returns the node at [path], or null when the
+  /// AST is unloaded or the path doesn't resolve. Mirrors the internal
+  /// `_astAt` helper without exposing it directly — kept on the surface
+  /// so json_tree can pre-validate sibling-key collisions before calling
+  /// `renameConfigKey`.
+  JsonAstNode? astAtPublic(List<String> path) => _astAt(path);
+
+  /// Rename the Map key at [path] to [newKey]. Permissive — accepts any
+  /// non-empty unique-among-siblings string. Validator surfaces any
+  /// downstream references that go stale (e.g. `$ticker` lingering in
+  /// output_schema after the input_schema entry was renamed).
+  ///
+  /// Returns silently on a no-op (same key), on read-only state, on
+  /// non-Map parents, or when the new key clashes with a sibling — UI
+  /// is expected to pre-validate so the user sees the rejection live.
+  void renameConfigKey(List<String> path, String newKey) {
+    if (_astRoot == null || path.isEmpty || _loadedWithErrors) return;
+    if (newKey.isEmpty) return;
+    final parentPath = path.sublist(0, path.length - 1);
+    final parent = _astAt(parentPath);
+    if (parent is! JsonObject) return;
+    final oldKey = path.last;
+    if (oldKey == newKey) return;
+    // Duplicate-key guard: skip silently. The AST helper would throw,
+    // but throwing leaks through `_applyOpToAst` as a non-recoverable
+    // op-log corruption; pre-filtering keeps the UI snappy and avoids
+    // a transient "Save failed" badge for what is a user-correctable
+    // typing mistake.
+    for (final p in parent.properties.whereType<JsonProperty>()) {
+      if (p.key == newKey) return;
+    }
+
+    // selectedExprPath rewrite: if the renamed key sits on the selection
+    // path, the new path differs only in `path.last`. Patch in place so
+    // the right-rail ExprPanel keeps pointing at the (renamed) leaf.
+    if (selectedExprPath != null &&
+        _pathStartsWith(selectedExprPath!, path)) {
+      final newSel = List<String>.from(selectedExprPath!);
+      newSel[path.length - 1] = newKey;
+      selectedExprPath = newSel;
+    }
+    // Same for focusedNodePath — Ctrl+Shift+↑/↓ keeps acting on the
+    // renamed entry without losing the keyboard target.
+    if (focusedNodePath != null &&
+        _pathStartsWith(focusedNodePath!, path)) {
+      final newFoc = List<String>.from(focusedNodePath!);
+      newFoc[path.length - 1] = newKey;
+      focusedNodePath = newFoc;
+    }
+
+    if (!_applyOpToAst(RenameKeyOp(path, newKey), 'op.rename',
+        {'path': path, 'newKey': newKey})) {
+      return;
+    }
+    _recomputeDirty();
+    _pushHistory();
+    notifyListeners();
+  }
+
   void duplicateConfigNode(List<String> path) {
     if (_astRoot == null || path.isEmpty || _loadedWithErrors) return;
     final parentPath = path.sublist(0, path.length - 1);

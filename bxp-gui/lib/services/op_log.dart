@@ -22,6 +22,15 @@ class EditValueOp extends ConfigOp {
   const EditValueOp(this.path, this.newValue);
 }
 
+/// Rename the Map key at [path] to [newKey]. Position, value, and
+/// surrounding comments are preserved — only the key text changes.
+/// Duplicate / empty keys are rejected by the AST helper at apply time.
+class RenameKeyOp extends ConfigOp {
+  final ConfigPath path;
+  final String newKey;
+  const RenameKeyOp(this.path, this.newKey);
+}
+
 /// Remove the entry at [path] (and its trailing comma + same-line comment).
 class DeleteOp extends ConfigOp {
   final ConfigPath path;

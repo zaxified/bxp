@@ -107,6 +107,63 @@ void main() {
   });
 
   // ============================================================
+  // renameProperty
+  // ============================================================
+  group('renameProperty', () {
+    test('renames Map key in place, preserving position and value', () {
+      final root = parseOk('{ a: 1, b: 2, c: 3 }');
+      renameProperty(root, ['b'], 'bb');
+      final obj = root as JsonObject;
+      final keys = obj.properties.whereType<JsonProperty>().map((p) => p.key).toList();
+      expect(keys, ['a', 'bb', 'c']);
+      expect((resolveNode(root, ['bb']) as JsonNumber).rawText, '2');
+      roundTrip(root);
+    });
+
+    test('preserves leading and trailing comments', () {
+      final root = parseOk('{\n  // lead\n  a: 1, // trail\n  b: 2\n}');
+      renameProperty(root, ['a'], 'aa');
+      final dumped = Dumper.dump(root);
+      expect(dumped, contains('// lead'));
+      expect(dumped, contains('// trail'));
+      // Dumper aligns Map leaves so the value column may carry extra
+      // spacing (`aa:  1` here because the longer sibling `b` widens the
+      // column). Match the key:value pair regardless of padding.
+      expect(dumped, matches(RegExp(r'aa:\s+1')));
+    });
+
+    test('renaming to same key is a no-op (no error)', () {
+      final root = parseOk('{ a: 1 }');
+      renameProperty(root, ['a'], 'a');
+      expect((resolveNode(root, ['a']) as JsonNumber).rawText, '1');
+    });
+
+    test('rejects duplicate sibling key', () {
+      final root = parseOk('{ a: 1, b: 2 }');
+      expect(() => renameProperty(root, ['a'], 'b'),
+          throwsA(isA<AstOpError>()));
+    });
+
+    test('rejects empty new key', () {
+      final root = parseOk('{ a: 1 }');
+      expect(() => renameProperty(root, ['a'], ''),
+          throwsA(isA<AstOpError>()));
+    });
+
+    test('rejects empty path (cannot rename root)', () {
+      final root = parseOk('{ a: 1 }');
+      expect(() => renameProperty(root, [], 'x'),
+          throwsA(isA<AstOpError>()));
+    });
+
+    test('rejects array index path (only Map keys are renamable)', () {
+      final root = parseOk('{ xs: [1, 2, 3] }');
+      expect(() => renameProperty(root, ['xs', '0'], 'first'),
+          throwsA(isA<AstOpError>()));
+    });
+  });
+
+  // ============================================================
   // deleteAt
   // ============================================================
   group('deleteAt', () {

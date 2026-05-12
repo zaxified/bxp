@@ -53,6 +53,50 @@ void setValueFromPlain(JsonAstNode root, List<String> path, Object? newValue) {
 }
 
 // --------------------------------------------------------------------------
+// RenameOp — change the key of a Map property in place.
+// --------------------------------------------------------------------------
+
+/// Rename the key of the [JsonProperty] addressed by [path] to [newKey].
+/// Position within the parent, the value subtree, and adjacent leading /
+/// trailing comments stay untouched — only the key string changes.
+///
+/// Throws [AstOpError] when:
+///   - `path` is empty (cannot rename root).
+///   - `path` ends in a numeric array index (only Map keys are renamable).
+///   - `newKey` is empty (parser would reject the dump).
+///   - `newKey` already names a sibling property (silent overwrite would
+///     drop the existing entry's value).
+///
+/// Renaming to the same key is a no-op (returns silently). Callers that
+/// want a duplicate-key error must compare before calling.
+void renameProperty(
+    JsonAstNode root, List<String> path, String newKey) {
+  if (path.isEmpty) {
+    throw AstOpError('cannot rename root', path);
+  }
+  if (newKey.isEmpty) {
+    throw AstOpError('rename target key must not be empty', path);
+  }
+  final ref = resolveParent(root, path);
+  if (ref.parent is! JsonObject) {
+    throw AstOpError(
+        'renameProperty only applies to JsonObject children — '
+        "got ${ref.parent.runtimeType} at path",
+        path);
+  }
+  final entry = ref.children[ref.index];
+  if (entry is! JsonProperty) {
+    throw AstOpError(
+        'cannot rename a CommentLine peer at index ${ref.index}', path);
+  }
+  if (entry.key == newKey) return;
+  if (_findPropertyIndex(ref.parent as JsonObject, newKey) >= 0) {
+    throw AstOpError("rename: key '$newKey' already exists in parent", path);
+  }
+  entry.key = newKey;
+}
+
+// --------------------------------------------------------------------------
 // DeleteOp — remove a Map property or List element at `path`.
 // --------------------------------------------------------------------------
 
