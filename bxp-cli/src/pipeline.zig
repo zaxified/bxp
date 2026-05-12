@@ -218,9 +218,10 @@ fn extractDateRange(stem: []const u8) DateRangeResult {
 /// contain LOOKUP() calls (the pre_pass evaluation context has no
 /// lookup_table pointer — self-referential pre_pass is undefined).
 fn configMentionsLookup(bc: *const config_mod.BrokerConfig) bool {
-    var schema_it = bc.input_schema.valueIterator();
-    while (schema_it.next()) |expr| {
-        if (std.mem.indexOf(u8, expr.*, "LOOKUP(") != null) return true;
+    // StringArrayHashMap exposes values as a slice; iterate by reference
+    // so the substring scan operates on stable pointers.
+    for (bc.input_schema.values()) |expr| {
+        if (std.mem.indexOf(u8, expr, "LOOKUP(") != null) return true;
     }
     if (bc.row_rules) |rules| {
         for (rules) |rule| {
@@ -393,7 +394,7 @@ fn writeJsonString(out: *Writer, s: []const u8) !void {
 /// In debug mode, every error is printed before being suppressed.
 /// Saves and restores ctx.error_detail so the caller's detail buffer is unaffected.
 fn evalAllVars(
-    schema: std.StringHashMap([]const u8),
+    schema: std.StringArrayHashMap([]const u8),
     ctx: *expr_mod.Context,
     out: Output,
     error_count: *u32,

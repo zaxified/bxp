@@ -263,7 +263,11 @@ pub const BrokerConfig = struct {
     ticker_map: std.StringHashMap([]const u8),
     /// Variable definitions evaluated per row: name → expression string.
     /// Required — must not be empty.  "@date" is required when date_filter_from_filename is true.
-    input_schema: std.StringHashMap([]const u8),
+    /// `StringArrayHashMap` (not `StringHashMap`): preserves JSON5
+    /// declaration order so `var_eval` trace events emit in the same
+    /// order as the user wrote them — the bxp-gui row-transform
+    /// `variables` table relies on this for deterministic display.
+    input_schema: std.StringArrayHashMap([]const u8),
     /// When non-empty, only CSV files whose name ends with this suffix are processed.
     /// Example: "_3.csv" processes only files like "account_..._3.csv".
     file_pattern_in: []const u8,
@@ -2483,7 +2487,7 @@ pub fn loadFromBytes(
                 errdefer alloc.free(file_pattern_out);
                 var xlsx_sheet: ?XlsxSheet = null;
                 var ticker_map = std.StringHashMap([]const u8).init(alloc);
-                var input_schema = std.StringHashMap([]const u8).init(alloc);
+                var input_schema = std.StringArrayHashMap([]const u8).init(alloc);
                 var date_filter_from_filename: bool = false;
                 var combined_output: bool = false;
                 var pre_passes = std.StringArrayHashMap(PrePass).init(alloc);

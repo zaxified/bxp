@@ -559,16 +559,26 @@ class _ExprResultCell extends StatelessWidget {
 }
 
 // ── Rules Table ──────────────────────────────────────────────────────
-class _RulesTable extends StatelessWidget {
+class _RulesTable extends StatefulWidget {
   final List<RuleEntry> rules;
   final int? matchedIndex;
   final String? filtered;
   const _RulesTable({required this.rules, this.matchedIndex, this.filtered});
 
   @override
+  State<_RulesTable> createState() => _RulesTableState();
+}
+
+class _RulesTableState extends State<_RulesTable> {
+  int? _hoverIdx;
+
+  @override
   Widget build(BuildContext context) {
     final store = context.watch<TraceStore>();
     final t = context.bxpTheme;
+    final rules = widget.rules;
+    final matchedIndex = widget.matchedIndex;
+    final filtered = widget.filtered;
 
     if (rules.isEmpty && filtered == null) {
       return Text(
@@ -640,15 +650,32 @@ class _RulesTable extends StatelessWidget {
                   ],
                 ),
               ),
-              ...rules.map((r) {
+              ...rules.asMap().entries.map((entry) {
+              final idx = entry.key;
+              final r = entry.value;
               final isMatched = r.ruleIndex == matchedIndex;
-              return InkWell(
-                onTap: () => store.jumpToConfigRule(r.ruleIndex, r.when),
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: isMatched ? t.matchedRowTint : Colors.transparent,
-                    border: Border(bottom: BorderSide(color: t.borderColor)),
-                  ),
+              final isHovered = _hoverIdx == idx;
+              // Hover background uses the same `withHover` token as the
+              // variables table above so both row-transform tables share
+              // one visual idiom. When a row is the matched one its tint
+              // still wins — hover would otherwise wash out the green
+              // highlight that anchors the user's eye to the active rule.
+              final bg = isMatched
+                  ? t.matchedRowTint
+                  : (isHovered ? t.withHover(t.surfaceBg) : Colors.transparent);
+              return MouseRegion(
+                onEnter: (_) => setState(() => _hoverIdx = idx),
+                onExit: (_) {
+                  if (_hoverIdx == idx) setState(() => _hoverIdx = null);
+                },
+                child: InkWell(
+                  onTap: () => store.jumpToConfigRule(r.ruleIndex, r.when),
+                  hoverColor: Colors.transparent,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: bg,
+                      border: Border(bottom: BorderSide(color: t.borderColor)),
+                    ),
                   child: Row(
                     children: [
                       SizedBox(
@@ -695,6 +722,7 @@ class _RulesTable extends StatelessWidget {
                         ),
                       ),
                     ],
+                  ),
                   ),
                 ),
               );

@@ -369,7 +369,24 @@ String? _tooltipFor(
       }
       final parts = <String>[];
       parts.add(sig ?? s.text);
-      if (call != null) parts.add('→ "${call.value}"');
+      if (call != null) {
+        // LOOKUP is special: `bxp-fmt --expr-trace` evaluates without the
+        // pre_pass table (only bxp-cli's dry-run has it), so the engine
+        // returns "" for every LOOKUP regardless of whether a matching
+        // entry exists during the actual conversion. Surfacing that
+        // empty value as `→ ""` looks like a real lookup miss to the
+        // user. Instead, suppress the misleading line and point at the
+        // dry-run trace where the resolved value is reachable via the
+        // owning $variable's `var_eval` event.
+        final isLookupWithoutContext =
+            s.text == 'LOOKUP' && call.value.isEmpty;
+        if (!isLookupWithoutContext) {
+          parts.add('→ "${call.value}"');
+        } else {
+          parts.add(
+              '→ resolved during dry-run only (see the consuming \$variable)');
+        }
+      }
       if (desc != null && desc.isNotEmpty) parts.add(desc);
       return parts.join('\n\n');
     case _Tok.string:
