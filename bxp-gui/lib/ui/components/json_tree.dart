@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io' show Directory;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -1022,6 +1023,22 @@ class _ErrorRow extends StatelessWidget {
     required this.message,
     this.severity = _DiagSeverity.error,
   });
+
+  /// Extract a missing-data_dir path from the error message if present.
+  /// bxp-core emits `data_dir does not exist: '<absolute path>'` and that
+  /// substring is stable enough to pattern-match — `code` isn't carried
+  /// on the Dart side today (see `_validationErrors` doc).
+  /// Returns null when this row isn't a dir_not_found diagnostic.
+  static String? _dirNotFoundPath(String msg) {
+    const marker = 'data_dir does not exist: \'';
+    final i = msg.indexOf(marker);
+    if (i < 0) return null;
+    final start = i + marker.length;
+    final end = msg.indexOf('\'', start);
+    if (end <= start) return null;
+    return msg.substring(start, end);
+  }
+
   @override
   Widget build(BuildContext context) {
     final t = context.bxpTheme;
@@ -1033,6 +1050,8 @@ class _ErrorRow extends StatelessWidget {
       _DiagSeverity.warning => (t.warnBg, t.warnBorder, t.warnText),
       _DiagSeverity.info => (t.infoBg, t.infoBorder, t.infoText),
     };
+    final missingDir =
+        severity == _DiagSeverity.error ? _dirNotFoundPath(message) : null;
     return Padding(
       padding: const EdgeInsets.only(left: 24.0, top: 2, bottom: 2),
       child: Container(
@@ -1041,13 +1060,98 @@ class _ErrorRow extends StatelessWidget {
           border: Border(left: BorderSide(color: border, width: 2)),
         ),
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-        child: Text(
-          message,
-          style: BxpText.body(context, color: fg, size: BxpSize.xs)
-              .copyWith(fontStyle: FontStyle.italic),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Flexible(
+              child: Text(
+                message,
+                style: BxpText.body(context, color: fg, size: BxpSize.xs)
+                    .copyWith(fontStyle: FontStyle.italic),
+              ),
+            ),
+            if (missingDir != null) ...[
+              const SizedBox(width: 8),
+              InkWell(
+                onTap: () =>
+                    _confirmCreateDir(context, missingDir),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 6, vertical: 1),
+                  child: Text(
+                    'Create directory',
+                    style: BxpText.body(context,
+                            color: t.accentHighlight, size: BxpSize.xs)
+                        .copyWith(
+                            decoration: TextDecoration.underline,
+                            fontStyle: FontStyle.italic),
+                  ),
+                ),
+              ),
+            ],
+          ],
         ),
       ),
     );
+  }
+
+  /// Confirmation dialog + filesystem call. Lives on `_ErrorRow` so the
+  /// banner's local context anchors the Navigator route. On success,
+  /// triggers a Validate re-run so this diagnostic clears.
+  Future<void> _confirmCreateDir(
+      BuildContext context, String absolutePath) async {
+    final store = context.read<TraceStore>();
+    final th = context.bxpTheme;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: th.dialogBg,
+        shape: RoundedRectangleBorder(
+          side: BorderSide(color: th.borderColor),
+          borderRadius: BorderRadius.zero,
+        ),
+        title: Text('Create directory?', style: BxpText.title(ctx)),
+        content: Text(
+          "Directory '$absolutePath' does not exist. Create it now?",
+          style: BxpText.body(ctx, color: th.textPrimary),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: Text('Cancel',
+                style: BxpText.body(ctx, color: th.textMuted)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: th.accentHighlight,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Create'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      await Directory(absolutePath).create(recursive: true);
+    } catch (e) {
+      // Surface a tiny snackbar with the OS error so the user knows the
+      // attempt didn't silently no-op. Hard failures (permissions, read-
+      // only mount) are rare enough not to warrant a richer recovery
+      // path; the user can copy the message and resolve manually.
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text("Failed to create directory: $e"),
+        ));
+      }
+      return;
+    }
+    // Re-run validation so the dir_not_found error disappears.
+    if (store.configPath.isNotEmpty) {
+      await store.runValidate();
+    }
   }
 }
 

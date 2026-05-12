@@ -550,8 +550,13 @@ class DartValidator {
     }
 
     // [Field] cluster outlier (G2 layer B-equivalent). One reference at
-    // freq==1 vs another at freq>=3 with edit distance ≤ 2.
-    final outlier = _clusterOutlier(fieldRefs);
+    // freq==1 vs another at freq>=3 within a length-relative edit
+    // distance threshold. Cached CSV headers from the most recent
+    // dry-run suppress the warning when the "outlier" is a real header
+    // — that pair is then unambiguously legitimate (e.g. `Time` next
+    // to `Type` in the XTB cash export).
+    final outlier =
+        _clusterOutlier(fieldRefs, csvHeadersByTemplate[tid] ?? const <String>{});
     if (outlier != null) {
       out.add(DartDiagnostic(
         path: ['conversion_templates', tid, 'input_schema'],
@@ -800,10 +805,26 @@ class DartValidator {
   }
 
   /// Frequency-cluster outlier detection. Mirrors the Zig
-  /// `staticCheckFieldClustering` heuristic: bad = freq 1, suggest =
-  /// nearest freq>=3 with edit distance ≤ 2. Returns null when no such
-  /// pair exists.
-  static _Outlier? _clusterOutlier(List<String> refs) {
+  /// `staticCheckFieldClustering` heuristic: `bad` = freq 1, `suggest` =
+  /// nearest freq≥3 within a length-relative edit-distance threshold.
+  ///
+  /// Threshold logic guards against short-word false positives — at
+  /// length 4, edit-distance 2 means "half the characters differ",
+  /// which is more likely a different word than a typo:
+  ///   - len < 6  → require dist ≤ 1 (single typo).
+  ///   - len ≥ 6  → require dist ≤ 2 (room for one transposition or
+  ///     two adjacent slips in longer field names like `Quantity`).
+  ///
+  /// Returns null when no qualifying pair exists.
+  ///
+  /// [knownHeaders] is the set of CSV column names captured during the
+  /// most recent dry-run for the current template. When the candidate
+  /// `bad` value appears in this set, the warning is suppressed: we
+  /// know empirically that the field exists, so the freq-1 ratio is
+  /// just the user referencing a legitimately-rare column. Empty set
+  /// = "no dry-run yet"; the length threshold is the only guard.
+  static _Outlier? _clusterOutlier(
+      List<String> refs, Set<String> knownHeaders) {
     final freq = <String, int>{};
     for (final r in refs) {
       freq[r] = (freq[r] ?? 0) + 1;
@@ -811,9 +832,22 @@ class DartValidator {
     final highs = freq.entries.where((e) => e.value >= 3).map((e) => e.key);
     for (final entry in freq.entries) {
       if (entry.value != 1) continue;
-      final suggest = _closestKey(entry.key, highs);
-      if (suggest != null && suggest != entry.key) {
-        return _Outlier(entry.key, suggest);
+      if (knownHeaders.contains(entry.key)) continue;
+      final bad = entry.key;
+      final maxDist = bad.length < 6 ? 1 : 2;
+      String? suggest;
+      var bestDist = 1 << 30;
+      final lowerBad = bad.toLowerCase();
+      for (final c in highs) {
+        if (c == bad) continue;
+        final d = _levenshtein(lowerBad, c.toLowerCase());
+        if (d < bestDist) {
+          bestDist = d;
+          suggest = c;
+        }
+      }
+      if (suggest != null && bestDist <= maxDist) {
+        return _Outlier(bad, suggest);
       }
     }
     return null;
