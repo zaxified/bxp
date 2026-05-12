@@ -1223,7 +1223,12 @@ pub fn staticCheckFieldClustering(
                 best = cand;
             }
         }
-        if (best != null and best_d <= 2) {
+        // Length-relative threshold. At length 4 edit-distance 2 means
+        // half the characters differ — more likely a different word
+        // than a typo. Mirror the dart_validator gate so the GUI and
+        // bxp-fmt agree on `Time` vs `Type`-class pairs.
+        const max_d: usize = if (bad.len < 6) 1 else 2;
+        if (best != null and best_d <= max_d) {
             return .{ .bad = bad, .suggest = best.? };
         }
     }

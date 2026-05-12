@@ -490,7 +490,12 @@ fn checkUnknownFields(
                         best = ce.key_ptr.*;
                     }
                 }
-                if (best != null and best_d <= 2) {
+                // Length-relative threshold — at 4 chars, dist 2 means
+                // half the word differs (`Time` vs `Type`), which is
+                // more likely a different column than a typo. Mirror
+                // the load-time `staticCheckFieldClustering` gate.
+                const max_d: usize = if (name.len < 6) 1 else 2;
+                if (best != null and best_d <= max_d) {
                     return .{ .bad = name, .suggest = best.? };
                 }
             }
@@ -650,11 +655,12 @@ pub fn processBroker(
 
     // ── Combined-output mode setup ─────────────────────────────────────
     // When `combined_output: true`, every input file in this template
-    // writes into ONE shared sink (file or discarding under --dry-run).
-    // Header is emitted once before the loop; the file stays open through
-    // every iteration and is closed/flushed after the loop. Per-file
-    // expression failure counts and trace events still fire per input
-    // file — only the output destination is consolidated.
+    // ADDITIONALLY appends to ONE shared sink (file or discarding under
+    // --dry-run) alongside its normal per-file output. Header is emitted
+    // once before the loop; the file stays open through every iteration
+    // and is closed/flushed after the loop. The per-file `.csvx` outputs
+    // continue to be produced unchanged — combined is an extra artefact,
+    // not a replacement.
     const combined = bc.combined_output;
     var combined_out_name_owned: ?[]u8 = null;
     defer if (combined_out_name_owned) |s| alloc.free(s);
@@ -665,6 +671,12 @@ pub fn processBroker(
     var combined_fout: *std.Io.Writer = undefined;
     var combined_json_first_row: bool = true;
     var combined_file_opened = false;
+    // True once --fresh confirmed the combined file already exists and
+    // routed the combined sink into a Discarding writer. Used inside the
+    // per-file loop to decide whether to skip an input file outright
+    // (both sinks are no-op) or still iterate it so the active sink
+    // (per-file OR combined) gets rows.
+    var combined_skipped = false;
     defer if (combined_file_opened and !out.dry_run) combined_out_file.close();
 
     if (combined) {
@@ -683,22 +695,23 @@ pub fn processBroker(
             combined_discarding = .init(&combined_out_file_buf);
             combined_fout = &combined_discarding.writer;
         } else if (fresh) {
-            // --fresh + combined: O_EXCL create. If the combined output
-            // already exists, skip the entire template (no per-file
-            // discard fallback — that would burn CPU producing nothing
-            // visible). The trace still emits start/end events so the
-            // GUI can show "skipped".
-            combined_out_file = dir.createFile(combined_out_name, .{ .exclusive = true }) catch |e| {
-                if (e == error.PathAlreadyExists) {
+            // --fresh + combined: O_EXCL create the combined sink. If it
+            // exists, fall through to discarding so the per-file outputs
+            // (which still honour their own --fresh skip) are unaffected.
+            if (dir.createFile(combined_out_name, .{ .exclusive = true })) |f| {
+                combined_out_file = f;
+                combined_file_opened = true;
+                combined_out_fw = combined_out_file.writer(&combined_out_file_buf);
+                combined_fout = &combined_out_fw.interface;
+            } else |e| switch (e) {
+                error.PathAlreadyExists => {
                     out.info("  skipping combined output '{s}' (exists)\n", .{combined_out_name});
-                    stats.time_ns = timer.read();
-                    return stats;
-                }
-                return e;
-            };
-            combined_file_opened = true;
-            combined_out_fw = combined_out_file.writer(&combined_out_file_buf);
-            combined_fout = &combined_out_fw.interface;
+                    combined_discarding = .init(&combined_out_file_buf);
+                    combined_fout = &combined_discarding.writer;
+                    combined_skipped = true;
+                },
+                else => return e,
+            }
         } else {
             combined_out_file = try dir.createFile(combined_out_name, .{});
             combined_file_opened = true;
@@ -706,16 +719,19 @@ pub fn processBroker(
             combined_fout = &combined_out_fw.interface;
         }
 
-        // Emit header once for the entire combined output.
-        const delim_out_local = &[_]u8{bc.csv_delimiter_out};
-        if (bc.file_type_out == .json) {
-            try combined_fout.writeAll("[\n");
-        } else {
-            for (bc.output_schema.items, 0..) |col, ci| {
-                if (ci > 0) try combined_fout.writeAll(delim_out_local);
-                try combined_fout.writeAll(col.header);
+        // Emit header once for the entire combined output (unless --fresh
+        // discarded into /dev/null).
+        if (!combined_skipped) {
+            const delim_out_local = &[_]u8{bc.csv_delimiter_out};
+            if (bc.file_type_out == .json) {
+                try combined_fout.writeAll("[\n");
+            } else {
+                for (bc.output_schema.items, 0..) |col, ci| {
+                    if (ci > 0) try combined_fout.writeAll(delim_out_local);
+                    try combined_fout.writeAll(col.header);
+                }
+                try combined_fout.writeAll("\n");
             }
-            try combined_fout.writeAll("\n");
         }
     }
 
@@ -1019,19 +1035,32 @@ pub fn processBroker(
         var out_fw: std.fs.File.Writer = undefined;
         var discarding: std.Io.Writer.Discarding = undefined;
         var per_file_opened = false;
-        const fout: *std.Io.Writer = if (combined) combined_fout else blk_sink: {
+        const fout: *std.Io.Writer = blk_sink: {
             if (out.dry_run) {
                 discarding = .init(&out_file_buf);
                 break :blk_sink &discarding.writer;
             }
             if (fresh) {
-                out_file = dir.createFile(out_name, .{ .exclusive = true }) catch |e| {
-                    if (e == error.PathAlreadyExists) {
+                if (dir.createFile(out_name, .{ .exclusive = true })) |f| {
+                    out_file = f;
+                } else |e| switch (e) {
+                    error.PathAlreadyExists => {
+                        // Per-file output already exists. If the combined
+                        // sink still needs rows (combined enabled and not
+                        // also skipped), keep iterating with a Discarding
+                        // per-file writer so the combined gets filled —
+                        // mirroring the "full run without --fresh" target
+                        // state. Otherwise skip the whole iteration.
+                        if (combined and !combined_skipped) {
+                            out.info("  skipping per-file '{s}' (exists; combined still being built)\n", .{filename});
+                            discarding = .init(&out_file_buf);
+                            break :blk_sink &discarding.writer;
+                        }
                         out.info("  skipping '{s}' (output exists)\n", .{filename});
                         continue;
-                    }
-                    return e;
-                };
+                    },
+                    else => return e,
+                }
             } else {
                 out_file = try dir.createFile(out_name, .{});
             }
@@ -1041,19 +1070,16 @@ pub fn processBroker(
         };
         defer if (per_file_opened) out_file.close();
         const delim_out = &[_]u8{bc.csv_delimiter_out};
-        // Header is written once per output sink. Per-file mode emits it
-        // at the start of every iteration; combined mode emitted it once
-        // above the loop so we skip it here.
-        if (!combined) {
-            if (bc.file_type_out == .json) {
-                try fout.writeAll("[\n");
-            } else {
-                for (bc.output_schema.items, 0..) |col, ci| {
-                    if (ci > 0) try fout.writeAll(delim_out);
-                    try fout.writeAll(col.header);
-                }
-                try fout.writeAll("\n");
+        // Per-file header — always emitted at the start of the per-file
+        // sink. Combined-mode header was written once above the loop.
+        if (bc.file_type_out == .json) {
+            try fout.writeAll("[\n");
+        } else {
+            for (bc.output_schema.items, 0..) |col, ci| {
+                if (ci > 0) try fout.writeAll(delim_out);
+                try fout.writeAll(col.header);
             }
+            try fout.writeAll("\n");
         }
 
         // Per-row arena: reset each iteration to reclaim expr evaluation allocations.
@@ -1202,17 +1228,18 @@ pub fn processBroker(
                         try out_values.append(merged.get(col.variable) orelse "");
                     }
                     if (bc.file_type_out == .json) {
-                        // Combined mode threads the "first row?" flag
-                        // across all files so the JSON array commas land
-                        // between every pair regardless of file boundary.
-                        const first = if (combined) combined_json_first_row else json_first_row;
-                        if (!first) try fout.writeAll(",\n");
-                        if (combined) {
-                            combined_json_first_row = false;
-                        } else {
-                            json_first_row = false;
-                        }
+                        if (!json_first_row) try fout.writeAll(",\n");
+                        json_first_row = false;
                         try writeJsonRow(fout, bc.output_schema.items, &merged);
+                        if (combined) {
+                            // Same row to the additional combined sink.
+                            // Its own first-row flag spans every input
+                            // file so commas land between every pair
+                            // regardless of file boundaries.
+                            if (!combined_json_first_row) try combined_fout.writeAll(",\n");
+                            combined_json_first_row = false;
+                            try writeJsonRow(combined_fout, bc.output_schema.items, &merged);
+                        }
                     } else {
                         var val_buf: [VAL_BUF_SIZE]u8 = undefined;
                         for (bc.output_schema.items, 0..) |col, ci| {
@@ -1220,6 +1247,14 @@ pub fn processBroker(
                             try writeSafeValue(fout, merged.get(col.variable) orelse "", bc.csv_delimiter_out, bc.csv_decimal_separator_out, bc.csv_text_quote_out, &val_buf);
                         }
                         try fout.writeAll("\n");
+                        if (combined) {
+                            var val_buf2: [VAL_BUF_SIZE]u8 = undefined;
+                            for (bc.output_schema.items, 0..) |col, ci| {
+                                if (ci > 0) try combined_fout.writeAll(delim_out);
+                                try writeSafeValue(combined_fout, merged.get(col.variable) orelse "", bc.csv_delimiter_out, bc.csv_decimal_separator_out, bc.csv_text_quote_out, &val_buf2);
+                            }
+                            try combined_fout.writeAll("\n");
+                        }
                     }
                     out.event("row_output", .{ .values = out_values.items });
                     file_rows_written += 1;
@@ -1253,13 +1288,11 @@ pub fn processBroker(
             out.event("row_end", .{});
         }
 
-        // Per-file mode emits the JSON array tail + flushes each output
-        // file at end-of-iteration. Combined mode defers both until after
-        // the loop so all input files contribute to one tail/flush.
-        if (!combined) {
-            if (bc.file_type_out == .json) try fout.writeAll("\n]\n");
-            try fout.flush();
-        }
+        // Per-file tail + flush — always emitted at end-of-iteration.
+        // Combined sink's tail/flush is deferred until after the loop
+        // so every input file contributes to one closing array bracket.
+        if (bc.file_type_out == .json) try fout.writeAll("\n]\n");
+        try fout.flush();
 
         // Surface silent expression errors. Bump stats.warnings ONCE per
         // file (not per error) so a clean run is exit 0 but any file with
@@ -1292,8 +1325,9 @@ pub fn processBroker(
 
     // Combined mode: close the JSON array (if applicable) and flush the
     // single shared sink. The file handle itself is closed by the defer
-    // attached to `combined_file_opened` above.
-    if (combined) {
+    // attached to `combined_file_opened` above. Skipped when --fresh
+    // already discarded into a no-op sink (file existed).
+    if (combined and combined_file_opened) {
         if (bc.file_type_out == .json) try combined_fout.writeAll("\n]\n");
         try combined_fout.flush();
     }
