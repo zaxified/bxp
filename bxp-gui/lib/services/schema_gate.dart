@@ -198,7 +198,33 @@ class SchemaGate {
       // Zig side (Map<String,dynamic> / List<dynamic> / scalars).
       return jsonDecode(jsonEncode(tpl));
     }
-    if (c.defaultValue != null) return c.defaultValue;
+    final dv = c.defaultValue;
+    if (dv != null) {
+      // FieldDoc.default in `bxp-core/config.zig` is declared as a string
+      // literal (e.g. `.default = "false"`, `.default = "0"`) regardless of
+      // the field's actual type — that's the source-side convention. Without
+      // this coercion a `boolean` field with `default = "false"` would land
+      // in the AST as `"false"` (string), tripping the validator's type
+      // check on the very next pass.
+      switch (c.typeName) {
+        case 'boolean':
+          if (dv is bool) return dv;
+          if (dv is String) {
+            final s = dv.toLowerCase();
+            if (s == 'true') return true;
+            if (s == 'false') return false;
+          }
+          return false;
+        case 'number':
+          if (dv is num) return dv;
+          if (dv is String) return num.tryParse(dv) ?? 0;
+          return 0;
+        case 'string':
+          return dv is String ? dv : dv.toString();
+        default:
+          return dv;
+      }
+    }
     switch (c.typeName) {
       case 'string':
         return '';

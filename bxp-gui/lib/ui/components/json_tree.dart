@@ -1533,7 +1533,15 @@ class _CommentRowState extends State<_CommentRow> {
       // right edge (delete × clipped). Empty placeholder still reads
       // `(click to edit)` (~98 px) which is plenty to click on.
       bodyWidget = InkWell(
-        onTap: _enterEdit,
+        onTap: () {
+          // Mirror `_JsonNodeState._buildExpandableRow.onTap`: a click that
+          // lands on the InkWell wins the gesture arena over the row-level
+          // tap-focus GestureDetector, so we set focus here too. Otherwise
+          // clicking the body to edit would not select the row for
+          // Ctrl+Shift+↑/↓/Del shortcuts.
+          context.read<TraceStore>().setFocusedNode(widget.path);
+          _enterEdit();
+        },
         // Disable Material's default hoverColor — `_CommentRow` already
         // paints a row-level hover background via MouseRegion +
         // Container, and the InkWell overlay double-shaded the text
@@ -1553,11 +1561,25 @@ class _CommentRowState extends State<_CommentRow> {
     }
 
     final debug = context.watch<DebugSettings>();
+    final focusedPath = context.watch<TraceStore>().focusedNodePath;
+    final isFocused = focusedPath != null &&
+        focusedPath.length == widget.path.length &&
+        () {
+          for (var i = 0; i < widget.path.length; i++) {
+            if (focusedPath[i] != widget.path[i]) return false;
+          }
+          return true;
+        }();
     final inner = Container(
       key: _rowKey,
-      color: (debug.hoverBackground && isHovered)
-          ? t.withHover(t.surfaceBg)
-          : Colors.transparent,
+      decoration: BoxDecoration(
+        color: (debug.hoverBackground && isHovered)
+            ? t.withHover(t.surfaceBg)
+            : Colors.transparent,
+        border: isFocused
+            ? Border(left: BorderSide(color: t.accentHighlight, width: 2))
+            : null,
+      ),
       // Vertical padding only — the leading indent is provided as the
       // first child of the envelope's row so the envelope's right edge
       // still aligns with the scrollbar (`Container.padding.left` would
@@ -1574,10 +1596,22 @@ class _CommentRowState extends State<_CommentRow> {
         ],
       ),
     );
+    // Translucent tap layer — same pattern as `_JsonNodeState._buildRow`
+    // so a click on the comment row marks it as the keyboard-focus target
+    // for global Ctrl+Shift+↑/↓/Del shortcuts. Translucent behaviour keeps
+    // the inline editor's tap (`InkWell._enterEdit`) on the body widget
+    // working — the GestureDetector here only fires when the tap misses
+    // every interactive child below.
+    Widget withTapFocus(Widget child) => GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onTap: () =>
+              context.read<TraceStore>().setFocusedNode(widget.path),
+          child: child,
+        );
     if (!debug.hoverBackground && !debug.hoverActionButtons) {
-      return inner;
+      return withTapFocus(inner);
     }
-    return MouseRegion(
+    return withTapFocus(MouseRegion(
       onEnter: (_) {
         if (debug.hoverActionButtons) {
           TreeActionsBinding.publishFromRow(
@@ -1590,7 +1624,7 @@ class _CommentRowState extends State<_CommentRow> {
         setState(() => isHovered = false);
       },
       child: inner,
-    );
+    ));
   }
 
   /// Trailing action toolbox for this comment row. Built fresh on each
@@ -1989,6 +2023,21 @@ class _AddChildDialogState extends State<_AddChildDialog> {
       // mirrors bxp-ui's "Key name cannot be empty" red banner.
       setState(() => _error = 'Key name cannot be empty');
       return;
+    }
+    // Late chip-binding: if the user typed a key that matches a literal
+    // schema candidate (e.g. `combined_output`, `date_filter_from_filename`)
+    // without clicking the chip first, adopt that candidate so the scaffold
+    // value uses the schema's type (`false` for boolean) instead of the
+    // dialog's default `_type` ("string"). Without this the new key lands
+    // as `"combined_output": ""` and the validator immediately flags a
+    // type warning.
+    if (widget.isMap && _pickedSuggestion == null && key != null) {
+      for (final c in widget.suggestions) {
+        if (!c.isFreeForm && c.key == key) {
+          _pickedSuggestion = c;
+          break;
+        }
+      }
     }
     int? atIndex;
     if (widget.isMap && widget.parent != null && key != null) {

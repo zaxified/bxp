@@ -1410,6 +1410,12 @@ class TraceStore extends ChangeNotifier {
       _addRecentFile(configPath);
     }
     if (!preserveTreeState) treeLoadGen++;
+    // Templates cache is keyed off the AST content, not the UI tree state —
+    // a save-driven reload (preserveTreeState: true) still changes the set
+    // of conversion_templates if the user added/removed one. Invalidate
+    // unconditionally so the Runner template picker reflects the new state
+    // without forcing a manual reload.
+    _availableTemplatesGen = -1;
     notifyListeners();
   }
 
@@ -1436,6 +1442,11 @@ class TraceStore extends ChangeNotifier {
     _opLog.truncate(_historyIndex);
     devTrace(traceEvent, traceData);
     _opLog.record(op);
+    // Cheap invalidation: any op may have added/removed a child of
+    // conversion_templates. Drop the templates cache so the Runner picker
+    // doesn't keep showing a deleted template (or miss a new one) while
+    // the user is mid-session.
+    _availableTemplatesGen = -1;
     _invalidatePathKeyedState();
     return true;
   }
@@ -1923,9 +1934,10 @@ class TraceStore extends ChangeNotifier {
     if (delta == 0) return;
     final parentPath = path.sublist(0, path.length - 1);
     final parent = _astAt(parentPath);
+    final isComment = path.last.startsWith(r'$comm_');
 
     int? listIdx;
-    if (parent is JsonArray) {
+    if (parent is JsonArray && !isComment) {
       listIdx = int.tryParse(path.last);
       if (listIdx == null) return;
     }

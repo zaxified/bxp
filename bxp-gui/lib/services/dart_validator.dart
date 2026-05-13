@@ -1020,6 +1020,17 @@ class DartValidator {
         i++;
         continue;
       }
+      // Logical AND / OR are tokenized as plain idents (matching the Zig
+      // parser at `parseAnd` / `parseOr`). When the RHS of `... AND (...)`
+      // or `... OR (...)` is a parenthesised group, the lparen sits
+      // immediately after the keyword and the call-finder would otherwise
+      // mistake the keyword for a function name — surfacing "unknown
+      // function 'AND' — did you mean 'RAND'?" on every grouped condition.
+      final upper = t.text.toUpperCase();
+      if (upper == 'AND' || upper == 'OR') {
+        i++;
+        continue;
+      }
       final name = t.text;
       final nameOffset = t.offset;
       final nameLength = t.text.length;

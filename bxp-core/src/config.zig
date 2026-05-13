@@ -466,6 +466,18 @@ pub const BrokerConfig = struct {
             .insert_order = "schema",
             .insert_template = XlsxSheet.scaffold_template,
         },
+        // Declared before input_schema so the GUI's schema-ordered insert
+        // (BrokerConfig.fields uses `insert_order = "schema"`) drops a new
+        // pre_pass into the position users expect — right before the
+        // input_schema whose LOOKUP() expressions depend on it. Matches the
+        // canonical pattern in DEV/bxp-cli.json (anycoin, xtb1_closed, ...).
+        .{
+            .key = "pre_pass",
+            .type_name = "object",
+            .required = false,
+            .description = "First-pass lookup table(s) built before the main loop. Two accepted shapes: legacy single block `{ when, key, values }` (detected by the presence of `when`) — accessed via 2-arg `LOOKUP(key, 'field')`; or named blocks `{ name1: { when, key, values }, ... }` — each block is its own namespace, accessed via 3-arg `LOOKUP('name', key, 'field')`.",
+            .insert_template = PrePass.scaffold_template,
+        },
         .{
             .key = "input_schema",
             .type_name = "object",
@@ -494,13 +506,6 @@ pub const BrokerConfig = struct {
             .description = "Ordered list of conditional routing rules. The first rule whose `when` matches produces the output rows; later rules are not evaluated. Rows matching no rule are silently skipped (or shown via row_rules_debug_missing).",
             .ordered = true,
             .insert_template = "[]",
-        },
-        .{
-            .key = "pre_pass",
-            .type_name = "object",
-            .required = false,
-            .description = "First-pass lookup table(s) built before the main loop. Two accepted shapes: legacy single block `{ when, key, values }` (detected by the presence of `when`) — accessed via 2-arg `LOOKUP(key, 'field')`; or named blocks `{ name1: { when, key, values }, ... }` — each block is its own namespace, accessed via 3-arg `LOOKUP('name', key, 'field')`.",
-            .insert_template = PrePass.scaffold_template,
         },
     };
 

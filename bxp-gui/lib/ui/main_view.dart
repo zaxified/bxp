@@ -184,10 +184,21 @@ class _MainViewState extends State<MainView> {
   /// Delete the keyboard-focused tree node. Mirrors the toolbox × button
   /// — silently no-ops on required keys (so a held-down Ctrl+Shift+Del
   /// doesn't accidentally wipe sibling content past the required gate).
+  /// Comment rows (`$comm_<N>` last segment) route through the comment-
+  /// specific store API so the AST patcher uses `DeleteCommentOp`.
   bool _deleteFocused(TraceStore store) {
     final path = store.focusedNodePath;
     if (path == null || path.isEmpty) return true;
     if (store.configLoadHadErrors) return true;
+    if (path.last.startsWith(r'$comm_')) {
+      devTrace('action.shortcut', {
+        'combo': 'Ctrl+Shift+Del',
+        'action': 'deleteCommentFocused',
+        'path': path,
+      });
+      store.deleteCommentNode(path);
+      return true;
+    }
     if (!SchemaGate(store).canDelete(path)) return true;
     devTrace('action.shortcut',
         {'combo': 'Ctrl+Shift+Del', 'action': 'deleteFocused', 'path': path});
