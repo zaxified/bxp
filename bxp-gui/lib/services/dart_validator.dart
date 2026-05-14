@@ -158,15 +158,16 @@ class DartValidator {
     for (final call in calls) {
       final hit = _checkCall(call, src, tokens, prePassNames);
       if (hit == null) continue;
-      // TODO(v0.3.0): remove this filter and the entire Dart-side editor
-      // first-pass (this method + the call site in trace_store.dart
-      // _runValidate). bridge_eval_expr now covers UnknownFunction,
-      // WrongArgCount, SplitPartBadIndex, and DateFormatBadToken
-      // identically to the Zig walker (sub-ms, cross-platform), so
-      // duplicating them in Dart is dead work. LookupUnknownPrePass needs
-      // template context the bridge ABI doesn't expose — that one stays
-      // in Dart long-term.
-      // See DEV/4-todo-dart-validator-section-A-disable.md.
+      // bridge_eval_expr covers these four codes identically to the Zig
+      // walker (UnknownFunction + WrongArgCount via expr.eval since
+      // 2026-05-11; SplitPartBadIndex + DateFormatBadToken via
+      // expr.staticCheckCalls since 2026-05-14). Suppressing them here
+      // lets the editor fall through to the bridge response without
+      // duplicate diagnostics. _checkCall itself stays intact because
+      // tree-walk (`_revalidateDart` per-edit feedback) still consumes
+      // those branches via `_validateExprStandalone`.
+      // LookupUnknownPrePass needs template context the bridge ABI
+      // doesn't expose — that one stays in Dart long-term.
       if (hit.code == 'dart.expr.UnknownFunction') continue;
       if (hit.code == 'dart.expr.WrongArgCount') continue;
       if (hit.code == 'dart.expr.SplitPartBadIndex') continue;

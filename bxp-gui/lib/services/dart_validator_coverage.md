@@ -43,20 +43,34 @@ Tree-level — independent walks:
 
 Expression-level — driven by `FnDoc.args[i].kind`:
 
-- ✅ Unknown function — name not in builtins set; suggests nearest
-  builtin within edit distance ≤ 2. `dart.expr.UnknownFunction`.
-- ✅ Wrong arg count — checks `min_args` / `max_args` (variadic max
-  of 255 = unbounded). `dart.expr.WrongArgCount`.
-- ✅ `literal_int_positive` (SPLIT_PART arg[2]) — bare int literal ≤ 0
-  is always `""`. `dart.expr.SplitPartBadIndex`.
-- ✅ `sunrise_format` (DATE_CONVERT arg[1]/arg[2]) — bare string
-  literal scanned against the sunrise vocabulary `Y M D E A` /
-  `a e h i m s`; first out-of-vocabulary letter outside `[...]`
-  brackets is flagged. `dart.expr.DateFormatBadToken`.
-- ✅ `pre_pass_name` (LOOKUP first arg in 3-arg form) — bare string
-  literal cross-referenced against the active template's pre_pass
-  block names; mismatch suggests nearest declared name.
-  `dart.expr.LookupUnknownPrePass`.
+The Dart walker still implements all five checks below — `_checkCall`
+runs them whenever tree-walk (`_revalidateDart` per-edit feedback) hits
+an `expr_string` leaf. The editor first-pass (`validateExpr`) filters
+four of them out so the bridge response wins per-keystroke without
+duplicate diagnostics. See `dart_validator.dart:158-176`.
+
+- ✅ tree-walk only / 🛜 editor via bridge — Unknown function (name
+  not in builtins set; suggests nearest builtin within edit distance
+  ≤ 2). `dart.expr.UnknownFunction`. Editor: `bridge_eval_expr` via
+  `expr.eval` since 2026-05-11.
+- ✅ tree-walk only / 🛜 editor via bridge — Wrong arg count (checks
+  `min_args` / `max_args`, variadic max of 255 = unbounded).
+  `dart.expr.WrongArgCount`. Editor: `bridge_eval_expr`.
+- ✅ tree-walk only / 🛜 editor via bridge — `literal_int_positive`
+  (SPLIT_PART arg[2]) — bare int literal ≤ 0 is always `""`.
+  `dart.expr.SplitPartBadIndex`. Editor: `bridge_eval_expr` via
+  `expr.staticCheckCalls` since 2026-05-14.
+- ✅ tree-walk only / 🛜 editor via bridge — `sunrise_format`
+  (DATE_CONVERT arg[1]/arg[2]) — bare string literal scanned against
+  the sunrise vocabulary `Y M D E A` / `a e h i m s`; first
+  out-of-vocabulary letter outside `[...]` brackets is flagged.
+  `dart.expr.DateFormatBadToken`. Editor: `bridge_eval_expr`.
+- ✅ Dart in both flows — `pre_pass_name` (LOOKUP first arg in 3-arg
+  form) — bare string literal cross-referenced against the active
+  template's pre_pass block names; mismatch suggests nearest declared
+  name. `dart.expr.LookupUnknownPrePass`. Bridge ABI doesn't expose
+  the `pre_pass_names` whitelist needed for this check, so Dart owns
+  it long-term.
 
 Autocomplete — driven by `FieldDoc.autocomplete` + AST + dry-run cache:
 
