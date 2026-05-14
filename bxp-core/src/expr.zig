@@ -1338,6 +1338,29 @@ fn parseAmericanNumber(s: []const u8) error{NotANumber}!f80 {
 // Built-in function implementations
 // ---------------------------------------------------------------------------
 
+/// Convert a float to a 1-based positive integer index, or return null for
+/// "silent skip" semantics (caller should return Value{ .string = "" }).
+///
+/// Gates THREE classes of input that `@intFromFloat` cannot handle safely:
+///   - NaN          → IEEE comparisons return false, so `f < 1.0` does NOT
+///                     filter it; `@intFromFloat(NaN)` is undefined behavior.
+///   - +Inf / -Inf  → cast to usize is out-of-range, panics in Debug/Safe.
+///   - f < 1.0      → would underflow on the typical `idx - 1` access.
+///
+/// Use this in every builtin that converts a user-supplied f80 to a usize
+/// index (FIELDS, SPLIT_PART, future similar). Discovered by the
+/// 2026-05-14 corpus probe (see DEV/6-todo-builtin-arg-validation-design.md).
+fn toPositiveIndex(f: f80) ?usize {
+    if (!std.math.isFinite(f) or f < 1.0) return null;
+    return @as(usize, @intFromFloat(f));
+}
+
+/// Maximum decimal precision a ROUND call will honour. f80 mantissa holds
+/// ~19 decimal digits, so anything beyond that is numerical noise.
+/// Caps `factor *= 10.0` (or `/= 10.0`) loop iterations to avoid DoS hangs
+/// when a template author passes a huge precision arg (e.g. `'inf'`).
+const ROUND_MAX_PRECISION: i32 = 30;
+
 // ── ABS ─────────────────────────────────────────────────────────────────
 const abs_doc: FnDoc = .{
     .name = "ABS",
@@ -1369,12 +1392,8 @@ const fields_doc: FnDoc = .{
 };
 fn builtinFields(args: []Value, ctx: *const Context) !Value {
     if (args.len != 1) return error.WrongArgCount;
-    const f = try args[0].toNumber();
-    // Gate n<1 BEFORE @intFromFloat — casting a negative f80 to usize is UB
-    // and 0 would underflow on `idx - 1`. Silent skip on n<1 matches the
-    // SPLIT_PART convention (out-of-range indexes return "").
-    if (f < 1.0) return Value{ .string = "" };
-    const idx = @as(usize, @intFromFloat(f));
+    const idx = toPositiveIndex(try args[0].toNumber()) orelse
+        return Value{ .string = "" };
     return Value{ .string = ctx.field(idx - 1) };
 }
 fn adaptFields(p: *Parser, args: []Value) anyerror!Value {
@@ -1589,12 +1608,12 @@ fn builtinSplitPart(args: []Value) !Value {
         .string => |v| v,
         else => return error.StringExpected,
     };
-    // Gate negative / fractional / zero indexes BEFORE @intFromFloat —
-    // casting a negative or out-of-range f80 to usize is illegal-cast UB.
-    // SPLIT_PART is 1-based; anything < 1 returns "" by spec.
-    const f = try args[2].toNumber();
-    if (f < 1.0 or delim.len == 0) return Value{ .string = "" };
-    const n = @as(usize, @intFromFloat(f));
+    // SPLIT_PART is 1-based; anything < 1 (or non-finite Inf/NaN, or
+    // empty delim) returns "" by spec. toPositiveIndex gates all the
+    // @intFromFloat-unsafe cases (NaN, Inf, < 1.0) in one place.
+    if (delim.len == 0) return Value{ .string = "" };
+    const n = toPositiveIndex(try args[2].toNumber()) orelse
+        return Value{ .string = "" };
 
     var rest = s;
     var part: usize = 1;
@@ -1751,7 +1770,13 @@ const round_doc: FnDoc = .{
 fn builtinRound(args: []Value) !Value {
     if (args.len != 2) return error.WrongArgCount;
     const x = try args[0].toNumber();
-    const n: i32 = @intFromFloat(@trunc(try args[1].toNumber()));
+    const n_f = @trunc(try args[1].toNumber());
+    // Gate non-finite precision (NaN/Inf) — silent skip, return x unchanged.
+    // Also cap at ±ROUND_MAX_PRECISION to avoid a 10⁹-iteration DoS hang
+    // when an arg evaluates to a huge number.
+    if (!std.math.isFinite(n_f)) return Value{ .number = x };
+    const n_clamped = @max(@min(n_f, @as(f80, ROUND_MAX_PRECISION)), -@as(f80, ROUND_MAX_PRECISION));
+    const n: i32 = @intFromFloat(n_clamped);
     var factor: f80 = 1.0;
     if (n >= 0) {
         for (0..@intCast(n)) |_| factor *= 10.0;
@@ -2937,6 +2962,57 @@ test "eval: FIELDS non-numeric string arg returns NotANumber" {
     var h = TestHelper.init(a);
     const ctx = h.ctx(&.{}, a);
     try testing.expectError(error.NotANumber, eval("FIELDS('abc')", &ctx));
+}
+
+// Regression guards for toPositiveIndex helper — discovered 2026-05-14:
+// IEEE 754 comparisons return false for NaN, so the prior `f < 1.0` gate
+// did NOT filter Inf/NaN, and `@intFromFloat(Inf or NaN)` panicked.
+test "eval: FIELDS Inf/NaN index returns empty string (no panic)" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{"only"}, a);
+    try testing.expectEqualStrings("", try evalString("FIELDS('inf')", &ctx));
+    try testing.expectEqualStrings("", try evalString("FIELDS('-inf')", &ctx));
+    try testing.expectEqualStrings("", try evalString("FIELDS('nan')", &ctx));
+}
+
+test "eval: SPLIT_PART Inf/NaN index returns empty string (no panic)" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    try testing.expectEqualStrings("", try evalString("SPLIT_PART('a,b', ',', 'inf')", &ctx));
+    try testing.expectEqualStrings("", try evalString("SPLIT_PART('a,b', ',', 'nan')", &ctx));
+}
+
+test "eval: ROUND non-finite precision returns x unchanged (no panic)" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    try testing.expectEqualStrings("3.14", try evalString("ROUND(3.14, 'inf')", &ctx));
+    try testing.expectEqualStrings("3.14", try evalString("ROUND(3.14, '-inf')", &ctx));
+    try testing.expectEqualStrings("3.14", try evalString("ROUND(3.14, 'nan')", &ctx));
+}
+
+// DoS guard — prior code looped `factor *= 10.0` n times, so n=1e9 hung
+// for tens of seconds. The clamp to ROUND_MAX_PRECISION caps it at ~30.
+test "eval: ROUND huge precision is fast" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    const t0 = std.time.milliTimestamp();
+    _ = try eval("ROUND(1.0, 1000000000)", &ctx);
+    _ = try eval("ROUND(1.0, -1000000000)", &ctx);
+    const elapsed_ms = std.time.milliTimestamp() - t0;
+    // Two clamped calls together must finish well under any sane budget.
+    try testing.expect(elapsed_ms < 100);
 }
 
 // ------------------------------------------------------------

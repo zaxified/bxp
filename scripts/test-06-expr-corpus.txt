@@ -87,6 +87,21 @@ expr	ok	FIELDS(0)
 expr	ok	FIELDS(-1)
 expr	ok	FIELDS(1)
 expr	ok	FIELDS(99)
+# Inf/NaN regression guards — earlier code (gate `f < 1.0`) did not filter
+# Inf/NaN because IEEE comparisons return false for them; @intFromFloat
+# then panicked. toPositiveIndex helper now gates all three.
+expr	ok	FIELDS('inf')
+expr	ok	FIELDS('-inf')
+expr	ok	FIELDS('nan')
+expr	ok	SPLIT_PART('a,b', ',', 'inf')
+expr	ok	SPLIT_PART('a,b', ',', 'nan')
+# ROUND non-finite precision returns x unchanged (silent skip).
+expr	ok	ROUND(3.14, 'inf')
+expr	ok	ROUND(3.14, 'nan')
+# ROUND huge precision is clamped to ROUND_MAX_PRECISION (=30) to avoid
+# a 10⁹-iteration DoS hang in `factor *= 10.0` loop.
+expr	ok	ROUND(1, 1000000000)
+expr	ok	ROUND(1, 30)
 # Type mismatch: numeric op on non-numeric string yields NotANumber.
 expr	err	[A] + 'x'	NotANumber
 # SPLIT_PART expects integer index; non-int gives NotANumber.
