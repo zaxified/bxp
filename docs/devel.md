@@ -188,17 +188,33 @@ The typical dev workflow:
 bash scripts/test.sh
 ```
 
-The test script:
+The test script auto-discovers `test-NN-*.sh` siblings and runs them in numeric order:
 
-1. Runs `zig build test` in `bxp-core` (unit tests for `csv.zig`, `expr.zig`, `json5.zig`).
-2. Builds `bxp-cli`.
-3. Iterates every `datasets/<id>/` directory, runs bxp-cli against the sample inputs, and diffs the output against `sample.expected`.
+1. `test-01-console.sh` — Zig unit tests + `bxp-cli` / `bxp-fmt` build smoke + `json5_ast` Dart tests.
+2. `test-02-datasets.sh` — runs `bxp-cli` against every `datasets/<id>/sample.json` and diffs against `sample.expected`.
+3. `test-03-desktop.sh` — `flutter analyze` + `flutter test` for `bxp-gui`.
+4. `test-04-bridge.sh` — Zig unit tests for the FFI bridge.
+5. `test-05-format.sh` — prettier + markdownlint checks on owned files.
+6. `test-06-expr-corpus.sh` — expression corpus regression gate (see below).
 
 Individual unit tests only:
 
 ```bash
 cd bxp-core && zig build test
 ```
+
+#### Expression corpus
+
+`scripts/test-06-expr-corpus.sh` walks `scripts/test-06-expr-corpus.txt` and runs each line through `bxp-fmt --expr`. Format is TAB-separated:
+
+```text
+expr<TAB>ok<TAB>expression
+expr<TAB>err<TAB>expression<TAB>error_name
+```
+
+The corpus doubles as living documentation for the BXP expression language — readable for both contributors and AI template generators. When a parser bug surfaces, add a failing case before fixing; when adding a new built-in function, add an `ok` case + an `err` case for the wrong arity.
+
+`scripts/test.sh` enforces a 60-second per-phase budget on the corpus phase via the `timeout` command, so a parser infinite-loop regression is caught quickly.
 
 ---
 

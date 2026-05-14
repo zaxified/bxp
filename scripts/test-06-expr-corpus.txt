@@ -1,0 +1,166 @@
+# BXP expression corpus — regression gate + living documentation.
+#
+# Format (TAB-separated columns):
+#   expr<TAB>ok<TAB>expression
+#   expr<TAB>err<TAB>expression<TAB>error_name
+#
+# Empty lines and lines starting with '#' are ignored.
+# Section headers use box-drawing characters for visual scan.
+# Non-inline comments above complex cases explain the why.
+#
+# Function catalog (per `bxp-fmt --docs` 2026-05-14, 18 functions):
+#   ABS, CEILING, COALESCE, CONTAINS, DATE_CONVERT, FIELDS, FLOOR,
+#   IF, LOOKUP, NOW, PRICE_CURRENCY, PRICE_VALUE, RAND, REPLACE,
+#   ROUND, SPLIT_PART, TICKER, TRIM
+# Keywords: AND, OR
+# Operators: &  =  !=  <  >  <=  >=  +  -  *  /
+
+# ── Logical operators ─────────────────────────────────────────────────
+# Reproduces AND/OR false-positive from 2026-05-13 session: DartValidator
+# Section-A in trace_store.dart misclassified `(B OR C) AND (...)` as
+# "AND" function call. Corpus locks the structural shape.
+expr	ok	([B] OR [C]) AND ([X] OR [Y])
+expr	ok	[A] AND [B]
+expr	ok	[A] OR [B]
+expr	ok	[A] AND [B] OR [C]
+expr	ok	[A] OR [B] AND [C]
+expr	ok	([A] AND [B]) OR [C]
+expr	ok	[A] AND ([B] OR [C])
+expr	ok	(([A] AND [B]) OR ([C] AND [D])) AND [E]
+expr	ok	[A] = 1 AND [B] = 2 AND [C] = 3
+expr	ok	[A] = 1 OR [A] = 2 OR [A] = 3 OR [A] = 4
+expr	ok	[A] = 'x' AND ([B] = 'y' OR [C] = 'z')
+# Single-clause boolean — valid; useful as a sanity baseline.
+expr	ok	[A]
+# `=` chains left-associatively: ((A=1)=1).
+expr	ok	[A] = 1 = 1
+
+# ── Function calls — ok (one per function) ────────────────────────────
+expr	ok	ABS(-5)
+expr	ok	ABS([Amount])
+expr	ok	CEILING(1.4)
+expr	ok	FLOOR(1.6)
+expr	ok	ROUND(1.5, 2)
+expr	ok	COALESCE([A])
+expr	ok	COALESCE([A], [B], [C])
+expr	ok	CONTAINS([A], 'sub')
+expr	ok	DATE_CONVERT([Date], 'YYYY-MM-DD', 'DD.MM.YYYY')
+expr	ok	IF([A] = 1, 'yes', 'no')
+# LOOKUP supports both 2-arg (default table) and 3-arg (named table) forms.
+expr	ok	LOOKUP([Key], 'field')
+expr	ok	LOOKUP('table', [Key], 'field')
+expr	ok	NOW()
+expr	ok	PRICE_CURRENCY('100 USD')
+expr	ok	PRICE_VALUE('100 USD')
+expr	ok	RAND()
+expr	ok	REPLACE([A], 'old', 'new')
+expr	ok	SPLIT_PART([A], ',', 1)
+expr	ok	TICKER([Symbol])
+expr	ok	TRIM([Symbol])
+# Nested fn calls — IF wrapping IF; ABS thrice nested.
+expr	ok	IF(IF([A] = 1, 'a', 'b') = 'a', 'yes', 'no')
+expr	ok	ABS(ABS(ABS([A])))
+
+# ── Function calls — err ──────────────────────────────────────────────
+expr	err	UNKNOWN_FN(1)	UnknownFunction
+# Did-you-mean: 'ABZ' should suggest 'ABS' via Levenshtein.
+expr	err	ABZ(1)	UnknownFunction
+expr	err	ABS(1, 2)	WrongArgCount
+expr	err	ABS()	WrongArgCount
+# IF([A]) — parser surfaces structural error first (missing comma between
+# args) before semantic arity check. Same error as IF([A] without close-paren.
+expr	err	IF([A])	ExpectedComma
+expr	err	IF([A]	ExpectedComma
+expr	err	REPLACE([A], 'x')	WrongArgCount
+expr	err	ROUND(1.5)	WrongArgCount
+# FIELDS without args fails cleanly with WrongArgCount.
+expr	err	FIELDS()	WrongArgCount
+# FIELDS with field-ref arg PANICS at runtime — integer overflow in eval.
+# Discovered during 2026-05-14 corpus probe. Real parser bug; fix
+# post-ship. Expected behavior: WrongArgCount or NotANumber (FIELDS takes
+# only integer literals per FnDoc.args).
+expr	err	FIELDS([A])	WrongArgCount
+# Type mismatch: numeric op on non-numeric string yields NotANumber.
+expr	err	[A] + 'x'	NotANumber
+# SPLIT_PART expects integer index; non-int gives NotANumber.
+expr	err	SPLIT_PART([A], ',', 'x')	NotANumber
+
+# ── Quoting / strings ─────────────────────────────────────────────────
+# Empty string literal.
+expr	ok	''
+# Triple-quote = literal single-quote inside a string ('').
+expr	ok	''''
+# String concat with '&'.
+expr	ok	'a' & 'b'
+expr	ok	'a' & 'b' & 'c'
+# Real-world pattern from templates: '$CASH-' & [Currency].
+expr	ok	'$CASH-' & [Currency]
+# Escaped quote inside concat.
+expr	ok	''' & [ID] & '''
+# Literal numeric strings.
+expr	ok	'1'
+expr	ok	'2026-01-01'
+
+# ── Field references ──────────────────────────────────────────────────
+expr	ok	[A]
+expr	ok	[Symbol]
+expr	ok	[Column Name]
+# Real-world templates use parenthesised disambiguation suffixes.
+expr	ok	[Currency (Total)]
+expr	ok	[Currency (Currency conversion fee)]
+# Period and slash inside field names — real-world (Trading 212).
+expr	ok	[No. of shares]
+expr	ok	[Order ID]
+# Numeric-prefixed field name — quirky but valid.
+expr	ok	[123]
+
+# ── Operator precedence & comparison ──────────────────────────────────
+expr	ok	1 + 2 * 3
+expr	ok	(1 + 2) * 3
+expr	ok	[A] + [B] * 2
+expr	ok	[X] >= 1 AND [X] <= 10
+expr	ok	[A] != [B]
+expr	ok	[A] < 0 OR [A] > 100
+expr	ok	[A] - [B] - [C]
+expr	ok	[A] / [B] / [C]
+expr	ok	-[A]
+expr	ok	[A] = [B] AND [C] = [D]
+
+# ── Real-world: T212 & XTB & Revolut templates ────────────────────────
+# Long OR chain — Trading 212 dividend variants.
+expr	ok	[Action] = 'Dividend (Dividend)' OR [Action] = 'Dividend (Dividend manufactured payment)' OR [Action] = 'Dividend (Tax exempted)'
+# Multi-OR + AND — Trading 212 buy variants with zero-total predicate.
+expr	ok	([Action] = 'Market buy' OR [Action] = 'Limit buy' OR [Action] = 'Stock distribution') AND [Total] = 0
+# IF with arithmetic in true-branch + currency string concat fallback.
+expr	ok	IF([Ticker] != '', TICKER([Ticker]), '$CASH-' & [Currency (Total)])
+# Sum-of-ABS arithmetic branch.
+expr	ok	IF(ABS([Currency conversion fee]) + ABS([Stamp duty reserve tax]) > 0, ABS([Currency conversion fee]) + ABS([Stamp duty reserve tax]), '')
+# Empty-string fallback pattern.
+expr	ok	IF(PRICE_VALUE([Fees]) > 0, PRICE_VALUE([Fees]), '')
+# LOOKUP with composite key (concat of two fields + separator).
+expr	ok	LOOKUP([Ticker] & '_' & [Time], 'shares') / [No. of shares]
+# DATE_CONVERT with bracket-literal escape in format string.
+expr	ok	DATE_CONVERT([Time], 'YYYY-MM-DD[T]hh:mm:ss[Z]', 'YYYY-MM-DD')
+# DATE_CONVERT — strftime-style with comma + 'D MMM' month name.
+expr	ok	DATE_CONVERT([Date], 'D MMM YYYY, hh:mm:ss', 'YYYY-MM-DD')
+# SPLIT_PART nested twice — Anycoin trade comment parser.
+expr	ok	SPLIT_PART(SPLIT_PART([Comment], ' ', 3), '/', 1)
+# String concat for composite identifier.
+expr	ok	''' & [Position ID] & '_' & [Open Time (UTC)] & ''''
+expr	ok	'split-correction-' & SPLIT_PART([Time], ' ', 1)
+# IF with simple Type=value branching.
+expr	ok	IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))
+expr	ok	IF([Total] > 0, 'DEPOSIT', 'WITHDRAWAL')
+expr	ok	IF([Type] = 'Other', PRICE_VALUE([Value]), PRICE_VALUE([Price]))
+
+# ── Real-world: dataset sample.json templates ─────────────────────────
+expr	ok	[Action] = 'Deposit'
+expr	ok	[Action] = 'Market sell' AND [Total] = 0
+expr	ok	ABS([Currency conversion fee])
+expr	ok	ABS([Total])
+expr	ok	'BUY'
+expr	ok	'SELL'
+expr	ok	IF([Type] = 'deposit', 1, [Amount])
+expr	ok	IF([Symbol] != '', TICKER([Symbol]), '$CASH-CZK')
+expr	ok	PRICE_CURRENCY([Value])
+expr	ok	TICKER([Currency])
