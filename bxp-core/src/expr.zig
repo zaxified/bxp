@@ -681,7 +681,7 @@ pub fn staticReferences(src: []const u8, alloc: std.mem.Allocator) !StaticRefs {
         }
 
         if (t.kind != .ident) continue;
-        if (!std.mem.eql(u8, t.text, "LOOKUP")) continue;
+        if (!std.ascii.eqlIgnoreCase(t.text, "LOOKUP")) continue;
 
         // LOOKUP — must be followed by `(` to be a real call.
         const lp = tok.next() catch break;

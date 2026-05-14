@@ -29,16 +29,18 @@ class _LiveSets {
 
 _LiveSets _liveSets(BuildContext context) {
   final store = context.watch<TraceStore>();
+  // Doc names are stored uppercased; classification lookups uppercase the
+  // candidate word, mirroring `std.ascii.eqlIgnoreCase` in bxp-core/expr.zig
+  // (evalCall, parseAnd/parseOr, lookupFnDocByName) so `if`/`IF`/`If` all
+  // highlight identically.
   final functions = store.docFunctions
-      .map((f) => f['name']?.toString() ?? '')
+      .map((f) => (f['name']?.toString() ?? '').toUpperCase())
       .where((s) => s.isNotEmpty)
       .toSet();
-  // Always keep boolean/null literals — they're tokenised as keywords for
-  // highlighting even though the docs catalog only lists AND/OR.
   final keywords = {
-    'true', 'false', 'null',
+    'TRUE', 'FALSE', 'NULL',
     ...store.docKeywords
-        .map((k) => k['name']?.toString() ?? '')
+        .map((k) => (k['name']?.toString() ?? '').toUpperCase())
         .where((s) => s.isNotEmpty),
   };
   return _LiveSets(functions, keywords);
@@ -134,9 +136,10 @@ List<_Span> _tokenize(String src, _LiveSets sets) {
     }
     if ((m = id.firstMatch(rest)) != null) {
       final word = m!.group(0)!;
-      final kind = sets.functions.contains(word)
+      final upper = word.toUpperCase();
+      final kind = sets.functions.contains(upper)
           ? _Tok.function_
-          : sets.keywords.contains(word)
+          : sets.keywords.contains(upper)
           ? _Tok.keyword
           : _Tok.ident;
       out.add(_Span(kind, word));
@@ -349,20 +352,26 @@ String? _tooltipFor(
       }
       return '${s.text} → "${entry.value ?? ""}"';
     case _Tok.function_:
+      // Doc names are uppercase; user text may be any case (we already
+      // classified case-insensitively above). Compare uppercased so the
+      // sig/desc lookup matches whatever the user typed.
+      final upperText = s.text.toUpperCase();
       String? sig;
       String? desc;
       for (final f in docFunctions) {
-        if (f['name'] == s.text) {
+        if ((f['name']?.toString() ?? '').toUpperCase() == upperText) {
           sig = f['signature']?.toString();
           desc = f['description']?.toString();
           break;
         }
       }
       // Pick the call whose name token starts at this span's offset. Two
-      // calls of the same fn at different offsets don't collide.
+      // calls of the same fn at different offsets don't collide. `c.fn`
+      // is echoed verbatim from the source, so compare case-insensitively
+      // for robustness against future producers that might normalise.
       ExprCallTrace? call;
       for (final c in calls) {
-        if (c.fn == s.text && c.srcStart == srcStart) {
+        if (c.fn.toUpperCase() == upperText && c.srcStart == srcStart) {
           call = c;
           break;
         }
@@ -379,7 +388,7 @@ String? _tooltipFor(
         // dry-run trace where the resolved value is reachable via the
         // owning $variable's `var_eval` event.
         final isLookupWithoutContext =
-            s.text == 'LOOKUP' && call.value.isEmpty;
+            upperText == 'LOOKUP' && call.value.isEmpty;
         if (!isLookupWithoutContext) {
           parts.add('→ "${call.value}"');
         } else {
