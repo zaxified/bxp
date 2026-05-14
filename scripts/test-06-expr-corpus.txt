@@ -75,11 +75,18 @@ expr	err	REPLACE([A], 'x')	WrongArgCount
 expr	err	ROUND(1.5)	WrongArgCount
 # FIELDS without args fails cleanly with WrongArgCount.
 expr	err	FIELDS()	WrongArgCount
-# FIELDS with field-ref arg PANICS at runtime — integer overflow in eval.
-# Discovered during 2026-05-14 corpus probe. Real parser bug; fix
-# post-ship. Expected behavior: WrongArgCount or NotANumber (FIELDS takes
-# only integer literals per FnDoc.args).
-expr	err	FIELDS([A])	WrongArgCount
+# FIELDS with multiple args = arity error.
+expr	err	FIELDS(1, 2)	WrongArgCount
+# Non-numeric string arg → toNumber fails with NotANumber.
+expr	err	FIELDS('abc')	NotANumber
+# Field-ref arg parses fine; runtime resolution depends on row context.
+# Empty/zero/negative indexes silent-skip (return "") per SPLIT_PART convention.
+# Previously panicked with integer overflow; regression-locked here.
+expr	ok	FIELDS([A])
+expr	ok	FIELDS(0)
+expr	ok	FIELDS(-1)
+expr	ok	FIELDS(1)
+expr	ok	FIELDS(99)
 # Type mismatch: numeric op on non-numeric string yields NotANumber.
 expr	err	[A] + 'x'	NotANumber
 # SPLIT_PART expects integer index; non-int gives NotANumber.

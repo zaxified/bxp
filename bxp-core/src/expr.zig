@@ -1362,14 +1362,19 @@ fn adaptAbs(p: *Parser, args: []Value) anyerror!Value {
 const fields_doc: FnDoc = .{
     .name = "FIELDS",
     .signature = "FIELDS(n)",
-    .description = "Field value by 1-based column index (alternative to [ColumnName] when the header is unknown).",
+    .description = "Field value by 1-based column index. n must be a positive integer — use this when the column header is unknown or unstable; use the [ColumnName] syntax to look up by header name.",
     .args = &.{.{ .name = "n" }},
     .min_args = 1,
     .max_args = 1,
 };
 fn builtinFields(args: []Value, ctx: *const Context) !Value {
     if (args.len != 1) return error.WrongArgCount;
-    const idx = @as(usize, @intFromFloat(try args[0].toNumber()));
+    const f = try args[0].toNumber();
+    // Gate n<1 BEFORE @intFromFloat — casting a negative f80 to usize is UB
+    // and 0 would underflow on `idx - 1`. Silent skip on n<1 matches the
+    // SPLIT_PART convention (out-of-range indexes return "").
+    if (f < 1.0) return Value{ .string = "" };
+    const idx = @as(usize, @intFromFloat(f));
     return Value{ .string = ctx.field(idx - 1) };
 }
 fn adaptFields(p: *Parser, args: []Value) anyerror!Value {
@@ -2858,6 +2863,80 @@ test "eval: COALESCE rejects zero args" {
     var h = TestHelper.init(a);
     const ctx = h.ctx(&.{}, a);
     try testing.expectError(error.WrongArgCount, eval("COALESCE()", &ctx));
+}
+
+// ------------------------------------------------------------
+// FIELDS — 1-based column index by literal int
+// ------------------------------------------------------------
+
+test "eval: FIELDS returns field at 1-based index" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{ "first", "second", "third" }, a);
+    try testing.expectEqualStrings("first",  try evalString("FIELDS(1)", &ctx));
+    try testing.expectEqualStrings("second", try evalString("FIELDS(2)", &ctx));
+    try testing.expectEqualStrings("third",  try evalString("FIELDS(3)", &ctx));
+}
+
+test "eval: FIELDS truncates fractional index" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{ "first", "second" }, a);
+    try testing.expectEqualStrings("first", try evalString("FIELDS(1.9)", &ctx));
+}
+
+test "eval: FIELDS out-of-bounds index returns empty string (silent skip)" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{ "only" }, a);
+    try testing.expectEqualStrings("", try evalString("FIELDS(99)", &ctx));
+}
+
+// Regression guard: previously panicked with integer overflow on `idx - 1`.
+test "eval: FIELDS zero or negative index returns empty string (no panic)" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{ "only" }, a);
+    try testing.expectEqualStrings("", try evalString("FIELDS(0)", &ctx));
+    try testing.expectEqualStrings("", try evalString("FIELDS(-1)", &ctx));
+}
+
+// Regression guard: empty-string arg via field-ref previously panicked
+// because toNumber("") = 0 then `idx - 1` underflowed.
+test "eval: FIELDS empty-string arg returns empty string (no panic)" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{ "only" }, a);
+    try testing.expectEqualStrings("", try evalString("FIELDS('')", &ctx));
+}
+
+test "eval: FIELDS rejects wrong arg count" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    try testing.expectError(error.WrongArgCount, eval("FIELDS()", &ctx));
+    try testing.expectError(error.WrongArgCount, eval("FIELDS(1, 2)", &ctx));
+}
+
+test "eval: FIELDS non-numeric string arg returns NotANumber" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    try testing.expectError(error.NotANumber, eval("FIELDS('abc')", &ctx));
 }
 
 // ------------------------------------------------------------
