@@ -35,7 +35,7 @@ class _ExprPlaygroundState extends State<ExprPlayground> {
   // the DSL" experience is interchangeable.
   static const _examples = <_Example>[
     _Example('date convert',
-        "DATE_CONVERT([Date], '%Y-%m-%d', '%d.%m.%Y')"),
+        "DATE_CONVERT([Date], 'YYYY-MM-DD', 'DD.MM.YYYY')"),
     _Example('buy/sell', "IF([Qty] > 0, 'BUY', 'SELL')"),
     _Example('ticker map', 'TICKER([Symbol])'),
     _Example('price parts',
@@ -125,9 +125,14 @@ class _ExprPlaygroundState extends State<ExprPlayground> {
       if (err == null) {
         _state = ExprValidationState.ok;
         _errorMessage = '';
+        _ctrl.setValidationSpan(offset: null, length: null);
       } else {
         _state = ExprValidationState.error;
         _errorMessage = err;
+        // Push the offending token span into the controller so the
+        // wavy underline lines up with the bridge response — same UX
+        // as the tree editor, which routes through the TraceStore.
+        _ctrl.setValidationSpan(offset: res.offset, length: res.length);
       }
     });
   }

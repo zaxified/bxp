@@ -1442,7 +1442,7 @@ fn stripCurrencySymbol(s: []const u8) ?struct { rest: []const u8, iso: []const u
 const price_value_doc: FnDoc = .{
     .name = "PRICE_VALUE",
     .signature = "PRICE_VALUE(f)",
-    .description = "Strip currency symbol or code from a price string, return the numeric part.",
+    .description = "Strip currency symbol or code from a price string, return the numeric part (e.g. \"$88744.27\" → \"88744.27\", \"€24.00\" → \"24.00\", \"24.00 CZK\" → \"24.00\").",
     .args = &.{.{ .name = "f" }},
     .min_args = 1,
     .max_args = 1,
@@ -1504,7 +1504,7 @@ fn adaptPriceCurrency(_: *Parser, args: []Value) anyerror!Value {
 const ticker_doc: FnDoc = .{
     .name = "TICKER",
     .signature = "TICKER(f)",
-    .description = "Map field value through the template's ticker_map. Returns value unchanged if not found.",
+    .description = "Map field value through the template's `ticker_map` (per-template config block that translates broker-specific symbols to canonical tickers, e.g. \"VOW.DE\" → \"VOW.DE.XETRA\"). Returns value unchanged if not found.",
     .args = &.{.{ .name = "f" }},
     .min_args = 1,
     .max_args = 1,
@@ -1605,7 +1605,7 @@ fn adaptLookup(p: *Parser, args: []Value) anyerror!Value {
 const split_part_doc: FnDoc = .{
     .name = "SPLIT_PART",
     .signature = "SPLIT_PART(s, delim, n)",
-    .description = "Return the n-th part of `s` split by `delim` (1-based index).",
+    .description = "Return the n-th part of `s` split by `delim` (1-based index). Returns \"\" when n exceeds the part count, when `delim` is empty, or when `n` ≤ 0. When `delim` is not found, n=1 returns the whole string and n>1 returns \"\".",
     .args = &.{
         .{ .name = "s" },
         .{ .name = "delim" },
@@ -1686,7 +1686,7 @@ fn adaptContains(_: *Parser, args: []Value) anyerror!Value {
 const replace_doc: FnDoc = .{
     .name = "REPLACE",
     .signature = "REPLACE(s, from, to)",
-    .description = "Replace all occurrences of `from` in `s` with `to`.",
+    .description = "Replace all occurrences of `from` in `s` with `to` (case-sensitive byte match). Returns `s` unchanged when `from` is empty.",
     .args = &.{
         .{ .name = "s" },
         .{ .name = "from" },
@@ -1775,7 +1775,7 @@ fn adaptTrim(_: *Parser, args: []Value) anyerror!Value {
 const round_doc: FnDoc = .{
     .name = "ROUND",
     .signature = "ROUND(f, n)",
-    .description = "Round `f` to `n` decimal places.",
+    .description = "Round `f` to `n` decimal places (half-away-from-zero). `n=0` rounds to the nearest integer; `n<0` rounds to tens/hundreds/etc. (`n=-2` → nearest 100). `n` is clamped to ±30 to bound CPU; non-finite `n` (NaN/Inf) returns `f` unchanged.",
     .args = &.{
         .{ .name = "f" },
         .{ .name = "n" },

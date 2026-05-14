@@ -685,8 +685,25 @@ class DartValidator {
           break;
         case 'pre_pass_name':
           if (t.kind != _TokKind.string) continue;
-          if (prePassNames.isEmpty) continue;
           final name = _unquoteSingle(t.text);
+          if (prePassNames.isEmpty) {
+            // Template has no pre_pass block at all — any LOOKUP name
+            // is invalid. Mirrors `bxp-fmt --config`, which flags this
+            // case via `Context.pre_pass_names` being an empty
+            // whitelist (expr.zig:1539). The standalone caller
+            // (`_validateExprStandalone`) passes an empty set too but
+            // suppresses this code at the editor first-pass when the
+            // active template can't be resolved (e.g. playground),
+            // see validateExpr loop above for that filter path.
+            return ExprDiagnostic(
+              severity: DartSeverity.error,
+              code: 'dart.expr.LookupUnknownPrePass',
+              message:
+                  "unknown pre_pass '$name' — template has no pre_pass block defined",
+              offset: t.offset,
+              length: t.text.length,
+            );
+          }
           if (!prePassNames.contains(name)) {
             final suggest = _closestKey(name, prePassNames);
             return ExprDiagnostic(

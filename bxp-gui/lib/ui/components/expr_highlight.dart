@@ -406,7 +406,30 @@ class ExprTextEditingController extends TextEditingController {
   /// look. If the project later adopts a 6-step scale the value should
   /// migrate to the new `BxpSize` token.
   final double fontSize;
+
+  /// Optional per-controller validation span override. When both are
+  /// non-null, they take precedence over the TraceStore-based values
+  /// below — this is how the playground (which owns its own validation
+  /// state, not the store's `exprValidationOffset/Length`) opts into
+  /// the same wavy-underline UI as the tree editor. Callers must invoke
+  /// `setValidationSpan(...)` so the controller fires `notifyListeners`
+  /// and the underlying TextField rebuilds.
+  int? _overrideValidationOffset;
+  int? _overrideValidationLength;
+
   ExprTextEditingController({super.text, this.fontSize = 13});
+
+  /// Push a validation span override (or clear it with both null) and
+  /// notify listeners so the live TextField repaints.
+  void setValidationSpan({int? offset, int? length}) {
+    if (_overrideValidationOffset == offset &&
+        _overrideValidationLength == length) {
+      return;
+    }
+    _overrideValidationOffset = offset;
+    _overrideValidationLength = length;
+    notifyListeners();
+  }
 
   @override
   TextSpan buildTextSpan({
@@ -427,14 +450,24 @@ class ExprTextEditingController extends TextEditingController {
     // colouring the whole cell red. The cell-level red border remains
     // (drawn by ExprEditor's container) — the underline pinpoints
     // *where*, the border tells the user the field is in error state.
-    final off = store.exprValidationOffset;
-    final len = store.exprValidationLength;
+    //
+    // Per-controller overrides win over the store-side values so the
+    // playground (own validation state) gets the same UI as the tree
+    // editor without having to round-trip through the store.
+    final usingOverride = _overrideValidationOffset != null &&
+        _overrideValidationLength != null;
+    final off = usingOverride
+        ? _overrideValidationOffset
+        : store.exprValidationOffset;
+    final len = usingOverride
+        ? _overrideValidationLength
+        : store.exprValidationLength;
     final showUnderline = off != null &&
         len != null &&
         len > 0 &&
         off >= 0 &&
         off + len <= text.length &&
-        text == store.selectedExprText;
+        (usingOverride || text == store.selectedExprText);
 
     final children = <TextSpan>[];
     var cursor = 0;

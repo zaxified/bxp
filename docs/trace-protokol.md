@@ -131,7 +131,7 @@ A variable from `input_schema` or the rule's `rows[]` evaluated successfully.
 {
   "t": "var_eval",
   "name": "$date",
-  "expr": "DATE_CONVERT([Date],'%Y-%m-%d')",
+  "expr": "DATE_CONVERT([Date],'YYYY-MM-DD')",
   "value": "2026-04-01",
 }
 ```
