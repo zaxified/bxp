@@ -1,0 +1,89 @@
+name: Bug report
+description: Something is broken or behaves differently from what's documented.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a report. The more concrete detail you can give
+        (especially a minimal config + sample CSV that reproduces the issue), the faster this
+        gets fixed.
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Which part of bxp?
+      options:
+        - bxp-cli (command-line tool)
+        - bxp-gui (desktop app)
+        - bxp-fmt (validator / docs binary)
+        - Not sure
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: bxp version
+      description: |
+        Output of `bxp-cli --version`, or `Help → About` in bxp-gui. If you built from
+        source, paste the short commit hash instead.
+      placeholder: "v0.2.2"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Linux
+        - macOS (Intel)
+        - macOS (Apple Silicon)
+        - Windows
+    validations:
+      required: true
+
+  - type: input
+    id: broker
+    attributes:
+      label: Broker (if relevant)
+      description: Which broker's export triggered this? Leave blank for generic bxp bugs.
+      placeholder: "IBKR, T212, DeGiro, ..."
+
+  - type: textarea
+    id: what_happened
+    attributes:
+      label: What happened?
+      description: Describe the actual behaviour. Paste full error output if any.
+      placeholder: |
+        Running `bxp-cli --config my.json input.csv` produces ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: |
+        If you can, attach a minimal config file + a small redacted CSV sample (10–20
+        rows is plenty). Drag-and-drop attachments work in this editor.
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Anything else?
+      description: Logs, screenshots, diagnostic traces (bxp-gui writes these to APPDATA on Windows / `~/.local/share/bxp-gui/` on Linux).

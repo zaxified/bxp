@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question or discussion
+    url: https://github.com/zaxified/bxp/discussions
+    about: For usage questions, template-authoring help, or general discussion, please open a Discussion rather than an issue.

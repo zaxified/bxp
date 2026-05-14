@@ -1,0 +1,39 @@
+name: Feature request
+description: Suggest a new feature, broker support, or expression-language addition.
+labels: ["enhancement"]
+body:
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - New broker support
+        - Expression language (new built-in / operator)
+        - Config schema (new template option)
+        - bxp-gui UX
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: |
+        Describe the real-world use case. "I have a Schwab CSV with a preamble line and
+        bxp-cli can't skip it" is more useful than "add CSV header offset support".
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed
+    attributes:
+      label: Proposed solution
+      description: If you have one. Otherwise leave blank — we'll figure it out.
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Workarounds you've tried
+      description: How are you handling this today?
