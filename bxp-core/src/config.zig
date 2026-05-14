@@ -1106,18 +1106,20 @@ fn checkOneExpr(
     // StaticCheckResult field + emit branch here, no dispatch
     // changes elsewhere.
     const sc = expr.staticCheckCalls(src);
-    if (sc.split_part) |bad_idx| {
+    if (sc.split_part) |bad| {
         const full_field = try std.fmt.allocPrint(alloc, "{s}.{s}", .{ field_prefix, field_leaf });
         defer alloc.free(full_field);
         const path = try std.fmt.allocPrint(alloc, "conversion_templates.{s}.{s}", .{ template_id, full_field });
         const message = try std.fmt.allocPrint(alloc,
             "expression in {s}: SPLIT_PART index is 1-based; literal {d} always returns \"\"",
-            .{ field_leaf, bad_idx });
+            .{ field_leaf, bad.bad_idx });
         try d.append(.{
             .path = path,
             .severity = .@"error",
             .code = "expr.SplitPartBadIndex",
             .message = message,
+            .expr_off = bad.off,
+            .expr_len = bad.len,
         });
     }
     if (sc.date_format) |bad| {
@@ -1132,6 +1134,8 @@ fn checkOneExpr(
             .severity = .@"error",
             .code = "expr.DateFormatBadToken",
             .message = message,
+            .expr_off = bad.off,
+            .expr_len = bad.len,
         });
     }
 }

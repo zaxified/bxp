@@ -801,6 +801,29 @@ export fn bridge_eval_expr(
     _ = expr.eval(text, &ctx) catch |err| {
         return writeExprErrorJson(out, err, detail, err_offset, err_len);
     };
+
+    // Static-arg checks (FnArgDoc-driven walker) — catches literal-only
+    // mistakes that runtime eval skips when the call never executes
+    // (e.g. SPLIT_PART(..., 0) with no row context). Mirrors the same
+    // call from `BrokerConfig.validate()` in bxp-core/src/config.zig
+    // so editor-time and Save-time diagnostics stay in sync.
+    const sc = expr.staticCheckCalls(text);
+    if (sc.split_part) |bad| {
+        const msg = std.fmt.allocPrint(
+            alloc,
+            "SPLIT_PART index is 1-based; literal {d} always returns \"\"",
+            .{bad.bad_idx},
+        ) catch return @intFromEnum(BridgeFfiError.out_of_memory);
+        return writeStaticErrorJson(out, "SplitPartBadIndex", msg, bad.off, bad.len);
+    }
+    if (sc.date_format) |bad| {
+        const msg = std.fmt.allocPrint(
+            alloc,
+            "DATE_CONVERT format '{s}' has unrecognized letter '{c}' at offset {d} — wrap any literal letters in brackets, e.g. '[T]'",
+            .{ bad.fmt, bad.fmt[bad.pos], bad.pos },
+        ) catch return @intFromEnum(BridgeFfiError.out_of_memory);
+        return writeStaticErrorJson(out, "DateFormatBadToken", msg, bad.off, bad.len);
+    }
     return 0;
 }
 
@@ -830,6 +853,34 @@ fn writeExprErrorJson(
         jw.objectField("len") catch return buf_too_small;
         jw.write(err_len) catch return buf_too_small;
     }
+    jw.endObject() catch return buf_too_small;
+    return @intCast(w.buffered().len);
+}
+
+/// Serialise a static-arg check finding into the caller-supplied `out`
+/// buffer. Same JSON shape as `writeExprErrorJson` but `name` is a
+/// hardcoded code string (e.g. `"SplitPartBadIndex"`) instead of a Zig
+/// `@errorName(...)`, and `off`/`len` are always emitted because the
+/// static walker always pins the offending literal token.
+fn writeStaticErrorJson(
+    out: []u8,
+    name: []const u8,
+    detail: []const u8,
+    off: u32,
+    len: u32,
+) i32 {
+    var w: std.Io.Writer = .fixed(out);
+    var jw: std.json.Stringify = .{ .writer = &w, .options = .{} };
+    const buf_too_small = @intFromEnum(BridgeFfiError.buf_too_small);
+    jw.beginObject() catch return buf_too_small;
+    jw.objectField("error") catch return buf_too_small;
+    jw.write(name) catch return buf_too_small;
+    jw.objectField("detail") catch return buf_too_small;
+    jw.write(detail) catch return buf_too_small;
+    jw.objectField("off") catch return buf_too_small;
+    jw.write(off) catch return buf_too_small;
+    jw.objectField("len") catch return buf_too_small;
+    jw.write(len) catch return buf_too_small;
     jw.endObject() catch return buf_too_small;
     return @intCast(w.buffered().len);
 }

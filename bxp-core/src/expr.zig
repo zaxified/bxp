@@ -428,6 +428,14 @@ const Tokenizer = struct {
 pub const BadDateFormat = struct {
     fmt: []const u8, // unquoted inner format text
     pos: usize,      // 0-based offset of bad char within fmt
+    off: u32,        // absolute offset of the literal token in the source
+    len: u32,        // length of the literal token in the source
+};
+
+pub const BadSplitPart = struct {
+    bad_idx: i64,    // the offending integer literal value (≤ 0)
+    off: u32,        // absolute offset of the literal token in the source
+    len: u32,        // length of the literal token in the source
 };
 
 /// Result of the unified per-call static checker. At most one hit per
@@ -441,11 +449,12 @@ pub const BadDateFormat = struct {
 pub const StaticCheckResult = struct {
     /// `literal_int_positive` violation — bad literal int (≤ 0).
     /// Today populated by SPLIT_PART arg[2]; carries the offending
-    /// integer for the diagnostic message.
-    split_part: ?i64 = null,
+    /// integer plus its source span for editor highlighting.
+    split_part: ?BadSplitPart = null,
     /// `sunrise_format` violation — bad format string literal.
     /// Today populated by DATE_CONVERT args[1]/[2]; carries the
-    /// offending format text + 0-based offset of the bad character.
+    /// offending format text + 0-based offset of the bad character
+    /// plus the absolute source span of the literal token.
     date_format: ?BadDateFormat = null,
 };
 
@@ -572,13 +581,22 @@ fn tryScanArg(
             if (out.split_part != null) return;
             const f = std.fmt.parseFloat(f80, first.text) catch return;
             const v = @as(i64, @intFromFloat(f));
-            if (v <= 0) out.split_part = v;
+            if (v <= 0) out.split_part = .{
+                .bad_idx = v,
+                .off = first.offset,
+                .len = first.len,
+            };
         },
         .sunrise_format => {
             if (first.kind != .string_lit) return;
             if (out.date_format != null) return;
             if (scanDateFormat(first.text)) |pos| {
-                out.date_format = .{ .fmt = first.text, .pos = pos };
+                out.date_format = .{
+                    .fmt = first.text,
+                    .pos = pos,
+                    .off = first.offset,
+                    .len = first.len,
+                };
             }
         },
         .expr, .literal_string, .pre_pass_name => {},

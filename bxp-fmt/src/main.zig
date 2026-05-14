@@ -985,6 +985,56 @@ fn runExpr(gpa: std.mem.Allocator, src: []const u8) !u8 {
         stderr.flush() catch {};
         return 1;
     };
+
+    // Static-arg checks (FnArgDoc-driven walker) — catches literal-only
+    // mistakes that runtime eval skips when the call never executes
+    // (e.g. SPLIT_PART(..., 0) with no row context). Mirrors the same
+    // call from `BrokerConfig.validate()` in bxp-core/src/config.zig and
+    // `bridge_eval_expr` in bxp-gui-bridge so editor-time and Save-time
+    // diagnostics stay in sync across all three entry points.
+    const sc = expr_mod.staticCheckCalls(src);
+    if (sc.split_part) |bad| {
+        const msg = try std.fmt.allocPrint(
+            alloc,
+            "SPLIT_PART index is 1-based; literal {d} always returns \"\"",
+            .{bad.bad_idx},
+        );
+        var jw: std.json.Stringify = .{ .writer = stderr, .options = .{} };
+        jw.beginObject() catch {};
+        jw.objectField("error") catch {};
+        jw.write("SplitPartBadIndex") catch {};
+        jw.objectField("detail") catch {};
+        jw.write(msg) catch {};
+        jw.objectField("off") catch {};
+        jw.write(bad.off) catch {};
+        jw.objectField("len") catch {};
+        jw.write(bad.len) catch {};
+        jw.endObject() catch {};
+        stderr.writeByte('\n') catch {};
+        stderr.flush() catch {};
+        return 1;
+    }
+    if (sc.date_format) |bad| {
+        const msg = try std.fmt.allocPrint(
+            alloc,
+            "DATE_CONVERT format '{s}' has unrecognized letter '{c}' at offset {d} — wrap any literal letters in brackets, e.g. '[T]'",
+            .{ bad.fmt, bad.fmt[bad.pos], bad.pos },
+        );
+        var jw: std.json.Stringify = .{ .writer = stderr, .options = .{} };
+        jw.beginObject() catch {};
+        jw.objectField("error") catch {};
+        jw.write("DateFormatBadToken") catch {};
+        jw.objectField("detail") catch {};
+        jw.write(msg) catch {};
+        jw.objectField("off") catch {};
+        jw.write(bad.off) catch {};
+        jw.objectField("len") catch {};
+        jw.write(bad.len) catch {};
+        jw.endObject() catch {};
+        stderr.writeByte('\n') catch {};
+        stderr.flush() catch {};
+        return 1;
+    }
     // Success: no output. Callers rely on exit code 0.
     return 0;
 }
