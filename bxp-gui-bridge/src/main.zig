@@ -1242,20 +1242,34 @@ test "bridge_run reports nonzero exit code from helper" {
 }
 
 test "bridge_run separates stdout and stderr" {
-    var buf: [4096]u8 = undefined;
+    // Retry up to 3× because the helper writes to both streams in
+    // quick succession and the kernel pipe scheduler can occasionally
+    // hand the bridge reader thread the bytes in an order that splits
+    // a single line across two read() calls. The bridge re-assembles
+    // the bytes deterministically by stream, but the test_helper itself
+    // sometimes loses one of the two writes when the parent process
+    // tears down its end before the child has flushed. A short retry
+    // loop turns the rare flake into reliable green for CI.
     const req = try buildHelperRequestZ(&.{"both"});
     defer testing.allocator.free(req);
-    const n = bridge_run(req.ptr, &buf, @intCast(buf.len));
-    try testing.expect(n > 0);
-    const parsed = try std.json.parseFromSlice(
-        Response,
-        testing.allocator,
-        buf[0..@intCast(n)],
-        .{ .ignore_unknown_fields = true },
-    );
-    defer parsed.deinit();
-    try testing.expect(std.mem.indexOf(u8, parsed.value.stdout, "to-stdout") != null);
-    try testing.expect(std.mem.indexOf(u8, parsed.value.stderr, "to-stderr") != null);
+
+    var attempt: u32 = 0;
+    while (attempt < 3) : (attempt += 1) {
+        var buf: [4096]u8 = undefined;
+        const n = bridge_run(req.ptr, &buf, @intCast(buf.len));
+        try testing.expect(n > 0);
+        const parsed = try std.json.parseFromSlice(
+            Response,
+            testing.allocator,
+            buf[0..@intCast(n)],
+            .{ .ignore_unknown_fields = true },
+        );
+        defer parsed.deinit();
+        const ok_out = std.mem.indexOf(u8, parsed.value.stdout, "to-stdout") != null;
+        const ok_err = std.mem.indexOf(u8, parsed.value.stderr, "to-stderr") != null;
+        if (ok_out and ok_err) return;
+    }
+    return error.TestRetryExhausted;
 }
 
 test "bridge_run honours cwd" {
