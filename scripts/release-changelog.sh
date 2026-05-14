@@ -93,11 +93,15 @@ for m in "${MANIFESTS[@]}"; do
     printf '   %-50s %s → %s\n' "$rel" "$cur" "$NEW"
     if ! $DRY_RUN; then
         # `.version = "X"` (zon) and `version: X` (yaml) — sed handles both
-        # by anchoring on the keyword.
-        sed -i -E \
+        # by anchoring on the keyword. Write-to-tmp + mv instead of `sed -i`
+        # so the script also works under BSD sed (macOS), which requires an
+        # argument after `-i` and disagrees with GNU on the empty form.
+        tmp=$(mktemp)
+        sed -E \
             -e "s/^(\s*\.version\s*=\s*\")[^\"]+(\".*)$/\1$NEW\2/" \
             -e "s/^(version:\s*)[^[:space:]]+(.*)$/\1$NEW\2/" \
-            "$m"
+            "$m" > "$tmp"
+        mv "$tmp" "$m"
     fi
 done
 
