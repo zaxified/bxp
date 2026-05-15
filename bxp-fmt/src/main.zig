@@ -71,28 +71,44 @@ fn writeAllToStdoutPipeAware(bytes: []const u8) error{WriteFailed}!void {
     }
 }
 
-fn usage() void {
-    std.debug.print(
-        \\bxp-fmt — config and expression utility for bxp-cli
-        \\
-        \\Usage (exactly one action flag):
-        \\  bxp-fmt --config <path>                  validate config; emit annotated JSON to stdout
-        \\  bxp-fmt --expr '<text>'                  validate one expression; stderr JSON on error
-        \\  bxp-fmt --docs                           emit full language/schema documentation as JSON
-        \\  bxp-fmt --config <path> --list-templates emit JSON list of templates declared in config
-        \\  bxp-fmt --config <path> --fetch-template <id>
-        \\                                           emit one template block as JSON
-        \\
-        \\Options:
-        \\  --version                 print version and exit
-        \\  --help                    print this help and exit
-        \\
-        \\Exit codes:
-        \\  0 - success
-        \\  1 - validation failure / template id not found
-        \\  2 - usage error
-        \\
-    , .{});
+/// Help text body. Two stream variants below pick which file descriptor
+/// it lands on — same split as bxp-cli's printHelp / usageErr.
+const USAGE_TEMPLATE =
+    \\bxp-fmt — config and expression utility for bxp-cli
+    \\
+    \\Usage (exactly one action flag):
+    \\  bxp-fmt --config <path>                  validate config; emit annotated JSON to stdout
+    \\  bxp-fmt --expr '<text>'                  validate one expression; stderr JSON on error
+    \\  bxp-fmt --docs                           emit full language/schema documentation as JSON
+    \\  bxp-fmt --config <path> --list-templates emit JSON list of templates declared in config
+    \\  bxp-fmt --config <path> --fetch-template <id>
+    \\                                           emit one template block as JSON
+    \\
+    \\Options:
+    \\  --version                 print version and exit
+    \\  --help                    print this help and exit
+    \\
+    \\Exit codes:
+    \\  0 - success
+    \\  1 - validation failure / template id not found
+    \\  2 - usage error
+    \\
+;
+
+/// Print the help text to stdout. Used for `--help` so callers piping
+/// `bxp-fmt --help | grep` work without `2>&1`.
+fn printHelp() void {
+    var buf: [4096]u8 = undefined;
+    var fw = std.fs.File.stdout().writer(&buf);
+    const w = &fw.interface;
+    w.writeAll(USAGE_TEMPLATE) catch {};
+    w.flush() catch {};
+}
+
+/// Print the help text to stderr. Used after an argument-validation
+/// failure where we want the usage to accompany the error message.
+fn usageErr() void {
+    std.debug.print("{s}", .{USAGE_TEMPLATE});
 }
 
 // Returning `!u8` (rather than `!void` + `std.process.exit`) so the
@@ -127,7 +143,7 @@ pub fn main() !u8 {
     while (i < args.len) : (i += 1) {
         const a = args[i];
         if (std.mem.eql(u8, a, "--help")) {
-            usage();
+            printHelp();
             return 0;
         }
         if (std.mem.eql(u8, a, "--version")) {
@@ -212,7 +228,7 @@ pub fn main() !u8 {
             continue;
         }
         std.debug.print("error: unknown argument: {s}\n", .{a});
-        usage();
+        usageErr();
         return 2;
     }
 
@@ -242,7 +258,7 @@ pub fn main() !u8 {
         return 2;
     }
     if (action_count == 0) {
-        usage();
+        usageErr();
         return 2;
     }
 
