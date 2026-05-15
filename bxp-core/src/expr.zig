@@ -580,6 +580,22 @@ fn tryScanArg(
             if (first.kind != .number_lit) return;
             if (out.split_part != null) return;
             const f = std.fmt.parseFloat(f80, first.text) catch return;
+            // Gate Inf/NaN and finite-but-out-of-i64 — `@intFromFloat`
+            // is undefined behaviour on any of these, and they're all
+            // reachable from user input in the editor (e.g. `1e30`).
+            // Mirrors the toPositiveIndex helper that runtime FIELDS /
+            // SPLIT_PART use; here we keep the literal "≤ 0" detection
+            // but treat any non-representable literal as a violation
+            // with bad_idx clamped to a sentinel so the diagnostic
+            // message stays printable.
+            if (!std.math.isFinite(f) or f > @as(f80, @floatFromInt(std.math.maxInt(i64))) or f < @as(f80, @floatFromInt(std.math.minInt(i64)))) {
+                out.split_part = .{
+                    .bad_idx = 0,
+                    .off = first.offset,
+                    .len = first.len,
+                };
+                return;
+            }
             const v = @as(i64, @intFromFloat(f));
             if (v <= 0) out.split_part = .{
                 .bad_idx = v,
@@ -3004,6 +3020,37 @@ test "eval: SPLIT_PART Inf/NaN index returns empty string (no panic)" {
     const ctx = h.ctx(&.{}, a);
     try testing.expectEqualStrings("", try evalString("SPLIT_PART('a,b', ',', 'inf')", &ctx));
     try testing.expectEqualStrings("", try evalString("SPLIT_PART('a,b', ',', 'nan')", &ctx));
+}
+
+// staticCheckCalls panic regression — the literal-int-positive arg
+// scanner cast `parseFloat(f80) -> i64` without bounds-checking, so a
+// finite-but-huge literal (e.g. `1e30`) or a parse-as-Inf literal
+// triggered `@intFromFloat` UB. Reachable from user input in three
+// places: bxp-fmt --expr / --config, bxp-gui-bridge bridge_eval_expr,
+// BrokerConfig.validate at startup. Guard now flags such literals as
+// "violation with bad_idx=0" and returns without invoking @intFromFloat.
+test "staticCheckCalls: SPLIT_PART literal index out-of-i64 range does not panic" {
+    // 24-digit positive literal parses as f80 ≈ 1e24, well past i64 max
+    // (~9.22e18); pre-guard `@intFromFloat(f80 → i64)` was undefined
+    // behaviour and panicked in Debug/ReleaseSafe.
+    const r_pos = staticCheckCalls("SPLIT_PART([Field], '/', 999999999999999999999999)");
+    try testing.expect(r_pos.split_part != null);
+    try testing.expectEqual(@as(i64, 0), r_pos.split_part.?.bad_idx);
+
+    // Negative beyond minInt(i64) (~-9.22e18) — same UB on the
+    // negative branch.
+    const r_neg = staticCheckCalls("SPLIT_PART([Field], '/', -99999999999999999999)");
+    try testing.expect(r_neg.split_part != null);
+    try testing.expectEqual(@as(i64, 0), r_neg.split_part.?.bad_idx);
+}
+
+test "staticCheckCalls: SPLIT_PART literal index in i64 range still detects ≤ 0" {
+    const r_zero = staticCheckCalls("SPLIT_PART([Field], '/', 0)");
+    try testing.expect(r_zero.split_part != null);
+    try testing.expectEqual(@as(i64, 0), r_zero.split_part.?.bad_idx);
+
+    const r_pos = staticCheckCalls("SPLIT_PART([Field], '/', 3)");
+    try testing.expect(r_pos.split_part == null);
 }
 
 test "eval: ROUND non-finite precision returns x unchanged (no panic)" {
