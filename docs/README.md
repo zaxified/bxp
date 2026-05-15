@@ -9,8 +9,9 @@ Developer documentation for the BXP monorepo.
 3. [`gui.md`](gui.md) — only if you're touching Flutter.
 4. Module-level [`CLAUDE.md`](../CLAUDE.md) files — deepest reference, one per
    module (`bxp-cli/CLAUDE.md`, `bxp-core/CLAUDE.md`, `bxp-fmt/CLAUDE.md`,
-   `bxp-gui/CLAUDE.md`). Loaded automatically by Claude Code, read directly
-   when you need internal-API detail.
+   `bxp-gui/CLAUDE.md`, `bxp-gui/packages/json5_ast/CLAUDE.md`). Loaded
+   automatically by Claude Code, read directly when you need internal-API
+   detail.
 
 **End-user documentation** (bundled with releases, not for new devs):
 

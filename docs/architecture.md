@@ -357,11 +357,11 @@ and to bxp-cli / bxp-fmt subprocesses.
 ```mermaid
 graph TD
     subgraph UI["lib/ui/"]
-        EDP["editor_panel.dart
+        EDP["config_view.dart + expr_panel.dart + expr_editor.dart
         config tree · expr editor · docs panel"]
-        TRP["trace_panel.dart
+        TRP["debug_panes.dart + row_detail.dart + output_panel.dart
         variables · rules · output · dry-run viewer"]
-        TLB["toolbar.dart
+        TLB["top_bar.dart + config_view.dart toolbar
         Run · Validate · Save · Cancel"]
         STG["settings_inspector.dart
         Ctrl+Shift+S drawer"]
@@ -409,7 +409,7 @@ graph TD
         JSON5 source → AstNode tree"]
         JD["dumper.dart
         AstNode tree → JSON5 source"]
-        JO["ops.dart
+        JO["operations.dart
         insert · delete · setValue · move · dup"]
     end
 
@@ -472,7 +472,7 @@ at stream start and after the `done` event.
 
 ```mermaid
 sequenceDiagram
-    participant UI as trace_panel.dart
+    participant UI as debug_panes.dart
     participant TS as TraceStore
     participant TB as TraceBuilder
     participant BPC as BxpProcessClient
@@ -638,14 +638,14 @@ plain stderr warning line during a real run.
 
 Every user edit in the config tree (insert field, delete, setValue, reorder) is
 expressed as a `ConfigOp` and applied to the live `AstNode` tree via
-`json5_ast/ops.dart`. The dumper re-serialises the AST to JSON5 for display and
+`json5_ast/operations.dart`. The dumper re-serialises the AST to JSON5 for display and
 for saving. `DartValidator` runs synchronously for fast per-field feedback;
 `bxp-fmt --config` is called on every Save for the authoritative full-config
 validation.
 
 ```mermaid
 sequenceDiagram
-    participant UI as editor_panel.dart
+    participant UI as config_view.dart
     participant TS as TraceStore
     participant AST as json5_ast (Dart)
     participant DV as DartValidator

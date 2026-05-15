@@ -158,11 +158,11 @@ mcp__dart__get_app_logs()
 # Widget + unit tests (bxp-gui)
 flutter test
 
-# json5_ast unit tests (~114 cases + round-trip suite)
+# json5_ast unit tests (~107 cases + round-trip suite)
 dart test packages/json5_ast/
 
 # Full desktop suite: flutter analyze + flutter test + dart test
-bash scripts/test-02-desktop.sh
+bash scripts/test-03-desktop.sh
 ```
 
 `flutter analyze` enforces sound null-safety and catches common issues. Run it
@@ -204,43 +204,55 @@ bxp-gui/
 ├── lib/
 │   ├── main.dart                    # Flutter entry: window sizing, theme, Provider wiring
 │   ├── services/
-│   │   ├── bxp_process_client.dart  # Process.run wrappers for bxp-cli / bxp-fmt
-│   │   ├── ast_loader.dart          # Parse user config to JsonAstNode tree
-│   │   ├── ast_patch_client.dart    # Apply AST mutations + dump back to disk
-│   │   ├── op_log.dart              # In-memory undo/redo ledger of ConfigOps
-│   │   ├── op_to_ast.dart           # Translate ConfigOp → AST mutation calls
-│   │   ├── schema_gate.dart         # Schema-aware "may the user do X here?"
-│   │   ├── dart_validator.dart      # Dart-side per-edit expression validator
-│   │   ├── prefs_service.dart       # User preferences persistence (visible JSON file)
-│   │   ├── updater_service.dart     # GitHub release poller + download/verify/install
-│   │   └── dev_trace.dart           # kDebugMode-gated print() helper
+│   │   ├── app_runtime.dart                  # Top-level lifecycle helpers + startup gate
+│   │   ├── ast_loader.dart                   # Parse user config to JsonAstNode tree
+│   │   ├── ast_patch_client.dart             # Apply AST mutations + dump back to disk
+│   │   ├── bridge_client.dart                # Dart FFI shim for bxp-gui-bridge (DLL on Win,
+│   │   │                                     # .so/.dylib on Linux/macOS for bridge_eval_expr)
+│   │   ├── bxp_process_client.dart           # Process.run wrappers for bxp-cli / bxp-fmt
+│   │   ├── dart_validator.dart               # Dart-side per-edit expression validator
+│   │   ├── debug_binding.dart                # WidgetsFlutterBinding hook for diagnostic capture
+│   │   ├── debug_settings.dart               # Opt-in regression knobs (paint, hover, scroll filters)
+│   │   ├── desktop_integration_service.dart  # First-run .desktop + hicolor icon writer (Linux AppImage)
+│   │   ├── dev_trace.dart                    # kDebugMode-gated print() helper
+│   │   ├── diagnostic_log.dart               # Opt-in NDJSON trace + engine stderr capture
+│   │   ├── op_log.dart                       # In-memory record of user edits since load
+│   │   ├── op_to_ast.dart                    # Translate ConfigOp → AST mutation calls
+│   │   ├── prefs_service.dart                # User preferences persistence (visible JSON file)
+│   │   ├── schema_doc_lookup.dart            # Resolve a config-tree path against the FieldDoc catalog
+│   │   ├── schema_gate.dart                  # Schema-aware "may the user do X here?"
+│   │   └── updater_service.dart              # GitHub release poller + download/verify/install
 │   ├── store/
-│   │   ├── trace_store.dart         # Central ChangeNotifier (~2k lines)
+│   │   ├── trace_store.dart         # Central ChangeNotifier (~2.9k lines)
 │   │   ├── trace_builder.dart       # Fold NDJSON trace events into TraceStore
 │   │   └── trace_model.dart         # Plain-Dart shapes for trace events
 │   └── ui/
 │       ├── main_view.dart           # 3-pane layout root
 │       ├── config_view.dart         # JSON5 tree editor pane
+│       ├── debug_overlay.dart       # Floating debug counter overlay (BXP_DIAGNOSTIC)
 │       ├── debug_panes.dart         # Trace/output bottom panes
 │       ├── settings_inspector.dart  # Ctrl+Shift+S internal-state drawer
 │       ├── layout_defaults.dart     # Fractional split sizes (single source)
+│       ├── shader_warmup.dart       # Skia shader pre-warmup (Windows perf)
 │       ├── zoom_limits.dart         # Window / zoom guards
-│       ├── theme/                   # App theme (bxp_theme.dart, bxp_text.dart, …)
+│       ├── theme/                   # App theme (bxp_theme, bxp_text, bxp_text_scheme,
+│       │                            # bxp_theme_animator, theme_inspector)
 │       └── components/
-│           ├── json_tree.dart       # Recursive tree renderer with insert/edit slots
-│           ├── expr_editor.dart     # Expression input with autocomplete
-│           ├── expr_panel.dart      # Right-rail expression preview
-│           ├── expr_playground.dart # Standalone expression sandbox
-│           ├── expr_highlight.dart  # Token-aware syntax highlighter
-│           ├── row_detail.dart      # Per-row variable/rule trace detail
-│           ├── row_list.dart        # Master row picker
-│           ├── file_list.dart       # Multi-file dry-run output list
-│           ├── output_panel.dart    # bxp-cli stdout/stderr viewer
-│           ├── top_bar.dart         # Title bar + actions
-│           ├── panel_header.dart    # Reusable header chrome
-│           ├── resize_handle.dart   # Splitter drag handle
-│           ├── open_dialog.dart     # Recent-files / file picker
-│           └── update_dialog.dart   # In-app updater prompt
+│           ├── json_tree.dart         # Recursive tree renderer with insert/edit slots
+│           ├── expr_editor.dart       # Expression input with autocomplete
+│           ├── expr_panel.dart        # Right-rail expression preview
+│           ├── expr_playground.dart   # Standalone expression sandbox
+│           ├── expr_highlight.dart    # Token-aware syntax highlighter
+│           ├── row_detail.dart        # Per-row variable/rule trace detail
+│           ├── row_list.dart          # Master row picker
+│           ├── file_list.dart         # Multi-file dry-run output list
+│           ├── output_panel.dart      # bxp-cli stdout/stderr viewer
+│           ├── top_bar.dart           # Title bar + actions
+│           ├── panel_header.dart      # Reusable header chrome
+│           ├── resize_handle.dart     # Splitter drag handle
+│           ├── open_dialog.dart       # Recent-files / file picker
+│           ├── integrate_dialog.dart  # First-run Linux desktop-integration prompt
+│           └── update_dialog.dart     # In-app updater prompt
 ├── packages/json5_ast/             # Dart JSON5 AST library (path dep)
 │   ├── lib/
 │   │   ├── json5_ast.dart          # Top-level umbrella export
@@ -252,9 +264,10 @@ bxp-gui/
 │   │   ├── value_builder.dart      # Typed value constructors
 │   │   └── src/
 │   │       └── tokenizer.dart      # JSON5 tokenizer (private)
-│   └── test/                       # ~114 unit tests + round-trip suite
+│   └── test/                       # ~107 unit tests + round-trip suite
 ├── linux/, macos/, windows/, web/  # Per-platform Flutter shells
-├── test/                           # Widget tests
+├── test/                           # Widget + service tests (desktop_integration,
+│                                   # expr_corpus_bridge, prefs_service, zoom_overflow)
 └── pubspec.yaml
 ```
 

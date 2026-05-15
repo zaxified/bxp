@@ -60,10 +60,10 @@ Plan for v0.3.0:
 
 ### Auto-updater security audit & hardening
 
-Shipped in v0.2.4 (planned): switched `_verifyChecksum` to fail-closed —
-missing `SHA256SUMS`, fetch failure, asset not listed in SUMS, and hash
-mismatch all now refuse the install with a specific message. Release
-page link in the dialog remains as the user's escape hatch.
+Planned for v0.2.4: switched `_verifyChecksum` to fail-closed — missing
+`SHA256SUMS`, fetch failure, asset not listed in SUMS, and hash mismatch
+all now refuse the install with a specific message. Release page link in
+the dialog remains as the user's escape hatch.
 
 Remaining hardening for v0.3.0 — treat as one cohesive audit pass:
 
@@ -161,19 +161,19 @@ Full design + migration plan: `DEV/6-todo-builtin-arg-validation-design.md`.
 - Flutter `integration_test` smoke run inside CI (Xvfb on Linux runners,
   headless setup on Mac / Win).
 
-### Windows runner image redirect (monitor 2026-05-13)
+### Windows runner image redirect (verify before next release)
 
-GitHub Actions is redirecting `windows-2025` → `windows-2025-vs2026`
-on 2026-05-12, swapping Visual Studio 2025 for Visual Studio 2026 on
-the `windows-latest` runner. The redirect is image-level so pinning
-to `windows-2025` does not avoid it. After 2026-05-13 a
+GitHub Actions redirected `windows-2025` → `windows-2025-vs2026` on
+2026-05-12, swapping Visual Studio 2025 for Visual Studio 2026 on the
+`windows-latest` runner. The redirect is image-level so pinning to
+`windows-2025` did not avoid it. Before the next tagged release a
 `workflow_dispatch` test of `release.yml` (e.g.
-`gh workflow run release.yml -f version=v0.2.2-rc-test`) should be
-run to confirm the Win build (Flutter MSVC, NSIS install) still
-works on the new image. If something breaks, options are
-(a) pin `runs-on: windows-2022` for the desktop-windows job,
-(b) fix whatever the VS 2026 swap broke. Drop this entry once a
-post-redirect release succeeds.
+`gh workflow run release.yml -f version=vX.Y.Z-rc-test`) should be run
+to confirm the Win build (Flutter MSVC, NSIS install) still works on
+the new image. If something breaks, options are (a) pin
+`runs-on: windows-2022` for the desktop-windows job, (b) fix whatever
+the VS 2026 swap broke. Drop this entry once a post-redirect release
+succeeds.
 
 ### Distribution polish
 

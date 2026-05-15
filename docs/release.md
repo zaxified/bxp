@@ -79,7 +79,7 @@ gh workflow run release.yml -f version=v0.2.2-rc-test
 ## Verifying a published release
 
 1. Open `https://github.com/zaxified/bxp/releases/tag/vX.Y.Z`.
-2. Confirm 7 artifacts + `SHA256SUMS` are listed.
+2. Confirm 8 artifacts + `SHA256SUMS` are listed.
 3. Download a desktop installer for your host, run it, and verify the
    GUI launches. The startup screen should show the version in
    SettingsInspector (Ctrl+Shift+S).

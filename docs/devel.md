@@ -73,8 +73,9 @@ zig version
 ### Claude Code setup
 
 BXP development in Zig works seamlessly with [Claude Code](https://claude.ai/code).
-The monorepo ships `CLAUDE.md` files at four levels — root, `bxp-cli/`, `bxp-core/`,
-`bxp-fmt/`, and `bxp-gui/` — Claude loads these automatically and reads project conventions.
+The monorepo ships six `CLAUDE.md` files — root, `bxp-cli/`, `bxp-core/`,
+`bxp-fmt/`, `bxp-gui/`, and `bxp-gui/packages/json5_ast/` — Claude loads these
+automatically and reads project conventions.
 
 ### Skills to use
 
@@ -140,17 +141,23 @@ bxp/                            # monorepo root (git root)
 │   └── trace-protokol.md       # bxp-cli --trace NDJSON protocol spec
 ├── resources/
 │   ├── console/                # bxp-cli sample config + readme (bundled in console archives)
-│   └── desktop/                # bxp-gui.desktop template + readme (bundled in desktop archives)
+│   ├── desktop/                # bxp-gui.desktop template + readme (bundled in desktop archives)
+│   └── icons/                  # SVG variants + build-icons.sh (single source for app icons)
 ├── scripts/
-│   ├── test.sh                 # wrapper: test-01-console.sh + test-02-desktop.sh
-│   ├── test-01-console.sh      # bxp-core unit + bxp-fmt smoke + bxp-cli regression
-│   ├── test-02-desktop.sh      # flutter analyze + flutter test + json5_ast dart test
+│   ├── test.sh                 # wrapper: runs every test-NN-*.sh in numeric order
+│   ├── test-lib.sh             # shared section/step/summary helpers (sourced)
+│   ├── test-01-console.sh      # bxp-core unit + bxp-cli/fmt build + bxp-fmt smoke + json5_ast unit
+│   ├── test-02-datasets.sh     # bxp-cli regression vs datasets/*/*.expected
+│   ├── test-03-desktop.sh      # flutter analyze + flutter test + json5_ast dart test
+│   ├── test-04-bridge.sh       # bxp-gui-bridge build + unit tests
+│   ├── test-05-format.sh       # prettier + markdownlint checks
+│   ├── test-06-expr-corpus.sh  # cross-runner expression corpus regression gate
 │   ├── release.sh              # wrapper: release-01-console.sh + release-02-desktop.sh
 │   ├── release-01-console.sh   # cross-compile bxp-cli → bxp-console-* archives
 │   ├── release-02-desktop.sh   # Flutter bundle → AppImage / .deb / .exe / .dmg
 │   ├── release-03-checksums.sh # emit SHA256SUMS for all release artifacts
-│   ├── release-changelog.sh    # generate CHANGELOG entry for a release
-│   └── release-tag.sh          # bump versions + create + push git tag
+│   ├── release-changelog.sh    # bump versions + generate CHANGELOG.md entry + commit
+│   └── release-tag.sh          # read version from manifest + tag + push
 └── README.md                   # project overview
 ```
 
@@ -589,26 +596,38 @@ Dev-only tips (not in the user guide):
 ./scripts/test.sh
 ```
 
-`test.sh` runs two sub-scripts in sequence:
+`test.sh` runs six sub-scripts in numeric order:
 
-**`test-01-console.sh`** — Zig / CLI side:
+**`test-01-console.sh`** — Zig / CLI build + unit:
 
-1. `zig build test` in `bxp-core` (unit tests for `csv.zig`, `expr.zig`, `json5.zig`, `docs.zig`).
-2. Builds `bxp-fmt`; runs smoke tests for each subcommand (`--config`, `--expr`, `--docs`, `--list-templates`, `--fetch-template`).
-3. Builds `bxp-cli`; iterates every `datasets/<id>/` directory and diffs output against `sample.expected`.
+1. `zig build test` in `bxp-core` (unit tests for `csv.zig`, `expr.zig`, `json5.zig`, `docs.zig`, `diagnostics.zig`).
+2. Builds `bxp-cli` and `bxp-fmt`.
+3. Runs `bxp-fmt` smoke tests for each subcommand (`--config`, `--expr`, `--docs`, `--list-templates`, `--fetch-template`).
+4. `dart test` inside `bxp-gui/packages/json5_ast/`.
 
-**`test-02-desktop.sh`** — Flutter / Dart side:
+**`test-02-datasets.sh`** — bxp-cli regression: iterates every `datasets/<id>/`
+directory and diffs output against `sample.expected`.
 
-1. `flutter analyze` — static analysis of `bxp-gui/`.
-2. `flutter test` — widget tests in `bxp-gui/test/`.
-3. `dart test` inside `bxp-gui/packages/json5_ast/` — json5_ast unit + round-trip tests.
+**`test-03-desktop.sh`** — Flutter / Dart side:
+
+1. Builds `bxp-gui-bridge` shared library (needed for `expr_corpus_bridge_test.dart`).
+2. `flutter analyze` — static analysis of `bxp-gui/`.
+3. `flutter test` — widget + service tests in `bxp-gui/test/`.
+4. `dart test` inside `bxp-gui/packages/json5_ast/` — json5_ast unit + round-trip tests.
+
+**`test-04-bridge.sh`** — `bxp-gui-bridge` build + unit tests.
+
+**`test-05-format.sh`** — `prettier --check` + `markdownlint` against owned files.
+
+**`test-06-expr-corpus.sh`** — expression corpus regression gate (TAB-separated
+`expr<TAB>ok|err<TAB>...` cases).
 
 Individual sub-suites:
 
 ```bash
 cd bxp-core && zig build test           # Zig unit tests only
 bash scripts/test-01-console.sh        # console side only (no Flutter dep)
-bash scripts/test-02-desktop.sh        # Flutter side only
+bash scripts/test-03-desktop.sh        # Flutter side only
 ```
 
 **Adding a regression test:**
@@ -632,8 +651,14 @@ Two release channels, distinct archives:
 | `bxp-desktop` | `bxp-desktop-<ver>-{linux.AppImage, linux.deb, linux.tar.gz, windows-setup.exe, macos.dmg}` | Flutter GUI + bundled bxp-cli + bxp-fmt |
 
 ```bash
-# Bump versions + tag + push (triggers GitHub Actions pipeline)
-bash scripts/release-tag.sh v0.3.0
+# 1. Bump manifests + CHANGELOG (commits "release: prepare X.Y.Z (YYYY.MM.DD)")
+bash scripts/release-changelog.sh patch   # or minor / major / 0.3.0
+
+# 2. Push the bump commit so the tag points at a public ref
+git push origin master
+
+# 3. Tag from the version just bumped + push (triggers GitHub Actions pipeline)
+bash scripts/release-tag.sh
 
 # Or build locally without tagging:
 bash scripts/release-01-console.sh v0.3.0-rc1   # console archives
