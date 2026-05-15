@@ -42,6 +42,7 @@ pub fn readJsonRecords(
     // Collect the union of all keys across all records (first-seen order).
     // Use a StringHashMap as a seen-set for O(1) duplicate detection.
     var seen = std.StringHashMap(void).init(alloc);
+    defer seen.deinit();
     for (items) |item| {
         if (item != .object) continue;
         var it = item.object.iterator();
