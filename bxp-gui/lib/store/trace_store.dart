@@ -1166,12 +1166,14 @@ class TraceStore extends ChangeNotifier {
     if (path.isEmpty || _customPlaces.contains(path)) return;
     _customPlaces.add(path);
     await _prefs.setStringList('bxp-gui.customPlaces', _customPlaces);
+    if (_disposed) return;
     notifyListeners();
   }
 
   Future<void> removeCustomPlace(String path) async {
     if (!_customPlaces.remove(path)) return;
     await _prefs.setStringList('bxp-gui.customPlaces', _customPlaces);
+    if (_disposed) return;
     notifyListeners();
   }
 
@@ -1180,6 +1182,7 @@ class TraceStore extends ChangeNotifier {
   void toggleTheme() async {
     _themePresetName = _themePresetName == 'slate' ? 'zinc' : 'slate';
     await _prefs.setString('bxp-ui.theme', _themePresetName);
+    if (_disposed) return;
     notifyListeners();
   }
 
@@ -1191,6 +1194,7 @@ class TraceStore extends ChangeNotifier {
     devTrace('action.theme.set', {'name': name});
     _themePresetName = name;
     await _prefs.setString('bxp-ui.theme', _themePresetName);
+    if (_disposed) return;
     notifyListeners();
   }
 
