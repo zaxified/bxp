@@ -299,16 +299,23 @@ class UpdaterService extends ChangeNotifier {
       var received = 0;
       _downloadProgress = 0.0;
       notifyListeners();
-      await for (final chunk in res) {
-        sink.add(chunk);
-        received += chunk.length;
-        if (total > 0) {
-          _downloadProgress = received / total;
-          onProgress?.call(_downloadProgress!);
-          notifyListeners();
+      // Inner try/finally guarantees the sink is closed even if the
+      // stream loop or notifyListeners throws. Without it, a network
+      // hiccup mid-download leaves the file descriptor open until GC
+      // and the partial file lingers on disk.
+      try {
+        await for (final chunk in res) {
+          sink.add(chunk);
+          received += chunk.length;
+          if (total > 0) {
+            _downloadProgress = received / total;
+            onProgress?.call(_downloadProgress!);
+            notifyListeners();
+          }
         }
+      } finally {
+        await sink.close().catchError((_) {});
       }
-      await sink.close();
     } finally {
       client.close(force: true);
       _downloadProgress = null;
