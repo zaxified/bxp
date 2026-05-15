@@ -173,10 +173,9 @@ class FileModel {
   /// this file. Filtered rows are absent.
   final List<String> rowIds = [];
   /// Pre-pass lookup table entries collected from `prepass_set` events
-  /// before the main row loop. Mirrors bxp-ui's `FileModel.prepass`.
-  /// Surfaced in the UI via FileList expandable detail / future LOOKUP
-  /// debug pane; for now we capture them so the trace round-trip is loss-
-  /// less.
+  /// before the main row loop. Surfaced in the UI via FileList expandable
+  /// detail / future LOOKUP debug pane; for now we capture them so the
+  /// trace round-trip is lossless.
   final List<PrepassEntry> prepass = [];
   /// File-level stats from the `file_end` event (e.g. rows written, rows
   /// filtered, warnings). Null until the event arrives.

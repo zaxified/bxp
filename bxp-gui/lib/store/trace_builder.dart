@@ -96,9 +96,8 @@ class TraceBuilder {
         break;
       case 'prepass_set':
         // Captured on the current FileModel for inspection / debugging.
-        // Mirrors bxp-ui's TraceBuilder.applyPrepassSet — same event
-        // shape (`{key, field, value}`) emitted by bxp-cli's pre_pass
-        // pipeline before any row_start fires.
+        // Event shape (`{key, field, value}`) is the bxp-cli contract for
+        // pre_pass entries emitted before any row_start fires.
         final fileId = currentFileId;
         if (fileId == null) return;
         model.files[fileId]?.prepass.add(PrepassEntry(

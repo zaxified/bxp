@@ -44,8 +44,7 @@ class _ConfigViewState extends State<ConfigView> {
               children: [
                 // When the loaded config contains `$err_*` diagnostic
                 // markers, bxp-fmt could parse it but treats it as broken
-                // — same semantics as bxp-ui's `readOnly = configHasErrors`.
-                // Editing buttons go inert so the user can't pile changes
+                // — editing buttons go inert so the user can't pile changes
                 // on top of a broken file; only Open/Reload stay live so
                 // they can recover by editing externally and re-loading.
                 ...() {
@@ -96,9 +95,8 @@ class _ConfigViewState extends State<ConfigView> {
                             store.isLoadingConfig,
                         onTap: () => store.runValidate()),
                     _ToolbarBtn(
-                      // "SAVING…" label mirrors bxp-ui's
-                      // configSaveStatus === "saving" indicator. The
-                      // re-entrancy guard in saveConfig() handles
+                      // "SAVING…" label surfaces the in-flight save round-trip.
+                      // The re-entrancy guard in saveConfig() handles
                       // double-click; we still disable the button so
                       // the affordance matches the no-op behaviour.
                       title: store.isSaving ? 'SAVING…' : 'SAVE',
@@ -163,9 +161,8 @@ class _ConfigViewState extends State<ConfigView> {
                 // by priority: AST tree present → render (even when
                 // configError is set, so the user can still browse a
                 // partially-parsed file); spawn in flight → "Loading…"
-                // placeholder (mirrors bxp-ui's configStatus="loading");
-                // error without partial JSON → red error banner; nothing
-                // loaded yet → empty-state hint.
+                // placeholder; error without partial JSON → red error
+                // banner; nothing loaded yet → empty-state hint.
                 SizedBox(
                   width: leftWidth,
                   child: store.astRoot != null
@@ -219,10 +216,6 @@ class _ConfigViewState extends State<ConfigView> {
     );
   }
 }
-
-// _Breadcrumb removed: the same path is now rendered exclusively in
-// ExprPanel's editor header. The duplicate row under the toolbar gave
-// the impression of a global selection state badge.
 
 class _ToolbarBtn extends StatelessWidget {
   final String title;

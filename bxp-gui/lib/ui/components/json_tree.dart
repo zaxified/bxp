@@ -2019,8 +2019,7 @@ class _AddChildDialogState extends State<_AddChildDialog> {
   void _confirm() {
     final key = widget.isMap ? _keyController.text.trim() : null;
     if (widget.isMap && (key == null || key.isEmpty)) {
-      // Surface the failure instead of silently ignoring the click —
-      // mirrors bxp-ui's "Key name cannot be empty" red banner.
+      // Surface the failure instead of silently ignoring the click.
       setState(() => _error = 'Key name cannot be empty');
       return;
     }
@@ -2463,7 +2462,6 @@ class _EditableStringState extends State<_EditableString> {
   }
 
   /// Discard pending edits and leave edit mode without firing onCommit.
-  /// Mirrors bxp-ui's EditableString Escape handler.
   void _cancel() {
     if (!isEditing) return;
     controller.text = widget.value;
@@ -2609,7 +2607,6 @@ class _EditableNumberState extends State<_EditableNumber> {
   }
 
   /// Discard pending edits and leave edit mode without firing onCommit.
-  /// Mirrors bxp-ui's EditableNumber Escape handler.
   void _cancel() {
     if (!isEditing) return;
     controller.text = widget.value.toString();
@@ -2762,9 +2759,8 @@ class _EditableEnum extends StatelessWidget {
 ///
 /// Looks the path up against `bxp-fmt --docs` config_schema (with `*`
 /// wildcards). When a description exists, the label gets a dotted
-/// underline + help cursor and a hover tooltip — matches bxp-ui's
-/// LabelSpan + findSchemaDoc behaviour. When no doc is found (or docs
-/// haven't loaded yet), the label renders unchanged.
+/// underline + help cursor and a hover tooltip. When no doc is found
+/// (or docs haven't loaded yet), the label renders unchanged.
 class _SchemaTooltipKey extends StatefulWidget {
   final String keyName;
   final List<String> path;

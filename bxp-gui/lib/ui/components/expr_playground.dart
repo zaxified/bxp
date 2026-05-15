@@ -15,7 +15,7 @@ import 'expr_panel.dart'
 // `exprBottomRowHeight` is intentionally re-exported to keep the cap on
 // `_PlaygroundErrorBox` height in sync with the panel-side `_ExprErrorBox`.
 
-/// Standalone expression scratchpad — mirrors bxp-ui's ExprPlayground.
+/// Standalone expression scratchpad.
 ///
 /// The playground is the same expression editor as the in-panel one — it
 /// reuses [ExprEditor] for autocomplete and the syntax-highlighting
@@ -31,8 +31,6 @@ class ExprPlayground extends StatefulWidget {
 }
 
 class _ExprPlaygroundState extends State<ExprPlayground> {
-  // Same preset set as bxp-ui ExprPlayground.tsx so the "help a user learn
-  // the DSL" experience is interchangeable.
   static const _examples = <_Example>[
     _Example('date convert',
         "DATE_CONVERT([Date], 'YYYY-MM-DD', 'DD.MM.YYYY')"),

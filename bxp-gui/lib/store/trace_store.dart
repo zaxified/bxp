@@ -31,8 +31,7 @@ typedef _DiagnosticBuckets = ({
 enum RunMode { none, dry, full }
 enum RunStatus { idle, running, done, error }
 
-/// 4-state badge for the live expression validator. Mirrors bxp-ui's
-/// ExprPanel/Playground ValidationState union.
+/// 4-state badge for the live expression validator.
 enum ExprValidationState { idle, pending, ok, error }
 
 /// Central application state — the single `ChangeNotifier` that drives every
@@ -181,7 +180,7 @@ class TraceStore extends ChangeNotifier {
   // Exit code from the most recent dry-run / full-run, captured so the
   // status bar can show "done · exit N" with the right colour:
   //   0 → success (emerald), 2 → completed with warnings (amber),
-  //   anything else → red. Mirrors bxp-ui's StatusBar logic.
+  //   anything else → red.
   int? lastExitCode;
   
   /// Phase 5c-D: validation diagnostics keyed by encoded path
@@ -263,10 +262,10 @@ class TraceStore extends ChangeNotifier {
   /// Append-only log of edits since load. Replayed at save time.
   final OpLog _opLog = OpLog();
   String? configError;
-  // True while a loadConfig spawn is in flight. Mirrors bxp-ui's
-  // `configStatus === "loading"` so ConfigView can show a "Loading…"
-  // placeholder instead of momentarily flashing "Config not parsed."
-  // when the bxp-fmt spawn takes more than a frame to return.
+  // True while a loadConfig spawn is in flight. Lets ConfigView show
+  // a "Loading…" placeholder instead of momentarily flashing
+  // "Config not parsed." when the bxp-fmt spawn takes more than a
+  // frame to return.
   bool isLoadingConfig = false;
 
   /// Bumps every time `loadConfig` completes. ConfigView keys the json-tree
@@ -310,10 +309,9 @@ class TraceStore extends ChangeNotifier {
   /// a token-level red underline instead of underlining the whole cell.
   int? exprValidationOffset;
   int? exprValidationLength;
-  // Validation lifecycle. Mirrors bxp-ui's 4-state badge so the editor
-  // and Playground can show "checking…" while a validateExpr spawn is
-  // in flight (200ms debounce + bxp-fmt round-trip), then flip to
-  // "valid"/"invalid" when the result lands.
+  // Validation lifecycle. The editor and Playground show "checking…"
+  // while a validateExpr spawn is in flight (200ms debounce + bxp-fmt
+  // round-trip), then flip to "valid"/"invalid" when the result lands.
   //   idle    — no expression selected OR text is whitespace
   //   pending — debounce timer running OR spawn in flight
   //   ok      — last validation returned no error
@@ -1098,15 +1096,13 @@ class TraceStore extends ChangeNotifier {
     // Intentionally NO startup auto-load. bxp-gui always opens with an
     // empty editor; the user picks a file via Ctrl+O / OPEN button (the
     // OpenDialog seeds its starting directory from recentFiles[0] so the
-    // MRU list is still useful for fast access). This diverges from
-    // bxp-ui's getStartupConfig RPC by design — opaque "where did this
+    // MRU list is still useful for fast access). Opaque "where did this
     // come from?" surprises after a crash/restart are worse than one
     // explicit dialog interaction per session.
   }
 
   // Recently opened config paths, MRU order. Persisted across sessions
-  // so the OpenDialog can offer them as a quick-pick list — mirrors
-  // bxp-ui's `recentFiles` zustand slice.
+  // so the OpenDialog can offer them as a quick-pick list.
   static const _recentMax = 10;
   List<String> _recentFiles = [];
   List<String> get recentFiles => List.unmodifiable(_recentFiles);
@@ -1457,11 +1453,11 @@ class TraceStore extends ChangeNotifier {
 
   void editConfigNode(List<String> path, dynamic newValue) {
     if (_astRoot == null) return;
-    // Mirror bxp-ui's `readOnly = configHasErrors`: when the loaded tree
-    // contains $err_* diagnostic markers, all mutations are blocked. The
-    // ConfigView toolbar already greys out edit buttons, but the inline
-    // tree editors (EditableString/Number/Boolean) commit through this
-    // path — guarding here covers both surfaces uniformly.
+    // When the loaded tree contains $err_* diagnostic markers, all
+    // mutations are blocked. The ConfigView toolbar already greys out
+    // edit buttons, but the inline tree editors (EditableString/Number/
+    // Boolean) commit through this path — guarding here covers both
+    // surfaces uniformly.
     if (_loadedWithErrors) return;
 
     final oldValue = _getAt(path);
@@ -1513,8 +1509,7 @@ class TraceStore extends ChangeNotifier {
   /// Discard all unsaved edits and snap the AST back to the last
   /// loaded/saved baseline. Cheaper than [loadConfig] because it
   /// doesn't re-spawn bxp-fmt — just clones `_astBaseline` and resets
-  /// the undo history. Mirrors bxp-ui's `resetDraft` action; bound to
-  /// Ctrl+T.
+  /// the undo history. Bound to Ctrl+T.
   void resetDraft() {
     if (_astBaseline == null) return;
     if (_loadedWithErrors) return; // edits are blocked anyway in this state
@@ -1976,8 +1971,8 @@ class TraceStore extends ChangeNotifier {
   ///
   /// For List containers: when [atIndex] is null the value is appended;
   /// otherwise it's clamped into `[0, list.length]` and inserted at that
-  /// position. Mirrors bxp-ui's `insertChild` index-clamp semantics.
-  /// Selections at or after the insertion point shift right by one.
+  /// position. Selections at or after the insertion point shift right
+  /// by one.
   void insertConfigNode(
     List<String> path,
     String? newKey,
@@ -2104,8 +2099,7 @@ class TraceStore extends ChangeNotifier {
   /// True while a saveConfig is in flight — write tmp, spawn bxp-fmt
   /// validation, backup, rename, reload. The toolbar SAVE button uses
   /// this to show a "SAVING…" label so the user gets feedback during
-  /// the (possibly slow) round-trip. Mirrors bxp-ui's
-  /// `configSaveStatus === "saving"` state.
+  /// the (possibly slow) round-trip.
   bool isSaving = false;
 
   Future<void> saveConfig() async {
@@ -2158,11 +2152,10 @@ class TraceStore extends ChangeNotifier {
       // Pre-save validation: round-trip through bxp-fmt --config. If the
       // emitter produced something the parser rejects, abort and surface
       // the diagnostic — better than silently corrupting the user's file.
-      // Mirrors bxp-ui's saveConfig pre-flight check. On failure we also
-      // refresh the diagnostic maps from `parsed` so tree badges align with
-      // the tooltip; the unparseable-output branch leaves them alone (the
-      // AST is still well-formed and existing markers stay more useful
-      // than a wipe-to-empty on a transient blip).
+      // On failure we also refresh the diagnostic maps from `parsed` so
+      // tree badges align with the tooltip; the unparseable-output branch
+      // leaves them alone (the AST is still well-formed and existing
+      // markers stay more useful than a wipe-to-empty on a transient blip).
       Future<void> failPreSave(String msg, {dynamic parsedForDiag}) async {
         try { await tmpFile.delete(); } catch (_) {}
         if (parsedForDiag != null) {
@@ -2207,7 +2200,6 @@ class TraceStore extends ChangeNotifier {
       // Backup the original before overwriting so the user has a recovery
       // path if a save turns out to be wrong. Suffix is a sortable
       // timestamp so multiple saves of the same file don't collide.
-      // Mirrors bxp-ui's `${path}_${ts}` backup convention.
       final original = File(configPath);
       if (await original.exists()) {
         final ts = _backupTimestamp(DateTime.now());
@@ -2456,7 +2448,7 @@ class TraceStore extends ChangeNotifier {
 
   /// Select a file by its composite id. Automatically selects the first
   /// row of the newly chosen file so RowDetail and OutputPanel are never
-  /// empty after a file-switch — mirrors bxp-ui's auto-select behaviour.
+  /// empty after a file-switch.
   void selectFile(String? id) {
     if (selectedFileId == id) return;
     devTrace('action.file.select', {'id': id});
@@ -2778,8 +2770,7 @@ class TraceStore extends ChangeNotifier {
   }
 
   /// Opens [path] in the host's default application. Used by the
-  /// StatusBar pencil-icon shortcut — mirrors bxp-ui's `openInEditor`
-  /// RPC.
+  /// StatusBar pencil-icon shortcut.
   ///
   /// Per-platform launchers:
   /// * **Linux** — `xdg-open`, the freedesktop entry point that hands

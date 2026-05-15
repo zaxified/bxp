@@ -104,7 +104,6 @@ class _FileListState extends State<FileList> {
     if (model == null || model.fileOrder.isEmpty) {
       return Padding(
         padding: const EdgeInsets.all(12.0),
-        // Exact-match bxp-ui's empty-state copy.
         child: Text('No files yet. Click Run Dry-Run.',
             style: BxpText.italic(context)),
       );

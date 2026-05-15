@@ -12,13 +12,12 @@ import 'diagnostic_log.dart';
 
 /// Spawn-based client for `bxp-cli` and `bxp-fmt`.
 ///
-/// Mirrors the RPC surface bxp-ui uses from its Bun main process: every
-/// call is a short-lived sub-process. `--trace` runs stream stdout line
-/// by line (one NDJSON event per line); validation calls capture stdout
-/// in full. The old FFI path (zig/bxp-ffi, a separate shared library
-/// re-exporting bxp-core) was deleted — keeping a parallel binding
-/// duplicated maintenance with zero UX upside now that validateExpr
-/// is debounced asynchronously.
+/// Every call is a short-lived sub-process. `--trace` runs stream stdout
+/// line by line (one NDJSON event per line); validation calls capture
+/// stdout in full. The old FFI path (zig/bxp-ffi, a separate shared
+/// library re-exporting bxp-core) was deleted — keeping a parallel
+/// binding duplicated maintenance with zero UX upside now that
+/// validateExpr is debounced asynchronously.
 class BxpProcessClient {
   /// Resolve a sibling binary. Search order:
   ///   1. Env override: `$BXP_CLI_PATH` / `$BXP_FMT_PATH`
@@ -511,10 +510,9 @@ class BxpProcessClient {
 
   /// Fetch the canonical function/keyword/operator/token/config-schema
   /// catalog from `bxp-fmt --docs`. Returns the parsed JSON tree, or
-  /// null if the binary is missing or returns garbage. Mirrors bxp-ui's
-  /// `getDocs` RPC — same single-source-of-truth contract so the tree
-  /// tooltips, expression catalog, and autocomplete all read from the
-  /// same data the CLI itself ships.
+  /// null if the binary is missing or returns garbage. Single-source-of-
+  /// truth contract: tree tooltips, expression catalog, and autocomplete
+  /// all read from the same data the CLI itself ships.
   static Future<Map<String, dynamic>?> getDocs() async {
     final bin = findBin('bxp-fmt');
     if (bin == null) return null;
@@ -929,9 +927,9 @@ class BxpProcessClient {
       stderrBuffer.write(chunk);
       // Stream stderr live to the caller — bxp-cli writes diagnostic
       // warnings (e.g. "[xlsx pre-pass] missing sheet") to stderr while
-      // the trace stream is still running. Mirrors bxp-ui's pushStderr
-      // so the StatusBar surfaces these progressively instead of waiting
-      // for the whole pipeline to finish.
+      // the trace stream is still running, so the StatusBar surfaces
+      // these progressively instead of waiting for the whole pipeline
+      // to finish.
       onStderr?.call(chunk);
     }).asFuture<void>();
 

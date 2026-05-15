@@ -215,10 +215,9 @@ class _ExprPanelState extends State<ExprPanel> {
                 ),
               ),
               const SizedBox(width: 8),
-              // 4-state validation badge — mirrors bxp-ui's
-              // ValidationBadge (idle/pending/ok/error) so the user sees a
-              // "checking" pulse during the 200ms debounce + bxp-fmt spawn
-              // instead of stale flicker between "valid" and "invalid".
+              // 4-state validation badge (idle/pending/ok/error) so the user
+              // sees a "checking" pulse during the 200ms debounce + bxp-fmt
+              // spawn instead of stale flicker between "valid" and "invalid".
               // Muted to "idle" while the autocomplete popup is up: the
               // user is mid-completion, a stale INVALID from the previous
               // partial keystroke shouts at them while they're picking.

@@ -4,10 +4,10 @@ import '../theme/bxp_text.dart';
 
 /// A slim section label used atop FileList / RowList / OutputPanel.
 ///
-/// Matches bxp-ui's SectionHeader: small uppercase title, letter-spaced,
-/// panel-bg background, themed bottom border. Counts render in
-/// `BxpText.body` at the same size token as the label so the layout
-/// stays consistent with the rest of the app's prose typography.
+/// Small uppercase title, letter-spaced, panel-bg background, themed
+/// bottom border. Counts render in `BxpText.body` at the same size token
+/// as the label so the layout stays consistent with the rest of the
+/// app's prose typography.
 class PanelHeader extends StatelessWidget {
   final String title;
   final int? count;

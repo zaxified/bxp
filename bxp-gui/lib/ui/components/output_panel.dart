@@ -11,8 +11,7 @@ import 'panel_header.dart';
 ///
 /// Column headers are derived from the template's `output_schema`
 /// (not from the file_start event), so we see both the CSV header name
-/// (e.g. `date`) and the variable that populated it (e.g. `$date`) —
-/// matching bxp-ui's OutputPanel layout.
+/// (e.g. `date`) and the variable that populated it (e.g. `$date`).
 class OutputPanel extends StatelessWidget {
   const OutputPanel({super.key});
 

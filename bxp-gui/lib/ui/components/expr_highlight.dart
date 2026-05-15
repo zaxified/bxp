@@ -6,7 +6,6 @@ import '../theme/bxp_theme.dart';
 import '../theme/bxp_text.dart';
 
 // ── BXP Expression tokenizer + inline highlighter ──────────────────────────
-// Mirrors the logic in bxp-ui/src/mainview/expr/highlight.tsx + colors.ts.
 // Token colours come from the active BxpTheme — light theme renders
 // VS Code Light Modern syntax (keyword=#0000FF, string=#A31515, ...),
 // dark theme renders Dark Modern (keyword=#569CD6, string=#CE9178, ...).

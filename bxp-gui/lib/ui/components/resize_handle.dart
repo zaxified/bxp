@@ -3,9 +3,7 @@ import '../theme/bxp_theme.dart';
 
 /// Thin draggable splitter with hover + active visual feedback.
 ///
-/// Mirrors bxp-ui's `w-1 cursor-col-resize bg-slate-800
-/// hover:bg-slate-600 active:bg-slate-500 transition-colors` recipe:
-/// the handle is a 4 px line that brightens when the cursor enters and
+/// The handle is a 4 px line that brightens when the cursor enters and
 /// brightens further during an active drag. Without this feedback the
 /// user can't tell which slim border is interactive.
 ///

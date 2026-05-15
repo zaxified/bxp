@@ -105,10 +105,10 @@ class _RowListInnerState extends State<_RowListInner> {
   int? _lastTabIndex;
 
   /// Per-column substring filter (case-insensitive). Empty string = no
-  /// filter on that column. Mirrors bxp-ui's RowList filter inputs.
-  /// Filtering is applied imperatively via [PlutoGridStateManager.setFilter]
-  /// — passing a pre-filtered `rows` list to PlutoGrid doesn't work
-  /// because the grid keeps its own copy in `stateManager.refRows`.
+  /// filter on that column. Filtering is applied imperatively via
+  /// [PlutoGridStateManager.setFilter] — passing a pre-filtered `rows`
+  /// list to PlutoGrid doesn't work because the grid keeps its own copy
+  /// in `stateManager.refRows`.
   final Map<String, String> _filters = {};
 
   /// Horizontal scroll controller for the sticky filter row above the
@@ -147,8 +147,8 @@ class _RowListInnerState extends State<_RowListInner> {
   void initState() {
     super.initState();
     // Auto-select the first row when a file with rows is opened but no
-    // row is yet selected — matches bxp-ui's effect that primes RowDetail
-    // / OutputPanel so they aren't "empty" on first paint.
+    // row is yet selected — primes RowDetail / OutputPanel so they
+    // aren't "empty" on first paint.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       if (widget.store.selectedRowId != null) return;
@@ -316,7 +316,7 @@ class _RowListInnerState extends State<_RowListInner> {
         ),
       ),
       PlutoColumn(
-        // Icon-only status column — no header text, matches bxp-ui.
+        // Icon-only status column — no header text; the glyph is self-explanatory.
         title: '',
         field: 'status',
         type: PlutoColumnType.text(),
@@ -548,8 +548,7 @@ class _RowListInnerState extends State<_RowListInner> {
                 evenRowColor: t.surfaceBg,
                 gridBorderColor: t.borderColor,
                 borderColor: t.borderColor,
-                // Selected row tint — subtle bg only, no focus border (bxp-ui
-                // uses a plain bg-slate-800 fill without an accent outline).
+                // Selected row tint — subtle bg only, no accent outline.
                 activatedColor: t.selectionBg,
                 activatedBorderColor: Colors.transparent,
                 // Columns header + cell text — both flow through
@@ -604,7 +603,7 @@ class _RowListInnerState extends State<_RowListInner> {
 }
 
 /// Sticky filter row above the column headers — one input per column,
-/// case-insensitive substring match. Mirrors bxp-ui's RowList filter inputs.
+/// case-insensitive substring match.
 class _FilterRow extends StatelessWidget {
   final List<String> headers;
   final Map<String, String> filters;
