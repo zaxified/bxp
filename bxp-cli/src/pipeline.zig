@@ -667,8 +667,12 @@ pub fn processBroker(
     var combined_out_file: std.fs.File = undefined;
     var combined_out_file_buf: [OUT_FILE_BUF_SIZE]u8 = undefined;
     var combined_out_fw: std.fs.File.Writer = undefined;
-    var combined_discarding: std.Io.Writer.Discarding = undefined;
-    var combined_fout: *std.Io.Writer = undefined;
+    // Initialise to a Discarding writer up-front so a stray flush at
+    // teardown is harmless even if no real combined sink was ever opened.
+    // The `combined_file_opened` flag still gates the meaningful flush
+    // path, but losing that invariant no longer reads undefined memory.
+    var combined_discarding: std.Io.Writer.Discarding = .init(&combined_out_file_buf);
+    var combined_fout: *std.Io.Writer = &combined_discarding.writer;
     var combined_json_first_row: bool = true;
     var combined_file_opened = false;
     // True once --fresh confirmed the combined file already exists and
@@ -692,8 +696,8 @@ pub fn processBroker(
         const combined_out_name = combined_out_name_owned.?;
 
         if (out.dry_run) {
-            combined_discarding = .init(&combined_out_file_buf);
-            combined_fout = &combined_discarding.writer;
+            // combined_fout already points at combined_discarding from
+            // the top-of-function init; no rewiring needed.
         } else if (fresh) {
             // --fresh + combined: O_EXCL create the combined sink. If it
             // exists, fall through to discarding so the per-file outputs
@@ -706,8 +710,7 @@ pub fn processBroker(
             } else |e| switch (e) {
                 error.PathAlreadyExists => {
                     out.info("  skipping combined output '{s}' (exists)\n", .{combined_out_name});
-                    combined_discarding = .init(&combined_out_file_buf);
-                    combined_fout = &combined_discarding.writer;
+                    // combined_fout still points at combined_discarding.
                     combined_skipped = true;
                 },
                 else => return e,
