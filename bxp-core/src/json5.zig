@@ -192,8 +192,6 @@ pub fn preprocess(alloc: std.mem.Allocator, input: []const u8) ![]u8 {
 
 /// Scan backwards in `out` and remove the last comma if it is only followed
 /// by whitespace.  Called just before writing } or ].
-/// Scan backwards in `out` and remove the last comma if it is only followed
-/// by whitespace.  Called just before writing } or ].
 ///
 /// Shrinking items.len directly (without a realloc) is intentional: the
 /// capacity stays allocated and will be reused for the closing bracket that
@@ -282,8 +280,7 @@ fn appendJsonStr(out: *std.ArrayList(u8), alloc: std.mem.Allocator, s: []const u
 //
 // Phase 5d will narrow the annotated-output contract to just `$err_*`
 // (probably as a new `--check` mode; `--config` may stay for backwards
-// compatibility with any external caller). Touchpoints to revisit
-// when that lands are tagged below with `// 5d-CANDIDATE:`.
+// compatibility with any external caller).
 
 pub const AnnotatedResult = struct {
     out: []u8,

@@ -1,4 +1,4 @@
-// Cross-runner corpus parity gate (Phase 4 of TODO 4).
+// Cross-runner corpus parity gate.
 //
 // Walks `scripts/test-06-expr-corpus.txt` through both expression
 // evaluators that ship in bxp-gui:
@@ -10,7 +10,7 @@
 // Per corpus line, asserts both runners agree with each other AND with
 // the corpus's expected outcome. A divergence between the two means
 // either bridge or bxp-fmt drifted from the shared `bxp-core/src/expr.zig`
-// behaviour and the regression must be fixed before TODO 4 ships.
+// behaviour and must be fixed before ship.
 //
 // The test is intentionally Dart-side (not pure shell) so the FFI
 // boundary itself is exercised; a shell-only check would never catch a

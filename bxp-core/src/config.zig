@@ -2294,18 +2294,6 @@ pub fn load(alloc: std.mem.Allocator, config_path: []const u8) !Config {
     return loadFromBytes(alloc, raw, config_path, null);
 }
 
-/// Parse + validate a config from in-memory JSON5 bytes. The path label
-/// is only used in diagnostic messages — pass an arbitrary marker
-/// (`"<inline>"`, `"test"`, …) when the source isn't a real file. Carved
-/// out of `load()` so `bxp-fmt --config` can avoid double-reading the
-/// file (it already has the raw bytes for `preprocessAnnotated`) and so
-/// inline tests can exercise the loader without touching disk.
-///
-/// `diag` is an optional structured diagnostic sink. When non-null,
-/// future phases will append path-aware errors / warnings into it
-/// alongside the existing `std.debug.print` + `return error` behavior.
-/// bxp-cli passes null so its load path is unchanged bit by bit; only
-/// bxp-fmt's deep-validation pass passes a non-null sink today.
 /// Emit a per-template diagnostic to the bag if non-null. The path is
 /// always rooted at `conversion_templates.<id>.<field_suffix>`. The
 /// message is built with `std.fmt.allocPrint` from the format string +

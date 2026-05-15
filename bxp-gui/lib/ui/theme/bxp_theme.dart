@@ -253,21 +253,8 @@ extension BxpThemeHelpers on BxpTheme {
 // Slate + zinc retain the original dark palette + augment with all the
 // new tokens (status surfaces, input chrome, syntax, etc.).
 //
-// FUTURE-TODO: load user-supplied themes from JSON files on disk.
-// Every field on [BxpTheme] is either Color, Brightness, an enum-like
-// preset id, or a label string — a `BxpTheme.fromJson(Map<String,dynamic>)`
-// factory plus a `toJson()` helper would unlock:
-//   1. Drop a `~/.config/bxp-gui/themes/myname.json` and have it appear
-//      in the cycle without rebuilding the app.
-//   2. Export the active preset for sharing / forking ("save as").
-//   3. Theme marketplace later if there's demand.
-// Schema is already JSON-friendly; only `tones` (a function pointer
-// for FlexSeedScheme) needs a name → preset lookup. Keep this list of
-// built-in presets as the fallback so corrupted/missing JSONs never
-// brick the app.
-//
-// Until that lands, any new preset goes here as a `const BxpTheme(...)`
-// literal and gets registered in [bxpThemes] + [bxpThemeOrder] below.
+// New presets go here as a `const BxpTheme(...)` literal and get
+// registered in [bxpThemes] + [bxpThemeOrder] below.
 
 const _slate = BxpTheme(
   preset: BxpThemePreset.slate,
