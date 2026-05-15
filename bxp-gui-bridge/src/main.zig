@@ -620,25 +620,28 @@ export fn bridge_run_streaming(
     };
 
     ctx.child.spawn() catch return -1;
+    // Single combined rollback for child + reader threads: kill the
+    // child FIRST (so any spawned reader threads' read() calls return
+    // EOF and exit their loops), THEN join the readers. The previous
+    // shape — separate child_ok / stdout_ok / stderr_ok defers — fired
+    // joins before kill in LIFO order on the rare `registerStream` OOM
+    // path, deadlocking on readers blocked in read() with a child still
+    // alive. `child_ok` flips true on the success path so the rollback
+    // is skipped after we've handed ownership to the wait thread.
+    var stdout_spawned = false;
+    var stderr_spawned = false;
     var child_ok = false;
     defer if (!child_ok) {
-        // kill() in std.process.Child includes wait() on POSIX/Windows, so
-        // the child is fully reaped by the time this defer returns. Pipe
-        // handles inside ctx.child are still open here — they get freed
-        // when arena_ok=false's deinit runs because ctx.child was init'd
-        // from the arena allocator. (No-op if reader threads already took
-        // ownership and nulled the field, which can only happen on the
-        // success path.)
         _ = ctx.child.kill() catch {};
+        if (stdout_spawned) ctx.stdout_thread.join();
+        if (stderr_spawned) ctx.stderr_thread.join();
     };
 
     ctx.stdout_thread = std.Thread.spawn(.{}, streamingStdoutLoop, .{ctx}) catch return -1;
-    var stdout_ok = false;
-    defer if (!stdout_ok) ctx.stdout_thread.join();
+    stdout_spawned = true;
 
     ctx.stderr_thread = std.Thread.spawn(.{}, streamingStderrLoop, .{ctx}) catch return -1;
-    var stderr_ok = false;
-    defer if (!stderr_ok) ctx.stderr_thread.join();
+    stderr_spawned = true;
 
     // Register before launching the wait thread so cancel sees a complete
     // ctx the moment we return to Dart. If registerStream fails (OOM in the
@@ -655,8 +658,6 @@ export fn bridge_run_streaming(
     ctx_ok = true;
     arena_ok = true;
     child_ok = true;
-    stdout_ok = true;
-    stderr_ok = true;
     registered_ok = true;
     started_ok = true;
 
