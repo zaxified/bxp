@@ -19,14 +19,16 @@ bxp/
 │   └── build.zig.zon     # depends on bxp-core (path dep)
 ├── bxp-core/             # Internal Zig library (shared modules)
 │   ├── src/
-│   │   ├── csv.zig       # RFC 4180 CSV parser + splitRecords()
-│   │   ├── xlsx.zig      # .xlsx → CSV converter (ZIP+XML)
-│   │   ├── expr.zig      # Expression evaluator + per-builtin FnDoc catalog
-│   │   ├── config.zig    # JSON5 config loader + per-struct FieldDoc tables
-│   │   ├── json.zig      # JSON array-of-objects → CSV rows
-│   │   ├── json5.zig     # JSON5 preprocessor (comments, unquoted keys, ...)
-│   │   └── docs.zig      # Aggregator: re-exports expr catalog + flattens
-│   │                     # config FieldDoc tables; serves bxp-fmt --docs
+│   │   ├── csv.zig         # RFC 4180 CSV parser + splitRecords()
+│   │   ├── xlsx.zig        # .xlsx → CSV converter (ZIP+XML)
+│   │   ├── expr.zig        # Expression evaluator + per-builtin FnDoc catalog
+│   │   ├── config.zig      # JSON5 config loader + per-struct FieldDoc tables
+│   │   ├── json.zig        # JSON array-of-objects → CSV rows
+│   │   ├── json5.zig       # JSON5 preprocessor (comments, unquoted keys, ...)
+│   │   ├── docs.zig        # Aggregator: re-exports expr catalog + flattens
+│   │   │                   # config FieldDoc tables; serves bxp-fmt --docs
+│   │   └── diagnostics.zig # Structured Diagnostic / Severity collector for
+│   │                       # bxp-fmt --config deep validation
 │   ├── build.zig         # exports each file as a named Zig module
 │   └── build.zig.zon     # depends on sunrise (datetime library)
 ├── bxp-gui/              # Flutter desktop app (replaces bxp-ui; uses bxp-cli/bxp-fmt via subprocess)
@@ -56,15 +58,28 @@ bxp/
 ├── scripts/
 │   ├── test.sh           # Wrapper — runs every test-NN-*.sh in numeric order
 │   ├── test-lib.sh       # Shared section/step/summary helpers (sourced)
-│   ├── test-01-console.sh   # bxp-core unit + bxp-cli/fmt build + bxp-fmt smoke + json5_ast unit
-│   ├── test-02-datasets.sh  # bxp-cli regression vs datasets/*/*.expected
-│   ├── test-03-desktop.sh   # flutter analyze + flutter test + json5_ast dart test
-│   ├── release.sh        # Wrapper — runs release-01-console.sh + release-02-desktop.sh
+│   ├── test-01-console.sh    # bxp-core unit + bxp-cli/fmt build + bxp-fmt smoke + json5_ast unit
+│   ├── test-02-datasets.sh   # bxp-cli regression vs datasets/*/*.expected
+│   ├── test-03-desktop.sh    # flutter analyze + flutter test + json5_ast dart test
+│   ├── test-04-bridge.sh     # bxp-gui-bridge build + unit tests
+│   ├── test-05-format.sh     # prettier + markdownlint checks
+│   ├── test-06-expr-corpus.sh    # cross-runner expression corpus regression gate
+│   ├── release.sh            # Wrapper — runs release-01-console.sh + release-02-desktop.sh
 │   ├── release-01-console.sh    # Cross-compile bxp-cli, package bxp-console-* archives
 │   ├── release-02-desktop.sh    # Host-OS-specific Flutter desktop bundle → .AppImage / .deb
-│   │                         # / .tar.gz / NSIS .exe / DMG (matrixed by GH Actions)
-│   └── release-03-checksums.sh    # Emit SHA256SUMS for every release artifact
-├── docs/                 # Developer documentation (architecture.md, devel.md, trace-protokol.md)
+│   │                            # / .tar.gz / NSIS .exe / DMG (matrixed by GH Actions)
+│   ├── release-03-checksums.sh  # Emit SHA256SUMS for every release artifact
+│   ├── release-changelog.sh     # Extract per-tag section from CHANGELOG.md for release notes
+│   └── release-tag.sh           # Push a vX.Y.Z tag and trigger the release workflow
+├── docs/                 # Developer + user documentation
+│   ├── README.md             # Index / table of contents
+│   ├── architecture.md       # System architecture + module diagrams
+│   ├── devel.md              # Developer setup, build, debug guide
+│   ├── gui.md                # bxp-gui user-facing guide
+│   ├── release.md            # Release operator walkthrough
+│   ├── roadmap.md            # Long-term backlog mirrored to memory
+│   ├── trace-protokol.md     # NDJSON trace stream protocol reference
+│   └── demo.gif              # README hero asset
 ├── .github/workflows/
 │   └── release.yml       # Multi-host release pipeline triggered by `v*` tag push
 ├── DEV/                  # Developer scratch space — sample data, in-flight plans, AST prototypes
@@ -145,12 +160,15 @@ services/prefs_service.dart`.
 - [`bxp-core/CLAUDE.md`](bxp-core/CLAUDE.md) — module API overview, build details, test coverage.
 - [`bxp-gui/CLAUDE.md`](bxp-gui/CLAUDE.md) — Flutter app structure, services/store/ui split,
   bxp-cli/bxp-fmt subprocess wiring.
+- [`bxp-gui/packages/json5_ast/CLAUDE.md`](bxp-gui/packages/json5_ast/CLAUDE.md) — standalone
+  Dart JSON5 AST library; parser, dumper, mutation API.
 
 ## CLAUDE.md files
 
 New CLAUDE.md files may be created anywhere inside `bxp/` as needed.
 Existing files: `bxp/CLAUDE.md` (this file), `bxp/bxp-cli/CLAUDE.md`,
-`bxp/bxp-core/CLAUDE.md`, `bxp/bxp-fmt/CLAUDE.md`, `bxp/bxp-gui/CLAUDE.md`.
+`bxp/bxp-core/CLAUDE.md`, `bxp/bxp-fmt/CLAUDE.md`, `bxp/bxp-gui/CLAUDE.md`,
+`bxp/bxp-gui/packages/json5_ast/CLAUDE.md`.
 
 ## Git & GitHub
 

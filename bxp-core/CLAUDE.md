@@ -39,7 +39,7 @@ RFC 4180 CSV parser.
   `bxp-cli/src/pipeline.zig:517`. Brokers frequently pad fields, so the rest
   of the pipeline (date parsing, numeric conversion, comparisons) sees clean
   values without csv.zig having to mutate the slices it returns.
-- Unit tests inline (`zig build test`).
+- Unit tests inline (12 test cases).
 
 ### xlsx.zig
 
@@ -63,7 +63,7 @@ Expression evaluator for `input_schema` and `row_rules` in bxp-cli.json.
   `lookup_table`, `alloc`, `decimal_sep_in`, `quote_out`.
 - `Value` — union of `number: f64`, `string: []const u8`, `boolean: bool`.
 - Depends on `sunrise` for `DATE_CONVERT()` date/time parsing and formatting.
-- Unit tests inline (~57 test cases).
+- Unit tests inline (83 test cases).
 
 **Built-in functions:** IF, ABS, DATE_CONVERT, PRICE_VALUE, PRICE_CURRENCY, TICKER,
 LOOKUP, SPLIT_PART, CONTAINS, REPLACE, TRIM, ROUND, FLOOR, CEILING, NOW, RAND, COALESCE, FIELDS.
@@ -124,7 +124,7 @@ Preprocessor that converts JSON5 source to standard JSON.
 - `preprocess(alloc, input)` — strips `//` and `/* */` comments, converts unquoted keys
   to quoted keys, removes trailing commas, converts single-quoted strings to double-quoted.
 - Implemented as a single-pass tokenizer — no external dependencies.
-- Unit tests inline (~8 test cases).
+- Unit tests inline (20 test cases).
 
 ### diagnostics.zig
 

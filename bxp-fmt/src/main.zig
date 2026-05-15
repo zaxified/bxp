@@ -79,6 +79,8 @@ const USAGE_TEMPLATE =
     \\Usage (exactly one action flag):
     \\  bxp-fmt --config <path>                  validate config; emit annotated JSON to stdout
     \\  bxp-fmt --expr '<text>'                  validate one expression; stderr JSON on error
+    \\  bxp-fmt --expr-trace '<text>'            evaluate one expression and stream NDJSON traces
+    \\                                           (optional --row-headers <json>, --row-fields <json>)
     \\  bxp-fmt --docs                           emit full language/schema documentation as JSON
     \\  bxp-fmt --config <path> --list-templates emit JSON list of templates declared in config
     \\  bxp-fmt --config <path> --fetch-template <id>

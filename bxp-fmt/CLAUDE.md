@@ -92,7 +92,7 @@ tree consumed by the conversion pipeline.
 bxp-fmt/
   src/
     main.zig      ← single file: arg parsing + 6 subcommand dispatchers
-                    (~2150 lines — bulk is JSON serialization helpers,
+                    (~2400 lines — bulk is JSON serialization helpers,
                      `--config` annotation glue, and deep validation logic)
   build.zig       ← depends on bxp-core path dep (../bxp-core); imports
                     the `config`, `expr`, `json5`, `docs`, and `diagnostics` modules
