@@ -32,6 +32,43 @@ push, then tag.
 
 Both scripts accept `--dry-run` to preview without mutating anything.
 
+### Optional: Windows pre-shipping smoke (between step 2 and step 3)
+
+When the release contains **substantial `bxp-gui` changes** — Flutter
+widget refactors, new dialogs, MSVC-dependent native code (engine
+stderr capture, NSIS installer changes, bridge ABI), or anything that
+plausibly touches the Windows build path — do a local Windows build
+between pushing master and pushing the tag. GH Actions matrix runs
+windows-latest only, so a regression that breaks Win MSVC compile or
+NSIS-install behaviour surfaces _after_ the release is half-published.
+
+On a Windows host with Git Bash + Zig 0.15.2 + Flutter (Windows desktop
+support) + Visual Studio with C++ desktop workload + NSIS on PATH:
+
+```bash
+git pull origin master
+bash scripts/release-02-desktop.sh
+# → releases/desktop/bxp-desktop-windows-x86_64.exe
+```
+
+Install and exercise the NSIS-built `.exe`: startup gate (`bxp-fmt
+--docs` probe), open a real `bxp-cli.json`, dry-run + full-run, expr
+playground, settings inspector. Anything `bxp-gui` touched in the
+release should be covered manually. Bridge ABI changes specifically:
+verify the synthetic startup error path stays clean (the bridge probe
+either loads or fails fatal — there is no `Process.start` fallback on
+Windows).
+
+If green → push the tag (step 3 below). If red → fix on the dev host,
+push to master, repeat the Win pull/build/test cycle until clean. The
+RC workflow_dispatch path is the alternative when Windows hardware
+isn't available — see "Testing on the windows-latest runner without a
+real tag" further down (uses the workflow_dispatch trigger).
+
+Skip this step for tag-prep wave releases (CHANGELOG / version bumps
+only), pure `bxp-cli` / `bxp-core` changes, or documentation-only
+releases — the GH Actions matrix is sufficient for those.
+
 ## What gets built
 
 | job               | runner         | output                                                                              |
