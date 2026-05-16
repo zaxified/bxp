@@ -1,10 +1,12 @@
 # Broker eXchange Parser (BXP Desktop)
 
-A single-binary CLI tool that converts broker export statements (CSV,
-XLSX, JSON) into [Wealthfolio](https://wealthfolio.app/) CSV format
-using declarative JSON5 templates. No code changes, no runtime
-dependencies — just the binary and a config file. Everything runs
-locally; your data never leaves the machine.
+A desktop app + CLI suite that converts broker export statements (CSV,
+XLSX, JSON) into portfolio-tracker CSV formats using declarative JSON5
+templates. [Wealthfolio](https://wealthfolio.app/) and
+[brycht.app](https://brycht.app/) are the two trackers with shipping
+templates today; any other tracker is reachable by writing an
+`output_schema` for it — no code changes. Everything runs locally; your
+data never leaves the machine.
 
 The desktop bundle adds a graphical editor and dry-run debugger on top
 of the same conversion engine, so you can edit templates and preview
@@ -27,32 +29,44 @@ workflow and bxp-fmt-specific sections.
 ## Installation
 
 Each release ships one artefact per platform, downloadable via stable
-GitHub URLs that always point at the latest version:
+GitHub URLs that always point at the latest version.
+
+### Linux
 
 ```bash
-# Linux (AppImage)
 sudo apt install libfuse2t64   # libfuse2 on older distros
+mkdir -p ~/.local/bin && cd ~/.local/bin
 wget https://github.com/zaxified/bxp/releases/latest/download/bxp-desktop-linux-x86_64.AppImage
 chmod +x bxp-desktop-linux-x86_64.AppImage
 ./bxp-desktop-linux-x86_64.AppImage   # first launch prompts to install menu + icons
-
-# Windows
-# Download bxp-desktop-windows-x86_64.exe from
-#   https://github.com/zaxified/bxp/releases/latest
-# Run the installer; SmartScreen may warn — "More info" → "Run anyway".
-
-# macOS (Apple Silicon)
-# Download bxp-desktop-macos-arm64.dmg from
-#   https://github.com/zaxified/bxp/releases/latest
-# Open it, drag bxp-gui.app to /Applications, first launch:
-# right-click → Open to bypass Gatekeeper.
 ```
 
-The Linux AppImage is the only Linux distribution channel; `.deb` and
-plain tarballs were retired in v0.2.3 to keep one update path. On
-first launch the AppImage offers to write `~/.local/share/applications/bxp-gui.desktop`
-plus `hicolor` icons so the app shows up in the system menu — no
-`sudo` needed, reversible from the Settings drawer.
+The AppImage lives in `~/.local/bin/` (typically on `PATH`). User
+preferences auto-save to `~/.local/share/bxp-gui/bxp-gui.json` on first
+edit. The Linux AppImage is the only Linux distribution channel; `.deb`
+and plain tarballs were retired in v0.2.3 to keep one update path. On
+first launch the AppImage offers to write
+`~/.local/share/applications/bxp-gui.desktop` plus `hicolor` icons so
+the app shows up in the system menu — no `sudo` needed, reversible from
+the Settings drawer.
+
+### Windows
+
+Download
+[`bxp-desktop-windows-x86_64.exe`](https://github.com/zaxified/bxp/releases/latest/download/bxp-desktop-windows-x86_64.exe)
+and run the NSIS installer. SmartScreen may warn — "More info" → "Run
+anyway". The app installs to `C:\Program Files\bxp-gui\` with a Start
+menu entry and desktop shortcut. User preferences live at
+`%APPDATA%\bxp-gui\bxp-gui.json`.
+
+### macOS (Apple Silicon)
+
+Download
+[`bxp-desktop-macos-arm64.dmg`](https://github.com/zaxified/bxp/releases/latest/download/bxp-desktop-macos-arm64.dmg),
+open it, drag `bxp-gui.app` to `/Applications/`. First launch:
+right-click `bxp-gui.app` → Open → Open (bypasses Gatekeeper once).
+Subsequent launches go through Spotlight / Launchpad / Dock. User
+preferences live at `~/Library/Application Support/bxp-gui/bxp-gui.json`.
 
 ---
 
@@ -74,7 +88,8 @@ runnable from a terminal for scripting or batch use.
 1. Drop the broker's export file into the template's `data_dir`.
 2. Run `./bxp-cli --template <id>`.
 3. Pick up the generated `*.csvx` file next to the input — ready to
-   import into Wealthfolio.
+   import into the tracker the template targets (Wealthfolio for
+   `*_to_wealthfolio`, brycht.app for `*_to_brychtapp`).
 
 ### Built-in templates
 
@@ -505,6 +520,22 @@ reserved.
 | `RAND()` | number | Cryptographically random float in `[0, 1)` |
 | `COALESCE(a, b, ...)` | any | First non-empty argument (empty = whitespace-only string); falls back to last arg verbatim if all empty |
 
+#### Function semantics — common gotchas
+
+- **`CONTAINS(s, sub)` is a substring match, not a prefix match.** It
+  returns `true` whenever `sub` appears *anywhere* inside `s`, which
+  means `CONTAINS('Sell to Buy', 'Buy')` is `true`. Brokers with
+  prefix-based action codes (Schwab `MKT BUY` / `LMT BUY`, IBKR
+  multi-word actions) need an exact or word-boundary check: prefer
+  exact comparison (`[Action] = 'Buy'`), `SPLIT_PART([Action], ' ', 1) = 'Buy'`
+  for the first word, or stack `CONTAINS` checks to exclude false
+  matches (`CONTAINS([Action], 'Buy') AND NOT CONTAINS([Action], 'Sell')`
+  is not yet expressible — use a more specific positive match instead).
+- **`SPLIT_PART(s, delim, n)` is 1-based and returns `""` on out-of-range.**
+  Out-of-range never errors — silent empty makes it safe to chain but
+  hides off-by-one bugs. Trace the variable in `bxp-gui` if the output
+  is empty unexpectedly.
+
 #### Type coercions
 
 - Empty string → `0` in a numeric context.
@@ -931,6 +962,25 @@ the default Wealthfolio set is:
 
 Output is RFC 4180–compliant with basic protection against spreadsheet
 formula injection.
+
+### brycht.app target
+
+The shipping brycht.app templates (`trading212_to_brychtapp`,
+`xtb2_cash_to_brychtapp`, `xtb2_closed_to_brychtapp`) target a different
+column set than Wealthfolio: `date, type, ticker, quantity, price,
+currency, fees, notes` (8 columns) instead of Wealthfolio's 13. Templates
+default to `combined_output: true` so the tracker imports a single merged
+file per template. brycht.app does not publish a separate machine-readable
+spec — treat the existing brycht.app entries in `bxp-cli.examples.json`
+as the canonical reference: each one carries inline JSON5 comments
+documenting what each `$variable` represents and how `$type` maps to the
+broker's source action.
+
+When authoring a new `*_to_brychtapp` template, pattern-match against
+`trading212_to_brychtapp` (simple stock broker) or `xtb2_cash_to_brychtapp`
+(xlsx-sourced, paired cash/closed shape) rather than against the
+Wealthfolio templates above — the `output_schema` shape and `$action`
+vocabulary differ.
 
 ---
 

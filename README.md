@@ -53,9 +53,11 @@ adapt. A new broker takes a JSON5 entry, not a code change.
   row's variables / rule matches / output stream past in NDJSON. Click
   any trace event to jump to the expression that produced it. Typos
   surface as red underlines on the offending token before you save.
-- **Universal mini-ETL.** The primary target is broker - Wealthfolio,
-  but the engine is broker-agnostic and target-agnostic - anything
-  expressible as "tabular in, tabular out, with row-level rules" fits.
+- **Universal mini-ETL.** Wealthfolio and brycht.app are the shipping
+  targets, but the engine is broker-agnostic and target-agnostic - any
+  tracker reachable by writing an `output_schema` is in scope, and
+  anything expressible as "tabular in, tabular out, with row-level
+  rules" fits.
 - **AI-friendly.** Templates are JSON5 with comments. Paste a 5-row
   sample of your broker's export into Claude / ChatGPT along with the
   reference readme, get back a working template.
@@ -70,26 +72,48 @@ adapt. A new broker takes a JSON5 entry, not a code change.
 
 ### 1. Console cli with examples
 
-Download console package for your OS [`releases`](https://github.com/zaxified/bxp/releases)
+The console package ships `bxp-cli` + `bxp-cli.examples.json` (12
+working templates with inline comments) + a sample `bxp-cli.json`. Use
+this when you want headless batch conversion, want to script `bxp-cli`
+into a pipeline, or just need to read the template catalog without
+installing the GUI.
+
+Download from the
+[releases page](https://github.com/zaxified/bxp/releases/latest) — pick
+`bxp-console-<version>-<platform>.{tar.gz,zip}` for your OS.
 
 ### 2. Desktop gui debugger
 
-One artefact per platform, downloadable via stable GitHub URLs that
-always point at the latest version:
+#### Linux
 
 ```bash
-# Linux (AppImage)
 sudo apt install libfuse2t64   # libfuse2 on older distros
+mkdir -p ~/.local/bin && cd ~/.local/bin
 wget https://github.com/zaxified/bxp/releases/latest/download/bxp-desktop-linux-x86_64.AppImage
 chmod +x bxp-desktop-linux-x86_64.AppImage
 ./bxp-desktop-linux-x86_64.AppImage   # first launch prompts to install menu + icons
 ```
 
-Direct downloads:
+The AppImage lives in `~/.local/bin/` (typically on `PATH`). User
+preferences auto-save to `~/.local/share/bxp-gui/bxp-gui.json` on first
+edit. After the first launch's integration prompt, the app is reachable
+from the system menu.
 
-- Linux — [`bxp-desktop-linux-x86_64.AppImage`](https://github.com/zaxified/bxp/releases/latest/download/bxp-desktop-linux-x86_64.AppImage)
-- macOS — [`bxp-desktop-macos-arm64.dmg`](https://github.com/zaxified/bxp/releases/latest/download/bxp-desktop-macos-arm64.dmg) (Apple Silicon)
-- Windows — [`bxp-desktop-windows-x86_64.exe`](https://github.com/zaxified/bxp/releases/latest/download/bxp-desktop-windows-x86_64.exe) (NSIS installer)
+#### Windows
+
+Download
+[`bxp-desktop-windows-x86_64.exe`](https://github.com/zaxified/bxp/releases/latest/download/bxp-desktop-windows-x86_64.exe)
+and run the NSIS installer. SmartScreen may warn — "More info" → "Run
+anyway". The app installs to `C:\Program Files\bxp-gui\` with a Start
+menu entry and desktop shortcut.
+
+#### macOS (Apple Silicon)
+
+Download
+[`bxp-desktop-macos-arm64.dmg`](https://github.com/zaxified/bxp/releases/latest/download/bxp-desktop-macos-arm64.dmg),
+open it, drag `bxp-gui.app` to `/Applications/`. First launch:
+right-click `bxp-gui.app` → Open → Open (bypasses Gatekeeper once).
+Subsequent launches go through Spotlight / Launchpad / Dock.
 
 ## Documentation
 

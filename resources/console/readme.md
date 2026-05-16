@@ -1,10 +1,12 @@
 # Broker eXchange Parser (bxp-cli)
 
 A single-binary CLI tool that converts broker export statements (CSV,
-XLSX, JSON) into [Wealthfolio](https://wealthfolio.app/) CSV format
-using declarative JSON5 templates. No code changes, no runtime
-dependencies — just the binary and a config file. Everything runs
-locally; your data never leaves the machine.
+XLSX, JSON) into portfolio-tracker CSV formats using declarative JSON5
+templates. [Wealthfolio](https://wealthfolio.app/) and
+[brycht.app](https://brycht.app/) are the two trackers with shipping
+templates today; any other tracker is reachable by writing an
+`output_schema` for it — no code changes. Everything runs locally; your
+data never leaves the machine.
 
 ---
 
@@ -15,7 +17,8 @@ locally; your data never leaves the machine.
 1. Drop the broker's export file into the template's `data_dir`.
 2. Run `./bxp-cli --template <id>`.
 3. Pick up the generated `*.csvx` file next to the input — ready to
-   import into Wealthfolio.
+   import into the tracker the template targets (Wealthfolio for
+   `*_to_wealthfolio`, brycht.app for `*_to_brychtapp`).
 
 ### Built-in templates
 
@@ -339,6 +342,22 @@ reserved.
 | `NOW()` | string | Current UTC datetime, format `YYYY-MM-DDTHH:MM:SSZ` |
 | `RAND()` | number | Cryptographically random float in `[0, 1)` |
 | `COALESCE(a, b, ...)` | any | First non-empty argument (empty = whitespace-only string); falls back to last arg verbatim if all empty |
+
+#### Function semantics — common gotchas
+
+- **`CONTAINS(s, sub)` is a substring match, not a prefix match.** It
+  returns `true` whenever `sub` appears *anywhere* inside `s`, which
+  means `CONTAINS('Sell to Buy', 'Buy')` is `true`. Brokers with
+  prefix-based action codes (Schwab `MKT BUY` / `LMT BUY`, IBKR
+  multi-word actions) need an exact or word-boundary check: prefer
+  exact comparison (`[Action] = 'Buy'`), `SPLIT_PART([Action], ' ', 1) = 'Buy'`
+  for the first word, or stack `CONTAINS` checks to exclude false
+  matches (`CONTAINS([Action], 'Buy') AND NOT CONTAINS([Action], 'Sell')`
+  is not yet expressible — use a more specific positive match instead).
+- **`SPLIT_PART(s, delim, n)` is 1-based and returns `""` on out-of-range.**
+  Out-of-range never errors — silent empty makes it safe to chain but
+  hides off-by-one bugs. Trace the variable in `bxp-gui` if the output
+  is empty unexpectedly.
 
 #### Type coercions
 
@@ -766,6 +785,25 @@ the default Wealthfolio set is:
 
 Output is RFC 4180–compliant with basic protection against spreadsheet
 formula injection.
+
+### brycht.app target
+
+The shipping brycht.app templates (`trading212_to_brychtapp`,
+`xtb2_cash_to_brychtapp`, `xtb2_closed_to_brychtapp`) target a different
+column set than Wealthfolio: `date, type, ticker, quantity, price,
+currency, fees, notes` (8 columns) instead of Wealthfolio's 13. Templates
+default to `combined_output: true` so the tracker imports a single merged
+file per template. brycht.app does not publish a separate machine-readable
+spec — treat the existing brycht.app entries in `bxp-cli.examples.json`
+as the canonical reference: each one carries inline JSON5 comments
+documenting what each `$variable` represents and how `$type` maps to the
+broker's source action.
+
+When authoring a new `*_to_brychtapp` template, pattern-match against
+`trading212_to_brychtapp` (simple stock broker) or `xtb2_cash_to_brychtapp`
+(xlsx-sourced, paired cash/closed shape) rather than against the
+Wealthfolio templates above — the `output_schema` shape and `$action`
+vocabulary differ.
 
 ---
 
