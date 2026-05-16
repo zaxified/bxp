@@ -89,18 +89,20 @@ done < "$CORPUS"
 t1=$(_now)
 dur=$(awk -v a="$t0" -v b="$t1" 'BEGIN{printf "%.1f", b-a}')
 
-# step()-style line + (N/N passed) footer.
-label="corpus"
-dots_n=$(( 51 - 5 - ${#label} ))
+# step()-style line — count goes in the label so the OK column lands at
+# the same place as every other step and the whole line stays inside the
+# 60-char visual width set by section().
+label="corpus (${passed}/${total})"
+dots_n=$(( _BXP_OK_COL - 5 - ${#label} ))
 (( dots_n < 3 )) && dots_n=3
 dots=$(printf '.%.0s' $(seq 1 $dots_n))
 
 if (( failed == 0 )); then
-    printf '  %s %s OK %5ss   (%d/%d passed)\n' "$label" "$dots" "$dur" "$passed" "$total"
+    printf '  %s %s OK %5ss\n' "$label" "$dots" "$dur"
     exit 0
 fi
 
-printf '  %s %s FAIL %3ss  (%d/%d passed)\n' "$label" "$dots" "$dur" "$passed" "$total"
+printf '  %s %s FAIL %3ss\n' "$label" "$dots" "$dur"
 echo
 echo "  Failures:"
 for f in "${failures[@]}"; do
