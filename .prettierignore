@@ -26,6 +26,7 @@ LICENSE.md
 datasets/*/sample.json
 DEV/bxp-cli.json
 bxp-cli/bxp-cli.json
+resources/console/bxp-cli.examples.json
 bxp-gui/packages/json5_ast/test/fixtures/
 
 # User-facing tutorials — hand-formatted for readability (long copy-paste
