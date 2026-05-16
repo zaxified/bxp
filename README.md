@@ -89,9 +89,10 @@ Download from the
 ```bash
 sudo apt install libfuse2t64   # libfuse2 on older distros
 mkdir -p ~/.local/bin && cd ~/.local/bin
+rm bxp-desktop-linux-x86_64.AppImage   # delete previous downloads
 wget https://github.com/zaxified/bxp/releases/latest/download/bxp-desktop-linux-x86_64.AppImage
 chmod +x bxp-desktop-linux-x86_64.AppImage
-./bxp-desktop-linux-x86_64.AppImage   # first launch prompts to install menu + icons
+./bxp-desktop-linux-x86_64.AppImage   # first launch prompts to install menu + icons + bxp-gui.json
 ```
 
 The AppImage lives in `~/.local/bin/` (typically on `PATH`). User
