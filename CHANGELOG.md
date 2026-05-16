@@ -79,9 +79,13 @@ in the GUI.
 - chore: GitHub community standards — Code of Conduct, issue
   templates, license identifier fix.
 - audit: pre-release 5-layer sweep — stripped 34 rotted `bxp-ui`
-  provenance comments from `bxp-gui`; refreshed all 6 CLAUDE.md files;
-  refreshed 7 `docs/` files (incl. trace-protokol ArgKind drift and
-  architecture.md mermaid file refs); cleaned speculative TODOs.
+  provenance comments from `bxp-gui`; refreshed all 7 CLAUDE.md files
+  (added a new `bxp-gui-bridge/CLAUDE.md` covering the C-ABI surface,
+  Debug→ReleaseSafe rewrite, and Win-mandatory / cross-platform roles);
+  refreshed 7 `docs/` files (incl. new bird's-eye bridge subgraph,
+  per-call routing table in devel.md, transport-paths section in gui.md,
+  trace-protokol ArgKind drift, architecture.md mermaid file refs);
+  cleaned speculative TODOs.
 
 ## 2026.05.10 — bxp-cli 0.2.2, bxp-fmt 0.2.2, bxp-gui 0.2.2
 
