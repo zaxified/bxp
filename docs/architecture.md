@@ -546,11 +546,11 @@ stateDiagram-v2
     [*] --> idle
     idle --> running: runDryRun() / runFullRun()
     running --> running: NDJSON event arrives
-    running --> cancelling: cancelRun() [user] OR\n10 s idle [watchdog]
+    running --> cancelling: cancelRun (user) OR 10s idle (watchdog)
     cancelling --> done: child exits
-    cancelling --> killed: 2 s grace expires\n→ SIGKILL
+    cancelling --> killed: 2s grace expires, SIGKILL
     killed --> done: process reaped
-    running --> done: {"t":"done"} received
+    running --> done: done event received
     done --> idle: notifyListeners()
 ```
 
@@ -634,22 +634,35 @@ into the annotated JSON output before exit.
 
 ```mermaid
 flowchart TD
-    INPUT([raw config bytes]) --> P1[json5.preprocessAnnotated\n$comm/$err keys for parse-level findings]
-    P1 --> P2[std.json.parseFromSliceLeaky\nstructural JSON parse]
-    P2 --> P3[config.loadFromBytes\n→ Config + BrokerConfig structs]
+    INPUT([raw config bytes]) --> P1[json5.preprocessAnnotated
+    $comm/$err keys for parse-level findings]
+    P1 --> P2[std.json.parseFromSliceLeaky
+    structural JSON parse]
+    P2 --> P3[config.loadFromBytes
+    → Config + BrokerConfig structs]
 
-    P3 --> V1[BrokerConfig.validateCollect\nschema constraints per template]
-    V1 --> V2[validateExprsCollect\nexpression statics: refs, calls, SPLIT_PART]
-    V2 --> V3[validateUnusedCollect\ndead pre_passes, unused $variables]
-    V3 --> V4[validateCrossTemplate\nfile_pattern_in collisions across templates]
-    V4 --> V5[validateUnknownKeysCollect\ntypo'd keys + did-you-mean]
-    V5 --> V6{--check-fs=N\nflag set?}
-    V6 -->|N>0| V7[validateFilesystemWithTimeout\ndata_dir + input file existence\nworker thread + N-second deadline]
+    P3 --> V1[BrokerConfig.validateCollect
+    schema constraints per template]
+    V1 --> V2[validateExprsCollect
+    expression statics: refs, calls, SPLIT_PART]
+    V2 --> V3[validateUnusedCollect
+    dead pre_passes, unused $variables]
+    V3 --> V4[validateCrossTemplate
+    file_pattern_in collisions across templates]
+    V4 --> V5[validateUnknownKeysCollect
+    typo'd keys + did-you-mean]
+    V5 --> V6{--check-fs=N
+    flag set?}
+    V6 -->|N>0| V7[validateFilesystemWithTimeout
+    data_dir + input file existence
+    worker thread + N-second deadline]
     V6 -->|N=0| MERGE
-    V7 --> MERGE[Merge errors[] + Diagnostics\ninto annotated JSON tree]
+    V7 --> MERGE["Merge errors[] + Diagnostics<br/>into annotated JSON tree"]
     MERGE --> EXIT{any error?}
-    EXIT -->|yes| OUT1([annotated JSON\nexit 1])
-    EXIT -->|no| OUT0([annotated JSON\nexit 0])
+    EXIT -->|yes| OUT1([annotated JSON
+    exit 1])
+    EXIT -->|no| OUT0([annotated JSON
+    exit 0])
 ```
 
 Severity routing in the merged JSON: `.error` → `$err_<N>`, `.warning` →
