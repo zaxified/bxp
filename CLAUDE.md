@@ -160,6 +160,8 @@ services/prefs_service.dart`.
 - [`bxp-core/CLAUDE.md`](bxp-core/CLAUDE.md) — module API overview, build details, test coverage.
 - [`bxp-gui/CLAUDE.md`](bxp-gui/CLAUDE.md) — Flutter app structure, services/store/ui split,
   bxp-cli/bxp-fmt subprocess wiring.
+- [`bxp-gui-bridge/CLAUDE.md`](bxp-gui-bridge/CLAUDE.md) — Zig FFI shared library;
+  C-ABI surface, Debug→ReleaseSafe rewrite rationale, platform role.
 - [`bxp-gui/packages/json5_ast/CLAUDE.md`](bxp-gui/packages/json5_ast/CLAUDE.md) — standalone
   Dart JSON5 AST library; parser, dumper, mutation API.
 
@@ -168,7 +170,7 @@ services/prefs_service.dart`.
 New CLAUDE.md files may be created anywhere inside `bxp/` as needed.
 Existing files: `bxp/CLAUDE.md` (this file), `bxp/bxp-cli/CLAUDE.md`,
 `bxp/bxp-core/CLAUDE.md`, `bxp/bxp-fmt/CLAUDE.md`, `bxp/bxp-gui/CLAUDE.md`,
-`bxp/bxp-gui/packages/json5_ast/CLAUDE.md`.
+`bxp/bxp-gui-bridge/CLAUDE.md`, `bxp/bxp-gui/packages/json5_ast/CLAUDE.md`.
 
 ## Git & GitHub
 

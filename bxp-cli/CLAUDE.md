@@ -5,8 +5,10 @@ For monorepo-level context see [`../CLAUDE.md`](../CLAUDE.md).
 
 ## Purpose
 
-**bxp-cli** — Zig 0.15.2 CLI tool that converts broker export statements to Wealthfolio
-format (`.csvx`) via JSON5 conversion templates. All broker logic is configuration-driven
+**bxp-cli** — Zig 0.15.2 CLI tool that converts broker export statements to portfolio
+tracker formats via JSON5 conversion templates. Wealthfolio (`.csvx`) and brycht.app are
+the shipping targets today; any other tracker can be reached by writing an
+`output_schema` for it — no code change required. All broker logic is configuration-driven
 (`bxp-cli.json`) — no compiled-in broker modules.
 
 ## Source layout

@@ -76,7 +76,7 @@ bxp-gui/
 │   ├── lib/                         # parser, tokenizer, ast, dumper,
 │   │                                # operations, path, value_builder —
 │   │                                # all pure Dart, no bxp-specific code
-│   ├── test/                        # ~69 unit tests incl. round-trip
+│   ├── test/                        # ~105 unit tests incl. round-trip
 │   │                                # canonicalisation
 │   ├── pubspec.yaml                 # name: json5_ast — candidate for
 │   │                                # extraction to a standalone repo
