@@ -49,6 +49,11 @@ graph TD
         Dart JSON5 AST library"]
     end
 
+    subgraph BRIDGE["bxp-gui-bridge — Zig FFI shared library"]
+        BRUN["bridge_run<br/>bridge_run_streaming<br/>subprocess proxy"]
+        BEVAL["bridge_eval_expr<br/>bridge_eval_expr_trace<br/>in-proc expr"]
+    end
+
     subgraph CLI["bxp-cli (binary)"]
         MAIN["main.zig
         arg parsing · dispatch"]
@@ -107,12 +112,32 @@ graph TD
     DOCS -.re-exports.-> EXPR
     DOCS -.re-exports.-> CFG2
 
-    SVCS -->|subprocess --trace| CLI
-    SVCS -->|subprocess --config / --docs / --expr / --expr-trace| FMT
+    SVCS -->|Process.start --trace| CLI
+    SVCS -->|Process.run| FMT
+    SVCS -->|dart:ffi| BRIDGE
+    BRUN -->|spawns| CLI
+    BRUN -->|spawns| FMT
+    BEVAL -.links.-> EXPR
     STORE --> SVCS
     STORE --> TB
     STORE --> AST_LIB
 ```
+
+`bxp-gui-bridge` is the FFI shim the GUI loads via `dart:ffi` at startup. Two
+roles in one shared library: (1) on **Windows** it wraps every `bxp-cli` /
+`bxp-fmt` subprocess to sidestep dart-lang/sdk#1727 (~8 KB stdout cutoff that
+kills `--docs` and `--trace`) — this path is mandatory; probe failure at
+startup is fatal. (2) on **all platforms** it links `bxp-core/expr` directly
+so the editor's live validation and the ExprPlayground avoid the ~50 ms
+`bxp-fmt --expr` spawn cost per keystroke. The subprocess proxy paths
+(`bridge_run`/`bridge_run_streaming`) also compile on Linux/macOS but stay
+dormant behind a `BXP_FORCE_BRIDGE_PROXY=1` smoke gate until v0.3.0.
+
+For the **per-call transport matrix** (which GUI calls use which transport on
+each OS, plus the two-cause "why" behind the split), see
+[`devel.md`'s "Why the bridge exists" + "Per-call routing"](devel.md#why-the-bridge-exists)
+section. The bridge's C-ABI surface and Debug→ReleaseSafe build rationale live
+in [`bxp-gui-bridge/CLAUDE.md`](../bxp-gui-bridge/CLAUDE.md).
 
 `docs.zig` is an aggregator — it owns no schema of its own. The dotted arrows
 indicate that it re-exports `expr.builtins` (the `FnDoc` catalog) and flattens
@@ -444,17 +469,23 @@ Key invariants:
 - **No fallback FnDocs.** bxp-fmt `--docs` is the single source for the
   language catalog. If the binary is missing at startup, the app shows a fatal
   error gate; there are no hardcoded fallback catalogs.
-- **Subprocess transport is platform-split.** On Linux and macOS,
-  `BxpProcessClient` calls `Process.start` / `Process.run` directly — every
-  `Process.start(...)` arrow in the diagrams below is a literal `dart:io`
-  call. **On Windows, all those arrows route through `bxp-gui-bridge.dll`**
-  (a Zig FFI shim, see [`../bxp-gui-bridge/`](../../bxp-gui-bridge/)) —
-  the protocol on the wire is identical (same args, same NDJSON), but the
-  transport sidesteps a dart:io pipe-truncation bug
-  (dart-lang/sdk#1727) on `--docs` / `--config` / `--trace`. The DLL is
-  mandatory on Windows; probe failure at startup is fatal. Cross-platform
-  consolidation is on the v0.3.0 roadmap (see
-  [`roadmap.md`](roadmap.md)).
+- **Two transport paths.** `BxpProcessClient` picks per call between
+  `dart:io` (`Process.start` / `Process.run`) and FFI through
+  `bxp-gui-bridge.{dll,so,dylib}`. The protocol on the wire is identical (same
+  args, same NDJSON); only the transport differs.
+  - **Out-of-process** (`Process.start`/`Process.run`) is the default on
+    Linux/macOS for every subcommand.
+  - **In-process expression eval** (`bridge_eval_expr` / `bridge_eval_expr_trace`)
+    runs on **all platforms** for the expr editor's live validation and the
+    ExprPlayground — avoids ~50 ms `bxp-fmt --expr` spawn cost per keystroke.
+  - **Subprocess proxy via bridge** (`bridge_run` / `bridge_run_streaming` +
+    `bridge_cancel` + `bridge_ack` for backpressure) is **mandatory on Windows**
+    to sidestep a `dart:io` pipe-truncation bug (dart-lang/sdk#1727) that kills
+    `--docs` (~30 KB) and `--trace` (megabytes). On Win the DLL is the only
+    path; probe failure at startup is fatal. On Linux/macOS these same
+    functions compile and work but stay behind a `BXP_FORCE_BRIDGE_PROXY=1`
+    pre-release smoke gate. Default-flip is on the v0.3.0 roadmap
+    ([`roadmap.md`](roadmap.md#flip-bridge-proxy-to-default-on-linuxmacos)).
 
 ---
 
@@ -832,6 +863,7 @@ classDiagram
         +file_pattern_in: string
         +file_pattern_out: ?string
         +date_filter_from_filename: bool
+        +combined_output: bool
         +ticker_map: TickerMap
         +xlsx_sheet: ?XlsxSheet
         +pre_passes: StringArrayHashMap~PrePass~

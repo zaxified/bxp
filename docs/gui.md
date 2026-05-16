@@ -158,7 +158,7 @@ mcp__dart__get_app_logs()
 # Widget + unit tests (bxp-gui)
 flutter test
 
-# json5_ast unit tests (~107 cases + round-trip suite)
+# json5_ast unit tests (~105 cases + round-trip suite)
 dart test packages/json5_ast/
 
 # Full desktop suite: flutter analyze + flutter test + dart test
@@ -185,9 +185,13 @@ Three layers, top-down:
 │  services/   Pure Dart, no Flutter imports    │
 │  Subprocess wrappers, AST loader, prefs, ...  │
 └───────────────────────────────────────────────┘
-        ↕  subprocess (Process.run / Process.start)
+        ↕  Two transport paths (see "Subprocess wiring" below)
+        │      Process.start / Process.run      (Linux / macOS default)
+        │      bxp-gui-bridge.{dll,so,dylib}    (Win mandatory; eval cross-plat)
+        ↓
   bxp-cli  (conversions via --trace NDJSON stream)
-  bxp-fmt  (validation, docs, expr eval)
+  bxp-fmt  (validation, docs, expr eval — out-of-process)
+  bxp-core (expr.zig linked directly via bridge_eval_expr — in-process)
 ```
 
 The Flutter app never parses JSON5 directly for runtime data — all backend
@@ -264,7 +268,7 @@ bxp-gui/
 │   │   ├── value_builder.dart      # Typed value constructors
 │   │   └── src/
 │   │       └── tokenizer.dart      # JSON5 tokenizer (private)
-│   └── test/                       # ~107 unit tests + round-trip suite
+│   └── test/                       # ~105 unit tests + round-trip suite
 ├── linux/, macos/, windows/, web/  # Per-platform Flutter shells
 ├── test/                           # Widget + service tests (desktop_integration,
 │                                   # expr_corpus_bridge, prefs_service, zoom_overflow)
@@ -275,7 +279,43 @@ bxp-gui/
 
 ## Subprocess wiring
 
-`BxpProcessClient` is the single entry point for all binary calls.
+`BxpProcessClient` is the single entry point for all binary calls. Under the
+hood there are two transports — out-of-process (`dart:io` Process.start) and
+in-process FFI (`bxp-gui-bridge.{dll,so,dylib}`). `BxpProcessClient` picks
+between them per call based on host OS and what the call needs.
+
+### Transport paths
+
+| Transport                   | Used on             | Used for                                                                              |
+| --------------------------- | ------------------- | ------------------------------------------------------------------------------------- |
+| `Process.start` (`dart:io`) | Linux/macOS default | `bxp-cli --trace`, `bxp-fmt --config` / `--docs` / `--expr` / `--expr-trace`          |
+| `bridge_run_streaming`      | Windows mandatory   | `bxp-cli --trace` — sidesteps dart-lang/sdk#1727 (~8 KB stdout cutoff)                |
+| `bridge_run`                | Windows mandatory   | one-shot `bxp-fmt --config` / `--docs` — same pipe-truncation workaround              |
+| `bridge_eval_expr`          | All platforms       | expr editor live validation per keystroke — avoids ~50 ms `bxp-fmt --expr` spawn cost |
+| `bridge_eval_expr_trace`    | All platforms       | ExprPlayground per-call NDJSON — same reason, plus per-token trace stream             |
+
+The bridge is implemented as a Zig shared library that links `bxp-core/expr`
+directly (in-proc paths) and spawns subprocesses (proxy paths). For the
+**two-cause rationale** behind this split and a per-call transport matrix
+(every GUI call × OS → which `bridge_*` / `Process.*` it actually invokes),
+see [`devel.md`'s "Why the bridge exists" + "Per-call routing"](devel.md#why-the-bridge-exists)
+section. The C-ABI surface and Debug→ReleaseSafe rewrite landmine live in
+[`bxp-gui-bridge/CLAUDE.md`](../bxp-gui-bridge/CLAUDE.md).
+
+**Windows is single-path.** DLL probe failure at startup is fatal (synthetic
+error surfaced through the normal startup gate). There is no `Process.start`
+fallback — dart-lang/sdk#1727 makes it unusable.
+
+**Linux/macOS dormant proxy.** `bridge_run` / `bridge_run_streaming` compile
+and work on these hosts but are gated behind `BXP_FORCE_BRIDGE_PROXY=1` as a
+pre-release smoke gate. The eval paths (`bridge_eval_expr*`) run unconditionally
+because no `Process.start` bug forces the fallback. Making the proxy paths the
+default on Linux/macOS is on the v0.3.0 roadmap
+([roadmap.md](roadmap.md#flip-bridge-proxy-to-default-on-linuxmacos)).
+
+**Reloading bridge changes.** `dlopen` mmaps the file at process start, so
+editing a `.so`/`.dylib` and `mcp__dart__hot_reload` does NOT pick it up. After
+`zig build` in `bxp-gui-bridge/`, fully stop and relaunch the Flutter app.
 
 ### Binary resolution
 

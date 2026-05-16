@@ -266,6 +266,37 @@ variants`). Tiny.
   2026-04-15 with breaking I/O API changes (~100–150 LOC affected).
   Assessment in `project_zig16_migration` memory.
 
+## Not planned
+
+Features that surface repeatedly in audits and reverse-simulations but
+are deliberately **out of scope** — documented here so the same
+discussion doesn't keep restarting. Reopen only if the rationale changes.
+
+- **Aggregation across rows (SUM / COUNT / GROUP BY).** Conflicts with
+  bxp's row-by-row engine philosophy — every output row is a pure
+  function of one input row plus the pre-pass lookup table, no global
+  state. Adding aggregation would require fundamental engine redesign.
+  Workaround: post-process the `.csvx` output in the destination tracker
+  (Wealthfolio / brycht.app) or with a one-line `awk` / spreadsheet.
+- **Multi-file input correlation (`LOOKUP` across files within one
+  template).** Same row-engine constraint as aggregation: each input
+  file is a self-contained unit. Workaround: concatenate the files
+  before running bxp-cli, or split the template into two and feed the
+  outputs to a third tool.
+- **Routing to multiple output files based on `$action`.** One template
+  produces one output stream (plus optional `combined_output`).
+  Workaround: define two templates with different `row_rules` filters
+  pointing at the same `data_dir`.
+- **Inline test assertions inside a template** ("this row should match
+  rule N"). The `datasets/<id>/sample.expected` baseline mechanism
+  already covers this from outside the template; adding assertions
+  inline would duplicate that surface area without adding new
+  capability.
+- **Step-through expression debugger.** The Expression Playground
+  (single-eval against a sample row) plus per-call NDJSON traces from
+  `--expr-trace` cover ~all real debugging needs. A breakpoint-style
+  debugger would be massive surface area for marginal gain.
+
 ## Done
 
 Historical milestones live in `CHANGELOG.md`. This section stays empty

@@ -73,9 +73,9 @@ zig version
 ### Claude Code setup
 
 BXP development in Zig works seamlessly with [Claude Code](https://claude.ai/code).
-The monorepo ships six `CLAUDE.md` files — root, `bxp-cli/`, `bxp-core/`,
-`bxp-fmt/`, `bxp-gui/`, and `bxp-gui/packages/json5_ast/` — Claude loads these
-automatically and reads project conventions.
+The monorepo ships seven `CLAUDE.md` files — root, `bxp-cli/`, `bxp-core/`,
+`bxp-fmt/`, `bxp-gui/`, `bxp-gui-bridge/`, and `bxp-gui/packages/json5_ast/` —
+Claude loads these automatically and reads project conventions.
 
 ### Skills to use
 
@@ -121,12 +121,17 @@ bxp/                            # monorepo root (git root)
 ├── bxp-gui/                    # Flutter desktop app (Linux / macOS / Windows)
 │   ├── lib/
 │   │   ├── main.dart           # Flutter entry; window + theme + provider wiring
-│   │   ├── services/           # subprocess wrappers, AST loader, prefs, updater
+│   │   ├── services/           # subprocess + FFI wrappers, AST loader, prefs, updater
 │   │   ├── store/              # TraceStore ChangeNotifier + trace data models
 │   │   └── ui/                 # widgets: tree editor, expr panel, row debugger, …
 │   ├── packages/json5_ast/     # standalone Dart JSON5 AST library (path dep)
 │   ├── linux/, macos/, windows/ # per-platform Flutter shells
 │   └── pubspec.yaml
+├── bxp-gui-bridge/             # Zig FFI shared library — Win subprocess proxy
+│   ├── src/main.zig            # + cross-platform in-proc expr evaluator
+│   ├── test/test_helper.zig    # bridge_run / bridge_run_streaming /
+│   ├── build.zig               # bridge_eval_expr* C-ABI surface
+│   └── build.zig.zon           # depends on bxp-core (path dep)
 ├── datasets/                   # anonymized sample data + expected outputs
 │   └── <template_id>/
 │       ├── sample.csv / .xlsx  # input file
@@ -249,19 +254,75 @@ Consequences of this design:
 ### Package dependency graph
 
 ```text
-  bxp-cli  ── path dep ──►  bxp-core  ── url dep ──►  sunrise
-  (binary)                  (library)                 (datetime)
-  bxp-fmt  ── path dep ──►  bxp-core
+  bxp-cli         ── path dep ──►  bxp-core  ── url dep ──►  sunrise
+  (binary)                         (library)                 (datetime)
+  bxp-fmt         ── path dep ──►  bxp-core
   (binary)
+  bxp-gui-bridge  ── path dep ──►  bxp-core           (links expr.zig directly)
+  (.dll/.so/.dylib)
 
-  bxp-gui  ── subprocess ──►  bxp-cli  (conversions, --trace stream)
-  (Flutter)  └─ subprocess ──►  bxp-fmt  (--config, --docs, --expr, --expr-trace)
+  bxp-gui  ── subprocess ──►  bxp-cli   (conversions, --trace stream)
+  (Flutter)  ├─ subprocess ──►  bxp-fmt   (--config, --docs, --expr, --expr-trace)
+             └─ FFI       ──►  bxp-gui-bridge  (Win: subprocess proxy;
+                                                all platforms: in-proc expr eval)
 ```
 
 `bxp-core` is a **local path dependency** (`../bxp-core`) — no network fetch
 needed. `sunrise` is a URL dependency fetched automatically by `zig build` on
-first run. `bxp-gui` ships both `bxp-cli` and `bxp-fmt` inside the Flutter
-bundle and invokes them via `Process.run`.
+first run. `bxp-gui` ships `bxp-cli`, `bxp-fmt`, and `bxp-gui-bridge.{dll,so,
+dylib}` inside the Flutter bundle.
+
+### Why the bridge exists
+
+Two independent forces drive the bridge — they happen to combine into one
+shared library, but each role solves a different problem.
+
+1. **Windows-only: `dart:io` pipe truncation
+   ([dart-lang/sdk#1727](https://github.com/dart-lang/sdk/issues/1727)).**
+   `Process.start` on Windows silently cuts subprocess stdout at ~8 KB.
+   `bxp-fmt --docs` is ~30 KB and `bxp-cli --trace` is megabytes — both
+   unusable through `dart:io`. The bridge reads pipes from native Zig code
+   so the drain doesn't depend on the Flutter event loop. On Windows the
+   bridge is the **only** path for every subprocess; DLL probe failure at
+   startup is fatal (no `Process.start` fallback to silently misbehave).
+2. **All platforms: per-keystroke expression eval needs to skip spawn.**
+   Validating an expression via `bxp-fmt --expr` costs ~50 ms of subprocess
+   startup before any actual evaluation. The expression editor validates
+   on every keystroke, so the spawn cost dominates. `bridge_eval_expr` links
+   `bxp-core/expr` directly into the GUI process — no spawn, no pipe drain,
+   sub-millisecond evaluation. This path runs on all platforms.
+
+### Per-call routing
+
+What `bxp-gui` actually does for each backend call:
+
+| GUI call                                          | Linux / macOS                                  | Windows                                        |
+| ------------------------------------------------- | ---------------------------------------------- | ---------------------------------------------- |
+| `bxp-cli --trace` (dry-run / full-run)            | `Process.start`                                | `bridge_run_streaming`                         |
+| `bxp-fmt --docs` (startup gate)                   | `Process.run`                                  | `bridge_run`                                   |
+| `bxp-fmt --config` (load + save validation)       | `Process.run`                                  | `bridge_run`                                   |
+| `bxp-fmt --list-templates` / `--fetch-template`   | `Process.run`                                  | `bridge_run`                                   |
+| `bxp-fmt --version` / `bxp-cli --version` (probe) | `Process.run`                                  | `bridge_run`                                   |
+| `bxp-fmt --expr` (live validation per keystroke)  | `bridge_eval_expr` (subprocess fallback)       | `bridge_eval_expr` (subprocess fallback)       |
+| `bxp-fmt --expr-trace` (ExprPlayground)           | `bridge_eval_expr_trace` (subprocess fallback) | `bridge_eval_expr_trace` (subprocess fallback) |
+
+Reading the table:
+
+- **Linux/macOS "subprocess fallback"** for the eval rows means `Process.start` /
+  `Process.run` — same `dart:io` path as the rest of the Linux/macOS column.
+- **Windows "subprocess fallback"** means `bridge_run` / `bridge_run_streaming` —
+  on Windows there is no `Process.start` path; the fallback is still the bridge,
+  just the proxy form instead of the in-proc eval form.
+- **Subprocess proxy on Linux/macOS** (`bridge_run` / `bridge_run_streaming` for
+  the first 5 rows) compiles and works but stays dormant behind
+  `BXP_FORCE_BRIDGE_PROXY=1` — that env var is the pre-release smoke gate that
+  validates the cross-platform bridge build before v0.3.0 makes it the default.
+
+Implementation: routing decisions live in
+[`bxp-gui/lib/services/bxp_process_client.dart`](../bxp-gui/lib/services/bxp_process_client.dart)
+(`_runOneShot`, `_runCliTraceViaBridge`, `traceExpr`). See
+[`bxp-gui-bridge/CLAUDE.md`](../bxp-gui-bridge/CLAUDE.md) for the C-ABI surface
+of each `bridge_*` entry point.
 
 ---
 
@@ -685,11 +746,12 @@ each module — internal API contracts, design decisions, "known non-issue"
 rationales — lives in per-module `CLAUDE.md` files. They're loaded
 automatically by Claude Code, but you can read them directly any time.
 
-| Module      | File                                                                              | What's in it                                                                             |
-| ----------- | --------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| Monorepo    | [`CLAUDE.md`](../CLAUDE.md)                                                       | Top-level layout + package dep graph + cross-cutting conventions                         |
-| `bxp-cli`   | [`bxp-cli/CLAUDE.md`](../bxp-cli/CLAUDE.md)                                       | Full config reference, expression syntax, broker list, exit codes, output stream routing |
-| `bxp-fmt`   | [`bxp-fmt/CLAUDE.md`](../bxp-fmt/CLAUDE.md)                                       | Subcommands, annotated JSON shape (`$comm_*`/`$err_*`/…), exit codes                     |
-| `bxp-core`  | [`bxp-core/CLAUDE.md`](../bxp-core/CLAUDE.md)                                     | Per-module API surface, build details, "known non-issues" rationale                      |
-| `bxp-gui`   | [`bxp-gui/CLAUDE.md`](../bxp-gui/CLAUDE.md)                                       | Flutter app structure, services/store/ui split, MCP debug workflow                       |
-| `json5_ast` | [`bxp-gui/packages/json5_ast/CLAUDE.md`](../bxp-gui/packages/json5_ast/CLAUDE.md) | Standalone-library-candidate status, comment ownership, future extraction recipe         |
+| Module           | File                                                                              | What's in it                                                                             |
+| ---------------- | --------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| Monorepo         | [`CLAUDE.md`](../CLAUDE.md)                                                       | Top-level layout + package dep graph + cross-cutting conventions                         |
+| `bxp-cli`        | [`bxp-cli/CLAUDE.md`](../bxp-cli/CLAUDE.md)                                       | Full config reference, expression syntax, broker list, exit codes, output stream routing |
+| `bxp-fmt`        | [`bxp-fmt/CLAUDE.md`](../bxp-fmt/CLAUDE.md)                                       | Subcommands, annotated JSON shape (`$comm_*`/`$err_*`/…), exit codes                     |
+| `bxp-core`       | [`bxp-core/CLAUDE.md`](../bxp-core/CLAUDE.md)                                     | Per-module API surface, build details, "known non-issues" rationale                      |
+| `bxp-gui`        | [`bxp-gui/CLAUDE.md`](../bxp-gui/CLAUDE.md)                                       | Flutter app structure, services/store/ui split, MCP debug workflow                       |
+| `bxp-gui-bridge` | [`bxp-gui-bridge/CLAUDE.md`](../bxp-gui-bridge/CLAUDE.md)                         | C-ABI surface, Debug→ReleaseSafe rewrite rationale, Win-mandatory / cross-platform roles |
+| `json5_ast`      | [`bxp-gui/packages/json5_ast/CLAUDE.md`](../bxp-gui/packages/json5_ast/CLAUDE.md) | Standalone-library-candidate status, comment ownership, future extraction recipe         |
