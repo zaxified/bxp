@@ -4,9 +4,9 @@
 [![Latest release](https://img.shields.io/github/v/release/zaxified/bxp)](https://github.com/zaxified/bxp/releases)
 [![CodeQL](https://github.com/zaxified/bxp/actions/workflows/github-code-scanning/codeql/badge.svg)](https://github.com/zaxified/bxp/security/code-scanning)
 
-> Convert broker exports into [Wealthfolio](https://wealthfolio.app/) CSV
-> using declarative JSON5 templates. Privacy-respecting, single binary,
-> no runtime dependencies.
+> Convert broker exports into [Wealthfolio](https://wealthfolio.app/) and
+> [brycht.app](https://brycht.app) CSV using declarative JSON5 templates.
+> Privacy-respecting, single binary, no runtime dependencies.
 
 ## About
 
@@ -24,8 +24,9 @@ templates, datasets, code, documentation - are welcome; see
 
 ## What it does
 
-BXP turns broker statements (CSV, XLSX, JSON) into Wealthfolio's CSV
-import format. Adding a new broker is a JSON5 template - no code, no
+BXP turns broker statements (CSV, XLSX, JSON) into
+[Wealthfolio](https://wealthfolio.app/) and [brycht.app](https://brycht.app)
+CSV import formats. Adding a new broker is a JSON5 template - no code, no
 compilation. Two binaries ship together:
 
 - **`bxp-cli`** - headless batch converter for scripts and pipelines.
@@ -41,7 +42,7 @@ date / currency parsing, and identifier mapping.
 ## Supported brokers
 
 Built-in templates ship for Anycoin, Revolut X, Trading 212, and XTB
-(both old and new formats). The full list lives in
+(both old and new formats), targeting both Wealthfolio and brycht.app. The full list lives in
 [`resources/console/bxp-cli.examples.json`](resources/console/bxp-cli.examples.json) -
 each entry is a working template with inline comments you can copy and
 adapt. A new broker takes a JSON5 entry, not a code change.

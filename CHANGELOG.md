@@ -4,6 +4,85 @@ All notable changes to BXP. New entries are prepended at the top by
 `scripts/release-changelog.sh`; pre-existing release tags (v0.1.0,
 v0.1.1) are hand-stubbed since they pre-date the automation.
 
+## 2026.05.16 — bxp-cli 0.2.3, bxp-fmt 0.2.3, bxp-gui 0.2.3
+
+Quality and tooling release. Fixes expression-evaluator crashes on
+out-of-range inputs, hardens the bridge and updater, adds
+`combined_output` template merging, ships three brycht.app tracker-mode
+templates, and delivers a wave of tree UX and editor validation polish
+in the GUI.
+
+### Features
+
+- feat(bxp-core,bxp-cli): `combined_output` template field — when
+  `true`, all input files additionally write their rows into one merged
+  file `1-{template_id}-combined{file_pattern_out}` inside `data_dir`,
+  alongside the normal per-file outputs. Useful for tracking tools that
+  import a single combined history file.
+- feat(resources): three brycht.app tracker-mode templates —
+  `trading212_to_brychtapp`, `xtb2_cash_to_brychtapp`,
+  `xtb2_closed_to_brychtapp` — convert Trading 212 and XTB (new format)
+  exports to the brycht.app CSV import format.
+- feat(bxp-gui-bridge): cross-platform in-process expression
+  evaluation — `bridge_eval_expr` / `bridge_eval_expr_trace` now
+  available on Linux and macOS (previously Windows-only). The GUI
+  expression validator and playground use the bridge path on all
+  platforms for consistent latency and NDJSON trace parity.
+- feat(bxp-gui): expression static-arg checks reach the editor
+  first-pass — type and range errors reported as red underlines in the
+  editor before the user runs a validation.
+- feat(bxp-gui): case-insensitive function-name matching — editor
+  highlights and the Zig evaluator agree on `IF` vs `if` etc.
+- feat(bxp-gui): tree UX polish wave — sticky action overlay per row,
+  custom schema tooltip without Flutter Tooltip focus capture, runner
+  read-only mode (hover-on-matched + lookup popup + sort), map-key
+  inline rename, add-child insert templates.
+- feat(bxp-gui): validator UX — create-dir prompt on missing
+  `data_dir`; fix `UnknownField` false-positive on valid keys.
+- feat(bxp-gui): expression corpus cross-runner parity gate —
+  `test/expr_corpus_bridge_test.dart` verifies bridge and `bxp-fmt`
+  evaluate identically for all 112 corpus expressions.
+- feat(bxp-core): Inf/NaN and out-of-range safety gates for
+  `FIELDS(n)`, `SPLIT_PART(…, n)`, and `ROUND(…, n)` — previously
+  panicked or produced junk on negative/zero/non-finite index
+  arguments.
+- feat(release): Linux desktop now ships as AppImage-only with
+  versionless asset names (`bxp-desktop-linux-x86_64.AppImage`) and
+  stable `releases/latest/download/` URLs. `.deb` and plain tarballs
+  retired.
+- feat(bxp-gui): first-run AppImage desktop integration — prompts
+  once to write `.desktop` file + hicolor icons; toggle in Settings.
+- feat(bxp-gui): fail-closed auto-updater — all four
+  checksum-verify outcomes (mismatch, download error, missing
+  `SHA256SUMS`, unexpected format) refuse to install.
+
+### Fixes
+
+- fix(bxp-gui-bridge): kill child process before joining reader
+  threads on rollback to prevent a hang on bridge teardown.
+- fix(bxp-fmt): route `--help` and `--version` output to stdout —
+  previously went to stderr, breaking callers that captured stdout.
+- fix(bxp-gui): guard `notifyListeners()` after `prefs.set` with
+  `_disposed` check to prevent async setState-after-dispose assertion.
+- fix(bxp-gui): close download sink on stream error to prevent file
+  descriptor leak in the auto-updater.
+- fix(bxp-core): defer `deinit` of seen-key hashmap in
+  `readJsonRecords` so the map outlives the caller's arena.
+- fix(scripts): cross-platform BSD/GNU `sed -i` divergence and
+  macOS `sha256sum` / `shasum -a 256` fallback.
+
+### Internal
+
+- test(scripts): expression corpus regression gate (`test-06`) — runs
+  the full 112-expression corpus through both `bxp-fmt --expr` and the
+  bridge on every CI pass.
+- chore: GitHub community standards — Code of Conduct, issue
+  templates, license identifier fix.
+- audit: pre-release 5-layer sweep — stripped 34 rotted `bxp-ui`
+  provenance comments from `bxp-gui`; refreshed all 6 CLAUDE.md files;
+  refreshed 7 `docs/` files (incl. trace-protokol ArgKind drift and
+  architecture.md mermaid file refs); cleaned speculative TODOs.
+
 ## 2026.05.10 — bxp-cli 0.2.2, bxp-fmt 0.2.2, bxp-gui 0.2.2
 
 Windows-focused release. Adds an FFI subprocess bridge that fixes

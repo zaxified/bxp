@@ -49,7 +49,7 @@ chmod +x bxp-desktop-linux-x86_64.AppImage
 ```
 
 The Linux AppImage is the only Linux distribution channel; `.deb` and
-plain tarballs were retired in v0.3.0 to keep one update path. On
+plain tarballs were retired in v0.2.3 to keep one update path. On
 first launch the AppImage offers to write `~/.local/share/applications/bxp-gui.desktop`
 plus `hicolor` icons so the app shows up in the system menu — no
 `sudo` needed, reversible from the Settings drawer.
@@ -87,6 +87,9 @@ runnable from a terminal for scripting or batch use.
 | `xtb1_cash_to_wealthfolio` | XTB — cash operations (old) |
 | `xtb2_closed_to_wealthfolio` | XTB — closed positions (new) |
 | `xtb2_cash_to_wealthfolio` | XTB — cash operations (new) |
+| `trading212_to_brychtapp` | Trading 212 → brycht.app (tracker) |
+| `xtb2_cash_to_brychtapp` | XTB — cash operations (new) → brycht.app (tracker) |
+| `xtb2_closed_to_brychtapp` | XTB — closed positions (new) → brycht.app (tracker) |
 
 ### Keyboard shortcuts
 
@@ -334,6 +337,10 @@ mybroker_to_wealthfolio: {
   // in the filename (YYYY-MM-DD_YYYY-MM-DD) are silently skipped. Requires $date.
   date_filter_from_filename: false,
 
+  // default false; when true all input files also write to a merged
+  // 1-{template_id}-combined{file_pattern_out} file in data_dir
+  // combined_output:              false,
+
   // optional; either a name from top-level ticker_maps, or an inline object
   ticker_map:                { /* "BROKER-SYM": "YAHOO-SYM" */ },
 
@@ -422,6 +429,7 @@ mybroker_to_wealthfolio: {
 | `row_rules_debug_missing` | bool | no | `false` | Print unmatched rows with `--debug` |
 | `row_rules` | array | yes | — | Ordered routing rules; first match wins |
 | `output_schema` | object | yes | — | Output CSV header → `$variable`; defines column order |
+| `combined_output` | bool | no | `false` | When `true`, all input files additionally write rows to one merged file `1-{template_id}-combined{file_pattern_out}` in `data_dir`, alongside the normal per-file outputs |
 
 ### Standard `$variable` reference
 
@@ -702,13 +710,13 @@ optional `,` thousands — that path is handled automatically (see
 If you are an AI assistant reading this section to generate a new
 template, follow these rules strictly:
 
-1. **`bxp-cli.examples.json` is required context.** It contains seven
+1. **`bxp-cli.examples.json` is required context.** It contains twelve
    working templates with rich inline comments. **If you don't have it
    in your context, ask the user to provide it before generating any
    template — do not guess at non-trade row patterns, action vocabulary,
    or broker quirks.** Pattern-match against the closest existing
    template (simple stock broker → Revolut X; paired rows → Anycoin;
-   xlsx source → XTB).
+   xlsx source → XTB; brycht.app tracker-mode → trading212_to_brychtapp).
 2. **Add, do not modify.** Insert a new entry under
    `conversion_templates` in the user's `bxp-cli.json`. Never rewrite
    existing templates unless the user explicitly asks.

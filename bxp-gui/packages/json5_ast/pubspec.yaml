@@ -3,7 +3,7 @@ description: >-
   JSON5 parser, comment-preserving AST, and mutation API. Pure Dart, no
   Flutter or bxp-specific dependencies. Dumps deterministic JSON5 text;
   preserves leading/trailing/block/standalone comments across edits.
-version: 0.2.2
+version: 0.2.3
 publish_to: none
 
 environment:
