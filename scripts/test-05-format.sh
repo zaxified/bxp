@@ -39,6 +39,27 @@ _markdownlint_check() {
     bunx markdownlint-cli2 "**/*.md"
 }
 
+_mermaid_check() {
+    local dir="$SCRIPT_DIR/mermaid-check"
+    # Lazy install on first run — keeps the dep out of the way for
+    # contributors who never touch docs.
+    if [ ! -d "$dir/node_modules" ]; then
+        (cd "$dir" && bun install --silent)
+    fi
+    # Filter to tracked .md files that actually contain a mermaid fence
+    # — fast path so we don't spin up the parser for every markdown
+    # file in the repo.
+    local files
+    files=$(git ls-files '*.md' | xargs grep -l '^```mermaid' 2>/dev/null || true)
+    if [ -z "$files" ]; then
+        echo "no mermaid blocks tracked"
+        return 0
+    fi
+    # shellcheck disable=SC2086
+    bun "$dir/check.mjs" $files
+}
+
 section "Format"
 step "$(_lab prettier 'check')" _prettier_check
 step "$(_lab lint-md   'check')" _markdownlint_check
+step "$(_lab mermaid   'check')" _mermaid_check
