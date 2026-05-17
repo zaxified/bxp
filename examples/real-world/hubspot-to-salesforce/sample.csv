@@ -1,0 +1,13 @@
+First Name,Last Name,Email,Phone Number,Company Name,Job Title,Lead Status,Original Source,Industry,Number of Employees,Annual Revenue,City,State/Region,Country,Create Date
+Anna,Novak,anna.novak@acmecorp.com,+1-555-0101,Acme Corp,VP Marketing,New,Organic Search,Software,250,15000000,Boston,MA,USA,2024-01-15 09:23:01
+Tomas,Svoboda,tomas.svoboda@globex.com,(555) 234-5678,Globex Industries,Director of Sales,Open ,Direct Traffic,Manufacturing,1500,250000000,Chicago,IL,USA,2024-02-03 14:45:22
+Petra,Dvorakova,petra@initech.io,555.345.6789,Initech,CTO,In Progress,Paid Search,Software & Technology,80,8000000,Austin,TX,USA,2024-02-20 11:12:34
+Jan,Kovar,jan.kovar@umbrella.com,+420 776 123 456,Umbrella Holdings,CEO,New,Referral,Pharma & Biotech,5000,500000000,Prague,Praha,Czech Republic,2024-03-05 08:00:00
+Sarah,Mitchell,sarah.m@stark.com,5559876543,,Senior Engineer,New,Organic Search,Software,1200,80000000,San Francisco,CA,USA,2024-03-18 16:34:11
+Mike,Johnson,mjohnson@wayne.com,+1 (555) 111-2222,Wayne Enterprises,COO,closed-won,Trade Show,Financial Services,3500,200000000,Gotham,NJ,USA,1/12/2024 10:30:00
+Lisa,Brown,lisa.brown@cyberdyne.com,,Cyberdyne Systems,Head of AI,Open,Email Campaign,Foo Bar Industry,450,45000000,Sunnyvale,CA,USA,2024-04-02 13:25:00
+Karl,Mueller,karl.m@bavarian-motors.de,+49 89 1234 5678,Bavarian Motors GmbH,VP Engineering,Connected,Organic Search,Automotive,12000,3500000000,Munich,Bayern,Germany,2024-04-15 07:55:44
+Yuki,Tanaka,yuki@sakura-tech.jp,+81-3-1234-5678,Sakura Tech,Product Manager,Bad Timing,LinkedIn,Software,90,12000000,Tokyo,Tokyo,Japan,2024-05-01 22:18:30
+Carlos,Rodriguez,carlos.r@latam-trade.com,+52 55 1234 5678,Latam Trade,Regional Director,Unqualified,Cold Outreach,Consulting,25,2500000,Mexico City,CDMX,Mexico,2024-05-22 12:04:09
+Emma,Watson,emma@oxford-edu.org.uk,+44 1865 270000,Oxford Educational,Dean of Studies,Open Deal,Webinar,Education,800,15000000,Oxford,Oxfordshire,United Kingdom,2024-06-10 09:11:00
+Raj,Patel,raj.patel@mumbai-tech.in,+91 22 1234 5678,Mumbai Tech Solutions,Founder,New,Referral,Software & Technology,15,500000,Mumbai,MH,India,2024-07-08 18:42:15

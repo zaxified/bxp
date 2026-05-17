@@ -1,0 +1,53 @@
+{
+  conversion_templates: {
+    noaa_daily_to_metric: {
+      data_dir:           ".",
+      file_pattern_in:    ".csv",
+      file_pattern_out:   ".csvx",
+      csv_text_quote_in:  "double",
+      csv_text_quote_out: "double",
+
+      input_schema: {
+        $station: "[STATION]",
+        $name:    "[NAME]",
+        $date:    "[DATE]",
+        $lat:     "[LATITUDE]",
+        $lon:     "[LONGITUDE]",
+
+        // TRICK 1 — GHCN stores temperatures and precipitation as integer
+        // TENTHS of their base unit (°C and mm), left-padded with spaces:
+        //   TMAX="   50"  →  5.0 °C
+        //   PRCP="   38"  →  3.8 mm
+        // A naive parser that skips the TRIM and the ÷10 reports 50°C max
+        // for a winter day. Wrap in IF so empty cells stay empty rather
+        // than becoming 0.
+        $tmax_c: "IF(TRIM([TMAX]) = '', '', TRIM([TMAX]) / 10)",
+        $tmin_c: "IF(TRIM([TMIN]) = '', '', TRIM([TMIN]) / 10)",
+        $tavg_c: "IF(TRIM([TAVG]) = '', '', TRIM([TAVG]) / 10)",
+        $prcp_mm:"IF(TRIM([PRCP]) = '', '', TRIM([PRCP]) / 10)",
+        $snow_mm:"IF(TRIM([SNOW]) = '', '', TRIM([SNOW]) / 10)",
+
+        // TRICK 2 — sanity check column. NOAA occasionally publishes rows
+        // where TMAX < TMIN (instrument fault or transcription error).
+        // Flag them so they don't poison climatology averages.
+        $consistency: "IF(TRIM([TMAX]) = '' OR TRIM([TMIN]) = '', 'partial', IF(TRIM([TMAX]) < TRIM([TMIN]), 'tmax_below_tmin', 'ok'))"
+      },
+
+      row_rules: [ { when: "1 = 1", rows: [ {} ] } ],
+
+      output_schema: {
+        station:     "$station",
+        name:        "$name",
+        date:        "$date",
+        lat:         "$lat",
+        lon:         "$lon",
+        tmax_c:      "$tmax_c",
+        tmin_c:      "$tmin_c",
+        tavg_c:      "$tavg_c",
+        prcp_mm:     "$prcp_mm",
+        snow_mm:     "$snow_mm",
+        consistency: "$consistency"
+      }
+    }
+  }
+}

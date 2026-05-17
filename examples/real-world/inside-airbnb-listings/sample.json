@@ -1,0 +1,82 @@
+{
+  // Inside Airbnb's "visualisations/listings.csv" endpoint redacts price
+  // for the public scrape (rate-limiting risk). The /data/ endpoint has it
+  // but requires registration. We treat empty price as a real-world signal,
+  // not an error: COALESCE downstream gives `<price-redacted>` so the gap is
+  // visible at a glance instead of silently zero.
+  ticker_maps: {
+    room_type_short: {
+      "Entire home/apt": "ENTIRE",
+      "Private room":    "PRIVATE",
+      "Hotel room":      "HOTEL",
+      "Shared room":     "SHARED"
+    }
+  },
+  conversion_templates: {
+    airbnb_listings_to_analytics: {
+      data_dir:           ".",
+      file_pattern_in:    ".csv",
+      file_pattern_out:   ".csvx",
+      // TRICK 0 — Names like `"Perfect for Your Parents, With Garden"`
+      // embed commas, so the CSV uses double-quote escaping. Without this
+      // every quoted name shifts every downstream column by one field.
+      csv_text_quote_in:  "double",
+      csv_text_quote_out: "double",
+      ticker_map:         "room_type_short",
+
+      input_schema: {
+        $listing_id: "[id]",
+        $name:       "[name]",
+        $host:       "[host_name]",
+        $district:   "[neighbourhood_group]",
+        $area:       "[neighbourhood]",
+        $lat:        "[latitude]",
+        $lon:        "[longitude]",
+
+        // TRICK 1 — room_type free-form text → 4-value enum via ticker_map.
+        $room_type:  "TICKER([room_type])",
+
+        // TRICK 2 — empty price gets a visible sentinel. Salesforce/Airtable
+        // would silently drop empty numerics; this preserves the gap.
+        $price_usd:  "COALESCE([price], '<price-redacted>')",
+
+        $min_nights: "[minimum_nights]",
+        $reviews:    "[number_of_reviews]",
+
+        // TRICK 3 — last_review can be empty (never-reviewed listing). Keep
+        // empty as empty (don't fall through to "<missing>" — empty here
+        // is a meaningful "no reviews yet").
+        $last_review:"[last_review]",
+
+        $reviews_pm: "[reviews_per_month]",
+        $avail_365:  "[availability_365]",
+
+        // TRICK 4 — NYC requires short-term rentals to register since 2023.
+        // license is one of: empty (unlicensed), "Exempt" (statutory carve-out),
+        // or "OSE-STRREG-NNNNNNN" (registered). Normalize into a 3-state
+        // status field — "unlicensed" rows are the regulatory risk.
+        $reg_status: "IF([license] = '',       'unlicensed', IF([license] = 'Exempt', 'exempt', 'registered'))"
+      },
+
+      row_rules: [ { when: "1 = 1", rows: [ {} ] } ],
+
+      output_schema: {
+        listing_id:    "$listing_id",
+        name:          "$name",
+        host:          "$host",
+        district:      "$district",
+        area:          "$area",
+        lat:           "$lat",
+        lon:           "$lon",
+        room_type:     "$room_type",
+        price_usd:     "$price_usd",
+        min_nights:    "$min_nights",
+        reviews:       "$reviews",
+        last_review:   "$last_review",
+        reviews_pm:    "$reviews_pm",
+        avail_365:     "$avail_365",
+        reg_status:    "$reg_status"
+      }
+    }
+  }
+}

@@ -1,0 +1,50 @@
+{
+  conversion_templates: {
+    imdb_titles_to_catalog: {
+      data_dir:           ".",
+      file_pattern_in:    ".csv",
+      file_pattern_out:   ".csvx",
+      // TRICK 0 — IMDb publishes title.basics as TSV, not CSV.
+      csv_delimiter_in:   "\t",
+      csv_delimiter_out:  ",",
+      csv_text_quote_out: "double",
+
+      input_schema: {
+        $id:    "[tconst]",
+        $type:  "[titleType]",
+        $title: "[primaryTitle]",
+        $orig:  "[originalTitle]",
+        $adult: "IF([isAdult] = '1', 'true', 'false')",
+
+        // TRICK 1 — \N is IMDb's null marker (two literal chars: backslash + N).
+        // Without normalising it, the literal "\N" leaks into the output and
+        // breaks every downstream type cast.
+        $year:    "IF([startYear]      = '\\N', '', [startYear])",
+        $end:     "IF([endYear]        = '\\N', '', [endYear])",
+        $runtime: "IF([runtimeMinutes] = '\\N', '', [runtimeMinutes])",
+
+        // TRICK 2 — `genres` is a comma-separated list inside a TSV cell.
+        // Pull the first one out as the primary genre while keeping the
+        // raw list for filtering. Whole-list nulls (\N for titles with no
+        // genre tagging) need the same null normalisation as TRICK 1.
+        $primary_genre: "IF([genres] = '\\N', '', SPLIT_PART([genres], ',', 1))",
+        $all_genres:    "IF([genres] = '\\N', '', [genres])"
+      },
+
+      row_rules: [ { when: "1 = 1", rows: [ {} ] } ],
+
+      output_schema: {
+        id:            "$id",
+        type:          "$type",
+        title:         "$title",
+        original:      "$orig",
+        adult:         "$adult",
+        year:          "$year",
+        end_year:      "$end",
+        runtime_min:   "$runtime",
+        primary_genre: "$primary_genre",
+        all_genres:    "$all_genres"
+      }
+    }
+  }
+}

@@ -1,0 +1,65 @@
+{
+  // payment_type 1-6 → human-readable. Defined by TLC data dictionary:
+  // https://www.nyc.gov/assets/tlc/downloads/pdf/data_dictionary_trip_records_yellow.pdf
+  ticker_maps: {
+    payment_type_to_label: {
+      "1": "credit_card",
+      "2": "cash",
+      "3": "no_charge",
+      "4": "dispute",
+      "5": "unknown",
+      "6": "voided"
+    }
+  },
+  conversion_templates: {
+    nyc_taxi_to_analytics: {
+      data_dir:           ".",
+      file_pattern_in:    ".csv",
+      file_pattern_out:   ".csvx",
+      ticker_map:         "payment_type_to_label",
+
+      input_schema: {
+        // TRICK 1 — TLC dumps datetimes as "02/09/2018 01:25:25 PM" with AM/PM.
+        // Most downstream tools want ISO-8601.
+        $pickup_at:   "DATE_CONVERT([tpep_pickup_datetime], 'MM/DD/YYYY hh:mm:ss A', 'YYYY-MM-DD[T]hh:mm:ss[Z]')",
+        $dropoff_at:  "DATE_CONVERT([tpep_dropoff_datetime], 'MM/DD/YYYY hh:mm:ss A', 'YYYY-MM-DD[T]hh:mm:ss[Z]')",
+
+        $passengers:  "[passenger_count]",
+        $distance_mi: "[trip_distance]",
+
+        // TRICK 2 — store_and_fwd_flag is "N"/"Y". Normalize to readable bool.
+        $stored:      "IF([store_and_fwd_flag] = 'Y', 'true', 'false')",
+
+        // TRICK 3 — payment_type integer (1-6) → text via ticker_map.
+        $payment:     "TICKER([payment_type])",
+
+        $fare_usd:    "[fare_amount]",
+        $tip_usd:     "[tip_amount]",
+        $tolls_usd:   "[tolls_amount]",
+        $total_usd:   "[total_amount]",
+
+        // TRICK 4 — data-quality sentinels. Real TLC dumps contain rows with
+        // passenger_count=0 (driver pickup with no fare) and fare_amount<0
+        // (refunds posted as negative trips). Both pass silently into
+        // downstream analytics and skew aggregates.
+        $quality:     "IF([passenger_count] = '0', 'no_passengers', IF([fare_amount] < 0, 'refund', 'ok'))"
+      },
+
+      row_rules: [ { when: "1 = 1", rows: [ {} ] } ],
+
+      output_schema: {
+        pickup_at:    "$pickup_at",
+        dropoff_at:   "$dropoff_at",
+        passengers:   "$passengers",
+        distance_mi:  "$distance_mi",
+        stored:       "$stored",
+        payment:      "$payment",
+        fare_usd:     "$fare_usd",
+        tip_usd:      "$tip_usd",
+        tolls_usd:    "$tolls_usd",
+        total_usd:    "$total_usd",
+        quality:      "$quality"
+      }
+    }
+  }
+}

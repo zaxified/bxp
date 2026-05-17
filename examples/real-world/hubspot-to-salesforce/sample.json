@@ -1,0 +1,73 @@
+{
+  // TRICK 1 — long picklist via ticker_map.
+  // ticker_map is repurposed as a general-purpose string lookup table:
+  // unmapped keys pass through unchanged (visible in GUI as "TICKER input
+  // == output", the smoking gun for row 7).
+  ticker_maps: {
+    industry_hs_to_sfdc: {
+      "Software":                "Technology",
+      "Software & Technology":   "Technology",
+      "Pharma & Biotech":        "Biotechnology",
+      "Manufacturing":           "Manufacturing",
+      "Financial Services":      "Finance",
+      "Automotive":              "Manufacturing",
+      "Consulting":              "Consulting",
+      "Education":               "Education"
+    }
+  },
+  conversion_templates: {
+    hubspot_to_sfdc_lead: {
+      data_dir:           ".",
+      file_pattern_in:    ".csv",
+      file_pattern_out:   ".csvx",
+      csv_text_quote_out: "double",
+      ticker_map:         "industry_hs_to_sfdc",
+      input_schema: {
+        // TRICK 4 — mixed date formats. HubSpot legacy/edited rows can leak
+        // US format ("1/12/2024 10:30:00") into otherwise-ISO exports.
+        // Sniff the separator and dispatch.
+        $date:        "IF(CONTAINS([Create Date], '/'), DATE_CONVERT([Create Date], 'M/D/YYYY hh:mm:ss', 'YYYY-MM-DD[T]hh:mm:ss[Z]'), DATE_CONVERT([Create Date], 'YYYY-MM-DD hh:mm:ss', 'YYYY-MM-DD[T]hh:mm:ss[Z]'))",
+        $firstName:   "TRIM([First Name])",
+        $lastName:    "TRIM([Last Name])",
+        $email:       "TRIM([Email])",
+        $phone:       "TRIM([Phone Number])",
+        $title:       "TRIM([Job Title])",
+
+        // TRICK 3 — required-but-empty field. Salesforce Lead requires
+        // Company. Sentinel makes the failure obvious post-import rather
+        // than silently empty.
+        $company:     "COALESCE(TRIM([Company Name]), '<missing>')",
+
+        $industry:    "TICKER(TRIM([Industry]))",
+
+        // TRICK 2 — short picklist via IF chain, with TRIM at every leaf
+        // (row 2 has "Open " with trailing whitespace — silent kill without TRIM).
+        $status:      "IF(TRIM([Lead Status]) = 'New',         'Open - Not Contacted', IF(TRIM([Lead Status]) = 'Open',        'Working - Contacted',  IF(TRIM([Lead Status]) = 'In Progress', 'Working - Contacted',  IF(TRIM([Lead Status]) = 'Connected',   'Working - Contacted',  IF(TRIM([Lead Status]) = 'Open Deal',   'Working - Contacted',  IF(TRIM([Lead Status]) = 'closed-won',  'Closed - Converted',   IF(TRIM([Lead Status]) = 'Bad Timing',  'Closed - Not Converted', IF(TRIM([Lead Status]) = 'Unqualified', 'Closed - Not Converted', 'Open - Not Contacted'))))))))",
+        $leadSource:  "IF(TRIM([Original Source]) = 'Organic Search', 'Web', IF(TRIM([Original Source]) = 'Paid Search', 'Web', IF(TRIM([Original Source]) = 'Direct Traffic', 'Web', IF(TRIM([Original Source]) = 'Email Campaign', 'Email', IF(TRIM([Original Source]) = 'Referral', 'Partner Referral', IF(TRIM([Original Source]) = 'Trade Show', 'Trade Show', IF(TRIM([Original Source]) = 'LinkedIn', 'Social', 'Other')))))))",
+        $numEmployees:"[Number of Employees]",
+        $revenue:     "[Annual Revenue]",
+        $city:        "TRIM([City])",
+        $state:       "TRIM([State/Region])",
+        $country:     "TRIM([Country])"
+      },
+      row_rules: [ { when: "1 = 1", rows: [ {} ] } ],
+      output_schema: {
+        FirstName:         "$firstName",
+        LastName:          "$lastName",
+        Email:             "$email",
+        Phone:             "$phone",
+        Title:             "$title",
+        Company:           "$company",
+        Industry:          "$industry",
+        Status:            "$status",
+        LeadSource:        "$leadSource",
+        NumberOfEmployees: "$numEmployees",
+        AnnualRevenue:     "$revenue",
+        City:              "$city",
+        State:             "$state",
+        Country:           "$country",
+        CreatedDate:       "$date"
+      }
+    }
+  }
+}
