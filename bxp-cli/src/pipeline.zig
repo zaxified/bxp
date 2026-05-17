@@ -581,11 +581,302 @@ fn checkUnknownFields(
     return any;
 }
 
+// ── Streaming CSV reader (10 MiB chunks) ───────────────────────────────
+//
+// `processBroker` streams CSV input in CHUNK_SIZE blocks and resets a
+// dedicated per-chunk arena between blocks so peak memory is bounded by
+// the chunk size — not by the file size. Quoted multi-line fields are
+// respected: chunk boundaries always land on a '\n' that occurs
+// OUTSIDE a quoted field, mirroring `csv.splitRecords()` semantics.
+
+/// Target chunk size in bytes. The buffer may grow above this when a
+/// single record is longer than CHUNK_SIZE (no '\n' outside quotes
+/// within the chunk window).
+const CHUNK_SIZE: usize = 10 * 1024 * 1024;
+
+/// Scans bytes tracking RFC-4180 quote state; returns the index of the
+/// LAST '\n' that occurs OUTSIDE a quoted field, or null if no such
+/// boundary exists. Mirrors the in_quotes logic in `csv.splitRecords`.
+fn findLastBoundary(bytes: []const u8, quote: u8) ?usize {
+    var pos: usize = 0;
+    var in_quotes: bool = false;
+    var last_nl: ?usize = null;
+    while (pos < bytes.len) {
+        const c = bytes[pos];
+        if (quote != 0 and c == quote) {
+            if (in_quotes and pos + 1 < bytes.len and bytes[pos + 1] == quote) {
+                pos += 2;
+                continue;
+            }
+            in_quotes = !in_quotes;
+            pos += 1;
+        } else if (c == '\n' and !in_quotes) {
+            last_nl = pos;
+            pos += 1;
+        } else {
+            pos += 1;
+        }
+    }
+    return last_nl;
+}
+
+/// Streaming file reader that yields chunks ending on record boundaries.
+/// Owns a backing `buffer` that holds residual bytes between calls.
+/// The slice returned by `nextChunk` is valid only until the next call.
+const ChunkReader = struct {
+    file: std.fs.File,
+    quote: u8,
+    buffer: std.array_list.Managed(u8),
+    /// Number of bytes returned by the previous nextChunk() call. Those
+    /// bytes are discarded from the front of `buffer` at the start of the
+    /// next call so only residual remains.
+    last_emit_len: usize,
+    eof: bool,
+
+    pub fn init(alloc: std.mem.Allocator, file: std.fs.File, quote: u8) ChunkReader {
+        return .{
+            .file = file,
+            .quote = quote,
+            .buffer = std.array_list.Managed(u8).init(alloc),
+            .last_emit_len = 0,
+            .eof = false,
+        };
+    }
+
+    pub fn deinit(self: *ChunkReader) void {
+        self.buffer.deinit();
+    }
+
+    /// Returns the next chunk of bytes ending at a record boundary
+    /// (the last '\n' outside a quoted field). At EOF, returns the
+    /// remaining bytes verbatim. Returns null when nothing is left.
+    pub fn nextChunk(self: *ChunkReader) !?[]const u8 {
+        // Drop bytes returned by the previous call so only residual remains.
+        if (self.last_emit_len > 0) {
+            const tail_len = self.buffer.items.len - self.last_emit_len;
+            if (tail_len > 0) {
+                std.mem.copyForwards(
+                    u8,
+                    self.buffer.items[0..tail_len],
+                    self.buffer.items[self.last_emit_len..],
+                );
+            }
+            self.buffer.items.len = tail_len;
+            self.last_emit_len = 0;
+        }
+        while (true) {
+            if (findLastBoundary(self.buffer.items, self.quote)) |boundary| {
+                self.last_emit_len = boundary + 1;
+                return self.buffer.items[0..self.last_emit_len];
+            }
+            if (self.eof) {
+                if (self.buffer.items.len == 0) return null;
+                self.last_emit_len = self.buffer.items.len;
+                return self.buffer.items;
+            }
+            try self.buffer.ensureUnusedCapacity(CHUNK_SIZE);
+            const dest = self.buffer.unusedCapacitySlice();
+            const want = @min(dest.len, CHUNK_SIZE);
+            const n = try self.file.read(dest[0..want]);
+            self.buffer.items.len += n;
+            if (n == 0) self.eof = true;
+        }
+    }
+};
+
+/// Unified row producer for the main pipeline loop.
+///
+/// CSV path → wraps a streaming `RowIterator`. Returned fields slices
+///            live in chunk_arena and become invalid on next call.
+/// JSON path → wraps the pre-materialised `all_rows` slice from
+///             `json_mod.readJsonRecords`. Slices live in file_alloc
+///             and remain valid for the whole file.
+///
+/// Both variants satisfy the single `next()` contract used by the main
+/// loop, so the row body is written once.
+const RowSource = union(enum) {
+    json_materialised: struct {
+        rows: [][][]const u8,
+        idx: usize,
+    },
+    csv_streaming: *RowIterator,
+
+    pub fn next(self: *RowSource) !?[][]const u8 {
+        switch (self.*) {
+            .json_materialised => |*j| {
+                if (j.idx >= j.rows.len) return null;
+                const f = j.rows[j.idx];
+                j.idx += 1;
+                return f;
+            },
+            .csv_streaming => |iter| return try iter.next(),
+        }
+    }
+};
+
+/// Iterator that produces parsed CSV row fields by reading chunks from a
+/// `ChunkReader` and splitting records via `csv.splitRecords`/`splitFields`.
+///
+/// `chunk_arena` is reset on each chunk boundary; the returned fields
+/// slice (and the string slices inside it) are valid only until the
+/// next call to `next()` or `parseHeader()`. Caller must dupe out any
+/// data that needs to outlive the current row.
+const RowIterator = struct {
+    reader: *ChunkReader,
+    chunk_arena: *std.heap.ArenaAllocator,
+    delimiter: u8,
+    quote: u8,
+
+    /// Current chunk's records (slices into reader.buffer). Replaced on
+    /// each chunk transition; backed by chunk_arena.
+    records: std.array_list.Managed([]const u8),
+    rec_idx: usize,
+    header_consumed: bool,
+
+    pub fn init(
+        reader: *ChunkReader,
+        chunk_arena: *std.heap.ArenaAllocator,
+        delimiter: u8,
+        quote: u8,
+    ) RowIterator {
+        return .{
+            .reader = reader,
+            .chunk_arena = chunk_arena,
+            .delimiter = delimiter,
+            .quote = quote,
+            .records = std.array_list.Managed([]const u8).init(chunk_arena.allocator()),
+            .rec_idx = 0,
+            .header_consumed = false,
+        };
+    }
+
+    /// Parses the header record from the first chunk. Returned slice and
+    /// its string contents live in chunk_arena — caller MUST dupe them
+    /// out into a longer-lived allocator before calling next().
+    ///
+    /// On the first chunk, BOM (EF BB BF) is stripped before parsing.
+    ///
+    /// Returns an empty slice when the file has no records at all.
+    pub fn parseHeader(self: *RowIterator) ![][]const u8 {
+        if (self.header_consumed) return &.{};
+        var chunk_bytes = (try self.reader.nextChunk()) orelse {
+            self.header_consumed = true;
+            return &.{};
+        };
+        // BOM strip (only meaningful on the first chunk; subsequent
+        // chunks never start with BOM).
+        if (chunk_bytes.len >= 3 and std.mem.eql(u8, chunk_bytes[0..3], "\xEF\xBB\xBF")) {
+            chunk_bytes = chunk_bytes[3..];
+        }
+        _ = self.chunk_arena.reset(.retain_capacity);
+        self.records = try csv.splitRecords(chunk_bytes, self.quote, self.chunk_arena.allocator());
+        self.rec_idx = 0;
+        self.header_consumed = true;
+        if (self.records.items.len == 0) return &.{};
+        const hdr_buf = try self.chunk_arena.allocator().alloc([]const u8, MAX_COLUMNS + 1);
+        const header = try csv.splitFields(
+            self.records.items[0], hdr_buf,
+            self.delimiter, self.quote, self.chunk_arena.allocator(),
+        );
+        self.rec_idx = 1;
+        return header;
+    }
+
+    /// Returns next row fields, or null at EOF. Must be called only
+    /// AFTER `parseHeader()` (which primes the iterator on the first
+    /// chunk). Slice + strings inside are valid until the next call.
+    pub fn next(self: *RowIterator) !?[][]const u8 {
+        while (true) {
+            if (self.rec_idx < self.records.items.len) {
+                const rec = self.records.items[self.rec_idx];
+                self.rec_idx += 1;
+                const row_buf = try self.chunk_arena.allocator().alloc([]const u8, MAX_COLUMNS);
+                return try csv.splitFields(
+                    rec, row_buf, self.delimiter, self.quote, self.chunk_arena.allocator(),
+                );
+            }
+            const chunk_bytes = (try self.reader.nextChunk()) orelse return null;
+            _ = self.chunk_arena.reset(.retain_capacity);
+            self.records = try csv.splitRecords(chunk_bytes, self.quote, self.chunk_arena.allocator());
+            self.rec_idx = 0;
+        }
+    }
+};
+
+/// Evaluates every configured pre_pass block against one input row,
+/// inserting matching results into `lookup_table`. Strings written to
+/// the table allocate from `file_alloc` so they persist for the whole
+/// file (the chunk arena is reset between chunks).
+///
+/// Errors during expression evaluation are swallowed silently — same
+/// behaviour as the legacy whole-file pre_pass loop — and logged when
+/// --debug is on. Empty key values cause the row to be skipped.
+fn evalPrepassRow(
+    fields: [][]const u8,
+    col_index: *const std.StringHashMap(usize),
+    lookup_table: *std.StringHashMap([]const u8),
+    bc: *const config_mod.BrokerConfig,
+    file_alloc: std.mem.Allocator,
+    out: Output,
+) !void {
+    const pre_ctx = expr_mod.Context{
+        .fields = fields,
+        .col_index = col_index,
+        .quote_out = bc.csv_text_quote_out,
+        .ticker_map = &bc.ticker_map,
+        .lookup_table = null, // no self-reference during pre_pass
+        .alloc = file_alloc,
+        .decimal_sep_in = bc.csv_decimal_separator_in,
+    };
+    var pp_it = bc.pre_passes.iterator();
+    while (pp_it.next()) |pp_entry| {
+        const pp_name = pp_entry.key_ptr.*;
+        const pp = pp_entry.value_ptr.*;
+        const when = expr_mod.eval(pp.when, &pre_ctx) catch |err| {
+            if (out.debug) {
+                out.writer.print("[pre_pass {s} error] when = \"{s}\": {s}\n", .{ pp_name, pp.when, @errorName(err) }) catch {};
+                out.writer.flush() catch {};
+            }
+            continue;
+        };
+        if (!when.toBool()) continue;
+        const key_val = expr_mod.evalString(pp.key, &pre_ctx) catch |err| {
+            if (out.debug) {
+                out.writer.print("[pre_pass {s} error] key = \"{s}\": {s}\n", .{ pp_name, pp.key, @errorName(err) }) catch {};
+                out.writer.flush() catch {};
+            }
+            continue;
+        };
+        if (key_val.len == 0) continue;
+        // `key_val` is dupe'd implicitly via the composite-key concat
+        // below (std.mem.concat copies bytes into file_alloc).
+        var v_it = pp.values.iterator();
+        while (v_it.next()) |ve| {
+            const val_raw = expr_mod.evalString(ve.value_ptr.*, &pre_ctx) catch |err| {
+                if (out.debug) {
+                    out.writer.print("[pre_pass {s} error] values.{s} = \"{s}\": {s}\n", .{ pp_name, ve.key_ptr.*, ve.value_ptr.*, @errorName(err) }) catch {};
+                    out.writer.flush() catch {};
+                }
+                continue;
+            };
+            // evalString may return a slice that points back into the
+            // input field bytes (for trivial expressions like a direct
+            // `[Column]` reference). Under chunked streaming those bytes
+            // live in chunk_arena and become invalid on the next chunk
+            // — so dupe into file_alloc to outlive the chunk.
+            const val = try file_alloc.dupe(u8, val_raw);
+            const composite = try std.mem.concat(file_alloc, u8, &.{ pp_name, "\x00", key_val, "\x00", ve.key_ptr.* });
+            try lookup_table.put(composite, val);
+            out.event("prepass_set", .{ .name = pp_name, .key = key_val, .field = ve.key_ptr.*, .value = val });
+        }
+    }
+}
+
 /// Processes all matching input files in dir_path for the given template.
 /// For each file:
 ///   1. Extracts optional date range from the filename.
-///   2. Reads and parses input (CSV or JSON); builds col_index from the header/keys.
-///   3. Builds pre_pass lookup table if configured.
+///   2. Streams the input (CSV or JSON) in 10 MiB chunks; builds col_index from the header/keys.
+///   3. Builds pre_pass lookup table if configured (streaming first pass over the file).
 ///   4. Evaluates input_schema expressions per row and writes output (CSV or JSON).
 /// Returns accumulated SectionStats for this template.
 pub fn processBroker(
@@ -805,78 +1096,133 @@ pub fn processBroker(
             },
         }
 
-        // Read entire input file into memory (max 16 MB).
-        const in_file = try dir.openFile(filename, .{});
+        // Open input file. CSV streams in 10 MiB chunks (chunk_arena
+        // resets per chunk so peak memory is bounded by chunk size, not
+        // file size). JSON still does a single whole-file load — JSON
+        // exports are small in the bxp use cases and there's no
+        // streaming JSON parser yet.
+        var in_file = try dir.openFile(filename, .{});
         defer in_file.close();
-        const content_raw = try in_file.readToEndAlloc(file_alloc, MAX_FILE_SIZE_BYTES);
-        // Strip UTF-8 BOM (EF BB BF) if present — common in Windows/Excel exports.
-        const content = if (std.mem.startsWith(u8, content_raw, "\xEF\xBB\xBF"))
-            content_raw[3..]
-        else
-            content_raw;
-        // Warn if the file is not valid UTF-8 — processing continues but field
-        // values with non-ASCII bytes may be garbled (e.g. Windows-1250 exports).
-        if (!std.unicode.utf8ValidateSlice(content)) {
-            stats.warnings += 1;
-            out.warning("warning: '{s}' is not valid UTF-8; non-ASCII characters may be garbled\n", .{filename});
-        }
 
-        // Parse input into a unified row representation: all_rows is a list of field
-        // string arrays.  col_index and col_names are built from the header / object keys.
-        // CSV: splitRecords() + splitFields() into file_alloc so rows survive the loop.
-        // JSON: json_mod.readJsonRecords() converts objects to string arrays.
+        // Per-chunk arena shared by pre_pass and main passes; reset on
+        // each chunk transition inside RowIterator.next().
+        var chunk_arena = std.heap.ArenaAllocator.init(alloc);
+        defer chunk_arena.deinit();
+
+        // Header structures persist across all chunks (live in file_alloc).
         var col_index = std.StringHashMap(usize).init(file_alloc);
         var col_names = std.array_list.Managed([]const u8).init(file_alloc);
-        var all_rows = std.array_list.Managed([][]const u8).init(file_alloc);
+
+        // Pre_pass results — populated in the streaming pre_pass below
+        // (CSV) or the in-memory pre_pass over all_rows (JSON). Empty
+        // when no pre_pass blocks are configured. Lives in file_alloc
+        // so it survives both passes.
+        var lookup_table = std.StringHashMap([]const u8).init(file_alloc);
+
+        // JSON path materialises rows up front; CSV streams them per chunk.
+        var json_all_rows: ?std.array_list.Managed([][]const u8) = null;
+
+        // Lazily-initialised main-pass iterator for CSV. Declared here
+        // so checkUnknownFields / file_start / output sink setup can run
+        // between parseHeader and the row loop, while the iter+reader
+        // live for the entire iteration.
+        var main_reader: ChunkReader = undefined;
+        var main_reader_inited = false;
+        defer if (main_reader_inited) main_reader.deinit();
+        var main_iter: RowIterator = undefined;
 
         if (bc.file_type_in == .json) {
-            // JSON array-of-objects path: readJsonRecords synthesizes a virtual
-            // header from the keys of the first object, then converts each
-            // subsequent object into a field-value array in the same column order.
-            // This allows input_schema to use [FieldName] the same way as CSV.
-            try json_mod.readJsonRecords(file_alloc, content, &col_names, &all_rows);
+            // JSON: whole-file read, then build col_names/index + materialise rows.
+            const content_raw = try in_file.readToEndAlloc(file_alloc, MAX_FILE_SIZE_BYTES);
+            const content = if (std.mem.startsWith(u8, content_raw, "\xEF\xBB\xBF"))
+                content_raw[3..]
+            else
+                content_raw;
+            if (!std.unicode.utf8ValidateSlice(content)) {
+                stats.warnings += 1;
+                out.warning("warning: '{s}' is not valid UTF-8; non-ASCII characters may be garbled\n", .{filename});
+            }
+            var rows = std.array_list.Managed([][]const u8).init(file_alloc);
+            try json_mod.readJsonRecords(file_alloc, content, &col_names, &rows);
             for (col_names.items, 0..) |name, idx| try col_index.put(name, idx);
+            json_all_rows = rows;
+
+            // JSON pre_pass iterates the materialised rows directly.
+            if (bc.pre_passes.count() > 0) {
+                for (rows.items) |fields| {
+                    try evalPrepassRow(fields, &col_index, &lookup_table, bc, file_alloc, out);
+                }
+            }
+        } else if (bc.pre_passes.count() > 0) {
+            // CSV with pre_pass: two-pass — header+pre_pass first, then
+            // seek back and create a fresh main-pass iterator.
+            var pp_reader = ChunkReader.init(file_alloc, in_file, bc.csv_text_quote_in);
+            defer pp_reader.deinit();
+            var pp_iter = RowIterator.init(&pp_reader, &chunk_arena, bc.csv_delimiter_in, bc.csv_text_quote_in);
+
+            const raw_header = try pp_iter.parseHeader();
+            const truncated = raw_header.len > MAX_COLUMNS;
+            const header_fields = if (truncated) raw_header[0..MAX_COLUMNS] else raw_header;
+            if (truncated) {
+                stats.warnings += 1;
+                out.warning("warning: '{s}' has more than {d} columns; extra columns are ignored\n", .{ filename, MAX_COLUMNS });
+            }
+            for (header_fields, 0..) |name, idx| {
+                // Intentional RFC 4180 deviation: trim spaces from column header
+                // names so that [ColumnName] references work regardless of padding.
+                const trimmed = std.mem.trim(u8, name, " ");
+                const owned = try file_alloc.dupe(u8, trimmed);
+                try col_index.put(owned, idx);
+                try col_names.append(owned);
+            }
+            // First-chunk UTF-8 validation. Chunk boundaries always
+            // land on '\n' (ASCII), so a multi-byte sequence is never
+            // split across chunks; each chunk is independently
+            // validatable. We validate only the first chunk to
+            // approximate the legacy single-shot whole-file check
+            // (cheap proxy for the common "BOM + Windows-1250 export"
+            // failure mode).
+            if (pp_reader.buffer.items.len > 0 and
+                !std.unicode.utf8ValidateSlice(pp_reader.buffer.items[0..pp_reader.last_emit_len]))
+            {
+                stats.warnings += 1;
+                out.warning("warning: '{s}' is not valid UTF-8; non-ASCII characters may be garbled\n", .{filename});
+            }
+
+            while (try pp_iter.next()) |fields| {
+                try evalPrepassRow(fields, &col_index, &lookup_table, bc, file_alloc, out);
+            }
+
+            try in_file.seekTo(0);
+            main_reader = ChunkReader.init(file_alloc, in_file, bc.csv_text_quote_in);
+            main_reader_inited = true;
+            main_iter = RowIterator.init(&main_reader, &chunk_arena, bc.csv_delimiter_in, bc.csv_text_quote_in);
+            _ = try main_iter.parseHeader(); // discard, col_names already populated
         } else {
-            // CSV: split into records, parse header, pre-allocate all field arrays into
-            // file_alloc so they persist for the full file lifetime (pre_pass + main loop).
-            const all_records = try csv.splitRecords(content, bc.csv_text_quote_in, file_alloc);
-            if (all_records.items.len > 0) {
-                // Allocate one extra slot so a CSV with exactly MAX_COLUMNS
-                // columns parses without spuriously tripping the truncation
-                // warning. The warning fires only when the input genuinely
-                // overflowed past MAX_COLUMNS.
-                const hdr_buf = try file_alloc.alloc([]const u8, MAX_COLUMNS + 1);
-                const header_fields_full = try csv.splitFields(
-                    all_records.items[0],
-                    hdr_buf,
-                    bc.csv_delimiter_in,
-                    bc.csv_text_quote_in,
-                    file_alloc,
-                );
-                const truncated = header_fields_full.len > MAX_COLUMNS;
-                const header_fields = if (truncated) header_fields_full[0..MAX_COLUMNS] else header_fields_full;
-                if (truncated) {
-                    stats.warnings += 1;
-                    out.warning("warning: '{s}' has more than {d} columns; extra columns are ignored\n", .{ filename, MAX_COLUMNS });
-                }
-                for (header_fields, 0..) |name, idx| {
-                    // Intentional RFC 4180 deviation: trim spaces from column header
-                    // names so that [ColumnName] references work regardless of padding.
-                    const trimmed = std.mem.trim(u8, name, " ");
-                    try col_index.put(trimmed, idx);
-                    try col_names.append(trimmed);
-                }
-                for (all_records.items[1..]) |line| {
-                    const row_buf = try file_alloc.alloc([]const u8, MAX_COLUMNS);
-                    const fields = try csv.splitFields(
-                        line,
-                        row_buf,
-                        bc.csv_delimiter_in,
-                        bc.csv_text_quote_in,
-                        file_alloc,
-                    );
-                    try all_rows.append(fields);
-                }
+            // CSV without pre_pass: parse header straight from the
+            // main-pass iterator (no rewind needed).
+            main_reader = ChunkReader.init(file_alloc, in_file, bc.csv_text_quote_in);
+            main_reader_inited = true;
+            main_iter = RowIterator.init(&main_reader, &chunk_arena, bc.csv_delimiter_in, bc.csv_text_quote_in);
+
+            const raw_header = try main_iter.parseHeader();
+            const truncated = raw_header.len > MAX_COLUMNS;
+            const header_fields = if (truncated) raw_header[0..MAX_COLUMNS] else raw_header;
+            if (truncated) {
+                stats.warnings += 1;
+                out.warning("warning: '{s}' has more than {d} columns; extra columns are ignored\n", .{ filename, MAX_COLUMNS });
+            }
+            for (header_fields, 0..) |name, idx| {
+                const trimmed = std.mem.trim(u8, name, " ");
+                const owned = try file_alloc.dupe(u8, trimmed);
+                try col_index.put(owned, idx);
+                try col_names.append(owned);
+            }
+            if (main_reader.buffer.items.len > 0 and
+                !std.unicode.utf8ValidateSlice(main_reader.buffer.items[0..main_reader.last_emit_len]))
+            {
+                stats.warnings += 1;
+                out.warning("warning: '{s}' is not valid UTF-8; non-ASCII characters may be garbled\n", .{filename});
             }
         }
 
@@ -893,95 +1239,29 @@ pub fn processBroker(
             stats.warnings += 1;
         }
 
-        // Warn if the file has no data rows. Always emits text — the count
-        // alone leaves the user with `done - WARN` and no clue which file
-        // caused it; suppressing the message just because the run is not in
-        // --debug mode hides actionable information. `Output.warning()`
-        // gates on --quiet (silent) and routes via stderr in --trace mode
-        // (so the GUI can surface it without corrupting the NDJSON stream).
-        if (all_rows.items.len == 0) {
+        // No-rows warning. JSON knows the count up front and warns now;
+        // for CSV the count is unknown until the streaming main loop
+        // finishes, so the warning is deferred to file_end below.
+        if (json_all_rows) |jr| if (jr.items.len == 0) {
             stats.warnings += 1;
             out.warning("warning: no rows in '{s}' (template: {s}, file: {s}/{s})\n", .{ filename, bid, dir_path, filename });
-        }
+        };
 
         const full_path = try std.fs.path.join(file_alloc, &.{ dir_path, filename });
         var out_header_names = std.array_list.Managed([]const u8).init(file_alloc);
         for (bc.output_schema.items) |col| {
             try out_header_names.append(col.header);
         }
+        // file_start.rows: known for JSON, 0 for CSV streaming (the
+        // accurate count is reported in file_end below).
         out.event("file_start", .{
             .template = bid,
             .path = full_path,
-            .rows = all_rows.items.len,
+            .rows = if (json_all_rows) |jr| jr.items.len else 0,
             .headers = col_names.items,
             .output_headers = out_header_names.items,
         });
 
-        // Build pre_pass lookup table(s) if any are configured.
-        //
-        // Each named block does a full linear scan of all_rows (first pass).
-        // The composite key format is "name\x00key\x00field_name" — the NUL
-        // byte is used as separator because it cannot appear in any expression
-        // result, so different (name, key, field) triples can never collide.
-        //
-        // When a key expression produces the empty string the row is silently
-        // skipped — an empty key would produce a match for any LOOKUP call
-        // that evaluated its own key expression to "", which would be
-        // surprising and is almost always a config error (e.g. a `when`
-        // filter that is too broad).
-        //
-        // LOOKUP() resolves the name either via its 3-arg form or via
-        // ctx.single_prepass_name when only one block is defined (legacy
-        // 2-arg form for backward compatibility).
-        var lookup_table = std.StringHashMap([]const u8).init(file_alloc);
-        var pp_it = bc.pre_passes.iterator();
-        while (pp_it.next()) |pp_entry| {
-            const pp_name = pp_entry.key_ptr.*;
-            const pp = pp_entry.value_ptr.*;
-            for (all_rows.items) |fields| {
-                const pre_ctx = expr_mod.Context{
-                    .fields = fields,
-                    .col_index = &col_index,
-                    .quote_out = bc.csv_text_quote_out,
-                    .ticker_map = &bc.ticker_map,
-                    .lookup_table = null, // no self-reference during pre_pass
-                    .alloc = file_alloc,
-                    .decimal_sep_in = bc.csv_decimal_separator_in,
-                };
-                // Collect only rows where when evaluates to true.
-                const when = expr_mod.eval(pp.when, &pre_ctx) catch |err| {
-                    if (out.debug) {
-                        out.writer.print("[pre_pass {s} error] when = \"{s}\": {s}\n", .{ pp_name, pp.when, @errorName(err) }) catch {};
-                        out.writer.flush() catch {};
-                    }
-                    continue;
-                };
-                if (!when.toBool()) continue;
-                // Evaluate key expression for this row.
-                const key_val = expr_mod.evalString(pp.key, &pre_ctx) catch |err| {
-                    if (out.debug) {
-                        out.writer.print("[pre_pass {s} error] key = \"{s}\": {s}\n", .{ pp_name, pp.key, @errorName(err) }) catch {};
-                        out.writer.flush() catch {};
-                    }
-                    continue;
-                };
-                if (key_val.len == 0) continue;
-                // Store each value expression under "name\x00key\x00field_name".
-                var v_it = pp.values.iterator();
-                while (v_it.next()) |ve| {
-                    const val = expr_mod.evalString(ve.value_ptr.*, &pre_ctx) catch |err| {
-                        if (out.debug) {
-                            out.writer.print("[pre_pass {s} error] values.{s} = \"{s}\": {s}\n", .{ pp_name, ve.key_ptr.*, ve.value_ptr.*, @errorName(err) }) catch {};
-                            out.writer.flush() catch {};
-                        }
-                        continue;
-                    };
-                    const composite = try std.mem.concat(file_alloc, u8, &.{ pp_name, "\x00", key_val, "\x00", ve.key_ptr.* });
-                    try lookup_table.put(composite, val);
-                    out.event("prepass_set", .{ .name = pp_name, .key = key_val, .field = ve.key_ptr.*, .value = val });
-                }
-            }
-        }
         const has_prepass = bc.pre_passes.count() > 0;
         const lookup_table_ptr: ?*const std.StringHashMap([]const u8) =
             if (has_prepass) &lookup_table else null;
@@ -1100,9 +1380,16 @@ pub fn processBroker(
 
         var json_first_row = true;
         var file_rows_written: usize = 0;
-        for (all_rows.items, 0..) |fields, row_idx| {
+        // Unified row source: JSON path replays the in-memory all_rows;
+        // CSV path drives main_iter, which resets chunk_arena per chunk.
+        var row_src: RowSource = if (json_all_rows) |jr|
+            .{ .json_materialised = .{ .rows = jr.items, .idx = 0 } }
+        else
+            .{ .csv_streaming = &main_iter };
+        var file_row_idx: usize = 0;
+        while (try row_src.next()) |fields| : (file_row_idx += 1) {
             _ = line_arena.reset(.retain_capacity);
-            out.event("row_start", .{ .file_row = row_idx + 1, .fields = fields });
+            out.event("row_start", .{ .file_row = file_row_idx + 1, .fields = fields });
 
             var row_detail: []const u8 = "";
             var row_ctx = expr_mod.Context{
@@ -1300,6 +1587,13 @@ pub fn processBroker(
         if (bc.file_type_out == .json) try fout.writeAll("\n]\n");
         try fout.flush();
 
+        // CSV no-rows warning: deferred from above because streaming
+        // doesn't expose the count until the loop finishes.
+        if (json_all_rows == null and file_row_idx == 0) {
+            stats.warnings += 1;
+            out.warning("warning: no rows in '{s}' (template: {s}, file: {s}/{s})\n", .{ filename, bid, dir_path, filename });
+        }
+
         // Surface silent expression errors. Bump stats.warnings ONCE per
         // file (not per error) so a clean run is exit 0 but any file with
         // expression failures flips to exit 2 and gets an actionable line
@@ -1313,7 +1607,7 @@ pub fn processBroker(
             .template = bid,
             .path = full_path,
             .stats = .{
-                .rows = all_rows.items.len,
+                .rows = file_row_idx,
                 .written = file_rows_written,
                 // Per-file expression evaluation failures (input_schema
                 // vars). Previously hardcoded 0; now populated from the
