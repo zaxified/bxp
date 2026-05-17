@@ -8,6 +8,54 @@ into a `CHANGELOG.md` entry when their PRs land + a release is cut.
 `scripts/release-changelog.sh` generates the `CHANGELOG.md` entry
 automatically from `git log` when cutting a release.
 
+## v0.2.4
+
+### Expression built-ins — string and boolean utilities
+
+Surfaced by the 2026-05-17 real-world-dataset session (HubSpot picklists,
+NOAA sentinels, IMDb `\N` null markers, Inside Airbnb price prefixes).
+Several patterns required nested-`IF` workarounds that single built-ins
+would collapse. Touches `expr.zig` FnDoc catalog, `bxp-fmt --docs` JSON
+shape, GUI autocomplete (via `--docs`), and Dart `expr_corpus_bridge_test`.
+
+- `SUBSTR(s, start, length)` / `LEFT(s, n)` / `RIGHT(s, n)` — fixed-position
+  string slicing. Real use: ISIN prefix codes (`LEFT([ISIN], 2)` = country
+  code), broker ticker suffix strip.
+- `STARTS_WITH(s, prefix)` / `ENDS_WITH(s, suffix)` — `CONTAINS` is
+  position-agnostic and false-positives on substrings. Most picklist /
+  category checks really want prefix or suffix anchoring.
+- `REGEX_MATCH(s, pattern)` — optional follow-on. If regex support lands
+  here, also opens `REGEX_EXTRACT(s, pattern)` from "Later — Real-world
+  broker CSV quirks" (Lime.co dividend ticker extraction). Otherwise
+  STARTS_WITH/ENDS_WITH covers ~90% of today's need.
+- `NOT expr` — boolean negation keyword. Today `WHEN: NOT CONTAINS(...)`
+  must be written as `IF(CONTAINS(...), 0, 1) = 1`. Parser-level change
+  in operator precedence (between `=` and `AND`).
+- `UPPER(s)` / `LOWER(s)` — explicit case normalisation. Makes picklist
+  case-folding one line instead of an `IF` chain per variant.
+- `NULL_IF(value, sentinel)` — emit empty string when `value == sentinel`.
+  Real use: NOAA `-9999` for missing measurements, IMDb `\N` null marker,
+  CSVs with `"N/A"` placeholders. Today: per-column `IF([X] = '-9999', '', [X])`
+  repeated for every sentinel-aware field.
+- `IN(value, v1, v2, ...)` — variadic equality OR-chain. Today nested
+  `IF([X] = 'A' OR [X] = 'B' OR ..., ...)`. Cleaner picklist whitelists,
+  cleaner row_rules `when` filters.
+
+### Wide-CSV support (already landed in source)
+
+- `MAX_FILE_SIZE_BYTES` raised 16 MB → 1 GiB so 100k+ row public datasets
+  (NOAA GHCN per-station 17 MB, NYC TLC monthly ~700 MB, IMDb subsets)
+  fit.
+- `MAX_COLUMNS` raised 64 → 1024 so wide datasets (NOAA GHCN daily =
+  124 cols paired measurement + quality flags, IoT sensor exports,
+  genomic feature dumps) fit without truncation.
+- Both are temporary ceilings until v0.4.0 streaming lifts them entirely.
+- Empirical note worth keeping: lowering `MAX_COLUMNS` below the
+  actually-used count does **not** save peak RAM (measured 256 spiked to
+  5.8 GB on 1.3M-row taxi vs 1.85 GB at both 64 and 1024 — Zig page-
+  allocator threshold effect). The dominant cost is `content_raw` +
+  `all_records` slice retention, not `row_buf`.
+
 ## v0.2.5
 
 ### External template JSON files
@@ -151,6 +199,35 @@ Plan for v0.4.0:
   evaluators ahead of TODO 4 Phase 3.
 
 Full design + migration plan: `DEV/6-todo-builtin-arg-validation-design.md`.
+
+### Streaming pipeline (lift the 1 GiB cap)
+
+`bxp-cli` today loads each input file end-to-end into RAM
+(`readToEndAlloc` in `pipeline.zig`). v0.2.4 raised the hard cap from
+16 MB to 1 GiB so real-world public datasets (NYC Taxi monthly ~85 MB,
+NOAA GHCN per-station 17 MB × 124 cols, Inside Airbnb city scrape 6 MB)
+fit — but memory grows linearly with input. A 1 GiB CSV needs 1–2 GiB
+peak resident, and 10M+ row datasets remain out of reach.
+
+Plan for v0.4.0 (or whenever the cap starts hurting real users):
+
+- Rewrite `processBroker()` in `bxp-cli/src/pipeline.zig` to iterate
+  `csv.splitRecords` (already an iterator in `bxp-core/src/csv.zig`)
+  instead of `parseRecords` over a full-file buffer.
+- Two-pass streaming when a template defines `pre_pass`:
+  pass 1 builds the lookup hashmap (memory = O(unique keys), not O(rows));
+  pass 2 emits output. Pass 2 alone for templates without `pre_pass`.
+- Leave XLSX path on full-file load — ZIP+XML decompression has no
+  meaningful streaming form.
+- Keep MAX_FILE_SIZE_BYTES as a sanity cap (lift to 16 GiB or remove
+  outright once streaming lands).
+- Memory ceiling drops from `O(file size)` to
+  `O(longest row + pre_pass table)` — typically <50 MB even for
+  10M-row inputs.
+
+Trade-offs surfaced when designing this: 2× disk I/O for `pre_pass`
+templates; file-mutation between passes is undefined (snapshot to
+`/tmp` if it ever becomes an issue).
 
 ## Later (no specific version)
 

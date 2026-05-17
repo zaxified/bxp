@@ -11,14 +11,17 @@ const expr_mod = @import("expr");
 const xlsx_mod = @import("xlsx");
 const json_mod = @import("json");
 
-// 16 MB cap prevents runaway memory use on accidental binary input or very
-// wide broker exports. Real broker CSVs rarely exceed a few hundred KB.
-const MAX_FILE_SIZE_BYTES: usize = 16 * 1024 * 1024;
-// Broker exports typically have 10–30 columns; 64 is a generous ceiling that
-// still fits in a stack-allocated `hdr_buf`. Rows beyond this are truncated
-// with a warning — extra columns are always broker internals not referenced
-// by any expression in bxp-cli.json.
-const MAX_COLUMNS: usize = 64;
+// 1 GiB cap. Whole-file load into RAM is the current design — streaming
+// is roadmapped for v0.4.0. Until then this ceiling lets real-world public
+// datasets (NYC Taxi monthly, NOAA GHCN per-station, Inside Airbnb city
+// scrapes) fit, while still preventing runaway memory on pathological input.
+const MAX_FILE_SIZE_BYTES: usize = 1024 * 1024 * 1024;
+// Broker exports typically have 10–30 columns; real-world public datasets
+// can reach 100+ (NOAA GHCN daily has 124, with paired measurement +
+// quality-flag columns). 1024 is a generous ceiling that costs ~16 KB per
+// file in arena-heap `hdr_buf` and ~16 KB per row in `row_buf`. Rows
+// beyond this are truncated with a warning.
+const MAX_COLUMNS: usize = 1024;
 // One 64 KB write buffer per output file. Kept in the per-file stack frame;
 // the OS then decides when to flush to disk. Smaller buffers cause noticeable
 // syscall overhead on files with thousands of short rows.
