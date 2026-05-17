@@ -13,3 +13,4 @@ releases/
 .DS_Store
 Thumbs.db
 *.swp
+scripts/bench/work/

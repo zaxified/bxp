@@ -631,14 +631,21 @@ const ChunkReader = struct {
     /// bytes are discarded from the front of `buffer` at the start of the
     /// next call so only residual remains.
     last_emit_len: usize,
+    /// Total file size (from stat at init); used to right-size the buffer
+    /// so files smaller than CHUNK_SIZE do not pay for a 10 MiB allocation.
+    total_size: u64,
+    bytes_read: u64,
     eof: bool,
 
-    pub fn init(alloc: std.mem.Allocator, file: std.fs.File, quote: u8) ChunkReader {
+    pub fn init(alloc: std.mem.Allocator, file: std.fs.File, quote: u8) !ChunkReader {
+        const stat = try file.stat();
         return .{
             .file = file,
             .quote = quote,
             .buffer = std.array_list.Managed(u8).init(alloc),
             .last_emit_len = 0,
+            .total_size = stat.size,
+            .bytes_read = 0,
             .eof = false,
         };
     }
@@ -674,11 +681,25 @@ const ChunkReader = struct {
                 self.last_emit_len = self.buffer.items.len;
                 return self.buffer.items;
             }
-            try self.buffer.ensureUnusedCapacity(CHUNK_SIZE);
+            // Right-size the next read: never reserve more than what the
+            // file still has to offer. For a 281 KB file this caps the
+            // buffer at 281 KB instead of 10 MiB; for a 100 MiB file it
+            // still grants the full 10 MiB chunk after each rotation.
+            const remaining: u64 = if (self.bytes_read >= self.total_size)
+                0
+            else
+                self.total_size - self.bytes_read;
+            if (remaining == 0) {
+                self.eof = true;
+                continue;
+            }
+            const want_cap: usize = @intCast(@min(@as(u64, CHUNK_SIZE), remaining));
+            try self.buffer.ensureUnusedCapacity(want_cap);
             const dest = self.buffer.unusedCapacitySlice();
-            const want = @min(dest.len, CHUNK_SIZE);
+            const want = @min(dest.len, want_cap);
             const n = try self.file.read(dest[0..want]);
             self.buffer.items.len += n;
+            self.bytes_read += n;
             if (n == 0) self.eof = true;
         }
     }
@@ -1156,7 +1177,7 @@ pub fn processBroker(
         } else if (bc.pre_passes.count() > 0) {
             // CSV with pre_pass: two-pass — header+pre_pass first, then
             // seek back and create a fresh main-pass iterator.
-            var pp_reader = ChunkReader.init(file_alloc, in_file, bc.csv_text_quote_in);
+            var pp_reader = try ChunkReader.init(file_alloc, in_file, bc.csv_text_quote_in);
             defer pp_reader.deinit();
             var pp_iter = RowIterator.init(&pp_reader, &chunk_arena, bc.csv_delimiter_in, bc.csv_text_quote_in);
 
@@ -1194,14 +1215,14 @@ pub fn processBroker(
             }
 
             try in_file.seekTo(0);
-            main_reader = ChunkReader.init(file_alloc, in_file, bc.csv_text_quote_in);
+            main_reader = try ChunkReader.init(file_alloc, in_file, bc.csv_text_quote_in);
             main_reader_inited = true;
             main_iter = RowIterator.init(&main_reader, &chunk_arena, bc.csv_delimiter_in, bc.csv_text_quote_in);
             _ = try main_iter.parseHeader(); // discard, col_names already populated
         } else {
             // CSV without pre_pass: parse header straight from the
             // main-pass iterator (no rewind needed).
-            main_reader = ChunkReader.init(file_alloc, in_file, bc.csv_text_quote_in);
+            main_reader = try ChunkReader.init(file_alloc, in_file, bc.csv_text_quote_in);
             main_reader_inited = true;
             main_iter = RowIterator.init(&main_reader, &chunk_arena, bc.csv_delimiter_in, bc.csv_text_quote_in);
 
