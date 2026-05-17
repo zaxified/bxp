@@ -753,13 +753,19 @@ const RowIterator = struct {
     records: std.array_list.Managed([]const u8),
     rec_idx: usize,
     header_consumed: bool,
+    /// Reusable per-row slice buffer. Lives in file_alloc (not chunk_arena)
+    /// so it survives chunk resets; allocated once at init. Caller already
+    /// must dupe out any data needed past the next `next()` / `parseHeader()`
+    /// call, so reusing the same buffer across rows is safe.
+    row_buf: [][]const u8,
 
     pub fn init(
         reader: *ChunkReader,
         chunk_arena: *std.heap.ArenaAllocator,
+        file_alloc: std.mem.Allocator,
         delimiter: u8,
         quote: u8,
-    ) RowIterator {
+    ) !RowIterator {
         return .{
             .reader = reader,
             .chunk_arena = chunk_arena,
@@ -768,6 +774,7 @@ const RowIterator = struct {
             .records = std.array_list.Managed([]const u8).init(chunk_arena.allocator()),
             .rec_idx = 0,
             .header_consumed = false,
+            .row_buf = try file_alloc.alloc([]const u8, MAX_COLUMNS),
         };
     }
 
@@ -811,9 +818,8 @@ const RowIterator = struct {
             if (self.rec_idx < self.records.items.len) {
                 const rec = self.records.items[self.rec_idx];
                 self.rec_idx += 1;
-                const row_buf = try self.chunk_arena.allocator().alloc([]const u8, MAX_COLUMNS);
                 return try csv.splitFields(
-                    rec, row_buf, self.delimiter, self.quote, self.chunk_arena.allocator(),
+                    rec, self.row_buf, self.delimiter, self.quote, self.chunk_arena.allocator(),
                 );
             }
             const chunk_bytes = (try self.reader.nextChunk()) orelse return null;
@@ -1179,7 +1185,7 @@ pub fn processBroker(
             // seek back and create a fresh main-pass iterator.
             var pp_reader = try ChunkReader.init(file_alloc, in_file, bc.csv_text_quote_in);
             defer pp_reader.deinit();
-            var pp_iter = RowIterator.init(&pp_reader, &chunk_arena, bc.csv_delimiter_in, bc.csv_text_quote_in);
+            var pp_iter = try RowIterator.init(&pp_reader, &chunk_arena, file_alloc, bc.csv_delimiter_in, bc.csv_text_quote_in);
 
             const raw_header = try pp_iter.parseHeader();
             const truncated = raw_header.len > MAX_COLUMNS;
@@ -1217,14 +1223,14 @@ pub fn processBroker(
             try in_file.seekTo(0);
             main_reader = try ChunkReader.init(file_alloc, in_file, bc.csv_text_quote_in);
             main_reader_inited = true;
-            main_iter = RowIterator.init(&main_reader, &chunk_arena, bc.csv_delimiter_in, bc.csv_text_quote_in);
+            main_iter = try RowIterator.init(&main_reader, &chunk_arena, file_alloc, bc.csv_delimiter_in, bc.csv_text_quote_in);
             _ = try main_iter.parseHeader(); // discard, col_names already populated
         } else {
             // CSV without pre_pass: parse header straight from the
             // main-pass iterator (no rewind needed).
             main_reader = try ChunkReader.init(file_alloc, in_file, bc.csv_text_quote_in);
             main_reader_inited = true;
-            main_iter = RowIterator.init(&main_reader, &chunk_arena, bc.csv_delimiter_in, bc.csv_text_quote_in);
+            main_iter = try RowIterator.init(&main_reader, &chunk_arena, file_alloc, bc.csv_delimiter_in, bc.csv_text_quote_in);
 
             const raw_header = try main_iter.parseHeader();
             const truncated = raw_header.len > MAX_COLUMNS;
