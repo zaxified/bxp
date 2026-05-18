@@ -108,6 +108,19 @@ fn jsonValueToString(alloc: std.mem.Allocator, value: std.json.Value) ![]const u
 /// Use `wrapChecked` for defensive wrapping or `classify` to test first.
 pub const Safe = struct { bytes: []const u8 };
 
+/// Parallel-array carrier of `[]const u8` + per-element safe bitmap.
+/// Emitted as a JSON array; each element skips classify when `safe[i]`
+/// is true, otherwise falls through to the escape-aware writer.
+///
+/// Lifetime: writer only reads the slices during the `writeEvent` call;
+/// caller owns the storage. Used by bxp-cli for row_start.fields and
+/// row_output.values where splitFields / evalString have already
+/// classified each cell once.
+pub const SafeFields = struct {
+    items: []const []const u8,
+    safe: []const bool,
+};
+
 /// Returns true when `s` contains no byte that requires JSON escaping
 /// (control chars < 0x20, `"`, or `\`). UTF-8 high bytes are safe — the
 /// JSON spec allows raw UTF-8 inside string literals.
@@ -154,6 +167,25 @@ fn writeValue(w: *std.Io.Writer, v: anytype) !void {
         try w.writeByte('"');
         try w.writeAll(v.bytes);
         try w.writeByte('"');
+        return;
+    }
+    if (T == SafeFields) {
+        try w.writeByte('[');
+        for (v.items, 0..) |s, i| {
+            if (i > 0) try w.writeByte(',');
+            if (v.safe[i]) {
+                try w.writeByte('"');
+                try w.writeAll(s);
+                try w.writeByte('"');
+            } else if (classify(s)) {
+                try w.writeByte('"');
+                try w.writeAll(s);
+                try w.writeByte('"');
+            } else {
+                try writeJsonString(w, s);
+            }
+        }
+        try w.writeByte(']');
         return;
     }
     const info = @typeInfo(T);
@@ -476,4 +508,34 @@ test "writeEvent: empty string" {
     var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, out, .{});
     defer parsed.deinit();
     try std.testing.expectEqualStrings("", parsed.value.object.get("v").?.string);
+}
+
+test "writeEvent: SafeFields all-safe" {
+    var buf: [256]u8 = undefined;
+    const items = [_][]const u8{ "alpha", "bravo", "charlie" };
+    const safe = [_]bool{ true, true, true };
+    const out = try writeEventToBuf(&buf, "row_start", .{
+        .fields = SafeFields{ .items = &items, .safe = &safe },
+    });
+    var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, out, .{});
+    defer parsed.deinit();
+    const arr = parsed.value.object.get("fields").?.array;
+    try std.testing.expectEqualStrings("alpha", arr.items[0].string);
+    try std.testing.expectEqualStrings("bravo", arr.items[1].string);
+    try std.testing.expectEqualStrings("charlie", arr.items[2].string);
+}
+
+test "writeEvent: SafeFields mixed safe/unsafe" {
+    var buf: [256]u8 = undefined;
+    const items = [_][]const u8{ "plain", "with\"quote", "back\\slash" };
+    const safe = [_]bool{ true, false, false };
+    const out = try writeEventToBuf(&buf, "row_start", .{
+        .fields = SafeFields{ .items = &items, .safe = &safe },
+    });
+    var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, out, .{});
+    defer parsed.deinit();
+    const arr = parsed.value.object.get("fields").?.array;
+    try std.testing.expectEqualStrings("plain", arr.items[0].string);
+    try std.testing.expectEqualStrings("with\"quote", arr.items[1].string);
+    try std.testing.expectEqualStrings("back\\slash", arr.items[2].string);
 }

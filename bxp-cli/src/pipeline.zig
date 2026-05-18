@@ -442,7 +442,11 @@ fn evalAllVars(
             out.event("var_error", .{ .name = e.key_ptr.*, .expr = e.value_ptr.*, .@"error" = @errorName(err), .detail = detail, .origin = "input_schema" });
             break :blk "";
         };
-        out.event("var_eval", .{ .name = e.key_ptr.*, .expr = e.value_ptr.*, .value = val, .origin = "input_schema" });
+        if (json_mod.wrapChecked(val)) |sv| {
+            out.event("var_eval", .{ .name = e.key_ptr.*, .expr = e.value_ptr.*, .value = sv, .origin = "input_schema" });
+        } else {
+            out.event("var_eval", .{ .name = e.key_ptr.*, .expr = e.value_ptr.*, .value = val, .origin = "input_schema" });
+        }
         try vars.put(e.key_ptr.*, val);
     }
     return vars;
@@ -748,6 +752,18 @@ const RowSource = union(enum) {
             .csv_streaming => |iter| return try iter.next(),
         }
     }
+
+    /// Returns the parallel safe bitmap for the most recently returned row,
+    /// or null when the source can't provide one (JSON path — fields come
+    /// from `readJsonRecords` and aren't classified). When non-null, the
+    /// slice has exactly `fields.len` entries. Caller reads it immediately
+    /// after `next()` (same lifetime contract as the fields slice).
+    pub fn currentSafe(self: *RowSource, fields: [][]const u8) ?[]const bool {
+        return switch (self.*) {
+            .json_materialised => null,
+            .csv_streaming => |iter| iter.row_safe[0..fields.len],
+        };
+    }
 };
 
 /// Iterator that produces parsed CSV row fields by reading chunks from a
@@ -774,6 +790,13 @@ const RowIterator = struct {
     /// call, so reusing the same buffer across rows is safe.
     row_buf: [][]const u8,
 
+    /// Parallel to row_buf: row_safe[i] == true iff row_buf[i] is escape-free
+    /// (no `"`, no `\`, no control byte < 0x20). Populated by splitFields on
+    /// every `next()` call. Used by the bxp-cli `--trace` fast-path so the
+    /// NDJSON writer can skip the per-cell classify scan; caller reads it
+    /// IMMEDIATELY after `next()` (same lifetime contract as row_buf).
+    row_safe: []bool,
+
     pub fn init(
         reader: *ChunkReader,
         chunk_arena: *std.heap.ArenaAllocator,
@@ -790,6 +813,7 @@ const RowIterator = struct {
             .rec_idx = 0,
             .header_consumed = false,
             .row_buf = try file_alloc.alloc([]const u8, MAX_COLUMNS),
+            .row_safe = try file_alloc.alloc(bool, MAX_COLUMNS),
         };
     }
 
@@ -819,7 +843,7 @@ const RowIterator = struct {
         const hdr_buf = try self.chunk_arena.allocator().alloc([]const u8, MAX_COLUMNS + 1);
         const header = try csv.splitFields(
             self.records.items[0], hdr_buf,
-            self.delimiter, self.quote, self.chunk_arena.allocator(),
+            self.delimiter, self.quote, self.chunk_arena.allocator(), null,
         );
         self.rec_idx = 1;
         return header;
@@ -834,7 +858,7 @@ const RowIterator = struct {
                 const rec = self.records.items[self.rec_idx];
                 self.rec_idx += 1;
                 return try csv.splitFields(
-                    rec, self.row_buf, self.delimiter, self.quote, self.chunk_arena.allocator(),
+                    rec, self.row_buf, self.delimiter, self.quote, self.chunk_arena.allocator(), self.row_safe,
                 );
             }
             const chunk_bytes = (try self.reader.nextChunk()) orelse return null;
@@ -1431,7 +1455,14 @@ pub fn processBroker(
         var file_row_idx: usize = 0;
         while (try row_src.next()) |fields| : (file_row_idx += 1) {
             _ = line_arena.reset(.retain_capacity);
-            out.event("row_start", .{ .file_row = file_row_idx + 1, .fields = fields });
+            if (row_src.currentSafe(fields)) |safe_bits| {
+                out.event("row_start", .{
+                    .file_row = file_row_idx + 1,
+                    .fields = json_mod.SafeFields{ .items = fields, .safe = safe_bits },
+                });
+            } else {
+                out.event("row_start", .{ .file_row = file_row_idx + 1, .fields = fields });
+            }
 
             var row_detail: []const u8 = "";
             var row_ctx = expr_mod.Context{
@@ -1533,7 +1564,11 @@ pub fn processBroker(
                             out.event("var_error", .{ .name = e.key_ptr.*, .expr = e.value_ptr.*, .@"error" = @errorName(err), .detail = row_detail, .origin = "row_rules", .rule_index = rule_index, .output_row_index = output_row_index });
                             break :blk "";
                         };
-                        out.event("var_eval", .{ .name = e.key_ptr.*, .expr = e.value_ptr.*, .value = val, .origin = "row_rules", .rule_index = rule_index, .output_row_index = output_row_index });
+                        if (json_mod.wrapChecked(val)) |sv| {
+                            out.event("var_eval", .{ .name = e.key_ptr.*, .expr = e.value_ptr.*, .value = sv, .origin = "row_rules", .rule_index = rule_index, .output_row_index = output_row_index });
+                        } else {
+                            out.event("var_eval", .{ .name = e.key_ptr.*, .expr = e.value_ptr.*, .value = val, .origin = "row_rules", .rule_index = rule_index, .output_row_index = output_row_index });
+                        }
                         try merged.put(e.key_ptr.*, val);
                     }
                     // Date range filter (date_filter_from_filename).
@@ -1556,11 +1591,6 @@ pub fn processBroker(
                         std.mem.order(u8, date_str[0..10], date_max) == .gt) {
                         out.event("row_filtered", .{ .reason = "date_filter_from_filename" });
                         continue;
-                    }
-                    // Collect output values for trace emission.
-                    var out_values = std.array_list.Managed([]const u8).init(line_alloc);
-                    for (bc.output_schema.items) |col| {
-                        try out_values.append(merged.get(col.variable) orelse "");
                     }
                     if (bc.file_type_out == .json) {
                         if (!json_first_row) try fout.writeAll(",\n");
@@ -1591,7 +1621,24 @@ pub fn processBroker(
                             try combined_fout.writeAll("\n");
                         }
                     }
-                    out.event("row_output", .{ .values = out_values.items });
+                    if (out.traceOn()) {
+                        // Build trace payload only when emitting — saves the
+                        // alloc + classify loop in non-trace runs (where
+                        // out.event() would no-op anyway).
+                        var out_values = std.array_list.Managed([]const u8).init(line_alloc);
+                        var out_safe = std.array_list.Managed(bool).init(line_alloc);
+                        for (bc.output_schema.items) |col| {
+                            const v = merged.get(col.variable) orelse "";
+                            try out_values.append(v);
+                            try out_safe.append(json_mod.classify(v));
+                        }
+                        out.event("row_output", .{
+                            .values = json_mod.SafeFields{
+                                .items = out_values.items,
+                                .safe = out_safe.items,
+                            },
+                        });
+                    }
                     file_rows_written += 1;
                 }
                 break; // first matching rule wins
