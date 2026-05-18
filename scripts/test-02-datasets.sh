@@ -37,6 +37,39 @@ _run_dataset() {
             return 1
         fi
     done
+    # Optional trace snapshot diff. When a *.expected.trace.ndjson sits next
+    # to the dataset, re-run with --trace and structurally compare each
+    # NDJSON line (via jq -S so semantically-equivalent JSON with different
+    # key ordering doesn't fail the diff). This protects the trace protocol
+    # from accidental drift without locking byte-exact output. Skipped when
+    # `jq` is missing so the suite still runs on minimal CI images.
+    for expected_trace in "$DATASETS/$template/"*.expected.trace.ndjson; do
+        [[ -f "$expected_trace" ]] || continue
+        if ! command -v jq > /dev/null 2>&1; then
+            echo "skip (no jq): $(basename "$expected_trace")"
+            continue
+        fi
+        local actual_trace
+        actual_trace="$(mktemp)"
+        "$BXP" --trace --config "$sample_json" > "$actual_trace"
+        # Normalise both sides through jq -cS (compact + sort keys) so the
+        # diff catches structural drift but not whitespace / key-order noise.
+        # Also redact path/config string values — those vary with the
+        # invocation cwd (relative vs absolute path the caller passed),
+        # which has nothing to do with the trace protocol contract.
+        local norm_expected norm_actual
+        norm_expected="$(mktemp)"
+        norm_actual="$(mktemp)"
+        jq -cS '.path? = "REDACTED" | .config? = "REDACTED"' < "$expected_trace" > "$norm_expected"
+        jq -cS '.path? = "REDACTED" | .config? = "REDACTED"' < "$actual_trace" > "$norm_actual"
+        if ! diff -q "$norm_expected" "$norm_actual" > /dev/null 2>&1; then
+            echo "trace diff: $(basename "$expected_trace")"
+            diff "$norm_expected" "$norm_actual" | head -20
+            rm -f "$actual_trace" "$norm_expected" "$norm_actual"
+            return 1
+        fi
+        rm -f "$actual_trace" "$norm_expected" "$norm_actual"
+    done
 }
 
 section "Datasets"

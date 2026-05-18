@@ -1,0 +1,1152 @@
+{"t":"start","schema_version":1,"config":"datasets/anycoin_to_wealthfolio/sample.json","templates":["anycoin_to_wealthfolio"]}
+{"t":"prepass_set","name":"_default","key":"1668007","field":"currency","value":"CZK"}
+{"t":"prepass_set","name":"_default","key":"1668007","field":"amount","value":"10001"}
+{"t":"prepass_set","name":"_default","key":"1947694","field":"currency","value":"CZK"}
+{"t":"prepass_set","name":"_default","key":"1947694","field":"amount","value":"200"}
+{"t":"prepass_set","name":"_default","key":"1949459","field":"currency","value":"CZK"}
+{"t":"prepass_set","name":"_default","key":"1949459","field":"amount","value":"1000"}
+{"t":"prepass_set","name":"_default","key":"1973332","field":"currency","value":"CZK"}
+{"t":"prepass_set","name":"_default","key":"1973332","field":"amount","value":"2500"}
+{"t":"prepass_set","name":"_default","key":"2001364","field":"currency","value":"CZK"}
+{"t":"prepass_set","name":"_default","key":"2001364","field":"amount","value":"2500"}
+{"t":"prepass_set","name":"_default","key":"2019056","field":"currency","value":"CZK"}
+{"t":"prepass_set","name":"_default","key":"2019056","field":"amount","value":"2500"}
+{"t":"prepass_set","name":"_default","key":"2037502","field":"currency","value":"CZK"}
+{"t":"prepass_set","name":"_default","key":"2037502","field":"amount","value":"2500"}
+{"t":"prepass_set","name":"_default","key":"2061399","field":"currency","value":"CZK"}
+{"t":"prepass_set","name":"_default","key":"2061399","field":"amount","value":"2500"}
+{"t":"prepass_set","name":"_default","key":"2068869","field":"currency","value":"CZK"}
+{"t":"prepass_set","name":"_default","key":"2068869","field":"amount","value":"50000"}
+{"t":"prepass_set","name":"_default","key":"2112673","field":"currency","value":"CZK"}
+{"t":"prepass_set","name":"_default","key":"2112673","field":"amount","value":"2500"}
+{"t":"prepass_set","name":"_default","key":"2138393","field":"currency","value":"CZK"}
+{"t":"prepass_set","name":"_default","key":"2138393","field":"amount","value":"2500"}
+{"t":"prepass_set","name":"_default","key":"2158654","field":"currency","value":"CZK"}
+{"t":"prepass_set","name":"_default","key":"2158654","field":"amount","value":"25000"}
+{"t":"prepass_set","name":"_default","key":"2160067","field":"currency","value":"CZK"}
+{"t":"prepass_set","name":"_default","key":"2160067","field":"amount","value":"2500"}
+{"t":"prepass_set","name":"_default","key":"2178611","field":"currency","value":"CZK"}
+{"t":"prepass_set","name":"_default","key":"2178611","field":"amount","value":"2500"}
+{"t":"prepass_set","name":"_default","key":"2197694","field":"currency","value":"CZK"}
+{"t":"prepass_set","name":"_default","key":"2197694","field":"amount","value":"2500"}
+{"t":"prepass_set","name":"_default","key":"2197694","field":"currency","value":"CZK"}
+{"t":"prepass_set","name":"_default","key":"2197694","field":"amount","value":"2500"}
+{"t":"file_start","template":"anycoin_to_wealthfolio","path":"datasets/anycoin_to_wealthfolio/./sample_2024-01-01_2025-12-31.csv","rows":0,"headers":["Date","Type","Amount","Currency","Order ID","anycoin TX ID","Description","Funding ID","Trade ID"],"output_headers":["date","symbol","quantity","activityType","unitPrice","currency","fee","amount","account","fxRate","subtype","instrumentType","comment"]}
+{"t":"row_start","file_row":1,"fields":["2023-12-23T06:20:20.182Z","deposit","1","CZK","","00000000-0000-0000-0000-000000000001","",""]}
+{"t":"var_eval","name":"$date","expr":"DATE_CONVERT([Date], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')","value":"2023-12-23 06:20:20","origin":"input_schema"}
+{"t":"var_eval","name":"$ticker","expr":"IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))","value":"$CASH-CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$quantity","expr":"IF([Type] = 'deposit', 1, [Amount])","value":"1","origin":"input_schema"}
+{"t":"var_eval","name":"$unitprice","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount') / [Amount])","value":"1","origin":"input_schema"}
+{"t":"var_eval","name":"$currency","expr":"IF([Type] = 'deposit', [Currency], LOOKUP([Order ID], 'currency'))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$fee","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$amount","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount'))","value":"1","origin":"input_schema"}
+{"t":"var_eval","name":"$account","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fxRate","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$subtype","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$instrumentType","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$comment","expr":"[anycoin TX ID]","value":"00000000-0000-0000-0000-000000000001","origin":"input_schema"}
+{"t":"rule_match","rule_index":0,"when":"[Type] = 'deposit'","rows":[{"$action":"'DEPOSIT'"}]}
+{"t":"var_eval","name":"$action","expr":"'DEPOSIT'","value":"DEPOSIT","origin":"row_rules","rule_index":0,"output_row_index":0}
+{"t":"row_filtered","reason":"date_filter_from_filename"}
+{"t":"rule_no_match","rule_index":1,"when":"[Type] = 'trade fill'"}
+{"t":"rule_no_match","rule_index":2,"when":"[Type] = 'trade payment'"}
+{"t":"rule_no_match","rule_index":3,"when":"[Type] = 'withdrawal'"}
+{"t":"rule_no_match","rule_index":4,"when":"[Type] = 'withdrawal_block'"}
+{"t":"rule_no_match","rule_index":5,"when":"[Type] = 'withdrawal_unblock'"}
+{"t":"row_end"}
+{"t":"row_start","file_row":2,"fields":["2023-12-26T09:19:01.569Z","deposit","10000","CZK","","00000000-0000-0000-0000-000000000002","",""]}
+{"t":"var_eval","name":"$date","expr":"DATE_CONVERT([Date], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')","value":"2023-12-26 09:19:01","origin":"input_schema"}
+{"t":"var_eval","name":"$ticker","expr":"IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))","value":"$CASH-CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$quantity","expr":"IF([Type] = 'deposit', 1, [Amount])","value":"1","origin":"input_schema"}
+{"t":"var_eval","name":"$unitprice","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount') / [Amount])","value":"10000","origin":"input_schema"}
+{"t":"var_eval","name":"$currency","expr":"IF([Type] = 'deposit', [Currency], LOOKUP([Order ID], 'currency'))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$fee","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$amount","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount'))","value":"10000","origin":"input_schema"}
+{"t":"var_eval","name":"$account","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fxRate","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$subtype","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$instrumentType","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$comment","expr":"[anycoin TX ID]","value":"00000000-0000-0000-0000-000000000002","origin":"input_schema"}
+{"t":"rule_match","rule_index":0,"when":"[Type] = 'deposit'","rows":[{"$action":"'DEPOSIT'"}]}
+{"t":"var_eval","name":"$action","expr":"'DEPOSIT'","value":"DEPOSIT","origin":"row_rules","rule_index":0,"output_row_index":0}
+{"t":"row_filtered","reason":"date_filter_from_filename"}
+{"t":"rule_no_match","rule_index":1,"when":"[Type] = 'trade fill'"}
+{"t":"rule_no_match","rule_index":2,"when":"[Type] = 'trade payment'"}
+{"t":"rule_no_match","rule_index":3,"when":"[Type] = 'withdrawal'"}
+{"t":"rule_no_match","rule_index":4,"when":"[Type] = 'withdrawal_block'"}
+{"t":"rule_no_match","rule_index":5,"when":"[Type] = 'withdrawal_unblock'"}
+{"t":"row_end"}
+{"t":"row_start","file_row":3,"fields":["2024-02-23T06:20:20.182Z","deposit","1","CZK","","00000000-0000-0000-0000-000000000001","",""]}
+{"t":"var_eval","name":"$date","expr":"DATE_CONVERT([Date], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')","value":"2024-02-23 06:20:20","origin":"input_schema"}
+{"t":"var_eval","name":"$ticker","expr":"IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))","value":"$CASH-CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$quantity","expr":"IF([Type] = 'deposit', 1, [Amount])","value":"1","origin":"input_schema"}
+{"t":"var_eval","name":"$unitprice","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount') / [Amount])","value":"1","origin":"input_schema"}
+{"t":"var_eval","name":"$currency","expr":"IF([Type] = 'deposit', [Currency], LOOKUP([Order ID], 'currency'))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$fee","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$amount","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount'))","value":"1","origin":"input_schema"}
+{"t":"var_eval","name":"$account","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fxRate","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$subtype","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$instrumentType","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$comment","expr":"[anycoin TX ID]","value":"00000000-0000-0000-0000-000000000001","origin":"input_schema"}
+{"t":"rule_match","rule_index":0,"when":"[Type] = 'deposit'","rows":[{"$action":"'DEPOSIT'"}]}
+{"t":"var_eval","name":"$action","expr":"'DEPOSIT'","value":"DEPOSIT","origin":"row_rules","rule_index":0,"output_row_index":0}
+{"t":"row_output","values":["2024-02-23 06:20:20","$CASH-CZK","1","DEPOSIT","1","CZK","","1","","","","","00000000-0000-0000-0000-000000000001"]}
+{"t":"rule_no_match","rule_index":1,"when":"[Type] = 'trade fill'"}
+{"t":"rule_no_match","rule_index":2,"when":"[Type] = 'trade payment'"}
+{"t":"rule_no_match","rule_index":3,"when":"[Type] = 'withdrawal'"}
+{"t":"rule_no_match","rule_index":4,"when":"[Type] = 'withdrawal_block'"}
+{"t":"rule_no_match","rule_index":5,"when":"[Type] = 'withdrawal_unblock'"}
+{"t":"row_end"}
+{"t":"row_start","file_row":4,"fields":["2024-02-26T09:19:01.569Z","deposit","10000","CZK","","00000000-0000-0000-0000-000000000002","",""]}
+{"t":"var_eval","name":"$date","expr":"DATE_CONVERT([Date], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')","value":"2024-02-26 09:19:01","origin":"input_schema"}
+{"t":"var_eval","name":"$ticker","expr":"IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))","value":"$CASH-CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$quantity","expr":"IF([Type] = 'deposit', 1, [Amount])","value":"1","origin":"input_schema"}
+{"t":"var_eval","name":"$unitprice","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount') / [Amount])","value":"10000","origin":"input_schema"}
+{"t":"var_eval","name":"$currency","expr":"IF([Type] = 'deposit', [Currency], LOOKUP([Order ID], 'currency'))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$fee","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$amount","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount'))","value":"10000","origin":"input_schema"}
+{"t":"var_eval","name":"$account","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fxRate","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$subtype","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$instrumentType","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$comment","expr":"[anycoin TX ID]","value":"00000000-0000-0000-0000-000000000002","origin":"input_schema"}
+{"t":"rule_match","rule_index":0,"when":"[Type] = 'deposit'","rows":[{"$action":"'DEPOSIT'"}]}
+{"t":"var_eval","name":"$action","expr":"'DEPOSIT'","value":"DEPOSIT","origin":"row_rules","rule_index":0,"output_row_index":0}
+{"t":"row_output","values":["2024-02-26 09:19:01","$CASH-CZK","1","DEPOSIT","10000","CZK","","10000","","","","","00000000-0000-0000-0000-000000000002"]}
+{"t":"rule_no_match","rule_index":1,"when":"[Type] = 'trade fill'"}
+{"t":"rule_no_match","rule_index":2,"when":"[Type] = 'trade payment'"}
+{"t":"rule_no_match","rule_index":3,"when":"[Type] = 'withdrawal'"}
+{"t":"rule_no_match","rule_index":4,"when":"[Type] = 'withdrawal_block'"}
+{"t":"rule_no_match","rule_index":5,"when":"[Type] = 'withdrawal_unblock'"}
+{"t":"row_end"}
+{"t":"row_start","file_row":5,"fields":["2024-12-08T22:28:46.803Z","deposit","200","CZK","","00000000-0000-0000-0000-000000000003","",""]}
+{"t":"var_eval","name":"$date","expr":"DATE_CONVERT([Date], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')","value":"2024-12-08 22:28:46","origin":"input_schema"}
+{"t":"var_eval","name":"$ticker","expr":"IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))","value":"$CASH-CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$quantity","expr":"IF([Type] = 'deposit', 1, [Amount])","value":"1","origin":"input_schema"}
+{"t":"var_eval","name":"$unitprice","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount') / [Amount])","value":"200","origin":"input_schema"}
+{"t":"var_eval","name":"$currency","expr":"IF([Type] = 'deposit', [Currency], LOOKUP([Order ID], 'currency'))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$fee","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$amount","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount'))","value":"200","origin":"input_schema"}
+{"t":"var_eval","name":"$account","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fxRate","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$subtype","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$instrumentType","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$comment","expr":"[anycoin TX ID]","value":"00000000-0000-0000-0000-000000000003","origin":"input_schema"}
+{"t":"rule_match","rule_index":0,"when":"[Type] = 'deposit'","rows":[{"$action":"'DEPOSIT'"}]}
+{"t":"var_eval","name":"$action","expr":"'DEPOSIT'","value":"DEPOSIT","origin":"row_rules","rule_index":0,"output_row_index":0}
+{"t":"row_output","values":["2024-12-08 22:28:46","$CASH-CZK","1","DEPOSIT","200","CZK","","200","","","","","00000000-0000-0000-0000-000000000003"]}
+{"t":"rule_no_match","rule_index":1,"when":"[Type] = 'trade fill'"}
+{"t":"rule_no_match","rule_index":2,"when":"[Type] = 'trade payment'"}
+{"t":"rule_no_match","rule_index":3,"when":"[Type] = 'withdrawal'"}
+{"t":"rule_no_match","rule_index":4,"when":"[Type] = 'withdrawal_block'"}
+{"t":"rule_no_match","rule_index":5,"when":"[Type] = 'withdrawal_unblock'"}
+{"t":"row_end"}
+{"t":"row_start","file_row":6,"fields":["2024-12-09T08:24:36.516Z","deposit","1000","CZK","","00000000-0000-0000-0000-000000000004","",""]}
+{"t":"var_eval","name":"$date","expr":"DATE_CONVERT([Date], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')","value":"2024-12-09 08:24:36","origin":"input_schema"}
+{"t":"var_eval","name":"$ticker","expr":"IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))","value":"$CASH-CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$quantity","expr":"IF([Type] = 'deposit', 1, [Amount])","value":"1","origin":"input_schema"}
+{"t":"var_eval","name":"$unitprice","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount') / [Amount])","value":"1000","origin":"input_schema"}
+{"t":"var_eval","name":"$currency","expr":"IF([Type] = 'deposit', [Currency], LOOKUP([Order ID], 'currency'))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$fee","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$amount","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount'))","value":"1000","origin":"input_schema"}
+{"t":"var_eval","name":"$account","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fxRate","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$subtype","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$instrumentType","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$comment","expr":"[anycoin TX ID]","value":"00000000-0000-0000-0000-000000000004","origin":"input_schema"}
+{"t":"rule_match","rule_index":0,"when":"[Type] = 'deposit'","rows":[{"$action":"'DEPOSIT'"}]}
+{"t":"var_eval","name":"$action","expr":"'DEPOSIT'","value":"DEPOSIT","origin":"row_rules","rule_index":0,"output_row_index":0}
+{"t":"row_output","values":["2024-12-09 08:24:36","$CASH-CZK","1","DEPOSIT","1000","CZK","","1000","","","","","00000000-0000-0000-0000-000000000004"]}
+{"t":"rule_no_match","rule_index":1,"when":"[Type] = 'trade fill'"}
+{"t":"rule_no_match","rule_index":2,"when":"[Type] = 'trade payment'"}
+{"t":"rule_no_match","rule_index":3,"when":"[Type] = 'withdrawal'"}
+{"t":"rule_no_match","rule_index":4,"when":"[Type] = 'withdrawal_block'"}
+{"t":"rule_no_match","rule_index":5,"when":"[Type] = 'withdrawal_unblock'"}
+{"t":"row_end"}
+{"t":"row_start","file_row":7,"fields":["2024-12-16T08:17:15.969Z","deposit","2500","CZK","","00000000-0000-0000-0000-000000000005","",""]}
+{"t":"var_eval","name":"$date","expr":"DATE_CONVERT([Date], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')","value":"2024-12-16 08:17:15","origin":"input_schema"}
+{"t":"var_eval","name":"$ticker","expr":"IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))","value":"$CASH-CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$quantity","expr":"IF([Type] = 'deposit', 1, [Amount])","value":"1","origin":"input_schema"}
+{"t":"var_eval","name":"$unitprice","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount') / [Amount])","value":"2500","origin":"input_schema"}
+{"t":"var_eval","name":"$currency","expr":"IF([Type] = 'deposit', [Currency], LOOKUP([Order ID], 'currency'))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$fee","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$amount","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount'))","value":"2500","origin":"input_schema"}
+{"t":"var_eval","name":"$account","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fxRate","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$subtype","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$instrumentType","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$comment","expr":"[anycoin TX ID]","value":"00000000-0000-0000-0000-000000000005","origin":"input_schema"}
+{"t":"rule_match","rule_index":0,"when":"[Type] = 'deposit'","rows":[{"$action":"'DEPOSIT'"}]}
+{"t":"var_eval","name":"$action","expr":"'DEPOSIT'","value":"DEPOSIT","origin":"row_rules","rule_index":0,"output_row_index":0}
+{"t":"row_output","values":["2024-12-16 08:17:15","$CASH-CZK","1","DEPOSIT","2500","CZK","","2500","","","","","00000000-0000-0000-0000-000000000005"]}
+{"t":"rule_no_match","rule_index":1,"when":"[Type] = 'trade fill'"}
+{"t":"rule_no_match","rule_index":2,"when":"[Type] = 'trade payment'"}
+{"t":"rule_no_match","rule_index":3,"when":"[Type] = 'withdrawal'"}
+{"t":"rule_no_match","rule_index":4,"when":"[Type] = 'withdrawal_block'"}
+{"t":"rule_no_match","rule_index":5,"when":"[Type] = 'withdrawal_unblock'"}
+{"t":"row_end"}
+{"t":"row_start","file_row":8,"fields":["2024-12-23T08:22:53.643Z","deposit","2500","CZK","","00000000-0000-0000-0000-000000000006","",""]}
+{"t":"var_eval","name":"$date","expr":"DATE_CONVERT([Date], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')","value":"2024-12-23 08:22:53","origin":"input_schema"}
+{"t":"var_eval","name":"$ticker","expr":"IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))","value":"$CASH-CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$quantity","expr":"IF([Type] = 'deposit', 1, [Amount])","value":"1","origin":"input_schema"}
+{"t":"var_eval","name":"$unitprice","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount') / [Amount])","value":"2500","origin":"input_schema"}
+{"t":"var_eval","name":"$currency","expr":"IF([Type] = 'deposit', [Currency], LOOKUP([Order ID], 'currency'))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$fee","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$amount","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount'))","value":"2500","origin":"input_schema"}
+{"t":"var_eval","name":"$account","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fxRate","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$subtype","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$instrumentType","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$comment","expr":"[anycoin TX ID]","value":"00000000-0000-0000-0000-000000000006","origin":"input_schema"}
+{"t":"rule_match","rule_index":0,"when":"[Type] = 'deposit'","rows":[{"$action":"'DEPOSIT'"}]}
+{"t":"var_eval","name":"$action","expr":"'DEPOSIT'","value":"DEPOSIT","origin":"row_rules","rule_index":0,"output_row_index":0}
+{"t":"row_output","values":["2024-12-23 08:22:53","$CASH-CZK","1","DEPOSIT","2500","CZK","","2500","","","","","00000000-0000-0000-0000-000000000006"]}
+{"t":"rule_no_match","rule_index":1,"when":"[Type] = 'trade fill'"}
+{"t":"rule_no_match","rule_index":2,"when":"[Type] = 'trade payment'"}
+{"t":"rule_no_match","rule_index":3,"when":"[Type] = 'withdrawal'"}
+{"t":"rule_no_match","rule_index":4,"when":"[Type] = 'withdrawal_block'"}
+{"t":"rule_no_match","rule_index":5,"when":"[Type] = 'withdrawal_unblock'"}
+{"t":"row_end"}
+{"t":"row_start","file_row":9,"fields":["2024-12-30T08:20:55.170Z","deposit","2500","CZK","","00000000-0000-0000-0000-000000000007","",""]}
+{"t":"var_eval","name":"$date","expr":"DATE_CONVERT([Date], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')","value":"2024-12-30 08:20:55","origin":"input_schema"}
+{"t":"var_eval","name":"$ticker","expr":"IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))","value":"$CASH-CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$quantity","expr":"IF([Type] = 'deposit', 1, [Amount])","value":"1","origin":"input_schema"}
+{"t":"var_eval","name":"$unitprice","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount') / [Amount])","value":"2500","origin":"input_schema"}
+{"t":"var_eval","name":"$currency","expr":"IF([Type] = 'deposit', [Currency], LOOKUP([Order ID], 'currency'))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$fee","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$amount","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount'))","value":"2500","origin":"input_schema"}
+{"t":"var_eval","name":"$account","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fxRate","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$subtype","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$instrumentType","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$comment","expr":"[anycoin TX ID]","value":"00000000-0000-0000-0000-000000000007","origin":"input_schema"}
+{"t":"rule_match","rule_index":0,"when":"[Type] = 'deposit'","rows":[{"$action":"'DEPOSIT'"}]}
+{"t":"var_eval","name":"$action","expr":"'DEPOSIT'","value":"DEPOSIT","origin":"row_rules","rule_index":0,"output_row_index":0}
+{"t":"row_output","values":["2024-12-30 08:20:55","$CASH-CZK","1","DEPOSIT","2500","CZK","","2500","","","","","00000000-0000-0000-0000-000000000007"]}
+{"t":"rule_no_match","rule_index":1,"when":"[Type] = 'trade fill'"}
+{"t":"rule_no_match","rule_index":2,"when":"[Type] = 'trade payment'"}
+{"t":"rule_no_match","rule_index":3,"when":"[Type] = 'withdrawal'"}
+{"t":"rule_no_match","rule_index":4,"when":"[Type] = 'withdrawal_block'"}
+{"t":"rule_no_match","rule_index":5,"when":"[Type] = 'withdrawal_unblock'"}
+{"t":"row_end"}
+{"t":"row_start","file_row":10,"fields":["2024-02-23T06:20:20.182Z","deposit","1","CZK","","00000000-0000-0000-0000-000000000001","",""]}
+{"t":"var_eval","name":"$date","expr":"DATE_CONVERT([Date], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')","value":"2024-02-23 06:20:20","origin":"input_schema"}
+{"t":"var_eval","name":"$ticker","expr":"IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))","value":"$CASH-CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$quantity","expr":"IF([Type] = 'deposit', 1, [Amount])","value":"1","origin":"input_schema"}
+{"t":"var_eval","name":"$unitprice","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount') / [Amount])","value":"1","origin":"input_schema"}
+{"t":"var_eval","name":"$currency","expr":"IF([Type] = 'deposit', [Currency], LOOKUP([Order ID], 'currency'))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$fee","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$amount","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount'))","value":"1","origin":"input_schema"}
+{"t":"var_eval","name":"$account","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fxRate","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$subtype","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$instrumentType","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$comment","expr":"[anycoin TX ID]","value":"00000000-0000-0000-0000-000000000001","origin":"input_schema"}
+{"t":"rule_match","rule_index":0,"when":"[Type] = 'deposit'","rows":[{"$action":"'DEPOSIT'"}]}
+{"t":"var_eval","name":"$action","expr":"'DEPOSIT'","value":"DEPOSIT","origin":"row_rules","rule_index":0,"output_row_index":0}
+{"t":"row_output","values":["2024-02-23 06:20:20","$CASH-CZK","1","DEPOSIT","1","CZK","","1","","","","","00000000-0000-0000-0000-000000000001"]}
+{"t":"rule_no_match","rule_index":1,"when":"[Type] = 'trade fill'"}
+{"t":"rule_no_match","rule_index":2,"when":"[Type] = 'trade payment'"}
+{"t":"rule_no_match","rule_index":3,"when":"[Type] = 'withdrawal'"}
+{"t":"rule_no_match","rule_index":4,"when":"[Type] = 'withdrawal_block'"}
+{"t":"rule_no_match","rule_index":5,"when":"[Type] = 'withdrawal_unblock'"}
+{"t":"row_end"}
+{"t":"row_start","file_row":11,"fields":["2024-02-26T09:19:01.569Z","deposit","10000","CZK","","00000000-0000-0000-0000-000000000002","",""]}
+{"t":"var_eval","name":"$date","expr":"DATE_CONVERT([Date], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')","value":"2024-02-26 09:19:01","origin":"input_schema"}
+{"t":"var_eval","name":"$ticker","expr":"IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))","value":"$CASH-CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$quantity","expr":"IF([Type] = 'deposit', 1, [Amount])","value":"1","origin":"input_schema"}
+{"t":"var_eval","name":"$unitprice","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount') / [Amount])","value":"10000","origin":"input_schema"}
+{"t":"var_eval","name":"$currency","expr":"IF([Type] = 'deposit', [Currency], LOOKUP([Order ID], 'currency'))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$fee","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$amount","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount'))","value":"10000","origin":"input_schema"}
+{"t":"var_eval","name":"$account","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fxRate","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$subtype","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$instrumentType","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$comment","expr":"[anycoin TX ID]","value":"00000000-0000-0000-0000-000000000002","origin":"input_schema"}
+{"t":"rule_match","rule_index":0,"when":"[Type] = 'deposit'","rows":[{"$action":"'DEPOSIT'"}]}
+{"t":"var_eval","name":"$action","expr":"'DEPOSIT'","value":"DEPOSIT","origin":"row_rules","rule_index":0,"output_row_index":0}
+{"t":"row_output","values":["2024-02-26 09:19:01","$CASH-CZK","1","DEPOSIT","10000","CZK","","10000","","","","","00000000-0000-0000-0000-000000000002"]}
+{"t":"rule_no_match","rule_index":1,"when":"[Type] = 'trade fill'"}
+{"t":"rule_no_match","rule_index":2,"when":"[Type] = 'trade payment'"}
+{"t":"rule_no_match","rule_index":3,"when":"[Type] = 'withdrawal'"}
+{"t":"rule_no_match","rule_index":4,"when":"[Type] = 'withdrawal_block'"}
+{"t":"rule_no_match","rule_index":5,"when":"[Type] = 'withdrawal_unblock'"}
+{"t":"row_end"}
+{"t":"row_start","file_row":12,"fields":["2024-12-08T22:28:46.803Z","deposit","200","CZK","","00000000-0000-0000-0000-000000000003","",""]}
+{"t":"var_eval","name":"$date","expr":"DATE_CONVERT([Date], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')","value":"2024-12-08 22:28:46","origin":"input_schema"}
+{"t":"var_eval","name":"$ticker","expr":"IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))","value":"$CASH-CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$quantity","expr":"IF([Type] = 'deposit', 1, [Amount])","value":"1","origin":"input_schema"}
+{"t":"var_eval","name":"$unitprice","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount') / [Amount])","value":"200","origin":"input_schema"}
+{"t":"var_eval","name":"$currency","expr":"IF([Type] = 'deposit', [Currency], LOOKUP([Order ID], 'currency'))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$fee","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$amount","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount'))","value":"200","origin":"input_schema"}
+{"t":"var_eval","name":"$account","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fxRate","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$subtype","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$instrumentType","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$comment","expr":"[anycoin TX ID]","value":"00000000-0000-0000-0000-000000000003","origin":"input_schema"}
+{"t":"rule_match","rule_index":0,"when":"[Type] = 'deposit'","rows":[{"$action":"'DEPOSIT'"}]}
+{"t":"var_eval","name":"$action","expr":"'DEPOSIT'","value":"DEPOSIT","origin":"row_rules","rule_index":0,"output_row_index":0}
+{"t":"row_output","values":["2024-12-08 22:28:46","$CASH-CZK","1","DEPOSIT","200","CZK","","200","","","","","00000000-0000-0000-0000-000000000003"]}
+{"t":"rule_no_match","rule_index":1,"when":"[Type] = 'trade fill'"}
+{"t":"rule_no_match","rule_index":2,"when":"[Type] = 'trade payment'"}
+{"t":"rule_no_match","rule_index":3,"when":"[Type] = 'withdrawal'"}
+{"t":"rule_no_match","rule_index":4,"when":"[Type] = 'withdrawal_block'"}
+{"t":"rule_no_match","rule_index":5,"when":"[Type] = 'withdrawal_unblock'"}
+{"t":"row_end"}
+{"t":"row_start","file_row":13,"fields":["2025-04-12T03:54:52.478Z","withdrawal_block","-0.00402601","BTC","","00000000-0000-0000-0000-000000000008","",""]}
+{"t":"var_eval","name":"$date","expr":"DATE_CONVERT([Date], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')","value":"2025-04-12 03:54:52","origin":"input_schema"}
+{"t":"var_eval","name":"$ticker","expr":"IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))","value":"BTC-EUR","origin":"input_schema"}
+{"t":"var_eval","name":"$quantity","expr":"IF([Type] = 'deposit', 1, [Amount])","value":"-0.00402601","origin":"input_schema"}
+{"t":"var_eval","name":"$unitprice","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount') / [Amount])","value":"0","origin":"input_schema"}
+{"t":"var_eval","name":"$currency","expr":"IF([Type] = 'deposit', [Currency], LOOKUP([Order ID], 'currency'))","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fee","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$amount","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount'))","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$account","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fxRate","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$subtype","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$instrumentType","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$comment","expr":"[anycoin TX ID]","value":"00000000-0000-0000-0000-000000000008","origin":"input_schema"}
+{"t":"rule_no_match","rule_index":0,"when":"[Type] = 'deposit'"}
+{"t":"rule_no_match","rule_index":1,"when":"[Type] = 'trade fill'"}
+{"t":"rule_no_match","rule_index":2,"when":"[Type] = 'trade payment'"}
+{"t":"rule_no_match","rule_index":3,"when":"[Type] = 'withdrawal'"}
+{"t":"rule_match","rule_index":4,"when":"[Type] = 'withdrawal_block'","rows":[]}
+{"t":"rule_no_match","rule_index":5,"when":"[Type] = 'withdrawal_unblock'"}
+{"t":"row_end"}
+{"t":"row_start","file_row":14,"fields":["2025-04-12T07:38:09.971Z","withdrawal_unblock","0.00402601","BTC","","00000000-0000-0000-0000-000000000009","",""]}
+{"t":"var_eval","name":"$date","expr":"DATE_CONVERT([Date], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')","value":"2025-04-12 07:38:09","origin":"input_schema"}
+{"t":"var_eval","name":"$ticker","expr":"IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))","value":"BTC-EUR","origin":"input_schema"}
+{"t":"var_eval","name":"$quantity","expr":"IF([Type] = 'deposit', 1, [Amount])","value":"0.00402601","origin":"input_schema"}
+{"t":"var_eval","name":"$unitprice","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount') / [Amount])","value":"0","origin":"input_schema"}
+{"t":"var_eval","name":"$currency","expr":"IF([Type] = 'deposit', [Currency], LOOKUP([Order ID], 'currency'))","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fee","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$amount","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount'))","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$account","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fxRate","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$subtype","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$instrumentType","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$comment","expr":"[anycoin TX ID]","value":"00000000-0000-0000-0000-000000000009","origin":"input_schema"}
+{"t":"rule_no_match","rule_index":0,"when":"[Type] = 'deposit'"}
+{"t":"rule_no_match","rule_index":1,"when":"[Type] = 'trade fill'"}
+{"t":"rule_no_match","rule_index":2,"when":"[Type] = 'trade payment'"}
+{"t":"rule_no_match","rule_index":3,"when":"[Type] = 'withdrawal'"}
+{"t":"rule_no_match","rule_index":4,"when":"[Type] = 'withdrawal_block'"}
+{"t":"rule_match","rule_index":5,"when":"[Type] = 'withdrawal_unblock'","rows":[]}
+{"t":"row_end"}
+{"t":"row_start","file_row":15,"fields":["2025-04-12T07:38:09.986Z","withdrawal","-0.00402601","BTC","","00000000-0000-0000-0000-000000000010","",""]}
+{"t":"var_eval","name":"$date","expr":"DATE_CONVERT([Date], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')","value":"2025-04-12 07:38:09","origin":"input_schema"}
+{"t":"var_eval","name":"$ticker","expr":"IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))","value":"BTC-EUR","origin":"input_schema"}
+{"t":"var_eval","name":"$quantity","expr":"IF([Type] = 'deposit', 1, [Amount])","value":"-0.00402601","origin":"input_schema"}
+{"t":"var_eval","name":"$unitprice","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount') / [Amount])","value":"0","origin":"input_schema"}
+{"t":"var_eval","name":"$currency","expr":"IF([Type] = 'deposit', [Currency], LOOKUP([Order ID], 'currency'))","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fee","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$amount","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount'))","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$account","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fxRate","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$subtype","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$instrumentType","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$comment","expr":"[anycoin TX ID]","value":"00000000-0000-0000-0000-000000000010","origin":"input_schema"}
+{"t":"rule_no_match","rule_index":0,"when":"[Type] = 'deposit'"}
+{"t":"rule_no_match","rule_index":1,"when":"[Type] = 'trade fill'"}
+{"t":"rule_no_match","rule_index":2,"when":"[Type] = 'trade payment'"}
+{"t":"rule_match","rule_index":3,"when":"[Type] = 'withdrawal'","rows":[]}
+{"t":"rule_no_match","rule_index":4,"when":"[Type] = 'withdrawal_block'"}
+{"t":"rule_no_match","rule_index":5,"when":"[Type] = 'withdrawal_unblock'"}
+{"t":"row_end"}
+{"t":"row_start","file_row":16,"fields":["2025-04-12T09:38:27.309Z","withdrawal_block","-0.1","BTC","","00000000-0000-0000-0000-000000000011","",""]}
+{"t":"var_eval","name":"$date","expr":"DATE_CONVERT([Date], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')","value":"2025-04-12 09:38:27","origin":"input_schema"}
+{"t":"var_eval","name":"$ticker","expr":"IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))","value":"BTC-EUR","origin":"input_schema"}
+{"t":"var_eval","name":"$quantity","expr":"IF([Type] = 'deposit', 1, [Amount])","value":"-0.1","origin":"input_schema"}
+{"t":"var_eval","name":"$unitprice","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount') / [Amount])","value":"0","origin":"input_schema"}
+{"t":"var_eval","name":"$currency","expr":"IF([Type] = 'deposit', [Currency], LOOKUP([Order ID], 'currency'))","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fee","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$amount","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount'))","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$account","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fxRate","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$subtype","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$instrumentType","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$comment","expr":"[anycoin TX ID]","value":"00000000-0000-0000-0000-000000000011","origin":"input_schema"}
+{"t":"rule_no_match","rule_index":0,"when":"[Type] = 'deposit'"}
+{"t":"rule_no_match","rule_index":1,"when":"[Type] = 'trade fill'"}
+{"t":"rule_no_match","rule_index":2,"when":"[Type] = 'trade payment'"}
+{"t":"rule_no_match","rule_index":3,"when":"[Type] = 'withdrawal'"}
+{"t":"rule_match","rule_index":4,"when":"[Type] = 'withdrawal_block'","rows":[]}
+{"t":"rule_no_match","rule_index":5,"when":"[Type] = 'withdrawal_unblock'"}
+{"t":"row_end"}
+{"t":"row_start","file_row":17,"fields":["2025-04-12T12:21:57.128Z","withdrawal_unblock","0.1","BTC","","00000000-0000-0000-0000-000000000012","",""]}
+{"t":"var_eval","name":"$date","expr":"DATE_CONVERT([Date], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')","value":"2025-04-12 12:21:57","origin":"input_schema"}
+{"t":"var_eval","name":"$ticker","expr":"IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))","value":"BTC-EUR","origin":"input_schema"}
+{"t":"var_eval","name":"$quantity","expr":"IF([Type] = 'deposit', 1, [Amount])","value":"0.1","origin":"input_schema"}
+{"t":"var_eval","name":"$unitprice","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount') / [Amount])","value":"0","origin":"input_schema"}
+{"t":"var_eval","name":"$currency","expr":"IF([Type] = 'deposit', [Currency], LOOKUP([Order ID], 'currency'))","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fee","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$amount","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount'))","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$account","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fxRate","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$subtype","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$instrumentType","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$comment","expr":"[anycoin TX ID]","value":"00000000-0000-0000-0000-000000000012","origin":"input_schema"}
+{"t":"rule_no_match","rule_index":0,"when":"[Type] = 'deposit'"}
+{"t":"rule_no_match","rule_index":1,"when":"[Type] = 'trade fill'"}
+{"t":"rule_no_match","rule_index":2,"when":"[Type] = 'trade payment'"}
+{"t":"rule_no_match","rule_index":3,"when":"[Type] = 'withdrawal'"}
+{"t":"rule_no_match","rule_index":4,"when":"[Type] = 'withdrawal_block'"}
+{"t":"rule_match","rule_index":5,"when":"[Type] = 'withdrawal_unblock'","rows":[]}
+{"t":"row_end"}
+{"t":"row_start","file_row":18,"fields":["2025-04-12T12:21:57.144Z","withdrawal","-0.1","BTC","","00000000-0000-0000-0000-000000000013","",""]}
+{"t":"var_eval","name":"$date","expr":"DATE_CONVERT([Date], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')","value":"2025-04-12 12:21:57","origin":"input_schema"}
+{"t":"var_eval","name":"$ticker","expr":"IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))","value":"BTC-EUR","origin":"input_schema"}
+{"t":"var_eval","name":"$quantity","expr":"IF([Type] = 'deposit', 1, [Amount])","value":"-0.1","origin":"input_schema"}
+{"t":"var_eval","name":"$unitprice","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount') / [Amount])","value":"0","origin":"input_schema"}
+{"t":"var_eval","name":"$currency","expr":"IF([Type] = 'deposit', [Currency], LOOKUP([Order ID], 'currency'))","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fee","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$amount","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount'))","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$account","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fxRate","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$subtype","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$instrumentType","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$comment","expr":"[anycoin TX ID]","value":"00000000-0000-0000-0000-000000000013","origin":"input_schema"}
+{"t":"rule_no_match","rule_index":0,"when":"[Type] = 'deposit'"}
+{"t":"rule_no_match","rule_index":1,"when":"[Type] = 'trade fill'"}
+{"t":"rule_no_match","rule_index":2,"when":"[Type] = 'trade payment'"}
+{"t":"rule_match","rule_index":3,"when":"[Type] = 'withdrawal'","rows":[]}
+{"t":"rule_no_match","rule_index":4,"when":"[Type] = 'withdrawal_block'"}
+{"t":"rule_no_match","rule_index":5,"when":"[Type] = 'withdrawal_unblock'"}
+{"t":"row_end"}
+{"t":"row_start","file_row":19,"fields":["2026-01-25T04:38:45.772Z","withdrawal_block","-0.09600399","BTC","","00000000-0000-0000-0000-000000000014","","00000000-0000-0000-0000-000000000015"]}
+{"t":"var_eval","name":"$date","expr":"DATE_CONVERT([Date], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')","value":"2026-01-25 04:38:45","origin":"input_schema"}
+{"t":"var_eval","name":"$ticker","expr":"IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))","value":"BTC-EUR","origin":"input_schema"}
+{"t":"var_eval","name":"$quantity","expr":"IF([Type] = 'deposit', 1, [Amount])","value":"-0.09600399","origin":"input_schema"}
+{"t":"var_eval","name":"$unitprice","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount') / [Amount])","value":"0","origin":"input_schema"}
+{"t":"var_eval","name":"$currency","expr":"IF([Type] = 'deposit', [Currency], LOOKUP([Order ID], 'currency'))","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fee","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$amount","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount'))","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$account","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fxRate","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$subtype","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$instrumentType","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$comment","expr":"[anycoin TX ID]","value":"00000000-0000-0000-0000-000000000014","origin":"input_schema"}
+{"t":"rule_no_match","rule_index":0,"when":"[Type] = 'deposit'"}
+{"t":"rule_no_match","rule_index":1,"when":"[Type] = 'trade fill'"}
+{"t":"rule_no_match","rule_index":2,"when":"[Type] = 'trade payment'"}
+{"t":"rule_no_match","rule_index":3,"when":"[Type] = 'withdrawal'"}
+{"t":"rule_match","rule_index":4,"when":"[Type] = 'withdrawal_block'","rows":[]}
+{"t":"rule_no_match","rule_index":5,"when":"[Type] = 'withdrawal_unblock'"}
+{"t":"row_end"}
+{"t":"row_start","file_row":20,"fields":["2026-01-25T09:26:44.134Z","withdrawal_unblock","0.09600399","BTC","","00000000-0000-0000-0000-000000000016","","00000000-0000-0000-0000-000000000015"]}
+{"t":"var_eval","name":"$date","expr":"DATE_CONVERT([Date], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')","value":"2026-01-25 09:26:44","origin":"input_schema"}
+{"t":"var_eval","name":"$ticker","expr":"IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))","value":"BTC-EUR","origin":"input_schema"}
+{"t":"var_eval","name":"$quantity","expr":"IF([Type] = 'deposit', 1, [Amount])","value":"0.09600399","origin":"input_schema"}
+{"t":"var_eval","name":"$unitprice","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount') / [Amount])","value":"0","origin":"input_schema"}
+{"t":"var_eval","name":"$currency","expr":"IF([Type] = 'deposit', [Currency], LOOKUP([Order ID], 'currency'))","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fee","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$amount","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount'))","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$account","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fxRate","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$subtype","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$instrumentType","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$comment","expr":"[anycoin TX ID]","value":"00000000-0000-0000-0000-000000000016","origin":"input_schema"}
+{"t":"rule_no_match","rule_index":0,"when":"[Type] = 'deposit'"}
+{"t":"rule_no_match","rule_index":1,"when":"[Type] = 'trade fill'"}
+{"t":"rule_no_match","rule_index":2,"when":"[Type] = 'trade payment'"}
+{"t":"rule_no_match","rule_index":3,"when":"[Type] = 'withdrawal'"}
+{"t":"rule_no_match","rule_index":4,"when":"[Type] = 'withdrawal_block'"}
+{"t":"rule_match","rule_index":5,"when":"[Type] = 'withdrawal_unblock'","rows":[]}
+{"t":"row_end"}
+{"t":"row_start","file_row":21,"fields":["2026-01-25T09:26:44.148Z","withdrawal","-0.09600399","BTC","","00000000-0000-0000-0000-000000000017","","00000000-0000-0000-0000-000000000015"]}
+{"t":"var_eval","name":"$date","expr":"DATE_CONVERT([Date], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')","value":"2026-01-25 09:26:44","origin":"input_schema"}
+{"t":"var_eval","name":"$ticker","expr":"IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))","value":"BTC-EUR","origin":"input_schema"}
+{"t":"var_eval","name":"$quantity","expr":"IF([Type] = 'deposit', 1, [Amount])","value":"-0.09600399","origin":"input_schema"}
+{"t":"var_eval","name":"$unitprice","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount') / [Amount])","value":"0","origin":"input_schema"}
+{"t":"var_eval","name":"$currency","expr":"IF([Type] = 'deposit', [Currency], LOOKUP([Order ID], 'currency'))","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fee","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$amount","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount'))","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$account","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fxRate","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$subtype","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$instrumentType","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$comment","expr":"[anycoin TX ID]","value":"00000000-0000-0000-0000-000000000017","origin":"input_schema"}
+{"t":"rule_no_match","rule_index":0,"when":"[Type] = 'deposit'"}
+{"t":"rule_no_match","rule_index":1,"when":"[Type] = 'trade fill'"}
+{"t":"rule_no_match","rule_index":2,"when":"[Type] = 'trade payment'"}
+{"t":"rule_match","rule_index":3,"when":"[Type] = 'withdrawal'","rows":[]}
+{"t":"rule_no_match","rule_index":4,"when":"[Type] = 'withdrawal_block'"}
+{"t":"rule_no_match","rule_index":5,"when":"[Type] = 'withdrawal_unblock'"}
+{"t":"row_end"}
+{"t":"row_start","file_row":22,"fields":["2024-08-07T20:08:05.215Z","trade payment","-10001","CZK","1668007","00000000-0000-0000-0000-000000000018","",""]}
+{"t":"var_eval","name":"$date","expr":"DATE_CONVERT([Date], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')","value":"2024-08-07 20:08:05","origin":"input_schema"}
+{"t":"var_eval","name":"$ticker","expr":"IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$quantity","expr":"IF([Type] = 'deposit', 1, [Amount])","value":"-10001","origin":"input_schema"}
+{"t":"var_eval","name":"$unitprice","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount') / [Amount])","value":"-1","origin":"input_schema"}
+{"t":"var_eval","name":"$currency","expr":"IF([Type] = 'deposit', [Currency], LOOKUP([Order ID], 'currency'))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$fee","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$amount","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount'))","value":"10001","origin":"input_schema"}
+{"t":"var_eval","name":"$account","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fxRate","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$subtype","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$instrumentType","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$comment","expr":"[anycoin TX ID]","value":"00000000-0000-0000-0000-000000000018","origin":"input_schema"}
+{"t":"rule_no_match","rule_index":0,"when":"[Type] = 'deposit'"}
+{"t":"rule_no_match","rule_index":1,"when":"[Type] = 'trade fill'"}
+{"t":"rule_match","rule_index":2,"when":"[Type] = 'trade payment'","rows":[]}
+{"t":"rule_no_match","rule_index":3,"when":"[Type] = 'withdrawal'"}
+{"t":"rule_no_match","rule_index":4,"when":"[Type] = 'withdrawal_block'"}
+{"t":"rule_no_match","rule_index":5,"when":"[Type] = 'withdrawal_unblock'"}
+{"t":"row_end"}
+{"t":"row_start","file_row":23,"fields":["2024-08-07T20:08:10.590Z","trade fill","0.00774711","BTC","1668007","00000000-0000-0000-0000-000000000019","",""]}
+{"t":"var_eval","name":"$date","expr":"DATE_CONVERT([Date], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')","value":"2024-08-07 20:08:10","origin":"input_schema"}
+{"t":"var_eval","name":"$ticker","expr":"IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))","value":"BTC-EUR","origin":"input_schema"}
+{"t":"var_eval","name":"$quantity","expr":"IF([Type] = 'deposit', 1, [Amount])","value":"0.00774711","origin":"input_schema"}
+{"t":"var_eval","name":"$unitprice","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount') / [Amount])","value":"1290933.00598546","origin":"input_schema"}
+{"t":"var_eval","name":"$currency","expr":"IF([Type] = 'deposit', [Currency], LOOKUP([Order ID], 'currency'))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$fee","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$amount","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount'))","value":"10001","origin":"input_schema"}
+{"t":"var_eval","name":"$account","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fxRate","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$subtype","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$instrumentType","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$comment","expr":"[anycoin TX ID]","value":"00000000-0000-0000-0000-000000000019","origin":"input_schema"}
+{"t":"rule_no_match","rule_index":0,"when":"[Type] = 'deposit'"}
+{"t":"rule_match","rule_index":1,"when":"[Type] = 'trade fill'","rows":[{"$action":"'BUY'"}]}
+{"t":"var_eval","name":"$action","expr":"'BUY'","value":"BUY","origin":"row_rules","rule_index":1,"output_row_index":0}
+{"t":"row_output","values":["2024-08-07 20:08:10","BTC-EUR","0.00774711","BUY","1290933.00598546","CZK","","10001","","","","","00000000-0000-0000-0000-000000000019"]}
+{"t":"rule_no_match","rule_index":2,"when":"[Type] = 'trade payment'"}
+{"t":"rule_no_match","rule_index":3,"when":"[Type] = 'withdrawal'"}
+{"t":"rule_no_match","rule_index":4,"when":"[Type] = 'withdrawal_block'"}
+{"t":"rule_no_match","rule_index":5,"when":"[Type] = 'withdrawal_unblock'"}
+{"t":"row_end"}
+{"t":"row_start","file_row":24,"fields":["2024-12-08T22:28:50.850Z","trade payment","-200","CZK","1947694","00000000-0000-0000-0000-000000000020","",""]}
+{"t":"var_eval","name":"$date","expr":"DATE_CONVERT([Date], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')","value":"2024-12-08 22:28:50","origin":"input_schema"}
+{"t":"var_eval","name":"$ticker","expr":"IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$quantity","expr":"IF([Type] = 'deposit', 1, [Amount])","value":"-200","origin":"input_schema"}
+{"t":"var_eval","name":"$unitprice","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount') / [Amount])","value":"-1","origin":"input_schema"}
+{"t":"var_eval","name":"$currency","expr":"IF([Type] = 'deposit', [Currency], LOOKUP([Order ID], 'currency'))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$fee","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$amount","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount'))","value":"200","origin":"input_schema"}
+{"t":"var_eval","name":"$account","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fxRate","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$subtype","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$instrumentType","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$comment","expr":"[anycoin TX ID]","value":"00000000-0000-0000-0000-000000000020","origin":"input_schema"}
+{"t":"rule_no_match","rule_index":0,"when":"[Type] = 'deposit'"}
+{"t":"rule_no_match","rule_index":1,"when":"[Type] = 'trade fill'"}
+{"t":"rule_match","rule_index":2,"when":"[Type] = 'trade payment'","rows":[]}
+{"t":"rule_no_match","rule_index":3,"when":"[Type] = 'withdrawal'"}
+{"t":"rule_no_match","rule_index":4,"when":"[Type] = 'withdrawal_block'"}
+{"t":"rule_no_match","rule_index":5,"when":"[Type] = 'withdrawal_unblock'"}
+{"t":"row_end"}
+{"t":"row_start","file_row":25,"fields":["2024-12-08T22:28:56.178Z","trade fill","0.00008276","BTC","1947694","00000000-0000-0000-0000-000000000021","",""]}
+{"t":"var_eval","name":"$date","expr":"DATE_CONVERT([Date], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')","value":"2024-12-08 22:28:56","origin":"input_schema"}
+{"t":"var_eval","name":"$ticker","expr":"IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))","value":"BTC-EUR","origin":"input_schema"}
+{"t":"var_eval","name":"$quantity","expr":"IF([Type] = 'deposit', 1, [Amount])","value":"0.00008276","origin":"input_schema"}
+{"t":"var_eval","name":"$unitprice","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount') / [Amount])","value":"2416626.38956017","origin":"input_schema"}
+{"t":"var_eval","name":"$currency","expr":"IF([Type] = 'deposit', [Currency], LOOKUP([Order ID], 'currency'))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$fee","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$amount","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount'))","value":"200","origin":"input_schema"}
+{"t":"var_eval","name":"$account","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fxRate","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$subtype","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$instrumentType","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$comment","expr":"[anycoin TX ID]","value":"00000000-0000-0000-0000-000000000021","origin":"input_schema"}
+{"t":"rule_no_match","rule_index":0,"when":"[Type] = 'deposit'"}
+{"t":"rule_match","rule_index":1,"when":"[Type] = 'trade fill'","rows":[{"$action":"'BUY'"}]}
+{"t":"var_eval","name":"$action","expr":"'BUY'","value":"BUY","origin":"row_rules","rule_index":1,"output_row_index":0}
+{"t":"row_output","values":["2024-12-08 22:28:56","BTC-EUR","0.00008276","BUY","2416626.38956017","CZK","","200","","","","","00000000-0000-0000-0000-000000000021"]}
+{"t":"rule_no_match","rule_index":2,"when":"[Type] = 'trade payment'"}
+{"t":"rule_no_match","rule_index":3,"when":"[Type] = 'withdrawal'"}
+{"t":"rule_no_match","rule_index":4,"when":"[Type] = 'withdrawal_block'"}
+{"t":"rule_no_match","rule_index":5,"when":"[Type] = 'withdrawal_unblock'"}
+{"t":"row_end"}
+{"t":"row_start","file_row":26,"fields":["2024-12-09T08:24:50.902Z","trade payment","-1000","CZK","1949459","00000000-0000-0000-0000-000000000022","",""]}
+{"t":"var_eval","name":"$date","expr":"DATE_CONVERT([Date], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')","value":"2024-12-09 08:24:50","origin":"input_schema"}
+{"t":"var_eval","name":"$ticker","expr":"IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$quantity","expr":"IF([Type] = 'deposit', 1, [Amount])","value":"-1000","origin":"input_schema"}
+{"t":"var_eval","name":"$unitprice","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount') / [Amount])","value":"-1","origin":"input_schema"}
+{"t":"var_eval","name":"$currency","expr":"IF([Type] = 'deposit', [Currency], LOOKUP([Order ID], 'currency'))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$fee","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$amount","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount'))","value":"1000","origin":"input_schema"}
+{"t":"var_eval","name":"$account","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fxRate","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$subtype","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$instrumentType","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$comment","expr":"[anycoin TX ID]","value":"00000000-0000-0000-0000-000000000022","origin":"input_schema"}
+{"t":"rule_no_match","rule_index":0,"when":"[Type] = 'deposit'"}
+{"t":"rule_no_match","rule_index":1,"when":"[Type] = 'trade fill'"}
+{"t":"rule_match","rule_index":2,"when":"[Type] = 'trade payment'","rows":[]}
+{"t":"rule_no_match","rule_index":3,"when":"[Type] = 'withdrawal'"}
+{"t":"rule_no_match","rule_index":4,"when":"[Type] = 'withdrawal_block'"}
+{"t":"rule_no_match","rule_index":5,"when":"[Type] = 'withdrawal_unblock'"}
+{"t":"row_end"}
+{"t":"row_start","file_row":27,"fields":["2024-12-09T08:24:57.081Z","trade fill","0.00041498","BTC","1949459","00000000-0000-0000-0000-000000000023","",""]}
+{"t":"var_eval","name":"$date","expr":"DATE_CONVERT([Date], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')","value":"2024-12-09 08:24:57","origin":"input_schema"}
+{"t":"var_eval","name":"$ticker","expr":"IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))","value":"BTC-EUR","origin":"input_schema"}
+{"t":"var_eval","name":"$quantity","expr":"IF([Type] = 'deposit', 1, [Amount])","value":"0.00041498","origin":"input_schema"}
+{"t":"var_eval","name":"$unitprice","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount') / [Amount])","value":"2409754.68697287","origin":"input_schema"}
+{"t":"var_eval","name":"$currency","expr":"IF([Type] = 'deposit', [Currency], LOOKUP([Order ID], 'currency'))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$fee","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$amount","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount'))","value":"1000","origin":"input_schema"}
+{"t":"var_eval","name":"$account","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fxRate","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$subtype","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$instrumentType","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$comment","expr":"[anycoin TX ID]","value":"00000000-0000-0000-0000-000000000023","origin":"input_schema"}
+{"t":"rule_no_match","rule_index":0,"when":"[Type] = 'deposit'"}
+{"t":"rule_match","rule_index":1,"when":"[Type] = 'trade fill'","rows":[{"$action":"'BUY'"}]}
+{"t":"var_eval","name":"$action","expr":"'BUY'","value":"BUY","origin":"row_rules","rule_index":1,"output_row_index":0}
+{"t":"row_output","values":["2024-12-09 08:24:57","BTC-EUR","0.00041498","BUY","2409754.68697287","CZK","","1000","","","","","00000000-0000-0000-0000-000000000023"]}
+{"t":"rule_no_match","rule_index":2,"when":"[Type] = 'trade payment'"}
+{"t":"rule_no_match","rule_index":3,"when":"[Type] = 'withdrawal'"}
+{"t":"rule_no_match","rule_index":4,"when":"[Type] = 'withdrawal_block'"}
+{"t":"rule_no_match","rule_index":5,"when":"[Type] = 'withdrawal_unblock'"}
+{"t":"row_end"}
+{"t":"row_start","file_row":28,"fields":["2024-12-16T08:17:20.779Z","trade payment","-2500","CZK","1973332","00000000-0000-0000-0000-000000000024","",""]}
+{"t":"var_eval","name":"$date","expr":"DATE_CONVERT([Date], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')","value":"2024-12-16 08:17:20","origin":"input_schema"}
+{"t":"var_eval","name":"$ticker","expr":"IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$quantity","expr":"IF([Type] = 'deposit', 1, [Amount])","value":"-2500","origin":"input_schema"}
+{"t":"var_eval","name":"$unitprice","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount') / [Amount])","value":"-1","origin":"input_schema"}
+{"t":"var_eval","name":"$currency","expr":"IF([Type] = 'deposit', [Currency], LOOKUP([Order ID], 'currency'))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$fee","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$amount","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount'))","value":"2500","origin":"input_schema"}
+{"t":"var_eval","name":"$account","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fxRate","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$subtype","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$instrumentType","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$comment","expr":"[anycoin TX ID]","value":"00000000-0000-0000-0000-000000000024","origin":"input_schema"}
+{"t":"rule_no_match","rule_index":0,"when":"[Type] = 'deposit'"}
+{"t":"rule_no_match","rule_index":1,"when":"[Type] = 'trade fill'"}
+{"t":"rule_match","rule_index":2,"when":"[Type] = 'trade payment'","rows":[]}
+{"t":"rule_no_match","rule_index":3,"when":"[Type] = 'withdrawal'"}
+{"t":"rule_no_match","rule_index":4,"when":"[Type] = 'withdrawal_block'"}
+{"t":"rule_no_match","rule_index":5,"when":"[Type] = 'withdrawal_unblock'"}
+{"t":"row_end"}
+{"t":"row_start","file_row":29,"fields":["2024-12-16T08:17:26.143Z","trade fill","0.00098475","BTC","1973332","00000000-0000-0000-0000-000000000025","",""]}
+{"t":"var_eval","name":"$date","expr":"DATE_CONVERT([Date], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')","value":"2024-12-16 08:17:26","origin":"input_schema"}
+{"t":"var_eval","name":"$ticker","expr":"IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))","value":"BTC-EUR","origin":"input_schema"}
+{"t":"var_eval","name":"$quantity","expr":"IF([Type] = 'deposit', 1, [Amount])","value":"0.00098475","origin":"input_schema"}
+{"t":"var_eval","name":"$unitprice","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount') / [Amount])","value":"2538715.41000254","origin":"input_schema"}
+{"t":"var_eval","name":"$currency","expr":"IF([Type] = 'deposit', [Currency], LOOKUP([Order ID], 'currency'))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$fee","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$amount","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount'))","value":"2500","origin":"input_schema"}
+{"t":"var_eval","name":"$account","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fxRate","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$subtype","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$instrumentType","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$comment","expr":"[anycoin TX ID]","value":"00000000-0000-0000-0000-000000000025","origin":"input_schema"}
+{"t":"rule_no_match","rule_index":0,"when":"[Type] = 'deposit'"}
+{"t":"rule_match","rule_index":1,"when":"[Type] = 'trade fill'","rows":[{"$action":"'BUY'"}]}
+{"t":"var_eval","name":"$action","expr":"'BUY'","value":"BUY","origin":"row_rules","rule_index":1,"output_row_index":0}
+{"t":"row_output","values":["2024-12-16 08:17:26","BTC-EUR","0.00098475","BUY","2538715.41000254","CZK","","2500","","","","","00000000-0000-0000-0000-000000000025"]}
+{"t":"rule_no_match","rule_index":2,"when":"[Type] = 'trade payment'"}
+{"t":"rule_no_match","rule_index":3,"when":"[Type] = 'withdrawal'"}
+{"t":"rule_no_match","rule_index":4,"when":"[Type] = 'withdrawal_block'"}
+{"t":"rule_no_match","rule_index":5,"when":"[Type] = 'withdrawal_unblock'"}
+{"t":"row_end"}
+{"t":"row_start","file_row":30,"fields":["2024-12-23T08:23:25.032Z","trade payment","-2500","CZK","2001364","00000000-0000-0000-0000-000000000026","",""]}
+{"t":"var_eval","name":"$date","expr":"DATE_CONVERT([Date], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')","value":"2024-12-23 08:23:25","origin":"input_schema"}
+{"t":"var_eval","name":"$ticker","expr":"IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$quantity","expr":"IF([Type] = 'deposit', 1, [Amount])","value":"-2500","origin":"input_schema"}
+{"t":"var_eval","name":"$unitprice","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount') / [Amount])","value":"-1","origin":"input_schema"}
+{"t":"var_eval","name":"$currency","expr":"IF([Type] = 'deposit', [Currency], LOOKUP([Order ID], 'currency'))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$fee","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$amount","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount'))","value":"2500","origin":"input_schema"}
+{"t":"var_eval","name":"$account","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fxRate","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$subtype","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$instrumentType","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$comment","expr":"[anycoin TX ID]","value":"00000000-0000-0000-0000-000000000026","origin":"input_schema"}
+{"t":"rule_no_match","rule_index":0,"when":"[Type] = 'deposit'"}
+{"t":"rule_no_match","rule_index":1,"when":"[Type] = 'trade fill'"}
+{"t":"rule_match","rule_index":2,"when":"[Type] = 'trade payment'","rows":[]}
+{"t":"rule_no_match","rule_index":3,"when":"[Type] = 'withdrawal'"}
+{"t":"rule_no_match","rule_index":4,"when":"[Type] = 'withdrawal_block'"}
+{"t":"rule_no_match","rule_index":5,"when":"[Type] = 'withdrawal_unblock'"}
+{"t":"row_end"}
+{"t":"row_start","file_row":31,"fields":["2024-12-23T08:23:29.757Z","trade fill","0.00106903","BTC","2001364","00000000-0000-0000-0000-000000000027","",""]}
+{"t":"var_eval","name":"$date","expr":"DATE_CONVERT([Date], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')","value":"2024-12-23 08:23:29","origin":"input_schema"}
+{"t":"var_eval","name":"$ticker","expr":"IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))","value":"BTC-EUR","origin":"input_schema"}
+{"t":"var_eval","name":"$quantity","expr":"IF([Type] = 'deposit', 1, [Amount])","value":"0.00106903","origin":"input_schema"}
+{"t":"var_eval","name":"$unitprice","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount') / [Amount])","value":"2338568.60892585","origin":"input_schema"}
+{"t":"var_eval","name":"$currency","expr":"IF([Type] = 'deposit', [Currency], LOOKUP([Order ID], 'currency'))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$fee","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$amount","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount'))","value":"2500","origin":"input_schema"}
+{"t":"var_eval","name":"$account","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fxRate","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$subtype","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$instrumentType","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$comment","expr":"[anycoin TX ID]","value":"00000000-0000-0000-0000-000000000027","origin":"input_schema"}
+{"t":"rule_no_match","rule_index":0,"when":"[Type] = 'deposit'"}
+{"t":"rule_match","rule_index":1,"when":"[Type] = 'trade fill'","rows":[{"$action":"'BUY'"}]}
+{"t":"var_eval","name":"$action","expr":"'BUY'","value":"BUY","origin":"row_rules","rule_index":1,"output_row_index":0}
+{"t":"row_output","values":["2024-12-23 08:23:29","BTC-EUR","0.00106903","BUY","2338568.60892585","CZK","","2500","","","","","00000000-0000-0000-0000-000000000027"]}
+{"t":"rule_no_match","rule_index":2,"when":"[Type] = 'trade payment'"}
+{"t":"rule_no_match","rule_index":3,"when":"[Type] = 'withdrawal'"}
+{"t":"rule_no_match","rule_index":4,"when":"[Type] = 'withdrawal_block'"}
+{"t":"rule_no_match","rule_index":5,"when":"[Type] = 'withdrawal_unblock'"}
+{"t":"row_end"}
+{"t":"row_start","file_row":32,"fields":["2024-12-30T08:22:03.214Z","trade payment","-2500","CZK","2019056","00000000-0000-0000-0000-000000000028","",""]}
+{"t":"var_eval","name":"$date","expr":"DATE_CONVERT([Date], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')","value":"2024-12-30 08:22:03","origin":"input_schema"}
+{"t":"var_eval","name":"$ticker","expr":"IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$quantity","expr":"IF([Type] = 'deposit', 1, [Amount])","value":"-2500","origin":"input_schema"}
+{"t":"var_eval","name":"$unitprice","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount') / [Amount])","value":"-1","origin":"input_schema"}
+{"t":"var_eval","name":"$currency","expr":"IF([Type] = 'deposit', [Currency], LOOKUP([Order ID], 'currency'))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$fee","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$amount","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount'))","value":"2500","origin":"input_schema"}
+{"t":"var_eval","name":"$account","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fxRate","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$subtype","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$instrumentType","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$comment","expr":"[anycoin TX ID]","value":"00000000-0000-0000-0000-000000000028","origin":"input_schema"}
+{"t":"rule_no_match","rule_index":0,"when":"[Type] = 'deposit'"}
+{"t":"rule_no_match","rule_index":1,"when":"[Type] = 'trade fill'"}
+{"t":"rule_match","rule_index":2,"when":"[Type] = 'trade payment'","rows":[]}
+{"t":"rule_no_match","rule_index":3,"when":"[Type] = 'withdrawal'"}
+{"t":"rule_no_match","rule_index":4,"when":"[Type] = 'withdrawal_block'"}
+{"t":"rule_no_match","rule_index":5,"when":"[Type] = 'withdrawal_unblock'"}
+{"t":"row_end"}
+{"t":"row_start","file_row":33,"fields":["2024-12-30T08:22:08.224Z","trade fill","0.00108466","BTC","2019056","00000000-0000-0000-0000-000000000029","",""]}
+{"t":"var_eval","name":"$date","expr":"DATE_CONVERT([Date], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')","value":"2024-12-30 08:22:08","origin":"input_schema"}
+{"t":"var_eval","name":"$ticker","expr":"IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))","value":"BTC-EUR","origin":"input_schema"}
+{"t":"var_eval","name":"$quantity","expr":"IF([Type] = 'deposit', 1, [Amount])","value":"0.00108466","origin":"input_schema"}
+{"t":"var_eval","name":"$unitprice","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount') / [Amount])","value":"2304869.72876293","origin":"input_schema"}
+{"t":"var_eval","name":"$currency","expr":"IF([Type] = 'deposit', [Currency], LOOKUP([Order ID], 'currency'))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$fee","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$amount","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount'))","value":"2500","origin":"input_schema"}
+{"t":"var_eval","name":"$account","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fxRate","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$subtype","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$instrumentType","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$comment","expr":"[anycoin TX ID]","value":"00000000-0000-0000-0000-000000000029","origin":"input_schema"}
+{"t":"rule_no_match","rule_index":0,"when":"[Type] = 'deposit'"}
+{"t":"rule_match","rule_index":1,"when":"[Type] = 'trade fill'","rows":[{"$action":"'BUY'"}]}
+{"t":"var_eval","name":"$action","expr":"'BUY'","value":"BUY","origin":"row_rules","rule_index":1,"output_row_index":0}
+{"t":"row_output","values":["2024-12-30 08:22:08","BTC-EUR","0.00108466","BUY","2304869.72876293","CZK","","2500","","","","","00000000-0000-0000-0000-000000000029"]}
+{"t":"rule_no_match","rule_index":2,"when":"[Type] = 'trade payment'"}
+{"t":"rule_no_match","rule_index":3,"when":"[Type] = 'withdrawal'"}
+{"t":"rule_no_match","rule_index":4,"when":"[Type] = 'withdrawal_block'"}
+{"t":"rule_no_match","rule_index":5,"when":"[Type] = 'withdrawal_unblock'"}
+{"t":"row_end"}
+{"t":"row_start","file_row":34,"fields":["2025-01-06T08:23:28.190Z","trade payment","-2500","CZK","2037502","00000000-0000-0000-0000-000000000030","",""]}
+{"t":"var_eval","name":"$date","expr":"DATE_CONVERT([Date], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')","value":"2025-01-06 08:23:28","origin":"input_schema"}
+{"t":"var_eval","name":"$ticker","expr":"IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$quantity","expr":"IF([Type] = 'deposit', 1, [Amount])","value":"-2500","origin":"input_schema"}
+{"t":"var_eval","name":"$unitprice","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount') / [Amount])","value":"-1","origin":"input_schema"}
+{"t":"var_eval","name":"$currency","expr":"IF([Type] = 'deposit', [Currency], LOOKUP([Order ID], 'currency'))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$fee","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$amount","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount'))","value":"2500","origin":"input_schema"}
+{"t":"var_eval","name":"$account","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fxRate","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$subtype","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$instrumentType","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$comment","expr":"[anycoin TX ID]","value":"00000000-0000-0000-0000-000000000030","origin":"input_schema"}
+{"t":"rule_no_match","rule_index":0,"when":"[Type] = 'deposit'"}
+{"t":"rule_no_match","rule_index":1,"when":"[Type] = 'trade fill'"}
+{"t":"rule_match","rule_index":2,"when":"[Type] = 'trade payment'","rows":[]}
+{"t":"rule_no_match","rule_index":3,"when":"[Type] = 'withdrawal'"}
+{"t":"rule_no_match","rule_index":4,"when":"[Type] = 'withdrawal_block'"}
+{"t":"rule_no_match","rule_index":5,"when":"[Type] = 'withdrawal_unblock'"}
+{"t":"row_end"}
+{"t":"row_start","file_row":35,"fields":["2025-01-06T08:23:36.556Z","trade fill","0.00101635","BTC","2037502","00000000-0000-0000-0000-000000000031","",""]}
+{"t":"var_eval","name":"$date","expr":"DATE_CONVERT([Date], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')","value":"2025-01-06 08:23:36","origin":"input_schema"}
+{"t":"var_eval","name":"$ticker","expr":"IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))","value":"BTC-EUR","origin":"input_schema"}
+{"t":"var_eval","name":"$quantity","expr":"IF([Type] = 'deposit', 1, [Amount])","value":"0.00101635","origin":"input_schema"}
+{"t":"var_eval","name":"$unitprice","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount') / [Amount])","value":"2459782.55522212","origin":"input_schema"}
+{"t":"var_eval","name":"$currency","expr":"IF([Type] = 'deposit', [Currency], LOOKUP([Order ID], 'currency'))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$fee","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$amount","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount'))","value":"2500","origin":"input_schema"}
+{"t":"var_eval","name":"$account","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fxRate","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$subtype","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$instrumentType","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$comment","expr":"[anycoin TX ID]","value":"00000000-0000-0000-0000-000000000031","origin":"input_schema"}
+{"t":"rule_no_match","rule_index":0,"when":"[Type] = 'deposit'"}
+{"t":"rule_match","rule_index":1,"when":"[Type] = 'trade fill'","rows":[{"$action":"'BUY'"}]}
+{"t":"var_eval","name":"$action","expr":"'BUY'","value":"BUY","origin":"row_rules","rule_index":1,"output_row_index":0}
+{"t":"row_output","values":["2025-01-06 08:23:36","BTC-EUR","0.00101635","BUY","2459782.55522212","CZK","","2500","","","","","00000000-0000-0000-0000-000000000031"]}
+{"t":"rule_no_match","rule_index":2,"when":"[Type] = 'trade payment'"}
+{"t":"rule_no_match","rule_index":3,"when":"[Type] = 'withdrawal'"}
+{"t":"rule_no_match","rule_index":4,"when":"[Type] = 'withdrawal_block'"}
+{"t":"rule_no_match","rule_index":5,"when":"[Type] = 'withdrawal_unblock'"}
+{"t":"row_end"}
+{"t":"row_start","file_row":36,"fields":["2025-01-13T08:23:08.931Z","trade payment","-2500","CZK","2061399","00000000-0000-0000-0000-000000000032","",""]}
+{"t":"var_eval","name":"$date","expr":"DATE_CONVERT([Date], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')","value":"2025-01-13 08:23:08","origin":"input_schema"}
+{"t":"var_eval","name":"$ticker","expr":"IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$quantity","expr":"IF([Type] = 'deposit', 1, [Amount])","value":"-2500","origin":"input_schema"}
+{"t":"var_eval","name":"$unitprice","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount') / [Amount])","value":"-1","origin":"input_schema"}
+{"t":"var_eval","name":"$currency","expr":"IF([Type] = 'deposit', [Currency], LOOKUP([Order ID], 'currency'))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$fee","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$amount","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount'))","value":"2500","origin":"input_schema"}
+{"t":"var_eval","name":"$account","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fxRate","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$subtype","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$instrumentType","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$comment","expr":"[anycoin TX ID]","value":"00000000-0000-0000-0000-000000000032","origin":"input_schema"}
+{"t":"rule_no_match","rule_index":0,"when":"[Type] = 'deposit'"}
+{"t":"rule_no_match","rule_index":1,"when":"[Type] = 'trade fill'"}
+{"t":"rule_match","rule_index":2,"when":"[Type] = 'trade payment'","rows":[]}
+{"t":"rule_no_match","rule_index":3,"when":"[Type] = 'withdrawal'"}
+{"t":"rule_no_match","rule_index":4,"when":"[Type] = 'withdrawal_block'"}
+{"t":"rule_no_match","rule_index":5,"when":"[Type] = 'withdrawal_unblock'"}
+{"t":"row_end"}
+{"t":"row_start","file_row":37,"fields":["2025-01-13T08:23:14.744Z","trade fill","0.00107555","BTC","2061399","00000000-0000-0000-0000-000000000033","",""]}
+{"t":"var_eval","name":"$date","expr":"DATE_CONVERT([Date], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')","value":"2025-01-13 08:23:14","origin":"input_schema"}
+{"t":"var_eval","name":"$ticker","expr":"IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))","value":"BTC-EUR","origin":"input_schema"}
+{"t":"var_eval","name":"$quantity","expr":"IF([Type] = 'deposit', 1, [Amount])","value":"0.00107555","origin":"input_schema"}
+{"t":"var_eval","name":"$unitprice","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount') / [Amount])","value":"2324392.17144717","origin":"input_schema"}
+{"t":"var_eval","name":"$currency","expr":"IF([Type] = 'deposit', [Currency], LOOKUP([Order ID], 'currency'))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$fee","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$amount","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount'))","value":"2500","origin":"input_schema"}
+{"t":"var_eval","name":"$account","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fxRate","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$subtype","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$instrumentType","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$comment","expr":"[anycoin TX ID]","value":"00000000-0000-0000-0000-000000000033","origin":"input_schema"}
+{"t":"rule_no_match","rule_index":0,"when":"[Type] = 'deposit'"}
+{"t":"rule_match","rule_index":1,"when":"[Type] = 'trade fill'","rows":[{"$action":"'BUY'"}]}
+{"t":"var_eval","name":"$action","expr":"'BUY'","value":"BUY","origin":"row_rules","rule_index":1,"output_row_index":0}
+{"t":"row_output","values":["2025-01-13 08:23:14","BTC-EUR","0.00107555","BUY","2324392.17144717","CZK","","2500","","","","","00000000-0000-0000-0000-000000000033"]}
+{"t":"rule_no_match","rule_index":2,"when":"[Type] = 'trade payment'"}
+{"t":"rule_no_match","rule_index":3,"when":"[Type] = 'withdrawal'"}
+{"t":"rule_no_match","rule_index":4,"when":"[Type] = 'withdrawal_block'"}
+{"t":"rule_no_match","rule_index":5,"when":"[Type] = 'withdrawal_unblock'"}
+{"t":"row_end"}
+{"t":"row_start","file_row":38,"fields":["2025-01-15T02:47:48.228Z","trade payment","-50000","CZK","2068869","00000000-0000-0000-0000-000000000034","",""]}
+{"t":"var_eval","name":"$date","expr":"DATE_CONVERT([Date], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')","value":"2025-01-15 02:47:48","origin":"input_schema"}
+{"t":"var_eval","name":"$ticker","expr":"IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$quantity","expr":"IF([Type] = 'deposit', 1, [Amount])","value":"-50000","origin":"input_schema"}
+{"t":"var_eval","name":"$unitprice","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount') / [Amount])","value":"-1","origin":"input_schema"}
+{"t":"var_eval","name":"$currency","expr":"IF([Type] = 'deposit', [Currency], LOOKUP([Order ID], 'currency'))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$fee","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$amount","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount'))","value":"50000","origin":"input_schema"}
+{"t":"var_eval","name":"$account","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fxRate","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$subtype","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$instrumentType","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$comment","expr":"[anycoin TX ID]","value":"00000000-0000-0000-0000-000000000034","origin":"input_schema"}
+{"t":"rule_no_match","rule_index":0,"when":"[Type] = 'deposit'"}
+{"t":"rule_no_match","rule_index":1,"when":"[Type] = 'trade fill'"}
+{"t":"rule_match","rule_index":2,"when":"[Type] = 'trade payment'","rows":[]}
+{"t":"rule_no_match","rule_index":3,"when":"[Type] = 'withdrawal'"}
+{"t":"rule_no_match","rule_index":4,"when":"[Type] = 'withdrawal_block'"}
+{"t":"rule_no_match","rule_index":5,"when":"[Type] = 'withdrawal_unblock'"}
+{"t":"row_end"}
+{"t":"row_start","file_row":39,"fields":["2025-01-15T02:47:54.879Z","trade fill","0.02064412","BTC","2068869","00000000-0000-0000-0000-000000000035","",""]}
+{"t":"var_eval","name":"$date","expr":"DATE_CONVERT([Date], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')","value":"2025-01-15 02:47:54","origin":"input_schema"}
+{"t":"var_eval","name":"$ticker","expr":"IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))","value":"BTC-EUR","origin":"input_schema"}
+{"t":"var_eval","name":"$quantity","expr":"IF([Type] = 'deposit', 1, [Amount])","value":"0.02064412","origin":"input_schema"}
+{"t":"var_eval","name":"$unitprice","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount') / [Amount])","value":"2421997.15948173","origin":"input_schema"}
+{"t":"var_eval","name":"$currency","expr":"IF([Type] = 'deposit', [Currency], LOOKUP([Order ID], 'currency'))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$fee","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$amount","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount'))","value":"50000","origin":"input_schema"}
+{"t":"var_eval","name":"$account","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fxRate","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$subtype","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$instrumentType","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$comment","expr":"[anycoin TX ID]","value":"00000000-0000-0000-0000-000000000035","origin":"input_schema"}
+{"t":"rule_no_match","rule_index":0,"when":"[Type] = 'deposit'"}
+{"t":"rule_match","rule_index":1,"when":"[Type] = 'trade fill'","rows":[{"$action":"'BUY'"}]}
+{"t":"var_eval","name":"$action","expr":"'BUY'","value":"BUY","origin":"row_rules","rule_index":1,"output_row_index":0}
+{"t":"row_output","values":["2025-01-15 02:47:54","BTC-EUR","0.02064412","BUY","2421997.15948173","CZK","","50000","","","","","00000000-0000-0000-0000-000000000035"]}
+{"t":"rule_no_match","rule_index":2,"when":"[Type] = 'trade payment'"}
+{"t":"rule_no_match","rule_index":3,"when":"[Type] = 'withdrawal'"}
+{"t":"rule_no_match","rule_index":4,"when":"[Type] = 'withdrawal_block'"}
+{"t":"rule_no_match","rule_index":5,"when":"[Type] = 'withdrawal_unblock'"}
+{"t":"row_end"}
+{"t":"row_start","file_row":40,"fields":["2025-01-27T08:22:50.061Z","trade payment","-2500","CZK","2112673","00000000-0000-0000-0000-000000000036","",""]}
+{"t":"var_eval","name":"$date","expr":"DATE_CONVERT([Date], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')","value":"2025-01-27 08:22:50","origin":"input_schema"}
+{"t":"var_eval","name":"$ticker","expr":"IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$quantity","expr":"IF([Type] = 'deposit', 1, [Amount])","value":"-2500","origin":"input_schema"}
+{"t":"var_eval","name":"$unitprice","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount') / [Amount])","value":"-1","origin":"input_schema"}
+{"t":"var_eval","name":"$currency","expr":"IF([Type] = 'deposit', [Currency], LOOKUP([Order ID], 'currency'))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$fee","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$amount","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount'))","value":"2500","origin":"input_schema"}
+{"t":"var_eval","name":"$account","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fxRate","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$subtype","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$instrumentType","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$comment","expr":"[anycoin TX ID]","value":"00000000-0000-0000-0000-000000000036","origin":"input_schema"}
+{"t":"rule_no_match","rule_index":0,"when":"[Type] = 'deposit'"}
+{"t":"rule_no_match","rule_index":1,"when":"[Type] = 'trade fill'"}
+{"t":"rule_match","rule_index":2,"when":"[Type] = 'trade payment'","rows":[]}
+{"t":"rule_no_match","rule_index":3,"when":"[Type] = 'withdrawal'"}
+{"t":"rule_no_match","rule_index":4,"when":"[Type] = 'withdrawal_block'"}
+{"t":"rule_no_match","rule_index":5,"when":"[Type] = 'withdrawal_unblock'"}
+{"t":"row_end"}
+{"t":"row_start","file_row":41,"fields":["2025-01-27T08:22:55.743Z","trade fill","0.00103232","BTC","2112673","00000000-0000-0000-0000-000000000037","",""]}
+{"t":"var_eval","name":"$date","expr":"DATE_CONVERT([Date], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')","value":"2025-01-27 08:22:55","origin":"input_schema"}
+{"t":"var_eval","name":"$ticker","expr":"IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))","value":"BTC-EUR","origin":"input_schema"}
+{"t":"var_eval","name":"$quantity","expr":"IF([Type] = 'deposit', 1, [Amount])","value":"0.00103232","origin":"input_schema"}
+{"t":"var_eval","name":"$unitprice","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount') / [Amount])","value":"2421729.69621823","origin":"input_schema"}
+{"t":"var_eval","name":"$currency","expr":"IF([Type] = 'deposit', [Currency], LOOKUP([Order ID], 'currency'))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$fee","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$amount","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount'))","value":"2500","origin":"input_schema"}
+{"t":"var_eval","name":"$account","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fxRate","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$subtype","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$instrumentType","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$comment","expr":"[anycoin TX ID]","value":"00000000-0000-0000-0000-000000000037","origin":"input_schema"}
+{"t":"rule_no_match","rule_index":0,"when":"[Type] = 'deposit'"}
+{"t":"rule_match","rule_index":1,"when":"[Type] = 'trade fill'","rows":[{"$action":"'BUY'"}]}
+{"t":"var_eval","name":"$action","expr":"'BUY'","value":"BUY","origin":"row_rules","rule_index":1,"output_row_index":0}
+{"t":"row_output","values":["2025-01-27 08:22:55","BTC-EUR","0.00103232","BUY","2421729.69621823","CZK","","2500","","","","","00000000-0000-0000-0000-000000000037"]}
+{"t":"rule_no_match","rule_index":2,"when":"[Type] = 'trade payment'"}
+{"t":"rule_no_match","rule_index":3,"when":"[Type] = 'withdrawal'"}
+{"t":"rule_no_match","rule_index":4,"when":"[Type] = 'withdrawal_block'"}
+{"t":"rule_no_match","rule_index":5,"when":"[Type] = 'withdrawal_unblock'"}
+{"t":"row_end"}
+{"t":"row_start","file_row":42,"fields":["2025-02-03T08:31:49.551Z","trade payment","-2500","CZK","2138393","00000000-0000-0000-0000-000000000038","",""]}
+{"t":"var_eval","name":"$date","expr":"DATE_CONVERT([Date], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')","value":"2025-02-03 08:31:49","origin":"input_schema"}
+{"t":"var_eval","name":"$ticker","expr":"IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$quantity","expr":"IF([Type] = 'deposit', 1, [Amount])","value":"-2500","origin":"input_schema"}
+{"t":"var_eval","name":"$unitprice","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount') / [Amount])","value":"-1","origin":"input_schema"}
+{"t":"var_eval","name":"$currency","expr":"IF([Type] = 'deposit', [Currency], LOOKUP([Order ID], 'currency'))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$fee","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$amount","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount'))","value":"2500","origin":"input_schema"}
+{"t":"var_eval","name":"$account","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fxRate","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$subtype","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$instrumentType","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$comment","expr":"[anycoin TX ID]","value":"00000000-0000-0000-0000-000000000038","origin":"input_schema"}
+{"t":"rule_no_match","rule_index":0,"when":"[Type] = 'deposit'"}
+{"t":"rule_no_match","rule_index":1,"when":"[Type] = 'trade fill'"}
+{"t":"rule_match","rule_index":2,"when":"[Type] = 'trade payment'","rows":[]}
+{"t":"rule_no_match","rule_index":3,"when":"[Type] = 'withdrawal'"}
+{"t":"rule_no_match","rule_index":4,"when":"[Type] = 'withdrawal_block'"}
+{"t":"rule_no_match","rule_index":5,"when":"[Type] = 'withdrawal_unblock'"}
+{"t":"row_end"}
+{"t":"row_start","file_row":43,"fields":["2025-02-03T08:31:55.185Z","trade fill","0.00104518","BTC","2138393","00000000-0000-0000-0000-000000000039","",""]}
+{"t":"var_eval","name":"$date","expr":"DATE_CONVERT([Date], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')","value":"2025-02-03 08:31:55","origin":"input_schema"}
+{"t":"var_eval","name":"$ticker","expr":"IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))","value":"BTC-EUR","origin":"input_schema"}
+{"t":"var_eval","name":"$quantity","expr":"IF([Type] = 'deposit', 1, [Amount])","value":"0.00104518","origin":"input_schema"}
+{"t":"var_eval","name":"$unitprice","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount') / [Amount])","value":"2391932.4900974","origin":"input_schema"}
+{"t":"var_eval","name":"$currency","expr":"IF([Type] = 'deposit', [Currency], LOOKUP([Order ID], 'currency'))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$fee","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$amount","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount'))","value":"2500","origin":"input_schema"}
+{"t":"var_eval","name":"$account","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fxRate","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$subtype","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$instrumentType","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$comment","expr":"[anycoin TX ID]","value":"00000000-0000-0000-0000-000000000039","origin":"input_schema"}
+{"t":"rule_no_match","rule_index":0,"when":"[Type] = 'deposit'"}
+{"t":"rule_match","rule_index":1,"when":"[Type] = 'trade fill'","rows":[{"$action":"'BUY'"}]}
+{"t":"var_eval","name":"$action","expr":"'BUY'","value":"BUY","origin":"row_rules","rule_index":1,"output_row_index":0}
+{"t":"row_output","values":["2025-02-03 08:31:55","BTC-EUR","0.00104518","BUY","2391932.4900974","CZK","","2500","","","","","00000000-0000-0000-0000-000000000039"]}
+{"t":"rule_no_match","rule_index":2,"when":"[Type] = 'trade payment'"}
+{"t":"rule_no_match","rule_index":3,"when":"[Type] = 'withdrawal'"}
+{"t":"rule_no_match","rule_index":4,"when":"[Type] = 'withdrawal_block'"}
+{"t":"rule_no_match","rule_index":5,"when":"[Type] = 'withdrawal_unblock'"}
+{"t":"row_end"}
+{"t":"row_start","file_row":44,"fields":["2025-02-10T02:57:04.252Z","trade payment","-25000","CZK","2158654","00000000-0000-0000-0000-000000000040","",""]}
+{"t":"var_eval","name":"$date","expr":"DATE_CONVERT([Date], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')","value":"2025-02-10 02:57:04","origin":"input_schema"}
+{"t":"var_eval","name":"$ticker","expr":"IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$quantity","expr":"IF([Type] = 'deposit', 1, [Amount])","value":"-25000","origin":"input_schema"}
+{"t":"var_eval","name":"$unitprice","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount') / [Amount])","value":"-1","origin":"input_schema"}
+{"t":"var_eval","name":"$currency","expr":"IF([Type] = 'deposit', [Currency], LOOKUP([Order ID], 'currency'))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$fee","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$amount","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount'))","value":"25000","origin":"input_schema"}
+{"t":"var_eval","name":"$account","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fxRate","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$subtype","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$instrumentType","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$comment","expr":"[anycoin TX ID]","value":"00000000-0000-0000-0000-000000000040","origin":"input_schema"}
+{"t":"rule_no_match","rule_index":0,"when":"[Type] = 'deposit'"}
+{"t":"rule_no_match","rule_index":1,"when":"[Type] = 'trade fill'"}
+{"t":"rule_match","rule_index":2,"when":"[Type] = 'trade payment'","rows":[]}
+{"t":"rule_no_match","rule_index":3,"when":"[Type] = 'withdrawal'"}
+{"t":"rule_no_match","rule_index":4,"when":"[Type] = 'withdrawal_block'"}
+{"t":"rule_no_match","rule_index":5,"when":"[Type] = 'withdrawal_unblock'"}
+{"t":"row_end"}
+{"t":"row_start","file_row":45,"fields":["2025-02-10T02:57:21.681Z","trade fill","0.01052241","BTC","2158654","00000000-0000-0000-0000-000000000041","",""]}
+{"t":"var_eval","name":"$date","expr":"DATE_CONVERT([Date], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')","value":"2025-02-10 02:57:21","origin":"input_schema"}
+{"t":"var_eval","name":"$ticker","expr":"IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))","value":"BTC-EUR","origin":"input_schema"}
+{"t":"var_eval","name":"$quantity","expr":"IF([Type] = 'deposit', 1, [Amount])","value":"0.01052241","origin":"input_schema"}
+{"t":"var_eval","name":"$unitprice","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount') / [Amount])","value":"2375881.57085687","origin":"input_schema"}
+{"t":"var_eval","name":"$currency","expr":"IF([Type] = 'deposit', [Currency], LOOKUP([Order ID], 'currency'))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$fee","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$amount","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount'))","value":"25000","origin":"input_schema"}
+{"t":"var_eval","name":"$account","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fxRate","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$subtype","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$instrumentType","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$comment","expr":"[anycoin TX ID]","value":"00000000-0000-0000-0000-000000000041","origin":"input_schema"}
+{"t":"rule_no_match","rule_index":0,"when":"[Type] = 'deposit'"}
+{"t":"rule_match","rule_index":1,"when":"[Type] = 'trade fill'","rows":[{"$action":"'BUY'"}]}
+{"t":"var_eval","name":"$action","expr":"'BUY'","value":"BUY","origin":"row_rules","rule_index":1,"output_row_index":0}
+{"t":"row_output","values":["2025-02-10 02:57:21","BTC-EUR","0.01052241","BUY","2375881.57085687","CZK","","25000","","","","","00000000-0000-0000-0000-000000000041"]}
+{"t":"rule_no_match","rule_index":2,"when":"[Type] = 'trade payment'"}
+{"t":"rule_no_match","rule_index":3,"when":"[Type] = 'withdrawal'"}
+{"t":"rule_no_match","rule_index":4,"when":"[Type] = 'withdrawal_block'"}
+{"t":"rule_no_match","rule_index":5,"when":"[Type] = 'withdrawal_unblock'"}
+{"t":"row_end"}
+{"t":"row_start","file_row":46,"fields":["2025-02-10T08:26:22.212Z","trade payment","-2500","CZK","2160067","00000000-0000-0000-0000-000000000042","",""]}
+{"t":"var_eval","name":"$date","expr":"DATE_CONVERT([Date], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')","value":"2025-02-10 08:26:22","origin":"input_schema"}
+{"t":"var_eval","name":"$ticker","expr":"IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$quantity","expr":"IF([Type] = 'deposit', 1, [Amount])","value":"-2500","origin":"input_schema"}
+{"t":"var_eval","name":"$unitprice","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount') / [Amount])","value":"-1","origin":"input_schema"}
+{"t":"var_eval","name":"$currency","expr":"IF([Type] = 'deposit', [Currency], LOOKUP([Order ID], 'currency'))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$fee","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$amount","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount'))","value":"2500","origin":"input_schema"}
+{"t":"var_eval","name":"$account","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fxRate","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$subtype","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$instrumentType","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$comment","expr":"[anycoin TX ID]","value":"00000000-0000-0000-0000-000000000042","origin":"input_schema"}
+{"t":"rule_no_match","rule_index":0,"when":"[Type] = 'deposit'"}
+{"t":"rule_no_match","rule_index":1,"when":"[Type] = 'trade fill'"}
+{"t":"rule_match","rule_index":2,"when":"[Type] = 'trade payment'","rows":[]}
+{"t":"rule_no_match","rule_index":3,"when":"[Type] = 'withdrawal'"}
+{"t":"rule_no_match","rule_index":4,"when":"[Type] = 'withdrawal_block'"}
+{"t":"rule_no_match","rule_index":5,"when":"[Type] = 'withdrawal_unblock'"}
+{"t":"row_end"}
+{"t":"row_start","file_row":47,"fields":["2025-02-10T08:26:29.703Z","trade fill","0.00103356","BTC","2160067","00000000-0000-0000-0000-000000000043","",""]}
+{"t":"var_eval","name":"$date","expr":"DATE_CONVERT([Date], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')","value":"2025-02-10 08:26:29","origin":"input_schema"}
+{"t":"var_eval","name":"$ticker","expr":"IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))","value":"BTC-EUR","origin":"input_schema"}
+{"t":"var_eval","name":"$quantity","expr":"IF([Type] = 'deposit', 1, [Amount])","value":"0.00103356","origin":"input_schema"}
+{"t":"var_eval","name":"$unitprice","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount') / [Amount])","value":"2418824.25790472","origin":"input_schema"}
+{"t":"var_eval","name":"$currency","expr":"IF([Type] = 'deposit', [Currency], LOOKUP([Order ID], 'currency'))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$fee","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$amount","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount'))","value":"2500","origin":"input_schema"}
+{"t":"var_eval","name":"$account","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fxRate","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$subtype","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$instrumentType","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$comment","expr":"[anycoin TX ID]","value":"00000000-0000-0000-0000-000000000043","origin":"input_schema"}
+{"t":"rule_no_match","rule_index":0,"when":"[Type] = 'deposit'"}
+{"t":"rule_match","rule_index":1,"when":"[Type] = 'trade fill'","rows":[{"$action":"'BUY'"}]}
+{"t":"var_eval","name":"$action","expr":"'BUY'","value":"BUY","origin":"row_rules","rule_index":1,"output_row_index":0}
+{"t":"row_output","values":["2025-02-10 08:26:29","BTC-EUR","0.00103356","BUY","2418824.25790472","CZK","","2500","","","","","00000000-0000-0000-0000-000000000043"]}
+{"t":"rule_no_match","rule_index":2,"when":"[Type] = 'trade payment'"}
+{"t":"rule_no_match","rule_index":3,"when":"[Type] = 'withdrawal'"}
+{"t":"rule_no_match","rule_index":4,"when":"[Type] = 'withdrawal_block'"}
+{"t":"rule_no_match","rule_index":5,"when":"[Type] = 'withdrawal_unblock'"}
+{"t":"row_end"}
+{"t":"row_start","file_row":48,"fields":["2025-02-17T08:16:46.738Z","trade payment","-2500","CZK","2178611","00000000-0000-0000-0000-000000000044","",""]}
+{"t":"var_eval","name":"$date","expr":"DATE_CONVERT([Date], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')","value":"2025-02-17 08:16:46","origin":"input_schema"}
+{"t":"var_eval","name":"$ticker","expr":"IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$quantity","expr":"IF([Type] = 'deposit', 1, [Amount])","value":"-2500","origin":"input_schema"}
+{"t":"var_eval","name":"$unitprice","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount') / [Amount])","value":"-1","origin":"input_schema"}
+{"t":"var_eval","name":"$currency","expr":"IF([Type] = 'deposit', [Currency], LOOKUP([Order ID], 'currency'))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$fee","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$amount","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount'))","value":"2500","origin":"input_schema"}
+{"t":"var_eval","name":"$account","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fxRate","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$subtype","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$instrumentType","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$comment","expr":"[anycoin TX ID]","value":"00000000-0000-0000-0000-000000000044","origin":"input_schema"}
+{"t":"rule_no_match","rule_index":0,"when":"[Type] = 'deposit'"}
+{"t":"rule_no_match","rule_index":1,"when":"[Type] = 'trade fill'"}
+{"t":"rule_match","rule_index":2,"when":"[Type] = 'trade payment'","rows":[]}
+{"t":"rule_no_match","rule_index":3,"when":"[Type] = 'withdrawal'"}
+{"t":"rule_no_match","rule_index":4,"when":"[Type] = 'withdrawal_block'"}
+{"t":"rule_no_match","rule_index":5,"when":"[Type] = 'withdrawal_unblock'"}
+{"t":"row_end"}
+{"t":"row_start","file_row":49,"fields":["2025-02-17T08:16:53.438Z","trade fill","0.00106751","BTC","2178611","00000000-0000-0000-0000-000000000045","",""]}
+{"t":"var_eval","name":"$date","expr":"DATE_CONVERT([Date], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')","value":"2025-02-17 08:16:53","origin":"input_schema"}
+{"t":"var_eval","name":"$ticker","expr":"IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))","value":"BTC-EUR","origin":"input_schema"}
+{"t":"var_eval","name":"$quantity","expr":"IF([Type] = 'deposit', 1, [Amount])","value":"0.00106751","origin":"input_schema"}
+{"t":"var_eval","name":"$unitprice","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount') / [Amount])","value":"2341898.4365486","origin":"input_schema"}
+{"t":"var_eval","name":"$currency","expr":"IF([Type] = 'deposit', [Currency], LOOKUP([Order ID], 'currency'))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$fee","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$amount","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount'))","value":"2500","origin":"input_schema"}
+{"t":"var_eval","name":"$account","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fxRate","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$subtype","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$instrumentType","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$comment","expr":"[anycoin TX ID]","value":"00000000-0000-0000-0000-000000000045","origin":"input_schema"}
+{"t":"rule_no_match","rule_index":0,"when":"[Type] = 'deposit'"}
+{"t":"rule_match","rule_index":1,"when":"[Type] = 'trade fill'","rows":[{"$action":"'BUY'"}]}
+{"t":"var_eval","name":"$action","expr":"'BUY'","value":"BUY","origin":"row_rules","rule_index":1,"output_row_index":0}
+{"t":"row_output","values":["2025-02-17 08:16:53","BTC-EUR","0.00106751","BUY","2341898.4365486","CZK","","2500","","","","","00000000-0000-0000-0000-000000000045"]}
+{"t":"rule_no_match","rule_index":2,"when":"[Type] = 'trade payment'"}
+{"t":"rule_no_match","rule_index":3,"when":"[Type] = 'withdrawal'"}
+{"t":"rule_no_match","rule_index":4,"when":"[Type] = 'withdrawal_block'"}
+{"t":"rule_no_match","rule_index":5,"when":"[Type] = 'withdrawal_unblock'"}
+{"t":"row_end"}
+{"t":"row_start","file_row":50,"fields":["2025-02-24T08:21:37.438Z","trade payment","-2500","CZK","2197694","00000000-0000-0000-0000-000000000046","",""]}
+{"t":"var_eval","name":"$date","expr":"DATE_CONVERT([Date], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')","value":"2025-02-24 08:21:37","origin":"input_schema"}
+{"t":"var_eval","name":"$ticker","expr":"IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$quantity","expr":"IF([Type] = 'deposit', 1, [Amount])","value":"-2500","origin":"input_schema"}
+{"t":"var_eval","name":"$unitprice","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount') / [Amount])","value":"-1","origin":"input_schema"}
+{"t":"var_eval","name":"$currency","expr":"IF([Type] = 'deposit', [Currency], LOOKUP([Order ID], 'currency'))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$fee","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$amount","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount'))","value":"2500","origin":"input_schema"}
+{"t":"var_eval","name":"$account","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fxRate","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$subtype","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$instrumentType","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$comment","expr":"[anycoin TX ID]","value":"00000000-0000-0000-0000-000000000046","origin":"input_schema"}
+{"t":"rule_no_match","rule_index":0,"when":"[Type] = 'deposit'"}
+{"t":"rule_no_match","rule_index":1,"when":"[Type] = 'trade fill'"}
+{"t":"rule_match","rule_index":2,"when":"[Type] = 'trade payment'","rows":[]}
+{"t":"rule_no_match","rule_index":3,"when":"[Type] = 'withdrawal'"}
+{"t":"rule_no_match","rule_index":4,"when":"[Type] = 'withdrawal_block'"}
+{"t":"rule_no_match","rule_index":5,"when":"[Type] = 'withdrawal_unblock'"}
+{"t":"row_end"}
+{"t":"row_start","file_row":51,"fields":["2025-02-24T08:21:40.500Z","trade fill","0.00107238","BTC","2197694","00000000-0000-0000-0000-000000000047","",""]}
+{"t":"var_eval","name":"$date","expr":"DATE_CONVERT([Date], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')","value":"2025-02-24 08:21:40","origin":"input_schema"}
+{"t":"var_eval","name":"$ticker","expr":"IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))","value":"BTC-EUR","origin":"input_schema"}
+{"t":"var_eval","name":"$quantity","expr":"IF([Type] = 'deposit', 1, [Amount])","value":"0.00107238","origin":"input_schema"}
+{"t":"var_eval","name":"$unitprice","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount') / [Amount])","value":"2331263.17163692","origin":"input_schema"}
+{"t":"var_eval","name":"$currency","expr":"IF([Type] = 'deposit', [Currency], LOOKUP([Order ID], 'currency'))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$fee","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$amount","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount'))","value":"2500","origin":"input_schema"}
+{"t":"var_eval","name":"$account","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fxRate","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$subtype","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$instrumentType","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$comment","expr":"[anycoin TX ID]","value":"00000000-0000-0000-0000-000000000047","origin":"input_schema"}
+{"t":"rule_no_match","rule_index":0,"when":"[Type] = 'deposit'"}
+{"t":"rule_match","rule_index":1,"when":"[Type] = 'trade fill'","rows":[{"$action":"'BUY'"}]}
+{"t":"var_eval","name":"$action","expr":"'BUY'","value":"BUY","origin":"row_rules","rule_index":1,"output_row_index":0}
+{"t":"row_output","values":["2025-02-24 08:21:40","BTC-EUR","0.00107238","BUY","2331263.17163692","CZK","","2500","","","","","00000000-0000-0000-0000-000000000047"]}
+{"t":"rule_no_match","rule_index":2,"when":"[Type] = 'trade payment'"}
+{"t":"rule_no_match","rule_index":3,"when":"[Type] = 'withdrawal'"}
+{"t":"rule_no_match","rule_index":4,"when":"[Type] = 'withdrawal_block'"}
+{"t":"rule_no_match","rule_index":5,"when":"[Type] = 'withdrawal_unblock'"}
+{"t":"row_end"}
+{"t":"row_start","file_row":52,"fields":["2026-01-24T08:21:37.438Z","trade payment","-2500","CZK","2197694","00000000-0000-0000-0000-000000000046","",""]}
+{"t":"var_eval","name":"$date","expr":"DATE_CONVERT([Date], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')","value":"2026-01-24 08:21:37","origin":"input_schema"}
+{"t":"var_eval","name":"$ticker","expr":"IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$quantity","expr":"IF([Type] = 'deposit', 1, [Amount])","value":"-2500","origin":"input_schema"}
+{"t":"var_eval","name":"$unitprice","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount') / [Amount])","value":"-1","origin":"input_schema"}
+{"t":"var_eval","name":"$currency","expr":"IF([Type] = 'deposit', [Currency], LOOKUP([Order ID], 'currency'))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$fee","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$amount","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount'))","value":"2500","origin":"input_schema"}
+{"t":"var_eval","name":"$account","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fxRate","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$subtype","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$instrumentType","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$comment","expr":"[anycoin TX ID]","value":"00000000-0000-0000-0000-000000000046","origin":"input_schema"}
+{"t":"rule_no_match","rule_index":0,"when":"[Type] = 'deposit'"}
+{"t":"rule_no_match","rule_index":1,"when":"[Type] = 'trade fill'"}
+{"t":"rule_match","rule_index":2,"when":"[Type] = 'trade payment'","rows":[]}
+{"t":"rule_no_match","rule_index":3,"when":"[Type] = 'withdrawal'"}
+{"t":"rule_no_match","rule_index":4,"when":"[Type] = 'withdrawal_block'"}
+{"t":"rule_no_match","rule_index":5,"when":"[Type] = 'withdrawal_unblock'"}
+{"t":"row_end"}
+{"t":"row_start","file_row":53,"fields":["2026-01-24T08:21:40.500Z","trade fill","0.00107238","BTC","2197694","00000000-0000-0000-0000-000000000047","",""]}
+{"t":"var_eval","name":"$date","expr":"DATE_CONVERT([Date], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')","value":"2026-01-24 08:21:40","origin":"input_schema"}
+{"t":"var_eval","name":"$ticker","expr":"IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))","value":"BTC-EUR","origin":"input_schema"}
+{"t":"var_eval","name":"$quantity","expr":"IF([Type] = 'deposit', 1, [Amount])","value":"0.00107238","origin":"input_schema"}
+{"t":"var_eval","name":"$unitprice","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount') / [Amount])","value":"2331263.17163692","origin":"input_schema"}
+{"t":"var_eval","name":"$currency","expr":"IF([Type] = 'deposit', [Currency], LOOKUP([Order ID], 'currency'))","value":"CZK","origin":"input_schema"}
+{"t":"var_eval","name":"$fee","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$amount","expr":"IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount'))","value":"2500","origin":"input_schema"}
+{"t":"var_eval","name":"$account","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$fxRate","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$subtype","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$instrumentType","expr":"","value":"","origin":"input_schema"}
+{"t":"var_eval","name":"$comment","expr":"[anycoin TX ID]","value":"00000000-0000-0000-0000-000000000047","origin":"input_schema"}
+{"t":"rule_no_match","rule_index":0,"when":"[Type] = 'deposit'"}
+{"t":"rule_match","rule_index":1,"when":"[Type] = 'trade fill'","rows":[{"$action":"'BUY'"}]}
+{"t":"var_eval","name":"$action","expr":"'BUY'","value":"BUY","origin":"row_rules","rule_index":1,"output_row_index":0}
+{"t":"row_filtered","reason":"date_filter_from_filename"}
+{"t":"rule_no_match","rule_index":2,"when":"[Type] = 'trade payment'"}
+{"t":"rule_no_match","rule_index":3,"when":"[Type] = 'withdrawal'"}
+{"t":"rule_no_match","rule_index":4,"when":"[Type] = 'withdrawal_block'"}
+{"t":"rule_no_match","rule_index":5,"when":"[Type] = 'withdrawal_unblock'"}
+{"t":"row_end"}
+{"t":"file_end","template":"anycoin_to_wealthfolio","path":"datasets/anycoin_to_wealthfolio/./sample_2024-01-01_2025-12-31.csv","stats":{"rows":53,"written":25,"errors":0,"warnings":0}}
+{"t":"done","exit_code":0}

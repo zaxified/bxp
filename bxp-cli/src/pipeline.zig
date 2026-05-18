@@ -1509,40 +1509,16 @@ pub fn processBroker(
                 }
                 rule_matched = true;
                 matched_rule_index = rule_index;
-                // Emit rule_match as a hand-built JSON object rather than
-                // via Output.event() because the `rows` field is a nested
-                // array-of-objects whose schema isn't known at compile time
-                // (StringArrayHashMap values). The generic `event()` helper
-                // uses `inline for` over a comptime-known struct, which
-                // cannot represent runtime-keyed maps. On any write error
-                // the labeled break abandons the partial object — the output
-                // stream may then be in an inconsistent state, but write
-                // errors on stdout are unrecoverable anyway.
-                if (out.traceOn()) emit_rule_match: {
-                    var jw: std.json.Stringify = .{ .writer = out.writer, .options = .{} };
-                    jw.beginObject() catch break :emit_rule_match;
-                    jw.objectField("t") catch break :emit_rule_match;
-                    jw.write("rule_match") catch break :emit_rule_match;
-                    jw.objectField("rule_index") catch break :emit_rule_match;
-                    jw.write(rule_index) catch break :emit_rule_match;
-                    jw.objectField("when") catch break :emit_rule_match;
-                    jw.write(rule.when) catch break :emit_rule_match;
-                    jw.objectField("rows") catch break :emit_rule_match;
-                    jw.beginArray() catch break :emit_rule_match;
-                    for (rule.rows) |row_override| {
-                        jw.beginObject() catch break :emit_rule_match;
-                        var it = row_override.iterator();
-                        while (it.next()) |entry| {
-                            jw.objectField(entry.key_ptr.*) catch break :emit_rule_match;
-                            jw.write(entry.value_ptr.*) catch break :emit_rule_match;
-                        }
-                        jw.endObject() catch break :emit_rule_match;
-                    }
-                    jw.endArray() catch break :emit_rule_match;
-                    jw.endObject() catch break :emit_rule_match;
-                    out.writer.writeByte('\n') catch break :emit_rule_match;
-                    out.writer.flush() catch break :emit_rule_match;
-                }
+                // The generic event() helper handles []StringHashMap recursion
+                // via writeValue's slice + struct-with-iterator dispatch arms.
+                // Previously this site hand-built JSON because Output.event was
+                // hardcoded to std.json.Stringify; the json.writeEvent fast-path
+                // now covers it natively.
+                out.event("rule_match", .{
+                    .rule_index = rule_index,
+                    .when = rule.when,
+                    .rows = rule.rows,
+                });
                 // Empty rows slice = silent skip.
                 for (rule.rows, 0..) |row_override, output_row_index| {
                     // Start from base vars, then apply per-row overrides.
