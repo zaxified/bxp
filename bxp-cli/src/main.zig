@@ -6,6 +6,7 @@ const std = @import("std");
 const config_mod = @import("config");
 const diagnostics_mod = @import("diagnostics");
 const json5_mod = @import("json5");
+const btrace = @import("btrace");
 const pipeline = @import("pipeline.zig");
 const build_options = @import("build_options");
 
@@ -152,6 +153,10 @@ pub fn main() !void {
     var quiet = false;
     var fresh = false;
     var trace = false;
+    // Trace output format. Bareword `--trace` and `--trace=json` both yield
+    // .full (today's NDJSON cesta). `--trace=bin` yields .bin (binary framed
+    // metadata stream consumed by future GUI). Any other suffix is an error.
+    var trace_format: enum { json, bin } = .json;
     var dry_run = false;
     var check_fs_seconds: u8 = 0;
     for (args[1..]) |arg| {
@@ -167,7 +172,21 @@ pub fn main() !void {
         if (std.mem.eql(u8, arg, "--debug")) debug = true;
         if (std.mem.eql(u8, arg, "--quiet")) quiet = true;
         if (std.mem.eql(u8, arg, "--fresh")) fresh = true;
-        if (std.mem.eql(u8, arg, "--trace")) trace = true;
+        if (std.mem.eql(u8, arg, "--trace")) {
+            trace = true;
+        } else if (std.mem.startsWith(u8, arg, "--trace=")) {
+            const val = arg["--trace=".len..];
+            if (std.mem.eql(u8, val, "json")) {
+                trace = true;
+                trace_format = .json;
+            } else if (std.mem.eql(u8, val, "bin")) {
+                trace = true;
+                trace_format = .bin;
+            } else {
+                std.debug.print("error: --trace value must be 'json' or 'bin': got '{s}'\n", .{val});
+                std.process.exit(1);
+            }
+        }
         if (std.mem.eql(u8, arg, "--dry-run")) dry_run = true;
         if (std.mem.startsWith(u8, arg, "--check-fs=")) {
             const val = arg["--check-fs=".len..];
@@ -192,7 +211,37 @@ pub fn main() !void {
         std.process.exit(1);
     }
 
-    const out = Output{ .writer = stdout, .quiet = quiet, .debug = debug, .trace = if (trace) .full else .off, .dry_run = dry_run };
+    // BENCH-only: BXP_TRACE_DRY=1 promotes --trace to dry mode (call sites
+    // build trace payloads but event() skips encoding + writeEvent). Lets a
+    // bench isolate "prep work at call site" from "JSON encode + stdout I/O".
+    const trace_mode: pipeline.TraceMode = if (trace) blk: {
+        if (std.posix.getenv("BXP_TRACE_DRY")) |_| break :blk .dry;
+        break :blk switch (trace_format) {
+            .json => .full,
+            .bin => .bin,
+        };
+    } else .off;
+
+    // Bin mode wraps the existing stdout writer in a btrace.Writer that emits
+    // magic + version on construction. Allocated on the stack — its address
+    // is given to Output via btrace_writer pointer.
+    var btw_storage: btrace.Writer = undefined;
+    var btw_init_ok = false;
+    if (trace_mode == .bin) {
+        btw_storage = btrace.Writer.init(stdout) catch |err| {
+            std.debug.print("error: --trace=bin init failed: {s}\n", .{@errorName(err)});
+            std.process.exit(1);
+        };
+        btw_init_ok = true;
+    }
+    const out = Output{
+        .writer = stdout,
+        .quiet = quiet,
+        .debug = debug,
+        .trace = trace_mode,
+        .dry_run = dry_run,
+        .btrace_writer = if (btw_init_ok) &btw_storage else null,
+    };
 
     // `run()` returns `error.Fatal` when it has already printed a diagnostic
     // and wants a clean exit-1 — no additional message needed. Any other
@@ -202,11 +251,13 @@ pub fn main() !void {
     const stats = run(args, out, fresh, check_fs_seconds, alloc) catch |err| {
         if (err == error.Fatal) {
             out.event("done", .{ .exit_code = @as(u8, 1) });
+            out.binEmitDone(1);
             std.process.exit(1); // message already printed
         }
         if (debug) return err; // propagate — Zig prints trace
         out.fatal("---\n# fatal error: {s}\n", .{@errorName(err)});
         out.event("done", .{ .exit_code = @as(u8, 1) });
+        out.binEmitDone(1);
         std.process.exit(1);
     };
 
@@ -218,6 +269,7 @@ pub fn main() !void {
     // return 2 as documented.
     const exit_code: u8 = if (stats.has_fatal) 1 else if (stats.warnings > 0) 2 else 0;
     out.event("done", .{ .exit_code = exit_code });
+    out.binEmitDone(@intCast(exit_code));
     if (exit_code != 0) std.process.exit(exit_code);
     // exit(0) implicit
 }
@@ -481,6 +533,7 @@ fn run(args: [][:0]u8, out: Output, fresh: bool, check_fs_seconds: u8, alloc: st
             std.mem.eql(u8, args[i], "--quiet") or
             std.mem.eql(u8, args[i], "--fresh") or
             std.mem.eql(u8, args[i], "--trace") or
+            std.mem.startsWith(u8, args[i], "--trace=") or
             std.mem.eql(u8, args[i], "--dry-run") or
             std.mem.eql(u8, args[i], "--help") or
             std.mem.startsWith(u8, args[i], "--check-fs="))

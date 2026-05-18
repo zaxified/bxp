@@ -121,19 +121,21 @@ pub const Writer = struct {
         source_locator: u64,
         output_idx: u64,
         rule_idx: i32,
-        action_idx: u16,
+        action: []const u8,
     ) !void {
-        try self.writeHeader(.output_row, 22);
+        const payload_len = 8 + 8 + 4 + lpSize(action);
+        try self.writeHeader(.output_row, @intCast(payload_len));
         try self.w.writeInt(u64, source_locator, .little);
         try self.w.writeInt(u64, output_idx, .little);
         try self.w.writeInt(i32, rule_idx, .little);
-        try self.w.writeInt(u16, action_idx, .little);
+        try self.writeLp(action);
     }
 
-    pub fn writeFilteredRow(self: *Writer, source_locator: u64, reason_idx: u16) !void {
-        try self.writeHeader(.filtered_row, 10);
+    pub fn writeFilteredRow(self: *Writer, source_locator: u64, reason: []const u8) !void {
+        const payload_len = 8 + lpSize(reason);
+        try self.writeHeader(.filtered_row, @intCast(payload_len));
         try self.w.writeInt(u64, source_locator, .little);
-        try self.w.writeInt(u16, reason_idx, .little);
+        try self.writeLp(reason);
     }
 
     pub fn writeErrorRow(
@@ -142,15 +144,15 @@ pub const Writer = struct {
         var_name: []const u8,
         error_kind: []const u8,
         detail: []const u8,
-        origin_idx: u8,
+        origin: []const u8,
     ) !void {
-        const payload_len = 8 + lpSize(var_name) + lpSize(error_kind) + lpSize(detail) + 1;
+        const payload_len = 8 + lpSize(var_name) + lpSize(error_kind) + lpSize(detail) + lpSize(origin);
         try self.writeHeader(.error_row, @intCast(payload_len));
         try self.w.writeInt(u64, source_locator, .little);
         try self.writeLp(var_name);
         try self.writeLp(error_kind);
         try self.writeLp(detail);
-        try self.w.writeByte(origin_idx);
+        try self.writeLp(origin);
     }
 
     pub fn writePrepassEntry(
@@ -210,13 +212,13 @@ pub const OutputRow = struct {
     source_locator: u64,
     output_idx: u64,
     rule_idx: i32,
-    action_idx: u16,
+    action: []const u8,
 };
 
 pub const FilteredRow = struct {
     chunk_id: u16,
     source_locator: u64,
-    reason_idx: u16,
+    reason: []const u8,
 };
 
 pub const ErrorRow = struct {
@@ -225,7 +227,7 @@ pub const ErrorRow = struct {
     var_name: []const u8,
     error_kind: []const u8,
     detail: []const u8,
-    origin_idx: u8,
+    origin: []const u8,
 };
 
 pub const PrepassEntry = struct {
@@ -302,31 +304,41 @@ pub const Reader = struct {
                     .errors = try self.r.takeInt(u32, .little),
                     .warnings = try self.r.takeInt(u32, .little),
                 } },
-                .output_row => return Frame{ .output_row = .{
-                    .chunk_id = chunk_id,
-                    .source_locator = try self.r.takeInt(u64, .little),
-                    .output_idx = try self.r.takeInt(u64, .little),
-                    .rule_idx = try self.r.takeInt(i32, .little),
-                    .action_idx = try self.r.takeInt(u16, .little),
-                } },
-                .filtered_row => return Frame{ .filtered_row = .{
-                    .chunk_id = chunk_id,
-                    .source_locator = try self.r.takeInt(u64, .little),
-                    .reason_idx = try self.r.takeInt(u16, .little),
-                } },
+                .output_row => {
+                    const source_locator = try self.r.takeInt(u64, .little);
+                    const output_idx = try self.r.takeInt(u64, .little);
+                    const rule_idx = try self.r.takeInt(i32, .little);
+                    const action = try self.readLp();
+                    return Frame{ .output_row = .{
+                        .chunk_id = chunk_id,
+                        .source_locator = source_locator,
+                        .output_idx = output_idx,
+                        .rule_idx = rule_idx,
+                        .action = action,
+                    } };
+                },
+                .filtered_row => {
+                    const source_locator = try self.r.takeInt(u64, .little);
+                    const reason = try self.readLp();
+                    return Frame{ .filtered_row = .{
+                        .chunk_id = chunk_id,
+                        .source_locator = source_locator,
+                        .reason = reason,
+                    } };
+                },
                 .error_row => {
                     const source_locator = try self.r.takeInt(u64, .little);
                     const var_name = try self.readLp();
                     const error_kind = try self.readLp();
                     const detail = try self.readLp();
-                    const origin_idx = try self.r.takeByte();
+                    const origin = try self.readLp();
                     return Frame{ .error_row = .{
                         .chunk_id = chunk_id,
                         .source_locator = source_locator,
                         .var_name = var_name,
                         .error_kind = error_kind,
                         .detail = detail,
-                        .origin_idx = origin_idx,
+                        .origin = origin,
                     } };
                 },
                 .prepass_entry => return Frame{ .prepass_entry = .{
@@ -429,7 +441,7 @@ test "roundtrip output_row including negative rule_idx" {
     var buf: [64]u8 = undefined;
     var w: std.Io.Writer = .fixed(&buf);
     var bw = try Writer.init(&w);
-    try bw.writeOutputRow(0xDEADBEEF, 42, -1, 5);
+    try bw.writeOutputRow(0xDEADBEEF, 42, -1, "BUY");
 
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -440,14 +452,14 @@ test "roundtrip output_row including negative rule_idx" {
     try std.testing.expectEqual(@as(u64, 0xDEADBEEF), orow.source_locator);
     try std.testing.expectEqual(@as(u64, 42), orow.output_idx);
     try std.testing.expectEqual(@as(i32, -1), orow.rule_idx);
-    try std.testing.expectEqual(@as(u16, 5), orow.action_idx);
+    try std.testing.expectEqualStrings("BUY", orow.action);
 }
 
 test "roundtrip filtered_row" {
-    var buf: [32]u8 = undefined;
+    var buf: [128]u8 = undefined;
     var w: std.Io.Writer = .fixed(&buf);
     var bw = try Writer.init(&w);
-    try bw.writeFilteredRow(123_456, 1);
+    try bw.writeFilteredRow(123_456, "date_filter_from_filename");
 
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -456,14 +468,14 @@ test "roundtrip filtered_row" {
     const f = (try br.nextFrame()).?;
     const fr = f.filtered_row;
     try std.testing.expectEqual(@as(u64, 123_456), fr.source_locator);
-    try std.testing.expectEqual(@as(u16, 1), fr.reason_idx);
+    try std.testing.expectEqualStrings("date_filter_from_filename", fr.reason);
 }
 
 test "roundtrip error_row" {
     var buf: [256]u8 = undefined;
     var w: std.Io.Writer = .fixed(&buf);
     var bw = try Writer.init(&w);
-    try bw.writeErrorRow(500, "$date", "DateConvertError", "format mismatch: 'DD.MM.YYYY'", 0);
+    try bw.writeErrorRow(500, "$date", "DateConvertError", "format mismatch: 'DD.MM.YYYY'", "input_schema");
 
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -475,7 +487,7 @@ test "roundtrip error_row" {
     try std.testing.expectEqualStrings("$date", er.var_name);
     try std.testing.expectEqualStrings("DateConvertError", er.error_kind);
     try std.testing.expectEqualStrings("format mismatch: 'DD.MM.YYYY'", er.detail);
-    try std.testing.expectEqual(@as(u8, 0), er.origin_idx);
+    try std.testing.expectEqualStrings("input_schema", er.origin);
 }
 
 test "roundtrip prepass_entry" {
@@ -514,7 +526,7 @@ test "UTF-8 multibyte in lp string" {
     var buf: [256]u8 = undefined;
     var w: std.Io.Writer = .fixed(&buf);
     var bw = try Writer.init(&w);
-    try bw.writeErrorRow(0, "$ticker", "MapError", "česká koruna ✓", 1);
+    try bw.writeErrorRow(0, "$ticker", "MapError", "česká koruna ✓", "row_rules");
 
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -543,9 +555,9 @@ test "multiple frames in sequence" {
     var buf: [512]u8 = undefined;
     var w: std.Io.Writer = .fixed(&buf);
     var bw = try Writer.init(&w);
-    try bw.writeOutputRow(10, 0, 0, 1);
-    try bw.writeOutputRow(20, 1, 1, 2);
-    try bw.writeFilteredRow(30, 0);
+    try bw.writeOutputRow(10, 0, 0, "BUY");
+    try bw.writeOutputRow(20, 1, 1, "SELL");
+    try bw.writeFilteredRow(30, "date_filter_from_filename");
     try bw.writeDone(0);
 
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -598,7 +610,7 @@ test "chunk_id round-trips when set on writer" {
     var w: std.Io.Writer = .fixed(&buf);
     var bw = try Writer.init(&w);
     bw.chunk_id = 7;
-    try bw.writeOutputRow(99, 0, 0, 0);
+    try bw.writeOutputRow(99, 0, 0, "BUY");
 
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
