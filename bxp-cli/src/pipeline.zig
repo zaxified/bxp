@@ -58,8 +58,15 @@ pub const SectionStats = struct {
 /// reachable from the CLI (`--trace` bool flag → `.full`); `.progress` and
 /// `.detail` are scaffolding for a future PR that wires `--trace=MODE`
 /// argument parsing and per-event filtering. Until then, `shouldEmit` treats
-/// any non-`off` mode identically to `full`.
-pub const TraceMode = enum(u2) { off, progress, detail, full };
+/// any non-`off` and non-`dry` mode identically to `full`.
+///
+/// `.dry` is a bench-only mode (gated by env BXP_TRACE_DRY) that makes
+/// `traceOn()` return true — so call sites build their `out_values` /
+/// safe bitmaps / wrapped Safe values exactly as in full trace mode — but
+/// `event()` skips the actual encoding + stdout write. Isolates the cost
+/// of trace-event PREPARATION at call sites from the cost of writeEvent
+/// + I/O. Should never reach a real user.
+pub const TraceMode = enum(u3) { off, progress, detail, full, dry };
 
 /// Per-event emit filter — comptime-evaluated by callers in `event()`. The
 /// truth table will be populated by the future selective-trace PR; for now
@@ -142,6 +149,7 @@ pub const Output = struct {
     /// Errors are swallowed (same pattern as info/warning/fatal).
     pub fn event(self: Output, comptime t_name: []const u8, args: anytype) void {
         if (!self.traceOn()) return;
+        if (self.trace == .dry) return;
         if (!shouldEmit(self.trace, t_name)) return;
         json_mod.writeEvent(self.writer, t_name, args) catch return;
         self.writer.flush() catch return;
@@ -655,6 +663,13 @@ const ChunkReader = struct {
     total_size: u64,
     bytes_read: u64,
     eof: bool,
+    /// File byte offset of `buffer.items[0]`. Incremented by
+    /// `last_emit_len` whenever a previously returned chunk is dropped
+    /// (at the start of `nextChunk`). Public so callers can compute the
+    /// absolute file offset of any byte returned: slice_byte_in_chunk +
+    /// `chunk_start_in_file`. Used by `--trace=bin` to emit a per-record
+    /// `source_locator` for sub-ms drill-down in fmt.
+    chunk_start_in_file: u64,
 
     pub fn init(alloc: std.mem.Allocator, file: std.fs.File, quote: u8) !ChunkReader {
         const stat = try file.stat();
@@ -666,6 +681,7 @@ const ChunkReader = struct {
             .total_size = stat.size,
             .bytes_read = 0,
             .eof = false,
+            .chunk_start_in_file = 0,
         };
     }
 
@@ -688,6 +704,10 @@ const ChunkReader = struct {
                 );
             }
             self.buffer.items.len = tail_len;
+            // The bytes that used to sit at buffer.items[0..last_emit_len]
+            // are gone; the residual that shifted forward starts at the
+            // file offset previously occupied by the dropped prefix.
+            self.chunk_start_in_file += self.last_emit_len;
             self.last_emit_len = 0;
         }
         while (true) {
@@ -764,6 +784,17 @@ const RowSource = union(enum) {
             .csv_streaming => |iter| iter.row_safe[0..fields.len],
         };
     }
+
+    /// Returns the file byte offset of the most recently returned record
+    /// in the SOURCE file (CSV path), or null when the source doesn't
+    /// support seek-based drill-down (JSON materialised path — TODO: add
+    /// per-object byte offsets when GUI exercises JSON drill-down).
+    pub fn currentOffset(self: *RowSource) ?u64 {
+        return switch (self.*) {
+            .json_materialised => null,
+            .csv_streaming => |iter| iter.current_offset,
+        };
+    }
 };
 
 /// Iterator that produces parsed CSV row fields by reading chunks from a
@@ -797,6 +828,19 @@ const RowIterator = struct {
     /// IMMEDIATELY after `next()` (same lifetime contract as row_buf).
     row_safe: []bool,
 
+    /// Byte offset of the start of the most-recently-returned record in the
+    /// source file. Populated by every `next()` and `parseHeader()`. Used
+    /// by `--trace=bin` to emit `source_locator` per output_row so fmt can
+    /// seek directly to the record for sub-ms drill-down.
+    current_offset: u64,
+
+    /// Pointer to the chunk currently held in `records` (chunk_arena-owned
+    /// slice from ChunkReader). Records' `ptr - chunk_ptr` gives in-chunk
+    /// byte offset; combined with `chunk_start_in_file` from ChunkReader
+    /// yields the absolute file offset.
+    chunk_ptr: [*]const u8,
+    chunk_start_in_file: u64,
+
     pub fn init(
         reader: *ChunkReader,
         chunk_arena: *std.heap.ArenaAllocator,
@@ -814,6 +858,9 @@ const RowIterator = struct {
             .header_consumed = false,
             .row_buf = try file_alloc.alloc([]const u8, MAX_COLUMNS),
             .row_safe = try file_alloc.alloc(bool, MAX_COLUMNS),
+            .current_offset = 0,
+            .chunk_ptr = undefined,
+            .chunk_start_in_file = 0,
         };
     }
 
@@ -830,13 +877,19 @@ const RowIterator = struct {
             self.header_consumed = true;
             return &.{};
         };
+        var bom_offset: usize = 0;
         // BOM strip (only meaningful on the first chunk; subsequent
         // chunks never start with BOM).
         if (chunk_bytes.len >= 3 and std.mem.eql(u8, chunk_bytes[0..3], "\xEF\xBB\xBF")) {
             chunk_bytes = chunk_bytes[3..];
+            bom_offset = 3;
         }
         _ = self.chunk_arena.reset(.retain_capacity);
         self.records = try csv.splitRecords(chunk_bytes, self.quote, self.chunk_arena.allocator());
+        // Anchor offsets against the original (pre-BOM) chunk start in the
+        // file: `chunk_ptr` points at the byte holding chunk_start_in_file.
+        self.chunk_ptr = chunk_bytes.ptr - bom_offset;
+        self.chunk_start_in_file = self.reader.chunk_start_in_file;
         self.rec_idx = 0;
         self.header_consumed = true;
         if (self.records.items.len == 0) return &.{};
@@ -845,6 +898,7 @@ const RowIterator = struct {
             self.records.items[0], hdr_buf,
             self.delimiter, self.quote, self.chunk_arena.allocator(), null,
         );
+        self.current_offset = self.chunk_start_in_file + (@intFromPtr(self.records.items[0].ptr) - @intFromPtr(self.chunk_ptr));
         self.rec_idx = 1;
         return header;
     }
@@ -852,11 +906,14 @@ const RowIterator = struct {
     /// Returns next row fields, or null at EOF. Must be called only
     /// AFTER `parseHeader()` (which primes the iterator on the first
     /// chunk). Slice + strings inside are valid until the next call.
+    /// `current_offset` is populated with the file byte offset of the
+    /// returned record (read it immediately, same lifetime as fields).
     pub fn next(self: *RowIterator) !?[][]const u8 {
         while (true) {
             if (self.rec_idx < self.records.items.len) {
                 const rec = self.records.items[self.rec_idx];
                 self.rec_idx += 1;
+                self.current_offset = self.chunk_start_in_file + (@intFromPtr(rec.ptr) - @intFromPtr(self.chunk_ptr));
                 return try csv.splitFields(
                     rec, self.row_buf, self.delimiter, self.quote, self.chunk_arena.allocator(), self.row_safe,
                 );
@@ -864,6 +921,8 @@ const RowIterator = struct {
             const chunk_bytes = (try self.reader.nextChunk()) orelse return null;
             _ = self.chunk_arena.reset(.retain_capacity);
             self.records = try csv.splitRecords(chunk_bytes, self.quote, self.chunk_arena.allocator());
+            self.chunk_ptr = chunk_bytes.ptr;
+            self.chunk_start_in_file = self.reader.chunk_start_in_file;
             self.rec_idx = 0;
         }
     }
