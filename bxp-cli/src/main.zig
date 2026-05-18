@@ -192,7 +192,7 @@ pub fn main() !void {
         std.process.exit(1);
     }
 
-    const out = Output{ .writer = stdout, .quiet = quiet, .debug = debug, .trace = trace, .dry_run = dry_run };
+    const out = Output{ .writer = stdout, .quiet = quiet, .debug = debug, .trace = if (trace) .full else .off, .dry_run = dry_run };
 
     // `run()` returns `error.Fatal` when it has already printed a diagnostic
     // and wants a clean exit-1 — no additional message needed. Any other

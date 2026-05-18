@@ -54,6 +54,21 @@ pub const SectionStats = struct {
     }
 };
 
+/// Trace verbosity mode for `--trace`. Today only `off` and `full` are
+/// reachable from the CLI (`--trace` bool flag → `.full`); `.progress` and
+/// `.detail` are scaffolding for a future PR that wires `--trace=MODE`
+/// argument parsing and per-event filtering. Until then, `shouldEmit` treats
+/// any non-`off` mode identically to `full`.
+pub const TraceMode = enum(u2) { off, progress, detail, full };
+
+/// Per-event emit filter — comptime-evaluated by callers in `event()`. The
+/// truth table will be populated by the future selective-trace PR; for now
+/// any non-`off` mode emits every event (preserving today's behaviour).
+inline fn shouldEmit(mode: TraceMode, comptime t_name: []const u8) bool {
+    _ = t_name;
+    return mode != .off;
+}
+
 /// Output wrapper that suppresses all writes when --quiet or --trace is active.
 /// All methods silently drop write errors (same pattern as existing debug prints).
 /// When --trace is active, human-readable lines are suppressed so that stdout
@@ -62,12 +77,20 @@ pub const Output = struct {
     writer: *Writer,
     quiet: bool,
     debug: bool,
-    trace: bool = false,
+    trace: TraceMode = .off,
     dry_run: bool = false,
+
+    /// True when any trace events are being emitted. Replaces the old
+    /// `self.trace` bool reads — call sites must not compare the enum
+    /// directly (a missing `.off` check would leak human-readable lines
+    /// into the NDJSON stream and break the GUI parser).
+    inline fn traceOn(self: Output) bool {
+        return self.trace != .off;
+    }
 
     /// Print an informational line. Suppressed in --quiet or --trace mode.
     pub fn info(self: Output, comptime fmt: []const u8, args: anytype) void {
-        if (self.quiet or self.trace) return;
+        if (self.quiet or self.traceOn()) return;
         self.writer.print(fmt, args) catch {};
         self.writer.flush() catch {};
     }
@@ -94,7 +117,7 @@ pub const Output = struct {
 
     /// Print a per-section summary line. Suppressed in --quiet or --trace mode.
     pub fn summary(self: Output, stats: SectionStats) void {
-        if (self.quiet or self.trace) return;
+        if (self.quiet or self.traceOn()) return;
         const errors: u32 = if (stats.has_fatal) 1 else 0;
         const secs = stats.time_ns / 1_000_000_000;
         const ms = (stats.time_ns % 1_000_000_000) / 1_000_000;
@@ -105,7 +128,7 @@ pub const Output = struct {
     /// Print the overall summary line (no leading "summary:" label).
     /// Suppressed in --quiet or --trace mode.
     pub fn overallLine(self: Output, stats: SectionStats) void {
-        if (self.quiet or self.trace) return;
+        if (self.quiet or self.traceOn()) return;
         const errors: u32 = if (stats.has_fatal) 1 else 0;
         const secs = stats.time_ns / 1_000_000_000;
         const ms = (stats.time_ns % 1_000_000_000) / 1_000_000;
@@ -118,7 +141,8 @@ pub const Output = struct {
     /// object alongside `"t": t_name`. `std.json.Stringify` handles string escaping.
     /// Errors are swallowed (same pattern as info/warning/fatal).
     pub fn event(self: Output, comptime t_name: []const u8, args: anytype) void {
-        if (!self.trace) return;
+        if (!self.traceOn()) return;
+        if (!shouldEmit(self.trace, t_name)) return;
         var jw: std.json.Stringify = .{ .writer = self.writer, .options = .{} };
         jw.beginObject() catch return;
         jw.objectField("t") catch return;
@@ -1472,7 +1496,7 @@ pub fn processBroker(
                 // the labeled break abandons the partial object — the output
                 // stream may then be in an inconsistent state, but write
                 // errors on stdout are unrecoverable anyway.
-                if (out.trace) emit_rule_match: {
+                if (out.traceOn()) emit_rule_match: {
                     var jw: std.json.Stringify = .{ .writer = out.writer, .options = .{} };
                     jw.beginObject() catch break :emit_rule_match;
                     jw.objectField("t") catch break :emit_rule_match;
