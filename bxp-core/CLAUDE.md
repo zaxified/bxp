@@ -18,7 +18,7 @@ as a local path dependency.
 | `xlsx`        | `xlsx.zig`        | `xlsxToCsv()`, `SheetSpec`                                                |
 | `expr`        | `expr.zig`        | `eval()`, `evalString()`, `Context`, `Value`, `FnDoc` catalog             |
 | `config`      | `config.zig`      | `Config`, `BrokerConfig`, `load()`, `validate()`, `FieldDoc`              |
-| `json`        | `json.zig`        | `readJsonRecords()`                                                       |
+| `json`        | `json.zig`        | `readJsonRecords()` + NDJSON writer (`Safe`, `classify`, `writeEvent`)    |
 | `json5`       | `json5.zig`       | `preprocess()` (internal; also exported for direct use)                   |
 | `docs`        | `docs.zig`        | `writeDocs(alloc, writer)` — emits the `bxp-fmt --docs` JSON              |
 | `diagnostics` | `diagnostics.zig` | `Diagnostics`, `Diagnostic`, `Severity` — structured validation collector |
@@ -111,11 +111,30 @@ Aggregator for `bxp-fmt --docs`. Single source of truth that the GUI
 
 ### json.zig
 
-Reads a JSON array-of-objects file into a unified row representation for use in the pipeline.
+Two responsibilities: JSON array-of-objects reader for pipeline input, and a
+fast-path NDJSON writer for the bxp-cli `--trace` event stream.
+
+**Reader:**
 
 - `readJsonRecords(alloc, content, col_names, all_rows)` — fills `col_names` (union of all
   keys found across all objects) and `all_rows` (each object as a `[][]const u8` field array).
 - Handles missing keys per object (fills with empty string).
+
+**NDJSON writer** (bypasses `std.json.Stringify.encodeJsonString`'s per-byte
+escape scan when callers can pre-classify strings as escape-free):
+
+- `Safe { bytes: []const u8 }` — wrapper marking a string as JSON-safe (no `"`, `\`, or byte < 0x20).
+- `classify(s)` — returns true when `s` contains no JSON-significant bytes.
+- `wrap(s)` — unchecked Safe wrapping (caller asserts contract).
+- `wrapChecked(s)` — returns `?Safe` (null when classify fails).
+- `writeEvent(w, comptime t_name, args)` — emits one NDJSON line. Comptime-dispatched
+  field handling for `Safe`, `[]const u8`, integers, floats, bool, optionals, slices,
+  fixed arrays, anonymous structs (recurse as nested object), and StringHashMap-like
+  types with `.iterator()` (recurse as runtime-keyed object). JSON output is semantically
+  equivalent to `std.json.Stringify` (same parsed tree) but is NOT byte-identical: no
+  whitespace, no indent, minimal escape shape.
+- ~15 inline tests cover all dispatch arms including UTF-8 multibyte, adversarial
+  payloads (control bytes, embedded quotes), and `rule_match`-shape nested maps.
 
 ### json5.zig
 

@@ -143,16 +143,7 @@ pub const Output = struct {
     pub fn event(self: Output, comptime t_name: []const u8, args: anytype) void {
         if (!self.traceOn()) return;
         if (!shouldEmit(self.trace, t_name)) return;
-        var jw: std.json.Stringify = .{ .writer = self.writer, .options = .{} };
-        jw.beginObject() catch return;
-        jw.objectField("t") catch return;
-        jw.write(t_name) catch return;
-        inline for (std.meta.fields(@TypeOf(args))) |field| {
-            jw.objectField(field.name) catch return;
-            jw.write(@field(args, field.name)) catch return;
-        }
-        jw.endObject() catch return;
-        self.writer.writeByte('\n') catch return;
+        json_mod.writeEvent(self.writer, t_name, args) catch return;
         self.writer.flush() catch return;
     }
 };
