@@ -141,7 +141,14 @@ run_one() {
 
   local cli_args=( --config "$run_dir/bxp-cli.json" )
   if [ "$trace" = "on" ]; then
-    cli_args+=( --trace )
+    # BXP_BENCH_TRACE_FORMAT=bin selects the binary --trace=bin producer
+    # (vs default NDJSON via --trace). Lets a matrix measure encode + I/O
+    # cost of the two formats head-to-head against the same workload.
+    if [ "${BXP_BENCH_TRACE_FORMAT:-json}" = "bin" ]; then
+      cli_args+=( --trace=bin )
+    else
+      cli_args+=( --trace )
+    fi
   else
     cli_args+=( --quiet )
   fi
@@ -149,11 +156,33 @@ run_one() {
   local trace_stats="$run_dir/trace.stats"
   local rc=0
 
+  # Experimental knobs (bench-only):
+  #   BXP_BENCH_SINK=devnull   — drop trace stream to /dev/null instead of
+  #                              piping through `wc -lc`. Lets a matrix
+  #                              measure encoding + write cost without the
+  #                              wc count overhead. trace_events / trace_bytes
+  #                              become 0 in this mode.
+  #   BXP_BENCH_TRACE_DRY=1    — exports BXP_TRACE_DRY into bxp-cli, which
+  #                              promotes --trace to dry mode (event() skips
+  #                              writeEvent + flush). Isolates call-site prep
+  #                              cost (out_values build, classify, struct
+  #                              field iter) from JSON encode + I/O.
+  local sink_mode="${BXP_BENCH_SINK:-wc}"
+  local extra_env=""
+  if [ "${BXP_BENCH_TRACE_DRY:-}" = "1" ]; then
+    extra_env="BXP_TRACE_DRY=1"
+  fi
+
   if [ "$trace" = "on" ]; then
-    /usr/bin/time -f '%e %M' -o "$time_file" \
-      timeout "$TIMEOUT_SEC" "$BXP_CLI" "${cli_args[@]}" 2>/dev/null \
-      | wc -lc > "$trace_stats"
-    rc="${PIPESTATUS[0]}"
+    if [ "$sink_mode" = "devnull" ]; then
+      /usr/bin/time -f '%e %M' -o "$time_file" \
+        env $extra_env timeout "$TIMEOUT_SEC" "$BXP_CLI" "${cli_args[@]}" >/dev/null 2>/dev/null || rc=$?
+    else
+      /usr/bin/time -f '%e %M' -o "$time_file" \
+        env $extra_env timeout "$TIMEOUT_SEC" "$BXP_CLI" "${cli_args[@]}" 2>/dev/null \
+        | wc -lc > "$trace_stats"
+      rc="${PIPESTATUS[0]}"
+    fi
   else
     /usr/bin/time -f '%e %M' -o "$time_file" \
       timeout "$TIMEOUT_SEC" "$BXP_CLI" "${cli_args[@]}" >/dev/null 2>/dev/null || rc=$?
