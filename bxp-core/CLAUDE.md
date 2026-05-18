@@ -19,6 +19,7 @@ as a local path dependency.
 | `expr`        | `expr.zig`        | `eval()`, `evalString()`, `Context`, `Value`, `FnDoc` catalog             |
 | `config`      | `config.zig`      | `Config`, `BrokerConfig`, `load()`, `validate()`, `FieldDoc`              |
 | `json`        | `json.zig`        | `readJsonRecords()` + NDJSON writer (`Safe`, `classify`, `writeEvent`)    |
+| `btrace`      | `btrace.zig`      | Binary trace `Writer` / `Reader` for `--trace=bin`                        |
 | `json5`       | `json5.zig`       | `preprocess()` (internal; also exported for direct use)                   |
 | `docs`        | `docs.zig`        | `writeDocs(alloc, writer)` — emits the `bxp-fmt --docs` JSON              |
 | `diagnostics` | `diagnostics.zig` | `Diagnostics`, `Diagnostic`, `Severity` — structured validation collector |
@@ -135,6 +136,27 @@ escape scan when callers can pre-classify strings as escape-free):
   whitespace, no indent, minimal escape shape.
 - ~15 inline tests cover all dispatch arms including UTF-8 multibyte, adversarial
   payloads (control bytes, embedded quotes), and `rule_match`-shape nested maps.
+
+### btrace.zig
+
+Binary framed trace stream emitted by `bxp-cli --trace=bin`. Replaces the
+NDJSON `--trace=json` stream for GUI consumers. Carries metadata only
+(per-output-row pointers into source CSV/JSON, error list, pre_pass dump,
+aggregate stats); per-row drill-down (vars, rules, output cell values) is
+recomputed on demand by `bxp-fmt` seeking to a row's `source_locator`
+byte offset.
+
+- `Writer.init(w)` writes `FRAME_MAGIC` ("BXTB") + `SCHEMA_VERSION` once.
+- Writer methods: `writeFileStart`, `writeFileEnd`, `writeOutputRow`,
+  `writeFilteredRow`, `writeErrorRow`, `writePrepassEntry`, `writeDone`.
+- `Reader.init(r, alloc)` verifies magic + version; `nextFrame()` returns
+  `?Frame` (null at EOF). Unknown frame types are silently skipped via the
+  `pay_len` prefix (forward compat).
+- Each frame: `[1B type][2B chunk_id][4B pay_len][payload]`. `chunk_id` is
+  reserved for future multicore chunk dispatch (always 0 today).
+- Variable-length strings use length-prefix (lp): `[u32 len][bytes]`.
+- Inline tests (16): per-frame roundtrip + adversarial UTF-8 + empty
+  strings + forward-compat unknown-type skip + EOF returns null.
 
 ### json5.zig
 

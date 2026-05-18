@@ -27,6 +27,10 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/json.zig"),
     });
 
+    _ = b.addModule("btrace", .{
+        .root_source_file = b.path("src/btrace.zig"),
+    });
+
     _ = b.addModule("xlsx", .{
         .root_source_file = b.path("src/xlsx.zig"),
     });
@@ -66,6 +70,24 @@ pub fn build(b: *std.Build) void {
     const csv_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/csv.zig"),
+            .target = target,
+            .optimize = optimize,
+            .strip = false,
+        }),
+    });
+
+    const json_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/json.zig"),
+            .target = target,
+            .optimize = optimize,
+            .strip = false,
+        }),
+    });
+
+    const btrace_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/btrace.zig"),
             .target = target,
             .optimize = optimize,
             .strip = false,
@@ -118,6 +140,8 @@ pub fn build(b: *std.Build) void {
 
     const test_step = b.step("test", "Run bxp-core unit tests");
     test_step.dependOn(&b.addRunArtifact(csv_tests).step);
+    test_step.dependOn(&b.addRunArtifact(json_tests).step);
+    test_step.dependOn(&b.addRunArtifact(btrace_tests).step);
     test_step.dependOn(&b.addRunArtifact(expr_tests).step);
     test_step.dependOn(&b.addRunArtifact(json5_tests).step);
     test_step.dependOn(&b.addRunArtifact(diagnostics_tests).step);
