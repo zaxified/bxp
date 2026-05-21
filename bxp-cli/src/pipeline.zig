@@ -99,6 +99,28 @@ pub const Output = struct {
     /// Non-null iff `trace == .bin`. Owned by the caller (main.zig); we just
     /// route bin-mode emits through it.
     btrace_writer: ?*btrace.Writer = null,
+    /// Non-null iff `--trace-file <path>` was given. Always receives the full
+    /// bin trace (every frame, every row) regardless of `trace` mode or
+    /// `bin_emit_detail`. Owned by main.zig; pipeline only emits through it.
+    btrace_file_writer: ?*btrace.Writer = null,
+    /// Pointer to a per-run flag indicating whether per-row detail frames
+    /// (row_start_fields, var_eval, rule_match, rule_no_match, row_output)
+    /// should be emitted to the stdout bin writer. The pointer lets
+    /// `processBroker` flip the flag per-file (small input → on, big → off)
+    /// while `Output` itself stays passable by value. Null means "always off"
+    /// (e.g. when --trace=bin is not used). Has no effect on the file writer
+    /// — that one always gets full detail.
+    bin_emit_detail_ptr: ?*bool = null,
+    /// Bintrace v2 symbol pools for the currently-processed template. Set
+    /// by `processBroker` after building, used by `binEmitVarEval` /
+    /// `binEmitRuleMatch` / `binEmitRuleNoMatch` to translate strings to
+    /// u16 indices, and by `binEmitFileStart` to emit the pool tables.
+    pools_ptr: ?*const SymbolPools = null,
+
+    inline fn binEmitDetail(self: Output) bool {
+        if (self.bin_emit_detail_ptr) |p| return p.*;
+        return false;
+    }
 
     /// True when any trace events are being emitted. Replaces the old
     /// `self.trace` bool reads — call sites must not compare the enum
@@ -186,9 +208,17 @@ pub const Output = struct {
         headers: []const []const u8,
         out_headers: []const []const u8,
     ) void {
-        if (self.trace != .bin) return;
+        // Bintrace v2 requires the per-template pools to be wired before
+        // emitting any file_start frame. If pools are null (no --trace=bin
+        // and no --trace-file), the writers are also null and these blocks
+        // are skipped harmlessly. If only one is null, the emit becomes a
+        // no-op to avoid emitting a malformed file_start without pools.
+        const pools = self.pools_ptr orelse return;
         if (self.btrace_writer) |bw| {
-            bw.writeFileStart(input_format, template, path, headers, out_headers) catch return;
+            bw.writeFileStart(input_format, template, path, headers, out_headers, pools.expr.items, pools.var_name.items, pools.rule_when.items) catch {};
+        }
+        if (self.btrace_file_writer) |bw| {
+            bw.writeFileStart(input_format, template, path, headers, out_headers, pools.expr.items, pools.var_name.items, pools.rule_when.items) catch {};
         }
     }
 
@@ -199,9 +229,11 @@ pub const Output = struct {
         errors: u32,
         warnings: u32,
     ) void {
-        if (self.trace != .bin) return;
         if (self.btrace_writer) |bw| {
-            bw.writeFileEnd(source_rows, written_rows, errors, warnings) catch return;
+            bw.writeFileEnd(source_rows, written_rows, errors, warnings) catch {};
+        }
+        if (self.btrace_file_writer) |bw| {
+            bw.writeFileEnd(source_rows, written_rows, errors, warnings) catch {};
         }
     }
 
@@ -212,16 +244,20 @@ pub const Output = struct {
         rule_idx: i32,
         action: []const u8,
     ) void {
-        if (self.trace != .bin) return;
         if (self.btrace_writer) |bw| {
-            bw.writeOutputRow(source_locator, output_idx, rule_idx, action) catch return;
+            bw.writeOutputRow(source_locator, output_idx, rule_idx, action) catch {};
+        }
+        if (self.btrace_file_writer) |bw| {
+            bw.writeOutputRow(source_locator, output_idx, rule_idx, action) catch {};
         }
     }
 
     pub fn binEmitFilteredRow(self: Output, source_locator: u64, reason: []const u8) void {
-        if (self.trace != .bin) return;
         if (self.btrace_writer) |bw| {
-            bw.writeFilteredRow(source_locator, reason) catch return;
+            bw.writeFilteredRow(source_locator, reason) catch {};
+        }
+        if (self.btrace_file_writer) |bw| {
+            bw.writeFilteredRow(source_locator, reason) catch {};
         }
     }
 
@@ -233,9 +269,11 @@ pub const Output = struct {
         detail: []const u8,
         origin: []const u8,
     ) void {
-        if (self.trace != .bin) return;
         if (self.btrace_writer) |bw| {
-            bw.writeErrorRow(source_locator, var_name, error_kind, detail, origin) catch return;
+            bw.writeErrorRow(source_locator, var_name, error_kind, detail, origin) catch {};
+        }
+        if (self.btrace_file_writer) |bw| {
+            bw.writeErrorRow(source_locator, var_name, error_kind, detail, origin) catch {};
         }
     }
 
@@ -246,17 +284,210 @@ pub const Output = struct {
         field: []const u8,
         value: []const u8,
     ) void {
-        if (self.trace != .bin) return;
         if (self.btrace_writer) |bw| {
-            bw.writePrepassEntry(name, key, field, value) catch return;
+            bw.writePrepassEntry(name, key, field, value) catch {};
+        }
+        if (self.btrace_file_writer) |bw| {
+            bw.writePrepassEntry(name, key, field, value) catch {};
         }
     }
 
     pub fn binEmitDone(self: Output, exit_code: i32) void {
-        if (self.trace != .bin) return;
         if (self.btrace_writer) |bw| {
-            bw.writeDone(exit_code) catch return;
-            self.writer.flush() catch return;
+            bw.writeDone(exit_code) catch {};
+            self.writer.flush() catch {};
+        }
+        if (self.btrace_file_writer) |bw| {
+            bw.writeDone(exit_code) catch {};
+        }
+    }
+
+    // ── per-row detail bin emit ──────────────────────────────────────────
+    // Always emit to the file writer (when set); emit to the stdout writer
+    // only when bin_emit_detail is true (per-file flag set by processBroker
+    // based on input size vs BIN_DETAIL_INPUT_THRESHOLD).
+
+    pub fn binEmitRowStartFields(
+        self: Output,
+        source_locator: u64,
+        file_row: u64,
+        fields: []const []const u8,
+    ) void {
+        if (self.binEmitDetail()) {
+            if (self.btrace_writer) |bw| {
+                bw.writeRowStartFields(source_locator, file_row, fields) catch {};
+            }
+        }
+        if (self.btrace_file_writer) |bw| {
+            bw.writeRowStartFields(source_locator, file_row, fields) catch {};
+        }
+    }
+
+    pub fn binEmitVarEval(
+        self: Output,
+        source_locator: u64,
+        var_name: []const u8,
+        expr: []const u8,
+        value: []const u8,
+        origin: btrace.VarOrigin,
+        rule_idx: i32,
+        output_row_idx: i32,
+    ) void {
+        const pools = self.pools_ptr orelse return;
+        const var_name_idx = pools.var_name_idx.get(var_name) orelse return;
+        const expr_idx = pools.expr_idx.get(expr) orelse return;
+        if (self.binEmitDetail()) {
+            if (self.btrace_writer) |bw| {
+                bw.writeVarEval(source_locator, var_name_idx, expr_idx, value, origin, rule_idx, output_row_idx) catch {};
+            }
+        }
+        if (self.btrace_file_writer) |bw| {
+            bw.writeVarEval(source_locator, var_name_idx, expr_idx, value, origin, rule_idx, output_row_idx) catch {};
+        }
+    }
+
+    pub fn binEmitRuleMatch(
+        self: Output,
+        source_locator: u64,
+        rule_idx: u32,
+        when: []const u8,
+    ) void {
+        const pools = self.pools_ptr orelse return;
+        const when_idx = pools.rule_when_idx.get(when) orelse return;
+        if (self.binEmitDetail()) {
+            if (self.btrace_writer) |bw| {
+                bw.writeRuleMatch(source_locator, rule_idx, when_idx) catch {};
+            }
+        }
+        if (self.btrace_file_writer) |bw| {
+            bw.writeRuleMatch(source_locator, rule_idx, when_idx) catch {};
+        }
+    }
+
+    pub fn binEmitRuleNoMatch(
+        self: Output,
+        source_locator: u64,
+        rule_idx: u32,
+        when: []const u8,
+        error_kind: []const u8,
+    ) void {
+        const pools = self.pools_ptr orelse return;
+        const when_idx = pools.rule_when_idx.get(when) orelse return;
+        if (self.binEmitDetail()) {
+            if (self.btrace_writer) |bw| {
+                bw.writeRuleNoMatch(source_locator, rule_idx, when_idx, error_kind) catch {};
+            }
+        }
+        if (self.btrace_file_writer) |bw| {
+            bw.writeRuleNoMatch(source_locator, rule_idx, when_idx, error_kind) catch {};
+        }
+    }
+
+    pub fn binEmitRowOutput(
+        self: Output,
+        source_locator: u64,
+        output_idx: u64,
+        values: []const []const u8,
+    ) void {
+        if (self.binEmitDetail()) {
+            if (self.btrace_writer) |bw| {
+                bw.writeRowOutput(source_locator, output_idx, values) catch {};
+            }
+        }
+        if (self.btrace_file_writer) |bw| {
+            bw.writeRowOutput(source_locator, output_idx, values) catch {};
+        }
+    }
+};
+
+/// Input file size at or below this threshold gets full per-row detail on
+/// the `--trace=bin` stdout stream. Above it, stdout receives metadata-only
+/// (today's behaviour). The `--trace-file` sidecar always gets full detail
+/// regardless of size.
+pub const BIN_DETAIL_INPUT_THRESHOLD: u64 = 10 * 1024 * 1024;
+
+/// Per-template symbol pools — bintrace v2 dedupe layer. Built once at
+/// `processBroker` entry by pre-walking the template's `input_schema`,
+/// `row_rules`, and rule overrides; emitted in `file_start` for every file.
+/// Per-row frames (`var_eval`, `rule_match`, `rule_no_match`) carry u16
+/// indices into these pools instead of repeating the strings.
+///
+/// Ownership: built and destroyed inside `processBroker`. The lists store
+/// borrowed slices into the template's config strings (which outlive the
+/// pool); the hashmaps own only their entries' u16 values.
+pub const SymbolPools = struct {
+    expr: std.array_list.Managed([]const u8),
+    var_name: std.array_list.Managed([]const u8),
+    rule_when: std.array_list.Managed([]const u8),
+    expr_idx: std.StringHashMap(u16),
+    var_name_idx: std.StringHashMap(u16),
+    rule_when_idx: std.StringHashMap(u16),
+
+    pub fn init(alloc: std.mem.Allocator) SymbolPools {
+        return .{
+            .expr = std.array_list.Managed([]const u8).init(alloc),
+            .var_name = std.array_list.Managed([]const u8).init(alloc),
+            .rule_when = std.array_list.Managed([]const u8).init(alloc),
+            .expr_idx = std.StringHashMap(u16).init(alloc),
+            .var_name_idx = std.StringHashMap(u16).init(alloc),
+            .rule_when_idx = std.StringHashMap(u16).init(alloc),
+        };
+    }
+
+    pub fn deinit(self: *SymbolPools) void {
+        self.expr.deinit();
+        self.var_name.deinit();
+        self.rule_when.deinit();
+        self.expr_idx.deinit();
+        self.var_name_idx.deinit();
+        self.rule_when_idx.deinit();
+    }
+
+    fn intern(
+        list: *std.array_list.Managed([]const u8),
+        map: *std.StringHashMap(u16),
+        s: []const u8,
+    ) !u16 {
+        const gop = try map.getOrPut(s);
+        if (!gop.found_existing) {
+            const idx: u16 = @intCast(list.items.len);
+            try list.append(s);
+            gop.value_ptr.* = idx;
+            return idx;
+        }
+        return gop.value_ptr.*;
+    }
+
+    pub fn internExpr(self: *SymbolPools, s: []const u8) !u16 {
+        return intern(&self.expr, &self.expr_idx, s);
+    }
+    pub fn internVarName(self: *SymbolPools, s: []const u8) !u16 {
+        return intern(&self.var_name, &self.var_name_idx, s);
+    }
+    pub fn internRuleWhen(self: *SymbolPools, s: []const u8) !u16 {
+        return intern(&self.rule_when, &self.rule_when_idx, s);
+    }
+
+    /// Pre-walk: intern every (var_name, expr, rule.when) string from the
+    /// template. After this call the maps are frozen — runtime emits look
+    /// up indices via `lookup*`, never re-intern.
+    pub fn buildFromBroker(self: *SymbolPools, bc: *const config_mod.BrokerConfig) !void {
+        var it = bc.input_schema.iterator();
+        while (it.next()) |e| {
+            _ = try self.internVarName(e.key_ptr.*);
+            _ = try self.internExpr(e.value_ptr.*);
+        }
+        if (bc.row_rules) |rules| {
+            for (rules) |rule| {
+                _ = try self.internRuleWhen(rule.when);
+                for (rule.rows) |row| {
+                    var row_it = row.iterator();
+                    while (row_it.next()) |e| {
+                        _ = try self.internVarName(e.key_ptr.*);
+                        _ = try self.internExpr(e.value_ptr.*);
+                    }
+                }
+            }
         }
     }
 };
@@ -562,6 +793,7 @@ fn evalAllVars(
         } else {
             out.event("var_eval", .{ .name = e.key_ptr.*, .expr = e.value_ptr.*, .value = val, .origin = "input_schema" });
         }
+        out.binEmitVarEval(source_locator, e.key_ptr.*, e.value_ptr.*, val, .input_schema, -1, -1);
         try vars.put(e.key_ptr.*, val);
     }
     return vars;
@@ -1117,13 +1349,24 @@ pub fn processBroker(
     dir_path: []const u8,
     bc: *const config_mod.BrokerConfig,
     fresh: bool,
-    out: Output,
+    out_in: Output,
     alloc: std.mem.Allocator,
 ) !SectionStats {
     var stats = SectionStats{};
     var timer = try std.time.Timer.start();
 
-    out.info("\n=== template: {s} ===\n", .{bid});
+    out_in.info("\n=== template: {s} ===\n", .{bid});
+
+    // Bintrace v2 symbol pools — built once per template, referenced by
+    // every per-row bin emit and emitted in `file_start` for each input
+    // file. Owned by this function (template scope); `out.pools_ptr` is
+    // a borrowed pointer into our local pools.
+    var pools = SymbolPools.init(alloc);
+    defer pools.deinit();
+    try pools.buildFromBroker(bc);
+
+    var out = out_in;
+    out.pools_ptr = &pools;
 
     // LOOKUP-without-pre_pass guard: bxp-fmt --config catches this at
     // validate time, but a hot-swapped config skips that gate. Warn once
@@ -1336,6 +1579,15 @@ pub fn processBroker(
         // streaming JSON parser yet.
         var in_file = try dir.openFile(filename, .{});
         defer in_file.close();
+
+        // Per-file flip of the `bin_emit_detail` flag based on input size.
+        // Small inputs get full per-row detail on the --trace=bin stdout
+        // stream; bigger ones stay metadata-only (today's behaviour). The
+        // --trace-file sidecar always gets full detail regardless.
+        if (out.bin_emit_detail_ptr) |p| {
+            const in_size: u64 = if (in_file.stat()) |st| @intCast(st.size) else |_| std.math.maxInt(u64);
+            p.* = in_size <= BIN_DETAIL_INPUT_THRESHOLD;
+        }
 
         // Per-chunk arena shared by pre_pass and main passes; reset on
         // each chunk transition inside RowIterator.next().
@@ -1629,6 +1881,7 @@ pub fn processBroker(
         var file_row_idx: usize = 0;
         while (try row_src.next()) |fields| : (file_row_idx += 1) {
             _ = line_arena.reset(.retain_capacity);
+            const row_offset = row_src.currentOffset() orelse 0;
             if (row_src.currentSafe(fields)) |safe_bits| {
                 out.event("row_start", .{
                     .file_row = file_row_idx + 1,
@@ -1637,6 +1890,7 @@ pub fn processBroker(
             } else {
                 out.event("row_start", .{ .file_row = file_row_idx + 1, .fields = fields });
             }
+            out.binEmitRowStartFields(row_offset, file_row_idx + 1, fields);
 
             var row_detail: []const u8 = "";
             var row_ctx = expr_mod.Context{
@@ -1675,10 +1929,12 @@ pub fn processBroker(
                         out.writer.flush() catch {};
                     }
                     out.event("rule_no_match", .{ .rule_index = rule_index, .when = rule.when, .@"error" = @errorName(err) });
+                    out.binEmitRuleNoMatch(row_offset, @intCast(rule_index), rule.when, @errorName(err));
                     continue;
                 };
                 if (!when_val.toBool()) {
                     out.event("rule_no_match", .{ .rule_index = rule_index, .when = rule.when });
+                    out.binEmitRuleNoMatch(row_offset, @intCast(rule_index), rule.when, "");
                     continue;
                 }
                 rule_matched = true;
@@ -1693,6 +1949,7 @@ pub fn processBroker(
                     .when = rule.when,
                     .rows = rule.rows,
                 });
+                out.binEmitRuleMatch(row_offset, @intCast(rule_index), rule.when);
                 // Empty rows slice = silent skip.
                 for (rule.rows, 0..) |row_override, output_row_index| {
                     // Start from base vars, then apply per-row overrides.
@@ -1720,6 +1977,7 @@ pub fn processBroker(
                         } else {
                             out.event("var_eval", .{ .name = e.key_ptr.*, .expr = e.value_ptr.*, .value = val, .origin = "row_rules", .rule_index = rule_index, .output_row_index = output_row_index });
                         }
+                        out.binEmitVarEval(row_offset, e.key_ptr.*, e.value_ptr.*, val, .row_rules, @intCast(rule_index), @intCast(output_row_index));
                         try merged.put(e.key_ptr.*, val);
                     }
                     // Date range filter (date_filter_from_filename).
@@ -1775,10 +2033,14 @@ pub fn processBroker(
                             try combined_fout.writeAll("\n");
                         }
                     }
-                    if (out.trace == .full or out.trace == .dry) {
-                        // JSON / dry-bench paths: build trace payload only when
-                        // about to emit it (skips alloc + classify on non-trace
-                        // runs where out.event() would no-op).
+                    // Build output values once: both NDJSON `row_output` and bin
+                    // `row_output` frame need them. NDJSON wraps with the Safe
+                    // bitmap fast-path; bin uses lp prefixes natively.
+                    var bin_out_values: ?[]const []const u8 = null;
+                    if (out.trace == .full or out.trace == .dry or
+                        out.btrace_file_writer != null or
+                        (out.binEmitDetail() and out.btrace_writer != null))
+                    {
                         var out_values = std.array_list.Managed([]const u8).init(line_alloc);
                         var out_safe = std.array_list.Managed(bool).init(line_alloc);
                         for (bc.output_schema.items) |col| {
@@ -1786,12 +2048,18 @@ pub fn processBroker(
                             try out_values.append(v);
                             try out_safe.append(json_mod.classify(v));
                         }
-                        out.event("row_output", .{
-                            .values = json_mod.SafeFields{
-                                .items = out_values.items,
-                                .safe = out_safe.items,
-                            },
-                        });
+                        if (out.trace == .full or out.trace == .dry) {
+                            out.event("row_output", .{
+                                .values = json_mod.SafeFields{
+                                    .items = out_values.items,
+                                    .safe = out_safe.items,
+                                },
+                            });
+                        }
+                        bin_out_values = out_values.items;
+                    }
+                    if (bin_out_values) |bv| {
+                        out.binEmitRowOutput(row_offset, file_rows_written, bv);
                     }
                     // Bin protocol: one output_row frame per written output. The
                     // source CSV/JSON byte offset lets fmt seek to the source
@@ -1815,6 +2083,7 @@ pub fn processBroker(
             if (rule_matched) {
                 for (rules[matched_rule_index + 1 ..], matched_rule_index + 1 ..) |rule, ri| {
                     out.event("rule_no_match", .{ .rule_index = ri, .when = rule.when });
+                    out.binEmitRuleNoMatch(row_offset, @intCast(ri), rule.when, "");
                 }
             }
             if (!rule_matched) {

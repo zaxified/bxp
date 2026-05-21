@@ -39,6 +39,8 @@ const USAGE_TEMPLATE =
     \\  --fresh            skip files whose output already exists (atomic O_EXCL)
     \\  --dry-run          run the pipeline in memory without writing output files
     \\  --trace            emit per-row NDJSON events on stdout (forces --quiet; conflicts with --debug)
+    \\  --trace-file=<path> write a full binary trace (every row, every event) to <path>;
+    \\                     independent of --trace= mode; useful for offline GUI drill-down
     \\  --debug            suppresses informational stdout summaries; prints unmatched rows as JSON when row_rules_debug_missing is set
     \\  --quiet            suppress informational stdout (errors still go to stderr)
     \\  --check-fs=N       opt-in: validate data_dir + input-file existence before any processing,
@@ -159,6 +161,7 @@ pub fn main() !void {
     var trace_format: enum { json, bin } = .json;
     var dry_run = false;
     var check_fs_seconds: u8 = 0;
+    var trace_file_path: ?[]const u8 = null;
     for (args[1..]) |arg| {
         if (std.mem.eql(u8, arg, "--version")) {
             stdout.print("bxp-cli {s}\n", .{build_options.version}) catch {};
@@ -188,6 +191,13 @@ pub fn main() !void {
             }
         }
         if (std.mem.eql(u8, arg, "--dry-run")) dry_run = true;
+        if (std.mem.startsWith(u8, arg, "--trace-file=")) {
+            trace_file_path = arg["--trace-file=".len..];
+            if (trace_file_path.?.len == 0) {
+                std.debug.print("error: --trace-file= requires a non-empty path\n", .{});
+                std.process.exit(1);
+            }
+        }
         if (std.mem.startsWith(u8, arg, "--check-fs=")) {
             const val = arg["--check-fs=".len..];
             check_fs_seconds = std.fmt.parseUnsigned(u8, val, 10) catch {
@@ -234,6 +244,40 @@ pub fn main() !void {
         };
         btw_init_ok = true;
     }
+
+    // `--trace-file=<path>` opens a sidecar bin trace file that always
+    // receives the full per-row detail stream, independent of --trace= mode.
+    // The file writer is kept alive for the whole run via a defer-close
+    // here; flush happens in `closeTraceFile` after `run()` returns.
+    var trace_file_buf: [65536]u8 = undefined;
+    var trace_file_handle: ?std.fs.File = null;
+    var trace_file_fw_storage: std.fs.File.Writer = undefined;
+    var trace_file_btw_storage: btrace.Writer = undefined;
+    var trace_file_btw_init_ok = false;
+    if (trace_file_path) |path| {
+        validatePath(path) catch {
+            std.debug.print("error: --trace-file path rejected: '{s}'\n", .{path});
+            std.process.exit(1);
+        };
+        const f = std.fs.cwd().createFile(path, .{}) catch |err| {
+            std.debug.print("error: --trace-file create failed: {s} ({s})\n", .{ @errorName(err), path });
+            std.process.exit(1);
+        };
+        trace_file_handle = f;
+        trace_file_fw_storage = f.writer(&trace_file_buf);
+        trace_file_btw_storage = btrace.Writer.init(&trace_file_fw_storage.interface) catch |err| {
+            std.debug.print("error: --trace-file init failed: {s}\n", .{@errorName(err)});
+            f.close();
+            std.process.exit(1);
+        };
+        trace_file_btw_init_ok = true;
+    }
+
+    // `bin_emit_detail` is owned here so processBroker can flip it per
+    // input file (small → emit detail to stdout, big → metadata-only).
+    // Output stores a pointer to keep itself passable by value.
+    var bin_emit_detail: bool = false;
+
     const out = Output{
         .writer = stdout,
         .quiet = quiet,
@@ -241,6 +285,8 @@ pub fn main() !void {
         .trace = trace_mode,
         .dry_run = dry_run,
         .btrace_writer = if (btw_init_ok) &btw_storage else null,
+        .btrace_file_writer = if (trace_file_btw_init_ok) &trace_file_btw_storage else null,
+        .bin_emit_detail_ptr = &bin_emit_detail,
     };
 
     // `run()` returns `error.Fatal` when it has already printed a diagnostic
@@ -252,12 +298,14 @@ pub fn main() !void {
         if (err == error.Fatal) {
             out.event("done", .{ .exit_code = @as(u8, 1) });
             out.binEmitDone(1);
+            closeTraceFile(&trace_file_fw_storage, trace_file_handle);
             std.process.exit(1); // message already printed
         }
         if (debug) return err; // propagate — Zig prints trace
         out.fatal("---\n# fatal error: {s}\n", .{@errorName(err)});
         out.event("done", .{ .exit_code = @as(u8, 1) });
         out.binEmitDone(1);
+        closeTraceFile(&trace_file_fw_storage, trace_file_handle);
         std.process.exit(1);
     };
 
@@ -270,8 +318,21 @@ pub fn main() !void {
     const exit_code: u8 = if (stats.has_fatal) 1 else if (stats.warnings > 0) 2 else 0;
     out.event("done", .{ .exit_code = exit_code });
     out.binEmitDone(@intCast(exit_code));
+    closeTraceFile(&trace_file_fw_storage, trace_file_handle);
     if (exit_code != 0) std.process.exit(exit_code);
     // exit(0) implicit
+}
+
+/// Flush + close the `--trace-file` sidecar (no-op when not opened).
+/// Mirrors the implicit close that happens for stdout when the process exits.
+/// Errors are swallowed — by the time this runs the bin frames are written;
+/// a flush failure here just means we lose the trailing buffered bytes,
+/// not the run itself.
+fn closeTraceFile(fw: *std.fs.File.Writer, handle: ?std.fs.File) void {
+    if (handle) |f| {
+        fw.interface.flush() catch {};
+        f.close();
+    }
 }
 
 /// Parses CLI arguments, loads config, validates all templates, then dispatches
@@ -536,7 +597,8 @@ fn run(args: [][:0]u8, out: Output, fresh: bool, check_fs_seconds: u8, alloc: st
             std.mem.startsWith(u8, args[i], "--trace=") or
             std.mem.eql(u8, args[i], "--dry-run") or
             std.mem.eql(u8, args[i], "--help") or
-            std.mem.startsWith(u8, args[i], "--check-fs="))
+            std.mem.startsWith(u8, args[i], "--check-fs=") or
+            std.mem.startsWith(u8, args[i], "--trace-file="))
         {
             // known flags — no action needed here
         } else {
