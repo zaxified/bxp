@@ -88,8 +88,8 @@ _run_dataset() {
     fi
     local magic
     magic=$(head -c 8 "$actual_bin" | od -An -tx1 | tr -d ' \n')
-    if [[ "$magic" != "4258544201000000" ]]; then
-        echo "bin trace: bad magic/version (got $magic, want 4258544201000000)"
+    if [[ "$magic" != "4258544202000000" ]]; then
+        echo "bin trace: bad magic/version (got $magic, want 4258544202000000)"
         rm -f "$actual_bin"
         return 1
     fi
