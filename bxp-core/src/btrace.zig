@@ -28,7 +28,10 @@
 const std = @import("std");
 
 pub const FRAME_MAGIC: u32 = 0x42545842; // "BXTB" read little-endian
-pub const SCHEMA_VERSION: u32 = 1;
+/// Schema v2 (2026-05-21): replaced per-row text strings (expr / var_name /
+/// rule.when) with u16 indices into per-file symbol pools emitted inside
+/// `file_start`. Breaking change — readers reject v1 streams.
+pub const SCHEMA_VERSION: u32 = 2;
 
 pub const FrameType = enum(u8) {
     file_start = 0x01,
@@ -38,6 +41,12 @@ pub const FrameType = enum(u8) {
     error_row = 0x05,
     prepass_entry = 0x06,
     done = 0x07,
+    // ── per-row drill-down frames (added experiment phase) ────────────────
+    row_start_fields = 0x08,
+    var_eval = 0x09,
+    rule_match = 0x0A,
+    rule_no_match = 0x0B,
+    row_output = 0x0C,
     _, // non-exhaustive — unknown types are skipped via `pay_len`
 };
 
@@ -45,6 +54,12 @@ pub const InputFormat = enum(u8) {
     csv = 0,
     json = 1,
     xlsx_intermediate_csv = 2,
+};
+
+/// Origin tag for `var_eval` frames — matches the NDJSON `origin` string.
+pub const VarOrigin = enum(u8) {
+    input_schema = 0,
+    row_rules = 1,
 };
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -87,10 +102,16 @@ pub const Writer = struct {
         path: []const u8,
         headers: []const []const u8,
         out_headers: []const []const u8,
+        expr_pool: []const []const u8,
+        var_name_pool: []const []const u8,
+        rule_when_pool: []const []const u8,
     ) !void {
-        var payload_len: usize = 1 + lpSize(template) + lpSize(path) + 2 + 2;
+        var payload_len: usize = 1 + lpSize(template) + lpSize(path) + 2 + 2 + 2 + 2 + 2;
         for (headers) |h| payload_len += lpSize(h);
         for (out_headers) |h| payload_len += lpSize(h);
+        for (expr_pool) |s| payload_len += lpSize(s);
+        for (var_name_pool) |s| payload_len += lpSize(s);
+        for (rule_when_pool) |s| payload_len += lpSize(s);
 
         try self.writeHeader(.file_start, @intCast(payload_len));
         try self.w.writeByte(@intFromEnum(input_format));
@@ -100,6 +121,12 @@ pub const Writer = struct {
         for (headers) |h| try self.writeLp(h);
         try self.w.writeInt(u16, @intCast(out_headers.len), .little);
         for (out_headers) |h| try self.writeLp(h);
+        try self.w.writeInt(u16, @intCast(expr_pool.len), .little);
+        for (expr_pool) |s| try self.writeLp(s);
+        try self.w.writeInt(u16, @intCast(var_name_pool.len), .little);
+        for (var_name_pool) |s| try self.writeLp(s);
+        try self.w.writeInt(u16, @intCast(rule_when_pool.len), .little);
+        for (rule_when_pool) |s| try self.writeLp(s);
     }
 
     pub fn writeFileEnd(
@@ -174,6 +201,93 @@ pub const Writer = struct {
         try self.writeHeader(.done, 4);
         try self.w.writeInt(i32, exit_code, .little);
     }
+
+    // ── per-row drill-down frame writers ─────────────────────────────────
+    // Mirror the NDJSON events emitted by pipeline.zig in `--trace=json`
+    // mode. Enabled only when caller has bin_emit_detail = true (see
+    // bxp-cli `Output` struct). Field count uses u16 to match file_start
+    // headers (MAX_COLUMNS = 1024 fits comfortably).
+
+    pub fn writeRowStartFields(
+        self: *Writer,
+        source_locator: u64,
+        file_row: u64,
+        fields: []const []const u8,
+    ) !void {
+        var payload_len: usize = 8 + 8 + 2;
+        for (fields) |f| payload_len += lpSize(f);
+
+        try self.writeHeader(.row_start_fields, @intCast(payload_len));
+        try self.w.writeInt(u64, source_locator, .little);
+        try self.w.writeInt(u64, file_row, .little);
+        try self.w.writeInt(u16, @intCast(fields.len), .little);
+        for (fields) |f| try self.writeLp(f);
+    }
+
+    pub fn writeVarEval(
+        self: *Writer,
+        source_locator: u64,
+        var_name_idx: u16,
+        expr_idx: u16,
+        value: []const u8,
+        origin: VarOrigin,
+        rule_idx: i32,
+        output_row_idx: i32,
+    ) !void {
+        const payload_len = 8 + 2 + 2 + lpSize(value) + 1 + 4 + 4;
+        try self.writeHeader(.var_eval, @intCast(payload_len));
+        try self.w.writeInt(u64, source_locator, .little);
+        try self.w.writeInt(u16, var_name_idx, .little);
+        try self.w.writeInt(u16, expr_idx, .little);
+        try self.writeLp(value);
+        try self.w.writeByte(@intFromEnum(origin));
+        try self.w.writeInt(i32, rule_idx, .little);
+        try self.w.writeInt(i32, output_row_idx, .little);
+    }
+
+    pub fn writeRuleMatch(
+        self: *Writer,
+        source_locator: u64,
+        rule_idx: u32,
+        when_idx: u16,
+    ) !void {
+        const payload_len = 8 + 4 + 2;
+        try self.writeHeader(.rule_match, @intCast(payload_len));
+        try self.w.writeInt(u64, source_locator, .little);
+        try self.w.writeInt(u32, rule_idx, .little);
+        try self.w.writeInt(u16, when_idx, .little);
+    }
+
+    pub fn writeRuleNoMatch(
+        self: *Writer,
+        source_locator: u64,
+        rule_idx: u32,
+        when_idx: u16,
+        error_kind: []const u8,
+    ) !void {
+        const payload_len = 8 + 4 + 2 + lpSize(error_kind);
+        try self.writeHeader(.rule_no_match, @intCast(payload_len));
+        try self.w.writeInt(u64, source_locator, .little);
+        try self.w.writeInt(u32, rule_idx, .little);
+        try self.w.writeInt(u16, when_idx, .little);
+        try self.writeLp(error_kind);
+    }
+
+    pub fn writeRowOutput(
+        self: *Writer,
+        source_locator: u64,
+        output_idx: u64,
+        values: []const []const u8,
+    ) !void {
+        var payload_len: usize = 8 + 8 + 2;
+        for (values) |v| payload_len += lpSize(v);
+
+        try self.writeHeader(.row_output, @intCast(payload_len));
+        try self.w.writeInt(u64, source_locator, .little);
+        try self.w.writeInt(u64, output_idx, .little);
+        try self.w.writeInt(u16, @intCast(values.len), .little);
+        for (values) |v| try self.writeLp(v);
+    }
 };
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -188,6 +302,11 @@ pub const Frame = union(enum) {
     error_row: ErrorRow,
     prepass_entry: PrepassEntry,
     done: Done,
+    row_start_fields: RowStartFields,
+    var_eval: VarEval,
+    rule_match: RuleMatch,
+    rule_no_match: RuleNoMatch,
+    row_output: RowOutput,
 };
 
 pub const FileStart = struct {
@@ -197,6 +316,9 @@ pub const FileStart = struct {
     path: []const u8,
     headers: []const []const u8,
     out_headers: []const []const u8,
+    expr_pool: []const []const u8,
+    var_name_pool: []const []const u8,
+    rule_when_pool: []const []const u8,
 };
 
 pub const FileEnd = struct {
@@ -241,6 +363,46 @@ pub const PrepassEntry = struct {
 pub const Done = struct {
     chunk_id: u16,
     exit_code: i32,
+};
+
+pub const RowStartFields = struct {
+    chunk_id: u16,
+    source_locator: u64,
+    file_row: u64,
+    fields: []const []const u8,
+};
+
+pub const VarEval = struct {
+    chunk_id: u16,
+    source_locator: u64,
+    var_name_idx: u16,
+    expr_idx: u16,
+    value: []const u8,
+    origin: VarOrigin,
+    rule_idx: i32,
+    output_row_idx: i32,
+};
+
+pub const RuleMatch = struct {
+    chunk_id: u16,
+    source_locator: u64,
+    rule_idx: u32,
+    when_idx: u16,
+};
+
+pub const RuleNoMatch = struct {
+    chunk_id: u16,
+    source_locator: u64,
+    rule_idx: u32,
+    when_idx: u16,
+    error_kind: []const u8,
+};
+
+pub const RowOutput = struct {
+    chunk_id: u16,
+    source_locator: u64,
+    output_idx: u64,
+    values: []const []const u8,
 };
 
 /// Read-side counterpart to `Writer`. Pass an allocator (ideally arena);
@@ -288,6 +450,15 @@ pub const Reader = struct {
                     const out_count = try self.r.takeInt(u16, .little);
                     const out_headers = try self.alloc.alloc([]const u8, out_count);
                     for (0..out_count) |i| out_headers[i] = try self.readLp();
+                    const expr_pool_count = try self.r.takeInt(u16, .little);
+                    const expr_pool = try self.alloc.alloc([]const u8, expr_pool_count);
+                    for (0..expr_pool_count) |i| expr_pool[i] = try self.readLp();
+                    const var_name_pool_count = try self.r.takeInt(u16, .little);
+                    const var_name_pool = try self.alloc.alloc([]const u8, var_name_pool_count);
+                    for (0..var_name_pool_count) |i| var_name_pool[i] = try self.readLp();
+                    const rule_when_pool_count = try self.r.takeInt(u16, .little);
+                    const rule_when_pool = try self.alloc.alloc([]const u8, rule_when_pool_count);
+                    for (0..rule_when_pool_count) |i| rule_when_pool[i] = try self.readLp();
                     return Frame{ .file_start = .{
                         .chunk_id = chunk_id,
                         .input_format = input_format,
@@ -295,6 +466,9 @@ pub const Reader = struct {
                         .path = path,
                         .headers = headers,
                         .out_headers = out_headers,
+                        .expr_pool = expr_pool,
+                        .var_name_pool = var_name_pool,
+                        .rule_when_pool = rule_when_pool,
                     } };
                 },
                 .file_end => return Frame{ .file_end = .{
@@ -352,6 +526,75 @@ pub const Reader = struct {
                     .chunk_id = chunk_id,
                     .exit_code = try self.r.takeInt(i32, .little),
                 } },
+                .row_start_fields => {
+                    const source_locator = try self.r.takeInt(u64, .little);
+                    const file_row = try self.r.takeInt(u64, .little);
+                    const fields_count = try self.r.takeInt(u16, .little);
+                    const fields = try self.alloc.alloc([]const u8, fields_count);
+                    for (0..fields_count) |i| fields[i] = try self.readLp();
+                    return Frame{ .row_start_fields = .{
+                        .chunk_id = chunk_id,
+                        .source_locator = source_locator,
+                        .file_row = file_row,
+                        .fields = fields,
+                    } };
+                },
+                .var_eval => {
+                    const source_locator = try self.r.takeInt(u64, .little);
+                    const var_name_idx = try self.r.takeInt(u16, .little);
+                    const expr_idx = try self.r.takeInt(u16, .little);
+                    const value = try self.readLp();
+                    const origin: VarOrigin = @enumFromInt(try self.r.takeByte());
+                    const rule_idx = try self.r.takeInt(i32, .little);
+                    const output_row_idx = try self.r.takeInt(i32, .little);
+                    return Frame{ .var_eval = .{
+                        .chunk_id = chunk_id,
+                        .source_locator = source_locator,
+                        .var_name_idx = var_name_idx,
+                        .expr_idx = expr_idx,
+                        .value = value,
+                        .origin = origin,
+                        .rule_idx = rule_idx,
+                        .output_row_idx = output_row_idx,
+                    } };
+                },
+                .rule_match => {
+                    const source_locator = try self.r.takeInt(u64, .little);
+                    const rule_idx = try self.r.takeInt(u32, .little);
+                    const when_idx = try self.r.takeInt(u16, .little);
+                    return Frame{ .rule_match = .{
+                        .chunk_id = chunk_id,
+                        .source_locator = source_locator,
+                        .rule_idx = rule_idx,
+                        .when_idx = when_idx,
+                    } };
+                },
+                .rule_no_match => {
+                    const source_locator = try self.r.takeInt(u64, .little);
+                    const rule_idx = try self.r.takeInt(u32, .little);
+                    const when_idx = try self.r.takeInt(u16, .little);
+                    const error_kind = try self.readLp();
+                    return Frame{ .rule_no_match = .{
+                        .chunk_id = chunk_id,
+                        .source_locator = source_locator,
+                        .rule_idx = rule_idx,
+                        .when_idx = when_idx,
+                        .error_kind = error_kind,
+                    } };
+                },
+                .row_output => {
+                    const source_locator = try self.r.takeInt(u64, .little);
+                    const output_idx = try self.r.takeInt(u64, .little);
+                    const values_count = try self.r.takeInt(u16, .little);
+                    const values = try self.alloc.alloc([]const u8, values_count);
+                    for (0..values_count) |i| values[i] = try self.readLp();
+                    return Frame{ .row_output = .{
+                        .chunk_id = chunk_id,
+                        .source_locator = source_locator,
+                        .output_idx = output_idx,
+                        .values = values,
+                    } };
+                },
                 _ => {
                     // Forward compat: skip unknown frame via pay_len.
                     try self.r.discardAll(pay_len);
@@ -401,7 +644,10 @@ test "roundtrip file_start" {
     var bw = try Writer.init(&w);
     const headers = [_][]const u8{ "Date", "Type", "Amount" };
     const out_headers = [_][]const u8{ "date", "activity" };
-    try bw.writeFileStart(.csv, "anycoin_to_wealthfolio", "/tmp/foo.csv", &headers, &out_headers);
+    const expr_pool = [_][]const u8{ "TICKER([Symbol])", "DATE_CONVERT([Date], 'X', 'Y')" };
+    const var_name_pool = [_][]const u8{ "$ticker", "$date" };
+    const rule_when_pool = [_][]const u8{ "[Type] = 'BUY'" };
+    try bw.writeFileStart(.csv, "anycoin_to_wealthfolio", "/tmp/foo.csv", &headers, &out_headers, &expr_pool, &var_name_pool, &rule_when_pool);
 
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -417,6 +663,10 @@ test "roundtrip file_start" {
     try std.testing.expectEqualStrings("Date", fs.headers[0]);
     try std.testing.expectEqualStrings("Amount", fs.headers[2]);
     try std.testing.expectEqualStrings("activity", fs.out_headers[1]);
+    try std.testing.expectEqual(@as(usize, 2), fs.expr_pool.len);
+    try std.testing.expectEqualStrings("TICKER([Symbol])", fs.expr_pool[0]);
+    try std.testing.expectEqualStrings("$date", fs.var_name_pool[1]);
+    try std.testing.expectEqualStrings("[Type] = 'BUY'", fs.rule_when_pool[0]);
 }
 
 test "roundtrip file_end" {
@@ -603,6 +853,115 @@ test "forward compat: unknown frame type skipped via pay_len" {
     var br = try Reader.init(&rdr, arena.allocator());
     const f = (try br.nextFrame()).?;
     try std.testing.expectEqual(@as(i32, 42), f.done.exit_code);
+}
+
+test "roundtrip row_start_fields" {
+    var buf: [512]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&buf);
+    var bw = try Writer.init(&w);
+    const fields = [_][]const u8{ "EUR", "USD", "100.50", "" };
+    try bw.writeRowStartFields(0xDEADBEEF, 42, &fields);
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var rdr: std.Io.Reader = .fixed(w.buffered());
+    var br = try Reader.init(&rdr, arena.allocator());
+    const f = (try br.nextFrame()).?;
+    const rsf = f.row_start_fields;
+    try std.testing.expectEqual(@as(u64, 0xDEADBEEF), rsf.source_locator);
+    try std.testing.expectEqual(@as(u64, 42), rsf.file_row);
+    try std.testing.expectEqual(@as(usize, 4), rsf.fields.len);
+    try std.testing.expectEqualStrings("EUR", rsf.fields[0]);
+    try std.testing.expectEqualStrings("USD", rsf.fields[1]);
+    try std.testing.expectEqualStrings("100.50", rsf.fields[2]);
+    try std.testing.expectEqualStrings("", rsf.fields[3]);
+}
+
+test "roundtrip var_eval input_schema origin" {
+    var buf: [256]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&buf);
+    var bw = try Writer.init(&w);
+    try bw.writeVarEval(123, 7, 42, "BTC-USD", .input_schema, -1, -1);
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var rdr: std.Io.Reader = .fixed(w.buffered());
+    var br = try Reader.init(&rdr, arena.allocator());
+    const f = (try br.nextFrame()).?;
+    const ve = f.var_eval;
+    try std.testing.expectEqual(@as(u64, 123), ve.source_locator);
+    try std.testing.expectEqual(@as(u16, 7), ve.var_name_idx);
+    try std.testing.expectEqual(@as(u16, 42), ve.expr_idx);
+    try std.testing.expectEqualStrings("BTC-USD", ve.value);
+    try std.testing.expectEqual(VarOrigin.input_schema, ve.origin);
+    try std.testing.expectEqual(@as(i32, -1), ve.rule_idx);
+    try std.testing.expectEqual(@as(i32, -1), ve.output_row_idx);
+}
+
+test "roundtrip var_eval row_rules origin with indices" {
+    var buf: [256]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&buf);
+    var bw = try Writer.init(&w);
+    try bw.writeVarEval(999, 3, 11, "BUY", .row_rules, 2, 0);
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var rdr: std.Io.Reader = .fixed(w.buffered());
+    var br = try Reader.init(&rdr, arena.allocator());
+    const f = (try br.nextFrame()).?;
+    const ve = f.var_eval;
+    try std.testing.expectEqual(VarOrigin.row_rules, ve.origin);
+    try std.testing.expectEqual(@as(i32, 2), ve.rule_idx);
+    try std.testing.expectEqual(@as(i32, 0), ve.output_row_idx);
+    try std.testing.expectEqual(@as(u16, 3), ve.var_name_idx);
+}
+
+test "roundtrip rule_match and rule_no_match" {
+    var buf: [512]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&buf);
+    var bw = try Writer.init(&w);
+    try bw.writeRuleMatch(100, 0, 5);
+    try bw.writeRuleNoMatch(200, 1, 6, "");
+    try bw.writeRuleNoMatch(300, 2, 7, "TypeMismatch");
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var rdr: std.Io.Reader = .fixed(w.buffered());
+    var br = try Reader.init(&rdr, arena.allocator());
+
+    const f1 = (try br.nextFrame()).?;
+    try std.testing.expectEqual(@as(u32, 0), f1.rule_match.rule_idx);
+    try std.testing.expectEqual(@as(u16, 5), f1.rule_match.when_idx);
+
+    const f2 = (try br.nextFrame()).?;
+    try std.testing.expectEqual(@as(u32, 1), f2.rule_no_match.rule_idx);
+    try std.testing.expectEqual(@as(u16, 6), f2.rule_no_match.when_idx);
+    try std.testing.expectEqualStrings("", f2.rule_no_match.error_kind);
+
+    const f3 = (try br.nextFrame()).?;
+    try std.testing.expectEqual(@as(u32, 2), f3.rule_no_match.rule_idx);
+    try std.testing.expectEqual(@as(u16, 7), f3.rule_no_match.when_idx);
+    try std.testing.expectEqualStrings("TypeMismatch", f3.rule_no_match.error_kind);
+}
+
+test "roundtrip row_output" {
+    var buf: [256]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&buf);
+    var bw = try Writer.init(&w);
+    const values = [_][]const u8{ "2026-05-21", "BTC-USD", "0.5", "BUY" };
+    try bw.writeRowOutput(500, 17, &values);
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var rdr: std.Io.Reader = .fixed(w.buffered());
+    var br = try Reader.init(&rdr, arena.allocator());
+    const f = (try br.nextFrame()).?;
+    const ro = f.row_output;
+    try std.testing.expectEqual(@as(u64, 500), ro.source_locator);
+    try std.testing.expectEqual(@as(u64, 17), ro.output_idx);
+    try std.testing.expectEqual(@as(usize, 4), ro.values.len);
+    try std.testing.expectEqualStrings("2026-05-21", ro.values[0]);
+    try std.testing.expectEqualStrings("BUY", ro.values[3]);
 }
 
 test "chunk_id round-trips when set on writer" {
