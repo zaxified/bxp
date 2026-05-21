@@ -20,7 +20,11 @@ import 'dart:typed_data';
 const int frameMagic = 0x42545842;
 
 /// Schema version. Bump on any frame layout change; readers reject mismatch.
-const int schemaVersion = 1;
+///
+/// v2 (2026-05-21): `file_start` carries `expr_pool` / `var_name_pool` /
+/// `rule_when_pool`; per-row frames (not yet parsed in this PR-A reader)
+/// reference pool entries by u16 index instead of inline strings.
+const int schemaVersion = 2;
 
 /// Per-frame header is 7 bytes: type (u8) + chunk_id (u16 LE) + pay_len (u32 LE).
 const int frameHeaderSize = 7;
@@ -76,8 +80,17 @@ class FileStart extends Frame {
   final String path;
   final List<String> headers;
   final List<String> outHeaders;
+
+  /// Bintrace v2 symbol pools — emitted once per file_start, referenced by
+  /// per-row frames via u16 index. Saves repeating the same expression /
+  /// variable name / rule.when text on every row.
+  final List<String> exprPool;
+  final List<String> varNamePool;
+  final List<String> ruleWhenPool;
+
   const FileStart(super.chunkId, this.inputFormat, this.template, this.path,
-      this.headers, this.outHeaders);
+      this.headers, this.outHeaders,
+      this.exprPool, this.varNamePool, this.ruleWhenPool);
 }
 
 class FileEnd extends Frame {
@@ -247,7 +260,23 @@ class BtraceReader {
     final outHeaders = <String>[
       for (int i = 0; i < outCount; i++) _readLp(),
     ];
-    return FileStart(chunkId, fmt, template, path, headers, outHeaders);
+    final exprPoolCount = _bd.getUint16(_pos, Endian.little);
+    _pos += 2;
+    final exprPool = <String>[
+      for (int i = 0; i < exprPoolCount; i++) _readLp(),
+    ];
+    final varNamePoolCount = _bd.getUint16(_pos, Endian.little);
+    _pos += 2;
+    final varNamePool = <String>[
+      for (int i = 0; i < varNamePoolCount; i++) _readLp(),
+    ];
+    final ruleWhenPoolCount = _bd.getUint16(_pos, Endian.little);
+    _pos += 2;
+    final ruleWhenPool = <String>[
+      for (int i = 0; i < ruleWhenPoolCount; i++) _readLp(),
+    ];
+    return FileStart(chunkId, fmt, template, path, headers, outHeaders,
+        exprPool, varNamePool, ruleWhenPool);
   }
 
   FileEnd _readFileEnd(int chunkId) {

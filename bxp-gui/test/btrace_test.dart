@@ -142,6 +142,14 @@ void main() {
         _BinBuilder.u16(2), // out_headers_count
         _BinBuilder.lp('date'),
         _BinBuilder.lp('activity'),
+        _BinBuilder.u16(2), // expr_pool_count
+        _BinBuilder.lp('TICKER([Symbol])'),
+        _BinBuilder.lp("DATE_CONVERT([Date], 'X', 'Y')"),
+        _BinBuilder.u16(2), // var_name_pool_count
+        _BinBuilder.lp(r'$ticker'),
+        _BinBuilder.lp(r'$date'),
+        _BinBuilder.u16(1), // rule_when_pool_count
+        _BinBuilder.lp("[Type] = 'BUY'"),
       ]);
       bb.writeFrame(FrameType.fileStart.value, 0, payload);
       final r = BtraceReader.fromBytes(bb.bytes());
@@ -153,6 +161,12 @@ void main() {
       expect(fs.path, '/tmp/foo.csv');
       expect(fs.headers, ['Date', 'Type', 'Amount']);
       expect(fs.outHeaders, ['date', 'activity']);
+      expect(fs.exprPool, [
+        'TICKER([Symbol])',
+        "DATE_CONVERT([Date], 'X', 'Y')",
+      ]);
+      expect(fs.varNamePool, [r'$ticker', r'$date']);
+      expect(fs.ruleWhenPool, ["[Type] = 'BUY'"]);
     });
 
     test('file_end', () {
