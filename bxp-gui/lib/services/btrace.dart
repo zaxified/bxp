@@ -21,10 +21,16 @@ const int frameMagic = 0x42545842;
 
 /// Schema version. Bump on any frame layout change; readers reject mismatch.
 ///
+/// v3 (2026-05-22): per-row detail frames (`row_start_fields`, `var_eval`,
+/// `rule_match`, `rule_no_match`, `row_output`) are no longer emitted by the
+/// producer in the default path — frame LAYOUT is identical to v2, only the
+/// emit policy changed (env var `BXP_EMIT_FULL_TRACE=1` opts back into v2-style
+/// emission for debug). The reader accepts both v2 and v3 streams; the
+/// constant is the version we PREFER to see, not a hard equality check.
 /// v2 (2026-05-21): `file_start` carries `expr_pool` / `var_name_pool` /
-/// `rule_when_pool`; per-row frames (not yet parsed in this PR-A reader)
-/// reference pool entries by u16 index instead of inline strings.
-const int schemaVersion = 2;
+/// `rule_when_pool`; per-row frames reference pool entries by u16 index
+/// instead of inline strings.
+const int schemaVersion = 3;
 
 /// Per-frame header is 7 bytes: type (u8) + chunk_id (u16 LE) + pay_len (u32 LE).
 const int frameHeaderSize = 7;
@@ -183,9 +189,13 @@ class BtraceReader {
           '(expected 0x${frameMagic.toRadixString(16).padLeft(8, '0')} = "BXTB")');
     }
     final version = bd.getUint32(4, Endian.little);
-    if (version != schemaVersion) {
+    // Frame layout is identical across v2 and v3 — v3 only changes the
+    // emit policy on the producer side (no detail by default). Accept
+    // both so older traces still parse and the schema bump is a soft
+    // boundary instead of a hard breakage for in-flight files.
+    if (version != schemaVersion && version != 2) {
       throw FormatException(
-          'btrace: unsupported schema version $version (this reader handles $schemaVersion)');
+          'btrace: unsupported schema version $version (this reader handles 2 and $schemaVersion)');
     }
     return BtraceReader._(data, bd, 8);
   }

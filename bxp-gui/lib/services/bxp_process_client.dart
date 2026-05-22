@@ -688,6 +688,117 @@ class BxpProcessClient {
     }
   }
 
+  /// Evaluate N expressions against one row context in a single spawn.
+  ///
+  /// Calls `bxp-fmt --expr-batch` with a JSON request on stdin, returns
+  /// a parallel list of results. Amortises subprocess-spawn cost across
+  /// the entire batch — typical GUI drill-down click runs ~14 input_schema
+  /// vars + a few rule.when probes (~19 calls), and per-call latency at
+  /// ~2 ms per spawn on Linux would compound to ~40 ms vs ~3 ms total
+  /// for a single batched call.
+  ///
+  /// Returns an empty list if the spawn itself failed (binary missing,
+  /// malformed request). Individual expression failures carry through
+  /// as `ExprBatchResult(ok: false, error, detail, off?, len?)` and do
+  /// NOT cause an empty return — the caller can render per-cell errors
+  /// alongside successful results.
+  static Future<List<ExprBatchResult>> evalBatch({
+    required List<String> headers,
+    required List<String> fields,
+    required List<String> exprs,
+    Map<String, String>? tickerMap,
+    Map<String, String>? lookups,
+    Duration timeout = _exprTimeout,
+    String? binPath,
+  }) async {
+    final bin = binPath ?? findBin('bxp-fmt');
+    if (bin == null) return const [];
+
+    final request = <String, dynamic>{
+      'headers': headers,
+      'fields': fields,
+      'exprs': exprs,
+    };
+    if (tickerMap != null && tickerMap.isNotEmpty) {
+      request['ticker_map'] = tickerMap;
+    }
+    if (lookups != null && lookups.isNotEmpty) {
+      request['lookups'] = lookups;
+    }
+    final requestJson = jsonEncode(request);
+
+    // Process.start so we can write the JSON body to the child's stdin.
+    // bxp-fmt --expr-batch responses are small (typically 1-5 KB for a
+    // realistic drill-down) so the dart-lang/sdk#1727 Windows pipe-overflow
+    // race doesn't bite here — we don't need the bridge proxy round-trip.
+    try {
+      final p = await Process.start(bin, ['--expr-batch']);
+      p.stdin.add(utf8.encode(requestJson));
+      await p.stdin.close();
+      final stdoutFut = p.stdout.transform(utf8.decoder).join();
+      final stderrFut = p.stderr.transform(utf8.decoder).join();
+      final exitFut = p.exitCode;
+      // Race the child against the timeout. If timeout fires we kill the
+      // process so the futures resolve instead of leaking. The "killed
+      // child" branch reports an empty result list — caller surfaces a
+      // timeout indicator the same way it would for any spawn failure.
+      final exitCode = await exitFut.timeout(timeout, onTimeout: () {
+        p.kill();
+        return ProcessRunResult.kExitTimeout;
+      });
+      if (exitCode != 0) {
+        // Drain so the futures complete; the stderr line is useful for
+        // diagnostics but we don't surface it through the return — caller
+        // sees an empty list and can decide on its own UX.
+        final err = await stderrFut;
+        _lastSubprocessDiag = 'evalBatch exit=$exitCode stderr="${_peek(err)}"';
+        return const [];
+      }
+      final out = await stdoutFut;
+      return _parseBatchResults(out);
+    } catch (e) {
+      _lastSubprocessDiag = 'evalBatch ${e.runtimeType}: $e';
+      return const [];
+    }
+  }
+
+  /// Parse the `{"results":[...]}` shape from `bxp-fmt --expr-batch`.
+  /// Tolerates malformed individual entries (rendered as ok:false) so a
+  /// single corrupt result line can't discard the rest of the batch.
+  static List<ExprBatchResult> _parseBatchResults(String out) {
+    Map<String, dynamic>? parsed;
+    try {
+      final v = jsonDecode(out);
+      if (v is Map<String, dynamic>) parsed = v;
+    } catch (_) {
+      return const [];
+    }
+    if (parsed == null) return const [];
+    final rawResults = parsed['results'];
+    if (rawResults is! List) return const [];
+    final out_ = <ExprBatchResult>[];
+    for (final r in rawResults) {
+      if (r is! Map) {
+        out_.add(const ExprBatchResult(
+          ok: false,
+          error: 'BadResultShape',
+          detail: 'result entry was not a JSON object',
+        ));
+        continue;
+      }
+      final ok = r['ok'] == true;
+      out_.add(ExprBatchResult(
+        ok: ok,
+        value: ok ? r['value']?.toString() : null,
+        error: ok ? null : r['error']?.toString(),
+        detail: ok ? null : r['detail']?.toString(),
+        off: r['off'] is num ? (r['off'] as num).toInt() : null,
+        len: r['len'] is num ? (r['len'] as num).toInt() : null,
+      ));
+    }
+    return out_;
+  }
+
   /// Parse NDJSON from `bxp-fmt --expr-trace` (or the bridge equivalent)
   /// into a per-call list, dropping the final/error sentinel and any
   /// malformed lines. Shared between the bridge and subprocess paths so
@@ -1145,4 +1256,30 @@ class TemplateInfo {
         fileTypeOut: j['file_type_out']?.toString() ?? 'csv',
         description: j['description']?.toString(),
       );
+}
+
+/// One entry from a `bxp-fmt --expr-batch` result array.
+///
+/// On success: `ok = true`, `value` holds the stringified result of evaluating
+/// the matching expression from the request. All other fields are null.
+/// On failure: `ok = false`, `error` holds the error name (e.g.
+/// `"ColumnNotFound"`, `"UnexpectedToken"`), `detail` a human-readable
+/// message, and `off` / `len` optionally point at the offending token in
+/// the expression source (used by the GUI's `ExprEditor` highlighter).
+class ExprBatchResult {
+  final bool ok;
+  final String? value;
+  final String? error;
+  final String? detail;
+  final int? off;
+  final int? len;
+
+  const ExprBatchResult({
+    required this.ok,
+    this.value,
+    this.error,
+    this.detail,
+    this.off,
+    this.len,
+  });
 }
