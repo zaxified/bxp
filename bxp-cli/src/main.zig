@@ -273,10 +273,17 @@ pub fn main() !void {
         trace_file_btw_init_ok = true;
     }
 
-    // `bin_emit_detail` is owned here so processBroker can flip it per
-    // input file (small → emit detail to stdout, big → metadata-only).
-    // Output stores a pointer to keep itself passable by value.
-    var bin_emit_detail: bool = false;
+    // Schema v3 (2026-05-22): `bin_emit_detail` is now set once at startup
+    // and never flipped per-file. Default false → btrace is index-only and
+    // GUI reconstructs drill-down via `bxp-fmt --expr-batch`. Setting env
+    // var `BXP_EMIT_FULL_TRACE=1` opts back into the v2 detail emission for
+    // debug / regression work — same wire format (frame layout unchanged),
+    // just more frames per row.
+    var bin_emit_detail: bool = blk: {
+        const v = std.process.getEnvVarOwned(alloc, "BXP_EMIT_FULL_TRACE") catch break :blk false;
+        defer alloc.free(v);
+        break :blk std.mem.eql(u8, v, "1") or std.ascii.eqlIgnoreCase(v, "true");
+    };
 
     const out = Output{
         .writer = stdout,

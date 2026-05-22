@@ -28,10 +28,20 @@
 const std = @import("std");
 
 pub const FRAME_MAGIC: u32 = 0x42545842; // "BXTB" read little-endian
-/// Schema v2 (2026-05-21): replaced per-row text strings (expr / var_name /
-/// rule.when) with u16 indices into per-file symbol pools emitted inside
-/// `file_start`. Breaking change — readers reject v1 streams.
-pub const SCHEMA_VERSION: u32 = 2;
+/// Schema v3 (2026-05-22): per-row detail frames (`row_start_fields`,
+/// `var_eval`, `rule_match`, `rule_no_match`, `row_output`) are NO LONGER
+/// emitted by the bxp-cli producer in the default path. The GUI reconstructs
+/// drill-down data on demand via `bxp-fmt --expr-batch` (re-eval of one row's
+/// input_schema + row_rules against config + source CSV) plus direct mmap
+/// reads of source.csv / output.csvx at the `source_locator` / `output_idx`
+/// addresses carried by `output_row`. Setting env var `BXP_EMIT_FULL_TRACE=1`
+/// at runtime opts back into v2-style emission for debug / regression work;
+/// the schema number on the wire stays 3 either way (frame layout did not
+/// change, only emit policy).
+/// Schema v2 (2026-05-21): symbol pools in `file_start` for expr / var_name /
+/// rule.when so detail frames reference them by u16 index instead of repeating
+/// the full string per row.
+pub const SCHEMA_VERSION: u32 = 3;
 
 pub const FrameType = enum(u8) {
     file_start = 0x01,
@@ -416,7 +426,11 @@ pub const Reader = struct {
         const magic = try r.takeInt(u32, .little);
         if (magic != FRAME_MAGIC) return error.InvalidMagic;
         const version = try r.takeInt(u32, .little);
-        if (version != SCHEMA_VERSION) return error.UnsupportedVersion;
+        // Frame layout is identical across v2 and v3 — v3 only changes the
+        // emit policy on the producer side (no detail by default). Accept
+        // both so older traces still parse and the schema bump is a soft
+        // boundary instead of a hard breakage for in-flight files.
+        if (version != SCHEMA_VERSION and version != 2) return error.UnsupportedVersion;
         return .{ .r = r, .alloc = alloc };
     }
 

@@ -303,9 +303,14 @@ pub const Output = struct {
     }
 
     // ── per-row detail bin emit ──────────────────────────────────────────
-    // Always emit to the file writer (when set); emit to the stdout writer
-    // only when bin_emit_detail is true (per-file flag set by processBroker
-    // based on input size vs BIN_DETAIL_INPUT_THRESHOLD).
+    // Schema v3 (2026-05-22): per-row detail frames are gated by
+    // `binEmitDetail()` on BOTH the stdout and the `--trace-file` writers.
+    // The flag defaults false; GUI drill-down reconstructs this data on
+    // demand via `bxp-fmt --expr-batch` + direct mmap reads of source.csv /
+    // output.csvx (addresses come from `output_row`). Setting env var
+    // `BXP_EMIT_FULL_TRACE=1` flips the flag true at startup — keeps the
+    // v2 emission path available for offline debug and the bxp-core
+    // regression tests in btrace.zig.
 
     pub fn binEmitRowStartFields(
         self: Output,
@@ -313,10 +318,9 @@ pub const Output = struct {
         file_row: u64,
         fields: []const []const u8,
     ) void {
-        if (self.binEmitDetail()) {
-            if (self.btrace_writer) |bw| {
-                bw.writeRowStartFields(source_locator, file_row, fields) catch {};
-            }
+        if (!self.binEmitDetail()) return;
+        if (self.btrace_writer) |bw| {
+            bw.writeRowStartFields(source_locator, file_row, fields) catch {};
         }
         if (self.btrace_file_writer) |bw| {
             bw.writeRowStartFields(source_locator, file_row, fields) catch {};
@@ -333,13 +337,12 @@ pub const Output = struct {
         rule_idx: i32,
         output_row_idx: i32,
     ) void {
+        if (!self.binEmitDetail()) return;
         const pools = self.pools_ptr orelse return;
         const var_name_idx = pools.var_name_idx.get(var_name) orelse return;
         const expr_idx = pools.expr_idx.get(expr) orelse return;
-        if (self.binEmitDetail()) {
-            if (self.btrace_writer) |bw| {
-                bw.writeVarEval(source_locator, var_name_idx, expr_idx, value, origin, rule_idx, output_row_idx) catch {};
-            }
+        if (self.btrace_writer) |bw| {
+            bw.writeVarEval(source_locator, var_name_idx, expr_idx, value, origin, rule_idx, output_row_idx) catch {};
         }
         if (self.btrace_file_writer) |bw| {
             bw.writeVarEval(source_locator, var_name_idx, expr_idx, value, origin, rule_idx, output_row_idx) catch {};
@@ -352,12 +355,11 @@ pub const Output = struct {
         rule_idx: u32,
         when: []const u8,
     ) void {
+        if (!self.binEmitDetail()) return;
         const pools = self.pools_ptr orelse return;
         const when_idx = pools.rule_when_idx.get(when) orelse return;
-        if (self.binEmitDetail()) {
-            if (self.btrace_writer) |bw| {
-                bw.writeRuleMatch(source_locator, rule_idx, when_idx) catch {};
-            }
+        if (self.btrace_writer) |bw| {
+            bw.writeRuleMatch(source_locator, rule_idx, when_idx) catch {};
         }
         if (self.btrace_file_writer) |bw| {
             bw.writeRuleMatch(source_locator, rule_idx, when_idx) catch {};
@@ -371,12 +373,11 @@ pub const Output = struct {
         when: []const u8,
         error_kind: []const u8,
     ) void {
+        if (!self.binEmitDetail()) return;
         const pools = self.pools_ptr orelse return;
         const when_idx = pools.rule_when_idx.get(when) orelse return;
-        if (self.binEmitDetail()) {
-            if (self.btrace_writer) |bw| {
-                bw.writeRuleNoMatch(source_locator, rule_idx, when_idx, error_kind) catch {};
-            }
+        if (self.btrace_writer) |bw| {
+            bw.writeRuleNoMatch(source_locator, rule_idx, when_idx, error_kind) catch {};
         }
         if (self.btrace_file_writer) |bw| {
             bw.writeRuleNoMatch(source_locator, rule_idx, when_idx, error_kind) catch {};
@@ -389,10 +390,9 @@ pub const Output = struct {
         output_idx: u64,
         values: []const []const u8,
     ) void {
-        if (self.binEmitDetail()) {
-            if (self.btrace_writer) |bw| {
-                bw.writeRowOutput(source_locator, output_idx, values) catch {};
-            }
+        if (!self.binEmitDetail()) return;
+        if (self.btrace_writer) |bw| {
+            bw.writeRowOutput(source_locator, output_idx, values) catch {};
         }
         if (self.btrace_file_writer) |bw| {
             bw.writeRowOutput(source_locator, output_idx, values) catch {};
@@ -1580,14 +1580,12 @@ pub fn processBroker(
         var in_file = try dir.openFile(filename, .{});
         defer in_file.close();
 
-        // Per-file flip of the `bin_emit_detail` flag based on input size.
-        // Small inputs get full per-row detail on the --trace=bin stdout
-        // stream; bigger ones stay metadata-only (today's behaviour). The
-        // --trace-file sidecar always gets full detail regardless.
-        if (out.bin_emit_detail_ptr) |p| {
-            const in_size: u64 = if (in_file.stat()) |st| @intCast(st.size) else |_| std.math.maxInt(u64);
-            p.* = in_size <= BIN_DETAIL_INPUT_THRESHOLD;
-        }
+        // Schema v3 (2026-05-22): the per-file size-based flip is gone.
+        // `bin_emit_detail` is set once at startup from the
+        // `BXP_EMIT_FULL_TRACE` env var (main.zig); processBroker no longer
+        // mutates it. The 10-MiB threshold logic is preserved as
+        // `BIN_DETAIL_INPUT_THRESHOLD` purely as documentation of the v2
+        // policy in case callers want to reintroduce a size guard.
 
         // Per-chunk arena shared by pre_pass and main passes; reset on
         // each chunk transition inside RowIterator.next().

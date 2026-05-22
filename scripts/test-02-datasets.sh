@@ -71,7 +71,7 @@ _run_dataset() {
         rm -f "$actual_trace" "$norm_expected" "$norm_actual"
     done
     # Binary --trace=bin smoke. Verifies the stream starts with the BXTB
-    # magic + schema version 1 and the producer doesn't crash. Byte-exact
+    # magic + schema version 3 and the producer doesn't crash. Byte-exact
     # diff is intentionally NOT done — file_start frames carry cwd-dependent
     # absolute paths; layout regression is covered by inline tests in
     # bxp-core/src/btrace.zig. This step just confirms the new producer
@@ -88,8 +88,8 @@ _run_dataset() {
     fi
     local magic
     magic=$(head -c 8 "$actual_bin" | od -An -tx1 | tr -d ' \n')
-    if [[ "$magic" != "4258544202000000" ]]; then
-        echo "bin trace: bad magic/version (got $magic, want 4258544202000000)"
+    if [[ "$magic" != "4258544203000000" ]]; then
+        echo "bin trace: bad magic/version (got $magic, want 4258544203000000)"
         rm -f "$actual_bin"
         return 1
     fi
