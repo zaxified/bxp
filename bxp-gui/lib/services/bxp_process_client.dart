@@ -908,6 +908,97 @@ class BxpProcessClient {
         onSpawn: onSpawn,
       );
 
+  /// Spawn `bxp-cli` with `--trace=bin --trace-file=<btraceOutPath>`.
+  ///
+  /// `--trace=bin` emits the binary BXTB stream on stdout — this is the
+  /// primary live source the GUI feeds frame-by-frame into its sparse
+  /// trace model as bytes arrive (no waiting for the process to exit).
+  /// `--trace-file` writes the same byte sequence to disk in parallel so
+  /// the file persists for post-run drill-down (mmap reads at
+  /// `source_locator` etc.) — useful for large datasets where the GUI
+  /// drops the in-RAM frame backing once the model is built.
+  ///
+  /// `--trace` implies `--quiet`, so there is no per-template stdout
+  /// summary block on this path; all progress signals come from the
+  /// binary stream itself (file_start / file_end / output_row frames).
+  /// stderr still streams chunk-by-chunk via [onStderr] for warnings.
+  static Future<ProcessRunResult> runWithBtrace({
+    required String configPath,
+    required String templateId,
+    required String btraceOutPath,
+    required bool dryRun,
+    void Function(List<int> chunk)? onStdoutChunk,
+    void Function(String chunk)? onStderr,
+    void Function(Process)? onSpawn,
+  }) async {
+    final endAction = DiagnosticLog.action(
+      'runWithBtrace',
+      {'config': configPath, 'template': templateId, 'bxtb': btraceOutPath},
+    );
+    final bin = findBin('bxp-cli');
+    if (bin == null) {
+      endAction({'result': 'binary_missing'});
+      return const ProcessRunResult(
+        exitCode: ProcessRunResult.kExitBinaryMissing,
+        stderr: 'bxp-cli binary not found',
+      );
+    }
+    final configFile = File(configPath);
+    if (!configFile.existsSync()) {
+      endAction({'result': 'config_missing'});
+      return ProcessRunResult(
+        exitCode: ProcessRunResult.kExitConfigMissing,
+        stderr: 'config file not found: $configPath',
+      );
+    }
+    final workingDir = configFile.parent.path;
+    final args = <String>[
+      '--config',
+      configPath,
+      if (templateId.isNotEmpty) ...['--template', templateId],
+      if (dryRun) '--dry-run',
+      '--trace=bin',
+      '--trace-file=$btraceOutPath',
+    ];
+
+    try {
+      final proc = await Process.start(bin, args, workingDirectory: workingDir);
+      if (onSpawn != null) onSpawn(proc);
+      // Stream stdout BYTES (binary BXTB frames). The transform here
+      // intentionally avoids utf8 decoding — these are raw little-endian
+      // u32/u16/u8 fields plus arbitrary lp-prefixed strings, not text.
+      // Caller's incremental parser feeds them into BtraceReader.streaming.
+      int stdoutBytes = 0;
+      final stdoutFut = proc.stdout.listen((chunk) {
+        stdoutBytes += chunk.length;
+        if (onStdoutChunk != null) onStdoutChunk(chunk);
+      }).asFuture<void>();
+      final stderrBuf = StringBuffer();
+      final stderrFut = proc.stderr.transform(utf8.decoder).listen((chunk) {
+        stderrBuf.write(chunk);
+        if (onStderr != null) onStderr(chunk);
+      }).asFuture<void>();
+      final exitCode = await proc.exitCode;
+      await stdoutFut;
+      await stderrFut;
+      endAction({
+        'exit': exitCode,
+        'stdout_bytes': stdoutBytes,
+        'stderr_bytes': stderrBuf.length,
+      });
+      return ProcessRunResult(
+        exitCode: exitCode,
+        stderr: stderrBuf.toString(),
+      );
+    } catch (e) {
+      endAction({'result': 'spawn_failed', 'error': e.toString()});
+      return ProcessRunResult(
+        exitCode: -1,
+        stderr: 'spawn failed: $e',
+      );
+    }
+  }
+
   static Future<ProcessRunResult> _runCliTrace({
     required String configPath,
     required String templateId,

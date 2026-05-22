@@ -162,18 +162,29 @@ class Done extends Frame {
   const Done(super.chunkId, this.exitCode);
 }
 
-/// Reader over a fully-loaded `Uint8List` byte buffer. Constructor verifies
-/// magic + schema version; `nextFrame()` returns one frame at a time until
-/// the buffer is exhausted (`null` at EOF).
+/// Reader over a `Uint8List` byte buffer that supports both bulk and
+/// streaming modes.
 ///
-/// Streaming reader (over `Stream<List<int>>` from a Process stdout) lives in
-/// `BtraceStreamReader` in a future PR.
+/// **Bulk mode** ([fromBytes]): the caller hands over a fully-loaded
+/// buffer (e.g. read from disk). Constructor verifies magic + schema
+/// version eagerly. `nextFrame()` returns one frame at a time and throws
+/// `FormatException` on truncated headers/payloads.
+///
+/// **Streaming mode** ([streaming]): constructor starts with an empty
+/// buffer and an unverified header. The caller pumps bytes via
+/// [appendBytes] as they arrive on a Process stdout pipe, then drains
+/// frames via [nextFrame] which returns `null` when there aren't enough
+/// bytes for the next full frame (caller waits for more chunks before
+/// retrying). Magic + version are validated lazily once the first 8
+/// bytes have been buffered.
 class BtraceReader {
-  final Uint8List _data;
-  final ByteData _bd;
+  Uint8List _data;
+  ByteData _bd;
   int _pos = 0;
+  bool _headerVerified;
+  final bool _streaming;
 
-  BtraceReader._(this._data, this._bd, this._pos);
+  BtraceReader._(this._data, this._bd, this._pos, this._headerVerified, this._streaming);
 
   /// Validates magic + version, returns a reader positioned past the header.
   factory BtraceReader.fromBytes(Uint8List data) {
@@ -197,7 +208,33 @@ class BtraceReader {
       throw FormatException(
           'btrace: unsupported schema version $version (this reader handles 2 and $schemaVersion)');
     }
-    return BtraceReader._(data, bd, 8);
+    return BtraceReader._(data, bd, 8, true, false);
+  }
+
+  /// Empty reader for streaming mode. Caller pumps bytes via [appendBytes]
+  /// and drains frames via [nextFrame] (returns null when starved). Magic
+  /// + version are verified lazily once the first 8 bytes have been fed;
+  /// the first nextFrame call on an unverified stream may throw
+  /// `FormatException` if the magic/version checks fail.
+  factory BtraceReader.streaming() {
+    final empty = Uint8List(0);
+    return BtraceReader._(
+        empty, ByteData.sublistView(empty), 0, false, true);
+  }
+
+  /// Streaming mode: append [chunk] to the internal buffer so the next
+  /// nextFrame() drain has fresh bytes to parse. Throws `StateError` if
+  /// called on a bulk-mode reader.
+  void appendBytes(List<int> chunk) {
+    if (!_streaming) {
+      throw StateError('appendBytes called on bulk-mode BtraceReader');
+    }
+    if (chunk.isEmpty) return;
+    final out = Uint8List(_data.length + chunk.length);
+    out.setRange(0, _data.length, _data);
+    out.setRange(_data.length, out.length, chunk);
+    _data = out;
+    _bd = ByteData.sublistView(_data);
   }
 
   /// True iff there are more bytes available (not necessarily a full frame).
@@ -206,13 +243,38 @@ class BtraceReader {
   /// Current byte position (after header). Useful for diagnostics.
   int get position => _pos;
 
-  /// Returns next frame, or `null` at EOF. Unknown frame types are silently
-  /// skipped via the `pay_len` prefix — forward compatibility lets readers
-  /// from older clients tolerate streams that contain frames they don't yet
-  /// understand. Throws `FormatException` on truncated header / payload.
+  /// Returns next frame, or `null` when there are no more frames available.
+  ///
+  /// In bulk mode `null` means EOF (the reader's buffer has been fully
+  /// consumed); a truncated header/payload throws `FormatException`.
+  ///
+  /// In streaming mode `null` means "need more bytes" — the caller should
+  /// pump more chunks via [appendBytes] and retry. The header/payload
+  /// checks below treat short buffers as starvation, not as a format error.
+  ///
+  /// Unknown frame types are silently skipped via the `pay_len` prefix
+  /// (forward compat).
   Frame? nextFrame() {
+    // Lazy header verification on streaming-mode first call.
+    if (!_headerVerified) {
+      if (_data.length < 8) return null;
+      final magic = _bd.getUint32(0, Endian.little);
+      if (magic != frameMagic) {
+        throw FormatException(
+            'btrace: bad magic 0x${magic.toRadixString(16).padLeft(8, '0')} '
+            '(expected 0x${frameMagic.toRadixString(16).padLeft(8, '0')} = "BXTB")');
+      }
+      final version = _bd.getUint32(4, Endian.little);
+      if (version != schemaVersion && version != 2) {
+        throw FormatException(
+            'btrace: unsupported schema version $version (this reader handles 2 and $schemaVersion)');
+      }
+      _headerVerified = true;
+      _pos = 8;
+    }
     while (_pos < _data.length) {
       if (_pos + frameHeaderSize > _data.length) {
+        if (_streaming) return null;
         throw FormatException(
             'btrace: truncated frame header at offset $_pos '
             '(have ${_data.length - _pos} bytes, need $frameHeaderSize)');
@@ -220,12 +282,16 @@ class BtraceReader {
       final typeByte = _data[_pos];
       final chunkId = _bd.getUint16(_pos + 1, Endian.little);
       final payLen = _bd.getUint32(_pos + 3, Endian.little);
-      _pos += frameHeaderSize;
-      if (_pos + payLen > _data.length) {
+      if (_pos + frameHeaderSize + payLen > _data.length) {
+        // Streaming mode: payload not fully buffered yet, wait for more.
+        // Bulk mode: truncated file → format error.
+        if (_streaming) return null;
         throw FormatException(
-            'btrace: truncated payload at offset $_pos '
-            '(need $payLen, have ${_data.length - _pos})');
+            'btrace: truncated payload at offset ${_pos + frameHeaderSize} '
+            '(need $payLen, have ${_data.length - _pos - frameHeaderSize})');
       }
+      // Commit position past header only once we know the full frame is in.
+      _pos += frameHeaderSize;
       final payloadEnd = _pos + payLen;
       final frameType = FrameType.fromByte(typeByte);
       if (frameType == null) {

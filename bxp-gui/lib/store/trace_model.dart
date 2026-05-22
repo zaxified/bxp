@@ -91,8 +91,10 @@ class RowModel {
   /// `FileModel.rowIds` if rows were filtered before tracing started.
   final int fileRow;
   /// Raw CSV field values for this row, in column order matching
-  /// `FileModel.headers`.
-  final List<String> fields;
+  /// `FileModel.headers`. NDJSON mode populates this from `row_start`;
+  /// btrace mode leaves it empty until [detailLoaded] fires and
+  /// [TraceStore.ensureDetailLoaded] reads the source CSV at [sourceLocator].
+  List<String> fields;
   /// Variable evaluations (input_schema + row_rules overrides), appended as
   /// trace events arrive. May be empty for filtered rows.
   final List<VarEntry> vars = [];
@@ -109,6 +111,37 @@ class RowModel {
   int? matchedRuleIndex;
   /// True when any `var_error` event was received for this row.
   bool hasError = false;
+
+  // ── Btrace mode metadata ───────────────────────────────────────────────
+  // Populated by `TraceStore._streamRunBtrace` from `output_row` frames so
+  // drill-down can lazy-fetch the source/output rows + re-eval expressions
+  // on demand. Default values match what NDJSON mode would leave them at
+  // (NDJSON populates everything synchronously, so `detailLoaded` stays
+  // true and these locator fields are never consulted).
+
+  /// Byte offset of the source CSV row this trace row was built from.
+  /// Used by [CsvRowFetcher.lineAt] to fetch the raw source line during
+  /// btrace-mode drill-down. -1 in NDJSON mode.
+  int sourceLocator = -1;
+  /// Per-file 0-based output-row index (`output_row.outputIdx`). Used as
+  /// the index into `FileModel.outputOffsets[]` to derive the byte offset
+  /// of the corresponding output.csvx line. -1 in NDJSON mode.
+  int outputIdx = -1;
+  /// Action label carried by the `output_row` frame (e.g. "BUY", "SELL").
+  /// Surfaces in master row lists without paying for a drill-down. Null
+  /// in NDJSON mode (where it can be derived from outputs[0]).
+  String? btraceAction;
+
+  /// False until [TraceStore.ensureDetailLoaded] has populated `vars`,
+  /// `rules`, `fields`, and `outputs` for this row. NDJSON mode populates
+  /// everything synchronously and never flips this — defaults true to
+  /// preserve that behaviour for callers that don't know about lazy load.
+  bool detailLoaded = true;
+
+  /// True while an ensureDetailLoaded() coroutine for this row is in
+  /// flight. Lets the UI render a spinner without thrashing notifyListeners
+  /// for transient state changes.
+  bool detailLoading = false;
 
   RowModel({required this.id, required this.fileId, required this.fileRow, required this.fields});
 }
@@ -181,6 +214,24 @@ class FileModel {
   /// filtered, warnings). Null until the event arrives.
   Map<String, dynamic>? stats;
 
+  // ── Btrace mode metadata ───────────────────────────────────────────────
+  // Populated by `TraceStore._streamRunBtrace`; used by
+  // `ensureDetailLoaded(rowId)` to map output-row idx → byte offset and
+  // open file-handle fetchers. All-empty / null in NDJSON mode.
+
+  /// Resolved path to the source CSV (the input file bxp-cli processed).
+  /// Differs from [path] only when the runtime CWD turned a relative
+  /// declared path into an absolute one.
+  String sourceCsvPath = '';
+  /// Resolved path to the output CSVX (sibling of the source CSV, with the
+  /// template's `file_pattern_out` suffix applied — defaults to `.csvx`).
+  String outputCsvxPath = '';
+  /// Byte offset into `outputCsvxPath` for every emitted output row, in
+  /// file order. Index N is the byte position of the start of the Nth
+  /// data row (header offset is implicit and not stored). Populated once
+  /// at trace-load time by a single sequential scan.
+  List<int> outputOffsets = const [];
+
   FileModel({required this.id, required this.template, required this.path, required this.rows, required this.headers});
 }
 
@@ -207,4 +258,11 @@ class TraceModel {
   /// Parse errors from malformed NDJSON lines, capped at `_kMaxIssues` to
   /// prevent runaway producers from exhausting memory.
   final List<String> issues = [];
+
+  /// True when this model was built by loading a `.bxtb` file (schema v3
+  /// index-only emit). Per-row vars/rules/outputs are populated lazily via
+  /// [TraceStore.ensureDetailLoaded] when the user selects a row. False
+  /// when the model came from the NDJSON `bxp-cli --trace` stream
+  /// (everything is in memory up front).
+  bool fromBtrace = false;
 }

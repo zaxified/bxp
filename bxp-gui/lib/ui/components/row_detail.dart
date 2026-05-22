@@ -37,6 +37,25 @@ class _RowDetailState extends State<RowDetail> {
     if (row == null || file == null) return const SizedBox.shrink();
 
     final t = context.bxpTheme;
+
+    // Btrace mode: per-row drill-down detail (vars, rules, output values,
+    // raw fields) is fetched lazily on first selection. Trigger the fetch
+    // after the current build frame so we don't notifyListeners() while
+    // building. The spinner branch below covers the loading state; once
+    // detailLoaded flips true, the next watch() rebuild renders normally.
+    if (model.fromBtrace && !row.detailLoaded && !row.detailLoading) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        store.ensureDetailLoaded(rowId);
+      });
+    }
+    if (model.fromBtrace && row.detailLoading) {
+      return const Center(
+        child: SizedBox(
+          width: 32, height: 32, child: CircularProgressIndicator(strokeWidth: 2),
+        ),
+      );
+    }
+
     final errorCount = row.vars.where((v) => v.kind == 'error').length;
 
     return Column(

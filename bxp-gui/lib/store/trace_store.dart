@@ -8,7 +8,9 @@ import 'package:json5_ast/ast.dart';
 import 'package:json5_ast/operations.dart' as ast_ops;
 import '../services/ast_loader.dart';
 import '../services/ast_patch_client.dart';
+import '../services/btrace.dart' as btrace_mod;
 import '../services/bxp_process_client.dart';
+import '../services/csv_row_fetcher.dart';
 import '../services/dart_validator.dart';
 import '../services/dev_trace.dart';
 import '../services/prefs_service.dart';
@@ -2468,10 +2470,39 @@ class TraceStore extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// When true (default since the btrace v3 migration), `_streamRun`
+  /// routes through `_streamRunBtrace` — spawns bxp-cli with
+  /// `--trace-file=<temp>.bxtb`, then loads the produced binary trace into
+  /// a sparse skeleton TraceModel. Per-row drill-down detail is fetched on
+  /// demand by [ensureDetailLoaded]. Setting this false at runtime (no UI
+  /// switch yet; toggle through a debug session for now) reverts to the
+  /// legacy NDJSON streaming pipeline so we can A/B compare if anything
+  /// regresses in user-facing behaviour.
+  bool useBtraceMode = true;
+
+  /// Per-file runtime state for btrace-backed runs. Holds the open
+  /// [CsvRowFetcher] handles, the precomputed output-row byte offsets, and
+  /// the template's input_schema / ticker_map / rule_when list that
+  /// [ensureDetailLoaded] needs to reconstruct per-row drill-down. Keyed
+  /// by `FileModel.id`. Emptied + disposed at the top of every
+  /// `_streamRun*` to avoid leaking file handles across runs.
+  final Map<String, _BtraceFileRuntime> _btraceRuntimes = {};
+
+  /// Dispatcher: route to btrace or NDJSON implementation based on
+  /// [useBtraceMode]. Both implementations honour the same lifecycle
+  /// contract (status flips to running, then done/error; stderr captured;
+  /// cancel via [cancelRun]; per-tick counter ValueNotifier kept current).
+  Future<void> _streamRun({required bool dry}) async {
+    if (useBtraceMode) {
+      return _streamRunBtrace(dry: dry);
+    }
+    return _streamRunNdjson(dry: dry);
+  }
+
   /// Spawns `bxp-cli --trace` (dry or full) and streams the NDJSON output
   /// into a fresh TraceBuilder. UI refreshes are throttled to ~60 fps so
   /// the file/row lists grow live while the pipeline still runs.
-  Future<void> _streamRun({required bool dry}) async {
+  Future<void> _streamRunNdjson({required bool dry}) async {
     if (configPath.isEmpty) return;
 
     status = RunStatus.running;
@@ -2847,5 +2878,978 @@ class TraceStore extends ChangeNotifier {
   /// of rebuild requests independent of pointer activity. Not for
   /// production use.
   void debugNotify() => notifyListeners();
+
+  // ─────────────────────────────────────────────────────────────────────
+  // Btrace-mode pipeline (schema v3, since 2026-05-22)
+  // ─────────────────────────────────────────────────────────────────────
+
+  /// Spawn `bxp-cli --trace-file=<temp>.bxtb`, wait for it to complete,
+  /// then load the produced binary trace into a sparse skeleton TraceModel.
+  /// Per-row drill-down detail (vars, rules, output values, raw fields)
+  /// stays unpopulated until [ensureDetailLoaded] fires on user selection.
+  ///
+  /// Lifecycle parity with [_streamRunNdjson]: status flips
+  /// running → done|error|cancelled, stderr is captured, the cancel
+  /// button works mid-spawn, traceModel is replaced once at the end.
+  Future<void> _streamRunBtrace({required bool dry}) async {
+    if (configPath.isEmpty) return;
+    status = RunStatus.running;
+    runMode = dry ? RunMode.dry : RunMode.full;
+    runError = null;
+    stderrText = '';
+    rawLines = 0;
+    _traceLinesCounter.value = 0;
+    lastExitCode = null;
+    selectedFileId = null;
+    selectedRowId = null;
+    _exprCallCache.clear();
+    _exprCallInFlight.clear();
+    // Dispose any lingering btrace runtime data from a previous run so
+    // file handles don't leak. CsvRowFetcher.dispose is idempotent.
+    for (final rt in _btraceRuntimes.values) {
+      await rt.dispose();
+    }
+    _btraceRuntimes.clear();
+    traceModel = null;
+    _fileGen.value++;
+    notifyListeners();
+
+    // Allocate a temp .bxtb path; cleaned up after the model is built.
+    // Place it next to the config so the path is short (Windows MAX_PATH)
+    // and resides on a writable drive.
+    final tmpDir = Directory.systemTemp;
+    final bxtbPath = p.join(tmpDir.path,
+        'bxp-gui-${DateTime.now().millisecondsSinceEpoch}.bxtb');
+
+    // Fresh in-flight model — _ingestBtraceFrame mutates this in place as
+    // frames arrive on stdout. UI listens via fileGen for additions; main
+    // notifyListeners() fires once on first frame and once at finish.
+    final model = TraceModel()..fromBtrace = true;
+    traceModel = model;
+
+    // Streaming BXTB parser + per-template/per-file context. Allocated
+    // up front so the stdout-chunk callback can keep state across calls.
+    final reader = btrace_mod.BtraceReader.streaming();
+    final ctx = _BtraceIngestCtx(
+      configPath: configPath,
+      bxtbDir: p.dirname(bxtbPath),
+      cfgDir: p.dirname(configPath),
+      model: model,
+      runtimes: _btraceRuntimes,
+    );
+
+    // Sequential drain: bxp-cli emits frames much faster than the
+    // per-frame `_ingestBtraceFrame` can complete (each output_row triggers
+    // a CsvRowFetcher.lineAt — async file seek + read). If we kicked off
+    // ingest tasks without await they'd race on the shared
+    // currentSourceFetcher (setPosition + read are not atomic between
+    // concurrent invocations), and rows would end up with fields from a
+    // different source line. The queue + draining flag below serialise
+    // ingest while still allowing the listener to keep reading chunks.
+    final pendingFrames = <btrace_mod.Frame>[];
+    bool draining = false;
+    Future<void> drainQueue() async {
+      while (pendingFrames.isNotEmpty) {
+        final frame = pendingFrames.removeAt(0);
+        try {
+          await _ingestBtraceFrame(ctx, frame);
+        } catch (e) {
+          model.issues.add('frame ingest: $e');
+        }
+      }
+    }
+
+    // Counter ticker — bumps `_traceLinesCounter` to `rawLines` (= frame
+    // count) on a 100 ms cadence so the status bar updates without
+    // calling notifyListeners() per frame.
+    final ticker = Timer.periodic(const Duration(milliseconds: 100), (_) {
+      if (_traceLinesCounter.value != rawLines) {
+        _traceLinesCounter.value = rawLines;
+      }
+    });
+
+    try {
+      final r = await BxpProcessClient.runWithBtrace(
+        configPath: configPath,
+        templateId: templateId,
+        btraceOutPath: bxtbPath,
+        dryRun: dry,
+        onSpawn: (p) {
+          _runProcess = p;
+          if (_cancelRequested) p.kill(ProcessSignal.sigterm);
+        },
+        onStdoutChunk: (chunk) {
+          reader.appendBytes(chunk);
+          while (true) {
+            btrace_mod.Frame? frame;
+            try {
+              frame = reader.nextFrame();
+            } on FormatException catch (e) {
+              model.issues.add('btrace parse: $e');
+              break;
+            }
+            if (frame == null) break;
+            rawLines++;
+            pendingFrames.add(frame);
+          }
+          // Kick a drain task if one isn't already in flight. When new
+          // chunks arrive while a drain runs, their frames append to
+          // `pendingFrames` and the active drain picks them up before
+          // it returns. Fire-and-forget here — the parent _streamRunBtrace
+          // awaits the final drain via the dedicated post-exit await.
+          if (!draining) {
+            draining = true;
+            drainQueue().whenComplete(() => draining = false);
+          }
+        },
+        onStderr: (chunk) {
+          _stderrBuffer.write(chunk);
+          _stderrCache = null;
+        },
+      );
+      if (stderrText.isEmpty) stderrText = r.stderr;
+      lastExitCode = r.exitCode;
+      if (_cancelRequested) {
+        status = RunStatus.done;
+        runError = 'cancelled';
+        return;
+      }
+      if (r.exitCode < 0) {
+        runError = r.stderr.isEmpty ? 'spawn failed' : r.stderr;
+        status = RunStatus.error;
+        return;
+      }
+      // Drain any frames still queued after the process exited. The
+      // `draining` flag may be true if the last chunk landed mid-drain;
+      // wait until the previous drain finishes, then run one final
+      // sequential pass over whatever is left (which itself may grow if
+      // new chunks land while we await — unlikely after process exit,
+      // but harmless because the inner while is queue-driven).
+      while (draining || pendingFrames.isNotEmpty) {
+        // Busy-yield to the event loop until the in-flight drain task
+        // releases the flag; then drain ourselves if anything is left.
+        await Future<void>.delayed(Duration.zero);
+        if (!draining && pendingFrames.isNotEmpty) {
+          draining = true;
+          await drainQueue();
+          draining = false;
+        }
+      }
+      // Finalize whatever file context was still open when the producer
+      // exited — opens output.csvx, builds outputOffsets, attaches the
+      // runtime so drill-down works.
+      await ctx.finalizeCurrentFile();
+      if (r.exitCode != 0 && runError == null) {
+        runError = 'bxp-cli exited ${r.exitCode}';
+      }
+    } catch (e) {
+      runError = e.toString();
+      status = RunStatus.error;
+      return;
+    } finally {
+      ticker.cancel();
+      _runProcess = null;
+      _cancelRequested = false;
+      // Best-effort cleanup of the on-disk .bxtb. Today the in-memory
+      // model captured everything live; the disk copy was a safety net
+      // and is purely redundant unless the model build raised. Keep it
+      // on parse error for developer inspection.
+      if (runError == null) {
+        try { File(bxtbPath).deleteSync(); } catch (_) {}
+      }
+      if (_traceLinesCounter.value != rawLines) {
+        _traceLinesCounter.value = rawLines;
+      }
+      notifyListeners();
+    }
+
+    if (status != RunStatus.error) status = RunStatus.done;
+    // Auto-select first file + row so RowDetail/OutputPanel aren't empty.
+    if (traceModel != null && traceModel!.fileOrder.isNotEmpty) {
+      selectedFileId ??= traceModel!.fileOrder.first;
+      final activeFile = traceModel!.files[selectedFileId];
+      if (selectedRowId == null &&
+          activeFile != null &&
+          activeFile.rowIds.isNotEmpty) {
+        selectedRowId = activeFile.rowIds.first;
+      }
+    }
+    notifyListeners();
+  }
+
+  /// Dispatch a single live frame from the streaming BXTB parser into the
+  /// trace model. Mutates `ctx` (current file/template) and the model
+  /// behind it. Caller drives this in a loop from a stdout-chunk listener.
+  Future<void> _ingestBtraceFrame(
+      _BtraceIngestCtx ctx, btrace_mod.Frame frame) async {
+    if (frame is btrace_mod.FileStart) {
+      await ctx.finalizeCurrentFile();
+      final fileId = '${frame.template}::${frame.path}';
+      final file = FileModel(
+        id: fileId,
+        template: frame.template,
+        path: frame.path,
+        rows: 0,
+        headers: List<String>.of(frame.headers),
+      );
+      file.outputHeaders = List<String>.of(frame.outHeaders);
+      for (final pp in ctx.prepassBatch) {
+        file.prepass.add(pp);
+      }
+      ctx.prepassBatch.clear();
+      final sourcePath = ctx.resolveSourcePath(frame.path);
+      if (sourcePath == null) {
+        ctx.model.issues.add('source CSV not found for ${frame.path}');
+      } else {
+        file.sourceCsvPath = sourcePath;
+        file.outputCsvxPath = ctx.deriveOutputPath(sourcePath);
+      }
+      ctx.model.files[fileId] = file;
+      ctx.model.fileOrder.add(fileId);
+      ctx.currentFile = file;
+      ctx.currentSourceFetcher = file.sourceCsvPath.isEmpty
+          ? null
+          : await CsvRowFetcher.open(file.sourceCsvPath);
+      await ctx.ensureTemplate(frame.template);
+      // Bump fileGen so FileList rebuilds with the newly-arrived entry
+      // without a main notifyListeners (which would also rebuild RowList
+      // mid-stream).
+      _fileGen.value++;
+      return;
+    }
+    if (frame is btrace_mod.FileEnd) {
+      final file = ctx.currentFile;
+      if (file != null) {
+        file.stats = {
+          'source_rows': frame.sourceRows,
+          'written_rows': frame.writtenRows,
+          'errors': frame.errors,
+          'warnings': frame.warnings,
+        };
+        _fileGen.value++;
+      }
+      return;
+    }
+    if (frame is btrace_mod.PrepassEntry) {
+      final entry = PrepassEntry(
+          key: frame.key, field: frame.field, value: frame.value);
+      final file = ctx.currentFile;
+      if (file != null) {
+        file.prepass.add(entry);
+      } else {
+        ctx.prepassBatch.add(entry);
+      }
+      return;
+    }
+    if (frame is btrace_mod.OutputRow) {
+      final file = ctx.currentFile;
+      if (file == null) return;
+      final rid = 'r${ctx.rowCounter++}';
+      final row = RowModel(
+        id: rid,
+        fileId: file.id,
+        fileRow: file.rowIds.length + 1,
+        fields: <String>[],
+      )
+        ..sourceLocator = frame.sourceLocator
+        ..outputIdx = frame.outputIdx
+        ..btraceAction = frame.action
+        ..matchedRuleIndex = frame.ruleIdx
+        ..detailLoaded = false;
+      // Pre-fetch raw source fields so RowList grid cells aren't blank.
+      // Drill-down detail (vars / rules / output values) stays lazy until
+      // the user actually selects the row.
+      if (ctx.currentSourceFetcher != null && frame.sourceLocator >= 0) {
+        final line =
+            await ctx.currentSourceFetcher!.lineAt(frame.sourceLocator);
+        if (line != null) {
+          row.fields = _splitCsv(line, file.headers.length);
+        }
+      }
+      ctx.model.rows[rid] = row;
+      file.rowIds.add(rid);
+      return;
+    }
+    if (frame is btrace_mod.FilteredRow) {
+      final file = ctx.currentFile;
+      if (file == null) return;
+      final rid = 'r${ctx.rowCounter++}';
+      final row = RowModel(
+        id: rid,
+        fileId: file.id,
+        fileRow: file.rowIds.length + 1,
+        fields: <String>[],
+      )
+        ..sourceLocator = frame.sourceLocator
+        ..filteredReason = frame.reason
+        ..detailLoaded = true; // filtered → nothing more to load
+      if (ctx.currentSourceFetcher != null && frame.sourceLocator >= 0) {
+        final line =
+            await ctx.currentSourceFetcher!.lineAt(frame.sourceLocator);
+        if (line != null) {
+          row.fields = _splitCsv(line, file.headers.length);
+        }
+      }
+      ctx.model.rows[rid] = row;
+      file.rowIds.add(rid);
+      return;
+    }
+    if (frame is btrace_mod.ErrorRow) {
+      ctx.model.issues.add(
+          'error @ locator ${frame.sourceLocator}: ${frame.errorKind} ${frame.detail}');
+      return;
+    }
+    if (frame is btrace_mod.Done) {
+      ctx.model.done = {'exitCode': frame.exitCode};
+      return;
+    }
+  }
+
+  /// Legacy build-after-exit path. Kept as the offline fallback (used when
+  /// loading a .bxtb saved from a previous run via a future "Open trace"
+  /// menu); the live streaming pipeline above is the primary path.
+  // ignore: unused_element
+  Future<TraceModel?> _buildModelFromBtrace(String bxtbPath) async {
+    final bytes = await File(bxtbPath).readAsBytes();
+    final reader = btrace_mod.BtraceReader.fromBytes(bytes);
+    final model = TraceModel()..fromBtrace = true;
+
+    // ── Template config (one fetch shared across all files; templates
+    // declare a single config block, so input_schema/rules don't change
+    // between files emitted from one bxp-cli run). ──────────────────────
+    String? currentTemplate;
+    Map<String, String> inputSchema = const {};
+    Map<String, String> tickerMap = const {};
+    List<String> ruleWhens = const [];
+    List<List<Map<String, String>>> ruleRows = const [];
+
+    Future<void> ensureTemplate(String templateId) async {
+      if (currentTemplate == templateId) return;
+      currentTemplate = templateId;
+      final tpl = await BxpProcessClient.fetchTemplate(configPath, templateId);
+      inputSchema = const {};
+      tickerMap = const {};
+      ruleWhens = const [];
+      ruleRows = const [];
+      if (tpl != null) {
+        final is_ = tpl['input_schema'];
+        if (is_ is Map) {
+          inputSchema = <String, String>{
+            for (final e in is_.entries) e.key.toString(): e.value?.toString() ?? '',
+          };
+        }
+        final tm = tpl['ticker_map'];
+        if (tm is Map) {
+          tickerMap = <String, String>{
+            for (final e in tm.entries) e.key.toString(): e.value?.toString() ?? '',
+          };
+        }
+        final rr = tpl['row_rules'];
+        if (rr is List) {
+          final whens = <String>[];
+          final rowsByRule = <List<Map<String, String>>>[];
+          for (final r in rr) {
+            if (r is! Map) continue;
+            whens.add(r['when']?.toString() ?? '');
+            final rowsField = r['rows'];
+            if (rowsField is List) {
+              rowsByRule.add([
+                for (final rowOverride in rowsField)
+                  if (rowOverride is Map)
+                    <String, String>{
+                      for (final e in rowOverride.entries)
+                        e.key.toString(): e.value?.toString() ?? '',
+                    }
+              ]);
+            } else {
+              rowsByRule.add(const []);
+            }
+          }
+          ruleWhens = whens;
+          ruleRows = rowsByRule;
+        }
+      }
+    }
+
+    // ── Per-file state, refreshed every time a new file_start arrives ───
+    FileModel? currentFile;
+    CsvRowFetcher? currentSourceFetcher;
+    final prepassBatch = <PrepassEntry>[];
+    int rowCounter = 0;
+
+    final bxtbDir = p.dirname(bxtbPath);
+    final cfgDir = p.dirname(configPath);
+
+    String? resolveSourcePath(String declared) {
+      for (final cand in [
+        declared,
+        p.join(bxtbDir, declared),
+        p.join(bxtbDir, p.basename(declared)),
+        p.join(cfgDir, declared),
+        p.join(cfgDir, p.basename(declared)),
+      ]) {
+        if (File(cand).existsSync()) return cand;
+      }
+      return null;
+    }
+
+    String deriveOutputPath(String sourcePath) =>
+        sourcePath.endsWith('.csv')
+            ? '${sourcePath.substring(0, sourcePath.length - 4)}.csvx'
+            : '$sourcePath.csvx';
+
+    Future<void> finalizeCurrentFile() async {
+      final file = currentFile;
+      if (file == null) return;
+      // Build outputOffsets if output.csvx exists. Single sequential scan.
+      if (file.outputCsvxPath.isNotEmpty &&
+          File(file.outputCsvxPath).existsSync()) {
+        file.outputOffsets = await _indexLineOffsets(file.outputCsvxPath);
+      }
+      final outputFetcher = file.outputCsvxPath.isEmpty
+          ? null
+          : await CsvRowFetcher.open(file.outputCsvxPath);
+      // Build pre-pass lookups blob for evalBatch.
+      final lookups = <String, String>{};
+      for (final pp in file.prepass) {
+        lookups['_default\x00${pp.key}\x00${pp.field}'] = pp.value;
+      }
+      _btraceRuntimes[file.id] = _BtraceFileRuntime(
+        sourceFetcher: currentSourceFetcher,
+        outputFetcher: outputFetcher,
+        inputSchema: inputSchema,
+        tickerMap: tickerMap,
+        ruleWhens: ruleWhens,
+        ruleRows: ruleRows,
+        lookups: lookups,
+      );
+      // currentSourceFetcher is now owned by the runtime; don't close it.
+      currentSourceFetcher = null;
+      currentFile = null;
+    }
+
+    // ── Frame walk ──────────────────────────────────────────────────────
+    while (reader.hasMore) {
+      final frame = reader.nextFrame();
+      if (frame == null) break;
+
+      if (frame is btrace_mod.FileStart) {
+        await finalizeCurrentFile();
+        final fileId = '${frame.template}::${frame.path}';
+        final file = FileModel(
+          id: fileId,
+          template: frame.template,
+          path: frame.path,
+          rows: 0,
+          headers: List<String>.of(frame.headers),
+        );
+        file.outputHeaders = List<String>.of(frame.outHeaders);
+        for (final pp in prepassBatch) {
+          file.prepass.add(pp);
+        }
+        prepassBatch.clear();
+        // Resolve sibling CSVs for this file.
+        final sourcePath = resolveSourcePath(frame.path);
+        if (sourcePath == null) {
+          model.issues.add('source CSV not found for ${frame.path}');
+        } else {
+          file.sourceCsvPath = sourcePath;
+          file.outputCsvxPath = deriveOutputPath(sourcePath);
+        }
+        model.files[fileId] = file;
+        model.fileOrder.add(fileId);
+        currentFile = file;
+        currentSourceFetcher = file.sourceCsvPath.isEmpty
+            ? null
+            : await CsvRowFetcher.open(file.sourceCsvPath);
+        // Fetch template config lazily on first sighting; cheap on repeat.
+        await ensureTemplate(frame.template);
+        continue;
+      }
+
+      if (frame is btrace_mod.FileEnd) {
+        final file = currentFile;
+        if (file != null) {
+          file.stats = {
+            'source_rows': frame.sourceRows,
+            'written_rows': frame.writtenRows,
+            'errors': frame.errors,
+            'warnings': frame.warnings,
+          };
+        }
+        continue;
+      }
+
+      if (frame is btrace_mod.PrepassEntry) {
+        // btrace.dart's PrepassEntry frame and trace_model.dart's
+        // PrepassEntry POJO are different types — convert before storing.
+        final entry =
+            PrepassEntry(key: frame.key, field: frame.field, value: frame.value);
+        final file = currentFile;
+        if (file != null) {
+          file.prepass.add(entry);
+        } else {
+          // prepass before file_start (unusual, but defend); will attach
+          // to whichever file_start arrives next.
+          prepassBatch.add(entry);
+        }
+        continue;
+      }
+
+      if (frame is btrace_mod.OutputRow) {
+        final file = currentFile;
+        if (file == null) continue;
+        final rid = 'r${rowCounter++}';
+        final row = RowModel(
+          id: rid,
+          fileId: file.id,
+          fileRow: file.rowIds.length + 1,
+          fields: <String>[],
+        )
+          ..sourceLocator = frame.sourceLocator
+          ..outputIdx = frame.outputIdx
+          ..btraceAction = frame.action
+          ..matchedRuleIndex = frame.ruleIdx
+          ..detailLoaded = false;
+        // Pre-fetch source fields so RowList renders immediately.
+        if (currentSourceFetcher != null && frame.sourceLocator >= 0) {
+          final line =
+              await currentSourceFetcher!.lineAt(frame.sourceLocator);
+          if (line != null) {
+            row.fields = _splitCsv(line, file.headers.length);
+          }
+        }
+        model.rows[rid] = row;
+        file.rowIds.add(rid);
+        continue;
+      }
+
+      if (frame is btrace_mod.FilteredRow) {
+        final file = currentFile;
+        if (file == null) continue;
+        final rid = 'r${rowCounter++}';
+        final row = RowModel(
+          id: rid,
+          fileId: file.id,
+          fileRow: file.rowIds.length + 1,
+          fields: <String>[],
+        )
+          ..sourceLocator = frame.sourceLocator
+          ..filteredReason = frame.reason
+          ..detailLoaded = true; // Nothing to drill down for filtered rows.
+        if (currentSourceFetcher != null && frame.sourceLocator >= 0) {
+          final line =
+              await currentSourceFetcher!.lineAt(frame.sourceLocator);
+          if (line != null) {
+            row.fields = _splitCsv(line, file.headers.length);
+          }
+        }
+        model.rows[rid] = row;
+        file.rowIds.add(rid);
+        continue;
+      }
+
+      if (frame is btrace_mod.ErrorRow) {
+        // ErrorRow frames address a specific source row by locator; we
+        // route them onto whichever row already has that locator, or
+        // mark the file as having a stream-level error. For now stash
+        // into model.issues so something surfaces in the status bar.
+        model.issues.add(
+            'error @ locator ${frame.sourceLocator}: ${frame.errorKind} ${frame.detail}');
+        continue;
+      }
+
+      if (frame is btrace_mod.Done) {
+        model.done = {'exitCode': frame.exitCode};
+        continue;
+      }
+    }
+
+    await finalizeCurrentFile();
+    return model;
+  }
+
+  /// Build a list of LF byte offsets — index N points at the start of
+  /// data row N (header row 0 is skipped). Used so that
+  /// outputCsvx[outputIdx] resolves to a CsvRowFetcher byte offset.
+  Future<List<int>> _indexLineOffsets(String path) async {
+    final bytes = await File(path).readAsBytes();
+    final offsets = <int>[];
+    if (bytes.isEmpty) return offsets;
+    final headerLf = bytes.indexOf(0x0A);
+    if (headerLf < 0) return offsets;
+    int pos = headerLf + 1;
+    while (pos < bytes.length) {
+      offsets.add(pos);
+      final nextLf = bytes.indexOf(0x0A, pos);
+      if (nextLf < 0) break;
+      pos = nextLf + 1;
+    }
+    return offsets;
+  }
+
+  /// Populate `row.fields`, `row.vars`, `row.rules`, `row.outputs` for a
+  /// row whose data has not yet been fetched (btrace mode). Idempotent —
+  /// calling on an already-loaded row returns immediately. Coalesces
+  /// concurrent calls via [detailLoading] so a double-click doesn't
+  /// trigger duplicate work.
+  Future<void> ensureDetailLoaded(String rowId) async {
+    final model = traceModel;
+    if (model == null || !model.fromBtrace) return;
+    final row = model.rows[rowId];
+    if (row == null || row.detailLoaded) return;
+    if (row.detailLoading) return;
+    row.detailLoading = true;
+    notifyListeners();
+
+    try {
+      await _loadRowDetail(row);
+      row.detailLoaded = true;
+    } catch (e) {
+      devTrace('btrace.ensureDetail.error', {'rowId': rowId, 'error': '$e'});
+      // Mark as loaded-with-stub so the UI doesn't loop the spinner; the
+      // row stays empty but rendering proceeds.
+      row.detailLoaded = true;
+    } finally {
+      row.detailLoading = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> _loadRowDetail(RowModel row) async {
+    final file = traceModel?.files[row.fileId];
+    if (file == null) return;
+    final runtime = _btraceRuntimes[file.id];
+    if (runtime == null) return;
+
+    // 1. Source row → fields list.
+    if (runtime.sourceFetcher != null && row.sourceLocator >= 0) {
+      final line = await runtime.sourceFetcher!.lineAt(row.sourceLocator);
+      if (line != null) {
+        row.fields = _splitCsv(line, file.headers.length);
+      }
+    }
+
+    // 2. Output row(s). One source row can produce multiple output rows
+    // (Currency conversion → 3 outputs). For now we surface only the
+    // primary output the OutputRow frame pointed at; multi-output is a
+    // follow-up since btrace already encodes the relationship via
+    // output_idx but doesn't group siblings.
+    if (runtime.outputFetcher != null &&
+        row.outputIdx >= 0 &&
+        row.outputIdx < file.outputOffsets.length) {
+      final line = await runtime.outputFetcher!
+          .lineAt(file.outputOffsets[row.outputIdx]);
+      if (line != null) {
+        row.outputs.add(_splitCsv(line, file.outputHeaders.length));
+      }
+    }
+
+    // 3. Re-evaluate input_schema expressions against the fetched source
+    // fields. evalBatch handles the per-expr ok/error shape; we surface
+    // both success and failure as VarEntry so the Rule-Results table
+    // still shows everything the user expects.
+    if (row.fields.isNotEmpty && runtime.inputSchema.isNotEmpty) {
+      final names = runtime.inputSchema.keys.toList();
+      final exprs = runtime.inputSchema.values.toList();
+      final results = await BxpProcessClient.evalBatch(
+        headers: file.headers,
+        fields: row.fields,
+        exprs: exprs,
+        tickerMap: runtime.tickerMap.isNotEmpty ? runtime.tickerMap : null,
+        lookups: runtime.lookups.isNotEmpty ? runtime.lookups : null,
+      );
+      if (results.length == exprs.length) {
+        for (var i = 0; i < names.length; i++) {
+          final r = results[i];
+          row.vars.add(VarEntry(
+            kind: r.ok ? 'eval' : 'error',
+            name: names[i],
+            expr: exprs[i],
+            value: r.ok ? r.value : null,
+            error: r.ok ? null : r.error,
+            detail: r.ok ? null : r.detail,
+            origin: 'input_schema',
+          ));
+          if (!r.ok) row.hasError = true;
+        }
+      }
+    }
+
+    // 4. Walk rules in order, evaluate each when. First match wins
+    // (matches bxp-cli semantics). Emit RuleEntry for every rule so the
+    // user sees the full decision tree. Override `rows` are evaluated
+    // only for the matched rule.
+    if (row.fields.isNotEmpty && runtime.ruleWhens.isNotEmpty) {
+      final results = await BxpProcessClient.evalBatch(
+        headers: file.headers,
+        fields: row.fields,
+        exprs: runtime.ruleWhens,
+        tickerMap: runtime.tickerMap.isNotEmpty ? runtime.tickerMap : null,
+        lookups: runtime.lookups.isNotEmpty ? runtime.lookups : null,
+      );
+      bool firstMatchSeen = false;
+      for (var i = 0; i < runtime.ruleWhens.length; i++) {
+        if (i >= results.length) break;
+        final r = results[i];
+        final matched = r.ok && _truthy(r.value);
+        final effectiveMatch = matched && !firstMatchSeen;
+        if (effectiveMatch) firstMatchSeen = true;
+        row.rules.add(RuleEntry(
+          ruleIndex: i,
+          when: runtime.ruleWhens[i],
+          matched: effectiveMatch,
+          rows: i < runtime.ruleRows.length ? runtime.ruleRows[i] : const [],
+        ));
+      }
+    }
+  }
+
+  /// Truth-test mirroring bxp-core/src/expr.zig's empty-or-zero rule:
+  /// empty / "0" / "false" / "FALSE" → false; everything else → true.
+  bool _truthy(String? v) {
+    if (v == null) return false;
+    if (v.isEmpty) return false;
+    if (v == '0') return false;
+    if (v.toLowerCase() == 'false') return false;
+    return true;
+  }
+
+  /// Minimal CSV splitter for drill-down: handles double-quoted fields with
+  /// embedded commas and `""` escapes. Mirrors `BtraceView._splitCsvLine`;
+  /// keep in sync if RFC 4180 edge cases emerge in real broker exports.
+  List<String> _splitCsv(String line, int columnHint) {
+    final fields = <String>[];
+    final buf = StringBuffer();
+    bool inQuotes = false;
+    for (int i = 0; i < line.length; i++) {
+      final ch = line[i];
+      if (inQuotes) {
+        if (ch == '"') {
+          if (i + 1 < line.length && line[i + 1] == '"') {
+            buf.write('"');
+            i++;
+          } else {
+            inQuotes = false;
+          }
+        } else {
+          buf.write(ch);
+        }
+      } else {
+        if (ch == ',') {
+          fields.add(buf.toString());
+          buf.clear();
+        } else if (ch == '"' && buf.isEmpty) {
+          inQuotes = true;
+        } else {
+          buf.write(ch);
+        }
+      }
+    }
+    fields.add(buf.toString());
+    while (fields.length < columnHint) {
+      fields.add('');
+    }
+    return fields;
+  }
+}
+
+/// Per-stream ingest context for [TraceStore._streamRunBtrace]. Bundles all
+/// the per-template + per-file state the frame-by-frame dispatcher needs
+/// to mutate as the BXTB stream lands. Owned by `_streamRunBtrace` for the
+/// lifetime of one run and discarded when the stream ends.
+class _BtraceIngestCtx {
+  final String configPath;
+  final String bxtbDir;
+  final String cfgDir;
+  final TraceModel model;
+  final Map<String, _BtraceFileRuntime> runtimes;
+
+  // Template-level state — refreshed every time a `file_start` arrives
+  // with a previously-unseen template id. `fetchTemplate` is the only
+  // bxp-fmt subprocess this whole pipeline spawns, so caching here keeps
+  // multi-file templates from re-spawning per file.
+  String? currentTemplate;
+  Map<String, String> inputSchema = const {};
+  Map<String, String> tickerMap = const {};
+  List<String> ruleWhens = const [];
+  List<List<Map<String, String>>> ruleRows = const [];
+
+  // File-level state — replaced at each `file_start`. The previous file's
+  // runtime is published into `runtimes` map via `finalizeCurrentFile()`
+  // before the new one is opened, so drill-down on already-finished files
+  // works even while the next file is still streaming.
+  FileModel? currentFile;
+  CsvRowFetcher? currentSourceFetcher;
+  // Pre-pass entries that arrive before any `file_start` are stashed here
+  // and re-attached to whichever FileModel arrives next.
+  final List<PrepassEntry> prepassBatch = [];
+  int rowCounter = 0;
+
+  _BtraceIngestCtx({
+    required this.configPath,
+    required this.bxtbDir,
+    required this.cfgDir,
+    required this.model,
+    required this.runtimes,
+  });
+
+  String? resolveSourcePath(String declared) {
+    for (final cand in [
+      declared,
+      p.join(bxtbDir, declared),
+      p.join(bxtbDir, p.basename(declared)),
+      p.join(cfgDir, declared),
+      p.join(cfgDir, p.basename(declared)),
+    ]) {
+      if (File(cand).existsSync()) return cand;
+    }
+    return null;
+  }
+
+  String deriveOutputPath(String sourcePath) =>
+      sourcePath.endsWith('.csv')
+          ? '${sourcePath.substring(0, sourcePath.length - 4)}.csvx'
+          : '$sourcePath.csvx';
+
+  /// Lazy template-config fetch. `bxp-fmt --config X --fetch-template Y`
+  /// is ~30 ms per spawn on Linux; one cached fetch per template id keeps
+  /// the live stream from stuttering on multi-file templates.
+  Future<void> ensureTemplate(String templateId) async {
+    if (currentTemplate == templateId) return;
+    currentTemplate = templateId;
+    final tpl = await BxpProcessClient.fetchTemplate(configPath, templateId);
+    inputSchema = const {};
+    tickerMap = const {};
+    ruleWhens = const [];
+    ruleRows = const [];
+    if (tpl == null) return;
+    final is_ = tpl['input_schema'];
+    if (is_ is Map) {
+      inputSchema = <String, String>{
+        for (final e in is_.entries)
+          e.key.toString(): e.value?.toString() ?? '',
+      };
+    }
+    final tm = tpl['ticker_map'];
+    if (tm is Map) {
+      tickerMap = <String, String>{
+        for (final e in tm.entries)
+          e.key.toString(): e.value?.toString() ?? '',
+      };
+    }
+    final rr = tpl['row_rules'];
+    if (rr is List) {
+      final whens = <String>[];
+      final rowsByRule = <List<Map<String, String>>>[];
+      for (final r in rr) {
+        if (r is! Map) continue;
+        whens.add(r['when']?.toString() ?? '');
+        final rowsField = r['rows'];
+        if (rowsField is List) {
+          rowsByRule.add([
+            for (final rowOverride in rowsField)
+              if (rowOverride is Map)
+                <String, String>{
+                  for (final e in rowOverride.entries)
+                    e.key.toString(): e.value?.toString() ?? '',
+                }
+          ]);
+        } else {
+          rowsByRule.add(const []);
+        }
+      }
+      ruleWhens = whens;
+      ruleRows = rowsByRule;
+    }
+  }
+
+  /// Wrap the in-flight file: build outputOffsets index, open the output
+  /// CSVX fetcher, publish the runtime so drill-down works for this file.
+  /// Idempotent — calling on a fresh ctx (no currentFile yet) is a no-op.
+  Future<void> finalizeCurrentFile() async {
+    final file = currentFile;
+    if (file == null) return;
+    if (file.outputCsvxPath.isNotEmpty &&
+        File(file.outputCsvxPath).existsSync()) {
+      file.outputOffsets = await _indexLineOffsetsStatic(file.outputCsvxPath);
+    }
+    final outputFetcher = file.outputCsvxPath.isEmpty
+        ? null
+        : await CsvRowFetcher.open(file.outputCsvxPath);
+    final lookups = <String, String>{};
+    for (final pp in file.prepass) {
+      lookups['_default\x00${pp.key}\x00${pp.field}'] = pp.value;
+    }
+    runtimes[file.id] = _BtraceFileRuntime(
+      sourceFetcher: currentSourceFetcher,
+      outputFetcher: outputFetcher,
+      inputSchema: inputSchema,
+      tickerMap: tickerMap,
+      ruleWhens: ruleWhens,
+      ruleRows: ruleRows,
+      lookups: lookups,
+    );
+    currentSourceFetcher = null;
+    currentFile = null;
+  }
+
+  /// Standalone variant of TraceStore._indexLineOffsets — duplicated here
+  /// to avoid passing a closure across the ctx boundary.
+  static Future<List<int>> _indexLineOffsetsStatic(String path) async {
+    final bytes = await File(path).readAsBytes();
+    final offsets = <int>[];
+    if (bytes.isEmpty) return offsets;
+    final headerLf = bytes.indexOf(0x0A);
+    if (headerLf < 0) return offsets;
+    int pos = headerLf + 1;
+    while (pos < bytes.length) {
+      offsets.add(pos);
+      final nextLf = bytes.indexOf(0x0A, pos);
+      if (nextLf < 0) break;
+      pos = nextLf + 1;
+    }
+    return offsets;
+  }
+}
+
+/// Per-file btrace-mode runtime data owned by [TraceStore]. Holds open
+/// file handles + template config needed by [TraceStore.ensureDetailLoaded].
+/// dispose() must be called before the runtime is dropped so we don't leak
+/// fds across runs.
+class _BtraceFileRuntime {
+  final CsvRowFetcher? sourceFetcher;
+  final CsvRowFetcher? outputFetcher;
+  /// Map var name (e.g. `$ticker`) → expression text from the template's
+  /// `input_schema`. Iterated in declaration order so the per-row vars
+  /// table renders predictably.
+  final Map<String, String> inputSchema;
+  /// Broker ticker map for `TICKER()` resolution during drill-down eval.
+  final Map<String, String> tickerMap;
+  /// Rule `when` expressions in declaration order. Drill-down walks these
+  /// to find the first match (matches bxp-cli first-match-wins semantics).
+  final List<String> ruleWhens;
+  /// Per-rule override row templates (the `rows: [{$var: expr, …}]` block).
+  /// `ruleRows[i]` corresponds to `ruleWhens[i]`. Empty list for
+  /// filter-only rules (`rows: []`).
+  final List<List<Map<String, String>>> ruleRows;
+  /// Pre-pass lookup blob ready for `bxp-fmt --expr-batch`'s `lookups`
+  /// field. Keys use `\x00` separator: `"<block>\x00<key>\x00<field>"`.
+  final Map<String, String> lookups;
+
+  _BtraceFileRuntime({
+    required this.sourceFetcher,
+    required this.outputFetcher,
+    required this.inputSchema,
+    required this.tickerMap,
+    required this.ruleWhens,
+    required this.ruleRows,
+    required this.lookups,
+  });
+
+  Future<void> dispose() async {
+    await sourceFetcher?.dispose();
+    await outputFetcher?.dispose();
+  }
 }
 
