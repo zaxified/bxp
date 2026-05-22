@@ -81,6 +81,8 @@ const USAGE_TEMPLATE =
     \\  bxp-fmt --expr '<text>'                  validate one expression; stderr JSON on error
     \\  bxp-fmt --expr-trace '<text>'            evaluate one expression and stream NDJSON traces
     \\                                           (optional --row-headers <json>, --row-fields <json>)
+    \\  bxp-fmt --expr-batch                     evaluate N expressions against one row from a JSON
+    \\                                           request on stdin; emit JSON results array on stdout
     \\  bxp-fmt --docs                           emit full language/schema documentation as JSON
     \\  bxp-fmt --config <path> --list-templates emit JSON list of templates declared in config
     \\  bxp-fmt --config <path> --fetch-template <id>
@@ -130,6 +132,7 @@ pub fn main() !u8 {
     var config_path: ?[]const u8 = null;
     var expr_src: ?[]const u8 = null;
     var expr_trace_src: ?[]const u8 = null;
+    var expr_batch = false;
     var row_headers_json: ?[]const u8 = null;
     var row_fields_json: ?[]const u8 = null;
     var emit_docs = false;
@@ -188,6 +191,10 @@ pub fn main() !u8 {
                 return 2;
             }
             expr_trace_src = args[i];
+            continue;
+        }
+        if (std.mem.eql(u8, a, "--expr-batch")) {
+            expr_batch = true;
             continue;
         }
         if (std.mem.eql(u8, a, "--row-headers")) {
@@ -252,11 +259,12 @@ pub fn main() !u8 {
     const action_count = @as(u8, if (has_config_action) 1 else 0) +
         @as(u8, if (expr_src != null) 1 else 0) +
         @as(u8, if (expr_trace_src != null) 1 else 0) +
+        @as(u8, if (expr_batch) 1 else 0) +
         @as(u8, if (emit_docs) 1 else 0) +
         @as(u8, if (config_modifier_count > 0) 1 else 0);
 
     if (action_count > 1) {
-        std.debug.print("error: --config, --expr, --expr-trace, --docs, --list-templates, and --fetch-template are mutually exclusive\n", .{});
+        std.debug.print("error: --config, --expr, --expr-trace, --expr-batch, --docs, --list-templates, and --fetch-template are mutually exclusive\n", .{});
         return 2;
     }
     if (action_count == 0) {
@@ -289,6 +297,9 @@ pub fn main() !u8 {
     }
     if (expr_trace_src) |e| {
         return try runExprTrace(alloc, e, row_headers_json, row_fields_json);
+    }
+    if (expr_batch) {
+        return try runExprBatch(alloc);
     }
     // Unreachable — action_count > 0 ensures one of the above fires, but
     // the compiler needs an explicit return for `!u8` exhaustiveness.
@@ -1203,6 +1214,219 @@ fn runExprTrace(
     jw.endObject() catch {};
     stdout.writeByte('\n') catch {};
     stdout.flush() catch {};
+    return 0;
+}
+
+// ── --expr-batch ─────────────────────────────────────────────────────────────
+
+/// Read a JSON request from stdin describing N expressions to evaluate against
+/// a single row context, evaluate each, and emit a JSON results array on stdout.
+/// Drill-down companion to `--expr-trace`: amortises subprocess-spawn latency
+/// across all expressions for one row (typical: ~14 input_schema vars + a few
+/// rule.when probes per GUI click).
+///
+/// Request shape (stdin, JSON):
+///   {
+///     "headers":     ["Action", "Time", ...],              // CSV column names
+///     "fields":      ["Dividend (Dividend)", "2024-...", ...], // row values (parallel)
+///     "ticker_map":  {"PFE.US": "PFE", ...},               // optional
+///     "lookups":     {"<name> <key> <field>": "value"}, // optional pre_pass blob
+///     "exprs":       ["[Time]", "TICKER([Ticker])", ...]   // expressions to eval
+///   }
+///
+/// Response shape (stdout, JSON):
+///   {"results":[
+///      {"ok":true,  "value":"..."},
+///      {"ok":false, "error":"ColumnNotFound", "detail":"...", "off":0, "len":5}
+///   ]}
+///
+/// Exit code 0 on a well-formed request (even if individual exprs fail; that
+/// surfaces per-result via `ok:false`). Exit 1 on malformed input.
+fn runExprBatch(gpa: std.mem.Allocator) !u8 {
+    var stdout_buf: [4096]u8 = undefined;
+    var stdout_fw = std.fs.File.stdout().writer(&stdout_buf);
+    const stdout = &stdout_fw.interface;
+
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    // Read stdin in full. 4 MiB cap matches the order-of-magnitude of a
+    // realistic per-row request: ~14 vars × ~200 bytes/expr + row fields
+    // ≈ a few KB. The cap is a safety net, not a tuning knob.
+    const STDIN_MAX: usize = 4 * 1024 * 1024;
+    var stdin_reader_buf: [4096]u8 = undefined;
+    var stdin_fr = std.fs.File.stdin().reader(&stdin_reader_buf);
+    const stdin_reader = &stdin_fr.interface;
+    const body = stdin_reader.allocRemaining(alloc, .limited(STDIN_MAX)) catch |err| {
+        std.debug.print("error: failed to read stdin: {s}\n", .{@errorName(err)});
+        return 1;
+    };
+
+    const parsed = std.json.parseFromSlice(std.json.Value, alloc, body, .{}) catch {
+        std.debug.print("error: --expr-batch stdin must be a JSON object\n", .{});
+        return 1;
+    };
+    defer parsed.deinit();
+
+    if (parsed.value != .object) {
+        std.debug.print("error: --expr-batch stdin must be a JSON object\n", .{});
+        return 1;
+    }
+    const obj = parsed.value.object;
+
+    const headers_v = obj.get("headers") orelse {
+        std.debug.print("error: missing 'headers' in --expr-batch request\n", .{});
+        return 1;
+    };
+    const fields_v = obj.get("fields") orelse {
+        std.debug.print("error: missing 'fields' in --expr-batch request\n", .{});
+        return 1;
+    };
+    const exprs_v = obj.get("exprs") orelse {
+        std.debug.print("error: missing 'exprs' in --expr-batch request\n", .{});
+        return 1;
+    };
+    if (headers_v != .array or fields_v != .array or exprs_v != .array) {
+        std.debug.print("error: headers/fields/exprs must be JSON arrays\n", .{});
+        return 1;
+    }
+    if (headers_v.array.items.len != fields_v.array.items.len) {
+        std.debug.print(
+            "error: headers ({d}) and fields ({d}) length mismatch\n",
+            .{ headers_v.array.items.len, fields_v.array.items.len },
+        );
+        return 1;
+    }
+
+    // Build col_index and the parallel field-slice array. We dupe every string
+    // into the arena because `parsed.deinit()` (deferred above) frees the
+    // original JSON-owned bytes once we exit this scope.
+    var col_index = std.StringHashMap(usize).init(alloc);
+    defer col_index.deinit();
+    var fields: std.ArrayList([]const u8) = .empty;
+    defer fields.deinit(alloc);
+    for (headers_v.array.items, fields_v.array.items, 0..) |h, f, idx| {
+        if (h != .string or f != .string) {
+            std.debug.print("error: headers/fields entries must be strings\n", .{});
+            return 1;
+        }
+        const h_owned = try alloc.dupe(u8, h.string);
+        try col_index.put(h_owned, idx);
+        try fields.append(alloc, try alloc.dupe(u8, f.string));
+    }
+
+    // Optional ticker_map.
+    var ticker_map = std.StringHashMap([]const u8).init(alloc);
+    defer ticker_map.deinit();
+    if (obj.get("ticker_map")) |tm| {
+        if (tm != .object) {
+            std.debug.print("error: ticker_map must be a JSON object\n", .{});
+            return 1;
+        }
+        var it = tm.object.iterator();
+        while (it.next()) |e| {
+            if (e.value_ptr.* != .string) {
+                std.debug.print("error: ticker_map values must be strings\n", .{});
+                return 1;
+            }
+            try ticker_map.put(
+                try alloc.dupe(u8, e.key_ptr.*),
+                try alloc.dupe(u8, e.value_ptr.string),
+            );
+        }
+    }
+
+    // Optional flat lookups blob (pre_pass result, "name\x00key\x00field" → value).
+    // We always allocate the map so `lookup_table` is non-null — passing null
+    // would make LOOKUP() silently return "" instead of resolving entries.
+    var lookups = std.StringHashMap([]const u8).init(alloc);
+    defer lookups.deinit();
+    var have_lookups = false;
+    if (obj.get("lookups")) |lk| {
+        if (lk != .object) {
+            std.debug.print("error: lookups must be a JSON object\n", .{});
+            return 1;
+        }
+        var it = lk.object.iterator();
+        while (it.next()) |e| {
+            if (e.value_ptr.* != .string) {
+                std.debug.print("error: lookups values must be strings\n", .{});
+                return 1;
+            }
+            try lookups.put(
+                try alloc.dupe(u8, e.key_ptr.*),
+                try alloc.dupe(u8, e.value_ptr.string),
+            );
+            have_lookups = true;
+        }
+    }
+
+    // Eval each expression. Reset detail/off/len before each call so a
+    // prior failure doesn't bleed into the next result.
+    var jw: std.json.Stringify = .{ .writer = stdout, .options = .{} };
+    try jw.beginObject();
+    try jw.objectField("results");
+    try jw.beginArray();
+
+    for (exprs_v.array.items) |e_v| {
+        if (e_v != .string) {
+            // Emit a synthetic per-result error so the array stays aligned
+            // with the caller's input order, then move on.
+            try jw.beginObject();
+            try jw.objectField("ok");
+            try jw.write(false);
+            try jw.objectField("error");
+            try jw.write("BadInput");
+            try jw.objectField("detail");
+            try jw.write("exprs entries must be strings");
+            try jw.endObject();
+            continue;
+        }
+        const src = e_v.string;
+
+        var detail: []const u8 = "";
+        var err_off: u32 = 0;
+        var err_len: u32 = 0;
+        const ctx = expr_mod.Context{
+            .fields = fields.items,
+            .col_index = &col_index,
+            .ticker_map = &ticker_map,
+            .lookup_table = if (have_lookups) &lookups else null,
+            .alloc = alloc,
+            .error_detail = &detail,
+            .error_offset = &err_off,
+            .error_len = &err_len,
+        };
+
+        const result = expr_mod.evalString(src, &ctx);
+        try jw.beginObject();
+        if (result) |val| {
+            try jw.objectField("ok");
+            try jw.write(true);
+            try jw.objectField("value");
+            try jw.write(val);
+        } else |err| {
+            try jw.objectField("ok");
+            try jw.write(false);
+            try jw.objectField("error");
+            try jw.write(@errorName(err));
+            try jw.objectField("detail");
+            try jw.write(detail);
+            if (err_len > 0) {
+                try jw.objectField("off");
+                try jw.write(err_off);
+                try jw.objectField("len");
+                try jw.write(err_len);
+            }
+        }
+        try jw.endObject();
+    }
+
+    try jw.endArray();
+    try jw.endObject();
+    try stdout.writeByte('\n');
+    try stdout.flush();
     return 0;
 }
 

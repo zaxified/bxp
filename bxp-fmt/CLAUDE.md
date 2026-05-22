@@ -27,6 +27,13 @@ arena setup, and JSON serialization on stdout/stderr.
 - `bxp-fmt --expr-trace '<text>' [--row-headers <json>] [--row-fields <json>]`
   — evaluate one expression with optional fake-row context and stream
   per-call NDJSON traces to stdout. Used by bxp-gui's expression playground.
+- `bxp-fmt --expr-batch` — evaluate N expressions against one row in a single
+  spawn. Reads a JSON request from stdin (`{headers, fields, ticker_map?, lookups?, exprs}`)
+  and emits `{results:[{ok,value} | {ok:false,error,detail,off?,len?}, ...]}` on
+  stdout. Used by bxp-gui drill-down (one click → ~14 input_schema vars + a few
+  rule.when probes); amortises Linux/macOS subprocess-spawn cost across the batch.
+  Exit code 0 on a well-formed request even if individual exprs fail (per-result
+  `ok` flag carries the per-expr outcome); exit 1 on malformed input.
 - `bxp-fmt --docs` — emit the full language + schema documentation JSON
   to stdout. Top-level keys: `functions`, `keywords`, `operators`,
   `tokens`, `config_schema`. Source of truth lives in
