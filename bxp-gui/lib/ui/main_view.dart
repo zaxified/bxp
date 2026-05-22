@@ -8,6 +8,7 @@ import '../store/trace_store.dart';
 import 'debug_panes.dart';
 import 'config_view.dart';
 import 'layout_defaults.dart';
+import 'components/btrace_view.dart';
 import 'components/top_bar.dart';
 import 'components/open_dialog.dart';
 import 'theme/bxp_theme.dart';
@@ -244,7 +245,11 @@ class _MainViewState extends State<MainView> {
                   Expanded(
                     child: IndexedStack(
                       index: activeTab,
-                      children: const [ConfigView(), DebugPanes()],
+                      children: const [
+                        ConfigView(),
+                        DebugPanes(),
+                        BtraceView(),
+                      ],
                     ),
                   ),
                   // Status bar

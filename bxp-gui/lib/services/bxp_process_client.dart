@@ -568,6 +568,33 @@ class BxpProcessClient {
   /// own enumeration of `configJson['conversion_templates']` keys, so a
   /// failure here only loses the metadata (data_dir / file_pattern_in /
   /// description) that powers the richer template-selector subtitle.
+  /// Fetch one template's raw JSON block via
+  /// `bxp-fmt --config <path> --fetch-template <id>`. Returns the parsed
+  /// JSON object (input_schema, row_rules, ticker_map, …) or null on any
+  /// failure (binary missing, exit non-zero, malformed JSON). Used by the
+  /// btrace browser to drive `evalBatch` with the template's input_schema
+  /// expressions when reconstructing drill-down on click.
+  static Future<Map<String, dynamic>?> fetchTemplate(
+      String configPath, String templateId) async {
+    final bin = findBin('bxp-fmt');
+    if (bin == null) return null;
+    try {
+      final result = await _runOneShot(
+        bin,
+        ['--config', configPath, '--fetch-template', templateId],
+        _listTemplatesTimeout,
+      );
+      if (result.exitCode != 0) return null;
+      final out = (result.stdout as String).trim();
+      if (out.isEmpty) return null;
+      final parsed = jsonDecode(out);
+      if (parsed is Map) return parsed.cast<String, dynamic>();
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   static Future<List<TemplateInfo>> listTemplates(String path) async {
     final bin = findBin('bxp-fmt');
     if (bin == null) return const [];

@@ -41,6 +41,12 @@ class TopBar extends StatelessWidget {
             active: activeTab == 1,
             onTap: () => store.setActiveTab(1),
           ),
+          _TopTab(
+            label: 'BTRACE',
+            active: activeTab == 2,
+            tooltip: 'Load a .bxtb file and drill down into rows on demand',
+            onTap: () => store.setActiveTab(2),
+          ),
           const Spacer(),
           _TopTab(
             label: 'GITHUB',
