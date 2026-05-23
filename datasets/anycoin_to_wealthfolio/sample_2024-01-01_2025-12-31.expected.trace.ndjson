@@ -1,4 +1,5 @@
-{"t":"start","schema_version":1,"config":"datasets/anycoin_to_wealthfolio/sample.json","templates":["anycoin_to_wealthfolio"]}
+{"t":"start","schema_version":1,"config":"sample.json","templates":["anycoin_to_wealthfolio"]}
+{"t":"file_start","template":"anycoin_to_wealthfolio","path":"././sample_2024-01-01_2025-12-31.csv","rows":0,"headers":["Date","Type","Amount","Currency","Order ID","anycoin TX ID","Description","Funding ID","Trade ID"],"output_headers":["date","symbol","quantity","activityType","unitPrice","currency","fee","amount","account","fxRate","subtype","instrumentType","comment"]}
 {"t":"prepass_set","name":"_default","key":"1668007","field":"currency","value":"CZK"}
 {"t":"prepass_set","name":"_default","key":"1668007","field":"amount","value":"10001"}
 {"t":"prepass_set","name":"_default","key":"1947694","field":"currency","value":"CZK"}
@@ -31,7 +32,6 @@
 {"t":"prepass_set","name":"_default","key":"2197694","field":"amount","value":"2500"}
 {"t":"prepass_set","name":"_default","key":"2197694","field":"currency","value":"CZK"}
 {"t":"prepass_set","name":"_default","key":"2197694","field":"amount","value":"2500"}
-{"t":"file_start","template":"anycoin_to_wealthfolio","path":"datasets/anycoin_to_wealthfolio/./sample_2024-01-01_2025-12-31.csv","rows":0,"headers":["Date","Type","Amount","Currency","Order ID","anycoin TX ID","Description","Funding ID","Trade ID"],"output_headers":["date","symbol","quantity","activityType","unitPrice","currency","fee","amount","account","fxRate","subtype","instrumentType","comment"]}
 {"t":"row_start","file_row":1,"fields":["2023-12-23T06:20:20.182Z","deposit","1","CZK","","00000000-0000-0000-0000-000000000001","",""]}
 {"t":"var_eval","name":"$date","expr":"DATE_CONVERT([Date], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')","value":"2023-12-23 06:20:20","origin":"input_schema"}
 {"t":"var_eval","name":"$ticker","expr":"IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))","value":"$CASH-CZK","origin":"input_schema"}
@@ -1148,5 +1148,5 @@
 {"t":"rule_no_match","rule_index":4,"when":"[Type] = 'withdrawal_block'"}
 {"t":"rule_no_match","rule_index":5,"when":"[Type] = 'withdrawal_unblock'"}
 {"t":"row_end"}
-{"t":"file_end","template":"anycoin_to_wealthfolio","path":"datasets/anycoin_to_wealthfolio/./sample_2024-01-01_2025-12-31.csv","stats":{"rows":53,"written":25,"errors":0,"warnings":0}}
+{"t":"file_end","template":"anycoin_to_wealthfolio","path":"././sample_2024-01-01_2025-12-31.csv","stats":{"rows":53,"written":25,"errors":0,"warnings":0}}
 {"t":"done","exit_code":0}

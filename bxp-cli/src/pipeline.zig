@@ -1614,6 +1614,16 @@ pub fn processBroker(
         defer if (main_reader_inited) main_reader.deinit();
         var main_iter: RowIterator = undefined;
 
+        // CSV pre_pass iterator — lifted to file-iteration scope so the
+        // pre_pass loop can run AFTER `file_start` is emitted (frame
+        // ordering invariant: every prepass_entry MUST be observed by a
+        // consumer that has already seen its parent file_start).
+        var pp_reader: ChunkReader = undefined;
+        var pp_reader_inited = false;
+        defer if (pp_reader_inited) pp_reader.deinit();
+        var pp_iter: RowIterator = undefined;
+        var pp_iter_inited = false;
+
         if (bc.file_type_in == .json) {
             // JSON: whole-file read, then build col_names/index + materialise rows.
             const content_raw = try in_file.readToEndAlloc(file_alloc, MAX_FILE_SIZE_BYTES);
@@ -1629,19 +1639,14 @@ pub fn processBroker(
             try json_mod.readJsonRecords(file_alloc, content, &col_names, &rows);
             for (col_names.items, 0..) |name, idx| try col_index.put(name, idx);
             json_all_rows = rows;
-
-            // JSON pre_pass iterates the materialised rows directly.
-            if (bc.pre_passes.count() > 0) {
-                for (rows.items) |fields| {
-                    try evalPrepassRow(fields, &col_index, &lookup_table, bc, file_alloc, out);
-                }
-            }
+            // JSON pre_pass deferred to the post-file_start section below.
         } else if (bc.pre_passes.count() > 0) {
-            // CSV with pre_pass: two-pass — header+pre_pass first, then
-            // seek back and create a fresh main-pass iterator.
-            var pp_reader = try ChunkReader.init(file_alloc, in_file, bc.csv_text_quote_in);
-            defer pp_reader.deinit();
-            var pp_iter = try RowIterator.init(&pp_reader, &chunk_arena, file_alloc, bc.csv_delimiter_in, bc.csv_text_quote_in);
+            // CSV with pre_pass: parse header here; run the pre_pass row
+            // loop AFTER file_start emission (see post-file_start block).
+            pp_reader = try ChunkReader.init(file_alloc, in_file, bc.csv_text_quote_in);
+            pp_reader_inited = true;
+            pp_iter = try RowIterator.init(&pp_reader, &chunk_arena, file_alloc, bc.csv_delimiter_in, bc.csv_text_quote_in);
+            pp_iter_inited = true;
 
             const raw_header = try pp_iter.parseHeader();
             const truncated = raw_header.len > MAX_COLUMNS;
@@ -1671,16 +1676,6 @@ pub fn processBroker(
                 stats.warnings += 1;
                 out.warning("warning: '{s}' is not valid UTF-8; non-ASCII characters may be garbled\n", .{filename});
             }
-
-            while (try pp_iter.next()) |fields| {
-                try evalPrepassRow(fields, &col_index, &lookup_table, bc, file_alloc, out);
-            }
-
-            try in_file.seekTo(0);
-            main_reader = try ChunkReader.init(file_alloc, in_file, bc.csv_text_quote_in);
-            main_reader_inited = true;
-            main_iter = try RowIterator.init(&main_reader, &chunk_arena, file_alloc, bc.csv_delimiter_in, bc.csv_text_quote_in);
-            _ = try main_iter.parseHeader(); // discard, col_names already populated
         } else {
             // CSV without pre_pass: parse header straight from the
             // main-pass iterator (no rewind needed).
@@ -1751,6 +1746,29 @@ pub fn processBroker(
             col_names.items,
             out_header_names.items,
         );
+
+        // Run pre_pass AFTER file_start so every prepass_entry frame /
+        // prepass_set event is observed by a consumer that has already
+        // seen the parent file_start. Otherwise a streaming GUI attributes
+        // file N's prepass entries to file N-1 (whose file_end has fired
+        // but whose currentFile slot is not yet cleared by file N's
+        // file_start).
+        if (bc.pre_passes.count() > 0) {
+            if (json_all_rows) |jr| {
+                for (jr.items) |fields| {
+                    try evalPrepassRow(fields, &col_index, &lookup_table, bc, file_alloc, out);
+                }
+            } else if (pp_iter_inited) {
+                while (try pp_iter.next()) |fields| {
+                    try evalPrepassRow(fields, &col_index, &lookup_table, bc, file_alloc, out);
+                }
+                try in_file.seekTo(0);
+                main_reader = try ChunkReader.init(file_alloc, in_file, bc.csv_text_quote_in);
+                main_reader_inited = true;
+                main_iter = try RowIterator.init(&main_reader, &chunk_arena, file_alloc, bc.csv_delimiter_in, bc.csv_text_quote_in);
+                _ = try main_iter.parseHeader(); // discard, col_names already populated
+            }
+        }
 
         const has_prepass = bc.pre_passes.count() > 0;
         const lookup_table_ptr: ?*const std.StringHashMap([]const u8) =
@@ -1915,6 +1933,14 @@ pub fn processBroker(
             const rules = bc.row_rules orelse &.{};
             var rule_matched = false;
             var matched_rule_index: usize = 0;
+            // Track whether this source row produced any row-level bin frame
+            // (output_row or filtered_row). If not, we synthesise a
+            // `filtered_row` at end-of-row so the GUI's btrace consumer
+            // sees one frame per source row (parity with NDJSON
+            // `row_start`). Two miss paths reach here: (a) no rule
+            // matched at all, (b) a rule matched but its `rows: []` is
+            // empty (silent skip).
+            var row_bin_frame_emitted = false;
             for (rules, 0..) |rule, rule_index| {
                 row_detail = "";
                 const when_val = expr_mod.eval(rule.when, &row_ctx) catch |err| {
@@ -1994,12 +2020,14 @@ pub fn processBroker(
                         std.mem.order(u8, date_str[0..10], date_min) == .lt) {
                         out.event("row_filtered", .{ .reason = "date_filter_from_filename" });
                         out.binEmitFilteredRow(cur_offset, "date_filter_from_filename");
+                        row_bin_frame_emitted = true;
                         continue;
                     }
                     if (date_max.len > 0 and date_str.len >= 10 and
                         std.mem.order(u8, date_str[0..10], date_max) == .gt) {
                         out.event("row_filtered", .{ .reason = "date_filter_from_filename" });
                         out.binEmitFilteredRow(cur_offset, "date_filter_from_filename");
+                        row_bin_frame_emitted = true;
                         continue;
                     }
                     if (bc.file_type_out == .json) {
@@ -2068,6 +2096,7 @@ pub fn processBroker(
                         @intCast(rule_index),
                         merged.get("$action") orelse "",
                     );
+                    row_bin_frame_emitted = true;
                     file_rows_written += 1;
                 }
                 break; // first matching rule wins
@@ -2096,6 +2125,15 @@ pub fn processBroker(
                     out.writer.print("}}\n", .{}) catch {};
                     out.writer.flush() catch {};
                 }
+            }
+            // Synthetic filtered_row so the GUI sees one row frame per
+            // source row (NDJSON has row_start for this purpose; btrace
+            // v3 has no per-source-row frame by default). Reasons:
+            //   - "no_rule_match"  → no rule's `when` evaluated truthy
+            //   - "rule_skip"      → a rule matched but its rows: [] is empty
+            if (!row_bin_frame_emitted) {
+                const reason: []const u8 = if (rule_matched) "rule_skip" else "no_rule_match";
+                out.binEmitFilteredRow(row_offset, reason);
             }
             out.event("row_end", .{});
         }

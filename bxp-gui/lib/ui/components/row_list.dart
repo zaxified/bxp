@@ -18,23 +18,72 @@ class RowList extends StatelessWidget {
   const RowList({super.key});
 
   String _rowStatus(RowModel row) {
-    if (row.hasError) return 'error';
+    // bxp-cli treats var/rule eval failures as WARNINGS (stats.warnings,
+    // --debug log) — same severity surfaces here. `hasError` is the
+    // legacy field name from the NDJSON path; semantics is "warning".
+    if (row.hasError) return 'warning';
+    // NDJSON mode populates `outputs` synchronously; btrace mode leaves
+    // `outputs` empty until drill-down loads, so we also infer "written"
+    // from the `btraceAction` populated by the `output_row` frame.
+    // 1:N templates (single source producing >1 output) get a distinct
+    // glyph so the user can spot the expansion without drill-down.
+    final outCount = row.outputIdxs.isNotEmpty
+        ? row.outputIdxs.length
+        : row.outputs.length;
+    if (outCount > 1) return 'written-multi';
     if (row.outputs.isNotEmpty) return 'written';
-    if (row.filteredReason != null) return 'filtered';
-    return 'no-match';
+    if (row.btraceAction != null) return 'written';
+    // Split the historical catch-all `filtered` into three semantic
+    // sub-statuses based on the `filteredReason` payload carried by the
+    // `filtered_row` btrace frame (synthetic in two of the three cases).
+    final reason = row.filteredReason;
+    if (reason == 'date_filter_from_filename') return 'filtered';
+    if (reason == 'rule_skip') return 'skipped';
+    if (reason == 'no_rule_match') return 'unmatched';
+    if (reason != null) return 'filtered'; // unknown reason → safe fallback
+    // NDJSON mode leaves filteredReason null for source rows that never
+    // matched a rule (no synthetic frame emission). Treat that as
+    // `unmatched` too — same semantics, just discovered differently.
+    return 'unmatched';
   }
 
   String _statusIcon(String status) {
     switch (status) {
       case 'written':
         return '▶';
+      case 'written-multi':
+        return '⏩';
       case 'filtered':
         return '▼';
-      case 'error':
-        return '✕';
-      case 'no-match':
+      case 'skipped':
+        return '⊘';
+      case 'unmatched':
+        return '?';
+      case 'warning':
+        return '⚠';
       default:
         return '·';
+    }
+  }
+
+  String _statusTooltip(String status) {
+    switch (status) {
+      case 'written':
+        return 'Written — row produced one output';
+      case 'written-multi':
+        return 'Written — row produced multiple outputs (1:N expansion)';
+      case 'filtered':
+        return 'Filtered — outside filename date range';
+      case 'skipped':
+        return 'Skipped — matched a rule with empty rows '
+            '(often a pre_pass lookup source)';
+      case 'unmatched':
+        return 'Unmatched — no rule\'s `when` evaluated truthy';
+      case 'warning':
+        return 'Warning — variable expression failed; row processed '
+            'with empty substitute (bxp-cli severity: warning)';
+      default:
+        return '';
     }
   }
 
@@ -67,6 +116,7 @@ class RowList extends StatelessWidget {
       store: store,
       rowStatus: _rowStatus,
       statusIcon: _statusIcon,
+      statusTooltip: _statusTooltip,
     );
   }
 }
@@ -78,6 +128,7 @@ class _RowListInner extends StatefulWidget {
   final TraceStore store;
   final String Function(RowModel) rowStatus;
   final String Function(String) statusIcon;
+  final String Function(String) statusTooltip;
 
   const _RowListInner({
     super.key,
@@ -87,6 +138,7 @@ class _RowListInner extends StatefulWidget {
     required this.store,
     required this.rowStatus,
     required this.statusIcon,
+    required this.statusTooltip,
   });
 
   @override
@@ -316,7 +368,9 @@ class _RowListInnerState extends State<_RowListInner> {
         ),
       ),
       PlutoColumn(
-        // Icon-only status column — no header text; the glyph is self-explanatory.
+        // Icon-only status column — the glyph itself is small, but a hover
+        // tooltip explains what each one means (▶ written, ▼ filtered,
+        // ⊘ skipped, ? unmatched, ✕ error).
         title: '',
         field: 'status',
         type: PlutoColumnType.text(),
@@ -330,14 +384,37 @@ class _RowListInnerState extends State<_RowListInner> {
         enableSorting: false,
         textAlign: PlutoColumnTextAlign.center,
         renderer: (ctx) {
-          final status = ctx.cell.value.toString();
+          // Cell value carries the status NAME (e.g. "written") — or for
+          // warning rows a `warning|<count>|<first-detail>` triple. We
+          // resolve glyph + colour from the status name and append the
+          // detail string to the tooltip when present.
+          final raw = ctx.cell.value.toString();
+          final parts = raw.split('|');
+          final status = parts[0];
+          final glyph = widget.statusIcon(status);
+          var tooltip = widget.statusTooltip(status);
+          if (status == 'warning' && parts.length >= 3) {
+            final count = int.tryParse(parts[1]) ?? 0;
+            final detail = parts.sublist(2).join('|');
+            tooltip = '$tooltip\n\n'
+                '$count warning${count == 1 ? "" : "s"} on this row\n'
+                '• $detail';
+          }
           Color color = t.textMuted;
-          if (status == '▶') color = t.valueOk;
-          if (status == '▼') color = t.valueWarn;
-          if (status == '✕') color = t.valueError;
-          return Text(
-            status,
-            style: BxpText.body(context, color: color, size: BxpSize.md),
+          if (status == 'written' || status == 'written-multi') {
+            color = t.valueOk;
+          }
+          if (status == 'filtered' || status == 'skipped' ||
+              status == 'warning') {
+            color = t.valueWarn;
+          }
+          return Tooltip(
+            message: tooltip,
+            waitDuration: const Duration(milliseconds: 400),
+            child: Text(
+              glyph,
+              style: BxpText.body(context, color: color, size: BxpSize.md),
+            ),
           );
         },
       ),
@@ -365,9 +442,20 @@ class _RowListInnerState extends State<_RowListInner> {
 
     final rows = rowList.map((row) {
       final status = widget.rowStatus(row);
+      // Cell value encodes status NAME + (when a warning) the count and
+      // first detail string so the renderer can build a hover tooltip
+      // that explains *why* the row was flagged without a row lookup.
+      // Format: `<status>` or `<status>|<count>|<first-detail>`.
+      String statusValue = status;
+      if (status == 'warning' && row.warningDetails.isNotEmpty) {
+        statusValue =
+            'warning|${row.warningDetails.length}|${row.warningDetails.first}';
+      }
       final cells = <String, PlutoCell>{
         'row_num': PlutoCell(value: '${row.fileRow}'),
-        'status': PlutoCell(value: widget.statusIcon(status)),
+        // Store the status NAME, not the glyph — the renderer resolves
+        // glyph + colour + tooltip together so they can't drift apart.
+        'status': PlutoCell(value: statusValue),
       };
       for (int i = 0; i < headers.length; i++) {
         cells[headers[i]] = PlutoCell(

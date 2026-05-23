@@ -735,6 +735,7 @@ class BxpProcessClient {
     required List<String> exprs,
     Map<String, String>? tickerMap,
     Map<String, String>? lookups,
+    String? singlePrepassName,
     Duration timeout = _exprTimeout,
     String? binPath,
   }) async {
@@ -751,6 +752,14 @@ class BxpProcessClient {
     }
     if (lookups != null && lookups.isNotEmpty) {
       request['lookups'] = lookups;
+    }
+    // Enables 2-arg LOOKUP(key, field) in evaluated exprs by binding the
+    // synthetic / explicit single-block pre_pass name. Required for the
+    // legacy single-block `pre_pass: {when, key, values}` form whose
+    // implicit name is `_default` — without this the expr layer returns
+    // `LookupRequiresName`.
+    if (singlePrepassName != null && singlePrepassName.isNotEmpty) {
+      request['single_prepass_name'] = singlePrepassName;
     }
     final requestJson = jsonEncode(request);
 

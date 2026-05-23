@@ -101,6 +101,7 @@ class TraceBuilder {
         final fileId = currentFileId;
         if (fileId == null) return;
         model.files[fileId]?.prepass.add(PrepassEntry(
+          name: ev['name']?.toString() ?? '_default',
           key: ev['key']?.toString() ?? '',
           field: ev['field']?.toString() ?? '',
           value: ev['value']?.toString() ?? '',

@@ -1362,6 +1362,25 @@ fn runExprBatch(gpa: std.mem.Allocator) !u8 {
         }
     }
 
+    // Optional single_prepass_name: enables 2-arg LOOKUP(key, field) when
+    // the template's pre_pass section has exactly one block. Without this,
+    // legacy single-block configs (where the synthetic name is `_default`)
+    // would have to switch to 3-arg LOOKUP at the source — instead the GUI
+    // passes the implicit name here and the expressions stay unchanged.
+    var single_prepass_name: ?[]const u8 = null;
+    if (obj.get("single_prepass_name")) |sp| {
+        switch (sp) {
+            .string => |s| if (s.len > 0) {
+                single_prepass_name = try alloc.dupe(u8, s);
+            },
+            .null => {},
+            else => {
+                std.debug.print("error: single_prepass_name must be a string\n", .{});
+                return 1;
+            },
+        }
+    }
+
     // Eval each expression. Reset detail/off/len before each call so a
     // prior failure doesn't bleed into the next result.
     var jw: std.json.Stringify = .{ .writer = stdout, .options = .{} };
@@ -1393,6 +1412,7 @@ fn runExprBatch(gpa: std.mem.Allocator) !u8 {
             .col_index = &col_index,
             .ticker_map = &ticker_map,
             .lookup_table = if (have_lookups) &lookups else null,
+            .single_prepass_name = single_prepass_name,
             .alloc = alloc,
             .error_detail = &detail,
             .error_offset = &err_off,

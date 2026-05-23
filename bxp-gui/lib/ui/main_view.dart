@@ -8,7 +8,6 @@ import '../store/trace_store.dart';
 import 'debug_panes.dart';
 import 'config_view.dart';
 import 'layout_defaults.dart';
-import 'components/btrace_view.dart';
 import 'components/top_bar.dart';
 import 'components/open_dialog.dart';
 import 'theme/bxp_theme.dart';
@@ -248,7 +247,6 @@ class _MainViewState extends State<MainView> {
                       children: const [
                         ConfigView(),
                         DebugPanes(),
-                        BtraceView(),
                       ],
                     ),
                   ),
@@ -375,12 +373,26 @@ class _StatusBarState extends State<_StatusBar> {
           for (final id in model.fileOrder) {
             final f = model.files[id];
             if (f == null) continue;
-            inputRows += f.rowIds.length;
+            // Authoritative source-row count lands at file_end; during the
+            // stream we approximate with rowIds.length (= number of bin
+            // row-level frames received so far). For 1:N templates the
+            // running approximation may exceed source rows briefly, then
+            // snaps to the exact figure when file_end arrives.
             final stats = f.stats;
+            inputRows += (stats?['rows'] as int?) ?? f.rowIds.length;
             if (stats != null) {
               outputRows += (stats['written'] as int? ?? 0);
-              errors += (stats['errors'] as int? ?? 0);
-              warnings += (stats['warnings'] as int? ?? 0);
+              // bxp-cli severity: `file_end.errors` carries the count of
+              // input_schema expression failures, which bxp-cli itself
+              // routes through `stats.warnings` (exit code 2, "warning:
+              // N input_schema expression error(s)" stderr text). To
+              // honour that 1:1 we sum it into the GUI warnings counter
+              // alongside the dedicated `file_end.warnings` (other
+              // per-file warnings — date filter no-range, malformed
+              // range, ...). The GUI's `errors` counter stays reserved
+              // for process-level fatals surfaced via the stderr badge.
+              warnings += (stats['warnings'] as int? ?? 0) +
+                  (stats['errors'] as int? ?? 0);
             }
           }
         }
@@ -508,8 +520,9 @@ class _StatusBarState extends State<_StatusBar> {
               ],
               const SizedBox(width: 16),
               ValueListenableBuilder<int>(
-                valueListenable: store.traceLinesCounter,
-                builder: (_, v, _) => _StatCell(label: 'trace lines', value: '$v'),
+                valueListenable: store.tracesBytesCounter,
+                builder: (_, v, _) =>
+                    _StatCell(label: 'traces', value: _formatTraces(v)),
               ),
               const SizedBox(width: 12),
               _StatCell(label: 'input rows', value: '$inputRows'),
@@ -535,6 +548,19 @@ class _StatusBarState extends State<_StatusBar> {
       },
     );
   }
+}
+
+/// Format raw bytes received from bxp-cli stdout into a 6-digit tier
+/// display: `N B` while under ~1 MB, `N KB` until ~1 GB, then `N MB`,
+/// `N GB`, `N TB`. Decimal thresholds for tier switches (more
+/// predictable) but binary division (1024-based) for the integer
+/// shown — matches what file managers display.
+String _formatTraces(int b) {
+  if (b < 1000000) return '$b B';
+  if (b < 1000000000) return '${b ~/ 1024} KB';
+  if (b < 1000000000000) return '${b ~/ (1024 * 1024)} MB';
+  if (b < 1000000000000000) return '${b ~/ (1024 * 1024 * 1024)} GB';
+  return '${b ~/ (1024 * 1024 * 1024 * 1024)} TB';
 }
 
 class _StatCell extends StatelessWidget {

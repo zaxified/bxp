@@ -130,6 +130,15 @@ class TraceStore extends ChangeNotifier {
   final ValueNotifier<int> _traceLinesCounter = ValueNotifier(0);
   ValueListenable<int> get traceLinesCounter => _traceLinesCounter;
 
+  /// Bytes received from the child's stdout since the current run started.
+  /// Tracked alongside [rawLines] so the StatusBar's "traces" cell can
+  /// render in byte-tier units (B / KB / MB / GB / TB) — easier to read
+  /// for streams of variable size than raw line count. Pumped from the
+  /// same 100 ms ticker as `_traceLinesCounter`.
+  int rawBytes = 0;
+  final ValueNotifier<int> _tracesBytesCounter = ValueNotifier(0);
+  ValueListenable<int> get tracesBytesCounter => _tracesBytesCounter;
+
   // Bumped on every `file_start` event so FileList can grow live during a
   // stream without main `notifyListeners()`. RowList does NOT listen to
   // this — once the first file's auto-select fires (single main notify on
@@ -2510,7 +2519,9 @@ class TraceStore extends ChangeNotifier {
     runError = null;
     stderrText = '';
     rawLines = 0;
+    rawBytes = 0;
     _traceLinesCounter.value = 0;
+    _tracesBytesCounter.value = 0;
     lastExitCode = null;
     selectedFileId = null;
     selectedRowId = null;
@@ -2527,12 +2538,16 @@ class TraceStore extends ChangeNotifier {
     _fileGen.value++;
     notifyListeners();
 
-    // Counter ticker — only refreshes the `trace lines` ValueNotifier.
-    // Crucially does NOT call main `notifyListeners()`, so RowList /
-    // OutputPanel / status-bar aggregates do not rebuild per tick.
+    // Counter ticker — only refreshes the `trace lines` / `traces` bytes
+    // ValueNotifiers. Crucially does NOT call main `notifyListeners()`,
+    // so RowList / OutputPanel / status-bar aggregates do not rebuild
+    // per tick.
     final ticker = Timer.periodic(const Duration(milliseconds: 100), (_) {
       if (_traceLinesCounter.value != rawLines) {
         _traceLinesCounter.value = rawLines;
+      }
+      if (_tracesBytesCounter.value != rawBytes) {
+        _tracesBytesCounter.value = rawBytes;
       }
     });
 
@@ -2557,6 +2572,10 @@ class TraceStore extends ChangeNotifier {
         },
         onLine: (line) {
           rawLines++;
+          // +1 for the stripped newline so the count tracks raw stdout
+          // size (approximate UTF-8 byte length; close enough for the UI
+          // tier display).
+          rawBytes += line.length + 1;
           builder.parseLine(line);
 
           // FileList grows live: bump `fileGen` whenever a new file_start
@@ -2634,6 +2653,9 @@ class TraceStore extends ChangeNotifier {
       // non-deterministic (varies per run).
       if (_traceLinesCounter.value != rawLines) {
         _traceLinesCounter.value = rawLines;
+      }
+      if (_tracesBytesCounter.value != rawBytes) {
+        _tracesBytesCounter.value = rawBytes;
       }
       // Always notify on exit. The error / cancel branches above do an
       // early `return`, which would skip the closing notify below and
@@ -2866,6 +2888,7 @@ class TraceStore extends ChangeNotifier {
     _disposed = true;
     _validationDebounce?.cancel();
     _traceLinesCounter.dispose();
+    _tracesBytesCounter.dispose();
     _fileGen.dispose();
     _pendingFocusPath.dispose();
     _pendingAddChildPath.dispose();
@@ -2898,7 +2921,9 @@ class TraceStore extends ChangeNotifier {
     runError = null;
     stderrText = '';
     rawLines = 0;
+    rawBytes = 0;
     _traceLinesCounter.value = 0;
+    _tracesBytesCounter.value = 0;
     lastExitCode = null;
     selectedFileId = null;
     selectedRowId = null;
@@ -2959,12 +2984,16 @@ class TraceStore extends ChangeNotifier {
       }
     }
 
-    // Counter ticker — bumps `_traceLinesCounter` to `rawLines` (= frame
-    // count) on a 100 ms cadence so the status bar updates without
-    // calling notifyListeners() per frame.
+    // Counter ticker — bumps `_traceLinesCounter` (frame count, for the
+    // settings inspector) and `_tracesBytesCounter` (bytes received, for
+    // the status-bar tier display) on a 100 ms cadence so the status bar
+    // updates without calling notifyListeners() per frame.
     final ticker = Timer.periodic(const Duration(milliseconds: 100), (_) {
       if (_traceLinesCounter.value != rawLines) {
         _traceLinesCounter.value = rawLines;
+      }
+      if (_tracesBytesCounter.value != rawBytes) {
+        _tracesBytesCounter.value = rawBytes;
       }
     });
 
@@ -2979,6 +3008,7 @@ class TraceStore extends ChangeNotifier {
           if (_cancelRequested) p.kill(ProcessSignal.sigterm);
         },
         onStdoutChunk: (chunk) {
+          rawBytes += chunk.length;
           reader.appendBytes(chunk);
           while (true) {
             btrace_mod.Frame? frame;
@@ -3060,6 +3090,9 @@ class TraceStore extends ChangeNotifier {
       if (_traceLinesCounter.value != rawLines) {
         _traceLinesCounter.value = rawLines;
       }
+      if (_tracesBytesCounter.value != rawBytes) {
+        _tracesBytesCounter.value = rawBytes;
+      }
       notifyListeners();
     }
 
@@ -3097,6 +3130,11 @@ class TraceStore extends ChangeNotifier {
         file.prepass.add(pp);
       }
       ctx.prepassBatch.clear();
+      // Source-locator → rowId is per-file scoped; clear so the next
+      // file's locators don't collide with the previous file's.
+      ctx.locatorToRid.clear();
+      ctx.pendingWarningLocators.clear();
+      ctx.pendingWarningDetails.clear();
       final sourcePath = ctx.resolveSourcePath(frame.path);
       if (sourcePath == null) {
         ctx.model.issues.add('source CSV not found for ${frame.path}');
@@ -3110,6 +3148,12 @@ class TraceStore extends ChangeNotifier {
       ctx.currentSourceFetcher = file.sourceCsvPath.isEmpty
           ? null
           : await CsvRowFetcher.open(file.sourceCsvPath);
+      // Eager-load whole source CSV into memory ONCE — the per-row
+      // extraction below is then a synchronous byte scan, which is what
+      // keeps drainQueue from bottlenecking on per-frame await chains.
+      ctx.currentSourceBytes = file.sourceCsvPath.isEmpty
+          ? null
+          : await File(file.sourceCsvPath).readAsBytes();
       await ctx.ensureTemplate(frame.template);
       // Bump fileGen so FileList rebuilds with the newly-arrived entry
       // without a main notifyListeners (which would also rebuild RowList
@@ -3121,8 +3165,8 @@ class TraceStore extends ChangeNotifier {
       final file = ctx.currentFile;
       if (file != null) {
         file.stats = {
-          'source_rows': frame.sourceRows,
-          'written_rows': frame.writtenRows,
+          'rows': frame.sourceRows,
+          'written': frame.writtenRows,
           'errors': frame.errors,
           'warnings': frame.warnings,
         };
@@ -3132,7 +3176,7 @@ class TraceStore extends ChangeNotifier {
     }
     if (frame is btrace_mod.PrepassEntry) {
       final entry = PrepassEntry(
-          key: frame.key, field: frame.field, value: frame.value);
+          name: frame.name, key: frame.key, field: frame.field, value: frame.value);
       final file = ctx.currentFile;
       if (file != null) {
         file.prepass.add(entry);
@@ -3144,6 +3188,18 @@ class TraceStore extends ChangeNotifier {
     if (frame is btrace_mod.OutputRow) {
       final file = ctx.currentFile;
       if (file == null) return;
+      // Collapse 1:N expansion (one source row producing multiple output
+      // rows) into a single grid row whose `outputIdxs` / `btraceActions`
+      // lists carry every output frame seen for this source_locator.
+      final existingRid = ctx.locatorToRid[frame.sourceLocator];
+      if (existingRid != null) {
+        final existing = ctx.model.rows[existingRid];
+        if (existing != null) {
+          existing.outputIdxs.add(frame.outputIdx);
+          existing.btraceActions.add(frame.action);
+        }
+        return;
+      }
       final rid = 'r${ctx.rowCounter++}';
       final row = RowModel(
         id: rid,
@@ -3154,20 +3210,30 @@ class TraceStore extends ChangeNotifier {
         ..sourceLocator = frame.sourceLocator
         ..outputIdx = frame.outputIdx
         ..btraceAction = frame.action
+        ..outputIdxs = [frame.outputIdx]
+        ..btraceActions = [frame.action]
         ..matchedRuleIndex = frame.ruleIdx
         ..detailLoaded = false;
-      // Pre-fetch raw source fields so RowList grid cells aren't blank.
-      // Drill-down detail (vars / rules / output values) stays lazy until
-      // the user actually selects the row.
-      if (ctx.currentSourceFetcher != null && frame.sourceLocator >= 0) {
+      // Pre-fetch raw source fields synchronously from the eager-loaded
+      // bytes. Drill-down detail (vars / rules / output values) stays
+      // lazy until the user actually selects the row.
+      if (ctx.currentSourceBytes != null && frame.sourceLocator >= 0) {
         final line =
-            await ctx.currentSourceFetcher!.lineAt(frame.sourceLocator);
+            _lineAtSync(ctx.currentSourceBytes!, frame.sourceLocator);
         if (line != null) {
           row.fields = _splitCsv(line, file.headers.length);
         }
       }
+      // Honour any pending error_row stashed for this locator before
+      // the row existed.
+      if (ctx.pendingWarningLocators.remove(frame.sourceLocator)) {
+        row.hasError = true;
+        final stashed = ctx.pendingWarningDetails.remove(frame.sourceLocator);
+        if (stashed != null) row.warningDetails.addAll(stashed);
+      }
       ctx.model.rows[rid] = row;
       file.rowIds.add(rid);
+      ctx.locatorToRid[frame.sourceLocator] = rid;
       return;
     }
     if (frame is btrace_mod.FilteredRow) {
@@ -3182,21 +3248,55 @@ class TraceStore extends ChangeNotifier {
       )
         ..sourceLocator = frame.sourceLocator
         ..filteredReason = frame.reason
-        ..detailLoaded = true; // filtered → nothing more to load
-      if (ctx.currentSourceFetcher != null && frame.sourceLocator >= 0) {
+        // date_filter rows are intentionally dropped — show no drill-down
+        // detail (the source row alone is the only useful info). Other
+        // filtered_row reasons (`rule_skip`, `no_rule_match`) still drive
+        // a drill-down walk so VARIABLES + RULES tables stay informative.
+        ..detailLoaded = frame.reason == 'date_filter_from_filename';
+      if (ctx.currentSourceBytes != null && frame.sourceLocator >= 0) {
         final line =
-            await ctx.currentSourceFetcher!.lineAt(frame.sourceLocator);
+            _lineAtSync(ctx.currentSourceBytes!, frame.sourceLocator);
         if (line != null) {
           row.fields = _splitCsv(line, file.headers.length);
         }
       }
+      // Honour pending error_row stashed before this row existed.
+      if (ctx.pendingWarningLocators.remove(frame.sourceLocator)) {
+        row.hasError = true;
+        final stashed = ctx.pendingWarningDetails.remove(frame.sourceLocator);
+        if (stashed != null) row.warningDetails.addAll(stashed);
+      }
       ctx.model.rows[rid] = row;
       file.rowIds.add(rid);
+      ctx.locatorToRid[frame.sourceLocator] = rid;
       return;
     }
     if (frame is btrace_mod.ErrorRow) {
+      // bxp-cli treats var/rule eval failures as WARNINGS (stats.warnings
+      // bump, --debug log), not hard errors — the row is still processed
+      // with an empty substitute. Surface the same severity per-row by
+      // flipping `hasError` (legacy field name; UI maps it to the
+      // `warning` status). Also keep the global issue list for
+      // file-level diagnostics.
       ctx.model.issues.add(
-          'error @ locator ${frame.sourceLocator}: ${frame.errorKind} ${frame.detail}');
+          'warning @ locator ${frame.sourceLocator}: ${frame.errorKind} ${frame.detail}');
+      final detail = '${frame.errorKind}: ${frame.detail} (in ${frame.varName})';
+      final rid = ctx.locatorToRid[frame.sourceLocator];
+      if (rid != null) {
+        final r = ctx.model.rows[rid];
+        if (r != null) {
+          r.hasError = true;
+          r.warningDetails.add(detail);
+        }
+      } else {
+        // error_row for a row not yet created (input_schema eval runs
+        // before rules → row-creating frame comes later). Stash both
+        // the flag bit and the detail text so the row-creating handler
+        // can attach them.
+        ctx.pendingWarningLocators.add(frame.sourceLocator);
+        (ctx.pendingWarningDetails[frame.sourceLocator] ??= <String>[])
+            .add(detail);
+      }
       return;
     }
     if (frame is btrace_mod.Done) {
@@ -3309,10 +3409,14 @@ class TraceStore extends ChangeNotifier {
       final outputFetcher = file.outputCsvxPath.isEmpty
           ? null
           : await CsvRowFetcher.open(file.outputCsvxPath);
-      // Build pre-pass lookups blob for evalBatch.
+      // Build pre-pass lookups blob for evalBatch — keys are namespaced by
+      // the actual pre_pass block name (legacy single-block reports
+      // `_default`; named blocks carry the explicit name).
       final lookups = <String, String>{};
+      final prepassNames = <String>{};
       for (final pp in file.prepass) {
-        lookups['_default\x00${pp.key}\x00${pp.field}'] = pp.value;
+        lookups['${pp.name}\x00${pp.key}\x00${pp.field}'] = pp.value;
+        prepassNames.add(pp.name);
       }
       _btraceRuntimes[file.id] = _BtraceFileRuntime(
         sourceFetcher: currentSourceFetcher,
@@ -3322,6 +3426,7 @@ class TraceStore extends ChangeNotifier {
         ruleWhens: ruleWhens,
         ruleRows: ruleRows,
         lookups: lookups,
+        singlePrepassName: prepassNames.length == 1 ? prepassNames.first : null,
       );
       // currentSourceFetcher is now owned by the runtime; don't close it.
       currentSourceFetcher = null;
@@ -3371,8 +3476,8 @@ class TraceStore extends ChangeNotifier {
         final file = currentFile;
         if (file != null) {
           file.stats = {
-            'source_rows': frame.sourceRows,
-            'written_rows': frame.writtenRows,
+            'rows': frame.sourceRows,
+            'written': frame.writtenRows,
             'errors': frame.errors,
             'warnings': frame.warnings,
           };
@@ -3384,7 +3489,7 @@ class TraceStore extends ChangeNotifier {
         // btrace.dart's PrepassEntry frame and trace_model.dart's
         // PrepassEntry POJO are different types — convert before storing.
         final entry =
-            PrepassEntry(key: frame.key, field: frame.field, value: frame.value);
+            PrepassEntry(name: frame.name, key: frame.key, field: frame.field, value: frame.value);
         final file = currentFile;
         if (file != null) {
           file.prepass.add(entry);
@@ -3436,7 +3541,10 @@ class TraceStore extends ChangeNotifier {
         )
           ..sourceLocator = frame.sourceLocator
           ..filteredReason = frame.reason
-          ..detailLoaded = true; // Nothing to drill down for filtered rows.
+          // date_filter rows are intentionally dropped — no drill-down.
+          // Other reasons (rule_skip, no_rule_match) still drive a walk
+          // so VARIABLES + RULES tables stay informative.
+          ..detailLoaded = frame.reason == 'date_filter_from_filename';
         if (currentSourceFetcher != null && frame.sourceLocator >= 0) {
           final line =
               await currentSourceFetcher!.lineAt(frame.sourceLocator);
@@ -3530,18 +3638,22 @@ class TraceStore extends ChangeNotifier {
       }
     }
 
-    // 2. Output row(s). One source row can produce multiple output rows
-    // (Currency conversion → 3 outputs). For now we surface only the
-    // primary output the OutputRow frame pointed at; multi-output is a
-    // follow-up since btrace already encodes the relationship via
-    // output_idx but doesn't group siblings.
-    if (runtime.outputFetcher != null &&
-        row.outputIdx >= 0 &&
-        row.outputIdx < file.outputOffsets.length) {
-      final line = await runtime.outputFetcher!
-          .lineAt(file.outputOffsets[row.outputIdx]);
-      if (line != null) {
-        row.outputs.add(_splitCsv(line, file.outputHeaders.length));
+    // 2. Output row(s). For 1:N templates (e.g. trading212 Currency
+    // conversion → 3 outputs) we iterate every per-output index this
+    // source row produced and append one parsed CSV line per output.
+    // Falls back to the legacy singular `outputIdx` when the producer
+    // didn't populate the plural list (older traces / NDJSON path).
+    if (runtime.outputFetcher != null) {
+      final idxs = row.outputIdxs.isNotEmpty
+          ? row.outputIdxs
+          : (row.outputIdx >= 0 ? <int>[row.outputIdx] : const <int>[]);
+      for (final idx in idxs) {
+        if (idx < 0 || idx >= file.outputOffsets.length) continue;
+        final line =
+            await runtime.outputFetcher!.lineAt(file.outputOffsets[idx]);
+        if (line != null) {
+          row.outputs.add(_splitCsv(line, file.outputHeaders.length));
+        }
       }
     }
 
@@ -3558,6 +3670,7 @@ class TraceStore extends ChangeNotifier {
         exprs: exprs,
         tickerMap: runtime.tickerMap.isNotEmpty ? runtime.tickerMap : null,
         lookups: runtime.lookups.isNotEmpty ? runtime.lookups : null,
+        singlePrepassName: runtime.singlePrepassName,
       );
       if (results.length == exprs.length) {
         for (var i = 0; i < names.length; i++) {
@@ -3580,6 +3693,7 @@ class TraceStore extends ChangeNotifier {
     // (matches bxp-cli semantics). Emit RuleEntry for every rule so the
     // user sees the full decision tree. Override `rows` are evaluated
     // only for the matched rule.
+    int? walkMatchedIdx;
     if (row.fields.isNotEmpty && runtime.ruleWhens.isNotEmpty) {
       final results = await BxpProcessClient.evalBatch(
         headers: file.headers,
@@ -3587,6 +3701,7 @@ class TraceStore extends ChangeNotifier {
         exprs: runtime.ruleWhens,
         tickerMap: runtime.tickerMap.isNotEmpty ? runtime.tickerMap : null,
         lookups: runtime.lookups.isNotEmpty ? runtime.lookups : null,
+        singlePrepassName: runtime.singlePrepassName,
       );
       bool firstMatchSeen = false;
       for (var i = 0; i < runtime.ruleWhens.length; i++) {
@@ -3594,13 +3709,61 @@ class TraceStore extends ChangeNotifier {
         final r = results[i];
         final matched = r.ok && _truthy(r.value);
         final effectiveMatch = matched && !firstMatchSeen;
-        if (effectiveMatch) firstMatchSeen = true;
+        if (effectiveMatch) {
+          firstMatchSeen = true;
+          walkMatchedIdx = i;
+        }
         row.rules.add(RuleEntry(
           ruleIndex: i,
           when: runtime.ruleWhens[i],
           matched: effectiveMatch,
           rows: i < runtime.ruleRows.length ? runtime.ruleRows[i] : const [],
         ));
+      }
+    }
+    // For btrace rows that arrived as `filtered_row` (rule_skip, date_filter,
+    // synthetic no_rule_match) the producer didn't carry the matched-rule
+    // index — recover it from the local rules walk so the RULES section
+    // header + RULE RESULTS panel can both render correctly.
+    row.matchedRuleIndex ??= walkMatchedIdx;
+
+    // 5. Override-expression eval for the matched rule. Each `rows` entry
+    // is a map of `$var → expr`; we evaluate against the source fields so
+    // the RULE RESULTS panel mirrors what bxp-cli would have produced for
+    // that rule. Surfaces both for actual output rows (matched + written)
+    // and for filtered rows that still matched a rule (e.g. date_filter,
+    // `rows: []`).
+    final mi = row.matchedRuleIndex;
+    if (mi != null && row.fields.isNotEmpty && mi < runtime.ruleRows.length) {
+      final ruleRowsList = runtime.ruleRows[mi];
+      for (int ri = 0; ri < ruleRowsList.length; ri++) {
+        final override = ruleRowsList[ri];
+        if (override.isEmpty) continue;
+        final names = override.keys.toList();
+        final exprs = override.values.toList();
+        final results = await BxpProcessClient.evalBatch(
+          headers: file.headers,
+          fields: row.fields,
+          exprs: exprs,
+          tickerMap: runtime.tickerMap.isNotEmpty ? runtime.tickerMap : null,
+          lookups: runtime.lookups.isNotEmpty ? runtime.lookups : null,
+        );
+        for (var i = 0; i < names.length; i++) {
+          if (i >= results.length) break;
+          final r = results[i];
+          row.vars.add(VarEntry(
+            kind: r.ok ? 'eval' : 'error',
+            name: names[i],
+            expr: exprs[i],
+            value: r.ok ? r.value : null,
+            error: r.ok ? null : r.error,
+            detail: r.ok ? null : r.detail,
+            origin: 'row_rules',
+            ruleIndex: mi,
+            outputRowIndex: ri,
+          ));
+          if (!r.ok) row.hasError = true;
+        }
       }
     }
   }
@@ -3616,6 +3779,20 @@ class TraceStore extends ChangeNotifier {
   }
 
   /// Minimal CSV splitter for drill-down: handles double-quoted fields with
+  /// Synchronous "extract one CSV line starting at byte [offset]" against
+  /// an eager-loaded source CSV held as `Uint8List`. Used by the btrace
+  /// ingest path to avoid the per-frame await chain on
+  /// `CsvRowFetcher.lineAt` (setPosition + read loop), which was the
+  /// dominant cost during streaming.
+  String? _lineAtSync(Uint8List bytes, int offset) {
+    if (offset < 0 || offset >= bytes.length) return null;
+    int end = bytes.indexOf(0x0A, offset);
+    if (end < 0) end = bytes.length;
+    int hardEnd = end;
+    if (hardEnd > offset && bytes[hardEnd - 1] == 0x0D) hardEnd -= 1;
+    return utf8.decode(bytes.sublist(offset, hardEnd), allowMalformed: true);
+  }
+
   /// embedded commas and `""` escapes. Mirrors `BtraceView._splitCsvLine`;
   /// keep in sync if RFC 4180 edge cases emerge in real broker exports.
   List<String> _splitCsv(String line, int columnHint) {
@@ -3681,10 +3858,33 @@ class _BtraceIngestCtx {
   // works even while the next file is still streaming.
   FileModel? currentFile;
   CsvRowFetcher? currentSourceFetcher;
+  // Eager-loaded source CSV bytes for the current file. Read once at
+  // `file_start` so per-row source-line extraction during ingest is a
+  // synchronous byte scan instead of a `CsvRowFetcher.lineAt` await chain
+  // (the latter dominated drain time and froze the live stats counter
+  // until process exit).
+  Uint8List? currentSourceBytes;
   // Pre-pass entries that arrive before any `file_start` are stashed here
   // and re-attached to whichever FileModel arrives next.
   final List<PrepassEntry> prepassBatch = [];
   int rowCounter = 0;
+
+  // Per-file map: source CSV byte offset → rowId. Lets the OutputRow
+  // ingest collapse N consecutive `output_row` frames sharing the same
+  // `source_locator` (1:N templates like trading212 Currency conversion)
+  // into ONE grid row whose `outputIdxs`/`btraceActions` lists carry all
+  // N outputs. Cleared on every `file_start`.
+  final Map<int, String> locatorToRid = {};
+  // Source-locators that had an `error_row` frame BEFORE the matching
+  // output_row / filtered_row was ingested. bxp-cli runs `evalAllVars`
+  // (which can emit error_row) before rules, so the error frame
+  // routinely precedes the row-creating frame for the same locator.
+  // Drained on output_row / filtered_row ingest to flip `hasError`.
+  final Set<int> pendingWarningLocators = {};
+  // Parallel to [pendingWarningLocators] but carries the per-frame
+  // detail strings (`<errorKind>: <detail> (in <varName>)`) so the
+  // row-creating handler can append them to `row.warningDetails`.
+  final Map<int, List<String>> pendingWarningDetails = {};
 
   _BtraceIngestCtx({
     required this.configPath,
@@ -3778,8 +3978,10 @@ class _BtraceIngestCtx {
         ? null
         : await CsvRowFetcher.open(file.outputCsvxPath);
     final lookups = <String, String>{};
+    final prepassNames = <String>{};
     for (final pp in file.prepass) {
-      lookups['_default\x00${pp.key}\x00${pp.field}'] = pp.value;
+      lookups['${pp.name}\x00${pp.key}\x00${pp.field}'] = pp.value;
+      prepassNames.add(pp.name);
     }
     runtimes[file.id] = _BtraceFileRuntime(
       sourceFetcher: currentSourceFetcher,
@@ -3789,8 +3991,10 @@ class _BtraceIngestCtx {
       ruleWhens: ruleWhens,
       ruleRows: ruleRows,
       lookups: lookups,
+      singlePrepassName: prepassNames.length == 1 ? prepassNames.first : null,
     );
     currentSourceFetcher = null;
+    currentSourceBytes = null;
     currentFile = null;
   }
 
@@ -3836,6 +4040,10 @@ class _BtraceFileRuntime {
   /// Pre-pass lookup blob ready for `bxp-fmt --expr-batch`'s `lookups`
   /// field. Keys use `\x00` separator: `"<block>\x00<key>\x00<field>"`.
   final Map<String, String> lookups;
+  /// Single-block pre_pass name passed to bxp-fmt so 2-arg
+  /// `LOOKUP(key, field)` resolves. Null when the template has no
+  /// pre_pass or has multiple distinct blocks (caller must use 3-arg form).
+  final String? singlePrepassName;
 
   _BtraceFileRuntime({
     required this.sourceFetcher,
@@ -3845,6 +4053,7 @@ class _BtraceFileRuntime {
     required this.ruleWhens,
     required this.ruleRows,
     required this.lookups,
+    this.singlePrepassName,
   });
 
   Future<void> dispose() async {

@@ -56,13 +56,21 @@ class _RowDetailState extends State<RowDetail> {
       );
     }
 
-    final errorCount = row.vars.where((v) => v.kind == 'error').length;
+    // bxp-cli severity: var/rule eval failures are WARNINGS (the
+    // `error` kind on VarEntry is the legacy field name from the
+    // NDJSON path). Banner copy + colour reflect "warning" semantics.
+    final warningCount = row.vars.where((v) => v.kind == 'error').length;
+    // Prefer the per-frame detail captured during ingest (carries
+    // errorKind + bxp-fmt detail text). Falls back to the re-eval
+    // VarEntry list above when ingest didn't see error_row frames
+    // (e.g. NDJSON path or offline-built model).
+    final ingestDetails = row.warningDetails;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // ── Error banner ────────────────────────────────────────────
-        if (errorCount > 0)
+        // ── Warning banner ──────────────────────────────────────────
+        if (warningCount > 0 || ingestDetails.isNotEmpty)
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
             decoration: BoxDecoration(
@@ -76,12 +84,20 @@ class _RowDetailState extends State<RowDetail> {
               children: [
                 Text('⚠', style: TextStyle(color: t.errorText, fontSize: 12)),
                 const SizedBox(width: 8),
-                Text(
-                  '$errorCount variable ${errorCount == 1 ? "error" : "errors"} in this row — see Variables below.',
-                  style: BxpText.body(
-                    context,
-                    color: t.errorText,
-                    size: BxpSize.sm,
+                Expanded(
+                  child: Text(
+                    ingestDetails.isNotEmpty
+                        ? '${ingestDetails.length} variable '
+                            '${ingestDetails.length == 1 ? "warning" : "warnings"} '
+                            'in this row — ${ingestDetails.first}'
+                        : '$warningCount variable '
+                            '${warningCount == 1 ? "warning" : "warnings"} '
+                            'in this row — see Variables below.',
+                    style: BxpText.body(
+                      context,
+                      color: t.errorText,
+                      size: BxpSize.sm,
+                    ),
                   ),
                 ),
               ],
@@ -134,8 +150,8 @@ class _RowDetailState extends State<RowDetail> {
                           children: [
                             _Section(
                               title: 'VARIABLES',
-                              subtitle: errorCount > 0
-                                  ? '${row.vars.length} entries · $errorCount error${errorCount == 1 ? "" : "s"}'
+                              subtitle: warningCount > 0
+                                  ? '${row.vars.length} entries · $warningCount warning${warningCount == 1 ? "" : "s"}'
                                   : '${row.vars.length} entries',
                               child: _VariablesTable(vars: row.vars),
                             ),

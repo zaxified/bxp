@@ -109,8 +109,16 @@ class RowModel {
   final List<List<String>> outputs = [];
   /// Index of the first rule that matched, or null for filtered/unmatched rows.
   int? matchedRuleIndex;
-  /// True when any `var_error` event was received for this row.
+  /// True when any `var_error` event / `error_row` btrace frame was
+  /// received for this row. Semantically a WARNING in bxp-cli's
+  /// vocabulary (legacy field name preserved for backward compatibility).
   bool hasError = false;
+  /// Human-readable details collected from `error_row` frames for this
+  /// row — `"<errorKind>: <detail> (in <varName>)"` per failed
+  /// expression. Surfaced in the RowList tooltip + RowDetail banner so
+  /// the user sees *why* the row was flagged without drilling down.
+  /// Empty when no warnings landed on this row.
+  final List<String> warningDetails = [];
 
   // ── Btrace mode metadata ───────────────────────────────────────────────
   // Populated by `TraceStore._streamRunBtrace` from `output_row` frames so
@@ -125,12 +133,25 @@ class RowModel {
   int sourceLocator = -1;
   /// Per-file 0-based output-row index (`output_row.outputIdx`). Used as
   /// the index into `FileModel.outputOffsets[]` to derive the byte offset
-  /// of the corresponding output.csvx line. -1 in NDJSON mode.
+  /// of the corresponding output.csvx line. -1 in NDJSON mode. Set from
+  /// the FIRST `output_row` frame received for this source row — for
+  /// 1:N templates (single source producing N outputs) `outputIdxs`
+  /// below carries the full list.
   int outputIdx = -1;
   /// Action label carried by the `output_row` frame (e.g. "BUY", "SELL").
   /// Surfaces in master row lists without paying for a drill-down. Null
   /// in NDJSON mode (where it can be derived from outputs[0]).
   String? btraceAction;
+  /// All per-file output-row indices for this source row. Length 1 for
+  /// single-output templates; >1 for 1:N expansion (trading212 currency
+  /// conversion expands one source row into BUY + SELL + FEE outputs).
+  /// Drill-down iterates this list when reading from `output.csvx`.
+  /// First element matches [outputIdx]; empty when no output was emitted
+  /// (filtered / unmatched / skipped rows).
+  List<int> outputIdxs = [];
+  /// Per-output action labels parallel to [outputIdxs]. First element
+  /// matches [btraceAction].
+  List<String> btraceActions = [];
 
   /// False until [TraceStore.ensureDetailLoaded] has populated `vars`,
   /// `rules`, `fields`, and `outputs` for this row. NDJSON mode populates
@@ -153,13 +174,18 @@ class RowModel {
 /// `field` is the column name that was indexed, `value` is the aggregate
 /// or verbatim value stored under that key for LOOKUP() access.
 class PrepassEntry {
+  /// Pre-pass namespace name. Legacy single-block form gets the synthetic
+  /// `_default`; named blocks carry the explicit name (e.g. `orders`). The
+  /// GUI uses this to namespace lookups when re-evaluating expressions in
+  /// drill-down and to derive the single-block name passed to bxp-fmt.
+  final String name;
   /// The lookup key (value of the indexed CSV column for this entry).
   final String key;
   /// The CSV column (header name) whose values were indexed to build this entry.
   final String field;
   /// The stored aggregate or verbatim value, accessible via `LOOKUP(key)`.
   final String value;
-  const PrepassEntry({required this.key, required this.field, required this.value});
+  const PrepassEntry({this.name = '_default', required this.key, required this.field, required this.value});
 }
 
 /// One entry in the per-call trace produced by `bxp-fmt --expr-trace`. Used

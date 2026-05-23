@@ -141,8 +141,19 @@ class _FileListState extends State<FileList> {
 
                   final name = _basename(file.path);
                   final written = file.stats?['written'];
-                  final errors = file.stats?['errors'] ?? 0;
-                  final rows = file.rowIds.length;
+                  // bxp-cli severity: file_end.errors (input_schema expr
+                  // failures) + file_end.warnings (other per-file
+                  // warnings) both flow through `stats.warnings` /
+                  // exit 2 on the producer side — surface them as a
+                  // single GUI "warn" badge.
+                  final warnings =
+                      ((file.stats?['warnings'] as int?) ?? 0) +
+                          ((file.stats?['errors'] as int?) ?? 0);
+                  // Once file_end has populated stats, prefer its authoritative
+                  // source-row count (matches between NDJSON and btrace modes,
+                  // even when one source row produces N outputs). During
+                  // streaming fall back to the running rowIds length.
+                  final rows = file.stats?['rows'] ?? file.rowIds.length;
                   final active = id == store.selectedFileId;
 
                   // Active row text uses theme's selectionText
@@ -176,10 +187,10 @@ class _FileListState extends State<FileList> {
                                   text: '${file.template} · $rows rows'),
                               if (written != null)
                                 TextSpan(text: ' · $written written'),
-                              if (errors > 0)
+                              if (warnings > 0)
                                 TextSpan(
-                                    text: ' · $errors err',
-                                    style: TextStyle(color: t.errorText)),
+                                    text: ' · $warnings warn',
+                                    style: TextStyle(color: t.valueWarn)),
                               // Pre-pass badge: surfaces the count of
                               // LOOKUP table entries gathered before
                               // the main row loop.
