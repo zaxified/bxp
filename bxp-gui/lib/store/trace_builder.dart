@@ -1,3 +1,12 @@
+// REMOVE IN v0.4.0 — TraceBuilder was the NDJSON-stream consumer for
+// `bxp-cli --trace` (line-by-line populate of TraceModel). Superseded by
+// the btrace pipeline (`btrace_mod` + `_streamRunBtrace`) in 2026-05-22.
+// The whole file is dead after the v0.4.0 cleanup; kept commented out
+// for one release cycle in case btrace regresses and we need to revive
+// the NDJSON path quickly. Re-enable [TraceStore._streamRunNdjson] +
+// [BxpProcessClient.runDryRun]/[runFullRun]/[_runCliTrace]/
+// [_runCliTraceViaBridge] + [BridgeClient.runStreaming] together.
+/*
 import 'dart:convert';
 import 'trace_model.dart';
 
@@ -241,3 +250,4 @@ class TraceBuilder {
     }
   }
 }
+*/

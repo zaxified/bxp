@@ -13,19 +13,34 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:ffi/ffi.dart';
 import 'package:path/path.dart' as p;
 
-// C ABI signature: bridge_run(const char* req, char* resp_buf, int32_t resp_size) -> int32_t.
+// C ABI signature:
+//   bridge_run(const char* req,
+//              const uint8_t* stdin_ptr, uint32_t stdin_len,
+//              char* resp_buf, int32_t resp_size) -> int32_t.
 // Returns # of bytes written, or -1 on bridge-level failure.
+//
+// `stdin_ptr` + `stdin_len` carry an optional input body written to the
+// child's stdin pipe (e.g. the JSON request for `bxp-fmt --expr-batch`).
+// When `stdin_len == 0` the child's stdin is closed immediately — the
+// legacy `bxp-fmt --docs` shape. The bridge runs the stdin writer on its
+// own thread so a body larger than the OS pipe buffer can't deadlock
+// against the stdout/stderr drainers.
 typedef _BridgeRunNative = Int32 Function(
   Pointer<Utf8>,
+  Pointer<Uint8>,
+  Uint32,
   Pointer<Uint8>,
   Int32,
 );
 typedef _BridgeRunDart = int Function(
   Pointer<Utf8>,
+  Pointer<Uint8>,
+  int,
   Pointer<Uint8>,
   int,
 );
@@ -209,6 +224,10 @@ class BridgeClient {
   /// `cwd` sets the working directory of the child — required for
   /// bxp-cli runs so relative `data_dir` paths in the user's config
   /// resolve against the config file rather than bxp-gui's own CWD.
+  /// `stdin` is an optional input body written to the child's stdin
+  /// pipe — required by `bxp-fmt --expr-batch`, which reads a JSON
+  /// request body from stdin. When omitted the child's stdin is closed
+  /// immediately (legacy shape used by `--docs` / `--config`).
   /// `bufSize` controls the response-buffer allocation; default is
   /// large enough for `bxp-fmt --docs` / `--config` payloads but
   /// streaming runs should pass [largeBufSize] (~64 MB) so the cap
@@ -217,6 +236,7 @@ class BridgeClient {
     String exe,
     List<String> args, {
     String? cwd,
+    Uint8List? stdin,
     int bufSize = defaultBufSize,
   }) {
     final request = jsonEncode({
@@ -225,8 +245,16 @@ class BridgeClient {
       if (cwd != null && cwd.isNotEmpty) 'cwd': cwd,
     });
     final requestPtr = request.toNativeUtf8();
+    // Allocate a 1-byte placeholder when no stdin is supplied — the C ABI
+    // requires a non-null pointer even when `stdin_len == 0`, and Zig
+    // never dereferences the pointer in that case.
+    final stdinLen = stdin?.length ?? 0;
+    final stdinPtr = malloc.allocate<Uint8>(stdinLen == 0 ? 1 : stdinLen);
+    if (stdinLen > 0) {
+      stdinPtr.asTypedList(stdinLen).setAll(0, stdin!);
+    }
     try {
-      final firstAttempt = _runWithBuffer(requestPtr, bufSize);
+      final firstAttempt = _runWithBuffer(requestPtr, stdinPtr, stdinLen, bufSize);
       if (firstAttempt != null) return firstAttempt;
       // Buffer too small for the encoded response. The bridge captures up
       // to [largeBufSize] bytes of child output, so a single retry with
@@ -242,7 +270,8 @@ class BridgeClient {
           err: 'bridge: response exceeds largeBufSize',
         );
       }
-      final retried = _runWithBuffer(requestPtr, largeBufSize);
+      final retried =
+          _runWithBuffer(requestPtr, stdinPtr, stdinLen, largeBufSize);
       if (retried != null) return retried;
       return const BridgeResult(
         exitCode: -1,
@@ -252,6 +281,7 @@ class BridgeClient {
       );
     } finally {
       malloc.free(requestPtr);
+      malloc.free(stdinPtr);
     }
   }
 
@@ -259,10 +289,15 @@ class BridgeClient {
   /// Returns null on overflow (-1 from the bridge) so [run] can decide
   /// whether to retry with a larger buffer; returns a parsed result on
   /// any other outcome (success or bridge-level error).
-  BridgeResult? _runWithBuffer(Pointer<Utf8> requestPtr, int bufSize) {
+  BridgeResult? _runWithBuffer(
+    Pointer<Utf8> requestPtr,
+    Pointer<Uint8> stdinPtr,
+    int stdinLen,
+    int bufSize,
+  ) {
     final responseBuf = malloc.allocate<Uint8>(bufSize);
     try {
-      final len = _bridgeRun(requestPtr, responseBuf, bufSize);
+      final len = _bridgeRun(requestPtr, stdinPtr, stdinLen, responseBuf, bufSize);
       if (len < 0) return null;
       final bytes = responseBuf.asTypedList(len);
       final responseJson = utf8.decode(bytes);
@@ -441,11 +476,66 @@ class BridgeClient {
   /// drained, future can complete and NativeCallables can close". The bridge
   /// joins both reader threads before invoking on_exit, so no callback ever
   /// fires after the future resolves.
+  /// Binary-mode counterpart of [runStreaming]. Sets `binary_mode: true`
+  /// in the bridge request so the stdout reader dispatches raw pipe-read
+  /// chunks instead of newline-batched lines. Designed for the bxp-cli
+  /// `--trace=bin` (BXTB) path where stdout is a binary frame stream
+  /// with no line boundaries.
+  ///
+  /// Threading + memory contract identical to [runStreaming]; only the
+  /// dispatch shape differs (raw byte chunks via [onChunk]).
+  Future<int> runStreamingBinary(
+    String exe,
+    List<String> args, {
+    String? cwd,
+    required void Function(Uint8List chunk) onChunk,
+    void Function(String chunk)? onStderr,
+    void Function(int handle)? onSpawn,
+  }) {
+    return _runStreamingImpl(
+      exe,
+      args,
+      cwd: cwd,
+      binaryMode: true,
+      onStdoutChunk: onChunk,
+      onStderr: onStderr,
+      onSpawn: onSpawn,
+    );
+  }
+
+  // REMOVE IN v0.4.0 — line-mode streaming was only used by the
+  // legacy NDJSON dry-run path ([BxpProcessClient._runCliTraceViaBridge],
+  // also commented out). Live streaming goes through [runStreamingBinary].
+  // When the v0.4.0 cleanup lands, also collapse [_runStreamingImpl] to
+  // binary-only (drop the `binaryMode` flag + the `onStdoutLine` branch).
+  /*
   Future<int> runStreaming(
     String exe,
     List<String> args, {
     String? cwd,
     required void Function(String line) onLine,
+    void Function(String chunk)? onStderr,
+    void Function(int handle)? onSpawn,
+  }) {
+    return _runStreamingImpl(
+      exe,
+      args,
+      cwd: cwd,
+      binaryMode: false,
+      onStdoutLine: onLine,
+      onStderr: onStderr,
+      onSpawn: onSpawn,
+    );
+  }
+  */
+
+  Future<int> _runStreamingImpl(
+    String exe,
+    List<String> args, {
+    String? cwd,
+    required bool binaryMode,
+    void Function(String line)? onStdoutLine,
+    void Function(Uint8List chunk)? onStdoutChunk,
     void Function(String chunk)? onStderr,
     void Function(int handle)? onSpawn,
   }) async {
@@ -460,12 +550,20 @@ class BridgeClient {
     void handleStdoutBatch(Pointer<Uint8> ptr, int len) {
       try {
         if (len > 0) {
-          // Bridge guarantees the buffer is valid until we return; copy the
-          // bytes through utf8.decode + LineSplitter immediately, then free.
-          final text = utf8.decode(ptr.asTypedList(len), allowMalformed: true);
-          for (final line in const LineSplitter().convert(text)) {
-            if (line.isEmpty) continue;
-            onLine(line);
+          if (binaryMode) {
+            // Copy the bytes out of the bridge-owned buffer before
+            // bridge_free below. Uint8List.fromList copies; callers can
+            // hold the chunk past the callback return safely.
+            final chunk = Uint8List.fromList(ptr.asTypedList(len));
+            onStdoutChunk?.call(chunk);
+          } else {
+            // Line mode: decode + split into NDJSON lines.
+            final text =
+                utf8.decode(ptr.asTypedList(len), allowMalformed: true);
+            for (final line in const LineSplitter().convert(text)) {
+              if (line.isEmpty) continue;
+              onStdoutLine?.call(line);
+            }
           }
         }
       } finally {
@@ -511,6 +609,7 @@ class BridgeClient {
       'exe': exe,
       'args': args,
       if (cwd != null && cwd.isNotEmpty) 'cwd': cwd,
+      if (binaryMode) 'binary_mode': true,
     });
     final requestPtr = request.toNativeUtf8();
 

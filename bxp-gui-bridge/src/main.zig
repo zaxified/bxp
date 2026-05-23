@@ -44,11 +44,18 @@ const max_output_bytes: usize = 64 * 1024 * 1024;
 /// means smoother UI (smaller per-batch decode/dispatch cost) but more FFI
 /// hops; higher means fewer hops but bigger latency spikes per batch.
 /// Defaults to `default_stdout_batch_lines` when null/omitted.
+///
+/// `binary_mode` is streaming-only: when true the stdout reader skips
+/// newline batching and dispatches each pipe read as-is. Used by the
+/// bxp-cli `--trace=bin` (BXTB) path where stdout is a binary frame
+/// stream with no line boundaries. `stdout_batch_lines` is ignored
+/// in this mode.
 const Request = struct {
     exe: []const u8,
     args: []const []const u8 = &.{},
     cwd: ?[]const u8 = null,
     stdout_batch_lines: ?usize = null,
+    binary_mode: bool = false,
 };
 
 /// Response shape mirrors dart:io ProcessResult conceptually:
@@ -81,12 +88,23 @@ export fn bridge_version() [*:0]const u8 {
 /// bridge-level failure (e.g. malformed request) prevented spawning the
 /// child.
 ///
+/// `stdin_ptr` + `stdin_len` carry an optional input body to write to the
+/// child's stdin. When `stdin_len == 0` the child's stdin is closed
+/// immediately (legacy behaviour, used by `bxp-fmt --docs` etc). When
+/// non-zero the bridge spawns a writer thread that pushes the body and
+/// closes the pipe, running concurrently with the stdout/stderr drainers
+/// so a request larger than the OS pipe buffer doesn't deadlock against
+/// a child that won't flush stdout until it has consumed stdin (the
+/// `bxp-fmt --expr-batch` shape).
+///
 /// Memory: all internal allocations go through std.heap.c_allocator and
 /// are released before returning. The response_buf is owned by the
 /// caller — Dart side typically allocates from `malloc` via dart:ffi
 /// and frees it after parsing the JSON.
 export fn bridge_run(
     request_json: [*:0]const u8,
+    stdin_ptr: [*]const u8,
+    stdin_len: u32,
     response_buf: [*]u8,
     response_buf_size: i32,
 ) i32 {
@@ -121,10 +139,11 @@ export fn bridge_run(
         argv.append(a, arg) catch return writeErr(out_buf, "OOM building argv", .{});
     }
 
+    const has_stdin = stdin_len > 0;
     var child = std.process.Child.init(argv.items, a);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
-    child.stdin_behavior = .Close;
+    child.stdin_behavior = if (has_stdin) .Pipe else .Close;
     if (req.cwd) |cwd| {
         if (cwd.len > 0) child.cwd = cwd;
     }
@@ -151,10 +170,39 @@ export fn bridge_run(
     defer stderr_buf.deinit(a);
 
     var truncated_flag = std.atomic.Value(bool).init(false);
+    // When stdin is in play, the writer thread runs concurrently with the
+    // drainers — without this a child reading stdin while writing stdout
+    // would deadlock once either side hits its pipe buffer. The writer
+    // closes the child's stdin pipe on completion so the child's
+    // `read(stdin)` sees EOF and proceeds to exit.
+    var stdin_writer_err: ?anyerror = null;
+    var stdin_writer_thread: ?std.Thread = null;
+    if (has_stdin) {
+        const stdin_slice = stdin_ptr[0..stdin_len];
+        stdin_writer_thread = std.Thread.spawn(.{}, stdinWriterLoop, .{ &child, stdin_slice, &stdin_writer_err }) catch |err| blk: {
+            stdin_writer_err = err;
+            // Spawn failure — close stdin manually so the child unblocks
+            // its read() and exits. Drainers + wait still run normally.
+            if (child.stdin) |*stdin_pipe| {
+                stdin_pipe.close();
+                child.stdin = null;
+            }
+            break :blk null;
+        };
+    }
     collectOutputCapped(&child, a, &stdout_buf, &stderr_buf, max_output_bytes, &truncated_flag) catch |err| {
+        if (stdin_writer_thread) |t| t.join();
         _ = child.kill() catch {};
         return writeErr(out_buf, "collect failed: {s}", .{@errorName(err)});
     };
+    if (stdin_writer_thread) |t| t.join();
+    if (stdin_writer_err) |werr| {
+        // stdin write failed mid-stream (child closed its read end early,
+        // pipe broken, OOM). Surface so the Dart side can distinguish
+        // this from a child that simply exited non-zero. Drainers already
+        // captured whatever stdout/stderr the child managed to emit.
+        return writeErr(out_buf, "stdin write failed: {s}", .{@errorName(werr)});
+    }
 
     const term = child.wait() catch |err| {
         return writeErr(out_buf, "wait failed: {s}", .{@errorName(err)});
@@ -235,6 +283,35 @@ fn drainerLoop(args: DrainerArgs) void {
         const take = @min(n, space);
         args.buf.appendSlice(args.alloc, read_buf[0..take]) catch return;
         if (take < n) args.truncated.store(true, .release);
+    }
+}
+
+/// Pump `data` into the child's stdin pipe and close it. Runs on its own
+/// thread so a request body larger than the OS pipe buffer can't deadlock
+/// against a child holding its stdout flush until it has finished reading
+/// stdin (the `bxp-fmt --expr-batch` shape: write request, then read
+/// response). Stores the first error encountered in `out_err` for the
+/// caller to surface — there is no in-band channel back from a detached
+/// writer otherwise.
+fn stdinWriterLoop(
+    child: *std.process.Child,
+    data: []const u8,
+    out_err: *?anyerror,
+) void {
+    var stdin = child.stdin orelse return;
+    child.stdin = null;
+    defer stdin.close();
+    var remaining: usize = 0;
+    while (remaining < data.len) {
+        const n = stdin.write(data[remaining..]) catch |err| {
+            out_err.* = err;
+            return;
+        };
+        if (n == 0) {
+            out_err.* = error.UnexpectedEof;
+            return;
+        }
+        remaining += n;
     }
 }
 
@@ -350,6 +427,10 @@ const StreamingCtx = struct {
     handle: i64 = 0,
     shutting_down: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     stdout_batch_lines: usize = default_stdout_batch_lines,
+    /// When true, dispatch raw stdout pipe-read chunks instead of
+    /// newline-batched lines. Used by the bxp-cli `--trace=bin` path
+    /// where stdout is a binary frame stream with no line boundaries.
+    binary_mode: bool = false,
     /// Bound on un-acked stdout batches in flight to Dart. Reader thread
     /// `wait`s a permit before dispatch; Dart `bridge_ack` posts one after
     /// it has processed the batch. See `default_queue_permits` for sizing.
@@ -389,16 +470,39 @@ fn unregisterStream(handle: i64) void {
     _ = streams_table.remove(handle);
 }
 
-/// Stdout reader: drain pipe in 8 KB chunks, accumulate, emit a batch to
-/// Dart every `stdout_batch_lines` newlines. On EOF, flush any leftover
-/// (which includes a possibly-unterminated final line). Closes the pipe
-/// handle on exit so the child's write end isn't kept open by us after
-/// the stream is drained.
+/// Stdout reader: drain pipe in 8 KB chunks, emit batches to Dart.
+///
+/// Two dispatch shapes:
+///   * Line mode (default) — accumulate, ship every `stdout_batch_lines`
+///     newlines as a batch. On EOF, flush any leftover (possibly an
+///     unterminated final line). Used by the NDJSON streaming dry-run.
+///   * Binary mode (`ctx.binary_mode == true`) — dispatch each pipe
+///     read() result verbatim, no scanning, no buffering. Used by the
+///     bxp-cli `--trace=bin` (BXTB) path where stdout is a frame stream
+///     with no line boundaries. `stdout_batch_lines` is ignored.
+///
+/// Closes the pipe handle on exit so the child's write end isn't kept
+/// open by us after the stream is drained.
 fn streamingStdoutLoop(ctx: *StreamingCtx) void {
     const a = std.heap.c_allocator;
     var stdout = ctx.child.stdout orelse return;
     ctx.child.stdout = null;
     defer stdout.close();
+
+    // Binary mode: skip the line-batching state machine entirely. Each
+    // read() result becomes one dispatch. No accumulation buffer needed —
+    // the dupe below is what the FFI contract hands to Dart anyway.
+    if (ctx.binary_mode) {
+        var read_buf: [8192]u8 = undefined;
+        while (true) {
+            const n = stdout.read(&read_buf) catch break;
+            if (n == 0) break;
+            const chunk_copy = a.dupe(u8, read_buf[0..n]) catch return;
+            ctx.queue_sema.wait();
+            dispatchOrFree(ctx, ctx.on_stdout_batch, chunk_copy, a);
+        }
+        return;
+    }
 
     var buf: std.ArrayList(u8) = .empty;
     defer buf.deinit(a);
@@ -599,6 +703,7 @@ export fn bridge_run_streaming(
         @max(n, 1)
     else
         default_stdout_batch_lines;
+    ctx.binary_mode = req.binary_mode;
 
     // Rollback signal: any failure between here and the final `started_ok = true`
     // raises this flag. Reader threads check it before invoking a Dart callback
@@ -1149,7 +1254,7 @@ test "writeErr produces parseable error response" {
 test "bridge_run rejects empty exe" {
     var buf: [1024]u8 = undefined;
     const req: [*:0]const u8 = "{\"exe\":\"\"}";
-    const n = bridge_run(req, &buf, @intCast(buf.len));
+    const n = bridge_run(req, "".ptr, 0, &buf, @intCast(buf.len));
     try testing.expect(n > 0);
     const parsed = try std.json.parseFromSlice(
         Response,
@@ -1164,7 +1269,7 @@ test "bridge_run rejects empty exe" {
 test "bridge_run rejects malformed JSON" {
     var buf: [1024]u8 = undefined;
     const req: [*:0]const u8 = "{not json";
-    const n = bridge_run(req, &buf, @intCast(buf.len));
+    const n = bridge_run(req, "".ptr, 0, &buf, @intCast(buf.len));
     try testing.expect(n > 0);
     const parsed = try std.json.parseFromSlice(
         Response,
@@ -1179,7 +1284,7 @@ test "bridge_run rejects malformed JSON" {
 test "bridge_run reports spawn failure for missing executable" {
     var buf: [4096]u8 = undefined;
     const req: [*:0]const u8 = "{\"exe\":\"/this/path/does/not/exist/xyz\"}";
-    const n = bridge_run(req, &buf, @intCast(buf.len));
+    const n = bridge_run(req, "".ptr, 0, &buf, @intCast(buf.len));
     try testing.expect(n > 0);
     const parsed = try std.json.parseFromSlice(
         Response,
@@ -1195,7 +1300,7 @@ test "bridge_run helper exit 0 produces clean response" {
     var buf: [4096]u8 = undefined;
     const req = try buildHelperRequestZ(&.{ "exit", "0" });
     defer testing.allocator.free(req);
-    const n = bridge_run(req.ptr, &buf, @intCast(buf.len));
+    const n = bridge_run(req.ptr, "".ptr, 0, &buf, @intCast(buf.len));
     try testing.expect(n > 0);
     const parsed = try std.json.parseFromSlice(
         Response,
@@ -1212,7 +1317,7 @@ test "bridge_run captures helper echo stdout" {
     var buf: [4096]u8 = undefined;
     const req = try buildHelperRequestZ(&.{ "echo", "hello", "world" });
     defer testing.allocator.free(req);
-    const n = bridge_run(req.ptr, &buf, @intCast(buf.len));
+    const n = bridge_run(req.ptr, "".ptr, 0, &buf, @intCast(buf.len));
     try testing.expect(n > 0);
     const parsed = try std.json.parseFromSlice(
         Response,
@@ -1230,7 +1335,7 @@ test "bridge_run reports nonzero exit code from helper" {
     var buf: [4096]u8 = undefined;
     const req = try buildHelperRequestZ(&.{ "exit", "7" });
     defer testing.allocator.free(req);
-    const n = bridge_run(req.ptr, &buf, @intCast(buf.len));
+    const n = bridge_run(req.ptr, "".ptr, 0, &buf, @intCast(buf.len));
     try testing.expect(n > 0);
     const parsed = try std.json.parseFromSlice(
         Response,
@@ -1257,7 +1362,7 @@ test "bridge_run separates stdout and stderr" {
     var attempt: u32 = 0;
     while (attempt < 3) : (attempt += 1) {
         var buf: [4096]u8 = undefined;
-        const n = bridge_run(req.ptr, &buf, @intCast(buf.len));
+        const n = bridge_run(req.ptr, "".ptr, 0, &buf, @intCast(buf.len));
         try testing.expect(n > 0);
         const parsed = try std.json.parseFromSlice(
             Response,
@@ -1283,7 +1388,7 @@ test "bridge_run honours cwd" {
     var buf: [4096]u8 = undefined;
     const req = try buildHelperRequestWithCwdZ(&.{"pwd"}, cwd);
     defer testing.allocator.free(req);
-    const n = bridge_run(req.ptr, &buf, @intCast(buf.len));
+    const n = bridge_run(req.ptr, "".ptr, 0, &buf, @intCast(buf.len));
     try testing.expect(n > 0);
     const parsed = try std.json.parseFromSlice(
         Response,
@@ -1293,6 +1398,70 @@ test "bridge_run honours cwd" {
     );
     defer parsed.deinit();
     try testing.expect(std.mem.indexOf(u8, parsed.value.stdout, cwd) != null);
+}
+
+test "bridge_run round-trips stdin to stdout through helper" {
+    // Sanity check: small payload should flow stdin → child → stdout without
+    // any deadlock or corruption. Covers the bxp-fmt --expr-batch shape
+    // where Dart sends a JSON request body on stdin and reads the response
+    // from stdout.
+    var buf: [4096]u8 = undefined;
+    const req = try buildHelperRequestZ(&.{"stdin-echo"});
+    defer testing.allocator.free(req);
+    const payload = "hello bridge stdin\nline two";
+    const n = bridge_run(
+        req.ptr,
+        payload.ptr,
+        @intCast(payload.len),
+        &buf,
+        @intCast(buf.len),
+    );
+    try testing.expect(n > 0);
+    const parsed = try std.json.parseFromSlice(
+        Response,
+        testing.allocator,
+        buf[0..@intCast(n)],
+        .{ .ignore_unknown_fields = true },
+    );
+    defer parsed.deinit();
+    try testing.expectEqual(@as(i32, 0), parsed.value.exit_code);
+    try testing.expectEqualStrings(payload, parsed.value.stdout);
+    try testing.expectEqual(@as(?[]const u8, null), parsed.value.err);
+}
+
+test "bridge_run stdin write survives request larger than pipe buffer" {
+    // The whole point of running the stdin writer on its own thread is so
+    // bodies bigger than the OS pipe buffer (typically 4-64 KB) don't
+    // deadlock with the stdout/stderr drainers. Push 1 MiB through to
+    // verify the concurrent setup holds.
+    const big_size: usize = 1 * 1024 * 1024;
+    const payload = try testing.allocator.alloc(u8, big_size);
+    defer testing.allocator.free(payload);
+    for (payload, 0..) |*b, i| b.* = @intCast(i & 0xFF);
+
+    const out_buf = try testing.allocator.alloc(u8, 4 * 1024 * 1024);
+    defer testing.allocator.free(out_buf);
+
+    const req = try buildHelperRequestZ(&.{"stdin-echo"});
+    defer testing.allocator.free(req);
+    const n = bridge_run(
+        req.ptr,
+        payload.ptr,
+        @intCast(payload.len),
+        out_buf.ptr,
+        @intCast(out_buf.len),
+    );
+    try testing.expect(n > 0);
+    const parsed = try std.json.parseFromSlice(
+        Response,
+        testing.allocator,
+        out_buf[0..@intCast(n)],
+        .{ .ignore_unknown_fields = true },
+    );
+    defer parsed.deinit();
+    try testing.expectEqual(@as(i32, 0), parsed.value.exit_code);
+    try testing.expectEqual(@as(usize, big_size), parsed.value.stdout.len);
+    try testing.expectEqualSlices(u8, payload, parsed.value.stdout);
 }
 
 test "bridge_run truncated flag set when stdout exceeds cap" {
@@ -1308,7 +1477,7 @@ test "bridge_run truncated flag set when stdout exceeds cap" {
 
     const req = try buildHelperRequestZ(&.{ "stdout-bytes", "67108880" }); // 64 MB + 16 B
     defer testing.allocator.free(req);
-    const n = bridge_run(req.ptr, out_buf.ptr, @intCast(big_buf_size));
+    const n = bridge_run(req.ptr, "".ptr, 0, out_buf.ptr, @intCast(big_buf_size));
     try testing.expect(n > 0);
     const parsed = try std.json.parseFromSlice(
         Response,
@@ -1538,6 +1707,34 @@ test "bridge_free is a no-op when len is zero" {
     // otherwise be UB.
     var dummy: u8 = 0;
     bridge_free(@ptrCast(&dummy), 0);
+}
+
+test "bridge_run_streaming binary_mode dispatches raw chunks" {
+    // Helper emits 32 KB of cycling bytes (0x00..0xFF repeating) with no
+    // newlines. In binary mode the reader bypasses newline scanning and
+    // ships each pipe-read result verbatim. Assert that the total byte
+    // count survives the round-trip — exact chunk count depends on pipe
+    // scheduling so we only check the sum.
+    stream_test.reset();
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    try aw.writer.writeAll("{\"exe\":");
+    try std.json.Stringify.value(helper_path, .{}, &aw.writer);
+    try aw.writer.writeAll(
+        ",\"args\":[\"stdout-binary\",\"32768\"],\"binary_mode\":true}",
+    );
+    const req = try aw.toOwnedSliceSentinel(0);
+    defer testing.allocator.free(req);
+
+    const handle = bridge_run_streaming(req.ptr, streamTestOnStdout, streamTestOnStderr, streamTestOnExit);
+    try testing.expect(handle > 0);
+    try testing.expect(stream_test.waitForExit(5 * std.time.ns_per_s));
+    try testing.expectEqual(@as(i32, 0), stream_test.exit_code);
+    try testing.expectEqual(@as(usize, 32768), stream_test.stdout_total);
+    // In binary mode each chunk arrives independently (no line buffering),
+    // so we expect at least 2 batches for a 32 KB payload through an 8 KB
+    // reader buffer. Upper bound left loose for kernel scheduling jitter.
+    try testing.expect(stream_test.batch_count >= 2);
 }
 
 test "bridge_run_streaming honours stdout_batch_lines from request" {

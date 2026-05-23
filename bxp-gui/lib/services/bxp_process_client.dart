@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
+import 'dart:typed_data';
 
 import 'package:path/path.dart' as p;
 
@@ -223,8 +224,9 @@ class BxpProcessClient {
   static Future<ProcessResult> _runOneShot(
     String executable,
     List<String> arguments,
-    Duration timeout,
-  ) async {
+    Duration timeout, {
+    Uint8List? stdinBody,
+  }) async {
     final dllPath = _resolveBridgePath();
     if (Platform.isWindows) {
       if (dllPath == null) {
@@ -238,7 +240,13 @@ class BxpProcessClient {
           'bridge: ${_lastSubprocessDiag ?? "DLL unavailable"}',
         );
       }
-      return _runOneShotViaBridge(dllPath, executable, arguments, timeout);
+      return _runOneShotViaBridge(
+        dllPath,
+        executable,
+        arguments,
+        timeout,
+        stdinBody: stdinBody,
+      );
     }
     // Non-Windows: by default dart:io's pipes work, so we stay on
     // Process.start. The pre-release smoke gate (`BXP_FORCE_BRIDGE_PROXY=1`)
@@ -248,9 +256,20 @@ class BxpProcessClient {
     // populates `_bridgeDllPath` on all platforms, so a non-null path
     // doesn't imply the user asked for the proxy smoke.
     if (_forceBridgeProxy() && dllPath != null) {
-      return _runOneShotViaBridge(dllPath, executable, arguments, timeout);
+      return _runOneShotViaBridge(
+        dllPath,
+        executable,
+        arguments,
+        timeout,
+        stdinBody: stdinBody,
+      );
     }
-    return _runWithTimeout(executable, arguments, timeout);
+    return _runWithTimeout(
+      executable,
+      arguments,
+      timeout,
+      stdinBody: stdinBody,
+    );
   }
 
   /// Bridge variant of [_runOneShot]. Hard error on any failure — no
@@ -260,11 +279,12 @@ class BxpProcessClient {
     String dllPath,
     String executable,
     List<String> arguments,
-    Duration timeout,
-  ) async {
+    Duration timeout, {
+    Uint8List? stdinBody,
+  }) async {
     try {
       final result = await Isolate.run(
-        () => _bridgeRunInIsolate(dllPath, executable, arguments),
+        () => _bridgeRunInIsolate(dllPath, executable, arguments, stdinBody),
       ).timeout(timeout);
       if (result.err != null) {
         _lastSubprocessDiag = 'bridge $_bridgeVersion: err=${result.err}';
@@ -319,8 +339,22 @@ class BxpProcessClient {
   static Future<ProcessResult> _runWithTimeout(
     String executable,
     List<String> arguments,
-    Duration timeout,
-  ) async {
+    Duration timeout, {
+    Uint8List? stdinBody,
+  }) async {
+    // When the caller supplied a stdin body the three-attempt
+    // direct → shell → Process.run chain doesn't apply — only the
+    // Process.start path can deliver bytes to the child. Run it once
+    // and return whatever exit we get.
+    if (stdinBody != null) {
+      return _runOnce(
+        executable,
+        arguments,
+        timeout,
+        runInShell: false,
+        stdinBody: stdinBody,
+      );
+    }
     // Three-attempt diagnostic chain (direct → runInShell → Process.run)
     // exists for the dart-lang/sdk#1727 spawn-vs-attach race that makes
     // bxp-fmt's --docs output (~30 KB) trip its own WriteFailed before
@@ -382,12 +416,22 @@ class BxpProcessClient {
     List<String> arguments,
     Duration timeout, {
     required bool runInShell,
+    Uint8List? stdinBody,
   }) async {
     final process = await Process.start(
       executable,
       arguments,
       runInShell: runInShell,
     );
+    if (stdinBody != null) {
+      // Fire-and-forget: write the request body, close stdin so the
+      // child sees EOF and proceeds. Errors here surface through the
+      // child's own exit code (likely non-zero) — there's no separate
+      // channel back to the parent for write failures.
+      process.stdin.add(stdinBody);
+      // ignore: unawaited_futures
+      process.stdin.close();
+    }
     // Subscribe to both streams BEFORE any further await. On Windows the
     // anonymous-pipe buffer is only ~4 KB, so a child that writes more
     // than that (e.g. `--docs` emits ~30 KB of JSON) blocks on WriteFile
@@ -762,36 +806,27 @@ class BxpProcessClient {
       request['single_prepass_name'] = singlePrepassName;
     }
     final requestJson = jsonEncode(request);
+    final stdinBytes = Uint8List.fromList(utf8.encode(requestJson));
 
-    // Process.start so we can write the JSON body to the child's stdin.
-    // bxp-fmt --expr-batch responses are small (typically 1-5 KB for a
-    // realistic drill-down) so the dart-lang/sdk#1727 Windows pipe-overflow
-    // race doesn't bite here — we don't need the bridge proxy round-trip.
+    // Route through the shared one-shot path so the Win bridge handles
+    // the pipe drain (sidesteps dart-lang/sdk#1727 on large responses —
+    // a drill-down with many lookups can exceed the 8 KB anonymous-pipe
+    // threshold and silently truncate over Process.start). On Linux/Mac
+    // `_runOneShot` keeps using Process.start with the stdin body.
     try {
-      final p = await Process.start(bin, ['--expr-batch']);
-      p.stdin.add(utf8.encode(requestJson));
-      await p.stdin.close();
-      final stdoutFut = p.stdout.transform(utf8.decoder).join();
-      final stderrFut = p.stderr.transform(utf8.decoder).join();
-      final exitFut = p.exitCode;
-      // Race the child against the timeout. If timeout fires we kill the
-      // process so the futures resolve instead of leaking. The "killed
-      // child" branch reports an empty result list — caller surfaces a
-      // timeout indicator the same way it would for any spawn failure.
-      final exitCode = await exitFut.timeout(timeout, onTimeout: () {
-        p.kill();
-        return ProcessRunResult.kExitTimeout;
-      });
-      if (exitCode != 0) {
-        // Drain so the futures complete; the stderr line is useful for
-        // diagnostics but we don't surface it through the return — caller
-        // sees an empty list and can decide on its own UX.
-        final err = await stderrFut;
-        _lastSubprocessDiag = 'evalBatch exit=$exitCode stderr="${_peek(err)}"';
+      final result = await _runOneShot(
+        bin,
+        const ['--expr-batch'],
+        timeout,
+        stdinBody: stdinBytes,
+      );
+      if (result.exitCode != 0) {
+        final err = (result.stderr as String);
+        _lastSubprocessDiag =
+            'evalBatch exit=${result.exitCode} stderr="${_peek(err)}"';
         return const [];
       }
-      final out = await stdoutFut;
-      return _parseBatchResults(out);
+      return _parseBatchResults(result.stdout as String);
     } catch (e) {
       _lastSubprocessDiag = 'evalBatch ${e.runtimeType}: $e';
       return const [];
@@ -870,8 +905,14 @@ class BxpProcessClient {
     return calls;
   }
 
-  // ── Streaming invocations (stdout emitted as NDJSON events) ───────────
-
+  // ── Streaming invocations (NDJSON path) ───────────────────────────────
+  //
+  // REMOVE IN v0.4.0 — the NDJSON `--trace` streaming path was superseded
+  // by the btrace `--trace=bin` migration in 2026-05-22. The entry points
+  // `runDryRun` / `runFullRun` are kept commented out as historical
+  // reference; the live path is [runWithBtrace] above. Removing once
+  // we have one full release with no btrace regressions.
+  /*
   /// Spawns `bxp-cli --config <path> --template <id> --dry-run --trace`.
   ///
   /// The pipeline runs with CWD = dirname(config_path) so `data_dir` paths
@@ -916,6 +957,7 @@ class BxpProcessClient {
         onStderr: onStderr,
         onSpawn: onSpawn,
       );
+  */
 
   /// Spawn `bxp-cli` with `--trace=bin --trace-file=<btraceOutPath>`.
   ///
@@ -939,6 +981,7 @@ class BxpProcessClient {
     void Function(List<int> chunk)? onStdoutChunk,
     void Function(String chunk)? onStderr,
     void Function(Process)? onSpawn,
+    void Function(int handle)? onBridgeSpawn,
   }) async {
     final endAction = DiagnosticLog.action(
       'runWithBtrace',
@@ -969,6 +1012,45 @@ class BxpProcessClient {
       '--trace=bin',
       '--trace-file=$btraceOutPath',
     ];
+
+    // Windows routes through bridge_run_streaming in binary mode —
+    // dart:io's Process.start suffers ~8 KB pipe truncation on the
+    // multi-MB binary BXTB stream (dart-lang/sdk#1727). The bridge
+    // drains the pipe in native Zig code. Cancellation goes through
+    // the [onBridgeSpawn] handle + `cancelBtrace(handle)` since there
+    // is no [Process] object on the bridge path.
+    final dllPath = _resolveBridgePath();
+    if (Platform.isWindows) {
+      if (dllPath == null) {
+        endAction({'result': 'bridge_unavailable'});
+        return ProcessRunResult(
+          exitCode: -1,
+          stderr: 'bridge: ${_lastSubprocessDiag ?? "DLL unavailable"}',
+        );
+      }
+      return _runWithBtraceViaBridge(
+        bin: bin,
+        args: args,
+        cwd: workingDir,
+        dllPath: dllPath,
+        onStdoutChunk: onStdoutChunk,
+        onStderr: onStderr,
+        onBridgeSpawn: onBridgeSpawn,
+        endAction: endAction,
+      );
+    }
+    if (_forceBridgeProxy() && dllPath != null) {
+      return _runWithBtraceViaBridge(
+        bin: bin,
+        args: args,
+        cwd: workingDir,
+        dllPath: dllPath,
+        onStdoutChunk: onStdoutChunk,
+        onStderr: onStderr,
+        onBridgeSpawn: onBridgeSpawn,
+        endAction: endAction,
+      );
+    }
 
     try {
       final proc = await Process.start(bin, args, workingDirectory: workingDir);
@@ -1008,6 +1090,82 @@ class BxpProcessClient {
     }
   }
 
+  /// Bridge variant of [runWithBtrace]. Streams the binary BXTB frames
+  /// via `bridge_run_streaming` in `binary_mode` so dart:io's anonymous
+  /// pipe truncation on Windows (sdk#1727) doesn't bite. Cancellation
+  /// goes through [cancelBtrace] — the bridge handle is the caller's
+  /// only path to kill the child, since there is no [Process] object in
+  /// this path.
+  static Future<ProcessRunResult> _runWithBtraceViaBridge({
+    required String bin,
+    required List<String> args,
+    required String cwd,
+    required String dllPath,
+    void Function(List<int> chunk)? onStdoutChunk,
+    void Function(String chunk)? onStderr,
+    void Function(int handle)? onBridgeSpawn,
+    required void Function(Map<String, dynamic>) endAction,
+  }) async {
+    final client = BridgeClient(dllPath);
+    int stdoutBytes = 0;
+    final stderrBuf = StringBuffer();
+    try {
+      final exitCode = await client.runStreamingBinary(
+        bin,
+        args,
+        cwd: cwd,
+        onSpawn: (handle) {
+          if (onBridgeSpawn != null) onBridgeSpawn(handle);
+        },
+        onChunk: (chunk) {
+          stdoutBytes += chunk.length;
+          if (onStdoutChunk != null) onStdoutChunk(chunk);
+        },
+        onStderr: (chunk) {
+          stderrBuf.write(chunk);
+          if (onStderr != null) onStderr(chunk);
+        },
+      );
+      endAction({
+        'path': 'bridge',
+        'exit': exitCode,
+        'stdout_bytes': stdoutBytes,
+        'stderr_bytes': stderrBuf.length,
+      });
+      return ProcessRunResult(
+        exitCode: exitCode,
+        stderr: stderrBuf.toString(),
+      );
+    } catch (e) {
+      endAction({'result': 'bridge_stream_failed', 'error': e.toString()});
+      return ProcessRunResult(
+        exitCode: -1,
+        stderr: 'bridge stream: $e',
+      );
+    }
+  }
+
+  /// Cancel a btrace bridge run. [handle] is the opaque value delivered
+  /// to the `onBridgeSpawn` callback of [runWithBtrace]; the bridge
+  /// signals the child (SIGTERM / TerminateProcess) and the streaming
+  /// future resolves naturally with the exit code. No-op for unknown
+  /// handles (already exited).
+  static void cancelBtrace(int handle) {
+    final dllPath = _resolveBridgePath();
+    if (dllPath == null) return;
+    try {
+      BridgeClient(dllPath).cancel(handle);
+    } catch (_) {
+      // Best-effort — cancel is idempotent and the run will resolve
+      // anyway when the child exits or the watchdog fires.
+    }
+  }
+
+  // REMOVE IN v0.4.0 — paired with the runDryRun / runFullRun stubs above.
+  // _runCliTrace + _runCliTraceViaBridge implement the legacy NDJSON
+  // streaming path. The btrace migration ([runWithBtrace]) replaced both;
+  // kept commented out until one release cycle confirms btrace stability.
+  /*
   static Future<ProcessRunResult> _runCliTrace({
     required String configPath,
     required String templateId,
@@ -1294,6 +1452,7 @@ class BxpProcessClient {
       stderr: stderrBuffer.toString(),
     );
   }
+  */
 }
 
 /// Worker-isolate entry point for FFI bridge calls. Top-level on purpose:
@@ -1310,10 +1469,11 @@ BridgeResult _bridgeRunInIsolate(
   String dllPath,
   String executable,
   List<String> arguments,
+  Uint8List? stdinBody,
 ) {
   try {
     final client = BridgeClient(dllPath);
-    return client.run(executable, arguments);
+    return client.run(executable, arguments, stdin: stdinBody);
   } catch (e) {
     return BridgeResult(
       exitCode: -1,

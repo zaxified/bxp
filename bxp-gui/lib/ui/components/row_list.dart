@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart' show mapEquals;
 import 'package:flutter/material.dart';
 import 'package:pluto_grid/pluto_grid.dart';
@@ -163,6 +165,27 @@ class _RowListInnerState extends State<_RowListInner> {
   /// in `stateManager.refRows`.
   final Map<String, String> _filters = {};
 
+  /// Subset of `widget.file.rowIds` currently materialised into
+  /// PlutoRows. For eager (small) files this equals `widget.file.rowIds`
+  /// after activation; for lazy (large) files it starts at the first
+  /// [kLazyInitialRows] and grows in batches of [kLazyExpandBatch] as
+  /// the user scrolls near the end. Populated in [_resyncVisibleRows];
+  /// the build method reads it to construct PlutoRows.
+  List<String> _visibleRowIds = const [];
+
+  /// True when [_visibleRowIds] is shorter than `widget.file.rowIds` —
+  /// i.e. there are more rows on disk we could materialise. Used by the
+  /// scroll listener to decide whether to expand.
+  bool _hasMoreToShow = false;
+
+  /// Currently-running filter scan key (for large files). Each launch
+  /// stamps a fresh key; the scan's `isAborted` closure compares against
+  /// this so a newer keystroke supersedes an older one without races.
+  Object? _filterScanKey;
+  /// Latest progress tick from a running filter scan, surfaced in the
+  /// spinner overlay. `null` when no scan is in flight.
+  ({int matched, int scanned})? _filterScanProgress;
+
   /// Horizontal scroll controller for the sticky filter row above the
   /// grid. Kept in sync with PlutoGrid's body scroll so the filter
   /// inputs stay aligned with their columns when the grid is wider
@@ -198,6 +221,7 @@ class _RowListInnerState extends State<_RowListInner> {
   @override
   void initState() {
     super.initState();
+    _resyncVisibleRows();
     // Auto-select the first row when a file with rows is opened but no
     // row is yet selected — primes RowDetail / OutputPanel so they
     // aren't "empty" on first paint.
@@ -208,6 +232,100 @@ class _RowListInnerState extends State<_RowListInner> {
       if (firstId != null && widget.model.rows[firstId] != null) {
         widget.store.selectRow(firstId);
       }
+    });
+  }
+
+  /// Seed [_visibleRowIds] from the file's eager/lazy mode. Eager files
+  /// show all rows; lazy files show only the first [kLazyInitialRows].
+  /// Called once at init and again after a filter scan completes.
+  void _resyncVisibleRows() {
+    final rowIds = widget.file.rowIds;
+    if (widget.file.sourceLoadEager || rowIds.length <= kLazyInitialRows) {
+      _visibleRowIds = rowIds;
+      _hasMoreToShow = false;
+    } else {
+      _visibleRowIds = rowIds.take(kLazyInitialRows).toList();
+      _hasMoreToShow = true;
+    }
+  }
+
+  /// Append the next [kLazyExpandBatch] rowIds to [_visibleRowIds] and
+  /// trigger a populate sweep so the new rows arrive with content. Builds
+  /// a fresh PlutoRow list and notifies the state manager. No-op when no
+  /// more rows to show or when a filter scan is active (filter view owns
+  /// the visible set in that case).
+  void _expandVisibleWindow() {
+    if (!_hasMoreToShow) return;
+    if (_filterScanKey != null) return;
+    final rowIds = widget.file.rowIds;
+    final start = _visibleRowIds.length;
+    if (start >= rowIds.length) {
+      _hasMoreToShow = false;
+      return;
+    }
+    final end = (start + kLazyExpandBatch).clamp(0, rowIds.length);
+    widget.store.ensureRowsPopulated(widget.fileId, start, end);
+    setState(() {
+      _visibleRowIds = rowIds.sublist(0, end);
+      _hasMoreToShow = end < rowIds.length;
+    });
+  }
+
+  /// Scroll listener on PlutoGrid's body vertical controller. When the
+  /// user scrolls within `kLazyExpandBatch * rowHeight` of the end, kick
+  /// an expand. Multiple firings are idempotent — `_expandVisibleWindow`
+  /// short-circuits on no-more-rows.
+  void _onBodyScroll() {
+    if (!_hasMoreToShow) return;
+    final ctrl = _bodyVertCtrl;
+    if (ctrl == null || !ctrl.hasClients) return;
+    const rowHeight = 28.0;
+    final threshold = kLazyExpandBatch * rowHeight;
+    if (ctrl.position.maxScrollExtent - ctrl.position.pixels < threshold) {
+      _expandVisibleWindow();
+    }
+  }
+
+  /// Kick off a filter scan against the large-file backing store and
+  /// replace [_visibleRowIds] with matches as they arrive. Cancels any
+  /// previous scan by stamping a fresh [_filterScanKey] — the older
+  /// scan's `isAborted` closure detects the mismatch and bails.
+  Future<void> _startLargeFilterScan() async {
+    final scanKey = Object();
+    setState(() {
+      _filterScanKey = scanKey;
+      _filterScanProgress = (matched: 0, scanned: 0);
+    });
+    final matched = await widget.store.filterScanLargeFile(
+      fileId: widget.fileId,
+      filters: _filters,
+      onProgress: (m, s) {
+        if (!mounted || _filterScanKey != scanKey) return;
+        setState(() => _filterScanProgress = (matched: m, scanned: s));
+      },
+      isAborted: () => !mounted || _filterScanKey != scanKey,
+    );
+    if (!mounted || _filterScanKey != scanKey) return;
+    setState(() {
+      _filterScanKey = null;
+      _filterScanProgress = null;
+      _visibleRowIds = matched;
+      _hasMoreToShow = false;
+    });
+  }
+
+  /// Cancel any in-flight scan and restore the unfiltered initial
+  /// window. Called when all filters are cleared.
+  void _abortLargeFilterScan() {
+    if (_filterScanKey == null && _filterScanProgress == null) {
+      _resyncVisibleRows();
+      setState(() {});
+      return;
+    }
+    setState(() {
+      _filterScanKey = null;
+      _filterScanProgress = null;
+      _resyncVisibleRows();
     });
   }
 
@@ -282,25 +400,48 @@ class _RowListInnerState extends State<_RowListInner> {
     }
   }
 
-  /// Apply current `_filters` map to the grid via PlutoGrid's own
-  /// filter API. Called every time a `_FilterCell` notifies a change.
+  /// Apply current `_filters` map to the grid. Two code paths:
+  ///
+  /// • Eager (small) file — every row's content is already populated
+  ///   in `RowModel.fields` and mirrored into PlutoCells, so PlutoGrid's
+  ///   built-in `setFilter` does the work without any disk read.
+  /// • Lazy (large) file — most rows have empty cells (their bytes
+  ///   are still on disk). Built-in filter would miss matches in the
+  ///   unloaded rows entirely. We bypass it and run a sequential scan
+  ///   via [TraceStore.filterScanLargeFile] which populates rows as it
+  ///   walks, yielding to the event loop so the UI stays responsive.
   void _applyFilter() {
     final sm = _stateManager;
-    if (sm == null) return;
     final headers = widget.file.headers;
-    if (_filters.values.every((v) => v.isEmpty)) {
-      sm.setFilter(null); // null clears all filters
+    final allEmpty = _filters.values.every((v) => v.isEmpty);
+
+    if (widget.file.sourceLoadEager) {
+      if (sm == null) return;
+      if (allEmpty) {
+        sm.setFilter(null);
+        return;
+      }
+      sm.setFilter((row) {
+        for (final h in headers) {
+          final f = _filters[h];
+          if (f == null || f.isEmpty) continue;
+          final cell = row.cells[h]?.value?.toString() ?? '';
+          if (!cell.toLowerCase().contains(f.toLowerCase())) return false;
+        }
+        return true;
+      });
       return;
     }
-    sm.setFilter((row) {
-      for (final h in headers) {
-        final f = _filters[h];
-        if (f == null || f.isEmpty) continue;
-        final cell = row.cells[h]?.value?.toString() ?? '';
-        if (!cell.toLowerCase().contains(f.toLowerCase())) return false;
-      }
-      return true;
-    });
+
+    // Lazy file path — scan via the store, replace the materialised
+    // window with the result set when done.
+    if (allEmpty) {
+      _abortLargeFilterScan();
+      return;
+    }
+    // Fire-and-forget. Subsequent keystrokes stamp a fresh
+    // `_filterScanKey` and the older scan aborts.
+    unawaited(_startLargeFilterScan());
   }
 
   @override
@@ -339,10 +480,12 @@ class _RowListInnerState extends State<_RowListInner> {
     );
     _cachedCellStyle = BxpText.body(context, size: BxpSize.md);
     final headers = widget.file.headers;
-    // Pass ALL rows to PlutoGrid; filtering happens imperatively via
-    // setFilter() below. Recomputing the rows list on every keystroke
-    // would force a full rebuild (and lose scroll position).
-    final rowList = widget.file.rowIds
+    // For eager (small) files this is identical to `widget.file.rowIds`.
+    // For lazy (large) files this is the materialised window — first
+    // [kLazyInitialRows] initially, growing in batches as the user
+    // scrolls or contracted to a filter-scan match list. PlutoGrid
+    // receives only this subset.
+    final rowList = _visibleRowIds
         .map((id) => widget.model.rows[id])
         .whereType<RowModel>()
         .toList();
@@ -522,7 +665,10 @@ class _RowListInnerState extends State<_RowListInner> {
           ),
         ),
         Expanded(
-          child: LayoutBuilder(
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: LayoutBuilder(
             builder: (context, constraints) {
               // Flutter Scrollbar computes _trackExtent = viewportDimension.
               // bodyRowsVertical.viewportDimension = PlutoGrid height minus
@@ -570,6 +716,12 @@ class _RowListInnerState extends State<_RowListInner> {
               // swap them into the Flutter Scrollbar wrappers immediately.
               _bodyVertCtrl = event.stateManager.scroll.bodyRowsVertical;
               _bodyHorizCtrl = event.stateManager.scroll.bodyRowsHorizontal;
+              // Scroll-driven lazy expansion for large files: when the user
+              // nears the bottom of the materialised window, append the
+              // next batch of rowIds + populate their fields via the active
+              // RAF. No-op for eager (small) files since `_hasMoreToShow`
+              // stays false there.
+              _bodyVertCtrl?.addListener(_onBodyScroll);
               WidgetsBinding.instance.addPostFrameCallback((_) {
                 if (!mounted) return;
                 final sm = _stateManager;
@@ -684,8 +836,85 @@ class _RowListInnerState extends State<_RowListInner> {
               );
             },
           ),
+              ),
+              if (_filterScanProgress != null)
+                Positioned(
+                  top: 8,
+                  right: 8,
+                  child: _FilterScanSpinner(
+                    progress: _filterScanProgress!,
+                    total: widget.file.rowIds.length,
+                    onCancel: _abortLargeFilterScan,
+                  ),
+                ),
+            ],
+          ),
         ),
       ],
+    );
+  }
+}
+
+/// Progress + cancel button shown while a large-file filter scan is in
+/// flight. Floats over the top-right of the rows grid; non-blocking so
+/// the user can still scroll the partial results landing underneath.
+class _FilterScanSpinner extends StatelessWidget {
+  final ({int matched, int scanned}) progress;
+  final int total;
+  final VoidCallback onCancel;
+  const _FilterScanSpinner({
+    required this.progress,
+    required this.total,
+    required this.onCancel,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.bxpTheme;
+    final pct = total == 0
+        ? 0
+        : ((progress.scanned / total) * 100).clamp(0, 100).round();
+    return Material(
+      color: t.panelBg.withValues(alpha: 0.92),
+      elevation: 2,
+      borderRadius: BorderRadius.circular(4),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: t.textPrimary,
+              ),
+            ),
+            const SizedBox(width: 10),
+            Text(
+              'Filtering ${progress.matched} / ${progress.scanned} ($pct%)',
+              style: BxpText.body(context, size: BxpSize.sm),
+            ),
+            const SizedBox(width: 10),
+            InkWell(
+              onTap: onCancel,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                child: Text(
+                  'Stop',
+                  style: BxpText.body(
+                    context,
+                    size: BxpSize.sm,
+                    color: t.valueWarn,
+                    weight: BxpWeight.medium,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

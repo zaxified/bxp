@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../store/trace_store.dart';
@@ -168,7 +170,11 @@ class _FileListState extends State<FileList> {
                     activeBg: activeBg,
                     hoverBg: hoverBg,
                     borderColor: borderColor,
-                    onTap: () => store.selectFile(id),
+                    // selectFile is async now (opens the source CSV via
+                    // RandomAccessFile and populates rows). Fire-and-forget
+                    // from the tap handler so the InkWell ripple completes
+                    // without blocking on disk I/O.
+                    onTap: () { unawaited(store.selectFile(id)); },
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [

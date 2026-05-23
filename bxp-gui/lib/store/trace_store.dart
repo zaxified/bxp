@@ -18,7 +18,10 @@ import '../services/op_log.dart';
 import '../services/op_to_ast.dart';
 import '../services/schema_doc_lookup.dart';
 import 'trace_model.dart';
-import 'trace_builder.dart';
+// trace_builder.dart imported only by the commented-out _streamRunNdjson;
+// re-enable when REMOVE IN v0.4.0 cleanup happens (live code uses
+// TraceBuilder indirectly via btrace_mod).
+// import 'trace_builder.dart';
 import '../ui/theme/bxp_text_scheme.dart';
 
 /// Per-severity diagnostic buckets produced by walking a `bxp-fmt
@@ -32,6 +35,30 @@ typedef _DiagnosticBuckets = ({
 
 enum RunMode { none, dry, full }
 enum RunStatus { idle, running, done, error }
+
+// ── Source-CSV lazy-load tuning ────────────────────────────────────────
+//
+// File-activation populate is split into two regimes based on size:
+//
+// • Small files (< [kEagerFileLoadBytes]) — the active file's whole CSV
+//   is slurped into a temporary `Uint8List` and every `RowModel.fields`
+//   is populated up-front. RowList behaves as before (all rows visible,
+//   PlutoGrid's built-in filter works). On switch-away the bytes and
+//   row strings are dropped — re-population on revisit is cheap.
+//
+// • Large files (>= [kEagerFileLoadBytes]) — the active file gets a
+//   persistent `RandomAccessFile` handle. Only the first
+//   [kLazyInitialRows] rows are populated initially; the user sees a
+//   subset of the file in PlutoGrid. Scroll near the end triggers an
+//   in-place append of [kLazyExpandBatch] more rows. Filter typing
+//   bypasses PlutoGrid's filter and runs a sequential scan via the RAF,
+//   yielding every [kFilterScanYieldEvery] iterations so the UI stays
+//   responsive. row_fields are kept after switch-away (re-population is
+//   expensive — sequential disk read pass).
+const int kEagerFileLoadBytes = 2 * 1024 * 1024;
+const int kLazyInitialRows = 200;
+const int kLazyExpandBatch = 200;
+const int kFilterScanYieldEvery = 2000;
 
 /// 4-state badge for the live expression validator.
 enum ExprValidationState { idle, pending, ok, error }
@@ -2425,7 +2452,17 @@ class TraceStore extends ChangeNotifier {
   /// the spawn callback and cleared in the run's `finally` block, so a
   /// non-null value means a streaming run is currently executing and can
   /// be killed by [cancelRun].
+  ///
+  /// On Windows the btrace path goes through the bridge — there is no
+  /// [Process] object, only [_runBridgeHandle]. Both fields are
+  /// mutually exclusive within a single run.
   Process? _runProcess;
+
+  /// Bridge stream handle for btrace runs that go through
+  /// `bridge_run_streaming` (Windows + BXP_FORCE_BRIDGE_PROXY smoke).
+  /// Set by the `onBridgeSpawn` callback; cleared by the `finally` block
+  /// or after [cancelRun] dispatched the bridge_cancel.
+  int? _runBridgeHandle;
 
   /// True between `cancelRun()` and the moment `_runProcess` reaches
   /// `exitCode`. Used by the toolbar to flip the run-button label to
@@ -2448,27 +2485,37 @@ class TraceStore extends ChangeNotifier {
     if (status != RunStatus.running) return;
     _cancelRequested = true;
     final proc = _runProcess;
+    final handle = _runBridgeHandle;
     if (proc != null) {
       devTrace('action.run.cancel', {'pid': proc.pid});
       proc.kill(ProcessSignal.sigterm);
+    } else if (handle != null) {
+      devTrace('action.run.cancel', {'bridgeHandle': handle});
+      BxpProcessClient.cancelBtrace(handle);
     } else {
       devTrace('action.run.cancel', {'pendingSpawn': true});
     }
+    _deactivateFile();
     notifyListeners();
   }
 
   /// Select a file by its composite id. Automatically selects the first
   /// row of the newly chosen file so RowDetail and OutputPanel are never
   /// empty after a file-switch.
-  void selectFile(String? id) {
+  ///
+  /// Async — opens the file's [RandomAccessFile] (and slurps bytes for
+  /// small files). Callers from the UI should `unawaited(...)` this so
+  /// the click handler doesn't block the frame. The store notifies
+  /// listeners both immediately (selection state) and again at the end
+  /// of the activation (populated state).
+  Future<void> selectFile(String? id) async {
     if (selectedFileId == id) return;
     devTrace('action.file.select', {'id': id});
     selectedFileId = id;
-    // Auto-select the first row in the newly selected file so RowDetail
-    // and OutputPanel populate immediately.
     final file = id == null ? null : traceModel?.files[id];
     selectedRowId = file != null && file.rowIds.isNotEmpty ? file.rowIds.first : null;
     notifyListeners();
+    await _activateFile(id);
   }
 
   /// Select a row by its synthetic id (`r0`, `r1`, …). Null deselects.
@@ -2479,16 +2526,6 @@ class TraceStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// When true (default since the btrace v3 migration), `_streamRun`
-  /// routes through `_streamRunBtrace` — spawns bxp-cli with
-  /// `--trace-file=<temp>.bxtb`, then loads the produced binary trace into
-  /// a sparse skeleton TraceModel. Per-row drill-down detail is fetched on
-  /// demand by [ensureDetailLoaded]. Setting this false at runtime (no UI
-  /// switch yet; toggle through a debug session for now) reverts to the
-  /// legacy NDJSON streaming pipeline so we can A/B compare if anything
-  /// regresses in user-facing behaviour.
-  bool useBtraceMode = true;
-
   /// Per-file runtime state for btrace-backed runs. Holds the open
   /// [CsvRowFetcher] handles, the precomputed output-row byte offsets, and
   /// the template's input_schema / ticker_map / rule_when list that
@@ -2497,17 +2534,264 @@ class TraceStore extends ChangeNotifier {
   /// `_streamRun*` to avoid leaking file handles across runs.
   final Map<String, _BtraceFileRuntime> _btraceRuntimes = {};
 
-  /// Dispatcher: route to btrace or NDJSON implementation based on
-  /// [useBtraceMode]. Both implementations honour the same lifecycle
-  /// contract (status flips to running, then done/error; stderr captured;
-  /// cancel via [cancelRun]; per-tick counter ValueNotifier kept current).
-  Future<void> _streamRun({required bool dry}) async {
-    if (useBtraceMode) {
-      return _streamRunBtrace(dry: dry);
+  // ── Active-file activation state ──────────────────────────────────
+  // At most one source CSV is "active" at a time. Activation happens
+  // on FileList click (or auto on first file after a run completes).
+  // The active file owns a single `RandomAccessFile` handle for sync
+  // seek+read; small files additionally cache their full bytes in
+  // [_activeEagerBytes]. Switching files closes the previous handle.
+
+  /// `FileModel.id` currently active, or null when no file is loaded
+  /// (idle, between runs, or just after dispose).
+  String? _activeFileId;
+  String? get activeFileId => _activeFileId;
+
+  /// Persistent file handle for the active file, used by
+  /// [populateRowSync] (and [filterScanLargeFile]) for sync random
+  /// seek+read. Null between activations.
+  RandomAccessFile? _activeRaf;
+
+  /// Eager-mode (`FileModel.sourceLoadEager == true`) cache of the
+  /// whole source CSV. Populated once at activation; null for lazy
+  /// (large-file) mode.
+  Uint8List? _activeEagerBytes;
+
+  /// Monotonic counter incremented at the start of each [_activateFile]
+  /// call. Overlapping clicks compare-and-bail against this so a slow
+  /// activation can't clobber a faster newer one.
+  int _activationSeq = 0;
+
+  /// Open the file's RAF, populate row content for eager files, leave
+  /// large files lazy (caller's RowList populates the visible window).
+  /// Closes the previous file's RAF first. Called by [selectFile].
+  Future<void> _activateFile(String? id) async {
+    _activationSeq++;
+    final mySeq = _activationSeq;
+    _deactivateFile();
+    if (id == null) return;
+    final file = traceModel?.files[id];
+    if (file == null || file.sourceCsvPath.isEmpty) return;
+
+    RandomAccessFile? raf;
+    try {
+      raf = await File(file.sourceCsvPath).open(mode: FileMode.read);
+    } catch (e) {
+      traceModel?.issues.add('open failed: ${file.sourceCsvPath}: $e');
+      return;
     }
-    return _streamRunNdjson(dry: dry);
+    // A faster click landed during the open() await — bail out, the
+    // newer activation already ran _deactivateFile + opened its own RAF.
+    if (mySeq != _activationSeq) {
+      try { await raf.close(); } catch (_) {}
+      return;
+    }
+    _activeFileId = id;
+    _activeRaf = raf;
+
+    if (file.sourceLoadEager) {
+      try {
+        _activeEagerBytes = await raf.read(file.sourceCsvSizeBytes);
+      } catch (e) {
+        traceModel?.issues.add('eager read failed: ${file.sourceCsvPath}: $e');
+        _activeEagerBytes = null;
+      }
+      if (mySeq != _activationSeq) {
+        try { await raf.close(); } catch (_) {}
+        return;
+      }
+      // Sweep populate all rows from the cached bytes.
+      _populateRangeSync(file, 0, file.rowIds.length);
+    } else {
+      // Lazy mode: populate first window so the user sees something.
+      _populateRangeSync(file, 0, kLazyInitialRows);
+    }
+    notifyListeners();
   }
 
+  /// Close the active RAF, drop cached bytes, optionally clear row
+  /// content for the previously-active file (small-file policy — re-
+  /// populate on revisit is cheap; large files keep their populated
+  /// row.fields since re-population is a sequential disk pass).
+  void _deactivateFile() {
+    final prevId = _activeFileId;
+    final raf = _activeRaf;
+    _activeRaf = null;
+    _activeEagerBytes = null;
+    _activeFileId = null;
+    if (raf != null) {
+      try { raf.closeSync(); } catch (_) {}
+    }
+    if (prevId != null) {
+      final prevFile = traceModel?.files[prevId];
+      if (prevFile != null && prevFile.sourceLoadEager) {
+        for (final rid in prevFile.rowIds) {
+          final r = traceModel?.rows[rid];
+          if (r != null && r.fieldsPopulated) {
+            r.fields = const [];
+            r.fieldsPopulated = false;
+          }
+        }
+      }
+    }
+  }
+
+  /// Populate `row.fields` for one row using the active file's data
+  /// source (eager bytes or RAF). No-op when already populated or
+  /// when the row doesn't belong to the active file. Returns true on
+  /// successful populate (or no-op for already-populated).
+  bool populateRowSync(String rowId) {
+    final row = traceModel?.rows[rowId];
+    if (row == null) return false;
+    if (row.fieldsPopulated) return true;
+    if (row.fileId != _activeFileId) return false;
+    final file = traceModel?.files[row.fileId];
+    if (file == null) return false;
+    if (row.sourceLocator < 0) {
+      row.fields = const [];
+      row.fieldsPopulated = true;
+      return true;
+    }
+    String? line;
+    final bytes = _activeEagerBytes;
+    if (bytes != null) {
+      line = _lineAtSync(bytes, row.sourceLocator);
+    } else {
+      final raf = _activeRaf;
+      if (raf == null) return false;
+      line = _readLineFromRafSync(raf, row.sourceLocator);
+    }
+    if (line == null) {
+      row.fields = const [];
+      row.fieldsPopulated = true;
+      return true;
+    }
+    row.fields = _splitCsv(line, file.headers.length);
+    row.fieldsPopulated = true;
+    return true;
+  }
+
+  /// Populate row.fields for a contiguous range of rowIds. Used by
+  /// [_activateFile] for the eager sweep and for the initial visible
+  /// window in lazy mode.
+  void _populateRangeSync(FileModel file, int startIdx, int count) {
+    final end = (startIdx + count).clamp(0, file.rowIds.length);
+    for (int i = startIdx; i < end; i++) {
+      populateRowSync(file.rowIds[i]);
+    }
+  }
+
+  /// Sync read of one CSV line starting at `offset`. Uses a 4 KB stack
+  /// buffer that expands by 4 KB chunks when no '\n' is found (rare
+  /// wide-row case). Caller guarantees `raf` is the active file's
+  /// handle.
+  String? _readLineFromRafSync(RandomAccessFile raf, int offset) {
+    final chunkSize = 4096;
+    final acc = <int>[];
+    int pos = offset;
+    try {
+      raf.setPositionSync(pos);
+    } catch (_) {
+      return null;
+    }
+    while (true) {
+      Uint8List buf;
+      try {
+        buf = raf.readSync(chunkSize);
+      } catch (_) {
+        return null;
+      }
+      if (buf.isEmpty) break;
+      int lf = -1;
+      for (int i = 0; i < buf.length; i++) {
+        if (buf[i] == 0x0A) { lf = i; break; }
+      }
+      if (lf >= 0) {
+        // Strip optional trailing CR.
+        var end = lf;
+        if (end > 0 && buf[end - 1] == 0x0D) end--;
+        acc.addAll(buf.sublist(0, end));
+        break;
+      }
+      acc.addAll(buf);
+      if (buf.length < chunkSize) break;
+    }
+    if (acc.isEmpty) return null;
+    try {
+      return utf8.decode(acc, allowMalformed: true);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Filter scan for large (lazy) files. Walks file.rowIds sequentially,
+  /// populates each row's fields via the active RAF, evaluates the
+  /// per-header substring predicate map, accumulates matches. Yields
+  /// to the event loop every [kFilterScanYieldEvery] iterations so the
+  /// UI stays responsive. [isAborted] is polled at each yield; when it
+  /// returns true the scan returns the partial match list so far.
+  Future<List<String>> filterScanLargeFile({
+    required String fileId,
+    required Map<String, String> filters,
+    required void Function(int matched, int scanned) onProgress,
+    required bool Function() isAborted,
+  }) async {
+    final file = traceModel?.files[fileId];
+    if (file == null) return const [];
+    // Lower-case predicate cache.
+    final preds = <int, String>{};
+    for (int c = 0; c < file.headers.length; c++) {
+      final raw = filters[file.headers[c]]?.trim();
+      if (raw == null || raw.isEmpty) continue;
+      preds[c] = raw.toLowerCase();
+    }
+    if (preds.isEmpty) return List<String>.of(file.rowIds);
+    final matched = <String>[];
+    for (int i = 0; i < file.rowIds.length; i++) {
+      if (isAborted()) break;
+      final rid = file.rowIds[i];
+      populateRowSync(rid);
+      final row = traceModel?.rows[rid];
+      if (row == null) continue;
+      bool ok = true;
+      for (final entry in preds.entries) {
+        final col = entry.key;
+        final needle = entry.value;
+        final cell = col < row.fields.length ? row.fields[col].toLowerCase() : '';
+        if (!cell.contains(needle)) { ok = false; break; }
+      }
+      if (ok) matched.add(rid);
+      if (((i + 1) % kFilterScanYieldEvery) == 0) {
+        onProgress(matched.length, i + 1);
+        await Future<void>.delayed(Duration.zero);
+      }
+    }
+    onProgress(matched.length, file.rowIds.length);
+    return matched;
+  }
+
+  /// Public accessor for RowList's scroll-expansion path: ensures rows
+  /// in `[start, end)` of `file.rowIds` have their fields populated.
+  /// Safe to call repeatedly — already-populated rows are skipped.
+  void ensureRowsPopulated(String fileId, int start, int end) {
+    final file = traceModel?.files[fileId];
+    if (file == null) return;
+    if (fileId != _activeFileId) return;
+    _populateRangeSync(file, start, (end - start).clamp(0, file.rowIds.length));
+  }
+
+  /// Dispatcher. Btrace is the only path since 2026-05-22; the legacy
+  /// NDJSON `_streamRunNdjson` is commented out below with a v0.4.0
+  /// removal marker and the `useBtraceMode` A/B flag is gone.
+  Future<void> _streamRun({required bool dry}) {
+    return _streamRunBtrace(dry: dry);
+  }
+
+  // REMOVE IN v0.4.0 — _streamRunNdjson is the legacy NDJSON streaming
+  // pipeline. Replaced by `_streamRunBtrace` in the btrace migration
+  // (2026-05-22). Kept commented out for one release cycle in case a
+  // user-visible regression in btrace forces a quick revert; remove once
+  // the btrace path has shipped without rollbacks.
+  /*
   /// Spawns `bxp-cli --trace` (dry or full) and streams the NDJSON output
   /// into a fresh TraceBuilder. UI refreshes are throttled to ~60 fps so
   /// the file/row lists grow live while the pipeline still runs.
@@ -2684,6 +2968,7 @@ class TraceStore extends ChangeNotifier {
     }
     notifyListeners();
   }
+  */
 
   /// Real template IDs from the live AST (no synthetic entries). The
   /// empty string is used separately in the UI to mean "all templates".
@@ -2892,6 +3177,7 @@ class TraceStore extends ChangeNotifier {
     _fileGen.dispose();
     _pendingFocusPath.dispose();
     _pendingAddChildPath.dispose();
+    _deactivateFile();
     super.dispose();
   }
 
@@ -2929,6 +3215,10 @@ class TraceStore extends ChangeNotifier {
     selectedRowId = null;
     _exprCallCache.clear();
     _exprCallInFlight.clear();
+    // Close the active file's RAF (if any) before the previous trace
+    // model is dropped — its rows are about to disappear and we don't
+    // want stale `_activeFileId` pointing into a gone model.
+    _deactivateFile();
     // Dispose any lingering btrace runtime data from a previous run so
     // file handles don't leak. CsvRowFetcher.dispose is idempotent.
     for (final rt in _btraceRuntimes.values) {
@@ -3007,6 +3297,10 @@ class TraceStore extends ChangeNotifier {
           _runProcess = p;
           if (_cancelRequested) p.kill(ProcessSignal.sigterm);
         },
+        onBridgeSpawn: (handle) {
+          _runBridgeHandle = handle;
+          if (_cancelRequested) BxpProcessClient.cancelBtrace(handle);
+        },
         onStdoutChunk: (chunk) {
           rawBytes += chunk.length;
           reader.appendBytes(chunk);
@@ -3079,6 +3373,7 @@ class TraceStore extends ChangeNotifier {
     } finally {
       ticker.cancel();
       _runProcess = null;
+      _runBridgeHandle = null;
       _cancelRequested = false;
       // Best-effort cleanup of the on-disk .bxtb. Today the in-memory
       // model captured everything live; the disk copy was a safety net
@@ -3097,9 +3392,13 @@ class TraceStore extends ChangeNotifier {
     }
 
     if (status != RunStatus.error) status = RunStatus.done;
-    // Auto-select first file + row so RowDetail/OutputPanel aren't empty.
+    // Auto-select first file + row so RowDetail/OutputPanel aren't empty,
+    // and kick off activation (opens RAF, populates row.fields for small
+    // files or first kLazyInitialRows for large).
+    String? autoFileId;
     if (traceModel != null && traceModel!.fileOrder.isNotEmpty) {
       selectedFileId ??= traceModel!.fileOrder.first;
+      autoFileId = selectedFileId;
       final activeFile = traceModel!.files[selectedFileId];
       if (selectedRowId == null &&
           activeFile != null &&
@@ -3108,6 +3407,9 @@ class TraceStore extends ChangeNotifier {
       }
     }
     notifyListeners();
+    if (autoFileId != null) {
+      await _activateFile(autoFileId);
+    }
   }
 
   /// Dispatch a single live frame from the streaming BXTB parser into the
@@ -3145,15 +3447,18 @@ class TraceStore extends ChangeNotifier {
       ctx.model.files[fileId] = file;
       ctx.model.fileOrder.add(fileId);
       ctx.currentFile = file;
-      ctx.currentSourceFetcher = file.sourceCsvPath.isEmpty
-          ? null
-          : await CsvRowFetcher.open(file.sourceCsvPath);
-      // Eager-load whole source CSV into memory ONCE — the per-row
-      // extraction below is then a synchronous byte scan, which is what
-      // keeps drainQueue from bottlenecking on per-frame await chains.
-      ctx.currentSourceBytes = file.sourceCsvPath.isEmpty
-          ? null
-          : await File(file.sourceCsvPath).readAsBytes();
+      // Capture file size synchronously so the eager/lazy decision is
+      // made once at file_start. No file content loaded here — that
+      // happens at file activation (user click in FileList).
+      if (file.sourceCsvPath.isNotEmpty) {
+        try {
+          file.sourceCsvSizeBytes = File(file.sourceCsvPath).statSync().size;
+        } catch (_) {
+          file.sourceCsvSizeBytes = 0;
+        }
+        file.sourceLoadEager = file.sourceCsvSizeBytes > 0 &&
+            file.sourceCsvSizeBytes < kEagerFileLoadBytes;
+      }
       await ctx.ensureTemplate(frame.template);
       // Bump fileGen so FileList rebuilds with the newly-arrived entry
       // without a main notifyListeners (which would also rebuild RowList
@@ -3214,16 +3519,9 @@ class TraceStore extends ChangeNotifier {
         ..btraceActions = [frame.action]
         ..matchedRuleIndex = frame.ruleIdx
         ..detailLoaded = false;
-      // Pre-fetch raw source fields synchronously from the eager-loaded
-      // bytes. Drill-down detail (vars / rules / output values) stays
-      // lazy until the user actually selects the row.
-      if (ctx.currentSourceBytes != null && frame.sourceLocator >= 0) {
-        final line =
-            _lineAtSync(ctx.currentSourceBytes!, frame.sourceLocator);
-        if (line != null) {
-          row.fields = _splitCsv(line, file.headers.length);
-        }
-      }
+      // row.fields stays empty + fieldsPopulated=false. Activation-time
+      // sweep (small files) or visible-window populate (large files)
+      // fills the content. Streaming ingest stays pure metadata.
       // Honour any pending error_row stashed for this locator before
       // the row existed.
       if (ctx.pendingWarningLocators.remove(frame.sourceLocator)) {
@@ -3253,13 +3551,7 @@ class TraceStore extends ChangeNotifier {
         // filtered_row reasons (`rule_skip`, `no_rule_match`) still drive
         // a drill-down walk so VARIABLES + RULES tables stay informative.
         ..detailLoaded = frame.reason == 'date_filter_from_filename';
-      if (ctx.currentSourceBytes != null && frame.sourceLocator >= 0) {
-        final line =
-            _lineAtSync(ctx.currentSourceBytes!, frame.sourceLocator);
-        if (line != null) {
-          row.fields = _splitCsv(line, file.headers.length);
-        }
-      }
+      // row.fields stays empty here; activation populates lazily.
       // Honour pending error_row stashed before this row existed.
       if (ctx.pendingWarningLocators.remove(frame.sourceLocator)) {
         row.hasError = true;
@@ -3631,10 +3923,35 @@ class TraceStore extends ChangeNotifier {
     if (runtime == null) return;
 
     // 1. Source row → fields list.
-    if (runtime.sourceFetcher != null && row.sourceLocator >= 0) {
-      final line = await runtime.sourceFetcher!.lineAt(row.sourceLocator);
-      if (line != null) {
-        row.fields = _splitCsv(line, file.headers.length);
+    //
+    // Active-file path: rows of the user-visible (clicked) file have
+    // their `RandomAccessFile` open, so [populateRowSync] hits sub-ms
+    // with no I/O overhead beyond an OS read.
+    //
+    // Inactive-file path: drill-down can still be triggered on a row
+    // belonging to a file the user has not activated (rare — usually
+    // happens if a previous selection persists across a file switch).
+    // We open an ad-hoc RAF for this one read and close it immediately
+    // so we don't violate the "1 active RAF" invariant. Cost is
+    // negligible — drill-down already pays one evalBatch subprocess
+    // round-trip.
+    if (!row.fieldsPopulated && row.sourceLocator >= 0) {
+      if (row.fileId == _activeFileId) {
+        populateRowSync(row.id);
+      } else if (file.sourceCsvPath.isNotEmpty) {
+        RandomAccessFile? raf;
+        try {
+          raf = File(file.sourceCsvPath).openSync(mode: FileMode.read);
+          final line = _readLineFromRafSync(raf, row.sourceLocator);
+          if (line != null) {
+            row.fields = _splitCsv(line, file.headers.length);
+            row.fieldsPopulated = true;
+          }
+        } catch (_) {
+          // best-effort — leave row.fields empty
+        } finally {
+          try { raf?.closeSync(); } catch (_) {}
+        }
       }
     }
 
@@ -3857,13 +4174,11 @@ class _BtraceIngestCtx {
   // before the new one is opened, so drill-down on already-finished files
   // works even while the next file is still streaming.
   FileModel? currentFile;
-  CsvRowFetcher? currentSourceFetcher;
-  // Eager-loaded source CSV bytes for the current file. Read once at
-  // `file_start` so per-row source-line extraction during ingest is a
-  // synchronous byte scan instead of a `CsvRowFetcher.lineAt` await chain
-  // (the latter dominated drain time and froze the live stats counter
-  // until process exit).
-  Uint8List? currentSourceBytes;
+  // currentSourceFetcher / currentSourceBytes removed (REMOVE IN v0.4.0
+  // cleanup of any remaining references): streaming ingest no longer
+  // loads source content. `file_start` captures only headers + file
+  // size; row content is populated when the user activates a file (see
+  // TraceStore._activateFile).
   // Pre-pass entries that arrive before any `file_start` are stashed here
   // and re-attached to whichever FileModel arrives next.
   final List<PrepassEntry> prepassBatch = [];
@@ -3984,7 +4299,10 @@ class _BtraceIngestCtx {
       prepassNames.add(pp.name);
     }
     runtimes[file.id] = _BtraceFileRuntime(
-      sourceFetcher: currentSourceFetcher,
+      // sourceFetcher stays null — source content is loaded on demand
+      // by TraceStore._activateFile via RandomAccessFile, not by a
+      // per-file persistent CsvRowFetcher.
+      sourceFetcher: null,
       outputFetcher: outputFetcher,
       inputSchema: inputSchema,
       tickerMap: tickerMap,
@@ -3993,8 +4311,6 @@ class _BtraceIngestCtx {
       lookups: lookups,
       singlePrepassName: prepassNames.length == 1 ? prepassNames.first : null,
     );
-    currentSourceFetcher = null;
-    currentSourceBytes = null;
     currentFile = null;
   }
 

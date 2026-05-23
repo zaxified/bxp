@@ -92,9 +92,21 @@ class RowModel {
   final int fileRow;
   /// Raw CSV field values for this row, in column order matching
   /// `FileModel.headers`. NDJSON mode populates this from `row_start`;
-  /// btrace mode leaves it empty until [detailLoaded] fires and
-  /// [TraceStore.ensureDetailLoaded] reads the source CSV at [sourceLocator].
+  /// btrace mode leaves it empty until file activation populates it (small
+  /// files: full sweep at click time, large files: lazy on visible-window
+  /// entry or filter scan). Track populated-vs-empty via [fieldsPopulated]
+  /// — an empty `fields` list could mean either "no source columns" or
+  /// "deferred lazy populate", and the latter must not be confused for the
+  /// former by renderers / filter predicates.
   List<String> fields;
+  /// True when [fields] holds the actual source-row content (or has been
+  /// confirmed empty for a row with no source columns). False means the
+  /// content is still on disk and a sync read via the active
+  /// `RandomAccessFile` is required to materialise it. Set by
+  /// `TraceStore._populateRowSync` / activation sweep; cleared by
+  /// `TraceStore._deactivateFile` for small files (RAM reclaim — re-populate
+  /// on re-activation is cheap).
+  bool fieldsPopulated = false;
   /// Variable evaluations (input_schema + row_rules overrides), appended as
   /// trace events arrive. May be empty for filtered rows.
   final List<VarEntry> vars = [];
@@ -257,6 +269,16 @@ class FileModel {
   /// data row (header offset is implicit and not stored). Populated once
   /// at trace-load time by a single sequential scan.
   List<int> outputOffsets = const [];
+  /// Size of [sourceCsvPath] in bytes, captured once at `file_start` via
+  /// `File.statSync().size`. Drives the eager-vs-lazy decision in
+  /// `TraceStore._activateFile` — files below `kEagerFileLoadBytes` get
+  /// slurped at activation, above stay on disk and populate per-row.
+  int sourceCsvSizeBytes = 0;
+  /// True when this file's source CSV fits under `kEagerFileLoadBytes`
+  /// and should be slurped into a temporary `Uint8List` on activation;
+  /// false for the lazy path. Set once at `file_start` based on
+  /// [sourceCsvSizeBytes]; never mutated after.
+  bool sourceLoadEager = false;
 
   FileModel({required this.id, required this.template, required this.path, required this.rows, required this.headers});
 }
