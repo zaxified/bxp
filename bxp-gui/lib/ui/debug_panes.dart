@@ -169,6 +169,16 @@ class _DebugPanesState extends State<DebugPanes> {
                         ? null
                         : model?.files[store.selectedFileId];
                     final rowsInCount = selectedFile?.rowIds.length ?? 0;
+                    // RowList publishes its currently-displayed count
+                    // (post-filter or lazy-window) via the store. When
+                    // it differs from the file's full row count, surface
+                    // it as a "— N shown" suffix so the header doubles
+                    // as a filter / scan-progress readout.
+                    final displayed = store.rowsInDisplayed;
+                    final rowsInSuffix =
+                        (displayed != null && displayed != rowsInCount)
+                            ? '— $displayed shown'
+                            : null;
 
                     return Column(
                       children: [
@@ -180,6 +190,7 @@ class _DebugPanesState extends State<DebugPanes> {
                               PanelHeader(
                                 title: 'ROWS IN',
                                 count: rowsInCount,
+                                suffix: rowsInSuffix,
                               ),
                               const Expanded(child: RowList()),
                             ],

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart' show mapEquals;
 import 'package:flutter/material.dart';
@@ -185,6 +186,19 @@ class _RowListInnerState extends State<_RowListInner> {
   /// Latest progress tick from a running filter scan, surfaced in the
   /// spinner overlay. `null` when no scan is in flight.
   ({int matched, int scanned})? _filterScanProgress;
+  /// Resume cursor for paginated filter scans. Equals `file.rowIds.length`
+  /// when the scan walked the file end-to-end. Used by `_expandVisibleWindow`
+  /// to continue a filter scan past its first 1000-match page.
+  int _filterScanCursor = 0;
+  /// True while the active visible set is a filter-scan match list (as
+  /// opposed to the unfiltered initial window). Drives the scroll-
+  /// expansion branch: "scan next page" vs "append next file rows".
+  bool _filterScanActive = false;
+  /// Guards against re-entrant scroll-expansion triggers while the
+  /// previous batch is still being populated (or the debug delay is
+  /// running). Scroll fires can repeat rapidly; without this they would
+  /// schedule N parallel appends that all race on PlutoGrid state.
+  bool _expandInFlight = false;
 
   /// Horizontal scroll controller for the sticky filter row above the
   /// grid. Kept in sync with PlutoGrid's body scroll so the filter
@@ -247,16 +261,61 @@ class _RowListInnerState extends State<_RowListInner> {
       _visibleRowIds = rowIds.take(kLazyInitialRows).toList();
       _hasMoreToShow = true;
     }
+    _filterScanActive = false;
+    _filterScanCursor = 0;
+    _publishDisplayedCount();
+  }
+
+  /// Push the currently-displayed row count up to the store so the
+  /// PanelHeader above us can render a "(total) — N filtered" suffix.
+  /// For eager files we read PlutoGrid's filtered view (refRows.length)
+  /// because the stock filter narrows it imperatively; for lazy files
+  /// the visible-window list is authoritative.
+  void _publishDisplayedCount() {
+    final count = widget.file.sourceLoadEager
+        ? (_stateManager?.refRows.length ?? _visibleRowIds.length)
+        : _visibleRowIds.length;
+    widget.store.setRowsInDisplayed(count);
   }
 
   /// Append the next [kLazyExpandBatch] rowIds to [_visibleRowIds] and
-  /// trigger a populate sweep so the new rows arrive with content. Builds
-  /// a fresh PlutoRow list and notifies the state manager. No-op when no
-  /// more rows to show or when a filter scan is active (filter view owns
-  /// the visible set in that case).
+  /// trigger a populate sweep so the new rows arrive with content. Adds
+  /// the new PlutoRows directly to the stateManager (PlutoGrid does NOT
+  /// react to widget.rows changes after mount — only to its imperative
+  /// API).
+  ///
+  /// Two branches:
+  ///   * Filter scan paginated (`_filterScanActive == true`) — fetch
+  ///     the next [kLazyExpandBatch] matches from the resume cursor and
+  ///     append.
+  ///   * Otherwise — append the next slice of `file.rowIds`.
+  ///
+  /// No-op when no more rows to show or while a filter scan is already
+  /// in flight.
   void _expandVisibleWindow() {
     if (!_hasMoreToShow) return;
     if (_filterScanKey != null) return;
+    if (_expandInFlight) return;
+    if (_filterScanActive) {
+      _expandInFlight = true;
+      _continueLargeFilterScan().whenComplete(() {
+        if (mounted) _expandInFlight = false;
+      });
+      return;
+    }
+    unawaited(_expandUnfilteredWindow());
+  }
+
+  Future<void> _expandUnfilteredWindow() async {
+    _expandInFlight = true;
+    try {
+      if (kLazyBatchDebugDelayMs > 0) {
+        await Future<void>.delayed(
+            const Duration(milliseconds: kLazyBatchDebugDelayMs));
+        if (!mounted) return;
+      }
+      final sm = _stateManager;
+      if (sm == null) return;
     final rowIds = widget.file.rowIds;
     final start = _visibleRowIds.length;
     if (start >= rowIds.length) {
@@ -265,10 +324,41 @@ class _RowListInnerState extends State<_RowListInner> {
     }
     final end = (start + kLazyExpandBatch).clamp(0, rowIds.length);
     widget.store.ensureRowsPopulated(widget.fileId, start, end);
+    final newIds = rowIds.sublist(start, end);
+    final headers = widget.file.headers;
+    final newPlutoRows = <PlutoRow>[];
+    for (final id in newIds) {
+      final row = widget.model.rows[id];
+      if (row == null) continue;
+      final status = widget.rowStatus(row);
+      String statusValue = status;
+      if (status == 'warning' && row.warningDetails.isNotEmpty) {
+        statusValue =
+            'warning|${row.warningDetails.length}|${row.warningDetails.first}';
+      }
+      final cells = <String, PlutoCell>{
+        'row_num': PlutoCell(value: '${row.fileRow}'),
+        'status': PlutoCell(value: statusValue),
+      };
+      for (int i = 0; i < headers.length; i++) {
+        cells[headers[i]] = PlutoCell(
+          value: i < row.fields.length ? row.fields[i] : '',
+        );
+      }
+      newPlutoRows.add(PlutoRow(cells: cells));
+    }
+    if (newPlutoRows.isNotEmpty) {
+      sm.appendRows(newPlutoRows);
+    }
+    if (!mounted) return;
     setState(() {
       _visibleRowIds = rowIds.sublist(0, end);
       _hasMoreToShow = end < rowIds.length;
     });
+    _publishDisplayedCount();
+    } finally {
+      _expandInFlight = false;
+    }
   }
 
   /// Scroll listener on PlutoGrid's body vertical controller. When the
@@ -286,19 +376,25 @@ class _RowListInnerState extends State<_RowListInner> {
     }
   }
 
-  /// Kick off a filter scan against the large-file backing store and
-  /// replace [_visibleRowIds] with matches as they arrive. Cancels any
-  /// previous scan by stamping a fresh [_filterScanKey] — the older
-  /// scan's `isAborted` closure detects the mismatch and bails.
+  /// Kick off a paginated filter scan. Cancels any previous scan by
+  /// stamping a fresh [_filterScanKey] — the older scan's `isAborted`
+  /// closure detects the mismatch and bails. Returns just the first
+  /// [kLazyExpandBatch] matches; further pages are fetched lazily by
+  /// `_expandVisibleWindow` when the user scrolls past the displayed
+  /// set.
   Future<void> _startLargeFilterScan() async {
     final scanKey = Object();
     setState(() {
       _filterScanKey = scanKey;
       _filterScanProgress = (matched: 0, scanned: 0);
+      _filterScanCursor = 0;
+      _filterScanActive = true;
     });
-    final matched = await widget.store.filterScanLargeFile(
+    final result = await widget.store.filterScanLargeFile(
       fileId: widget.fileId,
       filters: _filters,
+      fromIdx: 0,
+      maxMatches: kLazyExpandBatch,
       onProgress: (m, s) {
         if (!mounted || _filterScanKey != scanKey) return;
         setState(() => _filterScanProgress = (matched: m, scanned: s));
@@ -306,27 +402,139 @@ class _RowListInnerState extends State<_RowListInner> {
       isAborted: () => !mounted || _filterScanKey != scanKey,
     );
     if (!mounted || _filterScanKey != scanKey) return;
+    // PlutoGrid doesn't react to `widget.rows` changes after mount — we
+    // must replace its internal refRows via the state manager. Clear
+    // the existing rows, build PlutoRows for every match, append.
+    final sm = _stateManager;
+    if (sm != null) {
+      _replacePlutoRows(sm, result.matched);
+    }
     setState(() {
       _filterScanKey = null;
       _filterScanProgress = null;
-      _visibleRowIds = matched;
-      _hasMoreToShow = false;
+      _visibleRowIds = List<String>.of(result.matched);
+      _filterScanCursor = result.nextFromIdx;
+      _hasMoreToShow = !result.done;
     });
+    _publishDisplayedCount();
+  }
+
+  /// Continue an active filter scan past its first page. Called from
+  /// the scroll-expansion path when the user nears the bottom of the
+  /// match list. Appends to (rather than replaces) the visible set.
+  Future<void> _continueLargeFilterScan() async {
+    if (!_filterScanActive) return;
+    if (!_hasMoreToShow) return;
+    if (_filterScanKey != null) return; // already running
+    final scanKey = Object();
+    // Reset progress to the cumulative starting point so the spinner
+    // shows continuity instead of jumping back to (0, 0) between pages.
+    final priorMatches = _visibleRowIds.length;
+    final priorCursor = _filterScanCursor;
+    setState(() {
+      _filterScanKey = scanKey;
+      _filterScanProgress =
+          (matched: priorMatches, scanned: priorCursor);
+    });
+    final result = await widget.store.filterScanLargeFile(
+      fileId: widget.fileId,
+      filters: _filters,
+      fromIdx: _filterScanCursor,
+      maxMatches: kLazyExpandBatch,
+      onProgress: (m, s) {
+        if (!mounted || _filterScanKey != scanKey) return;
+        setState(() => _filterScanProgress =
+            (matched: priorMatches + m, scanned: s));
+      },
+      isAborted: () => !mounted || _filterScanKey != scanKey,
+    );
+    if (!mounted || _filterScanKey != scanKey) return;
+    // Append the new matches to the existing PlutoRow list.
+    final sm = _stateManager;
+    if (sm != null && result.matched.isNotEmpty) {
+      _appendPlutoRows(sm, result.matched);
+    }
+    setState(() {
+      _filterScanKey = null;
+      _filterScanProgress = null;
+      _visibleRowIds.addAll(result.matched);
+      _filterScanCursor = result.nextFromIdx;
+      _hasMoreToShow = !result.done;
+    });
+    _publishDisplayedCount();
+  }
+
+  /// Build PlutoRows for `rowIds` and append them to the live grid via
+  /// the state manager (same logic as `_expandVisibleWindow` minus the
+  /// `_visibleRowIds` bookkeeping). Used by `_continueLargeFilterScan`.
+  void _appendPlutoRows(PlutoGridStateManager sm, List<String> rowIds) {
+    final headers = widget.file.headers;
+    final fresh = <PlutoRow>[];
+    for (final id in rowIds) {
+      final row = widget.model.rows[id];
+      if (row == null) continue;
+      final status = widget.rowStatus(row);
+      String statusValue = status;
+      if (status == 'warning' && row.warningDetails.isNotEmpty) {
+        statusValue =
+            'warning|${row.warningDetails.length}|${row.warningDetails.first}';
+      }
+      final cells = <String, PlutoCell>{
+        'row_num': PlutoCell(value: '${row.fileRow}'),
+        'status': PlutoCell(value: statusValue),
+      };
+      for (int i = 0; i < headers.length; i++) {
+        cells[headers[i]] = PlutoCell(
+          value: i < row.fields.length ? row.fields[i] : '',
+        );
+      }
+      fresh.add(PlutoRow(cells: cells));
+    }
+    if (fresh.isNotEmpty) sm.appendRows(fresh);
+  }
+
+  /// Rebuild PlutoGrid's refRows from the given list of rowIds. Used by
+  /// the filter-scan completion path (and the abort path back to the
+  /// initial window) — both need to replace the entire grid contents
+  /// without remounting.
+  void _replacePlutoRows(PlutoGridStateManager sm, List<String> rowIds) {
+    final headers = widget.file.headers;
+    final fresh = <PlutoRow>[];
+    for (final id in rowIds) {
+      final row = widget.model.rows[id];
+      if (row == null) continue;
+      final status = widget.rowStatus(row);
+      String statusValue = status;
+      if (status == 'warning' && row.warningDetails.isNotEmpty) {
+        statusValue =
+            'warning|${row.warningDetails.length}|${row.warningDetails.first}';
+      }
+      final cells = <String, PlutoCell>{
+        'row_num': PlutoCell(value: '${row.fileRow}'),
+        'status': PlutoCell(value: statusValue),
+      };
+      for (int i = 0; i < headers.length; i++) {
+        cells[headers[i]] = PlutoCell(
+          value: i < row.fields.length ? row.fields[i] : '',
+        );
+      }
+      fresh.add(PlutoRow(cells: cells));
+    }
+    sm.removeRows(sm.refRows.toList());
+    if (fresh.isNotEmpty) sm.appendRows(fresh);
   }
 
   /// Cancel any in-flight scan and restore the unfiltered initial
   /// window. Called when all filters are cleared.
   void _abortLargeFilterScan() {
-    if (_filterScanKey == null && _filterScanProgress == null) {
-      _resyncVisibleRows();
-      setState(() {});
-      return;
-    }
     setState(() {
       _filterScanKey = null;
       _filterScanProgress = null;
       _resyncVisibleRows();
     });
+    final sm = _stateManager;
+    if (sm != null) _replacePlutoRows(sm, _visibleRowIds);
+    _publishDisplayedCount();
   }
 
   @override
@@ -419,6 +627,7 @@ class _RowListInnerState extends State<_RowListInner> {
       if (sm == null) return;
       if (allEmpty) {
         sm.setFilter(null);
+        _publishDisplayedCount();
         return;
       }
       sm.setFilter((row) {
@@ -430,6 +639,7 @@ class _RowListInnerState extends State<_RowListInner> {
         }
         return true;
       });
+      _publishDisplayedCount();
       return;
     }
 
@@ -490,13 +700,24 @@ class _RowListInnerState extends State<_RowListInner> {
         .whereType<RowModel>()
         .toList();
 
+    // Width the row-number column for the largest `fileRow` we expect to
+    // render. `file.rowIds.length` is the count of TRACED rows; the
+    // physical CSV row number can be even larger when bxp-cli skipped
+    // input rows pre-rule (header, filtered date ranges). For both cases
+    // the digit-count of `rowIds.length` is a close upper bound — pick
+    // it and convert to pixels with a small base + per-digit allowance.
+    final rowNumDigits = math.max(
+      2,
+      widget.file.rowIds.length.toString().length,
+    );
+    final rowNumWidth = 22.0 + 8.0 * rowNumDigits;
     final columns = <PlutoColumn>[
       PlutoColumn(
         title: '#',
         field: 'row_num',
         type: PlutoColumnType.text(),
-        width: 44,
-        minWidth: 44,
+        width: rowNumWidth,
+        minWidth: rowNumWidth,
         enableEditingMode: false,
         enableSorting: false,
         enableFilterMenuItem: false,
@@ -613,7 +834,10 @@ class _RowListInnerState extends State<_RowListInner> {
     // again on any user resize) so each filter cell sits flush with
     // its column. Falls back to 150 per column on first paint, before
     // onLoaded has had a chance to publish real widths.
-    double filterContentWidth = 44.0 + 28.0;
+    // row_num column was hard-coded to 44 px before — now it grows by
+    // digit count of `rowIds.length` (rowNumWidth), so the filter row's
+    // leading spacer has to follow that. status column stays 28 px.
+    double filterContentWidth = rowNumWidth + 28.0;
     for (final h in headers) {
       filterContentWidth += _colWidths[h] ?? 150.0;
     }
@@ -638,6 +862,7 @@ class _RowListInnerState extends State<_RowListInner> {
               // entries (first paint) fall back to 150 px so the row
               // doesn't render with zero-width inputs.
               widths: {for (final h in headers) h: _colWidths[h] ?? 150.0},
+              rowNumWidth: rowNumWidth,
               onChanged: (h, v) {
                 setState(() {
                   if (v.isEmpty) {
@@ -893,7 +1118,8 @@ class _FilterScanSpinner extends StatelessWidget {
             ),
             const SizedBox(width: 10),
             Text(
-              'Filtering ${progress.matched} / ${progress.scanned} ($pct%)',
+              '${progress.matched} matches · '
+              'scanned ${progress.scanned} of $total ($pct%)',
               style: BxpText.body(context, size: BxpSize.sm),
             ),
             const SizedBox(width: 10),
@@ -925,12 +1151,14 @@ class _FilterRow extends StatelessWidget {
   final List<String> headers;
   final Map<String, String> filters;
   final Map<String, double> widths;
+  final double rowNumWidth;
   final void Function(String header, String value) onChanged;
   final VoidCallback? onFocus;
   const _FilterRow({
     required this.headers,
     required this.filters,
     required this.widths,
+    required this.rowNumWidth,
     required this.onChanged,
     this.onFocus,
   });
@@ -954,7 +1182,7 @@ class _FilterRow extends StatelessWidget {
         children: [
           // Two leading spacer cells matching the # and status columns
           // in the grid, so filter inputs align with their data columns.
-          const SizedBox(width: 44),
+          SizedBox(width: rowNumWidth),
           const SizedBox(width: 28),
           for (final h in headers)
             SizedBox(

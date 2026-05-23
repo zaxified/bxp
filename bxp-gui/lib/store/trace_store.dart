@@ -56,9 +56,13 @@ enum RunStatus { idle, running, done, error }
 //   responsive. row_fields are kept after switch-away (re-population is
 //   expensive — sequential disk read pass).
 const int kEagerFileLoadBytes = 2 * 1024 * 1024;
-const int kLazyInitialRows = 200;
-const int kLazyExpandBatch = 200;
+const int kLazyInitialRows = 1000;
+const int kLazyExpandBatch = 1000;
 const int kFilterScanYieldEvery = 2000;
+/// Debug aid — artificial sleep before each lazy populate batch (scroll
+/// expand + filter scan continuation) so an NVMe-fast load is visible
+/// in the UI. Set 0 for production, 2000 ms for showing the spinner.
+const int kLazyBatchDebugDelayMs = 0;
 
 /// 4-state badge for the live expression validator.
 enum ExprValidationState { idle, pending, ok, error }
@@ -2514,6 +2518,12 @@ class TraceStore extends ChangeNotifier {
     selectedFileId = id;
     final file = id == null ? null : traceModel?.files[id];
     selectedRowId = file != null && file.rowIds.isNotEmpty ? file.rowIds.first : null;
+    // Clear the displayed-row count BEFORE notifying so the PanelHeader
+    // doesn't flash the previous file's count for one frame between
+    // selectedFileId switching and the new RowList's initState running
+    // `_publishDisplayedCount`. The new value lands within the same
+    // microtask but on a separate notify dispatch.
+    _rowsInDisplayed = null;
     notifyListeners();
     await _activateFile(id);
   }
@@ -2545,6 +2555,21 @@ class TraceStore extends ChangeNotifier {
   /// (idle, between runs, or just after dispose).
   String? _activeFileId;
   String? get activeFileId => _activeFileId;
+
+  /// How many rows the active file's RowList is currently displaying —
+  /// equals `file.rowIds.length` when no filter / window restriction
+  /// applies, or the smaller "matched" / "visible window" count
+  /// otherwise. Published by RowList via [setRowsInDisplayed] so the
+  /// PanelHeader above it can surface `(total) — N filtered` without
+  /// reaching into PlutoGrid internals across the widget tree.
+  /// Null when no file is active.
+  int? get rowsInDisplayed => _rowsInDisplayed;
+  int? _rowsInDisplayed;
+  void setRowsInDisplayed(int? value) {
+    if (_rowsInDisplayed == value) return;
+    _rowsInDisplayed = value;
+    notifyListeners();
+  }
 
   /// Persistent file handle for the active file, used by
   /// [populateRowSync] (and [filterScanLargeFile]) for sync random
@@ -2723,50 +2748,88 @@ class TraceStore extends ChangeNotifier {
     }
   }
 
-  /// Filter scan for large (lazy) files. Walks file.rowIds sequentially,
-  /// populates each row's fields via the active RAF, evaluates the
-  /// per-header substring predicate map, accumulates matches. Yields
-  /// to the event loop every [kFilterScanYieldEvery] iterations so the
-  /// UI stays responsive. [isAborted] is polled at each yield; when it
-  /// returns true the scan returns the partial match list so far.
-  Future<List<String>> filterScanLargeFile({
+  /// Paginated filter scan for large (lazy) files.
+  ///
+  /// Walks `file.rowIds` from [fromIdx] forward, populating each row via
+  /// the active RAF and applying the per-header substring predicate map.
+  /// Stops when [maxMatches] matches have been collected OR the file
+  /// is exhausted, whichever comes first. Returns the matched rowIds
+  /// for THIS page plus a cursor (`nextFromIdx`) and `done` flag the
+  /// caller uses to ask for the next page on scroll.
+  ///
+  /// Yields to the event loop every [kFilterScanYieldEvery] iterations
+  /// (and after every match emit) so a scan over a million-row file
+  /// doesn't freeze the UI. [isAborted] is polled at each yield; when
+  /// it returns true the scan returns whatever it has so far with
+  /// `done: true` semantics (caller treats the partial set as final).
+  Future<({List<String> matched, int nextFromIdx, bool done})>
+      filterScanLargeFile({
     required String fileId,
     required Map<String, String> filters,
+    int fromIdx = 0,
+    int maxMatches = kLazyExpandBatch,
     required void Function(int matched, int scanned) onProgress,
     required bool Function() isAborted,
   }) async {
     final file = traceModel?.files[fileId];
-    if (file == null) return const [];
-    // Lower-case predicate cache.
+    if (file == null) {
+      return (matched: <String>[], nextFromIdx: 0, done: true);
+    }
     final preds = <int, String>{};
     for (int c = 0; c < file.headers.length; c++) {
       final raw = filters[file.headers[c]]?.trim();
       if (raw == null || raw.isEmpty) continue;
       preds[c] = raw.toLowerCase();
     }
-    if (preds.isEmpty) return List<String>.of(file.rowIds);
+    if (preds.isEmpty) {
+      // No predicate active — return the slice as-is.
+      final end = (fromIdx + maxMatches).clamp(0, file.rowIds.length);
+      return (
+        matched: file.rowIds.sublist(fromIdx, end),
+        nextFromIdx: end,
+        done: end >= file.rowIds.length,
+      );
+    }
+
+    // Debug-mode artificial delay so the spinner is actually visible on
+    // a fast disk. No-op when `kLazyBatchDebugDelayMs == 0`.
+    if (kLazyBatchDebugDelayMs > 0) {
+      await Future<void>.delayed(
+          Duration(milliseconds: kLazyBatchDebugDelayMs));
+    }
+
     final matched = <String>[];
-    for (int i = 0; i < file.rowIds.length; i++) {
-      if (isAborted()) break;
+    int i = fromIdx;
+    while (i < file.rowIds.length && matched.length < maxMatches) {
+      if (isAborted()) {
+        return (matched: matched, nextFromIdx: i, done: true);
+      }
       final rid = file.rowIds[i];
       populateRowSync(rid);
       final row = traceModel?.rows[rid];
-      if (row == null) continue;
-      bool ok = true;
-      for (final entry in preds.entries) {
-        final col = entry.key;
-        final needle = entry.value;
-        final cell = col < row.fields.length ? row.fields[col].toLowerCase() : '';
-        if (!cell.contains(needle)) { ok = false; break; }
+      if (row != null) {
+        bool ok = true;
+        for (final entry in preds.entries) {
+          final col = entry.key;
+          final needle = entry.value;
+          final cell =
+              col < row.fields.length ? row.fields[col].toLowerCase() : '';
+          if (!cell.contains(needle)) { ok = false; break; }
+        }
+        if (ok) matched.add(rid);
       }
-      if (ok) matched.add(rid);
-      if (((i + 1) % kFilterScanYieldEvery) == 0) {
-        onProgress(matched.length, i + 1);
+      i++;
+      if ((i % kFilterScanYieldEvery) == 0) {
+        onProgress(matched.length, i);
         await Future<void>.delayed(Duration.zero);
       }
     }
-    onProgress(matched.length, file.rowIds.length);
-    return matched;
+    onProgress(matched.length, i);
+    return (
+      matched: matched,
+      nextFromIdx: i,
+      done: i >= file.rowIds.length,
+    );
   }
 
   /// Public accessor for RowList's scroll-expansion path: ensures rows
@@ -3476,6 +3539,23 @@ class TraceStore extends ChangeNotifier {
           'warnings': frame.warnings,
         };
         _fileGen.value++;
+        // First completed file → auto-activate so the user sees its rows
+        // populated while subsequent files are still streaming. The
+        // post-stream auto-select block at the end of _streamRunBtrace
+        // is now redundant for the first-file case, but stays as the
+        // fallback when a run finishes with no file_end frames (empty
+        // config / immediate error).
+        if (_activeFileId == null) {
+          selectedFileId ??= file.id;
+          if (selectedRowId == null && file.rowIds.isNotEmpty) {
+            selectedRowId = file.rowIds.first;
+          }
+          // Fire and forget — activation populates rows asynchronously
+          // and notifies on completion; we don't block the ingest
+          // loop on it.
+          // ignore: discarded_futures
+          _activateFile(file.id);
+        }
       }
       return;
     }
