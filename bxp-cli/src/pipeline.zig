@@ -1069,6 +1069,638 @@ fn evalPrepassRow(
     }
 }
 
+// ─────────────────────── Per-block parallel pipeline ─────────────────────────
+//
+// `processBroker` accumulates ~10 MiB worth of source-CSV records into a
+// `pending_rows` block, then forks K = `runtime.max_workers` worker tasks
+// over a contiguous slice of records each. Workers parse fields, evaluate
+// `input_schema` + `row_rules`, and emit output bytes + btrace frames into
+// per-worker `std.Io.Writer.Allocating` buffers — no shared mutable state
+// inside the eval body. After `WaitGroup.wait()` the main thread drains
+// the per-worker buffers in worker-index order so the resulting output is
+// byte-identical to the single-threaded baseline (the dataset regression
+// gate in `scripts/test-02-datasets.sh` catches any divergence for free).
+//
+// The same fork-join model handles pre_pass: workers populate per-worker
+// `partial_lookup` maps; drain merges them into the shared `lookup_table`
+// with last-writer-wins semantics (matching serial behaviour where later
+// rows overwrite earlier rows for the same composite key).
+
+/// Compile-time inputs to one source-row evaluation. Bundled into a struct
+/// so the `evalAndEmitRow` and worker function signatures stay manageable.
+/// All fields are read-only references / values — the same `RowEvalConst`
+/// instance is shared by every worker in a block.
+const RowEvalConst = struct {
+    bc: *const config_mod.BrokerConfig,
+    col_index: *const std.StringHashMap(usize),
+    col_names: []const []const u8,
+    lookup_table_ptr: ?*const std.StringHashMap([]const u8),
+    single_prepass_name: ?[]const u8,
+    date_min: []const u8,
+    date_max: []const u8,
+    bid: []const u8,
+};
+
+/// Mutable per-evaluation emit sinks. In the serial path these point at
+/// shared file-level state (`fout`, `combined_fout`, `file_rows_written`,
+/// `file_expr_errors`, the real `Output` with its btrace writers). In the
+/// parallel path each worker passes its own per-worker state — same code
+/// path, different destinations, drain re-stitches in source-row order.
+const RowEmit = struct {
+    out: Output,
+    fout: *Writer,
+    combined_fout: *Writer,
+    combined: bool,
+    json_first_row: *bool,
+    combined_json_first_row: *bool,
+    rows_written: *u64,
+    expr_errors: *u32,
+};
+
+/// Evaluates one parsed CSV row end-to-end: input_schema variables,
+/// row_rules walk (first match wins), per-rule `rows` override eval,
+/// date_filter_from_filename gate, output-row write to both per-file and
+/// combined sinks, btrace frame emit. Synthesises a `filtered_row` frame
+/// when no rule produced any output frame so the GUI sees one row frame
+/// per source row.
+///
+/// The function is shared by the serial path in `processBroker` and the
+/// parallel worker function `workerMainPass`. Determinism is provided by
+/// passing per-worker sinks + a worker-local `rows_written` counter; the
+/// drain step at the end of `processBlockParallel` rewrites btrace
+/// `outputIdx` fields to absolute file-scope indices.
+fn evalAndEmitRow(
+    fields: [][]const u8,
+    row_offset: u64,
+    rec: *const RowEvalConst,
+    line_arena: *std.heap.ArenaAllocator,
+    e: *RowEmit,
+) !void {
+    _ = line_arena.reset(.retain_capacity);
+    const line_alloc = line_arena.allocator();
+    const bc = rec.bc;
+    const out = e.out;
+    const delim_out = &[_]u8{bc.csv_delimiter_out};
+
+    var row_detail: []const u8 = "";
+    var row_ctx = expr_mod.Context{
+        .fields = fields,
+        .col_index = rec.col_index,
+        .quote_out = bc.csv_text_quote_out,
+        .ticker_map = &bc.ticker_map,
+        .lookup_table = rec.lookup_table_ptr,
+        .single_prepass_name = rec.single_prepass_name,
+        .alloc = line_alloc,
+        .decimal_sep_in = bc.csv_decimal_separator_in,
+        .error_detail = &row_detail,
+    };
+
+    var vars = try evalAllVars(bc.input_schema, &row_ctx, out, e.expr_errors, row_offset);
+
+    const rules = bc.row_rules orelse &.{};
+    var rule_matched = false;
+    var matched_rule_index: usize = 0;
+    // Track whether this source row produced any row-level bin frame
+    // (output_row or filtered_row). If not, we synthesise a `filtered_row`
+    // at end-of-row so the GUI's btrace consumer sees one frame per source
+    // row. Two miss paths reach here: (a) no rule matched at all, (b) a
+    // rule matched but its `rows: []` is empty (silent skip).
+    var row_bin_frame_emitted = false;
+    for (rules, 0..) |rule, rule_index| {
+        row_detail = "";
+        const when_val = expr_mod.eval(rule.when, &row_ctx) catch |err| {
+            if (out.debug) {
+                if (row_detail.len > 0) {
+                    out.writer.print("[row_rules when error] \"{s}\": {s} ({s})\n", .{ rule.when, @errorName(err), row_detail }) catch {};
+                } else {
+                    out.writer.print("[row_rules when error] \"{s}\": {s}\n", .{ rule.when, @errorName(err) }) catch {};
+                }
+                out.writer.flush() catch {};
+            }
+            continue;
+        };
+        if (!when_val.toBool()) continue;
+        rule_matched = true;
+        matched_rule_index = rule_index;
+        for (rule.rows) |row_override| {
+            // Start from base vars, then apply per-row overrides.
+            var merged = std.StringHashMap([]const u8).init(line_alloc);
+            var base_it = vars.iterator();
+            while (base_it.next()) |entry| try merged.put(entry.key_ptr.*, entry.value_ptr.*);
+            var ov_it = row_override.iterator();
+            while (ov_it.next()) |entry| {
+                row_detail = "";
+                const val = expr_mod.evalString(entry.value_ptr.*, &row_ctx) catch |err| blk: {
+                    if (out.debug) {
+                        if (row_detail.len > 0) {
+                            out.writer.print("[row_rules error] {s} = \"{s}\": {s} ({s})\n", .{ entry.key_ptr.*, entry.value_ptr.*, @errorName(err), row_detail }) catch {};
+                        } else {
+                            out.writer.print("[row_rules error] {s} = \"{s}\": {s}\n", .{ entry.key_ptr.*, entry.value_ptr.*, @errorName(err) }) catch {};
+                        }
+                        out.writer.flush() catch {};
+                    }
+                    out.binEmitErrorRow(row_offset, entry.key_ptr.*, @errorName(err), row_detail, "row_rules");
+                    break :blk "";
+                };
+                try merged.put(entry.key_ptr.*, val);
+            }
+            // Date range filter (date_filter_from_filename). Lexical prefix
+            // compare on the first 10 bytes of $date — ISO-8601 datetime
+            // strings sort chronologically as plain ASCII. Skipping when
+            // $date is shorter than 10 bytes passes the row through
+            // unfiltered rather than silently dropping it.
+            const date_str = merged.get(VAR_DATE) orelse "";
+            if (rec.date_min.len > 0 and date_str.len >= 10 and
+                std.mem.order(u8, date_str[0..10], rec.date_min) == .lt) {
+                out.binEmitFilteredRow(row_offset, "date_filter_from_filename");
+                row_bin_frame_emitted = true;
+                continue;
+            }
+            if (rec.date_max.len > 0 and date_str.len >= 10 and
+                std.mem.order(u8, date_str[0..10], rec.date_max) == .gt) {
+                out.binEmitFilteredRow(row_offset, "date_filter_from_filename");
+                row_bin_frame_emitted = true;
+                continue;
+            }
+            if (bc.file_type_out == .json) {
+                if (!e.json_first_row.*) try e.fout.writeAll(",\n");
+                e.json_first_row.* = false;
+                try writeJsonRow(e.fout, bc.output_schema.items, &merged);
+                if (e.combined) {
+                    if (!e.combined_json_first_row.*) try e.combined_fout.writeAll(",\n");
+                    e.combined_json_first_row.* = false;
+                    try writeJsonRow(e.combined_fout, bc.output_schema.items, &merged);
+                }
+            } else {
+                var val_buf: [VAL_BUF_SIZE]u8 = undefined;
+                for (bc.output_schema.items, 0..) |col, ci| {
+                    if (ci > 0) try e.fout.writeAll(delim_out);
+                    try writeSafeValue(e.fout, merged.get(col.variable) orelse "", bc.csv_delimiter_out, bc.csv_decimal_separator_out, bc.csv_text_quote_out, &val_buf);
+                }
+                try e.fout.writeAll("\n");
+                if (e.combined) {
+                    var val_buf2: [VAL_BUF_SIZE]u8 = undefined;
+                    for (bc.output_schema.items, 0..) |col, ci| {
+                        if (ci > 0) try e.combined_fout.writeAll(delim_out);
+                        try writeSafeValue(e.combined_fout, merged.get(col.variable) orelse "", bc.csv_delimiter_out, bc.csv_decimal_separator_out, bc.csv_text_quote_out, &val_buf2);
+                    }
+                    try e.combined_fout.writeAll("\n");
+                }
+            }
+            // Bin protocol: one output_row frame per written output. In
+            // worker context `rows_written` is the per-slice local counter;
+            // `processBlockParallel` drain rewrites these to absolute
+            // file-scope indices via the btrace bytes patch step.
+            out.binEmitOutputRow(
+                row_offset,
+                e.rows_written.*,
+                @intCast(rule_index),
+                merged.get("$action") orelse "",
+            );
+            row_bin_frame_emitted = true;
+            e.rows_written.* += 1;
+        }
+        break; // first matching rule wins
+    }
+    if (!rule_matched) {
+        if (bc.row_rules_debug_missing and out.debug) {
+            out.writer.print("[{s}] unmatched row (no row_rules entry):\n{{\n", .{rec.bid}) catch {};
+            for (rec.col_names, 0..) |col_name, ci| {
+                const val = if (ci < fields.len) fields[ci] else "";
+                const sep: []const u8 = if (ci + 1 < rec.col_names.len) "," else "";
+                out.writer.print("  \"{s}\": \"{s}\"{s}\n", .{ col_name, val, sep }) catch {};
+            }
+            out.writer.print("}}\n", .{}) catch {};
+            out.writer.flush() catch {};
+        }
+    }
+    // Synthetic filtered_row so the GUI sees one row frame per source row
+    // (btrace v3 has no per-source-row frame by default). Reasons:
+    //   - "no_rule_match"  → no rule's `when` evaluated truthy
+    //   - "rule_skip"      → a rule matched but its rows: [] is empty
+    if (!row_bin_frame_emitted) {
+        const reason: []const u8 = if (rule_matched) "rule_skip" else "no_rule_match";
+        out.binEmitFilteredRow(row_offset, reason);
+    }
+}
+
+/// Per-worker scratch + output buffers used by the per-block parallel
+/// pipeline. A fixed array of `WorkerSlice` is allocated once per file
+/// (size = `runtime.max_workers`), reused across every block within the
+/// file, and deinit'd at file end. Per-block reset clears the eval/IO
+/// state but keeps the underlying ArrayList capacity to avoid mmap churn
+/// on the next block; `prepass_arena` is reset only at file boundaries
+/// because the bytes it allocates feed the shared `lookup_table` and
+/// must outlive the pre_pass barrier.
+const WorkerSlice = struct {
+    // === Input slice (set by the per-block orchestrator) ===
+    lines: []const csv.LineSlice = &.{},
+    base_row_idx: u64 = 0,
+
+    // === Per-block scratch (reset between blocks within a file) ===
+    line_arena: std.heap.ArenaAllocator,
+    field_arena: std.heap.ArenaAllocator,
+    field_buf: []u8 = &.{}, // reusable [][]const u8 storage (alloc'd at init)
+
+    // === Per-file scratch (reset only at file boundaries) ===
+    /// Backs the per-worker pre_pass `partial_lookup` entries (composite
+    /// key + value bytes). Drain merges by copying pointers into the
+    /// shared `lookup_table`, so these bytes must live until the file's
+    /// main pass is done.
+    prepass_arena: std.heap.ArenaAllocator,
+
+    // === Per-worker IO buffers (cleared per block) ===
+    out_alloc: std.Io.Writer.Allocating,
+    combined_alloc: std.Io.Writer.Allocating,
+    btrace_alloc: std.Io.Writer.Allocating,
+    debug_alloc: std.Io.Writer.Allocating,
+    btw: btrace.Writer, // wraps `&btrace_alloc.writer`; no magic write
+    worker_out: Output, // synthetic Output backed by the per-worker buffers
+
+    // === JSON serialization state (worker-local within a block) ===
+    json_first_row: bool = true,
+    combined_json_first_row: bool = true,
+
+    // === Counters ===
+    rows_written: u64 = 0, // local outputIdx counter; drain patches to absolute
+    expr_errors: u32 = 0,
+
+    // === Pre_pass state ===
+    /// Populated by `workerPrePass`; drained into the shared
+    /// `lookup_table` after the WaitGroup barrier.
+    partial_lookup: std.StringHashMap([]const u8),
+
+    // === Error state (workers can't propagate errors through spawnWg) ===
+    error_value: ?anyerror = null,
+
+    pub fn init(alloc: std.mem.Allocator) !WorkerSlice {
+        var line_arena = std.heap.ArenaAllocator.init(alloc);
+        errdefer line_arena.deinit();
+        var field_arena = std.heap.ArenaAllocator.init(alloc);
+        errdefer field_arena.deinit();
+        var prepass_arena = std.heap.ArenaAllocator.init(alloc);
+        errdefer prepass_arena.deinit();
+
+        // Field buffer is `[MAX_COLUMNS][]const u8` worth of pointer slots.
+        // splitFields writes slice headers into it; the underlying bytes
+        // either point into the source chunk or live in `field_arena`.
+        const fb_bytes = try alloc.alloc(u8, @sizeOf([]const u8) * MAX_COLUMNS);
+        errdefer alloc.free(fb_bytes);
+
+        var out_alloc = std.Io.Writer.Allocating.init(alloc);
+        errdefer out_alloc.deinit();
+        var combined_alloc = std.Io.Writer.Allocating.init(alloc);
+        errdefer combined_alloc.deinit();
+        var btrace_alloc = std.Io.Writer.Allocating.init(alloc);
+        errdefer btrace_alloc.deinit();
+        var debug_alloc = std.Io.Writer.Allocating.init(alloc);
+        errdefer debug_alloc.deinit();
+
+        var ws = WorkerSlice{
+            .line_arena = line_arena,
+            .field_arena = field_arena,
+            .field_buf = fb_bytes,
+            .prepass_arena = prepass_arena,
+            .out_alloc = out_alloc,
+            .combined_alloc = combined_alloc,
+            .btrace_alloc = btrace_alloc,
+            .debug_alloc = debug_alloc,
+            .btw = undefined, // patched after Allocating addresses are stable
+            .worker_out = undefined, // patched after btw + debug_alloc are stable
+            .partial_lookup = std.StringHashMap([]const u8).init(alloc),
+        };
+        // We construct `btw` directly (bypassing `btrace.Writer.init`)
+        // so it does NOT write the BXTB magic into the per-worker buffer.
+        // Magic is emitted exactly once per stream by main.zig at startup;
+        // worker bytes are appended raw after that.
+        ws.btw = .{ .w = &ws.btrace_alloc.writer };
+        ws.worker_out = Output{
+            .writer = &ws.debug_alloc.writer,
+            .quiet = false,
+            .debug = false, // set per call via setDebug()
+            .trace = .off,
+            .dry_run = false,
+            .btrace_writer = &ws.btw,
+            .btrace_file_writer = null,
+        };
+        return ws;
+    }
+
+    pub fn deinit(self: *WorkerSlice) void {
+        const alloc = self.line_arena.child_allocator;
+        self.line_arena.deinit();
+        self.field_arena.deinit();
+        self.prepass_arena.deinit();
+        self.out_alloc.deinit();
+        self.combined_alloc.deinit();
+        self.btrace_alloc.deinit();
+        self.debug_alloc.deinit();
+        self.partial_lookup.deinit();
+        alloc.free(self.field_buf);
+    }
+
+    pub fn setDebug(self: *WorkerSlice, debug: bool) void {
+        self.worker_out.debug = debug;
+    }
+
+    /// Clear per-block state. Called by the orchestrator before each
+    /// block dispatch. Areny use `.retain_capacity` so the pages stay
+    /// mmapped; buffers reset length to 0 but keep their underlying
+    /// allocation. `prepass_arena` and `partial_lookup` are NOT reset
+    /// here — they live across blocks within a file (pre_pass populates
+    /// across the whole file, main pass consumes via shared lookup_table).
+    pub fn resetForBlock(self: *WorkerSlice) void {
+        _ = self.line_arena.reset(.retain_capacity);
+        _ = self.field_arena.reset(.retain_capacity);
+        self.out_alloc.clearRetainingCapacity();
+        self.combined_alloc.clearRetainingCapacity();
+        self.btrace_alloc.clearRetainingCapacity();
+        self.debug_alloc.clearRetainingCapacity();
+        self.json_first_row = true;
+        self.combined_json_first_row = true;
+        self.rows_written = 0;
+        self.expr_errors = 0;
+        self.error_value = null;
+    }
+
+    /// Clear per-file state. Called by the orchestrator at file
+    /// boundaries (before processing the first block of a new file).
+    pub fn resetForFile(self: *WorkerSlice) void {
+        _ = self.prepass_arena.reset(.retain_capacity);
+        self.partial_lookup.clearRetainingCapacity();
+        self.resetForBlock();
+    }
+
+    /// Typed view of `field_buf` as a `[][]const u8` slice for splitFields.
+    inline fn fieldBufSlice(self: *WorkerSlice) [][]const u8 {
+        const ptr: [*][]const u8 = @ptrCast(@alignCast(self.field_buf.ptr));
+        return ptr[0..MAX_COLUMNS];
+    }
+};
+
+/// Main-pass worker: parses each line in `ws.lines` and routes the row
+/// through `evalAndEmitRow` with per-worker emit sinks. Output bytes,
+/// combined-sink bytes, btrace frame bytes (with **local** outputIdx),
+/// and debug-print bytes all land in per-worker buffers that the drain
+/// step concatenates in source-row order.
+fn workerMainPass(ws: *WorkerSlice, rec: *const RowEvalConst) void {
+    var emit = RowEmit{
+        .out = ws.worker_out,
+        .fout = &ws.out_alloc.writer,
+        .combined_fout = &ws.combined_alloc.writer,
+        .combined = rec.bc.combined_output,
+        .json_first_row = &ws.json_first_row,
+        .combined_json_first_row = &ws.combined_json_first_row,
+        .rows_written = &ws.rows_written,
+        .expr_errors = &ws.expr_errors,
+    };
+    const field_slice = ws.fieldBufSlice();
+    for (ws.lines) |line| {
+        _ = ws.field_arena.reset(.retain_capacity);
+        const fields = csv.splitFields(
+            line.bytes,
+            field_slice,
+            rec.bc.csv_delimiter_in,
+            rec.bc.csv_text_quote_in,
+            ws.field_arena.allocator(),
+        ) catch |err| {
+            ws.error_value = err;
+            return;
+        };
+        evalAndEmitRow(fields, line.byte_offset, rec, &ws.line_arena, &emit) catch |err| {
+            ws.error_value = err;
+            return;
+        };
+    }
+}
+
+/// Upper bound on per-block worker count. Way above any realistic CPU
+/// count (today's biggest server SKUs are < 200 cores); used only to
+/// size the stack-allocated `boundaries` array in
+/// `processBlockParallel`. If this ever needs to grow, swap the stack
+/// array for a heap allocation.
+const MAX_WORKERS_LIMIT: usize = 256;
+
+/// In-place rewrite of the `outputIdx` u64 field in every `output_row`
+/// frame within `bytes`. Each worker emits its frames with a per-slice
+/// LOCAL `outputIdx` (0..ws.rows_written); the drain step adds
+/// `slice_base` (cumulative `file_rows_written` from previously-drained
+/// workers + this file's pre-block total) so the bytes appended to the
+/// real btrace stream carry absolute file-scope indices — byte-identical
+/// to the single-threaded baseline.
+///
+/// Frame layout (see bxp-core/src/btrace.zig writeOutputRow):
+///
+///     [1B type=0x03][2B chunk_id][4B pay_len]
+///     [8B source_locator][8B output_idx ← patched][4B rule_idx]
+///     [4B action_len][N bytes action]
+///
+/// `output_idx` sits at `frame_start + 1 + 2 + 4 + 8 = 15`.
+///
+/// Defensive truncation check: a partial frame at the tail breaks the
+/// loop early. Workers never emit a truncated frame (each writeOutputRow
+/// is a single bounded call), but the check costs nothing and guards
+/// against silent bit-shifted patches if a future frame layout change
+/// breaks the assumed `pay_len` length.
+fn patchBtraceOutputIdx(bytes: []u8, slice_base: u64) void {
+    const output_row_byte: u8 = @intFromEnum(btrace.FrameType.output_row);
+    var pos: usize = 0;
+    while (pos + 7 <= bytes.len) {
+        const t = bytes[pos];
+        const pay_len = std.mem.readInt(u32, bytes[pos + 3 ..][0..4], .little);
+        const frame_end = pos + 7 + pay_len;
+        if (frame_end > bytes.len) break;
+        if (t == output_row_byte) {
+            const idx_off = pos + 15;
+            const cur = std.mem.readInt(u64, bytes[idx_off..][0..8], .little);
+            std.mem.writeInt(u64, bytes[idx_off..][0..8], cur + slice_base, .little);
+        }
+        pos = frame_end;
+    }
+}
+
+/// Per-block parallel orchestrator. Splits the input `lines` slice into
+/// K contiguous row slices (K = min(`runtime.max_workers`, `lines.len`)),
+/// assigns each to a `WorkerSlice` from the caller-owned pool, forks K
+/// workers via `pool.spawnWg`, and waits on the WaitGroup barrier. The
+/// caller drains per-worker buffers in worker-index order via
+/// `drainBlockMain` or `drainBlockPrePass`.
+///
+/// Row-count split (not byte-count): each worker gets `lines.len / K`
+/// rows, with the remainder spread across the first `lines.len % K`
+/// workers. Source-row contiguity is preserved (slice 0 = rows 0..n0,
+/// slice 1 = rows n0..n1, etc.), so the drain-in-order step yields
+/// output that matches the single-threaded baseline byte-for-byte.
+fn processBlockParallel(
+    lines: []const csv.LineSlice,
+    workers: []WorkerSlice,
+    runtime: Runtime,
+    rec: *const RowEvalConst,
+    is_prepass: bool,
+) !usize {
+    if (lines.len == 0) return 0;
+    const k_raw = @min(runtime.max_workers, lines.len);
+    if (k_raw > MAX_WORKERS_LIMIT) return error.TooManyWorkers;
+    const K = k_raw;
+
+    var boundaries: [MAX_WORKERS_LIMIT + 1]usize = undefined;
+    boundaries[0] = 0;
+    const base = lines.len / K;
+    const rem = lines.len % K;
+    for (0..K) |i| {
+        const slice_len = base + (if (i < rem) @as(usize, 1) else @as(usize, 0));
+        boundaries[i + 1] = boundaries[i] + slice_len;
+    }
+
+    for (workers[0..K], 0..) |*w, i| {
+        w.resetForBlock();
+        w.lines = lines[boundaries[i]..boundaries[i + 1]];
+    }
+
+    var wg: std.Thread.WaitGroup = .{};
+    if (is_prepass) {
+        for (workers[0..K]) |*w| runtime.pool.spawnWg(&wg, workerPrePass, .{ w, rec });
+    } else {
+        for (workers[0..K]) |*w| runtime.pool.spawnWg(&wg, workerMainPass, .{ w, rec });
+    }
+    wg.wait();
+
+    // Surface the first worker error encountered. Workers cannot
+    // propagate errors through `spawnWg` so they stash them in
+    // `error_value`; we re-raise here so the file loop's main-thread
+    // error path handles it the same way as the serial path would.
+    for (workers[0..K]) |*w| {
+        if (w.error_value) |err| return err;
+    }
+    return K;
+}
+
+/// Drains K main-pass workers in worker-index order into the real
+/// per-file sink + combined sink + btrace stream, patches per-worker
+/// btrace bytes with the absolute file-scope `outputIdx`, and
+/// accumulates per-worker counters into the file-level totals.
+fn drainBlockMain(
+    workers: []WorkerSlice,
+    K: usize,
+    file_type_out: config_mod.FileType,
+    combined: bool,
+    real_fout: *Writer,
+    real_combined_fout: *Writer,
+    file_json_first_row: *bool,
+    file_combined_json_first_row: *bool,
+    real_out: Output,
+    file_rows_written: *u64,
+    file_expr_errors: *u32,
+) !void {
+    for (workers[0..K]) |*w| {
+        const out_bytes = w.out_alloc.written();
+        const combined_bytes = w.combined_alloc.written();
+        const btrace_bytes = w.btrace_alloc.written();
+        const debug_bytes = w.debug_alloc.written();
+
+        // Per-file output sink. JSON inserts a `,\n` separator before
+        // this worker's bytes when the file has already emitted at least
+        // one row (the very first worker with any output triggers the
+        // `file_json_first_row` flip).
+        if (out_bytes.len > 0) {
+            if (file_type_out == .json) {
+                if (!file_json_first_row.*) try real_fout.writeAll(",\n");
+                file_json_first_row.* = false;
+            }
+            try real_fout.writeAll(out_bytes);
+        }
+        // Combined sink (same logic on its own `first_row` flag spanning
+        // every input file in the template).
+        if (combined and combined_bytes.len > 0) {
+            if (file_type_out == .json) {
+                if (!file_combined_json_first_row.*) try real_combined_fout.writeAll(",\n");
+                file_combined_json_first_row.* = false;
+            }
+            try real_combined_fout.writeAll(combined_bytes);
+        }
+        // Btrace: patch outputIdx in place to absolute file-scope index,
+        // then append the same bytes to both real sinks (stdout stream
+        // and `--trace-file` sidecar when present).
+        if (btrace_bytes.len > 0) {
+            patchBtraceOutputIdx(btrace_bytes, file_rows_written.*);
+            if (real_out.btrace_writer) |bw| try bw.w.writeAll(btrace_bytes);
+            if (real_out.btrace_file_writer) |bw| try bw.w.writeAll(btrace_bytes);
+        }
+        file_rows_written.* += w.rows_written;
+        file_expr_errors.* += w.expr_errors;
+        // Debug prints land in real stdout (same destination as serial
+        // path; --debug and --trace are mutually exclusive via main.zig).
+        if (debug_bytes.len > 0) {
+            real_out.writer.writeAll(debug_bytes) catch {};
+            real_out.writer.flush() catch {};
+        }
+    }
+}
+
+/// Drains K pre_pass workers: merges per-worker `partial_lookup` maps
+/// into the shared `lookup_table` (last-writer-wins on duplicate
+/// composite keys, matching serial semantics), then appends per-worker
+/// btrace bytes (only `prepass_entry` frames — no outputIdx patching
+/// needed) and debug bytes to the real sinks.
+fn drainBlockPrePass(
+    workers: []WorkerSlice,
+    K: usize,
+    real_out: Output,
+    shared_lookup_table: *std.StringHashMap([]const u8),
+) !void {
+    for (workers[0..K]) |*w| {
+        const btrace_bytes = w.btrace_alloc.written();
+        const debug_bytes = w.debug_alloc.written();
+
+        if (btrace_bytes.len > 0) {
+            if (real_out.btrace_writer) |bw| try bw.w.writeAll(btrace_bytes);
+            if (real_out.btrace_file_writer) |bw| try bw.w.writeAll(btrace_bytes);
+        }
+        var it = w.partial_lookup.iterator();
+        while (it.next()) |entry| {
+            try shared_lookup_table.put(entry.key_ptr.*, entry.value_ptr.*);
+        }
+        if (debug_bytes.len > 0) {
+            real_out.writer.writeAll(debug_bytes) catch {};
+            real_out.writer.flush() catch {};
+        }
+    }
+}
+
+/// Pre_pass worker: parses each line and runs `evalPrepassRow` against a
+/// per-worker `partial_lookup` map. Drain merges the partial maps into
+/// the shared `lookup_table` (last-writer-wins on duplicate composite
+/// keys, matching serial semantics). Bytes for composite keys + values
+/// allocate from `ws.prepass_arena` so they survive past the pre_pass
+/// barrier into the main pass.
+fn workerPrePass(ws: *WorkerSlice, rec: *const RowEvalConst) void {
+    const field_slice = ws.fieldBufSlice();
+    for (ws.lines) |line| {
+        _ = ws.field_arena.reset(.retain_capacity);
+        const fields = csv.splitFields(
+            line.bytes,
+            field_slice,
+            rec.bc.csv_delimiter_in,
+            rec.bc.csv_text_quote_in,
+            ws.field_arena.allocator(),
+        ) catch |err| {
+            ws.error_value = err;
+            return;
+        };
+        evalPrepassRow(
+            fields,
+            rec.col_index,
+            &ws.partial_lookup,
+            rec.bc,
+            ws.prepass_arena.allocator(),
+            ws.worker_out,
+        ) catch |err| {
+            ws.error_value = err;
+            return;
+        };
+    }
+}
+
 /// Processes all matching input files in dir_path for the given template.
 /// For each file:
 ///   1. Extracts optional date range from the filename.
@@ -1592,10 +2224,13 @@ pub fn processBroker(
         // subsequent rows don't pay for mmap overhead on every allocation.
         var line_arena = std.heap.ArenaAllocator.init(alloc);
         defer line_arena.deinit();
-        const line_alloc = line_arena.allocator();
 
         var json_first_row = true;
-        var file_rows_written: usize = 0;
+        // `file_rows_written` is u64 to match the `evalAndEmitRow` /
+        // `binEmitOutputRow` signature shared with the parallel worker
+        // path; both treat the counter as `*u64`. binEmitFileEnd consumes
+        // it directly with no cast.
+        var file_rows_written: u64 = 0;
         // Unified row source: JSON path replays the in-memory all_rows;
         // CSV path drives main_iter, which resets chunk_arena per chunk.
         var row_src: RowSource = if (json_all_rows) |jr|
@@ -1603,172 +2238,35 @@ pub fn processBroker(
         else
             .{ .csv_streaming = &main_iter };
         var file_row_idx: usize = 0;
+
+        // Bundle the const inputs + mutable emit sinks for `evalAndEmitRow`.
+        // The same function is called by `workerMainPass` with per-worker
+        // emit state once the parallel path is wired in; right now the
+        // serial loop passes pointers to shared file-level state so the
+        // dataset regression gate validates the extraction.
+        const rec = RowEvalConst{
+            .bc = bc,
+            .col_index = &col_index,
+            .col_names = col_names.items,
+            .lookup_table_ptr = lookup_table_ptr,
+            .single_prepass_name = single_prepass_name,
+            .date_min = date_min,
+            .date_max = date_max,
+            .bid = bid,
+        };
+        var emit = RowEmit{
+            .out = out,
+            .fout = fout,
+            .combined_fout = combined_fout,
+            .combined = combined,
+            .json_first_row = &json_first_row,
+            .combined_json_first_row = &combined_json_first_row,
+            .rows_written = &file_rows_written,
+            .expr_errors = &file_expr_errors,
+        };
         while (try row_src.next()) |fields| : (file_row_idx += 1) {
-            _ = line_arena.reset(.retain_capacity);
             const row_offset = row_src.currentOffset() orelse 0;
-
-            var row_detail: []const u8 = "";
-            var row_ctx = expr_mod.Context{
-                .fields = fields,
-                .col_index = &col_index,
-                .quote_out = bc.csv_text_quote_out,
-                .ticker_map = &bc.ticker_map,
-                .lookup_table = lookup_table_ptr,
-                .single_prepass_name = single_prepass_name,
-                .alloc = line_alloc,
-                .decimal_sep_in = bc.csv_decimal_separator_in,
-                .error_detail = &row_detail,
-            };
-
-            // Evaluate all input_schema variables for this row.
-            var vars = try evalAllVars(bc.input_schema, &row_ctx, out, &file_expr_errors, row_src.currentOffset() orelse 0);
-
-            // Row rules: first matching rule determines what to emit.
-            // Rules are evaluated in declaration order; the loop breaks as
-            // soon as one `when` condition is true. An error in a `when`
-            // expression (e.g. type mismatch) is treated as "false" in
-            // production mode (silent `""` substitution), but logged in
-            // --debug mode so the user can see which expression failed.
-            const rules = bc.row_rules orelse &.{};
-            var rule_matched = false;
-            var matched_rule_index: usize = 0;
-            // Track whether this source row produced any row-level bin frame
-            // (output_row or filtered_row). If not, we synthesise a
-            // `filtered_row` at end-of-row so the GUI's btrace consumer
-            // sees one frame per source row. Two miss paths reach here:
-            // (a) no rule matched at all, (b) a rule matched but its
-            // `rows: []` is empty (silent skip).
-            var row_bin_frame_emitted = false;
-            for (rules, 0..) |rule, rule_index| {
-                row_detail = "";
-                const when_val = expr_mod.eval(rule.when, &row_ctx) catch |err| {
-                    if (out.debug) {
-                        if (row_detail.len > 0) {
-                            out.writer.print("[row_rules when error] \"{s}\": {s} ({s})\n", .{ rule.when, @errorName(err), row_detail }) catch {};
-                        } else {
-                            out.writer.print("[row_rules when error] \"{s}\": {s}\n", .{ rule.when, @errorName(err) }) catch {};
-                        }
-                        out.writer.flush() catch {};
-                    }
-                    continue;
-                };
-                if (!when_val.toBool()) {
-                    continue;
-                }
-                rule_matched = true;
-                matched_rule_index = rule_index;
-                // Empty rows slice = silent skip.
-                for (rule.rows) |row_override| {
-                    // Start from base vars, then apply per-row overrides.
-                    var merged = std.StringHashMap([]const u8).init(line_alloc);
-                    var base_it = vars.iterator();
-                    while (base_it.next()) |e| try merged.put(e.key_ptr.*, e.value_ptr.*);
-                    var ov_it = row_override.iterator();
-                    while (ov_it.next()) |e| {
-                        row_detail = "";
-                        const val = expr_mod.evalString(e.value_ptr.*, &row_ctx) catch |err| blk: {
-                            if (out.debug) {
-                                if (row_detail.len > 0) {
-                                    out.writer.print("[row_rules error] {s} = \"{s}\": {s} ({s})\n", .{ e.key_ptr.*, e.value_ptr.*, @errorName(err), row_detail }) catch {};
-                                } else {
-                                    out.writer.print("[row_rules error] {s} = \"{s}\": {s}\n", .{ e.key_ptr.*, e.value_ptr.*, @errorName(err) }) catch {};
-                                }
-                                out.writer.flush() catch {};
-                            }
-                            out.binEmitErrorRow(row_src.currentOffset() orelse 0, e.key_ptr.*, @errorName(err), row_detail, "row_rules");
-                            break :blk "";
-                        };
-                        try merged.put(e.key_ptr.*, val);
-                    }
-                    // Date range filter (date_filter_from_filename).
-                    // Compares only the first 10 bytes of $date so that
-                    // ISO-8601 datetime strings ("2026-03-15T14:00:00Z")
-                    // work alongside plain date strings ("2026-03-15") — the
-                    // lexical prefix comparison is correct for both because
-                    // ISO-8601 sorts chronologically as plain ASCII. When
-                    // $date is shorter than 10 bytes (e.g. empty string due
-                    // to an expression error), the guard `date_str.len >= 10`
-                    // skips filtering and the row is passed through unfiltered
-                    // rather than silently dropped.
-                    const date_str = merged.get(VAR_DATE) orelse "";
-                    const cur_offset = row_src.currentOffset() orelse 0;
-                    if (date_min.len > 0 and date_str.len >= 10 and
-                        std.mem.order(u8, date_str[0..10], date_min) == .lt) {
-                        out.binEmitFilteredRow(cur_offset, "date_filter_from_filename");
-                        row_bin_frame_emitted = true;
-                        continue;
-                    }
-                    if (date_max.len > 0 and date_str.len >= 10 and
-                        std.mem.order(u8, date_str[0..10], date_max) == .gt) {
-                        out.binEmitFilteredRow(cur_offset, "date_filter_from_filename");
-                        row_bin_frame_emitted = true;
-                        continue;
-                    }
-                    if (bc.file_type_out == .json) {
-                        if (!json_first_row) try fout.writeAll(",\n");
-                        json_first_row = false;
-                        try writeJsonRow(fout, bc.output_schema.items, &merged);
-                        if (combined) {
-                            // Same row to the additional combined sink.
-                            // Its own first-row flag spans every input
-                            // file so commas land between every pair
-                            // regardless of file boundaries.
-                            if (!combined_json_first_row) try combined_fout.writeAll(",\n");
-                            combined_json_first_row = false;
-                            try writeJsonRow(combined_fout, bc.output_schema.items, &merged);
-                        }
-                    } else {
-                        var val_buf: [VAL_BUF_SIZE]u8 = undefined;
-                        for (bc.output_schema.items, 0..) |col, ci| {
-                            if (ci > 0) try fout.writeAll(delim_out);
-                            try writeSafeValue(fout, merged.get(col.variable) orelse "", bc.csv_delimiter_out, bc.csv_decimal_separator_out, bc.csv_text_quote_out, &val_buf);
-                        }
-                        try fout.writeAll("\n");
-                        if (combined) {
-                            var val_buf2: [VAL_BUF_SIZE]u8 = undefined;
-                            for (bc.output_schema.items, 0..) |col, ci| {
-                                if (ci > 0) try combined_fout.writeAll(delim_out);
-                                try writeSafeValue(combined_fout, merged.get(col.variable) orelse "", bc.csv_delimiter_out, bc.csv_decimal_separator_out, bc.csv_text_quote_out, &val_buf2);
-                            }
-                            try combined_fout.writeAll("\n");
-                        }
-                    }
-                    // Bin protocol: one output_row frame per written output. The
-                    // source CSV/JSON byte offset lets fmt seek to the source
-                    // record for on-demand drill-down.
-                    out.binEmitOutputRow(
-                        row_src.currentOffset() orelse 0,
-                        file_rows_written,
-                        @intCast(rule_index),
-                        merged.get("$action") orelse "",
-                    );
-                    row_bin_frame_emitted = true;
-                    file_rows_written += 1;
-                }
-                break; // first matching rule wins
-            }
-            if (!rule_matched) {
-                // No rule matched — show as debug record if configured.
-                if (bc.row_rules_debug_missing and out.debug) {
-                    out.writer.print("[{s}] unmatched row (no row_rules entry):\n{{\n", .{bid}) catch {};
-                    for (col_names.items, 0..) |col_name, ci| {
-                        const val = if (ci < fields.len) fields[ci] else "";
-                        const sep: []const u8 = if (ci + 1 < col_names.items.len) "," else "";
-                        out.writer.print("  \"{s}\": \"{s}\"{s}\n", .{ col_name, val, sep }) catch {};
-                    }
-                    out.writer.print("}}\n", .{}) catch {};
-                    out.writer.flush() catch {};
-                }
-            }
-            // Synthetic filtered_row so the GUI sees one row frame per
-            // source row (btrace v3 has no per-source-row frame by
-            // default). Reasons:
-            //   - "no_rule_match"  → no rule's `when` evaluated truthy
-            //   - "rule_skip"      → a rule matched but its rows: [] is empty
-            if (!row_bin_frame_emitted) {
-                const reason: []const u8 = if (rule_matched) "rule_skip" else "no_rule_match";
-                out.binEmitFilteredRow(row_offset, reason);
-            }
+            try evalAndEmitRow(fields, row_offset, &rec, &line_arena, &emit);
         }
 
         // Per-file tail + flush — always emitted at end-of-iteration.
@@ -1795,7 +2293,7 @@ pub fn processBroker(
 
         out.binEmitFileEnd(
             @intCast(file_row_idx),
-            @intCast(file_rows_written),
+            file_rows_written,
             file_expr_errors,
             file_warnings,
         );
