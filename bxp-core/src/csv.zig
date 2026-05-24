@@ -10,33 +10,7 @@ const std = @import("std");
 /// needed, or into alloc-owned copies for fields containing an escaped quote.
 /// Returns a sub-slice of buf containing only the fields found on the line.
 /// buf must be large enough to hold all fields; extra capacity is ignored.
-///
-/// `safe_buf` is optional. When non-null, each entry is set to true iff the
-/// matching field contains no byte that requires JSON escaping (no `"`, no
-/// `\`, no control char < 0x20). Used by bxp-cli `--trace` fast-path to
-/// bypass per-cell classify when emitting NDJSON. The escape-tracking add
-/// is one branch per byte inside loops we're already scanning, so the
-/// overhead is well under the win of skipping a second pass elsewhere.
-pub fn splitFields(line: []const u8, buf: [][]const u8, delimiter: u8, quote: u8, alloc: std.mem.Allocator, safe_buf: ?[]bool) ![][]const u8 {
-    // Comptime-monomorphised on whether safe tracking is requested — the
-    // per-byte `if (b < 0x20 …)` branch must be ABSENT from the no-track
-    // path (it adds measurable wall-time to non-trace runs). Two specialised
-    // versions get generated; this top-level just routes to the right one.
-    if (safe_buf) |sb| {
-        return splitFieldsImpl(true, line, buf, delimiter, quote, alloc, sb);
-    }
-    return splitFieldsImpl(false, line, buf, delimiter, quote, alloc, &.{});
-}
-
-inline fn splitFieldsImpl(
-    comptime track_safe: bool,
-    line: []const u8,
-    buf: [][]const u8,
-    delimiter: u8,
-    quote: u8,
-    alloc: std.mem.Allocator,
-    safe_buf: []bool,
-) ![][]const u8 {
+pub fn splitFields(line: []const u8, buf: [][]const u8, delimiter: u8, quote: u8, alloc: std.mem.Allocator) ![][]const u8 {
     var count: usize = 0;
     var pos: usize = 0;
     // Loop condition: pos <= line.len (one past end) lets the outer while
@@ -44,7 +18,6 @@ inline fn splitFieldsImpl(
     // case, avoiding a separate post-loop append.
     while (count < buf.len and pos <= line.len) {
         if (pos == line.len) break;
-        var safe = true;
         if (quote != 0 and line[pos] == quote) {
             // Quoted field: scan until the closing quote.
             // Track whether any doubled-quote escape sequences were found so we
@@ -62,7 +35,6 @@ inline fn splitFieldsImpl(
                         break; // Closing quote
                     }
                 } else {
-                    if (track_safe and (b < 0x20 or b == '\\')) safe = false;
                     pos += 1;
                 }
             }
@@ -71,27 +43,19 @@ inline fn splitFieldsImpl(
             if (pos < line.len and line[pos] == delimiter) pos += 1; // Skip delimiter.
 
             // Unescape doubled quote → single quote only when needed (avoids
-            // allocation in the common case). The doubled-quote escape collapses
-            // to a literal " in the field value, which IS a JSON-significant
-            // byte — so any has_escaped_quote field is unconditionally unsafe.
+            // allocation in the common case).
             if (has_escaped_quote) {
                 buf[count] = try unescapeQuotes(raw, quote, alloc);
-                if (track_safe) safe = false;
             } else {
                 buf[count] = raw;
             }
         } else {
             // Unquoted field: scan until the next delimiter.
             const start = pos;
-            while (pos < line.len and line[pos] != delimiter) {
-                const b = line[pos];
-                if (track_safe and (b < 0x20 or b == '"' or b == '\\')) safe = false;
-                pos += 1;
-            }
+            while (pos < line.len and line[pos] != delimiter) : (pos += 1) {}
             buf[count] = line[start..pos];
             if (pos < line.len) pos += 1; // Skip delimiter.
         }
-        if (track_safe) safe_buf[count] = safe;
         count += 1;
     }
     return buf[0..count];
@@ -148,20 +112,20 @@ const t = std.testing;
 
 test "splitFields: empty line yields zero fields" {
     var buf: [8][]const u8 = undefined;
-    const fields = try splitFields("", &buf, ',', '"', t.allocator, null);
+    const fields = try splitFields("", &buf, ',', '"', t.allocator);
     try t.expectEqual(@as(usize, 0), fields.len);
 }
 
 test "splitFields: single unquoted field" {
     var buf: [8][]const u8 = undefined;
-    const fields = try splitFields("hello", &buf, ',', '"', t.allocator, null);
+    const fields = try splitFields("hello", &buf, ',', '"', t.allocator);
     try t.expectEqual(@as(usize, 1), fields.len);
     try t.expectEqualStrings("hello", fields[0]);
 }
 
 test "splitFields: three unquoted fields" {
     var buf: [8][]const u8 = undefined;
-    const fields = try splitFields("a,b,c", &buf, ',', '"', t.allocator, null);
+    const fields = try splitFields("a,b,c", &buf, ',', '"', t.allocator);
     try t.expectEqual(@as(usize, 3), fields.len);
     try t.expectEqualStrings("a", fields[0]);
     try t.expectEqualStrings("b", fields[1]);
@@ -170,7 +134,7 @@ test "splitFields: three unquoted fields" {
 
 test "splitFields: leading empty field" {
     var buf: [8][]const u8 = undefined;
-    const fields = try splitFields(",b", &buf, ',', '"', t.allocator, null);
+    const fields = try splitFields(",b", &buf, ',', '"', t.allocator);
     try t.expectEqual(@as(usize, 2), fields.len);
     try t.expectEqualStrings("", fields[0]);
     try t.expectEqualStrings("b", fields[1]);
@@ -178,7 +142,7 @@ test "splitFields: leading empty field" {
 
 test "splitFields: empty field between delimiters" {
     var buf: [8][]const u8 = undefined;
-    const fields = try splitFields("a,,b", &buf, ',', '"', t.allocator, null);
+    const fields = try splitFields("a,,b", &buf, ',', '"', t.allocator);
     try t.expectEqual(@as(usize, 3), fields.len);
     try t.expectEqualStrings("a", fields[0]);
     try t.expectEqualStrings("", fields[1]);
@@ -189,7 +153,7 @@ test "splitFields: trailing delimiter produces no extra empty field" {
     // After the last field the delimiter is consumed, then pos==len → break.
     // This deviates from strict RFC 4180 (which would yield a trailing "").
     var buf: [8][]const u8 = undefined;
-    const fields = try splitFields("a,b,", &buf, ',', '"', t.allocator, null);
+    const fields = try splitFields("a,b,", &buf, ',', '"', t.allocator);
     try t.expectEqual(@as(usize, 2), fields.len);
     try t.expectEqualStrings("a", fields[0]);
     try t.expectEqualStrings("b", fields[1]);
@@ -197,7 +161,7 @@ test "splitFields: trailing delimiter produces no extra empty field" {
 
 test "splitFields: quoted field containing delimiter" {
     var buf: [8][]const u8 = undefined;
-    const fields = try splitFields("\"a,b\",c", &buf, ',', '"', t.allocator, null);
+    const fields = try splitFields("\"a,b\",c", &buf, ',', '"', t.allocator);
     try t.expectEqual(@as(usize, 2), fields.len);
     try t.expectEqualStrings("a,b", fields[0]);
     try t.expectEqualStrings("c", fields[1]);
@@ -208,14 +172,14 @@ test "splitFields: quoted field with escaped double-quote" {
     var arena = std.heap.ArenaAllocator.init(t.allocator);
     defer arena.deinit();
     var buf: [8][]const u8 = undefined;
-    const fields = try splitFields("\"a\"\"b\"", &buf, ',', '"', arena.allocator(), null);
+    const fields = try splitFields("\"a\"\"b\"", &buf, ',', '"', arena.allocator());
     try t.expectEqual(@as(usize, 1), fields.len);
     try t.expectEqualStrings("a\"b", fields[0]);
 }
 
 test "splitFields: empty quoted field" {
     var buf: [8][]const u8 = undefined;
-    const fields = try splitFields("\"\"", &buf, ',', '"', t.allocator, null);
+    const fields = try splitFields("\"\"", &buf, ',', '"', t.allocator);
     try t.expectEqual(@as(usize, 1), fields.len);
     try t.expectEqualStrings("", fields[0]);
 }
@@ -223,7 +187,7 @@ test "splitFields: empty quoted field" {
 test "splitFields: quote=0 disables quoting" {
     // With quote=0 the double-quote is plain data; comma still splits.
     var buf: [8][]const u8 = undefined;
-    const fields = try splitFields("\"a,b\"", &buf, ',', 0, t.allocator, null);
+    const fields = try splitFields("\"a,b\"", &buf, ',', 0, t.allocator);
     try t.expectEqual(@as(usize, 2), fields.len);
     try t.expectEqualStrings("\"a", fields[0]);
     try t.expectEqualStrings("b\"", fields[1]);
@@ -231,7 +195,7 @@ test "splitFields: quote=0 disables quoting" {
 
 test "splitFields: spaces are preserved (trimming is done by Context.field)" {
     var buf: [8][]const u8 = undefined;
-    const fields = try splitFields("  a  ,  b  ", &buf, ',', '"', t.allocator, null);
+    const fields = try splitFields("  a  ,  b  ", &buf, ',', '"', t.allocator);
     try t.expectEqual(@as(usize, 2), fields.len);
     try t.expectEqualStrings("  a  ", fields[0]);
     try t.expectEqualStrings("  b  ", fields[1]);
@@ -239,50 +203,11 @@ test "splitFields: spaces are preserved (trimming is done by Context.field)" {
 
 test "splitFields: tab delimiter" {
     var buf: [8][]const u8 = undefined;
-    const fields = try splitFields("x\ty\tz", &buf, '\t', 0, t.allocator, null);
+    const fields = try splitFields("x\ty\tz", &buf, '\t', 0, t.allocator);
     try t.expectEqual(@as(usize, 3), fields.len);
     try t.expectEqualStrings("x", fields[0]);
     try t.expectEqualStrings("y", fields[1]);
     try t.expectEqualStrings("z", fields[2]);
-}
-
-test "splitFields: safe_buf marks plain cells safe" {
-    var buf: [4][]const u8 = undefined;
-    var safe: [4]bool = .{ false, false, false, false };
-    const fields = try splitFields("a,b,c", &buf, ',', '"', t.allocator, &safe);
-    try t.expectEqual(@as(usize, 3), fields.len);
-    try t.expect(safe[0] and safe[1] and safe[2]);
-}
-
-test "splitFields: safe_buf marks doubled-quote unsafe" {
-    var arena = std.heap.ArenaAllocator.init(t.allocator);
-    defer arena.deinit();
-    var buf: [4][]const u8 = undefined;
-    var safe: [4]bool = .{ true, true, true, true };
-    const fields = try splitFields("\"a\"\"b\"", &buf, ',', '"', arena.allocator(), &safe);
-    try t.expectEqual(@as(usize, 1), fields.len);
-    try t.expectEqualStrings("a\"b", fields[0]);
-    try t.expect(!safe[0]);
-}
-
-test "splitFields: safe_buf marks control-byte cell unsafe" {
-    var buf: [4][]const u8 = undefined;
-    var safe: [4]bool = .{ true, true, true, true };
-    const fields = try splitFields("plain,with\x01ctrl,end", &buf, ',', '"', t.allocator, &safe);
-    try t.expectEqual(@as(usize, 3), fields.len);
-    try t.expect(safe[0]);
-    try t.expect(!safe[1]);
-    try t.expect(safe[2]);
-}
-
-test "splitFields: safe_buf marks backslash-containing cell unsafe" {
-    var buf: [4][]const u8 = undefined;
-    var safe: [4]bool = .{ true, true, true, true };
-    const fields = try splitFields("a,b\\c,d", &buf, ',', '"', t.allocator, &safe);
-    try t.expectEqual(@as(usize, 3), fields.len);
-    try t.expect(safe[0]);
-    try t.expect(!safe[1]);
-    try t.expect(safe[2]);
 }
 
 // ============================================================

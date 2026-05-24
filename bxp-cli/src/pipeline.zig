@@ -69,7 +69,7 @@ pub const TraceMode = enum(u2) { off, bin };
 /// Output wrapper that suppresses all writes when --quiet or --trace is active.
 /// All methods silently drop write errors (same pattern as existing debug prints).
 /// When --trace is active, human-readable lines are suppressed so that stdout
-/// contains only newline-delimited JSON (NDJSON) trace events.
+/// contains only the binary BXTB frame stream.
 pub const Output = struct {
     writer: *Writer,
     quiet: bool,
@@ -100,9 +100,9 @@ pub const Output = struct {
     }
 
     /// Print a warning line. Suppressed in --quiet mode. Goes to stderr in
-    /// every mode: in --trace mode stdout is reserved for the NDJSON event
-    /// stream (interleaving raw text would break the GUI's line-by-line
-    /// parser); in normal mode diagnostic output belongs on stderr per
+    /// every mode: in --trace mode stdout is reserved for the binary BXTB
+    /// frame stream (interleaving raw text would break the GUI's frame
+    /// reader); in normal mode diagnostic output belongs on stderr per
     /// Unix convention so users redirecting stdout to a file don't get
     /// warnings inlined into their data.
     pub fn warning(self: Output, comptime fmt: []const u8, args: anytype) void {
@@ -111,8 +111,8 @@ pub const Output = struct {
     }
 
     /// Print a fatal-error line. Suppressed in --quiet mode. Goes to stderr
-    /// for the same reasons as `warning` above — the GUI's NDJSON parser
-    /// must see only events on stdout, and CLI users running e.g.
+    /// for the same reasons as `warning` above — the GUI's BXTB frame reader
+    /// must see only frames on stdout, and CLI users running e.g.
     /// `bxp-cli > out.csvx` need diagnostics out-of-band from the data.
     pub fn fatal(self: Output, comptime fmt: []const u8, args: anytype) void {
         if (self.quiet) return;
@@ -855,18 +855,6 @@ const RowSource = union(enum) {
         }
     }
 
-    /// Returns the parallel safe bitmap for the most recently returned row,
-    /// or null when the source can't provide one (JSON path — fields come
-    /// from `readJsonRecords` and aren't classified). When non-null, the
-    /// slice has exactly `fields.len` entries. Caller reads it immediately
-    /// after `next()` (same lifetime contract as the fields slice).
-    pub fn currentSafe(self: *RowSource, fields: [][]const u8) ?[]const bool {
-        return switch (self.*) {
-            .json_materialised => null,
-            .csv_streaming => |iter| iter.row_safe[0..fields.len],
-        };
-    }
-
     /// Returns the file byte offset of the most recently returned record
     /// in the SOURCE file (CSV path), or null when the source doesn't
     /// support seek-based drill-down (JSON materialised path — TODO: add
@@ -903,13 +891,6 @@ const RowIterator = struct {
     /// call, so reusing the same buffer across rows is safe.
     row_buf: [][]const u8,
 
-    /// Parallel to row_buf: row_safe[i] == true iff row_buf[i] is escape-free
-    /// (no `"`, no `\`, no control byte < 0x20). Populated by splitFields on
-    /// every `next()` call. Used by the bxp-cli `--trace` fast-path so the
-    /// NDJSON writer can skip the per-cell classify scan; caller reads it
-    /// IMMEDIATELY after `next()` (same lifetime contract as row_buf).
-    row_safe: []bool,
-
     /// Byte offset of the start of the most-recently-returned record in the
     /// source file. Populated by every `next()` and `parseHeader()`. Used
     /// by `--trace=bin` to emit `source_locator` per output_row so fmt can
@@ -939,7 +920,6 @@ const RowIterator = struct {
             .rec_idx = 0,
             .header_consumed = false,
             .row_buf = try file_alloc.alloc([]const u8, MAX_COLUMNS),
-            .row_safe = try file_alloc.alloc(bool, MAX_COLUMNS),
             .current_offset = 0,
             .chunk_ptr = undefined,
             .chunk_start_in_file = 0,
@@ -978,7 +958,7 @@ const RowIterator = struct {
         const hdr_buf = try self.chunk_arena.allocator().alloc([]const u8, MAX_COLUMNS + 1);
         const header = try csv.splitFields(
             self.records.items[0], hdr_buf,
-            self.delimiter, self.quote, self.chunk_arena.allocator(), null,
+            self.delimiter, self.quote, self.chunk_arena.allocator(),
         );
         self.current_offset = self.chunk_start_in_file + (@intFromPtr(self.records.items[0].ptr) - @intFromPtr(self.chunk_ptr));
         self.rec_idx = 1;
@@ -997,7 +977,7 @@ const RowIterator = struct {
                 self.rec_idx += 1;
                 self.current_offset = self.chunk_start_in_file + (@intFromPtr(rec.ptr) - @intFromPtr(self.chunk_ptr));
                 return try csv.splitFields(
-                    rec, self.row_buf, self.delimiter, self.quote, self.chunk_arena.allocator(), self.row_safe,
+                    rec, self.row_buf, self.delimiter, self.quote, self.chunk_arena.allocator(),
                 );
             }
             const chunk_bytes = (try self.reader.nextChunk()) orelse return null;
@@ -1639,10 +1619,9 @@ pub fn processBroker(
             // Track whether this source row produced any row-level bin frame
             // (output_row or filtered_row). If not, we synthesise a
             // `filtered_row` at end-of-row so the GUI's btrace consumer
-            // sees one frame per source row (parity with NDJSON
-            // `row_start`). Two miss paths reach here: (a) no rule
-            // matched at all, (b) a rule matched but its `rows: []` is
-            // empty (silent skip).
+            // sees one frame per source row. Two miss paths reach here:
+            // (a) no rule matched at all, (b) a rule matched but its
+            // `rows: []` is empty (silent skip).
             var row_bin_frame_emitted = false;
             for (rules, 0..) |rule, rule_index| {
                 row_detail = "";
