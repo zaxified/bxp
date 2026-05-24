@@ -260,27 +260,7 @@ fn appendJsonStr(out: *std.ArrayList(u8), alloc: std.mem.Allocator, s: []const u
     try out.append(alloc, '"');
 }
 
-// ── annotated variant: preserves comments as $comm_<N>, errors as $err_<N> ─
-//
-// FIXME (Phase 5d, planned): the **only** annotation the GUI still
-// consumes is `$err_<N>` — the rest is dead-code-by-design after the
-// 2026-05-02 AST migration. Specifically:
-//
-//   * `$comm_<N>` (Map keys + List wrapper objects)
-//   * `$meta_comm_<N>`  (byte spans paired with each $comm_<N>)
-//   * `$meta_<key>` / `$elem_meta_<key>` / `$meta_self`
-//
-// All of these were emitted to support the original Dart CST patcher in
-// bxp-gui's trace_store.dart. That patcher was deleted in commit
-// `0b1a691` (Phase 3) and replaced by a Dart JSON5 AST library
-// (`bxp-gui/tool/json_ast_proto/`), which parses the file directly and
-// needs no spans or comment IDs from bxp-fmt. After Phase 5c-D
-// (commit `1e76587`) the GUI's adapter Map went away too, so nothing
-// outside this file even reads these keys anymore.
-//
-// Phase 5d will narrow the annotated-output contract to just `$err_*`
-// (probably as a new `--check` mode; `--config` may stay for backwards
-// compatibility with any external caller).
+// ── annotated variant: silently strips comments, injects $err_<N> markers ─
 
 pub const AnnotatedResult = struct {
     out: []u8,
