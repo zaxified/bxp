@@ -3553,6 +3553,30 @@ class TraceStore extends ChangeNotifier {
             file.sourceCsvSizeBytes < kEagerFileLoadBytes;
       }
       await ctx.ensureTemplate(frame.template);
+      // Publish the per-file runtime EAGERLY (at file_start, not at
+      // file_end / finalize) so drill-down on rows from a still-streaming
+      // file works the moment the first output_row arrives. Lookups is
+      // a mutable map that the prepass_entry handler appends to as
+      // entries arrive; any prepass entries that were stashed in
+      // `prepassBatch` before file_start has just been drained into
+      // file.prepass above, so seed lookups from that snapshot.
+      final lookups = <String, String>{};
+      final prepassNames = <String>{};
+      for (final pp in file.prepass) {
+        lookups['${pp.name}\x00${pp.key}\x00${pp.field}'] = pp.value;
+        prepassNames.add(pp.name);
+      }
+      _btraceRuntimes[file.id] = _BtraceFileRuntime(
+        sourceFetcher: null,
+        outputFetcher: null,
+        inputSchema: ctx.inputSchema,
+        tickerMap: ctx.tickerMap,
+        ruleWhens: ctx.ruleWhens,
+        ruleRows: ctx.ruleRows,
+        outputSchema: ctx.outputSchema,
+        lookups: lookups,
+        singlePrepassName: prepassNames.length == 1 ? prepassNames.first : null,
+      );
       // Bump fileGen so FileList rebuilds with the newly-arrived entry
       // without a main notifyListeners (which would also rebuild RowList
       // mid-stream).
@@ -3595,6 +3619,16 @@ class TraceStore extends ChangeNotifier {
       final file = ctx.currentFile;
       if (file != null) {
         file.prepass.add(entry);
+        // Append into the runtime's mutable lookups map so drill-down
+        // sees fresh entries the moment they arrive — runtime was
+        // published eagerly at file_start with the prepassBatch
+        // snapshot; entries arriving after file_start must be poked
+        // in here too.
+        final rt = _btraceRuntimes[file.id];
+        if (rt != null) {
+          rt.lookups['${entry.name}\x00${entry.key}\x00${entry.field}'] =
+              entry.value;
+        }
       } else {
         ctx.prepassBatch.add(entry);
       }
@@ -3815,14 +3849,20 @@ class TraceStore extends ChangeNotifier {
     Future<void> finalizeCurrentFile() async {
       final file = currentFile;
       if (file == null) return;
-      // Build outputOffsets if output.csvx exists. Single sequential scan.
-      if (file.outputCsvxPath.isNotEmpty &&
-          File(file.outputCsvxPath).existsSync()) {
-        file.outputOffsets = await _indexLineOffsets(file.outputCsvxPath);
-      }
-      final outputFetcher = file.outputCsvxPath.isEmpty
-          ? null
-          : await CsvRowFetcher.open(file.outputCsvxPath);
+      // REMOVE IN v0.4.0 — csvx is no longer read by drill-down (rows-out
+      // is rebuilt from re-eval bindings against the snapshot output_schema).
+      // The outputOffsets index + the persistent CsvRowFetcher are dead
+      // weight: a synchronous file scan + an FD that nobody reads from.
+      // Kept commented while the producer side still emits csvx for users
+      // who consume the file outside the GUI.
+      //
+      // if (file.outputCsvxPath.isNotEmpty &&
+      //     File(file.outputCsvxPath).existsSync()) {
+      //   file.outputOffsets = await _indexLineOffsets(file.outputCsvxPath);
+      // }
+      // final outputFetcher = file.outputCsvxPath.isEmpty
+      //     ? null
+      //     : await CsvRowFetcher.open(file.outputCsvxPath);
       // Build pre-pass lookups blob for evalBatch — keys are namespaced by
       // the actual pre_pass block name (legacy single-block reports
       // `_default`; named blocks carry the explicit name).
@@ -3834,7 +3874,7 @@ class TraceStore extends ChangeNotifier {
       }
       _btraceRuntimes[file.id] = _BtraceFileRuntime(
         sourceFetcher: currentSourceFetcher,
-        outputFetcher: outputFetcher,
+        outputFetcher: null,
         inputSchema: inputSchema,
         tickerMap: tickerMap,
         ruleWhens: ruleWhens,
@@ -3992,24 +4032,13 @@ class TraceStore extends ChangeNotifier {
     return model;
   }
 
-  /// Build a list of LF byte offsets — index N points at the start of
-  /// data row N (header row 0 is skipped). Used so that
-  /// outputCsvx[outputIdx] resolves to a CsvRowFetcher byte offset.
-  Future<List<int>> _indexLineOffsets(String path) async {
-    final bytes = await File(path).readAsBytes();
-    final offsets = <int>[];
-    if (bytes.isEmpty) return offsets;
-    final headerLf = bytes.indexOf(0x0A);
-    if (headerLf < 0) return offsets;
-    int pos = headerLf + 1;
-    while (pos < bytes.length) {
-      offsets.add(pos);
-      final nextLf = bytes.indexOf(0x0A, pos);
-      if (nextLf < 0) break;
-      pos = nextLf + 1;
-    }
-    return offsets;
-  }
+  // REMOVE IN v0.4.0 — _indexLineOffsets used to build outputCsvx byte
+  // offsets so `outputFetcher.lineAt(outputOffsets[idx])` could serve
+  // drill-down rows-out. Drill-down now re-evaluates from bindings, so
+  // the index is unused. Definition removed; both call sites in
+  // `finalizeCurrentFile` are commented out alongside the matching
+  // outputFetcher.open().
+
 
   /// Populate `row.fields`, `row.vars`, `row.rules`, `row.outputs` for a
   /// row whose data has not yet been fetched (btrace mode). Idempotent —
@@ -4441,19 +4470,21 @@ class _BtraceIngestCtx {
     }
   }
 
-  /// Wrap the in-flight file: build outputOffsets index, open the output
-  /// CSVX fetcher, publish the runtime so drill-down works for this file.
+  /// Publish the in-flight file's runtime so drill-down works for it.
   /// Idempotent — calling on a fresh ctx (no currentFile yet) is a no-op.
   Future<void> finalizeCurrentFile() async {
     final file = currentFile;
     if (file == null) return;
-    if (file.outputCsvxPath.isNotEmpty &&
-        File(file.outputCsvxPath).existsSync()) {
-      file.outputOffsets = await _indexLineOffsetsStatic(file.outputCsvxPath);
-    }
-    final outputFetcher = file.outputCsvxPath.isEmpty
-        ? null
-        : await CsvRowFetcher.open(file.outputCsvxPath);
+    // REMOVE IN v0.4.0 — see live-ingest finalizeCurrentFile for rationale.
+    // Drill-down rebuilds rows-out from re-eval bindings; csvx is not read.
+    //
+    // if (file.outputCsvxPath.isNotEmpty &&
+    //     File(file.outputCsvxPath).existsSync()) {
+    //   file.outputOffsets = await _indexLineOffsetsStatic(file.outputCsvxPath);
+    // }
+    // final outputFetcher = file.outputCsvxPath.isEmpty
+    //     ? null
+    //     : await CsvRowFetcher.open(file.outputCsvxPath);
     final lookups = <String, String>{};
     final prepassNames = <String>{};
     for (final pp in file.prepass) {
@@ -4465,7 +4496,7 @@ class _BtraceIngestCtx {
       // by TraceStore._activateFile via RandomAccessFile, not by a
       // per-file persistent CsvRowFetcher.
       sourceFetcher: null,
-      outputFetcher: outputFetcher,
+      outputFetcher: null,
       inputSchema: inputSchema,
       tickerMap: tickerMap,
       ruleWhens: ruleWhens,
@@ -4477,23 +4508,11 @@ class _BtraceIngestCtx {
     currentFile = null;
   }
 
-  /// Standalone variant of TraceStore._indexLineOffsets — duplicated here
-  /// to avoid passing a closure across the ctx boundary.
-  static Future<List<int>> _indexLineOffsetsStatic(String path) async {
-    final bytes = await File(path).readAsBytes();
-    final offsets = <int>[];
-    if (bytes.isEmpty) return offsets;
-    final headerLf = bytes.indexOf(0x0A);
-    if (headerLf < 0) return offsets;
-    int pos = headerLf + 1;
-    while (pos < bytes.length) {
-      offsets.add(pos);
-      final nextLf = bytes.indexOf(0x0A, pos);
-      if (nextLf < 0) break;
-      pos = nextLf + 1;
-    }
-    return offsets;
-  }
+  // REMOVE IN v0.4.0 — _indexLineOffsetsStatic was the post-stream twin
+  // of TraceStore._indexLineOffsets. Both are now orphan; the in-class
+  // TraceStore version is kept (commented at its definition) for the
+  // same reason. Deleted here outright since the static lived inline
+  // with the now-commented call site.
 }
 
 /// Per-file btrace-mode runtime data owned by [TraceStore]. Holds open
