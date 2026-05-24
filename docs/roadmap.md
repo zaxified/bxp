@@ -231,26 +231,43 @@ templates; file-mutation between passes is undefined (snapshot to
 
 ## Later (no specific version)
 
+### CPU parallelism (next perf priority)
+
+After the 2026-05-24 NDJSON rip the three big memory/IO rocks landed:
+RSS (10 GB → 13 MB stable), GUI memory (sparse trace model + lazy
+source-CSV load), btrace size (4× faster trace=on, 206× smaller
+stream). The remaining wall-time scaling lever is multi-core. Bench
+machine has 8 cores; `bxp-cli` today processes one template
+single-threaded, leaving 7 cores idle. Big sweeps (S1 2M rows
+off=42 s, S3 1024-col off=65 s) bottleneck on the one busy core.
+
+Three attack points to evaluate before committing:
+
+- **Per-file parallelism (easiest).** Run N input files of one
+  template in parallel, each on its own thread + `chunk_arena`. Files
+  are already independent today — no cross-file state beyond stats
+  aggregation and the btrace stream. Embarrassingly parallel.
+  Open question: output ordering. Per-file `.csvx` is fine but
+  `combined_output` and the btrace stdout stream both want an ordered
+  append.
+- **Per-chunk parallelism within a file.** Harder. `RowIterator` state
+  is serial (`chunk_arena` resets, byte-offset tracking), and btrace
+  frame ordering would need post-parallel re-serialisation. Returns
+  diminish when a single file processes in under a few seconds.
+- **Per-template parallelism.** Trivial to add but only matters when
+  the user runs multiple templates in one invocation. Most runs are
+  single-template.
+
+`scripts/bench/` already supports `BENCH_PARALLEL=N` for the run
+matrix; this work is about **internal** parallelism inside one
+`bxp-cli` invocation.
+
 ### CI hardening
 
 - `.github/workflows/ci.yml` — run `scripts/test.sh` on every PR. Today
   only the release workflow exists; PRs go untested by CI.
 - Flutter `integration_test` smoke run inside CI (Xvfb on Linux runners,
   headless setup on Mac / Win).
-
-### Windows runner image redirect (verify before next release)
-
-GitHub Actions redirected `windows-2025` → `windows-2025-vs2026` on
-2026-05-12, swapping Visual Studio 2025 for Visual Studio 2026 on the
-`windows-latest` runner. The redirect is image-level so pinning to
-`windows-2025` did not avoid it. Before the next tagged release a
-`workflow_dispatch` test of `release.yml` (e.g.
-`gh workflow run release.yml -f version=vX.Y.Z-rc-test`) should be run
-to confirm the Win build (Flutter MSVC, NSIS install) still works on
-the new image. If something breaks, options are (a) pin
-`runs-on: windows-2022` for the desktop-windows job, (b) fix whatever
-the VS 2026 swap broke. Drop this entry once a post-redirect release
-succeeds.
 
 ### Distribution polish
 
@@ -334,8 +351,21 @@ variants`). Tiny.
   errors and unmatched-row JSON; `--trace` for per-row event detail.
   Today they must run two passes. Could `--trace --debug` be allowed,
   with the debug JSON written to stderr (alongside warnings) so the
-  NDJSON stream on stdout stays clean? Touches `bxp-cli/main.zig` arg
-  validation + `Output` struct. Small change, big workflow win.
+  BXTB frame stream on stdout stays clean? Touches `bxp-cli/main.zig`
+  arg validation + `Output` struct. Small change, big workflow win.
+
+### bxp-gui
+
+- **User-supplied themes from JSON files on disk.** Every field on
+  `BxpTheme` ([bxp-gui/lib/ui/theme/bxp_theme.dart](../bxp-gui/lib/ui/theme/bxp_theme.dart))
+  is either a `Color`, `Brightness`, enum-like preset id, or label string.
+  Adding `BxpTheme.fromJson(Map<String,dynamic>)` factory + `toJson()` helper
+  would unlock: (1) drop `~/.config/bxp-gui/themes/myname.json` and have it
+  appear in the cycle without rebuild; (2) export the active preset for
+  sharing or forking ("save as"); (3) optional theme marketplace later.
+  Schema is already JSON-friendly — only `tones` (function pointer for
+  FlexSeedScheme) needs a name → preset lookup. Built-in presets stay as
+  fallback for corrupt/missing JSON.
 
 ### Tooling
 
