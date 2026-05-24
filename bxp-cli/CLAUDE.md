@@ -266,12 +266,12 @@ Used in `DATE_CONVERT(f, from_fmt, to_fmt)`. Both `from_fmt` and `to_fmt` use th
 bxp-cli splits its output across stdout and stderr by purpose, not by severity:
 
 - **stdout** — machine-consumable: human-readable per-template `summary` lines,
-  the final `overallLine`, and (in `--trace` mode) the NDJSON event stream.
+  the final `overallLine`, and (in `--trace` mode) the binary BXTB frame stream.
 - **stderr** — diagnostics: `fatal` errors, `warning` text, panics, usage errors.
 
-Capture them separately. Piping `2>&1` interleaves them and breaks NDJSON
-consumers (the GUI's trace parser requires clean stdout). `--trace` implies
-`--quiet` so per-template summaries do not pollute the NDJSON stream; warnings
+Capture them separately. Piping `2>&1` interleaves them and breaks the BXTB
+frame reader (the GUI parser requires clean stdout). `--trace` implies
+`--quiet` so per-template summaries do not pollute the frame stream; warnings
 still go to stderr in trace mode so a stderr badge can surface them in the GUI.
 
 ## Notes

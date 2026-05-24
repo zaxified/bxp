@@ -143,7 +143,7 @@ bxp/                            # monorepo root (git root)
 │   ├── gui.md                  # bxp-gui developer guide
 │   ├── release.md              # release process walkthrough
 │   ├── roadmap.md              # forward-looking milestones
-│   └── trace-protokol.md       # bxp-cli --trace NDJSON protocol spec
+│   └── trace-protokol.md       # bxp-cli --trace BXTB + bxp-fmt subcommand output formats
 ├── resources/
 │   ├── console/                # bxp-cli sample config + readme (bundled in console archives)
 │   ├── desktop/                # bxp-gui.desktop template + readme (bundled in desktop archives)
@@ -530,8 +530,8 @@ to decorate the tree with inline error markers.
 
 **3. User-facing messages.** Use `std.process.exit(1)` for fatal CLI
 errors — no Zig stack trace leaks to the user. Severity routing in `--trace`
-mode: `Output.warning()` writes to stderr (stdout is reserved for NDJSON);
-fatal errors also stderr.
+mode: `Output.warning()` writes to stderr (stdout is reserved for the binary
+BXTB frame stream); fatal errors also stderr.
 
 ---
 
@@ -539,12 +539,12 @@ fatal errors also stderr.
 
 **bxp-cli verbosity flags** — composable, all on the same binary:
 
-| Flag           | What it does                                                                                      |
-| -------------- | ------------------------------------------------------------------------------------------------- |
-| `--debug`      | Prints unmatched rows when `row_rules_debug_missing: true`                                        |
-| `--quiet`      | Suppresses per-template summaries (exit code still reflects result)                               |
-| `--trace`      | Emits NDJSON event stream on stdout (consumed by `bxp-gui`'s dry-run debugger). Implies `--quiet` |
-| `--check-fs=N` | Adds filesystem-existence checks (templates' `data_dir`, etc.) with N-second timeout              |
+| Flag           | What it does                                                                                    |
+| -------------- | ----------------------------------------------------------------------------------------------- |
+| `--debug`      | Prints unmatched rows when `row_rules_debug_missing: true`                                      |
+| `--quiet`      | Suppresses per-template summaries (exit code still reflects result)                             |
+| `--trace`      | Emits BXTB frame stream on stdout (consumed by `bxp-gui`'s dry-run debugger). Implies `--quiet` |
+| `--check-fs=N` | Adds filesystem-existence checks (templates' `data_dir`, etc.) with N-second timeout            |
 
 **Inspecting an expression in isolation:**
 

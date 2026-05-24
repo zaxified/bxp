@@ -42,8 +42,7 @@ bxp-gui/
 │   │   ├── schema_gate.dart                  # Schema-aware "may the user do X here?"
 │   │   └── updater_service.dart              # GitHub release poller + download/verify/install
 │   ├── store/
-│   │   ├── trace_store.dart         # ChangeNotifier — central state (~2.9k lines)
-│   │   ├── trace_builder.dart       # Build per-row trace data structures
+│   │   ├── trace_store.dart         # ChangeNotifier — central state (~4.3k lines, includes BXTB ingest)
 │   │   └── trace_model.dart         # POJO shapes for trace events
 │   └── ui/
 │       ├── main_view.dart           # 3-pane layout root
@@ -190,8 +189,8 @@ The client maps each subcommand to a method:
 - `validateExpr(text)` → `bxp-fmt --expr ...`.
 - `traceExpr(text, headers, fields)` → `bxp-fmt --expr-trace` (NDJSON
   stream).
-- `runDryRun(path, template)` → `bxp-cli --trace ...` (NDJSON stream of
-  per-row trace events).
+- `runDryRun(path, template)` → `bxp-cli --trace ...` (binary BXTB frame
+  stream of per-row trace events).
 - `getVersion(name)` → `bxp-cli --version` / `bxp-fmt --version` (both go
   to stdout, not stderr).
 
