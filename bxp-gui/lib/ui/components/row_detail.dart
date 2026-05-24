@@ -57,13 +57,12 @@ class _RowDetailState extends State<RowDetail> {
     }
 
     // bxp-cli severity: var/rule eval failures are WARNINGS (the
-    // `error` kind on VarEntry is the legacy field name from the
-    // NDJSON path). Banner copy + colour reflect "warning" semantics.
+    // `error` kind on VarEntry is a legacy field name). Banner copy +
+    // colour reflect "warning" semantics.
     final warningCount = row.vars.where((v) => v.kind == 'error').length;
     // Prefer the per-frame detail captured during ingest (carries
     // errorKind + bxp-fmt detail text). Falls back to the re-eval
-    // VarEntry list above when ingest didn't see error_row frames
-    // (e.g. NDJSON path or offline-built model).
+    // VarEntry list above when ingest didn't see error_row frames.
     final ingestDetails = row.warningDetails;
 
     return Column(

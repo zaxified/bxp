@@ -22,11 +22,10 @@ class RowList extends StatelessWidget {
 
   String _rowStatus(RowModel row) {
     // bxp-cli treats var/rule eval failures as WARNINGS (stats.warnings,
-    // --debug log) — same severity surfaces here. `hasError` is the
-    // legacy field name from the NDJSON path; semantics is "warning".
+    // --debug log) — same severity surfaces here. Field name `hasError`
+    // is legacy; semantics is "warning".
     if (row.hasError) return 'warning';
-    // NDJSON mode populates `outputs` synchronously; btrace mode leaves
-    // `outputs` empty until drill-down loads, so we also infer "written"
+    // `outputs` stays empty until drill-down loads, so we infer "written"
     // from the `btraceAction` populated by the `output_row` frame.
     // 1:N templates (single source producing >1 output) get a distinct
     // glyph so the user can spot the expansion without drill-down.
@@ -44,9 +43,6 @@ class RowList extends StatelessWidget {
     if (reason == 'rule_skip') return 'skipped';
     if (reason == 'no_rule_match') return 'unmatched';
     if (reason != null) return 'filtered'; // unknown reason → safe fallback
-    // NDJSON mode leaves filteredReason null for source rows that never
-    // matched a rule (no synthetic frame emission). Treat that as
-    // `unmatched` too — same semantics, just discovered differently.
     return 'unmatched';
   }
 

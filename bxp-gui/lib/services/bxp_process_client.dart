@@ -14,11 +14,11 @@ import 'diagnostic_log.dart';
 /// Spawn-based client for `bxp-cli` and `bxp-fmt`.
 ///
 /// Every call is a short-lived sub-process. `--trace` runs stream stdout
-/// line by line (one NDJSON event per line); validation calls capture
-/// stdout in full. The old FFI path (zig/bxp-ffi, a separate shared
-/// library re-exporting bxp-core) was deleted — keeping a parallel
-/// binding duplicated maintenance with zero UX upside now that
-/// validateExpr is debounced asynchronously.
+/// as a binary BXTB frame stream (chunk-by-chunk into the BtraceReader);
+/// validation calls capture stdout in full. The old FFI path
+/// (zig/bxp-ffi, a separate shared library re-exporting bxp-core) was
+/// deleted — keeping a parallel binding duplicated maintenance with zero
+/// UX upside now that validateExpr is debounced asynchronously.
 class BxpProcessClient {
   /// Resolve a sibling binary. Search order:
   ///   1. Env override: `$BXP_CLI_PATH` / `$BXP_FMT_PATH`

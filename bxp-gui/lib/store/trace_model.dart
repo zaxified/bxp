@@ -91,13 +91,12 @@ class RowModel {
   /// `FileModel.rowIds` if rows were filtered before tracing started.
   final int fileRow;
   /// Raw CSV field values for this row, in column order matching
-  /// `FileModel.headers`. NDJSON mode populates this from `row_start`;
-  /// btrace mode leaves it empty until file activation populates it (small
-  /// files: full sweep at click time, large files: lazy on visible-window
-  /// entry or filter scan). Track populated-vs-empty via [fieldsPopulated]
-  /// — an empty `fields` list could mean either "no source columns" or
-  /// "deferred lazy populate", and the latter must not be confused for the
-  /// former by renderers / filter predicates.
+  /// `FileModel.headers`. Stays empty until file activation populates it
+  /// (small files: full sweep at click time, large files: lazy on
+  /// visible-window entry or filter scan). Track populated-vs-empty via
+  /// [fieldsPopulated] — an empty `fields` list could mean either "no
+  /// source columns" or "deferred lazy populate", and the latter must
+  /// not be confused for the former by renderers / filter predicates.
   List<String> fields;
   /// True when [fields] holds the actual source-row content (or has been
   /// confirmed empty for a row with no source columns). False means the
@@ -116,8 +115,9 @@ class RowModel {
   /// Non-null when this row was dropped by a filter expression; contains the
   /// filter reason string from the `row_filtered` event.
   String? filteredReason;
-  /// Output rows produced by the matched rule's `rows` block. Each inner list
-  /// is one output CSV row, parallel to `FileModel.outputHeaders`.
+  /// Output rows produced by the matched rule's `rows` block. Each inner
+  /// list is one output CSV row, column order matches the runtime's
+  /// `outputSchema` snapshot used to build them.
   final List<List<String>> outputs = [];
   /// Index of the first rule that matched, or null for filtered/unmatched rows.
   int? matchedRuleIndex;
@@ -132,32 +132,26 @@ class RowModel {
   /// Empty when no warnings landed on this row.
   final List<String> warningDetails = [];
 
-  // ── Btrace mode metadata ───────────────────────────────────────────────
+  // ── Btrace metadata ────────────────────────────────────────────────────
   // Populated by `TraceStore._streamRunBtrace` from `output_row` frames so
-  // drill-down can lazy-fetch the source/output rows + re-eval expressions
-  // on demand. Default values match what NDJSON mode would leave them at
-  // (NDJSON populates everything synchronously, so `detailLoaded` stays
-  // true and these locator fields are never consulted).
+  // drill-down can lazy-fetch the source row + re-eval expressions on
+  // demand.
 
   /// Byte offset of the source CSV row this trace row was built from.
-  /// Used by [CsvRowFetcher.lineAt] to fetch the raw source line during
-  /// btrace-mode drill-down. -1 in NDJSON mode.
+  /// Used to seek into the active file's RAF for lazy populate +
+  /// drill-down `_loadRowDetail`. -1 for synthetic rows that have no
+  /// source counterpart.
   int sourceLocator = -1;
-  /// Per-file 0-based output-row index (`output_row.outputIdx`). Used as
-  /// the index into `FileModel.outputOffsets[]` to derive the byte offset
-  /// of the corresponding output.csvx line. -1 in NDJSON mode. Set from
-  /// the FIRST `output_row` frame received for this source row — for
-  /// 1:N templates (single source producing N outputs) `outputIdxs`
-  /// below carries the full list.
+  /// Per-file 0-based output-row counter from the FIRST `output_row`
+  /// frame for this source row. For 1:N templates (single source
+  /// producing N outputs) `outputIdxs` below carries the full list.
   int outputIdx = -1;
   /// Action label carried by the `output_row` frame (e.g. "BUY", "SELL").
-  /// Surfaces in master row lists without paying for a drill-down. Null
-  /// in NDJSON mode (where it can be derived from outputs[0]).
+  /// Surfaces in master row lists without paying for a drill-down.
   String? btraceAction;
   /// All per-file output-row indices for this source row. Length 1 for
   /// single-output templates; >1 for 1:N expansion (trading212 currency
   /// conversion expands one source row into BUY + SELL + FEE outputs).
-  /// Drill-down iterates this list when reading from `output.csvx`.
   /// First element matches [outputIdx]; empty when no output was emitted
   /// (filtered / unmatched / skipped rows).
   List<int> outputIdxs = [];
@@ -166,9 +160,9 @@ class RowModel {
   List<String> btraceActions = [];
 
   /// False until [TraceStore.ensureDetailLoaded] has populated `vars`,
-  /// `rules`, `fields`, and `outputs` for this row. NDJSON mode populates
-  /// everything synchronously and never flips this — defaults true to
-  /// preserve that behaviour for callers that don't know about lazy load.
+  /// `rules`, `fields`, and `outputs` for this row. Defaults true so
+  /// the synthetic/null-row paths that bypass ensureDetailLoaded still
+  /// render normally.
   bool detailLoaded = true;
 
   /// True while an ensureDetailLoaded() coroutine for this row is in
@@ -249,10 +243,9 @@ class FileModel {
   /// filtered, warnings). Null until the event arrives.
   Map<String, dynamic>? stats;
 
-  // ── Btrace mode metadata ───────────────────────────────────────────────
-  // Populated by `TraceStore._streamRunBtrace`; used by
-  // `ensureDetailLoaded(rowId)` to map output-row idx → byte offset and
-  // open file-handle fetchers. All-empty / null in NDJSON mode.
+  // ── Btrace runtime metadata ────────────────────────────────────────────
+  // Populated by `TraceStore._streamRunBtrace`; backs lazy source-row
+  // populate + drill-down re-eval.
 
   /// Resolved path to the source CSV (the input file bxp-cli processed).
   /// Differs from [path] only when the runtime CWD turned a relative
@@ -281,13 +274,17 @@ class FileModel {
 
 /// Top-level container for all data produced by one bxp-cli `--trace` run.
 ///
-/// Populated incrementally by `TraceBuilder.parseLine` as NDJSON events
-/// arrive from the streaming process. Consumers (RowList, FileList,
-/// OutputPanel) read from this model via `TraceStore.traceModel`; they must
-/// not hold direct references across runs because `TraceStore._streamRun`
-/// replaces the whole model at the start of each new run.
+/// Populated incrementally by `TraceStore._streamRunBtrace` /
+/// `_buildModelFromBtrace` as BXTB frames arrive from the streaming
+/// producer or are read from a saved `.bxtb` file. Consumers (RowList,
+/// FileList, OutputPanel) read from this model via `TraceStore.traceModel`;
+/// they must not hold direct references across runs because
+/// `TraceStore._streamRunBtrace` replaces the whole model at the start
+/// of each new run.
 class TraceModel {
-  /// Raw `start` event payload, null until the event arrives.
+  /// Raw `start` event payload, kept for backwards compatibility — the
+  /// btrace stream never populates it, so it is always null in current
+  /// runs. Retained so older consumers that null-check it still compile.
   Map<String, dynamic>? start;
   /// Raw `done` event payload collapsed to `{exitCode: N}`, null until
   /// the pipeline finishes.
@@ -299,14 +296,15 @@ class TraceModel {
   final List<String> fileOrder = [];
   /// RowModel registry keyed by synthetic id (`r0`, `r1`, …).
   final Map<String, RowModel> rows = {};
-  /// Parse errors from malformed NDJSON lines, capped at `_kMaxIssues` to
+  /// Parse errors from malformed frames, capped at `_kMaxIssues` to
   /// prevent runaway producers from exhausting memory.
   final List<String> issues = [];
 
-  /// True when this model was built by loading a `.bxtb` file (schema v3
-  /// index-only emit). Per-row vars/rules/outputs are populated lazily via
-  /// [TraceStore.ensureDetailLoaded] when the user selects a row. False
-  /// when the model came from the NDJSON `bxp-cli --trace` stream
-  /// (everything is in memory up front).
+  /// True when this model was built from a BXTB stream (either live
+  /// ingest or a saved `.bxtb` file). Per-row vars/rules/outputs are
+  /// populated lazily via [TraceStore.ensureDetailLoaded] when the user
+  /// selects a row. Always true in current builds — kept as an explicit
+  /// flag so synthetic test models (or future non-btrace sources) can
+  /// still opt out of the lazy-detail path.
   bool fromBtrace = false;
 }

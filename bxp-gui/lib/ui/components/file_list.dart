@@ -151,9 +151,9 @@ class _FileListState extends State<FileList> {
                   final warnings =
                       ((file.stats?['warnings'] as int?) ?? 0) +
                           ((file.stats?['errors'] as int?) ?? 0);
-                  // Once file_end has populated stats, prefer its authoritative
-                  // source-row count (matches between NDJSON and btrace modes,
-                  // even when one source row produces N outputs). During
+                  // Once file_end has populated stats, prefer its
+                  // authoritative source-row count (the producer's tally,
+                  // distinct from output rows for 1:N templates). During
                   // streaming fall back to the running rowIds length.
                   final rows = file.stats?['rows'] ?? file.rowIds.length;
                   final active = id == store.selectedFileId;

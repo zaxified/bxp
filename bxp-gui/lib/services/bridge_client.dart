@@ -176,10 +176,11 @@ class BridgeClient {
   static const int defaultBufSize = 4 * 1024 * 1024;
 
   /// Response-buffer size for streaming runs (bxp-cli --trace), which
-  /// emit NDJSON proportional to row count. 64 MB matches the bridge's
-  /// max_output_bytes cap and covers ~300 K rows of trace output.
-  /// Allocated only for the duration of the call and freed afterwards,
-  /// so steady-state RAM cost is zero.
+  /// emit BXTB frames proportional to row count. 64 MB matches the
+  /// bridge's max_output_bytes cap and covers ~5 M output_row frames
+  /// (assuming ~12-byte average frame size). Allocated only for the
+  /// duration of the call and freed afterwards, so steady-state RAM
+  /// cost is zero.
   static const int largeBufSize = 64 * 1024 * 1024;
 
   final DynamicLibrary _lib;
@@ -231,7 +232,7 @@ class BridgeClient {
   /// `bufSize` controls the response-buffer allocation; default is
   /// large enough for `bxp-fmt --docs` / `--config` payloads but
   /// streaming runs should pass [largeBufSize] (~64 MB) so the cap
-  /// doesn't truncate big NDJSON dumps.
+  /// doesn't truncate big trace dumps.
   BridgeResult run(
     String exe,
     List<String> args, {
