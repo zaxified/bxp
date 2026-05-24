@@ -138,6 +138,22 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
 
+    // Worker thread pool shared across every `processBroker` call in this
+    // invocation. The per-block parallel pipeline forks `max_workers`
+    // worker tasks via `pool.spawnWg` and joins on a `WaitGroup` after
+    // each block. Persistent (not per-block spawn/join) so fork overhead
+    // is enqueue-cost, not OS thread creation. `getCpuCount` returns the
+    // number of logical CPUs available to the process (respects cpuset
+    // affinity on Linux), which is the natural worker count.
+    const ncpu = std.Thread.getCpuCount() catch 1;
+    var pool: std.Thread.Pool = undefined;
+    try pool.init(.{ .allocator = alloc, .n_jobs = ncpu });
+    defer pool.deinit();
+    const runtime = pipeline.Runtime{
+        .pool = &pool,
+        .max_workers = ncpu,
+    };
+
     // Buffered stdout writer. 4 KB is enough for --version / --help; the
     // pipeline uses its own per-file OUT_FILE_BUF_SIZE buffer for bulk output.
     var stdout_buf: [4096]u8 = undefined;
@@ -276,7 +292,7 @@ pub fn main() !void {
     // propagated error is unexpected (e.g. OOM); in release mode we print
     // the error name rather than crashing with an unformatted Zig trace. In
     // --debug mode we re-throw so the Zig runtime prints its full stack trace.
-    const stats = run(args, out, fresh, check_fs_seconds, alloc) catch |err| {
+    const stats = run(args, out, fresh, check_fs_seconds, runtime, alloc) catch |err| {
         if (err == error.Fatal) {
             out.binEmitDone(1);
             closeTraceFile(&trace_file_fw_storage, trace_file_handle);
@@ -317,7 +333,7 @@ fn closeTraceFile(fw: *std.fs.File.Writer, handle: ?std.fs.File) void {
 /// Parses CLI arguments, loads config, validates all templates, then dispatches
 /// to the processing pipeline for each selected template.
 /// Returns overall SectionStats; exit code is determined by the caller.
-fn run(args: [][:0]u8, out: Output, fresh: bool, check_fs_seconds: u8, alloc: std.mem.Allocator) !SectionStats {
+fn run(args: [][:0]u8, out: Output, fresh: bool, check_fs_seconds: u8, runtime: pipeline.Runtime, alloc: std.mem.Allocator) !SectionStats {
     var overall = SectionStats{};
     var timer = try std.time.Timer.start();
 
@@ -633,13 +649,13 @@ fn run(args: [][:0]u8, out: Output, fresh: bool, check_fs_seconds: u8, alloc: st
             return error.Fatal;
         };
         const dir_path = dir_path_arg orelse bc.data_dir;
-        const template_stats = try pipeline.processBroker(bid, dir_path, bc, fresh, out, alloc);
+        const template_stats = try pipeline.processBroker(bid, dir_path, bc, fresh, out, runtime, alloc);
         out.summary(template_stats);
         overall.merge(template_stats);
     } else {
         var it = cfg.brokers.iterator();
         while (it.next()) |entry| {
-            const template_stats = try pipeline.processBroker(entry.key_ptr.*, entry.value_ptr.data_dir, entry.value_ptr, fresh, out, alloc);
+            const template_stats = try pipeline.processBroker(entry.key_ptr.*, entry.value_ptr.data_dir, entry.value_ptr, fresh, out, runtime, alloc);
             out.summary(template_stats);
             overall.merge(template_stats);
         }

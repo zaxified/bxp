@@ -104,6 +104,78 @@ pub fn splitRecords(content: []const u8, quote: u8, alloc: std.mem.Allocator) !s
     return records;
 }
 
+/// One record produced by `LineIterator.next()`: the record bytes
+/// (slice into the underlying chunk buffer, RFC-4180 quote-aware logical
+/// line with `\r` stripped from the terminator) plus its absolute file
+/// byte offset (chunk base + record start within chunk). The offset is
+/// what `--trace=bin` emits as `source_locator` so the GUI can seek
+/// directly to the source record for drill-down.
+pub const LineSlice = struct {
+    bytes: []const u8,
+    byte_offset: u64,
+};
+
+/// Quote-aware streaming iterator over CSV records held in a single
+/// in-memory chunk buffer. Designed to feed the per-block parallel
+/// pipeline in bxp-cli — caller pulls one record at a time and
+/// accumulates them into a block before forking workers.
+///
+/// quote semantics match `splitRecords` exactly: `quote == 0` disables
+/// quoting; `quote != 0` treats doubled `quote quote` as an escape that
+/// stays inside the quoted field and a bare `quote` as the toggle.
+/// A `\n` inside a quoted field does NOT terminate the record.
+///
+/// `bytes` is borrowed (read-only) for the iterator's lifetime; emitted
+/// `LineSlice.bytes` slices point directly into it. `base_offset` is
+/// the absolute file offset of `bytes[0]` — typically
+/// `ChunkReader.chunk_start_in_file` at the time the chunk was returned.
+///
+/// Empty records (consecutive `\n` or trailing `\n` at EOF) are skipped,
+/// matching `splitRecords` behaviour. Returns `null` once the buffer is
+/// exhausted.
+pub const LineIterator = struct {
+    bytes: []const u8,
+    quote: u8,
+    base_offset: u64,
+    pos: usize,
+
+    pub fn init(bytes: []const u8, quote: u8, base_offset: u64) LineIterator {
+        return .{ .bytes = bytes, .quote = quote, .base_offset = base_offset, .pos = 0 };
+    }
+
+    pub fn next(self: *LineIterator) ?LineSlice {
+        // Skip leading empty records so the first call returns the first
+        // non-empty record (matches splitRecords).
+        while (self.pos < self.bytes.len) {
+            const rec_start = self.pos;
+            var in_quotes: bool = false;
+            var terminated = false;
+            while (self.pos < self.bytes.len) {
+                const c = self.bytes[self.pos];
+                if (self.quote != 0 and c == self.quote) {
+                    if (in_quotes and self.pos + 1 < self.bytes.len and self.bytes[self.pos + 1] == self.quote) {
+                        self.pos += 2; // escaped quote inside quoted field
+                        continue;
+                    }
+                    in_quotes = !in_quotes;
+                    self.pos += 1;
+                } else if (c == '\n' and !in_quotes) {
+                    terminated = true;
+                    break;
+                } else {
+                    self.pos += 1;
+                }
+            }
+            var rec = self.bytes[rec_start..self.pos];
+            if (terminated) self.pos += 1; // consume the newline
+            if (rec.len > 0 and rec[rec.len - 1] == '\r') rec = rec[0 .. rec.len - 1];
+            if (rec.len == 0) continue; // skip empty record, try next
+            return .{ .bytes = rec, .byte_offset = self.base_offset + rec_start };
+        }
+        return null;
+    }
+};
+
 // ============================================================
 // Tests
 // ============================================================
@@ -208,6 +280,93 @@ test "splitFields: tab delimiter" {
     try t.expectEqualStrings("x", fields[0]);
     try t.expectEqualStrings("y", fields[1]);
     try t.expectEqualStrings("z", fields[2]);
+}
+
+// ============================================================
+// LineIterator tests
+// ============================================================
+
+test "LineIterator: empty input yields null immediately" {
+    var it = LineIterator.init("", '"', 0);
+    try t.expectEqual(@as(?LineSlice, null), it.next());
+}
+
+test "LineIterator: three simple lines with absolute offsets" {
+    var it = LineIterator.init("a,b\nc,d\ne,f\n", '"', 1000);
+    const r1 = it.next().?;
+    try t.expectEqualStrings("a,b", r1.bytes);
+    try t.expectEqual(@as(u64, 1000), r1.byte_offset);
+    const r2 = it.next().?;
+    try t.expectEqualStrings("c,d", r2.bytes);
+    try t.expectEqual(@as(u64, 1004), r2.byte_offset);
+    const r3 = it.next().?;
+    try t.expectEqualStrings("e,f", r3.bytes);
+    try t.expectEqual(@as(u64, 1008), r3.byte_offset);
+    try t.expectEqual(@as(?LineSlice, null), it.next());
+}
+
+test "LineIterator: quoted newline does not terminate record" {
+    var it = LineIterator.init("\"a\nb\",c\nd,e\n", '"', 0);
+    const r1 = it.next().?;
+    try t.expectEqualStrings("\"a\nb\",c", r1.bytes);
+    try t.expectEqual(@as(u64, 0), r1.byte_offset);
+    const r2 = it.next().?;
+    try t.expectEqualStrings("d,e", r2.bytes);
+    try t.expectEqual(@as(u64, 8), r2.byte_offset);
+}
+
+test "LineIterator: escaped quote inside quoted field" {
+    // "a""b\nc" is one logical record: a"b\nc (the doubled "" is escape)
+    var it = LineIterator.init("\"a\"\"b\nc\"\nnext\n", '"', 0);
+    const r1 = it.next().?;
+    try t.expectEqualStrings("\"a\"\"b\nc\"", r1.bytes);
+    const r2 = it.next().?;
+    try t.expectEqualStrings("next", r2.bytes);
+}
+
+test "LineIterator: CRLF line endings strip the CR" {
+    var it = LineIterator.init("a,b\r\nc,d\r\n", '"', 0);
+    const r1 = it.next().?;
+    try t.expectEqualStrings("a,b", r1.bytes);
+    const r2 = it.next().?;
+    try t.expectEqualStrings("c,d", r2.bytes);
+}
+
+test "LineIterator: last record without trailing newline" {
+    var it = LineIterator.init("a\nb", '"', 0);
+    const r1 = it.next().?;
+    try t.expectEqualStrings("a", r1.bytes);
+    try t.expectEqual(@as(u64, 0), r1.byte_offset);
+    const r2 = it.next().?;
+    try t.expectEqualStrings("b", r2.bytes);
+    try t.expectEqual(@as(u64, 2), r2.byte_offset);
+    try t.expectEqual(@as(?LineSlice, null), it.next());
+}
+
+test "LineIterator: consecutive newlines skip empty records" {
+    var it = LineIterator.init("a\n\n\nb\n", '"', 0);
+    const r1 = it.next().?;
+    try t.expectEqualStrings("a", r1.bytes);
+    try t.expectEqual(@as(u64, 0), r1.byte_offset);
+    const r2 = it.next().?;
+    try t.expectEqualStrings("b", r2.bytes);
+    try t.expectEqual(@as(u64, 4), r2.byte_offset);
+}
+
+test "LineIterator: quote=0 disables quoting (embedded quote is plain data)" {
+    // quote=0: no quote-aware tracking. The bare '"' is plain data; the
+    // '\n' inside what looks like a quoted field still ends the record.
+    var it = LineIterator.init("\"a\nb\",c\n", 0, 0);
+    const r1 = it.next().?;
+    try t.expectEqualStrings("\"a", r1.bytes);
+    const r2 = it.next().?;
+    try t.expectEqualStrings("b\",c", r2.bytes);
+}
+
+test "LineIterator: base_offset propagates correctly across records" {
+    var it = LineIterator.init("xx\nyy\n", '"', 50);
+    try t.expectEqual(@as(u64, 50), it.next().?.byte_offset);
+    try t.expectEqual(@as(u64, 53), it.next().?.byte_offset);
 }
 
 // ============================================================

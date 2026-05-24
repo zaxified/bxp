@@ -238,25 +238,45 @@ RSS (10 GB → 13 MB stable), GUI memory (sparse trace model + lazy
 source-CSV load), btrace size (4× faster trace=on, 206× smaller
 stream). The remaining wall-time scaling lever is multi-core. Bench
 machine has 8 cores; `bxp-cli` today processes one template
-single-threaded, leaving 7 cores idle. Big sweeps (S1 2M rows
-off=42 s, S3 1024-col off=65 s) bottleneck on the one busy core.
+single-threaded, leaving 7 cores idle.
 
-Three attack points to evaluate before committing:
+**Target bottleneck: one large source file.** The bench bottlenecks
+that hurt — S1 2M rows off=42 s, S3 1024-col off=65 s — and the
+real-world workloads (CRM migrations, single-broker exports) both
+live in a single file. Multiple smaller files are not the pain point.
 
-- **Per-file parallelism (easiest).** Run N input files of one
-  template in parallel, each on its own thread + `chunk_arena`. Files
-  are already independent today — no cross-file state beyond stats
-  aggregation and the btrace stream. Embarrassingly parallel.
-  Open question: output ordering. Per-file `.csvx` is fine but
-  `combined_output` and the btrace stdout stream both want an ordered
-  append.
-- **Per-chunk parallelism within a file.** Harder. `RowIterator` state
-  is serial (`chunk_arena` resets, byte-offset tracking), and btrace
-  frame ordering would need post-parallel re-serialisation. Returns
-  diminish when a single file processes in under a few seconds.
+Three attack points, ranked by **value against the real bottleneck**
+(not by implementation difficulty):
+
+- **Per-chunk parallelism within a file (the only one that matters).**
+  Harder to implement, but the only candidate that attacks "one big
+  file" wall time. Pipeline becomes
+  `reader → chunk queue → N workers → ordered writer`. Per-thread
+  `chunk_arena`, per-thread output + btrace buffers, writer thread
+  reassembles in chunk-sequence order. Pre_pass stays a barrier
+  (read-only `lookup_table` post-barrier); pre_pass itself can also
+  parallelise with thread-local partial maps + merge if it becomes
+  the new bottleneck. JSON path (slurp-then-iterate) parallelises
+  trivially by splitting `all_rows` into ranges.
+- **Per-file parallelism.** Implementation-easy (files already
+  independent), but does nothing for N=1. Useful only for the
+  multi-broker concat case (one template, several input files)
+  and even there the win is small because per-file work is already
+  fast. Not the target.
 - **Per-template parallelism.** Trivial to add but only matters when
   the user runs multiple templates in one invocation. Most runs are
   single-template.
+
+Audit of serial state inside `processBroker` (per file) for the
+per-chunk path: `chunk_arena` (per-chunk, reset on transition);
+`RowIterator + ChunkReader` (10 MiB streaming); `file_rows_written`
+(monotonic, used as btrace `outputIdx`); `file_expr_errors` /
+`file_warnings` (file-scoped counters); `fout` (`.csvx` writer,
+order matters); `combined_fout` (cross-file, even more serial);
+`btrace_writer` + `btrace_file_writer` (frame sequence
+`file_start → prepass → output/filtered/error → file_end`);
+`out.writer` for stderr (debug + warning prints). Everything in
+`expr.Context` and `line_arena` is per-row scratch — safe.
 
 `scripts/bench/` already supports `BENCH_PARALLEL=N` for the run
 matrix; this work is about **internal** parallelism inside one

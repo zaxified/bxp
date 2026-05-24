@@ -66,6 +66,16 @@ pub const SectionStats = struct {
 /// --expr-batch` from the BXTB metadata + the source CSV.
 pub const TraceMode = enum(u2) { off, bin };
 
+/// Execution resources shared across one CLI invocation. Currently
+/// carries the worker thread pool used by `processBroker` for
+/// per-block parallel evaluation; `max_workers` is the dispatch ceiling
+/// (= `std.Thread.getCpuCount()` typically). main.zig owns the pool's
+/// lifetime via `init` + `deinit`; we just borrow the pointer.
+pub const Runtime = struct {
+    pool: *std.Thread.Pool,
+    max_workers: usize,
+};
+
 /// Output wrapper that suppresses all writes when --quiet or --trace is active.
 /// All methods silently drop write errors (same pattern as existing debug prints).
 /// When --trace is active, human-readable lines are suppressed so that stdout
@@ -1072,8 +1082,14 @@ pub fn processBroker(
     bc: *const config_mod.BrokerConfig,
     fresh: bool,
     out_in: Output,
+    runtime: Runtime,
     alloc: std.mem.Allocator,
 ) !SectionStats {
+    // `runtime` carries the worker thread pool that the per-block parallel
+    // path will use. Wiring lands incrementally — for now the field is
+    // received but unused so the call sites can be flipped in one go later.
+    _ = runtime;
+
     var stats = SectionStats{};
     var timer = try std.time.Timer.start();
 
