@@ -1396,6 +1396,23 @@ const WorkerSlice = struct {
         self.worker_out.debug = debug;
     }
 
+    /// Enable or disable per-worker btrace frame emission. When the real
+    /// `Output` has both `btrace_writer` and `btrace_file_writer` as
+    /// null (trace=off, no --trace-file), workers would otherwise emit
+    /// every frame into their per-worker `btrace_alloc` buffer only for
+    /// the drain step to patch + drop the bytes. Routing
+    /// `worker_out.btrace_writer = null` for the no-trace case makes
+    /// the `Output.binEmit*` calls inside `evalAndEmitRow` no-op via
+    /// their `if (self.btrace_writer) |bw|` guard — the inner btrace
+    /// frame serialization (length-prefixed strings, Allocating
+    /// growth, etc.) is skipped entirely. Measured wall-time win is
+    /// significant on row-heavy + narrow-column workloads where the
+    /// per-row eval is light and the wasted btrace serialization
+    /// dominates the worker loop.
+    pub fn setBtraceEnabled(self: *WorkerSlice, enabled: bool) void {
+        self.worker_out.btrace_writer = if (enabled) &self.btw else null;
+    }
+
     /// Clear per-block state. Called by the orchestrator before each
     /// block dispatch. Areny use `.retain_capacity` so the pages stay
     /// mmapped; buffers reset length to 0 but keep their underlying
@@ -2141,9 +2158,11 @@ pub fn processBroker(
                 // worker-index order with last-writer-wins on duplicate
                 // composite keys (matches the serial semantic where later
                 // rows overwrite earlier rows for the same key).
+                const trace_on = out.btrace_writer != null or out.btrace_file_writer != null;
                 for (workers) |*w| {
                     w.resetForFile();
                     w.setDebug(out.debug);
+                    w.setBtraceEnabled(trace_on);
                 }
                 var pending = std.array_list.Managed(csv.LineSlice).init(file_alloc);
                 defer pending.deinit();
@@ -2364,7 +2383,11 @@ pub fn processBroker(
             // order via drainBlockMain. Workers don't reset their
             // `prepass_arena` here (resetForFile happened before the
             // pre_pass loop and the bytes feed the shared lookup_table).
-            for (workers) |*w| w.setDebug(out.debug);
+            const trace_on = out.btrace_writer != null or out.btrace_file_writer != null;
+            for (workers) |*w| {
+                w.setDebug(out.debug);
+                w.setBtraceEnabled(trace_on);
+            }
             var pending = std.array_list.Managed(csv.LineSlice).init(file_alloc);
             defer pending.deinit();
             // First chunk: body lines starting after the header.

@@ -134,9 +134,20 @@ test "validatePath: backslash separator counts as traversal on Windows builds" {
 }
 
 pub fn main() !void {
+    // Allocator pick: `DebugAllocator` in Debug builds for leak tracking +
+    // double-free detection; `smp_allocator` in ReleaseFast / ReleaseSafe
+    // because the per-block parallel pipeline forks N worker threads that
+    // all allocate concurrently — `DebugAllocator`'s per-call mutex
+    // serialises every allocation across threads and choked S1 2M down to
+    // 1.58× speedup (sys time was ~89 s on a 25 s wall). `smp_allocator`
+    // is thread-aware with per-thread caches and removes that contention
+    // entirely.
     var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
-    const alloc = gpa.allocator();
+    const alloc: std.mem.Allocator = switch (@import("builtin").mode) {
+        .Debug => gpa.allocator(),
+        else => std.heap.smp_allocator,
+    };
 
     // Worker thread pool shared across every `processBroker` call in this
     // invocation. The per-block parallel pipeline forks `max_workers`
