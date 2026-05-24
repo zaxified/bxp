@@ -394,17 +394,15 @@ graph TD
 
     subgraph STORE["lib/store/"]
         TS["TraceStore (ChangeNotifier)
-        config AST · diagnostics · trace events
+        config AST · diagnostics · trace frames
         docs catalog · prefs · run status"]
-        TB["TraceBuilder
-        folds --trace NDJSON into TraceStore"]
         SG["SchemaGate
         insert order · type guard for Add-Child"]
         DV["DartValidator
         per-edit Dart-side checks
         driven by FnDoc.args + FieldDoc"]
         TM["trace_model.dart
-        Dart mirrors of NDJSON event types"]
+        Dart mirrors of BXTB frame payloads"]
     end
 
     subgraph SVC["lib/services/"]
@@ -440,7 +438,6 @@ graph TD
 
     UI -->|read state| TS
     UI -->|dispatch actions| TS
-    TS --> TB
     TS --> SG
     TS --> DV
     TS --> AST
@@ -472,7 +469,8 @@ Key invariants:
 - **Two transport paths.** `BxpProcessClient` picks per call between
   `dart:io` (`Process.start` / `Process.run`) and FFI through
   `bxp-gui-bridge.{dll,so,dylib}`. The protocol on the wire is identical (same
-  args, same NDJSON); only the transport differs.
+  CLI args, same stdout payload — BXTB frames for `--trace`, NDJSON for
+  `--expr-trace`, JSON for `--config` / `--docs`); only the transport differs.
   - **Out-of-process** (`Process.start`/`Process.run`) is the default on
     Linux/macOS for every subcommand.
   - **In-process expression eval** (`bridge_eval_expr` / `bridge_eval_expr_trace`)
@@ -492,44 +490,40 @@ Key invariants:
 ## Dry-run / Runner Flow
 
 Two toolbar buttons spawn `bxp-cli`: **dry-run** runs `--trace` only (no
-`.csvx` files written, just the NDJSON event stream for the debugger);
+`.csvx` files written, just the BXTB frame stream for the debugger);
 **full-run** writes real output. Neither has a keyboard shortcut — both
-share the same plumbing, only the `dry: bool` argument to `_streamRun`
-differs. Events stream back as NDJSON lines; `TraceBuilder` folds each event
-into `TraceStore`. To avoid a rebuild storm (PlutoGrid reallocates
+share the same plumbing, only the `dry: bool` argument to `_streamRunBtrace`
+differs. Frames stream back as binary BXTB; the in-store reader folds each
+frame into `TraceStore`. To avoid a rebuild storm (PlutoGrid reallocates
 quadratically on every `notifyListeners`), incremental row updates go through
 `ValueNotifier<int>` counters; the full `notifyListeners()` fires only twice:
-at stream start and after the `done` event.
+at stream start and after the `done` frame.
 
 ```mermaid
 sequenceDiagram
     participant UI as debug_panes.dart
     participant TS as TraceStore
-    participant TB as TraceBuilder
     participant BPC as BxpProcessClient
     participant CLI as bxp-cli --trace
 
     UI->>TS: runDryRun() / runFullRun()
     TS->>TS: write draft config to tmp file
-    TS->>BPC: runDryRun / runFullRun (configPath, template?)
+    TS->>BPC: runWithBtrace (configPath, template?)
     BPC->>CLI: Process.start(--trace --config ...)
-    CLI-->>BPC: {"t":"start",...}
-    BPC-->>TS: raw JSON line
-    TS->>TS: notifyListeners() [stream started]
-    TS->>TB: addLine(json)
-    TB->>TS: templates list, set runStatus=running
-    loop per-row events
-        CLI-->>BPC: row_start / var_eval / rule_match / row_output / row_end
-        BPC-->>TS: raw JSON line
-        TS->>TB: addLine(json)
-        TB->>TS: append RowTrace to current FileTrace
+    CLI-->>BPC: BXTB magic + file_start frame
+    BPC-->>TS: stdout byte chunk
+    TS->>TS: BtraceReader.feed(bytes), notifyListeners() [stream started]
+    TS->>TS: register FileModel, set runStatus=running
+    loop per source row
+        CLI-->>BPC: output_row | filtered_row | error_row | prepass_entry
+        BPC-->>TS: stdout byte chunk
+        TS->>TS: BtraceReader.feed → append RowModel to current FileModel
         TS-->>UI: traceLinesCounter.value++ [ValueNotifier — no rebuild]
     end
-    CLI-->>BPC: {"t":"file_end",...}
-    TS->>TB: addLine(json)
-    TB->>TS: finalize FileTrace stats
+    CLI-->>BPC: file_end frame
+    TS->>TS: BtraceReader.feed → finalise FileModel stats + publish runtime
     TS-->>UI: fileGen.value++ [ValueNotifier — file selector refresh]
-    CLI-->>BPC: {"t":"done","exit_code":0}
+    CLI-->>BPC: done frame (exit_code=0)
     BPC-->>TS: stream closed
     TS->>TS: set runStatus / exitCode
     TS-->>UI: notifyListeners() [final render]
@@ -545,12 +539,12 @@ idle watchdog. Both paths share the same termination plumbing:
 stateDiagram-v2
     [*] --> idle
     idle --> running: runDryRun() / runFullRun()
-    running --> running: NDJSON event arrives
+    running --> running: BXTB frame arrives
     running --> cancelling: cancelRun (user) OR 10s idle (watchdog)
     cancelling --> done: child exits
     cancelling --> killed: 2s grace expires, SIGKILL
     killed --> done: process reaped
-    running --> done: done event received
+    running --> done: done frame received
     done --> idle: notifyListeners()
 ```
 
@@ -559,10 +553,10 @@ Step detail:
 - **User cancel.** `cancelRun()` sets `_cancelRequested = true` and sends
   `SIGTERM` to the bxp-cli child. The streaming loop in `_streamRun` detects
   the flag, drains remaining stdout, and exits.
-- **Watchdog.** A periodic timer in `_streamRun` measures time since the last
-  NDJSON line. If the gap exceeds 10 seconds, it triggers the same SIGTERM
-  path. This catches a child stuck before emitting `done` (rare but seen
-  during early `--check-fs=N` development).
+- **Watchdog.** A periodic timer in `_streamRunBtrace` measures time since
+  the last BXTB frame. If the gap exceeds 10 seconds, it triggers the same
+  SIGTERM path. This catches a child stuck before emitting `done` (rare but
+  seen during early `--check-fs=N` development).
 - **SIGKILL escalation.** If the process doesn't exit within 2 seconds of
   SIGTERM, the watchdog escalates to SIGKILL. Negative exit codes from
   signal-driven termination are treated as cancellation, not a fault.

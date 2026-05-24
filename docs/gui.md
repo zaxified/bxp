@@ -32,8 +32,9 @@ bxp-gui replaced an earlier Electrobun + React + CodeMirror 6 frontend
   self-contained executable with no webview runtime dependency. The same
   Dart source builds on Linux, macOS, and Windows from one codebase.
 - **Subprocess streaming fits naturally.** `Process.start()` returns a stdout
-  `Stream<List<int>>` that maps directly onto the NDJSON event model. No IPC
-  bridge or marshaling layer — the stream is the protocol.
+  `Stream<List<int>>` that maps directly onto the BXTB frame reader (and the
+  NDJSON line splitter used by `--expr-trace`). No IPC bridge or marshaling
+  layer — the stream is the protocol.
 - **Hot reload.** Flutter hot-reloads UI and state-logic changes in ~1 s
   without losing app state. Zig backend changes still require a process
   restart, but Dart-only iterations are immediate.
@@ -189,7 +190,7 @@ Three layers, top-down:
         │      Process.start / Process.run      (Linux / macOS default)
         │      bxp-gui-bridge.{dll,so,dylib}    (Win mandatory; eval cross-plat)
         ↓
-  bxp-cli  (conversions via --trace NDJSON stream)
+  bxp-cli  (conversions via --trace BXTB frame stream)
   bxp-fmt  (validation, docs, expr eval — out-of-process)
   bxp-core (expr.zig linked directly via bridge_eval_expr — in-process)
 ```
@@ -227,9 +228,8 @@ bxp-gui/
 │   │   ├── schema_gate.dart                  # Schema-aware "may the user do X here?"
 │   │   └── updater_service.dart              # GitHub release poller + download/verify/install
 │   ├── store/
-│   │   ├── trace_store.dart         # Central ChangeNotifier (~2.9k lines)
-│   │   ├── trace_builder.dart       # Fold NDJSON trace events into TraceStore
-│   │   └── trace_model.dart         # Plain-Dart shapes for trace events
+│   │   ├── trace_store.dart         # Central ChangeNotifier (~4.3k lines, BXTB ingest inline)
+│   │   └── trace_model.dart         # Plain-Dart shapes for trace frame payloads
 │   └── ui/
 │       ├── main_view.dart           # 3-pane layout root
 │       ├── config_view.dart         # JSON5 tree editor pane
@@ -338,7 +338,7 @@ Resolved in this order:
 | `listTemplates(path)`   | `bxp-fmt --config … --list-templates`     | Template id array                                       |
 | `validateExpr(text)`    | `bxp-fmt --expr`                          | Returns `{error, offset, length}` on failure            |
 | `traceExpr(text, …)`    | `bxp-fmt --expr-trace`                    | NDJSON stream of per-call values                        |
-| `runDryRun(path, tmpl)` | `bxp-cli --trace`                         | NDJSON stream → `trace_builder.dart`                    |
+| `runDryRun(path, tmpl)` | `bxp-cli --trace`                         | BXTB frame stream → in-store reader                     |
 | `getVersion(name)`      | `bxp-cli --version` / `bxp-fmt --version` | Both write to stdout                                    |
 
 ### Linux dev-tree gotcha
@@ -409,9 +409,9 @@ error map and the tree highlight state.
 
 ## Key patterns
 
-### Streaming rebuild storm — never call notifyListeners per trace event
+### Streaming rebuild storm — never call notifyListeners per trace frame
 
-Calling top-level `notifyListeners()` per NDJSON event causes PlutoGrid to
+Calling top-level `notifyListeners()` per BXTB frame causes PlutoGrid to
 reallocate quadratically. Use per-cell `ValueNotifier` instead
 (`traceLinesCounter`, `fileGen`, …). Top-level `notifyListeners()` fires
 at most twice per dry-run stream (start + done).

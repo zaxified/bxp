@@ -7,9 +7,9 @@ Consumed by bxp-gui (Dart via subprocess) and by `scripts/test.sh`.
 
 - [bxp-cli --trace](#bxp-cli---trace)
   - [Wire format](#wire-format)
-  - [Current version](#current-version)
-  - [Event reference](#event-reference)
+  - [Frame reference](#frame-reference)
   - [Ordering guarantees](#ordering-guarantees)
+  - [Drill-down model](#drill-down-model)
   - [Versioning policy](#versioning-policy)
 - [bxp-fmt](#bxp-fmt)
   - [Exit codes](#exit-codes)
@@ -23,209 +23,131 @@ Consumed by bxp-gui (Dart via subprocess) and by `scripts/test.sh`.
 
 ## bxp-cli --trace
 
-Invoked as `bxp-cli --trace [--config ...] [--template ...]`. Writes one NDJSON
-event per line to **stdout**; everything else goes to **stderr**.
+Invoked as `bxp-cli --trace [--config ...] [--template ...]`. Writes a binary
+**BXTB** frame stream to **stdout**; everything else goes to **stderr**.
+`--trace=bin` is an explicit alias; any other `--trace=<x>` argument is a usage
+error (the legacy `--trace=json` NDJSON path was removed in v0.3.0).
+
+The optional `--trace-file <path>` flag mirrors the same byte stream to a file
+on disk, so a run can simultaneously drive a downstream consumer on stdout
+and persist the stream for offline inspection.
 
 ### Wire format
 
-- One JSON object per line on **stdout**, terminated by `\n` (no comma, no
-  trailing array).
-- Each object has a `"t"` field naming the event kind. Payload fields follow.
-- Strings are JSON-escaped by `std.json.Stringify`; consumers must parse with a
-  standard JSON reader, not line-split.
-- Non-NDJSON diagnostics (panics, usage errors, human progress lines) go to
-  **stderr**. Mixing with stdout is never allowed.
-- `--trace` implies `--quiet` so human-readable progress messages never pollute
-  stdout.
+The stream begins with a 4-byte little-endian magic `0x42585442` (ASCII
+`BXTB`) and is followed by a sequence of frames. There is **no schema-version
+field** — bxp-cli and bxp-gui ship together in every release and the magic is
+the only handshake.
 
-The first event is always `start` and carries `schema_version`. Consumers
-should refuse to parse if the version is higher than they know.
-
-### Current version
+Each frame has a fixed 7-byte header followed by a type-specific payload:
 
 ```text
-schema_version = 1
+┌────────────┬────────────┬─────────────────────────────────────────┐
+│  byte 0    │  1..2 LE   │  3..6 LE                                │
+├────────────┼────────────┼─────────────────────────────────────────┤
+│  type:u8   │  chunk:u16 │  pay_len:u32     payload (pay_len B)    │
+└────────────┴────────────┴─────────────────────────────────────────┘
 ```
 
-### Event reference
+- `type` — frame kind. Unknown types are silently skipped via `pay_len`
+  (forward compat).
+- `chunk_id` — reserved for future multicore frame dispatch; producers emit
+  `0` today.
+- `pay_len` — payload byte count following the header.
 
-#### `start`
+Variable-length strings inside payloads are length-prefixed (lp): `u32 len`
+little-endian followed by `len` bytes. All multi-byte integers are
+little-endian. There are no padding bytes between fields.
 
-Emitted once, before any other event.
+Non-frame diagnostics (panics, usage errors, human progress lines) go to
+**stderr**. Mixing with stdout is never allowed — `--trace` implies `--quiet`
+so summaries never appear on the frame stream.
 
-```jsonc
-{
-  "t": "start",
-  "schema_version": 1,
-  "config": "/path/to/bxp-cli.json",
-  "templates": ["xtb2_cash", "revolut_stocks"],
-}
+The authoritative protocol definition lives in
+[`bxp-core/src/btrace.zig`](../bxp-core/src/btrace.zig); this section
+documents the same shape for consumers that don't link the Zig writer.
+
+### Frame reference
+
+Seven frame types are defined today:
+
+| Code   | Name            | Purpose                                                                 |
+| ------ | --------------- | ----------------------------------------------------------------------- |
+| `0x01` | `file_start`    | Begin one input file (template + path + headers).                       |
+| `0x02` | `file_end`      | Close one input file (per-file counters).                               |
+| `0x03` | `output_row`    | One output row written to the `.csvx`. Carries the source-row locator.  |
+| `0x04` | `filtered_row`  | Source row skipped silently (no `output_row`, no `error_row`).          |
+| `0x05` | `error_row`     | Expression evaluation error against a source row.                       |
+| `0x06` | `prepass_entry` | One entry accumulated during the optional pre-pass over the input file. |
+| `0x07` | `done`          | Final frame. Carries the process exit code.                             |
+
+Frames carry **metadata only**: per-output-row pointers into the source CSV
+(`source_locator` byte offset), error list, pre_pass dump, aggregate stats.
+Per-row drill-down (variable values, rule evaluation traces, output cells) is
+**not** in the stream — see [Drill-down model](#drill-down-model).
+
+#### `0x01 file_start`
+
+```text
+input_format:u8       # 0 = csv, 1 = json, 2 = xlsx_intermediate_csv
+template:lp_string
+path:lp_string
+headers_count:u16
+headers:lp_string × headers_count
 ```
 
-| Field            | Type            | Notes                                              |
-| ---------------- | --------------- | -------------------------------------------------- |
-| `schema_version` | `u32`           | Protocol version. Bump on any breaking change.     |
-| `config`         | `string`        | Absolute path that bxp-cli loaded the config from. |
-| `templates`      | `array<string>` | Templates that will be processed, in order.        |
+The `input_format` enum lets a consumer pick the right re-read strategy for
+drill-down: CSV reads via `source_locator` byte offset, JSON re-parses
+materialised, xlsx is read as the intermediate CSV exported during processing.
 
-#### `file_start`
+#### `0x02 file_end`
 
-One input file is about to be processed.
-
-```jsonc
-{
-  "t": "file_start",
-  "template": "xtb2_cash",
-  "path": "data/xtb/2026.csv",
-  "rows": 42,
-  "headers": ["Date", "Symbol", "Qty", "Price"],
-}
+```text
+source_rows:u64
+written_rows:u64
+errors:u32           # input_schema expression failures
+warnings:u32         # non-fatal per-file issues
 ```
 
-| Field      | Type            | Notes                                         |
-| ---------- | --------------- | --------------------------------------------- |
-| `template` | `string`        | Template id from `conversion_templates`.      |
-| `path`     | `string`        | Resolved input path (joined with `data_dir`). |
-| `rows`     | `usize`         | Total row count after parsing the input file. |
-| `headers`  | `array<string>` | Column headers in file order.                 |
+#### `0x03 output_row`
 
-#### `prepass_set`
-
-One lookup entry accumulated during the optional pre-pass over the input file.
-Emitted after `file_start` and before any `row_start` for that file.
-
-```jsonc
-{ "t": "prepass_set", "key": "AAPL", "field": "isin", "value": "US0378331005" }
+```text
+source_locator:u64   # byte offset into the source file for re-read
+output_idx:u64       # 1-based output row index within this file
+rule_idx:i32         # which row_rules entry produced this output (0-based)
+action:lp_string     # $action value, retained for at-a-glance display
 ```
 
-| Field   | Type     | Notes                                               |
-| ------- | -------- | --------------------------------------------------- |
-| `key`   | `string` | Composite key (join of `pre_pass.key` evaluations). |
-| `field` | `string` | Field name (key in `pre_pass.values`).              |
-| `value` | `string` | Value evaluated from `pre_pass.values[field]`.      |
+#### `0x04 filtered_row`
 
-#### `row_start`
-
-Begins a new row. All subsequent `var_eval`, `var_error`, `rule_match`,
-`rule_no_match`, `row_filtered`, and `row_output` events belong to this row
-until the matching `row_end`.
-
-```jsonc
-{
-  "t": "row_start",
-  "file_row": 3,
-  "fields": ["2026-04-01", "AAPL", "10", "150.00"],
-}
+```text
+source_locator:u64
+reason:lp_string     # e.g. "date_filter_from_filename"
 ```
 
-| Field      | Type            | Notes                                              |
-| ---------- | --------------- | -------------------------------------------------- |
-| `file_row` | `usize`         | 1-based row index in the source file.              |
-| `fields`   | `array<string>` | Raw cell values in column order (same as headers). |
+#### `0x05 error_row`
 
-#### `var_eval`
-
-A variable from `input_schema` or the rule's `rows[]` evaluated successfully.
-
-```jsonc
-{
-  "t": "var_eval",
-  "name": "$date",
-  "expr": "DATE_CONVERT([Date],'YYYY-MM-DD')",
-  "value": "2026-04-01",
-}
+```text
+source_locator:u64
+var_name:lp_string
+error_kind:lp_string
+detail:lp_string
+origin:lp_string     # "input_schema" | "rule_override" | "pre_pass" | …
 ```
 
-#### `var_error`
+#### `0x06 prepass_entry`
 
-Variable evaluation failed. The row continues with the variable bound to the
-empty string, so subsequent rules may still match.
-
-```jsonc
-{
-  "t": "var_error",
-  "name": "$price",
-  "expr": "ROUND([Price])",
-  "error": "NotANumber",
-  "detail": "(pos 12)",
-}
+```text
+name:lp_string       # pre_pass block name ("_default" for legacy single-block)
+key:lp_string
+field:lp_string
+value:lp_string
 ```
 
-| Field    | Type     | Notes                                                    |
-| -------- | -------- | -------------------------------------------------------- |
-| `name`   | `string` | Variable name (`$...`).                                  |
-| `expr`   | `string` | Source expression, for UI display.                       |
-| `error`  | `string` | Zig error name (e.g. `NotANumber`, `ParseError`).        |
-| `detail` | `string` | Optional position / field hint, e.g. `(line 3, pos 12)`. |
+#### `0x07 done`
 
-#### `rule_match` / `rule_no_match`
-
-Rule evaluation for the current row. At most one `rule_match` per row (rules
-are evaluated top-down, stopping at the first match).
-
-```jsonc
-{"t": "rule_match",    "rule_index": 2, "when": "$action = 'BUY'"}
-{"t": "rule_no_match", "rule_index": 0, "when": "$action = 'DIV'"}
-{"t": "rule_no_match", "rule_index": 1, "when": "...", "error": "ParseError"}
-```
-
-The `error` field on `rule_no_match` is present only when the `when` expression
-failed to evaluate. The rule is treated as non-matching in that case.
-Consumers MUST tolerate the field's absence (treat missing `error` as "rule
-evaluated cleanly to false") — do not require it.
-
-#### `row_filtered`
-
-The row was silently skipped (e.g. outside the date window derived from the
-filename). No `row_output` follows.
-
-```jsonc
-{ "t": "row_filtered", "reason": "date_filter_from_filename" }
-```
-
-#### `row_output`
-
-Output values for the matched rule, in `output_schema` column order.
-
-```jsonc
-{ "t": "row_output", "values": ["2026-04-01", "AAPL", "BUY", "10", "150.00"] }
-```
-
-#### `row_end`
-
-Terminates the row. Emitted even when the row was filtered, errored, or had no
-matching rule — consumers can count `row_end` to verify progress.
-
-```jsonc
-{ "t": "row_end" }
-```
-
-#### `file_end`
-
-Summary of one file.
-
-```jsonc
-{
-  "t": "file_end",
-  "template": "xtb2_cash",
-  "path": "data/xtb/2026.csv",
-  "stats": { "rows": 42, "written": 38, "errors": 0, "warnings": 0 },
-}
-```
-
-`errors` is the count of `input_schema` expression failures during this file's
-processing. (`var_error` events for `row_rules` overrides are not yet
-aggregated here; consumers wanting a complete count should also tally
-`var_error` events.) `warnings` is the count of non-fatal per-file issues
-(date-filter no-range, malformed `YYYY-MM-DD_YYYY-MM-DD` in filename). Both
-default to `0` for files that processed cleanly.
-
-#### `done`
-
-Final event. Exit code of the CLI process.
-
-```jsonc
-{ "t": "done", "exit_code": 0 }
+```text
+exit_code:i32
 ```
 
 | Exit code | Meaning                                                  |
@@ -236,37 +158,66 @@ Final event. Exit code of the CLI process.
 
 ### Ordering guarantees
 
-For any file, events appear in this order:
+For any file, frames appear in this order:
 
 ```text
 file_start
-prepass_set*                      (may be zero)
-(row_start
-    var_eval | var_error*         (input_schema vars)
-    (rule_no_match | rule_match)*
-    (rule_match
-        var_eval | var_error*     (rule-local vars)
-        row_filtered? | row_output?)
-    row_end)*
+prepass_entry*                                (may be zero)
+( output_row | filtered_row | error_row )*    (one per source row, or many
+                                               for 1:N templates that emit
+                                               multiple outputs per source row)
 file_end
 ```
 
-Across files, `file_start` / `file_end` pairs are interleaved per
-`conversion_templates` order, but a `file_end` always precedes the next
-`file_start`.
+`error_row` for a given `source_locator` MAY precede the matching `output_row`
+or `filtered_row` — bxp-cli evaluates `input_schema` (which can fail) before
+running `row_rules`, so the error frame is emitted as soon as the failure is
+known. Consumers should drain pending `error_row`s onto the row when its
+output / filtered frame arrives.
 
-The stream is framed by a single `start` event at the beginning and a single
-`done` event at the end. A missing `done` means the process crashed; consumers
-should treat stderr as authoritative in that case.
+Across files, `file_start` / `file_end` pairs are emitted in
+`conversion_templates` order; a `file_end` always precedes the next
+`file_start`. The stream is closed by exactly one `done` frame. A missing
+`done` means the process crashed; consumers should treat stderr as
+authoritative in that case.
+
+### Drill-down model
+
+The frame stream is deliberately **metadata-only**. Each `output_row` and
+`error_row` carries a `source_locator` (byte offset into the source CSV) but
+**no** per-row variable bindings, rule evaluation trace, or output cell values.
+For files emitted via the xlsx path, the locator points into the intermediate
+CSV materialised during xlsx → CSV conversion.
+
+When the GUI needs that detail (user clicks one row in the drill-down panel),
+it:
+
+1. Seeks the source CSV to `source_locator` and reads one record.
+2. Spawns `bxp-fmt --expr-batch` with the row fields + the current config's
+   `input_schema` and `row_rules` to recompute variable values, rule matches,
+   and output cells.
+
+This shifts the per-row eval cost from the trace producer to on-demand
+consumption. Effects:
+
+- Trace bytes shrink from O(rows × variables × bytes-per-trace-event) to
+  O(rows × small header) — roughly two orders of magnitude on real
+  workloads.
+- Drill-down latency stays low for clicked rows (one re-eval ≈ 50 ms) and is
+  paid only for rows the user actually opens.
+- The current config is the source of truth at click time — drill-down
+  reflects edits made after the trace was produced.
 
 ### Versioning policy
 
-- **Minor** additions (new optional fields, new event kinds) keep
-  `schema_version` the same. Consumers MUST ignore unknown fields and unknown
-  event kinds.
-- **Breaking** changes (renaming a field, removing an event, changing the shape
-  of an existing field) bump `schema_version`. Consumers SHOULD reject streams
-  with a higher `schema_version` than they were built for.
+There is no in-band schema version. bxp-cli and bxp-gui are built and
+released together from the same monorepo; a mismatched producer/consumer
+pair is a build error, not a runtime concern.
+
+Forward compatibility within one release line is provided by `pay_len`:
+unknown frame types are skipped, and the frame layout uses fixed offsets
+plus length-prefixed strings so adding optional payload fields requires a
+new frame type (or a new release).
 
 ---
 
@@ -524,15 +475,15 @@ logic). Each entry describes one config tree path.
 
 ## Producer / Consumer
 
-| Binary     | Role                             | Source file                                                                                                        |
-| ---------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `bxp-cli`  | Produces `--trace` NDJSON stream | [`bxp-cli/src/pipeline.zig`](../bxp-cli/src/pipeline.zig) — `Output.event()`                                       |
-| `bxp-cli`  | Emits `start` / `done`           | [`bxp-cli/src/main.zig`](../bxp-cli/src/main.zig)                                                                  |
-| `bxp-fmt`  | All subcommand outputs           | [`bxp-fmt/src/main.zig`](../bxp-fmt/src/main.zig)                                                                  |
-| `bxp-core` | Per-call trace in `--expr-trace` | [`bxp-core/src/expr.zig`](../bxp-core/src/expr.zig) — `emitCallTrace()`                                            |
-| `bxp-core` | `--docs` catalog                 | [`bxp-core/src/docs.zig`](../bxp-core/src/docs.zig) — `writeDocs()`                                                |
-| `bxp-gui`  | Consumes `--trace`               | [`bxp-gui/lib/store/trace_builder.dart`](../bxp-gui/lib/store/trace_builder.dart)                                  |
-| `bxp-gui`  | Consumes `--expr-trace`          | [`bxp-gui/lib/services/bxp_process_client.dart`](../bxp-gui/lib/services/bxp_process_client.dart) — `traceExpr()`  |
-| `bxp-gui`  | Consumes `--config`              | [`bxp-gui/lib/services/bxp_process_client.dart`](../bxp-gui/lib/services/bxp_process_client.dart) — `loadConfig()` |
-| `bxp-gui`  | Consumes `--docs`                | [`bxp-gui/lib/store/trace_store.dart`](../bxp-gui/lib/store/trace_store.dart) — `loadDocs()`                       |
-| `bxp-gui`  | Event model                      | [`bxp-gui/lib/store/trace_model.dart`](../bxp-gui/lib/store/trace_model.dart)                                      |
+| Binary     | Role                                 | Source file                                                                                                        |
+| ---------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------ |
+| `bxp-cli`  | Produces `--trace` BXTB frame stream | [`bxp-cli/src/pipeline.zig`](../bxp-cli/src/pipeline.zig) — `Output.binEmit*()`                                    |
+| `bxp-core` | BXTB writer / reader                 | [`bxp-core/src/btrace.zig`](../bxp-core/src/btrace.zig)                                                            |
+| `bxp-fmt`  | All subcommand outputs               | [`bxp-fmt/src/main.zig`](../bxp-fmt/src/main.zig)                                                                  |
+| `bxp-core` | Per-call trace in `--expr-trace`     | [`bxp-core/src/expr.zig`](../bxp-core/src/expr.zig) — `emitCallTrace()`                                            |
+| `bxp-core` | `--docs` catalog                     | [`bxp-core/src/docs.zig`](../bxp-core/src/docs.zig) — `writeDocs()`                                                |
+| `bxp-gui`  | Consumes `--trace`                   | [`bxp-gui/lib/store/trace_store.dart`](../bxp-gui/lib/store/trace_store.dart) — `_streamRunBtrace`                 |
+| `bxp-gui`  | Consumes `--expr-trace`              | [`bxp-gui/lib/services/bxp_process_client.dart`](../bxp-gui/lib/services/bxp_process_client.dart) — `traceExpr()`  |
+| `bxp-gui`  | Consumes `--config`                  | [`bxp-gui/lib/services/bxp_process_client.dart`](../bxp-gui/lib/services/bxp_process_client.dart) — `loadConfig()` |
+| `bxp-gui`  | Consumes `--docs`                    | [`bxp-gui/lib/store/trace_store.dart`](../bxp-gui/lib/store/trace_store.dart) — `loadDocs()`                       |
+| `bxp-gui`  | Event model                          | [`bxp-gui/lib/store/trace_model.dart`](../bxp-gui/lib/store/trace_model.dart)                                      |
