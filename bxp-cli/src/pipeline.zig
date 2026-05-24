@@ -55,36 +55,16 @@ pub const SectionStats = struct {
     }
 };
 
-/// Trace verbosity mode for `--trace`. Today reachable from the CLI:
-///   `--trace` / `--trace=json`  → `.full`   (NDJSON, default, GUI today)
-///   `--trace=bin`               → `.bin`    (binary framed metadata only)
+/// Trace mode for `--trace`. Two reachable values:
+///   `.off` — no trace emission (default).
+///   `.bin` — binary BXTB frame stream on stdout (and optional
+///            `--trace-file` mirror). See `bxp-core/src/btrace.zig`
+///            for the frame protocol.
 ///
-/// `.progress` and `.detail` are scaffolding for a future PR that wires
-/// per-event filter table to `shouldEmit`. Until then any non-`off`,
-/// non-`dry`, non-`bin` mode is treated as full NDJSON emit.
-///
-/// `.dry` is a bench-only mode (gated by env BXP_TRACE_DRY) that makes
-/// `traceOn()` return true — so call sites build their `out_values` /
-/// safe bitmaps / wrapped Safe values exactly as in full trace mode — but
-/// `event()` skips the actual encoding + stdout write. Isolates the cost
-/// of trace-event PREPARATION at call sites from the cost of writeEvent
-/// + I/O. Should never reach a real user.
-///
-/// `.bin` routes through `bxp-core/src/btrace.zig` Writer. NDJSON `event()`
-/// becomes a no-op in this mode; per-event data flows through the dedicated
-/// `binEmit*` methods on Output. Most NDJSON events have NO bin counterpart
-/// (row_start, row_end, var_eval, rule_match, rule_no_match are drill-down
-/// and recomputed on demand by bxp-fmt). See `bxp-core/src/btrace.zig` for
-/// the frame protocol.
-pub const TraceMode = enum(u3) { off, progress, detail, full, dry, bin };
-
-/// Per-event emit filter — comptime-evaluated by callers in `event()`. The
-/// truth table will be populated by the future selective-trace PR; for now
-/// any non-`off` mode emits every event (preserving today's behaviour).
-inline fn shouldEmit(mode: TraceMode, comptime t_name: []const u8) bool {
-    _ = t_name;
-    return mode != .off;
-}
+/// The NDJSON `--trace` / `--trace=json` mode was removed in v0.3.0;
+/// per-row drill-down detail is recomputed on demand by `bxp-fmt
+/// --expr-batch` from the BXTB metadata + the source CSV.
+pub const TraceMode = enum(u2) { off, bin };
 
 /// Output wrapper that suppresses all writes when --quiet or --trace is active.
 /// All methods silently drop write errors (same pattern as existing debug prints).
@@ -178,27 +158,11 @@ pub const Output = struct {
         self.writer.flush() catch {};
     }
 
-    /// Emit one NDJSON event on stdout. No-op unless --trace is active.
-    /// The caller provides an anonymous struct whose fields are merged into the event
-    /// object alongside `"t": t_name`. `std.json.Stringify` handles string escaping.
-    /// Errors are swallowed (same pattern as info/warning/fatal).
-    pub fn event(self: Output, comptime t_name: []const u8, args: anytype) void {
-        if (!self.traceOn()) return;
-        if (self.trace == .dry) return;
-        // .bin mode: NDJSON emit is a no-op. Bin-protocol counterparts (where
-        // they exist) are emitted by the call site via `binEmit*` methods.
-        if (self.trace == .bin) return;
-        if (!shouldEmit(self.trace, t_name)) return;
-        json_mod.writeEvent(self.writer, t_name, args) catch return;
-        self.writer.flush() catch return;
-    }
-
     // ─────────────────────── Binary-trace emit methods ───────────────────────
-    // No-ops unless self.trace == .bin. NDJSON callers don't need to gate
-    // (NDJSON emit goes through `event` above); bin emit is opt-in per
-    // protocol — only the events bin actually carries get a `binEmit*`
-    // call at the site (var_eval, rule_match, row_start, row_end are
-    // intentionally NOT in the bin protocol).
+    // No-ops unless self.trace == .bin. Bin emit is opt-in per protocol —
+    // only the events bin actually carries get a `binEmit*` call at the
+    // site (var_eval, rule_match, row_start, row_end are intentionally
+    // NOT in the bin protocol; the GUI re-evaluates them on demand).
 
     pub fn binEmitFileStart(
         self: Output,
@@ -784,15 +748,9 @@ fn evalAllVars(
                 out.writer.print("\n", .{}) catch {};
                 out.writer.flush() catch {};
             }
-            out.event("var_error", .{ .name = e.key_ptr.*, .expr = e.value_ptr.*, .@"error" = @errorName(err), .detail = detail, .origin = "input_schema" });
             out.binEmitErrorRow(source_locator, e.key_ptr.*, @errorName(err), detail, "input_schema");
             break :blk "";
         };
-        if (json_mod.wrapChecked(val)) |sv| {
-            out.event("var_eval", .{ .name = e.key_ptr.*, .expr = e.value_ptr.*, .value = sv, .origin = "input_schema" });
-        } else {
-            out.event("var_eval", .{ .name = e.key_ptr.*, .expr = e.value_ptr.*, .value = val, .origin = "input_schema" });
-        }
         out.binEmitVarEval(source_locator, e.key_ptr.*, e.value_ptr.*, val, .input_schema, -1, -1);
         try vars.put(e.key_ptr.*, val);
     }
@@ -1331,7 +1289,6 @@ fn evalPrepassRow(
             const val = try file_alloc.dupe(u8, val_raw);
             const composite = try std.mem.concat(file_alloc, u8, &.{ pp_name, "\x00", key_val, "\x00", ve.key_ptr.* });
             try lookup_table.put(composite, val);
-            out.event("prepass_set", .{ .name = pp_name, .key = key_val, .field = ve.key_ptr.*, .value = val });
             out.binEmitPrepassEntry(pp_name, key_val, ve.key_ptr.*, val);
         }
     }
@@ -1730,15 +1687,6 @@ pub fn processBroker(
         for (bc.output_schema.items) |col| {
             try out_header_names.append(col.header);
         }
-        // file_start.rows: known for JSON, 0 for CSV streaming (the
-        // accurate count is reported in file_end below).
-        out.event("file_start", .{
-            .template = bid,
-            .path = full_path,
-            .rows = if (json_all_rows) |jr| jr.items.len else 0,
-            .headers = col_names.items,
-            .output_headers = out_header_names.items,
-        });
         out.binEmitFileStart(
             if (json_all_rows != null) .json else .csv,
             bid,
@@ -1898,14 +1846,6 @@ pub fn processBroker(
         while (try row_src.next()) |fields| : (file_row_idx += 1) {
             _ = line_arena.reset(.retain_capacity);
             const row_offset = row_src.currentOffset() orelse 0;
-            if (row_src.currentSafe(fields)) |safe_bits| {
-                out.event("row_start", .{
-                    .file_row = file_row_idx + 1,
-                    .fields = json_mod.SafeFields{ .items = fields, .safe = safe_bits },
-                });
-            } else {
-                out.event("row_start", .{ .file_row = file_row_idx + 1, .fields = fields });
-            }
             out.binEmitRowStartFields(row_offset, file_row_idx + 1, fields);
 
             var row_detail: []const u8 = "";
@@ -1952,27 +1892,15 @@ pub fn processBroker(
                         }
                         out.writer.flush() catch {};
                     }
-                    out.event("rule_no_match", .{ .rule_index = rule_index, .when = rule.when, .@"error" = @errorName(err) });
                     out.binEmitRuleNoMatch(row_offset, @intCast(rule_index), rule.when, @errorName(err));
                     continue;
                 };
                 if (!when_val.toBool()) {
-                    out.event("rule_no_match", .{ .rule_index = rule_index, .when = rule.when });
                     out.binEmitRuleNoMatch(row_offset, @intCast(rule_index), rule.when, "");
                     continue;
                 }
                 rule_matched = true;
                 matched_rule_index = rule_index;
-                // The generic event() helper handles []StringHashMap recursion
-                // via writeValue's slice + struct-with-iterator dispatch arms.
-                // Previously this site hand-built JSON because Output.event was
-                // hardcoded to std.json.Stringify; the json.writeEvent fast-path
-                // now covers it natively.
-                out.event("rule_match", .{
-                    .rule_index = rule_index,
-                    .when = rule.when,
-                    .rows = rule.rows,
-                });
                 out.binEmitRuleMatch(row_offset, @intCast(rule_index), rule.when);
                 // Empty rows slice = silent skip.
                 for (rule.rows, 0..) |row_override, output_row_index| {
@@ -1992,15 +1920,9 @@ pub fn processBroker(
                                 }
                                 out.writer.flush() catch {};
                             }
-                            out.event("var_error", .{ .name = e.key_ptr.*, .expr = e.value_ptr.*, .@"error" = @errorName(err), .detail = row_detail, .origin = "row_rules", .rule_index = rule_index, .output_row_index = output_row_index });
                             out.binEmitErrorRow(row_src.currentOffset() orelse 0, e.key_ptr.*, @errorName(err), row_detail, "row_rules");
                             break :blk "";
                         };
-                        if (json_mod.wrapChecked(val)) |sv| {
-                            out.event("var_eval", .{ .name = e.key_ptr.*, .expr = e.value_ptr.*, .value = sv, .origin = "row_rules", .rule_index = rule_index, .output_row_index = output_row_index });
-                        } else {
-                            out.event("var_eval", .{ .name = e.key_ptr.*, .expr = e.value_ptr.*, .value = val, .origin = "row_rules", .rule_index = rule_index, .output_row_index = output_row_index });
-                        }
                         out.binEmitVarEval(row_offset, e.key_ptr.*, e.value_ptr.*, val, .row_rules, @intCast(rule_index), @intCast(output_row_index));
                         try merged.put(e.key_ptr.*, val);
                     }
@@ -2018,14 +1940,12 @@ pub fn processBroker(
                     const cur_offset = row_src.currentOffset() orelse 0;
                     if (date_min.len > 0 and date_str.len >= 10 and
                         std.mem.order(u8, date_str[0..10], date_min) == .lt) {
-                        out.event("row_filtered", .{ .reason = "date_filter_from_filename" });
                         out.binEmitFilteredRow(cur_offset, "date_filter_from_filename");
                         row_bin_frame_emitted = true;
                         continue;
                     }
                     if (date_max.len > 0 and date_str.len >= 10 and
                         std.mem.order(u8, date_str[0..10], date_max) == .gt) {
-                        out.event("row_filtered", .{ .reason = "date_filter_from_filename" });
                         out.binEmitFilteredRow(cur_offset, "date_filter_from_filename");
                         row_bin_frame_emitted = true;
                         continue;
@@ -2059,33 +1979,18 @@ pub fn processBroker(
                             try combined_fout.writeAll("\n");
                         }
                     }
-                    // Build output values once: both NDJSON `row_output` and bin
-                    // `row_output` frame need them. NDJSON wraps with the Safe
-                    // bitmap fast-path; bin uses lp prefixes natively.
-                    var bin_out_values: ?[]const []const u8 = null;
-                    if (out.trace == .full or out.trace == .dry or
-                        out.btrace_file_writer != null or
+                    // Build output values for the bin `row_output` frame
+                    // (only needed when the bin writers are wired and
+                    // either the file mirror is on or stdout bin-detail
+                    // emission is enabled).
+                    if (out.btrace_file_writer != null or
                         (out.binEmitDetail() and out.btrace_writer != null))
                     {
                         var out_values = std.array_list.Managed([]const u8).init(line_alloc);
-                        var out_safe = std.array_list.Managed(bool).init(line_alloc);
                         for (bc.output_schema.items) |col| {
-                            const v = merged.get(col.variable) orelse "";
-                            try out_values.append(v);
-                            try out_safe.append(json_mod.classify(v));
+                            try out_values.append(merged.get(col.variable) orelse "");
                         }
-                        if (out.trace == .full or out.trace == .dry) {
-                            out.event("row_output", .{
-                                .values = json_mod.SafeFields{
-                                    .items = out_values.items,
-                                    .safe = out_safe.items,
-                                },
-                            });
-                        }
-                        bin_out_values = out_values.items;
-                    }
-                    if (bin_out_values) |bv| {
-                        out.binEmitRowOutput(row_offset, file_rows_written, bv);
+                        out.binEmitRowOutput(row_offset, file_rows_written, out_values.items);
                     }
                     // Bin protocol: one output_row frame per written output. The
                     // source CSV/JSON byte offset lets fmt seek to the source
@@ -2109,7 +2014,6 @@ pub fn processBroker(
             // loop's short-circuit semantics.
             if (rule_matched) {
                 for (rules[matched_rule_index + 1 ..], matched_rule_index + 1 ..) |rule, ri| {
-                    out.event("rule_no_match", .{ .rule_index = ri, .when = rule.when });
                     out.binEmitRuleNoMatch(row_offset, @intCast(ri), rule.when, "");
                 }
             }
@@ -2127,15 +2031,14 @@ pub fn processBroker(
                 }
             }
             // Synthetic filtered_row so the GUI sees one row frame per
-            // source row (NDJSON has row_start for this purpose; btrace
-            // v3 has no per-source-row frame by default). Reasons:
+            // source row (btrace v3 has no per-source-row frame by
+            // default). Reasons:
             //   - "no_rule_match"  → no rule's `when` evaluated truthy
             //   - "rule_skip"      → a rule matched but its rows: [] is empty
             if (!row_bin_frame_emitted) {
                 const reason: []const u8 = if (rule_matched) "rule_skip" else "no_rule_match";
                 out.binEmitFilteredRow(row_offset, reason);
             }
-            out.event("row_end", .{});
         }
 
         // Per-file tail + flush — always emitted at end-of-iteration.
@@ -2160,24 +2063,6 @@ pub fn processBroker(
             stats.warnings += 1;
         }
 
-        out.event("file_end", .{
-            .template = bid,
-            .path = full_path,
-            .stats = .{
-                .rows = file_row_idx,
-                .written = file_rows_written,
-                // Per-file expression evaluation failures (input_schema
-                // vars). Previously hardcoded 0; now populated from the
-                // same counter that drives the file-end warning text. The
-                // GUI's per-file " · N err" badge becomes meaningful.
-                .errors = file_expr_errors,
-                // Non-fatal per-file warnings (date filter no-range,
-                // malformed filename range, …). Previously this field
-                // duplicated `file_expr_errors`; now it carries the
-                // distinct per-file warning count.
-                .warnings = file_warnings,
-            },
-        });
         out.binEmitFileEnd(
             @intCast(file_row_idx),
             @intCast(file_rows_written),

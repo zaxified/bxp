@@ -18,10 +18,6 @@ import '../services/op_log.dart';
 import '../services/op_to_ast.dart';
 import '../services/schema_doc_lookup.dart';
 import 'trace_model.dart';
-// trace_builder.dart imported only by the commented-out _streamRunNdjson;
-// re-enable when REMOVE IN v0.4.0 cleanup happens (live code uses
-// TraceBuilder indirectly via btrace_mod).
-// import 'trace_builder.dart';
 import '../ui/theme/bxp_text_scheme.dart';
 
 /// Per-severity diagnostic buckets produced by walking a `bxp-fmt
@@ -2439,17 +2435,17 @@ class TraceStore extends ChangeNotifier {
 
   /// Trigger a dry-run (no output files written, `--dry-run` flag passed to
   /// bxp-cli). Idempotent — a second call while a run is in flight is a no-op
-  /// at the `_streamRun` level because it sets `status = running` first.
+  /// at the `_streamRunBtrace` level because it sets `status = running` first.
   Future<void> runDryRun() {
     devTrace('action.run.dry');
-    return _streamRun(dry: true);
+    return _streamRunBtrace(dry: true);
   }
 
   /// Trigger a full run (output files written to `data_dir`). Same streaming
   /// mechanics as [runDryRun] but without `--dry-run`.
   Future<void> runFullRun() {
     devTrace('action.run.full');
-    return _streamRun(dry: false);
+    return _streamRunBtrace(dry: false);
   }
 
   /// Live handle to the bxp-cli process spawned by `_streamRun`. Set inside
@@ -2871,197 +2867,6 @@ class TraceStore extends ChangeNotifier {
     if (fileId != _activeFileId) return;
     _populateRangeSync(file, start, (end - start).clamp(0, file.rowIds.length));
   }
-
-  /// Dispatcher. Btrace is the only path since 2026-05-22; the legacy
-  /// NDJSON `_streamRunNdjson` is commented out below with a v0.4.0
-  /// removal marker and the `useBtraceMode` A/B flag is gone.
-  Future<void> _streamRun({required bool dry}) {
-    return _streamRunBtrace(dry: dry);
-  }
-
-  // REMOVE IN v0.4.0 — _streamRunNdjson is the legacy NDJSON streaming
-  // pipeline. Replaced by `_streamRunBtrace` in the btrace migration
-  // (2026-05-22). Kept commented out for one release cycle in case a
-  // user-visible regression in btrace forces a quick revert; remove once
-  // the btrace path has shipped without rollbacks.
-  /*
-  /// Spawns `bxp-cli --trace` (dry or full) and streams the NDJSON output
-  /// into a fresh TraceBuilder. UI refreshes are throttled to ~60 fps so
-  /// the file/row lists grow live while the pipeline still runs.
-  Future<void> _streamRunNdjson({required bool dry}) async {
-    if (configPath.isEmpty) return;
-
-    status = RunStatus.running;
-    runMode = dry ? RunMode.dry : RunMode.full;
-    runError = null;
-    stderrText = '';
-    rawLines = 0;
-    rawBytes = 0;
-    _traceLinesCounter.value = 0;
-    _tracesBytesCounter.value = 0;
-    lastExitCode = null;
-    selectedFileId = null;
-    selectedRowId = null;
-    // Drop the per-(row, expr) trace cache: the row IDs and expression
-    // texts a fresh run produces are unrelated to the previous run's
-    // entries, so keeping them around just leaks memory.
-    _exprCallCache.clear();
-    _exprCallInFlight.clear();
-
-    // Fresh builder so subsequent runs start clean.
-    final builder = TraceBuilder();
-    traceModel = builder.model;
-    // One main notify to flip status to running and clear stale model.
-    _fileGen.value++;
-    notifyListeners();
-
-    // Counter ticker — only refreshes the `trace lines` / `traces` bytes
-    // ValueNotifiers. Crucially does NOT call main `notifyListeners()`,
-    // so RowList / OutputPanel / status-bar aggregates do not rebuild
-    // per tick.
-    final ticker = Timer.periodic(const Duration(milliseconds: 100), (_) {
-      if (_traceLinesCounter.value != rawLines) {
-        _traceLinesCounter.value = rawLines;
-      }
-      if (_tracesBytesCounter.value != rawBytes) {
-        _tracesBytesCounter.value = rawBytes;
-      }
-    });
-
-    int prevFileCount = 0;
-
-    // bxp-cli interprets an omitted --template as "process everything".
-    try {
-      final spawn = dry ? BxpProcessClient.runDryRun : BxpProcessClient.runFullRun;
-      final result = await spawn(
-        configPath: configPath,
-        templateId: templateId,
-        onSpawn: (p) {
-          _runProcess = p;
-          // The user may have clicked Cancel during the brief window
-          // between status=running and Process.start completing. If so,
-          // honour the request now that we finally have the handle —
-          // otherwise the run would race to completion ignoring the
-          // pending cancellation.
-          if (_cancelRequested) {
-            p.kill(ProcessSignal.sigterm);
-          }
-        },
-        onLine: (line) {
-          rawLines++;
-          // +1 for the stripped newline so the count tracks raw stdout
-          // size (approximate UTF-8 byte length; close enough for the UI
-          // tier display).
-          rawBytes += line.length + 1;
-          builder.parseLine(line);
-
-          // FileList grows live: bump `fileGen` whenever a new file_start
-          // landed. Cheap — typical M is < 50.
-          final fc = builder.model.fileOrder.length;
-          if (fc != prevFileCount) {
-            prevFileCount = fc;
-            _fileGen.value++;
-          }
-
-          // Auto-select happens exactly ONCE, on the FIRST `file_end`
-          // (detected by the first file's `stats` being non-null). That
-          // single main `notifyListeners()` triggers RowList to mount
-          // PlutoGrid with the first file's complete row set. After that
-          // we stay quiet until `done` — no further row-level rebuilds.
-          if (selectedFileId == null && builder.model.fileOrder.isNotEmpty) {
-            final firstId = builder.model.fileOrder.first;
-            final firstFile = builder.model.files[firstId];
-            if (firstFile?.stats != null) {
-              selectedFileId = firstId;
-              if (firstFile!.rowIds.isNotEmpty) {
-                selectedRowId = firstFile.rowIds.first;
-              }
-              notifyListeners();
-            }
-          }
-        },
-        // Stderr is appended silently during the run; surface lands at
-        // the first-file-ready notify or at the final `done` notify so
-        // we don't pay a rebuild per chunk.
-        onStderr: (chunk) {
-          _stderrBuffer.write(chunk);
-          _stderrCache = null;
-        },
-      );
-
-      // The streamed `onStderr` callback already filled `stderrText`
-      // chunk-by-chunk during the run, so we don't reassign from
-      // `result.stderr` here — that would overwrite identical data and
-      // briefly flicker the StatusBar badge size. Only fall back to
-      // the buffered copy if the stream produced nothing (e.g. the
-      // process crashed before any chunk arrived).
-      if (stderrText.isEmpty) stderrText = result.stderr;
-      lastExitCode = result.exitCode;
-      // SIGTERM/SIGKILL show up as negative exit codes too — treat a
-      // user-requested cancel as a clean done, not an error. Otherwise
-      // the toolbar would surface the kill signal as "spawn failed".
-      if (_cancelRequested) {
-        status = RunStatus.done;
-        runError = 'cancelled';
-        return;
-      }
-      if (result.exitCode < 0) {
-        runError = result.stderr.isEmpty ? 'spawn failed' : result.stderr;
-        status = RunStatus.error;
-        return;
-      }
-      if (builder.model.issues.isNotEmpty) {
-        runError = builder.model.issues.take(3).join('; ');
-      }
-    } catch (e) {
-      runError = e.toString();
-      status = RunStatus.error;
-      return;
-    } finally {
-      ticker.cancel();
-      // Drop the process handle so a stray cancelRun() click after the
-      // run completes is a harmless no-op instead of double-killing a
-      // dead PID (or worse, a recycled one).
-      _runProcess = null;
-      _cancelRequested = false;
-      // Final sync — the last 100ms tick may have fired before the
-      // closing batch of lines arrived, leaving the counter short of
-      // the true total. Without this the displayed number is
-      // non-deterministic (varies per run).
-      if (_traceLinesCounter.value != rawLines) {
-        _traceLinesCounter.value = rawLines;
-      }
-      if (_tracesBytesCounter.value != rawBytes) {
-        _tracesBytesCounter.value = rawBytes;
-      }
-      // Always notify on exit. The error / cancel branches above do an
-      // early `return`, which would skip the closing notify below and
-      // leave the toolbar stuck in `isCancelling` (last notify came from
-      // `cancelRun()` with the flag set). Putting the notify in `finally`
-      // guarantees one final UI update regardless of which exit path ran.
-      notifyListeners();
-    }
-
-    status = RunStatus.done;
-    // Post-stream selection sync. The live onLine handler already
-    // primes selectedFileId on the first file_start event, so we only
-    // top-up here for the corner case where no file_start fired (e.g.
-    // empty config) or a row inside the currently selected file landed
-    // after the user had cleared their selection. NEVER overwrite an
-    // active selection — that would yank the user out of whichever
-    // file/row they navigated to mid-stream.
-    if (traceModel != null && traceModel!.fileOrder.isNotEmpty) {
-      selectedFileId ??= traceModel!.fileOrder.first;
-      final activeFile = traceModel!.files[selectedFileId];
-      if (selectedRowId == null &&
-          activeFile != null &&
-          activeFile.rowIds.isNotEmpty) {
-        selectedRowId = activeFile.rowIds.first;
-      }
-    }
-    notifyListeners();
-  }
-  */
 
   /// Real template IDs from the live AST (no synthetic entries). The
   /// empty string is used separately in the UI to mean "all templates".

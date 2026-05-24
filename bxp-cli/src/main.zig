@@ -38,9 +38,9 @@ const USAGE_TEMPLATE =
     \\  --data <path>      override templates's data_dir (requires --template)
     \\  --fresh            skip files whose output already exists (atomic O_EXCL)
     \\  --dry-run          run the pipeline in memory without writing output files
-    \\  --trace            emit per-row NDJSON events on stdout (forces --quiet; conflicts with --debug)
+    \\  --trace            emit the binary BXTB trace stream on stdout (forces --quiet; conflicts with --debug)
     \\  --trace-file=<path> write a full binary trace (every row, every event) to <path>;
-    \\                     independent of --trace= mode; useful for offline GUI drill-down
+    \\                     independent of --trace; useful for offline GUI drill-down
     \\  --debug            suppresses informational stdout summaries; prints unmatched rows as JSON when row_rules_debug_missing is set
     \\  --quiet            suppress informational stdout (errors still go to stderr)
     \\  --check-fs=N       opt-in: validate data_dir + input-file existence before any processing,
@@ -155,10 +155,6 @@ pub fn main() !void {
     var quiet = false;
     var fresh = false;
     var trace = false;
-    // Trace output format. Bareword `--trace` and `--trace=json` both yield
-    // .full (today's NDJSON cesta). `--trace=bin` yields .bin (binary framed
-    // metadata stream consumed by future GUI). Any other suffix is an error.
-    var trace_format: enum { json, bin } = .json;
     var dry_run = false;
     var check_fs_seconds: u8 = 0;
     var trace_file_path: ?[]const u8 = null;
@@ -175,18 +171,19 @@ pub fn main() !void {
         if (std.mem.eql(u8, arg, "--debug")) debug = true;
         if (std.mem.eql(u8, arg, "--quiet")) quiet = true;
         if (std.mem.eql(u8, arg, "--fresh")) fresh = true;
+        // `--trace` and `--trace=bin` are accepted (both produce the binary
+        // framed trace stream — the only format since the NDJSON path was
+        // removed in v0.3.0). `--trace=<anything else>` is an error; the
+        // explicit `=bin` form is kept for users who scripted it against
+        // older releases.
         if (std.mem.eql(u8, arg, "--trace")) {
             trace = true;
         } else if (std.mem.startsWith(u8, arg, "--trace=")) {
             const val = arg["--trace=".len..];
-            if (std.mem.eql(u8, val, "json")) {
+            if (std.mem.eql(u8, val, "bin")) {
                 trace = true;
-                trace_format = .json;
-            } else if (std.mem.eql(u8, val, "bin")) {
-                trace = true;
-                trace_format = .bin;
             } else {
-                std.debug.print("error: --trace value must be 'json' or 'bin': got '{s}'\n", .{val});
+                std.debug.print("error: --trace value must be 'bin' (NDJSON support was removed): got '{s}'\n", .{val});
                 std.process.exit(1);
             }
         }
@@ -210,8 +207,8 @@ pub fn main() !void {
     // Conflicting-flag validation. These combinations produce contradictory
     // output semantics and are rejected up-front rather than silently
     // picking a winner: --quiet and --debug are opposites; --trace and
-    // --debug both affect raw row output in incompatible ways (NDJSON vs.
-    // human-readable JSON dumps).
+    // --debug both affect raw row output in incompatible ways (binary
+    // BXTB stream vs. human-readable JSON dumps).
     if (quiet and debug) {
         std.debug.print("error: --quiet and --debug cannot be used together\n", .{});
         std.process.exit(1);
@@ -221,16 +218,7 @@ pub fn main() !void {
         std.process.exit(1);
     }
 
-    // BENCH-only: BXP_TRACE_DRY=1 promotes --trace to dry mode (call sites
-    // build trace payloads but event() skips encoding + writeEvent). Lets a
-    // bench isolate "prep work at call site" from "JSON encode + stdout I/O".
-    const trace_mode: pipeline.TraceMode = if (trace) blk: {
-        if (std.posix.getenv("BXP_TRACE_DRY")) |_| break :blk .dry;
-        break :blk switch (trace_format) {
-            .json => .full,
-            .bin => .bin,
-        };
-    } else .off;
+    const trace_mode: pipeline.TraceMode = if (trace) .bin else .off;
 
     // Bin mode wraps the existing stdout writer in a btrace.Writer that emits
     // magic + version on construction. Allocated on the stack — its address
@@ -303,14 +291,12 @@ pub fn main() !void {
     // --debug mode we re-throw so the Zig runtime prints its full stack trace.
     const stats = run(args, out, fresh, check_fs_seconds, alloc) catch |err| {
         if (err == error.Fatal) {
-            out.event("done", .{ .exit_code = @as(u8, 1) });
             out.binEmitDone(1);
             closeTraceFile(&trace_file_fw_storage, trace_file_handle);
             std.process.exit(1); // message already printed
         }
         if (debug) return err; // propagate — Zig prints trace
         out.fatal("---\n# fatal error: {s}\n", .{@errorName(err)});
-        out.event("done", .{ .exit_code = @as(u8, 1) });
         out.binEmitDone(1);
         closeTraceFile(&trace_file_fw_storage, trace_file_handle);
         std.process.exit(1);
@@ -323,7 +309,6 @@ pub fn main() !void {
     // signals here. Warnings-only configs (no fatal anywhere) still
     // return 2 as documented.
     const exit_code: u8 = if (stats.has_fatal) 1 else if (stats.warnings > 0) 2 else 0;
-    out.event("done", .{ .exit_code = exit_code });
     out.binEmitDone(@intCast(exit_code));
     closeTraceFile(&trace_file_fw_storage, trace_file_handle);
     if (exit_code != 0) std.process.exit(exit_code);
@@ -632,24 +617,6 @@ fn run(args: [][:0]u8, out: Output, fresh: bool, check_fs_seconds: u8, alloc: st
             out.overallLine(overall);
             return error.Fatal;
         };
-    }
-
-    // Emit 'start' trace event once templates are resolved. The event carries
-    // the full list of template IDs the GUI uses to pre-populate its sidebar
-    // before the first `file_start` arrives. `schema_version` lets the GUI
-    // detect incompatible event-stream formats without a bxp-cli version
-    // check: increment it whenever the shape of any trace event changes.
-    if (template_id) |bid| {
-        const templates_arr = [_][]const u8{bid};
-        out.event("start", .{ .schema_version = @as(u32, 1), .config = config_path, .templates = templates_arr[0..] });
-    } else {
-        var names: std.ArrayList([]const u8) = .empty;
-        defer names.deinit(alloc);
-        var it2 = cfg.brokers.iterator();
-        while (it2.next()) |entry| {
-            try names.append(alloc, entry.key_ptr.*);
-        }
-        out.event("start", .{ .schema_version = @as(u32, 1), .config = config_path, .templates = names.items });
     }
 
     // xlsx pre-pass: convert xlsx files to intermediate CSV before the main processing loop.

@@ -476,66 +476,16 @@ class BridgeClient {
   /// drained, future can complete and NativeCallables can close". The bridge
   /// joins both reader threads before invoking on_exit, so no callback ever
   /// fires after the future resolves.
-  /// Binary-mode counterpart of [runStreaming]. Sets `binary_mode: true`
-  /// in the bridge request so the stdout reader dispatches raw pipe-read
-  /// chunks instead of newline-batched lines. Designed for the bxp-cli
-  /// `--trace=bin` (BXTB) path where stdout is a binary frame stream
-  /// with no line boundaries.
-  ///
-  /// Threading + memory contract identical to [runStreaming]; only the
-  /// dispatch shape differs (raw byte chunks via [onChunk]).
+  /// Spawn a child process and stream its stdout as raw binary chunks via
+  /// [onChunk]. Sets `binary_mode: true` on the bridge request so the
+  /// stdout reader dispatches raw pipe-read chunks (no newline batching).
+  /// Designed for the bxp-cli `--trace=bin` (BXTB) path where stdout is
+  /// a binary frame stream with no line boundaries.
   Future<int> runStreamingBinary(
     String exe,
     List<String> args, {
     String? cwd,
     required void Function(Uint8List chunk) onChunk,
-    void Function(String chunk)? onStderr,
-    void Function(int handle)? onSpawn,
-  }) {
-    return _runStreamingImpl(
-      exe,
-      args,
-      cwd: cwd,
-      binaryMode: true,
-      onStdoutChunk: onChunk,
-      onStderr: onStderr,
-      onSpawn: onSpawn,
-    );
-  }
-
-  // REMOVE IN v0.4.0 — line-mode streaming was only used by the
-  // legacy NDJSON dry-run path ([BxpProcessClient._runCliTraceViaBridge],
-  // also commented out). Live streaming goes through [runStreamingBinary].
-  // When the v0.4.0 cleanup lands, also collapse [_runStreamingImpl] to
-  // binary-only (drop the `binaryMode` flag + the `onStdoutLine` branch).
-  /*
-  Future<int> runStreaming(
-    String exe,
-    List<String> args, {
-    String? cwd,
-    required void Function(String line) onLine,
-    void Function(String chunk)? onStderr,
-    void Function(int handle)? onSpawn,
-  }) {
-    return _runStreamingImpl(
-      exe,
-      args,
-      cwd: cwd,
-      binaryMode: false,
-      onStdoutLine: onLine,
-      onStderr: onStderr,
-      onSpawn: onSpawn,
-    );
-  }
-  */
-
-  Future<int> _runStreamingImpl(
-    String exe,
-    List<String> args, {
-    String? cwd,
-    required bool binaryMode,
-    void Function(String line)? onStdoutLine,
-    void Function(Uint8List chunk)? onStdoutChunk,
     void Function(String chunk)? onStderr,
     void Function(int handle)? onSpawn,
   }) async {
@@ -550,21 +500,11 @@ class BridgeClient {
     void handleStdoutBatch(Pointer<Uint8> ptr, int len) {
       try {
         if (len > 0) {
-          if (binaryMode) {
-            // Copy the bytes out of the bridge-owned buffer before
-            // bridge_free below. Uint8List.fromList copies; callers can
-            // hold the chunk past the callback return safely.
-            final chunk = Uint8List.fromList(ptr.asTypedList(len));
-            onStdoutChunk?.call(chunk);
-          } else {
-            // Line mode: decode + split into NDJSON lines.
-            final text =
-                utf8.decode(ptr.asTypedList(len), allowMalformed: true);
-            for (final line in const LineSplitter().convert(text)) {
-              if (line.isEmpty) continue;
-              onStdoutLine?.call(line);
-            }
-          }
+          // Copy the bytes out of the bridge-owned buffer before
+          // bridge_free below. Uint8List.fromList copies; callers can
+          // hold the chunk past the callback return safely.
+          final chunk = Uint8List.fromList(ptr.asTypedList(len));
+          onChunk(chunk);
         }
       } finally {
         _bridgeFree(ptr, len);
@@ -609,7 +549,7 @@ class BridgeClient {
       'exe': exe,
       'args': args,
       if (cwd != null && cwd.isNotEmpty) 'cwd': cwd,
-      if (binaryMode) 'binary_mode': true,
+      'binary_mode': true,
     });
     final requestPtr = request.toNativeUtf8();
 

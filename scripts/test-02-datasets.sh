@@ -37,48 +37,15 @@ _run_dataset() {
             return 1
         fi
     done
-    # Optional trace snapshot diff. When a *.expected.trace.ndjson sits next
-    # to the dataset, re-run with --trace and structurally compare each
-    # NDJSON line (via jq -S so semantically-equivalent JSON with different
-    # key ordering doesn't fail the diff). This protects the trace protocol
-    # from accidental drift without locking byte-exact output. Skipped when
-    # `jq` is missing so the suite still runs on minimal CI images.
-    for expected_trace in "$DATASETS/$template/"*.expected.trace.ndjson; do
-        [[ -f "$expected_trace" ]] || continue
-        if ! command -v jq > /dev/null 2>&1; then
-            echo "skip (no jq): $(basename "$expected_trace")"
-            continue
-        fi
-        local actual_trace
-        actual_trace="$(mktemp)"
-        "$BXP" --trace --config "$sample_json" > "$actual_trace"
-        # Normalise both sides through jq -cS (compact + sort keys) so the
-        # diff catches structural drift but not whitespace / key-order noise.
-        # Also redact path/config string values — those vary with the
-        # invocation cwd (relative vs absolute path the caller passed),
-        # which has nothing to do with the trace protocol contract.
-        local norm_expected norm_actual
-        norm_expected="$(mktemp)"
-        norm_actual="$(mktemp)"
-        jq -cS '.path? = "REDACTED" | .config? = "REDACTED"' < "$expected_trace" > "$norm_expected"
-        jq -cS '.path? = "REDACTED" | .config? = "REDACTED"' < "$actual_trace" > "$norm_actual"
-        if ! diff -q "$norm_expected" "$norm_actual" > /dev/null 2>&1; then
-            echo "trace diff: $(basename "$expected_trace")"
-            diff "$norm_expected" "$norm_actual" | head -20
-            rm -f "$actual_trace" "$norm_expected" "$norm_actual"
-            return 1
-        fi
-        rm -f "$actual_trace" "$norm_expected" "$norm_actual"
-    done
-    # Binary --trace=bin smoke. Verifies the stream starts with the BXTB
+    # Binary --trace smoke. Verifies the stream starts with the BXTB
     # magic + schema version 3 and the producer doesn't crash. Byte-exact
     # diff is intentionally NOT done — file_start frames carry cwd-dependent
     # absolute paths; layout regression is covered by inline tests in
-    # bxp-core/src/btrace.zig. This step just confirms the new producer
-    # still emits a parseable stream for every dataset.
+    # bxp-core/src/btrace.zig. This step just confirms the producer still
+    # emits a parseable stream for every dataset.
     local actual_bin
     actual_bin="$(mktemp)"
-    "$BXP" --trace=bin --config "$sample_json" > "$actual_bin"
+    "$BXP" --trace --config "$sample_json" > "$actual_bin"
     local size
     size=$(stat -c '%s' "$actual_bin")
     if [[ "$size" -lt 8 ]]; then

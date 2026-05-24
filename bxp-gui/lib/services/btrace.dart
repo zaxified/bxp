@@ -1,4 +1,4 @@
-/// Dart-side parser for the bxp-cli `--trace=bin` binary stream.
+/// Dart-side parser for the bxp-cli `--trace` binary BXTB stream.
 ///
 /// Mirrors `bxp-core/src/btrace.zig`. Reads the BXTB-magic-prefixed header,
 /// then a sequence of length-prefixed frames. Unknown frame types are
@@ -6,10 +6,8 @@
 /// the wire encoding for all variable-length strings (`lp` = u32 length +
 /// bytes).
 ///
-/// PR-A status: pure parser with no UI consumer yet. `BxpProcessClient`
-/// continues to spawn bxp-cli with `--trace=json` (NDJSON) by default; this
-/// file just makes the binary format readable from Dart so subsequent PRs
-/// can swap consumers panel by panel.
+/// Live source for `TraceStore`'s streaming Runner pipeline — every
+/// `--trace` invocation flows through this parser frame-by-frame.
 library;
 
 import 'dart:convert';
