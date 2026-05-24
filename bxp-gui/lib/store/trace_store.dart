@@ -3258,8 +3258,7 @@ class TraceStore extends ChangeNotifier {
         }
       }
       // Finalize whatever file context was still open when the producer
-      // exited — opens output.csvx, builds outputOffsets, attaches the
-      // runtime so drill-down works.
+      // exited — publishes the per-file runtime so drill-down works.
       await ctx.finalizeCurrentFile();
       if (r.exitCode != 0 && runError == null) {
         runError = 'bxp-cli exited ${r.exitCode}';
@@ -3812,14 +3811,6 @@ class TraceStore extends ChangeNotifier {
     return model;
   }
 
-  // REMOVE IN v0.4.0 — _indexLineOffsets used to build outputCsvx byte
-  // offsets so `outputFetcher.lineAt(outputOffsets[idx])` could serve
-  // drill-down rows-out. Drill-down now re-evaluates from bindings, so
-  // the index is unused. Definition removed; both call sites in
-  // `finalizeCurrentFile` are commented out alongside the matching
-  // outputFetcher.open().
-
-
   /// Populate `row.fields`, `row.vars`, `row.rules`, `row.outputs` for a
   /// row whose data has not yet been fetched (btrace mode). Idempotent —
   /// calling on an already-loaded row returns immediately. Coalesces
@@ -3888,12 +3879,6 @@ class TraceStore extends ChangeNotifier {
     }
 
     // 2. Output row(s) — built from re-eval bindings in step 6 below.
-    // The legacy csvx fetch (outputFetcher.lineAt(outputOffsets[idx])) was
-    // removed because Dry-run, fresh-DEV, and synthetic source files never
-    // produce a csvx artifact. Rebuilding from input_schema + matched-rule
-    // overrides + output_schema mapping (current config) is symmetric with
-    // how the vars/rules panels already work and gives Dry-run drill-down
-    // the same output preview as Full-run drill-down.
 
     // 3. Re-evaluate input_schema expressions against the fetched source
     // fields. evalBatch handles the per-expr ok/error shape; we surface
@@ -4134,11 +4119,6 @@ class _BtraceIngestCtx {
   // before the new one is opened, so drill-down on already-finished files
   // works even while the next file is still streaming.
   FileModel? currentFile;
-  // currentSourceFetcher / currentSourceBytes removed (REMOVE IN v0.4.0
-  // cleanup of any remaining references): streaming ingest no longer
-  // loads source content. `file_start` captures only headers + file
-  // size; row content is populated when the user activates a file (see
-  // TraceStore._activateFile).
   // Pre-pass entries that arrive before any `file_start` are stashed here
   // and re-attached to whichever FileModel arrives next.
   final List<PrepassEntry> prepassBatch = [];
@@ -4276,12 +4256,6 @@ class _BtraceIngestCtx {
     );
     currentFile = null;
   }
-
-  // REMOVE IN v0.4.0 — _indexLineOffsetsStatic was the post-stream twin
-  // of TraceStore._indexLineOffsets. Both are now orphan; the in-class
-  // TraceStore version is kept (commented at its definition) for the
-  // same reason. Deleted here outright since the static lived inline
-  // with the now-commented call site.
 }
 
 /// Per-file btrace-mode runtime data owned by [TraceStore]. Holds open
