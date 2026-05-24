@@ -20,7 +20,6 @@ class _BinBuilder {
 
   void writeHeader() {
     _u32(frameMagic);
-    _u32(schemaVersion);
   }
 
   void writeFrame(int typeByte, int chunkId, List<int> payload) {
@@ -91,31 +90,15 @@ void main() {
 
     test('rejects wrong magic', () {
       final bb = _BinBuilder();
-      // Wrong magic, valid version slot
       for (int i = 0; i < 4; i++) {
         bb._bb.addByte(0xFF);
       }
-      bb._u32(schemaVersion);
       expect(
         () => BtraceReader.fromBytes(bb.bytes()),
         throwsA(isA<FormatException>().having(
           (e) => e.toString(),
           'message',
           contains('bad magic'),
-        )),
-      );
-    });
-
-    test('rejects unsupported schema version', () {
-      final bb = _BinBuilder();
-      bb._u32(frameMagic);
-      bb._u32(9999);
-      expect(
-        () => BtraceReader.fromBytes(bb.bytes()),
-        throwsA(isA<FormatException>().having(
-          (e) => e.toString(),
-          'message',
-          contains('unsupported schema version'),
         )),
       );
     });
@@ -139,17 +122,6 @@ void main() {
         _BinBuilder.lp('Date'),
         _BinBuilder.lp('Type'),
         _BinBuilder.lp('Amount'),
-        _BinBuilder.u16(2), // out_headers_count
-        _BinBuilder.lp('date'),
-        _BinBuilder.lp('activity'),
-        _BinBuilder.u16(2), // expr_pool_count
-        _BinBuilder.lp('TICKER([Symbol])'),
-        _BinBuilder.lp("DATE_CONVERT([Date], 'X', 'Y')"),
-        _BinBuilder.u16(2), // var_name_pool_count
-        _BinBuilder.lp(r'$ticker'),
-        _BinBuilder.lp(r'$date'),
-        _BinBuilder.u16(1), // rule_when_pool_count
-        _BinBuilder.lp("[Type] = 'BUY'"),
       ]);
       bb.writeFrame(FrameType.fileStart.value, 0, payload);
       final r = BtraceReader.fromBytes(bb.bytes());
@@ -160,13 +132,6 @@ void main() {
       expect(fs.template, 'anycoin_to_wealthfolio');
       expect(fs.path, '/tmp/foo.csv');
       expect(fs.headers, ['Date', 'Type', 'Amount']);
-      expect(fs.outHeaders, ['date', 'activity']);
-      expect(fs.exprPool, [
-        'TICKER([Symbol])',
-        "DATE_CONVERT([Date], 'X', 'Y')",
-      ]);
-      expect(fs.varNamePool, [r'$ticker', r'$date']);
-      expect(fs.ruleWhenPool, ["[Type] = 'BUY'"]);
     });
 
     test('file_end', () {

@@ -3325,7 +3325,6 @@ class TraceStore extends ChangeNotifier {
         rows: 0,
         headers: List<String>.of(frame.headers),
       );
-      file.outputHeaders = List<String>.of(frame.outHeaders);
       for (final pp in ctx.prepassBatch) {
         file.prepass.add(pp);
       }
@@ -3340,7 +3339,6 @@ class TraceStore extends ChangeNotifier {
         ctx.model.issues.add('source CSV not found for ${frame.path}');
       } else {
         file.sourceCsvPath = sourcePath;
-        file.outputCsvxPath = ctx.deriveOutputPath(sourcePath);
       }
       ctx.model.files[fileId] = file;
       ctx.model.fileOrder.add(fileId);
@@ -3373,7 +3371,6 @@ class TraceStore extends ChangeNotifier {
       }
       _btraceRuntimes[file.id] = _BtraceFileRuntime(
         sourceFetcher: null,
-        outputFetcher: null,
         inputSchema: ctx.inputSchema,
         tickerMap: ctx.tickerMap,
         ruleWhens: ctx.ruleWhens,
@@ -3646,28 +3643,9 @@ class TraceStore extends ChangeNotifier {
       return null;
     }
 
-    String deriveOutputPath(String sourcePath) =>
-        sourcePath.endsWith('.csv')
-            ? '${sourcePath.substring(0, sourcePath.length - 4)}.csvx'
-            : '$sourcePath.csvx';
-
     Future<void> finalizeCurrentFile() async {
       final file = currentFile;
       if (file == null) return;
-      // REMOVE IN v0.4.0 — csvx is no longer read by drill-down (rows-out
-      // is rebuilt from re-eval bindings against the snapshot output_schema).
-      // The outputOffsets index + the persistent CsvRowFetcher are dead
-      // weight: a synchronous file scan + an FD that nobody reads from.
-      // Kept commented while the producer side still emits csvx for users
-      // who consume the file outside the GUI.
-      //
-      // if (file.outputCsvxPath.isNotEmpty &&
-      //     File(file.outputCsvxPath).existsSync()) {
-      //   file.outputOffsets = await _indexLineOffsets(file.outputCsvxPath);
-      // }
-      // final outputFetcher = file.outputCsvxPath.isEmpty
-      //     ? null
-      //     : await CsvRowFetcher.open(file.outputCsvxPath);
       // Build pre-pass lookups blob for evalBatch — keys are namespaced by
       // the actual pre_pass block name (legacy single-block reports
       // `_default`; named blocks carry the explicit name).
@@ -3679,7 +3657,6 @@ class TraceStore extends ChangeNotifier {
       }
       _btraceRuntimes[file.id] = _BtraceFileRuntime(
         sourceFetcher: currentSourceFetcher,
-        outputFetcher: null,
         inputSchema: inputSchema,
         tickerMap: tickerMap,
         ruleWhens: ruleWhens,
@@ -3708,7 +3685,6 @@ class TraceStore extends ChangeNotifier {
           rows: 0,
           headers: List<String>.of(frame.headers),
         );
-        file.outputHeaders = List<String>.of(frame.outHeaders);
         for (final pp in prepassBatch) {
           file.prepass.add(pp);
         }
@@ -3719,7 +3695,6 @@ class TraceStore extends ChangeNotifier {
           model.issues.add('source CSV not found for ${frame.path}');
         } else {
           file.sourceCsvPath = sourcePath;
-          file.outputCsvxPath = deriveOutputPath(sourcePath);
         }
         model.files[fileId] = file;
         model.fileOrder.add(fileId);
@@ -4280,16 +4255,6 @@ class _BtraceIngestCtx {
   Future<void> finalizeCurrentFile() async {
     final file = currentFile;
     if (file == null) return;
-    // REMOVE IN v0.4.0 — see live-ingest finalizeCurrentFile for rationale.
-    // Drill-down rebuilds rows-out from re-eval bindings; csvx is not read.
-    //
-    // if (file.outputCsvxPath.isNotEmpty &&
-    //     File(file.outputCsvxPath).existsSync()) {
-    //   file.outputOffsets = await _indexLineOffsetsStatic(file.outputCsvxPath);
-    // }
-    // final outputFetcher = file.outputCsvxPath.isEmpty
-    //     ? null
-    //     : await CsvRowFetcher.open(file.outputCsvxPath);
     final lookups = <String, String>{};
     final prepassNames = <String>{};
     for (final pp in file.prepass) {
@@ -4301,7 +4266,6 @@ class _BtraceIngestCtx {
       // by TraceStore._activateFile via RandomAccessFile, not by a
       // per-file persistent CsvRowFetcher.
       sourceFetcher: null,
-      outputFetcher: null,
       inputSchema: inputSchema,
       tickerMap: tickerMap,
       ruleWhens: ruleWhens,
@@ -4326,7 +4290,6 @@ class _BtraceIngestCtx {
 /// fds across runs.
 class _BtraceFileRuntime {
   final CsvRowFetcher? sourceFetcher;
-  final CsvRowFetcher? outputFetcher;
   /// Map var name (e.g. `$ticker`) → expression text from the template's
   /// `input_schema`. Iterated in declaration order so the per-row vars
   /// table renders predictably.
@@ -4356,7 +4319,6 @@ class _BtraceFileRuntime {
 
   _BtraceFileRuntime({
     required this.sourceFetcher,
-    required this.outputFetcher,
     required this.inputSchema,
     required this.tickerMap,
     required this.ruleWhens,
@@ -4368,7 +4330,6 @@ class _BtraceFileRuntime {
 
   Future<void> dispose() async {
     await sourceFetcher?.dispose();
-    await outputFetcher?.dispose();
   }
 }
 

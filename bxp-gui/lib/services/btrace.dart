@@ -14,21 +14,10 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 /// Magic at the start of every binary trace stream — little-endian u32
-/// reading as ASCII "BXTB".
+/// reading as ASCII "BXTB". Sanity check only; producer (bxp-cli) and
+/// consumer (this file) ship together in every release, so there is no
+/// schema version on the wire.
 const int frameMagic = 0x42545842;
-
-/// Schema version. Bump on any frame layout change; readers reject mismatch.
-///
-/// v3 (2026-05-22): per-row detail frames (`row_start_fields`, `var_eval`,
-/// `rule_match`, `rule_no_match`, `row_output`) are no longer emitted by the
-/// producer in the default path — frame LAYOUT is identical to v2, only the
-/// emit policy changed (env var `BXP_EMIT_FULL_TRACE=1` opts back into v2-style
-/// emission for debug). The reader accepts both v2 and v3 streams; the
-/// constant is the version we PREFER to see, not a hard equality check.
-/// v2 (2026-05-21): `file_start` carries `expr_pool` / `var_name_pool` /
-/// `rule_when_pool`; per-row frames reference pool entries by u16 index
-/// instead of inline strings.
-const int schemaVersion = 3;
 
 /// Per-frame header is 7 bytes: type (u8) + chunk_id (u16 LE) + pay_len (u32 LE).
 const int frameHeaderSize = 7;
@@ -83,18 +72,9 @@ class FileStart extends Frame {
   final String template;
   final String path;
   final List<String> headers;
-  final List<String> outHeaders;
-
-  /// Bintrace v2 symbol pools — emitted once per file_start, referenced by
-  /// per-row frames via u16 index. Saves repeating the same expression /
-  /// variable name / rule.when text on every row.
-  final List<String> exprPool;
-  final List<String> varNamePool;
-  final List<String> ruleWhenPool;
 
   const FileStart(super.chunkId, this.inputFormat, this.template, this.path,
-      this.headers, this.outHeaders,
-      this.exprPool, this.varNamePool, this.ruleWhenPool);
+      this.headers);
 }
 
 class FileEnd extends Frame {
@@ -184,11 +164,11 @@ class BtraceReader {
 
   BtraceReader._(this._data, this._bd, this._pos, this._headerVerified, this._streaming);
 
-  /// Validates magic + version, returns a reader positioned past the header.
+  /// Validates magic, returns a reader positioned past the header.
   factory BtraceReader.fromBytes(Uint8List data) {
-    if (data.length < 8) {
+    if (data.length < 4) {
       throw FormatException(
-          'btrace stream too short: ${data.length} bytes (need ≥ 8 for magic + version)');
+          'btrace stream too short: ${data.length} bytes (need ≥ 4 for magic)');
     }
     final bd = ByteData.sublistView(data);
     final magic = bd.getUint32(0, Endian.little);
@@ -197,16 +177,7 @@ class BtraceReader {
           'btrace: bad magic 0x${magic.toRadixString(16).padLeft(8, '0')} '
           '(expected 0x${frameMagic.toRadixString(16).padLeft(8, '0')} = "BXTB")');
     }
-    final version = bd.getUint32(4, Endian.little);
-    // Frame layout is identical across v2 and v3 — v3 only changes the
-    // emit policy on the producer side (no detail by default). Accept
-    // both so older traces still parse and the schema bump is a soft
-    // boundary instead of a hard breakage for in-flight files.
-    if (version != schemaVersion && version != 2) {
-      throw FormatException(
-          'btrace: unsupported schema version $version (this reader handles 2 and $schemaVersion)');
-    }
-    return BtraceReader._(data, bd, 8, true, false);
+    return BtraceReader._(data, bd, 4, true, false);
   }
 
   /// Empty reader for streaming mode. Caller pumps bytes via [appendBytes]
@@ -255,20 +226,15 @@ class BtraceReader {
   Frame? nextFrame() {
     // Lazy header verification on streaming-mode first call.
     if (!_headerVerified) {
-      if (_data.length < 8) return null;
+      if (_data.length < 4) return null;
       final magic = _bd.getUint32(0, Endian.little);
       if (magic != frameMagic) {
         throw FormatException(
             'btrace: bad magic 0x${magic.toRadixString(16).padLeft(8, '0')} '
             '(expected 0x${frameMagic.toRadixString(16).padLeft(8, '0')} = "BXTB")');
       }
-      final version = _bd.getUint32(4, Endian.little);
-      if (version != schemaVersion && version != 2) {
-        throw FormatException(
-            'btrace: unsupported schema version $version (this reader handles 2 and $schemaVersion)');
-      }
       _headerVerified = true;
-      _pos = 8;
+      _pos = 4;
     }
     while (_pos < _data.length) {
       if (_pos + frameHeaderSize > _data.length) {
@@ -329,28 +295,7 @@ class BtraceReader {
     final headers = <String>[
       for (int i = 0; i < headersCount; i++) _readLp(),
     ];
-    final outCount = _bd.getUint16(_pos, Endian.little);
-    _pos += 2;
-    final outHeaders = <String>[
-      for (int i = 0; i < outCount; i++) _readLp(),
-    ];
-    final exprPoolCount = _bd.getUint16(_pos, Endian.little);
-    _pos += 2;
-    final exprPool = <String>[
-      for (int i = 0; i < exprPoolCount; i++) _readLp(),
-    ];
-    final varNamePoolCount = _bd.getUint16(_pos, Endian.little);
-    _pos += 2;
-    final varNamePool = <String>[
-      for (int i = 0; i < varNamePoolCount; i++) _readLp(),
-    ];
-    final ruleWhenPoolCount = _bd.getUint16(_pos, Endian.little);
-    _pos += 2;
-    final ruleWhenPool = <String>[
-      for (int i = 0; i < ruleWhenPoolCount; i++) _readLp(),
-    ];
-    return FileStart(chunkId, fmt, template, path, headers, outHeaders,
-        exprPool, varNamePool, ruleWhenPool);
+    return FileStart(chunkId, fmt, template, path, headers);
   }
 
   FileEnd _readFileEnd(int chunkId) {

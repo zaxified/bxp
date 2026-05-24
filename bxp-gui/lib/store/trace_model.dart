@@ -237,9 +237,6 @@ class FileModel {
   final int rows;
   /// Input CSV column headers in source order, from the `file_start` event.
   final List<String> headers;
-  /// Output schema column headers, populated from the first `row_output`
-  /// event (all output rows share the same schema for a given file).
-  List<String> outputHeaders = [];
   /// Ordered list of [RowModel.id] values for rows that were traced for
   /// this file. Filtered rows are absent.
   final List<String> rowIds = [];
@@ -261,14 +258,6 @@ class FileModel {
   /// Differs from [path] only when the runtime CWD turned a relative
   /// declared path into an absolute one.
   String sourceCsvPath = '';
-  /// Resolved path to the output CSVX (sibling of the source CSV, with the
-  /// template's `file_pattern_out` suffix applied — defaults to `.csvx`).
-  String outputCsvxPath = '';
-  /// Byte offset into `outputCsvxPath` for every emitted output row, in
-  /// file order. Index N is the byte position of the start of the Nth
-  /// data row (header offset is implicit and not stored). Populated once
-  /// at trace-load time by a single sequential scan.
-  List<int> outputOffsets = const [];
   /// Size of [sourceCsvPath] in bytes, captured once at `file_start` via
   /// `File.statSync().size`. Drives the eager-vs-lazy decision in
   /// `TraceStore._activateFile` — files below `kEagerFileLoadBytes` get

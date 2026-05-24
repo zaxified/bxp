@@ -38,25 +38,25 @@ _run_dataset() {
         fi
     done
     # Binary --trace smoke. Verifies the stream starts with the BXTB
-    # magic + schema version 3 and the producer doesn't crash. Byte-exact
-    # diff is intentionally NOT done — file_start frames carry cwd-dependent
-    # absolute paths; layout regression is covered by inline tests in
-    # bxp-core/src/btrace.zig. This step just confirms the producer still
-    # emits a parseable stream for every dataset.
+    # magic and the producer doesn't crash. Byte-exact diff is intentionally
+    # NOT done — file_start frames carry cwd-dependent absolute paths;
+    # layout regression is covered by inline tests in bxp-core/src/btrace.zig.
+    # This step just confirms the producer still emits a parseable stream
+    # for every dataset.
     local actual_bin
     actual_bin="$(mktemp)"
     "$BXP" --trace --config "$sample_json" > "$actual_bin"
     local size
     size=$(stat -c '%s' "$actual_bin")
-    if [[ "$size" -lt 8 ]]; then
+    if [[ "$size" -lt 4 ]]; then
         echo "bin trace too small ($size bytes)"
         rm -f "$actual_bin"
         return 1
     fi
     local magic
-    magic=$(head -c 8 "$actual_bin" | od -An -tx1 | tr -d ' \n')
-    if [[ "$magic" != "4258544203000000" ]]; then
-        echo "bin trace: bad magic/version (got $magic, want 4258544203000000)"
+    magic=$(head -c 4 "$actual_bin" | od -An -tx1 | tr -d ' \n')
+    if [[ "$magic" != "42585442" ]]; then
+        echo "bin trace: bad magic (got $magic, want 42585442)"
         rm -f "$actual_bin"
         return 1
     fi
