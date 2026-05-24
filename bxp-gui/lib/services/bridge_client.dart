@@ -478,10 +478,9 @@ class BridgeClient {
   /// joins both reader threads before invoking on_exit, so no callback ever
   /// fires after the future resolves.
   /// Spawn a child process and stream its stdout as raw binary chunks via
-  /// [onChunk]. Sets `binary_mode: true` on the bridge request so the
-  /// stdout reader dispatches raw pipe-read chunks (no newline batching).
-  /// Designed for the bxp-cli `--trace=bin` (BXTB) path where stdout is
-  /// a binary frame stream with no line boundaries.
+  /// [onChunk]. The bridge always dispatches raw pipe-read chunks (no
+  /// newline batching), designed for the bxp-cli `--trace=bin` (BXTB)
+  /// path where stdout is a binary frame stream with no line boundaries.
   Future<int> runStreamingBinary(
     String exe,
     List<String> args, {
@@ -550,7 +549,6 @@ class BridgeClient {
       'exe': exe,
       'args': args,
       if (cwd != null && cwd.isNotEmpty) 'cwd': cwd,
-      'binary_mode': true,
     });
     final requestPtr = request.toNativeUtf8();
 

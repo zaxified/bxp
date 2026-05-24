@@ -1038,8 +1038,8 @@ class BxpProcessClient {
   }
 
   /// Bridge variant of [runWithBtrace]. Streams the binary BXTB frames
-  /// via `bridge_run_streaming` in `binary_mode` so dart:io's anonymous
-  /// pipe truncation on Windows (sdk#1727) doesn't bite. Cancellation
+  /// via `bridge_run_streaming` so dart:io's anonymous pipe truncation
+  /// on Windows (sdk#1727) doesn't bite. Cancellation
   /// goes through [cancelBtrace] — the bridge handle is the caller's
   /// only path to kill the child, since there is no [Process] object in
   /// this path.
