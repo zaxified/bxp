@@ -1001,11 +1001,21 @@ class _RowListInnerState extends State<_RowListInner> {
             },
             onSelected: (event) {
               if (event.row == null) return;
-              final rowNum = event.row!.cells['row_num']?.value;
-              final match = rowList
-                  .where((r) => '${r.fileRow}' == rowNum.toString())
-                  .firstOrNull;
-              if (match != null) widget.store.selectRow(match.id);
+              final rowNum =
+                  event.row!.cells['row_num']?.value.toString() ?? '';
+              // Read _visibleRowIds at click time, not from the captured
+              // `rowList` closure built at PlutoGrid mount. After a filter
+              // scan _visibleRowIds is rewritten to the matched ids; the
+              // closure-captured rowList still holds the pre-filter window,
+              // so a matched row outside that window would resolve to null
+              // here and the click would be a silent no-op.
+              for (final id in _visibleRowIds) {
+                final r = widget.model.rows[id];
+                if (r != null && '${r.fileRow}' == rowNum) {
+                  widget.store.selectRow(id);
+                  return;
+                }
+              }
             },
             mode: PlutoGridMode.selectWithOneTap,
             configuration: PlutoGridConfiguration(
