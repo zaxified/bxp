@@ -112,7 +112,8 @@ class RowList extends StatelessWidget {
     return _RowListInner(
       // Hard remount on file change — PlutoGrid would otherwise keep the
       // old columns/rows and ignore new inputs.
-      key: ValueKey('rowlist::$fileId::${file.headers.join("|")}'),
+      key: ValueKey(
+          'rowlist::$fileId::${file.headers.join("|")}::${file.populateGen}'),
       fileId: fileId,
       file: file,
       model: model,
@@ -236,17 +237,14 @@ class _RowListInnerState extends State<_RowListInner> {
   void initState() {
     super.initState();
     _resyncVisibleRows();
-    // Auto-select the first row when a file with rows is opened but no
-    // row is yet selected — primes RowDetail / OutputPanel so they
-    // aren't "empty" on first paint.
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      if (widget.store.selectedRowId != null) return;
-      final firstId = widget.file.rowIds.firstOrNull;
-      if (firstId != null && widget.model.rows[firstId] != null) {
-        widget.store.selectRow(firstId);
-      }
-    });
+    // First-row auto-select used to live here as a postFrameCallback,
+    // but it raced the activation pipeline: clicking a file while a big
+    // sibling file was still streaming would auto-select r0 before the
+    // RAF was open, kicking off `ensureDetailLoaded` against an empty
+    // `row.fields`. Auto-select for the click path now lives in
+    // `TraceStore.selectFile` (deferred to after `_activateFile`); the
+    // initial-load streams set `selectedRowId` themselves before RowList
+    // mounts, so no auto-select is needed here.
   }
 
   /// Seed [_visibleRowIds] from the file's eager/lazy mode. Eager files
@@ -276,6 +274,21 @@ class _RowListInnerState extends State<_RowListInner> {
         ? (_stateManager?.refRows.length ?? _visibleRowIds.length)
         : _visibleRowIds.length;
     widget.store.setRowsInDisplayed(count);
+  }
+
+  /// Resolve the display value for one source-CSV cell. While the file
+  /// is being activated (RAF open + initial populate) `row.fields` is
+  /// still empty — render `…` so the user sees a "loading" placeholder
+  /// rather than a blank cell. The widget key folds in `populateGen` so
+  /// the rebuild triggered when populate finishes remounts PlutoGrid
+  /// and re-creates the PlutoRows from real values. Synthetic rows
+  /// (`sourceLocator < 0`, e.g. summary placeholders) always render
+  /// blank — they have no source row to load.
+  static String _cellValueFor(RowModel row, int i) {
+    if (row.fieldsPopulated) {
+      return i < row.fields.length ? row.fields[i] : '';
+    }
+    return row.sourceLocator >= 0 ? '…' : '';
   }
 
   /// Append the next [kLazyExpandBatch] rowIds to [_visibleRowIds] and
@@ -342,7 +355,7 @@ class _RowListInnerState extends State<_RowListInner> {
       };
       for (int i = 0; i < headers.length; i++) {
         cells[headers[i]] = PlutoCell(
-          value: i < row.fields.length ? row.fields[i] : '',
+          value: _cellValueFor(row, i),
         );
       }
       newPlutoRows.add(PlutoRow(cells: cells));
@@ -485,7 +498,7 @@ class _RowListInnerState extends State<_RowListInner> {
       };
       for (int i = 0; i < headers.length; i++) {
         cells[headers[i]] = PlutoCell(
-          value: i < row.fields.length ? row.fields[i] : '',
+          value: _cellValueFor(row, i),
         );
       }
       fresh.add(PlutoRow(cells: cells));
@@ -515,7 +528,7 @@ class _RowListInnerState extends State<_RowListInner> {
       };
       for (int i = 0; i < headers.length; i++) {
         cells[headers[i]] = PlutoCell(
-          value: i < row.fields.length ? row.fields[i] : '',
+          value: _cellValueFor(row, i),
         );
       }
       fresh.add(PlutoRow(cells: cells));
@@ -823,7 +836,7 @@ class _RowListInnerState extends State<_RowListInner> {
       };
       for (int i = 0; i < headers.length; i++) {
         cells[headers[i]] = PlutoCell(
-          value: i < row.fields.length ? row.fields[i] : '',
+          value: _cellValueFor(row, i),
         );
       }
       return PlutoRow(cells: cells);

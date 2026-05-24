@@ -2516,8 +2516,13 @@ class TraceStore extends ChangeNotifier {
     if (selectedFileId == id) return;
     devTrace('action.file.select', {'id': id});
     selectedFileId = id;
-    final file = id == null ? null : traceModel?.files[id];
-    selectedRowId = file != null && file.rowIds.isNotEmpty ? file.rowIds.first : null;
+    // Deselect the previous file's row up front. The first-row auto-
+    // select is deferred until AFTER `_activateFile` completes so the
+    // drill-down (which fires the moment `selectedRowId` flips non-null)
+    // never races with the RAF open + initial populate sweep. Otherwise
+    // the auto-selected r0 could be drill-downed before its source bytes
+    // have been read, leaving its rows-in / cell painted blank.
+    selectedRowId = null;
     // Clear the displayed-row count BEFORE notifying so the PanelHeader
     // doesn't flash the previous file's count for one frame between
     // selectedFileId switching and the new RowList's initState running
@@ -2526,6 +2531,14 @@ class TraceStore extends ChangeNotifier {
     _rowsInDisplayed = null;
     notifyListeners();
     await _activateFile(id);
+    // Activation seq guard: a faster click already moved on, leave its
+    // selection alone.
+    if (selectedFileId != id) return;
+    final file = id == null ? null : traceModel?.files[id];
+    if (file != null && file.rowIds.isNotEmpty && selectedRowId == null) {
+      selectedRowId = file.rowIds.first;
+      notifyListeners();
+    }
   }
 
   /// Select a row by its synthetic id (`r0`, `r1`, …). Null deselects.
@@ -2543,6 +2556,16 @@ class TraceStore extends ChangeNotifier {
   /// by `FileModel.id`. Emptied + disposed at the top of every
   /// `_streamRun*` to avoid leaking file handles across runs.
   final Map<String, _BtraceFileRuntime> _btraceRuntimes = {};
+
+  /// Public accessor for the per-file output_schema snapshot captured at
+  /// `file_start` time. Consumers (e.g. [OutputPanel] column headers)
+  /// read from this snapshot rather than the live `astRoot` so that a
+  /// user editing `output_schema` between run and drill-down doesn't
+  /// desync the column labels from the re-evaluated cell values. Empty
+  /// list when the file's runtime hasn't been built yet (live ingest
+  /// in flight) or when the template lacked an `output_schema` block.
+  List<({String header, String variable})> outputSchemaFor(String fileId) =>
+      _btraceRuntimes[fileId]?.outputSchema ?? const [];
 
   // ── Active-file activation state ──────────────────────────────────
   // At most one source CSV is "active" at a time. Activation happens
@@ -2630,6 +2653,13 @@ class TraceStore extends ChangeNotifier {
       // Lazy mode: populate first window so the user sees something.
       _populateRangeSync(file, 0, kLazyInitialRows);
     }
+    // Bump populateGen so RowList's widget key changes and PlutoGrid
+    // remounts with the freshly-populated cell values. Bumped only here
+    // (one-shot per activation) and NOT inside `_populateRangeSync`
+    // because scroll-expand populates go through the imperative
+    // appendRows path — remounting on every expand would reset the
+    // user's scroll position back to row 0.
+    file.populateGen++;
     notifyListeners();
   }
 
@@ -3694,6 +3724,7 @@ class TraceStore extends ChangeNotifier {
     Map<String, String> tickerMap = const {};
     List<String> ruleWhens = const [];
     List<List<Map<String, String>>> ruleRows = const [];
+    List<({String header, String variable})> outputSchema = const [];
 
     Future<void> ensureTemplate(String templateId) async {
       if (currentTemplate == templateId) return;
@@ -3703,6 +3734,7 @@ class TraceStore extends ChangeNotifier {
       tickerMap = const {};
       ruleWhens = const [];
       ruleRows = const [];
+      outputSchema = const [];
       if (tpl != null) {
         final is_ = tpl['input_schema'];
         if (is_ is Map) {
@@ -3739,6 +3771,16 @@ class TraceStore extends ChangeNotifier {
           }
           ruleWhens = whens;
           ruleRows = rowsByRule;
+        }
+        final os = tpl['output_schema'];
+        if (os is Map) {
+          outputSchema = [
+            for (final e in os.entries)
+              (
+                header: e.key.toString(),
+                variable: e.value?.toString() ?? '',
+              ),
+          ];
         }
       }
     }
@@ -3797,6 +3839,7 @@ class TraceStore extends ChangeNotifier {
         tickerMap: tickerMap,
         ruleWhens: ruleWhens,
         ruleRows: ruleRows,
+        outputSchema: outputSchema,
         lookups: lookups,
         singlePrepassName: prepassNames.length == 1 ? prepassNames.first : null,
       );
@@ -4035,24 +4078,13 @@ class TraceStore extends ChangeNotifier {
       }
     }
 
-    // 2. Output row(s). For 1:N templates (e.g. trading212 Currency
-    // conversion → 3 outputs) we iterate every per-output index this
-    // source row produced and append one parsed CSV line per output.
-    // Falls back to the legacy singular `outputIdx` when the producer
-    // didn't populate the plural list (older traces / NDJSON path).
-    if (runtime.outputFetcher != null) {
-      final idxs = row.outputIdxs.isNotEmpty
-          ? row.outputIdxs
-          : (row.outputIdx >= 0 ? <int>[row.outputIdx] : const <int>[]);
-      for (final idx in idxs) {
-        if (idx < 0 || idx >= file.outputOffsets.length) continue;
-        final line =
-            await runtime.outputFetcher!.lineAt(file.outputOffsets[idx]);
-        if (line != null) {
-          row.outputs.add(_splitCsv(line, file.outputHeaders.length));
-        }
-      }
-    }
+    // 2. Output row(s) — built from re-eval bindings in step 6 below.
+    // The legacy csvx fetch (outputFetcher.lineAt(outputOffsets[idx])) was
+    // removed because Dry-run, fresh-DEV, and synthetic source files never
+    // produce a csvx artifact. Rebuilding from input_schema + matched-rule
+    // overrides + output_schema mapping (current config) is symmetric with
+    // how the vars/rules panels already work and gives Dry-run drill-down
+    // the same output preview as Full-run drill-down.
 
     // 3. Re-evaluate input_schema expressions against the fetched source
     // fields. evalBatch handles the per-expr ok/error shape; we surface
@@ -4163,6 +4195,44 @@ class TraceStore extends ChangeNotifier {
         }
       }
     }
+
+    // 6. Build `row.outputs` from the eval bindings collected in steps
+    // 3+5, using the template's `output_schema` (header → $var) as the
+    // column-order recipe. Replaces the legacy csvx-fetch path. Honest
+    // for Dry-run / fresh-DEV / synthetic files because no on-disk
+    // output artifact is consulted.
+    //
+    // Emit count = number of `output_row` btrace frames for this source
+    // row (the producer's actual evidence of what was written). Filtered
+    // rows have zero emits and produce no outputs; 1:N rules emit one
+    // entry per `ruleRows[mi][ri]` and we re-eval each ri's overrides on
+    // top of the input_schema base bindings.
+    final emitCount = row.outputIdxs.isNotEmpty
+        ? row.outputIdxs.length
+        : (row.outputIdx >= 0 ? 1 : 0);
+    if (emitCount > 0 && runtime.outputSchema.isNotEmpty) {
+      final base = <String, String>{};
+      for (final v in row.vars) {
+        if (v.origin == 'input_schema' && v.kind == 'eval') {
+          base[v.name] = v.value ?? '';
+        }
+      }
+      for (int ri = 0; ri < emitCount; ri++) {
+        final bindings = Map<String, String>.from(base);
+        for (final v in row.vars) {
+          if (v.origin == 'row_rules' &&
+              v.kind == 'eval' &&
+              v.outputRowIndex == ri) {
+            bindings[v.name] = v.value ?? '';
+          }
+        }
+        final cells = <String>[
+          for (final col in runtime.outputSchema)
+            bindings[col.variable] ?? '',
+        ];
+        row.outputs.add(cells);
+      }
+    }
   }
 
   /// Truth-test mirroring bxp-core/src/expr.zig's empty-or-zero rule:
@@ -4248,6 +4318,7 @@ class _BtraceIngestCtx {
   Map<String, String> tickerMap = const {};
   List<String> ruleWhens = const [];
   List<List<Map<String, String>>> ruleRows = const [];
+  List<({String header, String variable})> outputSchema = const [];
 
   // File-level state — replaced at each `file_start`. The previous file's
   // runtime is published into `runtimes` map via `finalizeCurrentFile()`
@@ -4318,6 +4389,7 @@ class _BtraceIngestCtx {
     tickerMap = const {};
     ruleWhens = const [];
     ruleRows = const [];
+    outputSchema = const [];
     if (tpl == null) return;
     final is_ = tpl['input_schema'];
     if (is_ is Map) {
@@ -4357,6 +4429,16 @@ class _BtraceIngestCtx {
       ruleWhens = whens;
       ruleRows = rowsByRule;
     }
+    final os = tpl['output_schema'];
+    if (os is Map) {
+      outputSchema = [
+        for (final e in os.entries)
+          (
+            header: e.key.toString(),
+            variable: e.value?.toString() ?? '',
+          ),
+      ];
+    }
   }
 
   /// Wrap the in-flight file: build outputOffsets index, open the output
@@ -4388,6 +4470,7 @@ class _BtraceIngestCtx {
       tickerMap: tickerMap,
       ruleWhens: ruleWhens,
       ruleRows: ruleRows,
+      outputSchema: outputSchema,
       lookups: lookups,
       singlePrepassName: prepassNames.length == 1 ? prepassNames.first : null,
     );
@@ -4433,6 +4516,12 @@ class _BtraceFileRuntime {
   /// `ruleRows[i]` corresponds to `ruleWhens[i]`. Empty list for
   /// filter-only rules (`rows: []`).
   final List<List<Map<String, String>>> ruleRows;
+  /// Ordered `(output_header, $variable)` pairs from the template's
+  /// `output_schema`. Drill-down rebuilds `row.outputs` by iterating this
+  /// list and looking each `$variable` up in the per-row eval bindings —
+  /// the csvx file is never read, so this works for Dry-run, fresh-DEV,
+  /// and synthetic source files that never went through a Full run.
+  final List<({String header, String variable})> outputSchema;
   /// Pre-pass lookup blob ready for `bxp-fmt --expr-batch`'s `lookups`
   /// field. Keys use `\x00` separator: `"<block>\x00<key>\x00<field>"`.
   final Map<String, String> lookups;
@@ -4448,6 +4537,7 @@ class _BtraceFileRuntime {
     required this.tickerMap,
     required this.ruleWhens,
     required this.ruleRows,
+    required this.outputSchema,
     required this.lookups,
     this.singlePrepassName,
   });

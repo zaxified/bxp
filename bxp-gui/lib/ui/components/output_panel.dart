@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:json5_ast/ast.dart';
 import 'package:provider/provider.dart';
 import '../../store/trace_store.dart';
 import '../theme/bxp_theme.dart';
@@ -42,7 +41,7 @@ class OutputPanel extends StatelessWidget {
     final file = model.files[fileId];
     if (row == null || file == null) return const SizedBox.shrink();
 
-    final cols = _resolveColumns(store.astRoot, file.template, row.outputs);
+    final cols = _resolveColumns(store, fileId, row.outputs);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -61,54 +60,26 @@ class OutputPanel extends StatelessWidget {
     );
   }
 
-  /// Prefer config-declared schema (gives us `header` + `variable`),
-  /// fall back to positional `[1]..[N]` placeholders when not available.
-  ///
-  /// Phase 5c-C1: walks the live AST (`TraceStore.astRoot`) directly.
-  /// CommentLine peers in `output_schema` are skipped naturally by the
-  /// `whereType<JsonProperty>` filter — no $-prefixed key blacklist
-  /// needed (the AST never had $comm_/$meta_/$elem_meta_ entries to
-  /// begin with, those were adapter artefacts).
+  /// Pull `(header, $variable)` pairs from the per-file runtime snapshot
+  /// captured at `file_start`. Same source of truth that `_loadRowDetail`
+  /// uses to build `row.outputs` — guarantees column labels can never
+  /// drift from the cell values when a user edits `output_schema`
+  /// between run and drill-down. Falls back to positional `[1]..[N]`
+  /// placeholders when the snapshot is empty (template lacked an
+  /// `output_schema` block, or the file's runtime hasn't been finalised
+  /// yet during live ingest).
   List<_ColDef> _resolveColumns(
-      JsonAstNode? root, String templateId, List<List<String>> outputs) {
+      TraceStore store, String fileId, List<List<String>> outputs) {
+    final snap = store.outputSchemaFor(fileId);
+    if (snap.isNotEmpty) {
+      return [
+        for (final col in snap)
+          _ColDef(header: col.header, variable: col.variable),
+      ];
+    }
     final fallbackCols = outputs.isNotEmpty ? outputs.first.length : 0;
-    List<_ColDef> fallback() => List.generate(
+    return List.generate(
         fallbackCols, (i) => _ColDef(header: '[${i + 1}]', variable: ''));
-
-    if (root is! JsonObject) return fallback();
-    final templates = _findProp(root, 'conversion_templates');
-    if (templates is! JsonObject) return fallback();
-    final tpl = _findProp(templates, templateId);
-    if (tpl is! JsonObject) return fallback();
-    final schema = _findProp(tpl, 'output_schema');
-    if (schema is! JsonObject) return fallback();
-
-    final cols = <_ColDef>[];
-    for (final entry in schema.properties.whereType<JsonProperty>()) {
-      cols.add(_ColDef(
-        header: entry.key,
-        variable: _stringValueOf(entry.value),
-      ));
-    }
-    return cols.isEmpty ? fallback() : cols;
-  }
-
-  static JsonAstNode? _findProp(JsonObject obj, String key) {
-    for (final p in obj.properties.whereType<JsonProperty>()) {
-      if (p.key == key) return p.value;
-    }
-    return null;
-  }
-
-  /// Render a JSON5 scalar back to its string form for use as a column
-  /// "variable" label. Containers collapse to empty (the schema row's
-  /// value is always a scalar in well-formed configs).
-  static String _stringValueOf(JsonAstNode v) {
-    if (v is JsonString) return v.value;
-    if (v is JsonNumber) return v.rawText;
-    if (v is JsonBool) return v.value ? 'true' : 'false';
-    if (v is JsonNull) return 'null';
-    return '';
   }
 }
 

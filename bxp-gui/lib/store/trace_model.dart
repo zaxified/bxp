@@ -279,6 +279,13 @@ class FileModel {
   /// false for the lazy path. Set once at `file_start` based on
   /// [sourceCsvSizeBytes]; never mutated after.
   bool sourceLoadEager = false;
+  /// Monotonic counter bumped each time `TraceStore._populateRangeSync`
+  /// fills `row.fields` for a batch of rows in this file. RowList folds
+  /// this value into its widget key so the second build after activation
+  /// (post-populate) forces a PlutoGrid remount and the row cells get
+  /// repainted with real values instead of the `…` placeholder shown
+  /// while data was still being read from disk.
+  int populateGen = 0;
 
   FileModel({required this.id, required this.template, required this.path, required this.rows, required this.headers});
 }
