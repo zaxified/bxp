@@ -1333,57 +1333,50 @@ const WorkerSlice = struct {
     // === Error state (workers can't propagate errors through spawnWg) ===
     error_value: ?anyerror = null,
 
-    pub fn init(alloc: std.mem.Allocator) !WorkerSlice {
-        var line_arena = std.heap.ArenaAllocator.init(alloc);
-        errdefer line_arena.deinit();
-        var field_arena = std.heap.ArenaAllocator.init(alloc);
-        errdefer field_arena.deinit();
-        var prepass_arena = std.heap.ArenaAllocator.init(alloc);
-        errdefer prepass_arena.deinit();
-
-        // Field buffer is `[MAX_COLUMNS][]const u8` worth of pointer slots.
-        // splitFields writes slice headers into it; the underlying bytes
-        // either point into the source chunk or live in `field_arena`.
-        const fb_bytes = try alloc.alloc(u8, @sizeOf([]const u8) * MAX_COLUMNS);
-        errdefer alloc.free(fb_bytes);
-
-        var out_alloc = std.Io.Writer.Allocating.init(alloc);
-        errdefer out_alloc.deinit();
-        var combined_alloc = std.Io.Writer.Allocating.init(alloc);
-        errdefer combined_alloc.deinit();
-        var btrace_alloc = std.Io.Writer.Allocating.init(alloc);
-        errdefer btrace_alloc.deinit();
-        var debug_alloc = std.Io.Writer.Allocating.init(alloc);
-        errdefer debug_alloc.deinit();
-
-        var ws = WorkerSlice{
-            .line_arena = line_arena,
-            .field_arena = field_arena,
-            .field_buf = fb_bytes,
-            .prepass_arena = prepass_arena,
-            .out_alloc = out_alloc,
-            .combined_alloc = combined_alloc,
-            .btrace_alloc = btrace_alloc,
-            .debug_alloc = debug_alloc,
-            .btw = undefined, // patched after Allocating addresses are stable
-            .worker_out = undefined, // patched after btw + debug_alloc are stable
+    /// Initialise `self` in its final storage location. Cannot return by
+    /// value: `worker_out.writer` and `btw.w` are self-referential
+    /// pointers into `debug_alloc.writer` / `btrace_alloc.writer`, so
+    /// returning a copy of the struct would leave the pointers aimed at
+    /// the temporary stack slot instead of the caller's array element.
+    /// Caller pattern:
+    ///
+    ///     workers[i] = undefined;
+    ///     try workers[i].init(alloc);
+    pub fn init(self: *WorkerSlice, alloc: std.mem.Allocator) !void {
+        self.* = WorkerSlice{
+            .line_arena = std.heap.ArenaAllocator.init(alloc),
+            .field_arena = std.heap.ArenaAllocator.init(alloc),
+            .field_buf = &.{}, // alloc'd below
+            .prepass_arena = std.heap.ArenaAllocator.init(alloc),
+            .out_alloc = std.Io.Writer.Allocating.init(alloc),
+            .combined_alloc = std.Io.Writer.Allocating.init(alloc),
+            .btrace_alloc = std.Io.Writer.Allocating.init(alloc),
+            .debug_alloc = std.Io.Writer.Allocating.init(alloc),
+            .btw = undefined,
+            .worker_out = undefined,
             .partial_lookup = std.StringHashMap([]const u8).init(alloc),
         };
+        // Field buffer is `[MAX_COLUMNS][]const u8` worth of pointer
+        // slots. splitFields writes slice headers into it; the
+        // underlying bytes either point into the source chunk or live in
+        // `field_arena`.
+        self.field_buf = try alloc.alloc(u8, @sizeOf([]const u8) * MAX_COLUMNS);
         // We construct `btw` directly (bypassing `btrace.Writer.init`)
         // so it does NOT write the BXTB magic into the per-worker buffer.
         // Magic is emitted exactly once per stream by main.zig at startup;
-        // worker bytes are appended raw after that.
-        ws.btw = .{ .w = &ws.btrace_alloc.writer };
-        ws.worker_out = Output{
-            .writer = &ws.debug_alloc.writer,
+        // worker bytes are appended raw after that. `chunk_id = 0` matches
+        // the value the canonical writer carries (reserved for future
+        // multicore chunk dispatch — always 0 today; see btrace.zig).
+        self.btw = .{ .w = &self.btrace_alloc.writer, .chunk_id = 0 };
+        self.worker_out = Output{
+            .writer = &self.debug_alloc.writer,
             .quiet = false,
             .debug = false, // set per call via setDebug()
             .trace = .off,
             .dry_run = false,
-            .btrace_writer = &ws.btw,
+            .btrace_writer = &self.btw,
             .btrace_file_writer = null,
         };
-        return ws;
     }
 
     pub fn deinit(self: *WorkerSlice) void {
@@ -1575,6 +1568,69 @@ fn processBlockParallel(
     return K;
 }
 
+/// Parses the CSV header (first logical record) from the first chunk
+/// returned by a `ChunkReader`. Strips a UTF-8 BOM, splits the header
+/// fields, dupes them into `file_alloc` after trimming spaces, and
+/// populates `col_index` + `col_names`. Returns the byte offset within
+/// `chunk_bytes` where body records begin — the caller continues
+/// iteration from there with `csv.LineIterator`. Header truncation
+/// (more than `MAX_COLUMNS`) bumps `stats.warnings` and emits a warning
+/// to mirror the legacy `RowIterator.parseHeader` behaviour.
+fn parseCsvHeader(
+    chunk_bytes: []const u8,
+    delimiter: u8,
+    quote: u8,
+    file_alloc: std.mem.Allocator,
+    col_index: *std.StringHashMap(usize),
+    col_names: *std.array_list.Managed([]const u8),
+    out: Output,
+    filename: []const u8,
+    stats: *SectionStats,
+) !usize {
+    var pos: usize = 0;
+    if (chunk_bytes.len >= 3 and std.mem.eql(u8, chunk_bytes[0..3], "\xEF\xBB\xBF")) {
+        pos = 3;
+    }
+    var hdr_it = csv.LineIterator.init(chunk_bytes[pos..], quote, 0);
+    const hdr_line_opt = hdr_it.next();
+    if (hdr_line_opt == null) return pos;
+    const hdr_line = hdr_line_opt.?;
+    var hdr_arena = std.heap.ArenaAllocator.init(file_alloc);
+    defer hdr_arena.deinit();
+    const hdr_scratch = try hdr_arena.allocator().alloc([]const u8, MAX_COLUMNS + 1);
+    const raw_header = try csv.splitFields(hdr_line.bytes, hdr_scratch, delimiter, quote, hdr_arena.allocator());
+    const truncated = raw_header.len > MAX_COLUMNS;
+    const header_fields = if (truncated) raw_header[0..MAX_COLUMNS] else raw_header;
+    if (truncated) {
+        stats.warnings += 1;
+        out.warning("warning: '{s}' has more than {d} columns; extra columns are ignored\n", .{ filename, MAX_COLUMNS });
+    }
+    for (header_fields, 0..) |name, idx| {
+        const trimmed = std.mem.trim(u8, name, " ");
+        const owned = try file_alloc.dupe(u8, trimmed);
+        try col_index.put(owned, idx);
+        try col_names.append(owned);
+    }
+    return pos + hdr_it.pos;
+}
+
+/// BOM + first-record skip without parsing fields or populating
+/// `col_index`. Used by the parallel CSV main pass to skip the header
+/// line in the first chunk after the file is re-opened for the second
+/// pass (the pre_pass already populated `col_index` + `col_names`, no
+/// need to redo it).
+fn skipBomAndHeader(chunk_bytes: []const u8, quote: u8) usize {
+    var pos: usize = 0;
+    if (chunk_bytes.len >= 3 and std.mem.eql(u8, chunk_bytes[0..3], "\xEF\xBB\xBF")) {
+        pos = 3;
+    }
+    var it = csv.LineIterator.init(chunk_bytes[pos..], quote, 0);
+    if (it.next() != null) {
+        return pos + it.pos;
+    }
+    return chunk_bytes.len;
+}
+
 /// Drains K main-pass workers in worker-index order into the real
 /// per-file sink + combined sink + btrace stream, patches per-worker
 /// btrace bytes with the absolute file-scope `outputIdx`, and
@@ -1717,17 +1773,33 @@ pub fn processBroker(
     runtime: Runtime,
     alloc: std.mem.Allocator,
 ) !SectionStats {
-    // `runtime` carries the worker thread pool that the per-block parallel
-    // path will use. Wiring lands incrementally — for now the field is
-    // received but unused so the call sites can be flipped in one go later.
-    _ = runtime;
-
     var stats = SectionStats{};
     var timer = try std.time.Timer.start();
 
     out_in.info("\n=== template: {s} ===\n", .{bid});
 
     const out = out_in;
+
+    // Worker scratch — one `WorkerSlice` per pool worker, allocated once
+    // per template and reused across every file. `resetForFile` clears
+    // per-file state (`prepass_arena`, `partial_lookup`) at each file
+    // boundary; `processBlockParallel` calls `resetForBlock` per block.
+    // `inited` tracks how many were successfully constructed so the
+    // single defer below deinits exactly the constructed ones even if
+    // initialization fails partway through.
+    const K_workers = runtime.max_workers;
+    const workers = try alloc.alloc(WorkerSlice, K_workers);
+    var workers_inited: usize = 0;
+    defer {
+        var i = workers_inited;
+        while (i > 0) : (i -= 1) workers[i - 1].deinit();
+        alloc.free(workers);
+    }
+    for (workers) |*w| {
+        w.* = undefined;
+        try w.init(alloc);
+        workers_inited += 1;
+    }
 
     // LOOKUP-without-pre_pass guard: bxp-fmt --config catches this at
     // validate time, but a hot-swapped config skips that gate. Warn once
@@ -1941,11 +2013,6 @@ pub fn processBroker(
         var in_file = try dir.openFile(filename, .{});
         defer in_file.close();
 
-        // Per-chunk arena shared by pre_pass and main passes; reset on
-        // each chunk transition inside RowIterator.next().
-        var chunk_arena = std.heap.ArenaAllocator.init(alloc);
-        defer chunk_arena.deinit();
-
         // Header structures persist across all chunks (live in file_alloc).
         var col_index = std.StringHashMap(usize).init(file_alloc);
         var col_names = std.array_list.Managed([]const u8).init(file_alloc);
@@ -1959,24 +2026,21 @@ pub fn processBroker(
         // JSON path materialises rows up front; CSV streams them per chunk.
         var json_all_rows: ?std.array_list.Managed([][]const u8) = null;
 
-        // Lazily-initialised main-pass iterator for CSV. Declared here
-        // so checkUnknownFields / file_start / output sink setup can run
-        // between parseHeader and the row loop, while the iter+reader
-        // live for the entire iteration.
-        var main_reader: ChunkReader = undefined;
-        var main_reader_inited = false;
-        defer if (main_reader_inited) main_reader.deinit();
-        var main_iter: RowIterator = undefined;
+        // CSV chunk reader — shared between pre_pass and main pass.
+        // After pre_pass, the file is rewound and the reader is re-init'd
+        // (since `ChunkReader` is owned by the file's read cursor and
+        // can't seek backwards on its own).
+        var chunk_reader: ChunkReader = undefined;
+        var chunk_reader_inited = false;
+        defer if (chunk_reader_inited) chunk_reader.deinit();
 
-        // CSV pre_pass iterator — lifted to file-iteration scope so the
-        // pre_pass loop can run AFTER `file_start` is emitted (frame
-        // ordering invariant: every prepass_entry MUST be observed by a
-        // consumer that has already seen its parent file_start).
-        var pp_reader: ChunkReader = undefined;
-        var pp_reader_inited = false;
-        defer if (pp_reader_inited) pp_reader.deinit();
-        var pp_iter: RowIterator = undefined;
-        var pp_iter_inited = false;
+        // First chunk + body-start offset (after BOM + header). Captured
+        // once during the initial header parse and re-captured after
+        // rewind. The parallel block loop consumes records starting at
+        // `first_chunk[first_chunk_body_start..]` from this chunk, then
+        // pulls subsequent chunks via `chunk_reader.nextChunk()`.
+        var first_chunk: []const u8 = "";
+        var first_chunk_body_start: usize = 0;
 
         if (bc.file_type_in == .json) {
             // JSON: whole-file read, then build col_names/index + materialise rows.
@@ -1994,67 +2058,39 @@ pub fn processBroker(
             for (col_names.items, 0..) |name, idx| try col_index.put(name, idx);
             json_all_rows = rows;
             // JSON pre_pass deferred to the post-file_start section below.
-        } else if (bc.pre_passes.count() > 0) {
-            // CSV with pre_pass: parse header here; run the pre_pass row
-            // loop AFTER file_start emission (see post-file_start block).
-            pp_reader = try ChunkReader.init(file_alloc, in_file, bc.csv_text_quote_in);
-            pp_reader_inited = true;
-            pp_iter = try RowIterator.init(&pp_reader, &chunk_arena, file_alloc, bc.csv_delimiter_in, bc.csv_text_quote_in);
-            pp_iter_inited = true;
-
-            const raw_header = try pp_iter.parseHeader();
-            const truncated = raw_header.len > MAX_COLUMNS;
-            const header_fields = if (truncated) raw_header[0..MAX_COLUMNS] else raw_header;
-            if (truncated) {
-                stats.warnings += 1;
-                out.warning("warning: '{s}' has more than {d} columns; extra columns are ignored\n", .{ filename, MAX_COLUMNS });
-            }
-            for (header_fields, 0..) |name, idx| {
-                // Intentional RFC 4180 deviation: trim spaces from column header
-                // names so that [ColumnName] references work regardless of padding.
-                const trimmed = std.mem.trim(u8, name, " ");
-                const owned = try file_alloc.dupe(u8, trimmed);
-                try col_index.put(owned, idx);
-                try col_names.append(owned);
-            }
-            // First-chunk UTF-8 validation. Chunk boundaries always
-            // land on '\n' (ASCII), so a multi-byte sequence is never
-            // split across chunks; each chunk is independently
-            // validatable. We validate only the first chunk to
-            // approximate the legacy single-shot whole-file check
-            // (cheap proxy for the common "BOM + Windows-1250 export"
-            // failure mode).
-            if (pp_reader.buffer.items.len > 0 and
-                !std.unicode.utf8ValidateSlice(pp_reader.buffer.items[0..pp_reader.last_emit_len]))
-            {
-                stats.warnings += 1;
-                out.warning("warning: '{s}' is not valid UTF-8; non-ASCII characters may be garbled\n", .{filename});
-            }
         } else {
-            // CSV without pre_pass: parse header straight from the
-            // main-pass iterator (no rewind needed).
-            main_reader = try ChunkReader.init(file_alloc, in_file, bc.csv_text_quote_in);
-            main_reader_inited = true;
-            main_iter = try RowIterator.init(&main_reader, &chunk_arena, file_alloc, bc.csv_delimiter_in, bc.csv_text_quote_in);
-
-            const raw_header = try main_iter.parseHeader();
-            const truncated = raw_header.len > MAX_COLUMNS;
-            const header_fields = if (truncated) raw_header[0..MAX_COLUMNS] else raw_header;
-            if (truncated) {
-                stats.warnings += 1;
-                out.warning("warning: '{s}' has more than {d} columns; extra columns are ignored\n", .{ filename, MAX_COLUMNS });
-            }
-            for (header_fields, 0..) |name, idx| {
-                const trimmed = std.mem.trim(u8, name, " ");
-                const owned = try file_alloc.dupe(u8, trimmed);
-                try col_index.put(owned, idx);
-                try col_names.append(owned);
-            }
-            if (main_reader.buffer.items.len > 0 and
-                !std.unicode.utf8ValidateSlice(main_reader.buffer.items[0..main_reader.last_emit_len]))
-            {
-                stats.warnings += 1;
-                out.warning("warning: '{s}' is not valid UTF-8; non-ASCII characters may be garbled\n", .{filename});
+            // CSV path: open the chunk reader, pull the first chunk,
+            // validate UTF-8, parse the header (populates col_index +
+            // col_names + dupe'd strings into file_alloc), and remember
+            // where body records begin. The same `first_chunk` view is
+            // reused both by the pre_pass block loop (when configured)
+            // and by the main-pass block loop below.
+            chunk_reader = try ChunkReader.init(file_alloc, in_file, bc.csv_text_quote_in);
+            chunk_reader_inited = true;
+            first_chunk = (try chunk_reader.nextChunk()) orelse "";
+            if (first_chunk.len > 0) {
+                // First-chunk UTF-8 validation. Chunk boundaries always
+                // land on '\n' (ASCII), so a multi-byte sequence is never
+                // split across chunks; each chunk is independently
+                // validatable. We validate only the first chunk to
+                // approximate the legacy single-shot whole-file check
+                // (cheap proxy for the common "BOM + Windows-1250 export"
+                // failure mode).
+                if (!std.unicode.utf8ValidateSlice(first_chunk)) {
+                    stats.warnings += 1;
+                    out.warning("warning: '{s}' is not valid UTF-8; non-ASCII characters may be garbled\n", .{filename});
+                }
+                first_chunk_body_start = try parseCsvHeader(
+                    first_chunk,
+                    bc.csv_delimiter_in,
+                    bc.csv_text_quote_in,
+                    file_alloc,
+                    &col_index,
+                    &col_names,
+                    out,
+                    filename,
+                    &stats,
+                );
             }
         }
 
@@ -2098,15 +2134,69 @@ pub fn processBroker(
                 for (jr.items) |fields| {
                     try evalPrepassRow(fields, &col_index, &lookup_table, bc, file_alloc, out);
                 }
-            } else if (pp_iter_inited) {
-                while (try pp_iter.next()) |fields| {
-                    try evalPrepassRow(fields, &col_index, &lookup_table, bc, file_alloc, out);
+            } else if (chunk_reader_inited) {
+                // CSV parallel pre_pass: workers populate per-worker
+                // `partial_lookup` maps from per-chunk row slices; drain
+                // merges them into the shared `lookup_table` in
+                // worker-index order with last-writer-wins on duplicate
+                // composite keys (matches the serial semantic where later
+                // rows overwrite earlier rows for the same key).
+                for (workers) |*w| {
+                    w.resetForFile();
+                    w.setDebug(out.debug);
                 }
+                var pending = std.array_list.Managed(csv.LineSlice).init(file_alloc);
+                defer pending.deinit();
+                const rec_prepass = RowEvalConst{
+                    .bc = bc,
+                    .col_index = &col_index,
+                    .col_names = col_names.items,
+                    .lookup_table_ptr = null, // pre_pass has no self-reference
+                    .single_prepass_name = null,
+                    .date_min = date_min,
+                    .date_max = date_max,
+                    .bid = bid,
+                };
+                // First chunk: body lines starting after the header.
+                if (first_chunk.len > first_chunk_body_start) {
+                    var it = csv.LineIterator.init(
+                        first_chunk[first_chunk_body_start..],
+                        bc.csv_text_quote_in,
+                        chunk_reader.chunk_start_in_file + first_chunk_body_start,
+                    );
+                    while (it.next()) |line| try pending.append(line);
+                }
+                if (pending.items.len > 0) {
+                    const k_used = try processBlockParallel(pending.items, workers, runtime, &rec_prepass, true);
+                    try drainBlockPrePass(workers, k_used, out, &lookup_table);
+                    pending.clearRetainingCapacity();
+                }
+                // Subsequent chunks (one block per chunk; ChunkReader
+                // returns chunks already aligned on record boundaries
+                // at ~10 MiB, which matches our target block size).
+                while (try chunk_reader.nextChunk()) |chunk_bytes| {
+                    var it = csv.LineIterator.init(
+                        chunk_bytes,
+                        bc.csv_text_quote_in,
+                        chunk_reader.chunk_start_in_file,
+                    );
+                    while (it.next()) |line| try pending.append(line);
+                    if (pending.items.len > 0) {
+                        const k_used = try processBlockParallel(pending.items, workers, runtime, &rec_prepass, true);
+                        try drainBlockPrePass(workers, k_used, out, &lookup_table);
+                        pending.clearRetainingCapacity();
+                    }
+                }
+                // Rewind file for main pass. `ChunkReader` can't seek
+                // backwards, so we deinit + re-init it after the file
+                // cursor moves to 0. `skipBomAndHeader` skips the same
+                // bytes that `parseCsvHeader` consumed during the
+                // pre-pass header parse.
                 try in_file.seekTo(0);
-                main_reader = try ChunkReader.init(file_alloc, in_file, bc.csv_text_quote_in);
-                main_reader_inited = true;
-                main_iter = try RowIterator.init(&main_reader, &chunk_arena, file_alloc, bc.csv_delimiter_in, bc.csv_text_quote_in);
-                _ = try main_iter.parseHeader(); // discard, col_names already populated
+                chunk_reader.deinit();
+                chunk_reader = try ChunkReader.init(file_alloc, in_file, bc.csv_text_quote_in);
+                first_chunk = (try chunk_reader.nextChunk()) orelse "";
+                first_chunk_body_start = skipBomAndHeader(first_chunk, bc.csv_text_quote_in);
             }
         }
 
@@ -2231,19 +2321,11 @@ pub fn processBroker(
         // path; both treat the counter as `*u64`. binEmitFileEnd consumes
         // it directly with no cast.
         var file_rows_written: u64 = 0;
-        // Unified row source: JSON path replays the in-memory all_rows;
-        // CSV path drives main_iter, which resets chunk_arena per chunk.
-        var row_src: RowSource = if (json_all_rows) |jr|
-            .{ .json_materialised = .{ .rows = jr.items, .idx = 0 } }
-        else
-            .{ .csv_streaming = &main_iter };
         var file_row_idx: usize = 0;
 
-        // Bundle the const inputs + mutable emit sinks for `evalAndEmitRow`.
-        // The same function is called by `workerMainPass` with per-worker
-        // emit state once the parallel path is wired in; right now the
-        // serial loop passes pointers to shared file-level state so the
-        // dataset regression gate validates the extraction.
+        // Const inputs shared between JSON serial loop and CSV parallel
+        // workers. Both paths thread this through `evalAndEmitRow`; the
+        // const view stays read-only inside workers.
         const rec = RowEvalConst{
             .bc = bc,
             .col_index = &col_index,
@@ -2254,19 +2336,95 @@ pub fn processBroker(
             .date_max = date_max,
             .bid = bid,
         };
-        var emit = RowEmit{
-            .out = out,
-            .fout = fout,
-            .combined_fout = combined_fout,
-            .combined = combined,
-            .json_first_row = &json_first_row,
-            .combined_json_first_row = &combined_json_first_row,
-            .rows_written = &file_rows_written,
-            .expr_errors = &file_expr_errors,
-        };
-        while (try row_src.next()) |fields| : (file_row_idx += 1) {
-            const row_offset = row_src.currentOffset() orelse 0;
-            try evalAndEmitRow(fields, row_offset, &rec, &line_arena, &emit);
+
+        if (json_all_rows) |jr| {
+            // JSON serial main loop. JSON parallelisation is out of
+            // scope for v1 (JSON slurps to RAM and is the small-file
+            // path); the file count of JSON exports in real-world bxp
+            // use cases is tiny.
+            var row_src: RowSource = .{ .json_materialised = .{ .rows = jr.items, .idx = 0 } };
+            var emit = RowEmit{
+                .out = out,
+                .fout = fout,
+                .combined_fout = combined_fout,
+                .combined = combined,
+                .json_first_row = &json_first_row,
+                .combined_json_first_row = &combined_json_first_row,
+                .rows_written = &file_rows_written,
+                .expr_errors = &file_expr_errors,
+            };
+            while (try row_src.next()) |fields| : (file_row_idx += 1) {
+                const row_offset = row_src.currentOffset() orelse 0;
+                try evalAndEmitRow(fields, row_offset, &rec, &line_arena, &emit);
+            }
+        } else if (chunk_reader_inited) {
+            // CSV parallel main loop. Per-chunk = per-block: collect
+            // record slices from each chunk via LineIterator, fork K
+            // workers via processBlockParallel, drain in worker-index
+            // order via drainBlockMain. Workers don't reset their
+            // `prepass_arena` here (resetForFile happened before the
+            // pre_pass loop and the bytes feed the shared lookup_table).
+            for (workers) |*w| w.setDebug(out.debug);
+            var pending = std.array_list.Managed(csv.LineSlice).init(file_alloc);
+            defer pending.deinit();
+            // First chunk: body lines starting after the header.
+            if (first_chunk.len > first_chunk_body_start) {
+                var it = csv.LineIterator.init(
+                    first_chunk[first_chunk_body_start..],
+                    bc.csv_text_quote_in,
+                    chunk_reader.chunk_start_in_file + first_chunk_body_start,
+                );
+                while (it.next()) |line| {
+                    try pending.append(line);
+                    file_row_idx += 1;
+                }
+            }
+            if (pending.items.len > 0) {
+                const k_used = try processBlockParallel(pending.items, workers, runtime, &rec, false);
+                try drainBlockMain(
+                    workers,
+                    k_used,
+                    bc.file_type_out,
+                    combined,
+                    fout,
+                    combined_fout,
+                    &json_first_row,
+                    &combined_json_first_row,
+                    out,
+                    &file_rows_written,
+                    &file_expr_errors,
+                );
+                pending.clearRetainingCapacity();
+            }
+            // Subsequent chunks.
+            while (try chunk_reader.nextChunk()) |chunk_bytes| {
+                var it = csv.LineIterator.init(
+                    chunk_bytes,
+                    bc.csv_text_quote_in,
+                    chunk_reader.chunk_start_in_file,
+                );
+                while (it.next()) |line| {
+                    try pending.append(line);
+                    file_row_idx += 1;
+                }
+                if (pending.items.len > 0) {
+                    const k_used = try processBlockParallel(pending.items, workers, runtime, &rec, false);
+                    try drainBlockMain(
+                        workers,
+                        k_used,
+                        bc.file_type_out,
+                        combined,
+                        fout,
+                        combined_fout,
+                        &json_first_row,
+                        &combined_json_first_row,
+                        out,
+                        &file_rows_written,
+                        &file_expr_errors,
+                    );
+                    pending.clearRetainingCapacity();
+                }
+            }
         }
 
         // Per-file tail + flush — always emitted at end-of-iteration.
