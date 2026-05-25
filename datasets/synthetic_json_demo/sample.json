@@ -1,0 +1,42 @@
+// Synthetic fixture exercising bxp-cli JSON input handling. Not a real
+// broker — purely a regression test for json.zig behaviour:
+//   * union of keys across records (first-seen order)
+//   * keys absent from a given record collapse to ""
+//   * value type coercions: string/number/null/bool/integer
+//   * key order varies between records (output column order must remain
+//     deterministic = first-seen across the whole file)
+{
+  conversion_templates: {
+    synthetic_json_demo: {
+      data_dir:                  ".",
+      file_type_in:              "json",
+      file_type_out:             "csv",
+      file_pattern_in:           ".in.json",
+      file_pattern_out:          ".csvx",
+      input_schema: {
+        $date:      "[date]",
+        $ticker:    "[ticker]",
+        $quantity:  "[qty]",
+        $unitprice: "[price]",
+        $currency:  "[currency]",
+        $fee:       "[fee]",
+        $note:      "[note]",
+        $flag:      "[flag]",
+      },
+      row_rules: [
+        { when: "1", rows: [ { $action: "'BUY'" } ] },
+      ],
+      output_schema: {
+        date:         "$date",
+        symbol:       "$ticker",
+        quantity:     "$quantity",
+        activityType: "$action",
+        unitPrice:    "$unitprice",
+        currency:     "$currency",
+        fee:          "$fee",
+        note:         "$note",
+        flag:         "$flag",
+      },
+    },
+  },
+}

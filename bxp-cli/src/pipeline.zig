@@ -12,11 +12,6 @@ const xlsx_mod = @import("xlsx");
 const json_mod = @import("json");
 const btrace = @import("btrace");
 
-// 1 GiB cap. Whole-file load into RAM is the current design — streaming
-// is roadmapped for v0.4.0. Until then this ceiling lets real-world public
-// datasets (NYC Taxi monthly, NOAA GHCN per-station, Inside Airbnb city
-// scrapes) fit, while still preventing runaway memory on pathological input.
-const MAX_FILE_SIZE_BYTES: usize = 1024 * 1024 * 1024;
 // Broker exports typically have 10–30 columns; real-world public datasets
 // can reach 100+ (NOAA GHCN daily has 124, with paired measurement +
 // quality-flag columns). 1024 is a generous ceiling that costs ~16 KB per
@@ -31,6 +26,12 @@ const OUT_FILE_BUF_SIZE: usize = 65536;
 // Real numeric outputs are short ("123456789.12345678" = 18 chars); anything
 // longer is treated as non-numeric and passed through verbatim.
 const VAL_BUF_SIZE: usize = 64;
+// JSON parallel pipeline block size: records buffered by the serial
+// Scanner-based RecordReader before fork-joining the worker pool. 1024
+// amortises dispatch overhead across enough rows that workers do real
+// work per spawn, while keeping the block arena footprint bounded
+// (records' field bytes accumulate until the block drains).
+const JSON_PARALLEL_BLOCK_SIZE: usize = 1024;
 /// Runtime key for the date variable in the merged vars map (JSON5 converts @date → $date).
 const VAR_DATE: []const u8 = "$date";
 
@@ -836,47 +837,6 @@ const ChunkReader = struct {
     }
 };
 
-/// Unified row producer for the main pipeline loop.
-///
-/// CSV path → wraps a streaming `RowIterator`. Returned fields slices
-///            live in chunk_arena and become invalid on next call.
-/// JSON path → wraps the pre-materialised `all_rows` slice from
-///             `json_mod.readJsonRecords`. Slices live in file_alloc
-///             and remain valid for the whole file.
-///
-/// Both variants satisfy the single `next()` contract used by the main
-/// loop, so the row body is written once.
-const RowSource = union(enum) {
-    json_materialised: struct {
-        rows: [][][]const u8,
-        idx: usize,
-    },
-    csv_streaming: *RowIterator,
-
-    pub fn next(self: *RowSource) !?[][]const u8 {
-        switch (self.*) {
-            .json_materialised => |*j| {
-                if (j.idx >= j.rows.len) return null;
-                const f = j.rows[j.idx];
-                j.idx += 1;
-                return f;
-            },
-            .csv_streaming => |iter| return try iter.next(),
-        }
-    }
-
-    /// Returns the file byte offset of the most recently returned record
-    /// in the SOURCE file (CSV path), or null when the source doesn't
-    /// support seek-based drill-down (JSON materialised path — TODO: add
-    /// per-object byte offsets when GUI exercises JSON drill-down).
-    pub fn currentOffset(self: *RowSource) ?u64 {
-        return switch (self.*) {
-            .json_materialised => null,
-            .csv_streaming => |iter| iter.current_offset,
-        };
-    }
-};
-
 /// Iterator that produces parsed CSV row fields by reading chunks from a
 /// `ChunkReader` and splitting records via `csv.splitRecords`/`splitFields`.
 ///
@@ -1284,6 +1244,15 @@ fn evalAndEmitRow(
     }
 }
 
+/// One pre-parsed JSON record handed to a worker for evaluation. Field
+/// slices are allocated by the producer thread (the serial Scanner-based
+/// `RecordReader`) into a caller-owned block arena that stays live
+/// through the parallel block's WaitGroup barrier.
+pub const ParsedJsonRecord = struct {
+    fields: [][]const u8,
+    byte_offset: u64,
+};
+
 /// Per-worker scratch + output buffers used by the per-block parallel
 /// pipeline. A fixed array of `WorkerSlice` is allocated once per file
 /// (size = `runtime.max_workers`), reused across every block within the
@@ -1295,6 +1264,16 @@ fn evalAndEmitRow(
 const WorkerSlice = struct {
     // === Input slice (set by the per-block orchestrator) ===
     lines: []const csv.LineSlice = &.{},
+
+    // === JSON parallel input (mutually exclusive with `lines`) ===
+    /// JSON main/pre_pass workers consume pre-parsed records here instead
+    /// of raw CSV bytes — parsing JSON in workers would require carrying
+    /// per-worker Scanner state and a brace-aware byte splitter; serial
+    /// parsing in the reader thread is much simpler and the eval step
+    /// (where 3-expr templates spend the bulk of CPU) still parallelises.
+    /// Pre-parsed records' field slices live in the caller-owned block
+    /// arena and stay valid through the WaitGroup barrier.
+    json_records: []const ParsedJsonRecord = &.{},
     base_row_idx: u64 = 0,
 
     // === Per-block scratch (reset between blocks within a file) ===
@@ -1484,6 +1463,46 @@ fn workerMainPass(ws: *WorkerSlice, rec: *const RowEvalConst) void {
     }
 }
 
+/// JSON main-pass worker: consumes pre-parsed records in `ws.json_records`
+/// and routes each through `evalAndEmitRow`. No `csv.splitFields` step —
+/// the producer thread (RecordReader) already materialised every field.
+fn workerJsonMainPass(ws: *WorkerSlice, rec: *const RowEvalConst) void {
+    var emit = RowEmit{
+        .out = ws.worker_out,
+        .fout = &ws.out_alloc.writer,
+        .combined_fout = &ws.combined_alloc.writer,
+        .combined = rec.bc.combined_output,
+        .json_first_row = &ws.json_first_row,
+        .combined_json_first_row = &ws.combined_json_first_row,
+        .rows_written = &ws.rows_written,
+        .expr_errors = &ws.expr_errors,
+    };
+    for (ws.json_records) |rrec| {
+        evalAndEmitRow(rrec.fields, rrec.byte_offset, rec, &ws.line_arena, &emit) catch |err| {
+            ws.error_value = err;
+            return;
+        };
+    }
+}
+
+/// JSON pre_pass worker: same idea as `workerPrePass` but skips field
+/// parsing (records arrive pre-parsed from the serial Scanner reader).
+fn workerJsonPrePass(ws: *WorkerSlice, rec: *const RowEvalConst) void {
+    for (ws.json_records) |rrec| {
+        evalPrepassRow(
+            rrec.fields,
+            rec.col_index,
+            &ws.partial_lookup,
+            rec.bc,
+            ws.prepass_arena.allocator(),
+            ws.worker_out,
+        ) catch |err| {
+            ws.error_value = err;
+            return;
+        };
+    }
+}
+
 /// Upper bound on per-block worker count. Way above any realistic CPU
 /// count (today's biggest server SKUs are < 200 cores); used only to
 /// size the stack-allocated `boundaries` array in
@@ -1579,6 +1598,52 @@ fn processBlockParallel(
     // propagate errors through `spawnWg` so they stash them in
     // `error_value`; we re-raise here so the file loop's main-thread
     // error path handles it the same way as the serial path would.
+    for (workers[0..K]) |*w| {
+        if (w.error_value) |err| return err;
+    }
+    return K;
+}
+
+/// JSON sibling of `processBlockParallel`. Splits the pre-parsed records
+/// slice into K contiguous worker slices (same row-count split as the
+/// CSV path) and dispatches `workerJsonMainPass` / `workerJsonPrePass`.
+/// Caller drains via `drainBlockMain` / `drainBlockPrePass` exactly the
+/// same way as the CSV path — the per-worker output buffers are format-
+/// agnostic.
+fn processBlockParallelJson(
+    records: []const ParsedJsonRecord,
+    workers: []WorkerSlice,
+    runtime: Runtime,
+    rec: *const RowEvalConst,
+    is_prepass: bool,
+) !usize {
+    if (records.len == 0) return 0;
+    const k_raw = @min(runtime.max_workers, records.len);
+    if (k_raw > MAX_WORKERS_LIMIT) return error.TooManyWorkers;
+    const K = k_raw;
+
+    var boundaries: [MAX_WORKERS_LIMIT + 1]usize = undefined;
+    boundaries[0] = 0;
+    const base = records.len / K;
+    const rem = records.len % K;
+    for (0..K) |i| {
+        const slice_len = base + (if (i < rem) @as(usize, 1) else @as(usize, 0));
+        boundaries[i + 1] = boundaries[i] + slice_len;
+    }
+
+    for (workers[0..K], 0..) |*w, i| {
+        w.resetForBlock();
+        w.json_records = records[boundaries[i]..boundaries[i + 1]];
+    }
+
+    var wg: std.Thread.WaitGroup = .{};
+    if (is_prepass) {
+        for (workers[0..K]) |*w| runtime.pool.spawnWg(&wg, workerJsonPrePass, .{ w, rec });
+    } else {
+        for (workers[0..K]) |*w| runtime.pool.spawnWg(&wg, workerJsonMainPass, .{ w, rec });
+    }
+    wg.wait();
+
     for (workers[0..K]) |*w| {
         if (w.error_value) |err| return err;
     }
@@ -2040,8 +2105,13 @@ pub fn processBroker(
         // so it survives both passes.
         var lookup_table = std.StringHashMap([]const u8).init(file_alloc);
 
-        // JSON path materialises rows up front; CSV streams them per chunk.
-        var json_all_rows: ?std.array_list.Managed([][]const u8) = null;
+        // JSON path streams records via `json_mod.RecordReader`. Two
+        // separate passes happen below (Pass 0 = col_names discovery
+        // here; Pass 1 = pre_pass; Pass 2 = main) — each pass rewinds
+        // the file and re-instantiates a Reader, so we only carry a
+        // boolean to tell the downstream branches which file format
+        // they're consuming.
+        var json_streaming = false;
 
         // CSV chunk reader — shared between pre_pass and main pass.
         // After pre_pass, the file is rewound and the reader is re-init'd
@@ -2060,21 +2130,26 @@ pub fn processBroker(
         var first_chunk_body_start: usize = 0;
 
         if (bc.file_type_in == .json) {
-            // JSON: whole-file read, then build col_names/index + materialise rows.
-            const content_raw = try in_file.readToEndAlloc(file_alloc, MAX_FILE_SIZE_BYTES);
-            const content = if (std.mem.startsWith(u8, content_raw, "\xEF\xBB\xBF"))
-                content_raw[3..]
-            else
-                content_raw;
-            if (!std.unicode.utf8ValidateSlice(content)) {
-                stats.warnings += 1;
-                out.warning("warning: '{s}' is not valid UTF-8; non-ASCII characters may be garbled\n", .{filename});
-            }
-            var rows = std.array_list.Managed([][]const u8).init(file_alloc);
-            try json_mod.readJsonRecords(file_alloc, content, &col_names, &rows);
+            // JSON Pass 0: stream the whole file once via `scanColNames`
+            // to discover the union of object keys across all records
+            // (first-seen order). No value materialisation, no slurp —
+            // RSS bounded to the Scanner read buffer. Pre_pass / main
+            // passes re-open the file below and instantiate their own
+            // RecordReader.
+            //
+            // UTF-8 validation: dropped from the JSON path with the
+            // streaming refactor. The std.json Scanner enforces UTF-8
+            // inside string values (SyntaxError on invalid bytes);
+            // structural characters (`{}[]:,`) and whitespace are
+            // ASCII-only, so non-string UTF-8 garbage is rejected too.
+            // The legacy whole-file `utf8ValidateSlice` warning is
+            // therefore redundant.
+            var pass0_buf: [json_mod.READ_BUF_SIZE]u8 = undefined;
+            try in_file.seekTo(0);
+            var pass0_freader = in_file.reader(&pass0_buf);
+            try json_mod.scanColNames(file_alloc, &pass0_freader.interface, &col_names);
             for (col_names.items, 0..) |name, idx| try col_index.put(name, idx);
-            json_all_rows = rows;
-            // JSON pre_pass deferred to the post-file_start section below.
+            json_streaming = true;
         } else {
             // CSV path: open the chunk reader, pull the first chunk,
             // validate UTF-8, parse the header (populates col_index +
@@ -2124,17 +2199,14 @@ pub fn processBroker(
             stats.warnings += 1;
         }
 
-        // No-rows warning. JSON knows the count up front and warns now;
-        // for CSV the count is unknown until the streaming main loop
-        // finishes, so the warning is deferred to file_end below.
-        if (json_all_rows) |jr| if (jr.items.len == 0) {
-            stats.warnings += 1;
-            out.warning("warning: no rows in '{s}' (template: {s}, file: {s}/{s})\n", .{ filename, bid, dir_path, filename });
-        };
+        // No-rows warning is now deferred for both formats — streaming
+        // JSON discovers row count only during the main pass below
+        // (mirrors the CSV chunk reader's deferral). See the warning
+        // emission at file_end further down.
 
         const full_path = try std.fs.path.join(file_alloc, &.{ dir_path, filename });
         out.binEmitFileStart(
-            if (json_all_rows != null) .json else .csv,
+            if (json_streaming) .json else .csv,
             bid,
             full_path,
             col_names.items,
@@ -2147,9 +2219,54 @@ pub fn processBroker(
         // but whose currentFile slot is not yet cleared by file N's
         // file_start).
         if (bc.pre_passes.count() > 0) {
-            if (json_all_rows) |jr| {
-                for (jr.items) |fields| {
-                    try evalPrepassRow(fields, &col_index, &lookup_table, bc, file_alloc, out);
+            if (json_streaming) {
+                // JSON Pass 1 (parallel): re-open the file, stream records
+                // serially from a Scanner-backed RecordReader into blocks
+                // of `JSON_PARALLEL_BLOCK_SIZE` pre-parsed records, then
+                // fork-join the worker pool over each block. Block arena
+                // holds every record's fields while workers run; resets
+                // after drain to bound RAM.
+                const trace_on = out.btrace_writer != null or out.btrace_file_writer != null;
+                for (workers) |*w| {
+                    w.resetForFile();
+                    w.setDebug(out.debug);
+                    w.setBtraceEnabled(trace_on);
+                }
+                try in_file.seekTo(0);
+                var prepass_buf: [json_mod.READ_BUF_SIZE]u8 = undefined;
+                var prepass_freader = in_file.reader(&prepass_buf);
+                var rr: json_mod.RecordReader = undefined;
+                rr.init(file_alloc, &prepass_freader.interface, &col_index);
+                defer rr.deinit();
+                var block_arena = std.heap.ArenaAllocator.init(file_alloc);
+                defer block_arena.deinit();
+                var pending = std.array_list.Managed(ParsedJsonRecord).init(file_alloc);
+                defer pending.deinit();
+                try pending.ensureTotalCapacity(JSON_PARALLEL_BLOCK_SIZE);
+                const rec_prepass = RowEvalConst{
+                    .bc = bc,
+                    .col_index = &col_index,
+                    .col_names = col_names.items,
+                    .lookup_table_ptr = null, // pre_pass has no self-reference
+                    .single_prepass_name = null,
+                    .date_min = date_min,
+                    .date_max = date_max,
+                    .bid = bid,
+                };
+                while (true) {
+                    const fields_opt = try rr.next(block_arena.allocator());
+                    if (fields_opt) |fields| {
+                        try pending.append(.{ .fields = fields, .byte_offset = rr.recordStartOffset() });
+                    }
+                    const flush_now = (fields_opt == null and pending.items.len > 0) or
+                        pending.items.len >= JSON_PARALLEL_BLOCK_SIZE;
+                    if (flush_now) {
+                        const k_used = try processBlockParallelJson(pending.items, workers, runtime, &rec_prepass, true);
+                        try drainBlockPrePass(workers, k_used, out, &lookup_table);
+                        pending.clearRetainingCapacity();
+                        _ = block_arena.reset(.retain_capacity);
+                    }
+                    if (fields_opt == null) break;
                 }
             } else if (chunk_reader_inited) {
                 // CSV parallel pre_pass: workers populate per-worker
@@ -2356,25 +2473,56 @@ pub fn processBroker(
             .bid = bid,
         };
 
-        if (json_all_rows) |jr| {
-            // JSON serial main loop. JSON parallelisation is out of
-            // scope for v1 (JSON slurps to RAM and is the small-file
-            // path); the file count of JSON exports in real-world bxp
-            // use cases is tiny.
-            var row_src: RowSource = .{ .json_materialised = .{ .rows = jr.items, .idx = 0 } };
-            var emit = RowEmit{
-                .out = out,
-                .fout = fout,
-                .combined_fout = combined_fout,
-                .combined = combined,
-                .json_first_row = &json_first_row,
-                .combined_json_first_row = &combined_json_first_row,
-                .rows_written = &file_rows_written,
-                .expr_errors = &file_expr_errors,
-            };
-            while (try row_src.next()) |fields| : (file_row_idx += 1) {
-                const row_offset = row_src.currentOffset() orelse 0;
-                try evalAndEmitRow(fields, row_offset, &rec, &line_arena, &emit);
+        if (json_streaming) {
+            // JSON Pass 2 (parallel): the serial Scanner reader fills a
+            // block of pre-parsed `ParsedJsonRecord`, then `processBlock-
+            // ParallelJson` fork-joins K = max_workers workers — each
+            // evaluating its slice via `evalAndEmitRow`. `drainBlockMain`
+            // writes per-worker output buffers in source-row order so the
+            // output matches the single-threaded baseline byte-for-byte.
+            const trace_on = out.btrace_writer != null or out.btrace_file_writer != null;
+            for (workers) |*w| {
+                w.setDebug(out.debug);
+                w.setBtraceEnabled(trace_on);
+            }
+            try in_file.seekTo(0);
+            var main_buf: [json_mod.READ_BUF_SIZE]u8 = undefined;
+            var main_freader = in_file.reader(&main_buf);
+            var rr: json_mod.RecordReader = undefined;
+            rr.init(file_alloc, &main_freader.interface, &col_index);
+            defer rr.deinit();
+            var block_arena = std.heap.ArenaAllocator.init(file_alloc);
+            defer block_arena.deinit();
+            var pending = std.array_list.Managed(ParsedJsonRecord).init(file_alloc);
+            defer pending.deinit();
+            try pending.ensureTotalCapacity(JSON_PARALLEL_BLOCK_SIZE);
+            while (true) {
+                const fields_opt = try rr.next(block_arena.allocator());
+                if (fields_opt) |fields| {
+                    try pending.append(.{ .fields = fields, .byte_offset = rr.recordStartOffset() });
+                    file_row_idx += 1;
+                }
+                const flush_now = (fields_opt == null and pending.items.len > 0) or
+                    pending.items.len >= JSON_PARALLEL_BLOCK_SIZE;
+                if (flush_now) {
+                    const k_used = try processBlockParallelJson(pending.items, workers, runtime, &rec, false);
+                    try drainBlockMain(
+                        workers,
+                        k_used,
+                        bc.file_type_out,
+                        combined,
+                        fout,
+                        combined_fout,
+                        &json_first_row,
+                        &combined_json_first_row,
+                        out,
+                        &file_rows_written,
+                        &file_expr_errors,
+                    );
+                    pending.clearRetainingCapacity();
+                    _ = block_arena.reset(.retain_capacity);
+                }
+                if (fields_opt == null) break;
             }
         } else if (chunk_reader_inited) {
             // CSV parallel main loop. Per-chunk = per-block: collect
@@ -2456,9 +2604,9 @@ pub fn processBroker(
         if (bc.file_type_out == .json) try fout.writeAll("\n]\n");
         try fout.flush();
 
-        // CSV no-rows warning: deferred from above because streaming
-        // doesn't expose the count until the loop finishes.
-        if (json_all_rows == null and file_row_idx == 0) {
+        // No-rows warning: deferred from above for both formats because
+        // streaming doesn't expose the count until the loop finishes.
+        if (file_row_idx == 0) {
             stats.warnings += 1;
             out.warning("warning: no rows in '{s}' (template: {s}, file: {s}/{s})\n", .{ filename, bid, dir_path, filename });
         }

@@ -200,7 +200,8 @@ flowchart TD
     FRESH -->|continue| DETECT{File type?}
     DETECT -->|.csv| CSV_READ[csv.splitRecords
     csv.splitFields]
-    DETECT -->|.json| JSON_READ[json.readJsonRecords]
+    DETECT -->|.json| JSON_READ[json.scanColNames +
+    json.RecordReader streaming]
     CSV_READ --> PREPASS
     JSON_READ --> PREPASS
 

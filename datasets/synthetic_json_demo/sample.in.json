@@ -1,0 +1,39 @@
+[
+  {
+    "date": "2025-01-15 10:00:00",
+    "ticker": "AAPL",
+    "qty": 10,
+    "price": 195.5
+  },
+  {
+    "date": "2025-01-16 11:30:00",
+    "ticker": "MSFT",
+    "qty": 5,
+    "price": 415.2,
+    "currency": "USD"
+  },
+  {
+    "date": "2025-01-17 09:15:00",
+    "ticker": "GOOG",
+    "qty": 2,
+    "currency": "USD",
+    "price": null
+  },
+  {
+    "date": "2025-01-18 14:45:00",
+    "ticker": "AMZN",
+    "qty": 7,
+    "price": 178.0,
+    "fee": 0.5
+  },
+  {
+    "ticker": "TSLA",
+    "date": "2025-01-19 16:00:00",
+    "qty": 3,
+    "price": 245,
+    "currency": "USD",
+    "fee": 1.25,
+    "note": "limit order",
+    "flag": true
+  }
+]

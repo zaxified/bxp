@@ -1,0 +1,6 @@
+date,symbol,quantity,activityType,unitPrice,currency,fee,note,flag
+2025-01-15 10:00:00,AAPL,10,BUY,195.5,,,,
+2025-01-16 11:30:00,MSFT,5,BUY,415.2,USD,,,
+2025-01-17 09:15:00,GOOG,2,BUY,,USD,,,
+2025-01-18 14:45:00,AMZN,7,BUY,178,,0.5,,
+2025-01-19 16:00:00,TSLA,3,BUY,245,USD,1.25,limit order,true

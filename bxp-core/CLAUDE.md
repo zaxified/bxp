@@ -18,7 +18,7 @@ as a local path dependency.
 | `xlsx`        | `xlsx.zig`        | `xlsxToCsv()`, `SheetSpec`                                                |
 | `expr`        | `expr.zig`        | `eval()`, `evalString()`, `Context`, `Value`, `FnDoc` catalog             |
 | `config`      | `config.zig`      | `Config`, `BrokerConfig`, `load()`, `validate()`, `FieldDoc`              |
-| `json`        | `json.zig`        | `readJsonRecords()` — JSON array-of-objects input reader                  |
+| `json`        | `json.zig`        | `scanColNames()` + `RecordReader` — streaming JSON array-of-objects input |
 | `btrace`      | `btrace.zig`      | Binary trace `Writer` / `Reader` for `--trace=bin`                        |
 | `json5`       | `json5.zig`       | `preprocess()` (internal; also exported for direct use)                   |
 | `docs`        | `docs.zig`        | `writeDocs(alloc, writer)` — emits the `bxp-fmt --docs` JSON              |
@@ -112,11 +112,29 @@ Aggregator for `bxp-fmt --docs`. Single source of truth that the GUI
 
 ### json.zig
 
-JSON array-of-objects reader for bxp-cli input.
+Streaming JSON array-of-objects reader for bxp-cli input. Two-pass design
+keeps RSS bounded (Scanner read buffer + one record at a time); no
+whole-file slurp, no upper file-size limit.
 
-- `readJsonRecords(alloc, content, col_names, all_rows)` — fills `col_names` (union of all
-  keys found across all objects) and `all_rows` (each object as a `[][]const u8` field array).
-- Handles missing keys per object (fills with empty string).
+- `scanColNames(name_alloc, io_reader, col_names)` — Pass 0: scans the
+  whole array once, collects the union of object keys in first-seen order.
+  Values are skipped via `skipValue`; no per-value allocation. Returns
+  `error.JsonNotArray` / `error.JsonNotObjectArray` on shape mismatch.
+- `RecordReader.init(self, parent_alloc, io_reader, col_index)` — opens
+  a per-record streaming reader. Caller initialises in-place via `*Self`
+  pointer (Scanner captures an Allocator handle into `self.scratch`;
+  return-by-value would dangle that pointer → segfault on first alloc).
+- `RecordReader.next(row_alloc)` — materialises the next record into a
+  `[][]const u8` indexed by `col_index` order. Returns null at array end.
+  Caller resets `row_alloc` between calls to bound per-row footprint.
+- `RecordReader.recordStartOffset()` — source-file byte offset of the
+  current record's `{` byte (mirrors CSV `RowIterator.current_offset`).
+- Pre_pass + main pass each rewind the file (`file.seekTo(0)`) and
+  instantiate their own `RecordReader` against a fresh buffered reader.
+- Value coercions match the legacy `std.json.Value` path byte-for-byte:
+  null → "", bool → "true"/"false", string → dupe, integer-like number →
+  verbatim dupe, non-integer number → `parseFloat` then `{d}` format,
+  nested {}/[] → "".
 
 ### btrace.zig
 
