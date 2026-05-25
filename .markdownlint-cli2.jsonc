@@ -34,6 +34,7 @@
     "**/zig-out/**",
     "**/DEV/**",
     "**/ephemeral/**",
+    "scripts/bench/work/**",
     "**/.plugin_symlinks/**",
     "LICENSE.md",
   ],

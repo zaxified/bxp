@@ -17,6 +17,7 @@ bxp-gui/.dart_tool/
 
 # Scratch — not shipped.
 DEV/
+scripts/bench/work/
 
 # Apache 2.0 boilerplate — leave alone.
 LICENSE.md
