@@ -30,6 +30,7 @@
   - [Adding a new built-in function](#adding-a-new-built-in-function)
   - [Testing](#testing)
   - [Release process](#release-process)
+  - [Release optimize mode (Small vs Fast)](#release-optimize-mode-small-vs-fast)
   - [GUI development](#gui-development)
   - [Where to dig deeper (CLAUDE.md map)](#where-to-dig-deeper-claudemd-map)
 
@@ -728,6 +729,38 @@ bash scripts/release-02-desktop.sh v0.3.0-rc1   # host-OS desktop bundle
 
 The GitHub Actions pipeline fans out across ubuntu / windows / macos runners so
 all native installers come from real native builds.
+
+---
+
+### Release optimize mode (Small vs Fast)
+
+`scripts/release-01-console.sh` builds bxp-cli with `-Doptimize=ReleaseSmall`.
+The console archive ships the small binary by design — small downloads,
+small docker layers, small footprint for users who run bxp-cli once a week
+on a few-hundred-row broker export.
+
+For perf-critical local runs (large CSVs, repeated batch processing) you can
+rebuild with `zig build -Doptimize=ReleaseFast`. Measured deltas on
+representative synthetic workloads (serial, warm cache, NVMe-backed, 3 reps
+each, median wall-clock):
+
+| Scenario                                                | Profile          | Small  | Fast   | Speedup |
+| ------------------------------------------------------- | ---------------- | ------ | ------ | ------- |
+| 100k rows × 1024 cols, w=20 (2.0 GB CSV, per-block ‖)   | wide-cols, ‖ CPU | 22.59s | 17.24s | 1.31×   |
+| 2M rows × 16 cols, w=20 (551 MB CSV, reader-bound)      | row-heavy        | 9.82s  | 5.99s  | 1.64×   |
+| 100k rows × 16 cols, w=20 (28 MB CSV, passthrough only) | minimal work     | 0.39s  | 0.23s  | 1.70×   |
+
+Binary size cost: 377 KB → 5.5 MB (≈ 15×). RSS in both modes is identical
+(within measurement noise; ~24 MB across all three scenarios).
+
+The wide-cols parallel path benefits the **least** from ReleaseFast because
+it is dominated by per-block synchronization and IO rather than per-row
+codegen quality. The minimal-work passthrough benefits the **most** because
+fixed-cost dispatch overhead is where codegen quality shows up cleanest.
+
+Bench artifacts: `scripts/bench/work/rsrf/` (driver + per-run CSV).
+Reproduce via `scripts/bench/work/rsrf/run.sh` after generating inputs with
+`python3 scripts/bench/gen.py`.
 
 ---
 
