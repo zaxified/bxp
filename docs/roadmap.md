@@ -10,30 +10,34 @@ automatically from `git log` when cutting a release.
 
 ## v0.2.4
 
-### Expression built-ins — string and boolean utilities
+### Expression built-ins — string and boolean utilities (shipped 2026-05-26)
 
 Surfaced by the 2026-05-17 real-world-dataset session (HubSpot picklists,
 NOAA sentinels, IMDb `\N` null markers, Inside Airbnb price prefixes).
 Several patterns required nested-`IF` workarounds that single built-ins
-would collapse. Touches `expr.zig` FnDoc catalog, `bxp-fmt --docs` JSON
-shape, GUI autocomplete (via `--docs`), and Dart `expr_corpus_bridge_test`.
+collapse cleanly:
 
-- ~~`SUBSTR(s, start, length)` / `LEFT(s, n)` / `RIGHT(s, n)`~~ **shipped
-  2026-05-26.** Fixed-position string slicing. Real use: ISIN prefix codes
-  (`LEFT([ISIN], 2)` = country code), broker ticker suffix strip.
-- ~~`STARTS_WITH(s, prefix)` / `ENDS_WITH(s, suffix)`~~ **shipped
-  2026-05-26.** `CONTAINS` is position-agnostic and false-positives on
-  substrings; these anchor at the start/end for picklist / category checks.
-- ~~`UPPER(s)` / `LOWER(s)`~~ **shipped 2026-05-26.** ASCII case
-  normalisation; non-ASCII bytes pass through unchanged.
-- ~~`NOT expr`~~ **shipped 2026-05-26.** Boolean negation keyword.
-  Precedence sits between comparison operators and `AND` — `NOT [A] = 1`
-  means `NOT ([A] = 1)`. Multiple NOTs stack.
-- ~~`NULLIF(value, sentinel)`~~ **shipped 2026-05-26.** Empty string when
-  `value == sentinel`, otherwise `value`. Equality matches `=` semantics
-  (numeric first, then string).
-- ~~`IN(value, v1, v2, ...)`~~ **shipped 2026-05-26.** Variadic equality
-  OR-chain. Replaces nested `IF([X] = 'A' OR [X] = 'B' ...)` patterns.
+- `LEFT(s, n)` / `RIGHT(s, n)` / `SUBSTR(s, start, length)` — fixed-position
+  slicing (ISIN country prefix, broker ticker suffix strip).
+- `STARTS_WITH(s, prefix)` / `ENDS_WITH(s, suffix)` — anchored prefix/suffix
+  match; `CONTAINS` was position-agnostic and false-positive-prone on
+  picklist / category checks.
+- `UPPER(s)` / `LOWER(s)` — ASCII case normalisation; non-ASCII bytes
+  pass through unchanged.
+- `NOT expr` — boolean negation keyword. Precedence between comparison
+  operators and `AND` — `NOT [A] = 1` means `NOT ([A] = 1)`. Multiple
+  NOTs stack.
+- `NULLIF(value, sentinel)` — empty string when `value == sentinel`,
+  otherwise `value`. Equality matches `=` semantics (numeric first,
+  then string). Collapses NOAA `-9999`, IMDb `\N`, `"N/A"` sentinels.
+- `IN(value, v1, v2, ...)` — variadic equality OR-chain. Replaces nested
+  `IF([X] = 'A' OR [X] = 'B' ...)` patterns. Action picklists use the
+  explicit listing (vs `STARTS_WITH` on a shared prefix) so that a
+  broker adding a new action variant forces a template review.
+
+Catalog grew from 18 to 27 functions and 2 to 3 keywords; corpus from
+117 to 144 cases. Real-world validation: 78 `.csvx` byte-identical on
+`DEV/` before/after rewriting 7 `OR`-chain `when` clauses to `IN`.
 
 ### Wide-CSV support (already landed in source)
 
