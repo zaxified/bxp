@@ -26,16 +26,14 @@ shape, GUI autocomplete (via `--docs`), and Dart `expr_corpus_bridge_test`.
   substrings; these anchor at the start/end for picklist / category checks.
 - ~~`UPPER(s)` / `LOWER(s)`~~ **shipped 2026-05-26.** ASCII case
   normalisation; non-ASCII bytes pass through unchanged.
-- `NOT expr` — boolean negation keyword. Today `WHEN: NOT CONTAINS(...)`
-  must be written as `IF(CONTAINS(...), 0, 1) = 1`. Parser-level change
-  in operator precedence (between `=` and `AND`).
-- `NULLIF(value, sentinel)` — emit empty string when `value == sentinel`.
-  Real use: NOAA `-9999` for missing measurements, IMDb `\N` null marker,
-  CSVs with `"N/A"` placeholders. Today: per-column `IF([X] = '-9999', '', [X])`
-  repeated for every sentinel-aware field.
-- `IN(value, v1, v2, ...)` — variadic equality OR-chain. Today nested
-  `IF([X] = 'A' OR [X] = 'B' OR ..., ...)`. Cleaner picklist whitelists,
-  cleaner row_rules `when` filters.
+- ~~`NOT expr`~~ **shipped 2026-05-26.** Boolean negation keyword.
+  Precedence sits between comparison operators and `AND` — `NOT [A] = 1`
+  means `NOT ([A] = 1)`. Multiple NOTs stack.
+- ~~`NULLIF(value, sentinel)`~~ **shipped 2026-05-26.** Empty string when
+  `value == sentinel`, otherwise `value`. Equality matches `=` semantics
+  (numeric first, then string).
+- ~~`IN(value, v1, v2, ...)`~~ **shipped 2026-05-26.** Variadic equality
+  OR-chain. Replaces nested `IF([X] = 'A' OR [X] = 'B' ...)` patterns.
 
 ### Wide-CSV support (already landed in source)
 

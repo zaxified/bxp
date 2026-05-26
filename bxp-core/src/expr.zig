@@ -770,6 +770,11 @@ const or_kw_doc: KeywordDoc = .{
     .name = "OR",
     .description = "Logical OR. Both operands are evaluated. Returns \"true\" or \"false\".",
 };
+// Handled in Parser.parseNot.
+const not_kw_doc: KeywordDoc = .{
+    .name = "NOT",
+    .description = "Boolean negation. Precedence sits between comparison operators and AND, so `NOT [A] = 1` means `NOT ([A] = 1)`. Multiple NOTs stack.",
+};
 
 // Comparison operators — semantics in Parser.parseCmp.
 const eq_op_doc: OperatorDoc = .{ .token = "=",  .description = "Equality comparison. Returns \"true\" or \"false\"." };
@@ -885,17 +890,35 @@ const Parser = struct {
         return left;
     }
 
-    // and_expr := cmp_expr ('AND' cmp_expr)*
+    // and_expr := not_expr ('AND' not_expr)*
     fn parseAnd(self: *Parser) anyerror!Value {
-        var left = try self.parseCmp();
+        var left = try self.parseNot();
         while (true) {
             const t = try self.tok.peek();
             if (t.kind != .ident or !std.ascii.eqlIgnoreCase(t.text, "AND")) break;
             _ = try self.tok.next();
-            const right = try self.parseCmp();
+            const right = try self.parseNot();
             left = Value{ .boolean = left.toBool() and right.toBool() };
         }
         return left;
+    }
+
+    // not_expr := 'NOT'* cmp_expr
+    // Precedence sits between `AND` and the comparison operators so that
+    // `NOT [A] = 1` parses as `NOT ([A] = 1)` and `[A] AND NOT [B]` parses
+    // as `[A] AND (NOT [B])`. Multiple NOTs stack (`NOT NOT [A]` == `[A]`)
+    // because they consume in a loop.
+    fn parseNot(self: *Parser) anyerror!Value {
+        var negate: bool = false;
+        while (true) {
+            const t = try self.tok.peek();
+            if (t.kind != .ident or !std.ascii.eqlIgnoreCase(t.text, "NOT")) break;
+            _ = try self.tok.next();
+            negate = !negate;
+        }
+        const v = try self.parseCmp();
+        if (!negate) return v;
+        return Value{ .boolean = !v.toBool() };
     }
 
     // cmp_expr := add_expr (op add_expr)?
@@ -2260,6 +2283,79 @@ fn adaptEndsWith(_: *Parser, args: []Value) anyerror!Value {
     return builtinEndsWith(args);
 }
 
+// ── NULLIF ──────────────────────────────────────────────────────────────
+const nullif_doc: FnDoc = .{
+    .name = "NULLIF",
+    .signature = "NULLIF(value, sentinel)",
+    .description = "Return `\"\"` when `value` equals `sentinel`, otherwise return `value`. Equality is numeric when both sides parse as numbers, otherwise byte-exact string compare — mirrors the `=` operator. Typical use: collapse sentinel values such as `\"-9999\"`, `\"\\N\"`, `\"N/A\"` to empty.",
+    .args = &.{
+        .{ .name = "value" },
+        .{ .name = "sentinel" },
+    },
+    .min_args = 2,
+    .max_args = 2,
+};
+/// NULLIF semantics match SQL: NULLIF(x, y) → NULL if x = y else x. bxp
+/// has no NULL — empty string is the equivalent (numeric ctx coerces it
+/// to 0, string ctx leaves it as ""). Compare numerically first, fall
+/// back to string equality, mirroring parseCmp's `=` operator.
+fn builtinNullif(args: []Value, alloc: std.mem.Allocator) !Value {
+    if (args.len != 2) return error.WrongArgCount;
+    const ln = args[0].toNumber() catch null;
+    const rn = args[1].toNumber() catch null;
+    if (ln != null and rn != null) {
+        if (ln.? == rn.?) return Value{ .string = "" };
+        return args[0];
+    }
+    const ls = try args[0].toString(alloc);
+    const rs = try args[1].toString(alloc);
+    if (std.mem.eql(u8, ls, rs)) return Value{ .string = "" };
+    return args[0];
+}
+fn adaptNullif(p: *Parser, args: []Value) anyerror!Value {
+    return builtinNullif(args, p.ctx.alloc);
+}
+
+// ── IN ──────────────────────────────────────────────────────────────────
+const in_doc: FnDoc = .{
+    .name = "IN",
+    .signature = "IN(value, v1, v2, ...)",
+    .description = "Return \"true\" when `value` equals any of `v1, v2, …`. Equality is numeric when both sides parse as numbers, otherwise byte-exact string compare — mirrors the `=` operator. Variadic 2+ args.",
+    .args = &.{
+        .{ .name = "value" },
+        .{ .name = "v1" },
+    },
+    .min_args = 2,
+    .max_args = 255,
+};
+/// IN(value, v1, v2, ...) — variadic equality OR-chain. Replaces nested
+/// `IF([X] = 'A' OR [X] = 'B' OR ..., ...)` patterns. Equality semantics
+/// match `=` operator (numeric first, then string).
+fn builtinIn(args: []Value, alloc: std.mem.Allocator) !Value {
+    if (args.len < 2) return error.WrongArgCount;
+    const ln = args[0].toNumber() catch null;
+    const ls_lazy: ?[]const u8 = null;
+    var ls: ?[]const u8 = ls_lazy;
+    for (args[1..]) |opt| {
+        if (ln) |l| {
+            if (opt.toNumber() catch null) |r| {
+                if (l == r) return Value{ .boolean = true };
+                continue;
+            }
+        }
+        // Either value is non-numeric, or this option doesn't parse as
+        // a number → fall back to string equality. Materialise the
+        // stringified value on first need.
+        if (ls == null) ls = try args[0].toString(alloc);
+        const rs = try opt.toString(alloc);
+        if (std.mem.eql(u8, ls.?, rs)) return Value{ .boolean = true };
+    }
+    return Value{ .boolean = false };
+}
+fn adaptIn(p: *Parser, args: []Value) anyerror!Value {
+    return builtinIn(args, p.ctx.alloc);
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -2310,7 +2406,7 @@ pub fn evalString(src: []const u8, ctx: *const Context) ![]const u8 {
 // expr.zig so their full data lives here.
 // ---------------------------------------------------------------------------
 
-pub const keywords = [_]KeywordDoc{ and_kw_doc, or_kw_doc };
+pub const keywords = [_]KeywordDoc{ and_kw_doc, or_kw_doc, not_kw_doc };
 
 // Operator order chosen to match how the parser groups them visually — concat
 // + comparisons + additive + multiplicative — so a reader scanning the GUI's
@@ -2370,6 +2466,8 @@ pub const builtins = [_]FnEntry{
     .{ .name = "LOWER",          .doc = lower_doc,          .impl = adaptLower },
     .{ .name = "STARTS_WITH",    .doc = starts_with_doc,    .impl = adaptStartsWith },
     .{ .name = "ENDS_WITH",      .doc = ends_with_doc,      .impl = adaptEndsWith },
+    .{ .name = "NULLIF",         .doc = nullif_doc,         .impl = adaptNullif },
+    .{ .name = "IN",             .doc = in_doc,             .impl = adaptIn },
 };
 
 // ============================================================
@@ -3477,4 +3575,126 @@ test "eval: STARTS_WITH/ENDS_WITH wrong arg count" {
     const ctx = h.ctx(&.{}, a);
     try testing.expectError(error.WrongArgCount, eval("STARTS_WITH('a')", &ctx));
     try testing.expectError(error.WrongArgCount, eval("ENDS_WITH('a', 'b', 'c')", &ctx));
+}
+
+// ------------------------------------------------------------
+// v0.2.4 SQL semantics: NOT keyword, NULLIF, IN
+// ------------------------------------------------------------
+
+test "eval: NOT negates boolean expressions" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    try testing.expectEqualStrings("false", try evalString("NOT 1 = 1", &ctx));
+    try testing.expectEqualStrings("true",  try evalString("NOT 1 = 2", &ctx));
+    try testing.expectEqualStrings("true",  try evalString("NOT CONTAINS('hello', 'xyz')", &ctx));
+    try testing.expectEqualStrings("false", try evalString("NOT CONTAINS('hello', 'ell')", &ctx));
+}
+
+test "eval: NOT stacks (double-NOT cancels)" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    try testing.expectEqualStrings("true",  try evalString("NOT NOT 1 = 1", &ctx));
+    try testing.expectEqualStrings("false", try evalString("NOT NOT NOT 1 = 1", &ctx));
+}
+
+// Precedence sanity: NOT binds tighter than AND/OR. `[A] AND NOT [B]`
+// must group as `[A] AND (NOT [B])`, not `NOT ([A] AND [B])`.
+test "eval: NOT precedence between AND and =" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    // truthy AND NOT(falsy) → true AND true → true
+    try testing.expectEqualStrings("true",  try evalString("'x' AND NOT 1 = 2", &ctx));
+    // truthy AND NOT(truthy) → true AND false → false
+    try testing.expectEqualStrings("false", try evalString("'x' AND NOT 1 = 1", &ctx));
+}
+
+// "NOT" as a substring of a longer identifier must NOT be consumed as
+// the keyword. The tokenizer + keyword check use exact-length compare.
+test "eval: NOT keyword does not steal longer identifiers" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    try h.col_index.put("NOTE", 0);
+    const ctx = h.ctx(&.{ "hi" }, a);
+    try testing.expectEqualStrings("hi", try evalString("[NOTE]", &ctx));
+}
+
+test "eval: NULLIF basic" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    // Equal string → ""
+    try testing.expectEqualStrings("",       try evalString("NULLIF('foo', 'foo')", &ctx));
+    // Different string → first arg
+    try testing.expectEqualStrings("foo",    try evalString("NULLIF('foo', 'bar')", &ctx));
+    // Real-world sentinels.
+    try testing.expectEqualStrings("",       try evalString("NULLIF('-9999', '-9999')", &ctx));
+    try testing.expectEqualStrings("",       try evalString("NULLIF('N/A', 'N/A')", &ctx));
+    try testing.expectEqualStrings("42",     try evalString("NULLIF('42', '-9999')", &ctx));
+}
+
+// Numeric equality: '100' and '100.0' should match (same as `=` operator).
+test "eval: NULLIF numeric coercion matches '=' semantics" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    try testing.expectEqualStrings("", try evalString("NULLIF('100', '100.0')", &ctx));
+    try testing.expectEqualStrings("", try evalString("NULLIF(0, 0)", &ctx));
+}
+
+test "eval: NULLIF wrong arg count" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    try testing.expectError(error.WrongArgCount, eval("NULLIF('a')", &ctx));
+    try testing.expectError(error.WrongArgCount, eval("NULLIF('a', 'b', 'c')", &ctx));
+}
+
+test "eval: IN matches any option" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    try testing.expectEqualStrings("true",  try evalString("IN('B', 'A', 'B', 'C')", &ctx));
+    try testing.expectEqualStrings("false", try evalString("IN('Z', 'A', 'B', 'C')", &ctx));
+    // Single-option IN behaves like equality.
+    try testing.expectEqualStrings("true",  try evalString("IN('A', 'A')", &ctx));
+    try testing.expectEqualStrings("false", try evalString("IN('A', 'B')", &ctx));
+}
+
+test "eval: IN numeric coercion" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    try testing.expectEqualStrings("true",  try evalString("IN('100', '50', '100.0', '200')", &ctx));
+    try testing.expectEqualStrings("false", try evalString("IN(100, 200, 300)", &ctx));
+}
+
+test "eval: IN wrong arg count" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    try testing.expectError(error.WrongArgCount, eval("IN('a')", &ctx));
+    try testing.expectError(error.WrongArgCount, eval("IN()", &ctx));
 }

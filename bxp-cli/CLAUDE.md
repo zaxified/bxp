@@ -184,7 +184,7 @@ is `true`, those dates are used to filter rows by `$date`. Otherwise all records
 ## Expression reference (expr.zig)
 
 Expressions are evaluated per row. Operator precedence (high → low):
-`unary -` → `* /` → `&` (concat) → `+ -` → `= != < > <= >=` → `AND` → `OR`
+`unary -` → `* /` → `&` (concat) → `+ -` → `= != < > <= >=` → `NOT` → `AND` → `OR`
 
 | Syntax                                                  | Description                                                                                                                                                                                                     |
 | ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -201,6 +201,9 @@ Expressions are evaluated per row. Operator precedence (high → low):
 | `LOOKUP(key, 'field')` / `LOOKUP('name', key, 'field')` | Retrieve value from `pre_pass` table — 2-arg form for legacy single block, 3-arg form for named blocks                                                                                                          |
 | `SPLIT_PART(f, delim, n)`                               | Split `f` by `delim`, return nth part (1-based); `""` if fewer than n parts                                                                                                                                     |
 | `CONTAINS(f, sub)`                                      | `true` when `sub` is found inside `f`                                                                                                                                                                           |
+| `NOT expr`                                              | Boolean negation keyword. Precedence between comparison operators and `AND` — `NOT [A] = 1` means `NOT ([A] = 1)`. Multiple NOTs stack.                                                                         |
+| `NULLIF(value, sentinel)`                               | Empty string when `value` equals `sentinel`, otherwise `value`. Equality matches `=` operator. Use to collapse sentinels (`-9999`, `\N`, `N/A`).                                                                |
+| `IN(value, v1, v2, ...)`                                | Variadic equality OR-chain — `true` when `value` matches any option. Replaces nested `IF([X] = 'A' OR [X] = 'B' ...)`.                                                                                          |
 | `STARTS_WITH(f, prefix)`                                | `true` when `f` begins with `prefix` (case-sensitive); empty `prefix` always matches                                                                                                                            |
 | `ENDS_WITH(f, suffix)`                                  | `true` when `f` ends with `suffix` (case-sensitive); empty `suffix` always matches                                                                                                                              |
 | `LEFT(f, n)`                                            | First `n` bytes of `f` (`n` clamped to `[0, len]`; non-finite or negative `n` → `""`)                                                                                                                           |

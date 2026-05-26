@@ -8,11 +8,12 @@
 # Section headers use box-drawing characters for visual scan.
 # Non-inline comments above complex cases explain the why.
 #
-# Function catalog (per `bxp-fmt --docs` 2026-05-26, 25 functions):
+# Function catalog (per `bxp-fmt --docs` 2026-05-26, 27 functions):
 #   ABS, CEILING, COALESCE, CONTAINS, DATE_CONVERT, ENDS_WITH, FIELDS,
-#   FLOOR, IF, LEFT, LOOKUP, LOWER, NOW, PRICE_CURRENCY, PRICE_VALUE,
-#   RAND, REPLACE, RIGHT, ROUND, SPLIT_PART, STARTS_WITH, SUBSTR,
-#   TICKER, TRIM, UPPER
+#   FLOOR, IF, IN, LEFT, LOOKUP, LOWER, NOW, NULLIF, PRICE_CURRENCY,
+#   PRICE_VALUE, RAND, REPLACE, RIGHT, ROUND, SPLIT_PART, STARTS_WITH,
+#   SUBSTR, TICKER, TRIM, UPPER
+# Keywords: AND, OR, NOT
 # Keywords: AND, OR
 # Operators: &  =  !=  <  >  <=  >=  +  -  *  /
 
@@ -68,6 +69,18 @@ expr	ok	STARTS_WITH([A], 'pref')
 expr	ok	ENDS_WITH([A], 'suf')
 # Real-world: ISIN country prefix extraction.
 expr	ok	LEFT([ISIN], 2)
+# v0.2.4 SQL semantics — NULLIF, IN, NOT keyword.
+expr	ok	NULLIF([X], '-9999')
+expr	ok	NULLIF([X], 'N/A')
+expr	ok	IN([Action], 'BUY', 'SELL')
+expr	ok	IN([Action], 'BUY', 'SELL', 'DIVIDEND', 'TAX')
+expr	ok	NOT CONTAINS([Description], 'fee')
+expr	ok	NOT [A] = 1
+# Stacked NOTs.
+expr	ok	NOT NOT [A]
+# NOT precedence: binds tighter than AND/OR, weaker than =.
+expr	ok	[A] = 1 AND NOT [B] = 2
+expr	ok	NOT [A] = 1 OR [B] = 2
 # Nested fn calls — IF wrapping IF; ABS thrice nested.
 expr	ok	IF(IF([A] = 1, 'a', 'b') = 'a', 'yes', 'no')
 expr	ok	ABS(ABS(ABS([A])))
@@ -91,6 +104,11 @@ expr	err	SUBSTR([A], 1)	WrongArgCount
 expr	err	UPPER([A], 'extra')	WrongArgCount
 expr	err	STARTS_WITH([A])	WrongArgCount
 expr	err	ENDS_WITH([A], 'b', 'c')	WrongArgCount
+# v0.2.4 SQL semantics arity errors.
+expr	err	NULLIF([A])	WrongArgCount
+expr	err	NULLIF([A], 'b', 'c')	WrongArgCount
+expr	err	IN([A])	WrongArgCount
+expr	err	IN()	WrongArgCount
 # FIELDS without args fails cleanly with WrongArgCount.
 expr	err	FIELDS()	WrongArgCount
 # FIELDS with multiple args = arity error.
