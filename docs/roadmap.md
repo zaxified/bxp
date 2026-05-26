@@ -371,6 +371,41 @@ variants`). Tiny.
   FlexSeedScheme) needs a name → preset lookup. Built-in presets stay as
   fallback for corrupt/missing JSON.
 
+- **Wide-CSV rendering: two possible future optimisation paths.**
+  After the 2026-05-26 survival session, the GUI handles 900-col x
+  100k-row CSVs but RSS scales linearly with `visible_rows × cols`
+  (~13.5 GB at full-file scroll on the bench). Real-world data (broker
+  exports 10-30 cols, NOAA GHCN 124 cols) sits well below the limit
+  and current Pluto + the `kWideColLimit=64` gate is enough. Revisit
+  these if a 1000+ col use case becomes real:
+  - **Query-driven viewport (csvql or in-house slicer).** PlutoGrid
+    becomes a windowed display of `~30 visible cols x ~50 visible rows`.
+    On scroll, query a slice from disk
+    ([csvql](https://github.com/melihbirim/csvql) or an in-house
+    `getRowSlice(file, rowIds, colIndexes)` built on the
+    existing lazy RAF). RSS becomes constant regardless of file size.
+    Hard parts: synthetic scrollbars representing the full virtual extent,
+    scroll → query latency budget (debounce + prefetch), viewport index
+    ↔ virtual rowId mapping for drill-down, zip-merge per-row BXTB
+    metadata (status / warnings) which csvql does not know about.
+    In-house slicer is the cheaper start (no new dep); csvql wins if we
+    also want SQL-style queries as a user feature (joins / aggregates).
+  - **Custom table widget replacing PlutoGrid.** Our use is much
+    narrower than what Pluto offers (no editing, sorting, reordering,
+    type validation, context menus, frozen cols). A purpose-built
+    widget could deliver 2D virtualisation (column headers virtualised
+    same as body cells), no `MediaQuery` sandwich for the Scrollbar
+    wiring, and tighter coupling with BXTB metadata. Cost: 2-4 weeks
+    of focused work to reach feature parity (scroll sync between
+    header strip and body, focus management, keyboard navigation,
+    accessibility, IME) — Pluto has had years of upstream bugfixes.
+    Reconsider if we hit a Pluto bug we cannot work around, or if the
+    above query-viewport path lands and forces a custom widget anyway.
+
+  Both paths are big — single-session POC is unlikely. Decision input:
+  do we have a real workload that needs it, or is the current ceiling
+  comfortable for shipping use cases?
+
 ### Tooling
 
 - Zig 0.16 migration. Currently pinned to 0.15.2; 0.16 shipped
