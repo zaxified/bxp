@@ -88,9 +88,24 @@ class RowList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final store = context.watch<TraceStore>();
-    final model = store.traceModel;
-    final fileId = store.selectedFileId;
+    // Watch only the fields that determine _RowListInner's identity /
+    // remount decision. `selectedRowId` flips on every row click; if we
+    // watched the whole store, RowList would rebuild per click and
+    // _RowListInner.build would re-allocate its columns + rows lists
+    // (900 cols * 1000 rows ~= 900k PlutoCell objects on the wide-CSV
+    // path) on the main isolate — freezing the UI long enough for the
+    // Wayland compositor to terminate the client. context.select narrows
+    // the dependency to: model identity, selected file, and the file's
+    // populate generation (the remount trigger after lazy populate).
+    final model = context.select<TraceStore, TraceModel?>((s) => s.traceModel);
+    final fileId =
+        context.select<TraceStore, String?>((s) => s.selectedFileId);
+    final populateGen = context.select<TraceStore, int>((s) {
+      final fid = s.selectedFileId;
+      if (fid == null) return 0;
+      return s.traceModel?.files[fid]?.populateGen ?? 0;
+    });
+    final store = context.read<TraceStore>();
 
     if (model == null || fileId == null) {
       return Padding(
@@ -109,7 +124,7 @@ class RowList extends StatelessWidget {
       // Hard remount on file change — PlutoGrid would otherwise keep the
       // old columns/rows and ignore new inputs.
       key: ValueKey(
-          'rowlist::$fileId::${file.headers.join("|")}::${file.populateGen}'),
+          'rowlist::$fileId::${file.headers.join("|")}::$populateGen'),
       fileId: fileId,
       file: file,
       model: model,
@@ -163,6 +178,12 @@ class _RowListInnerState extends State<_RowListInner> {
   /// in `stateManager.refRows`.
   final Map<String, String> _filters = {};
 
+  /// Wide-file (>[kWideColLimit] cols) single-input filter. Matches the
+  /// needle against ANY cell in a row, case-insensitive. Used in place
+  /// of the per-column [_FilterRow] which we skip on wide files because
+  /// mounting one TextField per column blew the main isolate.
+  String _wideGlobalFilter = '';
+
   /// Subset of `widget.file.rowIds` currently materialised into
   /// PlutoRows. For eager (small) files this equals `widget.file.rowIds`
   /// after activation; for lazy (large) files it starts at the first
@@ -196,6 +217,31 @@ class _RowListInnerState extends State<_RowListInner> {
   /// running). Scroll fires can repeat rapidly; without this they would
   /// schedule N parallel appends that all race on PlutoGrid state.
   bool _expandInFlight = false;
+
+  /// Memoised PlutoColumn + PlutoRow lists. `build` recomputed both on
+  /// every call before — at ~900 cols / 1000 rows that's ~900 k PlutoCell
+  /// allocations per rebuild. The store fires `notifyListeners` during
+  /// row-detail load (~3x per click) and the resulting RowList rebuilds
+  /// were starving the event loop, making each subprocess wait stretch
+  /// from ~10 ms to >1 s and ultimately tripping the Wayland compositor
+  /// ping timeout. PlutoGrid consumes `columns` / `rows` once on mount
+  /// and ignores subsequent widget.rows changes (we mutate its state
+  /// imperatively via `_replacePlutoRows`), so caching them across
+  /// rebuilds is sound. Invalidated on file/header change (handled by
+  /// the parent ValueKey remount) and on `_visibleRowIds` change.
+  List<PlutoColumn>? _cachedColumns;
+  List<PlutoRow>? _cachedRows;
+  /// Bump to force the next build to rebuild the rows list. Set by code
+  /// paths that mutate `_visibleRowIds` (filter scan, window expand) so
+  /// the rebuild sees fresh row content if PlutoGrid happens to be
+  /// remounted on the next frame.
+  int _rowsRevision = 0;
+  int _cachedRowsRevision = -1;
+
+  void _invalidateRowsCache() {
+    _rowsRevision++;
+    _cachedRows = null;
+  }
 
   /// Horizontal scroll controller for the sticky filter row above the
   /// grid. Kept in sync with PlutoGrid's body scroll so the filter
@@ -257,6 +303,7 @@ class _RowListInnerState extends State<_RowListInner> {
     }
     _filterScanActive = false;
     _filterScanCursor = 0;
+    _invalidateRowsCache();
     _publishDisplayedCount();
   }
 
@@ -265,11 +312,21 @@ class _RowListInnerState extends State<_RowListInner> {
   /// For eager files we read PlutoGrid's filtered view (refRows.length)
   /// because the stock filter narrows it imperatively; for lazy files
   /// the visible-window list is authoritative.
+  ///
+  /// `setRowsInDisplayed` fires `notifyListeners()` on the store, which
+  /// would mark ancestor `_InheritedProviderScope` widgets dirty. When
+  /// this runs during build (`initState` -> `_resyncVisibleRows` is the
+  /// call site that bites), the framework throws "setState during build".
+  /// Defer to the post-frame callback so the publish always lands after
+  /// the current build completes.
   void _publishDisplayedCount() {
     final count = widget.file.sourceLoadEager
         ? (_stateManager?.refRows.length ?? _visibleRowIds.length)
         : _visibleRowIds.length;
-    widget.store.setRowsInDisplayed(count);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      widget.store.setRowsInDisplayed(count);
+    });
   }
 
   /// Resolve the display value for one source-CSV cell. While the file
@@ -363,6 +420,13 @@ class _RowListInnerState extends State<_RowListInner> {
     setState(() {
       _visibleRowIds = rowIds.sublist(0, end);
       _hasMoreToShow = end < rowIds.length;
+      // Append to the cache instead of invalidating it — rebuilding all
+      // visible rows (e.g. 6000 * 900 = 5.4 M PlutoCells) on every
+      // scroll-driven expand is what made RSS spike multi-GB on wide
+      // files. The new batch was already built above for `appendRows`;
+      // attach it to the cache so future rebuilds keep using the cached
+      // list verbatim.
+      _cachedRows?.addAll(newPlutoRows);
     });
     _publishDisplayedCount();
     } finally {
@@ -402,6 +466,7 @@ class _RowListInnerState extends State<_RowListInner> {
     final result = await widget.store.filterScanLargeFile(
       fileId: widget.fileId,
       filters: _filters,
+      globalFilter: _wideGlobalFilter,
       fromIdx: 0,
       maxMatches: kLazyExpandBatch,
       onProgress: (m, s) {
@@ -424,6 +489,7 @@ class _RowListInnerState extends State<_RowListInner> {
       _visibleRowIds = List<String>.of(result.matched);
       _filterScanCursor = result.nextFromIdx;
       _hasMoreToShow = !result.done;
+      _invalidateRowsCache();
     });
     _publishDisplayedCount();
   }
@@ -448,6 +514,7 @@ class _RowListInnerState extends State<_RowListInner> {
     final result = await widget.store.filterScanLargeFile(
       fileId: widget.fileId,
       filters: _filters,
+      globalFilter: _wideGlobalFilter,
       fromIdx: _filterScanCursor,
       maxMatches: kLazyExpandBatch,
       onProgress: (m, s) {
@@ -565,10 +632,21 @@ class _RowListInnerState extends State<_RowListInner> {
   /// minWidth keeps short data + short header readable; maxWidth
   /// stops a single long URL/UUID from eating half the viewport
   /// (the user can still drag wider).
+  ///
+  /// Pass is O(cols * visible_rows) of `TextPainter.layout()` — on a
+  /// 900-col x 1000-row file that's ~900k layouts, multi-second main-
+  /// isolate block (and Wayland compositor ping timeout on Linux).
+  /// Skip the pass entirely above `kAutoFitColLimit` data columns;
+  /// PlutoColumn falls back to its declared 150 px default and the
+  /// user can still drag any edge to override.
   void _autoFitDataColumns(PlutoGridStateManager sm) {
     final headerStyle = _cachedHeaderStyle;
     final cellStyle = _cachedCellStyle;
     if (headerStyle == null || cellStyle == null) return;
+    // refColumns includes the leading `row_num` + `status` fixed
+    // columns; subtract them to reason about data-column count.
+    final dataCols = sm.refColumns.length - 2;
+    if (dataCols > kWideColLimit) return;
     const cellHorizontalPadding = 14.0; // PlutoGrid default cell pad
     const cellExtraChars = 21.0; // ~3 chars breathing room
     const minWidth = 60.0;
@@ -630,7 +708,10 @@ class _RowListInnerState extends State<_RowListInner> {
   void _applyFilter() {
     final sm = _stateManager;
     final headers = widget.file.headers;
-    final allEmpty = _filters.values.every((v) => v.isEmpty);
+    final perColEmpty = _filters.values.every((v) => v.isEmpty);
+    final globalNeedle = _wideGlobalFilter.trim().toLowerCase();
+    final hasGlobal = globalNeedle.isNotEmpty;
+    final allEmpty = perColEmpty && !hasGlobal;
 
     if (widget.file.sourceLoadEager) {
       if (sm == null) return;
@@ -645,6 +726,13 @@ class _RowListInnerState extends State<_RowListInner> {
           if (f == null || f.isEmpty) continue;
           final cell = row.cells[h]?.value?.toString() ?? '';
           if (!cell.toLowerCase().contains(f.toLowerCase())) return false;
+        }
+        if (hasGlobal) {
+          for (final h in headers) {
+            final cell = row.cells[h]?.value?.toString() ?? '';
+            if (cell.toLowerCase().contains(globalNeedle)) return true;
+          }
+          return false;
         }
         return true;
       });
@@ -720,7 +808,13 @@ class _RowListInnerState extends State<_RowListInner> {
       widget.file.rowIds.length.toString().length,
     );
     final rowNumWidth = 22.0 + 8.0 * rowNumDigits;
-    final columns = <PlutoColumn>[
+    // Memoise both lists across rebuilds. PlutoGrid consumes columns /
+    // rows once on mount and ignores subsequent widget changes (we mutate
+    // its state imperatively via `_replacePlutoRows` on filter / window
+    // expand), so passing the cached lists is safe and saves ~900 col +
+    // ~900 k PlutoCell allocations per notify-driven rebuild — the eat
+    // of CPU that was starving the event loop during drill-down loads.
+    _cachedColumns ??= <PlutoColumn>[
       PlutoColumn(
         title: '#',
         field: 'row_num',
@@ -812,8 +906,10 @@ class _RowListInnerState extends State<_RowListInner> {
         ),
       ),
     ];
+    final columns = _cachedColumns!;
 
-    final rows = rowList.map((row) {
+    if (_cachedRows == null || _cachedRowsRevision != _rowsRevision) {
+      _cachedRows = rowList.map((row) {
       final status = widget.rowStatus(row);
       // Cell value encodes status NAME + (when a warning) the count and
       // first detail string so the renderer can build a hover tooltip
@@ -837,6 +933,9 @@ class _RowListInnerState extends State<_RowListInner> {
       }
       return PlutoRow(cells: cells);
     }).toList();
+      _cachedRowsRevision = _rowsRevision;
+    }
+    final rows = _cachedRows!;
 
     // Total width matches the actual rendered grid columns. We mirror
     // _colWidths (populated from stateManager after autoFitColumn and
@@ -851,10 +950,29 @@ class _RowListInnerState extends State<_RowListInner> {
       filterContentWidth += _colWidths[h] ?? 150.0;
     }
 
+    // Per-column filter row above the grid. For wide files (>kWideColLimit)
+    // we swap it for a single global-substring TextField — mounting 900+
+    // per-column TextField + Controller + FocusNode children in one Row
+    // per rebuild was the largest cost on the wide-CSV path (135 k-px
+    // wide layout, per-frame measure walk across every child).
+    final isWide = headers.length > kWideColLimit;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        SingleChildScrollView(
+        if (isWide)
+          _WideGlobalFilterBar(
+            initial: _wideGlobalFilter,
+            onChanged: (v) {
+              setState(() => _wideGlobalFilter = v);
+              _applyFilter();
+            },
+            onFocus: () {
+              if (!mounted) return;
+              _stateManager?.clearCurrentCell();
+            },
+          )
+        else
+          SingleChildScrollView(
           scrollDirection: Axis.horizontal,
           controller: _filterHCtrl,
           // Disable independent user-scroll on this row — it tracks
@@ -1166,6 +1284,103 @@ class _FilterScanSpinner extends StatelessWidget {
 
 /// Sticky filter row above the column headers — one input per column,
 /// case-insensitive substring match.
+/// Single TextField rendered above the grid for wide-CSV files in place
+/// of the per-column [_FilterRow]. The needle matches against ANY cell
+/// in a row (case-insensitive substring) — wired into both the eager
+/// `setFilter` path and the lazy [TraceStore.filterScanLargeFile] path
+/// through [_RowListInnerState._wideGlobalFilter].
+class _WideGlobalFilterBar extends StatefulWidget {
+  final String initial;
+  final ValueChanged<String> onChanged;
+  final VoidCallback? onFocus;
+  const _WideGlobalFilterBar({
+    required this.initial,
+    required this.onChanged,
+    this.onFocus,
+  });
+
+  @override
+  State<_WideGlobalFilterBar> createState() => _WideGlobalFilterBarState();
+}
+
+class _WideGlobalFilterBarState extends State<_WideGlobalFilterBar> {
+  late final TextEditingController _ctrl;
+  late final FocusNode _focus;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = TextEditingController(text: widget.initial);
+    _focus = FocusNode();
+    _focus.addListener(_handleFocusChange);
+  }
+
+  void _handleFocusChange() {
+    if (_focus.hasFocus) widget.onFocus?.call();
+  }
+
+  @override
+  void dispose() {
+    _focus.removeListener(_handleFocusChange);
+    _focus.dispose();
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.bxpTheme;
+    return Container(
+      decoration: BoxDecoration(
+        color: t.panelBg,
+        border: Border(bottom: BorderSide(color: t.borderColor)),
+      ),
+      padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
+      child: Row(
+        children: [
+          Text(
+            'filter all columns:',
+            style: BxpText.body(context, color: t.textMuted, size: BxpSize.sm),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: TextField(
+              controller: _ctrl,
+              focusNode: _focus,
+              onChanged: widget.onChanged,
+              style: BxpText.body(context, color: t.textPrimary, size: BxpSize.sm),
+              cursorColor: t.textPrimary,
+              decoration: InputDecoration(
+                isDense: true,
+                hintText: 'substring match in any cell',
+                hintStyle: BxpText.body(
+                  context,
+                  color: t.inputPlaceholder,
+                  size: BxpSize.sm,
+                ),
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.zero,
+                  borderSide: BorderSide(color: t.borderColor),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.zero,
+                  borderSide: BorderSide(color: t.borderColor),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.zero,
+                  borderSide: BorderSide(color: t.borderColor),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _FilterRow extends StatelessWidget {
   final List<String> headers;
   final Map<String, String> filters;

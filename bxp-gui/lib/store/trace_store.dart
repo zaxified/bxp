@@ -55,6 +55,12 @@ const int kEagerFileLoadBytes = 2 * 1024 * 1024;
 const int kLazyInitialRows = 1000;
 const int kLazyExpandBatch = 1000;
 const int kFilterScanYieldEvery = 2000;
+/// Data-column threshold above which UI passes that are O(cols * rows)
+/// or O(cols) per row-select are skipped or virtualised. Matches the
+/// historical `MAX_COLUMNS` default — broker exports are well below;
+/// wide public datasets (NOAA GHCN ~124 cols, sensor dumps, stress-
+/// tests near the 1024 ceiling) cross it.
+const int kWideColLimit = 64;
 /// Debug aid — artificial sleep before each lazy populate batch (scroll
 /// expand + filter scan continuation) so an NVMe-fast load is visible
 /// in the UI. Set 0 for production, 2000 ms for showing the spinner.
@@ -2792,6 +2798,7 @@ class TraceStore extends ChangeNotifier {
       filterScanLargeFile({
     required String fileId,
     required Map<String, String> filters,
+    String? globalFilter,
     int fromIdx = 0,
     int maxMatches = kLazyExpandBatch,
     required void Function(int matched, int scanned) onProgress,
@@ -2807,7 +2814,12 @@ class TraceStore extends ChangeNotifier {
       if (raw == null || raw.isEmpty) continue;
       preds[c] = raw.toLowerCase();
     }
-    if (preds.isEmpty) {
+    // Single needle matched against ANY column — used by the wide-CSV
+    // global filter UI where per-column input would mean mounting one
+    // TextField per column (900+ widgets per rebuild).
+    final globalLower = globalFilter?.trim().toLowerCase();
+    final hasGlobal = globalLower != null && globalLower.isNotEmpty;
+    if (preds.isEmpty && !hasGlobal) {
       // No predicate active — return the slice as-is.
       final end = (fromIdx + maxMatches).clamp(0, file.rowIds.length);
       return (
@@ -2841,6 +2853,12 @@ class TraceStore extends ChangeNotifier {
           final cell =
               col < row.fields.length ? row.fields[col].toLowerCase() : '';
           if (!cell.contains(needle)) { ok = false; break; }
+        }
+        if (ok && hasGlobal) {
+          ok = false;
+          for (final f in row.fields) {
+            if (f.toLowerCase().contains(globalLower)) { ok = true; break; }
+          }
         }
         if (ok) matched.add(rid);
       }

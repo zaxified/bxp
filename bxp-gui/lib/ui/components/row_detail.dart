@@ -301,6 +301,19 @@ class _Section extends StatelessWidget {
 }
 
 // ── Fields Table ─────────────────────────────────────────────────────
+//
+// Two paths:
+//
+// • headers.length <= kWideColLimit — `Table` with IntrinsicColumnWidth
+//   on column 0 so the header column auto-shrinks to its longest entry
+//   (capped at 50 % of panel). Nice ergonomics for broker exports.
+//
+// • headers.length > kWideColLimit — `ListView.builder` virtualises
+//   the row list (offscreen rows are not built) and a fixed 40 % first
+//   column avoids the all-rows layout pass that IntrinsicColumnWidth
+//   forces. Row-select on a 900-col file otherwise builds 900 TableRow
+//   widgets up front and runs an intrinsic-width pass over all of them
+//   on the main isolate — multi-second hang.
 class _FieldsTable extends StatelessWidget {
   final List<String> headers;
   final List<String> values;
@@ -315,9 +328,46 @@ class _FieldsTable extends StatelessWidget {
       size: BxpSize.sm,
     );
 
+    if (headers.length > kWideColLimit) {
+      return LayoutBuilder(
+        builder: (context, constraints) {
+          final headerColWidth = constraints.maxWidth * 0.4;
+          return ListView.builder(
+            itemCount: headers.length,
+            itemBuilder: (context, i) {
+              final val = i < values.length ? values[i] : '';
+              return DecoratedBox(
+                decoration: BoxDecoration(
+                  border: Border(bottom: BorderSide(color: t.borderColor)),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    SizedBox(
+                      width: headerColWidth,
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(12, 5, 10, 5),
+                        child: Text(headers[i], style: headerStyle),
+                      ),
+                    ),
+                    Expanded(
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(0, 5, 12, 5),
+                        child: DataColorText(text: val, size: BxpSize.md),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            },
+          );
+        },
+      );
+    }
+
     return SingleChildScrollView(
       child: Table(
-        // Header column shrinks to fit its content but is capped at 40 %
+        // Header column shrinks to fit its content but is capped at 50 %
         // of the panel width — long header names wrap inside that cap
         // instead of pushing the value column off-screen.
         columnWidths: const {
