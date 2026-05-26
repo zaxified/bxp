@@ -212,8 +212,8 @@ peak resident, and 10M+ row datasets remain out of reach.
 Plan for v0.4.0 (or whenever the cap starts hurting real users):
 
 - Rewrite `processBroker()` in `bxp-cli/src/pipeline.zig` to iterate
-  `csv.splitRecords` (already an iterator in `bxp-core/src/csv.zig`)
-  instead of `parseRecords` over a full-file buffer.
+  records via `csv.LineIterator` over `ChunkReader` blocks instead of
+  `parseRecords` over a full-file buffer.
 - Two-pass streaming when a template defines `pre_pass`:
   pass 1 builds the lookup hashmap (memory = O(unique keys), not O(rows));
   pass 2 emits output. Pass 2 alone for templates without `pre_pass`.
@@ -269,7 +269,7 @@ Three attack points, ranked by **value against the real bottleneck**
 
 Audit of serial state inside `processBroker` (per file) for the
 per-chunk path: `chunk_arena` (per-chunk, reset on transition);
-`RowIterator + ChunkReader` (10 MiB streaming); `file_rows_written`
+`ChunkReader + csv.LineIterator` (10 MiB streaming); `file_rows_written`
 (monotonic, used as btrace `outputIdx`); `file_expr_errors` /
 `file_warnings` (file-scoped counters); `fout` (`.csvx` writer,
 order matters); `combined_fout` (cross-file, even more serial);
@@ -317,8 +317,8 @@ to pre-process the file" or "skip the affected rows".
   and the actual headers on line 2. bxp-cli has `xlsx_sheet.header_row`
   for xlsx but no equivalent for plain CSV. Add
   `csv_header_row: N` (default `1`) — skip the first `N-1` lines before
-  treating line `N` as the header. Touches `csv.zig` (splitRecords
-  offset) + `config.zig` (FieldDoc + load) + integration test.
+  treating line `N` as the header. Touches `pipeline.zig` (`ChunkReader`
+  header skip) + `config.zig` (FieldDoc + load) + integration test.
 
 - **Multi-CSV-in-one-file (blank-line separated).** Some brokers
   concatenate multiple sub-CSVs into a single `.csv`, separated by one

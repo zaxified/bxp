@@ -61,49 +61,6 @@ pub fn splitFields(line: []const u8, buf: [][]const u8, delimiter: u8, quote: u8
     return buf[0..count];
 }
 
-/// Splits CSV file content into logical records (RFC 4180 §2 rule 6).
-///
-/// quote controls the quoting character used in the input file (0 = no quoting,
-/// '"' = RFC 4180 double-quote, '\'' = single-quote).  When quote != 0, a \n
-/// inside a quoted field does not end the record (multi-line field support).
-/// Each returned slice is a complete logical CSV record with \r stripped from
-/// line endings; empty records are skipped.
-/// Slices point into content — no allocation beyond the list itself.
-pub fn splitRecords(content: []const u8, quote: u8, alloc: std.mem.Allocator) !std.array_list.Managed([]const u8) {
-    var records = std.array_list.Managed([]const u8).init(alloc);
-    var pos: usize = 0;
-    var rec_start: usize = 0;
-    var in_quotes: bool = false;
-
-    while (pos < content.len) {
-        const c = content[pos];
-        if (quote != 0 and c == quote) {
-            if (in_quotes and pos + 1 < content.len and content[pos + 1] == quote) {
-                pos += 2; // escaped quote (e.g. "") — stay in quoted field
-                continue;
-            }
-            in_quotes = !in_quotes;
-            pos += 1;
-        } else if (c == '\n' and !in_quotes) {
-            // End of logical record.
-            var rec = content[rec_start..pos];
-            if (rec.len > 0 and rec[rec.len - 1] == '\r') rec = rec[0 .. rec.len - 1];
-            if (rec.len > 0) try records.append(rec);
-            pos += 1;
-            rec_start = pos;
-        } else {
-            pos += 1;
-        }
-    }
-    // Handle last record when file has no trailing newline.
-    if (rec_start < content.len) {
-        var rec = content[rec_start..];
-        if (rec.len > 0 and rec[rec.len - 1] == '\r') rec = rec[0 .. rec.len - 1];
-        if (rec.len > 0) try records.append(rec);
-    }
-    return records;
-}
-
 /// One record produced by `LineIterator.next()`: the record bytes
 /// (slice into the underlying chunk buffer, RFC-4180 quote-aware logical
 /// line with `\r` stripped from the terminator) plus its absolute file
@@ -120,19 +77,18 @@ pub const LineSlice = struct {
 /// pipeline in bxp-cli — caller pulls one record at a time and
 /// accumulates them into a block before forking workers.
 ///
-/// quote semantics match `splitRecords` exactly: `quote == 0` disables
-/// quoting; `quote != 0` treats doubled `quote quote` as an escape that
-/// stays inside the quoted field and a bare `quote` as the toggle.
-/// A `\n` inside a quoted field does NOT terminate the record.
+/// quote semantics: `quote == 0` disables quoting; `quote != 0` treats
+/// doubled `quote quote` as an escape that stays inside the quoted
+/// field and a bare `quote` as the toggle. A `\n` inside a quoted
+/// field does NOT terminate the record (RFC 4180 §2 rule 6).
 ///
 /// `bytes` is borrowed (read-only) for the iterator's lifetime; emitted
 /// `LineSlice.bytes` slices point directly into it. `base_offset` is
 /// the absolute file offset of `bytes[0]` — typically
 /// `ChunkReader.chunk_start_in_file` at the time the chunk was returned.
 ///
-/// Empty records (consecutive `\n` or trailing `\n` at EOF) are skipped,
-/// matching `splitRecords` behaviour. Returns `null` once the buffer is
-/// exhausted.
+/// Empty records (consecutive `\n` or trailing `\n` at EOF) are skipped.
+/// Returns `null` once the buffer is exhausted.
 pub const LineIterator = struct {
     bytes: []const u8,
     quote: u8,
@@ -145,7 +101,7 @@ pub const LineIterator = struct {
 
     pub fn next(self: *LineIterator) ?LineSlice {
         // Skip leading empty records so the first call returns the first
-        // non-empty record (matches splitRecords).
+        // non-empty record.
         while (self.pos < self.bytes.len) {
             const rec_start = self.pos;
             var in_quotes: bool = false;

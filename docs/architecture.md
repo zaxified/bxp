@@ -198,8 +198,8 @@ flowchart TD
     and output exists?}
     FRESH -->|skip| NEXT([next file])
     FRESH -->|continue| DETECT{File type?}
-    DETECT -->|.csv| CSV_READ[csv.splitRecords
-    csv.splitFields]
+    DETECT -->|.csv| CSV_READ[ChunkReader +
+    csv.LineIterator + csv.splitFields]
     DETECT -->|.json| JSON_READ[json.scanColNames +
     json.RecordReader streaming]
     CSV_READ --> PREPASS
@@ -244,7 +244,7 @@ The `--debug` flag prints rows that match no rule when
 `row_rules_debug_missing: true` is set on the template — useful when
 authoring a new template. xlsx files take an earlier path: `xlsxPrePass`
 extracts each sheet to an intermediate `.csv` before this loop runs, so
-xlsx and csv inputs follow the same code from `csv.splitRecords` onwards.
+xlsx and csv inputs follow the same code from the chunked CSV reader onwards.
 
 ---
 

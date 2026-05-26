@@ -19,7 +19,7 @@ bxp/
 │   └── build.zig.zon     # depends on bxp-core (path dep)
 ├── bxp-core/             # Internal Zig library (shared modules)
 │   ├── src/
-│   │   ├── csv.zig         # RFC 4180 CSV parser + splitRecords()
+│   │   ├── csv.zig         # RFC 4180 CSV parser + splitFields + LineIterator
 │   │   ├── xlsx.zig        # .xlsx → CSV converter (ZIP+XML)
 │   │   ├── expr.zig        # Expression evaluator + per-builtin FnDoc catalog
 │   │   ├── config.zig      # JSON5 config loader + per-struct FieldDoc tables

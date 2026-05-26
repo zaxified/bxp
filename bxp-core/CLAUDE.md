@@ -14,7 +14,7 @@ as a local path dependency.
 
 | Module        | File              | Public API                                                                |
 | ------------- | ----------------- | ------------------------------------------------------------------------- |
-| `csv`         | `csv.zig`         | `splitRecords()`, `splitFields()`                                         |
+| `csv`         | `csv.zig`         | `splitFields()`, `LineIterator`                                           |
 | `xlsx`        | `xlsx.zig`        | `xlsxToCsv()`, `SheetSpec`                                                |
 | `expr`        | `expr.zig`        | `eval()`, `evalString()`, `Context`, `Value`, `FnDoc` catalog             |
 | `config`      | `config.zig`      | `Config`, `BrokerConfig`, `load()`, `validate()`, `FieldDoc`              |
@@ -30,10 +30,11 @@ as a local path dependency.
 
 RFC 4180 CSV parser.
 
-- `splitRecords(content, quote_ch, alloc)` — splits raw file content into record slices
-  (no allocation per record; slices into `content`).
 - `splitFields(record, buf, delim, quote_ch, alloc)` — splits one record into field strings,
   up to `buf.len` fields. Unquotes quoted fields.
+- `LineIterator.init(bytes, quote, base_offset)` — quote-aware streaming
+  iterator over records held in a single in-memory chunk; `next()` yields
+  `LineSlice { bytes, byte_offset }` until the buffer is exhausted.
 - Spaces are preserved per RFC 4180. The bxp pipeline intentionally trims them
   _outside_ csv.zig: field values at access time in `expr.Context.field`
   (`expr.zig:138`), header names when building `col_index` in
@@ -128,7 +129,8 @@ whole-file slurp, no upper file-size limit.
   `[][]const u8` indexed by `col_index` order. Returns null at array end.
   Caller resets `row_alloc` between calls to bound per-row footprint.
 - `RecordReader.recordStartOffset()` — source-file byte offset of the
-  current record's `{` byte (mirrors CSV `RowIterator.current_offset`).
+  current record's `{` byte (CSV path emits the analogous offset via
+  `LineSlice.byte_offset`).
 - Pre_pass + main pass each rewind the file (`file.seekTo(0)`) and
   instantiate their own `RecordReader` against a fresh buffered reader.
 - Value coercions match the legacy `std.json.Value` path byte-for-byte:

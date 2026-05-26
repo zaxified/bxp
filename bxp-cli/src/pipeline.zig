@@ -707,7 +707,7 @@ fn checkUnknownFields(
 // dedicated per-chunk arena between blocks so peak memory is bounded by
 // the chunk size — not by the file size. Quoted multi-line fields are
 // respected: chunk boundaries always land on a '\n' that occurs
-// OUTSIDE a quoted field, mirroring `csv.splitRecords()` semantics.
+// OUTSIDE a quoted field (RFC 4180 §2 rule 6).
 
 /// Target chunk size in bytes. The buffer may grow above this when a
 /// single record is longer than CHUNK_SIZE (no '\n' outside quotes
@@ -716,7 +716,7 @@ const CHUNK_SIZE: usize = 10 * 1024 * 1024;
 
 /// Scans bytes tracking RFC-4180 quote state; returns the index of the
 /// LAST '\n' that occurs OUTSIDE a quoted field, or null if no such
-/// boundary exists. Mirrors the in_quotes logic in `csv.splitRecords`.
+/// boundary exists.
 fn findLastBoundary(bytes: []const u8, quote: u8) ?usize {
     var pos: usize = 0;
     var in_quotes: bool = false;
@@ -833,129 +833,6 @@ const ChunkReader = struct {
             self.buffer.items.len += n;
             self.bytes_read += n;
             if (n == 0) self.eof = true;
-        }
-    }
-};
-
-/// Iterator that produces parsed CSV row fields by reading chunks from a
-/// `ChunkReader` and splitting records via `csv.splitRecords`/`splitFields`.
-///
-/// `chunk_arena` is reset on each chunk boundary; the returned fields
-/// slice (and the string slices inside it) are valid only until the
-/// next call to `next()` or `parseHeader()`. Caller must dupe out any
-/// data that needs to outlive the current row.
-const RowIterator = struct {
-    reader: *ChunkReader,
-    chunk_arena: *std.heap.ArenaAllocator,
-    delimiter: u8,
-    quote: u8,
-
-    /// Current chunk's records (slices into reader.buffer). Replaced on
-    /// each chunk transition; backed by chunk_arena.
-    records: std.array_list.Managed([]const u8),
-    rec_idx: usize,
-    header_consumed: bool,
-    /// Reusable per-row slice buffer. Lives in file_alloc (not chunk_arena)
-    /// so it survives chunk resets; allocated once at init. Caller already
-    /// must dupe out any data needed past the next `next()` / `parseHeader()`
-    /// call, so reusing the same buffer across rows is safe.
-    row_buf: [][]const u8,
-
-    /// Byte offset of the start of the most-recently-returned record in the
-    /// source file. Populated by every `next()` and `parseHeader()`. Used
-    /// by `--trace=bin` to emit `source_locator` per output_row so fmt can
-    /// seek directly to the record for sub-ms drill-down.
-    current_offset: u64,
-
-    /// Pointer to the chunk currently held in `records` (chunk_arena-owned
-    /// slice from ChunkReader). Records' `ptr - chunk_ptr` gives in-chunk
-    /// byte offset; combined with `chunk_start_in_file` from ChunkReader
-    /// yields the absolute file offset.
-    chunk_ptr: [*]const u8,
-    chunk_start_in_file: u64,
-
-    pub fn init(
-        reader: *ChunkReader,
-        chunk_arena: *std.heap.ArenaAllocator,
-        file_alloc: std.mem.Allocator,
-        delimiter: u8,
-        quote: u8,
-    ) !RowIterator {
-        return .{
-            .reader = reader,
-            .chunk_arena = chunk_arena,
-            .delimiter = delimiter,
-            .quote = quote,
-            .records = std.array_list.Managed([]const u8).init(chunk_arena.allocator()),
-            .rec_idx = 0,
-            .header_consumed = false,
-            .row_buf = try file_alloc.alloc([]const u8, MAX_COLUMNS),
-            .current_offset = 0,
-            .chunk_ptr = undefined,
-            .chunk_start_in_file = 0,
-        };
-    }
-
-    /// Parses the header record from the first chunk. Returned slice and
-    /// its string contents live in chunk_arena — caller MUST dupe them
-    /// out into a longer-lived allocator before calling next().
-    ///
-    /// On the first chunk, BOM (EF BB BF) is stripped before parsing.
-    ///
-    /// Returns an empty slice when the file has no records at all.
-    pub fn parseHeader(self: *RowIterator) ![][]const u8 {
-        if (self.header_consumed) return &.{};
-        var chunk_bytes = (try self.reader.nextChunk()) orelse {
-            self.header_consumed = true;
-            return &.{};
-        };
-        var bom_offset: usize = 0;
-        // BOM strip (only meaningful on the first chunk; subsequent
-        // chunks never start with BOM).
-        if (chunk_bytes.len >= 3 and std.mem.eql(u8, chunk_bytes[0..3], "\xEF\xBB\xBF")) {
-            chunk_bytes = chunk_bytes[3..];
-            bom_offset = 3;
-        }
-        _ = self.chunk_arena.reset(.retain_capacity);
-        self.records = try csv.splitRecords(chunk_bytes, self.quote, self.chunk_arena.allocator());
-        // Anchor offsets against the original (pre-BOM) chunk start in the
-        // file: `chunk_ptr` points at the byte holding chunk_start_in_file.
-        self.chunk_ptr = chunk_bytes.ptr - bom_offset;
-        self.chunk_start_in_file = self.reader.chunk_start_in_file;
-        self.rec_idx = 0;
-        self.header_consumed = true;
-        if (self.records.items.len == 0) return &.{};
-        const hdr_buf = try self.chunk_arena.allocator().alloc([]const u8, MAX_COLUMNS + 1);
-        const header = try csv.splitFields(
-            self.records.items[0], hdr_buf,
-            self.delimiter, self.quote, self.chunk_arena.allocator(),
-        );
-        self.current_offset = self.chunk_start_in_file + (@intFromPtr(self.records.items[0].ptr) - @intFromPtr(self.chunk_ptr));
-        self.rec_idx = 1;
-        return header;
-    }
-
-    /// Returns next row fields, or null at EOF. Must be called only
-    /// AFTER `parseHeader()` (which primes the iterator on the first
-    /// chunk). Slice + strings inside are valid until the next call.
-    /// `current_offset` is populated with the file byte offset of the
-    /// returned record (read it immediately, same lifetime as fields).
-    pub fn next(self: *RowIterator) !?[][]const u8 {
-        while (true) {
-            if (self.rec_idx < self.records.items.len) {
-                const rec = self.records.items[self.rec_idx];
-                self.rec_idx += 1;
-                self.current_offset = self.chunk_start_in_file + (@intFromPtr(rec.ptr) - @intFromPtr(self.chunk_ptr));
-                return try csv.splitFields(
-                    rec, self.row_buf, self.delimiter, self.quote, self.chunk_arena.allocator(),
-                );
-            }
-            const chunk_bytes = (try self.reader.nextChunk()) orelse return null;
-            _ = self.chunk_arena.reset(.retain_capacity);
-            self.records = try csv.splitRecords(chunk_bytes, self.quote, self.chunk_arena.allocator());
-            self.chunk_ptr = chunk_bytes.ptr;
-            self.chunk_start_in_file = self.reader.chunk_start_in_file;
-            self.rec_idx = 0;
         }
     }
 };
@@ -1656,8 +1533,7 @@ fn processBlockParallelJson(
 /// populates `col_index` + `col_names`. Returns the byte offset within
 /// `chunk_bytes` where body records begin — the caller continues
 /// iteration from there with `csv.LineIterator`. Header truncation
-/// (more than `MAX_COLUMNS`) bumps `stats.warnings` and emits a warning
-/// to mirror the legacy `RowIterator.parseHeader` behaviour.
+/// (more than `MAX_COLUMNS`) bumps `stats.warnings` and emits a warning.
 fn parseCsvHeader(
     chunk_bytes: []const u8,
     delimiter: u8,

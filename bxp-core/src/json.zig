@@ -155,7 +155,8 @@ pub const RecordReader = struct {
     started: bool,
     /// Source-file byte offset of the opening `{` of the most recently
     /// emitted record. 0 before the first `next()` call. Used by btrace
-    /// drill-down (mirrors CSV `RowIterator.current_offset`).
+    /// drill-down (CSV path emits the analogous offset via
+    /// `csv.LineSlice.byte_offset`).
     last_record_offset: u64,
 
     /// Caller owns the `io_reader` lifetime. `parent_alloc` only backs the
