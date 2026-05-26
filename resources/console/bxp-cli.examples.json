@@ -288,7 +288,7 @@
       row_rules_debug_missing: true,
       row_rules: [
         {
-          when:  "[Type] = 'Buy' OR [Type] = 'Buy - Revolut X'",
+          when:  "IN([Type], 'Buy', 'Buy - Revolut X')",
           rows: [
             {
               $action:  "'BUY'"
@@ -397,7 +397,7 @@
       row_rules: [
         // zero-total buy = stock transfer (no cash exchanged)
         {
-          when:  "([Action] = 'Market buy' OR [Action] = 'Limit buy' OR [Action] = 'Stock distribution') AND [Total] = 0",
+          when:  "IN([Action], 'Market buy', 'Limit buy', 'Stock distribution') AND [Total] = 0",
           rows: [
             {
               $action:  "'TRANSFER_IN'"
@@ -413,7 +413,7 @@
           ]
         },
         {
-          when:  "[Action] = 'Market buy' OR [Action] = 'Limit buy' OR [Action] = 'Stock distribution'",
+          when:  "IN([Action], 'Market buy', 'Limit buy', 'Stock distribution')",
           rows: [
             {
               $action:  "'BUY'"
@@ -450,7 +450,7 @@
           ]
         },
         {
-          when:  "[Action] = 'Dividend (Dividend)' OR [Action] = 'Dividend (Dividend manufactured payment)' OR [Action] = 'Dividend (Tax exempted)'",
+          when:  "IN([Action], 'Dividend (Dividend)', 'Dividend (Dividend manufactured payment)', 'Dividend (Tax exempted)')",
           rows: [
             {
               $action:  "'DIVIDEND'"
@@ -458,7 +458,7 @@
           ]
         },
         {
-          when:  "[Action] = 'Interest on cash' OR [Action] = 'Lending interest'",
+          when:  "IN([Action], 'Interest on cash', 'Lending interest')",
           rows: [
             {
               $action:  "'INTEREST'"
@@ -528,7 +528,7 @@
         },
         // result/dividend adjustment: direction from sign of Total
         {
-          when:  "[Action] = 'Result adjustment' OR [Action] = 'Dividend adjustment'",
+          when:  "IN([Action], 'Result adjustment', 'Dividend adjustment')",
           rows: [
             {
               $action:     "IF([Total] > 0, 'DEPOSIT', 'WITHDRAWAL')",
@@ -1175,7 +1175,7 @@
           ]
         },
         {
-          when:  "[Action] = 'Market buy' OR [Action] = 'Limit buy' OR [Action] = 'Stock distribution'",
+          when:  "IN([Action], 'Market buy', 'Limit buy', 'Stock distribution')",
           rows: [
             {
               $type:  "'BUY'"
