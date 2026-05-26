@@ -18,17 +18,17 @@ Several patterns required nested-`IF` workarounds that single built-ins
 would collapse. Touches `expr.zig` FnDoc catalog, `bxp-fmt --docs` JSON
 shape, GUI autocomplete (via `--docs`), and Dart `expr_corpus_bridge_test`.
 
-- `SUBSTR(s, start, length)` / `LEFT(s, n)` / `RIGHT(s, n)` — fixed-position
-  string slicing. Real use: ISIN prefix codes (`LEFT([ISIN], 2)` = country
-  code), broker ticker suffix strip.
-- `STARTS_WITH(s, prefix)` / `ENDS_WITH(s, suffix)` — `CONTAINS` is
-  position-agnostic and false-positives on substrings. Most picklist /
-  category checks really want prefix or suffix anchoring.
+- ~~`SUBSTR(s, start, length)` / `LEFT(s, n)` / `RIGHT(s, n)`~~ **shipped
+  2026-05-26.** Fixed-position string slicing. Real use: ISIN prefix codes
+  (`LEFT([ISIN], 2)` = country code), broker ticker suffix strip.
+- ~~`STARTS_WITH(s, prefix)` / `ENDS_WITH(s, suffix)`~~ **shipped
+  2026-05-26.** `CONTAINS` is position-agnostic and false-positives on
+  substrings; these anchor at the start/end for picklist / category checks.
+- ~~`UPPER(s)` / `LOWER(s)`~~ **shipped 2026-05-26.** ASCII case
+  normalisation; non-ASCII bytes pass through unchanged.
 - `NOT expr` — boolean negation keyword. Today `WHEN: NOT CONTAINS(...)`
   must be written as `IF(CONTAINS(...), 0, 1) = 1`. Parser-level change
   in operator precedence (between `=` and `AND`).
-- `UPPER(s)` / `LOWER(s)` — explicit case normalisation. Makes picklist
-  case-folding one line instead of an `IF` chain per variant.
 - `NULLIF(value, sentinel)` — emit empty string when `value == sentinel`.
   Real use: NOAA `-9999` for missing measurements, IMDb `\N` null marker,
   CSVs with `"N/A"` placeholders. Today: per-column `IF([X] = '-9999', '', [X])`

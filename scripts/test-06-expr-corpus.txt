@@ -8,10 +8,11 @@
 # Section headers use box-drawing characters for visual scan.
 # Non-inline comments above complex cases explain the why.
 #
-# Function catalog (per `bxp-fmt --docs` 2026-05-14, 18 functions):
-#   ABS, CEILING, COALESCE, CONTAINS, DATE_CONVERT, FIELDS, FLOOR,
-#   IF, LOOKUP, NOW, PRICE_CURRENCY, PRICE_VALUE, RAND, REPLACE,
-#   ROUND, SPLIT_PART, TICKER, TRIM
+# Function catalog (per `bxp-fmt --docs` 2026-05-26, 25 functions):
+#   ABS, CEILING, COALESCE, CONTAINS, DATE_CONVERT, ENDS_WITH, FIELDS,
+#   FLOOR, IF, LEFT, LOOKUP, LOWER, NOW, PRICE_CURRENCY, PRICE_VALUE,
+#   RAND, REPLACE, RIGHT, ROUND, SPLIT_PART, STARTS_WITH, SUBSTR,
+#   TICKER, TRIM, UPPER
 # Keywords: AND, OR
 # Operators: &  =  !=  <  >  <=  >=  +  -  *  /
 
@@ -57,6 +58,16 @@ expr	ok	REPLACE([A], 'old', 'new')
 expr	ok	SPLIT_PART([A], ',', 1)
 expr	ok	TICKER([Symbol])
 expr	ok	TRIM([Symbol])
+# v0.2.4 string utilities.
+expr	ok	LEFT([A], 3)
+expr	ok	RIGHT([A], 3)
+expr	ok	SUBSTR([A], 2, 5)
+expr	ok	UPPER([A])
+expr	ok	LOWER([A])
+expr	ok	STARTS_WITH([A], 'pref')
+expr	ok	ENDS_WITH([A], 'suf')
+# Real-world: ISIN country prefix extraction.
+expr	ok	LEFT([ISIN], 2)
 # Nested fn calls — IF wrapping IF; ABS thrice nested.
 expr	ok	IF(IF([A] = 1, 'a', 'b') = 'a', 'yes', 'no')
 expr	ok	ABS(ABS(ABS([A])))
@@ -73,6 +84,13 @@ expr	err	IF([A])	ExpectedComma
 expr	err	IF([A]	ExpectedComma
 expr	err	REPLACE([A], 'x')	WrongArgCount
 expr	err	ROUND(1.5)	WrongArgCount
+# v0.2.4 string utilities arity errors.
+expr	err	LEFT([A])	WrongArgCount
+expr	err	RIGHT([A], 1, 2)	WrongArgCount
+expr	err	SUBSTR([A], 1)	WrongArgCount
+expr	err	UPPER([A], 'extra')	WrongArgCount
+expr	err	STARTS_WITH([A])	WrongArgCount
+expr	err	ENDS_WITH([A], 'b', 'c')	WrongArgCount
 # FIELDS without args fails cleanly with WrongArgCount.
 expr	err	FIELDS()	WrongArgCount
 # FIELDS with multiple args = arity error.

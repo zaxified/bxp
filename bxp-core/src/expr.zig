@@ -2058,6 +2058,208 @@ fn normalizeMonthAbbrev(s: []const u8, alloc: std.mem.Allocator) ![]const u8 {
     return out.toOwnedSlice();
 }
 
+// ── LEFT ────────────────────────────────────────────────────────────────
+const left_doc: FnDoc = .{
+    .name = "LEFT",
+    .signature = "LEFT(s, n)",
+    .description = "Return the first `n` bytes of `s`. `n` is clamped to `[0, len(s)]`; non-finite `n` (NaN/Inf) or negative `n` returns \"\".",
+    .args = &.{
+        .{ .name = "s" },
+        .{ .name = "n" },
+    },
+    .min_args = 2,
+    .max_args = 2,
+};
+fn builtinLeft(args: []Value) !Value {
+    if (args.len != 2) return error.WrongArgCount;
+    const s = switch (args[0]) {
+        .string => |v| v,
+        else => return error.StringExpected,
+    };
+    const nf = try args[1].toNumber();
+    if (!std.math.isFinite(nf) or nf < 0) return Value{ .string = "" };
+    const clamped = @min(nf, @as(f80, @floatFromInt(s.len)));
+    const n: usize = @intFromFloat(clamped);
+    return Value{ .string = s[0..n] };
+}
+fn adaptLeft(p: *Parser, args: []Value) anyerror!Value {
+    return builtinLeft(args) catch |err| {
+        if (args.len >= 2) switch (args[1]) { .string => |s| p.setNotANumber(s), else => {} };
+        return err;
+    };
+}
+
+// ── RIGHT ───────────────────────────────────────────────────────────────
+const right_doc: FnDoc = .{
+    .name = "RIGHT",
+    .signature = "RIGHT(s, n)",
+    .description = "Return the last `n` bytes of `s`. `n` is clamped to `[0, len(s)]`; non-finite `n` (NaN/Inf) or negative `n` returns \"\".",
+    .args = &.{
+        .{ .name = "s" },
+        .{ .name = "n" },
+    },
+    .min_args = 2,
+    .max_args = 2,
+};
+fn builtinRight(args: []Value) !Value {
+    if (args.len != 2) return error.WrongArgCount;
+    const s = switch (args[0]) {
+        .string => |v| v,
+        else => return error.StringExpected,
+    };
+    const nf = try args[1].toNumber();
+    if (!std.math.isFinite(nf) or nf < 0) return Value{ .string = "" };
+    const clamped = @min(nf, @as(f80, @floatFromInt(s.len)));
+    const n: usize = @intFromFloat(clamped);
+    return Value{ .string = s[s.len - n ..] };
+}
+fn adaptRight(p: *Parser, args: []Value) anyerror!Value {
+    return builtinRight(args) catch |err| {
+        if (args.len >= 2) switch (args[1]) { .string => |s| p.setNotANumber(s), else => {} };
+        return err;
+    };
+}
+
+// ── SUBSTR ──────────────────────────────────────────────────────────────
+const substr_doc: FnDoc = .{
+    .name = "SUBSTR",
+    .signature = "SUBSTR(s, start, length)",
+    .description = "Return `length` bytes from `s` starting at 1-based position `start`. Returns \"\" when `start` is non-positive / non-finite / past end of `s`, or when `length` is non-positive / non-finite. `length` is clamped to the bytes remaining from `start`.",
+    .args = &.{
+        .{ .name = "s" },
+        .{ .name = "start", .kind = .literal_int_positive },
+        .{ .name = "length" },
+    },
+    .min_args = 3,
+    .max_args = 3,
+};
+fn builtinSubstr(args: []Value) !Value {
+    if (args.len != 3) return error.WrongArgCount;
+    const s = switch (args[0]) {
+        .string => |v| v,
+        else => return error.StringExpected,
+    };
+    const start = toPositiveIndex(try args[1].toNumber()) orelse
+        return Value{ .string = "" };
+    const lenf = try args[2].toNumber();
+    if (!std.math.isFinite(lenf) or lenf < 0) return Value{ .string = "" };
+    if (start > s.len) return Value{ .string = "" };
+    const begin = start - 1;
+    const avail = s.len - begin;
+    const clamped = @min(lenf, @as(f80, @floatFromInt(avail)));
+    const len: usize = @intFromFloat(clamped);
+    return Value{ .string = s[begin .. begin + len] };
+}
+fn adaptSubstr(p: *Parser, args: []Value) anyerror!Value {
+    return builtinSubstr(args) catch |err| {
+        if (args.len >= 2) switch (args[1]) { .string => |s| p.setNotANumber(s), else => {} };
+        if (args.len >= 3) switch (args[2]) { .string => |s| p.setNotANumber(s), else => {} };
+        return err;
+    };
+}
+
+// ── UPPER ───────────────────────────────────────────────────────────────
+const upper_doc: FnDoc = .{
+    .name = "UPPER",
+    .signature = "UPPER(s)",
+    .description = "ASCII upper-case conversion: bytes a–z become A–Z; all other bytes (including non-ASCII UTF-8) pass through unchanged.",
+    .args = &.{.{ .name = "s" }},
+    .min_args = 1,
+    .max_args = 1,
+};
+fn builtinUpper(args: []Value, alloc: std.mem.Allocator) !Value {
+    if (args.len != 1) return error.WrongArgCount;
+    const s = switch (args[0]) {
+        .string => |v| v,
+        else => return error.StringExpected,
+    };
+    const buf = try alloc.alloc(u8, s.len);
+    for (s, 0..) |c, i| buf[i] = std.ascii.toUpper(c);
+    return Value{ .string = buf };
+}
+fn adaptUpper(p: *Parser, args: []Value) anyerror!Value {
+    return builtinUpper(args, p.ctx.alloc);
+}
+
+// ── LOWER ───────────────────────────────────────────────────────────────
+const lower_doc: FnDoc = .{
+    .name = "LOWER",
+    .signature = "LOWER(s)",
+    .description = "ASCII lower-case conversion: bytes A–Z become a–z; all other bytes (including non-ASCII UTF-8) pass through unchanged.",
+    .args = &.{.{ .name = "s" }},
+    .min_args = 1,
+    .max_args = 1,
+};
+fn builtinLower(args: []Value, alloc: std.mem.Allocator) !Value {
+    if (args.len != 1) return error.WrongArgCount;
+    const s = switch (args[0]) {
+        .string => |v| v,
+        else => return error.StringExpected,
+    };
+    const buf = try alloc.alloc(u8, s.len);
+    for (s, 0..) |c, i| buf[i] = std.ascii.toLower(c);
+    return Value{ .string = buf };
+}
+fn adaptLower(p: *Parser, args: []Value) anyerror!Value {
+    return builtinLower(args, p.ctx.alloc);
+}
+
+// ── STARTS_WITH ─────────────────────────────────────────────────────────
+const starts_with_doc: FnDoc = .{
+    .name = "STARTS_WITH",
+    .signature = "STARTS_WITH(s, prefix)",
+    .description = "Return \"true\" when `s` begins with `prefix` (case-sensitive byte match), else \"false\". An empty `prefix` always matches.",
+    .args = &.{
+        .{ .name = "s" },
+        .{ .name = "prefix" },
+    },
+    .min_args = 2,
+    .max_args = 2,
+};
+fn builtinStartsWith(args: []Value) !Value {
+    if (args.len != 2) return error.WrongArgCount;
+    const s = switch (args[0]) {
+        .string => |v| v,
+        else => return error.StringExpected,
+    };
+    const prefix = switch (args[1]) {
+        .string => |v| v,
+        else => return error.StringExpected,
+    };
+    return Value{ .boolean = std.mem.startsWith(u8, s, prefix) };
+}
+fn adaptStartsWith(_: *Parser, args: []Value) anyerror!Value {
+    return builtinStartsWith(args);
+}
+
+// ── ENDS_WITH ───────────────────────────────────────────────────────────
+const ends_with_doc: FnDoc = .{
+    .name = "ENDS_WITH",
+    .signature = "ENDS_WITH(s, suffix)",
+    .description = "Return \"true\" when `s` ends with `suffix` (case-sensitive byte match), else \"false\". An empty `suffix` always matches.",
+    .args = &.{
+        .{ .name = "s" },
+        .{ .name = "suffix" },
+    },
+    .min_args = 2,
+    .max_args = 2,
+};
+fn builtinEndsWith(args: []Value) !Value {
+    if (args.len != 2) return error.WrongArgCount;
+    const s = switch (args[0]) {
+        .string => |v| v,
+        else => return error.StringExpected,
+    };
+    const suffix = switch (args[1]) {
+        .string => |v| v,
+        else => return error.StringExpected,
+    };
+    return Value{ .boolean = std.mem.endsWith(u8, s, suffix) };
+}
+fn adaptEndsWith(_: *Parser, args: []Value) anyerror!Value {
+    return builtinEndsWith(args);
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -2161,6 +2363,13 @@ pub const builtins = [_]FnEntry{
     .{ .name = "CONTAINS",       .doc = contains_doc,       .impl = adaptContains },
     .{ .name = "REPLACE",        .doc = replace_doc,        .impl = adaptReplace },
     .{ .name = "FIELDS",         .doc = fields_doc,         .impl = adaptFields },
+    .{ .name = "LEFT",           .doc = left_doc,           .impl = adaptLeft },
+    .{ .name = "RIGHT",          .doc = right_doc,          .impl = adaptRight },
+    .{ .name = "SUBSTR",         .doc = substr_doc,         .impl = adaptSubstr },
+    .{ .name = "UPPER",          .doc = upper_doc,          .impl = adaptUpper },
+    .{ .name = "LOWER",          .doc = lower_doc,          .impl = adaptLower },
+    .{ .name = "STARTS_WITH",    .doc = starts_with_doc,    .impl = adaptStartsWith },
+    .{ .name = "ENDS_WITH",      .doc = ends_with_doc,      .impl = adaptEndsWith },
 };
 
 // ============================================================
@@ -3130,4 +3339,142 @@ test "catalog: tokens are non-empty and unique by kind" {
             try testing.expect(!std.mem.eql(u8, a.kind, b.kind));
         }
     }
+}
+
+// ------------------------------------------------------------
+// v0.2.4 string utilities: LEFT, RIGHT, SUBSTR, UPPER, LOWER,
+// STARTS_WITH, ENDS_WITH
+// ------------------------------------------------------------
+
+test "eval: LEFT basic and edge cases" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    try testing.expectEqualStrings("hel",   try evalString("LEFT('hello', 3)", &ctx));
+    try testing.expectEqualStrings("hello", try evalString("LEFT('hello', 10)", &ctx));
+    try testing.expectEqualStrings("",      try evalString("LEFT('hello', 0)", &ctx));
+    try testing.expectEqualStrings("",      try evalString("LEFT('hello', -1)", &ctx));
+    try testing.expectEqualStrings("",      try evalString("LEFT('', 5)", &ctx));
+}
+
+test "eval: LEFT ISIN country prefix (real-world use case)" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    try testing.expectEqualStrings("US", try evalString("LEFT('US0378331005', 2)", &ctx));
+    try testing.expectEqualStrings("DE", try evalString("LEFT('DE0007236101', 2)", &ctx));
+}
+
+test "eval: RIGHT basic and edge cases" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    try testing.expectEqualStrings("llo",   try evalString("RIGHT('hello', 3)", &ctx));
+    try testing.expectEqualStrings("hello", try evalString("RIGHT('hello', 10)", &ctx));
+    try testing.expectEqualStrings("",      try evalString("RIGHT('hello', 0)", &ctx));
+    try testing.expectEqualStrings("",      try evalString("RIGHT('hello', -1)", &ctx));
+    try testing.expectEqualStrings("",      try evalString("RIGHT('', 5)", &ctx));
+}
+
+test "eval: SUBSTR basic" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    try testing.expectEqualStrings("ell",   try evalString("SUBSTR('hello', 2, 3)", &ctx));
+    try testing.expectEqualStrings("hello", try evalString("SUBSTR('hello', 1, 100)", &ctx));
+    try testing.expectEqualStrings("",      try evalString("SUBSTR('hello', 6, 3)", &ctx));
+    try testing.expectEqualStrings("",      try evalString("SUBSTR('hello', 2, 0)", &ctx));
+}
+
+test "eval: SUBSTR start non-positive returns empty" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    try testing.expectEqualStrings("", try evalString("SUBSTR('hello', 0, 3)", &ctx));
+    try testing.expectEqualStrings("", try evalString("SUBSTR('hello', -1, 3)", &ctx));
+    try testing.expectEqualStrings("", try evalString("SUBSTR('hello', 1, -1)", &ctx));
+}
+
+// Regression guard: parallels [[feedback_expr_intfromfloat_pattern]] —
+// SUBSTR/LEFT/RIGHT must not panic on huge floats, Inf, or NaN. The
+// tokenizer rejects `1e30` / `Inf` literals, so we drive these through
+// field-string parseFloat which DOES accept them.
+test "eval: LEFT/RIGHT/SUBSTR Inf/NaN/huge floats via field are safe" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    try h.col_index.put("Big", 0);
+    try h.col_index.put("Inf", 1);
+    try h.col_index.put("Nan", 2);
+    const ctx = h.ctx(&.{ "1e30", "Inf", "NaN" }, a);
+    try testing.expectEqualStrings("hello", try evalString("LEFT('hello', [Big])", &ctx));
+    try testing.expectEqualStrings("",      try evalString("LEFT('hello', [Inf])", &ctx));
+    try testing.expectEqualStrings("",      try evalString("LEFT('hello', [Nan])", &ctx));
+    try testing.expectEqualStrings("hello", try evalString("RIGHT('hello', [Big])", &ctx));
+    try testing.expectEqualStrings("",      try evalString("RIGHT('hello', [Inf])", &ctx));
+    try testing.expectEqualStrings("ello",  try evalString("SUBSTR('hello', 2, [Big])", &ctx));
+    try testing.expectEqualStrings("",      try evalString("SUBSTR('hello', 2, [Inf])", &ctx));
+    try testing.expectEqualStrings("",      try evalString("SUBSTR('hello', 2, [Nan])", &ctx));
+}
+
+test "eval: UPPER and LOWER ASCII" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    try testing.expectEqualStrings("HELLO", try evalString("UPPER('hello')", &ctx));
+    try testing.expectEqualStrings("HELLO", try evalString("UPPER('HeLLo')", &ctx));
+    try testing.expectEqualStrings("hello", try evalString("LOWER('HELLO')", &ctx));
+    try testing.expectEqualStrings("",      try evalString("UPPER('')", &ctx));
+    try testing.expectEqualStrings("123abc", try evalString("LOWER('123ABC')", &ctx));
+}
+
+// Non-ASCII bytes (e.g. UTF-8 multi-byte sequences) are left alone so
+// UPPER doesn't corrupt broker exports with accented chars.
+test "eval: UPPER/LOWER leave non-ASCII bytes unchanged" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    // "Č" = 0xC4 0x8C; bytes pass through, ASCII letters get case-folded.
+    try testing.expectEqualStrings("ČAU",  try evalString("UPPER('Čau')",  &ctx));
+    try testing.expectEqualStrings("Čau",  try evalString("LOWER('ČaU')",  &ctx));
+}
+
+test "eval: STARTS_WITH and ENDS_WITH" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    try testing.expectEqualStrings("true",  try evalString("STARTS_WITH('hello world', 'hello')", &ctx));
+    try testing.expectEqualStrings("false", try evalString("STARTS_WITH('hello world', 'world')", &ctx));
+    try testing.expectEqualStrings("true",  try evalString("ENDS_WITH('hello world', 'world')", &ctx));
+    try testing.expectEqualStrings("false", try evalString("ENDS_WITH('hello world', 'hello')", &ctx));
+    // Empty needle always matches; matches std.mem.startsWith / endsWith.
+    try testing.expectEqualStrings("true",  try evalString("STARTS_WITH('hello', '')", &ctx));
+    try testing.expectEqualStrings("true",  try evalString("ENDS_WITH('hello', '')", &ctx));
+}
+
+test "eval: STARTS_WITH/ENDS_WITH wrong arg count" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    try testing.expectError(error.WrongArgCount, eval("STARTS_WITH('a')", &ctx));
+    try testing.expectError(error.WrongArgCount, eval("ENDS_WITH('a', 'b', 'c')", &ctx));
 }
