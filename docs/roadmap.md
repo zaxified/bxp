@@ -39,21 +39,6 @@ Catalog grew from 18 to 27 functions and 2 to 3 keywords; corpus from
 117 to 144 cases. Real-world validation: 78 `.csvx` byte-identical on
 `DEV/` before/after rewriting 7 `OR`-chain `when` clauses to `IN`.
 
-### Wide-CSV support (already landed in source)
-
-- `MAX_FILE_SIZE_BYTES` raised 16 MB → 1 GiB so 100k+ row public datasets
-  (NOAA GHCN per-station 17 MB, NYC TLC monthly ~700 MB, IMDb subsets)
-  fit.
-- `MAX_COLUMNS` raised 64 → 1024 so wide datasets (NOAA GHCN daily =
-  124 cols paired measurement + quality flags, IoT sensor exports,
-  genomic feature dumps) fit without truncation.
-- Both are temporary ceilings until v0.4.0 streaming lifts them entirely.
-- Empirical note worth keeping: lowering `MAX_COLUMNS` below the
-  actually-used count does **not** save peak RAM (measured 256 spiked to
-  5.8 GB on 1.3M-row taxi vs 1.85 GB at both 64 and 1024 — Zig page-
-  allocator threshold effect). The dominant cost is `content_raw` +
-  `all_records` slice retention, not `row_buf`.
-
 ## v0.2.5
 
 ### External template JSON files
