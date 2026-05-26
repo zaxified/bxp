@@ -7,6 +7,7 @@
   - [Execution Flow](#execution-flow)
   - [Per-File Processing (processBroker)](#per-file-processing-processbroker)
   - [Two-Pass Pipeline Detail](#two-pass-pipeline-detail)
+  - [Expression Evaluator - Why a Custom DSL?](#expression-evaluator---why-a-custom-dsl)
   - [Expression Evaluator - Call Stack](#expression-evaluator---call-stack)
 - bxp-fmt
   - [Validation Pipeline](#bxp-fmt-validation-pipeline)
@@ -306,6 +307,83 @@ fill rows.
 The lookup table is keyed internally by a composite `name\x00key\x00field`
 string, which is why both forms share the same `LookupTable` storage —
 the legacy 2-arg form just gets `_default` synthesized as the namespace.
+
+---
+
+## Expression Evaluator - Why a Custom DSL?
+
+bxp's expression language (`expr.zig`) is a custom **SQL/Excel-style
+expression DSL** — not an embedded Lua, JavaScript, Python, or off-the-shelf
+expression engine. This section explains the choice so it doesn't have to be
+re-researched on every audit.
+
+### Naming convention
+
+The DSL is intentionally **SQL/Excel-flavored**:
+
+| Surface | bxp expr              | Origin                                  |
+| ------- | --------------------- | --------------------------------------- |
+| Column  | `[ColumnName]`        | Excel structured ref, SQL bracket-quote |
+| Equal   | `=`                   | SQL (not `==`)                          |
+| Concat  | `&`                   | Excel / SQL Server                      |
+| Logic   | `AND`, `OR`, `NOT`    | SQL keywords                            |
+| Cond    | `IF(cond, yes, no)`   | Excel `IF`                              |
+| String  | `'text'`              | SQL single-quote                        |
+| Funcs   | `UPPER_CASE` builtins | SQL/Excel convention                    |
+
+Built-ins map onto recognisable SQL/Excel functions wherever possible:
+`COALESCE`, `NULLIF`, `IN`, `SUBSTR`, `LEFT`/`RIGHT`, `UPPER`/`LOWER`,
+`TRIM`, `ROUND`, `FLOOR`/`CEILING`, `REPLACE`, `SPLIT_PART` (PostgreSQL),
+`STARTS_WITH`/`ENDS_WITH` (PostgreSQL `starts_with`/`ends_with`),
+`CONTAINS` (SQL Server), `LOOKUP` (Excel). Domain extensions (`DATE_CONVERT`,
+`PRICE_VALUE`, `PRICE_CURRENCY`, `TICKER`) follow the same `UPPER_CASE`
+shape.
+
+The target persona is an Excel-comfortable analyst (broker statement
+authoring, CRM migration mapping), not a Python/JS programmer. A Lua-style
+(`if x then ... end`) or Python-style (`y if cond else z`) syntax would
+alienate that user; SQL/Excel idioms transfer directly from a spreadsheet
+workflow.
+
+### Why not embed Lua / JavaScript / Python / expr-lang?
+
+Surveyed alternatives:
+
+- **Lua** via ziglua (~250 KB, full programming language with GC)
+- **JavaScript** via QuickJS (~700 KB, ES2020+ sandbox)
+- **Go expr-lang / CEL** (no Zig port exists; would require a from-scratch implementation)
+- **Python** (CPython too heavy to embed; ~5–10 MB runtime)
+
+Tradeoff for our workload (per-row eval over 100k–10M rows):
+
+| Aspect                                         | bxp expr (current)           | Hosted engine swap            |
+| ---------------------------------------------- | ---------------------------- | ----------------------------- |
+| Per-row eval cost (2M rows S1 bench)           | 6.5 s (measured 2026-05-25)  | 10–100× slower (GC, dispatch) |
+| Binary footprint                               | included in bxp-cli          | +250 KB to +700 KB            |
+| Trace highlighting (off/len in GUI playground) | shipped                      | rebuild from scratch          |
+| `FnDoc` autocomplete (single source of truth)  | co-located with each builtin | rebuild binding layer         |
+| Domain builtins (`DATE_CONVERT`, `LOOKUP`, …)  | inline impl + sunrise dep    | reimplement as native funcs   |
+| Sandboxing                                     | implicit (no loops, no I/O)  | strip Lua `io`/`os` / harden  |
+
+The value of `expr.zig` is **not** the parser (~600 LOC, recursive
+descent). It's the **integration**: per-row arena pattern, trace stream
+hooks, `FnDoc` autocomplete in `bxp-gui`, `error_detail` diagnostics
+returned through `Context`, byte-exact reproducibility across the 117/117
+corpus and 8 dataset regression tests. All of that would have to be
+rebuilt around any hosted engine while paying the perf and footprint cost.
+
+### When to revisit
+
+Only revisit the build-vs-buy decision if **both** become true:
+
+1. A user-meaningful capability (e.g. user-defined functions, loops over
+   sub-records, complex aggregations) lands on the roadmap that genuinely
+   needs a full programming language.
+2. A native-Zig expression engine matures with comparable perf, embedded
+   sandboxing, and a stable allocator-aware API.
+
+Until then, the SQL/Excel-style DSL is a deliberate fit for the user
+persona and workload, not legacy inertia.
 
 ---
 

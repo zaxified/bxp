@@ -24,16 +24,12 @@ shape, GUI autocomplete (via `--docs`), and Dart `expr_corpus_bridge_test`.
 - `STARTS_WITH(s, prefix)` / `ENDS_WITH(s, suffix)` — `CONTAINS` is
   position-agnostic and false-positives on substrings. Most picklist /
   category checks really want prefix or suffix anchoring.
-- `REGEX_MATCH(s, pattern)` — optional follow-on. If regex support lands
-  here, also opens `REGEX_EXTRACT(s, pattern)` from "Later — Real-world
-  broker CSV quirks" (Lime.co dividend ticker extraction). Otherwise
-  STARTS_WITH/ENDS_WITH covers ~90% of today's need.
 - `NOT expr` — boolean negation keyword. Today `WHEN: NOT CONTAINS(...)`
   must be written as `IF(CONTAINS(...), 0, 1) = 1`. Parser-level change
   in operator precedence (between `=` and `AND`).
 - `UPPER(s)` / `LOWER(s)` — explicit case normalisation. Makes picklist
   case-folding one line instead of an `IF` chain per variant.
-- `NULL_IF(value, sentinel)` — emit empty string when `value == sentinel`.
+- `NULLIF(value, sentinel)` — emit empty string when `value == sentinel`.
   Real use: NOAA `-9999` for missing measurements, IMDb `\N` null marker,
   CSVs with `"N/A"` placeholders. Today: per-column `IF([X] = '-9999', '', [X])`
   repeated for every sentinel-aware field.
@@ -345,8 +341,9 @@ to pre-process the file" or "skip the affected rows".
   to extract the ticker. Two design options: (a) document
   `ticker_map` keyed by company name (`"APPLE INC": "AAPL"`) — works
   with the existing engine, just needs a readme tip; (b) add a
-  `REGEX_EXTRACT(s, pattern)` built-in. (a) is cheap; (b) is a real
-  feature.
+  `REGEX_EXTRACT(s, pattern)` built-in (deferred to Zig 0.16
+  migration — see "Expression builtins (regex)" under Tooling). (a)
+  is cheap and unblocks today; (b) is a real feature later.
 
 - **Readme polish** — add an `OR` example to "Minimal examples"
   (`[Action] = 'Buy' OR CONTAINS([Action], 'Buy to')   → catch all buy
@@ -391,7 +388,29 @@ variants`). Tiny.
 
 - Zig 0.16 migration. Currently pinned to 0.15.2; 0.16 shipped
   2026-04-15 with breaking I/O API changes (~100–150 LOC affected).
-  Assessment in `project_zig16_migration` memory.
+  Assessment in `project_zig16_migration` memory. Bundle this with
+  `REGEX_MATCH` / `REGEX_EXTRACT` below — the only mature native-Zig
+  regex (zig-utils/zig-regex v0.2.0, 2026-05-18) requires Zig 0.16+.
+
+### Expression builtins (regex)
+
+- `REGEX_MATCH(s, pattern)` and `REGEX_EXTRACT(s, pattern)` — deferred
+  from v0.2.4 (2026-05-26 decision). Real use: Lime.co dividend ticker
+  extraction (`"Qualified Dividend APPLE INC 100"` → `"APPLE INC"`),
+  generic user-defined patterns in templates. Surveyed regex options
+  for Zig 0.15.2:
+  - `tiehuis/zig-regex` — no capture groups, no UTF-8 → blocks `REGEX_EXTRACT`.
+  - `zig-utils/zig-regex v0.2.0` — full feature set incl. named groups
+    and lookaround, **requires Zig 0.16+**.
+  - `alexnask/ctregex.zig` — patterns must be comptime-known, useless
+    for runtime template strings.
+  - POSIX `regex.h` via `std.c` — works on Linux/macOS but libc-managed
+    memory (can't use Zig allocators) and Windows packaging pain.
+  - libpcre bindings — +external dep ~700 KB, cross-platform build setup.
+
+  Decision: bundle with the Zig 0.16 migration above, then adopt
+  zig-utils/zig-regex. v0.2.4 ships the other 9 builtins; the remaining
+  ~10 % of real-world need (regex) waits.
 
 ## Not planned
 
