@@ -534,6 +534,14 @@ errors — no Zig stack trace leaks to the user. Severity routing in `--trace`
 mode: `Output.warning()` writes to stderr (stdout is reserved for the binary
 BXTB frame stream); fatal errors also stderr.
 
+> **Naming note — BXTB.** Short for **BXP Trace Binary**; nothing to do with
+> the XTB broker that several conversion templates target. The four ASCII
+> bytes `B`, `X`, `T`, `B` are written verbatim as the file-format magic at
+> the start of every `--trace` stream so `bxp-gui` and offline tools can
+> reject anything that does not begin with them. Defined in
+> [`bxp-core/src/btrace.zig`](../bxp-core/src/btrace.zig) as
+> `FRAME_MAGIC = 0x42545842` (little-endian).
+
 ---
 
 ### Debugging workflow
