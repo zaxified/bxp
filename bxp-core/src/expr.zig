@@ -73,10 +73,10 @@ pub const Value = union(enum) {
             // COALESCE or IF if they need to distinguish "no value" from 0.
             // American thousands-separated numbers ("1,234.56") are tried
             // after the standard parseFloat fails, so they don't pay the
-            // parseAmericanNumber overhead when the input is a plain decimal.
+            // parseGroupedNumber overhead when the input is a plain decimal.
             .string => |s| if (s.len == 0) 0 else
                 std.fmt.parseFloat(f80, s) catch
-                parseAmericanNumber(s) catch
+                parseGroupedNumber(s, ',', '.') catch
                 return error.NotANumber,
             .boolean => |b| if (b) @as(f80, 1) else 0,
         };
@@ -1106,18 +1106,40 @@ const Parser = struct {
         // a bare "not a number: '1.234,56'" when decimal_sep_in is wrong.
         self.last_field_name = name;
 
-        // Decimal separator normalisation: convert "1234,56" → "1234.56" before
-        // returning so that downstream toNumber() calls work without needing to
-        // know the separator. Only allocate a copy when the field actually
-        // contains the alternate separator AND looks numeric — avoids spurious
-        // allocations for strings like "N/A" that happen to contain a comma.
-        if (self.ctx.decimal_sep_in != '.' and
-            std.mem.indexOfScalar(u8, raw, self.ctx.decimal_sep_in) != null and
-            isNumericWithSep(raw, self.ctx.decimal_sep_in))
-        {
-            const copy = try self.ctx.alloc.dupe(u8, raw);
-            std.mem.replaceScalar(u8, copy, self.ctx.decimal_sep_in, '.');
-            return Value{ .string = copy };
+        // Decimal separator normalisation for non-default locales. Two
+        // shapes are recognised when `decimal_sep_in != '.'`:
+        //
+        //  * Plain decimal-only ("1234,56", "-1,5"): one alternate separator,
+        //    digits otherwise. Validated by `isNumericWithSep`; converted by
+        //    swapping the separator to '.'.
+        //  * Grouped EU thousands ("1.234,56", "-1.234.567,89"): '.' groups of
+        //    three digits + optional decimal. Validated by `parseGroupedNumber`
+        //    with `thousands='.'`, `decimal=decimal_sep_in`; converted by
+        //    stripping '.' and swapping the decimal char.
+        //
+        // Mirrors the American thousands fallback in `Value.toNumber`
+        // (`parseGroupedNumber(s, ',', '.')`) — same algorithm, swapped
+        // separators. Only allocate a copy when the field is genuinely a
+        // recognised numeric shape; raw strings like "N/A" are returned as-is.
+        if (self.ctx.decimal_sep_in != '.') {
+            const sep = self.ctx.decimal_sep_in;
+            if (parseGroupedNumber(raw, '.', sep)) |_| {
+                const copy = try self.ctx.alloc.alloc(u8, raw.len);
+                var ci: usize = 0;
+                for (raw) |c| {
+                    if (c == '.') continue;
+                    copy[ci] = if (c == sep) '.' else c;
+                    ci += 1;
+                }
+                return Value{ .string = copy[0..ci] };
+            } else |_| {}
+            if (std.mem.indexOfScalar(u8, raw, sep) != null and
+                isNumericWithSep(raw, sep))
+            {
+                const copy = try self.ctx.alloc.dupe(u8, raw);
+                std.mem.replaceScalar(u8, copy, sep, '.');
+                return Value{ .string = copy };
+            }
         }
         return Value{ .string = raw };
     }
@@ -1334,15 +1356,25 @@ const if_doc: FnDoc = .{
 // Number parsing helpers
 // ---------------------------------------------------------------------------
 
-/// Parses a number in American thousands-separated format: "1,234.56", "-1,234,567", "1,000".
-/// Requires at least one thousands group (,ddd) — plain "123" is rejected (handled by parseFloat).
-/// Returns error.NotANumber if the string does not match the pattern.
+/// Parses a number in thousands-grouped format, generalised over both
+/// American (`thousands=','`, `decimal='.'`) and European (`thousands='.'`,
+/// `decimal=','`) conventions. Accepts:
+///   `[-]?d{1,3}(<thousands>d{3})+(<decimal>d+)?`
+/// Requires at least one thousands group — plain numbers without grouping
+/// (`"123"`, `"1,5"`, `"1.5"`) are caller's `parseFloat` responsibility.
+/// Returns `error.NotANumber` if `s` does not match the pattern for the
+/// given separators.
 ///
-/// The strict structural validation (1–3 leading digits, exactly 3 digits per
-/// group, no trailing non-numeric characters) is intentional. It prevents
-/// false positives on strings like "2025,06,01" (date components) or European
-/// decimal notation ("1.234,56" after decimal normalisation).
-fn parseAmericanNumber(s: []const u8) error{NotANumber}!f80 {
+/// The strict structural validation (1–3 leading digits, exactly 3 digits
+/// per group, no trailing non-numeric characters) is intentional. It
+/// prevents false positives on strings like `"2025,06,01"` (date
+/// components) or American thousands input misread as a European number.
+///
+/// Examples:
+///   parseGroupedNumber("1,234.56", ',', '.') → 1234.56  (American)
+///   parseGroupedNumber("1.234,56", '.', ',') → 1234.56  (European)
+///   parseGroupedNumber("-1.234.567,89", '.', ',') → -1234567.89
+fn parseGroupedNumber(s: []const u8, thousands: u8, decimal: u8) error{NotANumber}!f80 {
     var i: usize = 0;
     if (i < s.len and s[i] == '-') i += 1;
     // 1–3 leading digits before the first thousands group
@@ -1350,37 +1382,37 @@ fn parseAmericanNumber(s: []const u8) error{NotANumber}!f80 {
     while (i < s.len and std.ascii.isDigit(s[i])) i += 1;
     const leading = i - leading_start;
     if (leading == 0 or leading > 3) return error.NotANumber;
-    // At least one ',ddd' group required
+    // At least one '<thousands>ddd' group required
     var groups: usize = 0;
-    while (i < s.len and s[i] == ',') {
+    while (i < s.len and s[i] == thousands) {
         if (s.len < i + 4) return error.NotANumber;
         if (!std.ascii.isDigit(s[i + 1]) or
             !std.ascii.isDigit(s[i + 2]) or
             !std.ascii.isDigit(s[i + 3])) return error.NotANumber;
         i += 4;
         groups += 1;
-        // A digit immediately after the group means >3 digits between commas → invalid
+        // A digit immediately after the group means >3 digits between separators → invalid
         if (i < s.len and std.ascii.isDigit(s[i])) return error.NotANumber;
     }
     if (groups == 0) return error.NotANumber;
     // Optional decimal part
     if (i < s.len) {
-        if (s[i] != '.') return error.NotANumber;
+        if (s[i] != decimal) return error.NotANumber;
         i += 1;
         if (i >= s.len or !std.ascii.isDigit(s[i])) return error.NotANumber;
         while (i < s.len and std.ascii.isDigit(s[i])) i += 1;
     }
     if (i != s.len) return error.NotANumber;
-    // Strip commas into a stack buffer and re-parse with the standard
-    // parseFloat. The 32-byte buffer is generous — the longest valid input
-    // is "−" + 3 + 11×",ddd" = 46 chars, but 32 covers all values that
-    // fit in an f80 anyway (f80 max ≈ 1.18×10^4932, far beyond 3+11*4 digits).
+    // Strip thousands and rewrite the decimal char to '.' into a stack
+    // buffer, then re-parse with the standard parseFloat. The 32-byte
+    // buffer covers any input that fits in an f80 (f80 max ≈ 1.18×10^4932,
+    // far beyond what 3+N*4 digits can express).
     var buf: [32]u8 = undefined;
     var bi: usize = 0;
     for (s) |c| {
-        if (c == ',') continue;
+        if (c == thousands) continue;
         if (bi >= buf.len) return error.NotANumber;
-        buf[bi] = c;
+        buf[bi] = if (c == decimal) '.' else c;
         bi += 1;
     }
     return std.fmt.parseFloat(f80, buf[0..bi]) catch return error.NotANumber;
@@ -3039,6 +3071,78 @@ test "eval: decimal_sep_in=',' leaves non-numeric fields unchanged" {
     var ctx = h.ctx(&.{ "hello,world" }, a);
     ctx.decimal_sep_in = ',';
     try testing.expectEqualStrings("hello,world", try evalString("[1]", &ctx));
+}
+
+test "eval: decimal_sep_in=',' parses EU thousands group (1.234,56)" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    var ctx = h.ctx(&.{ "1.234,56" }, a);
+    ctx.decimal_sep_in = ',';
+    try testing.expectEqualStrings("1234.56", try evalString("[1]", &ctx));
+}
+
+test "eval: decimal_sep_in=',' parses multi-group EU thousands (-1.234.567,89)" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    var ctx = h.ctx(&.{ "-1.234.567,89" }, a);
+    ctx.decimal_sep_in = ',';
+    try testing.expectEqualStrings("-1234567.89", try evalString("[1]", &ctx));
+}
+
+test "eval: decimal_sep_in=',' parses integer-only EU thousands (1.234)" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    var ctx = h.ctx(&.{ "1.234" }, a);
+    ctx.decimal_sep_in = ',';
+    try testing.expectEqualStrings("1234", try evalString("[1]", &ctx));
+}
+
+test "eval: decimal_sep_in=',' rejects invalid grouping (1.5)" {
+    // '.' followed by fewer than 3 digits is not a valid thousands group
+    // in EU notation → field is left raw, not converted to "15".
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    var ctx = h.ctx(&.{ "1.5" }, a);
+    ctx.decimal_sep_in = ',';
+    try testing.expectEqualStrings("1.5", try evalString("[1]", &ctx));
+}
+
+test "eval: decimal_sep_in=',' arithmetic on EU thousands group" {
+    // End-to-end: EU thousands value flows through field access into
+    // arithmetic and produces the expected numeric result.
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    var ctx = h.ctx(&.{ "1.234,50" }, a);
+    ctx.decimal_sep_in = ',';
+    try testing.expectEqualStrings("2469", try evalString("[1] * 2", &ctx));
+}
+
+test "parseGroupedNumber: American format" {
+    try testing.expectEqual(@as(f80, 1234.56), try parseGroupedNumber("1,234.56", ',', '.'));
+    try testing.expectEqual(@as(f80, -1234567), try parseGroupedNumber("-1,234,567", ',', '.'));
+    try testing.expectEqual(@as(f80, 1000), try parseGroupedNumber("1,000", ',', '.'));
+    try testing.expectError(error.NotANumber, parseGroupedNumber("123", ',', '.'));
+    try testing.expectError(error.NotANumber, parseGroupedNumber("1,5", ',', '.'));
+    try testing.expectError(error.NotANumber, parseGroupedNumber("1,2345", ',', '.'));
+}
+
+test "parseGroupedNumber: European format" {
+    try testing.expectEqual(@as(f80, 1234.56), try parseGroupedNumber("1.234,56", '.', ','));
+    try testing.expectEqual(@as(f80, -1234567.89), try parseGroupedNumber("-1.234.567,89", '.', ','));
+    try testing.expectEqual(@as(f80, 1234), try parseGroupedNumber("1.234", '.', ','));
+    try testing.expectError(error.NotANumber, parseGroupedNumber("1.5", '.', ','));
+    try testing.expectError(error.NotANumber, parseGroupedNumber("1.234.5", '.', ','));
+    try testing.expectError(error.NotANumber, parseGroupedNumber("1,234.56", '.', ','));
 }
 
 // ------------------------------------------------------------

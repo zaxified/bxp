@@ -535,26 +535,21 @@ report date-only (no time) result in `... 00:00:00` — that's accepted.
 European brokers (Comdirect, DKB, Flatex, BoursoBank, Fineco, …)
 typically export numbers with `.` as thousands separator and `,` as
 decimal: `5.000,00` means five thousand. Setting
-`csv_decimal_separator_in: ","` handles **simple** comma decimals
-(`75,00` → `75.00` internally) but **leaves multi-`.`-multi-`,` values
-unchanged** because the field-access pre-converter can't tell which
-form the user used. The result is a mix of pre-normalised and raw
-strings flowing into expressions.
+`csv_decimal_separator_in: ","` opts the template into EU parsing,
+and field access converts both shapes automatically:
 
-The pattern that works for both cases:
+| Raw field value      | Converted     | Reason                                  |
+| -------------------- | ------------- | --------------------------------------- |
+| `75,00`              | `75.00`       | Plain decimal, comma swapped            |
+| `1234,56`            | `1234.56`     | Plain decimal, comma swapped            |
+| `1.234,56`           | `1234.56`     | EU thousands group + decimal            |
+| `-1.234.567,89`      | `-1234567.89` | Multiple thousands groups               |
+| `1.234`              | `1234`        | EU thousands without decimal            |
+| `1.5`                | `1.5`         | `.` not followed by 3 digits → left raw |
+| `N/A`, `hello,world` | unchanged     | Non-numeric, left raw                   |
 
-```text
-$amount: "ABS(IF(CONTAINS([Betrag in EUR], ','),
-                 REPLACE(REPLACE([Betrag in EUR], '.', ''), ',', '.'),
-                 [Betrag in EUR]))"
-```
-
-`CONTAINS([X], ',')` distinguishes raw values (still have `,`) from
-pre-converted values (already pure `.` decimal). For raw values, strip
-the `.` thousands then swap `,` to `.`; for pre-converted values, pass
-through unchanged. Apply the same wrapper to every numeric field (`$amount`,
-`$quantity`, `$unitprice`, `$fee`) when authoring a European broker
-template.
+Expressions receive numeric fields ready to feed into arithmetic; no
+defensive `IF(CONTAINS(...), REPLACE(...), ...)` wrapper needed.
 
 US-style brokers (Schwab, Fidelity, Trading 212) use `.` decimal +
 optional `,` thousands — that path is handled automatically (see

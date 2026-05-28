@@ -267,31 +267,20 @@ to pre-process the file" or "skip the affected rows".
   migration — see "Expression builtins (regex)" under Tooling). (a)
   is cheap and unblocks today; (b) is a real feature later.
 
-- **Readme polish** — add an `OR` example to "Minimal examples"
-  (`[Action] = 'Buy' OR CONTAINS([Action], 'Buy to')   → catch all buy
-variants`). Tiny.
-
-- **`csv_decimal_separator_in: ","` consistency.** Surfaced by
-  Comdirect-style German locale simulation (2026-05-07). The current
-  implementation pre-converts UNAMBIGUOUS comma-decimals at field-access
-  time (`75,00` → `75.00` string) but leaves multi-`.`-multi-`,` values
-  raw because it can't disambiguate. Expressions then receive a mix of
-  pre-converted and raw strings, which forces template authors to write
-  a defensive `IF(CONTAINS([X], ','), strip+swap, [X])` wrapper around
-  every numeric expression. Fix options: (a) convert ALL comma-decimal
-  fields consistently using a paired `csv_thousands_separator_in: "."`
-  flag; (b) always normalise at field-access time using a smarter
-  heuristic (last non-numeric char wins as decimal); (c) leave behaviour
-  alone but add a built-in `PARSE_EU_NUMBER([X])` function that does the
-  strip+swap+ABS in one call. Decide by feasibility: (c) is cheapest.
-
-- **Mutually-exclusive `--trace` and `--debug` is awkward for self-test.**
-  AI agents authoring a template need both: `--debug` for runtime expr
-  errors and unmatched-row JSON; `--trace` for per-row event detail.
-  Today they must run two passes. Could `--trace --debug` be allowed,
-  with the debug JSON written to stderr (alongside warnings) so the
-  BXTB frame stream on stdout stays clean? Touches `bxp-cli/main.zig`
-  arg validation + `Output` struct. Small change, big workflow win.
+- **AI-authoring workflow — rethink fmt / `--debug` / `--trace=bin` split.**
+  Today three surfaces partially overlap for the "AI agent iterating on
+  a template against sample data" use case: `bxp-fmt` (static config /
+  expr validation, per-row drill-down via `--expr-batch`), `bxp-cli
+--debug` (per-row JSON for unmatched rows + expr errors on stdout),
+  and `bxp-cli --trace=bin` (binary BXTB frame stream on stdout — needs
+  a parser the AI agent doesn't have). `--debug` and `--trace` are
+  mutually exclusive on stdout. The question: what does an AI agent
+  actually need in one round-trip, and which tool should provide it?
+  Re-design before adding flags. Possibilities surfaced so far:
+  structured NDJSON `--debug` covering matched + unmatched + error rows
+  (not just `row_rules_debug_missing`); a `bxp-fmt`-side multi-row
+  simulation; or accepting that `--trace=bin` plus a small parser
+  helper is the right path for AI even though it's binary.
 
 ### bxp-gui
 
