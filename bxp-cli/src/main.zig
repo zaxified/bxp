@@ -39,12 +39,15 @@ const USAGE_TEMPLATE =
     \\  --fresh            skip files whose output already exists (atomic O_EXCL)
     \\  --dry-run          run the pipeline in memory without writing output files
     \\  --trace            emit the binary BXTB trace stream on stdout (forces --quiet; conflicts with --debug)
-    \\  --trace-file=<path> write a full binary trace (every row, every event) to <path>;
+    \\  --trace-file <path> write a full binary trace (every row, every event) to <path>;
     \\                     independent of --trace; useful for offline GUI drill-down
     \\  --debug            suppresses informational stdout summaries; prints unmatched rows as JSON when row_rules_debug_missing is set
     \\  --quiet            suppress informational stdout (errors still go to stderr)
-    \\  --check-fs=N       opt-in: validate data_dir + input-file existence before any processing,
-    \\                     with N-second total timeout (e.g. --check-fs=5). Default off.
+    \\  --check-fs <n>     opt-in: validate data_dir + input-file existence before any processing,
+    \\                     with N-second total timeout (e.g. --check-fs 5). Default off.
+    \\
+    \\Value-taking options accept either `--name value` or `--name=value`.
+    \\
     \\  --version          print version and exit
     \\  --help             print this help and exit
     \\
@@ -120,6 +123,105 @@ test "validatePath allows one '..' but not two" {
     try std.testing.expectError(error.InvalidPath, validatePath("foo/../bar/.."));
 }
 
+/// Result of matching a value-taking flag against `args[i_ptr.*]`.
+const ArgMatch = union(enum) {
+    no_match,
+    missing_value,
+    value: []const u8,
+};
+
+/// Matches `--name VALUE` (space form, advances `i_ptr` past VALUE) or
+/// `--name=VALUE` (equals form, `i_ptr` unchanged). Returns `.missing_value`
+/// when the space form matches but no following argument exists; callers
+/// surface this as a usage error. Returns `.no_match` when `arg` does not
+/// match `name` in either form. The empty-equals form (`--name=`) yields
+/// `.value` with an empty slice — semantics of an empty value are left to
+/// the caller (e.g. `--trace-file=` is rejected; `--config=` would be too).
+fn matchValueArg(args: [][:0]u8, i_ptr: *usize, name: []const u8) ArgMatch {
+    const arg = args[i_ptr.*];
+    if (std.mem.eql(u8, arg, name)) {
+        if (i_ptr.* + 1 >= args.len) return .missing_value;
+        i_ptr.* += 1;
+        return .{ .value = args[i_ptr.*] };
+    }
+    if (arg.len > name.len and arg[name.len] == '=' and std.mem.startsWith(u8, arg, name)) {
+        return .{ .value = arg[name.len + 1 ..] };
+    }
+    return .no_match;
+}
+
+test "matchValueArg: space form returns value and advances index" {
+    var args_buf: [3][:0]u8 = .{
+        @constCast(@as([:0]const u8, "prog")),
+        @constCast(@as([:0]const u8, "--config")),
+        @constCast(@as([:0]const u8, "foo.json")),
+    };
+    const args: [][:0]u8 = &args_buf;
+    var i: usize = 1;
+    const r = matchValueArg(args, &i, "--config");
+    try std.testing.expect(r == .value);
+    try std.testing.expectEqualStrings("foo.json", r.value);
+    try std.testing.expectEqual(@as(usize, 2), i);
+}
+
+test "matchValueArg: equals form returns value without advancing index" {
+    var args_buf: [2][:0]u8 = .{
+        @constCast(@as([:0]const u8, "prog")),
+        @constCast(@as([:0]const u8, "--config=foo.json")),
+    };
+    const args: [][:0]u8 = &args_buf;
+    var i: usize = 1;
+    const r = matchValueArg(args, &i, "--config");
+    try std.testing.expect(r == .value);
+    try std.testing.expectEqualStrings("foo.json", r.value);
+    try std.testing.expectEqual(@as(usize, 1), i);
+}
+
+test "matchValueArg: space form with no following arg is missing_value" {
+    var args_buf: [2][:0]u8 = .{
+        @constCast(@as([:0]const u8, "prog")),
+        @constCast(@as([:0]const u8, "--config")),
+    };
+    const args: [][:0]u8 = &args_buf;
+    var i: usize = 1;
+    const r = matchValueArg(args, &i, "--config");
+    try std.testing.expect(r == .missing_value);
+}
+
+test "matchValueArg: unrelated arg is no_match" {
+    var args_buf: [2][:0]u8 = .{
+        @constCast(@as([:0]const u8, "prog")),
+        @constCast(@as([:0]const u8, "--debug")),
+    };
+    const args: [][:0]u8 = &args_buf;
+    var i: usize = 1;
+    const r = matchValueArg(args, &i, "--config");
+    try std.testing.expect(r == .no_match);
+}
+
+test "matchValueArg: prefix-only does not match (--configx)" {
+    var args_buf: [2][:0]u8 = .{
+        @constCast(@as([:0]const u8, "prog")),
+        @constCast(@as([:0]const u8, "--configx")),
+    };
+    const args: [][:0]u8 = &args_buf;
+    var i: usize = 1;
+    const r = matchValueArg(args, &i, "--config");
+    try std.testing.expect(r == .no_match);
+}
+
+test "matchValueArg: empty equals value returns empty slice" {
+    var args_buf: [2][:0]u8 = .{
+        @constCast(@as([:0]const u8, "prog")),
+        @constCast(@as([:0]const u8, "--trace-file=")),
+    };
+    const args: [][:0]u8 = &args_buf;
+    var i: usize = 1;
+    const r = matchValueArg(args, &i, "--trace-file");
+    try std.testing.expect(r == .value);
+    try std.testing.expectEqual(@as(usize, 0), r.value.len);
+}
+
 test "validatePath: backslash separator counts as traversal on Windows builds" {
     // On Windows `std.fs.path.isSep('\\')` is true, so `..\..` should
     // reject. On POSIX `\\` is just a regular byte, `..\..` collapses
@@ -185,7 +287,14 @@ pub fn main() !void {
     var dry_run = false;
     var check_fs_seconds: u8 = 0;
     var trace_file_path: ?[]const u8 = null;
-    for (args[1..]) |arg| {
+    // Value-taking flags accept both `--name VALUE` and `--name=VALUE` forms
+    // via `matchValueArg`. Pure flags only accept the bare token. Unknown
+    // arguments are silently skipped here — they're either consumed by the
+    // second pass in `run()` (--config, --template, --data) or rejected
+    // there as truly unknown.
+    var i: usize = 1;
+    while (i < args.len) : (i += 1) {
+        const arg = args[i];
         if (std.mem.eql(u8, arg, "--version")) {
             stdout.print("bxp-cli {s}\n", .{build_options.version}) catch {};
             stdout.flush() catch {};
@@ -195,17 +304,19 @@ pub fn main() !void {
             printHelp(args[0]);
             return;
         }
-        if (std.mem.eql(u8, arg, "--debug")) debug = true;
-        if (std.mem.eql(u8, arg, "--quiet")) quiet = true;
-        if (std.mem.eql(u8, arg, "--fresh")) fresh = true;
+        if (std.mem.eql(u8, arg, "--debug")) { debug = true; continue; }
+        if (std.mem.eql(u8, arg, "--quiet")) { quiet = true; continue; }
+        if (std.mem.eql(u8, arg, "--fresh")) { fresh = true; continue; }
+        if (std.mem.eql(u8, arg, "--dry-run")) { dry_run = true; continue; }
         // `--trace` and `--trace=bin` are accepted (both produce the binary
         // framed trace stream — the only format since the NDJSON path was
         // removed in v0.3.0). `--trace=<anything else>` is an error; the
         // explicit `=bin` form is kept for users who scripted it against
-        // older releases.
-        if (std.mem.eql(u8, arg, "--trace")) {
-            trace = true;
-        } else if (std.mem.startsWith(u8, arg, "--trace=")) {
+        // older releases. `--trace` does NOT take a separate space-form value
+        // because it's primarily a bare flag — only the historical `=bin`
+        // variant is recognised.
+        if (std.mem.eql(u8, arg, "--trace")) { trace = true; continue; }
+        if (std.mem.startsWith(u8, arg, "--trace=")) {
             const val = arg["--trace=".len..];
             if (std.mem.eql(u8, val, "bin")) {
                 trace = true;
@@ -213,22 +324,39 @@ pub fn main() !void {
                 std.debug.print("error: --trace value must be 'bin' (NDJSON support was removed): got '{s}'\n", .{val});
                 std.process.exit(1);
             }
+            continue;
         }
-        if (std.mem.eql(u8, arg, "--dry-run")) dry_run = true;
-        if (std.mem.startsWith(u8, arg, "--trace-file=")) {
-            trace_file_path = arg["--trace-file=".len..];
-            if (trace_file_path.?.len == 0) {
-                std.debug.print("error: --trace-file= requires a non-empty path\n", .{});
+        switch (matchValueArg(args, &i, "--trace-file")) {
+            .value => |v| {
+                if (v.len == 0) {
+                    std.debug.print("error: --trace-file requires a non-empty path\n", .{});
+                    std.process.exit(1);
+                }
+                trace_file_path = v;
+                continue;
+            },
+            .missing_value => {
+                std.debug.print("error: --trace-file requires a path argument\n", .{});
                 std.process.exit(1);
-            }
+            },
+            .no_match => {},
         }
-        if (std.mem.startsWith(u8, arg, "--check-fs=")) {
-            const val = arg["--check-fs=".len..];
-            check_fs_seconds = std.fmt.parseUnsigned(u8, val, 10) catch {
-                std.debug.print("error: --check-fs requires a non-negative integer (seconds): got '{s}'\n", .{val});
+        switch (matchValueArg(args, &i, "--check-fs")) {
+            .value => |v| {
+                check_fs_seconds = std.fmt.parseUnsigned(u8, v, 10) catch {
+                    std.debug.print("error: --check-fs requires a non-negative integer (seconds): got '{s}'\n", .{v});
+                    std.process.exit(1);
+                };
+                continue;
+            },
+            .missing_value => {
+                std.debug.print("error: --check-fs requires a non-negative integer (seconds) argument\n", .{});
                 std.process.exit(1);
-            };
+            },
+            .no_match => {},
         }
+        // Fall through: --config / --template / --data and their values, or
+        // unknown args, are handled in the `run()` second pass.
     }
 
     // Conflicting-flag validation. These combinations produce contradictory
@@ -354,14 +482,16 @@ fn run(args: [][:0]u8, out: Output, fresh: bool, check_fs_seconds: u8, runtime: 
     {
         var i: usize = 1;
         while (i < args.len) : (i += 1) {
-            if (std.mem.eql(u8, args[i], "--config")) {
-                i += 1;
-                if (i >= args.len) {
+            switch (matchValueArg(args, &i, "--config")) {
+                .value => |v| {
+                    config_path = v;
+                    config_explicit = true;
+                },
+                .missing_value => {
                     usageErr(args[0]);
                     return error.Fatal;
-                }
-                config_path = args[i];
-                config_explicit = true;
+                },
+                .no_match => {},
             }
         }
     }
@@ -580,39 +710,71 @@ fn run(args: [][:0]u8, out: Output, fresh: bool, check_fs_seconds: u8, runtime: 
     var dir_path_arg: ?[]const u8 = null;
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
-        if (std.mem.eql(u8, args[i], "--template")) {
-            i += 1;
-            if (i >= args.len) {
+        // Value-taking flags: `matchValueArg` consumes both space and equals
+        // forms. `--config` / `--trace-file` / `--check-fs` were already
+        // applied earlier; we just need to advance past their value token.
+        switch (matchValueArg(args, &i, "--template")) {
+            .value => |v| { template_id = v; continue; },
+            .missing_value => {
                 usageErr(args[0]);
+                overall.has_fatal = true;
                 return error.Fatal;
-            }
-            template_id = args[i];
-        } else if (std.mem.eql(u8, args[i], "--data")) {
-            i += 1;
-            if (i >= args.len) {
-                usageErr(args[0]);
-                return error.Fatal;
-            }
-            dir_path_arg = args[i];
-        } else if (std.mem.eql(u8, args[i], "--config")) {
-            i += 1; // value already consumed above — skip it here
-        } else if (std.mem.eql(u8, args[i], "--debug") or
-            std.mem.eql(u8, args[i], "--quiet") or
-            std.mem.eql(u8, args[i], "--fresh") or
-            std.mem.eql(u8, args[i], "--trace") or
-            std.mem.startsWith(u8, args[i], "--trace=") or
-            std.mem.eql(u8, args[i], "--dry-run") or
-            std.mem.eql(u8, args[i], "--help") or
-            std.mem.startsWith(u8, args[i], "--check-fs=") or
-            std.mem.startsWith(u8, args[i], "--trace-file="))
-        {
-            // known flags — no action needed here
-        } else {
-            out.fatal("error: unknown argument: {s}\n", .{args[i]});
-            usageErr(args[0]);
-            overall.has_fatal = true;
-            return error.Fatal;
+            },
+            .no_match => {},
         }
+        switch (matchValueArg(args, &i, "--data")) {
+            .value => |v| { dir_path_arg = v; continue; },
+            .missing_value => {
+                usageErr(args[0]);
+                overall.has_fatal = true;
+                return error.Fatal;
+            },
+            .no_match => {},
+        }
+        switch (matchValueArg(args, &i, "--config")) {
+            .value => |_| continue,
+            .missing_value => {
+                usageErr(args[0]);
+                overall.has_fatal = true;
+                return error.Fatal;
+            },
+            .no_match => {},
+        }
+        switch (matchValueArg(args, &i, "--trace-file")) {
+            .value => |_| continue,
+            .missing_value => {
+                usageErr(args[0]);
+                overall.has_fatal = true;
+                return error.Fatal;
+            },
+            .no_match => {},
+        }
+        switch (matchValueArg(args, &i, "--check-fs")) {
+            .value => |_| continue,
+            .missing_value => {
+                usageErr(args[0]);
+                overall.has_fatal = true;
+                return error.Fatal;
+            },
+            .no_match => {},
+        }
+        // Pure flags (no value).
+        const a = args[i];
+        if (std.mem.eql(u8, a, "--debug") or
+            std.mem.eql(u8, a, "--quiet") or
+            std.mem.eql(u8, a, "--fresh") or
+            std.mem.eql(u8, a, "--trace") or
+            std.mem.startsWith(u8, a, "--trace=") or
+            std.mem.eql(u8, a, "--dry-run") or
+            std.mem.eql(u8, a, "--help") or
+            std.mem.eql(u8, a, "--version"))
+        {
+            continue;
+        }
+        out.fatal("error: unknown argument: {s}\n", .{a});
+        usageErr(args[0]);
+        overall.has_fatal = true;
+        return error.Fatal;
     }
 
     if (dir_path_arg != null and template_id == null) {

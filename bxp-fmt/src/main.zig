@@ -92,6 +92,8 @@ const USAGE_TEMPLATE =
     \\  --version                 print version and exit
     \\  --help                    print this help and exit
     \\
+    \\Value-taking options accept either `--name value` or `--name=value`.
+    \\
     \\Exit codes:
     \\  0 - success
     \\  1 - validation failure / template id not found
@@ -113,6 +115,32 @@ fn printHelp() void {
 /// failure where we want the usage to accompany the error message.
 fn usageErr() void {
     std.debug.print("{s}", .{USAGE_TEMPLATE});
+}
+
+/// Result of matching a value-taking flag against `args[i_ptr.*]`. Mirrors
+/// the helper in `bxp-cli/src/main.zig` so both binaries accept the same
+/// `--name value` / `--name=value` forms.
+const ArgMatch = union(enum) {
+    no_match,
+    missing_value,
+    value: []const u8,
+};
+
+/// Matches `--name VALUE` (space form, advances `i_ptr` past VALUE) or
+/// `--name=VALUE` (equals form, `i_ptr` unchanged). Returns `.missing_value`
+/// when the space form matches but no following argument exists; returns
+/// `.no_match` when `arg` does not match `name` in either form.
+fn matchValueArg(args: [][:0]u8, i_ptr: *usize, name: []const u8) ArgMatch {
+    const arg = args[i_ptr.*];
+    if (std.mem.eql(u8, arg, name)) {
+        if (i_ptr.* + 1 >= args.len) return .missing_value;
+        i_ptr.* += 1;
+        return .{ .value = args[i_ptr.*] };
+    }
+    if (arg.len > name.len and arg[name.len] == '=' and std.mem.startsWith(u8, arg, name)) {
+        return .{ .value = arg[name.len + 1 ..] };
+    }
+    return .no_match;
 }
 
 // Returning `!u8` (rather than `!void` + `std.process.exit`) so the
@@ -166,75 +194,76 @@ pub fn main() !u8 {
             emit_docs = true;
             continue;
         }
-        if (std.mem.eql(u8, a, "--config")) {
-            i += 1;
-            if (i >= args.len) {
-                std.debug.print("error: --config requires a path\n", .{});
-                return 2;
-            }
-            config_path = args[i];
-            continue;
-        }
-        if (std.mem.eql(u8, a, "--expr")) {
-            i += 1;
-            if (i >= args.len) {
-                std.debug.print("error: --expr requires an expression string\n", .{});
-                return 2;
-            }
-            expr_src = args[i];
-            continue;
-        }
-        if (std.mem.eql(u8, a, "--expr-trace")) {
-            i += 1;
-            if (i >= args.len) {
-                std.debug.print("error: --expr-trace requires an expression string\n", .{});
-                return 2;
-            }
-            expr_trace_src = args[i];
-            continue;
-        }
         if (std.mem.eql(u8, a, "--expr-batch")) {
             expr_batch = true;
-            continue;
-        }
-        if (std.mem.eql(u8, a, "--row-headers")) {
-            i += 1;
-            if (i >= args.len) {
-                std.debug.print("error: --row-headers requires a JSON array string\n", .{});
-                return 2;
-            }
-            row_headers_json = args[i];
-            continue;
-        }
-        if (std.mem.eql(u8, a, "--row-fields")) {
-            i += 1;
-            if (i >= args.len) {
-                std.debug.print("error: --row-fields requires a JSON array string\n", .{});
-                return 2;
-            }
-            row_fields_json = args[i];
             continue;
         }
         if (std.mem.eql(u8, a, "--list-templates")) {
             list_templates = true;
             continue;
         }
-        if (std.mem.eql(u8, a, "--fetch-template")) {
-            i += 1;
-            if (i >= args.len) {
+        // Value-taking flags accept both `--name value` and `--name=value`.
+        switch (matchValueArg(args, &i, "--config")) {
+            .value => |v| { config_path = v; continue; },
+            .missing_value => {
+                std.debug.print("error: --config requires a path\n", .{});
+                return 2;
+            },
+            .no_match => {},
+        }
+        switch (matchValueArg(args, &i, "--expr")) {
+            .value => |v| { expr_src = v; continue; },
+            .missing_value => {
+                std.debug.print("error: --expr requires an expression string\n", .{});
+                return 2;
+            },
+            .no_match => {},
+        }
+        switch (matchValueArg(args, &i, "--expr-trace")) {
+            .value => |v| { expr_trace_src = v; continue; },
+            .missing_value => {
+                std.debug.print("error: --expr-trace requires an expression string\n", .{});
+                return 2;
+            },
+            .no_match => {},
+        }
+        switch (matchValueArg(args, &i, "--row-headers")) {
+            .value => |v| { row_headers_json = v; continue; },
+            .missing_value => {
+                std.debug.print("error: --row-headers requires a JSON array string\n", .{});
+                return 2;
+            },
+            .no_match => {},
+        }
+        switch (matchValueArg(args, &i, "--row-fields")) {
+            .value => |v| { row_fields_json = v; continue; },
+            .missing_value => {
+                std.debug.print("error: --row-fields requires a JSON array string\n", .{});
+                return 2;
+            },
+            .no_match => {},
+        }
+        switch (matchValueArg(args, &i, "--fetch-template")) {
+            .value => |v| { fetch_template_id = v; continue; },
+            .missing_value => {
                 std.debug.print("error: --fetch-template requires a template id\n", .{});
                 return 2;
-            }
-            fetch_template_id = args[i];
-            continue;
+            },
+            .no_match => {},
         }
-        if (std.mem.startsWith(u8, a, "--check-fs=")) {
-            const val = a["--check-fs=".len..];
-            check_fs_seconds = std.fmt.parseUnsigned(u8, val, 10) catch {
-                std.debug.print("error: --check-fs requires a non-negative integer (seconds): got '{s}'\n", .{val});
+        switch (matchValueArg(args, &i, "--check-fs")) {
+            .value => |v| {
+                check_fs_seconds = std.fmt.parseUnsigned(u8, v, 10) catch {
+                    std.debug.print("error: --check-fs requires a non-negative integer (seconds): got '{s}'\n", .{v});
+                    return 2;
+                };
+                continue;
+            },
+            .missing_value => {
+                std.debug.print("error: --check-fs requires a non-negative integer (seconds) argument\n", .{});
                 return 2;
-            };
-            continue;
+            },
+            .no_match => {},
         }
         std.debug.print("error: unknown argument: {s}\n", .{a});
         usageErr();

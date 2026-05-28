@@ -183,34 +183,44 @@ Plan for v0.4.0:
 
 Full design + migration plan: `DEV/6-todo-builtin-arg-validation-design.md`.
 
-### Streaming pipeline (lift the 1 GiB cap)
+### Raise XLSX cap + optimise large `.xlsx` ingest
 
-`bxp-cli` today loads each input file end-to-end into RAM
-(`readToEndAlloc` in `pipeline.zig`). v0.2.4 raised the hard cap from
-16 MB to 1 GiB so real-world public datasets (NYC Taxi monthly ~85 MB,
-NOAA GHCN per-station 17 MB × 124 cols, Inside Airbnb city scrape 6 MB)
-fit — but memory grows linearly with input. A 1 GiB CSV needs 1–2 GiB
-peak resident, and 10M+ row datasets remain out of reach.
+CSV and JSON paths went streaming in earlier releases (CSV via
+`ChunkReader` + `csv.LineIterator`; JSON via `std.json.Reader`).
+Memory ceiling on those paths is now `O(longest row + pre_pass table)`,
+so multi-GiB CSV / JSON inputs work fine.
 
-Plan for v0.4.0 (or whenever the cap starts hurting real users):
+`.xlsx` is the remaining ceiling. `bxp-core/src/xlsx.zig` caps the
+file at **10 MB** (`XLSX_MAX_FILE_SIZE`), which rejects realistic
+workbooks (multi-sheet broker exports, NOAA / public datasets
+distributed as `.xlsx`). Raising the cap is cheap; making large
+`.xlsx` ingest fast is the real work — ZIP central-directory parse,
+DEFLATE inflate of `xl/sharedStrings.xml` and `xl/worksheets/sheet1.xml`,
+and the XML walk that produces our row stream all currently materialise
+intermediate buffers.
 
-- Rewrite `processBroker()` in `bxp-cli/src/pipeline.zig` to iterate
-  records via `csv.LineIterator` over `ChunkReader` blocks instead of
-  `parseRecords` over a full-file buffer.
-- Two-pass streaming when a template defines `pre_pass`:
-  pass 1 builds the lookup hashmap (memory = O(unique keys), not O(rows));
-  pass 2 emits output. Pass 2 alone for templates without `pre_pass`.
-- Leave XLSX path on full-file load — ZIP+XML decompression has no
-  meaningful streaming form.
-- Keep MAX_FILE_SIZE_BYTES as a sanity cap (lift to 16 GiB or remove
-  outright once streaming lands).
-- Memory ceiling drops from `O(file size)` to
-  `O(longest row + pre_pass table)` — typically <50 MB even for
-  10M-row inputs.
+Plan for v0.4.0:
 
-Trade-offs surfaced when designing this: 2× disk I/O for `pre_pass`
-templates; file-mutation between passes is undefined (snapshot to
-`/tmp` if it ever becomes an issue).
+- Lift `XLSX_MAX_FILE_SIZE` from 10 MB to something workbook-realistic
+  (256 MB candidate; multi-sheet bookkeeping rarely exceeds that).
+  Keep as a sanity cap, not a feature limit.
+- Profile a 50–100 MB workbook end-to-end. Likely hotspots:
+  shared-strings table (loaded whole into RAM today), per-row XML
+  parsing, and the intermediate CSV buffer we hand to `processBroker`.
+- Stream the shared-strings table where possible (build a string-index
+  → offset map and `pread` on demand) instead of slurping it all.
+- Stream the worksheet `<row>` walk directly into the existing CSV
+  pipeline (skip the intermediate full-file CSV buffer); each row
+  becomes one `LineSlice`-equivalent record fed to the same
+  `processBroker` chunk path.
+- Bench harness entry: synthetic `.xlsx` matching the worst public
+  dataset shape we want to support.
+
+Trade-off: ZIP+DEFLATE has no random-seek primitive, so streaming
+shared-strings means a second `inflate` pass when the worksheet row
+walk first references each string. Acceptable if the total memory
+ceiling drops from `O(workbook size)` to
+`O(shared-strings index + one row)`.
 
 ## Later (no specific version)
 
