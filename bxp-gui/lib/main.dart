@@ -14,6 +14,7 @@ import 'ui/components/integrate_dialog.dart';
 import 'ui/components/update_dialog.dart';
 import 'ui/debug_overlay.dart';
 import 'ui/main_view.dart';
+import 'ui/platform_shortcuts.dart';
 import 'ui/shader_warmup.dart';
 import 'ui/theme/bxp_theme.dart';
 import 'ui/theme/bxp_theme_animator.dart';
@@ -332,7 +333,7 @@ class _ZoomContainerState extends State<ZoomContainer> {
   bool _handleKey(KeyEvent event) {
     if (event is KeyDownEvent || event is KeyRepeatEvent) {
       final physical = event.physicalKey;
-      if (HardwareKeyboard.instance.isControlPressed) {
+      if (isCommandModifierPressed()) {
         final key = event.logicalKey.keyLabel;
         if (key == '+' || key == '=' || physical == PhysicalKeyboardKey.numpadAdd || physical == PhysicalKeyboardKey.equal || physical == PhysicalKeyboardKey.bracketRight) {
           _bump(kZoomStep);
@@ -396,7 +397,7 @@ class _ZoomContainerState extends State<ZoomContainer> {
     }
     return Listener(
       onPointerSignal: (event) {
-        if (event is PointerScrollEvent && HardwareKeyboard.instance.isControlPressed) {
+        if (event is PointerScrollEvent && isCommandModifierPressed()) {
           if (event.scrollDelta.dy > 0) {
             _bump(-kZoomStep);
           } else if (event.scrollDelta.dy < 0) {

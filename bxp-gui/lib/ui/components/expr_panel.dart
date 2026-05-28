@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../store/trace_store.dart';
+import '../platform_shortcuts.dart';
 import '../theme/bxp_theme.dart';
 import '../theme/bxp_text.dart';
 import 'expr_editor.dart';
@@ -438,11 +439,12 @@ class _DocsPanel extends StatelessWidget {
                     'to expand / collapse the captured stderr panel.'),
                 const _TipDoc('Hover any token in the expression editor '
                     'to see its docstring inline.'),
-                const _TipDoc('Ctrl+Scroll zooms the whole UI; Ctrl+0 '
-                    'resets, Ctrl++/Ctrl+- step.'),
-                const _TipDoc('Ctrl+Shift+S opens the settings / runtime '
-                    'inspector — it lists every keyboard shortcut, the '
-                    'binary paths, and the active config status.'),
+                _TipDoc('$commandModifierLabel+Scroll zooms the whole UI; '
+                    '$commandModifierLabel+0 resets, '
+                    '$commandModifierLabel++/$commandModifierLabel+- step.'),
+                _TipDoc('$commandModifierLabel+Shift+S opens the settings / '
+                    'runtime inspector — it lists every keyboard shortcut, '
+                    'the binary paths, and the active config status.'),
               ],
             ),
           ),

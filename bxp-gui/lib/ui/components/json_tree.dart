@@ -13,6 +13,7 @@ import '../../services/schema_doc_lookup.dart';
 import '../../services/schema_gate.dart';
 import '../../store/trace_store.dart';
 import '../layout_defaults.dart';
+import '../platform_shortcuts.dart';
 import '../theme/bxp_theme.dart';
 import '../theme/bxp_text.dart';
 import 'expr_highlight.dart';
@@ -1102,7 +1103,7 @@ class _JsonNodeState extends State<_JsonNode> {
           _ActionBtn(
             icon: '+',
             tooltip: isComposite
-                ? 'Add child  (Ctrl+Shift+Insert)'
+                ? 'Add child  ($commandModifierLabel+Shift+Insert)'
                 : 'Add child — leaf rows can\'t host children',
             // `codeNumber` (active) vs `textMuted` (disabled) —
             // amber/gold sits clearly between the accent-blue move
@@ -1115,7 +1116,7 @@ class _JsonNodeState extends State<_JsonNode> {
           _ActionBtn(
             icon: '↑',
             tooltip: canReorder
-                ? 'Move up  (Ctrl+Shift+↑)'
+                ? 'Move up  ($commandModifierLabel+Shift+↑)'
                 : 'Move up — order is not significant here',
             color: canReorder ? t.accentHighlight : t.textMuted,
             onTap: canReorder
@@ -1125,7 +1126,7 @@ class _JsonNodeState extends State<_JsonNode> {
           _ActionBtn(
             icon: '↓',
             tooltip: canReorder
-                ? 'Move down  (Ctrl+Shift+↓)'
+                ? 'Move down  ($commandModifierLabel+Shift+↓)'
                 : 'Move down — order is not significant here',
             color: canReorder ? t.accentHighlight : t.textMuted,
             onTap: canReorder
@@ -1148,7 +1149,7 @@ class _JsonNodeState extends State<_JsonNode> {
             icon: '×',
             tooltip: isRequired
                 ? 'Required key — cannot delete'
-                : 'Delete  (Ctrl+Shift+Del)',
+                : 'Delete  ($commandModifierLabel+Shift+Del)',
             color: isRequired ? t.textMuted : t.errorText,
             onTap: isRequired ? null : () => store.deleteConfigNode(widget.path),
           ),

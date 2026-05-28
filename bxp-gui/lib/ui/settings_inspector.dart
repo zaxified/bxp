@@ -13,6 +13,7 @@ import '../services/diagnostic_log.dart';
 import '../store/trace_store.dart';
 import 'components/integrate_dialog.dart';
 import 'layout_defaults.dart';
+import 'platform_shortcuts.dart';
 import 'theme/bxp_theme.dart';
 import 'theme/bxp_text.dart';
 
@@ -234,19 +235,22 @@ class _Body extends StatelessWidget {
       ('Theme', [
         ('preset', store.themePresetName),
       ]),
-      ('Keyboard shortcuts', [
-        ('Save', 'Ctrl+S'),
-        ('Reload from disk', 'Ctrl+R'),
-        ('Undo / Redo', 'Ctrl+Z / Ctrl+Y'),
-        ('Discard unsaved changes', 'Ctrl+T'),
-        ('Validate', 'Ctrl+E'),
-        ('Move focused node', 'Ctrl+Shift+↑/↓'),
-        ('Delete focused node', 'Ctrl+Shift+Del'),
-        ('Add child to focused node', 'Ctrl+Shift+Insert'),
-        ('Rename map key (focused row)', 'double-click on the key chip'),
-        ('Open settings inspector', 'Ctrl+Shift+S'),
-        ('Open theme inspector', 'Ctrl+Shift+T'),
-      ]),
+      ('Keyboard shortcuts', () {
+        final mod = commandModifierLabel;
+        return [
+          ('Save', '$mod+S'),
+          ('Reload from disk', '$mod+R'),
+          ('Undo / Redo', '$mod+Z / $mod+Y'),
+          ('Discard unsaved changes', '$mod+T'),
+          ('Validate', '$mod+E'),
+          ('Move focused node', '$mod+Shift+↑/↓'),
+          ('Delete focused node', '$mod+Shift+Del'),
+          ('Add child to focused node', '$mod+Shift+Insert'),
+          ('Rename map key (focused row)', 'double-click on the key chip'),
+          ('Open settings inspector', '$mod+Shift+S'),
+          ('Open theme inspector', '$mod+Shift+T'),
+        ];
+      }()),
     ];
 
     // Per-section Tables — each computes its own `IntrinsicColumnWidth` for
@@ -561,11 +565,11 @@ class _DebugSection extends StatelessWidget {
           const SizedBox(height: 8),
           _Subheader('Render pipeline'),
           _DebugCheckRow(
-            label: 'Disable Ctrl+/− zoom',
+            label: 'Disable $commandModifierLabel+/− zoom',
             subtitle:
                 'Off (default): Transform.scale wraps the app, '
-                'Ctrl+/− changes zoom. On: paint at native resolution, '
-                'no scaling layer — used to isolate compositor cost.',
+                '$commandModifierLabel+/− changes zoom. On: paint at native '
+                'resolution, no scaling layer — used to isolate compositor cost.',
             value: s.bypassZoom,
             onChanged: (v) => s.bypassZoom = v,
           ),

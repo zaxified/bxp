@@ -7,6 +7,7 @@ import 'components/expr_panel.dart';
 import 'components/open_dialog.dart';
 import 'components/resize_handle.dart';
 import 'layout_defaults.dart';
+import 'platform_shortcuts.dart';
 import 'theme/bxp_theme.dart';
 import 'theme/bxp_text.dart';
 
@@ -54,10 +55,11 @@ class _ConfigViewState extends State<ConfigView> {
                   // does its own pre-flight scan and refuses to write a
                   // broken file.
                   final readOnly = store.configLoadHadErrors;
+                  final mod = commandModifierLabel;
                   return [
                     _ToolbarBtn(
                       title: 'OPEN',
-                      tooltip: 'Open config file (Ctrl+O)',
+                      tooltip: 'Open config file ($mod+O)',
                       onTap: () => OpenDialog.show(context, (path) async {
                         store.setConfigPath(path);
                         await store.loadConfig();
@@ -65,29 +67,29 @@ class _ConfigViewState extends State<ConfigView> {
                     ),
                     _ToolbarBtn(
                       title: 'RELOAD',
-                      tooltip: 'Reload from disk (Ctrl+R)',
+                      tooltip: 'Reload from disk ($mod+R)',
                       disabled: store.configPath.isEmpty,
                       onTap: () => store.loadConfig(),
                     ),
                     _ToolbarBtn(
                         title: 'RESET',
-                        tooltip: 'Discard all unsaved changes (Ctrl+T)',
+                        tooltip: 'Discard all unsaved changes ($mod+T)',
                         disabled: readOnly || !store.isDirty,
                         onTap: () => store.resetDraft()),
                     _ToolbarBtn(
                         title: 'UNDO',
-                        tooltip: 'Undo (Ctrl+Z)',
+                        tooltip: 'Undo ($mod+Z)',
                         disabled: readOnly || !store.canUndo,
                         onTap: () => store.undo()),
                     _ToolbarBtn(
                         title: 'REDO',
-                        tooltip: 'Redo (Ctrl+Y)',
+                        tooltip: 'Redo ($mod+Y)',
                         disabled: readOnly || !store.canRedo,
                         onTap: () => store.redo()),
                     _ToolbarBtn(
                         title: store.isValidating ? 'VALIDATING…' : 'VALIDATE',
                         tooltip:
-                            'Run bxp-fmt --config --check-fs=2 (Ctrl+E)',
+                            'Run bxp-fmt --config --check-fs=2 ($mod+E)',
                         disabled: store.configPath.isEmpty ||
                             store.astRoot == null ||
                             store.isValidating ||
@@ -102,7 +104,7 @@ class _ConfigViewState extends State<ConfigView> {
                       title: store.isSaving ? 'SAVING…' : 'SAVE',
                       tooltip: store.configHasErrors
                           ? 'Cannot save while config has syntax errors'
-                          : 'Save config to disk (Ctrl+S)',
+                          : 'Save config to disk ($mod+S)',
                       disabled: readOnly ||
                           !store.isDirty ||
                           store.isSaving ||

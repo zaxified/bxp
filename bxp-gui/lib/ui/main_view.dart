@@ -14,6 +14,7 @@ import 'theme/bxp_theme.dart';
 import 'theme/bxp_text.dart';
 import 'theme/theme_inspector.dart';
 import 'settings_inspector.dart';
+import 'platform_shortcuts.dart';
 
 class MainView extends StatefulWidget {
   const MainView({super.key});
@@ -66,10 +67,8 @@ class _MainViewState extends State<MainView> {
 
   bool _handleKey(KeyEvent event) {
     if (event is! KeyDownEvent) return false;
+    if (!isCommandModifierPressed()) return false;
     final keys = HardwareKeyboard.instance.logicalKeysPressed;
-    final ctrl = keys.contains(LogicalKeyboardKey.controlLeft) ||
-        keys.contains(LogicalKeyboardKey.controlRight);
-    if (!ctrl) return false;
     final shift = keys.contains(LogicalKeyboardKey.shiftLeft) ||
         keys.contains(LogicalKeyboardKey.shiftRight);
     final store = context.read<TraceStore>();
