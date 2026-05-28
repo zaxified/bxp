@@ -107,28 +107,6 @@ Track as a single "auto-update hardening" workstream — these layer on
 each other (e.g. signed SUMS removes the need for parts of the CI
 test, path validation removes part of the shell-injection concern).
 
-### macOS keyboard shortcut idiomatization
-
-Today every app-level shortcut in `main_view.dart:_handleKey` uses
-`Ctrl+...` regardless of host platform. On macOS the idiomatic modifier
-for Save / Undo / Redo / etc. is `Cmd` (Meta), not Ctrl. A Mac user
-pressing Control still triggers our handler, so nothing is broken, but
-the binding is foreign to the platform conventions and clashes with
-Mac muscle memory.
-
-Two changes needed:
-
-- **Modifier swap.** Switch `HardwareKeyboard.instance.isControlPressed`
-  to `isMetaPressed` on macOS via a `defaultTargetPlatform`-aware
-  constant. Linux / Windows stay on Ctrl.
-- **Mission Control collision.** `Ctrl+Up` / `Ctrl+Down` is a default
-  macOS system shortcut for Mission Control. Our move-tree-node binding
-  is `Ctrl+Shift+Up/Down`, which the default Mission Control config
-  doesn't intercept, but a user who has remapped Mission Control to the
-  Shift variant in System Settings will lose tree move. Flipping the
-  whole shortcut set to Cmd-prefixed makes the collision vanish (Cmd
-  isn't in any Mission Control binding).
-
 ## v0.4.0
 
 ### Declarative arg-type contracts for expr builtins
