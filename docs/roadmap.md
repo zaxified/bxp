@@ -2,54 +2,30 @@
 
 > [← docs/](README.md)
 
-Forward-looking milestones. Hand-maintained — `CHANGELOG.md` is the
-shipped history; this file is what's planned. Items move out of here
-into a `CHANGELOG.md` entry when their PRs land + a release is cut.
-`scripts/release-changelog.sh` generates the `CHANGELOG.md` entry
-automatically from `git log` when cutting a release.
-
-## v0.2.4
-
-### Expression built-ins — string and boolean utilities (shipped 2026-05-26)
-
-Surfaced by the 2026-05-17 real-world-dataset session (HubSpot picklists,
-NOAA sentinels, IMDb `\N` null markers, Inside Airbnb price prefixes).
-Several patterns required nested-`IF` workarounds that single built-ins
-collapse cleanly:
-
-- `LEFT(s, n)` / `RIGHT(s, n)` / `SUBSTR(s, start, length)` — fixed-position
-  slicing (ISIN country prefix, broker ticker suffix strip).
-- `STARTS_WITH(s, prefix)` / `ENDS_WITH(s, suffix)` — anchored prefix/suffix
-  match; `CONTAINS` was position-agnostic and false-positive-prone on
-  picklist / category checks.
-- `UPPER(s)` / `LOWER(s)` — ASCII case normalisation; non-ASCII bytes
-  pass through unchanged.
-- `NOT expr` — boolean negation keyword. Precedence between comparison
-  operators and `AND` — `NOT [A] = 1` means `NOT ([A] = 1)`. Multiple
-  NOTs stack.
-- `NULLIF(value, sentinel)` — empty string when `value == sentinel`,
-  otherwise `value`. Equality matches `=` semantics (numeric first,
-  then string). Collapses NOAA `-9999`, IMDb `\N`, `"N/A"` sentinels.
-- `IN(value, v1, v2, ...)` — variadic equality OR-chain. Replaces nested
-  `IF([X] = 'A' OR [X] = 'B' ...)` patterns. Action picklists use the
-  explicit listing (vs `STARTS_WITH` on a shared prefix) so that a
-  broker adding a new action variant forces a template review.
-
-Catalog grew from 18 to 27 functions and 2 to 3 keywords; corpus from
-117 to 144 cases. Real-world validation: 78 `.csvx` byte-identical on
-`DEV/` before/after rewriting 7 `OR`-chain `when` clauses to `IN`.
+Backlog. Hand-maintained — entries get crossed out / deleted as work
+lands on master. `CHANGELOG.md` is generated independently from `git log`
+at release time by `scripts/release-changelog.sh` and is not coupled
+to this file.
 
 ## v0.2.5
 
 ### External template JSON files
 
-Today the conversion templates are baked into `bxp-cli` (and surfaced
-through `bxp-fmt --list-templates` / `--fetch-template`). Move them out
-to user-editable JSON files shipped alongside the binary so users can:
+Today bxp-cli has no concept of a template library: all templates live
+inside one user-owned config file (`bxp-cli.json`), and the starter
+set ships as a single monolithic `resources/console/bxp-cli.examples.json`.
+Users who want a specific broker template have to copy/paste it out of
+the examples file into their own config. Split the starter set into a
+per-broker template library so:
 
-- Add or tweak templates without rebuilding bxp-cli.
-- Ship per-broker variants without bloating the core binary.
-- Override built-in templates locally (user dir wins over bundle dir).
+- A discovery dir (`templates/revolut.json`, `templates/trading212.json`,
+  …) ships next to the binary; users can also drop their own files into
+  a per-user dir and the discovery merges both with the user dir winning
+  on name collision.
+- `bxp-fmt --list-templates` / `--fetch-template` work without a
+  user-owned `bxp-cli.json` — they enumerate the discovered library.
+- Per-broker variants can be added or revised independently without
+  re-shipping one bloated examples file.
 
 Open design questions to resolve before implementation:
 
@@ -58,8 +34,8 @@ Open design questions to resolve before implementation:
   (Windows) / `~/Library/Application Support/bxp/templates/` (macOS)?
 - JSON5 or strict JSON for template files? (consistency with config
   loader argues JSON5).
-- Migration path for the templates currently embedded in `bxp-cli` —
-  generate them out at release time vs ship as a one-shot extractor.
+- Migration: keep `bxp-cli.examples.json` working during the transition
+  or replace it outright on the v0.2.5 cut.
 - `--list-templates` / `--fetch-template` semantics when the same name
   exists in bundle + user dir.
 
@@ -170,10 +146,10 @@ Plan for v0.4.0:
 - Add `accepts: ArgType` field to `ArgDoc` in `expr.zig`. Types: `any_value`
   (default, no validation), `any_string`, `any_number`, `finite_number`,
   `positive_integer`, `integer_in_range{min, max}`.
-- Move argument validation into the central `evalCall` dispatcher
-  (`bxp-core/src/expr.zig:1169` area). Validator runs against declared
-  types BEFORE the builtin impl is called — impls receive guaranteed-valid
-  args and can drop their defensive boilerplate.
+- Move argument validation into the central `evalCall` dispatcher in
+  `bxp-core/src/expr.zig`. Validator runs against declared types BEFORE
+  the builtin impl is called — impls receive guaranteed-valid args and
+  can drop their defensive boilerplate.
 - Surface `accepts` in `bxp-fmt --docs` JSON so `bxp-gui` debugger can
   show arg-type hints in autocomplete and flag templates whose literal
   args fail static validation.
@@ -223,57 +199,6 @@ ceiling drops from `O(workbook size)` to
 `O(shared-strings index + one row)`.
 
 ## Later (no specific version)
-
-### CPU parallelism (next perf priority)
-
-After the 2026-05-24 NDJSON rip the three big memory/IO rocks landed:
-RSS (10 GB → 13 MB stable), GUI memory (sparse trace model + lazy
-source-CSV load), btrace size (4× faster trace=on, 206× smaller
-stream). The remaining wall-time scaling lever is multi-core. Bench
-machine has 8 cores; `bxp-cli` today processes one template
-single-threaded, leaving 7 cores idle.
-
-**Target bottleneck: one large source file.** The bench bottlenecks
-that hurt — S1 2M rows off=42 s, S3 1024-col off=65 s — and the
-real-world workloads (CRM migrations, single-broker exports) both
-live in a single file. Multiple smaller files are not the pain point.
-
-Three attack points, ranked by **value against the real bottleneck**
-(not by implementation difficulty):
-
-- **Per-chunk parallelism within a file (the only one that matters).**
-  Harder to implement, but the only candidate that attacks "one big
-  file" wall time. Pipeline becomes
-  `reader → chunk queue → N workers → ordered writer`. Per-thread
-  `chunk_arena`, per-thread output + btrace buffers, writer thread
-  reassembles in chunk-sequence order. Pre_pass stays a barrier
-  (read-only `lookup_table` post-barrier); pre_pass itself can also
-  parallelise with thread-local partial maps + merge if it becomes
-  the new bottleneck. JSON path (slurp-then-iterate) parallelises
-  trivially by splitting `all_rows` into ranges.
-- **Per-file parallelism.** Implementation-easy (files already
-  independent), but does nothing for N=1. Useful only for the
-  multi-broker concat case (one template, several input files)
-  and even there the win is small because per-file work is already
-  fast. Not the target.
-- **Per-template parallelism.** Trivial to add but only matters when
-  the user runs multiple templates in one invocation. Most runs are
-  single-template.
-
-Audit of serial state inside `processBroker` (per file) for the
-per-chunk path: `chunk_arena` (per-chunk, reset on transition);
-`ChunkReader + csv.LineIterator` (10 MiB streaming); `file_rows_written`
-(monotonic, used as btrace `outputIdx`); `file_expr_errors` /
-`file_warnings` (file-scoped counters); `fout` (`.csvx` writer,
-order matters); `combined_fout` (cross-file, even more serial);
-`btrace_writer` + `btrace_file_writer` (frame sequence
-`file_start → prepass → output/filtered/error → file_end`);
-`out.writer` for stderr (debug + warning prints). Everything in
-`expr.Context` and `line_arena` is per-row scratch — safe.
-
-`scripts/bench/` already supports `BENCH_PARALLEL=N` for the run
-matrix; this work is about **internal** parallelism inside one
-`bxp-cli` invocation.
 
 ### CI hardening
 
@@ -474,10 +399,3 @@ discussion doesn't keep restarting. Reopen only if the rationale changes.
   (single-eval against a sample row) plus per-call NDJSON traces from
   `--expr-trace` cover ~all real debugging needs. A breakpoint-style
   debugger would be massive surface area for marginal gain.
-
-## Done
-
-Historical milestones live in `CHANGELOG.md`. This section stays empty
-on purpose — once a roadmap item ships, it moves to the changelog entry
-for that release (generated by `scripts/release-changelog.sh`) and the
-line here is deleted.
