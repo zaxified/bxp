@@ -1448,10 +1448,15 @@ class TraceStore extends ChangeNotifier {
     // Add to MRU when the AST parsed (even if bxp-fmt found errors —
     // user can still re-open later). Skip when the spawn itself crashed
     // so paths to nonexistent / unreadable files don't pollute the
-    // quick-pick list. Fire-and-forget — persistence write is non-critical.
+    // quick-pick list. Fire-and-forget — persistence write is non-critical
+    // for the load flow, but surface failures through the trace so debug
+    // sessions can see when prefs writes are dropping silently (full disk,
+    // permissions, locked file on Windows).
     if (configPath.isNotEmpty && _astRoot != null) {
       // ignore: discarded_futures
-      _addRecentFile(configPath);
+      _addRecentFile(configPath).catchError((Object e) {
+        devTrace('action.loadConfig.addRecent.failed', {'error': '$e'});
+      });
     }
     if (!preserveTreeState) treeLoadGen++;
     // Templates cache is keyed off the AST content, not the UI tree state —

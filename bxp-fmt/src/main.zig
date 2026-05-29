@@ -703,11 +703,45 @@ fn valueToJsonString(a: std.mem.Allocator, value: std.json.Value) ![]u8 {
     return aw.toOwnedSlice();
 }
 
-/// Serialize a Value to stdout with a trailing newline, then flush.
-fn serializeValue(stdout: *std.Io.Writer, value: std.json.Value) !void {
-    try std.json.Stringify.value(value, .{}, stdout);
-    try stdout.writeByte('\n');
-    try stdout.flush();
+/// Emit a structured expression-error JSON line to stderr (with trailing
+/// newline + flush). Used by `runExpr` (eval failure + SPLIT_PART /
+/// DATE_CONVERT static-check failures) and `runExprTrace` (error sentinel).
+///
+/// `t` is null for `runExpr` (plain `{error, detail, off?, len?}`) and
+/// `"error"` for `runExprTrace` (NDJSON sentinel `{t:"error", error, detail,
+/// off?, len?}`). `off`/`len` are emitted only when `len > 0` — mirrors the
+/// bridge's `writeExprErrorJson` / `writeStaticErrorJson` shape so editor
+/// highlight behaves identically across all four entry points.
+///
+/// All writes use `catch {}` because the caller is already on an error path
+/// and the non-zero exit code is the authoritative signal.
+fn writeExprErrorJsonToStderr(
+    stderr: *std.Io.Writer,
+    t: ?[]const u8,
+    err_name: []const u8,
+    detail: []const u8,
+    off: u32,
+    len: u32,
+) void {
+    var jw: std.json.Stringify = .{ .writer = stderr, .options = .{} };
+    jw.beginObject() catch {};
+    if (t) |tt| {
+        jw.objectField("t") catch {};
+        jw.write(tt) catch {};
+    }
+    jw.objectField("error") catch {};
+    jw.write(err_name) catch {};
+    jw.objectField("detail") catch {};
+    jw.write(detail) catch {};
+    if (len > 0) {
+        jw.objectField("off") catch {};
+        jw.write(off) catch {};
+        jw.objectField("len") catch {};
+        jw.write(len) catch {};
+    }
+    jw.endObject() catch {};
+    stderr.writeByte('\n') catch {};
+    stderr.flush() catch {};
 }
 
 /// Emit `{"$err_1":"<msg>"}` to stdout with newline + flush, then caller
@@ -840,10 +874,6 @@ fn insertNumberedBefore(
 /// `injectSemanticErrors`). The shared `counter` keeps numbering unique
 /// across the existing ValidationError pass and any deep-validation
 /// findings, so the GUI can route by prefix without collisions.
-///
-/// Phase A is a plumbing-only pass: today no emit site populates the
-/// Diagnostics bag, so this function is invoked with an empty slice and
-/// is a no-op. Phase B+ start filling the bag.
 fn injectDiagnostics(
     a: std.mem.Allocator,
     root: *std.json.Value,
@@ -1020,27 +1050,9 @@ fn runExpr(gpa: std.mem.Allocator, src: []const u8) !u8 {
     _ = expr_mod.eval(src, &ctx) catch |err| {
         // Error JSON goes to stderr, not stdout — stdout is empty on
         // failure so the caller can check exit code without parsing.
-        // `catch {}` is intentional: if stderr itself fails there is
-        // nothing meaningful to report; the non-zero exit code is enough.
-        var jw: std.json.Stringify = .{ .writer = stderr, .options = .{} };
-        jw.beginObject() catch {};
-        jw.objectField("error") catch {};
-        jw.write(@errorName(err)) catch {};
-        jw.objectField("detail") catch {};
-        jw.write(detail) catch {};
-        // Phase G1: token offset/len so the GUI ExprPanel can highlight
-        // the offending token in the live editor (BxpProcessClient.validateExpr
-        // parses these alongside `error` and `detail`). Emitted only when
-        // the parser pinned a span — len == 0 means "no specific token".
-        if (err_len > 0) {
-            jw.objectField("off") catch {};
-            jw.write(err_offset) catch {};
-            jw.objectField("len") catch {};
-            jw.write(err_len) catch {};
-        }
-        jw.endObject() catch {};
-        stderr.writeByte('\n') catch {};
-        stderr.flush() catch {};
+        // Token off/len (Phase G1) let the GUI ExprPanel highlight the
+        // offending span; emitted only when the parser pinned one.
+        writeExprErrorJsonToStderr(stderr, null, @errorName(err), detail, err_offset, err_len);
         return 1;
     };
 
@@ -1057,19 +1069,7 @@ fn runExpr(gpa: std.mem.Allocator, src: []const u8) !u8 {
             "SPLIT_PART index is 1-based; literal {d} always returns \"\"",
             .{bad.bad_idx},
         );
-        var jw: std.json.Stringify = .{ .writer = stderr, .options = .{} };
-        jw.beginObject() catch {};
-        jw.objectField("error") catch {};
-        jw.write("SplitPartBadIndex") catch {};
-        jw.objectField("detail") catch {};
-        jw.write(msg) catch {};
-        jw.objectField("off") catch {};
-        jw.write(bad.off) catch {};
-        jw.objectField("len") catch {};
-        jw.write(bad.len) catch {};
-        jw.endObject() catch {};
-        stderr.writeByte('\n') catch {};
-        stderr.flush() catch {};
+        writeExprErrorJsonToStderr(stderr, null, "SplitPartBadIndex", msg, bad.off, bad.len);
         return 1;
     }
     if (sc.date_format) |bad| {
@@ -1078,19 +1078,7 @@ fn runExpr(gpa: std.mem.Allocator, src: []const u8) !u8 {
             "DATE_CONVERT format '{s}' has unrecognized letter '{c}' at offset {d} — wrap any literal letters in brackets, e.g. '[T]'",
             .{ bad.fmt, bad.fmt[bad.pos], bad.pos },
         );
-        var jw: std.json.Stringify = .{ .writer = stderr, .options = .{} };
-        jw.beginObject() catch {};
-        jw.objectField("error") catch {};
-        jw.write("DateFormatBadToken") catch {};
-        jw.objectField("detail") catch {};
-        jw.write(msg) catch {};
-        jw.objectField("off") catch {};
-        jw.write(bad.off) catch {};
-        jw.objectField("len") catch {};
-        jw.write(bad.len) catch {};
-        jw.endObject() catch {};
-        stderr.writeByte('\n') catch {};
-        stderr.flush() catch {};
+        writeExprErrorJsonToStderr(stderr, null, "DateFormatBadToken", msg, bad.off, bad.len);
         return 1;
     }
     // Success: no output. Callers rely on exit code 0.
@@ -1201,6 +1189,8 @@ fn runExprTrace(
     }
 
     var detail: []const u8 = "";
+    var err_offset: u32 = 0;
+    var err_len: u32 = 0;
     const ctx = expr_mod.Context{
         .fields = fields_list.items,
         .col_index = &col_index,
@@ -1208,6 +1198,11 @@ fn runExprTrace(
         .lookup_table = null,
         .alloc = alloc,
         .error_detail = &detail,
+        // Phase G1 parity with runExpr + bridge_eval_expr_trace: capture
+        // token span on parse failures so the GUI ExprPanel highlights the
+        // offending range identically across all three execution paths.
+        .error_offset = &err_offset,
+        .error_len = &err_len,
         // trace_writer receives one NDJSON line per function call.
         // The GUI reads stdout line-by-line as a stream and renders each
         // call in the Variables panel before the final sentinel arrives.
@@ -1218,18 +1213,7 @@ fn runExprTrace(
         // Emit error sentinel on stderr then exit non-zero. Per-fn traces
         // already on stdout up to the point of failure are kept — the GUI
         // can surface partial results when an outer call blew up.
-        // `catch {}` mirrors runExpr: nothing useful to do if stderr write fails.
-        var jw: std.json.Stringify = .{ .writer = stderr, .options = .{} };
-        jw.beginObject() catch {};
-        jw.objectField("t") catch {};
-        jw.write("error") catch {};
-        jw.objectField("error") catch {};
-        jw.write(@errorName(err)) catch {};
-        jw.objectField("detail") catch {};
-        jw.write(detail) catch {};
-        jw.endObject() catch {};
-        stderr.writeByte('\n') catch {};
-        stderr.flush() catch {};
+        writeExprErrorJsonToStderr(stderr, "error", @errorName(err), detail, err_offset, err_len);
         return 1;
     };
     // Emit the final sentinel on stdout so the GUI knows the stream is

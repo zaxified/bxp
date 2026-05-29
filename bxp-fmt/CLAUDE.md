@@ -144,9 +144,12 @@ count crosses the threshold), revisit.
   variation between callers makes the abstraction hurt more than it
   helps today.
 
-- **`emitExprError` extraction.** `runExpr` and `runExprTrace` each
-  serialize a JSON error object to stderr — almost identical except
-  `runExprTrace` also writes `"t":"error"`, and both now include optional
-  `"off"`/`"len"` token-span fields (Phase G1). Skipped: only two call
-  sites today. Extract when a third caller shows up; the gain is too
-  modest to justify a parameterised helper for two consumers.
+- **`runX` writer setup is the only remaining intentional duplication.**
+  The prior expression-error JSON serialisation duplication (eval failure +
+  SPLIT_PART / DATE_CONVERT static checks in `runExpr`, plus the
+  `runExprTrace` error sentinel) crossed the rule-of-three threshold once
+  Phase G1 added the static checks; extracted into
+  `writeExprErrorJsonToStderr`. The helper also fixed a Phase G1 oversight:
+  `runExprTrace`'s error sentinel previously omitted `off`/`len`, so the
+  bridge path and subprocess fallback disagreed on whether the GUI editor
+  got a highlight span for the same expression.
