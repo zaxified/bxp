@@ -154,11 +154,12 @@ expr	err	FIELDS(1, 2)	WrongArgCount
 # Non-numeric string arg → toNumber fails with NotANumber.
 expr	err	FIELDS('abc')	NotANumber
 # Field-ref arg parses fine; runtime resolution depends on row context.
-# Empty/zero/negative indexes silent-skip (return "") per SPLIT_PART convention.
-# Previously panicked with integer overflow; regression-locked here.
 expr	ok	FIELDS([A])
-expr	ok	FIELDS(0)
-expr	ok	FIELDS(-1)
+# `n` is `.positive_integer` (1-based): a literal 0 / negative index is
+# statically flagged at config-load, same as SPLIT_PART / SUBSTR. A
+# non-literal index that resolves to ≤ 0 still silently returns "" at runtime.
+expr	err	FIELDS(0)	SplitPartBadIndex
+expr	err	FIELDS(-1)	SplitPartBadIndex
 expr	ok	FIELDS(1)
 expr	ok	FIELDS(99)
 # Inf/NaN regression guards — earlier code (gate `f < 1.0`) did not filter
@@ -192,6 +193,27 @@ expr	err	DATE_CONVERT('x', 'YYYY-Q-DD', 'YYYY-MM-DD')	DateFormatBadToken
 expr	err	DATE_CONVERT('x', 'YYYY-MM-DD', 'YYYY-Q-DD')	DateFormatBadToken
 # Bracket escapes neutralise letters — these stay clean.
 expr	ok	DATE_CONVERT([Time], 'YYYY-MM-DD[Q]', 'YYYY-MM-DD')
+
+# ── Unified arg-domain validator (central validateArgs) ───────────────
+# `.number` domain: non-numeric arg raises NotANumber loudly (vs the
+# silent "" skip reserved for positive_integer index args). Pins the
+# behaviour after arity + domain checks moved into the central dispatcher.
+expr	err	ABS('foo')	NotANumber
+expr	err	LEFT('hello', 'x')	NotANumber
+expr	err	RIGHT('hello', 'x')	NotANumber
+expr	err	DATEADD('2024-01-01', 'x')	NotANumber
+expr	err	GREATEST('foo', 1)	NotANumber
+# `.string` domain stays a no-op coercion guard: a numeric value still
+# hits the impl's own StringExpected check (no silent toString coercion).
+expr	err	LEN(5)	StringExpected
+# integer_in_range clamps a huge precision to ±30 — no DoS, valid result.
+expr	ok	ROUND(1.5, 999999999)
+# DATEADD / WORKDAY day offset: non-finite or absurd magnitude silently
+# returns "" (previously panicked in @intFromFloat). Non-numeric stays loud.
+expr	ok	DATEADD('2024-01-01', 'inf')
+expr	ok	DATEADD('2024-01-01', 1000000000)
+expr	ok	WORKDAY('2024-01-01', 'inf')
+expr	ok	DATEADD('2024-01-01', 30)
 
 # ── Quoting / strings ─────────────────────────────────────────────────
 # Empty string literal.

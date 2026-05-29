@@ -761,8 +761,8 @@ export fn bridge_free(ptr: [*]u8, len: u32) void {
 
 // ── In-process expr evaluation ──────────────────────────────────────────
 //
-// New-style FFI family — see DEV/plan-bridge-ffi-conventions.md for the
-// conventions these exports follow:
+// New-style FFI family — see "Adding a new bridge FFI export" in
+// docs/devel.md for the conventions these exports follow:
 //   * caller-supplied output buffer, `bytes_written` return value
 //   * negative codes for bridge-level failures only
 //   * per-call arena; no handle table, no Dart-side `bridge_free`
@@ -843,7 +843,7 @@ export fn bridge_eval_expr(
     if (sc.split_part) |bad| {
         const msg = std.fmt.allocPrint(
             alloc,
-            "SPLIT_PART index is 1-based; literal {d} always returns \"\"",
+            "index argument is 1-based; literal {d} always returns \"\"",
             .{bad.bad_idx},
         ) catch return @intFromEnum(BridgeFfiError.out_of_memory);
         return writeStaticErrorJson(out, "SplitPartBadIndex", msg, bad.off, bad.len);

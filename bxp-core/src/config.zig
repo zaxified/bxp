@@ -1111,7 +1111,7 @@ fn checkOneExpr(
         defer alloc.free(full_field);
         const path = try std.fmt.allocPrint(alloc, "conversion_templates.{s}.{s}", .{ template_id, full_field });
         const message = try std.fmt.allocPrint(alloc,
-            "expression in {s}: SPLIT_PART index is 1-based; literal {d} always returns \"\"",
+            "expression in {s}: index argument is 1-based; literal {d} always returns \"\"",
             .{ field_leaf, bad.bad_idx });
         try d.append(.{
             .path = path,

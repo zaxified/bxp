@@ -323,6 +323,7 @@ class _ExprEditorState extends State<ExprEditor> {
           label: signature,
           desc: description,
           kind: _AcKind.fn,
+          argHint: _buildArgHint(f),
         ),
       );
     }
@@ -458,6 +459,55 @@ class _ExprEditorState extends State<ExprEditor> {
       }
     }
     return '$name(${parts.join(', ')})';
+  }
+
+  /// Map a FnDoc `args[].kind` tag to a short human-readable type label,
+  /// or null when the kind carries no useful constraint to surface
+  /// (`expr` = "any expression"). Mirrors the `ArgKind` union in
+  /// `bxp-core/src/expr.zig`; new kinds degrade to their raw tag so the
+  /// hint never silently drops an arg.
+  static String? _argKindLabel(Map<String, dynamic> arg) {
+    final kind = arg['kind']?.toString() ?? 'expr';
+    switch (kind) {
+      case 'expr':
+        return null;
+      case 'string':
+      case 'literal_string':
+        return 'text';
+      case 'sunrise_format':
+        return 'date format';
+      case 'pre_pass_name':
+        return 'pre_pass name';
+      case 'number':
+        return 'number';
+      case 'finite_number':
+        return 'finite number';
+      case 'positive_integer':
+        return 'integer ≥ 1';
+      case 'integer_in_range':
+        final min = arg['min'];
+        final max = arg['max'];
+        return (min != null && max != null)
+            ? 'integer $min..$max'
+            : 'integer';
+      default:
+        return kind;
+    }
+  }
+
+  /// Build the compact per-arg type hint shown under a focused function in
+  /// the autocomplete popup, e.g. "f: number · n: integer -30..30". Returns
+  /// "" when no arg carries a typed domain (all `expr`).
+  static String _buildArgHint(Map<String, dynamic> fn) {
+    final args = ((fn['args'] as List?) ?? const [])
+        .cast<Map<String, dynamic>>();
+    final parts = <String>[];
+    for (final a in args) {
+      final label = _argKindLabel(a);
+      if (label == null) continue;
+      parts.add('${a['name'] ?? 'arg'}: $label');
+    }
+    return parts.join(' · ');
   }
 
   /// Locate the first `<placeholder>` token in [text] starting at
@@ -707,6 +757,18 @@ class _ExprEditorState extends State<ExprEditor> {
                                       : BxpWeight.regular,
                                 ),
                               ),
+                              if (selected && it.argHint.isNotEmpty) ...[
+                                const SizedBox(height: 2),
+                                Text(
+                                  it.argHint,
+                                  softWrap: true,
+                                  style: BxpText.body(
+                                    ctx,
+                                    color: t.codeColumn,
+                                    size: BxpSize.xs,
+                                  ),
+                                ),
+                              ],
                               if (selected && it.desc.isNotEmpty) ...[
                                 const SizedBox(height: 2),
                                 Text(
@@ -781,11 +843,17 @@ class _AcItem {
   final String label;
   final String desc;
   final _AcKind kind;
+
+  /// Compact per-argument type hint built from the FnDoc `args[].kind`
+  /// metadata (e.g. "n: integer ≥ 1 · f: number"). Empty for keywords,
+  /// columns, and functions whose args carry no typed domain.
+  final String argHint;
   const _AcItem({
     required this.insert,
     required this.label,
     required this.desc,
     required this.kind,
+    this.argHint = '',
   });
 }
 

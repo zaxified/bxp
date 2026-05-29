@@ -1066,7 +1066,7 @@ fn runExpr(gpa: std.mem.Allocator, src: []const u8) !u8 {
     if (sc.split_part) |bad| {
         const msg = try std.fmt.allocPrint(
             alloc,
-            "SPLIT_PART index is 1-based; literal {d} always returns \"\"",
+            "index argument is 1-based; literal {d} always returns \"\"",
             .{bad.bad_idx},
         );
         writeExprErrorJsonToStderr(stderr, null, "SplitPartBadIndex", msg, bad.off, bad.len);
@@ -2188,7 +2188,7 @@ test "annotateRaw Phase G5: SPLIT_PART literal-zero index → \\$err_ at express
     var it = is.object.iterator();
     while (it.next()) |kv| {
         if (std.mem.startsWith(u8, kv.key_ptr.*, "$err_") and
-            diagHas(kv.value_ptr, "SPLIT_PART index is 1-based"))
+            diagHas(kv.value_ptr, "index argument is 1-based"))
         {
             saw_bad_err = true;
         }

@@ -447,7 +447,7 @@ pub const BadSplitPart = struct {
 /// add a case in `tryScanArg` below, populate FnDoc.args on the
 /// relevant builtin, and emit the diagnostic in `bxp-core/src/config.zig`.
 pub const StaticCheckResult = struct {
-    /// `literal_int_positive` violation — bad literal int (≤ 0).
+    /// `positive_integer` violation — bad literal int (≤ 0).
     /// Today populated by SPLIT_PART arg[2]; carries the offending
     /// integer plus its source span for editor highlighting.
     split_part: ?BadSplitPart = null,
@@ -555,7 +555,7 @@ fn lookupFnDocByName(name: []const u8) ?FnDoc {
 fn hasSpecializedArgs(fn_doc: FnDoc) bool {
     for (fn_doc.args) |a| {
         switch (a.kind) {
-            .literal_int_positive, .sunrise_format => return true,
+            .positive_integer, .sunrise_format => return true,
             else => {},
         }
     }
@@ -576,7 +576,7 @@ fn tryScanArg(
     if (count != 1) return;
     if (arg_idx >= fn_doc.args.len) return; // variadic past declared args
     switch (fn_doc.args[arg_idx].kind) {
-        .literal_int_positive => {
+        .positive_integer => {
             if (first.kind != .number_lit) return;
             if (out.split_part != null) return;
             const f = std.fmt.parseFloat(f80, first.text) catch return;
@@ -615,7 +615,17 @@ fn tryScanArg(
                 };
             }
         },
-        .expr, .literal_string, .pre_pass_name => {},
+        // No static literal check: runtime-only domains + plain string /
+        // expr args. (integer_in_range's optional literal-range warning is
+        // a deliberate non-goal for now — see plan step 4.)
+        .expr,
+        .string,
+        .literal_string,
+        .pre_pass_name,
+        .number,
+        .finite_number,
+        .integer_in_range,
+        => {},
     }
 }
 
@@ -1240,6 +1250,8 @@ const Parser = struct {
         for (builtins) |b| {
             if (b.lazy) continue;
             if (std.ascii.eqlIgnoreCase(name, b.name)) {
+                if (try self.validateArgs(b.doc, args.items)) |short_circuit|
+                    return short_circuit;
                 return b.impl.?(self, args.items);
             }
         }
@@ -1252,6 +1264,87 @@ const Parser = struct {
         self.tok.last_len = name_len;
         self.setDetail("unknown function '{s}' — check function name spelling", .{name});
         return error.UnknownFunction;
+    }
+
+    /// Central argument validator — runs in `evalCall` before the builtin
+    /// impl, enforcing the arity + per-arg domain contracts declared in
+    /// `FnDoc`. Returns `null` to proceed to the impl, a `Value` to
+    /// short-circuit the whole call (a bad `positive_integer` index resolves
+    /// the call to ""), or propagates an error. May coerce `args` in place
+    /// (range clamping). Impls downstream receive guaranteed-valid args, so
+    /// new builtins are safe-by-construction once their FnDoc declares
+    /// domains — see `ArgKind`.
+    ///
+    /// Failure policy is per-domain, chosen to preserve the historical
+    /// behavior of the per-impl guards this centralises:
+    ///   - `number` / `finite_number` → loud `error.NotANumber` attributed
+    ///     to the offending arg (matches the old `adaptX` catch path).
+    ///   - `positive_integer` → silent skip to "" (matches `toPositiveIndex`).
+    ///   - `integer_in_range` → clamp finite values in place; non-finite /
+    ///     non-numeric pass through untouched so the impl's own handling
+    ///     (e.g. ROUND's "non-finite n returns f unchanged") still applies.
+    fn validateArgs(self: *Parser, doc: FnDoc, args: []Value) !?Value {
+        // Arity — replaces the per-impl `if (args.len != N)` checks.
+        // max_args 0 = unspecified, 255 = variadic/unbounded: skip the cap.
+        if (args.len < doc.min_args) return error.WrongArgCount;
+        if (doc.max_args != 0 and doc.max_args != 255 and args.len > doc.max_args)
+            return error.WrongArgCount;
+
+        // Per-arg domain guards. Only declared positions are checked; extra
+        // (variadic) args past `doc.args.len` carry no contract.
+        for (doc.args, 0..) |a, i| {
+            if (i >= args.len) break;
+            switch (a.kind) {
+                .expr, .string, .literal_string, .sunrise_format, .pre_pass_name => {},
+                .number => _ = args[i].toNumber() catch {
+                    switch (args[i]) {
+                        .string => |s| self.setNotANumber(s),
+                        else => {},
+                    }
+                    return error.NotANumber;
+                },
+                .finite_number => {
+                    const n = args[i].toNumber() catch {
+                        switch (args[i]) {
+                            .string => |s| self.setNotANumber(s),
+                            else => {},
+                        }
+                        return error.NotANumber;
+                    };
+                    if (!std.math.isFinite(n)) {
+                        switch (args[i]) {
+                            .string => |s| self.setNotANumber(s),
+                            else => {},
+                        }
+                        return error.NotANumber;
+                    }
+                },
+                .positive_integer => {
+                    // Split failure policy, preserving historical behavior:
+                    // non-numeric input → loud NotANumber; a valid number
+                    // that is not a positive index (≤ 0 / non-finite) →
+                    // silent skip to "".
+                    const n = args[i].toNumber() catch {
+                        switch (args[i]) {
+                            .string => |s| self.setNotANumber(s),
+                            else => {},
+                        }
+                        return error.NotANumber;
+                    };
+                    if (toPositiveIndex(n) == null) return Value{ .string = "" };
+                },
+                .integer_in_range => |r| {
+                    if (args[i].toNumber()) |n| {
+                        if (std.math.isFinite(n)) {
+                            const lo: f80 = @floatFromInt(r.min);
+                            const hi: f80 = @floatFromInt(r.max);
+                            args[i] = .{ .number = @max(@min(@trunc(n), hi), lo) };
+                        }
+                    } else |_| {}
+                },
+            }
+        }
+        return null;
     }
 };
 
@@ -1268,14 +1361,31 @@ const Parser = struct {
 /// FnArgDoc-based static checker (see `staticCheckCallsCollect` below).
 /// New kinds extend the catalog without touching dispatch sites in
 /// `bxp-core/src/config.zig`.
-pub const ArgKind = enum {
-    /// Any expression — no special static check applies.
+/// Per-arg semantic domain — the single source of truth for argument
+/// metadata. One declaration on a builtin's FnDoc drives all three
+/// consumers: (a) the central runtime guard in `evalCall` (coerce / skip /
+/// clamp before the impl runs), (b) the static literal checker
+/// `staticCheckCalls` (config-load diagnostics), and (c) the
+/// `bxp-fmt --docs` JSON the GUI autocomplete reads.
+///
+/// Runtime failure policy is chosen per variant to preserve the historical
+/// observable behavior of the impls these guards replaced — see the
+/// `validateArgs` table below. Adding a new builtin = declare its arg
+/// domains here; it is then safe-by-construction (no per-impl validation).
+///
+/// A `union(enum)` (not a plain enum) because `integer_in_range` carries a
+/// `{min,max}` payload. GUI-facing tag names (`expr`, `string`,
+/// `literal_string`, `sunrise_format`, `pre_pass_name`) are deliberately
+/// stable — `expr_editor.dart` keys placeholder quoting on them.
+pub const ArgKind = union(enum) {
+    /// Any expression — no runtime guard, no static check (default).
     expr,
+    /// Coerces to a string via `toString` (never fails). Signals a
+    /// string-typed arg for docs / autocomplete; no runtime guard needed.
+    string,
     /// Bare string literal expected (validators may scan literal text).
+    /// GUI wraps the autocomplete placeholder in quotes.
     literal_string,
-    /// Bare integer literal expected, must be ≥ 1. Drives
-    /// `expr.SplitPartBadIndex` diagnostics for SPLIT_PART arg[2].
-    literal_int_positive,
     /// Bare string literal containing a sunrise-format pattern. Drives
     /// `expr.DateFormatBadToken` diagnostics for DATE_CONVERT arg[1]/arg[2].
     sunrise_format,
@@ -1283,6 +1393,18 @@ pub const ArgKind = enum {
     /// in bxp-gui (no static check today — runtime-resolved via
     /// Context.pre_pass_names; documented for catalog completeness).
     pre_pass_name,
+    /// Must coerce to a number via `toNumber`; failure → NotANumber
+    /// (loud, attributed to the failing arg).
+    number,
+    /// Number that must be finite (no NaN/Inf); non-finite → NotANumber.
+    finite_number,
+    /// Integer ≥ 1, representable as a usize index. Static: bad literal
+    /// (≤ 0 / non-representable) drives `expr.SplitPartBadIndex`. Runtime:
+    /// `toPositiveIndex` guard — failure short-circuits the call to "".
+    positive_integer,
+    /// Finite integer clamped to `[min, max]` after truncation. Runtime:
+    /// clamp (no skip). Mirrors the ROUND precision cap.
+    integer_in_range: struct { min: i64, max: i64 },
 };
 
 pub const FnArgDoc = struct {
@@ -1439,6 +1561,25 @@ fn toPositiveIndex(f: f80) ?usize {
     return @as(usize, @intFromFloat(f));
 }
 
+/// Sane upper bound (in days) for date-offset arithmetic — ±10 000 years,
+/// far beyond any realistic settlement / maturity offset. Bounds
+/// `@intFromFloat` so a non-finite or absurd offset can't reach it.
+const MAX_DATE_OFFSET_DAYS: i64 = 3_652_500;
+
+/// Convert a user-supplied f80 day offset (DATEADD / WORKDAY arg `n`) to an
+/// i64, or return null for "silent skip" — non-finite (NaN/Inf) or beyond
+/// ±MAX_DATE_OFFSET_DAYS. Day offsets are always small (T+2, +30, +365), so
+/// rejecting huge / non-finite values both prevents an `@intFromFloat`
+/// out-of-range panic and matches the date builtins' "blank/invalid → ''"
+/// contract. Non-numeric args are caught earlier by the `.number` domain.
+fn toDayOffset(f: f80) ?i64 {
+    if (!std.math.isFinite(f)) return null;
+    const t = @trunc(f);
+    if (t > @as(f80, MAX_DATE_OFFSET_DAYS) or t < -@as(f80, MAX_DATE_OFFSET_DAYS))
+        return null;
+    return @intFromFloat(t);
+}
+
 /// Maximum decimal precision a ROUND call will honour. f80 mantissa holds
 /// ~19 decimal digits, so anything beyond that is numerical noise.
 /// Caps `factor *= 10.0` (or `/= 10.0`) loop iterations to avoid DoS hangs
@@ -1450,19 +1591,18 @@ const abs_doc: FnDoc = .{
     .name = "ABS",
     .signature = "ABS(f)",
     .description = "Absolute numeric value.",
-    .args = &.{.{ .name = "f" }},
+    .args = &.{.{ .name = "f", .kind = .number }},
     .min_args = 1,
     .max_args = 1,
 };
+// Arity + the `.number` domain on `f` are enforced centrally in
+// `validateArgs`, so the impl receives a guaranteed-numeric arg and the
+// adapter no longer needs a NotANumber catch (plain signature forward).
 fn builtinAbs(args: []Value) !Value {
-    if (args.len != 1) return error.WrongArgCount;
     return Value{ .number = @abs(try args[0].toNumber()) };
 }
-fn adaptAbs(p: *Parser, args: []Value) anyerror!Value {
-    return builtinAbs(args) catch |err| {
-        if (args.len >= 1) switch (args[0]) { .string => |s| p.setNotANumber(s), else => {} };
-        return err;
-    };
+fn adaptAbs(_: *Parser, args: []Value) anyerror!Value {
+    return builtinAbs(args);
 }
 
 // ── FIELDS ──────────────────────────────────────────────────────────────
@@ -1470,21 +1610,21 @@ const fields_doc: FnDoc = .{
     .name = "FIELDS",
     .signature = "FIELDS(n)",
     .description = "Field value by 1-based column index. n must be a positive integer — use this when the column header is unknown or unstable; use the [ColumnName] syntax to look up by header name.",
-    .args = &.{.{ .name = "n" }},
+    // `n` is `.positive_integer`: a literal `FIELDS(0)` / `FIELDS(-1)` is
+    // statically flagged at config-load (1-based index contract, same as
+    // SPLIT_PART / SUBSTR). A non-literal index that resolves to ≤ 0 / Inf
+    // still silently returns "" at runtime via `toPositiveIndex` below.
+    .args = &.{.{ .name = "n", .kind = .positive_integer }},
     .min_args = 1,
     .max_args = 1,
 };
 fn builtinFields(args: []Value, ctx: *const Context) !Value {
-    if (args.len != 1) return error.WrongArgCount;
     const idx = toPositiveIndex(try args[0].toNumber()) orelse
         return Value{ .string = "" };
     return Value{ .string = ctx.field(idx - 1) };
 }
 fn adaptFields(p: *Parser, args: []Value) anyerror!Value {
-    return builtinFields(args, p.ctx) catch |err| {
-        if (args.len >= 1) switch (args[0]) { .string => |s| p.setNotANumber(s), else => {} };
-        return err;
-    };
+    return builtinFields(args, p.ctx);
 }
 
 /// stripCurrencySymbol strips a leading currency symbol (byte prefix) from s.
@@ -1509,7 +1649,7 @@ const price_value_doc: FnDoc = .{
     .name = "PRICE_VALUE",
     .signature = "PRICE_VALUE(f)",
     .description = "Strip currency symbol or code from a price string, return the numeric part (e.g. \"$88744.27\" → \"88744.27\", \"€24.00\" → \"24.00\", \"24.00 CZK\" → \"24.00\").",
-    .args = &.{.{ .name = "f" }},
+    .args = &.{.{ .name = "f", .kind = .string }},
     .min_args = 1,
     .max_args = 1,
 };
@@ -1520,7 +1660,6 @@ const price_value_doc: FnDoc = .{
 /// everything after the first space is dropped, returning just the numeric
 /// part. If no space is present, the whole trimmed string is returned.
 fn builtinPriceValue(args: []Value) !Value {
-    if (args.len != 1) return error.WrongArgCount;
     const s = switch (args[0]) {
         .string => |v| v,
         else => return error.StringExpected,
@@ -1539,7 +1678,7 @@ const price_currency_doc: FnDoc = .{
     .name = "PRICE_CURRENCY",
     .signature = "PRICE_CURRENCY(f)",
     .description = "Extract currency code from a price string (e.g. \"EUR\", \"USD\").",
-    .args = &.{.{ .name = "f" }},
+    .args = &.{.{ .name = "f", .kind = .string }},
     .min_args = 1,
     .max_args = 1,
 };
@@ -1552,7 +1691,6 @@ const price_currency_doc: FnDoc = .{
 /// symbol and the function returns "". Callers should use COALESCE or IF to
 /// supply a fallback when the format may be ambiguous.
 fn builtinPriceCurrency(args: []Value) !Value {
-    if (args.len != 1) return error.WrongArgCount;
     const s = switch (args[0]) {
         .string => |v| v,
         else => return error.StringExpected,
@@ -1571,13 +1709,12 @@ const ticker_doc: FnDoc = .{
     .name = "TICKER",
     .signature = "TICKER(f)",
     .description = "Map field value through the template's `ticker_map` (per-template config block that translates broker-specific symbols to canonical tickers, e.g. \"VOW.DE\" → \"VOW.DE.XETRA\"). Returns value unchanged if not found.",
-    .args = &.{.{ .name = "f" }},
+    .args = &.{.{ .name = "f", .kind = .string }},
     .min_args = 1,
     .max_args = 1,
 };
 /// TICKER(field) — look up in ticker_map, return as-is if not found.
 fn builtinTicker(args: []Value, ctx: *const Context) !Value {
-    if (args.len != 1) return error.WrongArgCount;
     const s = switch (args[0]) {
         .string => |v| v,
         else => return error.StringExpected,
@@ -1613,7 +1750,6 @@ const lookup_doc: FnDoc = .{
 /// The lookup table uses composite keys "name\x00key\x00field".
 /// Returns empty string if no pre_pass table is present or key/field not found.
 fn builtinLookup(args: []Value, ctx: *const Context) !Value {
-    if (args.len != 2 and args.len != 3) return error.WrongArgCount;
     // Validate-mode (Phase G3): when the deep-pass deepens with a
     // populated `pre_pass_names` whitelist, resolve the first argument
     // immediately and flag unknown names. Runtime callers leave
@@ -1673,9 +1809,9 @@ const split_part_doc: FnDoc = .{
     .signature = "SPLIT_PART(s, delim, n)",
     .description = "Return the n-th part of `s` split by `delim` (1-based index). Returns \"\" when n exceeds the part count, when `delim` is empty, or when `n` ≤ 0. When `delim` is not found, n=1 returns the whole string and n>1 returns \"\".",
     .args = &.{
-        .{ .name = "s" },
-        .{ .name = "delim" },
-        .{ .name = "n", .kind = .literal_int_positive },
+        .{ .name = "s", .kind = .string },
+        .{ .name = "delim", .kind = .string },
+        .{ .name = "n", .kind = .positive_integer },
     },
     .min_args = 3,
     .max_args = 3,
@@ -1683,7 +1819,6 @@ const split_part_doc: FnDoc = .{
 /// SPLIT_PART(string, delimiter, n) — split string by delimiter, return nth part (1-based).
 /// Returns "" when fewer than n parts exist or delimiter is empty.
 fn builtinSplitPart(args: []Value) !Value {
-    if (args.len != 3) return error.WrongArgCount;
     const s = switch (args[0]) {
         .string => |v| v,
         else => return error.StringExpected,
@@ -1712,11 +1847,8 @@ fn builtinSplitPart(args: []Value) !Value {
         part += 1;
     }
 }
-fn adaptSplitPart(p: *Parser, args: []Value) anyerror!Value {
-    return builtinSplitPart(args) catch |err| {
-        if (args.len >= 3) switch (args[2]) { .string => |s| p.setNotANumber(s), else => {} };
-        return err;
-    };
+fn adaptSplitPart(_: *Parser, args: []Value) anyerror!Value {
+    return builtinSplitPart(args);
 }
 
 // ── CONTAINS ────────────────────────────────────────────────────────────
@@ -1725,15 +1857,14 @@ const contains_doc: FnDoc = .{
     .signature = "CONTAINS(haystack, needle)",
     .description = "Returns \"true\" if `haystack` contains `needle`, else \"false\".",
     .args = &.{
-        .{ .name = "haystack" },
-        .{ .name = "needle" },
+        .{ .name = "haystack", .kind = .string },
+        .{ .name = "needle", .kind = .string },
     },
     .min_args = 2,
     .max_args = 2,
 };
 /// CONTAINS(string, substring) → bool — true when substring is found inside string.
 fn builtinContains(args: []Value) !Value {
-    if (args.len != 2) return error.WrongArgCount;
     const s = switch (args[0]) {
         .string => |v| v,
         else => return error.StringExpected,
@@ -1754,16 +1885,15 @@ const replace_doc: FnDoc = .{
     .signature = "REPLACE(s, from, to)",
     .description = "Replace all occurrences of `from` in `s` with `to` (case-sensitive byte match). Returns `s` unchanged when `from` is empty.",
     .args = &.{
-        .{ .name = "s" },
-        .{ .name = "from" },
-        .{ .name = "to" },
+        .{ .name = "s", .kind = .string },
+        .{ .name = "from", .kind = .string },
+        .{ .name = "to", .kind = .string },
     },
     .min_args = 3,
     .max_args = 3,
 };
 /// REPLACE(string, old, new) — replace all occurrences of old with new.
 fn builtinReplace(args: []Value, alloc: std.mem.Allocator) !Value {
-    if (args.len != 3) return error.WrongArgCount;
     const s = switch (args[0]) {
         .string => |v| v,
         else => return error.StringExpected,
@@ -1820,13 +1950,12 @@ const trim_doc: FnDoc = .{
     .name = "TRIM",
     .signature = "TRIM(f)",
     .description = "Strip leading and trailing whitespace from a string.",
-    .args = &.{.{ .name = "f" }},
+    .args = &.{.{ .name = "f", .kind = .string }},
     .min_args = 1,
     .max_args = 1,
 };
 /// TRIM(f) — strip leading and trailing whitespace (spaces, tabs, CR, LF).
 fn builtinTrim(args: []Value) !Value {
-    if (args.len != 1) return error.WrongArgCount;
     const s = switch (args[0]) {
         .string => |v| v,
         else => return args[0],
@@ -1843,16 +1972,21 @@ const round_doc: FnDoc = .{
     .signature = "ROUND(f, n)",
     .description = "Round `f` to `n` decimal places (half-away-from-zero). `n=0` rounds to the nearest integer; `n<0` rounds to tens/hundreds/etc. (`n=-2` → nearest 100). `n` is clamped to ±30 to bound CPU; non-finite `n` (NaN/Inf) returns `f` unchanged.",
     .args = &.{
-        .{ .name = "f" },
-        .{ .name = "n" },
+        .{ .name = "f", .kind = .number },
+        .{ .name = "n", .kind = .{ .integer_in_range = .{
+            .min = -@as(i64, ROUND_MAX_PRECISION),
+            .max = @as(i64, ROUND_MAX_PRECISION),
+        } } },
     },
     .min_args = 2,
     .max_args = 2,
 };
 /// ROUND(f, n) — round f to n decimal places.
 /// n >= 0: round to n places after decimal point; n < 0: round to tens/hundreds/etc.
+/// `validateArgs` clamps a finite `n` to ±ROUND_MAX_PRECISION (the
+/// integer_in_range domain) before this runs; the local clamp below stays
+/// as defence-in-depth and to handle the non-finite passthrough case.
 fn builtinRound(args: []Value) !Value {
-    if (args.len != 2) return error.WrongArgCount;
     const x = try args[0].toNumber();
     const n_f = @trunc(try args[1].toNumber());
     // Gate non-finite precision (NaN/Inf) — silent skip, return x unchanged.
@@ -1881,20 +2015,16 @@ const floor_doc: FnDoc = .{
     .name = "FLOOR",
     .signature = "FLOOR(f)",
     .description = "Round `f` down to nearest integer.",
-    .args = &.{.{ .name = "f" }},
+    .args = &.{.{ .name = "f", .kind = .number }},
     .min_args = 1,
     .max_args = 1,
 };
 /// FLOOR(f) — largest integer less than or equal to f.
 fn builtinFloor(args: []Value) !Value {
-    if (args.len != 1) return error.WrongArgCount;
     return Value{ .number = @floor(try args[0].toNumber()) };
 }
-fn adaptFloor(p: *Parser, args: []Value) anyerror!Value {
-    return builtinFloor(args) catch |err| {
-        if (args.len >= 1) switch (args[0]) { .string => |s| p.setNotANumber(s), else => {} };
-        return err;
-    };
+fn adaptFloor(_: *Parser, args: []Value) anyerror!Value {
+    return builtinFloor(args);
 }
 
 // ── CEILING ─────────────────────────────────────────────────────────────
@@ -1902,20 +2032,16 @@ const ceiling_doc: FnDoc = .{
     .name = "CEILING",
     .signature = "CEILING(f)",
     .description = "Round `f` up to nearest integer.",
-    .args = &.{.{ .name = "f" }},
+    .args = &.{.{ .name = "f", .kind = .number }},
     .min_args = 1,
     .max_args = 1,
 };
 /// CEILING(f) — smallest integer greater than or equal to f.
 fn builtinCeiling(args: []Value) !Value {
-    if (args.len != 1) return error.WrongArgCount;
     return Value{ .number = @ceil(try args[0].toNumber()) };
 }
-fn adaptCeiling(p: *Parser, args: []Value) anyerror!Value {
-    return builtinCeiling(args) catch |err| {
-        if (args.len >= 1) switch (args[0]) { .string => |s| p.setNotANumber(s), else => {} };
-        return err;
-    };
+fn adaptCeiling(_: *Parser, args: []Value) anyerror!Value {
+    return builtinCeiling(args);
 }
 
 // ── RAND ────────────────────────────────────────────────────────────────
@@ -1957,7 +2083,6 @@ const coalesce_doc: FnDoc = .{
 /// as-is — this guarantees that COALESCE(x, '') returns '' instead of the
 /// first non-empty, which matches the "last arg is the fallback" contract.
 fn builtinCoalesce(args: []Value) !Value {
-    if (args.len == 0) return error.WrongArgCount;
     for (args[0 .. args.len - 1]) |v| {
         switch (v) {
             .string => |s| {
@@ -1978,7 +2103,7 @@ const date_convert_doc: FnDoc = .{
     .signature = "DATE_CONVERT(f, from, to)",
     .description = "Reformat a date/time string. Format tokens: YYYY (year), MM/M (month), MMM/MMMM (month name), DD/D (day), hh/h (hour), mm/m (minute), ss/s (second), [literal] (literal characters), [*] (wildcard).",
     .args = &.{
-        .{ .name = "f" },
+        .{ .name = "f", .kind = .string },
         .{ .name = "from", .kind = .sunrise_format },
         .{ .name = "to", .kind = .sunrise_format },
     },
@@ -1994,7 +2119,6 @@ const date_convert_doc: FnDoc = .{
 /// normalizeMonthAbbrev to handle non-standard 4-character month abbreviations
 /// (e.g. "Sept" → "Sep") before passing to sunrise.
 fn builtinDateConvert(args: []Value, alloc: std.mem.Allocator) !Value {
-    if (args.len != 3) return error.WrongArgCount;
     const input = switch (args[0]) {
         .string => |v| v,
         else => return error.StringExpected,
@@ -2119,14 +2243,13 @@ const left_doc: FnDoc = .{
     .signature = "LEFT(s, n)",
     .description = "Return the first `n` bytes of `s`. `n` is clamped to `[0, len(s)]`; non-finite `n` (NaN/Inf) or negative `n` returns \"\".",
     .args = &.{
-        .{ .name = "s" },
-        .{ .name = "n" },
+        .{ .name = "s", .kind = .string },
+        .{ .name = "n", .kind = .number },
     },
     .min_args = 2,
     .max_args = 2,
 };
 fn builtinLeft(args: []Value) !Value {
-    if (args.len != 2) return error.WrongArgCount;
     const s = switch (args[0]) {
         .string => |v| v,
         else => return error.StringExpected,
@@ -2137,11 +2260,8 @@ fn builtinLeft(args: []Value) !Value {
     const n: usize = @intFromFloat(clamped);
     return Value{ .string = s[0..n] };
 }
-fn adaptLeft(p: *Parser, args: []Value) anyerror!Value {
-    return builtinLeft(args) catch |err| {
-        if (args.len >= 2) switch (args[1]) { .string => |s| p.setNotANumber(s), else => {} };
-        return err;
-    };
+fn adaptLeft(_: *Parser, args: []Value) anyerror!Value {
+    return builtinLeft(args);
 }
 
 // ── RIGHT ───────────────────────────────────────────────────────────────
@@ -2150,14 +2270,13 @@ const right_doc: FnDoc = .{
     .signature = "RIGHT(s, n)",
     .description = "Return the last `n` bytes of `s`. `n` is clamped to `[0, len(s)]`; non-finite `n` (NaN/Inf) or negative `n` returns \"\".",
     .args = &.{
-        .{ .name = "s" },
-        .{ .name = "n" },
+        .{ .name = "s", .kind = .string },
+        .{ .name = "n", .kind = .number },
     },
     .min_args = 2,
     .max_args = 2,
 };
 fn builtinRight(args: []Value) !Value {
-    if (args.len != 2) return error.WrongArgCount;
     const s = switch (args[0]) {
         .string => |v| v,
         else => return error.StringExpected,
@@ -2168,11 +2287,8 @@ fn builtinRight(args: []Value) !Value {
     const n: usize = @intFromFloat(clamped);
     return Value{ .string = s[s.len - n ..] };
 }
-fn adaptRight(p: *Parser, args: []Value) anyerror!Value {
-    return builtinRight(args) catch |err| {
-        if (args.len >= 2) switch (args[1]) { .string => |s| p.setNotANumber(s), else => {} };
-        return err;
-    };
+fn adaptRight(_: *Parser, args: []Value) anyerror!Value {
+    return builtinRight(args);
 }
 
 // ── SUBSTR ──────────────────────────────────────────────────────────────
@@ -2181,15 +2297,14 @@ const substr_doc: FnDoc = .{
     .signature = "SUBSTR(s, start, length)",
     .description = "Return `length` bytes from `s` starting at 1-based position `start`. Returns \"\" when `start` is non-positive / non-finite / past end of `s`, or when `length` is non-positive / non-finite. `length` is clamped to the bytes remaining from `start`.",
     .args = &.{
-        .{ .name = "s" },
-        .{ .name = "start", .kind = .literal_int_positive },
-        .{ .name = "length" },
+        .{ .name = "s", .kind = .string },
+        .{ .name = "start", .kind = .positive_integer },
+        .{ .name = "length", .kind = .number },
     },
     .min_args = 3,
     .max_args = 3,
 };
 fn builtinSubstr(args: []Value) !Value {
-    if (args.len != 3) return error.WrongArgCount;
     const s = switch (args[0]) {
         .string => |v| v,
         else => return error.StringExpected,
@@ -2205,12 +2320,8 @@ fn builtinSubstr(args: []Value) !Value {
     const len: usize = @intFromFloat(clamped);
     return Value{ .string = s[begin .. begin + len] };
 }
-fn adaptSubstr(p: *Parser, args: []Value) anyerror!Value {
-    return builtinSubstr(args) catch |err| {
-        if (args.len >= 2) switch (args[1]) { .string => |s| p.setNotANumber(s), else => {} };
-        if (args.len >= 3) switch (args[2]) { .string => |s| p.setNotANumber(s), else => {} };
-        return err;
-    };
+fn adaptSubstr(_: *Parser, args: []Value) anyerror!Value {
+    return builtinSubstr(args);
 }
 
 // ── UPPER ───────────────────────────────────────────────────────────────
@@ -2218,12 +2329,11 @@ const upper_doc: FnDoc = .{
     .name = "UPPER",
     .signature = "UPPER(s)",
     .description = "ASCII upper-case conversion: bytes a–z become A–Z; all other bytes (including non-ASCII UTF-8) pass through unchanged.",
-    .args = &.{.{ .name = "s" }},
+    .args = &.{.{ .name = "s", .kind = .string }},
     .min_args = 1,
     .max_args = 1,
 };
 fn builtinUpper(args: []Value, alloc: std.mem.Allocator) !Value {
-    if (args.len != 1) return error.WrongArgCount;
     const s = switch (args[0]) {
         .string => |v| v,
         else => return error.StringExpected,
@@ -2241,12 +2351,11 @@ const lower_doc: FnDoc = .{
     .name = "LOWER",
     .signature = "LOWER(s)",
     .description = "ASCII lower-case conversion: bytes A–Z become a–z; all other bytes (including non-ASCII UTF-8) pass through unchanged.",
-    .args = &.{.{ .name = "s" }},
+    .args = &.{.{ .name = "s", .kind = .string }},
     .min_args = 1,
     .max_args = 1,
 };
 fn builtinLower(args: []Value, alloc: std.mem.Allocator) !Value {
-    if (args.len != 1) return error.WrongArgCount;
     const s = switch (args[0]) {
         .string => |v| v,
         else => return error.StringExpected,
@@ -2265,14 +2374,13 @@ const starts_with_doc: FnDoc = .{
     .signature = "STARTS_WITH(s, prefix)",
     .description = "Return \"true\" when `s` begins with `prefix` (case-sensitive byte match), else \"false\". An empty `prefix` always matches.",
     .args = &.{
-        .{ .name = "s" },
-        .{ .name = "prefix" },
+        .{ .name = "s", .kind = .string },
+        .{ .name = "prefix", .kind = .string },
     },
     .min_args = 2,
     .max_args = 2,
 };
 fn builtinStartsWith(args: []Value) !Value {
-    if (args.len != 2) return error.WrongArgCount;
     const s = switch (args[0]) {
         .string => |v| v,
         else => return error.StringExpected,
@@ -2293,14 +2401,13 @@ const ends_with_doc: FnDoc = .{
     .signature = "ENDS_WITH(s, suffix)",
     .description = "Return \"true\" when `s` ends with `suffix` (case-sensitive byte match), else \"false\". An empty `suffix` always matches.",
     .args = &.{
-        .{ .name = "s" },
-        .{ .name = "suffix" },
+        .{ .name = "s", .kind = .string },
+        .{ .name = "suffix", .kind = .string },
     },
     .min_args = 2,
     .max_args = 2,
 };
 fn builtinEndsWith(args: []Value) !Value {
-    if (args.len != 2) return error.WrongArgCount;
     const s = switch (args[0]) {
         .string => |v| v,
         else => return error.StringExpected,
@@ -2332,7 +2439,6 @@ const nullif_doc: FnDoc = .{
 /// to 0, string ctx leaves it as ""). Compare numerically first, fall
 /// back to string equality, mirroring parseCmp's `=` operator.
 fn builtinNullif(args: []Value, alloc: std.mem.Allocator) !Value {
-    if (args.len != 2) return error.WrongArgCount;
     const ln = args[0].toNumber() catch null;
     const rn = args[1].toNumber() catch null;
     if (ln != null and rn != null) {
@@ -2364,7 +2470,6 @@ const in_doc: FnDoc = .{
 /// `IF([X] = 'A' OR [X] = 'B' OR ..., ...)` patterns. Equality semantics
 /// match `=` operator (numeric first, then string).
 fn builtinIn(args: []Value, alloc: std.mem.Allocator) !Value {
-    if (args.len < 2) return error.WrongArgCount;
     const ln = args[0].toNumber() catch null;
     const ls_lazy: ?[]const u8 = null;
     var ls: ?[]const u8 = ls_lazy;
@@ -2474,21 +2579,19 @@ const dateadd_doc: FnDoc = .{
     .signature = "DATEADD(d, n)",
     .description = "Add `n` calendar days to date `d` (YYYY-MM-DD). Negative `n` subtracts. Returns YYYY-MM-DD. For business-day arithmetic (skipping weekends) use WORKDAY().",
     .args = &.{
-        .{ .name = "d" },
-        .{ .name = "n" },
+        .{ .name = "d", .kind = .string },
+        .{ .name = "n", .kind = .number },
     },
     .min_args = 2,
     .max_args = 2,
 };
 fn builtinDateAdd(p: *Parser, args: []Value) !Value {
-    if (args.len != 2) return error.WrongArgCount;
     const ds = switch (args[0]) {
         .string => |v| v,
         else => return error.StringExpected,
     };
     if (ds.len == 0) return Value{ .string = "" };
-    const n_f = try args[1].toNumber();
-    const n: i64 = @intFromFloat(n_f);
+    const n = toDayOffset(try args[1].toNumber()) orelse return Value{ .string = "" };
     const start = try parseDateArg(p, ds);
     const result = epochDayToYmd(start + n);
     return Value{ .string = try formatYmd(p.ctx.alloc, result) };
@@ -2503,14 +2606,13 @@ const datediff_doc: FnDoc = .{
     .signature = "DATEDIFF(d1, d2)",
     .description = "Calendar days from `d2` to `d1`: positive when `d1` is later. Both arguments are YYYY-MM-DD strings.",
     .args = &.{
-        .{ .name = "d1" },
-        .{ .name = "d2" },
+        .{ .name = "d1", .kind = .string },
+        .{ .name = "d2", .kind = .string },
     },
     .min_args = 2,
     .max_args = 2,
 };
 fn builtinDateDiff(p: *Parser, args: []Value) !Value {
-    if (args.len != 2) return error.WrongArgCount;
     const s1 = switch (args[0]) { .string => |v| v, else => return error.StringExpected };
     const s2 = switch (args[1]) { .string => |v| v, else => return error.StringExpected };
     if (s1.len == 0 or s2.len == 0) return Value{ .string = "" };
@@ -2528,18 +2630,16 @@ const workday_doc: FnDoc = .{
     .signature = "WORKDAY(d, n)",
     .description = "Add `n` business days to date `d` (YYYY-MM-DD), skipping Saturdays and Sundays. Negative `n` subtracts. Correct for T+2 settlement math; does NOT account for exchange holidays.",
     .args = &.{
-        .{ .name = "d" },
-        .{ .name = "n" },
+        .{ .name = "d", .kind = .string },
+        .{ .name = "n", .kind = .number },
     },
     .min_args = 2,
     .max_args = 2,
 };
 fn builtinWorkday(p: *Parser, args: []Value) !Value {
-    if (args.len != 2) return error.WrongArgCount;
     const ds = switch (args[0]) { .string => |v| v, else => return error.StringExpected };
     if (ds.len == 0) return Value{ .string = "" };
-    const n_f = try args[1].toNumber();
-    var n: i64 = @intFromFloat(n_f);
+    var n = toDayOffset(try args[1].toNumber()) orelse return Value{ .string = "" };
     var ep = try parseDateArg(p, ds);
     // Excel semantics: WORKDAY(d, 0) returns d unchanged (no snap to next workday).
     while (n > 0) {
@@ -2561,12 +2661,11 @@ const year_doc: FnDoc = .{
     .name = "YEAR",
     .signature = "YEAR(d)",
     .description = "Year component of date `d` (YYYY-MM-DD) as a number.",
-    .args = &.{.{ .name = "d" }},
+    .args = &.{.{ .name = "d", .kind = .string }},
     .min_args = 1,
     .max_args = 1,
 };
 fn builtinYear(p: *Parser, args: []Value) !Value {
-    if (args.len != 1) return error.WrongArgCount;
     const s = switch (args[0]) { .string => |v| v, else => return error.StringExpected };
     if (s.len == 0) return Value{ .string = "" };
     const parts = parseYmd(s) catch {
@@ -2584,12 +2683,11 @@ const month_doc: FnDoc = .{
     .name = "MONTH",
     .signature = "MONTH(d)",
     .description = "Month component of date `d` (YYYY-MM-DD) as a number, 1-12.",
-    .args = &.{.{ .name = "d" }},
+    .args = &.{.{ .name = "d", .kind = .string }},
     .min_args = 1,
     .max_args = 1,
 };
 fn builtinMonth(p: *Parser, args: []Value) !Value {
-    if (args.len != 1) return error.WrongArgCount;
     const s = switch (args[0]) { .string => |v| v, else => return error.StringExpected };
     if (s.len == 0) return Value{ .string = "" };
     const parts = parseYmd(s) catch {
@@ -2607,12 +2705,11 @@ const day_doc: FnDoc = .{
     .name = "DAY",
     .signature = "DAY(d)",
     .description = "Day-of-month component of date `d` (YYYY-MM-DD) as a number, 1-31.",
-    .args = &.{.{ .name = "d" }},
+    .args = &.{.{ .name = "d", .kind = .string }},
     .min_args = 1,
     .max_args = 1,
 };
 fn builtinDay(p: *Parser, args: []Value) !Value {
-    if (args.len != 1) return error.WrongArgCount;
     const s = switch (args[0]) { .string => |v| v, else => return error.StringExpected };
     if (s.len == 0) return Value{ .string = "" };
     const parts = parseYmd(s) catch {
@@ -2630,12 +2727,11 @@ const weekday_doc: FnDoc = .{
     .name = "WEEKDAY",
     .signature = "WEEKDAY(d)",
     .description = "ISO day-of-week for date `d` (YYYY-MM-DD): Monday=1 … Sunday=7. Useful for weekend-trade detection: `WEEKDAY([Date]) > 5`.",
-    .args = &.{.{ .name = "d" }},
+    .args = &.{.{ .name = "d", .kind = .string }},
     .min_args = 1,
     .max_args = 1,
 };
 fn builtinWeekday(p: *Parser, args: []Value) !Value {
-    if (args.len != 1) return error.WrongArgCount;
     const s = switch (args[0]) { .string => |v| v, else => return error.StringExpected };
     if (s.len == 0) return Value{ .string = "" };
     const ep = try parseDateArg(p, s);
@@ -2650,12 +2746,11 @@ const eomonth_doc: FnDoc = .{
     .name = "EOMONTH",
     .signature = "EOMONTH(d)",
     .description = "Last calendar day of the month containing date `d` (YYYY-MM-DD), as YYYY-MM-DD. Useful for snapping coupon/dividend dates and month-end reporting.",
-    .args = &.{.{ .name = "d" }},
+    .args = &.{.{ .name = "d", .kind = .string }},
     .min_args = 1,
     .max_args = 1,
 };
 fn builtinEomonth(p: *Parser, args: []Value) !Value {
-    if (args.len != 1) return error.WrongArgCount;
     const s = switch (args[0]) { .string => |v| v, else => return error.StringExpected };
     if (s.len == 0) return Value{ .string = "" };
     const parts = parseYmd(s) catch {
@@ -2681,12 +2776,11 @@ const len_doc: FnDoc = .{
     .name = "LEN",
     .signature = "LEN(s)",
     .description = "Byte length of `s` (UTF-8 byte count, not codepoint or grapheme count). Empty string → 0.",
-    .args = &.{.{ .name = "s" }},
+    .args = &.{.{ .name = "s", .kind = .string }},
     .min_args = 1,
     .max_args = 1,
 };
 fn builtinLen(args: []Value) !Value {
-    if (args.len != 1) return error.WrongArgCount;
     const s = switch (args[0]) {
         .string => |v| v,
         else => return error.StringExpected,
@@ -2704,12 +2798,11 @@ const greatest_doc: FnDoc = .{
     .description = "Largest numeric value among arguments. Per-row maximum (not aggregation across rows). Arguments are coerced to numbers; empty string coerces to 0, non-numeric strings raise an error.",
     // Variadic 1+ args. Like COALESCE, only the first arg is declared;
     // trailing args inherit `kind = .expr` semantically.
-    .args = &.{.{ .name = "a" }},
+    .args = &.{.{ .name = "a", .kind = .number }},
     .min_args = 1,
     .max_args = 255,
 };
 fn builtinGreatest(args: []Value) !Value {
-    if (args.len == 0) return error.WrongArgCount;
     var best: f80 = try args[0].toNumber();
     for (args[1..]) |v| {
         const n = try v.toNumber();
@@ -2737,12 +2830,11 @@ const least_doc: FnDoc = .{
     .name = "LEAST",
     .signature = "LEAST(a, b, ...)",
     .description = "Smallest numeric value among arguments. Per-row minimum (not aggregation across rows). Arguments are coerced to numbers; empty string coerces to 0, non-numeric strings raise an error.",
-    .args = &.{.{ .name = "a" }},
+    .args = &.{.{ .name = "a", .kind = .number }},
     .min_args = 1,
     .max_args = 255,
 };
 fn builtinLeast(args: []Value) !Value {
-    if (args.len == 0) return error.WrongArgCount;
     var best: f80 = try args[0].toNumber();
     for (args[1..]) |v| {
         const n = try v.toNumber();

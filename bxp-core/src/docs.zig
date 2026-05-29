@@ -205,6 +205,17 @@ pub fn writeDocs(alloc: std.mem.Allocator, writer: *std.Io.Writer) !void {
             try jw.write(a.name);
             try jw.objectField("kind");
             try jw.write(@tagName(a.kind));
+            // `integer_in_range` carries a {min,max} payload; surface it so
+            // the GUI can show the accepted range in arg-type hints.
+            switch (a.kind) {
+                .integer_in_range => |r| {
+                    try jw.objectField("min");
+                    try jw.write(r.min);
+                    try jw.objectField("max");
+                    try jw.write(r.max);
+                },
+                else => {},
+            }
             try jw.endObject();
         }
         try jw.endArray();
