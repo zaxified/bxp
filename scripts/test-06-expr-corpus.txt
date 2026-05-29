@@ -8,11 +8,12 @@
 # Section headers use box-drawing characters for visual scan.
 # Non-inline comments above complex cases explain the why.
 #
-# Function catalog (per `bxp-fmt --docs` 2026-05-29, 30 functions):
-#   ABS, CEILING, COALESCE, CONTAINS, DATE_CONVERT, ENDS_WITH, FIELDS,
-#   FLOOR, GREATEST, IF, IN, LEAST, LEFT, LEN, LOOKUP, LOWER, NOW,
-#   NULLIF, PRICE_CURRENCY, PRICE_VALUE, RAND, REPLACE, RIGHT, ROUND,
-#   SPLIT_PART, STARTS_WITH, SUBSTR, TICKER, TRIM, UPPER
+# Function catalog (per `bxp-fmt --docs` 2026-05-29, 38 functions):
+#   ABS, CEILING, COALESCE, CONTAINS, DATE_CONVERT, DATEADD, DATEDIFF,
+#   DAY, ENDS_WITH, EOMONTH, FIELDS, FLOOR, GREATEST, IF, IN, LEAST,
+#   LEFT, LEN, LOOKUP, LOWER, MONTH, NOW, NULLIF, PRICE_CURRENCY,
+#   PRICE_VALUE, RAND, REPLACE, RIGHT, ROUND, SPLIT_PART, STARTS_WITH,
+#   SUBSTR, TICKER, TRIM, UPPER, WEEKDAY, WORKDAY, YEAR
 # Keywords: AND, OR, NOT
 # Keywords: AND, OR
 # Operators: &  =  !=  <  >  <=  >=  +  -  *  /
@@ -83,6 +84,20 @@ expr	ok	GREATEST([Fee], 0)
 expr	ok	GREATEST([A], [B], [C])
 expr	ok	LEAST([Quantity], [Available])
 expr	ok	LEAST(GREATEST([X], 0), 100)
+# v0.2.4 date cluster — calendar + business-day arithmetic + component extraction.
+expr	ok	DATEADD([TradeDate], 2)
+expr	ok	DATEADD('2024-01-01', -7)
+expr	ok	DATEDIFF([Settlement], [TradeDate])
+expr	ok	WORKDAY([TradeDate], 2)
+expr	ok	YEAR([Date])
+expr	ok	MONTH([Date])
+expr	ok	DAY([Date])
+expr	ok	WEEKDAY([Date])
+expr	ok	WEEKDAY([Date]) > 5
+expr	ok	EOMONTH([Date])
+# Compose: parse foreign-format date then add business days.
+expr	ok	WORKDAY(DATE_CONVERT([Trade], 'DD.MM.YYYY', 'YYYY-MM-DD'), 2)
+expr	ok	YEAR([Date]) = 2024 AND MONTH([Date]) = 12
 # Stacked NOTs.
 expr	ok	NOT NOT [A]
 # NOT precedence: binds tighter than AND/OR, weaker than =.
@@ -119,6 +134,17 @@ expr	err	LEN()	WrongArgCount
 expr	err	LEN('a', 'b')	WrongArgCount
 expr	err	GREATEST()	WrongArgCount
 expr	err	LEAST()	WrongArgCount
+# v0.2.4 date cluster arity + format errors.
+expr	err	DATEADD('2024-01-01')	WrongArgCount
+expr	err	DATEDIFF('2024-01-01')	WrongArgCount
+expr	err	WORKDAY('2024-01-01')	WrongArgCount
+expr	err	YEAR()	WrongArgCount
+expr	err	MONTH('a', 'b')	WrongArgCount
+expr	err	DAY()	WrongArgCount
+expr	err	WEEKDAY()	WrongArgCount
+expr	err	EOMONTH()	WrongArgCount
+expr	err	YEAR('2024/01/15')	InvalidDate
+expr	err	DATEADD('2024-13-01', 1)	InvalidDate
 expr	err	IN([A])	WrongArgCount
 expr	err	IN()	WrongArgCount
 # FIELDS without args fails cleanly with WrongArgCount.

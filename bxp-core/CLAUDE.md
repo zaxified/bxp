@@ -70,7 +70,8 @@ Expression evaluator for `input_schema` and `row_rules` in bxp-cli.json.
 **Built-in functions:** IF, ABS, DATE_CONVERT, PRICE_VALUE, PRICE_CURRENCY,
 TICKER, LOOKUP, SPLIT_PART, CONTAINS, REPLACE, TRIM, ROUND, FLOOR, CEILING,
 NOW, RAND, COALESCE, FIELDS, UPPER, LOWER, LEFT, RIGHT, SUBSTR,
-STARTS_WITH, ENDS_WITH, NULLIF, IN, LEN, GREATEST, LEAST.
+STARTS_WITH, ENDS_WITH, NULLIF, IN, LEN, GREATEST, LEAST, DATEADD,
+DATEDIFF, WORKDAY, YEAR, MONTH, DAY, WEEKDAY, EOMONTH.
 
 **Doc catalog** (`pub const builtins`, `keywords`, `operators`, `tokens`): each
 builtin sits next to its `FnDoc` declaration (search for `── <NAME> ──`

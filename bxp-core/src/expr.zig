@@ -2388,6 +2388,294 @@ fn adaptIn(p: *Parser, args: []Value) anyerror!Value {
     return builtinIn(args, p.ctx.alloc);
 }
 
+// ---------------------------------------------------------------------------
+// Date helpers — shared by YEAR/MONTH/DAY/WEEKDAY/DATEADD/DATEDIFF/WORKDAY/
+// EOMONTH. All inputs must be canonical "YYYY-MM-DD" strings; chain via
+// DATE_CONVERT() when the source uses a different format.
+//
+// Empty-input contract: every date builtin returns the empty string ""
+// silently when its date argument is empty. This mirrors DATE_CONVERT's
+// rationale (broker rows often have blank settlement/value-date fields and
+// a hard error would abort processing of every subsequent row).
+// Malformed non-empty input still surfaces InvalidDate with a clickable
+// diagnostic so typo'd templates fail loudly.
+//
+// Uses Howard Hinnant's `days_from_civil` / `civil_from_days` algorithm —
+// branch-free O(1), exact across the entire i32 year range, handles leap
+// years and negative dates without table lookups. Source:
+// https://howardhinnant.github.io/date_algorithms.html#days_from_civil
+// ---------------------------------------------------------------------------
+
+const DateParts = struct { year: i32, month: u32, day: u32 };
+
+fn parseYmd(s: []const u8) !DateParts {
+    if (s.len != 10 or s[4] != '-' or s[7] != '-') return error.InvalidDate;
+    const y = std.fmt.parseInt(i32, s[0..4], 10) catch return error.InvalidDate;
+    const m = std.fmt.parseInt(u32, s[5..7], 10) catch return error.InvalidDate;
+    const d = std.fmt.parseInt(u32, s[8..10], 10) catch return error.InvalidDate;
+    if (m < 1 or m > 12 or d < 1 or d > 31) return error.InvalidDate;
+    return .{ .year = y, .month = m, .day = d };
+}
+
+fn ymdToEpochDay(year: i32, month: u32, day: u32) i64 {
+    const y: i64 = if (month <= 2) @as(i64, year) - 1 else year;
+    const era = @divFloor(y, 400);
+    const yoe: u32 = @intCast(y - era * 400);
+    const m_idx: u32 = if (month > 2) month - 3 else month + 9;
+    const doy: u32 = (153 * m_idx + 2) / 5 + day - 1;
+    const doe: u32 = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return era * 146097 + @as(i64, doe) - 719468;
+}
+
+fn epochDayToYmd(epoch_day: i64) DateParts {
+    const z = epoch_day + 719468;
+    const era = @divFloor(z, 146097);
+    const doe: u32 = @intCast(z - era * 146097);
+    const yoe: u32 = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    const y: i64 = @as(i64, yoe) + era * 400;
+    const doy: u32 = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    const mp: u32 = (5 * doy + 2) / 153;
+    const d: u32 = doy - (153 * mp + 2) / 5 + 1;
+    const m: u32 = if (mp < 10) mp + 3 else mp - 9;
+    const final_y: i32 = @intCast(if (m <= 2) y + 1 else y);
+    return .{ .year = final_y, .month = m, .day = d };
+}
+
+/// ISO weekday: Monday=1 … Sunday=7. 1970-01-01 (epoch_day=0) was Thursday=4.
+fn isoWeekday(epoch_day: i64) u32 {
+    return @intCast(@mod(epoch_day + 3, 7) + 1);
+}
+
+fn formatYmd(alloc: std.mem.Allocator, parts: DateParts) ![]const u8 {
+    // Cast to unsigned for formatting: Zig 0.15's `{d}` prepends '+' to
+    // positive signed integers. Trading dates never go negative, so the
+    // cast is safe in practice — `parseYmd` rejects malformed input and
+    // year arithmetic stays positive across the realistic CSV range.
+    const y_u: u32 = @intCast(parts.year);
+    return std.fmt.allocPrint(alloc, "{d:0>4}-{d:0>2}-{d:0>2}", .{ y_u, parts.month, parts.day });
+}
+
+/// Parse arg[0] as a date string and return its epoch day. On parse failure
+/// writes a descriptive diagnostic via `setDetail` and returns InvalidDate so
+/// callers see a clickable error in bxp-fmt / GUI. Empty input must be
+/// pre-handled by the caller (return "" silently) — see DATE_CONVERT's
+/// rationale at builtinDateConvert.
+fn parseDateArg(p: *Parser, s: []const u8) !i64 {
+    const parts = parseYmd(s) catch {
+        p.setDetail("invalid date '{s}': expected YYYY-MM-DD", .{s});
+        return error.InvalidDate;
+    };
+    return ymdToEpochDay(parts.year, parts.month, parts.day);
+}
+
+// ── DATEADD ─────────────────────────────────────────────────────────────
+const dateadd_doc: FnDoc = .{
+    .name = "DATEADD",
+    .signature = "DATEADD(d, n)",
+    .description = "Add `n` calendar days to date `d` (YYYY-MM-DD). Negative `n` subtracts. Returns YYYY-MM-DD. For business-day arithmetic (skipping weekends) use WORKDAY().",
+    .args = &.{
+        .{ .name = "d" },
+        .{ .name = "n" },
+    },
+    .min_args = 2,
+    .max_args = 2,
+};
+fn builtinDateAdd(p: *Parser, args: []Value) !Value {
+    if (args.len != 2) return error.WrongArgCount;
+    const ds = switch (args[0]) {
+        .string => |v| v,
+        else => return error.StringExpected,
+    };
+    if (ds.len == 0) return Value{ .string = "" };
+    const n_f = try args[1].toNumber();
+    const n: i64 = @intFromFloat(n_f);
+    const start = try parseDateArg(p, ds);
+    const result = epochDayToYmd(start + n);
+    return Value{ .string = try formatYmd(p.ctx.alloc, result) };
+}
+fn adaptDateAdd(p: *Parser, args: []Value) anyerror!Value {
+    return builtinDateAdd(p, args);
+}
+
+// ── DATEDIFF ────────────────────────────────────────────────────────────
+const datediff_doc: FnDoc = .{
+    .name = "DATEDIFF",
+    .signature = "DATEDIFF(d1, d2)",
+    .description = "Calendar days from `d2` to `d1`: positive when `d1` is later. Both arguments are YYYY-MM-DD strings.",
+    .args = &.{
+        .{ .name = "d1" },
+        .{ .name = "d2" },
+    },
+    .min_args = 2,
+    .max_args = 2,
+};
+fn builtinDateDiff(p: *Parser, args: []Value) !Value {
+    if (args.len != 2) return error.WrongArgCount;
+    const s1 = switch (args[0]) { .string => |v| v, else => return error.StringExpected };
+    const s2 = switch (args[1]) { .string => |v| v, else => return error.StringExpected };
+    if (s1.len == 0 or s2.len == 0) return Value{ .string = "" };
+    const d1 = try parseDateArg(p, s1);
+    const d2 = try parseDateArg(p, s2);
+    return Value{ .number = @floatFromInt(d1 - d2) };
+}
+fn adaptDateDiff(p: *Parser, args: []Value) anyerror!Value {
+    return builtinDateDiff(p, args);
+}
+
+// ── WORKDAY ─────────────────────────────────────────────────────────────
+const workday_doc: FnDoc = .{
+    .name = "WORKDAY",
+    .signature = "WORKDAY(d, n)",
+    .description = "Add `n` business days to date `d` (YYYY-MM-DD), skipping Saturdays and Sundays. Negative `n` subtracts. Correct for T+2 settlement math; does NOT account for exchange holidays.",
+    .args = &.{
+        .{ .name = "d" },
+        .{ .name = "n" },
+    },
+    .min_args = 2,
+    .max_args = 2,
+};
+fn builtinWorkday(p: *Parser, args: []Value) !Value {
+    if (args.len != 2) return error.WrongArgCount;
+    const ds = switch (args[0]) { .string => |v| v, else => return error.StringExpected };
+    if (ds.len == 0) return Value{ .string = "" };
+    const n_f = try args[1].toNumber();
+    var n: i64 = @intFromFloat(n_f);
+    var ep = try parseDateArg(p, ds);
+    // Excel semantics: WORKDAY(d, 0) returns d unchanged (no snap to next workday).
+    while (n > 0) {
+        ep += 1;
+        if (isoWeekday(ep) <= 5) n -= 1;
+    }
+    while (n < 0) {
+        ep -= 1;
+        if (isoWeekday(ep) <= 5) n += 1;
+    }
+    return Value{ .string = try formatYmd(p.ctx.alloc, epochDayToYmd(ep)) };
+}
+fn adaptWorkday(p: *Parser, args: []Value) anyerror!Value {
+    return builtinWorkday(p, args);
+}
+
+// ── YEAR ────────────────────────────────────────────────────────────────
+const year_doc: FnDoc = .{
+    .name = "YEAR",
+    .signature = "YEAR(d)",
+    .description = "Year component of date `d` (YYYY-MM-DD) as a number.",
+    .args = &.{.{ .name = "d" }},
+    .min_args = 1,
+    .max_args = 1,
+};
+fn builtinYear(p: *Parser, args: []Value) !Value {
+    if (args.len != 1) return error.WrongArgCount;
+    const s = switch (args[0]) { .string => |v| v, else => return error.StringExpected };
+    if (s.len == 0) return Value{ .string = "" };
+    const parts = parseYmd(s) catch {
+        p.setDetail("invalid date '{s}': expected YYYY-MM-DD", .{s});
+        return error.InvalidDate;
+    };
+    return Value{ .number = @floatFromInt(parts.year) };
+}
+fn adaptYear(p: *Parser, args: []Value) anyerror!Value {
+    return builtinYear(p, args);
+}
+
+// ── MONTH ───────────────────────────────────────────────────────────────
+const month_doc: FnDoc = .{
+    .name = "MONTH",
+    .signature = "MONTH(d)",
+    .description = "Month component of date `d` (YYYY-MM-DD) as a number, 1-12.",
+    .args = &.{.{ .name = "d" }},
+    .min_args = 1,
+    .max_args = 1,
+};
+fn builtinMonth(p: *Parser, args: []Value) !Value {
+    if (args.len != 1) return error.WrongArgCount;
+    const s = switch (args[0]) { .string => |v| v, else => return error.StringExpected };
+    if (s.len == 0) return Value{ .string = "" };
+    const parts = parseYmd(s) catch {
+        p.setDetail("invalid date '{s}': expected YYYY-MM-DD", .{s});
+        return error.InvalidDate;
+    };
+    return Value{ .number = @floatFromInt(parts.month) };
+}
+fn adaptMonth(p: *Parser, args: []Value) anyerror!Value {
+    return builtinMonth(p, args);
+}
+
+// ── DAY ─────────────────────────────────────────────────────────────────
+const day_doc: FnDoc = .{
+    .name = "DAY",
+    .signature = "DAY(d)",
+    .description = "Day-of-month component of date `d` (YYYY-MM-DD) as a number, 1-31.",
+    .args = &.{.{ .name = "d" }},
+    .min_args = 1,
+    .max_args = 1,
+};
+fn builtinDay(p: *Parser, args: []Value) !Value {
+    if (args.len != 1) return error.WrongArgCount;
+    const s = switch (args[0]) { .string => |v| v, else => return error.StringExpected };
+    if (s.len == 0) return Value{ .string = "" };
+    const parts = parseYmd(s) catch {
+        p.setDetail("invalid date '{s}': expected YYYY-MM-DD", .{s});
+        return error.InvalidDate;
+    };
+    return Value{ .number = @floatFromInt(parts.day) };
+}
+fn adaptDay(p: *Parser, args: []Value) anyerror!Value {
+    return builtinDay(p, args);
+}
+
+// ── WEEKDAY ─────────────────────────────────────────────────────────────
+const weekday_doc: FnDoc = .{
+    .name = "WEEKDAY",
+    .signature = "WEEKDAY(d)",
+    .description = "ISO day-of-week for date `d` (YYYY-MM-DD): Monday=1 … Sunday=7. Useful for weekend-trade detection: `WEEKDAY([Date]) > 5`.",
+    .args = &.{.{ .name = "d" }},
+    .min_args = 1,
+    .max_args = 1,
+};
+fn builtinWeekday(p: *Parser, args: []Value) !Value {
+    if (args.len != 1) return error.WrongArgCount;
+    const s = switch (args[0]) { .string => |v| v, else => return error.StringExpected };
+    if (s.len == 0) return Value{ .string = "" };
+    const ep = try parseDateArg(p, s);
+    return Value{ .number = @floatFromInt(isoWeekday(ep)) };
+}
+fn adaptWeekday(p: *Parser, args: []Value) anyerror!Value {
+    return builtinWeekday(p, args);
+}
+
+// ── EOMONTH ─────────────────────────────────────────────────────────────
+const eomonth_doc: FnDoc = .{
+    .name = "EOMONTH",
+    .signature = "EOMONTH(d)",
+    .description = "Last calendar day of the month containing date `d` (YYYY-MM-DD), as YYYY-MM-DD. Useful for snapping coupon/dividend dates and month-end reporting.",
+    .args = &.{.{ .name = "d" }},
+    .min_args = 1,
+    .max_args = 1,
+};
+fn builtinEomonth(p: *Parser, args: []Value) !Value {
+    if (args.len != 1) return error.WrongArgCount;
+    const s = switch (args[0]) { .string => |v| v, else => return error.StringExpected };
+    if (s.len == 0) return Value{ .string = "" };
+    const parts = parseYmd(s) catch {
+        p.setDetail("invalid date '{s}': expected YYYY-MM-DD", .{s});
+        return error.InvalidDate;
+    };
+    var next_y = parts.year;
+    var next_m = parts.month + 1;
+    if (next_m > 12) {
+        next_m = 1;
+        next_y += 1;
+    }
+    const first_of_next = ymdToEpochDay(next_y, next_m, 1);
+    const result = epochDayToYmd(first_of_next - 1);
+    return Value{ .string = try formatYmd(p.ctx.alloc, result) };
+}
+fn adaptEomonth(p: *Parser, args: []Value) anyerror!Value {
+    return builtinEomonth(p, args);
+}
+
 // ── LEN ─────────────────────────────────────────────────────────────────
 const len_doc: FnDoc = .{
     .name = "LEN",
@@ -2592,6 +2880,14 @@ pub const builtins = [_]FnEntry{
     .{ .name = "LEN",            .doc = len_doc,            .impl = adaptLen },
     .{ .name = "GREATEST",       .doc = greatest_doc,       .impl = adaptGreatest },
     .{ .name = "LEAST",          .doc = least_doc,          .impl = adaptLeast },
+    .{ .name = "DATEADD",        .doc = dateadd_doc,        .impl = adaptDateAdd },
+    .{ .name = "DATEDIFF",       .doc = datediff_doc,       .impl = adaptDateDiff },
+    .{ .name = "WORKDAY",        .doc = workday_doc,        .impl = adaptWorkday },
+    .{ .name = "YEAR",           .doc = year_doc,           .impl = adaptYear },
+    .{ .name = "MONTH",          .doc = month_doc,          .impl = adaptMonth },
+    .{ .name = "DAY",            .doc = day_doc,            .impl = adaptDay },
+    .{ .name = "WEEKDAY",        .doc = weekday_doc,        .impl = adaptWeekday },
+    .{ .name = "EOMONTH",        .doc = eomonth_doc,        .impl = adaptEomonth },
 };
 
 // ============================================================
@@ -3973,4 +4269,185 @@ test "eval: GREATEST/LEAST wrong arg count" {
     const ctx = h.ctx(&.{}, a);
     try testing.expectError(error.WrongArgCount, eval("GREATEST()", &ctx));
     try testing.expectError(error.WrongArgCount, eval("LEAST()", &ctx));
+}
+
+// ------------------------------------------------------------
+// Date helpers — Hinnant round-trip + ISO weekday anchors
+// ------------------------------------------------------------
+
+test "ymdToEpochDay / epochDayToYmd round-trip" {
+    // Anchor: 1970-01-01 = epoch_day 0.
+    try testing.expectEqual(@as(i64, 0), ymdToEpochDay(1970, 1, 1));
+    const p0 = epochDayToYmd(0);
+    try testing.expectEqual(@as(i32, 1970), p0.year);
+    try testing.expectEqual(@as(u32, 1), p0.month);
+    try testing.expectEqual(@as(u32, 1), p0.day);
+    // Leap day round-trip.
+    const leap_ep = ymdToEpochDay(2024, 2, 29);
+    const leap = epochDayToYmd(leap_ep);
+    try testing.expectEqual(@as(i32, 2024), leap.year);
+    try testing.expectEqual(@as(u32, 2), leap.month);
+    try testing.expectEqual(@as(u32, 29), leap.day);
+    // Pre-epoch date.
+    const pre = epochDayToYmd(ymdToEpochDay(1900, 6, 15));
+    try testing.expectEqual(@as(i32, 1900), pre.year);
+    try testing.expectEqual(@as(u32, 6), pre.month);
+    try testing.expectEqual(@as(u32, 15), pre.day);
+}
+
+test "isoWeekday: Monday=1, Sunday=7" {
+    // 1970-01-01 was Thursday.
+    try testing.expectEqual(@as(u32, 4), isoWeekday(ymdToEpochDay(1970, 1, 1)));
+    // 2026-05-25 (today's reference) is Monday.
+    try testing.expectEqual(@as(u32, 1), isoWeekday(ymdToEpochDay(2026, 5, 25)));
+    // 2026-05-31 = Sunday.
+    try testing.expectEqual(@as(u32, 7), isoWeekday(ymdToEpochDay(2026, 5, 31)));
+    // Negative epoch_day path — 1969-12-31 was Wednesday.
+    try testing.expectEqual(@as(u32, 3), isoWeekday(ymdToEpochDay(1969, 12, 31)));
+}
+
+// ------------------------------------------------------------
+// Date builtins
+// ------------------------------------------------------------
+
+test "eval: DATEADD calendar arithmetic" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    try testing.expectEqualStrings("2024-01-03", try evalString("DATEADD('2024-01-01', 2)", &ctx));
+    try testing.expectEqualStrings("2023-12-30", try evalString("DATEADD('2024-01-01', -2)", &ctx));
+    // Month rollover.
+    try testing.expectEqualStrings("2024-02-01", try evalString("DATEADD('2024-01-31', 1)", &ctx));
+    // Leap year — 2024-02-28 + 1 = 2024-02-29 (leap day).
+    try testing.expectEqualStrings("2024-02-29", try evalString("DATEADD('2024-02-28', 1)", &ctx));
+    // Year rollover.
+    try testing.expectEqualStrings("2025-01-01", try evalString("DATEADD('2024-12-31', 1)", &ctx));
+}
+
+test "eval: DATEDIFF returns calendar days" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    try testing.expectEqualStrings("2", try evalString("DATEDIFF('2024-01-03', '2024-01-01')", &ctx));
+    try testing.expectEqualStrings("-2", try evalString("DATEDIFF('2024-01-01', '2024-01-03')", &ctx));
+    try testing.expectEqualStrings("0", try evalString("DATEDIFF('2024-01-15', '2024-01-15')", &ctx));
+    // Across leap year boundary.
+    try testing.expectEqualStrings("366", try evalString("DATEDIFF('2025-01-01', '2024-01-01')", &ctx));
+}
+
+test "eval: WORKDAY skips weekends" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    // 2024-01-04 = Thursday. T+2 = Monday 2024-01-08 (not Saturday).
+    try testing.expectEqualStrings("2024-01-08", try evalString("WORKDAY('2024-01-04', 2)", &ctx));
+    // T+1 from Friday = next Monday.
+    try testing.expectEqualStrings("2024-01-08", try evalString("WORKDAY('2024-01-05', 1)", &ctx));
+    // T+2 from Monday = Wednesday (no weekend in between).
+    try testing.expectEqualStrings("2024-01-10", try evalString("WORKDAY('2024-01-08', 2)", &ctx));
+    // n=0 returns input unchanged (Excel semantics).
+    try testing.expectEqualStrings("2024-01-06", try evalString("WORKDAY('2024-01-06', 0)", &ctx));
+    // Negative n — back-dating settlement.
+    try testing.expectEqualStrings("2024-01-04", try evalString("WORKDAY('2024-01-08', -2)", &ctx));
+}
+
+test "eval: YEAR / MONTH / DAY / WEEKDAY extract components" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    try testing.expectEqualStrings("2026", try evalString("YEAR('2026-05-25')", &ctx));
+    try testing.expectEqualStrings("5",    try evalString("MONTH('2026-05-25')", &ctx));
+    try testing.expectEqualStrings("25",   try evalString("DAY('2026-05-25')", &ctx));
+    // 2026-05-25 was Monday.
+    try testing.expectEqualStrings("1",    try evalString("WEEKDAY('2026-05-25')", &ctx));
+    // 2026-05-31 was Sunday.
+    try testing.expectEqualStrings("7",    try evalString("WEEKDAY('2026-05-31')", &ctx));
+}
+
+test "eval: EOMONTH snaps to month end" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    try testing.expectEqualStrings("2024-01-31", try evalString("EOMONTH('2024-01-15')", &ctx));
+    // February non-leap.
+    try testing.expectEqualStrings("2023-02-28", try evalString("EOMONTH('2023-02-10')", &ctx));
+    // February leap.
+    try testing.expectEqualStrings("2024-02-29", try evalString("EOMONTH('2024-02-10')", &ctx));
+    // December rollover handled correctly.
+    try testing.expectEqualStrings("2024-12-31", try evalString("EOMONTH('2024-12-01')", &ctx));
+    // Already last day of month — returns same day.
+    try testing.expectEqualStrings("2024-04-30", try evalString("EOMONTH('2024-04-30')", &ctx));
+}
+
+test "eval: date builtins reject malformed dates" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    try testing.expectError(error.InvalidDate, eval("YEAR('2024/01/15')", &ctx));
+    try testing.expectError(error.InvalidDate, eval("MONTH('not-a-date')", &ctx));
+    try testing.expectError(error.InvalidDate, eval("DATEADD('2024-13-01', 1)", &ctx));
+    try testing.expectError(error.InvalidDate, eval("DATEDIFF('2024-01-01', 'bad')", &ctx));
+    try testing.expectError(error.InvalidDate, eval("WORKDAY('24-01-01', 1)", &ctx));
+}
+
+test "eval: date builtins arg count errors" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    try testing.expectError(error.WrongArgCount, eval("DATEADD('2024-01-01')", &ctx));
+    try testing.expectError(error.WrongArgCount, eval("DATEDIFF('2024-01-01')", &ctx));
+    try testing.expectError(error.WrongArgCount, eval("WORKDAY('2024-01-01')", &ctx));
+    try testing.expectError(error.WrongArgCount, eval("YEAR()", &ctx));
+    try testing.expectError(error.WrongArgCount, eval("MONTH('a', 'b')", &ctx));
+    try testing.expectError(error.WrongArgCount, eval("DAY()", &ctx));
+    try testing.expectError(error.WrongArgCount, eval("WEEKDAY()", &ctx));
+    try testing.expectError(error.WrongArgCount, eval("EOMONTH()", &ctx));
+}
+
+test "eval: date builtins return empty string on empty input (no error)" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    try h.col_index.put("Date", 0);
+    // Blank field — every date builtin must silently pass through ""
+    // (matches DATE_CONVERT's blank-tolerant contract).
+    const ctx = h.ctx(&.{""}, a);
+    try testing.expectEqualStrings("", try evalString("YEAR([Date])", &ctx));
+    try testing.expectEqualStrings("", try evalString("MONTH([Date])", &ctx));
+    try testing.expectEqualStrings("", try evalString("DAY([Date])", &ctx));
+    try testing.expectEqualStrings("", try evalString("WEEKDAY([Date])", &ctx));
+    try testing.expectEqualStrings("", try evalString("EOMONTH([Date])", &ctx));
+    try testing.expectEqualStrings("", try evalString("DATEADD([Date], 2)", &ctx));
+    try testing.expectEqualStrings("", try evalString("WORKDAY([Date], 2)", &ctx));
+    try testing.expectEqualStrings("", try evalString("DATEDIFF([Date], '2024-01-01')", &ctx));
+    try testing.expectEqualStrings("", try evalString("DATEDIFF('2024-01-01', [Date])", &ctx));
+}
+
+test "eval: date builtins compose with DATE_CONVERT for non-canonical input" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    try h.col_index.put("TradeDate", 0);
+    // T212 reports "DD.MM.YYYY"; chain DATE_CONVERT → DATEADD for T+2 settlement.
+    const ctx = h.ctx(&.{"15.01.2024"}, a);
+    try testing.expectEqualStrings(
+        "2024-01-17",
+        try evalString("DATEADD(DATE_CONVERT([TradeDate], 'DD.MM.YYYY', 'YYYY-MM-DD'), 2)", &ctx),
+    );
 }
