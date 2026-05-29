@@ -308,6 +308,31 @@ to pre-process the file" or "skip the affected rows".
   do we have a real workload that needs it, or is the current ceiling
   comfortable for shipping use cases?
 
+- **Rendered output `.csvx` preview in the bottom pane.** Tabular view
+  of generated output after a full-run, reusing PlutoGrid from the trace
+  view. Users today alt-tab to Rainbow CSV / Excel for sanity-check.
+  Small implementation; reconsider when a GUI workflow audit shows the
+  alt-tab friction is frequent.
+
+- **Raw input CSV / xlsx preview with `[ColumnName]` highlighting.**
+  Tabular view of source file with columns referenced from `input_schema`
+  highlighted. Killer use-case: AI handoff workflow — user could point
+  the agent at a file rather than paste 5 rows. Reconsider when the
+  import wizard below starts, or on explicit user request.
+
+- **Import wizard from sample CSV.** Drop CSV onto empty-config state →
+  GUI detects delimiter / decimal / quoting, header-similarity matches
+  candidate `$variable` mappings (`Date` → `$date`, `Symbol` → `$ticker`,
+  …), generates a skeleton template for the user to fill `row_rules`.
+  Lowers first-template barrier from "expert" to "novice". Big feature,
+  needs design sketches first. Reconsider on explicit user request or
+  visible onboarding friction during a real session.
+
+- **In-app diff actual vs expected `.csvx`.** Regression workflow without
+  external `diff` tool — useful during template iteration; once stable,
+  `scripts/test-02-datasets.sh` covers it from CI. Reconsider on request
+  from a contributor maintaining > 3 templates.
+
 ### Tooling
 
 - Zig 0.16 migration. Currently pinned to 0.15.2; 0.16 shipped
@@ -366,3 +391,13 @@ discussion doesn't keep restarting. Reopen only if the rationale changes.
   (single-eval against a sample row) plus per-call NDJSON traces from
   `--expr-trace` cover ~all real debugging needs. A breakpoint-style
   debugger would be massive surface area for marginal gain.
+- **Output row deduplication (`dedup_output: bool`).** The re-import
+  scenario it would solve — overlapping date ranges across successive
+  broker exports producing duplicate `.csvx` rows — is a workflow
+  problem solved upstream: discipline the export date ranges (every
+  broker UI offers a "from / to" picker), wipe `data_dir` before
+  re-import, or rely on the destination tracker's own dedup. Adding
+  it inside BXP would require cross-run persistent state (a hash file
+  next to each `data_dir`), which clashes with the stateless engine
+  contract — every run today is reproducible from inputs alone. No
+  user has reported the duplicate-row problem in practice.
