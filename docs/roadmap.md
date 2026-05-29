@@ -109,34 +109,6 @@ test, path validation removes part of the shell-injection concern).
 
 ## v0.4.0
 
-### Declarative arg-type contracts for expr builtins
-
-The 2026-05-14 audit (commits `076ca9c` + `f51940e`) found three independent
-`@intFromFloat` panic bugs in `expr.zig` builtins — `FIELDS`, `SPLIT_PART`,
-`ROUND` — all stemming from the same pattern: each function gates its own
-args (or forgets to), and `f < 1.0` doesn't filter `±Inf` or `NaN` because
-IEEE comparisons against them return false. Quick fix shipped: shared
-`toPositiveIndex` helper. The class of bug isn't structurally prevented —
-a 19th builtin written the same way would crash again.
-
-Plan for v0.4.0:
-
-- Add `accepts: ArgType` field to `ArgDoc` in `expr.zig`. Types: `any_value`
-  (default, no validation), `any_string`, `any_number`, `finite_number`,
-  `positive_integer`, `integer_in_range{min, max}`.
-- Move argument validation into the central `evalCall` dispatcher in
-  `bxp-core/src/expr.zig`. Validator runs against declared types BEFORE
-  the builtin impl is called — impls receive guaranteed-valid args and
-  can drop their defensive boilerplate.
-- Surface `accepts` in `bxp-fmt --docs` JSON so `bxp-gui` debugger can
-  show arg-type hints in autocomplete and flag templates whose literal
-  args fail static validation.
-- Same validator becomes the single source of truth for `bxp-fmt --expr`
-  and `bridge_eval_expr` (FFI), eliminating parity drift between the two
-  evaluators ahead of TODO 4 Phase 3.
-
-Full design + migration plan: `DEV/6-todo-builtin-arg-validation-design.md`.
-
 ### Raise XLSX cap + optimise large `.xlsx` ingest
 
 CSV and JSON paths went streaming in earlier releases (CSV via

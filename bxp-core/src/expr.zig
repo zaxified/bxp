@@ -616,8 +616,8 @@ fn tryScanArg(
             }
         },
         // No static literal check: runtime-only domains + plain string /
-        // expr args. (integer_in_range's optional literal-range warning is
-        // a deliberate non-goal for now — see plan step 4.)
+        // expr args. (A literal-range warning for integer_in_range is a
+        // deliberate non-goal — validateArgs clamps it at runtime.)
         .expr,
         .string,
         .literal_string,
@@ -1555,7 +1555,8 @@ fn parseGroupedNumber(s: []const u8, thousands: u8, decimal: u8) error{NotANumbe
 ///
 /// Use this in every builtin that converts a user-supplied f80 to a usize
 /// index (FIELDS, SPLIT_PART, future similar). Discovered by the
-/// 2026-05-14 corpus probe (see DEV/6-todo-builtin-arg-validation-design.md).
+/// 2026-05-14 corpus probe; the `positive_integer` ArgKind domain now wires
+/// the same gate into the central `validateArgs` for new builtins.
 fn toPositiveIndex(f: f80) ?usize {
     if (!std.math.isFinite(f) or f < 1.0) return null;
     return @as(usize, @intFromFloat(f));
