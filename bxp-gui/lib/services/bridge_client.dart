@@ -372,7 +372,19 @@ class BridgeClient {
         return (error: 'bridge: eval error code $n', offset: null, length: null);
       }
       final bytes = outBuf.asTypedList(n);
-      final json = jsonDecode(utf8.decode(bytes));
+      final Object? json;
+      try {
+        json = jsonDecode(utf8.decode(bytes));
+      } catch (e) {
+        // FFI bug: bridge wrote non-JSON bytes. Surface the parse
+        // exception so the operator can correlate against bridge logs
+        // instead of staring at "malformed eval response".
+        return (
+          error: 'bridge: eval response parse failed: $e',
+          offset: null,
+          length: null,
+        );
+      }
       if (json is! Map) {
         return (error: 'bridge: malformed eval response', offset: null, length: null);
       }

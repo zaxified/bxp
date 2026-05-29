@@ -430,6 +430,31 @@ test "FieldDoc.key matches a real struct field" {
     }
 }
 
+test "FieldDoc.validator tag is right for representative expression fields" {
+    // The aggregate `config_schema covers known paths` test catches drift in
+    // KEY presence; this one pins per-entry VALIDATOR correctness for a
+    // handful of expression-typed fields. If `RowRule.when` (the canonical
+    // when-clause) ever loses its `.expr_string` validator, the GUI's
+    // ExprPanel routing breaks silently. Spot-check rather than exhaustive
+    // so adding a new field doesn't require touching this test.
+    const Spec = struct { T: type, key: []const u8, validator: config.FieldValidator };
+    const specs = [_]Spec{
+        .{ .T = config.RowRule, .key = "when", .validator = .expr_string },
+        .{ .T = config.PrePass, .key = "when", .validator = .expr_string },
+    };
+    inline for (specs) |s| {
+        var found = false;
+        for (s.T.fields) |fd| {
+            if (std.mem.eql(u8, fd.key, s.key)) {
+                try std.testing.expectEqual(s.validator, fd.validator);
+                found = true;
+                break;
+            }
+        }
+        try std.testing.expect(found);
+    }
+}
+
 test "every insert_template / scaffold_template parses as JSON5" {
     // Schema templates ship as JSON5 source strings — a typo in any of them
     // surfaces only at `bxp-fmt --docs` runtime. Parse each template here so

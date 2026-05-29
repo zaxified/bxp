@@ -181,8 +181,15 @@ export fn bridge_run(
     }
     collectOutputCapped(&child, a, &stdout_buf, &stderr_buf, max_output_bytes, &truncated_flag) catch |err| {
         if (stdin_writer_thread) |t| t.join();
-        _ = child.kill() catch {};
-        return writeErr(out_buf, "collect failed: {s}", .{@errorName(err)});
+        // Best-effort kill — record the kill failure into the same error
+        // response so a debug session sees both halves of the story
+        // ("collect failed because X; child also wouldn't die because Y")
+        // instead of silently losing the kill diagnostic.
+        if (child.kill()) |_| {
+            return writeErr(out_buf, "collect failed: {s}", .{@errorName(err)});
+        } else |kerr| {
+            return writeErr(out_buf, "collect failed: {s}; kill: {s}", .{ @errorName(err), @errorName(kerr) });
+        }
     };
     if (stdin_writer_thread) |t| t.join();
     if (stdin_writer_err) |werr| {
@@ -1087,25 +1094,19 @@ const test_options = @import("test_options");
 const helper_path: []const u8 = test_options.test_helper_path;
 
 /// Build a JSON request for the bridge that invokes the test helper with
-/// `args`. Returned slice is null-terminated (the bridge expects a C
-/// string) and allocated on the test allocator; caller frees with
-/// `testing.allocator.free(req)`.
+/// `args`, optionally including a `cwd` field. Returned slice is
+/// null-terminated (the bridge expects a C string) and allocated on the
+/// test allocator; caller frees with `testing.allocator.free(req)`.
 fn buildHelperRequestZ(args: []const []const u8) ![:0]u8 {
-    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
-    defer aw.deinit();
-    try aw.writer.writeAll("{\"exe\":");
-    try std.json.Stringify.value(helper_path, .{}, &aw.writer);
-    try aw.writer.writeAll(",\"args\":[");
-    for (args, 0..) |arg, i| {
-        if (i > 0) try aw.writer.writeAll(",");
-        try std.json.Stringify.value(arg, .{}, &aw.writer);
-    }
-    try aw.writer.writeAll("]}");
-    return aw.toOwnedSliceSentinel(0);
+    return buildHelperRequestZWithCwd(args, null);
 }
 
 /// Variant of `buildHelperRequestZ` that adds a `cwd` field.
 fn buildHelperRequestWithCwdZ(args: []const []const u8, cwd: []const u8) ![:0]u8 {
+    return buildHelperRequestZWithCwd(args, cwd);
+}
+
+fn buildHelperRequestZWithCwd(args: []const []const u8, cwd: ?[]const u8) ![:0]u8 {
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
     try aw.writer.writeAll("{\"exe\":");
@@ -1115,8 +1116,11 @@ fn buildHelperRequestWithCwdZ(args: []const []const u8, cwd: []const u8) ![:0]u8
         if (i > 0) try aw.writer.writeAll(",");
         try std.json.Stringify.value(arg, .{}, &aw.writer);
     }
-    try aw.writer.writeAll("],\"cwd\":");
-    try std.json.Stringify.value(cwd, .{}, &aw.writer);
+    try aw.writer.writeAll("]");
+    if (cwd) |c| {
+        try aw.writer.writeAll(",\"cwd\":");
+        try std.json.Stringify.value(c, .{}, &aw.writer);
+    }
     try aw.writer.writeAll("}");
     return aw.toOwnedSliceSentinel(0);
 }
@@ -1267,34 +1271,24 @@ test "bridge_run reports nonzero exit code from helper" {
 }
 
 test "bridge_run separates stdout and stderr" {
-    // Retry up to 3× because the helper writes to both streams in
-    // quick succession and the kernel pipe scheduler can occasionally
-    // hand the bridge reader thread the bytes in an order that splits
-    // a single line across two read() calls. The bridge re-assembles
-    // the bytes deterministically by stream, but the test_helper itself
-    // sometimes loses one of the two writes when the parent process
-    // tears down its end before the child has flushed. A short retry
-    // loop turns the rare flake into reliable green for CI.
+    // The `both` test_helper subcommand uses raw unbuffered File.writeAll
+    // for both streams so the writes hit the kernel pipe synchronously
+    // before the helper exits; no retry crutch needed.
     const req = try buildHelperRequestZ(&.{"both"});
     defer testing.allocator.free(req);
 
-    var attempt: u32 = 0;
-    while (attempt < 3) : (attempt += 1) {
-        var buf: [4096]u8 = undefined;
-        const n = bridge_run(req.ptr, "".ptr, 0, &buf, @intCast(buf.len));
-        try testing.expect(n > 0);
-        const parsed = try std.json.parseFromSlice(
-            Response,
-            testing.allocator,
-            buf[0..@intCast(n)],
-            .{ .ignore_unknown_fields = true },
-        );
-        defer parsed.deinit();
-        const ok_out = std.mem.indexOf(u8, parsed.value.stdout, "to-stdout") != null;
-        const ok_err = std.mem.indexOf(u8, parsed.value.stderr, "to-stderr") != null;
-        if (ok_out and ok_err) return;
-    }
-    return error.TestRetryExhausted;
+    var buf: [4096]u8 = undefined;
+    const n = bridge_run(req.ptr, "".ptr, 0, &buf, @intCast(buf.len));
+    try testing.expect(n > 0);
+    const parsed = try std.json.parseFromSlice(
+        Response,
+        testing.allocator,
+        buf[0..@intCast(n)],
+        .{ .ignore_unknown_fields = true },
+    );
+    defer parsed.deinit();
+    try testing.expect(std.mem.indexOf(u8, parsed.value.stdout, "to-stdout") != null);
+    try testing.expect(std.mem.indexOf(u8, parsed.value.stderr, "to-stderr") != null);
 }
 
 test "bridge_run honours cwd" {

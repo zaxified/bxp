@@ -56,8 +56,16 @@ pub fn main() !void {
     }
 
     if (std.mem.eql(u8, cmd, "both")) {
-        try writeStdoutLn("to-stdout", .{});
-        try writeStderrLn("to-stderr", .{});
+        // Use raw unbuffered writes here (not writeStdoutLn / writeStderrLn)
+        // so neither message can sit in a Zig-side buffer at process exit.
+        // The buffered helpers flush before returning, but pairing two
+        // independent buffered writers across two streams just before
+        // `main()` returns previously surfaced a flake where one of the
+        // two messages occasionally never reached the bridge reader. With
+        // direct File.writeAll the bytes hit the kernel pipe synchronously
+        // and the parent test passes without the 3× retry crutch.
+        try std.fs.File.stdout().writeAll("to-stdout\n");
+        try std.fs.File.stderr().writeAll("to-stderr\n");
         return;
     }
 

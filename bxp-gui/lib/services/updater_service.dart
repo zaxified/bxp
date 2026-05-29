@@ -167,6 +167,16 @@ class UpdaterService extends ChangeNotifier {
         return a['browser_download_url']?.toString();
       }
     }
+    // No asset matched the per-platform regex — most likely a typo or
+    // naming-convention drift in the release workflow. The user-facing
+    // result is a silent "manual update required" fallback; trace the
+    // pattern + asset names so the regression shows up in debug logs.
+    devTrace('updater.assetNotFound', {
+      'pattern': pattern.pattern,
+      'assets': [
+        for (final a in assets) (a as Map)['name']?.toString() ?? '',
+      ],
+    });
     return null;
   }
 

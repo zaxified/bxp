@@ -30,7 +30,7 @@ void devTrace(String event, [Map<String, Object?>? data]) {
     try {
       encoded = jsonEncode(data);
     } catch (e) {
-      encoded = '<unencodable: $e>';
+      encoded = '<unencodable: ${e.runtimeType}: $e>';
     }
     payload = '$event $encoded';
   }
