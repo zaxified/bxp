@@ -8,11 +8,11 @@
 # Section headers use box-drawing characters for visual scan.
 # Non-inline comments above complex cases explain the why.
 #
-# Function catalog (per `bxp-fmt --docs` 2026-05-26, 27 functions):
+# Function catalog (per `bxp-fmt --docs` 2026-05-29, 30 functions):
 #   ABS, CEILING, COALESCE, CONTAINS, DATE_CONVERT, ENDS_WITH, FIELDS,
-#   FLOOR, IF, IN, LEFT, LOOKUP, LOWER, NOW, NULLIF, PRICE_CURRENCY,
-#   PRICE_VALUE, RAND, REPLACE, RIGHT, ROUND, SPLIT_PART, STARTS_WITH,
-#   SUBSTR, TICKER, TRIM, UPPER
+#   FLOOR, GREATEST, IF, IN, LEAST, LEFT, LEN, LOOKUP, LOWER, NOW,
+#   NULLIF, PRICE_CURRENCY, PRICE_VALUE, RAND, REPLACE, RIGHT, ROUND,
+#   SPLIT_PART, STARTS_WITH, SUBSTR, TICKER, TRIM, UPPER
 # Keywords: AND, OR, NOT
 # Keywords: AND, OR
 # Operators: &  =  !=  <  >  <=  >=  +  -  *  /
@@ -76,6 +76,13 @@ expr	ok	IN([Action], 'BUY', 'SELL')
 expr	ok	IN([Action], 'BUY', 'SELL', 'DIVIDEND', 'TAX')
 expr	ok	NOT CONTAINS([Description], 'fee')
 expr	ok	NOT [A] = 1
+# v0.2.4 misc — LEN (Excel/T-SQL), GREATEST/LEAST (SQL per-row min/max).
+expr	ok	LEN([Description])
+expr	ok	LEN([Ticker]) = 0
+expr	ok	GREATEST([Fee], 0)
+expr	ok	GREATEST([A], [B], [C])
+expr	ok	LEAST([Quantity], [Available])
+expr	ok	LEAST(GREATEST([X], 0), 100)
 # Stacked NOTs.
 expr	ok	NOT NOT [A]
 # NOT precedence: binds tighter than AND/OR, weaker than =.
@@ -107,6 +114,11 @@ expr	err	ENDS_WITH([A], 'b', 'c')	WrongArgCount
 # v0.2.4 SQL semantics arity errors.
 expr	err	NULLIF([A])	WrongArgCount
 expr	err	NULLIF([A], 'b', 'c')	WrongArgCount
+# v0.2.4 misc arity errors.
+expr	err	LEN()	WrongArgCount
+expr	err	LEN('a', 'b')	WrongArgCount
+expr	err	GREATEST()	WrongArgCount
+expr	err	LEAST()	WrongArgCount
 expr	err	IN([A])	WrongArgCount
 expr	err	IN()	WrongArgCount
 # FIELDS without args fails cleanly with WrongArgCount.

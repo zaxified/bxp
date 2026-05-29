@@ -67,8 +67,10 @@ Expression evaluator for `input_schema` and `row_rules` in bxp-cli.json.
 - Depends on `sunrise` for `DATE_CONVERT()` date/time parsing and formatting.
 - Unit tests inline (83 test cases).
 
-**Built-in functions:** IF, ABS, DATE_CONVERT, PRICE_VALUE, PRICE_CURRENCY, TICKER,
-LOOKUP, SPLIT_PART, CONTAINS, REPLACE, TRIM, ROUND, FLOOR, CEILING, NOW, RAND, COALESCE, FIELDS.
+**Built-in functions:** IF, ABS, DATE_CONVERT, PRICE_VALUE, PRICE_CURRENCY,
+TICKER, LOOKUP, SPLIT_PART, CONTAINS, REPLACE, TRIM, ROUND, FLOOR, CEILING,
+NOW, RAND, COALESCE, FIELDS, UPPER, LOWER, LEFT, RIGHT, SUBSTR,
+STARTS_WITH, ENDS_WITH, NULLIF, IN, LEN, GREATEST, LEAST.
 
 **Doc catalog** (`pub const builtins`, `keywords`, `operators`, `tokens`): each
 builtin sits next to its `FnDoc` declaration (search for `── <NAME> ──`

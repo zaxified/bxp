@@ -2388,6 +2388,95 @@ fn adaptIn(p: *Parser, args: []Value) anyerror!Value {
     return builtinIn(args, p.ctx.alloc);
 }
 
+// ── LEN ─────────────────────────────────────────────────────────────────
+const len_doc: FnDoc = .{
+    .name = "LEN",
+    .signature = "LEN(s)",
+    .description = "Byte length of `s` (UTF-8 byte count, not codepoint or grapheme count). Empty string → 0.",
+    .args = &.{.{ .name = "s" }},
+    .min_args = 1,
+    .max_args = 1,
+};
+fn builtinLen(args: []Value) !Value {
+    if (args.len != 1) return error.WrongArgCount;
+    const s = switch (args[0]) {
+        .string => |v| v,
+        else => return error.StringExpected,
+    };
+    return Value{ .number = @floatFromInt(s.len) };
+}
+fn adaptLen(_: *Parser, args: []Value) anyerror!Value {
+    return builtinLen(args);
+}
+
+// ── GREATEST ────────────────────────────────────────────────────────────
+const greatest_doc: FnDoc = .{
+    .name = "GREATEST",
+    .signature = "GREATEST(a, b, ...)",
+    .description = "Largest numeric value among arguments. Per-row maximum (not aggregation across rows). Arguments are coerced to numbers; empty string coerces to 0, non-numeric strings raise an error.",
+    // Variadic 1+ args. Like COALESCE, only the first arg is declared;
+    // trailing args inherit `kind = .expr` semantically.
+    .args = &.{.{ .name = "a" }},
+    .min_args = 1,
+    .max_args = 255,
+};
+fn builtinGreatest(args: []Value) !Value {
+    if (args.len == 0) return error.WrongArgCount;
+    var best: f80 = try args[0].toNumber();
+    for (args[1..]) |v| {
+        const n = try v.toNumber();
+        if (n > best) best = n;
+    }
+    return Value{ .number = best };
+}
+fn adaptGreatest(p: *Parser, args: []Value) anyerror!Value {
+    return builtinGreatest(args) catch |err| {
+        for (args) |v| switch (v) {
+            .string => |s| {
+                _ = std.fmt.parseFloat(f80, s) catch {
+                    p.setNotANumber(s);
+                    return err;
+                };
+            },
+            else => {},
+        };
+        return err;
+    };
+}
+
+// ── LEAST ───────────────────────────────────────────────────────────────
+const least_doc: FnDoc = .{
+    .name = "LEAST",
+    .signature = "LEAST(a, b, ...)",
+    .description = "Smallest numeric value among arguments. Per-row minimum (not aggregation across rows). Arguments are coerced to numbers; empty string coerces to 0, non-numeric strings raise an error.",
+    .args = &.{.{ .name = "a" }},
+    .min_args = 1,
+    .max_args = 255,
+};
+fn builtinLeast(args: []Value) !Value {
+    if (args.len == 0) return error.WrongArgCount;
+    var best: f80 = try args[0].toNumber();
+    for (args[1..]) |v| {
+        const n = try v.toNumber();
+        if (n < best) best = n;
+    }
+    return Value{ .number = best };
+}
+fn adaptLeast(p: *Parser, args: []Value) anyerror!Value {
+    return builtinLeast(args) catch |err| {
+        for (args) |v| switch (v) {
+            .string => |s| {
+                _ = std.fmt.parseFloat(f80, s) catch {
+                    p.setNotANumber(s);
+                    return err;
+                };
+            },
+            else => {},
+        };
+        return err;
+    };
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -2500,6 +2589,9 @@ pub const builtins = [_]FnEntry{
     .{ .name = "ENDS_WITH",      .doc = ends_with_doc,      .impl = adaptEndsWith },
     .{ .name = "NULLIF",         .doc = nullif_doc,         .impl = adaptNullif },
     .{ .name = "IN",             .doc = in_doc,             .impl = adaptIn },
+    .{ .name = "LEN",            .doc = len_doc,            .impl = adaptLen },
+    .{ .name = "GREATEST",       .doc = greatest_doc,       .impl = adaptGreatest },
+    .{ .name = "LEAST",          .doc = least_doc,          .impl = adaptLeast },
 };
 
 // ============================================================
@@ -3801,4 +3893,84 @@ test "eval: IN wrong arg count" {
     const ctx = h.ctx(&.{}, a);
     try testing.expectError(error.WrongArgCount, eval("IN('a')", &ctx));
     try testing.expectError(error.WrongArgCount, eval("IN()", &ctx));
+}
+
+test "eval: LEN byte count" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    try testing.expectEqualStrings("0", try evalString("LEN('')", &ctx));
+    try testing.expectEqualStrings("5", try evalString("LEN('hello')", &ctx));
+    // UTF-8 byte count, not codepoint count — "café" is 5 bytes (é = 0xC3 0xA9).
+    try testing.expectEqualStrings("5", try evalString("LEN('café')", &ctx));
+}
+
+test "eval: LEN wrong arg count" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    try testing.expectError(error.WrongArgCount, eval("LEN()", &ctx));
+    try testing.expectError(error.WrongArgCount, eval("LEN('a', 'b')", &ctx));
+}
+
+test "eval: GREATEST returns numeric maximum" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    try testing.expectEqualStrings("5", try evalString("GREATEST(5)", &ctx));
+    try testing.expectEqualStrings("7", try evalString("GREATEST(3, 7, 2)", &ctx));
+    try testing.expectEqualStrings("-1", try evalString("GREATEST(-5, -1, -3)", &ctx));
+    // Fee-clamping idiom: GREATEST(value, 0) replaces IF(value < 0, 0, value).
+    try testing.expectEqualStrings("0",   try evalString("GREATEST(-2.5, 0)", &ctx));
+    try testing.expectEqualStrings("3.5", try evalString("GREATEST(3.5, 0)", &ctx));
+}
+
+test "eval: LEAST returns numeric minimum" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    try testing.expectEqualStrings("2", try evalString("LEAST(3, 7, 2)", &ctx));
+    try testing.expectEqualStrings("-5", try evalString("LEAST(-5, -1, -3)", &ctx));
+    // Ceiling idiom: LEAST(value, cap) clamps from above.
+    try testing.expectEqualStrings("100", try evalString("LEAST(150, 100)", &ctx));
+}
+
+test "eval: GREATEST/LEAST empty string coerces to zero" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    try h.col_index.put("Fee", 0);
+    // Empty field coerces to 0 via toNumber() — matches BXP's "no NULL, empty=0" convention.
+    const ctx = h.ctx(&.{""}, a);
+    try testing.expectEqualStrings("5", try evalString("GREATEST([Fee], 5)", &ctx));
+    try testing.expectEqualStrings("0", try evalString("LEAST([Fee], 5)", &ctx));
+}
+
+test "eval: GREATEST/LEAST non-numeric string raises NotANumber" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    try testing.expectError(error.NotANumber, eval("GREATEST('abc', 5)", &ctx));
+    try testing.expectError(error.NotANumber, eval("LEAST(5, 'xyz')", &ctx));
+}
+
+test "eval: GREATEST/LEAST wrong arg count" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    try testing.expectError(error.WrongArgCount, eval("GREATEST()", &ctx));
+    try testing.expectError(error.WrongArgCount, eval("LEAST()", &ctx));
 }
