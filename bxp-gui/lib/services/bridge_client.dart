@@ -95,8 +95,8 @@ typedef _BridgeFreeNative = Void Function(Pointer<Uint8>, Uint32);
 typedef _BridgeFreeDart = void Function(Pointer<Uint8>, int);
 
 // C ABI for the in-process expression evaluator family
-// (see DEV/plan-bridge-ffi-conventions.md). Stateless, caller-owned
-// buffers, no Dart-side bridge_free required.
+// (see "Adding a new bridge FFI export" in docs/devel.md). Stateless,
+// caller-owned buffers, no Dart-side bridge_free required.
 //
 //   bridge_eval_expr(text_ptr, text_len, out_buf, out_size) -> int32_t
 //     0 = valid expression

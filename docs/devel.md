@@ -28,6 +28,7 @@
   - [Known issues](#known-issues)
   - [Adding a new conversion template](#adding-a-new-conversion-template)
   - [Adding a new built-in function](#adding-a-new-built-in-function)
+  - [Adding a new bridge FFI export](#adding-a-new-bridge-ffi-export)
   - [Testing](#testing)
   - [Release process](#release-process)
   - [Release optimize mode (Small vs Fast)](#release-optimize-mode-small-vs-fast)
@@ -542,6 +543,33 @@ BXTB frame stream); fatal errors also stderr.
 > [`bxp-core/src/btrace.zig`](../bxp-core/src/btrace.zig) as
 > `FRAME_MAGIC = 0x42545842` (little-endian).
 
+**4. Template-strict, data-lenient (expr engine).** Two audiences get two
+policies, by who can fix the problem and when:
+
+- **Template author** — literals, config, expressions. A mistake here is a
+  bug the author can fix, so fail **loud and early**: static literal checks
+  (`SplitPartBadIndex`, `DateFormatBadToken`) at config-load, `$err_`
+  diagnostics, exit 1. The central `validateArgs` dispatcher
+  (`expr.zig`) enforces arity + arg-domain contracts here too.
+- **Broker data** — runtime field values from CSV/JSON. A "bad" value is
+  almost always an imperfection in the source the author can't fix (blank
+  settlement date, missing optional column, odd format), so **accommodate**:
+  return `""` / coerce (`toNumber("") → 0`, `DATE_CONVERT` parse-fail → `""`,
+  date builtins on empty → `""`, an out-of-range `FIELDS`/`DATEADD` index →
+  `""`). Aborting a 10k-row conversion over one messy row is worse than
+  emitting `""` and continuing.
+
+These compose, they don't conflict: a runtime silent-`""` is a deliberate
+**output policy**, while **code safety is orthogonal and still required** —
+the path that produces the skip must not panic (`@intFromFloat` on Inf/huge
+is guarded by `toPositiveIndex` / `toDayOffset`, which then return the
+lenient `""`). When hardening such a path, fix the crash but keep the silent
+`""`; do not "upgrade" a data-derived skip into a loud error. The lenient
+runtime is safe because other layers answer "did I write the template
+right?": the static checks above, `--debug` + `row_rules_debug_missing`
+(unmatched-row surfacing), and the GUI per-cell trace where the author sees
+the `""`.
+
 ---
 
 ### Debugging workflow
@@ -656,6 +684,117 @@ Dev-only tips (not in the user guide):
    ```bash
    cd bxp-core && zig build test --summary all
    ```
+
+---
+
+### Adding a new bridge FFI export
+
+The bridge hosts a **new-style FFI family** — synchronous, in-process C-ABI
+exports that link a stateless `bxp-core` routine directly into the GUI process,
+skipping the subprocess spawn. The first two members are `bridge_eval_expr`
+(in-proc `bxp-fmt --expr`) and `bridge_eval_expr_trace` (in-proc
+`bxp-fmt --expr-trace`). The plan is to add more such direct calls once
+`bxp-core` / `bxp-fmt` stabilise and stop churning internally — every new
+member follows the conventions below so adding the tenth export is as
+mechanical as adding the first.
+
+> These conventions cover the **stateless `bridge_eval_*` family only**. The
+> legacy subprocess-proxy exports (`bridge_run`, `bridge_run_streaming`,
+> `bridge_cancel`, `bridge_ack`, `bridge_free`) keep their own established
+> conventions from the proxy era. A future **handle-based** family (stateful,
+> e.g. a loaded-config handle) would need a separate convention set — lifecycle,
+> per-handle memory, handle-table thread safety — deliberately out of scope here.
+
+**1 — Buffer protocol.** Caller supplies the output buffer; the bridge never
+`malloc`s the result and there is no Dart-side free for this family.
+
+```zig
+export fn bridge_eval_xxx(
+    /* input params */
+    out_buf: [*]u8, out_size: u32,
+) callconv(.c) i32;
+```
+
+| Return | Meaning                                                                   |
+| ------ | ------------------------------------------------------------------------- |
+| `0`    | Success, no payload (valid, nothing to report)                            |
+| `> 0`  | `bytes_written` to `out_buf` — may carry a success **or** failure payload |
+| `< 0`  | Bridge-level error code (see rule 2)                                      |
+
+A positive return does **not** automatically mean success: for exports where
+error info belongs in the payload (`bridge_eval_expr` returns
+`{"error":...,"off":...,"len":...}` JSON), the caller always parses `out_buf`
+when `bytes_written > 0`. What a non-zero payload means is documented per-export
+in its doc comment. On overflow the caller retries with a bigger buffer (4 KB
+default for expr, 64 KB retry) — mirrors the `largeBufSize` retry in
+`BridgeClient`.
+
+**2 — Error codes.** Bridge-level failures (problems originating _in the bridge
+layer_, not in evaluation) are a negative `i32` enum:
+
+```zig
+const BridgeFfiError = enum(i32) {
+    out_of_memory = -1,   // c_allocator can't satisfy the per-call arena
+    buf_too_small = -2,   // out_buf overflowed mid-write; caller retries bigger
+    invalid_input = -3,   // caller's request is malformed: fix the call site
+};
+```
+
+Note there is **no `eval_error` code**. Evaluation-level failures (syntax error,
+unknown function, divide-by-zero) are _not_ a negative code — they return
+`bytes_written > 0` with a structured JSON payload (rule 4). This was a
+deliberate Phase-1 decision: keep negative codes for "your call is broken" and
+let payloads carry "the expression is broken, show the user." Any new export
+follows the same split.
+
+**3 — Memory ownership: caller-owns-everything.** Input pointers are owned by
+the caller for the call's duration; the bridge must hold no reference past
+return. The output buffer is caller-allocated and caller-freed. Internally the
+export opens a per-call `ArenaAllocator.init(c_allocator)` with `defer
+arena.deinit()` — every transient allocation dies at return. No handle table,
+no Dart-side `bridge_free` for this family.
+
+**4 — Stateless + thread-safe.** Calling `bridge_eval_xxx(args)` 100× is
+semantically identical to calling it once: no loaded configs, cached rows, or
+counters survive between calls (the only allowed global is the read-only,
+init-once docs catalog). Because there is no shared mutable state and the arena
+is per-call, the family is thread-safe without mutexes — safe to call directly
+from the Dart main isolate (sub-ms latency, well under one frame budget). If a
+future export genuinely needs persistent state, it belongs in the handle-based
+family, not here.
+
+**5 — UTF-8, length-prefixed strings.** Inputs are `ptr: [*]const u8, len: u32`,
+**not** null-terminated (`[*:0]`): Dart strings may contain interior `\0`, the
+explicit length skips a `strlen`, and it stays consistent with the output buffer
+protocol. JSON args (e.g. `row_headers` / `row_fields` for the trace export)
+follow the same shape.
+
+**6 — Output JSON shape matches the `bxp-fmt` equivalent.** A failure payload is
+byte-identical to what the matching `bxp-fmt` subcommand emits on stderr today,
+so the existing Dart parser handles bridge and subprocess responses
+identically — no Dart parser change when wiring a new export:
+
+```json
+{"error":"<ErrorName>","detail":"<detail>","off":N,"len":N,"suggest":"..."}
+```
+
+`off` / `len` / `suggest` are optional (emitted only when the parser pins a token
+or has a "did-you-mean" candidate). The trace export instead emits an NDJSON
+stream identical to `bxp-fmt --expr-trace` stdout, where success/failure is read
+from the `t` field of the last line.
+
+**Worked reference — the shipped `bridge_eval_expr`:** see
+[`bxp-gui-bridge/src/main.zig`](../bxp-gui-bridge/src/main.zig) (`bridge_eval_expr`,
+`writeExprErrorJson`, `writeStaticErrorJson`). Note it does two things beyond a
+bare `expr.eval`: it runs `expr.staticCheckCalls` after a clean eval to catch
+literal-only mistakes the runtime skips (e.g. `SPLIT_PART(..., 0)`), mirroring
+`BrokerConfig.validate()` so editor-time and Save-time diagnostics agree. The
+Dart side lives in
+[`bxp-gui/lib/services/bridge_client.dart`](../bxp-gui/lib/services/bridge_client.dart).
+
+Any ABI change (signature, new error code) must bump both the bridge export and
+its Dart shim in the **same commit** — there is no auto-versioned compatibility
+shim, so a stale `.so`/`.dll` against a new GUI silently misbehaves.
 
 ---
 

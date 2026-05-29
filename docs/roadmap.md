@@ -341,6 +341,18 @@ to pre-process the file" or "skip the affected rows".
   `REGEX_MATCH` / `REGEX_EXTRACT` below — the only mature native-Zig
   regex (zig-utils/zig-regex v0.2.0, 2026-05-18) requires Zig 0.16+.
 
+### Bridge FFI expansion (more direct Zig calls)
+
+- Grow the in-proc `bridge_eval_*` FFI family beyond today's
+  `bridge_eval_expr` / `bridge_eval_expr_trace`. The intent: once
+  `bxp-core` / `bxp-fmt` stop churning internally, move more stateless
+  `bxp-fmt`-style calls off the subprocess path and link them directly
+  into the GUI process. Deferred deliberately — not worth pinning the FFI
+  surface to code that is still changing. Conventions every new export
+  must follow are already written up: see
+  ["Adding a new bridge FFI export"](devel.md#adding-a-new-bridge-ffi-export)
+  in the developer guide.
+
 ### Expression builtins (regex)
 
 - `REGEX_MATCH(s, pattern)` and `REGEX_EXTRACT(s, pattern)` — deferred
