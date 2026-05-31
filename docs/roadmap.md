@@ -109,6 +109,32 @@ evaluator with a value is `--expr-trace` / `--expr-batch`. Decide: emit
 `{"ok":true}` on success (smallest change), or make the whole contract uniform
 (`{"ok":false,...}` to stdout too, exit code preserved). Surfaced 2026-05-31.
 
+### BUG-3 — `DATE_CONVERT` silently drops pre-1970 dates — pre-release
+
+The vendored `sunrise` lib rejects pre-epoch dates, so `DATE_CONVERT` returns
+`""` (silently, `warnings:0`) for any date before 1970-01-01 — `19241010`,
+`19691231`, … all vanish. Silent data loss, and pre-1970 dates (birthdates,
+census, archives) are everywhere. Found 2026-05-31 building
+`hl7-adt-patient-roster`; worked around there with a pure string-slice reformat
+(`LEFT`/`SUBSTR`, no epoch limit). Decision (user owns): fix `sunrise`/
+`DATE_CONVERT` via a civil-date path (not epoch seconds) / at-least-warn on drop /
+document the limit. Likely release-relevant.
+
+### Future example candidates (low priority)
+
+Carried over from the (now-deleted) `DEV/*-todo` scratch when the example
+backlog was otherwise exhausted:
+
+- **`olist_ecommerce`** real-world multi-file normalisation — Kaggle
+  CC-BY-NC-SA; the login wall conflicts with a no-login `fetch-full.sh` → needs
+  a mirror or a different multi-file dataset.
+- **`czech_public_contracts`** (smlouvy.gov.cz, CC0) — `DD.MM.YYYY` +
+  space-thousands + contract-type maps; confirm a stable export URL + a cited
+  problem first.
+- **`basic/csv-to-json`** teaching example — isolated CSV → JSON array
+  (`file_type_out: json`), the basic-tier mirror of `squirrel-census-json`. Low
+  priority: JSON *output* is already shown by `advanced/multi-stage-etl`.
+
 ## v0.3.0
 
 ### Flip bridge proxy to default on Linux/macOS
