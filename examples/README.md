@@ -1,11 +1,20 @@
 # BXP Examples
 
-Each section is a self-contained example. Open the per-example readme for
-the full story, or copy the command into your shell to re-run it from the CLI.
+Two kinds of example live here:
 
----
+- **Real-world use cases** — real, publicly available datasets, each with a
+  cited source describing a genuine data problem. The committed `sample.csv` is
+  a small real slice; `fetch-full.sh` pulls the complete file for a scale run.
+- **Teaching examples** — small, synthetic, constructed inputs that isolate one
+  engine feature at a time. The data is fabricated on purpose.
 
-## JHU COVID-19 Wide → Long (unpivot)
+Open a per-example readme for the full story, or copy the command to run it.
+
+## Real-world use cases
+
+Real public datasets — each readme cites its source and the documented problem it solves.
+
+### JHU COVID-19 Wide → Long (unpivot)
 
 **What.** Reshape the Johns Hopkins COVID-19 confirmed-cases time series from
 
@@ -17,9 +26,7 @@ the full story, or copy the command into your shell to re-run it from the CLI.
 bxp-cli --config ./real-world/covid-wide-to-long/sample.json --template covid_wide_to_long
 ```
 
----
-
-## French DVF Real-Estate → Analytics Schema
+### French DVF Real-Estate → Analytics Schema
 
 **What.** Reshape France's official "Demandes de valeurs foncières" (DVF) raw
 
@@ -31,23 +38,7 @@ bxp-cli --config ./real-world/covid-wide-to-long/sample.json --template covid_wi
 bxp-cli --config ./real-world/french-dvf-realestate/sample.json --template dvf_realestate_to_analytics
 ```
 
----
-
-## HubSpot Contacts → Salesforce Lead
-
-**What.** Convert a HubSpot Contacts CSV export into a Salesforce Lead Import CSV.
-
-**Why interesting.** Real CRM migrations take 2–8 weeks because picklist mismatches, mixed date formats and trailing whitespace fail _silently_ — the import succeeds row by row, then Salesforce rejects half of them after the fact.
-
-📄 [real-world/hubspot-to-salesforce/00-readme.md](real-world/hubspot-to-salesforce/00-readme.md)
-
-```bash
-bxp-cli --config ./real-world/hubspot-to-salesforce/sample.json --template hubspot_to_sfdc_lead
-```
-
----
-
-## Chicago Business Licenses → Analytics Schema
+### Chicago Business Licenses → Analytics Schema
 
 **What.** Turn the City of Chicago's raw Business Licenses export into a
 
@@ -59,9 +50,7 @@ bxp-cli --config ./real-world/hubspot-to-salesforce/sample.json --template hubsp
 bxp-cli --config ./real-world/chicago-business-licenses/sample.json --template chicago_licenses_to_analytics
 ```
 
----
-
-## IMDb Title Basics → Catalog Row
+### IMDb Title Basics → Catalog Row
 
 **What.** Reshape IMDb's public `title.basics.tsv` into a CSV catalogue row with normalised null markers, exploded genres, and a boolean `adult` column.
 
@@ -73,9 +62,7 @@ bxp-cli --config ./real-world/chicago-business-licenses/sample.json --template c
 bxp-cli --config ./real-world/imdb-title-basics/sample.json --template imdb_titles_to_catalog
 ```
 
----
-
-## Inside Airbnb NYC Listings → Analytics Schema
+### Inside Airbnb NYC Listings → Analytics Schema
 
 **What.** Reshape Inside Airbnb's public NYC scrape into an analytics CSV with short room-type codes, a regulatory-status column, and a visible sentinel for the redacted price field.
 
@@ -87,9 +74,7 @@ bxp-cli --config ./real-world/imdb-title-basics/sample.json --template imdb_titl
 bxp-cli --config ./real-world/inside-airbnb-listings/sample.json --template airbnb_listings_to_analytics
 ```
 
----
-
-## NOAA GHCN Daily → Metric Units
+### NOAA GHCN Daily → Metric Units
 
 **What.** Convert NOAA Global Historical Climatology Network daily records into a CSV with proper SI units (°C and mm) and a per-row consistency flag.
 
@@ -101,9 +86,7 @@ bxp-cli --config ./real-world/inside-airbnb-listings/sample.json --template airb
 bxp-cli --config ./real-world/noaa-ghcn-daily/sample.json --template noaa_daily_to_metric
 ```
 
----
-
-## NYC Yellow Taxi Trips → Analytics Schema
+### NYC Yellow Taxi Trips → Analytics Schema
 
 **What.** Convert raw NYC TLC Yellow Taxi trip records into an analytics-ready CSV with ISO timestamps, human-readable payment types, and a per-row data quality flag.
 
@@ -113,4 +96,20 @@ bxp-cli --config ./real-world/noaa-ghcn-daily/sample.json --template noaa_daily_
 
 ```bash
 bxp-cli --config ./real-world/nyc-taxi-trips/sample.json --template nyc_taxi_to_analytics
+```
+
+## Teaching examples (synthetic)
+
+Constructed, minimal inputs that isolate one feature. The data is fabricated, not sourced.
+
+### HubSpot Contacts → Salesforce Lead
+
+**What.** Convert a HubSpot Contacts CSV export into a Salesforce Lead Import CSV.
+
+**Why interesting.** Real CRM migrations take 2–8 weeks because picklist mismatches, mixed date formats and trailing whitespace fail _silently_ — the import succeeds row by row, then Salesforce rejects half of them after the fact.
+
+📄 [intermediate/hubspot-to-salesforce/00-readme.md](intermediate/hubspot-to-salesforce/00-readme.md)
+
+```bash
+bxp-cli --config ./intermediate/hubspot-to-salesforce/sample.json --template hubspot_to_sfdc_lead
 ```
