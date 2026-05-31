@@ -65,11 +65,35 @@ class ExprEditor extends StatefulWidget {
 
   @override
   State<ExprEditor> createState() => _ExprEditorState();
+
+  /// Build a call scaffold for [fn] (ArgKind-aware quoting + single-block
+  /// pre_pass auto-fill) targeting the active template. Used by the
+  /// FUNCTIONS doc panel's click-to-insert so a signature tap inserts the
+  /// same scaffold as accepting [fn] from the autocomplete popup.
+  static String scaffoldFor(TraceStore store, Map<String, dynamic> fn) {
+    final sel = store.selectedExprPath;
+    final tid =
+        (sel != null && sel.length >= 2 && sel[0] == 'conversion_templates')
+            ? sel[1]
+            : store.templateId;
+    return _ExprEditorState._buildFnTemplate(
+      fn,
+      _ExprEditorState._prePassNamesFor(store, tid),
+    );
+  }
 }
 
 class _ExprEditorState extends State<ExprEditor> {
   late final FocusNode _focusNode = widget.focusNode ?? FocusNode();
   final _editorLink = LayerLink();
+
+  // FUNCTIONS doc-panel click-to-insert. We subscribe to the store's
+  // `exprInsertRequest` notifier; since exactly one ExprEditor (playground
+  // or in-panel) is mounted at a time, the request reaches the right one.
+  // `_lastInsertGen` deduplicates the listener so we apply each request
+  // once and ignore the stale value carried over when a new editor mounts.
+  TraceStore? _store;
+  int _lastInsertGen = 0;
 
   // Autocomplete popup state. Lives in an OverlayEntry anchored to the
   // editor via LayerLink so it floats above surrounding widgets (mirrors
@@ -108,9 +132,24 @@ class _ExprEditorState extends State<ExprEditor> {
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final store = context.read<TraceStore>();
+    if (!identical(store, _store)) {
+      _store?.exprInsertRequest.removeListener(_onInsertRequest);
+      _store = store;
+      // Seed the gen with the current value so a request that fired before
+      // this editor mounted is not replayed on attach.
+      _lastInsertGen = store.exprInsertRequest.value?.gen ?? 0;
+      store.exprInsertRequest.addListener(_onInsertRequest);
+    }
+  }
+
+  @override
   void dispose() {
     _acDebounce?.cancel();
     _hidePopup();
+    _store?.exprInsertRequest.removeListener(_onInsertRequest);
     widget.controller.removeListener(_onEdit);
     _focusNode.removeListener(_onFocusChange);
     // If we attached our key handler to a parent-owned focus node, detach
@@ -561,6 +600,42 @@ class _ExprEditorState extends State<ExprEditor> {
     _popup?.remove();
     _popup = null;
     widget.onAutocompleteVisibilityChanged?.call(false);
+  }
+
+  /// Splice text requested by the FUNCTIONS doc panel into the editor at
+  /// the current caret (or at the end when there is no valid selection).
+  /// For scaffold inserts the caret lands on the first `<placeholder>` so
+  /// the user can type the first arg immediately — mirroring autocomplete
+  /// accept. Literal examples carry no placeholder, so the caret lands at
+  /// the end of the inserted text. `widget.onChanged` is invoked manually
+  /// because a programmatic `controller.value` set does not fire the
+  /// TextField's onChanged (which drives store write-back + validation).
+  void _onInsertRequest() {
+    final req = _store?.exprInsertRequest.value;
+    if (req == null || req.gen == _lastInsertGen) return;
+    _lastInsertGen = req.gen;
+
+    final insert = req.text;
+    if (insert.isEmpty) return;
+    final text = widget.controller.text;
+    final sel = widget.controller.selection;
+    final start = sel.isValid ? sel.start : text.length;
+    final end = sel.isValid ? sel.end : text.length;
+    final newText = text.replaceRange(start, end, insert);
+
+    // Select the first placeholder inside the inserted span (scaffold
+    // case); otherwise collapse the caret at the end of the insert.
+    final ph = _firstPlaceholder(newText, start);
+    final TextSelection nextSel = (ph != null && ph.$1 < start + insert.length)
+        ? TextSelection(baseOffset: ph.$1, extentOffset: ph.$2)
+        : TextSelection.collapsed(offset: start + insert.length);
+
+    widget.controller.value = TextEditingValue(
+      text: newText,
+      selection: nextSel,
+    );
+    widget.onChanged?.call(newText);
+    _focusNode.requestFocus();
   }
 
   void _applyAutocomplete(_AcItem item) {

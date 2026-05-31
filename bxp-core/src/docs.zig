@@ -197,6 +197,8 @@ pub fn writeDocs(alloc: std.mem.Allocator, writer: *std.Io.Writer) !void {
         try jw.write(f.signature);
         try jw.objectField("description");
         try jw.write(f.description);
+        try jw.objectField("example");
+        try jw.write(f.example);
         try jw.objectField("args");
         try jw.beginArray();
         for (f.args) |a| {

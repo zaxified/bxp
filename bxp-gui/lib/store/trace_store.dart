@@ -191,6 +191,22 @@ class TraceStore extends ChangeNotifier {
     _pendingFocusPath.value = null;
   }
 
+  /// Text the FUNCTIONS doc panel asked to splice into the live
+  /// expression editor. Exactly one ExprEditor (playground OR in-panel)
+  /// is mounted at a time, so the request reaches the right one. Carries
+  /// a monotonic `gen` so clicking the same entry twice re-fires even
+  /// though the text is identical. The mounted editor consumes it at its
+  /// current caret position; see ExprEditor's insert-request listener.
+  final ValueNotifier<({String text, int gen})?> _exprInsertRequest =
+      ValueNotifier(null);
+  ValueListenable<({String text, int gen})?> get exprInsertRequest =>
+      _exprInsertRequest;
+  int _exprInsertGen = 0;
+  void requestExprInsert(String text) {
+    _exprInsertGen += 1;
+    _exprInsertRequest.value = (text: text, gen: _exprInsertGen);
+  }
+
   /// Path of the tree row whose Add-Child dialog should be opened next
   /// frame. Fired by the Ctrl+Shift+Insert shortcut so that the dialog
   /// pops over the focused row even though the shortcut handler lives in

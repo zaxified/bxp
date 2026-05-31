@@ -31,15 +31,24 @@ class ExprPlayground extends StatefulWidget {
 }
 
 class _ExprPlaygroundState extends State<ExprPlayground> {
+  // Composite, real-world recipes that combine several builtins — kept
+  // deliberately more advanced than the single-call per-function examples
+  // in the FUNCTIONS doc panel, so the two don't overlap. These reference
+  // sample [Column] names (they evaluate to "" without loaded data); the
+  // user adapts them to their own headers.
   static const _examples = <_Example>[
-    _Example('date convert',
-        "DATE_CONVERT([Date], 'YYYY-MM-DD', 'DD.MM.YYYY')"),
-    _Example('buy/sell', "IF([Qty] > 0, 'BUY', 'SELL')"),
-    _Example('ticker map', 'TICKER([Symbol])'),
+    _Example('T+2 settlement',
+        "DATEADD(DATE_CONVERT([TradeDate], 'DD.MM.YYYY', 'YYYY-MM-DD'), 2)"),
+    _Example('side + qty',
+        "IF([Qty] > 0, 'BUY', 'SELL') & ' ' & ABS([Qty])"),
     _Example('price parts',
         "PRICE_VALUE([Price]) & ' ' & PRICE_CURRENCY([Price])"),
-    _Example('coalesce',
+    _Example('symbol root',
+        "UPPER(SPLIT_PART([Symbol], '.', 1))"),
+    _Example('isin fallback',
         "COALESCE([ISIN], LOOKUP([Symbol], 'isin'), '')"),
+    _Example('currency-aware round',
+        "ROUND(PRICE_VALUE([Amount]), IF([Currency] = 'JPY', 0, 2))"),
   ];
 
   late final ExprTextEditingController _ctrl;

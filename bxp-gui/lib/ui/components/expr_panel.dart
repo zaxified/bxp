@@ -343,14 +343,6 @@ class _DocsPanel extends StatelessWidget {
     // All four catalogs are guaranteed populated by the startup gate
     // (see _StartupGate in main.dart) — bxp-fmt --docs is the only source
     // of truth.
-    final fns = store.docFunctions
-        .map(
-          (f) => (
-            f['signature']?.toString() ?? f['name']?.toString() ?? '',
-            f['description']?.toString() ?? '',
-          ),
-        )
-        .toList();
     final kws = store.docKeywords
         .map(
           (k) => (
@@ -395,7 +387,10 @@ class _DocsPanel extends StatelessWidget {
                 children: [
                   const _SectionLabel('FUNCTIONS'),
                   const SizedBox(height: 10),
-                  for (final f in fns) _FuncDoc(f.$1, f.$2),
+                  for (final f in ([...store.docFunctions]..sort((a, b) =>
+                      (a['name']?.toString() ?? '')
+                          .compareTo(b['name']?.toString() ?? ''))))
+                    _FuncDoc(f),
                 ],
               ),
             ),
@@ -508,29 +503,120 @@ class _SectionLabel extends StatelessWidget {
       Text(label, style: BxpText.label(context));
 }
 
-class _FuncDoc extends StatelessWidget {
-  final String sig;
-  final String desc;
-  const _FuncDoc(this.sig, this.desc);
+/// One FUNCTIONS-panel entry: bold signature, muted description, and an
+/// optional `e.g. …` example. The signature and the example are
+/// click-to-insert — tapping the signature splices the call scaffold
+/// (ArgKind-aware quoting via [ExprEditor.scaffoldFor]) and tapping the
+/// example splices it verbatim into the live editor at the caret (see
+/// `TraceStore.requestExprInsert`). A hover background flags clickability;
+/// no Tooltip — Flutter's Tooltip steals hover + blocks scroll inside the
+/// scrollable docs column.
+class _FuncDoc extends StatefulWidget {
+  final Map<String, dynamic> fn;
+  const _FuncDoc(this.fn);
+  @override
+  State<_FuncDoc> createState() => _FuncDocState();
+}
+
+class _FuncDocState extends State<_FuncDoc> {
+  // 0 = none hovered, 1 = signature, 2 = example.
+  int _hover = 0;
+
   @override
   Widget build(BuildContext context) {
     final t = context.bxpTheme;
+    final fn = widget.fn;
+    final sig = fn['signature']?.toString() ?? fn['name']?.toString() ?? '';
+    final desc = fn['description']?.toString() ?? '';
+    final example = fn['example']?.toString() ?? '';
+    final hoverBg = t.accentHighlight.withValues(alpha: 0.12);
+
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            sig,
-            style: BxpText.body(
-              context,
-              color: t.codeFunction,
-              size: BxpSize.sm,
-              weight: BxpWeight.bold,
-            ),
+          // Signature + example share a line (Wrap drops the example to the
+          // next line when the pair is too wide for the column, e.g.
+          // DATE_CONVERT). Each is independently click-to-insert.
+          Wrap(
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 8,
+            runSpacing: 1,
+            children: [
+              _clickable(
+                id: 1,
+                hoverBg: hoverBg,
+                onTap: () {
+                  final store = context.read<TraceStore>();
+                  store.requestExprInsert(ExprEditor.scaffoldFor(store, fn));
+                },
+                child: Text(
+                  sig,
+                  style: BxpText.body(
+                    context,
+                    color: t.codeFunction,
+                    size: BxpSize.sm,
+                    weight: BxpWeight.bold,
+                  ),
+                ),
+              ),
+              if (example.isNotEmpty)
+                _clickable(
+                  id: 2,
+                  hoverBg: hoverBg,
+                  onTap: () =>
+                      context.read<TraceStore>().requestExprInsert(example),
+                  child: RichText(
+                    text: TextSpan(children: [
+                      TextSpan(
+                        text: '→  ',
+                        style: BxpText.muted(context, size: BxpSize.xs),
+                      ),
+                      TextSpan(
+                        text: example,
+                        style: BxpText.body(
+                          context,
+                          color: t.codeString,
+                          size: BxpSize.xs,
+                        ),
+                      ),
+                    ]),
+                  ),
+                ),
+            ],
           ),
-          Text(desc, style: BxpText.muted(context, size: BxpSize.xs)),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            child: Text(desc, style: BxpText.muted(context, size: BxpSize.xs)),
+          ),
         ],
+      ),
+    );
+  }
+
+  Widget _clickable({
+    required int id,
+    required Color hoverBg,
+    required VoidCallback onTap,
+    required Widget child,
+  }) {
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hover = id),
+      onExit: (_) => setState(() {
+        if (_hover == id) _hover = 0;
+      }),
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+          decoration: BoxDecoration(
+            color: _hover == id ? hoverBg : Colors.transparent,
+            borderRadius: BorderRadius.circular(3),
+          ),
+          child: child,
+        ),
       ),
     );
   }
