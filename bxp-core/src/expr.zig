@@ -2932,9 +2932,32 @@ pub fn eval(src: []const u8, ctx: *const Context) !Value {
 /// "99.00" → "99" normalisation documented in the project notes. It only
 /// fires when the string looks like a valid float — non-numeric strings
 /// (e.g. "BUY") pass through unchanged.
+/// True for numeric-looking strings that must NOT be round-tripped through
+/// a float, because doing so would corrupt them:
+///   - leading-zero integers ("07666", "00012345") — ZIP / postal codes /
+///     zero-padded IDs whose leading zeros carry meaning;
+///   - all-digit integers longer than the f64/f80 exact range (>15 digits) —
+///     e.g. a 21-digit account/order ID, which parseFloat would round.
+/// Plain decimals and in-range integers fall through to normalisation so
+/// existing numeric formatting (incl. scientific-notation → plain decimal)
+/// is unchanged.
+fn isPrecisionSensitiveText(s: []const u8) bool {
+    if (s.len >= 2 and s[0] == '0' and s[1] >= '0' and s[1] <= '9') return true;
+    if (s.len > 15) {
+        for (s) |c| if (c < '0' or c > '9') return false;
+        return true;
+    }
+    return false;
+}
+
 pub fn evalString(src: []const u8, ctx: *const Context) ![]const u8 {
     const v = try eval(src, ctx);
     const s = try v.toString(ctx.alloc);
+    // Preserve precision-sensitive numeric strings verbatim (leading zeros,
+    // oversized integer IDs). Everything else is normalised by round-tripping
+    // through f80 — this is what turns exported scientific notation
+    // ("1.23E+15") into plain decimals and canonicalises numeric output.
+    if (isPrecisionSensitiveText(s)) return s;
     if (std.fmt.parseFloat(f80, s)) |n| {
         return (Value{ .number = n }).toString(ctx.alloc);
     } else |_| {}
@@ -3120,6 +3143,27 @@ test "eval: American number arithmetic via field ref" {
     try testing.expectEqualStrings("2469.12", try evalString("[Amount] * 2", &ctx));
     // Plain passthrough — string preserved as-is
     try testing.expectEqualStrings("1,234.56", try evalString("[Amount]",     &ctx));
+}
+
+test "evalString: leading zeros and oversized ids preserved; exp/normal still normalised" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    try h.col_index.put("Zip", 0);
+    try h.col_index.put("Id", 1);
+    try h.col_index.put("Sci", 2);
+    try h.col_index.put("Amount", 3);
+    const ctx = h.ctx(&.{ "07666", "123456789012345678901", "1.23E+15", "1000.00" }, a);
+    // Leading-zero integers (ZIP / zero-padded IDs) must survive verbatim.
+    try testing.expectEqualStrings("07666", try evalString("[Zip]", &ctx));
+    try testing.expectEqualStrings("007", try evalString("'007'", &ctx));
+    // Oversized integer ID — no f80 round-trip, so no silent corruption.
+    try testing.expectEqualStrings("123456789012345678901", try evalString("[Id]", &ctx));
+    // Scientific notation still expands to a plain decimal.
+    try testing.expectEqualStrings("1230000000000000", try evalString("[Sci]", &ctx));
+    // In-range plain decimal is still normalised (trailing zeros dropped).
+    try testing.expectEqualStrings("1000", try evalString("[Amount]", &ctx));
 }
 
 test "Value.toBool: empty string is false, non-empty is true (even '0')" {
