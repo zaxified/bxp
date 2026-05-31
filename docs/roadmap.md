@@ -67,6 +67,48 @@ Resolve before the next release. Found 2026-05-31 while building the
 `squirrel-census-json` real-world example (the passthrough half was fixed the
 same day).
 
+### CSV-injection guard over-prefixes leading `+` — pre-release
+
+`writeSafeValue` (`bxp-cli/src/pipeline.zig`) prefixes a leading `=`, `+`, `@`,
+or tab with `'` to neutralise spreadsheet formula injection. `-` already has a
+smart exception (only prefix when **not** followed by a digit/decimal, so
+`-12.34` passes), but `+` does not — so a legitimate value beginning with `+`
+(international phone `+420 555 0101`, signed quantity `+5`) is silently mangled
+to `'+420…`. Found 2026-05-31 while building the `json-union` example.
+
+Fix: mirror the `-` numeric-next exception for `+` (prefix only when the next
+char is not a digit/decimal separator). `+SUM(...)` / `+cmd|…` still get the
+guard; phone/signed numbers pass through. Same residual risk the codebase
+already accepts for `-` (`-1-1` is an un-prefixed formula). Needs a unit test
+alongside the existing `writeSafeValue` cases. (Consider whether `=`/`@`/tab
+want any analogous carve-out — almost certainly not, but note the decision.)
+
+### `--fresh` + `combined_output` leaves a stale roll-up — pre-release
+
+With `--fresh`, the combined output is `O_EXCL`-created and **skipped if it
+already exists** (`bxp-cli/src/pipeline.zig` ~L1862), while per-file outputs
+honour their own per-file skip. Intentional since the feature landed (8c4dfff,
+held through 24d4ac2 + a926dbb) — **not a regression** — but the semantics are
+surprising: add a new input, run `--fresh`, and the new file gets a per-file
+output while the combined roll-up stays stale (missing the new rows). Decide the
+intended contract: (a) `--fresh` always rebuilds the combined (skip applies only
+to per-file work — but the combined then needs every input reprocessed, so the
+per-file skip can't also hold); (b) keep current skip-if-exists and document it;
+(c) a `--rebuild-combined` style override. Resolve before release. Surfaced
+2026-05-31 while building the combine-pattern examples.
+
+### `bxp-fmt --expr` is silent on success — pre-release
+
+`runExpr` (`bxp-fmt/src/main.zig` ~L1050) is a validator: on success it writes
+**nothing** to stdout (exit 0); only failures emit JSON (to stderr). Recurring
+confusion — callers (and Claude) expect *some* output. The only consumer of the
+validator form is `scripts/test-01-console.sh`, which checks the exit code only
+(discards stdout), so adding `{"ok":true}` to stdout on success is safe. Note:
+`--expr` cannot return a *value* (no row context — column refs error); the
+evaluator with a value is `--expr-trace` / `--expr-batch`. Decide: emit
+`{"ok":true}` on success (smallest change), or make the whole contract uniform
+(`{"ok":false,...}` to stdout too, exit code preserved). Surfaced 2026-05-31.
+
 ## v0.3.0
 
 ### Flip bridge proxy to default on Linux/macOS
@@ -307,6 +349,19 @@ fixed before release instead, not parked here).
   multi-region dataset) you can't normalise to UTC. Feature: an offset/`Z`
   format token plus an optional "convert to UTC" mode in `DATE_CONVERT`.
   Date-only sibling problems (DST gaps, leap seconds) are out of scope.
+
+  **TZ-help builtins (considered 2026-05-31).** The vendored `sunrise` lib
+  has no timezone awareness, so today a correct DST-aware offset must be
+  hand-derived in the expression language — e.g. EU Prague (`CET`/`CEST`) is
+  computable from `EOMONTH`/`WEEKDAY`/`DATEADD`/`DATEDIFF` ("last Sunday of
+  March/October" window), as demonstrated in
+  `examples/advanced/multi-stage-etl`. That works but is verbose and
+  per-zone bespoke. Decide between (a) a small set of TZ-help builtins
+  (e.g. `TZ_OFFSET(date, zone)` returning `+01:00`/`+02:00` for a known
+  zone/rule set), or (b) implementing real zone/DST support in `bxp-core`
+  (tz database or per-zone rules) feeding `DATE_CONVERT`. Either removes the
+  hand-rolled DST arithmetic; weigh binary-size/complexity vs how common
+  multi-zone normalisation is.
 
 - **Minor, surfaced 2026-05-31 (low priority):**
   (a) `csv_thousands_separator_in` config so space/NBSP-grouped European
