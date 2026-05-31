@@ -4,7 +4,7 @@
 
 **What.** Reshape IMDb's public `title.basics.tsv` into a CSV catalogue row with normalised null markers, exploded genres, and a boolean `adult` column.
 
-**Why interesting.** IMDb's public non-commercial datasets are the canonical reference for film research, and they ship with three idiosyncrasies that silently corrupt every downstream pipeline that assumes "standard CSV": (1) the file is tab-separated, not comma-separated, so `cut -d,` and auto-detecting tools mis-parse every row; (2) missing values are encoded as the literal two-character string `\N` instead of an empty cell, so a naive type cast on `runtimeMinutes` returns `NaN` half the time; (3) `genres` is itself a comma-separated list embedded inside one TSV field.
+**Why interesting.** IMDb's public non-commercial datasets are the canonical reference for film research, and they ship with four idiosyncrasies that silently corrupt every downstream pipeline that assumes "standard CSV": (1) the file is tab-separated, not comma-separated, so `cut -d,` and auto-detecting tools mis-parse every row; (2) missing values are encoded as the literal two-character string `\N` instead of an empty cell, so a naive type cast on `runtimeMinutes` returns `NaN` half the time; (3) `genres` is itself a comma-separated list embedded inside one TSV field; (4) the TSV is **unquoted** yet thousands of titles contain a literal `"` character (`"Giliap"`, `Mujeres ... "nervios"`), so any RFC-4180 parser that assumes `"` opens a quoted field silently swallows every line up to the next `"` — dropping ~256k of the 12.5M rows with no error.
 
 **Edge cases sourced from.**
 
@@ -16,10 +16,37 @@
 **Data source.** [IMDb Non-Commercial Datasets — `title.basics.tsv.gz`](https://datasets.imdbws.com/title.basics.tsv.gz)
 (this slice: first 500 titles).
 
+**Run it at full scale.** The committed `sample.csv` is a 500-row slice that
+shows the quirks; the real file is ~12.5M rows. Pull it and run the same
+template against the whole thing:
+
+```bash
+bash fetch-full.sh          # downloads + extracts ./full/title.basics.tsv (~1 GB)
+bxp-cli --config full.json  # processes all 12.5M rows
+```
+
+Measured on the reference machine (ReleaseFast, 8 cores):
+
+| metric    | value                                   |
+| --------- | --------------------------------------- |
+| input     | 12,533,197 rows / 1.1 GB TSV            |
+| output    | 12,533,197 rows / 1.1 GB CSV (1:1)      |
+| wall time | ~24.5 s                                 |
+| peak RSS  | ~26 MB (flat — does not grow with rows) |
+
+The 1:1 row count is the whole point of TRICK 0b: with the default `"`
+input quoting left on, the same run produces only ~12.28M rows and reports
+no error. `full/` is gitignored — the download stays local.
+
 **The tricks** (see inline comments in `sample.json`):
 
 0. **TSV not CSV** — `csv_delimiter_in: "\t"` switches the parser to tab
    delimiting; output stays CSV for downstream tools.
+   - **Unquoted TSV with literal `"`** — `csv_text_quote_in: "none"` turns
+     off RFC-4180 quote handling. BXP defaults the input quote to `"`; left
+     on, the `"` inside titles merges lines and silently drops ~256k rows on
+     the full file. This is invisible on the 500-row slice (no quoted titles
+     in it) — see the scale note above.
 1. **`\N` null marker** — `IF([X] = '\N', '', [X])` rewritten three times
    (startYear, endYear, runtimeMinutes) plus once for the whole `genres`
    field.

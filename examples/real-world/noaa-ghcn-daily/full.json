@@ -1,0 +1,46 @@
+{
+  // Scale-run config: identical template to sample.json, but pointed at the
+  // full Central Park station file fetched by fetch-full.sh into ./full/.
+  // Keep the input_schema in sync with sample.json — same dataset, same tricks.
+  conversion_templates: {
+    noaa_daily_to_metric: {
+      data_dir:           "full",
+      file_pattern_in:    ".csv",
+      file_pattern_out:   ".csvx",
+      csv_text_quote_in:  "double",
+      csv_text_quote_out: "double",
+
+      input_schema: {
+        $station: "[STATION]",
+        $name:    "[NAME]",
+        $date:    "[DATE]",
+        $lat:     "[LATITUDE]",
+        $lon:     "[LONGITUDE]",
+
+        $tmax_c: "IF(TRIM([TMAX]) = '', '', TRIM([TMAX]) / 10)",
+        $tmin_c: "IF(TRIM([TMIN]) = '', '', TRIM([TMIN]) / 10)",
+        $tavg_c: "IF(TRIM([TAVG]) = '', '', TRIM([TAVG]) / 10)",
+        $prcp_mm:"IF(TRIM([PRCP]) = '', '', TRIM([PRCP]) / 10)",
+        $snow_mm:"IF(TRIM([SNOW]) = '', '', TRIM([SNOW]) / 10)",
+
+        $consistency: "IF(TRIM([TMAX]) = '' OR TRIM([TMIN]) = '', 'partial', IF(TRIM([TMAX]) < TRIM([TMIN]), 'tmax_below_tmin', 'ok'))"
+      },
+
+      row_rules: [ { when: "1 = 1", rows: [ {} ] } ],
+
+      output_schema: {
+        station:     "$station",
+        name:        "$name",
+        date:        "$date",
+        lat:         "$lat",
+        lon:         "$lon",
+        tmax_c:      "$tmax_c",
+        tmin_c:      "$tmin_c",
+        tavg_c:      "$tavg_c",
+        prcp_mm:     "$prcp_mm",
+        snow_mm:     "$snow_mm",
+        consistency: "$consistency"
+      }
+    }
+  }
+}

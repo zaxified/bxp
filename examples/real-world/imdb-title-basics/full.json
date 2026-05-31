@@ -1,17 +1,17 @@
 {
+  // Scale-run config: identical template to sample.json, but pointed at the
+  // full title.basics.tsv fetched by fetch-full.sh into ./full/ (~12.5M rows).
+  // Keep the input_schema in sync with sample.json — same dataset, same tricks.
   conversion_templates: {
     imdb_titles_to_catalog: {
-      data_dir:           ".",
-      file_pattern_in:    ".csv",
+      data_dir:           "full",
+      file_pattern_in:    ".tsv",
       file_pattern_out:   ".csvx",
       // TRICK 0 — IMDb publishes title.basics as TSV, not CSV.
       csv_delimiter_in:   "\t",
-      // TRICK 0b — the TSV is UNQUOTED, yet titles contain literal `"`
-      // characters (e.g. `"Giliap"`, `Mujeres ... "nervios"`). BXP defaults
-      // csv_text_quote_in to `"` (RFC 4180), which would treat those quotes
-      // as field delimiters and silently MERGE every physical line up to the
-      // next `"` into one record. On the full 12.5M-row file that drops
-      // ~256k rows without any error. Disable input quoting for TSV.
+      // TRICK 0b — TSV is unquoted but titles contain literal `"`; disable
+      // input quoting or RFC-4180 quote-merging silently drops ~256k rows.
+      // See sample.json for the full story.
       csv_text_quote_in:  "none",
       csv_delimiter_out:  ",",
       csv_text_quote_out: "double",
@@ -23,17 +23,10 @@
         $orig:  "[originalTitle]",
         $adult: "IF([isAdult] = '1', 'true', 'false')",
 
-        // TRICK 1 — \N is IMDb's null marker (two literal chars: backslash + N).
-        // Without normalising it, the literal "\N" leaks into the output and
-        // breaks every downstream type cast.
         $year:    "IF([startYear]      = '\\N', '', [startYear])",
         $end:     "IF([endYear]        = '\\N', '', [endYear])",
         $runtime: "IF([runtimeMinutes] = '\\N', '', [runtimeMinutes])",
 
-        // TRICK 2 — `genres` is a comma-separated list inside a TSV cell.
-        // Pull the first one out as the primary genre while keeping the
-        // raw list for filtering. Whole-list nulls (\N for titles with no
-        // genre tagging) need the same null normalisation as TRICK 1.
         $primary_genre: "IF([genres] = '\\N', '', SPLIT_PART([genres], ',', 1))",
         $all_genres:    "IF([genres] = '\\N', '', [genres])"
       },

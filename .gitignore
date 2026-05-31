@@ -14,3 +14,8 @@ releases/
 Thumbs.db
 *.swp
 scripts/bench/work/
+
+# Full real-world datasets fetched on demand by examples/*/fetch-full.sh
+# (hundreds of MB — never committed; the small sample.* slices are enough
+# for the repo, the full pull is a local scale demonstration).
+examples/real-world/*/full/

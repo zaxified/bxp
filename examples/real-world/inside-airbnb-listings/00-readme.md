@@ -17,6 +17,32 @@
 **Data source.** [Inside Airbnb — New York City, 2026-02-13 scrape](https://data.insideairbnb.com/united-states/ny/new-york-city/2026-02-13/visualisations/listings.csv)
 (this slice: first 300 listings).
 
+**Run it at full scale.** The committed `sample.csv` is a 300-row slice; the
+real scrape is the full current NYC listing set. Pull it and run the same
+template against the whole thing:
+
+```bash
+bash fetch-full.sh          # downloads ./full/listings.csv (~6 MB)
+bxp-cli --config full.json  # processes every NYC listing
+```
+
+Measured on the reference machine (ReleaseFast, 8 cores):
+
+| metric          | value                                  |
+| --------------- | -------------------------------------- |
+| input / output  | 36,445 rows (1:1, no column shift)     |
+| wall time       | ~0.12 s                                |
+| peak RSS        | ~14 MB                                 |
+| `unlicensed`    | 31,453 rows (**86%**)                  |
+| `exempt`        | 2,688 rows                             |
+| `registered`    | 2,304 rows                             |
+| price redacted  | 36,445 rows (**100%** — endpoint strips every price) |
+
+The 84% `unlicensed` rate in the 300-row slice holds at 86% across the full
+36k listings — Local Law 18's enforcement gap is not a sampling artifact. The
+quoted-comma names (e.g. `Perfect for Your Parents, With Garden & Patio`)
+stay intact in a single field, exactly as TRICK 0 promises.
+
 **The tricks** (see inline comments in `sample.json`):
 
 0. **CSV double-quote escaping** — `csv_text_quote_in: "double"` so names

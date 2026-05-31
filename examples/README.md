@@ -5,6 +5,20 @@ the full story, or copy the command into your shell to re-run it from the CLI.
 
 ---
 
+## French DVF Real-Estate → Analytics Schema
+
+**What.** Reshape France's official "Demandes de valeurs foncières" (DVF) raw
+
+**Why interesting.** DVF is the canonical open dataset for French property
+
+📄 [real-world/french-dvf-realestate/00-readme.md](real-world/french-dvf-realestate/00-readme.md)
+
+```bash
+bxp-cli --config ./real-world/french-dvf-realestate/sample.json --template dvf_realestate_to_analytics
+```
+
+---
+
 ## HubSpot Contacts → Salesforce Lead
 
 **What.** Convert a HubSpot Contacts CSV export into a Salesforce Lead Import CSV.
@@ -19,11 +33,25 @@ bxp-cli --config ./real-world/hubspot-to-salesforce/sample.json --template hubsp
 
 ---
 
+## Chicago Business Licenses → Analytics Schema
+
+**What.** Turn the City of Chicago's raw Business Licenses export into a
+
+**Why interesting.** It's a real, actively-maintained municipal dataset whose
+
+📄 [real-world/chicago-business-licenses/00-readme.md](real-world/chicago-business-licenses/00-readme.md)
+
+```bash
+bxp-cli --config ./real-world/chicago-business-licenses/sample.json --template chicago_licenses_to_analytics
+```
+
+---
+
 ## IMDb Title Basics → Catalog Row
 
 **What.** Reshape IMDb's public `title.basics.tsv` into a CSV catalogue row with normalised null markers, exploded genres, and a boolean `adult` column.
 
-**Why interesting.** IMDb's public non-commercial datasets are the canonical reference for film research, and they ship with three idiosyncrasies that silently corrupt every downstream pipeline that assumes "standard CSV": (1) the file is tab-separated, not comma-separated, so `cut -d,` and auto-detecting tools mis-parse every row; (2) missing values are encoded as the literal two-character string `\N` instead of an empty cell, so a naive type cast on `runtimeMinutes` returns `NaN` half the time; (3) `genres` is itself a comma-separated list embedded inside one TSV field.
+**Why interesting.** IMDb's public non-commercial datasets are the canonical reference for film research, and they ship with four idiosyncrasies that silently corrupt every downstream pipeline that assumes "standard CSV": (1) the file is tab-separated, not comma-separated, so `cut -d,` and auto-detecting tools mis-parse every row; (2) missing values are encoded as the literal two-character string `\N` instead of an empty cell, so a naive type cast on `runtimeMinutes` returns `NaN` half the time; (3) `genres` is itself a comma-separated list embedded inside one TSV field; (4) the TSV is **unquoted** yet thousands of titles contain a literal `"` character (`"Giliap"`, `Mujeres ... "nervios"`), so any RFC-4180 parser that assumes `"` opens a quoted field silently swallows every line up to the next `"` — dropping ~256k of the 12.5M rows with no error.
 
 📄 [real-world/imdb-title-basics/00-readme.md](real-world/imdb-title-basics/00-readme.md)
 

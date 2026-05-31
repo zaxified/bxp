@@ -1,0 +1,67 @@
+{
+  // Scale-run config: identical template to sample.json, but pointed at the
+  // full NYC listings file fetched by fetch-full.sh into ./full/.
+  // Keep the input_schema in sync with sample.json — same dataset, same tricks.
+  ticker_maps: {
+    room_type_short: {
+      "Entire home/apt": "ENTIRE",
+      "Private room":    "PRIVATE",
+      "Hotel room":      "HOTEL",
+      "Shared room":     "SHARED"
+    }
+  },
+  conversion_templates: {
+    airbnb_listings_to_analytics: {
+      data_dir:           "full",
+      file_pattern_in:    ".csv",
+      file_pattern_out:   ".csvx",
+      csv_text_quote_in:  "double",
+      csv_text_quote_out: "double",
+      ticker_map:         "room_type_short",
+
+      input_schema: {
+        $listing_id: "[id]",
+        $name:       "[name]",
+        $host:       "[host_name]",
+        $district:   "[neighbourhood_group]",
+        $area:       "[neighbourhood]",
+        $lat:        "[latitude]",
+        $lon:        "[longitude]",
+
+        $room_type:  "TICKER([room_type])",
+
+        $price_usd:  "COALESCE([price], '<price-redacted>')",
+
+        $min_nights: "[minimum_nights]",
+        $reviews:    "[number_of_reviews]",
+
+        $last_review:"[last_review]",
+
+        $reviews_pm: "[reviews_per_month]",
+        $avail_365:  "[availability_365]",
+
+        $reg_status: "IF([license] = '',       'unlicensed', IF([license] = 'Exempt', 'exempt', 'registered'))"
+      },
+
+      row_rules: [ { when: "1 = 1", rows: [ {} ] } ],
+
+      output_schema: {
+        listing_id:    "$listing_id",
+        name:          "$name",
+        host:          "$host",
+        district:      "$district",
+        area:          "$area",
+        lat:           "$lat",
+        lon:           "$lon",
+        room_type:     "$room_type",
+        price_usd:     "$price_usd",
+        min_nights:    "$min_nights",
+        reviews:       "$reviews",
+        last_review:   "$last_review",
+        reviews_pm:    "$reviews_pm",
+        avail_365:     "$avail_365",
+        reg_status:    "$reg_status"
+      }
+    }
+  }
+}
