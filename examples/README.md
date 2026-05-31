@@ -5,6 +5,20 @@ the full story, or copy the command into your shell to re-run it from the CLI.
 
 ---
 
+## JHU COVID-19 Wide → Long (unpivot)
+
+**What.** Reshape the Johns Hopkins COVID-19 confirmed-cases time series from
+
+**Why interesting.** The JHU CSSE time series was the most-analysed dataset of
+
+📄 [real-world/covid-wide-to-long/00-readme.md](real-world/covid-wide-to-long/00-readme.md)
+
+```bash
+bxp-cli --config ./real-world/covid-wide-to-long/sample.json --template covid_wide_to_long
+```
+
+---
+
 ## French DVF Real-Estate → Analytics Schema
 
 **What.** Reshape France's official "Demandes de valeurs foncières" (DVF) raw

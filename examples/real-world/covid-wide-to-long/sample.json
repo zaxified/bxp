@@ -1,0 +1,44 @@
+{
+  // Johns Hopkins COVID-19 confirmed-cases time series — the canonical "wide"
+  // dataset: one column PER DAY (1/22/20, 1/23/20, …). Analysis tools nearly
+  // always need it in long/tidy form (one row per country-date). This template
+  // unpivots three year-boundary snapshots into long rows using bxp's
+  // multi-row row_rules — one input country row fans out to N output rows.
+  conversion_templates: {
+    covid_wide_to_long: {
+      data_dir:           ".",
+      file_pattern_in:    ".csv",
+      file_pattern_out:   ".csvx",
+      // TRICK 0 — country names embed commas ("Korea, South"), so the file is
+      // double-quoted.
+      csv_text_quote_in:  "double",
+      csv_text_quote_out: "double",
+
+      input_schema: {
+        $country: "[Country/Region]"
+      },
+
+      // TRICK 1 — UNPIVOT (wide → long). Each `rows` entry emits one output
+      // row, pulling a different date column and stamping the matching ISO
+      // date as a literal. (Inside an override you reference *fields* with
+      // [..], not other $variables — note the slash-named columns work as
+      // field refs.) One country row in → three country-date rows out.
+      row_rules: [
+        {
+          when: "1 = 1",
+          rows: [
+            { $date: "'2020-01-22'", $cases: "[1/22/20]" },
+            { $date: "'2020-12-31'", $cases: "[12/31/20]" },
+            { $date: "'2021-12-31'", $cases: "[12/31/21]" }
+          ]
+        }
+      ],
+
+      output_schema: {
+        country:          "$country",
+        date:             "$date",
+        cumulative_cases: "$cases"
+      }
+    }
+  }
+}

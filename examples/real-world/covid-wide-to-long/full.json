@@ -1,0 +1,23 @@
+{
+  // Scale/complete-run config: same unpivot as sample.json, pointed at the
+  // full JHU confirmed-global file in ./full/. NB: that file has 1147 columns
+  // (one per day) and exceeds bxp's 1024-column cap — the overflow days warn
+  // and are ignored, but the three snapshot columns we reference (≤ col 714)
+  // are well within range. See the roadmap note on raising MAX_COLUMNS.
+  conversion_templates: {
+    covid_wide_to_long: {
+      data_dir:           "full",
+      file_pattern_in:    ".csv",
+      file_pattern_out:   ".csvx",
+      csv_text_quote_in:  "double",
+      csv_text_quote_out: "double",
+      input_schema: { $country: "[Country/Region]" },
+      row_rules: [ { when: "1 = 1", rows: [
+        { $date: "'2020-01-22'", $cases: "[1/22/20]" },
+        { $date: "'2020-12-31'", $cases: "[12/31/20]" },
+        { $date: "'2021-12-31'", $cases: "[12/31/21]" }
+      ] } ],
+      output_schema: { country: "$country", date: "$date", cumulative_cases: "$cases" }
+    }
+  }
+}
