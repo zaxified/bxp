@@ -64,6 +64,9 @@ bxp/
 │   ├── test-04-bridge.sh     # bxp-gui-bridge build + unit tests
 │   ├── test-05-format.sh     # prettier + markdownlint checks
 │   ├── test-06-expr-corpus.sh    # cross-runner expression corpus regression gate
+│   ├── test-07-bench-guard.sh    # coarse perf gate: own ReleaseFast build, RSS
+│   │                             # ceiling + wall scaling-ratio (catches O(N) RSS
+│   │                             # + O(n^2) regressions; no absolute wall thresholds)
 │   ├── release.sh            # Wrapper — runs release-01-console.sh + release-02-desktop.sh
 │   ├── release-01-console.sh    # Cross-compile bxp-cli, package bxp-console-* archives
 │   ├── release-02-desktop.sh    # Host-OS-specific Flutter desktop bundle → .AppImage / .deb

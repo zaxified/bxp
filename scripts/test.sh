@@ -19,6 +19,8 @@ export BXP_TEST_T0="$(_now)"
 # phases like Flutter desktop tests. Lookup falls back to no timeout.
 declare -A PHASE_BUDGET=(
     [test-06-expr-corpus.sh]=60
+    # Cold ReleaseFast build (~50s) + two timed runs; warm zig cache ~1s.
+    [test-07-bench-guard.sh]=180
 )
 
 shopt -s nullglob
