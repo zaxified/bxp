@@ -51,12 +51,13 @@ The consistency flag earns its keep here: two instrument-fault days hidden in
    fault), `TMAX`/`TMIN` empty (`partial`), or otherwise `ok`. Climatology
    averages computed across the raw column would silently swallow these.
 
-**Wide files, no ceiling.** GHCN's per-station file has **124 columns**
-(every measurement element pairs with a `_ATTRIBUTES` quality-flag column).
-BXP parses all of them — the full run reports `warnings:0` and every
-referenced element resolves, including `TAVG` at column 57. There is no
-column cap; the engine processes 1024-column inputs in the stress matrix
-without degrading, so a 124-column climate file is comfortably within range.
+**Wide files.** GHCN's per-station file has **124 columns** (every
+measurement element pairs with a `_ATTRIBUTES` quality-flag column). BXP
+parses all of them — the full run reports `warnings:0` and every referenced
+element resolves, including `TAVG` at column 57. bxp-cli's column ceiling is
+**1024** (`MAX_COLUMNS`); a 124-column climate file sits comfortably under it.
+Inputs wider than that (e.g. a daily time-series with one column per day) warn
+and ignore the overflow — see the roadmap entry on raising the cap.
 
 **Smoking gun.** Run the conversion and look at row 3 (`2020-01-03`):
 

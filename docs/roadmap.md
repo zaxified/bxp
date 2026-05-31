@@ -287,6 +287,17 @@ fixed before release instead, not parked here).
   (b) Load-time warning on **duplicate column headers** — `[name]` currently
   resolves last-wins silently, which can mask a malformed export.
 
+- **Raise / make-configurable the 1024-column cap (`MAX_COLUMNS`).** Wide
+  time-series exports exceed it: the Johns Hopkins COVID-19 daily series ships
+  one column per day (1147 columns by March 2023), so everything past column
+  1024 is silently dropped (`warning: '<file>' has more than 1024 columns;
+  extra columns are ignored`, reproduced 2026-05-31). 1024 is a deliberate,
+  generous ceiling (the field buffer is `[MAX_COLUMNS][]const u8`), but
+  day-per-column datasets are a real shape. Options: raise it, or make it a
+  config/dynamic allocation. Note: such files usually *want* unpivoting to long
+  form anyway (bxp does that via multi-row `row_rules`), which sidesteps the
+  width entirely once the columns are reachable.
+
 - **Bracket-protected fields (web-server access logs).** Apache/nginx
   combined-log format is space-delimited but wraps the timestamp in
   `[10/Oct/2000:13:55:36 -0700]` — a group containing the delimiter. bxp-cli
