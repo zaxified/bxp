@@ -1,0 +1,44 @@
+{
+  // Scale-run config: identical template to sample.json, pointed at the full
+  // valeursfoncieres-2024.txt fetched by fetch-full.sh into ./full/ (~4M rows).
+  // Keep the input_schema in sync with sample.json — same dataset, same tricks.
+  conversion_templates: {
+    dvf_realestate_to_analytics: {
+      data_dir:                  "full",
+      file_pattern_in:           ".txt",
+      file_pattern_out:          ".csvx",
+      csv_delimiter_in:          "|",
+      csv_decimal_separator_in:  ",",
+      csv_delimiter_out:         ",",
+      csv_text_quote_out:        "double",
+
+      input_schema: {
+        $date:          "DATE_CONVERT([Date mutation], 'DD/MM/YYYY', 'YYYY-MM-DD')",
+        $sale_type:     "[Nature mutation]",
+        $price_eur:     "[Valeur fonciere]",
+        $commune:       "[Commune]",
+        $dept:          "[Code departement]",
+        $postal_raw:    "[Code postal]",
+        $postal_fixed:  "RIGHT('00000' & [Code postal], 5)",
+        $property_type: "[Type local]",
+        $area_m2:       "[Surface reelle bati]",
+        $rooms:         "[Nombre pieces principales]"
+      },
+
+      row_rules: [ { when: "1 = 1", rows: [ {} ] } ],
+
+      output_schema: {
+        date:          "$date",
+        sale_type:     "$sale_type",
+        price_eur:     "$price_eur",
+        commune:       "$commune",
+        dept:          "$dept",
+        postal_raw:    "$postal_raw",
+        postal_fixed:  "$postal_fixed",
+        property_type: "$property_type",
+        area_m2:       "$area_m2",
+        rooms:         "$rooms"
+      }
+    }
+  }
+}

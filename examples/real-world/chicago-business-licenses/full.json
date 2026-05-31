@@ -1,0 +1,47 @@
+{
+  // Scale-run config: identical template to sample.json, pointed at the full
+  // license register fetched by fetch-full.sh into ./full/ (~1.2M rows).
+  // Keep the input_schema in sync with sample.json — same dataset, same tricks.
+  ticker_maps: {
+    license_status_label: {
+      "AAI": "issued",
+      "AAC": "cancelled_during_term",
+      "REV": "revoked",
+      "REA": "revocation_appealed"
+    }
+  },
+  conversion_templates: {
+    chicago_licenses_to_analytics: {
+      data_dir:           "full",
+      file_pattern_in:    ".csv",
+      file_pattern_out:   ".csvx",
+      csv_text_quote_in:  "double",
+      csv_text_quote_out: "double",
+      ticker_map:         "license_status_label",
+
+      input_schema: {
+        $business:   "COALESCE([doing_business_as_name], [legal_name])",
+        $license:    "[license_description]",
+        $zip:        "[zip_code]",
+        $status:     "TICKER([license_status])",
+        $app_type:   "IF([application_type] = 'ISSUE',  'initial_application', IF([application_type] = 'RENEW', 'renewal', IF([application_type] = 'C_LOC', 'change_of_location', IF([application_type] = 'C_CAPA', 'change_of_capacity', IF([application_type] = 'C_EXPA', 'liquor_area_expansion', IF([application_type] = 'C_SBA', 'change_of_business_activity', [application_type]))))))",
+        $start:      "DATE_CONVERT([license_start_date], 'YYYY-MM-DD[T]hh:mm:ss', 'YYYY-MM-DD')",
+        $expires:    "DATE_CONVERT([expiration_date], 'YYYY-MM-DD[T]hh:mm:ss', 'YYYY-MM-DD')",
+        $applied:    "IF([application_created_date] = '', '<not-on-file>', DATE_CONVERT([application_created_date], 'YYYY-MM-DD[T]hh:mm:ss', 'YYYY-MM-DD'))"
+      },
+
+      row_rules: [ { when: "1 = 1", rows: [ {} ] } ],
+
+      output_schema: {
+        business:  "$business",
+        license:   "$license",
+        zip:       "$zip",
+        status:    "$status",
+        app_type:  "$app_type",
+        start:     "$start",
+        expires:   "$expires",
+        applied:   "$applied"
+      }
+    }
+  }
+}

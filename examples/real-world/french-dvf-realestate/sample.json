@@ -1,0 +1,61 @@
+{
+  // French DGFiP "Demandes de valeurs foncières" (DVF) — the raw open-data
+  // real-estate transaction export. A textbook European-government CSV:
+  // pipe-delimited, comma-decimal money, DD/MM/YYYY dates, and a postal-code
+  // column the producer already stored as a number (leading zero lost).
+  conversion_templates: {
+    dvf_realestate_to_analytics: {
+      data_dir:                  ".",
+      file_pattern_in:           ".csv",
+      file_pattern_out:          ".csvx",
+      // TRICK 0 — the file is pipe-delimited, not comma-delimited.
+      csv_delimiter_in:          "|",
+      // TRICK 1 — monetary values use a comma decimal: "346,50" = 346.50 €.
+      // A US-centric parser reads "346,50" as 34650 (comma = thousands) — a
+      // 100x error — or splits the field. Declaring the decimal separator
+      // makes [Valeur fonciere] arrive as a clean 346.5.
+      csv_decimal_separator_in:  ",",
+      csv_delimiter_out:         ",",
+      csv_text_quote_out:        "double",
+
+      input_schema: {
+        // TRICK 2 — French dates are DD/MM/YYYY; convert to ISO-8601.
+        $date:          "DATE_CONVERT([Date mutation], 'DD/MM/YYYY', 'YYYY-MM-DD')",
+        $sale_type:     "[Nature mutation]",
+        $price_eur:     "[Valeur fonciere]",
+        $commune:       "[Commune]",
+
+        // TRICK 3 — `Code departement` is stored as text and keeps its
+        // leading zero ("01" = Ain). bxp passes it through verbatim.
+        $dept:          "[Code departement]",
+
+        // TRICK 4 — `Code postal`, by contrast, was stored as a NUMBER by the
+        // producer, so its leading zero is already gone ("01230" → "1230").
+        // Re-pad it back to five digits. (This RIGHT('00000' & x, 5) idiom
+        // only emits the correct "01230" since the bxp leading-zero fix —
+        // before it, the padded value was re-canonicalised back to "1230".)
+        $postal_raw:    "[Code postal]",
+        $postal_fixed:  "RIGHT('00000' & [Code postal], 5)",
+
+        $property_type: "[Type local]",
+        $area_m2:       "[Surface reelle bati]",
+        $rooms:         "[Nombre pieces principales]"
+      },
+
+      row_rules: [ { when: "1 = 1", rows: [ {} ] } ],
+
+      output_schema: {
+        date:          "$date",
+        sale_type:     "$sale_type",
+        price_eur:     "$price_eur",
+        commune:       "$commune",
+        dept:          "$dept",
+        postal_raw:    "$postal_raw",
+        postal_fixed:  "$postal_fixed",
+        property_type: "$property_type",
+        area_m2:       "$area_m2",
+        rooms:         "$rooms"
+      }
+    }
+  }
+}
