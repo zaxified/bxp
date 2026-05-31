@@ -1,0 +1,61 @@
+stop_id,name,kind,parent_id,parent_station_name
+101,Van Cortlandt Park-242 St,station,,
+101N,Van Cortlandt Park-242 St,platform,101,Van Cortlandt Park-242 St
+101S,Van Cortlandt Park-242 St,platform,101,Van Cortlandt Park-242 St
+103,238 St,station,,
+103N,238 St,platform,103,238 St
+103S,238 St,platform,103,238 St
+104,231 St,station,,
+104N,231 St,platform,104,231 St
+104S,231 St,platform,104,231 St
+106,Marble Hill-225 St,station,,
+106N,Marble Hill-225 St,platform,106,Marble Hill-225 St
+106S,Marble Hill-225 St,platform,106,Marble Hill-225 St
+107,215 St,station,,
+107N,215 St,platform,107,215 St
+107S,215 St,platform,107,215 St
+108,207 St,station,,
+108N,207 St,platform,108,207 St
+108S,207 St,platform,108,207 St
+109,Dyckman St,station,,
+109N,Dyckman St,platform,109,Dyckman St
+109S,Dyckman St,platform,109,Dyckman St
+110,191 St,station,,
+110N,191 St,platform,110,191 St
+110S,191 St,platform,110,191 St
+111,181 St,station,,
+111N,181 St,platform,111,181 St
+111S,181 St,platform,111,181 St
+112,168 St-Washington Hts,station,,
+112N,168 St-Washington Hts,platform,112,168 St-Washington Hts
+112S,168 St-Washington Hts,platform,112,168 St-Washington Hts
+113,157 St,station,,
+113N,157 St,platform,113,157 St
+113S,157 St,platform,113,157 St
+114,145 St,station,,
+114N,145 St,platform,114,145 St
+114S,145 St,platform,114,145 St
+115,137 St-City College,station,,
+115N,137 St-City College,platform,115,137 St-City College
+115S,137 St-City College,platform,115,137 St-City College
+116,125 St,station,,
+116N,125 St,platform,116,125 St
+116S,125 St,platform,116,125 St
+117,116 St-Columbia University,station,,
+117N,116 St-Columbia University,platform,117,116 St-Columbia University
+117S,116 St-Columbia University,platform,117,116 St-Columbia University
+118,Cathedral Pkwy (110 St),station,,
+118N,Cathedral Pkwy (110 St),platform,118,Cathedral Pkwy (110 St)
+118S,Cathedral Pkwy (110 St),platform,118,Cathedral Pkwy (110 St)
+119,103 St,station,,
+119N,103 St,platform,119,103 St
+119S,103 St,platform,119,103 St
+120,96 St,station,,
+120N,96 St,platform,120,96 St
+120S,96 St,platform,120,96 St
+121,86 St,station,,
+121N,86 St,platform,121,86 St
+121S,86 St,platform,121,86 St
+122,79 St,station,,
+122N,79 St,platform,122,79 St
+122S,79 St,platform,122,79 St

@@ -38,6 +38,18 @@ bxp-cli --config ./real-world/covid-wide-to-long/sample.json --template covid_wi
 bxp-cli --config ./real-world/french-dvf-realestate/sample.json --template dvf_realestate_to_analytics
 ```
 
+### GTFS Stops → Self-Join (pre_pass + LOOKUP)
+
+**What.** Enrich every NYC-subway platform row with its parent **station name**
+
+**Why interesting.** GTFS `stops.txt` is hierarchical inside one flat CSV: a
+
+📄 [real-world/gtfs-stops-selfjoin/00-readme.md](real-world/gtfs-stops-selfjoin/00-readme.md)
+
+```bash
+bxp-cli --config ./real-world/gtfs-stops-selfjoin/sample.json --template gtfs_stops_selfjoin
+```
+
 ### Chicago Business Licenses → Analytics Schema
 
 **What.** Turn the City of Chicago's raw Business Licenses export into a

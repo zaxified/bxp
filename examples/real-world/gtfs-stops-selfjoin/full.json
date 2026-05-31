@@ -1,0 +1,28 @@
+{
+  // Scale/complete-run config: same self-join as sample.json, on the full
+  // stops.txt in ./full/. Keep input_schema in sync with sample.json.
+  conversion_templates: {
+    gtfs_stops_selfjoin: {
+      data_dir:           "full",
+      file_pattern_in:    ".txt",
+      file_pattern_out:   ".csvx",
+      pre_pass: {
+        when:   "[location_type] = '1'",
+        key:    "[stop_id]",
+        values: { station_name: "[stop_name]", station_lat: "[stop_lat]", station_lon: "[stop_lon]" }
+      },
+      input_schema: {
+        $stop_id:    "[stop_id]",
+        $name:       "[stop_name]",
+        $kind:       "IF([location_type] = '1', 'station', 'platform')",
+        $parent_id:  "[parent_station]",
+        $parent_name:"IF([parent_station] = '', '', LOOKUP([parent_station], 'station_name'))"
+      },
+      row_rules: [ { when: "1 = 1", rows: [ {} ] } ],
+      output_schema: {
+        stop_id: "$stop_id", name: "$name", kind: "$kind",
+        parent_id: "$parent_id", parent_station_name: "$parent_name"
+      }
+    }
+  }
+}

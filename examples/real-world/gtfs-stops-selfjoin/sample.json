@@ -1,0 +1,49 @@
+{
+  // GTFS stops.txt (NYC subway) — each directional platform row carries a
+  // `parent_station` that points at ANOTHER row's `stop_id` in the SAME file.
+  // This is a self-join: enrich every platform with its parent station's name,
+  // resolved from a different row, using bxp's pre_pass + LOOKUP.
+  conversion_templates: {
+    gtfs_stops_selfjoin: {
+      data_dir:           ".",
+      file_pattern_in:    ".csv",
+      file_pattern_out:   ".csvx",
+
+      // PRE_PASS — first scan the whole file and index the *parent stations*
+      // (location_type = 1) by their stop_id, capturing the name/coords other
+      // rows will need. This is what lets a later row look back at an earlier
+      // (or later) row by key.
+      pre_pass: {
+        when:   "[location_type] = '1'",
+        key:    "[stop_id]",
+        values: {
+          station_name: "[stop_name]",
+          station_lat:  "[stop_lat]",
+          station_lon:  "[stop_lon]"
+        }
+      },
+
+      input_schema: {
+        $stop_id:   "[stop_id]",
+        $name:      "[stop_name]",
+        $kind:      "IF([location_type] = '1', 'station', 'platform')",
+        $parent_id: "[parent_station]",
+
+        // SELF-JOIN — turn the opaque parent_station id ("101") into the human
+        // station name stored by another row. Stations themselves have no
+        // parent, so guard the empty case.
+        $parent_name: "IF([parent_station] = '', '', LOOKUP([parent_station], 'station_name'))"
+      },
+
+      row_rules: [ { when: "1 = 1", rows: [ {} ] } ],
+
+      output_schema: {
+        stop_id:             "$stop_id",
+        name:                "$name",
+        kind:                "$kind",
+        parent_id:           "$parent_id",
+        parent_station_name: "$parent_name"
+      }
+    }
+  }
+}
