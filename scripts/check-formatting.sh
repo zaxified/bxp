@@ -1,15 +1,21 @@
 #!/usr/bin/env bash
-# Formatting + markdown-lint check.
+# Documentation formatting fix + lint — PRE-RELEASE ONLY.
 #
-# Runs prettier --check and markdownlint-cli2 across owned .md/.json/.jsonc
-# /.yml/.yaml files. Ignores are read from `.prettierignore` and the project
-# `.markdownlint-cli2.jsonc`. Phase fails if any file would change under
-# prettier --write or any markdownlint rule fires — encourages contributors
-# (and Claude) to run `bunx prettier --write` + fix lint issues before commit.
+# Deliberately NOT named `test-NN-*.sh`, so `scripts/test.sh` does not auto-run
+# it: formatting is not a routine correctness gate. It belongs to the pre-release
+# docs review (see memory `feedback_pre_release_review_order`, Krok 3).
+#
+# Three steps, in order:
+#   1. prettier --write  — AUTO-FIXES formatting across owned .md/.json/.jsonc
+#      /.yml/.yaml (notably realigns markdown tables). Ignores from
+#      `.prettierignore`. This is the fixer, not a check — run it, commit the
+#      result; nothing to hand-fix.
+#   2. markdownlint-cli2 — verifies markdown semantics (`.markdownlint-cli2.jsonc`).
+#   3. mermaid check     — parses every mermaid fence (renders aren't visible to
+#      a reviewer; a syntax slip ships a blank graph to GitHub).
 #
 # Usage (from any directory):
-#   bash scripts/test-05-format.sh   — this phase alone
-#   bash scripts/test.sh             — wrapper runs every phase
+#   bash scripts/check-formatting.sh
 
 set -euo pipefail
 
@@ -31,8 +37,8 @@ if ! command -v bunx >/dev/null 2>&1; then
     exit 0
 fi
 
-_prettier_check() {
-    bunx prettier --check "**/*.{md,json,jsonc,yml,yaml}"
+_prettier_fix() {
+    bunx prettier --write "**/*.{md,json,jsonc,yml,yaml}"
 }
 
 _markdownlint_check() {
@@ -60,6 +66,6 @@ _mermaid_check() {
 }
 
 section "Format"
-step "$(_lab prettier 'check')" _prettier_check
+step "$(_lab prettier 'write')" _prettier_fix
 step "$(_lab lint-md   'check')" _markdownlint_check
 step "$(_lab mermaid   'check')" _mermaid_check

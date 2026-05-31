@@ -62,7 +62,6 @@ bxp/
 │   ├── test-02-datasets.sh   # bxp-cli regression vs datasets/*/*.expected
 │   ├── test-03-desktop.sh    # flutter analyze + flutter test + json5_ast dart test
 │   ├── test-04-bridge.sh     # bxp-gui-bridge build + unit tests
-│   ├── test-05-format.sh     # prettier + markdownlint checks
 │   ├── test-06-expr-corpus.sh    # cross-runner expression corpus regression gate
 │   ├── test-07-bench-guard.sh    # coarse perf gate: own ReleaseFast build, RSS
 │   │                             # ceiling + wall scaling-ratio (catches O(N) RSS
@@ -73,7 +72,10 @@ bxp/
 │   │                            # / .tar.gz / NSIS .exe / DMG (matrixed by GH Actions)
 │   ├── release-03-checksums.sh  # Emit SHA256SUMS for every release artifact
 │   ├── release-changelog.sh     # Extract per-tag section from CHANGELOG.md for release notes
-│   └── release-tag.sh           # Push a vX.Y.Z tag and trigger the release workflow
+│   ├── release-tag.sh           # Push a vX.Y.Z tag and trigger the release workflow
+│   └── check-formatting.sh      # prettier --write + markdownlint + mermaid; PRE-RELEASE
+│                                # docs fix/lint — deliberately NOT a test-NN phase
+│                                # (test.sh does not auto-run it)
 ├── docs/                 # Developer + user documentation
 │   ├── README.md             # Index / table of contents
 │   ├── architecture.md       # System architecture + module diagrams

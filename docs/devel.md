@@ -157,14 +157,14 @@ bxp/                            # monorepo root (git root)
 │   ├── test-02-datasets.sh     # bxp-cli regression vs datasets/*/*.expected
 │   ├── test-03-desktop.sh      # flutter analyze + flutter test + json5_ast dart test
 │   ├── test-04-bridge.sh       # bxp-gui-bridge build + unit tests
-│   ├── test-05-format.sh       # prettier + markdownlint checks
 │   ├── test-06-expr-corpus.sh  # cross-runner expression corpus regression gate
 │   ├── release.sh              # wrapper: release-01-console.sh + release-02-desktop.sh
 │   ├── release-01-console.sh   # cross-compile bxp-cli → bxp-console-* archives
 │   ├── release-02-desktop.sh   # Flutter bundle → AppImage / .deb / .exe / .dmg
 │   ├── release-03-checksums.sh # emit SHA256SUMS for all release artifacts
 │   ├── release-changelog.sh    # bump versions + generate CHANGELOG.md entry + commit
-│   └── release-tag.sh          # read version from manifest + tag + push
+│   ├── release-tag.sh          # read version from manifest + tag + push
+│   └── check-formatting.sh     # prettier --write + markdownlint + mermaid (pre-release; not auto-run)
 └── README.md                   # project overview
 ```
 
@@ -208,8 +208,7 @@ The test script auto-discovers `test-NN-*.sh` siblings and runs them in numeric 
 2. `test-02-datasets.sh` — runs `bxp-cli` against every `datasets/<id>/sample.json` and diffs against `sample.expected`.
 3. `test-03-desktop.sh` — `flutter analyze` + `flutter test` for `bxp-gui`.
 4. `test-04-bridge.sh` — Zig unit tests for the FFI bridge.
-5. `test-05-format.sh` — prettier + markdownlint checks on owned files.
-6. `test-06-expr-corpus.sh` — expression corpus regression gate (see below).
+5. `test-06-expr-corpus.sh` — expression corpus regression gate (see below).
 
 Individual unit tests only:
 
@@ -826,10 +825,12 @@ directory and diffs output against `sample.expected`.
 
 **`test-04-bridge.sh`** — `bxp-gui-bridge` build + unit tests.
 
-**`test-05-format.sh`** — `prettier --check` + `markdownlint` against owned files.
-
 **`test-06-expr-corpus.sh`** — expression corpus regression gate (TAB-separated
 `expr<TAB>ok|err<TAB>...` cases).
+
+> Docs formatting is **not** a test phase. `scripts/check-formatting.sh`
+> (`prettier --write` + `markdownlint` + mermaid parse) is a standalone
+> pre-release step — `test.sh` does not run it.
 
 Individual sub-suites:
 

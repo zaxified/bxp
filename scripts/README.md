@@ -17,7 +17,7 @@ wrappers ignore them.
 | Dataset regression only                               | `bash scripts/test-02-datasets.sh`               |
 | Desktop tests only                                    | `bash scripts/test-03-desktop.sh`                |
 | Bridge tests only                                     | `bash scripts/test-04-bridge.sh`                 |
-| Format + markdown lint only                           | `bash scripts/test-05-format.sh`                 |
+| Docs format-fix + lint (pre-release only)             | `bash scripts/check-formatting.sh`               |
 | Expression corpus only                                | `bash scripts/test-06-expr-corpus.sh`            |
 | Local smoke build (no publish)                        | `bash scripts/release.sh`                        |
 | Console build only                                    | `bash scripts/release-01-console.sh`             |
@@ -55,7 +55,6 @@ test-01-console.sh            bxp-core unit + bxp-cli/fmt build + bxp-fmt smoke 
 test-02-datasets.sh           bxp-cli regression vs datasets/*/*.expected
 test-03-desktop.sh            flutter analyze + flutter test + json5_ast dart test
 test-04-bridge.sh             bxp-gui-bridge unit tests (FFI surface)
-test-05-format.sh             prettier --check + markdownlint-cli2
 test-06-expr-corpus.sh        bxp-fmt --expr corpus regression gate
 
 release.sh                    wrapper — runs every release-NN-*.sh in order
@@ -65,6 +64,7 @@ release-03-checksums.sh       generate SHA256SUMS over release artifacts
 
 release-changelog.sh          standalone — bump versions + prepend CHANGELOG.md
 release-tag.sh                standalone — CalVer tag + push (triggers CI)
+check-formatting.sh           standalone — prettier --write + markdownlint + mermaid (pre-release docs; NOT auto-run by test.sh)
 ```
 
 ## Platform requirements
