@@ -1,0 +1,38 @@
+{
+  // Teaching example — synthetic data. You have one CSV per day (or per month),
+  // all with the SAME columns, and you want a single combined table for the
+  // whole period. `combined_output: true` does exactly this: every file matched
+  // in data_dir is processed with this one template and the rows are written to
+  // ONE output file, `1-fan_in_daily-combined.csvx`, in alphabetical filename
+  // order — so naming files by date (2024-01-01.csv, 2024-01-02.csv, …) gives a
+  // deterministic chronological stack with no manual `cat` and no repeated
+  // header rows.
+  conversion_templates: {
+    fan_in_daily: {
+      data_dir:          ".",
+      file_pattern_in:   ".csv",
+      file_pattern_out:  ".csvx",
+
+      // Fan-in switch: many inputs -> one output file.
+      combined_output:   true,
+
+      input_schema: {
+        $date:  "[date]",
+        $store: "[store]",
+
+        // The daily files use the continental format "1 250,50" (space
+        // thousands, comma decimal). Strip the space, swap the comma, multiply
+        // by 1 to land a clean numeric amount.
+        $amount: "REPLACE(REPLACE([gross], ' ', ''), ',', '.') * 1"
+      },
+
+      row_rules: [ { when: "1 = 1", rows: [ {} ] } ],
+
+      output_schema: {
+        date:   "$date",
+        store:  "$store",
+        amount: "$amount"
+      }
+    }
+  }
+}

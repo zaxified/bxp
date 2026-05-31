@@ -46,6 +46,12 @@ bxp-cli --config full.json  # converts every object's RA/Dec → decimal degrees
 - Both guarded with `LEN(TRIM(...)) = 0` so blank-coord `NonEx` rows stay empty
   instead of computing to `0` (which would be a real point on the sky).
 
+**Run it.**
+
+```bash
+bxp-cli --config ./sample.json --template ngc_to_decimal_degrees
+```
+
 **Smoking gun.** The Andromeda Galaxy (M31 = NGC 224) and the Orion Nebula
 (M42 = NGC 1976, southern) convert exactly:
 

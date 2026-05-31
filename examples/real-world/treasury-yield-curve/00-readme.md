@@ -55,6 +55,12 @@ one header would misalign columns.
   date-tenor rows per business day. (Inside an override you reference *fields*
   with `[..]`, not other `$variables`.)
 
+**Run it.**
+
+```bash
+bxp-cli --config ./sample.json --template treasury_curve_to_long
+```
+
 **Smoking gun.** The 2024-12-31 row holding 13 yields across 13 columns becomes
 13 tidy rows carrying a numeric tenor:
 

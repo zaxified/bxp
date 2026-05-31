@@ -57,6 +57,12 @@ skew every average-fare and tip-rate aggregate computed over the raw column.
    classifies each row as `ok` / `no_passengers` / `refund` so the
    anomalies stand out instead of contaminating aggregates.
 
+**Run it.**
+
+```bash
+bxp-cli --config ./sample.json --template nyc_taxi_to_analytics
+```
+
 **Smoking gun.** Run the conversion and look at the `quality` column. In this
 800-row real-data slice the engine surfaces:
 

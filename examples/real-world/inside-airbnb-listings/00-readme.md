@@ -57,6 +57,12 @@ stay intact in a single field, exactly as TRICK 0 promises.
 4. **Three-state regulatory column** — `IF` chain over `[license]` derives
    `unlicensed` / `exempt` / `registered`.
 
+**Run it.**
+
+```bash
+bxp-cli --config ./sample.json --template airbnb_listings_to_analytics
+```
+
 **Smoking gun.** Run the conversion and look at the `reg_status` histogram.
 In this 300-row real-data slice from February 2026:
 

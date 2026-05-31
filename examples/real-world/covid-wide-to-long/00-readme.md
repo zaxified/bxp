@@ -47,6 +47,12 @@ is a [roadmap item](../../../docs/roadmap.md).
   field reference. Inside an override you reference *fields* with `[..]`, not
   `$variables`.)
 
+**Run it.**
+
+```bash
+bxp-cli --config ./sample.json --template covid_wide_to_long
+```
+
 **Smoking gun.** `sample.csvx` turns one `Afghanistan` row holding
 `0 | 52330 | 158084` across three columns into three tidy rows:
 

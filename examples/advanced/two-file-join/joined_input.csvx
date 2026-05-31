@@ -1,0 +1,5 @@
+order_id,customer_id,customer_name,customer_city,amount
+1001,C-1,Acme s.r.o.,Praha,1250.5
+1002,C-2,Globex a.s.,Brno,980
+1003,C-1,Acme s.r.o.,Praha,540
+1004,C-9,,,75

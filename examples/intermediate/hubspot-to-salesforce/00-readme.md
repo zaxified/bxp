@@ -31,6 +31,12 @@ documented; the rows are not.
 4. **Mixed date formats** → `IF(CONTAINS('/'), DATE_CONVERT US, DATE_CONVERT ISO)`
    sniffs the separator per row.
 
+**Run it.**
+
+```bash
+bxp-cli --config ./sample.json --template hubspot_to_sfdc_lead
+```
+
 **Smoking gun.** Open `sample.csv` row 7 (Lisa Brown / Cyberdyne) in the GUI.
 Industry value `"Foo Bar Industry"` is not in the lookup map — `TICKER()`
 passes it through unchanged. CLI says `errors:0`, but Salesforce would reject

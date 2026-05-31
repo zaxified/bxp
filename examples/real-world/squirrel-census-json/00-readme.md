@@ -54,6 +54,12 @@ bxp-cli --config full.json  # flattens every sighting → CSV
 - **Coerce booleans**: `[running]` etc. arrive as JSON `false`/`true` and land
   as the text `false`/`true`.
 
+**Run it.**
+
+```bash
+bxp-cli --config ./sample.json --template squirrel_census_to_csv
+```
+
 **Smoking gun.** The first two sightings have no `primary_fur_color` or
 `location` keys at all; the third does. bxp lines them up under one schema:
 

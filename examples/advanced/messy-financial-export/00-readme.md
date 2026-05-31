@@ -33,6 +33,12 @@ no glue script orchestrating per-column cleanups.
 6. null-variant notes → empty — see
    [basic/null-variants](../../basic/null-variants/00-readme.md)
 
+**Run it.**
+
+```bash
+bxp-cli --config ./sample.json --template messy_financial_export
+```
+
 **Smoking gun.** One ragged input row —
 
 ```text

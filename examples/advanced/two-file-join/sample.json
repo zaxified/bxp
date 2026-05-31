@@ -1,0 +1,56 @@
+{
+  // Teaching example — synthetic data. The classic relational JOIN: a fact table
+  // (orders) carries only a foreign key (customer_id); the human details
+  // (name, city) live in a separate dimension table (customers). bxp processes
+  // ONE file per pass, so the two sources are first stacked into one file with a
+  // `_type` marker column — `customer` rows and `order` rows together. (Here the
+  // combined file is shipped ready-made; for how to PRODUCE it from two separate
+  // files inside bxp, see ../multi-stage-etl, which builds the same shape with
+  // `combined_output`.)
+  //
+  // With both record types in one file, a pre_pass indexes the dimension rows
+  // and the main pass enriches each fact row via LOOKUP — a real keyed join.
+  conversion_templates: {
+    two_file_join: {
+      data_dir:          ".",
+      file_pattern_in:   ".csv",
+      file_pattern_out:  ".csvx",
+
+      // PRE_PASS — scan the `customer` rows only and index name+city by
+      // customer_id. This is the dimension side of the join.
+      pre_pass: {
+        when:   "[_type] = 'customer'",
+        key:    "[customer_id]",
+        values: {
+          cust_name: "[name]",
+          cust_city: "[city]"
+        }
+      },
+
+      input_schema: {
+        $order_id:    "[order_id]",
+        $customer_id: "[customer_id]",
+        $amount:      "[amount]",
+
+        // THE JOIN — resolve the foreign key to the dimension's values. An order
+        // whose customer_id is not in the dimension (C-9) gets "" — LOOKUP
+        // returns empty for an unknown key, so unmatched rows are visible, not
+        // dropped.
+        $name: "LOOKUP([customer_id], 'cust_name')",
+        $city: "LOOKUP([customer_id], 'cust_city')"
+      },
+
+      // Emit only the fact (order) rows; the dimension rows were just the lookup
+      // source.
+      row_rules: [ { when: "[_type] = 'order'", rows: [ {} ] } ],
+
+      output_schema: {
+        order_id:      "$order_id",
+        customer_id:   "$customer_id",
+        customer_name: "$name",
+        customer_city: "$city",
+        amount:        "$amount"
+      }
+    }
+  }
+}

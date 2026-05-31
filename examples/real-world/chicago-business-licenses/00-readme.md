@@ -74,6 +74,12 @@ Two things the full run surfaces that the slice can't:
    keeps the date part; `IF([application_created_date] = '', '<not-on-file>', …)`
    turns the 84%-blank column into an explicit marker.
 
+**Run it.**
+
+```bash
+bxp-cli --config ./sample.json --template chicago_licenses_to_analytics
+```
+
 **Smoking gun.** Sort `sample.csvx` by `status`. The `revoked` and
 `cancelled_during_term` blocks are now obvious at a glance — in the raw file
 they were `REV` and `AAC`, indistinguishable to anyone without the data

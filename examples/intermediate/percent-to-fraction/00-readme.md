@@ -33,6 +33,12 @@ IF(CONTAINS([Rate], 'bps'), SPLIT_PART([Rate], ' ', 1) / 10000,
 - `bps` form → take the leading number, divide by 10000 (1 bp = 0.0001).
 - anything else → already a fraction, `* 1` to normalise.
 
+**Run it.**
+
+```bash
+bxp-cli --config ./sample.json --template percent_to_fraction
+```
+
 **Smoking gun.** Two notations for the same thing land on the same fraction, and
 the legacy decimal passes straight through:
 

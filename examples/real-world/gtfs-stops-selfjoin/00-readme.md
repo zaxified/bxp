@@ -45,6 +45,12 @@ platforms resolve their parent station name** via the self-join.
    Stations have no parent, so an `IF([parent_station] = '', …)` guard keeps
    them clean.
 
+**Run it.**
+
+```bash
+bxp-cli --config ./sample.json --template gtfs_stops_selfjoin
+```
+
 **Smoking gun.** Row `101N` arrives with only `parent_station = 101` — an id
 that means nothing on its own. The output row carries
 `parent_station_name = "Van Cortlandt Park-242 St"`, pulled from row `101`

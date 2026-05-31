@@ -53,6 +53,12 @@ bxp-cli --config full.json  # one roster row per PID segment (~60)
   `DATE_CONVERT` silently returns `""` for dates before 1970 (the Unix epoch),
   which would **vanish a 1924 birth date**. String slicing has no such limit.
 
+**Run it.**
+
+```bash
+bxp-cli --config ./sample.json --template hl7_adt_patient_roster
+```
+
 **Smoking gun.** A 57-line, 20-segment-type message reduces to the one patient row
 that matters, and the pre-1970 birth date survives intact:
 

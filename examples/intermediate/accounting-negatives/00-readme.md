@@ -42,6 +42,12 @@ IF(STARTS_WITH(TRIM([Amount]), '('),
 - The else branch just drops commas — handling plain positives (`"1,234.56"`)
   and rows that are *already* signed (`-100.00`) alike.
 
+**Run it.**
+
+```bash
+bxp-cli --config ./sample.json --template accounting_negatives_clean
+```
+
 **Smoking gun.** The mixed-shape input collapses to clean signed decimals:
 
 ```text

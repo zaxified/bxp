@@ -1,0 +1,58 @@
+{
+  // Teaching example — synthetic data. The same kind of records arrive in two
+  // formats: an old CSV batch (legacy.csv — US dates, US-grouped numbers) and a
+  // new JSON batch (modern.in.json — different key names, ISO dates). bxp reads
+  // one FORMAT per template, so each format gets its own pass into the SAME
+  // output_schema; a final combine pass fans the two normalised files into one
+  // dataset. Run the whole pipeline with:  bxp-cli --config ./sample.json
+  //
+  // Glob safety: each template's file_pattern_in is chosen so the three passes
+  // never pick up each other's files (`legacy.csv` vs `.in.json` vs `.unified.csv`).
+  conversion_templates: {
+
+    // PASS 1 — CSV batch -> unified schema.
+    bridge_csv: {
+      data_dir:          ".",
+      file_pattern_in:   "legacy.csv",
+      file_pattern_out:  "legacy.unified.csv",
+      input_schema: {
+        $id:     "[id]",
+        $date:   "DATE_CONVERT([date], 'MM/DD/YYYY', 'YYYY-MM-DD')",
+        $amount: "REPLACE([amount], ',', '') * 1"
+      },
+      row_rules: [ { when: "1 = 1", rows: [ {} ] } ],
+      output_schema: { id: "$id", date: "$date", amount: "$amount" }
+    },
+
+    // PASS 2 — JSON batch -> the IDENTICAL unified schema (different key names).
+    bridge_json: {
+      data_dir:          ".",
+      file_type_in:      "json",
+      file_pattern_in:   ".in.json",
+      file_type_out:     "csv",
+      file_pattern_out:  ".unified.csv",
+      input_schema: {
+        $id:     "[order_id]",
+        $date:   "[ts]",
+        $amount: "[total] * 1"
+      },
+      row_rules: [ { when: "1 = 1", rows: [ {} ] } ],
+      output_schema: { id: "$id", date: "$date", amount: "$amount" }
+    },
+
+    // PASS 3 — fan the two normalised files into ONE dataset.
+    combine_unified: {
+      data_dir:          ".",
+      file_pattern_in:   ".unified.csv",
+      file_pattern_out:  ".csvx",
+      combined_output:   true,
+      input_schema: {
+        $id:     "[id]",
+        $date:   "[date]",
+        $amount: "[amount]"
+      },
+      row_rules: [ { when: "1 = 1", rows: [ {} ] } ],
+      output_schema: { id: "$id", date: "$date", amount: "$amount" }
+    }
+  }
+}

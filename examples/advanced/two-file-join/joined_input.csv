@@ -1,0 +1,8 @@
+_type,customer_id,name,city,order_id,amount
+customer,C-1,Acme s.r.o.,Praha,,
+customer,C-2,Globex a.s.,Brno,,
+customer,C-3,Initech,Ostrava,,
+order,C-1,,,1001,1250.50
+order,C-2,,,1002,980.00
+order,C-1,,,1003,540.00
+order,C-9,,,1004,75.00

@@ -34,6 +34,12 @@ traps, both solved by guarding blanks with `LEN(TRIM([x])) = 0` **first**:
    it would wrongly treat a real `"0"` as blank. `LEN(TRIM([x])) = 0` compares
    **length** — no coercion — so `"0"` (length 1) survives to be read as `false`.
 
+**Run it.**
+
+```bash
+bxp-cli --config ./sample.json --template boolean_variants_clean
+```
+
 **Smoking gun.** Eight spellings collapse to three states; the `0` is a real
 `false`, the blank stays blank, and the junk `unknown` is dropped to empty:
 

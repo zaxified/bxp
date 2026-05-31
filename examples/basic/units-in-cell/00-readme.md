@@ -34,6 +34,12 @@ unit:   SPLIT_PART([Measure], ' ', 2)
 - `LEN(TRIM([Measure])) = 0` keeps a blank cell empty rather than coercing it
   to `0` (a length test, so it doesn't itself coerce a real `"0"`).
 
+**Run it.**
+
+```bash
+bxp-cli --config ./sample.json --template units_in_cell_split
+```
+
 **Smoking gun.** One fused column becomes two clean ones:
 
 ```text

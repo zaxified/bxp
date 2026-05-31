@@ -1,0 +1,148 @@
+{
+  // Teaching example — synthetic data. The CAPSTONE: a transitive (two-hop) JOIN
+  // that one pass cannot do, chained across passes, while harmonising three
+  // different date formats and bridging CSV <-> JSON.
+  //
+  // The graph: order -> product -> category -> name. An order knows only its
+  // product_id; the product knows its category_id; the category name lives in a
+  // third file. The second hop's key (category_id) does not exist on an order
+  // until the first hop has run — so it cannot be done in a single pre_pass.
+  //
+  // bxp reads one file per pass and runs one pre_pass per pass, so the pipeline
+  // is: combine -> join (hop 1) -> combine -> join (hop 2). Run it all with:
+  //   bxp-cli --config ./sample.json
+  //
+  // Each source carries its own date format (the author knows which is which):
+  //   orders.csv        order_date  US    MM/DD/YYYY
+  //   products.csv      added_date  EU    DD.MM.YYYY
+  //   categories.json   created     long  YYYYMMDD
+  // All three are normalised to ISO. The order timestamp additionally gets a
+  // DST-aware Europe/Prague offset (+01:00 winter / +02:00 summer) computed
+  // purely from date builtins — see the big $order_ts expression in PASS 4.
+  //
+  // Glob safety: intermediate JSONs end ".in.json" so a re-run never re-reads
+  // the final ".json"; combined files use the "1-<tpl>-combined.csvx" name.
+  conversion_templates: {
+
+    // PASS 1 (combine) — stack orders + products into one file with a `_type`
+    // marker so the next pass's pre_pass can index across both. `_type` is
+    // derived from which key the row has (orders have order_id, products don't).
+    combine_op: {
+      data_dir:          ".",
+      file_pattern_in:   ".csv",
+      file_pattern_out:  ".csvx",
+      combined_output:   true,
+      input_schema: {
+        $_type:       "IF(LEN([order_id]) > 0, 'order', 'product')",
+        $order_id:    "[order_id]",
+        $product_id:  "[product_id]",
+        $order_date:  "[order_date]",
+        $category_id: "[category_id]",
+        $added_date:  "[added_date]"
+      },
+      row_rules: [ { when: "1 = 1", rows: [ {} ] } ],
+      output_schema: {
+        _type: "$_type", order_id: "$order_id", product_id: "$product_id",
+        order_date: "$order_date", category_id: "$category_id", added_date: "$added_date"
+      }
+    },
+
+    // PASS 2 (hop 1) — index products, attach category_id (+ product added_date
+    // converted EU->ISO) to each order. Convert order_date US->ISO here too.
+    // Output as JSON so it can be combined with the categories JSON next.
+    join_product: {
+      data_dir:          ".",
+      file_pattern_in:   "combine_op-combined.csvx",
+      file_type_out:     "json",
+      file_pattern_out:  "enriched.in.json",
+      pre_pass: {
+        when:   "[_type] = 'product'",
+        key:    "[product_id]",
+        values: {
+          cat_id:     "[category_id]",
+          padded_iso: "DATE_CONVERT([added_date], 'DD.MM.YYYY', 'YYYY-MM-DD')"
+        }
+      },
+      input_schema: {
+        $order_id:      "[order_id]",
+        $product_id:    "[product_id]",
+        $order_date:    "DATE_CONVERT([order_date], 'MM/DD/YYYY', 'YYYY-MM-DD')",
+        $category_id:   "LOOKUP([product_id], 'cat_id')",
+        $product_added: "LOOKUP([product_id], 'padded_iso')"
+      },
+      row_rules: [ { when: "[_type] = 'order'", rows: [ {} ] } ],
+      output_schema: {
+        order_id: "$order_id", product_id: "$product_id", order_date: "$order_date",
+        category_id: "$category_id", product_added: "$product_added"
+      }
+    },
+
+    // PASS 3 (combine) — stack the enriched orders (JSON) with the categories
+    // (JSON) into one file. `_type` again derived from key presence.
+    combine_oc: {
+      data_dir:          ".",
+      file_type_in:      "json",
+      file_pattern_in:   ".in.json",
+      file_type_out:     "csv",
+      file_pattern_out:  ".csvx",
+      combined_output:   true,
+      input_schema: {
+        $_type:         "IF(LEN([order_id]) > 0, 'order', 'category')",
+        $order_id:      "[order_id]",
+        $product_id:    "[product_id]",
+        // Build the DST-aware Europe/Prague timestamp HERE, where order_date is
+        // already ISO (converted in PASS 2) and present as a field — so the final
+        // join pass stays free of date math. CEST (+02:00) from the last Sunday
+        // of March to the last Sunday of October, else CET (+01:00). "Last Sunday
+        // of month" = end-of-month minus (its ISO weekday mod 7), the mod done as
+        // x-7*FLOOR(x/7) since there is no MOD; the in-window test uses DATEDIFF
+        // (numeric) because string >= is unsupported on dates. Empty-guarded so
+        // category rows (no order_date) and startup validation stay safe.
+        $order_ts:      "IF(LEN([order_date]) = 0, '', [order_date] & 'T00:00:00' & IF(DATEDIFF([order_date], DATEADD(EOMONTH(YEAR([order_date]) & '-03-15'), 0 - (WEEKDAY(EOMONTH(YEAR([order_date]) & '-03-15')) - 7 * FLOOR(WEEKDAY(EOMONTH(YEAR([order_date]) & '-03-15')) / 7)))) >= 0 AND DATEDIFF([order_date], DATEADD(EOMONTH(YEAR([order_date]) & '-10-15'), 0 - (WEEKDAY(EOMONTH(YEAR([order_date]) & '-10-15')) - 7 * FLOOR(WEEKDAY(EOMONTH(YEAR([order_date]) & '-10-15')) / 7)))) < 0, '+02:00', '+01:00'))",
+        $category_id:   "[category_id]",
+        $product_added: "[product_added]",
+        $category_name: "[category_name]",
+        $created:       "[created]"
+      },
+      row_rules: [ { when: "1 = 1", rows: [ {} ] } ],
+      output_schema: {
+        _type: "$_type", order_id: "$order_id", product_id: "$product_id",
+        order_ts: "$order_ts", category_id: "$category_id",
+        product_added: "$product_added", category_name: "$category_name", created: "$created"
+      }
+    },
+
+    // PASS 4 (hop 2) — index categories, attach category_name and the created
+    // date (long YYYYMMDD -> ISO). The order timestamp was already built in
+    // PASS 3, so this final pass is pure lookup + passthrough — no date math.
+    join_category: {
+      data_dir:          ".",
+      file_pattern_in:   "combine_oc-combined.csvx",
+      file_type_out:     "json",
+      file_pattern_out:  "final.json",
+      pre_pass: {
+        when:   "[_type] = 'category'",
+        key:    "[category_id]",
+        values: {
+          cat_name:    "[category_name]",
+          cat_created: "DATE_CONVERT([created], 'YYYYMMDD', 'YYYY-MM-DD')"
+        }
+      },
+      input_schema: {
+        $order_id:         "[order_id]",
+        $product_id:       "[product_id]",
+        $category_id:      "[category_id]",
+        $category_name:    "LOOKUP([category_id], 'cat_name')",
+        $product_added:    "[product_added]",
+        $category_created: "LOOKUP([category_id], 'cat_created')",
+        $order_ts:         "[order_ts]"
+      },
+      row_rules: [ { when: "[_type] = 'order'", rows: [ {} ] } ],
+      output_schema: {
+        order_id: "$order_id", product_id: "$product_id", category_id: "$category_id",
+        category_name: "$category_name", order_ts: "$order_ts",
+        product_added: "$product_added", category_created: "$category_created"
+      }
+    }
+  }
+}

@@ -59,6 +59,12 @@ element resolves, including `TAVG` at column 57. bxp-cli's column ceiling is
 Inputs wider than that (e.g. a daily time-series with one column per day) warn
 and ignore the overflow — see the roadmap entry on raising the cap.
 
+**Run it.**
+
+```bash
+bxp-cli --config ./sample.json --template noaa_daily_to_metric
+```
+
 **Smoking gun.** Run the conversion and look at row 3 (`2020-01-03`):
 
 - Raw `TMAX="   94"` → `tmax_c = 9.4`

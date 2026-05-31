@@ -33,6 +33,12 @@ IF(IN(TRIM([Email]), 'NULL', 'NA', 'N/A', 'n/a', 'None', 'none', '-'), '', TRIM(
 - Match → `''`; otherwise keep the trimmed value. The same guard drops onto
   every dirty column.
 
+**Run it.**
+
+```bash
+bxp-cli --config ./sample.json --template null_variants_clean
+```
+
 **Smoking gun.** Bob's `N/A` email and `NULL` note, Carol's `-` phone and `None`
 note, Dave's `NA`/`n/a` all become truly empty — while `follow up next week`
 and the real emails survive:

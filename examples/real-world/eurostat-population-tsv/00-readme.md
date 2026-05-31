@@ -63,6 +63,12 @@ bxp-cli --config full.json  # cleans every ~17.7k rows (all age/sex/geo combos)
   the `b`/`p`/`bep` suffix into its own column so the break/provisional status
   survives the cleanup.
 
+**Run it.**
+
+```bash
+bxp-cli --config ./sample.json --template eurostat_pop_tsv_clean
+```
+
 **Smoking gun.** Germany's raw 2023 cell is `83118501 b` and Andorra's is `: `.
 The template turns them into:
 

@@ -1,0 +1,40 @@
+{
+  // Teaching example — synthetic data. Two CRM exports arrive as JSON arrays
+  // with DIFFERENT key sets: `crm_alpha` has vat + email, `crm_beta` has phone
+  // (and email only on some records). JSON omits empty keys entirely, so the two
+  // files are structurally heterogeneous. Goal: one CSV with every column, where
+  // a key a record never had collapses to "".
+  //
+  // Two mechanisms combine here:
+  //   * file_type_in:json — bxp takes the UNION of keys per file as that file's
+  //     columns; a key absent from a record reads as "".
+  //   * combined_output  — both files run through this one template into a single
+  //     output, `1-json_union-combined.csvx`. The output_schema below IS the
+  //     unified target schema; each input normalises to it automatically.
+  conversion_templates: {
+    json_union: {
+      data_dir:         ".",
+      file_type_in:     "json",
+      file_pattern_in:  ".in.json",
+      file_type_out:    "csv",
+      file_pattern_out: ".csvx",
+      combined_output:  true,
+
+      input_schema: {
+        $company: "[company]",
+        $vat:     "[vat]",     // only in crm_alpha
+        $email:   "[email]",   // in crm_alpha, and some crm_beta rows
+        $phone:   "[phone]"    // only in crm_beta
+      },
+
+      row_rules: [ { when: "1 = 1", rows: [ {} ] } ],
+
+      output_schema: {
+        company: "$company",
+        vat:     "$vat",
+        email:   "$email",
+        phone:   "$phone"
+      }
+    }
+  }
+}

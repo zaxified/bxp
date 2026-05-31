@@ -1,0 +1,42 @@
+{
+  // Teaching example — synthetic data. The same source (a broker's trade export)
+  // changed format over time: the 2022 "legacy" vintage has columns
+  // Date/Ticker/Amount with ISO dates and plain numbers; the 2024 "current"
+  // vintage renamed them to trade_date/symbol/value with EU dates (DD.MM.YYYY)
+  // and space-grouped, comma-decimal numbers. You want every vintage in ONE
+  // consistent table.
+  //
+  // ONE template harmonises both. Because a column absent from a file reads as
+  // "", each output field picks whichever vintage's column is present and
+  // converts it to the canonical form. `combined_output: true` then stacks all
+  // vintages into a single `1-vintage_harmonise-combined.csvx`.
+  conversion_templates: {
+    vintage_harmonise: {
+      data_dir:          ".",
+      file_pattern_in:   ".csv",
+      file_pattern_out:  ".csvx",
+      combined_output:   true,
+
+      input_schema: {
+        // DATE — legacy is already ISO; current is DD.MM.YYYY. Pick by presence,
+        // convert only the one that needs it, so both land as YYYY-MM-DD.
+        $date: "IF(LEN([Date]) > 0, [Date], DATE_CONVERT([trade_date], 'DD.MM.YYYY', 'YYYY-MM-DD'))",
+
+        // TICKER — just a rename across vintages; COALESCE takes the non-empty one.
+        $ticker: "COALESCE([Ticker], [symbol])",
+
+        // AMOUNT — legacy is plain (1000.50); current is EU '1 250,50'. Pick by
+        // presence and normalise the EU form (strip space, swap comma) to a number.
+        $amount: "IF(LEN([Amount]) > 0, [Amount] * 1, REPLACE(REPLACE([value], ' ', ''), ',', '.') * 1)"
+      },
+
+      row_rules: [ { when: "1 = 1", rows: [ {} ] } ],
+
+      output_schema: {
+        date:   "$date",
+        ticker: "$ticker",
+        amount: "$amount"
+      }
+    }
+  }
+}

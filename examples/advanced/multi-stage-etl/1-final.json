@@ -1,0 +1,5 @@
+[
+{"order_id":"1001","product_id":"P-9","category_id":"C-3","category_name":"Electronics","order_ts":"2024-01-15T00:00:00+01:00","product_added":"2023-01-02","category_created":"2020-01-15"},
+{"order_id":"1002","product_id":"P-7","category_id":"C-1","category_name":"Books","order_ts":"2024-07-20T00:00:00+02:00","product_added":"2023-06-15","category_created":"2019-12-20"},
+{"order_id":"1003","product_id":"P-9","category_id":"C-3","category_name":"Electronics","order_ts":"2024-11-02T00:00:00+01:00","product_added":"2023-01-02","category_created":"2020-01-15"}
+]

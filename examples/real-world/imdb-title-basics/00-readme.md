@@ -54,6 +54,12 @@ no error. `full/` is gitignored — the download stays local.
    first genre into its own `primary_genre` column while `all_genres`
    keeps the full list for filtering.
 
+**Run it.**
+
+```bash
+bxp-cli --config ./sample.json --template imdb_titles_to_catalog
+```
+
 **Smoking gun.** Before the fix in TRICK 2 was applied, exactly one row in
 this 500-title slice — `tt0000502` (`Bohemios`, 1905 Spanish film) — had
 `genres = '\N'`. The first version of `sample.json` handled `\N` for

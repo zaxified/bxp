@@ -62,6 +62,12 @@ Measured on the reference machine (ReleaseFast, 8 cores):
    fix — previously the padded result was re-canonicalised straight back to
    `1230`.)
 
+**Run it.**
+
+```bash
+bxp-cli --config ./sample.json --template dvf_realestate_to_analytics
+```
+
 **Smoking gun.** Open `sample.csvx` row 1 (`CHALEY`, 02/01/2024):
 
 - `price_eur = 346.5` — the raw `346,50`. A naive importer would log this sale

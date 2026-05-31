@@ -35,6 +35,12 @@ pile of regexes; bxp has a dedicated pair of functions for it.
 - An `IF([Price] = '', '', …)` guard keeps a genuinely empty price empty rather
   than coercing it to `0`.
 
+**Run it.**
+
+```bash
+bxp-cli --config ./sample.json --template price_currency_split
+```
+
 **Smoking gun.** One ragged column becomes two clean ones:
 
 ```text

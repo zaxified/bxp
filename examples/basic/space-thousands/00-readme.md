@@ -34,6 +34,12 @@ REPLACE(REPLACE([Amount], ' ', ''), ',', '.') * 1
 - swap the decimal comma for a dot;
 - `* 1` coerces the result to a real number.
 
+**Run it.**
+
+```bash
+bxp-cli --config ./sample.json --template space_thousands_clean
+```
+
 **Smoking gun.**
 
 ```text
