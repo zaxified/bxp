@@ -1,0 +1,32 @@
+{
+  // Teaching example — synthetic data. A rate sheet where the same quantity is
+  // written two ways finance loves: percent ("2.5%") and basis points
+  // ("25 bps"), plus the occasional already-decimal legacy value. To compute
+  // with them you need one consistent fraction (0.025). The template detects
+  // the notation and normalises each to a decimal fraction.
+  conversion_templates: {
+    percent_to_fraction: {
+      data_dir:          ".",
+      file_pattern_in:   ".csv",
+      file_pattern_out:  ".csvx",
+
+      input_schema: {
+        $product: "[Product]",
+
+        // THE TRICK — dispatch on the notation:
+        //   "2.5%"   → strip '%', divide by 100        → 0.025
+        //   "25 bps" → take the number, divide by 10000 → 0.0025
+        //   "0.03"   → already a fraction, pass through (* 1 to normalise)
+        // (1 basis point = 0.01% = 0.0001, so bps ÷ 10000.)
+        $rate: "IF(CONTAINS([Rate], '%'), REPLACE([Rate], '%', '') / 100, IF(CONTAINS([Rate], 'bps'), SPLIT_PART([Rate], ' ', 1) / 10000, [Rate] * 1))"
+      },
+
+      row_rules: [ { when: "1 = 1", rows: [ {} ] } ],
+
+      output_schema: {
+        product:       "$product",
+        rate_fraction: "$rate"
+      }
+    }
+  }
+}

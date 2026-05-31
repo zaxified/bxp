@@ -1,0 +1,65 @@
+{
+  // NYC Central Park Squirrel Census — published as a JSON API (Socrata), not a
+  // CSV. It is the textbook "JSON array → flat CSV" job, and the records carry
+  // four real JSON-shaped headaches: (1) OPTIONAL keys — most sightings omit
+  // `primary_fur_color`/`location`, so the objects are heterogeneous; (2) native
+  // JSON BOOLEANS (`running: false`) rather than text; (3) a NESTED object
+  // `geocoded_column: { type, coordinates }`; (4) a date stored as the
+  // separator-less digit blob `"10142018"`. Getting this into a spreadsheet
+  // normally means a jq/pandas script; bxp reads the array straight to CSV.
+  conversion_templates: {
+    squirrel_census_to_csv: {
+      data_dir:         ".",
+      // TRICK 0 — declare JSON input. bxp scans the whole array once, takes the
+      // UNION of keys (first-seen order) as the column set, and materialises one
+      // record at a time. Keys absent from a record collapse to "".
+      file_type_in:     "json",
+      file_pattern_in:  ".in.json",
+      file_type_out:    "csv",
+      file_pattern_out: ".csvx",
+
+      input_schema: {
+        $id:    "[unique_squirrel_id]",
+        // TRICK 1 — date is `MMDDYYYY` with NO separators ("10142018"). One
+        // DATE_CONVERT turns it into ISO-8601.
+        $date:  "DATE_CONVERT([date], 'MMDDYYYY', 'YYYY-MM-DD')",
+        $shift: "[shift]",
+
+        // TRICK 2 — the nested `geocoded_column` object flattens to "" (bxp does
+        // not descend into nested {}/[]), so read the flat top-level fields the
+        // API also provides: the high-precision lon/lat (`x`/`y`) and the
+        // `hectare` grid cell. The coordinates pass through with every
+        // significant digit intact (no float round-trip).
+        $lat:   "[y]",
+        $lon:   "[x]",
+        $grid:  "[hectare]",
+
+        // TRICK 3 — OPTIONAL keys. Most sightings omit these; absent → "".
+        $fur:   "[primary_fur_color]",
+        $where: "[location]",
+
+        // TRICK 4 — native JSON booleans (`false`/`true`) are coerced to the
+        // text "false"/"true" — no quoting surprises downstream.
+        $running:  "[running]",
+        $eating:   "[eating]",
+        $foraging: "[foraging]"
+      },
+
+      row_rules: [ { when: "1 = 1", rows: [ {} ] } ],
+
+      output_schema: {
+        squirrel_id: "$id",
+        date:        "$date",
+        shift:       "$shift",
+        lat:         "$lat",
+        lon:         "$lon",
+        hectare:     "$grid",
+        fur_color:   "$fur",
+        location:    "$where",
+        running:     "$running",
+        eating:      "$eating",
+        foraging:    "$foraging"
+      }
+    }
+  }
+}

@@ -1,0 +1,33 @@
+{
+  // Teaching example — synthetic data. Continental-European number format:
+  // space-grouped thousands and a COMMA decimal ("1 234 567,89" = 1234567.89),
+  // common in FR / CZ / SI / many EU exports. bxp auto-handles the
+  // period-thousands form ("1.234,56") but NOT space-grouped thousands, so this
+  // is the one-line idiom for it.
+  conversion_templates: {
+    space_thousands_clean: {
+      data_dir:           ".",
+      file_pattern_in:    ".csv",
+      file_pattern_out:   ".csvx",
+      // Amounts are quoted because the decimal comma collides with the field
+      // delimiter.
+      csv_text_quote_in:  "double",
+
+      input_schema: {
+        $label: "[Label]",
+
+        // THE TRICK — strip the space thousands separators, swap the decimal
+        // comma for a dot, then * 1 to land a real number. REPLACE replaces
+        // EVERY occurrence, so one call clears all the spaces.
+        $amount: "REPLACE(REPLACE([Amount], ' ', ''), ',', '.') * 1"
+      },
+
+      row_rules: [ { when: "1 = 1", rows: [ {} ] } ],
+
+      output_schema: {
+        label:  "$label",
+        amount: "$amount"
+      }
+    }
+  }
+}

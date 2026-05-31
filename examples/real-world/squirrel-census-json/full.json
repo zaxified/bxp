@@ -1,0 +1,45 @@
+{
+  // Scale/complete-run config: identical flattening to sample.json, pointed at
+  // the full census JSON in ./full/ (~3,023 sightings). JSON keys are referenced
+  // by name, so the same template works on the 40-record slice and the full
+  // array unchanged.
+  conversion_templates: {
+    squirrel_census_to_csv: {
+      data_dir:         "full",
+      file_type_in:     "json",
+      file_pattern_in:  ".in.json",
+      file_type_out:    "csv",
+      file_pattern_out: ".csvx",
+
+      input_schema: {
+        $id:    "[unique_squirrel_id]",
+        $date:  "DATE_CONVERT([date], 'MMDDYYYY', 'YYYY-MM-DD')",
+        $shift: "[shift]",
+        $lat:   "[y]",
+        $lon:   "[x]",
+        $grid:  "[hectare]",
+        $fur:   "[primary_fur_color]",
+        $where: "[location]",
+        $running:  "[running]",
+        $eating:   "[eating]",
+        $foraging: "[foraging]"
+      },
+
+      row_rules: [ { when: "1 = 1", rows: [ {} ] } ],
+
+      output_schema: {
+        squirrel_id: "$id",
+        date:        "$date",
+        shift:       "$shift",
+        lat:         "$lat",
+        lon:         "$lon",
+        hectare:     "$grid",
+        fur_color:   "$fur",
+        location:    "$where",
+        running:     "$running",
+        eating:      "$eating",
+        foraging:    "$foraging"
+      }
+    }
+  }
+}

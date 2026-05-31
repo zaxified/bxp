@@ -1,0 +1,43 @@
+{
+  // OpenNGC — the open catalogue of NGC/IC deep-sky objects. Like nearly all
+  // astronomical catalogues, it stores celestial coordinates in SEXAGESIMAL
+  // form: right ascension as HH:MM:SS.s (hours, not degrees) and declination as
+  // ±DD:MM:SS.s. To plot, cross-match, or feed them to a GIS/most APIs you need
+  // DECIMAL DEGREES. This template does the standard conversion in two
+  // expressions — no astropy.
+  conversion_templates: {
+    ngc_to_decimal_degrees: {
+      data_dir:          ".",
+      file_pattern_in:   ".csv",
+      file_pattern_out:  ".csvx",
+      // TRICK 0 — OpenNGC is semicolon-delimited.
+      csv_delimiter_in:  ";",
+      csv_delimiter_out: ",",
+
+      input_schema: {
+        $name: "[Name]",
+
+        // TRICK 1 — RA is in HOURS:MIN:SEC. Convert to hours, then ×15 because
+        // 24h spans 360° (1h = 15°). SPLIT_PART on ':' pulls each part.
+        //   00:42:44.35 → (0 + 42/60 + 44.35/3600) × 15 = 10.6848°
+        // (Non-existent catalogue entries have blank coords → guard with LEN.)
+        $ra_deg: "IF(LEN(TRIM([RA])) = 0, '', (SPLIT_PART([RA], ':', 1) + SPLIT_PART([RA], ':', 2) / 60 + SPLIT_PART([RA], ':', 3) / 3600) * 15)",
+
+        // TRICK 2 — Dec is ±DEG:ARCMIN:ARCSEC. The sign on the degrees part must
+        // apply to the whole value, so capture it once (STARTS_WITH '-') and
+        // multiply the magnitude (ABS of the degrees field) by it.
+        //   +41:16:08.6 → +(41 + 16/60 + 8.6/3600) = 41.2691°
+        //   -05:23:22.8 → -(5  + 23/60 + 22.8/3600) = -5.3897°
+        $dec_deg: "IF(LEN(TRIM([Dec])) = 0, '', IF(STARTS_WITH(TRIM([Dec]), '-'), -1, 1) * (ABS(SPLIT_PART([Dec], ':', 1)) + SPLIT_PART([Dec], ':', 2) / 60 + SPLIT_PART([Dec], ':', 3) / 3600))"
+      },
+
+      row_rules: [ { when: "1 = 1", rows: [ {} ] } ],
+
+      output_schema: {
+        name:    "$name",
+        ra_deg:  "$ra_deg",
+        dec_deg: "$dec_deg"
+      }
+    }
+  }
+}

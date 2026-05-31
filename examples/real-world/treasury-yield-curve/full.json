@@ -1,0 +1,48 @@
+{
+  // Scale/complete-run config: identical unpivot to sample.json, pointed at the
+  // concatenated 2023-2024 file in ./full/. Maturity columns are referenced by
+  // NAME ([1 Mo], [30 Yr], …), so the same template works on the slice and the
+  // full file with no positional adjustment — every business day fans out to
+  // 13 tidy date-tenor rows.
+  conversion_templates: {
+    treasury_curve_to_long: {
+      data_dir:           "full",
+      file_pattern_in:    ".csv",
+      file_pattern_out:   ".csvx",
+      csv_text_quote_in:  "double",
+      csv_text_quote_out: "double",
+
+      input_schema: {
+        $date: "DATE_CONVERT([Date], 'MM/DD/YYYY', 'YYYY-MM-DD')"
+      },
+
+      row_rules: [
+        {
+          when: "1 = 1",
+          rows: [
+            { $tenor: "'1 Mo'",  $months: "1",   $yield: "[1 Mo]"  },
+            { $tenor: "'2 Mo'",  $months: "2",   $yield: "[2 Mo]"  },
+            { $tenor: "'3 Mo'",  $months: "3",   $yield: "[3 Mo]"  },
+            { $tenor: "'4 Mo'",  $months: "4",   $yield: "[4 Mo]"  },
+            { $tenor: "'6 Mo'",  $months: "6",   $yield: "[6 Mo]"  },
+            { $tenor: "'1 Yr'",  $months: "12",  $yield: "[1 Yr]"  },
+            { $tenor: "'2 Yr'",  $months: "24",  $yield: "[2 Yr]"  },
+            { $tenor: "'3 Yr'",  $months: "36",  $yield: "[3 Yr]"  },
+            { $tenor: "'5 Yr'",  $months: "60",  $yield: "[5 Yr]"  },
+            { $tenor: "'7 Yr'",  $months: "84",  $yield: "[7 Yr]"  },
+            { $tenor: "'10 Yr'", $months: "120", $yield: "[10 Yr]" },
+            { $tenor: "'20 Yr'", $months: "240", $yield: "[20 Yr]" },
+            { $tenor: "'30 Yr'", $months: "360", $yield: "[30 Yr]" }
+          ]
+        }
+      ],
+
+      output_schema: {
+        date:         "$date",
+        tenor:        "$tenor",
+        tenor_months: "$months",
+        yield_pct:    "$yield"
+      }
+    }
+  }
+}

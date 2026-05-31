@@ -1,0 +1,35 @@
+{
+  // Teaching example — synthetic data. Different systems write "no value" a
+  // dozen different ways: NULL, NA, N/A, n/a, None, "-", empty. Imported as-is,
+  // the literal text "N/A" pollutes counts, breaks joins, and shows up in
+  // dropdowns. This template folds every null-variant to a single genuine
+  // empty cell, leaving real values untouched.
+  conversion_templates: {
+    null_variants_clean: {
+      data_dir:          ".",
+      file_pattern_in:   ".csv",
+      file_pattern_out:  ".csvx",
+
+      input_schema: {
+        $name: "[Name]",
+
+        // THE TRICK — IN(value, ...) tests membership against a list of null
+        // markers (IN is a *function* here: IN(val, a, b, …), not SQL infix).
+        // TRIM first so " NA " also matches; if it's a marker → "", else keep
+        // the trimmed value. Apply the same guard to every dirty column.
+        $email: "IF(IN(TRIM([Email]), 'NULL', 'NA', 'N/A', 'n/a', 'None', 'none', '-'), '', TRIM([Email]))",
+        $phone: "IF(IN(TRIM([Phone]), 'NULL', 'NA', 'N/A', 'n/a', 'None', 'none', '-'), '', TRIM([Phone]))",
+        $notes: "IF(IN(TRIM([Notes]), 'NULL', 'NA', 'N/A', 'n/a', 'None', 'none', '-'), '', TRIM([Notes]))"
+      },
+
+      row_rules: [ { when: "1 = 1", rows: [ {} ] } ],
+
+      output_schema: {
+        name:  "$name",
+        email: "$email",
+        phone: "$phone",
+        notes: "$notes"
+      }
+    }
+  }
+}

@@ -1,0 +1,6 @@
+Name,Email,Phone,Notes
+Alice,alice@example.com,555-1234,VIP customer
+Bob,N/A,555-9999,NULL
+Carol,carol@example.com,-,None
+Dave,NA,n/a,follow up next week
+Eve,,555-0000,NA

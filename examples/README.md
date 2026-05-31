@@ -26,6 +26,18 @@ Real public datasets — each readme cites its source and the documented problem
 bxp-cli --config ./real-world/covid-wide-to-long/sample.json --template covid_wide_to_long
 ```
 
+### Eurostat Population (bulk TSV) → Clean Per-Country Rows
+
+**What.** Turn one row of Eurostat's bulk `demo_pjan` download (population on 1
+
+**Why interesting.** Eurostat is the official statistical office of the EU and
+
+📄 [real-world/eurostat-population-tsv/00-readme.md](real-world/eurostat-population-tsv/00-readme.md)
+
+```bash
+bxp-cli --config ./real-world/eurostat-population-tsv/sample.json --template eurostat_pop_tsv_clean
+```
+
 ### French DVF Real-Estate → Analytics Schema
 
 **What.** Reshape France's official "Demandes de valeurs foncières" (DVF) raw
@@ -48,6 +60,18 @@ bxp-cli --config ./real-world/french-dvf-realestate/sample.json --template dvf_r
 
 ```bash
 bxp-cli --config ./real-world/gtfs-stops-selfjoin/sample.json --template gtfs_stops_selfjoin
+```
+
+### HL7 v2 ADT Feed → Patient Roster
+
+**What.** Pull a flat patient roster (MRN, name, birth date, sex) out of a feed
+
+**Why interesting.** HL7 v2 is the messaging standard that runs hospitals, and
+
+📄 [real-world/hl7-adt-patient-roster/00-readme.md](real-world/hl7-adt-patient-roster/00-readme.md)
+
+```bash
+bxp-cli --config ./real-world/hl7-adt-patient-roster/sample.json --template hl7_adt_patient_roster
 ```
 
 ### Chicago Business Licenses → Analytics Schema
@@ -86,6 +110,18 @@ bxp-cli --config ./real-world/imdb-title-basics/sample.json --template imdb_titl
 bxp-cli --config ./real-world/inside-airbnb-listings/sample.json --template airbnb_listings_to_analytics
 ```
 
+### OpenNGC Sexagesimal Coordinates → Decimal Degrees
+
+**What.** Convert the celestial coordinates in the OpenNGC deep-sky catalogue
+
+**Why interesting.** Essentially every astronomical catalogue stores
+
+📄 [real-world/ngc-sexagesimal-coords/00-readme.md](real-world/ngc-sexagesimal-coords/00-readme.md)
+
+```bash
+bxp-cli --config ./real-world/ngc-sexagesimal-coords/sample.json --template ngc_to_decimal_degrees
+```
+
 ### NOAA GHCN Daily → Metric Units
 
 **What.** Convert NOAA Global Historical Climatology Network daily records into a CSV with proper SI units (°C and mm) and a per-row consistency flag.
@@ -110,9 +146,105 @@ bxp-cli --config ./real-world/noaa-ghcn-daily/sample.json --template noaa_daily_
 bxp-cli --config ./real-world/nyc-taxi-trips/sample.json --template nyc_taxi_to_analytics
 ```
 
+### NYC Squirrel Census (JSON API) → Flat CSV
+
+**What.** Flatten the 2018 NYC Central Park Squirrel Census — published as a
+
+**Why interesting.** A huge share of public data now ships as a **JSON array of
+
+📄 [real-world/squirrel-census-json/00-readme.md](real-world/squirrel-census-json/00-readme.md)
+
+```bash
+bxp-cli --config ./real-world/squirrel-census-json/sample.json --template squirrel_census_to_csv
+```
+
+### US Treasury Yield Curve (wide → long) + tenor mapping
+
+**What.** Melt the US Treasury's daily par-yield-curve CSV from its native
+
+**Why interesting.** The Treasury par yield curve is one of the most-watched
+
+📄 [real-world/treasury-yield-curve/00-readme.md](real-world/treasury-yield-curve/00-readme.md)
+
+```bash
+bxp-cli --config ./real-world/treasury-yield-curve/sample.json --template treasury_curve_to_long
+```
+
 ## Teaching examples (synthetic)
 
 Constructed, minimal inputs that isolate one feature. The data is fabricated, not sourced.
+
+### Messy Financial Export → Clean Transactions (combined)
+
+**What.** Take one realistically messy brokerage/ERP transaction export and
+
+**Why interesting.** Real exports rarely have just one problem — a single CSV
+
+📄 [advanced/messy-financial-export/00-readme.md](advanced/messy-financial-export/00-readme.md)
+
+```bash
+bxp-cli --config ./advanced/messy-financial-export/sample.json --template messy_financial_export
+```
+
+### Null Variants → Empty
+
+**What.** Fold every "no value" spelling — `NULL`, `NA`, `N/A`, `n/a`, `None`,
+
+**Why interesting.** When data passes through several systems, "missing" gets
+
+📄 [basic/null-variants/00-readme.md](basic/null-variants/00-readme.md)
+
+```bash
+bxp-cli --config ./basic/null-variants/sample.json --template null_variants_clean
+```
+
+### Space-Grouped Thousands → Number
+
+**What.** Parse the continental-European number format — space-grouped
+
+**Why interesting.** French, Czech, Slovenian and many other EU exports group
+
+📄 [basic/space-thousands/00-readme.md](basic/space-thousands/00-readme.md)
+
+```bash
+bxp-cli --config ./basic/space-thousands/sample.json --template space_thousands_clean
+```
+
+### Units-in-Cell → Number + Unit
+
+**What.** Split a measurement column that glues a number to its unit —
+
+**Why interesting.** Quantities routinely ship as `"<number> <unit>"` in one
+
+📄 [basic/units-in-cell/00-readme.md](basic/units-in-cell/00-readme.md)
+
+```bash
+bxp-cli --config ./basic/units-in-cell/sample.json --template units_in_cell_split
+```
+
+### Accounting Negatives → Signed Decimals
+
+**What.** Normalise an accounting/bank/ERP export where negative amounts are
+
+**Why interesting.** The parenthesis-for-negative convention is everywhere in
+
+📄 [intermediate/accounting-negatives/00-readme.md](intermediate/accounting-negatives/00-readme.md)
+
+```bash
+bxp-cli --config ./intermediate/accounting-negatives/sample.json --template accounting_negatives_clean
+```
+
+### Boolean Variants → Canonical true/false
+
+**What.** Fold boolean columns written every which way — `Yes`/`No`, `Y`/`N`,
+
+**Why interesting.** "Boolean" is the least standardised column type in
+
+📄 [intermediate/boolean-variants/00-readme.md](intermediate/boolean-variants/00-readme.md)
+
+```bash
+bxp-cli --config ./intermediate/boolean-variants/sample.json --template boolean_variants_clean
+```
 
 ### HubSpot Contacts → Salesforce Lead
 
@@ -124,4 +256,28 @@ Constructed, minimal inputs that isolate one feature. The data is fabricated, no
 
 ```bash
 bxp-cli --config ./intermediate/hubspot-to-salesforce/sample.json --template hubspot_to_sfdc_lead
+```
+
+### Percent / Basis Points → Decimal Fraction
+
+**What.** Normalise a `Rate` column that mixes percent (`2.5%`), basis points
+
+**Why interesting.** Finance writes the same rate two ways — `2.5%` and `25 bps`
+
+📄 [intermediate/percent-to-fraction/00-readme.md](intermediate/percent-to-fraction/00-readme.md)
+
+```bash
+bxp-cli --config ./intermediate/percent-to-fraction/sample.json --template percent_to_fraction
+```
+
+### Price + Currency Split
+
+**What.** Split a single mixed-notation `Price` column — `$12.99`, `50.00 EUR`,
+
+**Why interesting.** Prices arrive glued to their currency in a dozen
+
+📄 [intermediate/price-currency-split/00-readme.md](intermediate/price-currency-split/00-readme.md)
+
+```bash
+bxp-cli --config ./intermediate/price-currency-split/sample.json --template price_currency_split
 ```

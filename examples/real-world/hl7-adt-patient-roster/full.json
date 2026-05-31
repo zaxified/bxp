@@ -1,0 +1,33 @@
+{
+  // Scale/complete-run config: identical extraction to sample.json, pointed at
+  // the concatenated ADT feed in ./full/ (~57 messages). Same positional PID
+  // parsing; one roster row per PID segment. (Real feeds repeat patients across
+  // event types, so expect duplicate rows — dedup is a downstream concern.)
+  conversion_templates: {
+    hl7_adt_patient_roster: {
+      data_dir:          "full",
+      file_pattern_in:   ".hl7",
+      file_pattern_out:  ".csvx",
+      csv_delimiter_in:  "|",
+      csv_delimiter_out: ",",
+
+      input_schema: {
+        $mrn:    "SPLIT_PART([4], '^', 1)",
+        $family: "SPLIT_PART(SPLIT_PART([6], '^', 1), '&', 1)",
+        $given:  "SPLIT_PART([6], '^', 2)",
+        $dob:    "IF(LEN(TRIM([8])) = 0, '', LEFT([8], 4) & '-' & SUBSTR([8], 5, 2) & '-' & SUBSTR([8], 7, 2))",
+        $sex:    "[9]"
+      },
+
+      row_rules: [ { when: "[1] = 'PID'", rows: [ {} ] } ],
+
+      output_schema: {
+        mrn:    "$mrn",
+        family: "$family",
+        given:  "$given",
+        dob:    "$dob",
+        sex:    "$sex"
+      }
+    }
+  }
+}

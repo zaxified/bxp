@@ -1,0 +1,40 @@
+{
+  // Teaching example — synthetic data. A bookkeeping / bank / ERP export where
+  // negative amounts use the ACCOUNTING convention: parentheses instead of a
+  // minus sign, e.g. "(2,500.00)" = -2500. Thousands are comma-grouped. A naive
+  // `amount * 1` throws on the parentheses (and on the commas); spreadsheets
+  // import "(2,500.00)" as text. The template normalises every amount to a
+  // plain signed decimal.
+  conversion_templates: {
+    accounting_negatives_clean: {
+      data_dir:           ".",
+      file_pattern_in:    ".csv",
+      file_pattern_out:   ".csvx",
+      // Amount cells are double-quoted because the thousands separator is a
+      // comma — the same character as the field delimiter.
+      csv_text_quote_in:  "double",
+
+      input_schema: {
+        $date: "[Date]",
+        $desc: "[Description]",
+
+        // THE TRICK — accounting negatives + thousands separators in one pass:
+        //   * STARTS_WITH('(')  detects the parenthesised (negative) form;
+        //   * strip '(' ')' and the ',' thousands separators with REPLACE;
+        //   * `* 1` coerces the cleaned string to a number;
+        //   * `0 - (...)` applies the sign the parentheses stood for.
+        // The non-parenthesised branch just drops the commas (handles both
+        // plain positives like "1,234.56" and already-signed "-100.00").
+        $amount: "IF(STARTS_WITH(TRIM([Amount]), '('), 0 - (REPLACE(REPLACE(REPLACE(TRIM([Amount]), '(', ''), ')', ''), ',', '') * 1), REPLACE(TRIM([Amount]), ',', '') * 1)"
+      },
+
+      row_rules: [ { when: "1 = 1", rows: [ {} ] } ],
+
+      output_schema: {
+        date:        "$date",
+        description: "$desc",
+        amount:      "$amount"
+      }
+    }
+  }
+}

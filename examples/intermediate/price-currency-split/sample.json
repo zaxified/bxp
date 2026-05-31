@@ -1,0 +1,37 @@
+{
+  // Teaching example — synthetic data. A product/marketplace export where one
+  // `Price` column mixes currency notations: leading symbol ($12.99, €3.50),
+  // trailing ISO code (50.00 EUR, 24.00 CZK), and comma thousands
+  // (1,234.00 USD). Downstream you almost always need the NUMBER and the
+  // CURRENCY in separate columns. bxp ships two builtins for exactly this:
+  // PRICE_VALUE (strip the symbol/code) and PRICE_CURRENCY (extract it).
+  conversion_templates: {
+    price_currency_split: {
+      data_dir:           ".",
+      file_pattern_in:    ".csv",
+      file_pattern_out:   ".csvx",
+      csv_text_quote_in:  "double",
+
+      input_schema: {
+        $item: "[Item]",
+
+        // TRICK 1 — split value from currency:
+        //   PRICE_VALUE("$12.99")    → "12.99"
+        //   PRICE_CURRENCY("$12.99") → "USD"
+        // PRICE_VALUE keeps the comma thousands as-is ("1,234.00"), so wrap it
+        // in REPLACE(…, ',', '') * 1 to land a clean number; the IF guard keeps
+        // a genuinely empty price empty instead of coercing it to 0.
+        $price:    "IF([Price] = '', '', REPLACE(PRICE_VALUE([Price]), ',', '') * 1)",
+        $currency: "PRICE_CURRENCY([Price])"
+      },
+
+      row_rules: [ { when: "1 = 1", rows: [ {} ] } ],
+
+      output_schema: {
+        item:     "$item",
+        price:    "$price",
+        currency: "$currency"
+      }
+    }
+  }
+}

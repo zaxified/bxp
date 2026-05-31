@@ -1,0 +1,32 @@
+{
+  // Teaching example — synthetic data. A measurement column glues the number to
+  // its unit in one cell: "5.0 kg", "250 g", "1.5 L". You can't sum or convert
+  // that until the number and the unit live in separate columns. SPLIT_PART on
+  // the space does both halves.
+  conversion_templates: {
+    units_in_cell_split: {
+      data_dir:          ".",
+      file_pattern_in:   ".csv",
+      file_pattern_out:  ".csvx",
+
+      input_schema: {
+        $product: "[Product]",
+
+        // THE TRICK — split on the space:
+        //   SPLIT_PART("5.0 kg", ' ', 1) → "5.0"  (×1 → clean number 5)
+        //   SPLIT_PART("5.0 kg", ' ', 2) → "kg"
+        // LEN(...) = 0 guards a blank cell so it stays empty instead of 0.
+        $amount: "IF(LEN(TRIM([Measure])) = 0, '', SPLIT_PART([Measure], ' ', 1) * 1)",
+        $unit:   "SPLIT_PART([Measure], ' ', 2)"
+      },
+
+      row_rules: [ { when: "1 = 1", rows: [ {} ] } ],
+
+      output_schema: {
+        product: "$product",
+        amount:  "$amount",
+        unit:    "$unit"
+      }
+    }
+  }
+}
