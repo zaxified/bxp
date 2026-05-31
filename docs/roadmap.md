@@ -232,6 +232,84 @@ to pre-process the file" or "skip the affected rows".
   simulation; or accepting that `--trace=bin` plus a small parser
   helper is the right path for AI even though it's binary.
 
+### Real-world data quirks (problem-first)
+
+Surfaced by the problem-first examples initiative: start from a real,
+documented data-cleaning problem, attempt it with bxp-cli, and record
+genuine *feature* gaps here (bugs — where BXP does something wrong — get
+fixed before release instead, not parked here).
+
+- **Input character-encoding / charset transcoding.** A huge share of
+  real-world CSVs — especially European and Windows-origin exports — are
+  Windows-1252 / ISO-8859-1 / Latin-1, not UTF-8. bxp-cli reads bytes
+  verbatim: it does not corrupt them, but it also does not transcode, so a
+  Latin-1 `André` (`0x41 0x6e 0x64 0x72 0xe9`) passes straight through and
+  the `.csvx` is then invalid UTF-8 for any downstream consumer that
+  assumes UTF-8 (the GUI, Wealthfolio, a database import). bxp-cli already
+  *detects* the situation — it emits `warning: '<file>' is not valid UTF-8;
+  non-ASCII characters may be garbled` — but there is no `input_encoding`
+  config to actually transcode. Reproduced 2026-05-31: raw passthrough of a
+  Latin-1 field emits the raw `0xe9` byte (with the warning). Feature: an
+  `input_encoding: "windows-1252" | "latin1" | "utf-8"` (default `utf-8`)
+  per-template option that transcodes input to UTF-8 before parsing.
+  Touches the chunk reader (`pipeline.zig`) + `config.zig`. Note: a
+  *known-pattern* mojibake (`cafÃ©` → `café`) can already be patched today
+  with explicit `REPLACE(...)`; this feature is for the general case where
+  the whole file is in one non-UTF-8 charset.
+
+- **Forward-fill / unmerge-cells (`fill_down`).** Spreadsheets exported
+  from merged cells leave the group label on the first row and blanks
+  below it (`Fruit,apple` / `,banana` / `,cherry`). De-merging — carrying
+  the last non-empty value down a column — is one of the most common
+  spreadsheet-cleaning chores. bxp-cli can't do it today: it needs the
+  *previous row's* value (positional cross-row state), which the keyed
+  `pre_pass`/`LOOKUP` model doesn't provide and which clashes with the
+  per-block parallel pipeline (blocks are processed independently). Repro
+  2026-05-31: blanks pass through unchanged. Feature: an opt-in
+  `fill_down: ["colA", "colB"]` carried as serial pre-processing before the
+  parallel main pass (a small single-threaded scan that materialises the
+  filled column), or document it as Not-planned if the serial cost is
+  judged to break the engine contract. Decide vs the stateless/parallel
+  philosophy before implementing.
+
+- **Timezone-aware datetimes → UTC.** `DATE_CONVERT` parses the wall-clock
+  part of `2024-03-15T14:23:01+02:00` (or `…Z`) but silently drops the
+  offset — there is no token for it and no conversion to a common zone.
+  Reproduced 2026-05-31. For mixed-offset exports (a real pain in any
+  multi-region dataset) you can't normalise to UTC. Feature: an offset/`Z`
+  format token plus an optional "convert to UTC" mode in `DATE_CONVERT`.
+  Date-only sibling problems (DST gaps, leap seconds) are out of scope.
+
+- **Minor, surfaced 2026-05-31 (low priority):**
+  (a) `csv_thousands_separator_in` config so space/NBSP-grouped European
+  numbers (`1 234 567,89`) parse without the
+  `REPLACE(REPLACE(x,' ',''),',','.')` idiom that works today.
+  (b) Load-time warning on **duplicate column headers** — `[name]` currently
+  resolves last-wins silently, which can mask a malformed export.
+
+- **Bracket-protected fields (web-server access logs).** Apache/nginx
+  combined-log format is space-delimited but wraps the timestamp in
+  `[10/Oct/2000:13:55:36 -0700]` — a group containing the delimiter. bxp-cli
+  honours `"`-quoting but not `[...]`, so a space-delimited parse splits
+  inside the bracket and shifts every subsequent column (reproduced
+  2026-05-31). Web-server logs are one of the most common raw ETL inputs.
+  Options: a `bracket_group: true` (treat `[...]` like a quote that protects
+  the delimiter), a general `group_open`/`group_close` pair, or an explicit
+  "logs are out of scope — pre-process with a log parser" note. Decide vs
+  the CSV-tool scope. (The *date* inside the bracket already parses fine via
+  `DATE_CONVERT(..., 'DD/MMM/YYYY:hh:mm:ss', ...)`.)
+
+- **Warn on unterminated quote (EOF inside an open quoted field).** *(High
+  value, cheap.)* A single stray unescaped `"` makes the RFC-4180 reader
+  swallow every following row into one field, silently — `warnings:0`,
+  rows just vanish. Reproduced 2026-05-31 (3 rows → 1). This is the exact
+  mechanism by which the IMDb dataset lost ~256k rows before we caught it
+  (now handled there with `csv_text_quote_in: "none"`). The lenient parse
+  itself is defensible; the silent row loss is not. Emit a warning when a
+  quoted field reaches EOF still open (and ideally when a record's column
+  count diverges wildly from the header — a secondary tell). Touches the
+  chunk reader / `LineIterator` quote state + the diagnostics sink.
+
 ### bxp-gui
 
 - **User-supplied themes from JSON files on disk.** Every field on
