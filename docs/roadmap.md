@@ -39,6 +39,34 @@ Open design questions to resolve before implementation:
 - `--list-templates` / `--fetch-template` semantics when the same name
   exists in bundle + user dir.
 
+### Computed-number output precision cap (`{d:.8}`) — pre-release
+
+`Value.toString` formats non-integer `.number` results with `{d:.8}`
+(`bxp-core/src/expr.zig`), i.e. a hard 8-decimal cap before trailing-zero
+trimming. This was a deliberate choice to tame f64 arithmetic noise — a
+division like `ABS([Total]) / [shares]` would otherwise surface
+`8.6299999999974` instead of `8.63`. The cap is correct for that purpose but
+is **global**: a template that genuinely needs >8 fractional digits in a
+*computed* value (high-precision crypto quantities, scientific ratios) is
+silently truncated.
+
+Scope note: this is **only** the computed-`.number` path. The passthrough-string
+sibling (a numeric-looking string copied through `evalString`) was the bug that
+truncated coordinates; that is **already fixed** — `evalString` now canonicalises
+string results without a float round-trip, so passthrough decimals keep every
+digit. What remains is deciding the computed-number policy:
+
+- raise/remove the cap and require templates to `ROUND(...)` explicitly where
+  they want fixed precision (re-baselines computed fixtures; reintroduces f64
+  noise unless every divide is wrapped); or
+- make the precision configurable (e.g. an `output_decimals` knob) with 8 as
+  the default; or
+- keep `{d:.8}` and document it as the computed-value contract.
+
+Resolve before the next release. Found 2026-05-31 while building the
+`squirrel-census-json` real-world example (the passthrough half was fixed the
+same day).
+
 ## v0.3.0
 
 ### Flip bridge proxy to default on Linux/macOS

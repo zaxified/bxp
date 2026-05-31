@@ -2924,23 +2924,12 @@ pub fn eval(src: []const u8, ctx: *const Context) !Value {
     };
 }
 
-/// Evaluates src and returns the result as a string allocated with ctx.alloc.
-/// Numeric strings are normalized: non-integers get up to 8 decimal places
-/// with trailing zeros trimmed; integer-valued floats have no decimal point.
-///
-/// The re-parse + re-format step after toString() is what produces the
-/// "99.00" → "99" normalisation documented in the project notes. It only
-/// fires when the string looks like a valid float — non-numeric strings
-/// (e.g. "BUY") pass through unchanged.
 /// True for numeric-looking strings that must NOT be round-tripped through
 /// a float, because doing so would corrupt them:
 ///   - leading-zero integers ("07666", "00012345") — ZIP / postal codes /
 ///     zero-padded IDs whose leading zeros carry meaning;
 ///   - all-digit integers longer than the f64/f80 exact range (>15 digits) —
 ///     e.g. a 21-digit account/order ID, which parseFloat would round.
-/// Plain decimals and in-range integers fall through to normalisation so
-/// existing numeric formatting (incl. scientific-notation → plain decimal)
-/// is unchanged.
 fn isPrecisionSensitiveText(s: []const u8) bool {
     if (s.len >= 2 and s[0] == '0' and s[1] >= '0' and s[1] <= '9') return true;
     if (s.len > 15) {
@@ -2950,17 +2939,50 @@ fn isPrecisionSensitiveText(s: []const u8) bool {
     return false;
 }
 
+/// Evaluates src and returns the result as a string allocated with ctx.alloc.
+///
+/// Only STRING results (passthrough fields, string literals, concatenation)
+/// are canonicalised here, via canonicaliseNumericString. Computed .number
+/// results are already formatted by Value.toString — including the {d:.8}
+/// rounding that tames f64 arithmetic noise — and must NOT be re-touched.
+/// Routing a passthrough string through the float formatter is what used to
+/// truncate high-precision data (e.g. coordinates) to 8 decimals.
 pub fn evalString(src: []const u8, ctx: *const Context) ![]const u8 {
     const v = try eval(src, ctx);
     const s = try v.toString(ctx.alloc);
-    // Preserve precision-sensitive numeric strings verbatim (leading zeros,
-    // oversized integer IDs). Everything else is normalised by round-tripping
-    // through f80 — this is what turns exported scientific notation
-    // ("1.23E+15") into plain decimals and canonicalises numeric output.
+    return switch (v) {
+        .string => canonicaliseNumericString(s, ctx.alloc),
+        else => s,
+    };
+}
+
+/// Canonicalises a STRING value that may look numeric, WITHOUT round-tripping
+/// it through the float formatter (which caps decimals at 8 places and would
+/// corrupt high-precision passthrough data):
+///   - leading-zero / oversized integers → verbatim (isPrecisionSensitiveText);
+///   - scientific notation ("1.23E+15")  → expanded to a plain decimal (the one
+///     case that genuinely needs an f80 round-trip);
+///   - plain decimals with trailing zeros → zeros trimmed as a STRING op, so
+///     every significant digit survives ("1000.00"→"1000",
+///     "0.0313646200"→"0.03136462", but "40.7940823884086" is kept intact);
+///   - non-numeric strings and plain integers → verbatim.
+fn canonicaliseNumericString(s: []const u8, alloc: std.mem.Allocator) ![]const u8 {
     if (isPrecisionSensitiveText(s)) return s;
-    if (std.fmt.parseFloat(f80, s)) |n| {
-        return (Value{ .number = n }).toString(ctx.alloc);
-    } else |_| {}
+    // Must parse as a float to be treated as numeric at all (e.g. "BUY",
+    // grouped "1,234.56" → returned verbatim).
+    _ = std.fmt.parseFloat(f80, s) catch return s;
+    // Scientific notation is the only form needing numeric expansion.
+    if (std.mem.indexOfAny(u8, s, "eE")) |_| {
+        const n = std.fmt.parseFloat(f80, s) catch return s;
+        return (Value{ .number = n }).toString(alloc);
+    }
+    // Plain decimal: trim trailing zeros (and a dangling '.') as a string op.
+    if (std.mem.indexOfScalar(u8, s, '.')) |_| {
+        var end = s.len;
+        while (end > 1 and s[end - 1] == '0') end -= 1;
+        if (end > 0 and s[end - 1] == '.') end -= 1;
+        return s[0..end];
+    }
     return s;
 }
 
@@ -3164,6 +3186,28 @@ test "evalString: leading zeros and oversized ids preserved; exp/normal still no
     try testing.expectEqualStrings("1230000000000000", try evalString("[Sci]", &ctx));
     // In-range plain decimal is still normalised (trailing zeros dropped).
     try testing.expectEqualStrings("1000", try evalString("[Amount]", &ctx));
+}
+
+test "evalString: high-precision passthrough decimals keep every significant digit" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    try h.col_index.put("Lat", 0);
+    try h.col_index.put("Lon", 1);
+    try h.col_index.put("Padded", 2);
+    const ctx = h.ctx(&.{ "40.7940823884086", "-73.9561344937861", "0.0313646200" }, a);
+    // A passthrough coordinate string must NOT be truncated to 8 decimals
+    // (the old f80 round-trip dropped 5+ digits) — it has no trailing zeros,
+    // so it survives verbatim.
+    try testing.expectEqualStrings("40.7940823884086", try evalString("[Lat]", &ctx));
+    try testing.expectEqualStrings("-73.9561344937861", try evalString("[Lon]", &ctx));
+    // Zero-padded broker quantities are still canonicalised by a string-only
+    // trailing-zero trim (no precision loss, byte-identical to the old output).
+    try testing.expectEqualStrings("0.03136462", try evalString("[Padded]", &ctx));
+    // Computed (.number) results still get the {d:.8} noise-taming round —
+    // unaffected by the string-path change.
+    try testing.expectEqualStrings("8.63", try evalString("ABS(0 - 8.6299999999974)", &ctx));
 }
 
 test "Value.toBool: empty string is false, non-empty is true (even '0')" {
