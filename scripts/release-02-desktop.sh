@@ -78,6 +78,11 @@ build_linux() {
     # would have placed when run via `flutter run`).
     cp "$MONO_ROOT/bxp-cli/zig-out/bin/bxp-cli" "$appdir/bxp-cli"
     cp "$MONO_ROOT/bxp-fmt/zig-out/bin/bxp-fmt" "$appdir/bxp-fmt"
+    # Starter templates — GUI-only installs lack the console archive, so
+    # ship the examples next to the binaries; findExamplesSource() picks
+    # them up for the open-dialog "create examples" action.
+    cp "$MONO_ROOT/resources/console/bxp-cli.examples.json" \
+       "$appdir/bxp-cli.examples.json"
     # FFI bridge — hosts in-process expr eval. Sibling to bxp-gui so
     # findBridgeLibrary() picks it up.
     cp "$MONO_ROOT/bxp-gui-bridge/zig-out/lib/libbxp-gui-bridge.so" \
@@ -162,6 +167,9 @@ build_windows() {
     cp -R "$bundle"/* "$appdir/"
     cp "$MONO_ROOT/bxp-cli/zig-out/bin/bxp-cli.exe" "$appdir/bxp-cli.exe"
     cp "$MONO_ROOT/bxp-fmt/zig-out/bin/bxp-fmt.exe" "$appdir/bxp-fmt.exe"
+    # Starter templates for GUI-only installs (see Linux note above).
+    cp "$MONO_ROOT/resources/console/bxp-cli.examples.json" \
+       "$appdir/bxp-cli.examples.json"
     # FFI bridge DLL — sidesteps dart:io's Windows pipe truncation
     # (sdk#1727) on `--docs`, `--config`, and `--trace` reads. Found by
     # findBridgeLibrary() as a sibling of bxp-gui.exe.
@@ -203,6 +211,9 @@ build_macos() {
     # binary, so BxpProcessClient.findBin finds them as siblings.
     cp "$MONO_ROOT/bxp-cli/zig-out/bin/bxp-cli" "$app/Contents/MacOS/bxp-cli"
     cp "$MONO_ROOT/bxp-fmt/zig-out/bin/bxp-fmt" "$app/Contents/MacOS/bxp-fmt"
+    # Starter templates for GUI-only installs (see Linux note above).
+    cp "$MONO_ROOT/resources/console/bxp-cli.examples.json" \
+       "$app/Contents/MacOS/bxp-cli.examples.json"
     # FFI bridge — hosts in-process expr eval. Sibling to bxp-gui so
     # findBridgeLibrary() picks it up via the same dev-tree probe order
     # as the Win/Linux paths.

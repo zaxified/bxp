@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
+import '../../services/bxp_process_client.dart';
 import '../../store/trace_store.dart';
 import '../theme/bxp_theme.dart';
 import '../theme/bxp_text.dart';
@@ -219,6 +220,34 @@ class _OpenDialogState extends State<OpenDialog> {
     }
   }
 
+  /// Copy the bundled `bxp-cli.examples.json` into the folder currently in
+  /// view (verbatim name; unique-suffixed on collision). Lets a GUI-only
+  /// install grab the starter templates without the console archive. Re-
+  /// lists so the new file shows up, and reports the outcome via snackbar.
+  Future<void> _createExamplesHere() async {
+    final messenger = ScaffoldMessenger.of(context);
+    String? created;
+    try {
+      created = BxpProcessClient.copyExamplesInto(currentPath);
+    } catch (_) {
+      created = null;
+    }
+    if (!mounted) return;
+    final createdPath = created;
+    if (createdPath == null) {
+      messenger.showSnackBar(const SnackBar(
+        content: Text('Example templates are not bundled with this build.'),
+      ));
+    } else {
+      await _navigate(currentPath); // refresh so the new file appears
+      if (!mounted) return;
+      messenger.showSnackBar(SnackBar(
+        content: Text('Created ${p.basename(createdPath)}'),
+      ));
+    }
+    _refocusRootIfSearchInactive();
+  }
+
   void _activateSelected() {
     if (visible.isEmpty) return;
     final entry = visible[selectedIndex];
@@ -428,6 +457,7 @@ class _OpenDialogState extends State<OpenDialog> {
                             context.read<TraceStore>().addCustomPlace(path);
                             _refocusRootIfSearchInactive();
                           },
+                          onCreateExamples: () => _createExamplesHere(),
                         ),
                       ),
                     ],
@@ -775,6 +805,7 @@ class _BrowserPanel extends StatelessWidget {
   final ValueChanged<int> onActivate;
   final VoidCallback onAddCurrentToPlaces;
   final ValueChanged<String> onAddPathToPlaces;
+  final VoidCallback onCreateExamples;
 
   const _BrowserPanel({
     required this.currentPath,
@@ -794,6 +825,7 @@ class _BrowserPanel extends StatelessWidget {
     required this.onActivate,
     required this.onAddCurrentToPlaces,
     required this.onAddPathToPlaces,
+    required this.onCreateExamples,
   });
 
   @override
@@ -806,6 +838,7 @@ class _BrowserPanel extends StatelessWidget {
           onUp: onUp,
           onPick: onCrumb,
           onAddCurrent: onAddCurrentToPlaces,
+          onCreateExamples: onCreateExamples,
         ),
         _SearchBar(
           controller: searchCtrl,
@@ -836,12 +869,14 @@ class _BreadcrumbBar extends StatelessWidget {
   final VoidCallback onUp;
   final ValueChanged<String> onPick;
   final VoidCallback onAddCurrent;
+  final VoidCallback onCreateExamples;
 
   const _BreadcrumbBar({
     required this.path,
     required this.onUp,
     required this.onPick,
     required this.onAddCurrent,
+    required this.onCreateExamples,
   });
 
   @override
@@ -896,6 +931,11 @@ class _BreadcrumbBar extends StatelessWidget {
             icon: Icons.bookmark_add_outlined,
             tooltip: 'Add current folder to Places',
             onTap: onAddCurrent,
+          ),
+          _IconBtn(
+            icon: Icons.note_add_outlined,
+            tooltip: 'Create example templates (bxp-cli.examples.json) here',
+            onTap: onCreateExamples,
           ),
         ],
       ),

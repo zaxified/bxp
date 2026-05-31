@@ -87,6 +87,72 @@ class BxpProcessClient {
     return null;
   }
 
+  /// Bundled starter-template file name. Ships next to the binaries in the
+  /// desktop archive (release-02-desktop.sh) so a GUI-only install — which
+  /// no longer assumes the console archive is also present — still has the
+  /// example templates on hand.
+  static const examplesFileName = 'bxp-cli.examples.json';
+
+  /// Locates the bundled `bxp-cli.examples.json`. Mirrors [findBin]:
+  /// `$BXP_EXAMPLES_PATH` override → sibling of the running executable
+  /// (desktop bundle) → dev-tree `<mono>/resources/console/<file>`.
+  /// Returns null when no copy exists.
+  static String? findExamplesSource() {
+    final env = Platform.environment['BXP_EXAMPLES_PATH'];
+    if (env != null && env.isNotEmpty) {
+      if (File(env).existsSync()) return env;
+      devTrace('findExamples.envOverrideMissing', {'path': env});
+      return null;
+    }
+
+    final exeDir = File(Platform.resolvedExecutable).parent.path;
+    final sibling = p.join(exeDir, examplesFileName);
+    if (File(sibling).existsSync()) return sibling;
+
+    // Same walk-up as findBin: find the `bxp-gui/` segment; its parent is
+    // the monorepo root that holds `resources/console/`.
+    Directory dir = Directory(exeDir);
+    for (int i = 0; i < 10; i++) {
+      final parent = dir.parent;
+      if (parent.path == dir.path) break;
+      if (p.basename(dir.path) == 'bxp-gui') {
+        final candidate =
+            p.join(parent.path, 'resources', 'console', examplesFileName);
+        if (File(candidate).existsSync()) return candidate;
+        break;
+      }
+      dir = parent;
+    }
+    return null;
+  }
+
+  /// Copies the bundled examples file into [destDir] verbatim, keeping the
+  /// `bxp-cli.examples.json` name. Never overwrites: on a name collision it
+  /// appends ` (N)` before the extension until a free name is found.
+  /// Returns the created file's path, or null when the source can't be
+  /// located. Propagates I/O errors to the caller.
+  static String? copyExamplesInto(String destDir) {
+    final src = findExamplesSource();
+    if (src == null) return null;
+    final target = uniqueTargetPath(destDir, examplesFileName);
+    File(src).copySync(target);
+    devTrace('copyExamples.created', {'target': target});
+    return target;
+  }
+
+  /// Returns `destDir/fileName`, or — when that exists — the first free
+  /// `destDir/<base> (N)<ext>` (N = 1, 2, …). Pure-ish (only stats the
+  /// filesystem); extracted for unit testing the collision suffixing.
+  static String uniqueTargetPath(String destDir, String fileName) {
+    final ext = p.extension(fileName); // .json
+    final base = p.basenameWithoutExtension(fileName); // bxp-cli.examples
+    String target = p.join(destDir, fileName);
+    for (int n = 1; File(target).existsSync(); n++) {
+      target = p.join(destDir, '$base ($n)$ext');
+    }
+    return target;
+  }
+
   // ── One-shot invocations (stdout captured) ─────────────────────────────
 
   /// Per-call timeouts. A hung child (deadlock, missing-stdin wait, broken
