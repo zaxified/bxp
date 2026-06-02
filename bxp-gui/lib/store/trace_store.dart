@@ -4009,6 +4009,11 @@ class TraceStore extends ChangeNotifier {
           exprs: exprs,
           tickerMap: runtime.tickerMap.isNotEmpty ? runtime.tickerMap : null,
           lookups: runtime.lookups.isNotEmpty ? runtime.lookups : null,
+          // Row_rules override exprs reach LOOKUP just like input_schema /
+          // rule-when exprs do; without the single pre_pass name a 2-arg
+          // LOOKUP against a legacy single block ('_default') fails with
+          // LookupRequiresName. Mirror the step 3/4 batches above.
+          singlePrepassName: runtime.singlePrepassName,
         );
         for (var i = 0; i < names.length; i++) {
           if (i >= results.length) break;
