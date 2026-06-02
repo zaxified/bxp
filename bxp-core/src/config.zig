@@ -1461,10 +1461,14 @@ pub fn validateFilesystem(
         // counting after the first hit. Iteration errors break the
         // loop (rare on Linux) and fall through to the
         // `fs.no_input_files` warning below.
+        // Accept `.sym_link` as well as `.file`: the runtime loop
+        // (pipeline.zig) opens symlinked CSVs transparently, so a
+        // data_dir holding only symlinks (or hardlinks — those report
+        // as `.file`) has real work to do and must not warn here.
         var matched: u32 = 0;
         var dir_it = dir.iterate();
         while (dir_it.next() catch null) |dir_entry| {
-            if (dir_entry.kind != .file) continue;
+            if (dir_entry.kind != .file and dir_entry.kind != .sym_link) continue;
             if (std.mem.endsWith(u8, dir_entry.name, broker.file_pattern_in)) {
                 matched = 1;
                 break;
