@@ -67,20 +67,6 @@ Resolve before the next release. Found 2026-05-31 while building the
 `squirrel-census-json` real-world example (the passthrough half was fixed the
 same day).
 
-### `--fresh` + `combined_output` leaves a stale roll-up — pre-release
-
-With `--fresh`, the combined output is `O_EXCL`-created and **skipped if it
-already exists** (`bxp-cli/src/pipeline.zig` ~L1862), while per-file outputs
-honour their own per-file skip. Intentional since the feature landed (8c4dfff,
-held through 24d4ac2 + a926dbb) — **not a regression** — but the semantics are
-surprising: add a new input, run `--fresh`, and the new file gets a per-file
-output while the combined roll-up stays stale (missing the new rows). Decide the
-intended contract: (a) `--fresh` always rebuilds the combined (skip applies only
-to per-file work — but the combined then needs every input reprocessed, so the
-per-file skip can't also hold); (b) keep current skip-if-exists and document it;
-(c) a `--rebuild-combined` style override. Resolve before release. Surfaced
-2026-05-31 while building the combine-pattern examples.
-
 ### `bxp-fmt --expr` is silent on success — pre-release
 
 `runExpr` (`bxp-fmt/src/main.zig` ~L1050) is a validator: on success it writes

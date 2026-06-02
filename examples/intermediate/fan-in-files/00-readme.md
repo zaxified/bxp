@@ -32,8 +32,13 @@ files by date gives a chronological stack. The per-row cleanup (`REPLACE` the
 space thousands + comma decimal, `* 1`) is applied uniformly to every file.
 
 > Note: bxp still also writes a per-file `<stem>.csvx` for each input; the
-> combined file is the fan-in result. Pass `--fresh` on a re-run to suppress the
-> per-file copies once they exist.
+> combined file is the fan-in result.
+>
+> **Incremental re-runs.** Drop a new period file in (`2024-01-04.csv`) and
+> re-run with `--fresh`: the per-file `.csvx` copies that already exist are
+> skipped, but the combined roll-up is always rebuilt from **every** input — so
+> the new day lands in `1-fan_in_daily-combined.csvx` while the old days are not
+> re-written. The combined always reflects the full folder, never a stale subset.
 
 **Run it.**
 

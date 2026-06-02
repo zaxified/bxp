@@ -47,7 +47,10 @@ zig build
 # Suppress all output (exit code still reflects result)
 ./zig-out/bin/bxp-cli --quiet
 
-# Skip files whose output already exists
+# Skip files whose per-file output already exists.
+# With `combined_output`, the per-file skip still applies, but the
+# combined roll-up is always rebuilt in full so it reflects every input
+# (a skipped input is still iterated into the combined sink).
 ./zig-out/bin/bxp-cli --fresh
 ```
 

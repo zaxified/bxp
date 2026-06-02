@@ -1835,12 +1835,6 @@ pub fn processBroker(
     var combined_fout: *std.Io.Writer = &combined_discarding.writer;
     var combined_json_first_row: bool = true;
     var combined_file_opened = false;
-    // True once --fresh confirmed the combined file already exists and
-    // routed the combined sink into a Discarding writer. Used inside the
-    // per-file loop to decide whether to skip an input file outright
-    // (both sinks are no-op) or still iterate it so the active sink
-    // (per-file OR combined) gets rows.
-    var combined_skipped = false;
     defer if (combined_file_opened and !out.dry_run) combined_out_file.close();
 
     if (combined) {
@@ -1858,43 +1852,33 @@ pub fn processBroker(
         if (out.dry_run) {
             // combined_fout already points at combined_discarding from
             // the top-of-function init; no rewiring needed.
-        } else if (fresh) {
-            // --fresh + combined: O_EXCL create the combined sink. If it
-            // exists, fall through to discarding so the per-file outputs
-            // (which still honour their own --fresh skip) are unaffected.
-            if (dir.createFile(combined_out_name, .{ .exclusive = true })) |f| {
-                combined_out_file = f;
-                combined_file_opened = true;
-                combined_out_fw = combined_out_file.writer(&combined_out_file_buf);
-                combined_fout = &combined_out_fw.interface;
-            } else |e| switch (e) {
-                error.PathAlreadyExists => {
-                    out.info("  skipping combined output '{s}' (exists)\n", .{combined_out_name});
-                    // combined_fout still points at combined_discarding.
-                    combined_skipped = true;
-                },
-                else => return e,
-            }
         } else {
+            // The combined roll-up is a whole-corpus artefact: it must
+            // always reflect every input file. Under --fresh it is
+            // therefore unconditionally (re)created from scratch — never
+            // skip-if-exists — while the per-file loop below still honours
+            // its own --fresh skip for individual per-file outputs. A
+            // skipped per-file input is still iterated so its rows reach
+            // the combined sink. (A plain truncating create matches the
+            // non-fresh path; race protection on the combined sink is not
+            // meaningful since its contents are deterministic from the
+            // full input set.)
             combined_out_file = try dir.createFile(combined_out_name, .{});
             combined_file_opened = true;
             combined_out_fw = combined_out_file.writer(&combined_out_file_buf);
             combined_fout = &combined_out_fw.interface;
         }
 
-        // Emit header once for the entire combined output (unless --fresh
-        // discarded into /dev/null).
-        if (!combined_skipped) {
-            const delim_out_local = &[_]u8{bc.csv_delimiter_out};
-            if (bc.file_type_out == .json) {
-                try combined_fout.writeAll("[\n");
-            } else {
-                for (bc.output_schema.items, 0..) |col, ci| {
-                    if (ci > 0) try combined_fout.writeAll(delim_out_local);
-                    try combined_fout.writeAll(col.header);
-                }
-                try combined_fout.writeAll("\n");
+        // Emit header once for the entire combined output.
+        const delim_out_local = &[_]u8{bc.csv_delimiter_out};
+        if (bc.file_type_out == .json) {
+            try combined_fout.writeAll("[\n");
+        } else {
+            for (bc.output_schema.items, 0..) |col, ci| {
+                if (ci > 0) try combined_fout.writeAll(delim_out_local);
+                try combined_fout.writeAll(col.header);
             }
+            try combined_fout.writeAll("\n");
         }
     }
 
@@ -2280,13 +2264,14 @@ pub fn processBroker(
                     out_file = f;
                 } else |e| switch (e) {
                     error.PathAlreadyExists => {
-                        // Per-file output already exists. If the combined
-                        // sink still needs rows (combined enabled and not
-                        // also skipped), keep iterating with a Discarding
-                        // per-file writer so the combined gets filled —
-                        // mirroring the "full run without --fresh" target
-                        // state. Otherwise skip the whole iteration.
-                        if (combined and !combined_skipped) {
+                        // Per-file output already exists. When combined is
+                        // enabled the combined sink always needs this file's
+                        // rows (it is rebuilt in full every run), so keep
+                        // iterating with a Discarding per-file writer so the
+                        // combined gets filled — mirroring the "full run
+                        // without --fresh" target state. Otherwise skip the
+                        // whole iteration.
+                        if (combined) {
                             out.info("  skipping per-file '{s}' (exists; combined still being built)\n", .{filename});
                             discarding = .init(&out_file_buf);
                             break :blk_sink &discarding.writer;
