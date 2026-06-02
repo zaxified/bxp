@@ -1011,6 +1011,9 @@ fn writeJsonString(writer: *std.Io.Writer, s: []const u8) !void {
 /// Expressions that reference [ColumnName] or $var will fail because the context
 /// has no fields — that is the intended behavior for a bare syntax check.
 fn runExpr(gpa: std.mem.Allocator, src: []const u8) !u8 {
+    var stdout_buf: [64]u8 = undefined;
+    var stdout_fw = std.fs.File.stdout().writer(&stdout_buf);
+    const stdout = &stdout_fw.interface;
     var stderr_buf: [4096]u8 = undefined;
     var stderr_fw = std.fs.File.stderr().writer(&stderr_buf);
     const stderr = &stderr_fw.interface;
@@ -1081,7 +1084,11 @@ fn runExpr(gpa: std.mem.Allocator, src: []const u8) !u8 {
         writeExprErrorJsonToStderr(stderr, null, "DateFormatBadToken", msg, bad.off, bad.len);
         return 1;
     }
-    // Success: no output. Callers rely on exit code 0.
+    // Success: emit a one-line `{"ok":true}` on stdout so callers can
+    // confirm a clean validation without relying on the exit code alone
+    // (error path keeps stdout empty + writes JSON to stderr).
+    try stdout.writeAll("{\"ok\":true}\n");
+    try stdout.flush();
     return 0;
 }
 

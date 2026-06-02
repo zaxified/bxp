@@ -21,8 +21,8 @@ arena setup, and JSON serialization on stdout/stderr.
   stdout (see "Annotated JSON output" below). Exit 0 on success, 1 on any
   validation error.
 - `bxp-fmt --expr '<text>'` — parse and evaluate the expression with an
-  empty `Context` (no fields, empty column index). Success → exit 0.
-  Failure → one JSON line on stderr:
+  empty `Context` (no fields, empty column index). Success → `{"ok":true}`
+  on stdout, exit 0. Failure → stdout stays empty, one JSON line on stderr:
   `{"error":"<ErrorName>","detail":"<detail>"}`; exit 1.
 - `bxp-fmt --expr-trace '<text>' [--row-headers <json>] [--row-fields <json>]`
   — evaluate one expression with optional fake-row context and stream

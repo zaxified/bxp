@@ -31,8 +31,13 @@ _smoke_bxp_fmt() {
     for sample_json in "$DATASETS"/*/sample.json; do
         "$BXP_FMT" --config "$sample_json" | python3 -m json.tool > /dev/null
     done
-    # --expr accepts valid syntax …
-    "$BXP_FMT" --expr "IF([Qty] > 0, 'BUY', 'SELL')" > /dev/null
+    # --expr accepts valid syntax … and confirms it on stdout.
+    expr_ok=$("$BXP_FMT" --expr "IF([Qty] > 0, 'BUY', 'SELL')")
+    [ "$expr_ok" = '{"ok":true}' ] || {
+        echo "FAIL: bxp-fmt --expr did not emit {\"ok\":true} on success"
+        echo "$expr_ok"
+        return 1
+    }
     # … and rejects broken syntax.
     if "$BXP_FMT" --expr "IF([Qty"; then
         echo "FAIL: bxp-fmt --expr did not reject broken expression"
