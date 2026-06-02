@@ -349,18 +349,24 @@ fixed before release instead, not parked here).
   format token plus an optional "convert to UTC" mode in `DATE_CONVERT`.
   Date-only sibling problems (DST gaps, leap seconds) are out of scope.
 
-  **TZ-help builtins (considered 2026-05-31).** The `datefmt` date core has
-  no timezone awareness, so today a correct DST-aware offset must be
-  hand-derived in the expression language — e.g. EU Prague (`CET`/`CEST`) is
-  computable from `EOMONTH`/`WEEKDAY`/`DATEADD`/`DATEDIFF` ("last Sunday of
-  March/October" window), as demonstrated in
-  `examples/advanced/multi-stage-etl`. That works but is verbose and
-  per-zone bespoke. Decide between (a) a small set of TZ-help builtins
-  (e.g. `TZ_OFFSET(date, zone)` returning `+01:00`/`+02:00` for a known
-  zone/rule set), or (b) implementing real zone/DST support in `bxp-core`
-  (tz database or per-zone rules) feeding `DATE_CONVERT`. Either removes the
-  hand-rolled DST arithmetic; weigh binary-size/complexity vs how common
-  multi-zone normalisation is.
+  **TZ-help builtins — consider on a concrete use-case.** DST-aware offsets
+  are now expressible without a dependency: `NTH_DOW(year, month, weekday, n)`
+  shipped 2026-06-02 (the `datefmt` calendar primitive — last Sunday of March
+  is `NTH_DOW(y, 3, 7, -1)`), so the EU Prague window in
+  `examples/advanced/multi-stage-etl` reads cleanly. `datefmt` itself still has
+  no timezone awareness. Two upgrades, both **deferred until a real multi-zone
+  use-case** justifies the maintenance cost:
+  - `TZ_OFFSET(date, zone)` — returns `+01:00`/`+02:00` for a curated zone set
+    (Europe/{London,Prague,…}, America/{New_York,…}, Asia/{Tokyo,…}), computing
+    DST internally via `NTH_DOW`. One call replaces the hand-rolled `DATEDIFF`
+    window. Cost: a zone→(base offset + DST rule) table that goes stale on rule
+    changes (EU 1996, US 2007) and is date-granularity only (transition-day
+    ambiguity). Subsumes a simpler `IS_DST(date, rule)` boolean.
+  - `TZ_CONVERT(ts, from_zone, to_zone)` — full Postgres-style normalisation
+    backed by the IANA tz database (historical rules correct). Heavier: embeds
+    tzdata + a parser in the static binary. Only if real historical multi-zone
+    conversion appears. Excel offers neither (no TZ/DST concept at all), so
+    these would put bxp ahead of the spreadsheet baseline, not just at parity.
 
 - **Minor, surfaced 2026-05-31 (low priority):**
   (a) `csv_thousands_separator_in` config so space/NBSP-grouped European
@@ -402,6 +408,20 @@ fixed before release instead, not parked here).
   quoted field reaches EOF still open (and ideally when a record's column
   count diverges wildly from the header — a secondary tell). Touches the
   chunk reader / `LineIterator` quote state + the diagnostics sink.
+
+- **`REPLACE_MAP` builtin — bulk/chained replace.** Consider on a concrete
+  use-case. Templates that normalise several tokens at once today nest
+  `REPLACE(REPLACE(REPLACE(x, 'a', '1'), 'b', '2'), …)` — unreadable past two
+  or three pairs (the thousands-separator idiom `REPLACE(REPLACE(x,' ',''),
+  ',','.')` is the common case, and a foreign-month-name normaliser would be
+  another). A `REPLACE_MAP(s, 'from1','to1', 'from2','to2', …)` variadic (or a
+  named-map form mirroring `ticker_maps`, e.g. `REPLACE_MAP(s, 'mymap')`) would
+  collapse the nest into one call. Open questions: variadic pairs vs a
+  config-level named map; left-to-right apply order + whether an earlier
+  replacement's output is eligible for a later rule (it is in a nested chain —
+  document the semantics). This would also be the lightweight answer to the
+  deferred `date_locales` idea (a named month-name map applied before
+  `DATE_CONVERT`), avoiding a dedicated locale subsystem.
 
 ### bxp-gui
 
