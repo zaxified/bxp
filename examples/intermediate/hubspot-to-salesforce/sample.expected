@@ -1,13 +1,13 @@
 FirstName,LastName,Email,Phone,Title,Company,Industry,Status,LeadSource,NumberOfEmployees,AnnualRevenue,City,State,Country,CreatedDate
-Anna,Novak,anna.novak@acmecorp.com,'+1-555-0101,VP Marketing,Acme Corp,Technology,Open - Not Contacted,Web,250,15000000,Boston,MA,USA,2024-01-15T09:23:01Z
+Anna,Novak,anna.novak@acmecorp.com,+1-555-0101,VP Marketing,Acme Corp,Technology,Open - Not Contacted,Web,250,15000000,Boston,MA,USA,2024-01-15T09:23:01Z
 Tomas,Svoboda,tomas.svoboda@globex.com,(555) 234-5678,Director of Sales,Globex Industries,Manufacturing,Working - Contacted,Web,1500,250000000,Chicago,IL,USA,2024-02-03T14:45:22Z
 Petra,Dvorakova,petra@initech.io,555.345.6789,CTO,Initech,Technology,Working - Contacted,Web,80,8000000,Austin,TX,USA,2024-02-20T11:12:34Z
-Jan,Kovar,jan.kovar@umbrella.com,'+420 776 123 456,CEO,Umbrella Holdings,Biotechnology,Open - Not Contacted,Partner Referral,5000,500000000,Prague,Praha,Czech Republic,2024-03-05T08:00:00Z
+Jan,Kovar,jan.kovar@umbrella.com,+420 776 123 456,CEO,Umbrella Holdings,Biotechnology,Open - Not Contacted,Partner Referral,5000,500000000,Prague,Praha,Czech Republic,2024-03-05T08:00:00Z
 Sarah,Mitchell,sarah.m@stark.com,5559876543,Senior Engineer,<missing>,Technology,Open - Not Contacted,Web,1200,80000000,San Francisco,CA,USA,2024-03-18T16:34:11Z
-Mike,Johnson,mjohnson@wayne.com,'+1 (555) 111-2222,COO,Wayne Enterprises,Finance,Closed - Converted,Trade Show,3500,200000000,Gotham,NJ,USA,2024-01-12T10:30:00Z
+Mike,Johnson,mjohnson@wayne.com,+1 (555) 111-2222,COO,Wayne Enterprises,Finance,Closed - Converted,Trade Show,3500,200000000,Gotham,NJ,USA,2024-01-12T10:30:00Z
 Lisa,Brown,lisa.brown@cyberdyne.com,,Head of AI,Cyberdyne Systems,Foo Bar Industry,Working - Contacted,Email,450,45000000,Sunnyvale,CA,USA,2024-04-02T13:25:00Z
-Karl,Mueller,karl.m@bavarian-motors.de,'+49 89 1234 5678,VP Engineering,Bavarian Motors GmbH,Manufacturing,Working - Contacted,Web,12000,3500000000,Munich,Bayern,Germany,2024-04-15T07:55:44Z
-Yuki,Tanaka,yuki@sakura-tech.jp,'+81-3-1234-5678,Product Manager,Sakura Tech,Technology,Closed - Not Converted,Social,90,12000000,Tokyo,Tokyo,Japan,2024-05-01T22:18:30Z
-Carlos,Rodriguez,carlos.r@latam-trade.com,'+52 55 1234 5678,Regional Director,Latam Trade,Consulting,Closed - Not Converted,Other,25,2500000,Mexico City,CDMX,Mexico,2024-05-22T12:04:09Z
-Emma,Watson,emma@oxford-edu.org.uk,'+44 1865 270000,Dean of Studies,Oxford Educational,Education,Working - Contacted,Other,800,15000000,Oxford,Oxfordshire,United Kingdom,2024-06-10T09:11:00Z
-Raj,Patel,raj.patel@mumbai-tech.in,'+91 22 1234 5678,Founder,Mumbai Tech Solutions,Technology,Open - Not Contacted,Partner Referral,15,500000,Mumbai,MH,India,2024-07-08T18:42:15Z
+Karl,Mueller,karl.m@bavarian-motors.de,+49 89 1234 5678,VP Engineering,Bavarian Motors GmbH,Manufacturing,Working - Contacted,Web,12000,3500000000,Munich,Bayern,Germany,2024-04-15T07:55:44Z
+Yuki,Tanaka,yuki@sakura-tech.jp,+81-3-1234-5678,Product Manager,Sakura Tech,Technology,Closed - Not Converted,Social,90,12000000,Tokyo,Tokyo,Japan,2024-05-01T22:18:30Z
+Carlos,Rodriguez,carlos.r@latam-trade.com,+52 55 1234 5678,Regional Director,Latam Trade,Consulting,Closed - Not Converted,Other,25,2500000,Mexico City,CDMX,Mexico,2024-05-22T12:04:09Z
+Emma,Watson,emma@oxford-edu.org.uk,+44 1865 270000,Dean of Studies,Oxford Educational,Education,Working - Contacted,Other,800,15000000,Oxford,Oxfordshire,United Kingdom,2024-06-10T09:11:00Z
+Raj,Patel,raj.patel@mumbai-tech.in,+91 22 1234 5678,Founder,Mumbai Tech Solutions,Technology,Open - Not Contacted,Partner Referral,15,500000,Mumbai,MH,India,2024-07-08T18:42:15Z

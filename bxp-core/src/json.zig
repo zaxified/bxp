@@ -310,22 +310,30 @@ pub const RecordReader = struct {
     }
 };
 
-/// Number text → row-arena string. Matches the legacy `std.json.Value`
-/// path's two-branch behaviour exactly:
-///   * integer-like literals (no `.`, `e`, `E`, and not `-0`) pass
-///     through verbatim — equivalent to `allocPrint("{d}", .{i64})`
-///     which is a no-op on valid JSON integers.
-///   * everything else parses as f64 and re-formats with `{d}` so
-///     "415.20" canonicalises to "415.2" and "1e3" to "1000".
-///
-/// f64 precision loss for huge integers (> 2^53) matches the legacy
-/// behaviour for the same input range — not introduced by this refactor.
+/// Number text → row-arena string. Canonicalises plain decimals WITHOUT an
+/// `f64` round-trip, so a high-precision JSON decimal survives the read intact
+/// — mirroring the CSV passthrough invariant (`canonicaliseNumericString`):
+///   * integer-like literals (no `.`, `e`, `E`, and not `-0`) pass through
+///     verbatim — full precision regardless of digit count.
+///   * plain decimals get a string-only trailing-zero trim ("415.20" → "415.2",
+///     but "40.718807220458984" is kept intact — no `f64` truncation).
+///   * scientific notation is the one form that genuinely needs a numeric
+///     round-trip; it still expands via `f64` ("1e3" → "1000"). Such values
+///     are not the precision-sensitive (>15-digit) class the trim protects.
 fn numberStringToOutput(row_alloc: std.mem.Allocator, num_str: []const u8) ![]const u8 {
     if (std.json.isNumberFormattedLikeAnInteger(num_str)) {
         return try row_alloc.dupe(u8, num_str);
     }
-    const f = try std.fmt.parseFloat(f64, num_str);
-    return try std.fmt.allocPrint(row_alloc, "{d}", .{f});
+    // Scientific notation: expand via f64 (round-trip acceptable here).
+    if (std.mem.indexOfAny(u8, num_str, "eE") != null) {
+        const f = try std.fmt.parseFloat(f64, num_str);
+        return try std.fmt.allocPrint(row_alloc, "{d}", .{f});
+    }
+    // Plain decimal: trim trailing zeros (and a dangling '.') as a string op.
+    var end = num_str.len;
+    while (end > 1 and num_str[end - 1] == '0') end -= 1;
+    if (end > 0 and num_str[end - 1] == '.') end -= 1;
+    return try row_alloc.dupe(u8, num_str[0..end]);
 }
 
 // ── tests ────────────────────────────────────────────────────────────

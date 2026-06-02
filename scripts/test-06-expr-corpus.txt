@@ -165,15 +165,16 @@ expr	err	FIELDS(0)	SplitPartBadIndex
 expr	err	FIELDS(-1)	SplitPartBadIndex
 expr	ok	FIELDS(1)
 expr	ok	FIELDS(99)
-# Inf/NaN regression guards — earlier code (gate `f < 1.0`) did not filter
-# Inf/NaN because IEEE comparisons return false for them; @intFromFloat
-# then panicked. toPositiveIndex helper now gates all three.
+# 'inf'/'nan' are treated as missing data (→ 0, like an empty field), NOT as
+# loud errors — a bad CSV export must not turn an otherwise-working numeric
+# expression into a counted error. As an index they coerce to 0 → silent "";
+# in arithmetic they behave like 0. (The @intFromFloat panic class is gone.)
 expr	ok	FIELDS('inf')
 expr	ok	FIELDS('-inf')
 expr	ok	FIELDS('nan')
 expr	ok	SPLIT_PART('a,b', ',', 'inf')
 expr	ok	SPLIT_PART('a,b', ',', 'nan')
-# ROUND non-finite precision returns x unchanged (silent skip).
+# ROUND precision of 'inf'/'nan' coerces to 0 places (missing → empty contract).
 expr	ok	ROUND(3.14, 'inf')
 expr	ok	ROUND(3.14, 'nan')
 # ROUND huge precision is clamped to ROUND_MAX_PRECISION (=30) to avoid
@@ -182,6 +183,11 @@ expr	ok	ROUND(1, 1000000000)
 expr	ok	ROUND(1, 30)
 # Type mismatch: numeric op on non-numeric string yields NotANumber.
 expr	err	[A] + 'x'	NotANumber
+# Fixed-point overflow: a result past the ±1.7e26 range is a clean error,
+# never a trap (1e14 × 1e14 = 1e28). Realistic money math never reaches it.
+expr	err	100000000000000 * 100000000000000	NumberOverflow
+# A literal beyond the fixed-point range is rejected at parse time.
+expr	err	1000000000000000000000000000000	NumberOutOfRange
 # SPLIT_PART expects integer index; non-int gives NotANumber.
 expr	err	SPLIT_PART([A], ',', 'x')	NotANumber
 # Literal SPLIT_PART index ≤ 0 is statically caught (1-based contract).
@@ -211,8 +217,9 @@ expr	err	GREATEST('foo', 1)	NotANumber
 expr	err	LEN(5)	StringExpected
 # integer_in_range clamps a huge precision to ±30 — no DoS, valid result.
 expr	ok	ROUND(1.5, 999999999)
-# DATEADD / WORKDAY day offset: non-finite or absurd magnitude silently
-# returns "" (previously panicked in @intFromFloat). Non-numeric stays loud.
+# DATEADD / WORKDAY day offset: an absurd in-range magnitude silently
+# returns "" (beyond ±MAX_DATE_OFFSET_DAYS). A missing 'inf' coerces to 0
+# (→ same date back), not an error — bad-export resilience.
 expr	ok	DATEADD('2024-01-01', 'inf')
 expr	ok	DATEADD('2024-01-01', 1000000000)
 expr	ok	WORKDAY('2024-01-01', 'inf')

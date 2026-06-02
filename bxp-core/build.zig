@@ -108,6 +108,18 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    // decimal.zig is the fixed-point numeric core; expr.zig pulls it in via a
+    // file-relative @import (like datefmt.zig), so no named module is needed —
+    // only the standalone test artifact.
+    const decimal_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/decimal.zig"),
+            .target = target,
+            .optimize = optimize,
+            .strip = false,
+        }),
+    });
+
     const json5_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/json5.zig"),
@@ -171,6 +183,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(btrace_tests).step);
     test_step.dependOn(&b.addRunArtifact(expr_tests).step);
     test_step.dependOn(&b.addRunArtifact(datefmt_tests).step);
+    test_step.dependOn(&b.addRunArtifact(decimal_tests).step);
     test_step.dependOn(&b.addRunArtifact(json5_tests).step);
     test_step.dependOn(&b.addRunArtifact(diagnostics_tests).step);
     test_step.dependOn(&b.addRunArtifact(xlsx_tests).step);

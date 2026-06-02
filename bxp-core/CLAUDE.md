@@ -18,6 +18,7 @@ as a local path dependency.
 | `xlsx`        | `xlsx.zig`        | `xlsxToCsv()`, `SheetSpec`                                                |
 | `expr`        | `expr.zig`        | `eval()`, `evalString()`, `Context`, `Value`, `FnDoc` catalog             |
 | `datefmt`     | `datefmt.zig`     | `parse()`, `format()`, civil/arithmetic helpers — date core (file-rel @import by `expr.zig`, not a named module) |
+| `decimal`     | `decimal.zig`     | `Decimal` fixed-point i128 @ 1e12 — numeric core (file-rel @import by `expr.zig`, not a named module) |
 | `config`      | `config.zig`      | `Config`, `BrokerConfig`, `load()`, `validate()`, `FieldDoc`              |
 | `json`        | `json.zig`        | `scanColNames()` + `RecordReader` — streaming JSON array-of-objects input |
 | `btrace`      | `btrace.zig`      | Binary trace `Writer` / `Reader` for `--trace=bin`                        |
@@ -67,7 +68,11 @@ Expression evaluator for `input_schema` and `row_rules` in bxp-cli.json.
 - `evalString(expr, ctx)` — like `eval()` but coerces result to string.
 - `Context` — per-row evaluation context: `fields`, `col_index`, `ticker_map`,
   `lookup_table`, `alloc`, `decimal_sep_in`, `quote_out`.
-- `Value` — union of `number: f64`, `string: []const u8`, `boolean: bool`.
+- `Value` — union of `decimal: Decimal`, `string: []const u8`, `boolean: bool`.
+  `Decimal` (in `decimal.zig`) is a fixed-point `i128` at scale 1e12 (12
+  fractional digits): exact `+ −`, half-away-from-zero `× ÷` and `ROUND`. Replaces
+  the former `f80` + `{d:.8}` print cap, so `0.02 + 0.08` is exactly `0.10`.
+  Passthrough strings (coords, long IDs) bypass the core to keep full precision.
 - `DATE_CONVERT()` date/time parsing and formatting is handled in-process by
   `datefmt.zig` (file-relative `@import`) — no external dependency. Pre-1970
   dates are fully supported (pure parse → format reshuffle, no epoch round-trip).
@@ -148,10 +153,13 @@ whole-file slurp, no upper file-size limit.
   `LineSlice.byte_offset`).
 - Pre_pass + main pass each rewind the file (`file.seekTo(0)`) and
   instantiate their own `RecordReader` against a fresh buffered reader.
-- Value coercions match the legacy `std.json.Value` path byte-for-byte:
-  null → "", bool → "true"/"false", string → dupe, integer-like number →
-  verbatim dupe, non-integer number → `parseFloat` then `{d}` format,
-  nested {}/[] → "".
+- Value coercions: null → "", bool → "true"/"false", string → dupe,
+  integer-like number → verbatim dupe, nested {}/[] → "". Plain non-integer
+  decimals canonicalise via a **string-only trailing-zero trim** (no `f64`
+  round-trip), mirroring the CSV passthrough invariant — so a high-precision
+  JSON decimal (e.g. a 15-digit coordinate) survives intact. Scientific
+  notation still expands via `f64` (the one case that needs a numeric
+  round-trip; not the precision-sensitive >15-digit class).
 
 ### btrace.zig
 

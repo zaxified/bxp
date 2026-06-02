@@ -39,73 +39,83 @@ Open design questions to resolve before implementation:
 - `--list-templates` / `--fetch-template` semantics when the same name
   exists in bundle + user dir.
 
-### Computed-number output precision cap (`{d:.8}`) — interim, superseded by decimal core
+### ~~Decimal numeric core (`f80` → `i128 @ 1e12`)~~ — DONE 2026-06-02
 
-`Value.toString` formats non-integer results with `{d:.8}`
-(`bxp-core/src/expr.zig`), a hard 8-decimal cap that tames binary-float
-arithmetic noise (`0.02 + 0.08 → 0.099999999999999999995 → 0.1`). The cap
-is **correct and stays as-is for now** — empirically (2026-06-02) it is the
-right default: every monetary computed field (fee subtraction, share
-division) produces float noise, so removing the cap forced `ROUND(...)` on
-~7 expressions across the real `DEV/` templates ("ROUND needed too often").
+Shipped. The evaluator's number type is now a fixed-point `Decimal`
+(`i128` at scale 1e12 = 12 decimal places, in `bxp-core/src/decimal.zig`),
+replacing `f80` + the `{d:.8}` print cap. Add/subtract are exact; multiply,
+divide and `ROUND()` all round the 12th digit **half-away-from-zero** ("school"
+rounding, matching Excel/LibreOffice — the target users aren't programmers).
+`i256` intermediates guard multiply overflow, and arithmetic past the ±1.7e26
+range is a clean `NotANumber`-class error (never a trap). `0.02 + 0.08` is now
+exactly `0.10` — no cap, no binary-float noise.
 
-**Decision: the proper fix is the decimal numeric core (next item), not a
-cap policy.** The noise is inherent to binary floating point, not a Zig
-bug; the right representation for decimal money is fixed-point. Until that
-core lands, keep `{d:.8}` and document it as the computed-value contract.
-The passthrough-string sibling (coordinates / long IDs) is **already fixed**
-— `evalString` canonicalises without a float round-trip. Found 2026-05-31
-(`squirrel-census-json`); cap-vs-decimal investigated 2026-06-02.
+What landed:
 
-### Decimal numeric core (`f80` → `i128 @ 1e12`)
+- `Decimal { raw: i128 }` with float-free `parse`/`toString` (the ~22× format
+  win), overflow-checked add/sub/mul/neg/abs, div/round/floor/ceil/order; full
+  unit-test coverage.
+- `expr.zig` fully migrated: `toNumber`→`Decimal` (keeps lenient
+  `parseGroupedNumber` and sci-notation), all binary ops/comparisons,
+  `ABS/ROUND/FLOOR/CEILING/GREATEST/LEAST/RAND`, index/length clamps, date
+  builtins (`Decimal.fromInt`). The `@intFromFloat` Inf/NaN guards are gone —
+  there is no Inf/NaN. The non-finite tokens `nan`/`inf`/`-inf` are treated as
+  missing data (→ 0, like an empty field, no error) so a bad export doesn't
+  raise false errors; a genuinely out-of-range value is `NotANumber` and
+  arithmetic past the range is a `NumberOverflow` error.
+- `json.zig`: plain non-integer JSON decimals canonicalise via a string-only
+  trailing-zero trim (no `f64` round-trip), preserving input precision;
+  sci-notation still expands via `f64`.
+- Passthrough ≠ computed invariant preserved — high-precision IDs/coords never
+  enter `Decimal` (verified: 15-digit airbnb coords survive verbatim).
+- Re-baselined `datasets/` (4 price fixtures: 8→12 digit divisions), expr
+  corpus (`test-06`, inf/nan → missing/0), `examples/` (ngc computed coords
+  8→12 digit); rounding contract documented in `bxp-cli/CLAUDE.md` +
+  `bxp-core/CLAUDE.md`.
 
-Replace the evaluator's float number type (`Value.number: f80`, an old
-workaround for an `f64` summation bug) with **fixed-point `i128` at a
-constant scale of 1e12** (12 decimal places). Makes `+ − ×` exact (no
-noise, no cap), with only division rounding (to 12 places, round-half-even).
-Resolves the precision-cap item above at the root.
+Out of scope (recorded so it isn't re-litigated): per-number exponent /
+BigDecimal (rejected — relocates the rounding decision, adds complexity);
+scientific ranges + transcendental functions (sqrt/pow/log); `>12` computed
+decimals (raise the single scale constant if a real use-case appears);
+`excelSerialToDatetime` f64 (date concern).
 
-Why 1e12, and why now: bxp is steering toward a **universal CSV ETL** with
-**bounded magnitude** (money / measurements, not astronomical). An isolated
-numeric-core micro-bench (40M rows, ReleaseFast) showed the whole f80 cost
-is float→string formatting (≈22× slower than integer format); fixed-point
-is **~2.8× faster** at 1e12 while needing no i256 for any realistic value
-(i128-only arithmetic is overflow-safe to ~170 trillion). Higher scales
-(1e16) buy more decimals but force i256 and erode the win to ~neutral —
-1e12 is the sweet spot. Range at 1e12: ±1.7e26 integer with 12 decimals.
+### ~~`bxp-fmt --expr` is silent on success~~ — DONE 2026-06-02
 
-Scope (full design in `DEV/decimal-core-plan.md`):
+`runExpr` now emits `{"ok":true}` on stdout on success (exit 0); the error path
+still keeps stdout empty and writes JSON to stderr. `test-01-console.sh` asserts
+the success line. Note: `--expr` still cannot return a *value* (no row context —
+column refs error); the value-returning evaluators are `--expr-trace` /
+`--expr-batch`.
 
-- New `Decimal { raw: i128 }` type (scale 1e12); `i256` intermediate as the
-  overflow safety net for `× ÷`.
-- Migrate `expr.zig`: parse (`toNumber`→`toDecimal`, keep lenient
-  `parseGroupedNumber` + sci-notation), format (drop `{d:.8}`), all binary
-  ops, comparisons, `ABS/ROUND/FLOOR/CEILING/GREATEST/LEAST`, `RAND`, the
-  index/length clamps, date builtins (`Decimal.fromInt`). The
-  `@intFromFloat` Inf/NaN guards disappear.
-- Fix `json.zig numberStringToOutput`: stop round-tripping non-integer JSON
-  numbers through `f64` (string-canonicalise instead) so input precision
-  isn't lost before expr sees it.
-- Preserve the passthrough ≠ computed invariant (high-precision IDs/coords
-  must never enter `Decimal`).
-- Re-baseline `datasets/`, expr corpus (`test-06`), `examples/` `.expected`;
-  document the rounding contract in CLAUDE.md + docs.
+### RAND() carries only 12 random digits — follow-up to the decimal core
 
-Out of scope: per-number exponent / BigDecimal (rejected — relocates the
-rounding decision and adds complexity); scientific ranges + transcendental
-functions (sqrt/pow/log); `excelSerialToDatetime` f64 (date concern).
+`RAND()` returns a value in `[0, 1)`, and the fixed-point scale is 1e12, so its
+result holds at most **12 random digits**. For probability/jitter that is fine,
+but a user generating large random integers (e.g. UIDs) via the idiom
+`RAND() * 10^N` gets only 12 random digits followed by zeros — the rest are
+never generated, because `RAND()` is materialised to its 12-digit value
+*before* the multiply, which can then only shift + zero-pad.
 
-### `bxp-fmt --expr` is silent on success — pre-release
+Desired behaviour (designed with the user 2026-06-02): treat `RAND()` as a
+**lazy random token**; when it is **directly multiplied by a power-of-ten
+literal** `10^N`, generate `N` fully-random digits in one fused step and return
+them as a **string** (an integer beyond ~26 digits is not a representable
+`Decimal`). Bare `RAND()` stays the 12-digit `[0,1)` value (Excel-compatible).
 
-`runExpr` (`bxp-fmt/src/main.zig` ~L1050) is a validator: on success it writes
-**nothing** to stdout (exit 0); only failures emit JSON (to stderr). Recurring
-confusion — callers (and Claude) expect *some* output. The only consumer of the
-validator form is `scripts/test-01-console.sh`, which checks the exit code only
-(discards stdout), so adding `{"ok":true}` to stdout on success is safe. Note:
-`--expr` cannot return a *value* (no row context — column refs error); the
-evaluator with a value is `--expr-trace` / `--expr-batch`. Decide: emit
-`{"ok":true}` on success (smallest change), or make the whole contract uniform
-(`{"ok":false,...}` to stdout too, exit code preserved). Surfaced 2026-05-31.
+```text
+RAND()              → "0.123456789012"        (12 digits, [0,1))
+RAND() * 1000000000 → "123456789"             (9 random digits)
+RAND() * 10^18      → "123456789012345678"     (18 random digits, string)
+```
+
+Implementation sketch: add a lazy-random `Value` sentinel; `parseMul` detects
+`<random> * <power-of-ten Decimal>` → draw a uniform random in `[0, 10^N)` →
+format as a string. Anywhere else the sentinel materialises to the 12-digit
+`[0,1)` Decimal. Boundary: the multiplier literal `10^N` itself caps at N≤26
+(a bigger literal overflows the `Decimal` range); supporting N>26 needs
+intercepting the literal too. Alternative considered (and rejected by the user
+in favour of the `RAND() * 10^N` syntax): an explicit `RAND(n)` /
+`RANDBETWEEN(lo, hi)` builtin.
 
 ### Future example candidates (low priority)
 

@@ -2,7 +2,9 @@
 ///
 /// Expressions are evaluated against a single CSV row represented by a Context.
 /// The evaluator is a single-pass recursive-descent parser that produces a Value
-/// (string, number, or boolean) without building an intermediate AST.
+/// (string, fixed-point decimal, or boolean) without building an intermediate AST.
+/// Numeric values use a fixed-point Decimal core (i128 @ scale 1e12) — see
+/// `decimal.zig` — so decimal money math is exact (`0.02 + 0.08 == 0.10`).
 ///
 /// Operator precedence (highest to lowest):
 ///   unary -
@@ -24,7 +26,7 @@
 ///   ROUND(f, n)               — round f to n decimal places
 ///   FLOOR(f)                  — round f down to nearest integer
 ///   CEILING(f)                — round f up to nearest integer
-///   RAND()                    — random float in [0, 1)
+///   RAND()                    — random value in [0, 1) (up to 12 decimals)
 ///   COALESCE(a, b, ...)       — first non-empty argument (empty = whitespace-only string)
 ///   DATE_CONVERT(f, from, to) — reformat a date/time string; format tokens use datefmt syntax
 ///   PRICE_VALUE(f)            — strip currency symbol/code, return numeric string
@@ -33,6 +35,7 @@
 ///   LOOKUP([name,] key, field) — retrieve a value stored by a pre_pass table
 const std = @import("std");
 const datefmt = @import("datefmt.zig");
+const Decimal = @import("decimal.zig").Decimal;
 
 // ---------------------------------------------------------------------------
 // Value — the three types an expression can produce
@@ -40,52 +43,48 @@ const datefmt = @import("datefmt.zig");
 
 pub const Value = union(enum) {
     string: []const u8,
-    number: f80,
+    decimal: Decimal,
     boolean: bool,
 
     /// Returns the value as a string slice, allocated with alloc when needed.
-    /// Numbers: integer-valued floats are formatted without a decimal point;
-    ///          all other floats are formatted with up to 8 decimal places
-    ///          (trailing zeros are trimmed).
+    /// Decimals format their integer part, then up to 12 fractional digits
+    /// with trailing zeros trimmed (no float formatter — see decimal.zig).
     pub fn toString(self: Value, alloc: std.mem.Allocator) ![]const u8 {
         return switch (self) {
             .string => |s| s,
-            .number => |n| blk: {
-                if (n == @trunc(n) and @abs(n) < 1e15) {
-                    break :blk std.fmt.allocPrint(alloc, "{d}", .{@as(i64, @intFromFloat(n))});
-                }
-                const s = try std.fmt.allocPrint(alloc, "{d:.8}", .{n});
-                // Trim trailing zeros after the decimal point.
-                var end = s.len;
-                while (end > 1 and s[end - 1] == '0') end -= 1;
-                if (end > 0 and s[end - 1] == '.') end -= 1;
-                break :blk s[0..end];
-            },
+            .decimal => |d| try d.toString(alloc),
             .boolean => |b| if (b) "true" else "false",
         };
     }
 
-    pub fn toNumber(self: Value) !f80 {
+    pub fn toNumber(self: Value) !Decimal {
         return switch (self) {
-            .number => |n| n,
+            .decimal => |d| d,
             // Empty string is treated as zero so that optional/missing CSV
             // fields don't cause arithmetic failures — callers can gate with
             // COALESCE or IF if they need to distinguish "no value" from 0.
+            // The non-finite tokens "nan"/"inf"/"-inf" (case-insensitive) are
+            // treated the same as empty: they are missing/undefined numeric
+            // data, typically a bad CSV export artifact (a division-by-zero or
+            // dropped value), and must NOT turn an otherwise-working numeric
+            // expression into a counted error. Coercing to 0 mirrors the
+            // empty-field contract and reproduces the historical silent-skip
+            // for index args (0 → not a positive index → "").
             // American thousands-separated numbers ("1,234.56") are tried
-            // after the standard parseFloat fails, so they don't pay the
+            // after the plain decimal parse fails, so they don't pay the
             // parseGroupedNumber overhead when the input is a plain decimal.
-            .string => |s| if (s.len == 0) 0 else
-                std.fmt.parseFloat(f80, s) catch
-                parseGroupedNumber(s, ',', '.') catch
+            .string => |s| if (s.len == 0 or isNonFiniteToken(s)) Decimal.zero else
+                Decimal.parse(s) orelse
+                parseGroupedNumber(s, ',', '.') orelse
                 return error.NotANumber,
-            .boolean => |b| if (b) @as(f80, 1) else 0,
+            .boolean => |b| if (b) Decimal.one else Decimal.zero,
         };
     }
 
     pub fn toBool(self: Value) bool {
         return switch (self) {
             .boolean => |b| b,
-            .number => |n| n != 0,
+            .decimal => |d| !d.isZero(),
             // A non-empty string — even "0" or "false" — is truthy.
             // This matches typical template logic where field absence (empty
             // string) is the only falsy state for string-typed data.
@@ -579,26 +578,25 @@ fn tryScanArg(
         .positive_integer => {
             if (first.kind != .number_lit) return;
             if (out.split_part != null) return;
-            const f = std.fmt.parseFloat(f80, first.text) catch return;
-            // Gate Inf/NaN and finite-but-out-of-i64 — `@intFromFloat`
-            // is undefined behaviour on any of these, and they're all
-            // reachable from user input in the editor (e.g. `1e30`).
             // Mirrors the toPositiveIndex helper that runtime FIELDS /
-            // SPLIT_PART use; here we keep the literal "≤ 0" detection
-            // but treat any non-representable literal as a violation
-            // with bad_idx clamped to a sentinel so the diagnostic
-            // message stays printable.
-            if (!std.math.isFinite(f) or f > @as(f80, @floatFromInt(std.math.maxInt(i64))) or f < @as(f80, @floatFromInt(std.math.minInt(i64)))) {
+            // SPLIT_PART use: a literal that overflows the fixed-point range
+            // (e.g. `1e30`) is treated as a violation with bad_idx clamped to
+            // a printable sentinel; otherwise the integer part is checked for
+            // the "≤ 0" mistake.
+            const d = Decimal.parse(first.text) orelse {
                 out.split_part = .{
                     .bad_idx = 0,
                     .off = first.offset,
                     .len = first.len,
                 };
                 return;
-            }
-            const v = @as(i64, @intFromFloat(f));
-            if (v <= 0) out.split_part = .{
-                .bad_idx = v,
+            };
+            const v = d.trunc();
+            // Flag exactly what toPositiveIndex rejects at runtime: an
+            // integer part below 1, or one beyond a usable usize index
+            // (both yield a silent "" — worth surfacing in the editor).
+            if (v < 1 or v > std.math.maxInt(usize)) out.split_part = .{
+                .bad_idx = if (v >= std.math.minInt(i64) and v <= std.math.maxInt(i64)) @intCast(v) else 0,
                 .off = first.offset,
                 .len = first.len,
             };
@@ -829,7 +827,7 @@ const Parser = struct {
     ) void {
         const w = self.ctx.trace_writer orelse return;
         const value_str: []const u8 = switch (value) {
-            .number => |n| std.fmt.allocPrint(self.ctx.alloc, "{d}", .{n}) catch return,
+            .decimal => |d| d.toString(self.ctx.alloc) catch return,
             .string => |s| s,
             .boolean => |b| if (b) "true" else "false",
         };
@@ -927,15 +925,14 @@ const Parser = struct {
         const ln = left.toNumber() catch null;
         const rn = right.toNumber() catch null;
         if (ln != null and rn != null) {
-            const l = ln.?;
-            const r = rn.?;
+            const ord = ln.?.order(rn.?); // exact integer compare at the same scale
             return Value{ .boolean = switch (op) {
-                .eq => l == r,
-                .neq => l != r,
-                .lt => l < r,
-                .gt => l > r,
-                .lte => l <= r,
-                .gte => l >= r,
+                .eq => ord == .eq,
+                .neq => ord != .eq,
+                .lt => ord == .lt,
+                .gt => ord == .gt,
+                .lte => ord != .gt,
+                .gte => ord != .lt,
                 else => unreachable, // op enum is exhaustive; eq/neq handled above, lt/gt/lte/gte handled here
             } };
         }
@@ -964,7 +961,8 @@ const Parser = struct {
                 switch (right) { .string => |s| self.setNotANumber(s), else => {} }
                 return err;
             };
-            left = Value{ .number = if (t.kind == .plus) l + r else l - r };
+            const res = if (t.kind == .plus) l.add(r) else l.sub(r);
+            left = Value{ .decimal = res orelse return error.NumberOverflow };
         }
         return left;
     }
@@ -1007,13 +1005,13 @@ const Parser = struct {
                 // cash deposit), and a crash or error message per row would be
                 // far more disruptive than a blank output cell. Users who need
                 // to detect zero-division can guard with IF([qty] != 0, ..., '').
-                if (r == 0) {
-                    left = Value{ .string = "" };
+                if (l.div(r)) |q| {
+                    left = Value{ .decimal = q };
                 } else {
-                    left = Value{ .number = l / r };
+                    left = Value{ .string = "" };
                 }
             } else {
-                left = Value{ .number = l * r };
+                left = Value{ .decimal = l.mul(r) orelse return error.NumberOverflow };
             }
         }
         return left;
@@ -1029,7 +1027,7 @@ const Parser = struct {
                 switch (v) { .string => |s| self.setNotANumber(s), else => {} }
                 return err;
             };
-            return Value{ .number = -n };
+            return Value{ .decimal = n.neg() orelse return error.NumberOverflow };
         }
         return self.parsePrimary();
     }
@@ -1044,7 +1042,9 @@ const Parser = struct {
                 '"' => "\"",
                 else => "",
             } },
-            .number_lit => return Value{ .number = try std.fmt.parseFloat(f80, t.text) },
+            // The lexer guarantees a syntactically valid number; parse can
+            // still fail (null) on a literal that overflows the i128 range.
+            .number_lit => return Value{ .decimal = Decimal.parse(t.text) orelse return error.NumberOutOfRange },
             .field_ref => return self.evalFieldRef(t.text),
             .lparen => {
                 const v = try self.parseExpr();
@@ -1107,7 +1107,7 @@ const Parser = struct {
         // recognised numeric shape; raw strings like "N/A" are returned as-is.
         if (self.ctx.decimal_sep_in != '.') {
             const sep = self.ctx.decimal_sep_in;
-            if (parseGroupedNumber(raw, '.', sep)) |_| {
+            if (parseGroupedNumber(raw, '.', sep) != null) {
                 const copy = try self.ctx.alloc.alloc(u8, raw.len);
                 var ci: usize = 0;
                 for (raw) |c| {
@@ -1116,7 +1116,7 @@ const Parser = struct {
                     ci += 1;
                 }
                 return Value{ .string = copy[0..ci] };
-            } else |_| {}
+            }
             if (std.mem.indexOfScalar(u8, raw, sep) != null and
                 isNumericWithSep(raw, sep))
             {
@@ -1278,26 +1278,20 @@ const Parser = struct {
                     return error.NotANumber;
                 },
                 .finite_number => {
-                    const n = args[i].toNumber() catch {
+                    // The fixed-point core is always finite; this domain now
+                    // only enforces that the arg is numeric at all.
+                    _ = args[i].toNumber() catch {
                         switch (args[i]) {
                             .string => |s| self.setNotANumber(s),
                             else => {},
                         }
                         return error.NotANumber;
                     };
-                    if (!std.math.isFinite(n)) {
-                        switch (args[i]) {
-                            .string => |s| self.setNotANumber(s),
-                            else => {},
-                        }
-                        return error.NotANumber;
-                    }
                 },
                 .positive_integer => {
                     // Split failure policy, preserving historical behavior:
                     // non-numeric input → loud NotANumber; a valid number
-                    // that is not a positive index (≤ 0 / non-finite) →
-                    // silent skip to "".
+                    // that is not a positive index (≤ 0) → silent skip to "".
                     const n = args[i].toNumber() catch {
                         switch (args[i]) {
                             .string => |s| self.setNotANumber(s),
@@ -1309,11 +1303,9 @@ const Parser = struct {
                 },
                 .integer_in_range => |r| {
                     if (args[i].toNumber()) |n| {
-                        if (std.math.isFinite(n)) {
-                            const lo: f80 = @floatFromInt(r.min);
-                            const hi: f80 = @floatFromInt(r.max);
-                            args[i] = .{ .number = @max(@min(@trunc(n), hi), lo) };
-                        }
+                        const t = n.trunc(); // integer part toward zero
+                        const clamped = @max(@min(t, @as(i128, r.max)), @as(i128, r.min));
+                        args[i] = .{ .decimal = Decimal.fromInt(clamped) };
                     } else |_| {}
                 },
             }
@@ -1476,105 +1468,110 @@ const if_doc: FnDoc = .{
 ///   parseGroupedNumber("1,234.56", ',', '.') → 1234.56  (American)
 ///   parseGroupedNumber("1.234,56", '.', ',') → 1234.56  (European)
 ///   parseGroupedNumber("-1.234.567,89", '.', ',') → -1234567.89
-fn parseGroupedNumber(s: []const u8, thousands: u8, decimal: u8) error{NotANumber}!f80 {
+/// True for the non-finite tokens `nan` / `inf` / `infinity` (case-insensitive,
+/// optional leading sign, surrounding whitespace ignored). These are treated as
+/// missing numeric data — coerced to 0 like an empty field — so a bad-export
+/// artifact does not raise a (counted) error on an otherwise-working numeric
+/// expression. See `Value.toNumber`.
+fn isNonFiniteToken(s: []const u8) bool {
+    var body = std.mem.trim(u8, s, " \t\r\n");
+    if (body.len > 0 and (body[0] == '+' or body[0] == '-')) body = body[1..];
+    return std.ascii.eqlIgnoreCase(body, "nan") or
+        std.ascii.eqlIgnoreCase(body, "inf") or
+        std.ascii.eqlIgnoreCase(body, "infinity");
+}
+
+fn parseGroupedNumber(s: []const u8, thousands: u8, decimal: u8) ?Decimal {
     var i: usize = 0;
     if (i < s.len and s[i] == '-') i += 1;
     // 1–3 leading digits before the first thousands group
     const leading_start = i;
     while (i < s.len and std.ascii.isDigit(s[i])) i += 1;
     const leading = i - leading_start;
-    if (leading == 0 or leading > 3) return error.NotANumber;
+    if (leading == 0 or leading > 3) return null;
     // At least one '<thousands>ddd' group required
     var groups: usize = 0;
     while (i < s.len and s[i] == thousands) {
-        if (s.len < i + 4) return error.NotANumber;
+        if (s.len < i + 4) return null;
         if (!std.ascii.isDigit(s[i + 1]) or
             !std.ascii.isDigit(s[i + 2]) or
-            !std.ascii.isDigit(s[i + 3])) return error.NotANumber;
+            !std.ascii.isDigit(s[i + 3])) return null;
         i += 4;
         groups += 1;
         // A digit immediately after the group means >3 digits between separators → invalid
-        if (i < s.len and std.ascii.isDigit(s[i])) return error.NotANumber;
+        if (i < s.len and std.ascii.isDigit(s[i])) return null;
     }
-    if (groups == 0) return error.NotANumber;
+    if (groups == 0) return null;
     // Optional decimal part
     if (i < s.len) {
-        if (s[i] != decimal) return error.NotANumber;
+        if (s[i] != decimal) return null;
         i += 1;
-        if (i >= s.len or !std.ascii.isDigit(s[i])) return error.NotANumber;
+        if (i >= s.len or !std.ascii.isDigit(s[i])) return null;
         while (i < s.len and std.ascii.isDigit(s[i])) i += 1;
     }
-    if (i != s.len) return error.NotANumber;
+    if (i != s.len) return null;
     // Strip thousands and rewrite the decimal char to '.' into a stack
-    // buffer, then re-parse with the standard parseFloat. The 32-byte
-    // buffer covers any input that fits in an f80 (f80 max ≈ 1.18×10^4932,
-    // far beyond what 3+N*4 digits can express).
-    var buf: [32]u8 = undefined;
+    // buffer, then re-parse with the fixed-point decimal parser. The 40-byte
+    // buffer covers any value the fixed-point range can hold (≈27 integer
+    // digits + dot + 12 fractional), far beyond what 3+N*4 digits can express.
+    var buf: [40]u8 = undefined;
     var bi: usize = 0;
     for (s) |c| {
         if (c == thousands) continue;
-        if (bi >= buf.len) return error.NotANumber;
+        if (bi >= buf.len) return null;
         buf[bi] = if (c == decimal) '.' else c;
         bi += 1;
     }
-    return std.fmt.parseFloat(f80, buf[0..bi]) catch return error.NotANumber;
+    return Decimal.parse(buf[0..bi]);
 }
 
 // ---------------------------------------------------------------------------
 // Built-in function implementations
 // ---------------------------------------------------------------------------
 
-/// Convert a float to a 1-based positive integer index, or return null for
+/// Convert a Decimal to a 1-based positive integer index, or return null for
 /// "silent skip" semantics (caller should return Value{ .string = "" }).
 ///
-/// Gates THREE classes of input that `@intFromFloat` cannot handle safely:
-///   - NaN          → IEEE comparisons return false, so `f < 1.0` does NOT
-///                     filter it; `@intFromFloat(NaN)` is undefined behavior.
-///   - +Inf / -Inf  → cast to usize is out-of-range, panics in Debug/Safe.
-///   - f < 1.0      → would underflow on the typical `idx - 1` access.
+/// The fixed-point core has no Inf/NaN, so the only gate left is the
+/// integer-part value: anything below 1 (≤ 0) would underflow on the typical
+/// `idx - 1` access, and a value past usize is clamped out.
 ///
-/// Use this in every builtin that converts a user-supplied f80 to a usize
-/// index (FIELDS, SPLIT_PART, future similar). Discovered by the
-/// 2026-05-14 corpus probe; the `positive_integer` ArgKind domain now wires
-/// the same gate into the central `validateArgs` for new builtins.
-fn toPositiveIndex(f: f80) ?usize {
-    if (!std.math.isFinite(f) or f < 1.0) return null;
-    return @as(usize, @intFromFloat(f));
+/// Use this in every builtin that converts a user-supplied numeric arg to a
+/// usize index (FIELDS, SPLIT_PART, future similar). The `positive_integer`
+/// ArgKind domain wires the same gate into the central `validateArgs`.
+fn toPositiveIndex(d: Decimal) ?usize {
+    const t = d.trunc(); // integer part, toward zero
+    if (t < 1 or t > std.math.maxInt(usize)) return null;
+    return @intCast(t);
 }
 
 /// Sane upper bound (in days) for date-offset arithmetic — ±10 000 years,
-/// far beyond any realistic settlement / maturity offset. Bounds
-/// `@intFromFloat` so a non-finite or absurd offset can't reach it.
+/// far beyond any realistic settlement / maturity offset.
 const MAX_DATE_OFFSET_DAYS: i64 = 3_652_500;
 
-/// Convert a user-supplied f80 day offset (DATEADD / WORKDAY arg `n`) to an
-/// i64, or return null for "silent skip" — non-finite (NaN/Inf) or beyond
-/// ±MAX_DATE_OFFSET_DAYS. Day offsets are always small (T+2, +30, +365), so
-/// rejecting huge / non-finite values both prevents an `@intFromFloat`
-/// out-of-range panic and matches the date builtins' "blank/invalid → ''"
-/// contract. Non-numeric args are caught earlier by the `.number` domain.
-fn toDayOffset(f: f80) ?i64 {
-    if (!std.math.isFinite(f)) return null;
-    const t = @trunc(f);
-    if (t > @as(f80, MAX_DATE_OFFSET_DAYS) or t < -@as(f80, MAX_DATE_OFFSET_DAYS))
-        return null;
-    return @intFromFloat(t);
+/// Convert a user-supplied Decimal day offset (DATEADD / WORKDAY arg `n`) to
+/// an i64, or return null for "silent skip" — beyond ±MAX_DATE_OFFSET_DAYS.
+/// Day offsets are always small (T+2, +30, +365), so rejecting huge values
+/// matches the date builtins' "blank/invalid → ''" contract. Non-numeric args
+/// are caught earlier by the `.number` domain.
+fn toDayOffset(d: Decimal) ?i64 {
+    const t = d.trunc();
+    if (t > MAX_DATE_OFFSET_DAYS or t < -MAX_DATE_OFFSET_DAYS) return null;
+    return @intCast(t);
 }
 
-/// Truncate a numeric arg to i32, or null when non-finite / out of i32 range.
-/// Used by integer-component date builtins (NTH_DOW) where `@intCast` from a
-/// wider type would otherwise panic on absurd inputs.
-fn toI32Arg(f: f80) ?i32 {
-    if (!std.math.isFinite(f)) return null;
-    const t = @trunc(f);
-    if (t > 2147483647.0 or t < -2147483648.0) return null;
-    return @intFromFloat(t);
+/// Truncate a numeric arg to i32, or null when out of i32 range. Used by
+/// integer-component date builtins (NTH_DOW) where `@intCast` from a wider
+/// type would otherwise panic on absurd inputs.
+fn toI32Arg(d: Decimal) ?i32 {
+    const t = d.trunc();
+    if (t > std.math.maxInt(i32) or t < std.math.minInt(i32)) return null;
+    return @intCast(t);
 }
 
-/// Maximum decimal precision a ROUND call will honour. f80 mantissa holds
-/// ~19 decimal digits, so anything beyond that is numerical noise.
-/// Caps `factor *= 10.0` (or `/= 10.0`) loop iterations to avoid DoS hangs
-/// when a template author passes a huge precision arg (e.g. `'inf'`).
+/// Maximum decimal precision a ROUND call will honour. The fixed-point core
+/// holds 12 fractional digits; values past that are clamped by ROUND itself.
+/// Kept as the `integer_in_range` clamp bound for the `n` argument.
 const ROUND_MAX_PRECISION: i32 = 30;
 
 // ── ABS ─────────────────────────────────────────────────────────────────
@@ -1591,7 +1588,7 @@ const abs_doc: FnDoc = .{
 // `validateArgs`, so the impl receives a guaranteed-numeric arg and the
 // adapter no longer needs a NotANumber catch (plain signature forward).
 fn builtinAbs(args: []Value) !Value {
-    return Value{ .number = @abs(try args[0].toNumber()) };
+    return Value{ .decimal = (try args[0].toNumber()).abs() orelse return error.NumberOverflow };
 }
 fn adaptAbs(_: *Parser, args: []Value) anyerror!Value {
     return builtinAbs(args);
@@ -1973,7 +1970,7 @@ const round_doc: FnDoc = .{
     .name = "ROUND",
     .signature = "ROUND(f, n)",
     .example = "ROUND(3.14159, 2)",
-    .description = "Round `f` to `n` decimal places (half-away-from-zero). `n=0` rounds to the nearest integer; `n<0` rounds to tens/hundreds/etc. (`n=-2` → nearest 100). `n` is clamped to ±30 to bound CPU; non-finite `n` (NaN/Inf) returns `f` unchanged.",
+    .description = "Round `f` to `n` decimal places (half away from zero, like Excel: `ROUND(2.5,0)=3`). `n=0` rounds to the nearest integer; `n<0` rounds to tens/hundreds/etc. (`n=-2` → nearest 100); `n>=12` is a no-op (12 is the fixed-point scale). `n` is clamped to ±30.",
     .args = &.{
         .{ .name = "f", .kind = .number },
         .{ .name = "n", .kind = .{ .integer_in_range = .{
@@ -1984,27 +1981,15 @@ const round_doc: FnDoc = .{
     .min_args = 2,
     .max_args = 2,
 };
-/// ROUND(f, n) — round f to n decimal places.
+/// ROUND(f, n) — round f to n decimal places, half-away-from-zero (Excel-style).
 /// n >= 0: round to n places after decimal point; n < 0: round to tens/hundreds/etc.
-/// `validateArgs` clamps a finite `n` to ±ROUND_MAX_PRECISION (the
-/// integer_in_range domain) before this runs; the local clamp below stays
-/// as defence-in-depth and to handle the non-finite passthrough case.
+/// `validateArgs` clamps `n` to ±ROUND_MAX_PRECISION (the integer_in_range
+/// domain) before this runs; the local clamp below stays as defence-in-depth.
 fn builtinRound(args: []Value) !Value {
     const x = try args[0].toNumber();
-    const n_f = @trunc(try args[1].toNumber());
-    // Gate non-finite precision (NaN/Inf) — silent skip, return x unchanged.
-    // Also cap at ±ROUND_MAX_PRECISION to avoid a 10⁹-iteration DoS hang
-    // when an arg evaluates to a huge number.
-    if (!std.math.isFinite(n_f)) return Value{ .number = x };
-    const n_clamped = @max(@min(n_f, @as(f80, ROUND_MAX_PRECISION)), -@as(f80, ROUND_MAX_PRECISION));
-    const n: i32 = @intFromFloat(n_clamped);
-    var factor: f80 = 1.0;
-    if (n >= 0) {
-        for (0..@intCast(n)) |_| factor *= 10.0;
-    } else {
-        for (0..@intCast(-n)) |_| factor /= 10.0;
-    }
-    return Value{ .number = @round(x * factor) / factor };
+    const n_t = (try args[1].toNumber()).trunc(); // integer part of n
+    const n_clamped = @max(@min(n_t, @as(i128, ROUND_MAX_PRECISION)), -@as(i128, ROUND_MAX_PRECISION));
+    return Value{ .decimal = x.round(@intCast(n_clamped)) };
 }
 fn adaptRound(p: *Parser, args: []Value) anyerror!Value {
     return builtinRound(args) catch |err| {
@@ -2025,7 +2010,7 @@ const floor_doc: FnDoc = .{
 };
 /// FLOOR(f) — largest integer less than or equal to f.
 fn builtinFloor(args: []Value) !Value {
-    return Value{ .number = @floor(try args[0].toNumber()) };
+    return Value{ .decimal = (try args[0].toNumber()).floor() };
 }
 fn adaptFloor(_: *Parser, args: []Value) anyerror!Value {
     return builtinFloor(args);
@@ -2043,7 +2028,7 @@ const ceiling_doc: FnDoc = .{
 };
 /// CEILING(f) — smallest integer greater than or equal to f.
 fn builtinCeiling(args: []Value) !Value {
-    return Value{ .number = @ceil(try args[0].toNumber()) };
+    return Value{ .decimal = (try args[0].toNumber()).ceil() };
 }
 fn adaptCeiling(_: *Parser, args: []Value) anyerror!Value {
     return builtinCeiling(args);
@@ -2054,15 +2039,17 @@ const rand_doc: FnDoc = .{
     .name = "RAND",
     .signature = "RAND()",
     .example = "RAND()",
-    .description = "Random float in [0, 1).",
+    .description = "Random value in [0, 1) with up to 12 decimal places.",
     .args = &.{},
     .min_args = 0,
     .max_args = 0,
 };
-/// RAND() — cryptographically random float in [0, 1).
+/// RAND() — cryptographically random fixed-point value in [0, 1). Draws a
+/// uniform raw integer in [0, SCALE) so the result has up to 12 decimals.
 fn builtinRand(args: []Value) !Value {
     if (args.len != 0) return error.WrongArgCount;
-    return Value{ .number = @floatCast(std.crypto.random.float(f64)) };
+    const r = std.crypto.random.intRangeLessThan(i128, 0, Decimal.SCALE);
+    return Value{ .decimal = .{ .raw = r } };
 }
 fn adaptRand(_: *Parser, args: []Value) anyerror!Value {
     return builtinRand(args);
@@ -2095,7 +2082,7 @@ fn builtinCoalesce(args: []Value) !Value {
             .string => |s| {
                 if (std.mem.trim(u8, s, " \t\r\n").len > 0) return v;
             },
-            .number, .boolean => return v,
+            .decimal, .boolean => return v,
         }
     }
     return args[args.len - 1];
@@ -2254,7 +2241,7 @@ const left_doc: FnDoc = .{
     .name = "LEFT",
     .signature = "LEFT(s, n)",
     .example = "LEFT('AAPL.US', 4)",
-    .description = "Return the first `n` bytes of `s`. `n` is clamped to `[0, len(s)]`; non-finite `n` (NaN/Inf) or negative `n` returns \"\".",
+    .description = "Return the first `n` bytes of `s`. `n` is clamped to `[0, len(s)]`; negative `n` returns \"\".",
     .args = &.{
         .{ .name = "s", .kind = .string },
         .{ .name = "n", .kind = .number },
@@ -2267,10 +2254,9 @@ fn builtinLeft(args: []Value) !Value {
         .string => |v| v,
         else => return error.StringExpected,
     };
-    const nf = try args[1].toNumber();
-    if (!std.math.isFinite(nf) or nf < 0) return Value{ .string = "" };
-    const clamped = @min(nf, @as(f80, @floatFromInt(s.len)));
-    const n: usize = @intFromFloat(clamped);
+    const t = (try args[1].toNumber()).trunc(); // integer part of n
+    if (t < 0) return Value{ .string = "" };
+    const n: usize = if (t > s.len) s.len else @intCast(t);
     return Value{ .string = s[0..n] };
 }
 fn adaptLeft(_: *Parser, args: []Value) anyerror!Value {
@@ -2282,7 +2268,7 @@ const right_doc: FnDoc = .{
     .name = "RIGHT",
     .signature = "RIGHT(s, n)",
     .example = "RIGHT('AAPL.US', 2)",
-    .description = "Return the last `n` bytes of `s`. `n` is clamped to `[0, len(s)]`; non-finite `n` (NaN/Inf) or negative `n` returns \"\".",
+    .description = "Return the last `n` bytes of `s`. `n` is clamped to `[0, len(s)]`; negative `n` returns \"\".",
     .args = &.{
         .{ .name = "s", .kind = .string },
         .{ .name = "n", .kind = .number },
@@ -2295,10 +2281,9 @@ fn builtinRight(args: []Value) !Value {
         .string => |v| v,
         else => return error.StringExpected,
     };
-    const nf = try args[1].toNumber();
-    if (!std.math.isFinite(nf) or nf < 0) return Value{ .string = "" };
-    const clamped = @min(nf, @as(f80, @floatFromInt(s.len)));
-    const n: usize = @intFromFloat(clamped);
+    const t = (try args[1].toNumber()).trunc(); // integer part of n
+    if (t < 0) return Value{ .string = "" };
+    const n: usize = if (t > s.len) s.len else @intCast(t);
     return Value{ .string = s[s.len - n ..] };
 }
 fn adaptRight(_: *Parser, args: []Value) anyerror!Value {
@@ -2310,7 +2295,7 @@ const substr_doc: FnDoc = .{
     .name = "SUBSTR",
     .signature = "SUBSTR(s, start, length)",
     .example = "SUBSTR('AAPL.US', 1, 4)",
-    .description = "Return `length` bytes from `s` starting at 1-based position `start`. Returns \"\" when `start` is non-positive / non-finite / past end of `s`, or when `length` is non-positive / non-finite. `length` is clamped to the bytes remaining from `start`.",
+    .description = "Return `length` bytes from `s` starting at 1-based position `start`. Returns \"\" when `start` is non-positive / past end of `s`, or when `length` is negative. `length` is clamped to the bytes remaining from `start`.",
     .args = &.{
         .{ .name = "s", .kind = .string },
         .{ .name = "start", .kind = .positive_integer },
@@ -2326,13 +2311,12 @@ fn builtinSubstr(args: []Value) !Value {
     };
     const start = toPositiveIndex(try args[1].toNumber()) orelse
         return Value{ .string = "" };
-    const lenf = try args[2].toNumber();
-    if (!std.math.isFinite(lenf) or lenf < 0) return Value{ .string = "" };
+    const len_t = (try args[2].toNumber()).trunc(); // integer part of length
+    if (len_t < 0) return Value{ .string = "" };
     if (start > s.len) return Value{ .string = "" };
     const begin = start - 1;
     const avail = s.len - begin;
-    const clamped = @min(lenf, @as(f80, @floatFromInt(avail)));
-    const len: usize = @intFromFloat(clamped);
+    const len: usize = if (len_t > avail) avail else @intCast(len_t);
     return Value{ .string = s[begin .. begin + len] };
 }
 fn adaptSubstr(_: *Parser, args: []Value) anyerror!Value {
@@ -2462,7 +2446,7 @@ fn builtinNullif(args: []Value, alloc: std.mem.Allocator) !Value {
     const ln = args[0].toNumber() catch null;
     const rn = args[1].toNumber() catch null;
     if (ln != null and rn != null) {
-        if (ln.? == rn.?) return Value{ .string = "" };
+        if (ln.?.eql(rn.?)) return Value{ .string = "" };
         return args[0];
     }
     const ls = try args[0].toString(alloc);
@@ -2497,7 +2481,7 @@ fn builtinIn(args: []Value, alloc: std.mem.Allocator) !Value {
     for (args[1..]) |opt| {
         if (ln) |l| {
             if (opt.toNumber() catch null) |r| {
-                if (l == r) return Value{ .boolean = true };
+                if (l.eql(r)) return Value{ .boolean = true };
                 continue;
             }
         }
@@ -2600,7 +2584,7 @@ fn builtinDateDiff(p: *Parser, args: []Value) !Value {
     if (s1.len == 0 or s2.len == 0) return Value{ .string = "" };
     const d1 = try parseDateArg(p, s1);
     const d2 = try parseDateArg(p, s2);
-    return Value{ .number = @floatFromInt(d1 - d2) };
+    return Value{ .decimal = Decimal.fromInt(d1 - d2) };
 }
 fn adaptDateDiff(p: *Parser, args: []Value) anyerror!Value {
     return builtinDateDiff(p, args);
@@ -2656,7 +2640,7 @@ fn builtinYear(p: *Parser, args: []Value) !Value {
         p.setDetail("invalid date '{s}': expected YYYY-MM-DD", .{s});
         return error.InvalidDate;
     };
-    return Value{ .number = @floatFromInt(parts.year) };
+    return Value{ .decimal = Decimal.fromInt(parts.year) };
 }
 fn adaptYear(p: *Parser, args: []Value) anyerror!Value {
     return builtinYear(p, args);
@@ -2679,7 +2663,7 @@ fn builtinMonth(p: *Parser, args: []Value) !Value {
         p.setDetail("invalid date '{s}': expected YYYY-MM-DD", .{s});
         return error.InvalidDate;
     };
-    return Value{ .number = @floatFromInt(parts.month) };
+    return Value{ .decimal = Decimal.fromInt(parts.month) };
 }
 fn adaptMonth(p: *Parser, args: []Value) anyerror!Value {
     return builtinMonth(p, args);
@@ -2702,7 +2686,7 @@ fn builtinDay(p: *Parser, args: []Value) !Value {
         p.setDetail("invalid date '{s}': expected YYYY-MM-DD", .{s});
         return error.InvalidDate;
     };
-    return Value{ .number = @floatFromInt(parts.day) };
+    return Value{ .decimal = Decimal.fromInt(parts.day) };
 }
 fn adaptDay(p: *Parser, args: []Value) anyerror!Value {
     return builtinDay(p, args);
@@ -2722,7 +2706,7 @@ fn builtinWeekday(p: *Parser, args: []Value) !Value {
     const s = switch (args[0]) { .string => |v| v, else => return error.StringExpected };
     if (s.len == 0) return Value{ .string = "" };
     const ep = try parseDateArg(p, s);
-    return Value{ .number = @floatFromInt(isoWeekday(ep)) };
+    return Value{ .decimal = Decimal.fromInt(isoWeekday(ep)) };
 }
 fn adaptWeekday(p: *Parser, args: []Value) anyerror!Value {
     return builtinWeekday(p, args);
@@ -2801,7 +2785,7 @@ fn builtinLen(args: []Value) !Value {
         .string => |v| v,
         else => return error.StringExpected,
     };
-    return Value{ .number = @floatFromInt(s.len) };
+    return Value{ .decimal = Decimal.fromInt(@intCast(s.len)) };
 }
 fn adaptLen(_: *Parser, args: []Value) anyerror!Value {
     return builtinLen(args);
@@ -2820,21 +2804,19 @@ const greatest_doc: FnDoc = .{
     .max_args = 255,
 };
 fn builtinGreatest(args: []Value) !Value {
-    var best: f80 = try args[0].toNumber();
+    var best: Decimal = try args[0].toNumber();
     for (args[1..]) |v| {
         const n = try v.toNumber();
-        if (n > best) best = n;
+        if (n.order(best) == .gt) best = n;
     }
-    return Value{ .number = best };
+    return Value{ .decimal = best };
 }
 fn adaptGreatest(p: *Parser, args: []Value) anyerror!Value {
     return builtinGreatest(args) catch |err| {
         for (args) |v| switch (v) {
-            .string => |s| {
-                _ = std.fmt.parseFloat(f80, s) catch {
-                    p.setNotANumber(s);
-                    return err;
-                };
+            .string => |s| if (!stringIsNumeric(s)) {
+                p.setNotANumber(s);
+                return err;
             },
             else => {},
         };
@@ -2853,26 +2835,32 @@ const least_doc: FnDoc = .{
     .max_args = 255,
 };
 fn builtinLeast(args: []Value) !Value {
-    var best: f80 = try args[0].toNumber();
+    var best: Decimal = try args[0].toNumber();
     for (args[1..]) |v| {
         const n = try v.toNumber();
-        if (n < best) best = n;
+        if (n.order(best) == .lt) best = n;
     }
-    return Value{ .number = best };
+    return Value{ .decimal = best };
 }
 fn adaptLeast(p: *Parser, args: []Value) anyerror!Value {
     return builtinLeast(args) catch |err| {
         for (args) |v| switch (v) {
-            .string => |s| {
-                _ = std.fmt.parseFloat(f80, s) catch {
-                    p.setNotANumber(s);
-                    return err;
-                };
+            .string => |s| if (!stringIsNumeric(s)) {
+                p.setNotANumber(s);
+                return err;
             },
             else => {},
         };
         return err;
     };
+}
+
+/// True when `s` coerces to a number under the same rules as `Value.toNumber`
+/// (empty → 0, plain decimal, or thousands-grouped). Used by GREATEST/LEAST
+/// adapters to pinpoint the offending non-numeric argument for diagnostics.
+fn stringIsNumeric(s: []const u8) bool {
+    if (s.len == 0 or isNonFiniteToken(s)) return true;
+    return Decimal.parse(s) != null or parseGroupedNumber(s, ',', '.') != null;
 }
 
 // ---------------------------------------------------------------------------
@@ -2898,12 +2886,12 @@ pub fn eval(src: []const u8, ctx: *const Context) !Value {
     };
 }
 
-/// True for numeric-looking strings that must NOT be round-tripped through
-/// a float, because doing so would corrupt them:
+/// True for numeric-looking strings that must NOT be re-formatted, because
+/// doing so would corrupt them:
 ///   - leading-zero integers ("07666", "00012345") — ZIP / postal codes /
 ///     zero-padded IDs whose leading zeros carry meaning;
-///   - all-digit integers longer than the f64/f80 exact range (>15 digits) —
-///     e.g. a 21-digit account/order ID, which parseFloat would round.
+///   - long all-digit integers (>15 digits) — e.g. a 21-digit account/order
+///     ID. Short-circuited verbatim before any numeric parse touches them.
 fn isPrecisionSensitiveText(s: []const u8) bool {
     if (s.len >= 2 and s[0] == '0' and s[1] >= '0' and s[1] <= '9') return true;
     if (s.len > 15) {
@@ -2916,11 +2904,11 @@ fn isPrecisionSensitiveText(s: []const u8) bool {
 /// Evaluates src and returns the result as a string allocated with ctx.alloc.
 ///
 /// Only STRING results (passthrough fields, string literals, concatenation)
-/// are canonicalised here, via canonicaliseNumericString. Computed .number
-/// results are already formatted by Value.toString — including the {d:.8}
-/// rounding that tames f64 arithmetic noise — and must NOT be re-touched.
-/// Routing a passthrough string through the float formatter is what used to
-/// truncate high-precision data (e.g. coordinates) to 8 decimals.
+/// are canonicalised here, via canonicaliseNumericString. Computed .decimal
+/// results are already exact (fixed-point) and formatted by Value.toString,
+/// and must NOT be re-touched. Routing a passthrough string through the
+/// numeric core would quantise it to 12 decimals, truncating high-precision
+/// data (e.g. coordinates) — hence the string-only canonicalisation below.
 pub fn evalString(src: []const u8, ctx: *const Context) ![]const u8 {
     const v = try eval(src, ctx);
     const s = try v.toString(ctx.alloc);
@@ -2930,25 +2918,28 @@ pub fn evalString(src: []const u8, ctx: *const Context) ![]const u8 {
     };
 }
 
-/// Canonicalises a STRING value that may look numeric, WITHOUT round-tripping
-/// it through the float formatter (which caps decimals at 8 places and would
-/// corrupt high-precision passthrough data):
+/// Canonicalises a STRING value that may look numeric, WITHOUT quantising it
+/// through the fixed-point core (which would truncate high-precision
+/// passthrough data to 12 decimals):
 ///   - leading-zero / oversized integers → verbatim (isPrecisionSensitiveText);
 ///   - scientific notation ("1.23E+15")  → expanded to a plain decimal (the one
-///     case that genuinely needs an f80 round-trip);
+///     case that genuinely needs a numeric round-trip);
 ///   - plain decimals with trailing zeros → zeros trimmed as a STRING op, so
 ///     every significant digit survives ("1000.00"→"1000",
 ///     "0.0313646200"→"0.03136462", but "40.7940823884086" is kept intact);
 ///   - non-numeric strings and plain integers → verbatim.
+///
+/// `Decimal.parse` serves only as the "is this numeric (and in range)?"
+/// predicate and to expand scientific notation; the plain-decimal branch
+/// trims the ORIGINAL string so no precision is lost.
 fn canonicaliseNumericString(s: []const u8, alloc: std.mem.Allocator) ![]const u8 {
     if (isPrecisionSensitiveText(s)) return s;
-    // Must parse as a float to be treated as numeric at all (e.g. "BUY",
-    // grouped "1,234.56" → returned verbatim).
-    _ = std.fmt.parseFloat(f80, s) catch return s;
+    // Must parse as a fixed-point number to be treated as numeric at all
+    // (e.g. "BUY", grouped "1,234.56", out-of-range "1e30" → verbatim).
+    const d = Decimal.parse(s) orelse return s;
     // Scientific notation is the only form needing numeric expansion.
     if (std.mem.indexOfAny(u8, s, "eE")) |_| {
-        const n = std.fmt.parseFloat(f80, s) catch return s;
-        return (Value{ .number = n }).toString(alloc);
+        return d.toString(alloc);
     }
     // Plain decimal: trim trailing zeros (and a dangling '.') as a string op.
     if (std.mem.indexOfScalar(u8, s, '.')) |_| {
@@ -3080,19 +3071,28 @@ const TestHelper = struct {
 // Value methods
 // ------------------------------------------------------------
 
-test "Value.toString: integer-valued float has no decimal point" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    try testing.expectEqualStrings("7", try (Value{ .number = 7.0 }).toString(arena.allocator()));
-    try testing.expectEqualStrings("-3", try (Value{ .number = -3.0 }).toString(arena.allocator()));
-    try testing.expectEqualStrings("0", try (Value{ .number = 0.0 }).toString(arena.allocator()));
+/// Test helper: build a Value.decimal from a literal numeric string.
+fn dec(s: []const u8) Value {
+    return Value{ .decimal = Decimal.parse(s).? };
+}
+/// Test helper: assert a toNumber() result equals the given literal.
+fn expectNum(want: []const u8, v: Value) !void {
+    try testing.expectEqual(Decimal.parse(want).?.raw, (try v.toNumber()).raw);
 }
 
-test "Value.toString: float trims trailing zeros" {
+test "Value.toString: integer-valued decimal has no decimal point" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
-    try testing.expectEqualStrings("1.5", try (Value{ .number = 1.5 }).toString(arena.allocator()));
-    try testing.expectEqualStrings("1.25", try (Value{ .number = 1.25 }).toString(arena.allocator()));
+    try testing.expectEqualStrings("7", try dec("7").toString(arena.allocator()));
+    try testing.expectEqualStrings("-3", try dec("-3").toString(arena.allocator()));
+    try testing.expectEqualStrings("0", try dec("0").toString(arena.allocator()));
+}
+
+test "Value.toString: decimal trims trailing zeros" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    try testing.expectEqualStrings("1.5", try dec("1.5").toString(arena.allocator()));
+    try testing.expectEqualStrings("1.25", try dec("1.25").toString(arena.allocator()));
 }
 
 test "Value.toString: bool" {
@@ -3103,12 +3103,12 @@ test "Value.toString: bool" {
 }
 
 test "Value.toNumber: empty string returns 0" {
-    try testing.expectEqual(@as(f80, 0), try (Value{ .string = "" }).toNumber());
+    try testing.expectEqual(@as(i128, 0), (try (Value{ .string = "" }).toNumber()).raw);
 }
 
 test "Value.toNumber: numeric string is parsed" {
-    try testing.expectEqual(@as(f80, 42), try (Value{ .string = "42" }).toNumber());
-    try testing.expectEqual(@as(f80, -1.5), try (Value{ .string = "-1.5" }).toNumber());
+    try expectNum("42", Value{ .string = "42" });
+    try expectNum("-1.5", Value{ .string = "-1.5" });
 }
 
 test "Value.toNumber: non-numeric string returns error" {
@@ -3116,10 +3116,10 @@ test "Value.toNumber: non-numeric string returns error" {
 }
 
 test "Value.toNumber: American thousands-separated format" {
-    try testing.expectEqual(@as(f80, 1234.56),   try (Value{ .string = "1,234.56"     }).toNumber());
-    try testing.expectEqual(@as(f80, 1234567),   try (Value{ .string = "1,234,567"    }).toNumber());
-    try testing.expectEqual(@as(f80, -1234.5),   try (Value{ .string = "-1,234.5"     }).toNumber());
-    try testing.expectEqual(@as(f80, 1000),      try (Value{ .string = "1,000"        }).toNumber());
+    try expectNum("1234.56", Value{ .string = "1,234.56" });
+    try expectNum("1234567", Value{ .string = "1,234,567" });
+    try expectNum("-1234.5", Value{ .string = "-1,234.5" });
+    try expectNum("1000", Value{ .string = "1,000" });
     // Must still be a string when not used in arithmetic
     try testing.expectEqualStrings("1,234.56", (Value{ .string = "1,234.56" }).toString(testing.allocator) catch unreachable);
     // Invalid patterns must stay NotANumber
@@ -3155,7 +3155,7 @@ test "evalString: leading zeros and oversized ids preserved; exp/normal still no
     // Leading-zero integers (ZIP / zero-padded IDs) must survive verbatim.
     try testing.expectEqualStrings("07666", try evalString("[Zip]", &ctx));
     try testing.expectEqualStrings("007", try evalString("'007'", &ctx));
-    // Oversized integer ID — no f80 round-trip, so no silent corruption.
+    // Oversized integer ID — never enters the numeric core, so no corruption.
     try testing.expectEqualStrings("123456789012345678901", try evalString("[Id]", &ctx));
     // Scientific notation still expands to a plain decimal.
     try testing.expectEqualStrings("1230000000000000", try evalString("[Sci]", &ctx));
@@ -3172,17 +3172,18 @@ test "evalString: high-precision passthrough decimals keep every significant dig
     try h.col_index.put("Lon", 1);
     try h.col_index.put("Padded", 2);
     const ctx = h.ctx(&.{ "40.7940823884086", "-73.9561344937861", "0.0313646200" }, a);
-    // A passthrough coordinate string must NOT be truncated to 8 decimals
-    // (the old f80 round-trip dropped 5+ digits) — it has no trailing zeros,
-    // so it survives verbatim.
+    // A passthrough coordinate string must NOT be quantised to 12 decimals
+    // by the numeric core — it has no trailing zeros, so it survives verbatim
+    // (13 fractional digits, beyond the fixed-point scale, kept intact).
     try testing.expectEqualStrings("40.7940823884086", try evalString("[Lat]", &ctx));
     try testing.expectEqualStrings("-73.9561344937861", try evalString("[Lon]", &ctx));
     // Zero-padded broker quantities are still canonicalised by a string-only
     // trailing-zero trim (no precision loss, byte-identical to the old output).
     try testing.expectEqualStrings("0.03136462", try evalString("[Padded]", &ctx));
-    // Computed (.number) results still get the {d:.8} noise-taming round —
-    // unaffected by the string-path change.
-    try testing.expectEqualStrings("8.63", try evalString("ABS(0 - 8.6299999999974)", &ctx));
+    // Computed (.decimal) results are now exact fixed-point: the literal
+    // 8.6299999999974 (13 frac digits) quantises to 12 places (13th digit 4 →
+    // rounds down). No {d:.8} cap masks it any more — represented faithfully.
+    try testing.expectEqualStrings("8.629999999997", try evalString("ABS(0 - 8.6299999999974)", &ctx));
 }
 
 test "Value.toBool: empty string is false, non-empty is true (even '0')" {
@@ -3192,9 +3193,9 @@ test "Value.toBool: empty string is false, non-empty is true (even '0')" {
 }
 
 test "Value.toBool: numeric zero is false, non-zero is true" {
-    try testing.expect(!(Value{ .number = 0 }).toBool());
-    try testing.expect((Value{ .number = 1 }).toBool());
-    try testing.expect((Value{ .number = -1 }).toBool());
+    try testing.expect(!dec("0").toBool());
+    try testing.expect(dec("1").toBool());
+    try testing.expect(dec("-1").toBool());
 }
 
 // ------------------------------------------------------------
@@ -3715,21 +3716,21 @@ test "eval: decimal_sep_in=',' arithmetic on EU thousands group" {
 }
 
 test "parseGroupedNumber: American format" {
-    try testing.expectEqual(@as(f80, 1234.56), try parseGroupedNumber("1,234.56", ',', '.'));
-    try testing.expectEqual(@as(f80, -1234567), try parseGroupedNumber("-1,234,567", ',', '.'));
-    try testing.expectEqual(@as(f80, 1000), try parseGroupedNumber("1,000", ',', '.'));
-    try testing.expectError(error.NotANumber, parseGroupedNumber("123", ',', '.'));
-    try testing.expectError(error.NotANumber, parseGroupedNumber("1,5", ',', '.'));
-    try testing.expectError(error.NotANumber, parseGroupedNumber("1,2345", ',', '.'));
+    try testing.expectEqual(Decimal.parse("1234.56").?.raw, parseGroupedNumber("1,234.56", ',', '.').?.raw);
+    try testing.expectEqual(Decimal.parse("-1234567").?.raw, parseGroupedNumber("-1,234,567", ',', '.').?.raw);
+    try testing.expectEqual(Decimal.parse("1000").?.raw, parseGroupedNumber("1,000", ',', '.').?.raw);
+    try testing.expect(parseGroupedNumber("123", ',', '.') == null);
+    try testing.expect(parseGroupedNumber("1,5", ',', '.') == null);
+    try testing.expect(parseGroupedNumber("1,2345", ',', '.') == null);
 }
 
 test "parseGroupedNumber: European format" {
-    try testing.expectEqual(@as(f80, 1234.56), try parseGroupedNumber("1.234,56", '.', ','));
-    try testing.expectEqual(@as(f80, -1234567.89), try parseGroupedNumber("-1.234.567,89", '.', ','));
-    try testing.expectEqual(@as(f80, 1234), try parseGroupedNumber("1.234", '.', ','));
-    try testing.expectError(error.NotANumber, parseGroupedNumber("1.5", '.', ','));
-    try testing.expectError(error.NotANumber, parseGroupedNumber("1.234.5", '.', ','));
-    try testing.expectError(error.NotANumber, parseGroupedNumber("1,234.56", '.', ','));
+    try testing.expectEqual(Decimal.parse("1234.56").?.raw, parseGroupedNumber("1.234,56", '.', ',').?.raw);
+    try testing.expectEqual(Decimal.parse("-1234567.89").?.raw, parseGroupedNumber("-1.234.567,89", '.', ',').?.raw);
+    try testing.expectEqual(Decimal.parse("1234").?.raw, parseGroupedNumber("1.234", '.', ',').?.raw);
+    try testing.expect(parseGroupedNumber("1.5", '.', ',') == null);
+    try testing.expect(parseGroupedNumber("1.234.5", '.', ',') == null);
+    try testing.expect(parseGroupedNumber("1,234.56", '.', ',') == null);
 }
 
 // ------------------------------------------------------------
@@ -3860,7 +3861,7 @@ test "eval: RAND returns float in [0, 1)" {
     for (0..20) |_| {
         const v = try eval("RAND()", &ctx);
         const n = try v.toNumber();
-        try testing.expect(n >= 0 and n < 1);
+        try testing.expect(n.raw >= 0 and n.raw < Decimal.SCALE);
     }
 }
 
@@ -3991,10 +3992,11 @@ test "eval: FIELDS non-numeric string arg returns NotANumber" {
     try testing.expectError(error.NotANumber, eval("FIELDS('abc')", &ctx));
 }
 
-// Regression guards for toPositiveIndex helper — discovered 2026-05-14:
-// IEEE 754 comparisons return false for NaN, so the prior `f < 1.0` gate
-// did NOT filter Inf/NaN, and `@intFromFloat(Inf or NaN)` panicked.
-test "eval: FIELDS Inf/NaN index returns empty string (no panic)" {
+// 'inf'/'nan' are treated as missing data (→ 0, like an empty field), so a
+// positive_integer index of 'inf'/'nan' silently skips to "" (0 is not a valid
+// 1-based index) — no counted error. Reproduces the historical silent-skip and
+// avoids false errors from bad-export artifacts.
+test "eval: FIELDS 'inf'/'nan' index silently skips to empty" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
@@ -4005,7 +4007,7 @@ test "eval: FIELDS Inf/NaN index returns empty string (no panic)" {
     try testing.expectEqualStrings("", try evalString("FIELDS('nan')", &ctx));
 }
 
-test "eval: SPLIT_PART Inf/NaN index returns empty string (no panic)" {
+test "eval: SPLIT_PART 'inf'/'nan' index silently skips to empty" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
@@ -4013,6 +4015,19 @@ test "eval: SPLIT_PART Inf/NaN index returns empty string (no panic)" {
     const ctx = h.ctx(&.{}, a);
     try testing.expectEqualStrings("", try evalString("SPLIT_PART('a,b', ',', 'inf')", &ctx));
     try testing.expectEqualStrings("", try evalString("SPLIT_PART('a,b', ',', 'nan')", &ctx));
+}
+
+test "eval: 'nan'/'inf' field coerces to 0 in arithmetic (no error)" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    try h.col_index.put("Fee", 0);
+    // A bad-export 'nan'/'inf' fee degrades to 0, so [Total] - [Fee] still works.
+    var ctx = h.ctx(&.{"nan"}, a);
+    try testing.expectEqualStrings("100", try evalString("100 - [Fee]", &ctx));
+    ctx = h.ctx(&.{"inf"}, a);
+    try testing.expectEqualStrings("100", try evalString("100 - [Fee]", &ctx));
 }
 
 // staticCheckCalls panic regression — the literal-int-positive arg
@@ -4046,15 +4061,17 @@ test "staticCheckCalls: SPLIT_PART literal index in i64 range still detects ≤ 
     try testing.expect(r_pos.split_part == null);
 }
 
-test "eval: ROUND non-finite precision returns x unchanged (no panic)" {
+// 'inf'/'nan' precision args coerce to 0 (missing → empty contract), so
+// ROUND(x, 'inf') rounds to 0 places rather than raising an error.
+test "eval: ROUND 'inf'/'nan' precision coerces to 0 places (no error)" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
     var h = TestHelper.init(a);
     const ctx = h.ctx(&.{}, a);
-    try testing.expectEqualStrings("3.14", try evalString("ROUND(3.14, 'inf')", &ctx));
-    try testing.expectEqualStrings("3.14", try evalString("ROUND(3.14, '-inf')", &ctx));
-    try testing.expectEqualStrings("3.14", try evalString("ROUND(3.14, 'nan')", &ctx));
+    try testing.expectEqualStrings("3", try evalString("ROUND(3.14, 'inf')", &ctx));
+    try testing.expectEqualStrings("3", try evalString("ROUND(3.14, '-inf')", &ctx));
+    try testing.expectEqualStrings("3", try evalString("ROUND(3.14, 'nan')", &ctx));
 }
 
 // DoS guard — prior code looped `factor *= 10.0` n times, so n=1e9 hung
@@ -4198,23 +4215,30 @@ test "eval: SUBSTR start non-positive returns empty" {
 // SUBSTR/LEFT/RIGHT must not panic on huge floats, Inf, or NaN. The
 // tokenizer rejects `1e30` / `Inf` literals, so we drive these through
 // field-string parseFloat which DOES accept them.
-test "eval: LEFT/RIGHT/SUBSTR Inf/NaN/huge floats via field are safe" {
+// With the fixed-point core there is no Inf/NaN. An in-range huge index clamps
+// to the string length; a non-finite token ("Inf"/"NaN") coerces to 0 (missing
+// → empty contract) so the length is 0 → ""; a genuinely out-of-range value
+// ("1e30", a valid number past ±1.7e26) is a loud NotANumber. The former
+// @intFromFloat panic class is gone.
+test "eval: LEFT/RIGHT/SUBSTR huge index clamps; 'inf'→0; out-of-range errors" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
     var h = TestHelper.init(a);
-    try h.col_index.put("Big", 0);
-    try h.col_index.put("Inf", 1);
-    try h.col_index.put("Nan", 2);
-    const ctx = h.ctx(&.{ "1e30", "Inf", "NaN" }, a);
+    try h.col_index.put("Big", 0); // representable, far past any string length
+    try h.col_index.put("Over", 1); // overflows the fixed-point range
+    try h.col_index.put("Inf", 2);
+    const ctx = h.ctx(&.{ "999999999", "1e30", "Inf" }, a);
+    // In-range huge index clamps to the available length.
     try testing.expectEqualStrings("hello", try evalString("LEFT('hello', [Big])", &ctx));
-    try testing.expectEqualStrings("",      try evalString("LEFT('hello', [Inf])", &ctx));
-    try testing.expectEqualStrings("",      try evalString("LEFT('hello', [Nan])", &ctx));
     try testing.expectEqualStrings("hello", try evalString("RIGHT('hello', [Big])", &ctx));
-    try testing.expectEqualStrings("",      try evalString("RIGHT('hello', [Inf])", &ctx));
     try testing.expectEqualStrings("ello",  try evalString("SUBSTR('hello', 2, [Big])", &ctx));
-    try testing.expectEqualStrings("",      try evalString("SUBSTR('hello', 2, [Inf])", &ctx));
-    try testing.expectEqualStrings("",      try evalString("SUBSTR('hello', 2, [Nan])", &ctx));
+    // 'Inf' coerces to 0 → length 0 → "".
+    try testing.expectEqualStrings("", try evalString("LEFT('hello', [Inf])", &ctx));
+    try testing.expectEqualStrings("", try evalString("RIGHT('hello', [Inf])", &ctx));
+    // A genuinely out-of-range value still raises NotANumber.
+    try testing.expectError(error.NotANumber, evalString("LEFT('hello', [Over])", &ctx));
+    try testing.expectError(error.NotANumber, evalString("SUBSTR('hello', 2, [Over])", &ctx));
 }
 
 test "eval: UPPER and LOWER ASCII" {

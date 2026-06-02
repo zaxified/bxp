@@ -215,14 +215,41 @@ Expressions are evaluated per row. Operator precedence (high → low):
 | `UPPER(f)` / `LOWER(f)`                                 | ASCII case conversion; non-ASCII (UTF-8 multi-byte) bytes pass through unchanged                                                                                                                                |
 | `REPLACE(f, old, new)`                                  | Replace all occurrences of `old` with `new` in `f`; returns `f` unchanged if `old` is empty                                                                                                                     |
 | `TRIM(f)`                                               | Strip leading and trailing whitespace (space, tab, CR, LF)                                                                                                                                                      |
-| `ROUND(f, n)`                                           | Round `f` to `n` decimal places (`n` may be negative for tens/hundreds)                                                                                                                                         |
+| `ROUND(f, n)`                                           | Round `f` to `n` decimal places, half away from zero — Excel-style (`n` may be negative for tens/hundreds; `n>=12` is a no-op)                                                                                    |
 | `FLOOR(f)`                                              | Largest integer ≤ `f`                                                                                                                                                                                           |
 | `CEILING(f)`                                            | Smallest integer ≥ `f`                                                                                                                                                                                          |
 | `NOW()`                                                 | Current UTC datetime as `"YYYY-MM-DDTHH:MM:SSZ"`                                                                                                                                                                |
-| `RAND()`                                                | Cryptographically random float in `[0, 1)`                                                                                                                                                                      |
+| `RAND()`                                                | Cryptographically random value in `[0, 1)` (up to 12 decimal places)                                                                                                                                            |
 | `COALESCE(a, b, ...)`                                   | Return first non-empty argument (empty = whitespace-only string; numbers/booleans are never empty). If all args are empty, returns the last arg verbatim — use `COALESCE(@a, @b, "0")` for a guaranteed default |
 
 Type coercions: empty string → `0` in numeric context; any non-empty string → `true` in boolean context.
+
+### Numeric model — fixed-point decimal
+
+Computed numbers use a fixed-point decimal core (`i128` scaled by 1e12 → 12
+fractional digits), not binary floating point. Consequences:
+
+- Decimal money math is **exact**: `0.02 + 0.08` is `0.10`, not `0.0999…`.
+  `+ −` are exact. `× ÷` and `ROUND(f, n)` all round **half away from zero**
+  ("school" rounding, matching Excel/LibreOffice: `ROUND(2.5, 0) = 3`). A
+  product or quotient with more than 12 fractional digits is rounded (not
+  truncated) at the 12th.
+- Arithmetic that overflows the range (below) is a `NotANumber`-class error,
+  never a crash.
+- Output prints the integer part plus up to 12 fractional digits, trailing
+  zeros trimmed (`1000.00` → `1000`, `1/3` → `0.333333333333`).
+- Magnitude is bounded to ≈ ±1.7e26 (far past world money supply); a literal
+  or computed value beyond the range, or a genuinely non-numeric string used as
+  a number, is a `NotANumber` error. There is no `Inf`/`NaN`.
+- The non-finite tokens `nan` / `inf` / `-inf` (case-insensitive) are treated
+  as **missing data** — coerced to `0` like an empty field, **not** an error —
+  so a bad CSV export (a stray `nan`/`inf`) never turns an otherwise-working
+  numeric expression into a counted error. (Used as an index they coerce to 0 →
+  silent `""`, matching the historical skip.)
+- **Passthrough** strings (a field copied straight through, e.g. a 15-digit
+  coordinate or a 21-digit ID) are **never** routed through the numeric core,
+  so their full precision survives — only genuinely *computed* values quantise
+  to 12 places.
 
 ## datefmt date format tokens
 

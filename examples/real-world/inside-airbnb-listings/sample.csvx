@@ -4,8 +4,8 @@ listing_id,name,host,district,area,lat,lon,room_type,price_usd,min_nights,review
 6872,Uptown Sanctuary w/ Private Bath (Month to Month),Kae,Manhattan,East Harlem,40.80107,-73.94255,PRIVATE,<price-redacted>,30,2,2025-10-07,0.04,83,unlicensed
 6990,UES Beautiful Blue Room,Cynthia,Manhattan,East Harlem,40.78778,-73.94759,PRIVATE,<price-redacted>,30,251,2026-01-11,1.26,214,unlicensed
 7097,"Perfect for Your Parents, With Garden & Patio",Jane,Brooklyn,Fort Greene,40.69194,-73.97389,PRIVATE,<price-redacted>,2,423,2025-09-23,2.16,0,registered
-7801,Sunny Williamsburg Loft with Private Cedar Sauna,Chaya,Brooklyn,Williamsburg,40.71880722,-73.95617676,ENTIRE,<price-redacted>,30,12,2024-07-31,0.06,196,unlicensed
-8490,"Maison des Sirenes1,bohemian, luminous apartment",Nathalie,Brooklyn,Bedford-Stuyvesant,40.68455584,-73.93963415,ENTIRE,<price-redacted>,30,189,2023-10-16,0.94,220,unlicensed
+7801,Sunny Williamsburg Loft with Private Cedar Sauna,Chaya,Brooklyn,Williamsburg,40.718807220458984,-73.9561767578125,ENTIRE,<price-redacted>,30,12,2024-07-31,0.06,196,unlicensed
+8490,"Maison des Sirenes1,bohemian, luminous apartment",Nathalie,Brooklyn,Bedford-Stuyvesant,40.684555843449075,-73.93963415175676,ENTIRE,<price-redacted>,30,189,2023-10-16,0.94,220,unlicensed
 9357,Midtown Pied-a-terre,Tommi,Manhattan,Hell's Kitchen,40.76724,-73.98664,ENTIRE,<price-redacted>,30,58,2017-08-13,0.29,150,unlicensed
 10452,Radiant Oasis  B&B Style room,Angela,Brooklyn,Bedford-Stuyvesant,40.68294,-73.95682,PRIVATE,<price-redacted>,30,82,2025-03-31,0.43,229,unlicensed
 11943,Country space in the city,Harriet,Brooklyn,Flatbush,40.63702,-73.96327,PRIVATE,<price-redacted>,30,0,,,0,unlicensed
@@ -16,7 +16,7 @@ listing_id,name,host,district,area,lat,lon,room_type,price_usd,min_nights,review
 15385,"Very, very cozy place",Cristina,Brooklyn,Williamsburg,40.71211,-73.96397,PRIVATE,<price-redacted>,31,63,2025-07-25,0.33,97,unlicensed
 15396,Sunny & Spacious Chelsea Apartment,Petra,Manhattan,Chelsea,40.74493,-73.99521,ENTIRE,<price-redacted>,180,5,2018-11-03,0.04,179,unlicensed
 16338,"Large Room + Private Deck, Clinton Hill Best Area",Patricia,Brooklyn,Clinton Hill,40.69121,-73.96804,PRIVATE,<price-redacted>,30,33,2025-12-03,0.17,303,unlicensed
-16580,"Sunny, Modern room in East Village w City Views",Reka,Manhattan,East Village,40.72372723,-73.97625851,PRIVATE,<price-redacted>,1,676,2026-01-25,4.45,228,registered
+16580,"Sunny, Modern room in East Village w City Views",Reka,Manhattan,East Village,40.72372723229208,-73.97625850509617,PRIVATE,<price-redacted>,1,676,2026-01-25,4.45,228,registered
 16821,Charming Room in Amazing East Village Apt. (B),Casey,Manhattan,East Village,40.72281,-73.98501,PRIVATE,<price-redacted>,1,301,2026-02-10,1.83,42,registered
 16974,SpaHa Loft: Enormous and Bright,Robin,Manhattan,East Harlem,40.8019,-73.93762,ENTIRE,<price-redacted>,30,291,2023-09-05,1.48,239,unlicensed
 17037,Lovely EV Artist's Home,Anna,Manhattan,East Village,40.72289,-73.98028,ENTIRE,<price-redacted>,30,53,2024-06-06,0.27,177,unlicensed
@@ -45,10 +45,10 @@ listing_id,name,host,district,area,lat,lon,room_type,price_usd,min_nights,review
 31994,Room with En Suite Bathroom & Deck,Waldemar,Brooklyn,Clinton Hill,40.68818,-73.96383,PRIVATE,<price-redacted>,2,637,2026-02-09,3.35,249,registered
 32037,Huge Private  Floor at The Waverly,Sahr,Brooklyn,Clinton Hill,40.68513,-73.96648,PRIVATE,<price-redacted>,30,91,2022-11-02,0.49,364,unlicensed
 33009,Retreat in Williamsburg,Ming,Brooklyn,Williamsburg,40.71512,-73.95899,ENTIRE,<price-redacted>,30,301,2025-12-29,1.58,147,unlicensed
-36647,"1 Bedroom & your own Bathroom, Elevator Apartment",Irene,Manhattan,East Harlem,40.79245377,-73.94074249,PRIVATE,<price-redacted>,30,102,2023-12-09,0.55,335,unlicensed
+36647,"1 Bedroom & your own Bathroom, Elevator Apartment",Irene,Manhattan,East Harlem,40.79245376586914,-73.94074249267578,PRIVATE,<price-redacted>,30,102,2023-12-09,0.55,335,unlicensed
 38663,Luxury Brownstone in Boerum Hill,Sarah,Brooklyn,Boerum Hill,40.68442,-73.98068,PRIVATE,<price-redacted>,3,43,2023-08-30,0.26,365,registered
 38833,Spectacular West Harlem Garden Apt,Matthew,Manhattan,Harlem,40.8180576,-73.9466707,PRIVATE,<price-redacted>,1,286,2026-01-19,1.52,28,registered
-39282,Cozy “Indie Rock”Room in the Heart of Williamsburg,Gustavo,Brooklyn,Williamsburg,40.7106514,-73.95087433,PRIVATE,<price-redacted>,4,289,2026-01-09,1.53,84,registered
+39282,Cozy “Indie Rock”Room in the Heart of Williamsburg,Gustavo,Brooklyn,Williamsburg,40.71065139770508,-73.95087432861328,PRIVATE,<price-redacted>,4,289,2026-01-09,1.53,84,registered
 39593,A lovely room w/ a Manhattan view,Myung,Queens,Sunnyside,40.74523,-73.92318,PRIVATE,<price-redacted>,52,36,2025-05-15,0.19,226,unlicensed
 39704,"Private, Large & Sunny 1BR w/W&D",Renée,Brooklyn,Bedford-Stuyvesant,40.68216,-73.94594,ENTIRE,<price-redacted>,30,336,2019-12-12,1.78,0,unlicensed
 42300,Beautiful Lower East Side Loft,Koray,Manhattan,Lower East Side,40.71992,-73.99167,ENTIRE,<price-redacted>,30,70,2024-08-31,0.37,180,unlicensed
@@ -59,7 +59,7 @@ listing_id,name,host,district,area,lat,lon,room_type,price_usd,min_nights,review
 45935,Room in Beautiful Townhouse.,L,Bronx,Mott Haven,40.80635,-73.92201,PRIVATE,<price-redacted>,30,0,,,263,unlicensed
 45936,Couldn't Be Closer To Columbia Uni,Rahul,Manhattan,Morningside Heights,40.8063,-73.95985,PRIVATE,<price-redacted>,30,138,2025-12-20,0.75,197,unlicensed
 46544,Park Slope haven 15 mins from Soho,Monica,Brooklyn,Park Slope,40.67979,-73.97978,ENTIRE,<price-redacted>,50,57,2024-01-04,0.31,2,unlicensed
-46911,Large Room pr/h Br/St in Park Slope,Kathleen R,Brooklyn,Park Slope,40.68009896,-73.97461897,PRIVATE,<price-redacted>,14,77,2025-09-05,0.41,178,registered
+46911,Large Room pr/h Br/St in Park Slope,Kathleen R,Brooklyn,Park Slope,40.68009896425498,-73.9746189673198,PRIVATE,<price-redacted>,14,77,2025-09-05,0.41,178,registered
 49048,Dreamy Loft Style w own bathroom,Angela,Brooklyn,Bedford-Stuyvesant,40.6829,-73.95701,PRIVATE,<price-redacted>,30,31,2025-09-07,0.17,191,unlicensed
 51438,1 Bedroom in 2 Bdrm Apt- Upper East,Jessica,Manhattan,Upper East Side,40.77449,-73.95308,PRIVATE,<price-redacted>,30,0,,,0,unlicensed
 52689,"Private, sunny two-bedroom near subway & shops",Litza,Queens,Ditmars Steinway,40.77868,-73.90652,PRIVATE,<price-redacted>,3,132,2026-01-11,0.72,41,registered
@@ -67,7 +67,7 @@ listing_id,name,host,district,area,lat,lon,room_type,price_usd,min_nights,review
 53470,Clean and convenient 2BR apartment,Mark,Queens,Ridgewood,40.70422,-73.89778,ENTIRE,<price-redacted>,30,5,2015-05-29,0.03,365,unlicensed
 53477,3 floors of luxury!,Mark,Queens,Middle Village,40.71778,-73.87714,ENTIRE,<price-redacted>,30,16,2019-08-09,0.09,365,unlicensed
 54466,Beautiful Uptown Manhattan apartmnt,Douglas,Manhattan,Harlem,40.80255,-73.95803,PRIVATE,<price-redacted>,30,0,,,365,unlicensed
-54508,S/Rm Br/st  PSlope great for  Med/Stu,Kathleen R,Brooklyn,Park Slope,40.67895951,-73.97409475,PRIVATE,<price-redacted>,3,229,2026-01-28,1.23,229,registered
+54508,S/Rm Br/st  PSlope great for  Med/Stu,Kathleen R,Brooklyn,Park Slope,40.6789595110935,-73.97409474641334,PRIVATE,<price-redacted>,3,229,2026-01-28,1.23,229,registered
 54544,City Room - Private Penthouse Apt.,Wayne,Manhattan,Harlem,40.81182,-73.94631,ENTIRE,<price-redacted>,30,144,2025-01-02,0.78,89,unlicensed
 54694,(H) Great Deal/Pvt Rm,Jullett,Queens,Jamaica,40.67144,-73.76501,PRIVATE,<price-redacted>,30,62,2018-01-01,0.33,0,unlicensed
 54860,Bedroom in my apartment with a private bathroom.,Jenny,Manhattan,East Harlem,40.79934,-73.94236,PRIVATE,<price-redacted>,30,307,2025-11-25,1.65,308,unlicensed
@@ -83,7 +83,7 @@ listing_id,name,host,district,area,lat,lon,room_type,price_usd,min_nights,review
 59121,Convenient 3BR w/6 beds!!,Mark,Queens,Ridgewood,40.70271,-73.8993,ENTIRE,<price-redacted>,30,4,2023-02-10,0.02,365,unlicensed
 60181,Sunny East Village Apartment with rooftop,Sue,Manhattan,East Village,40.7253,-73.98028,ENTIRE,<price-redacted>,30,37,2023-09-03,0.2,45,unlicensed
 60457,Spacious Greenwich Village Apt,Jessica,Manhattan,Greenwich Village,40.73072,-73.99275,ENTIRE,<price-redacted>,30,9,2019-07-31,0.05,0,unlicensed
-60611,SpaHa Studio Monthly Rental,Blanca,Manhattan,East Harlem,40.79266739,-73.9465332,ENTIRE,<price-redacted>,30,197,2025-08-02,1.09,269,unlicensed
+60611,SpaHa Studio Monthly Rental,Blanca,Manhattan,East Harlem,40.792667388916016,-73.946533203125,ENTIRE,<price-redacted>,30,197,2025-08-02,1.09,269,unlicensed
 60666,City Room - Private Luxury Suite,Wayne,Manhattan,Harlem,40.81006,-73.94559,PRIVATE,<price-redacted>,30,283,2025-09-30,1.54,66,unlicensed
 174966,Luxury 2Bed/2.5Bath Central Park View,Henry,Manhattan,Upper West Side,40.7751,-73.98595,ENTIRE,<price-redacted>,30,25,2016-01-20,0.15,365,unlicensed
 176135,Cosy Sunny 1brm in Prospect Heights,Jenna,Brooklyn,Crown Heights,40.67545,-73.96096,ENTIRE,<price-redacted>,30,31,2019-08-09,0.18,83,unlicensed
@@ -93,13 +93,13 @@ listing_id,name,host,district,area,lat,lon,room_type,price_usd,min_nights,review
 182069,Cozy entire studio Apartment,Matteo,Manhattan,East Harlem,40.78959,-73.94705,ENTIRE,<price-redacted>,30,131,2025-12-14,0.75,348,unlicensed
 187986,Comfort at Crossroads of Downtown,Daniel,Manhattan,Chelsea,40.73862,-73.99758,ENTIRE,<price-redacted>,30,2,2015-08-28,0.01,0,unlicensed
 188674,UNION SQUARE/ E. VILL 1BR BEAUTIFUL,Leslie,Manhattan,East Village,40.73345,-73.98809,ENTIRE,<price-redacted>,30,63,2018-01-12,0.36,0,unlicensed
-188803,"Fort Greene, Brooklyn: Back Bedroom",Doug,Brooklyn,Fort Greene,40.6879299,-73.976464,PRIVATE,<price-redacted>,2,62,2025-10-27,0.49,18,registered
+188803,"Fort Greene, Brooklyn: Back Bedroom",Doug,Brooklyn,Fort Greene,40.6879299,-73.97646399999999,PRIVATE,<price-redacted>,2,62,2025-10-27,0.49,18,registered
 189135,Hell's Kitchen Funky 80s Hideaway!,Michael,Manhattan,Hell's Kitchen,40.76263,-73.99401,PRIVATE,<price-redacted>,2,199,2025-12-23,1.17,81,registered
 189181,Room in Chic Modern High Line Luxury- New!,David,Manhattan,Chelsea,40.74907,-74.00281,PRIVATE,<price-redacted>,30,1,2014-04-20,0.01,0,unlicensed
 189787,Spacious & Comfy BK Brownstone,Sundiata,Brooklyn,Crown Heights,40.66941,-73.94988,ENTIRE,<price-redacted>,30,102,2020-01-01,0.58,0,unlicensed
 190968,Lovely Brooklyn Brownstone 1BR!,Karen,Brooklyn,Prospect Heights,40.67914,-73.96443,ENTIRE,<price-redacted>,30,35,2019-12-28,0.2,0,unlicensed
 190974,Beautiful Grdn. Apt. in Park Slope,Alan,Brooklyn,Park Slope,40.66836,-73.98166,ENTIRE,<price-redacted>,30,313,2023-11-02,1.85,364,unlicensed
-191610,Presence Guest Room - Chelsea NYC,Tony,Manhattan,Chelsea,40.74697297,-74.00178397,PRIVATE,<price-redacted>,1,175,2026-01-02,1.02,42,registered
+191610,Presence Guest Room - Chelsea NYC,Tony,Manhattan,Chelsea,40.74697296939259,-74.00178397023312,PRIVATE,<price-redacted>,1,175,2026-01-02,1.02,42,registered
 195123,"Cheerful, comfortable room",Susan,Manhattan,Washington Heights,40.83338,-73.94326,PRIVATE,<price-redacted>,30,229,2020-01-11,1.3,1,unlicensed
 195240,Covid Clean since '11!,Thalia,Brooklyn,Flatbush,40.65468,-73.95721,PRIVATE,<price-redacted>,30,90,2022-12-04,0.54,88,unlicensed
 195989,"Sunny, Large, Park Slope Bedroom",Elizabeth,Brooklyn,Park Slope,40.6767158,-73.9818207,PRIVATE,<price-redacted>,3,230,2023-10-07,1.31,0,registered
@@ -128,7 +128,7 @@ listing_id,name,host,district,area,lat,lon,room_type,price_usd,min_nights,review
 74680,One Bedroom Mini studio - Free WIFI,Nazleen,Queens,Astoria,40.77507,-73.93367,PRIVATE,<price-redacted>,30,269,2025-11-13,1.51,288,unlicensed
 74860,"Sunlit and Cozy Williamsburg/Greenpoint, Brooklyn",Allison,Brooklyn,Greenpoint,40.72364,-73.95013,ENTIRE,<price-redacted>,30,3,2019-10-30,0.02,0,unlicensed
 75635,Bright Cozy Chinatown Studio Apt.,Patricia,Manhattan,Chinatown,40.71624,-73.994,ENTIRE,<price-redacted>,30,424,2025-12-22,2.33,262,unlicensed
-75658,Modern Bed Stuy loft + rooftop garden,Noemi,Brooklyn,Bedford-Stuyvesant,40.69558879,-73.95461924,PRIVATE,<price-redacted>,30,20,2012-09-30,0.11,365,unlicensed
+75658,Modern Bed Stuy loft + rooftop garden,Noemi,Brooklyn,Bedford-Stuyvesant,40.695588790857855,-73.95461923691613,PRIVATE,<price-redacted>,30,20,2012-09-30,0.11,365,unlicensed
 77765,Superior @ Box House,The Box House Hotel,Brooklyn,Greenpoint,40.73777,-73.95366,HOTEL,<price-redacted>,1,72,2025-10-11,0.4,0,exempt
 79067,3 Bdr/2ba Brownstone w/Garden. Stunning!,Bliss,Brooklyn,Clinton Hill,40.68337,-73.96253,ENTIRE,<price-redacted>,48,11,2019-01-02,0.09,135,unlicensed
 80684,Duplex w/ Terrace @ Box House Hotel,The Box House Hotel,Brooklyn,Greenpoint,40.73756,-73.9535,HOTEL,<price-redacted>,1,11,2025-10-12,0.06,0,exempt
@@ -140,7 +140,7 @@ listing_id,name,host,district,area,lat,lon,room_type,price_usd,min_nights,review
 83474,NY Mag & Budget Travel love us!,Matthew,Brooklyn,Downtown Brooklyn,40.69132,-73.98573,PRIVATE,<price-redacted>,30,5,2014-12-18,0.03,334,unlicensed
 84010,Superior @ Box House,The Box House Hotel,Brooklyn,Greenpoint,40.73777,-73.95366,HOTEL,<price-redacted>,1,40,2025-10-12,0.23,0,exempt
 89427,The Brooklyn Waverly,Sahr,Brooklyn,Clinton Hill,40.68513,-73.96648,ENTIRE,<price-redacted>,30,0,,,358,unlicensed
-93313,"Maison de sirenes 2, bohemian, ecclectic apartment",Nathalie,Brooklyn,Bedford-Stuyvesant,40.68456943,-73.93840021,ENTIRE,<price-redacted>,30,173,2023-11-01,0.96,236,unlicensed
+93313,"Maison de sirenes 2, bohemian, ecclectic apartment",Nathalie,Brooklyn,Bedford-Stuyvesant,40.684569430603325,-73.93840021354636,ENTIRE,<price-redacted>,30,173,2023-11-01,0.96,236,unlicensed
 94783,"Beautiful, Bright’s, Warm & Spacious 1.5BR Apt",Keishera,Brooklyn,Crown Heights,40.6736,-73.9551,ENTIRE,<price-redacted>,3,178,2026-01-03,0.99,96,exempt
 96471,"The Brooklyn Waverly, One Bedroom",Sahr,Brooklyn,Clinton Hill,40.68513,-73.96648,PRIVATE,<price-redacted>,30,11,2019-12-10,0.06,364,unlicensed
 98663,Groovy NYC Chelsea Pad,Peter Michael,Manhattan,Chelsea,40.75077,-73.99657,ENTIRE,<price-redacted>,30,18,2015-12-08,0.1,97,unlicensed
@@ -187,7 +187,7 @@ listing_id,name,host,district,area,lat,lon,room_type,price_usd,min_nights,review
 168123,"Brooklyn- sunny, quiet, homelike-Park Slope South",Sara,Brooklyn,Windsor Terrace,40.65891,-73.98556,ENTIRE,<price-redacted>,30,124,2025-02-03,0.7,143,unlicensed
 169483,Very close to Downtown Awesome Space,Jeffrey,Brooklyn,Gravesend,40.60602,-73.97076,PRIVATE,<price-redacted>,30,0,,,365,unlicensed
 170420,The Happy home!,Lena,Manhattan,East Harlem,40.79179,-73.93972,ENTIRE,<price-redacted>,30,15,2016-02-15,0.09,0,unlicensed
-170761,"Fort Greene, Brooklyn: Front Bedroom",Doug,Brooklyn,Fort Greene,40.68877615,-73.9776236,PRIVATE,<price-redacted>,2,341,2026-02-09,2.38,280,registered
+170761,"Fort Greene, Brooklyn: Front Bedroom",Doug,Brooklyn,Fort Greene,40.68877615321917,-73.97762359693657,PRIVATE,<price-redacted>,2,341,2026-02-09,2.38,280,registered
 171562,Chelsea studio with balcony & views,Omri,Manhattan,Chelsea,40.74937,-73.99467,ENTIRE,<price-redacted>,30,32,2023-09-27,0.18,38,unlicensed
 173151,spacious room,Jane,Brooklyn,Greenpoint,40.72852,-73.95655,PRIVATE,<price-redacted>,30,261,2020-03-08,1.47,20,unlicensed
 258688,Spacious & Stylish Chelsea One Bedroom Apartment,Chad,Manhattan,West Village,40.74024,-74.00584,ENTIRE,<price-redacted>,30,55,2022-05-22,0.32,0,unlicensed
@@ -203,7 +203,7 @@ listing_id,name,host,district,area,lat,lon,room_type,price_usd,min_nights,review
 208148,Central Bedford Avenue Apartment,Martina,Brooklyn,Williamsburg,40.71955,-73.95471,ENTIRE,<price-redacted>,30,14,2015-08-31,0.08,0,unlicensed
 208889,Welcome to Brooklyn! Bed-Stuy,Jameelah,Brooklyn,Bedford-Stuyvesant,40.69049,-73.93212,ENTIRE,<price-redacted>,30,67,2025-11-02,0.38,266,unlicensed
 212544,Quiet One Bedroom in Park Slope,Daniel,Brooklyn,Gowanus,40.67828,-73.98414,ENTIRE,<price-redacted>,30,9,2016-06-23,0.05,0,unlicensed
-213330,Master Bedroom - Unbelievably RARE Penthouse Oasis,Nader,Manhattan,Chinatown,40.71681595,-73.98969269,PRIVATE,<price-redacted>,5,101,2026-01-01,0.77,266,registered
+213330,Master Bedroom - Unbelievably RARE Penthouse Oasis,Nader,Manhattan,Chinatown,40.71681594848633,-73.98969268798828,PRIVATE,<price-redacted>,5,101,2026-01-01,0.77,266,registered
 214917,New Clean Spacious Bed & Breakfast,Carmel,Staten Island,Emerson Hill,40.60742,-74.14388,ENTIRE,<price-redacted>,30,1,2016-07-11,0.01,0,unlicensed
 216080,Spacious & Sunny Safe Haven,Jane,Brooklyn,Fort Greene,40.69062,-73.97354,PRIVATE,<price-redacted>,30,156,2025-06-27,0.89,50,unlicensed
 217580,Long term fully furnished apartment.,Samuel,Brooklyn,Fort Hamilton,40.61933,-74.03208,ENTIRE,<price-redacted>,30,12,2023-05-21,0.07,253,unlicensed
@@ -216,11 +216,11 @@ listing_id,name,host,district,area,lat,lon,room_type,price_usd,min_nights,review
 225976,Cozy multi-leveled apartment!,Marina,Staten Island,Shore Acres,40.61019,-74.06757,ENTIRE,<price-redacted>,30,103,2026-01-05,0.59,335,unlicensed
 226021,Sunny 2 bdrm W'burg Duplex w/ 3 beds. 5* superhost,Ryan,Brooklyn,Williamsburg,40.71137,-73.9465,ENTIRE,<price-redacted>,30,250,2024-09-30,1.43,164,unlicensed
 227495,Great studio apt near Central Park,Kimball,Manhattan,Upper West Side,40.78764,-73.97274,ENTIRE,<price-redacted>,30,114,2025-09-05,0.65,146,unlicensed
-228317,"Your Haven Awaits At ""Emma's Place""",Lady Jay,Brooklyn,Bedford-Stuyvesant,40.68563833,-73.92470229,PRIVATE,<price-redacted>,30,92,2022-05-15,0.53,365,unlicensed
+228317,"Your Haven Awaits At ""Emma's Place""",Lady Jay,Brooklyn,Bedford-Stuyvesant,40.68563832502508,-73.92470229417086,PRIVATE,<price-redacted>,30,92,2022-05-15,0.53,365,unlicensed
 228925,Beautiful Brownstone,Marceline,Brooklyn,Bedford-Stuyvesant,40.68098,-73.94023,ENTIRE,<price-redacted>,30,8,2021-07-29,0.07,0,unlicensed
 230877,Monthly Apartment Rental,Blanca,Manhattan,East Harlem,40.79147,-73.94629,ENTIRE,<price-redacted>,30,130,2025-11-19,0.74,22,unlicensed
 231154,(D) BIG DEAL,Jullett,Queens,Jamaica,40.67144,-73.76501,PRIVATE,<price-redacted>,30,31,2018-10-14,0.18,0,unlicensed
-232612,"Lovely pied-à-terre, in an historic building",Dee,Brooklyn,Bedford-Stuyvesant,40.68518847,-73.9426884,PRIVATE,<price-redacted>,1,592,2026-01-28,3.39,67,registered
+232612,"Lovely pied-à-terre, in an historic building",Dee,Brooklyn,Bedford-Stuyvesant,40.68518847176618,-73.94268839549034,PRIVATE,<price-redacted>,1,592,2026-01-28,3.39,67,registered
 232775,Stunning 1 BR Loft Williamsburg Bedford L,Alyssa & Dion,Brooklyn,Williamsburg,40.72113,-73.95658,ENTIRE,<price-redacted>,181,4,2013-05-07,0.02,0,unlicensed
 233638,rooms for rent in Queens with piano,Melody,Queens,Ridgewood,40.70132,-73.90883,PRIVATE,<price-redacted>,30,24,2023-09-05,0.15,365,unlicensed
 235552,HUGE Sunny Duplex Loft with Garden,Bertie,Brooklyn,South Slope,40.66386,-73.98519,ENTIRE,<price-redacted>,30,39,2023-08-14,0.23,186,unlicensed
@@ -241,7 +241,7 @@ listing_id,name,host,district,area,lat,lon,room_type,price_usd,min_nights,review
 250536,The Lenox in Harlem,Yvette,Manhattan,Harlem,40.81146,-73.94469,PRIVATE,<price-redacted>,30,11,2017-09-25,0.06,358,unlicensed
 250537,The Lenox in Harlem,Yvette,Manhattan,Harlem,40.81128,-73.9433,ENTIRE,<price-redacted>,30,0,,,365,unlicensed
 252865,"""BEST PLACE TO LIVE"" in NYC, North Park Slope",Grace,Brooklyn,Prospect Heights,40.67882,-73.97224,PRIVATE,<price-redacted>,30,5,2019-11-02,0.04,0,unlicensed
-253332,"Spacious, modern private suite in large apartment",Cynthia,Brooklyn,Sunset Park,40.66161713,-73.99192062,PRIVATE,<price-redacted>,3,28,2025-12-30,0.16,337,registered
+253332,"Spacious, modern private suite in large apartment",Cynthia,Brooklyn,Sunset Park,40.66161712766098,-73.99192061645073,PRIVATE,<price-redacted>,3,28,2025-12-30,0.16,337,registered
 253466,Loft Suite,The Box House Hotel,Brooklyn,Greenpoint,40.73756,-73.9535,ENTIRE,<price-redacted>,1,48,2022-09-10,0.32,0,exempt
 253471,Loft Suite,The Box House Hotel,Brooklyn,Greenpoint,40.73756,-73.9535,ENTIRE,<price-redacted>,1,31,2024-06-30,0.2,0,exempt
 253475,Loft Suite,The Box House Hotel,Brooklyn,Greenpoint,40.73756,-73.9535,ENTIRE,<price-redacted>,1,100,2024-10-16,0.59,0,exempt
@@ -254,7 +254,7 @@ listing_id,name,host,district,area,lat,lon,room_type,price_usd,min_nights,review
 253842,1 Bedroom Apartment with Private Terrace,The Box House Hotel,Brooklyn,Greenpoint,40.73756,-73.9535,PRIVATE,<price-redacted>,1,14,2024-04-14,0.1,0,exempt
 253846,Superior @ Box House,The Box House Hotel,Brooklyn,Greenpoint,40.73756,-73.9535,HOTEL,<price-redacted>,1,35,2025-09-14,0.21,0,exempt
 254168,2 BR Duplex @ Box House Hotel,The Box House Hotel,Brooklyn,Greenpoint,40.73756,-73.9535,PRIVATE,<price-redacted>,1,5,2014-10-26,0.03,0,exempt
-255476,"Vegan Share in Huge, Gorgeous Prime Wburg!",Bree,Brooklyn,Williamsburg,40.7113482,-73.95338679,PRIVATE,<price-redacted>,30,52,2025-09-25,0.44,92,unlicensed
+255476,"Vegan Share in Huge, Gorgeous Prime Wburg!",Bree,Brooklyn,Williamsburg,40.71134819720268,-73.95338679325236,PRIVATE,<price-redacted>,30,52,2025-09-25,0.44,92,unlicensed
 255601,Cozy Modern 2 Bedroom Apartment 20 min from City,Christopher,Brooklyn,Bedford-Stuyvesant,40.69101,-73.95018,ENTIRE,<price-redacted>,1,317,2026-02-09,1.83,268,registered
 255957,Stunning NYC Views! Free Gym! Doorman! Terrace!,Claudia,Manhattan,Nolita,40.72032,-73.99462,ENTIRE,<price-redacted>,30,26,2024-06-01,0.15,365,unlicensed
 257097,Sunny! 2br Steps to train/restaurants - 15 to NYC,Jaime,Brooklyn,Bedford-Stuyvesant,40.68278,-73.95549,ENTIRE,<price-redacted>,90,43,2025-06-28,0.25,293,unlicensed
@@ -263,10 +263,10 @@ listing_id,name,host,district,area,lat,lon,room_type,price_usd,min_nights,review
 351859,Exquisite Spacious Studio in Midtown,Ron,Manhattan,Chelsea,40.74828,-73.9917,ENTIRE,<price-redacted>,30,152,2023-12-07,0.91,365,unlicensed
 352651,COMFORTABLE LARGE ROOM,Marvet,Brooklyn,Prospect-Lefferts Gardens,40.66,-73.95203,PRIVATE,<price-redacted>,30,10,2019-06-23,0.06,365,unlicensed
 353317,Lower East Side 1bedroom apt in NYC,Marc,Manhattan,Chinatown,40.71481,-73.99059,PRIVATE,<price-redacted>,30,162,2024-06-30,0.96,268,unlicensed
-355563,Central Cobble/Boerum Hill Townhome | Roof Terrace,Elizabeth,Brooklyn,Boerum Hill,40.68560791,-73.98918915,ENTIRE,<price-redacted>,30,1,2023-08-31,0.03,365,unlicensed
+355563,Central Cobble/Boerum Hill Townhome | Roof Terrace,Elizabeth,Brooklyn,Boerum Hill,40.68560791015625,-73.98918914794922,ENTIRE,<price-redacted>,30,1,2023-08-31,0.03,365,unlicensed
 363016,2 bdrm  Entire Furnished Apt.  (R),Debbie,Queens,Maspeth,40.72678,-73.90448,ENTIRE,<price-redacted>,30,2,2017-10-01,0.01,0,unlicensed
 367810,Manhattan View Artistic Loft,Veronika,Brooklyn,Greenpoint,40.73626,-73.95634,PRIVATE,<price-redacted>,30,11,2023-04-19,0.1,0,unlicensed
-373618,"Designer’s loft, roof deck best W’burg",Christina,Brooklyn,Williamsburg,40.71942398,-73.96005437,PRIVATE,<price-redacted>,2,170,2026-01-02,1.01,78,registered
+373618,"Designer’s loft, roof deck best W’burg",Christina,Brooklyn,Williamsburg,40.71942398164986,-73.96005436966747,PRIVATE,<price-redacted>,2,170,2026-01-02,1.01,78,registered
 380730,Luxury L-Shape Studio + 3 cats,Alexander,Brooklyn,Sheepshead Bay,40.59556,-73.94998,ENTIRE,<price-redacted>,30,3,2018-12-04,0.03,0,unlicensed
 385824,New York City- Riverdale Modern two bedrooms unit,Orit,Bronx,Spuyten Duyvil,40.88095,-73.91701,ENTIRE,<price-redacted>,30,146,2023-10-09,1.23,365,unlicensed
 386744,Great room priv/bathrm Eastside location 70's ST,Cristina,Manhattan,Upper East Side,40.77,-73.95842,PRIVATE,<price-redacted>,30,106,2025-07-31,0.63,147,unlicensed
@@ -279,7 +279,7 @@ listing_id,name,host,district,area,lat,lon,room_type,price_usd,min_nights,review
 397034,New York City for All Seasons!,Richelle,Manhattan,Upper West Side,40.78221,-73.98357,PRIVATE,<price-redacted>,30,25,2013-06-22,0.15,365,unlicensed
 400039,Big Beautiful Railroad in Brooklyn,John,Brooklyn,Bushwick,40.70267,-73.92716,ENTIRE,<price-redacted>,30,52,2017-06-30,0.33,0,unlicensed
 408491,Charming West Village One Bedroom,Marshall,Manhattan,West Village,40.73633,-73.99925,ENTIRE,<price-redacted>,30,0,,,0,unlicensed
-408983,Brownstone full floor 900sft. Dog and Pet Friendly,Andre,Brooklyn,Prospect-Lefferts Gardens,40.65914536,-73.95812225,ENTIRE,<price-redacted>,30,127,2026-01-12,0.76,334,unlicensed
+408983,Brownstone full floor 900sft. Dog and Pet Friendly,Andre,Brooklyn,Prospect-Lefferts Gardens,40.65914535522461,-73.95812225341797,ENTIRE,<price-redacted>,30,127,2026-01-12,0.76,334,unlicensed
 409262,"Family friendly, in Boerum/Cobble Hill",Elizabeth,Brooklyn,Boerum Hill,40.68561,-73.98919,ENTIRE,<price-redacted>,30,33,2023-01-01,0.2,350,unlicensed
 411918,"Apartment in Crown Heights, BKLYN",Verena,Brooklyn,Crown Heights,40.67128,-73.94307,ENTIRE,<price-redacted>,30,189,2025-08-29,1.14,269,unlicensed
 413504,Perfect NYC/Williamsburg Location,Omri,Brooklyn,Williamsburg,40.71294,-73.94461,PRIVATE,<price-redacted>,30,178,2023-11-09,1.06,179,unlicensed
@@ -290,9 +290,9 @@ listing_id,name,host,district,area,lat,lon,room_type,price_usd,min_nights,review
 261674,Chelsea/West Village - 2bdrm apt,Lindsey,Manhattan,Chelsea,40.74101,-74.00006,PRIVATE,<price-redacted>,30,19,2017-04-01,0.13,0,unlicensed
 262405,Spacious Townhome Apartment,Wade,Brooklyn,East Flatbush,40.6446,-73.94184,ENTIRE,<price-redacted>,30,75,2022-12-28,0.45,0,unlicensed
 262478,Chic + Stylish room in heart of LowerEastSide NYC!,Juliana,Manhattan,Lower East Side,40.71881,-73.9879,PRIVATE,<price-redacted>,30,11,2019-10-02,0.11,0,unlicensed
-263005,2 bedroom apartment in charming brick townhouse,Marisa And Colin,Brooklyn,Fort Greene,40.69749832,-73.97722626,ENTIRE,<price-redacted>,30,129,2023-08-30,0.75,0,unlicensed
+263005,2 bedroom apartment in charming brick townhouse,Marisa And Colin,Brooklyn,Fort Greene,40.6974983215332,-73.97722625732422,ENTIRE,<price-redacted>,30,129,2023-08-30,0.75,0,unlicensed
 263232,Cozy&Clean in a great neighborhood,Nicole,Manhattan,Harlem,40.82176,-73.94522,ENTIRE,<price-redacted>,30,0,,,83,unlicensed
-263888,Contemporary & Classic Sanctuary on the Hudson,Catherine,Manhattan,Upper West Side,40.79541779,-73.97563171,ENTIRE,<price-redacted>,30,250,2025-11-30,1.45,97,unlicensed
+263888,Contemporary & Classic Sanctuary on the Hudson,Catherine,Manhattan,Upper West Side,40.79541778564453,-73.97563171386719,ENTIRE,<price-redacted>,30,250,2025-11-30,1.45,97,unlicensed
 265145,Studio sublet in Hell's kitchen,Akiko,Manhattan,Theater District,40.76253,-73.98365,ENTIRE,<price-redacted>,30,8,2015-01-08,0.05,0,unlicensed
 265506,Luxury NYC 2 Bedroom with Terrace,Sandra,Manhattan,Upper East Side,40.7628,-73.9651,ENTIRE,<price-redacted>,30,11,2015-11-01,0.06,0,unlicensed
 266449,2 Bedroom Gem - Prime LES Location,Drew,Manhattan,Lower East Side,40.719482,-73.98877,ENTIRE,<price-redacted>,30,86,2025-11-09,0.51,220,unlicensed
