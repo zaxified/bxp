@@ -124,6 +124,31 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    const xlsx_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/xlsx.zig"),
+            .target = target,
+            .optimize = optimize,
+            .strip = false,
+        }),
+    });
+
+    // config.zig uses @import("json5.zig") — the test module's import name
+    // must match the production module wiring above.
+    const config_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/config.zig"),
+            .target = target,
+            .optimize = optimize,
+            .strip = false,
+            .imports = &.{
+                .{ .name = "json5.zig",   .module = json5_mod },
+                .{ .name = "diagnostics", .module = diagnostics_mod },
+                .{ .name = "expr",        .module = expr_mod },
+            },
+        }),
+    });
+
     const docs_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/docs.zig"),
@@ -145,5 +170,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(expr_tests).step);
     test_step.dependOn(&b.addRunArtifact(json5_tests).step);
     test_step.dependOn(&b.addRunArtifact(diagnostics_tests).step);
+    test_step.dependOn(&b.addRunArtifact(xlsx_tests).step);
+    test_step.dependOn(&b.addRunArtifact(config_tests).step);
     test_step.dependOn(&b.addRunArtifact(docs_tests).step);
 }

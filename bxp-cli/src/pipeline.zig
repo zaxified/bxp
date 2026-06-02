@@ -442,16 +442,15 @@ fn writeSafeValue(out: *Writer, value: []const u8, delimiter_out: u8, decimal_se
     // Tab (`\t`) is also a known Excel/LibreOffice formula trigger when the
     // cell parser hits it on the leading edge — broker exports rarely emit
     // a tab-leading value but the prefix is cheap insurance.
-    //
-    // '-' is special: a leading minus is valid for negative numbers (e.g.
-    // "-12.34") and must NOT be prefixed — that would produce "'-12.34",
-    // which would then parse as a string in the portfolio tracker. Only
-    // prefix when '-' is followed by a non-digit (e.g. "-- comment"),
-    // which is an injection pattern, not a number.
     if (s.len > 0) {
         switch (s[0]) {
-            '=', '+', '@', '\t' => try out.writeByte('\''),
-            '-' => {
+            '=', '@', '\t' => try out.writeByte('\''),
+            // '+' and '-' both legitimately lead a signed number ("+5",
+            // "-12.34", "+.5") and must NOT be prefixed in that case, or the
+            // value would parse as a string in the portfolio tracker. Only
+            // prefix when the next char is not a digit/decimal separator
+            // (e.g. "+cmd|...", "-- comment"), which is an injection pattern.
+            '+', '-' => {
                 const next_is_numeric = s.len > 1 and
                     (std.ascii.isDigit(s[1]) or s[1] == decimal_sep_out);
                 if (!next_is_numeric) try out.writeByte('\'');
@@ -2647,4 +2646,46 @@ pub fn xlsxPrePass(
     xlsx_stats.time_ns = timer.read();
     out.summary(xlsx_stats);
     return xlsx_stats;
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+/// Run `writeSafeValue` with default CSV punctuation (`,` delimiter, `.`
+/// decimal, `"` quote) and assert the written bytes equal `expected`.
+fn expectSafeValue(value: []const u8, expected: []const u8) !void {
+    var out_buf: [256]u8 = undefined;
+    var w = std.Io.Writer.fixed(&out_buf);
+    var val_buf: [VAL_BUF_SIZE]u8 = undefined;
+    try writeSafeValue(&w, value, ',', '.', '"', &val_buf);
+    try std.testing.expectEqualStrings(expected, w.buffered());
+}
+
+test "writeSafeValue: formula-injection leads get an apostrophe guard" {
+    // OWASP CSV-injection set: '=', '+', '@', tab, and CR all open a formula
+    // in Excel/LibreOffice; prefix with ' so the cell renders as literal text.
+    try expectSafeValue("=cmd|'/c calc'!A1", "'=cmd|'/c calc'!A1");
+    try expectSafeValue("@SUM(A1:A9)", "'@SUM(A1:A9)");
+    try expectSafeValue("+cmd|'/c calc'!A1", "'+cmd|'/c calc'!A1");
+    try expectSafeValue("\t=1+1", "'\t=1+1");
+}
+
+test "writeSafeValue: signed numbers are not mangled by the guard" {
+    // '+' and '-' legitimately lead a number; prefixing would make the
+    // portfolio tracker parse them as strings. Both must pass through when
+    // the next char is a digit or the decimal separator.
+    try expectSafeValue("-12.34", "-12.34");
+    try expectSafeValue("+5", "+5");
+    try expectSafeValue("+.5", "+.5");
+    try expectSafeValue("-.5", "-.5");
+    try expectSafeValue("+420 555 0101", "+420 555 0101"); // intl phone number
+}
+
+test "writeSafeValue: non-numeric +/- leads are still guarded" {
+    // A '+'/'-' followed by a non-digit is an injection pattern, not a number.
+    try expectSafeValue("+SUM(A1:A9)", "'+SUM(A1:A9)");
+    try expectSafeValue("-- comment", "'-- comment");
+    try expectSafeValue("+", "'+"); // lone sign: safe default
+    try expectSafeValue("-", "'-");
 }

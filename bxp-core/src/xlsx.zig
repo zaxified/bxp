@@ -1029,3 +1029,122 @@ fn readFile(alloc: Allocator, dir: std.fs.Dir, path: []const u8) ![]u8 {
     defer file.close();
     return file.readToEndAlloc(alloc, XLSX_MAX_FILE_SIZE);
 }
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+const testing = std.testing;
+
+test "colRefToIndex: bijective base-26, row digits ignored, case-insensitive" {
+    try testing.expectEqual(@as(u32, 0), colRefToIndex("A1"));
+    try testing.expectEqual(@as(u32, 1), colRefToIndex("B"));
+    try testing.expectEqual(@as(u32, 25), colRefToIndex("Z1"));
+    try testing.expectEqual(@as(u32, 26), colRefToIndex("AA1")); // first two-letter col
+    try testing.expectEqual(@as(u32, 54), colRefToIndex("BC23")); // 2*26+3-1
+    try testing.expectEqual(@as(u32, 0), colRefToIndex("a1")); // lowercase tolerated
+    try testing.expectEqual(@as(u32, 0), colRefToIndex("")); // empty → 0, never underflows
+    try testing.expectEqual(@as(u32, 0), colRefToIndex("7")); // no letters → 0
+}
+
+test "normalizeNumber: trailing-zero strip + scientific reformat + 1e15 guard" {
+    const a = testing.allocator;
+    const cases = [_]struct { in: []const u8, want: []const u8 }{
+        .{ .in = "1.0000", .want = "1" }, // all decimals stripped → drop point
+        .{ .in = "518.740000", .want = "518.74" },
+        .{ .in = "42", .want = "42" }, // no dot → verbatim
+        .{ .in = "1.5", .want = "1.5" },
+        .{ .in = "1E5", .want = "100000" }, // whole-valued sci → integer
+        .{ .in = "1.5E2", .want = "150" },
+        // Past the 1e15 exactness guard the raw string is preserved untouched.
+        .{ .in = "1e20", .want = "1e20" },
+    };
+    for (cases) |c| {
+        const got = try normalizeNumber(a, c.in);
+        defer a.free(got);
+        try testing.expectEqualStrings(c.want, got);
+    }
+}
+
+test "excelSerialToDatetime: epoch anchor + fractional time" {
+    var buf: [19]u8 = undefined;
+    // Serial 25569 is the documented Unix-epoch anchor.
+    try testing.expectEqualStrings("1970-01-01 00:00:00", excelSerialToDatetime(25569.0, &buf));
+    // 0.5 of a day → noon; the date part stays put.
+    try testing.expectEqualStrings("1970-01-01 12:00:00", excelSerialToDatetime(25569.5, &buf));
+    // 0.75 → 18:00.
+    try testing.expectEqualStrings("1970-01-01 18:00:00", excelSerialToDatetime(25569.75, &buf));
+}
+
+test "unixDayToYMD: Hinnant civil-from-days anchors" {
+    try testing.expectEqual(YMD{ .y = 1970, .m = 1, .d = 1 }, unixDayToYMD(0));
+    try testing.expectEqual(YMD{ .y = 1969, .m = 12, .d = 31 }, unixDayToYMD(-1));
+    try testing.expectEqual(YMD{ .y = 2000, .m = 2, .d = 29 }, unixDayToYMD(11016)); // leap day
+}
+
+test "decodeEntities: named, numeric, passthrough, and bare ampersand" {
+    const a = testing.allocator;
+    const cases = [_]struct { in: []const u8, want: []const u8 }{
+        .{ .in = "a&amp;b", .want = "a&b" },
+        .{ .in = "&lt;tag&gt;", .want = "<tag>" },
+        .{ .in = "&quot;x&apos;y", .want = "\"x'y" },
+        .{ .in = "&#65;&#x41;", .want = "AA" }, // decimal + hex → 'A'
+        .{ .in = "&unknown;", .want = "&unknown;" }, // unknown entity preserved
+        .{ .in = "Q&A", .want = "Q&A" }, // bare '&' with no ';' is literal
+    };
+    for (cases) |c| {
+        var out: std.ArrayList(u8) = .empty;
+        defer out.deinit(a);
+        try decodeEntities(c.in, &out, a);
+        try testing.expectEqualStrings(c.want, out.items);
+    }
+}
+
+test "isDateFormatCode: tokens vs literals, brackets, and General" {
+    try testing.expect(isDateFormatCode("yyyy-mm-dd"));
+    try testing.expect(isDateFormatCode("h:mm:ss"));
+    try testing.expect(!isDateFormatCode("General"));
+    try testing.expect(!isDateFormatCode("0.00")); // pure numeric format
+    // 'h' lives only inside an elapsed-time bracket → not a date token.
+    try testing.expect(!isDateFormatCode("[Red]0"));
+    // A real token after a quoted literal still counts.
+    try testing.expect(isDateFormatCode("\"day \"d"));
+}
+
+test "isBuiltinDateFmt: documented builtin numFmtId ranges" {
+    try testing.expect(isBuiltinDateFmt(14)); // m/d/yy
+    try testing.expect(isBuiltinDateFmt(22)); // m/d/yy h:mm
+    try testing.expect(isBuiltinDateFmt(45)); // mm:ss
+    try testing.expect(isBuiltinDateFmt(47)); // mmss.0
+    try testing.expect(!isBuiltinDateFmt(0)); // General
+    try testing.expect(!isBuiltinDateFmt(23)); // gap between the two ranges
+    try testing.expect(!isBuiltinDateFmt(48));
+}
+
+test "getAttr: exact + namespace-prefixed match, quote styles, missing" {
+    try testing.expectEqualStrings("5", getAttr("r=\"5\" t=\"s\"", "r").?);
+    try testing.expectEqualStrings("s", getAttr("r=\"5\" t=\"s\"", "t").?);
+    try testing.expectEqualStrings("rId1", getAttr("r:id='rId1'", "id").?); // ns + single quotes
+    try testing.expect(getAttr("r=\"5\"", "missing") == null);
+}
+
+test "stripNs: drops the namespace prefix" {
+    try testing.expectEqualStrings("id", stripNs("r:id"));
+    try testing.expectEqualStrings("id", stripNs("id"));
+    try testing.expectEqualStrings("b:t", stripNs("a:b:t")); // splits on the first colon only
+}
+
+test "writeCsvField: RFC 4180 quoting" {
+    var buf: [64]u8 = undefined;
+    const Check = struct {
+        fn run(b: []u8, value: []const u8, want: []const u8) !void {
+            var w = std.Io.Writer.fixed(b);
+            try writeCsvField(&w, value);
+            try testing.expectEqualStrings(want, w.buffered());
+        }
+    };
+    try Check.run(&buf, "plain", "plain"); // no special chars → verbatim
+    try Check.run(&buf, "a,b", "\"a,b\""); // delimiter → wrap
+    try Check.run(&buf, "say \"hi\"", "\"say \"\"hi\"\"\""); // quote → wrap + double
+    try Check.run(&buf, "line\nbreak", "\"line\nbreak\""); // newline → wrap
+}

@@ -67,22 +67,6 @@ Resolve before the next release. Found 2026-05-31 while building the
 `squirrel-census-json` real-world example (the passthrough half was fixed the
 same day).
 
-### CSV-injection guard over-prefixes leading `+` — pre-release
-
-`writeSafeValue` (`bxp-cli/src/pipeline.zig`) prefixes a leading `=`, `+`, `@`,
-or tab with `'` to neutralise spreadsheet formula injection. `-` already has a
-smart exception (only prefix when **not** followed by a digit/decimal, so
-`-12.34` passes), but `+` does not — so a legitimate value beginning with `+`
-(international phone `+420 555 0101`, signed quantity `+5`) is silently mangled
-to `'+420…`. Found 2026-05-31 while building the `json-union` example.
-
-Fix: mirror the `-` numeric-next exception for `+` (prefix only when the next
-char is not a digit/decimal separator). `+SUM(...)` / `+cmd|…` still get the
-guard; phone/signed numbers pass through. Same residual risk the codebase
-already accepts for `-` (`-1-1` is an un-prefixed formula). Needs a unit test
-alongside the existing `writeSafeValue` cases. (Consider whether `=`/`@`/tab
-want any analogous carve-out — almost certainly not, but note the decision.)
-
 ### `--fresh` + `combined_output` leaves a stale roll-up — pre-release
 
 With `--fresh`, the combined output is `O_EXCL`-created and **skipped if it

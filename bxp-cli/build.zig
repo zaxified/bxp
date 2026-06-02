@@ -39,6 +39,30 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run Broker eXchange Parser");
     run_step.dependOn(&run_cmd.step);
 
-    // Unit tests live in bxp-core. Run "zig build test" there, or use scripts/test.sh.
-    _ = b.step("test", "Run unit tests (delegates to bxp-core; use scripts/test.sh)");
+    // Inline tests live in src/main.zig (validatePath, matchValueArg) and
+    // src/pipeline.zig (writeSafeValue). main.zig is the test root; it
+    // @imports pipeline.zig, so the latter's tests are discovered too.
+    // bxp-core has its own `zig build test`; scripts/test.sh runs both.
+    const main_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .strip = false,
+            .imports = &.{
+                .{ .name = "csv",           .module = core_dep.module("csv") },
+                .{ .name = "config",        .module = core_dep.module("config") },
+                .{ .name = "expr",          .module = core_dep.module("expr") },
+                .{ .name = "xlsx",          .module = core_dep.module("xlsx") },
+                .{ .name = "json",          .module = core_dep.module("json") },
+                .{ .name = "btrace",        .module = core_dep.module("btrace") },
+                .{ .name = "json5",         .module = core_dep.module("json5") },
+                .{ .name = "diagnostics",   .module = core_dep.module("diagnostics") },
+                .{ .name = "build_options", .module = options.createModule() },
+            },
+        }),
+    });
+
+    const test_step = b.step("test", "Run bxp-cli unit tests");
+    test_step.dependOn(&b.addRunArtifact(main_tests).step);
 }

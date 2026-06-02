@@ -79,6 +79,7 @@ _json5_ast_tests() {
 section "Console"
 step "$(_lab bxp-core   'unit tests')"  _zig_in "$MONO_ROOT/bxp-core" build test
 step "$(_lab bxp-cli    'build')"       _zig_in "$MONO_ROOT/bxp-cli"  build
+step "$(_lab bxp-cli    'unit tests')"  _zig_in "$MONO_ROOT/bxp-cli"  build test
 step "$(_lab bxp-fmt    'build')"       _zig_in "$MONO_ROOT/bxp-fmt"  build
 step "$(_lab bxp-fmt    'unit tests')"  _zig_in "$MONO_ROOT/bxp-fmt"  build test
 step "$(_lab bxp-fmt    'smoke')"       _smoke_bxp_fmt

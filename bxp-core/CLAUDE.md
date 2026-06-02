@@ -53,7 +53,10 @@ Converts `.xlsx` files (ZIP + XML) to intermediate CSV files.
 - Supported cell types: shared strings, inline strings, formula results, booleans,
   plain numbers, date/time (detected via styles.xml numFmtId).
 - Buffer sizes: `ZIP_READ_BUF_SIZE=8192`, `CSV_OUT_BUF_SIZE=65536`, `XLSX_MAX_FILE_SIZE=10MB`.
-- No unit tests (tested via bxp-cli integration tests).
+- Inline unit tests (10) cover the pure helpers: `colRefToIndex`,
+  `normalizeNumber`, `excelSerialToDatetime`, `unixDayToYMD`, `decodeEntities`,
+  `isDateFormatCode`, `isBuiltinDateFmt`, `getAttr`, `stripNs`, `writeCsvField`.
+  End-to-end ZIP/XML parsing is still exercised via bxp-cli integration tests.
 
 ### expr.zig
 
@@ -91,6 +94,12 @@ JSON5 configuration loader.
   when `date_filter_from_filename=true`).
 - Config file size limit: `CONFIG_MAX_FILE_SIZE=1MB`.
 - Internally uses `json5.zig` to preprocess JSON5 → standard JSON before `std.json` parsing.
+- Inline unit tests (10) cover the pure did-you-mean / parsing helpers
+  (`levenshteinIgnoreCase`, `closestBuiltin`, `closestKey`, `suffixOverlap`,
+  `isAnnotationKey`, `extractQuotedName`, `jsonErrorDesc`) plus two
+  `loadFromBytes` integration cases (enum/punctuation parse + invalid-enum
+  warning). `loadFromBytes` allocates into a caller-owned arena — tests pass
+  an `ArenaAllocator`, matching how bxp-fmt drives it.
 
 **Doc catalog** (`pub const FieldDoc`, plus `pub const fields = [_]FieldDoc{...}`
 on each public struct + `pub const scaffold_template` where a struct can be
@@ -195,7 +204,7 @@ Structured diagnostics collector for config/json5/expr validation.
 # Build all modules (no standalone binary):
 cd bxp-core && zig build
 
-# Run unit tests (csv, expr, json5, docs):
+# Run unit tests (csv, json, btrace, expr, json5, diagnostics, xlsx, config, docs):
 cd bxp-core && zig build test
 ```
 

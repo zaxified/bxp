@@ -2883,3 +2883,152 @@ pub fn loadFromBytes(
 
     return config;
 }
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+const testing = std.testing;
+
+test "levenshteinIgnoreCase: distance, case-insensitivity, long-string shortcut" {
+    try testing.expectEqual(@as(usize, 0), levenshteinIgnoreCase("ROUND", "round"));
+    try testing.expectEqual(@as(usize, 1), levenshteinIgnoreCase("ROUNT", "ROUND"));
+    try testing.expectEqual(@as(usize, 3), levenshteinIgnoreCase("kitten", "sitting"));
+    try testing.expectEqual(@as(usize, 5), levenshteinIgnoreCase("", "abcde"));
+    // Past the 64-char DP ceiling the helper degrades to a length-delta.
+    const long_a = "a" ** 70;
+    const long_b = "a" ** 65;
+    try testing.expectEqual(@as(usize, 5), levenshteinIgnoreCase(long_a, long_b));
+}
+
+test "closestBuiltin: near typo resolves, far string is rejected" {
+    // One edit from ROUND → suggested.
+    try testing.expectEqualStrings("ROUND", closestBuiltin("ROUNT").?);
+    // Case-insensitive match still snaps to the canonical catalog spelling.
+    try testing.expectEqualStrings("ABS", closestBuiltin("abx").?);
+    // Three+ edits away from every builtin → no suggestion.
+    try testing.expect(closestBuiltin("zzzzzzzzzz") == null);
+}
+
+test "closestKey: did-you-mean over an explicit candidate list" {
+    const candidates = [_][]const u8{ "data_dir", "file_pattern_in", "input_schema" };
+    try testing.expectEqualStrings("data_dir", closestKey("data_dur", &candidates).?);
+    try testing.expectEqualStrings("input_schema", closestKey("input_schena", &candidates).?);
+    try testing.expect(closestKey("totally_unrelated", &candidates) == null);
+}
+
+test "suffixOverlap: documented file_pattern_in overlap cases" {
+    // Equal or one-is-suffix-of-other → overlap.
+    try testing.expect(suffixOverlap(".csv", "_closed.csv"));
+    try testing.expect(suffixOverlap("_closed.csv", ".csv"));
+    try testing.expect(suffixOverlap(".csv", ".csv"));
+    // Two distinct full suffixes → no overlap.
+    try testing.expect(!suffixOverlap("_closed.csv", "_cash.csv"));
+    // Empty operands never overlap.
+    try testing.expect(!suffixOverlap("", ".csv"));
+}
+
+test "isAnnotationKey: only the four reserved $-prefixes match" {
+    try testing.expect(isAnnotationKey("$err_0"));
+    try testing.expect(isAnnotationKey("$warn_12"));
+    try testing.expect(isAnnotationKey("$info_3"));
+    try testing.expect(isAnnotationKey("$comm_7"));
+    // A normal template variable is not an annotation key.
+    try testing.expect(!isAnnotationKey("$date"));
+    try testing.expect(!isAnnotationKey("data_dir"));
+}
+
+test "containsString" {
+    const hay = [_][]const u8{ "alpha", "beta", "gamma" };
+    try testing.expect(containsString(&hay, "beta"));
+    try testing.expect(!containsString(&hay, "delta"));
+    try testing.expect(!containsString(&.{}, "anything"));
+}
+
+test "extractQuotedName: pulls the first single-quoted token, else null" {
+    try testing.expectEqualStrings("Total", extractQuotedName("LOOKUP([x], 'Total')").?);
+    try testing.expectEqualStrings("", extractQuotedName("a '' b").?); // empty quotes
+    try testing.expect(extractQuotedName("no quotes here") == null);
+    try testing.expect(extractQuotedName("'unterminated") == null); // lone quote
+}
+
+test "jsonErrorDesc: maps known parse errors, falls back to @errorName" {
+    try testing.expectEqualStrings(
+        "duplicate key in object — remove or rename the repeated key",
+        jsonErrorDesc(error.DuplicateField),
+    );
+    try testing.expectEqualStrings(
+        "number value out of range",
+        jsonErrorDesc(error.Overflow),
+    );
+    // Unmapped error → its name verbatim.
+    try testing.expectEqualStrings("OutOfMemory", jsonErrorDesc(error.OutOfMemory));
+}
+
+// `loadFromBytes` (and its diagnostic sink) allocate into a caller-owned
+// arena in production — bxp-fmt wraps a GPA in an ArenaAllocator before
+// calling. Diagnostics.deinit does not free per-message strings, so these
+// integration tests mirror that contract with an arena rather than the
+// leak-checking testing.allocator.
+test "loadFromBytes: csv-punctuation + enum fields parse through their helpers" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    var diag = Diagnostics.init(a);
+    defer diag.deinit();
+
+    const src =
+        \\{
+        \\  conversion_templates: {
+        \\    demo: {
+        \\      csv_delimiter_in: ";",
+        \\      csv_text_quote_out: "double",
+        \\      file_type_out: "json",
+        \\      input_schema: { $x: "[1]" },
+        \\      output_schema: { col: "$x" },
+        \\    },
+        \\  },
+        \\}
+    ;
+    var config = try loadFromBytes(a, src, "<test>", &diag);
+    defer config.deinit();
+
+    const demo = config.brokers.get("demo").?;
+    try testing.expectEqual(@as(u8, ';'), demo.csv_delimiter_in);
+    try testing.expectEqual(@as(u8, '"'), demo.csv_text_quote_out);
+    try testing.expectEqual(FileType.json, demo.file_type_out);
+    // A clean config emits no diagnostics.
+    try testing.expectEqual(@as(usize, 0), diag.count());
+}
+
+test "loadFromBytes: invalid enum surfaces a warning but still loads with the default" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    var diag = Diagnostics.init(a);
+    defer diag.deinit();
+
+    const src =
+        \\{
+        \\  conversion_templates: {
+        \\    demo: {
+        \\      file_type_out: "jsno",
+        \\      csv_text_quote_out: "fancy",
+        \\      input_schema: { $x: "[1]" },
+        \\      output_schema: { col: "$x" },
+        \\    },
+        \\  },
+        \\}
+    ;
+    var config = try loadFromBytes(a, src, "<test>", &diag);
+    defer config.deinit();
+
+    const demo = config.brokers.get("demo").?;
+    // Typos fall back to the documented defaults...
+    try testing.expectEqual(FileType.csv, demo.file_type_out);
+    try testing.expectEqual(@as(u8, 0), demo.csv_text_quote_out); // "none"
+    // ...but the user is warned about each one rather than failing silently.
+    try testing.expectEqual(@as(usize, 2), diag.countBySeverity(.warning));
+}

@@ -107,6 +107,13 @@ fn validatePath(path: []const u8) error{InvalidPath}!void {
     }
 }
 
+// Pull in pipeline.zig's tests (writeSafeValue). Zig only discovers tests in
+// the test root and in files force-referenced here, not in every transitively
+// imported file.
+test {
+    _ = @import("pipeline.zig");
+}
+
 test "validatePath rejects shell metacharacters" {
     try std.testing.expectError(error.InvalidPath, validatePath("foo;rm -rf /"));
     try std.testing.expectError(error.InvalidPath, validatePath("a$(b)"));
