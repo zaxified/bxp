@@ -1171,16 +1171,11 @@ fn runExprTrace(
             try fields_list.append(alloc, try alloc.dupe(u8, item.string));
         }
     }
-    // Length mismatch is a caller bug (bxp-gui always sends matched pairs).
-    // We exit 2 (usage error) rather than 1 so the GUI can distinguish
-    // "bad expression" from "we sent a malformed request".
-    if (headers_list.items.len != fields_list.items.len) {
-        std.debug.print(
-            "error: --row-headers ({d}) and --row-fields ({d}) length mismatch\n",
-            .{ headers_list.items.len, fields_list.items.len },
-        );
-        return 2;
-    }
+    // Ragged headers/fields are tolerated, matching the runtime engine and
+    // the `--expr-batch` path: field access is by header name → column index,
+    // and `Context.field` returns "" past the row's field count. A trailing
+    // delimiter in an xlsx-extracted CSV (header one column wider than the
+    // data rows) must not blank out the trace.
     // Build col_index from headers so [ColumnName] references resolve to
     // the correct field slot during eval. The index owns no allocations —
     // the keys point into `headers_list` which lives in the arena.
@@ -1276,6 +1271,20 @@ fn runExprBatch(gpa: std.mem.Allocator) !u8 {
         return 1;
     };
 
+    const code = try runExprBatchBytes(alloc, body, stdout);
+    try stdout.flush();
+    return code;
+}
+
+/// Pure core of [runExprBatch]: parse one JSON request from `body`,
+/// evaluate every expr against the row, and write the `{results:[...]}`
+/// JSON to `out` (no flush — the caller owns that). Split out so inline
+/// tests can drive it without stdin/stdout, mirroring `annotateRaw`.
+fn runExprBatchBytes(
+    alloc: std.mem.Allocator,
+    body: []const u8,
+    out: *std.io.Writer,
+) !u8 {
     const parsed = std.json.parseFromSlice(std.json.Value, alloc, body, .{}) catch {
         std.debug.print("error: --expr-batch stdin must be a JSON object\n", .{});
         return 1;
@@ -1304,28 +1313,32 @@ fn runExprBatch(gpa: std.mem.Allocator) !u8 {
         std.debug.print("error: headers/fields/exprs must be JSON arrays\n", .{});
         return 1;
     }
-    if (headers_v.array.items.len != fields_v.array.items.len) {
-        std.debug.print(
-            "error: headers ({d}) and fields ({d}) length mismatch\n",
-            .{ headers_v.array.items.len, fields_v.array.items.len },
-        );
-        return 1;
-    }
-
-    // Build col_index and the parallel field-slice array. We dupe every string
-    // into the arena because `parsed.deinit()` (deferred above) frees the
-    // original JSON-owned bytes once we exit this scope.
+    // Ragged headers/fields are tolerated, matching the runtime engine:
+    // field access is by header name → column index, and `Context.field`
+    // returns "" for an index past the row's field count. xlsx-extracted
+    // CSVs frequently carry a trailing delimiter that makes the header row
+    // one column wider (or narrower) than the data rows; erroring here would
+    // blank out the entire drill-down (no vars, no rules) for an otherwise
+    // valid row. Build col_index from headers and the field-slice array from
+    // fields, independently — never zip them. We dupe every string into the
+    // arena because `parsed.deinit()` (deferred above) frees the original
+    // JSON-owned bytes once we exit this scope.
     var col_index = std.StringHashMap(usize).init(alloc);
     defer col_index.deinit();
-    var fields: std.ArrayList([]const u8) = .empty;
-    defer fields.deinit(alloc);
-    for (headers_v.array.items, fields_v.array.items, 0..) |h, f, idx| {
-        if (h != .string or f != .string) {
-            std.debug.print("error: headers/fields entries must be strings\n", .{});
+    for (headers_v.array.items, 0..) |h, idx| {
+        if (h != .string) {
+            std.debug.print("error: headers entries must be strings\n", .{});
             return 1;
         }
-        const h_owned = try alloc.dupe(u8, h.string);
-        try col_index.put(h_owned, idx);
+        try col_index.put(try alloc.dupe(u8, h.string), idx);
+    }
+    var fields: std.ArrayList([]const u8) = .empty;
+    defer fields.deinit(alloc);
+    for (fields_v.array.items) |f| {
+        if (f != .string) {
+            std.debug.print("error: fields entries must be strings\n", .{});
+            return 1;
+        }
         try fields.append(alloc, try alloc.dupe(u8, f.string));
     }
 
@@ -1396,7 +1409,7 @@ fn runExprBatch(gpa: std.mem.Allocator) !u8 {
 
     // Eval each expression. Reset detail/off/len before each call so a
     // prior failure doesn't bleed into the next result.
-    var jw: std.json.Stringify = .{ .writer = stdout, .options = .{} };
+    var jw: std.json.Stringify = .{ .writer = out, .options = .{} };
     try jw.beginObject();
     try jw.objectField("results");
     try jw.beginArray();
@@ -1458,8 +1471,7 @@ fn runExprBatch(gpa: std.mem.Allocator) !u8 {
 
     try jw.endArray();
     try jw.endObject();
-    try stdout.writeByte('\n');
-    try stdout.flush();
+    try out.writeByte('\n');
     return 0;
 }
 
@@ -2643,4 +2655,52 @@ test "annotateRaw Phase B: output_schema missing attaches at template path" {
         }
     }
     try testing.expect(has_err);
+}
+
+/// Drive `runExprBatchBytes` over an in-memory buffer and return the
+/// `{exit, json}` pair so tests can assert without stdin/stdout.
+fn batchOnBytes(a: std.mem.Allocator, body: []const u8) !struct { exit: u8, json: []const u8 } {
+    var buf: std.io.Writer.Allocating = .init(a);
+    const code = try runExprBatchBytes(a, body, &buf.writer);
+    return .{ .exit = code, .json = buf.written() };
+}
+
+test "expr-batch: more fields than headers is tolerated (xlsx trailing comma)" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // 2 headers, 3 fields (trailing-comma data row). The runtime engine
+    // accesses fields by header→index and ignores the unaddressed extra,
+    // so the batch must NOT error — erroring here used to blank the GUI
+    // drill-down (no vars, no rules) for valid xlsx-derived rows.
+    const r = try batchOnBytes(a,
+        \\{"headers":["A","B"],"fields":["1","2","x"],"exprs":["[A]","[B]"]}
+    );
+    try testing.expectEqual(@as(u8, 0), r.exit);
+    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, a, r.json, .{});
+    const results = parsed.object.get("results").?.array;
+    try testing.expectEqual(@as(usize, 2), results.items.len);
+    try testing.expectEqualStrings("1", results.items[0].object.get("value").?.string);
+    try testing.expectEqualStrings("2", results.items[1].object.get("value").?.string);
+}
+
+test "expr-batch: fewer fields than headers yields empty for missing column" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // 3 headers, 1 field: [B]/[C] resolve to indices past the row → "".
+    const r = try batchOnBytes(a,
+        \\{"headers":["A","B","C"],"fields":["1"],"exprs":["[A]","[B]","[C]"]}
+    );
+    try testing.expectEqual(@as(u8, 0), r.exit);
+    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, a, r.json, .{});
+    const results = parsed.object.get("results").?.array;
+    try testing.expectEqual(@as(usize, 3), results.items.len);
+    try testing.expectEqualStrings("1", results.items[0].object.get("value").?.string);
+    try testing.expectEqualStrings("", results.items[1].object.get("value").?.string);
+    try testing.expectEqualStrings("", results.items[2].object.get("value").?.string);
 }
