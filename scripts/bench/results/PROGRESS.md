@@ -23,6 +23,7 @@ numbers are noisier — but the trend across S05 → S13 is the meaningful arc).
 | S13 | 24/05-0245 | NDJSON rip: --trace = BIN only   |
 | S14 | 24/05-1958 | per-block parallel CSV pipeline  |
 | S15 | 24/05-2110 | sunrise vendor: DATE_CONVERT FBA |
+| S16 | 02/06-0643 | sunrise removed → in-house datefmt.zig |
 
 ## Wall time (seconds)
 
@@ -169,3 +170,23 @@ trace diff against committed `.expected` fixtures) stays green on all 7
 shipping templates. The parallel path drains worker buffers in
 worker-index order with patched btrace `outputIdx` so the resulting
 streams match the serial baseline bit-for-bit.
+
+## S16 notes — sunrise removed, in-house datefmt.zig (new baseline)
+
+The vendored `sunrise` datetime library was replaced by `bxp-core/src/datefmt.zig`
+(zero external deps; allocation-free stack tokenizer, same as the sunrise FBA
+vendor patch). The 3expr workload's parser-heavy expression is a per-row
+`DATE_CONVERT`, so this sweep directly measures the new date core.
+
+Results (`results-20260602-064320.csv`, BENCH_PARALLEL=1, ReleaseFast):
+
+| sweep point          |  S15 |  S16 |
+| -------------------- | ---: | ---: |
+| S1 2M rows (DATE_CONVERT-heavy) | 6.52 | 6.75 |
+| Total wall (25 pts)  | 45.2 | 46.3 |
+| Peak RSS             | ~25 MB | ~25 MB |
+
+Flat within run-to-run noise (~2.5%): the in-house tokenizer matches the
+vendored+patched sunrise on the hot path, as expected. **This is the new
+post-sunrise baseline.** The pending-revert overhead (tracking an upstream PR,
+re-vendoring on merge) is gone for good.

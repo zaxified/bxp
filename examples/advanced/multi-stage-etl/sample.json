@@ -93,12 +93,12 @@
         // Build the DST-aware Europe/Prague timestamp HERE, where order_date is
         // already ISO (converted in PASS 2) and present as a field — so the final
         // join pass stays free of date math. CEST (+02:00) from the last Sunday
-        // of March to the last Sunday of October, else CET (+01:00). "Last Sunday
-        // of month" = end-of-month minus (its ISO weekday mod 7), the mod done as
-        // x-7*FLOOR(x/7) since there is no MOD; the in-window test uses DATEDIFF
-        // (numeric) because string >= is unsupported on dates. Empty-guarded so
-        // category rows (no order_date) and startup validation stay safe.
-        $order_ts:      "IF(LEN([order_date]) = 0, '', [order_date] & 'T00:00:00' & IF(DATEDIFF([order_date], DATEADD(EOMONTH(YEAR([order_date]) & '-03-15'), 0 - (WEEKDAY(EOMONTH(YEAR([order_date]) & '-03-15')) - 7 * FLOOR(WEEKDAY(EOMONTH(YEAR([order_date]) & '-03-15')) / 7)))) >= 0 AND DATEDIFF([order_date], DATEADD(EOMONTH(YEAR([order_date]) & '-10-15'), 0 - (WEEKDAY(EOMONTH(YEAR([order_date]) & '-10-15')) - 7 * FLOOR(WEEKDAY(EOMONTH(YEAR([order_date]) & '-10-15')) / 7)))) < 0, '+02:00', '+01:00'))",
+        // of March to the last Sunday of October, else CET (+01:00). NTH_DOW(y, m,
+        // 7, -1) gives the last Sunday of a month directly; the in-window test
+        // uses DATEDIFF (numeric) because string >= is unsupported on dates.
+        // Empty-guarded so category rows (no order_date) and startup validation
+        // stay safe.
+        $order_ts:      "IF(LEN([order_date]) = 0, '', [order_date] & 'T00:00:00' & IF(DATEDIFF([order_date], NTH_DOW(YEAR([order_date]), 3, 7, -1)) >= 0 AND DATEDIFF([order_date], NTH_DOW(YEAR([order_date]), 10, 7, -1)) < 0, '+02:00', '+01:00'))",
         $category_id:   "[category_id]",
         $product_added: "[product_added]",
         $category_name: "[category_name]",

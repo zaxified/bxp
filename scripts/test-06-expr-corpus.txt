@@ -11,7 +11,7 @@
 # Function catalog (per `bxp-fmt --docs` 2026-05-29, 38 functions):
 #   ABS, CEILING, COALESCE, CONTAINS, DATE_CONVERT, DATEADD, DATEDIFF,
 #   DAY, ENDS_WITH, EOMONTH, FIELDS, FLOOR, GREATEST, IF, IN, LEAST,
-#   LEFT, LEN, LOOKUP, LOWER, MONTH, NOW, NULLIF, PRICE_CURRENCY,
+#   LEFT, LEN, LOOKUP, LOWER, MONTH, NOW, NTH_DOW, NULLIF, PRICE_CURRENCY,
 #   PRICE_VALUE, RAND, REPLACE, RIGHT, ROUND, SPLIT_PART, STARTS_WITH,
 #   SUBSTR, TICKER, TRIM, UPPER, WEEKDAY, WORKDAY, YEAR
 # Keywords: AND, OR, NOT
@@ -95,6 +95,9 @@ expr	ok	DAY([Date])
 expr	ok	WEEKDAY([Date])
 expr	ok	WEEKDAY([Date]) > 5
 expr	ok	EOMONTH([Date])
+expr	ok	NTH_DOW(2024, 3, 7, -1)
+expr	ok	NTH_DOW(YEAR([Date]), 10, 7, -1)
+expr	err	NTH_DOW(2024, 3, 7)	WrongArgCount
 # Compose: parse foreign-format date then add business days.
 expr	ok	WORKDAY(DATE_CONVERT([Trade], 'DD.MM.YYYY', 'YYYY-MM-DD'), 2)
 expr	ok	YEAR([Date]) = 2024 AND MONTH([Date]) = 12

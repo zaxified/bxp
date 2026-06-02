@@ -1561,6 +1561,16 @@ fn toDayOffset(f: f80) ?i64 {
     return @intFromFloat(t);
 }
 
+/// Truncate a numeric arg to i32, or null when non-finite / out of i32 range.
+/// Used by integer-component date builtins (NTH_DOW) where `@intCast` from a
+/// wider type would otherwise panic on absurd inputs.
+fn toI32Arg(f: f80) ?i32 {
+    if (!std.math.isFinite(f)) return null;
+    const t = @trunc(f);
+    if (t > 2147483647.0 or t < -2147483648.0) return null;
+    return @intFromFloat(t);
+}
+
 /// Maximum decimal precision a ROUND call will honour. f80 mantissa holds
 /// ~19 decimal digits, so anything beyond that is numerical noise.
 /// Caps `factor *= 10.0` (or `/= 10.0`) loop iterations to avoid DoS hangs
@@ -2749,6 +2759,33 @@ fn adaptEomonth(p: *Parser, args: []Value) anyerror!Value {
     return builtinEomonth(p, args);
 }
 
+// ── NTH_DOW ─────────────────────────────────────────────────────────────
+const nth_dow_doc: FnDoc = .{
+    .name = "NTH_DOW",
+    .signature = "NTH_DOW(year, month, weekday, n)",
+    .example = "NTH_DOW(2024, 3, 7, -1)",
+    .description = "Date (YYYY-MM-DD) of the `n`-th `weekday` (ISO Mon=1 … Sun=7) in `year`/`month`. Positive `n` counts from the start (1 = first); negative counts from the end (-1 = last). Returns \"\" when the occurrence doesn't exist or an argument is out of range. Handy for DST boundaries — EU summer time is `NTH_DOW(YEAR(d), 3, 7, -1)` (last Sunday of March) to `NTH_DOW(YEAR(d), 10, 7, -1)` (last Sunday of October).",
+    .args = &.{
+        .{ .name = "year", .kind = .number },
+        .{ .name = "month", .kind = .number },
+        .{ .name = "weekday", .kind = .number },
+        .{ .name = "n", .kind = .number },
+    },
+    .min_args = 4,
+    .max_args = 4,
+};
+fn builtinNthDow(p: *Parser, args: []Value) !Value {
+    const year = toI32Arg(try args[0].toNumber()) orelse return Value{ .string = "" };
+    const month = toI32Arg(try args[1].toNumber()) orelse return Value{ .string = "" };
+    const weekday = toI32Arg(try args[2].toNumber()) orelse return Value{ .string = "" };
+    const n = toI32Arg(try args[3].toNumber()) orelse return Value{ .string = "" };
+    const parts = datefmt.nthWeekdayOfMonth(year, month, weekday, n) orelse return Value{ .string = "" };
+    return Value{ .string = try datefmt.formatIsoDate(p.ctx.alloc, parts) };
+}
+fn adaptNthDow(p: *Parser, args: []Value) anyerror!Value {
+    return builtinNthDow(p, args);
+}
+
 // ── LEN ─────────────────────────────────────────────────────────────────
 const len_doc: FnDoc = .{
     .name = "LEN",
@@ -3006,6 +3043,7 @@ pub const builtins = [_]FnEntry{
     .{ .name = "DAY",            .doc = day_doc,            .impl = adaptDay },
     .{ .name = "WEEKDAY",        .doc = weekday_doc,        .impl = adaptWeekday },
     .{ .name = "EOMONTH",        .doc = eomonth_doc,        .impl = adaptEomonth },
+    .{ .name = "NTH_DOW",        .doc = nth_dow_doc,        .impl = adaptNthDow },
 };
 
 // ============================================================
@@ -4548,6 +4586,28 @@ test "eval: EOMONTH snaps to month end" {
     try testing.expectEqualStrings("2024-12-31", try evalString("EOMONTH('2024-12-01')", &ctx));
     // Already last day of month — returns same day.
     try testing.expectEqualStrings("2024-04-30", try evalString("EOMONTH('2024-04-30')", &ctx));
+}
+
+test "eval: NTH_DOW DST boundaries + lenient empty on invalid" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    // EU DST window: last Sunday of March / October 2024.
+    try testing.expectEqualStrings("2024-03-31", try evalString("NTH_DOW(2024, 3, 7, -1)", &ctx));
+    try testing.expectEqualStrings("2024-10-27", try evalString("NTH_DOW(2024, 10, 7, -1)", &ctx));
+    // nth-from-start + pre-1970.
+    try testing.expectEqualStrings("2024-03-10", try evalString("NTH_DOW(2024, 3, 7, 2)", &ctx));
+    try testing.expectEqualStrings("1924-03-30", try evalString("NTH_DOW(1924, 3, 7, -1)", &ctx));
+    // Non-existent occurrence / out-of-range args → "" (data-lenient).
+    try testing.expectEqualStrings("", try evalString("NTH_DOW(2023, 2, 7, 5)", &ctx));
+    try testing.expectEqualStrings("", try evalString("NTH_DOW(2024, 13, 7, 1)", &ctx));
+    // The full EU Europe/Prague offset idiom (DATEDIFF since string >= is unsupported).
+    try testing.expectEqualStrings(
+        "+02:00",
+        try evalString("IF(DATEDIFF('2024-07-20', NTH_DOW(2024,3,7,-1)) >= 0 AND DATEDIFF('2024-07-20', NTH_DOW(2024,10,7,-1)) < 0, '+02:00', '+01:00')", &ctx),
+    );
 }
 
 test "eval: date builtins reject malformed dates" {

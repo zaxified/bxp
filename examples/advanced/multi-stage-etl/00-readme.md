@@ -47,9 +47,10 @@ join pass stays clean.
 **Computing the Prague offset with no timezone support** (PASS 3). CEST
 (`+02:00`) holds from the last Sunday of March to the last Sunday of October,
 else CET (`+01:00`).
-"Last Sunday of month" = `EOMONTH` minus its ISO weekday mod 7 (mod done as
-`x - 7*FLOOR(x/7)`, since there is no `MOD`); the in-window test uses `DATEDIFF`
-(numeric) because `>=` is unsupported on date strings.
+`NTH_DOW(YEAR([order_date]), 3, 7, -1)` returns the last Sunday of March
+directly (ISO weekday `7` = Sunday, occurrence `-1` = last); the same for
+October bounds the window. The in-window test uses `DATEDIFF` (numeric)
+because `>=` is unsupported on date strings.
 
 > Caveat: the offset is computed at **date** granularity, so the exact switch
 > hour on the transition day is not modelled — fine for date-stamped data. A

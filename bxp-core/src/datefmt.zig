@@ -652,6 +652,36 @@ pub fn startOfMonth(parts: DateParts) DateParts {
 pub fn endOfMonth(parts: DateParts) DateParts {
     return .{ .year = parts.year, .month = parts.month, .day = daysInMonth(parts.year, parts.month), .hour = 23, .minute = 59, .second = 59 };
 }
+/// Date of the `n`-th occurrence of ISO weekday `weekday` (Mon=1 … Sun=7) in
+/// `year`/`month`. Positive `n` counts from the start (`1` = first); negative
+/// `n` counts from the end (`-1` = last, `-2` = second-to-last). Returns null
+/// when any argument is out of range or the occurrence doesn't exist (e.g. a
+/// 5th Friday in a month that has only four).
+///
+/// This is the calendar primitive behind DST-boundary math in templates:
+/// EU summer time runs from the **last Sunday of March** to the **last Sunday
+/// of October** — `nthWeekdayOfMonth(y, 3, 7, -1)` and `(y, 10, 7, -1)`.
+pub fn nthWeekdayOfMonth(year: i32, month: i32, weekday: i32, n: i32) ?DateParts {
+    if (month < 1 or month > 12) return null;
+    if (weekday < 1 or weekday > 7) return null;
+    if (n == 0) return null;
+    const m: u32 = @intCast(month);
+    const dim: i32 = @intCast(daysInMonth(year, m));
+
+    const day: i32 = if (n > 0) blk: {
+        const first_dow: i32 = @intCast(isoWeekday(ymdToEpochDay(year, m, 1)));
+        const offset = @mod(weekday - first_dow, 7); // 0..6 to first match
+        break :blk 1 + offset + (n - 1) * 7;
+    } else blk: {
+        const last_dow: i32 = @intCast(isoWeekday(ymdToEpochDay(year, m, @intCast(dim))));
+        const offset = @mod(last_dow - weekday, 7); // 0..6 back to last match
+        break :blk dim - offset + (n + 1) * 7;
+    };
+
+    if (day < 1 or day > dim) return null;
+    return .{ .year = year, .month = m, .day = @intCast(day) };
+}
+
 pub fn startOfYear(parts: DateParts) DateParts {
     return .{ .year = parts.year, .month = 1, .day = 1 };
 }
@@ -843,6 +873,26 @@ test "arithmetic: diff + boundaries" {
     try testing.expectEqual(@as(i32, 14), diffInMonths(.{ .year = 2025, .month = 3, .day = 1 }, .{ .year = 2024, .month = 1, .day = 1 }));
     try testing.expectEqual(@as(u32, 29), endOfMonth(.{ .year = 2024, .month = 2, .day = 10 }).day);
     try testing.expectEqual(DateParts{ .year = 2024, .month = 1, .day = 1 }, startOfYear(.{ .year = 2024, .month = 7, .day = 4 }));
+}
+
+test "nthWeekdayOfMonth: DST boundaries, nth-from-start, and overflow" {
+    // EU DST 2024: last Sunday of March = 31st, last Sunday of October = 27th.
+    try testing.expectEqual(DateParts{ .year = 2024, .month = 3, .day = 31 }, nthWeekdayOfMonth(2024, 3, 7, -1).?);
+    try testing.expectEqual(DateParts{ .year = 2024, .month = 10, .day = 27 }, nthWeekdayOfMonth(2024, 10, 7, -1).?);
+    // US DST: 2nd Sunday of March 2024 = 10th, 1st Sunday of November = 3rd.
+    try testing.expectEqual(@as(u32, 10), nthWeekdayOfMonth(2024, 3, 7, 2).?.day);
+    try testing.expectEqual(@as(u32, 3), nthWeekdayOfMonth(2024, 11, 7, 1).?.day);
+    // First Monday of Jan 2024 = 1st (Jan 1 2024 is a Monday).
+    try testing.expectEqual(@as(u32, 1), nthWeekdayOfMonth(2024, 1, 1, 1).?.day);
+    // Second-to-last Sunday of March 2024 = 24th.
+    try testing.expectEqual(@as(u32, 24), nthWeekdayOfMonth(2024, 3, 7, -2).?.day);
+    // Works pre-1970.
+    try testing.expectEqual(@as(u32, 30), nthWeekdayOfMonth(1924, 3, 7, -1).?.day);
+    // Non-existent (Feb 2023 has only four Sundays) and out-of-range args → null.
+    try testing.expect(nthWeekdayOfMonth(2023, 2, 7, 5) == null);
+    try testing.expect(nthWeekdayOfMonth(2024, 13, 7, 1) == null);
+    try testing.expect(nthWeekdayOfMonth(2024, 3, 8, 1) == null);
+    try testing.expect(nthWeekdayOfMonth(2024, 3, 7, 0) == null);
 }
 
 test "strict ISO helpers" {
