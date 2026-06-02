@@ -17,6 +17,7 @@ as a local path dependency.
 | `csv`         | `csv.zig`         | `splitFields()`, `LineIterator`                                           |
 | `xlsx`        | `xlsx.zig`        | `xlsxToCsv()`, `SheetSpec`                                                |
 | `expr`        | `expr.zig`        | `eval()`, `evalString()`, `Context`, `Value`, `FnDoc` catalog             |
+| `datefmt`     | `datefmt.zig`     | `parse()`, `format()`, civil/arithmetic helpers — date core (file-rel @import by `expr.zig`, not a named module) |
 | `config`      | `config.zig`      | `Config`, `BrokerConfig`, `load()`, `validate()`, `FieldDoc`              |
 | `json`        | `json.zig`        | `scanColNames()` + `RecordReader` — streaming JSON array-of-objects input |
 | `btrace`      | `btrace.zig`      | Binary trace `Writer` / `Reader` for `--trace=bin`                        |
@@ -67,7 +68,9 @@ Expression evaluator for `input_schema` and `row_rules` in bxp-cli.json.
 - `Context` — per-row evaluation context: `fields`, `col_index`, `ticker_map`,
   `lookup_table`, `alloc`, `decimal_sep_in`, `quote_out`.
 - `Value` — union of `number: f64`, `string: []const u8`, `boolean: bool`.
-- Depends on `sunrise` for `DATE_CONVERT()` date/time parsing and formatting.
+- `DATE_CONVERT()` date/time parsing and formatting is handled in-process by
+  `datefmt.zig` (file-relative `@import`) — no external dependency. Pre-1970
+  dates are fully supported (pure parse → format reshuffle, no epoch round-trip).
 - Unit tests inline (83 test cases).
 
 **Built-in functions:** IF, ABS, DATE_CONVERT, PRICE_VALUE, PRICE_CURRENCY,
@@ -204,12 +207,12 @@ Structured diagnostics collector for config/json5/expr validation.
 # Build all modules (no standalone binary):
 cd bxp-core && zig build
 
-# Run unit tests (csv, json, btrace, expr, json5, diagnostics, xlsx, config, docs):
+# Run unit tests (csv, json, btrace, expr, datefmt, json5, diagnostics, xlsx, config, docs):
 cd bxp-core && zig build test
 ```
 
 Module exports in `build.zig`: `csv`, `json`, `json5`, `xlsx`, `expr`, `config`, `docs`, `diagnostics`.
-`expr` imports `sunrise`; `config` imports `json5` (as `"json5.zig"` — internal import name);
+`expr` imports `datefmt.zig` (file-relative, not a named module); `config` imports `json5` (as `"json5.zig"` — internal import name);
 `docs` imports `config`, `expr`, `json5`; `diagnostics` has no bxp-core dependencies.
 
 ## Coding conventions

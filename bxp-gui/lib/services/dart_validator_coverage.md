@@ -60,9 +60,9 @@ duplicate diagnostics. See `dart_validator.dart:158-176`.
   (SPLIT_PART arg[2]) — bare int literal ≤ 0 is always `""`.
   `dart.expr.SplitPartBadIndex`. Editor: `bridge_eval_expr` via
   `expr.staticCheckCalls` since 2026-05-14.
-- ✅ tree-walk only / 🛜 editor via bridge — `sunrise_format`
+- ✅ tree-walk only / 🛜 editor via bridge — `date_format`
   (DATE_CONVERT arg[1]/arg[2]) — bare string literal scanned against
-  the sunrise vocabulary `Y M D E A` / `a e h i m s`; first
+  the datefmt token vocabulary `Y M D E A` / `a e h i m s`; first
   out-of-vocabulary letter outside `[...]` brackets is flagged.
   `dart.expr.DateFormatBadToken`. Editor: `bridge_eval_expr`.
 - ✅ Dart in both flows — `pre_pass_name` (LOOKUP first arg in 3-arg

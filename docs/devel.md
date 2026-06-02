@@ -61,7 +61,7 @@ Install these extensions for a productive experience:
 | ---- | ---------- | --------------------------------------------------------------------- |
 | Zig  | **0.15.2** | Exact version - `build.zig.zon` sets `minimum_zig_version = "0.15.0"` |
 
-No other runtime dependencies. `bxp-core` fetches `sunrise` (datetime library) automatically via `zig build` on first run.
+No other runtime dependencies — `bxp-core` has **no external dependencies** (the date core is in-house: `bxp-core/src/datefmt.zig`).
 
 In VS Code terminal:
 
@@ -113,13 +113,14 @@ bxp/                            # monorepo root (git root)
 │   │   ├── csv.zig             # RFC 4180 CSV parser
 │   │   ├── xlsx.zig            # .xlsx → CSV (ZIP+XML)
 │   │   ├── expr.zig            # expression evaluator + FnDoc catalog
+│   │   ├── datefmt.zig         # in-house date parse/format + civil arithmetic (DATE_CONVERT core)
 │   │   ├── config.zig          # JSON5 config loader + FieldDoc tables
 │   │   ├── json.zig            # JSON array-of-objects → row representation
 │   │   ├── json5.zig           # JSON5 preprocessor (comments, unquoted keys, ...)
 │   │   ├── docs.zig            # --docs aggregator: re-exports expr + config catalogs
 │   │   └── diagnostics.zig     # structured validation collector (Severity, Diagnostic)
 │   ├── build.zig               # exports named Zig modules
-│   └── build.zig.zon           # depends on sunrise (url dep, auto-fetched)
+│   └── build.zig.zon           # no external dependencies
 ├── bxp-gui/                    # Flutter desktop app (Linux / macOS / Windows)
 │   ├── lib/
 │   │   ├── main.dart           # Flutter entry; window + theme + provider wiring
@@ -255,8 +256,8 @@ Consequences of this design:
 ### Package dependency graph
 
 ```text
-  bxp-cli         ── path dep ──►  bxp-core  ── url dep ──►  sunrise
-  (binary)                         (library)                 (datetime)
+  bxp-cli         ── path dep ──►  bxp-core   (no external deps)
+  (binary)                         (library)
   bxp-fmt         ── path dep ──►  bxp-core
   (binary)
   bxp-gui-bridge  ── path dep ──►  bxp-core           (links expr.zig directly)
@@ -268,10 +269,11 @@ Consequences of this design:
                                                 all platforms: in-proc expr eval)
 ```
 
-`bxp-core` is a **local path dependency** (`../bxp-core`) — no network fetch
-needed. `sunrise` is a URL dependency fetched automatically by `zig build` on
-first run. `bxp-gui` ships `bxp-cli`, `bxp-fmt`, and `bxp-gui-bridge.{dll,so,
-dylib}` inside the Flutter bundle.
+`bxp-core` is a **local path dependency** (`../bxp-core`) with **no external
+dependencies** — no network fetch needed. (The date core lives in-house at
+`bxp-core/src/datefmt.zig`, replacing the former `sunrise` URL dependency.)
+`bxp-gui` ships `bxp-cli`, `bxp-fmt`, and `bxp-gui-bridge.{dll,so,dylib}`
+inside the Flutter bundle.
 
 ### Why the bridge exists
 

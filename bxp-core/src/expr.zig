@@ -26,13 +26,13 @@
 ///   CEILING(f)                — round f up to nearest integer
 ///   RAND()                    — random float in [0, 1)
 ///   COALESCE(a, b, ...)       — first non-empty argument (empty = whitespace-only string)
-///   DATE_CONVERT(f, from, to) — reformat a date/time string; format tokens use sunrise syntax
+///   DATE_CONVERT(f, from, to) — reformat a date/time string; format tokens use datefmt syntax
 ///   PRICE_VALUE(f)            — strip currency symbol/code, return numeric string
 ///   PRICE_CURRENCY(f)         — extract currency code from a price string
 ///   TICKER(f)                 — map field value through broker's ticker_map
 ///   LOOKUP([name,] key, field) — retrieve a value stored by a pre_pass table
 const std = @import("std");
-const sunrise = @import("sunrise");
+const datefmt = @import("datefmt.zig");
 
 // ---------------------------------------------------------------------------
 // Value — the three types an expression can produce
@@ -421,7 +421,7 @@ const Tokenizer = struct {
     }
 };
 
-/// Phase G4 sunrise-format diagnostic shape. Re-exported for external
+/// Phase G4 date-format diagnostic shape. Re-exported for external
 /// consumers of the unified static checker (kept public after the
 /// G4/G5 unification — `staticCheckSplitPart`/`staticCheckDateFormat`
 /// are gone, callers consume `StaticCheckResult` instead).
@@ -451,7 +451,7 @@ pub const StaticCheckResult = struct {
     /// Today populated by SPLIT_PART arg[2]; carries the offending
     /// integer plus its source span for editor highlighting.
     split_part: ?BadSplitPart = null,
-    /// `sunrise_format` violation — bad format string literal.
+    /// `date_format` violation — bad format string literal.
     /// Today populated by DATE_CONVERT args[1]/[2]; carries the
     /// offending format text + 0-based offset of the bad character
     /// plus the absolute source span of the literal token.
@@ -555,7 +555,7 @@ fn lookupFnDocByName(name: []const u8) ?FnDoc {
 fn hasSpecializedArgs(fn_doc: FnDoc) bool {
     for (fn_doc.args) |a| {
         switch (a.kind) {
-            .positive_integer, .sunrise_format => return true,
+            .positive_integer, .date_format => return true,
             else => {},
         }
     }
@@ -603,10 +603,10 @@ fn tryScanArg(
                 .len = first.len,
             };
         },
-        .sunrise_format => {
+        .date_format => {
             if (first.kind != .string_lit) return;
             if (out.date_format != null) return;
-            if (scanDateFormat(first.text)) |pos| {
+            if (datefmt.firstInvalidFormatChar(first.text)) |pos| {
                 out.date_format = .{
                     .fmt = first.text,
                     .pos = pos,
@@ -627,32 +627,6 @@ fn tryScanArg(
         .integer_in_range,
         => {},
     }
-}
-
-/// Scan one sunrise format string. Returns 0-based offset of first
-/// ASCII letter outside `[...]` that's not in the vocabulary, or null
-/// when the string is clean. Unclosed `[` consumes to end of string
-/// (no false flag) — sunrise's runtime would error on such input.
-fn scanDateFormat(fmt: []const u8) ?usize {
-    var i: usize = 0;
-    while (i < fmt.len) : (i += 1) {
-        const c = fmt[i];
-        if (c == '[') {
-            i += 1;
-            while (i < fmt.len and fmt[i] != ']') : (i += 1) {}
-            continue;
-        }
-        // Sunrise vocabulary: Y M D E A / a e h i m s. Anything else
-        // ASCII-alpha outside brackets is suspect.
-        switch (c) {
-            'A', 'D', 'E', 'M', 'Y' => {},
-            'a', 'e', 'h', 'i', 'm', 's' => {},
-            'B'...'C', 'F'...'L', 'N'...'X', 'Z',
-            'b'...'d', 'f'...'g', 'j'...'l', 'n'...'r', 't'...'z' => return i,
-            else => {}, // non-letter (digit, separator, etc.) is fine
-        }
-    }
-    return null;
 }
 
 /// Phase G8: collect static cross-reference data from an expression
@@ -1295,7 +1269,7 @@ const Parser = struct {
         for (doc.args, 0..) |a, i| {
             if (i >= args.len) break;
             switch (a.kind) {
-                .expr, .string, .literal_string, .sunrise_format, .pre_pass_name => {},
+                .expr, .string, .literal_string, .date_format, .pre_pass_name => {},
                 .number => _ = args[i].toNumber() catch {
                     switch (args[i]) {
                         .string => |s| self.setNotANumber(s),
@@ -1375,7 +1349,7 @@ const Parser = struct {
 ///
 /// A `union(enum)` (not a plain enum) because `integer_in_range` carries a
 /// `{min,max}` payload. GUI-facing tag names (`expr`, `string`,
-/// `literal_string`, `sunrise_format`, `pre_pass_name`) are deliberately
+/// `literal_string`, `date_format`, `pre_pass_name`) are deliberately
 /// stable — `expr_editor.dart` keys placeholder quoting on them.
 pub const ArgKind = union(enum) {
     /// Any expression — no runtime guard, no static check (default).
@@ -1386,9 +1360,9 @@ pub const ArgKind = union(enum) {
     /// Bare string literal expected (validators may scan literal text).
     /// GUI wraps the autocomplete placeholder in quotes.
     literal_string,
-    /// Bare string literal containing a sunrise-format pattern. Drives
-    /// `expr.DateFormatBadToken` diagnostics for DATE_CONVERT arg[1]/arg[2].
-    sunrise_format,
+    /// Bare string literal containing a datefmt token pattern. Drives
+    /// `expr.BadDateFormat` diagnostics for DATE_CONVERT arg[1]/arg[2].
+    date_format,
     /// Bare string literal naming a pre_pass block. Drives autocomplete
     /// in bxp-gui (no static check today — runtime-resolved via
     /// Context.pre_pass_names; documented for catalog completeness).
@@ -2128,20 +2102,24 @@ const date_convert_doc: FnDoc = .{
     .description = "Reformat a date/time string. Format tokens: YYYY (year), MM/M (month), MMM/MMMM (month name), DD/D (day), hh/h (hour), mm/m (minute), ss/s (second), [literal] (literal characters), [*] (wildcard).",
     .args = &.{
         .{ .name = "f", .kind = .string },
-        .{ .name = "from", .kind = .sunrise_format },
-        .{ .name = "to", .kind = .sunrise_format },
+        .{ .name = "from", .kind = .date_format },
+        .{ .name = "to", .kind = .date_format },
     },
     .min_args = 3,
     .max_args = 3,
 };
 /// Parses the input string according to from_fmt, then formats the result
-/// according to to_fmt.  Both format strings use sunrise token syntax:
+/// according to to_fmt.  Both format strings use the datefmt token syntax:
 ///   YYYY  MM/M  MMM/MMMM  DD/D  hh/h  mm/m  ss/s  [literal]  [*]=wildcard
-/// See the sunrise library documentation for the full token list.
+/// See `datefmt.zig` for the full token list.
+///
+/// This is a pure field reshuffle (parse → DateParts → format); it never
+/// round-trips through an epoch timestamp, so any year — including pre-1970 —
+/// converts losslessly.
 ///
 /// When from_fmt contains the MMM token, the input is pre-processed by
 /// normalizeMonthAbbrev to handle non-standard 4-character month abbreviations
-/// (e.g. "Sept" → "Sep") before passing to sunrise.
+/// (e.g. "Sept" → "Sep") before parsing.
 fn builtinDateConvert(args: []Value, alloc: std.mem.Allocator) !Value {
     const input = switch (args[0]) {
         .string => |v| v,
@@ -2156,9 +2134,9 @@ fn builtinDateConvert(args: []Value, alloc: std.mem.Allocator) !Value {
         else => return error.StringExpected,
     };
     // Pre-process 4-character month abbreviations (e.g. "Sept", "June") into
-    // the 3-character form that sunrise expects. Allocation happens only when
-    // the input actually contains a matching word — the common case (no MMM
-    // token in from_fmt) skips the work entirely.
+    // the 3-character form that the MMM token expects. Allocation happens only
+    // when the input actually contains a matching word — the common case (no
+    // MMM token in from_fmt) skips the work entirely.
     const normalized = if (containsMMM(from_fmt))
         try normalizeMonthAbbrev(input, alloc)
     else
@@ -2167,10 +2145,10 @@ fn builtinDateConvert(args: []Value, alloc: std.mem.Allocator) !Value {
     // Rationale: broker files frequently contain rows where a date field is blank
     // (e.g. a cash row that has no settlement date). A silent "" is preferable to
     // an error that aborts processing of every subsequent row in the file.
-    const dt = sunrise.DateTime.parse(normalized, .{ .format = from_fmt }) catch {
+    const parts = datefmt.parse(normalized, from_fmt) catch {
         return Value{ .string = "" };
     };
-    return Value{ .string = try dt.format(alloc, to_fmt) };
+    return Value{ .string = try datefmt.format(alloc, parts, to_fmt) };
 }
 fn adaptDateConvert(p: *Parser, args: []Value) anyerror!Value {
     return builtinDateConvert(args, p.ctx.alloc) catch |err| {
@@ -2184,9 +2162,9 @@ fn adaptDateConvert(p: *Parser, args: []Value) anyerror!Value {
 
 /// Returns true if fmt contains the MMM token (exactly 3 M's, not part of MMMM).
 /// MMMM is the full month-name token and does NOT trigger month-abbreviation
-/// normalisation — it expects the full name ("September") and sunrise handles it
+/// normalisation — it expects the full name ("September") and datefmt handles it
 /// natively. Only MMM (abbreviated: "Sep") needs our pre-processing step because
-/// some brokers export 4-letter variants that sunrise doesn't recognise.
+/// some brokers export 4-letter variants that the MMM token doesn't recognise.
 fn containsMMM(fmt: []const u8) bool {
     var i: usize = 0;
     while (i + 3 <= fmt.len) {
@@ -2538,60 +2516,19 @@ fn adaptIn(p: *Parser, args: []Value) anyerror!Value {
 // Malformed non-empty input still surfaces InvalidDate with a clickable
 // diagnostic so typo'd templates fail loudly.
 //
-// Uses Howard Hinnant's `days_from_civil` / `civil_from_days` algorithm —
-// branch-free O(1), exact across the entire i32 year range, handles leap
-// years and negative dates without table lookups. Source:
-// https://howardhinnant.github.io/date_algorithms.html#days_from_civil
+// The civil-date primitives live in `datefmt.zig` (the single date core that
+// replaced the sunrise dependency). Aliased here so the builtins below read
+// unchanged; `datefmt` implements Howard Hinnant's `days_from_civil` /
+// `civil_from_days` — branch-free O(1), exact across the i32 year range,
+// negative (pre-1970) dates included.
 // ---------------------------------------------------------------------------
 
-const DateParts = struct { year: i32, month: u32, day: u32 };
-
-fn parseYmd(s: []const u8) !DateParts {
-    if (s.len != 10 or s[4] != '-' or s[7] != '-') return error.InvalidDate;
-    const y = std.fmt.parseInt(i32, s[0..4], 10) catch return error.InvalidDate;
-    const m = std.fmt.parseInt(u32, s[5..7], 10) catch return error.InvalidDate;
-    const d = std.fmt.parseInt(u32, s[8..10], 10) catch return error.InvalidDate;
-    if (m < 1 or m > 12 or d < 1 or d > 31) return error.InvalidDate;
-    return .{ .year = y, .month = m, .day = d };
-}
-
-fn ymdToEpochDay(year: i32, month: u32, day: u32) i64 {
-    const y: i64 = if (month <= 2) @as(i64, year) - 1 else year;
-    const era = @divFloor(y, 400);
-    const yoe: u32 = @intCast(y - era * 400);
-    const m_idx: u32 = if (month > 2) month - 3 else month + 9;
-    const doy: u32 = (153 * m_idx + 2) / 5 + day - 1;
-    const doe: u32 = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    return era * 146097 + @as(i64, doe) - 719468;
-}
-
-fn epochDayToYmd(epoch_day: i64) DateParts {
-    const z = epoch_day + 719468;
-    const era = @divFloor(z, 146097);
-    const doe: u32 = @intCast(z - era * 146097);
-    const yoe: u32 = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    const y: i64 = @as(i64, yoe) + era * 400;
-    const doy: u32 = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    const mp: u32 = (5 * doy + 2) / 153;
-    const d: u32 = doy - (153 * mp + 2) / 5 + 1;
-    const m: u32 = if (mp < 10) mp + 3 else mp - 9;
-    const final_y: i32 = @intCast(if (m <= 2) y + 1 else y);
-    return .{ .year = final_y, .month = m, .day = d };
-}
-
-/// ISO weekday: Monday=1 … Sunday=7. 1970-01-01 (epoch_day=0) was Thursday=4.
-fn isoWeekday(epoch_day: i64) u32 {
-    return @intCast(@mod(epoch_day + 3, 7) + 1);
-}
-
-fn formatYmd(alloc: std.mem.Allocator, parts: DateParts) ![]const u8 {
-    // Cast to unsigned for formatting: Zig 0.15's `{d}` prepends '+' to
-    // positive signed integers. Trading dates never go negative, so the
-    // cast is safe in practice — `parseYmd` rejects malformed input and
-    // year arithmetic stays positive across the realistic CSV range.
-    const y_u: u32 = @intCast(parts.year);
-    return std.fmt.allocPrint(alloc, "{d:0>4}-{d:0>2}-{d:0>2}", .{ y_u, parts.month, parts.day });
-}
+const DateParts = datefmt.DateParts;
+const parseYmd = datefmt.parseIsoDate;
+const ymdToEpochDay = datefmt.ymdToEpochDay;
+const epochDayToYmd = datefmt.epochDayToYmd;
+const isoWeekday = datefmt.isoWeekday;
+const formatYmd = datefmt.formatIsoDate;
 
 /// Parse arg[0] as a date string and return its epoch day. On parse failure
 /// writes a descriptive diagnostic via `setDetail` and returns InvalidDate so

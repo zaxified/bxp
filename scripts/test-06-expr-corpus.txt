@@ -186,7 +186,7 @@ expr	err	SPLIT_PART([A], ',', 'x')	NotANumber
 # at runtime — see runtime tests above.
 expr	err	SPLIT_PART('a/b', '/', 0)	SplitPartBadIndex
 expr	err	SPLIT_PART('a/b', '/', -1)	SplitPartBadIndex
-# DATE_CONVERT format string with letter outside sunrise vocabulary
+# DATE_CONVERT format string with letter outside the datefmt token vocabulary
 # (Y M D E A / a e h i m s) is statically caught when the bad letter
 # sits outside `[...]` brackets.
 expr	err	DATE_CONVERT('x', 'YYYY-Q-DD', 'YYYY-MM-DD')	DateFormatBadToken

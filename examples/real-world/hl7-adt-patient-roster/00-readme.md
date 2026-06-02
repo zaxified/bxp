@@ -46,12 +46,12 @@ bxp-cli --config full.json  # one roster row per PID segment (~60)
   `PID` segments; `MSH`/`EVN`/`PV1`/`OBX`/… produce nothing.
 - **Name components:** `SPLIT_PART([6], '^', N)` for family/given, then a second
   `SPLIT_PART(…, '&', 1)` to peel the surname out of its sub-components.
-- **Birth date — string slice, not `DATE_CONVERT`.** This is a pure
-  `YYYYMMDD`→ISO *reformat*, so
-  `LEFT([8],4) & '-' & SUBSTR([8],5,2) & '-' & SUBSTR([8],7,2)` is the right
-  tool. It also sidesteps a real limitation found while building this example:
-  `DATE_CONVERT` silently returns `""` for dates before 1970 (the Unix epoch),
-  which would **vanish a 1924 birth date**. String slicing has no such limit.
+- **Birth date — string slice.** This is a pure `YYYYMMDD`→ISO *reformat*, so
+  `LEFT([8],4) & '-' & SUBSTR([8],5,2) & '-' & SUBSTR([8],7,2)` does the job
+  directly — no format tokens to get right, no date validation. `DATE_CONVERT([8],
+  'YYYYMMDD', 'YYYY-MM-DD')` works equally well here (including the 1924 birth
+  date — `DATE_CONVERT` is a pure parse→format reshuffle with no lower-year
+  limit); string slicing is shown as the leaner idiom for a fixed-width layout.
 
 **Run it.**
 

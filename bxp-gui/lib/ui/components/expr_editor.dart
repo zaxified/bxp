@@ -490,7 +490,7 @@ class _ExprEditorState extends State<ExprEditor> {
           }
           break;
         case 'literal_string':
-        case 'sunrise_format':
+        case 'date_format':
           parts.add("'<$argName>'");
           break;
         default:
@@ -513,7 +513,7 @@ class _ExprEditorState extends State<ExprEditor> {
       case 'string':
       case 'literal_string':
         return 'text';
-      case 'sunrise_format':
+      case 'date_format':
         return 'date format';
       case 'pre_pass_name':
         return 'pre_pass name';

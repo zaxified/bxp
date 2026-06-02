@@ -4,9 +4,6 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const sunrise_dep = b.dependency("sunrise", .{ .target = target, .optimize = optimize });
-    const sunrise_mod = sunrise_dep.module("sunrise");
-
     // json5 is used internally by config — export it and wire it in.
     const json5_mod = b.addModule("json5", .{
         .root_source_file = b.path("src/json5.zig"),
@@ -35,11 +32,10 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/xlsx.zig"),
     });
 
+    // expr.zig pulls in its date core via a file-relative @import("datefmt.zig"),
+    // so no named module wiring is needed for it.
     const expr_mod = b.addModule("expr", .{
         .root_source_file = b.path("src/expr.zig"),
-        .imports = &.{
-            .{ .name = "sunrise", .module = sunrise_mod },
-        },
     });
 
     // config.zig uses @import("json5.zig") — the import name must match.
@@ -100,9 +96,15 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .strip = false,
-            .imports = &.{
-                .{ .name = "sunrise", .module = sunrise_mod },
-            },
+        }),
+    });
+
+    const datefmt_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/datefmt.zig"),
+            .target = target,
+            .optimize = optimize,
+            .strip = false,
         }),
     });
 
@@ -168,6 +170,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(json_tests).step);
     test_step.dependOn(&b.addRunArtifact(btrace_tests).step);
     test_step.dependOn(&b.addRunArtifact(expr_tests).step);
+    test_step.dependOn(&b.addRunArtifact(datefmt_tests).step);
     test_step.dependOn(&b.addRunArtifact(json5_tests).step);
     test_step.dependOn(&b.addRunArtifact(diagnostics_tests).step);
     test_step.dependOn(&b.addRunArtifact(xlsx_tests).step);

@@ -383,8 +383,7 @@ SPLIT_PART([Comment], ' @ ', 2)                                → second part a
 ### Date format tokens
 
 Both the `from` and `to` arguments of `DATE_CONVERT` use the same token
-set (from the `sunrise` library). Any characters that are not tokens
-are matched literally.
+set. Any characters that are not tokens are matched literally.
 
 | Token | Meaning | Example |
 | --- | --- | --- |
@@ -417,7 +416,8 @@ are matched literally.
 - `mm` is minute; `MM` is month — easy to mix up.
 - `MMM` expects exactly 3 characters; 4-character variants like `Sept`
   and `June` are pre-normalized automatically.
-- Years before 1970 are rejected.
+- Dates before 1970 are fully supported — birthdates, census, and
+  archival dates convert losslessly.
 - Components not present in the `from` format default to `1970-01-01 00:00:00`.
 
 #### Worked date examples
@@ -591,7 +591,7 @@ template, follow these rules strictly:
    `row_rules[].rows` array. Each object can override `$variables` for
    that specific output row.
 8. **Match the broker's exact date shape.** Use `DATE_CONVERT` with
-   sunrise tokens that correspond to the input literally,
+   date-format tokens that correspond to the input literally,
    character-by-character; use `[*]` to skip fractional seconds,
    trailing `Z`, or timezone suffixes.
 9. **Prices with embedded currency.** For fields like `"$100.00"` or

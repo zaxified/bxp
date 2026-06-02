@@ -411,7 +411,7 @@ bxp-fmt --docs
 
 `args[].kind` values: `expr` (any expression) | `literal_string` (bare string
 literal) | `literal_int_positive` (positive integer literal, ≥ 1) |
-`sunrise_format` (sunrise date-format pattern) | `pre_pass_name` (name of a
+`date_format` (datefmt date-format pattern) | `pre_pass_name` (name of a
 declared `pre_pass` block).
 
 #### `keywords` entry

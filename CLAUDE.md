@@ -30,7 +30,7 @@ bxp/
 │   │   └── diagnostics.zig # Structured Diagnostic / Severity collector for
 │   │                       # bxp-fmt --config deep validation
 │   ├── build.zig         # exports each file as a named Zig module
-│   └── build.zig.zon     # depends on sunrise (datetime library)
+│   └── build.zig.zon     # no external dependencies (date core is in-house: src/datefmt.zig)
 ├── bxp-gui/              # Flutter desktop app (replaces bxp-ui; uses bxp-cli/bxp-fmt via subprocess)
 │   ├── lib/              # Dart source (services/, store/, ui/)
 │   ├── linux/, macos/, windows/, web/  # platform configs
@@ -129,12 +129,14 @@ that file. See `docs/release.md` for the operator walkthrough.
 ## Package dependency
 
 ```text
-bxp-cli  --[path dep]--> bxp-core  --[url dep]--> sunrise
+bxp-cli  --[path dep]--> bxp-core   (no external deps)
 bxp-fmt  --[path dep]--> bxp-core
 bxp-gui  --[subprocess]-> bxp-cli, bxp-fmt
 ```
 
-`bxp-core` is a local path dependency (`../bxp-core`) — no network fetch needed.
+`bxp-core` is a local path dependency (`../bxp-core`) with **no external
+dependencies** — no network fetch needed. (The former `sunrise` datetime
+dependency was replaced by the in-house `bxp-core/src/datefmt.zig` date core.)
 bxp-gui ships both bxp-cli and bxp-fmt binaries inside the Flutter bundle and
 invokes them via `Process.run` for conversions, validation, docs, etc.
 

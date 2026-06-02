@@ -668,7 +668,7 @@ class DartValidator {
             );
           }
           break;
-        case 'sunrise_format':
+        case 'date_format':
           if (t.kind != _TokKind.string) continue;
           final inner = _unquoteSingle(t.text);
           final pos = _scanDateFormat(inner);
@@ -808,9 +808,9 @@ class DartValidator {
     return prev[m];
   }
 
-  /// Mirror of `bxp-core/src/expr.zig::scanDateFormat` (sunrise vocabulary
-  /// `Y M D E A / a e h i m s`). Returns the 0-based offset of the first
-  /// out-of-vocabulary letter outside `[...]` brackets, or null when the
+  /// Mirror of `bxp-core/src/datefmt.zig::firstInvalidFormatChar` (token
+  /// vocabulary `Y M D E A / a e h i m s`). Returns the 0-based offset of the
+  /// first out-of-vocabulary letter outside `[...]` brackets, or null when the
   /// string is clean.
   static int? _scanDateFormat(String fmt) {
     var i = 0;

@@ -93,17 +93,6 @@ evaluator with a value is `--expr-trace` / `--expr-batch`. Decide: emit
 `{"ok":true}` on success (smallest change), or make the whole contract uniform
 (`{"ok":false,...}` to stdout too, exit code preserved). Surfaced 2026-05-31.
 
-### BUG-3 — `DATE_CONVERT` silently drops pre-1970 dates — pre-release
-
-The vendored `sunrise` lib rejects pre-epoch dates, so `DATE_CONVERT` returns
-`""` (silently, `warnings:0`) for any date before 1970-01-01 — `19241010`,
-`19691231`, … all vanish. Silent data loss, and pre-1970 dates (birthdates,
-census, archives) are everywhere. Found 2026-05-31 building
-`hl7-adt-patient-roster`; worked around there with a pure string-slice reformat
-(`LEFT`/`SUBSTR`, no epoch limit). Decision (user owns): fix `sunrise`/
-`DATE_CONVERT` via a civil-date path (not epoch seconds) / at-least-warn on drop /
-document the limit. Likely release-relevant.
-
 ### Future example candidates (low priority)
 
 Carried over from the (now-deleted) `DEV/*-todo` scratch when the example
@@ -360,8 +349,8 @@ fixed before release instead, not parked here).
   format token plus an optional "convert to UTC" mode in `DATE_CONVERT`.
   Date-only sibling problems (DST gaps, leap seconds) are out of scope.
 
-  **TZ-help builtins (considered 2026-05-31).** The vendored `sunrise` lib
-  has no timezone awareness, so today a correct DST-aware offset must be
+  **TZ-help builtins (considered 2026-05-31).** The `datefmt` date core has
+  no timezone awareness, so today a correct DST-aware offset must be
   hand-derived in the expression language — e.g. EU Prague (`CET`/`CEST`) is
   computable from `EOMONTH`/`WEEKDAY`/`DATEADD`/`DATEDIFF` ("last Sunday of
   March/October" window), as demonstrated in

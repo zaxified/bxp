@@ -51,8 +51,8 @@ installing an unverified binary, it counts.
   access to the user's home directory or `bxp-gui.json` prefs file.
 - Denial-of-service from intentionally huge input files when the user
   themselves chose to point bxp at them.
-- Issues in upstream dependencies (Zig stdlib, Flutter, Dart, the
-  `sunrise` datetime lib) — please report those to the respective
+- Issues in upstream dependencies (Zig stdlib, Flutter, Dart) — please
+  report those to the respective
   upstream. If bxp's usage actively turns a benign upstream bug into a
   security issue, that's in scope here.
 - Findings from automated scanners without a working reproduction.

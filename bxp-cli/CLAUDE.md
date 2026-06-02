@@ -194,7 +194,7 @@ Expressions are evaluated per row. Operator precedence (high → low):
 | `'text'`                                                | String literal                                                                                                                                                                                                  |
 | `IF(cond, yes, no)`                                     | Short-circuit conditional                                                                                                                                                                                       |
 | `ABS(f)`                                                | Absolute numeric value                                                                                                                                                                                          |
-| `DATE_CONVERT(f, from, to)`                             | Reformat date/time; format tokens use sunrise syntax (see section below)                                                                                                                                        |
+| `DATE_CONVERT(f, from, to)`                             | Reformat date/time; format tokens use datefmt syntax (see section below)                                                                                                                                        |
 | `PRICE_VALUE(f)`                                        | Strip currency symbol/code, return numeric string (`"24.00 CZK"` → `"24.00"`)                                                                                                                                   |
 | `PRICE_CURRENCY(f)`                                     | Extract currency code (`"24.00 CZK"` → `"CZK"`, `"$100"` → `"USD"`)                                                                                                                                             |
 | `TICKER(f)`                                             | Map field through broker's `ticker_map`; returns as-is if not found                                                                                                                                             |
@@ -221,9 +221,11 @@ Expressions are evaluated per row. Operator precedence (high → low):
 
 Type coercions: empty string → `0` in numeric context; any non-empty string → `true` in boolean context.
 
-## sunrise date format tokens (v0.1.0)
+## datefmt date format tokens
 
 Used in `DATE_CONVERT(f, from_fmt, to_fmt)`. Both `from_fmt` and `to_fmt` use the same token set.
+Implemented in `bxp-core/src/datefmt.zig` (the in-house date core that replaced
+the former `sunrise` dependency).
 
 | Token          | Meaning                                             | Example               |
 | -------------- | --------------------------------------------------- | --------------------- |
@@ -255,7 +257,11 @@ Used in `DATE_CONVERT(f, from_fmt, to_fmt)`. Both `from_fmt` and `to_fmt` use th
 
 - `mm` = minute, `MM` = month — easy to mix up
 - `MMM` expects exactly 3 chars; `normalizeMonthAbbrev` in `expr.zig` pre-processes 4-char variants like `Sept`, `June`
-- Parse rejects years before 1970 (`OutOfRange`)
+- Pre-1970 dates are fully supported — `DATE_CONVERT` is a pure field reshuffle
+  (parse → format) and never round-trips through a Unix epoch, so birthdates,
+  census, and archival dates convert losslessly
+- Range violations (month 13, Feb 30, hour 25, …) are rejected; the field then
+  yields `""` silently, matching the blank-field passthrough contract
 - Missing components (e.g. date-only format) default to 1970-01-01
 
 ## Conversion templates

@@ -75,6 +75,8 @@ graph TD
         ZIP+XML → CSV"]
         EXPR["expr.zig
         expression evaluator"]
+        DATEFMT["datefmt.zig
+        date parse/format core"]
         CFG2["config.zig
         config loader"]
         JSON["json.zig
@@ -87,11 +89,6 @@ graph TD
         validation collector"]
     end
 
-    subgraph Ext["External"]
-        SUNRISE["sunrise
-        date/time library"]
-    end
-
     CFG -->|read| MAIN
     DATA -->|read| PIPE
     MAIN --> CFG2
@@ -101,7 +98,7 @@ graph TD
     PIPE --> EXPR
     PIPE --> JSON
     CFG2 --> JSON5
-    EXPR --> SUNRISE
+    EXPR --> DATEFMT
     PIPE -->|write| OUT[".csvx output files"]
 
     FMTMAIN --> CFG2
@@ -362,7 +359,7 @@ Tradeoff for our workload (per-row eval over 100k–10M rows):
 | Binary footprint                               | included in bxp-cli          | +250 KB to +700 KB            |
 | Trace highlighting (off/len in GUI playground) | shipped                      | rebuild from scratch          |
 | `FnDoc` autocomplete (single source of truth)  | co-located with each builtin | rebuild binding layer         |
-| Domain builtins (`DATE_CONVERT`, `LOOKUP`, …)  | inline impl + sunrise dep    | reimplement as native funcs   |
+| Domain builtins (`DATE_CONVERT`, `LOOKUP`, …)  | inline impl, zero deps       | reimplement as native funcs   |
 | Sandboxing                                     | implicit (no loops, no I/O)  | strip Lua `io`/`os` / harden  |
 
 The value of `expr.zig` is **not** the parser (~600 LOC, recursive
@@ -419,8 +416,8 @@ graph TD
     SPLIT_PART, CONTAINS, REPLACE,
     TRIM, ROUND, FLOOR, CEILING,
     FIELDS"]
-    FUNC --> SUNRISE_CALL["sunrise
-    (DATE_CONVERT only)"]
+    FUNC --> DATEFMT_CALL["datefmt.zig
+    (DATE_CONVERT + date builtins)"]
 
     FIELD -->|reads| CTX_FIELDS["Context.fields
     Context.col_index"]
