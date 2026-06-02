@@ -39,33 +39,61 @@ Open design questions to resolve before implementation:
 - `--list-templates` / `--fetch-template` semantics when the same name
   exists in bundle + user dir.
 
-### Computed-number output precision cap (`{d:.8}`) — pre-release
+### Computed-number output precision cap (`{d:.8}`) — interim, superseded by decimal core
 
-`Value.toString` formats non-integer `.number` results with `{d:.8}`
-(`bxp-core/src/expr.zig`), i.e. a hard 8-decimal cap before trailing-zero
-trimming. This was a deliberate choice to tame f64 arithmetic noise — a
-division like `ABS([Total]) / [shares]` would otherwise surface
-`8.6299999999974` instead of `8.63`. The cap is correct for that purpose but
-is **global**: a template that genuinely needs >8 fractional digits in a
-*computed* value (high-precision crypto quantities, scientific ratios) is
-silently truncated.
+`Value.toString` formats non-integer results with `{d:.8}`
+(`bxp-core/src/expr.zig`), a hard 8-decimal cap that tames binary-float
+arithmetic noise (`0.02 + 0.08 → 0.099999999999999999995 → 0.1`). The cap
+is **correct and stays as-is for now** — empirically (2026-06-02) it is the
+right default: every monetary computed field (fee subtraction, share
+division) produces float noise, so removing the cap forced `ROUND(...)` on
+~7 expressions across the real `DEV/` templates ("ROUND needed too often").
 
-Scope note: this is **only** the computed-`.number` path. The passthrough-string
-sibling (a numeric-looking string copied through `evalString`) was the bug that
-truncated coordinates; that is **already fixed** — `evalString` now canonicalises
-string results without a float round-trip, so passthrough decimals keep every
-digit. What remains is deciding the computed-number policy:
+**Decision: the proper fix is the decimal numeric core (next item), not a
+cap policy.** The noise is inherent to binary floating point, not a Zig
+bug; the right representation for decimal money is fixed-point. Until that
+core lands, keep `{d:.8}` and document it as the computed-value contract.
+The passthrough-string sibling (coordinates / long IDs) is **already fixed**
+— `evalString` canonicalises without a float round-trip. Found 2026-05-31
+(`squirrel-census-json`); cap-vs-decimal investigated 2026-06-02.
 
-- raise/remove the cap and require templates to `ROUND(...)` explicitly where
-  they want fixed precision (re-baselines computed fixtures; reintroduces f64
-  noise unless every divide is wrapped); or
-- make the precision configurable (e.g. an `output_decimals` knob) with 8 as
-  the default; or
-- keep `{d:.8}` and document it as the computed-value contract.
+### Decimal numeric core (`f80` → `i128 @ 1e12`)
 
-Resolve before the next release. Found 2026-05-31 while building the
-`squirrel-census-json` real-world example (the passthrough half was fixed the
-same day).
+Replace the evaluator's float number type (`Value.number: f80`, an old
+workaround for an `f64` summation bug) with **fixed-point `i128` at a
+constant scale of 1e12** (12 decimal places). Makes `+ − ×` exact (no
+noise, no cap), with only division rounding (to 12 places, round-half-even).
+Resolves the precision-cap item above at the root.
+
+Why 1e12, and why now: bxp is steering toward a **universal CSV ETL** with
+**bounded magnitude** (money / measurements, not astronomical). An isolated
+numeric-core micro-bench (40M rows, ReleaseFast) showed the whole f80 cost
+is float→string formatting (≈22× slower than integer format); fixed-point
+is **~2.8× faster** at 1e12 while needing no i256 for any realistic value
+(i128-only arithmetic is overflow-safe to ~170 trillion). Higher scales
+(1e16) buy more decimals but force i256 and erode the win to ~neutral —
+1e12 is the sweet spot. Range at 1e12: ±1.7e26 integer with 12 decimals.
+
+Scope (full design in `DEV/decimal-core-plan.md`):
+
+- New `Decimal { raw: i128 }` type (scale 1e12); `i256` intermediate as the
+  overflow safety net for `× ÷`.
+- Migrate `expr.zig`: parse (`toNumber`→`toDecimal`, keep lenient
+  `parseGroupedNumber` + sci-notation), format (drop `{d:.8}`), all binary
+  ops, comparisons, `ABS/ROUND/FLOOR/CEILING/GREATEST/LEAST`, `RAND`, the
+  index/length clamps, date builtins (`Decimal.fromInt`). The
+  `@intFromFloat` Inf/NaN guards disappear.
+- Fix `json.zig numberStringToOutput`: stop round-tripping non-integer JSON
+  numbers through `f64` (string-canonicalise instead) so input precision
+  isn't lost before expr sees it.
+- Preserve the passthrough ≠ computed invariant (high-precision IDs/coords
+  must never enter `Decimal`).
+- Re-baseline `datasets/`, expr corpus (`test-06`), `examples/` `.expected`;
+  document the rounding contract in CLAUDE.md + docs.
+
+Out of scope: per-number exponent / BigDecimal (rejected — relocates the
+rounding decision and adds complexity); scientific ranges + transcendental
+functions (sqrt/pow/log); `excelSerialToDatetime` f64 (date concern).
 
 ### `bxp-fmt --expr` is silent on success — pre-release
 
