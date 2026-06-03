@@ -73,6 +73,8 @@
       ZURN:  "ZURN.SW"
     },
     xtb: {
+      "ABR.US":    "ABR",
+      "AGNC.US":   "AGNC",
       "ASML.NL":   "ASML.AS",
       "BNTX.US":   "BNTX",
       "BP.UK":     "BP.L",
@@ -80,6 +82,8 @@
       "CZG.CZ":    "COLT.PR",
       "DSFIR.NL":  "DSFIR.AS",
       "FOUR.US":   "FOUR",
+      "GBDC.US":   "GBDC",
+      "HTGC.US":   "HTGC",
       "KOMB.CZ":   "KOMB.PR",
       "MRNA.US":   "MRNA",
       "NESN.CH":   "NESN.SW",
@@ -89,6 +93,7 @@
       "PFE.US":    "PFE",
       "PH.US":     "PH",
       "ROG.CH":    "ROG.SW",
+      "STWD.US":   "STWD",
       "TABAK.CZ":  "TABAK.PR",
       "VICI.US":   "VICI",
       "VWRA.UK":   "VWRA.L"
@@ -907,10 +912,18 @@
           ]
         },
         {
-          when:  "[Type] = 'Withholding tax'",
+          when:  "[Type] = 'Withholding tax' AND NOT CONTAINS([Comment],'Reclassification')",
           rows: [
             {
               $action:  "'TAX'"
+            }
+          ]
+        },
+        {
+          when:  "[Type] = 'Withholding tax' AND CONTAINS([Comment],'Reclassification')",
+          rows: [
+            {
+              $action:  "IF([Amount]>0, 'DIVIDEND', 'TAX')"
             }
           ]
         },
