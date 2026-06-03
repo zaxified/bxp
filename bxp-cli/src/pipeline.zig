@@ -522,6 +522,7 @@ fn evalAllVars(
     error_count: *u32,
     source_locator: u64,
     folded: ?*const std.StringHashMap([]const u8),
+    skip: ?*const std.StringHashMap(void),
 ) !std.StringHashMap([]const u8) {
     var vars = std.StringHashMap([]const u8).init(ctx.alloc);
     var detail: []const u8 = "";
@@ -530,6 +531,11 @@ fn evalAllVars(
     defer ctx.error_detail = saved_detail;
     var it = schema.iterator();
     while (it.next()) |e| {
+        // bod 2: the winning rule overwrites this var in every output row, so its
+        // base value is dead work — skip it. The override supplies the value.
+        if (skip) |sk| {
+            if (sk.contains(e.key_ptr.*)) continue;
+        }
         // Constant fold: row-invariant vars were evaluated once at file-start.
         // Reuse the precomputed value — byte-identical to per-row eval since
         // the expression references no field/lookup/nondeterministic builtin.
@@ -956,6 +962,12 @@ const RowEvalConst = struct {
     /// overwrites `$date` (so pre-override `$date` == the value the late filter
     /// would compare). `false` on the pre_pass path.
     date_fast_path: bool = false,
+    /// bod 2: per-rule skip-sets, indexed by `row_rules` position. Each set holds
+    /// the input_schema var names the rule overwrites in EVERY output row
+    /// (intersection across `rule.rows`). When that rule wins, `evalAllVars`
+    /// skips those vars' base eval — the override supplies them. Empty on the
+    /// pre_pass path.
+    rule_skip_sets: []const std.StringHashMap(void) = &.{},
 };
 
 /// Mutable per-evaluation emit sinks. In the serial path these point at
@@ -1032,17 +1044,13 @@ fn evalAndEmitRow(
         }
     }
 
-    var vars = try evalAllVars(bc.input_schema, &row_ctx, out, e.expr_errors, row_offset, rec.folded_vars);
-
     const rules = bc.row_rules orelse &.{};
-    var rule_matched = false;
-    var matched_rule_index: usize = 0;
-    // Track whether this source row produced any row-level bin frame
-    // (output_row or filtered_row). If not, we synthesise a `filtered_row`
-    // at end-of-row so the GUI's btrace consumer sees one frame per source
-    // row. Two miss paths reach here: (a) no rule matched at all, (b) a
-    // rule matched but its `rows: []` is empty (silent skip).
-    var row_bin_frame_emitted = false;
+
+    // bod 2: find the winning rule FIRST. `when` references only CSV columns
+    // (never $vars), so rule selection is independent of input_schema — which
+    // lets `evalAllVars` then skip computing the input_schema vars the winning
+    // rule overwrites in every output row.
+    var matched_rule_index: ?usize = null;
     for (rules, 0..) |rule, rule_index| {
         row_detail = "";
         const when_val = expr_mod.eval(rule.when, &row_ctx) catch |err| {
@@ -1056,9 +1064,26 @@ fn evalAndEmitRow(
             }
             continue;
         };
-        if (!when_val.toBool()) continue;
-        rule_matched = true;
-        matched_rule_index = rule_index;
+        if (when_val.toBool()) {
+            matched_rule_index = rule_index;
+            break; // first matching rule wins
+        }
+    }
+
+    // No match → no skip, preserving today's full input_schema eval (and its
+    // per-row error frames) for unmatched rows.
+    const skip: ?*const std.StringHashMap(void) =
+        if (matched_rule_index) |mi| &rec.rule_skip_sets[mi] else null;
+    var vars = try evalAllVars(bc.input_schema, &row_ctx, out, e.expr_errors, row_offset, rec.folded_vars, skip);
+
+    // Track whether this source row produced any row-level bin frame
+    // (output_row or filtered_row). If not, we synthesise a `filtered_row`
+    // at end-of-row so the GUI's btrace consumer sees one frame per source
+    // row. Two miss paths reach here: (a) no rule matched at all, (b) a
+    // rule matched but its `rows: []` is empty (silent skip).
+    var row_bin_frame_emitted = false;
+    if (matched_rule_index) |rule_index| {
+        const rule = rules[rule_index];
         for (rule.rows) |row_override| {
             // Start from base vars, then apply per-row overrides.
             var merged = std.StringHashMap([]const u8).init(line_alloc);
@@ -1137,9 +1162,8 @@ fn evalAndEmitRow(
             row_bin_frame_emitted = true;
             e.rows_written.* += 1;
         }
-        break; // first matching rule wins
     }
-    if (!rule_matched) {
+    if (matched_rule_index == null) {
         if (bc.row_rules_debug_missing and out.debug) {
             out.writer.print("[{s}] unmatched row (no row_rules entry):\n{{\n", .{rec.bid}) catch {};
             for (rec.col_names, 0..) |col_name, ci| {
@@ -1156,7 +1180,7 @@ fn evalAndEmitRow(
     //   - "no_rule_match"  → no rule's `when` evaluated truthy
     //   - "rule_skip"      → a rule matched but its rows: [] is empty
     if (!row_bin_frame_emitted) {
-        const reason: []const u8 = if (rule_matched) "rule_skip" else "no_rule_match";
+        const reason: []const u8 = if (matched_rule_index != null) "rule_skip" else "no_rule_match";
         out.binEmitFilteredRow(row_offset, reason);
     }
 }
@@ -2409,6 +2433,34 @@ pub fn processBroker(
             break :blk true;
         };
 
+        // bod 2: per-rule skip-sets — input_schema vars overwritten by EVERY
+        // row of the rule (intersection across rule.rows). When the rule wins,
+        // evalAllVars skips their base eval. Computed once per file into
+        // file_alloc; indexed by row_rules position.
+        var rule_skip_sets: []std.StringHashMap(void) = &.{};
+        if (bc.row_rules) |rrules| {
+            rule_skip_sets = try file_alloc.alloc(std.StringHashMap(void), rrules.len);
+            for (rrules, 0..) |rule, ri| {
+                var set = std.StringHashMap(void).init(file_alloc);
+                if (rule.rows.len > 0) {
+                    var it0 = rule.rows[0].iterator();
+                    while (it0.next()) |ov| {
+                        const k = ov.key_ptr.*;
+                        if (bc.input_schema.get(k) == null) continue; // only input_schema vars
+                        var in_all = true;
+                        for (rule.rows[1..]) |orow| {
+                            if (orow.get(k) == null) {
+                                in_all = false;
+                                break;
+                            }
+                        }
+                        if (in_all) try set.put(k, {});
+                    }
+                }
+                rule_skip_sets[ri] = set;
+            }
+        }
+
         // Const inputs shared between JSON serial loop and CSV parallel
         // workers. Both paths thread this through `evalAndEmitRow`; the
         // const view stays read-only inside workers.
@@ -2423,6 +2475,7 @@ pub fn processBroker(
             .bid = bid,
             .folded_vars = &folded_vars,
             .date_fast_path = date_fast_path,
+            .rule_skip_sets = rule_skip_sets,
         };
 
         if (json_streaming) {
