@@ -950,6 +950,12 @@ const RowEvalConst = struct {
     /// evaluated without error at file-start. `evalAllVars` reuses these instead
     /// of re-evaluating per row. `null` on the pre_pass path (no input_schema eval).
     folded_vars: ?*const std.StringHashMap([]const u8) = null,
+    /// bod 1: when true, `evalAndEmitRow` evaluates `$date` first and drops
+    /// out-of-range rows before input_schema/row_rules. Decided once per file:
+    /// requires an active date filter, a declared `$date`, and no rule that
+    /// overwrites `$date` (so pre-override `$date` == the value the late filter
+    /// would compare). `false` on the pre_pass path.
+    date_fast_path: bool = false,
 };
 
 /// Mutable per-evaluation emit sinks. In the serial path these point at
@@ -1005,6 +1011,26 @@ fn evalAndEmitRow(
         .decimal_sep_in = bc.csv_decimal_separator_in,
         .error_detail = &row_detail,
     };
+
+    // bod 1: date-prefilter. When the filter is active and `$date` is declared
+    // and never overwritten by a rule (rec.date_fast_path, decided once per
+    // file), evaluate `$date` FIRST and drop out-of-range rows before the much
+    // costlier input_schema + row_rules evaluation. The drop emits the same
+    // `date_filter_from_filename` filtered_row frame the late filter would, but
+    // deliberately fires before rule matching — so a date-dropped row is never
+    // attributed to `no_rule_match` and never runs per-row eval/error frames.
+    if (rec.date_fast_path) {
+        row_detail = "";
+        const dstr = expr_mod.evalString(bc.input_schema.get(VAR_DATE).?, &row_ctx) catch "";
+        if ((rec.date_min.len > 0 and dstr.len >= 10 and
+            std.mem.order(u8, dstr[0..10], rec.date_min) == .lt) or
+            (rec.date_max.len > 0 and dstr.len >= 10 and
+            std.mem.order(u8, dstr[0..10], rec.date_max) == .gt))
+        {
+            out.binEmitFilteredRow(row_offset, "date_filter_from_filename");
+            return;
+        }
+    }
 
     var vars = try evalAllVars(bc.input_schema, &row_ctx, out, e.expr_errors, row_offset, rec.folded_vars);
 
@@ -2367,6 +2393,22 @@ pub fn processBroker(
             }
         }
 
+        // bod 1: enable the early date-prefilter only when the filter is active,
+        // `$date` is declared, and no row_rules override rewrites `$date` — so the
+        // pre-override value the early check sees equals the post-override value
+        // the late (in-override-loop) filter would otherwise compare against.
+        const date_fast_path = blk: {
+            if (date_min.len == 0 and date_max.len == 0) break :blk false;
+            if (bc.input_schema.get(VAR_DATE) == null) break :blk false;
+            const rules = bc.row_rules orelse break :blk true;
+            for (rules) |rule| {
+                for (rule.rows) |row_override| {
+                    if (row_override.get(VAR_DATE) != null) break :blk false;
+                }
+            }
+            break :blk true;
+        };
+
         // Const inputs shared between JSON serial loop and CSV parallel
         // workers. Both paths thread this through `evalAndEmitRow`; the
         // const view stays read-only inside workers.
@@ -2380,6 +2422,7 @@ pub fn processBroker(
             .date_max = date_max,
             .bid = bid,
             .folded_vars = &folded_vars,
+            .date_fast_path = date_fast_path,
         };
 
         if (json_streaming) {
