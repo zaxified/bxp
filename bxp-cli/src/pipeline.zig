@@ -521,6 +521,7 @@ fn evalAllVars(
     out: Output,
     error_count: *u32,
     source_locator: u64,
+    folded: ?*const std.StringHashMap([]const u8),
 ) !std.StringHashMap([]const u8) {
     var vars = std.StringHashMap([]const u8).init(ctx.alloc);
     var detail: []const u8 = "";
@@ -529,6 +530,15 @@ fn evalAllVars(
     defer ctx.error_detail = saved_detail;
     var it = schema.iterator();
     while (it.next()) |e| {
+        // Constant fold: row-invariant vars were evaluated once at file-start.
+        // Reuse the precomputed value — byte-identical to per-row eval since
+        // the expression references no field/lookup/nondeterministic builtin.
+        if (folded) |fm| {
+            if (fm.get(e.key_ptr.*)) |fv| {
+                try vars.put(e.key_ptr.*, fv);
+                continue;
+            }
+        }
         detail = "";
         const val = expr_mod.evalString(e.value_ptr.*, ctx) catch |err| blk: {
             error_count.* += 1;
@@ -935,6 +945,11 @@ const RowEvalConst = struct {
     date_min: []const u8,
     date_max: []const u8,
     bid: []const u8,
+    /// Constant-folded `input_schema` vars: name → precomputed value for every
+    /// expression that `expr.isRowInvariant` proved row-invariant and that
+    /// evaluated without error at file-start. `evalAllVars` reuses these instead
+    /// of re-evaluating per row. `null` on the pre_pass path (no input_schema eval).
+    folded_vars: ?*const std.StringHashMap([]const u8) = null,
 };
 
 /// Mutable per-evaluation emit sinks. In the serial path these point at
@@ -991,7 +1006,7 @@ fn evalAndEmitRow(
         .error_detail = &row_detail,
     };
 
-    var vars = try evalAllVars(bc.input_schema, &row_ctx, out, e.expr_errors, row_offset);
+    var vars = try evalAllVars(bc.input_schema, &row_ctx, out, e.expr_errors, row_offset, rec.folded_vars);
 
     const rules = bc.row_rules orelse &.{};
     var rule_matched = false;
@@ -2319,6 +2334,39 @@ pub fn processBroker(
         var file_rows_written: u64 = 0;
         var file_row_idx: usize = 0;
 
+        // Constant folding (Phase 3A): evaluate every row-invariant input_schema
+        // expression ONCE here, before the parallel block fork, and reuse the
+        // result for every row. Built on the main thread into file_alloc, then
+        // shared read-only through `rec.folded_vars` to all workers. A fold is
+        // taken only when (a) `expr.isRowInvariant` proves no field/lookup/
+        // nondeterministic dependency AND (b) the expression evaluates without
+        // error — an erroring constant stays dynamic so its per-row
+        // `binEmitErrorRow` frames are preserved byte-identically.
+        var folded_vars = std.StringHashMap([]const u8).init(file_alloc);
+        {
+            var fold_detail: []const u8 = "";
+            var fold_ctx = expr_mod.Context{
+                .fields = &.{},
+                .col_index = &col_index,
+                .quote_out = bc.csv_text_quote_out,
+                .ticker_map = &bc.ticker_map,
+                .lookup_table = null,
+                .single_prepass_name = null,
+                .alloc = file_alloc,
+                .decimal_sep_in = bc.csv_decimal_separator_in,
+                .error_detail = &fold_detail,
+            };
+            var fold_it = bc.input_schema.iterator();
+            while (fold_it.next()) |e| {
+                if (!expr_mod.isRowInvariant(e.value_ptr.*, file_alloc)) continue;
+                fold_detail = "";
+                const v = expr_mod.evalString(e.value_ptr.*, &fold_ctx) catch continue;
+                // Dupe into file_alloc: evalString may return a slice into the
+                // config-owned src; duping pins the lifetime to this file's arena.
+                try folded_vars.put(e.key_ptr.*, try file_alloc.dupe(u8, v));
+            }
+        }
+
         // Const inputs shared between JSON serial loop and CSV parallel
         // workers. Both paths thread this through `evalAndEmitRow`; the
         // const view stays read-only inside workers.
@@ -2331,6 +2379,7 @@ pub fn processBroker(
             .date_min = date_min,
             .date_max = date_max,
             .bid = bid,
+            .folded_vars = &folded_vars,
         };
 
         if (json_streaming) {

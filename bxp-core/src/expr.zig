@@ -732,6 +732,32 @@ pub fn staticReferences(src: []const u8, alloc: std.mem.Allocator) !StaticRefs {
     return refs;
 }
 
+/// True when an expression's value is row-invariant — it references no input
+/// column (`[Col]`) and no `LOOKUP` table, and contains no nondeterministic
+/// builtin (`NOW`/`RAND`). Such an expression yields the same value for every
+/// row, so it can be evaluated once per file and the result reused (constant
+/// folding). Conservative: any uncertainty (computed LOOKUP name, tokenizer
+/// error) returns false, leaving the expression on the normal per-row path.
+pub fn isRowInvariant(src: []const u8, alloc: std.mem.Allocator) bool {
+    var refs = staticReferences(src, alloc) catch return false;
+    defer refs.deinit();
+    if (refs.fields.count() != 0) return false;
+    if (refs.lookups.count() != 0) return false;
+    if (refs.has_two_arg_lookup or refs.has_computed_lookup_name) return false;
+
+    // Reject the two nondeterministic builtins. Token-level check (not a
+    // substring scan) so a string literal like 'KNOW' is not mistaken for NOW.
+    var tok = Tokenizer.init(src);
+    while (true) {
+        const t = tok.next() catch return false;
+        if (t.kind == .eof) break;
+        if (t.kind != .ident) continue;
+        if (std.ascii.eqlIgnoreCase(t.text, "NOW")) return false;
+        if (std.ascii.eqlIgnoreCase(t.text, "RAND")) return false;
+    }
+    return true;
+}
+
 // ---------------------------------------------------------------------------
 // Parser / Evaluator — recursive-descent; evaluates while parsing, no AST
 // ---------------------------------------------------------------------------
