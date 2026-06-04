@@ -1640,6 +1640,7 @@ fn parseCsvHeader(
     chunk_bytes: []const u8,
     delimiter: u8,
     quote: u8,
+    header_line: u32,
     file_alloc: std.mem.Allocator,
     col_index: *std.StringHashMap(usize),
     col_names: *std.array_list.Managed([]const u8),
@@ -1651,9 +1652,18 @@ fn parseCsvHeader(
     if (chunk_bytes.len >= 3 and std.mem.eql(u8, chunk_bytes[0..3], "\xEF\xBB\xBF")) {
         pos = 3;
     }
+    // Headerless input (csv_header_line = 0): consume no line as headers, leave
+    // col_index empty, and let body iteration start at the very first line —
+    // columns are reachable only by position via FIELDS(n).
+    if (header_line == 0) return pos;
     var hdr_it = csv.LineIterator.init(chunk_bytes[pos..], quote, 0);
+    // Skip the header_line-1 preamble lines that precede the header row.
+    var preamble: u32 = 1;
+    while (preamble < header_line) : (preamble += 1) {
+        if (hdr_it.next() == null) return pos + hdr_it.pos; // ran out before the header → no body
+    }
     const hdr_line_opt = hdr_it.next();
-    if (hdr_line_opt == null) return pos;
+    if (hdr_line_opt == null) return pos + hdr_it.pos;
     const hdr_line = hdr_line_opt.?;
     var hdr_arena = std.heap.ArenaAllocator.init(file_alloc);
     defer hdr_arena.deinit();
@@ -1679,16 +1689,20 @@ fn parseCsvHeader(
 /// line in the first chunk after the file is re-opened for the second
 /// pass (the pre_pass already populated `col_index` + `col_names`, no
 /// need to redo it).
-fn skipBomAndHeader(chunk_bytes: []const u8, quote: u8) usize {
+fn skipBomAndHeader(chunk_bytes: []const u8, quote: u8, header_line: u32) usize {
     var pos: usize = 0;
     if (chunk_bytes.len >= 3 and std.mem.eql(u8, chunk_bytes[0..3], "\xEF\xBB\xBF")) {
         pos = 3;
     }
+    // Headerless: no line was consumed as headers, so body starts at the first line.
+    if (header_line == 0) return pos;
+    // Skip the preamble lines plus the header row (header_line lines total).
     var it = csv.LineIterator.init(chunk_bytes[pos..], quote, 0);
-    if (it.next() != null) {
-        return pos + it.pos;
+    var n: u32 = 0;
+    while (n < header_line) : (n += 1) {
+        if (it.next() == null) return chunk_bytes.len;
     }
-    return chunk_bytes.len;
+    return pos + it.pos;
 }
 
 /// Drains K main-pass workers in worker-index order into the real
@@ -2138,6 +2152,7 @@ pub fn processBroker(
                     first_chunk,
                     bc.csv_delimiter_in,
                     bc.csv_text_quote_in,
+                    bc.csv_header_line,
                     file_alloc,
                     &col_index,
                     &col_names,
@@ -2294,7 +2309,7 @@ pub fn processBroker(
                 chunk_reader.deinit();
                 chunk_reader = try ChunkReader.init(file_alloc, in_file, bc.csv_text_quote_in);
                 first_chunk = (try chunk_reader.nextChunk()) orelse "";
-                first_chunk_body_start = skipBomAndHeader(first_chunk, bc.csv_text_quote_in);
+                first_chunk_body_start = skipBomAndHeader(first_chunk, bc.csv_text_quote_in, bc.csv_header_line);
             }
         }
 

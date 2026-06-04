@@ -306,6 +306,13 @@ pub const BrokerConfig = struct {
     row_rules_debug_missing: bool,
     /// Output column definitions for this template.  Required — must not be empty.
     output_schema: std.array_list.Managed(OutputColumn),
+    /// 1-based line number of the CSV header row.  Default: 1 (first line).
+    /// 0 = the file has NO header: no line is consumed as headers, every line
+    /// (including the first) is data, and columns are reachable only by position
+    /// via FIELDS(n) (`[Name]` yields "" since there are no names). N > 1 skips
+    /// the N-1 preceding preamble lines and uses line N as the header.
+    /// CSV input only; ignored for JSON (object keys) and xlsx (xlsx_sheet.header_row).
+    csv_header_line: u32,
     /// Field delimiter used in input CSV files.  Default: ','.
     csv_delimiter_in: u8,
     /// Field delimiter written to output CSV files.  Default: ','.
@@ -381,6 +388,13 @@ pub const BrokerConfig = struct {
             .required = true,
             .description = "Output filename suffix. Replaces file_pattern_in in the output filename.",
             .validator = .non_empty,
+        },
+        .{
+            .key = "csv_header_line",
+            .type_name = "number",
+            .required = false,
+            .default = "1",
+            .description = "1-based line number of the CSV header row (default 1). 0 = headerless input: no line is treated as headers, the first line is data, and columns are reachable only by position via FIELDS(n). N>1 skips N-1 preamble lines. CSV input only.",
         },
         .{
             .key = "csv_delimiter_in",
@@ -2500,6 +2514,7 @@ pub fn loadFromBytes(
                 var row_rules: ?[]RowRule = null;
                 var row_rules_debug_missing: bool = false;
                 var output_schema: ?std.array_list.Managed(OutputColumn) = null;
+                var csv_header_line: u32 = 1;
                 var csv_delimiter_in: u8 = ',';
                 var csv_delimiter_out: u8 = ',';
                 var csv_decimal_separator_in: u8 = '.';
@@ -2831,6 +2846,30 @@ pub fn loadFromBytes(
                             }
                         }
                     }
+                    // csv_header_line: 1-based header line number (0 = headerless). A JSON number.
+                    csv_header_line = if (bobj.get("csv_header_line")) |v| switch (v) {
+                        .integer => |n| blk: {
+                            if (n < 0 or n > std.math.maxInt(u32)) {
+                                try emitTemplateDiag(alloc, diag, .@"error", "config.invalid_value",
+                                    b_entry.key_ptr.*, "csv_header_line",
+                                    "csv_header_line must be between 0 and {d}, got {d}", .{ std.math.maxInt(u32), n });
+                                std.debug.print(
+                                    "---\n# {s}: config error: template '{s}': csv_header_line out of range, got {d}\n",
+                                    .{ config_path, b_entry.key_ptr.*, n });
+                                return error.InvalidConfig;
+                            }
+                            break :blk @as(u32, @intCast(n));
+                        },
+                        else => {
+                            try emitTemplateDiag(alloc, diag, .@"error", "config.wrong_type",
+                                b_entry.key_ptr.*, "csv_header_line",
+                                "csv_header_line must be a number, got {s}", .{@tagName(v)});
+                            std.debug.print(
+                                "---\n# {s}: config error: template '{s}': csv_header_line must be a number, got {s}\n",
+                                .{ config_path, b_entry.key_ptr.*, @tagName(v) });
+                            return error.InvalidConfig;
+                        },
+                    } else csv_header_line;
                     // csv_delimiter_in / csv_delimiter_out / csv_decimal_separator_in / csv_decimal_separator_out
                     // Each must be a single-character string; silently ignored if wrong length.
                     csv_delimiter_in = try parseSingleCharCsvField(alloc, diag, bobj, b_entry.key_ptr.*, "csv_delimiter_in", csv_delimiter_in);
@@ -2867,6 +2906,7 @@ pub fn loadFromBytes(
                         .row_rules                 = row_rules,
                         .row_rules_debug_missing   = row_rules_debug_missing,
                         .output_schema             = output_schema.?,
+                        .csv_header_line           = csv_header_line,
                         .csv_delimiter_in          = csv_delimiter_in,
                         .csv_delimiter_out         = csv_delimiter_out,
                         .csv_decimal_separator_in  = csv_decimal_separator_in,
@@ -2999,6 +3039,32 @@ test "loadFromBytes: csv-punctuation + enum fields parse through their helpers" 
     try testing.expectEqual(@as(u8, '"'), demo.csv_text_quote_out);
     try testing.expectEqual(FileType.json, demo.file_type_out);
     // A clean config emits no diagnostics.
+    try testing.expectEqual(@as(usize, 0), diag.count());
+}
+
+test "loadFromBytes: csv_header_line parses (default 1, headerless 0, preamble N)" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    var diag = Diagnostics.init(a);
+    defer diag.deinit();
+
+    const src =
+        \\{
+        \\  conversion_templates: {
+        \\    deflt:      { input_schema: { $x: "1" }, output_schema: { c: "$x" } },
+        \\    headerless: { csv_header_line: 0, input_schema: { $x: "1" }, output_schema: { c: "$x" } },
+        \\    preamble:   { csv_header_line: 3, input_schema: { $x: "1" }, output_schema: { c: "$x" } },
+        \\  },
+        \\}
+    ;
+    var config = try loadFromBytes(a, src, "<test>", &diag);
+    defer config.deinit();
+
+    try testing.expectEqual(@as(u32, 1), config.brokers.get("deflt").?.csv_header_line);
+    try testing.expectEqual(@as(u32, 0), config.brokers.get("headerless").?.csv_header_line);
+    try testing.expectEqual(@as(u32, 3), config.brokers.get("preamble").?.csv_header_line);
     try testing.expectEqual(@as(usize, 0), diag.count());
 }
 
