@@ -662,11 +662,10 @@ fn tryScanArg(
 
 /// Phase G8: collect static cross-reference data from an expression
 /// source. Walks tokens (no AST, no eval) and gathers:
-///   - `fields` set: every named `[ColumnName]` reference. A bracketed
-///     numeric `[1]` is a header-name lookup for a column literally named
-///     "1" (positional access is FIELDS(n), not `[n]`); such all-digit
-///     names are skipped here so the did-you-mean typo consumer doesn't
-///     treat a stray "4" as a misspelled header.
+///   - `fields` set: every `[ColumnName]` reference, by name. A bracketed
+///     numeric `[4]` is just a header-name lookup for a column literally
+///     named "4" (positional access is FIELDS(n), not `[n]`), so it is
+///     recorded here like any other name.
 ///   - `lookups` set: literal first-arg string of every 3-arg
 ///     `LOOKUP("name", key, field)` call. Used to cross-walk against
 ///     declared `pre_passes` block names.
@@ -704,13 +703,14 @@ pub fn staticReferences(src: []const u8, alloc: std.mem.Allocator) !StaticRefs {
         const t = tok.next() catch break;
         if (t.kind == .eof) break;
 
-        // [Name] field references — record by name. All-digit bracket names
-        // (`[4]`) are header-name lookups for a column literally named "4"
-        // (positional access is FIELDS(n)); skip them so the did-you-mean typo
-        // consumer doesn't treat a stray numeric name as a misspelled header.
+        // [Name] field references — record by name. An all-digit bracket name
+        // (`[4]`) is a header-name lookup for a column literally named "4", no
+        // different from any other name: it goes into `fields` like the rest, so
+        // constant-folding correctly treats it as a row-varying reference and the
+        // typo consumer validates it against the real headers. (Positional access
+        // by column number is FIELDS(n), not `[n]`.)
         if (t.kind == .field_ref) {
             if (t.text.len == 0) continue;
-            if (std.ascii.isDigit(t.text[0])) continue;
             try refs.fields.put(t.text, {});
             continue;
         }
@@ -3037,12 +3037,12 @@ fn tokenizeAll(src: []const u8, alloc: std.mem.Allocator) ![]const Token {
 pub fn compile(src: []const u8, col_index: *const std.StringHashMap(usize), alloc: std.mem.Allocator) Node {
     // Empty source: the fused evaluator short-circuits to "" — keep `.raw`.
     if (src.len == 0) return .{ .raw = src };
-    // A source that is exactly one named column reference `[Name]` — resolve the
-    // index once (no per-row hash lookup). Numeric `[n]` refs stay on the token
-    // path below.
+    // A source that is exactly one column reference `[Name]` — resolve the index
+    // once (no per-row hash lookup). A numeric `[4]` is a name lookup for a column
+    // named "4" like any other, so it qualifies too (col_index.get("4")).
     var tok = Tokenizer.init(src);
     const t0 = tok.next() catch return .{ .raw = src };
-    if (t0.kind == .field_ref and t0.text.len > 0 and !std.ascii.isDigit(t0.text[0])) {
+    if (t0.kind == .field_ref and t0.text.len > 0) {
         const t1 = tok.next() catch return .{ .raw = src };
         if (t1.kind == .eof) return .{ .col_ref = col_index.get(t0.text) };
     }
@@ -3812,6 +3812,21 @@ test "eval: [n] numeric is a name lookup, not positional (use FIELDS for positio
     try h2.col_index.put("1", 0);
     const ctx2 = h2.ctx(&.{"hit"}, a);
     try testing.expectEqualStrings("hit", try evalString("[1]", &ctx2));
+}
+
+test "isRowInvariant: numeric bracket [4] counts as a field ref (never folded)" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // `[4]` references a column literally named "4" — row-varying, so constant
+    // folding must NOT prove it invariant (else a real "4" column would freeze
+    // to one row's value).
+    try testing.expect(!isRowInvariant("[4]", a));
+    try testing.expect(!isRowInvariant("SPLIT_PART([4], '^', 1)", a));
+    // Sanity: a pure literal still folds; FIELDS(n) and [Name] do not.
+    try testing.expect(isRowInvariant("'xT212'", a));
+    try testing.expect(!isRowInvariant("FIELDS(4)", a));
+    try testing.expect(!isRowInvariant("[Valeur]", a));
 }
 
 test "eval: unknown column name returns empty string" {

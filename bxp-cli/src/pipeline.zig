@@ -609,8 +609,9 @@ fn checkUnknownFields(
     // Walks one expression. Returns the first `[X]` reference whose
     // Levenshtein distance to some real header is ≤ 2 — that's the
     // typo class. Mismatches with no close header (distance ≥ 3) are
-    // skipped: legitimate optional / cross-version columns. Numeric
-    // `[1]` indexes are already filtered by `staticReferences`.
+    // skipped: legitimate optional / cross-version columns. A numeric
+    // `[4]` is just a header name like any other and is validated the
+    // same way (positional access is FIELDS(n), which carries no `[X]`).
     const inner = struct {
         fn check(
             ar_: std.mem.Allocator,
