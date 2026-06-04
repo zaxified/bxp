@@ -395,12 +395,9 @@ fixed before release instead, not parked here).
     conversion appears. Excel offers neither (no TZ/DST concept at all), so
     these would put bxp ahead of the spreadsheet baseline, not just at parity.
 
-- **Minor, surfaced 2026-05-31 (low priority):**
-  (a) `csv_thousands_separator_in` config so space/NBSP-grouped European
-  numbers (`1 234 567,89`) parse without the
-  `REPLACE(REPLACE(x,' ',''),',','.')` idiom that works today.
-  (b) Load-time warning on **duplicate column headers** — `[name]` currently
-  resolves last-wins silently, which can mask a malformed export.
+- **Load-time warning on duplicate column headers** (surfaced 2026-05-31, low
+  priority). `[name]` currently resolves last-wins silently, which can mask a
+  malformed export.
 
 - **Raise / make-configurable the 1024-column cap (`MAX_COLUMNS`).** Wide
   time-series exports exceed it: the Johns Hopkins COVID-19 daily series ships
@@ -603,3 +600,12 @@ discussion doesn't keep restarting. Reopen only if the rationale changes.
   next to each `data_dir`), which clashes with the stateless engine
   contract — every run today is reproducible from inputs alone. No
   user has reported the duplicate-row problem in practice.
+- **Space / NBSP thousands grouping (`csv_thousands_separator_in`).**
+  Space- or NBSP-grouped European numbers (`1 234 567,89`) are not
+  auto-normalised: `parseGroupedNumber` disambiguates dot/comma grouping
+  (because `csv_decimal_separator_in` declares the decimal char), but a
+  space/NBSP thousands separator stays raw. Decided (user, 2026-06-04) **not**
+  to add a `csv_thousands_separator_in` config for it — the user strips it
+  themselves with `REPLACE(REPLACE([X], ' ', ''), ',', '.')` (and the 2-byte
+  NBSP variant). Note: dot-grouped EU (`1.234.567,89`) **is** handled
+  automatically — only the space/NBSP case is out of scope here.
