@@ -9,9 +9,9 @@
       file_pattern_out:   ".csvx",
       // TRICK 0 — IMDb publishes title.basics as TSV, not CSV.
       csv_delimiter_in:   "\t",
-      // TRICK 0b — TSV is unquoted but titles contain literal `"`; disable
-      // input quoting or RFC-4180 quote-merging silently drops ~256k rows.
-      // See sample.json for the full story.
+      // TRICK 0b — TSV is unquoted but titles contain literal `"`. `none`
+      // treats `"` as data (no warning); even with default quoting bxp's
+      // lazy-quotes now keeps all rows + warns per affected line. See sample.json.
       csv_text_quote_in:  "none",
       csv_delimiter_out:  ",",
       csv_text_quote_out: "double",

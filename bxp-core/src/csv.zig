@@ -70,6 +70,12 @@ pub fn splitFields(line: []const u8, buf: [][]const u8, delimiter: u8, quote: u8
 pub const LineSlice = struct {
     bytes: []const u8,
     byte_offset: u64,
+    /// True when this record ended (at '\n' or EOF) while still inside an
+    /// open quote — i.e. the line carries an unbalanced/stray quote char.
+    /// The record is still emitted (the stray quote is treated as a literal
+    /// byte, "lazy quotes" semantics); the flag lets the caller warn so the
+    /// situation isn't silent. See `LineIterator.next`.
+    unbalanced_quote: bool = false,
 };
 
 /// Quote-aware streaming iterator over CSV records held in a single
@@ -79,8 +85,16 @@ pub const LineSlice = struct {
 ///
 /// quote semantics: `quote == 0` disables quoting; `quote != 0` treats
 /// doubled `quote quote` as an escape that stays inside the quoted
-/// field and a bare `quote` as the toggle. A `\n` inside a quoted
-/// field does NOT terminate the record (RFC 4180 §2 rule 6).
+/// field and a bare `quote` as the toggle.
+///
+/// A '\n' ALWAYS terminates the record — quoted fields may NOT span
+/// physical lines (deliberately NOT RFC 4180 §2 rule 6). This makes a
+/// single stray/unbalanced quote a one-line problem instead of letting it
+/// swallow every following row up to the next quote ("lazy quotes"
+/// semantics, à la Go `encoding/csv` LazyQuotes). When a record ends with
+/// an open quote, `LineSlice.unbalanced_quote` is set so the caller can
+/// warn. Quoting still protects the *delimiter* within a line (e.g.
+/// `"a,b"` is one field) — only the newline is no longer protected.
 ///
 /// `bytes` is borrowed (read-only) for the iterator's lifetime; emitted
 /// `LineSlice.bytes` slices point directly into it. `base_offset` is
@@ -115,7 +129,10 @@ pub const LineIterator = struct {
                     }
                     in_quotes = !in_quotes;
                     self.pos += 1;
-                } else if (c == '\n' and !in_quotes) {
+                } else if (c == '\n') {
+                    // Newline ALWAYS ends the record (see type doc): even an
+                    // open quote does not let it span lines. `in_quotes` here
+                    // therefore means "stray/unbalanced quote on this line".
                     terminated = true;
                     break;
                 } else {
@@ -123,10 +140,11 @@ pub const LineIterator = struct {
                 }
             }
             var rec = self.bytes[rec_start..self.pos];
+            const unbalanced = in_quotes; // open quote at '\n' or EOF
             if (terminated) self.pos += 1; // consume the newline
             if (rec.len > 0 and rec[rec.len - 1] == '\r') rec = rec[0 .. rec.len - 1];
             if (rec.len == 0) continue; // skip empty record, try next
-            return .{ .bytes = rec, .byte_offset = self.base_offset + rec_start };
+            return .{ .bytes = rec, .byte_offset = self.base_offset + rec_start, .unbalanced_quote = unbalanced };
         }
         return null;
     }
@@ -261,23 +279,50 @@ test "LineIterator: three simple lines with absolute offsets" {
     try t.expectEqual(@as(?LineSlice, null), it.next());
 }
 
-test "LineIterator: quoted newline does not terminate record" {
+test "LineIterator: newline ends record even inside an open quote (lazy quotes)" {
+    // A stray '"' no longer swallows the next line. Each physical line is its
+    // own record; the lines carrying the unbalanced quote are flagged.
     var it = LineIterator.init("\"a\nb\",c\nd,e\n", '"', 0);
     const r1 = it.next().?;
-    try t.expectEqualStrings("\"a\nb\",c", r1.bytes);
+    try t.expectEqualStrings("\"a", r1.bytes);
     try t.expectEqual(@as(u64, 0), r1.byte_offset);
+    try t.expect(r1.unbalanced_quote);
     const r2 = it.next().?;
-    try t.expectEqualStrings("d,e", r2.bytes);
-    try t.expectEqual(@as(u64, 8), r2.byte_offset);
+    try t.expectEqualStrings("b\",c", r2.bytes);
+    try t.expectEqual(@as(u64, 3), r2.byte_offset);
+    try t.expect(r2.unbalanced_quote);
+    const r3 = it.next().?;
+    try t.expectEqualStrings("d,e", r3.bytes);
+    try t.expectEqual(@as(u64, 8), r3.byte_offset);
+    try t.expect(!r3.unbalanced_quote);
+    try t.expectEqual(@as(?LineSlice, null), it.next());
 }
 
-test "LineIterator: escaped quote inside quoted field" {
-    // "a""b\nc" is one logical record: a"b\nc (the doubled "" is escape)
+test "LineIterator: doubled-quote escape is still honored within a line" {
+    // The "" escape does not toggle quote state, so the leading '"' is left
+    // unmatched when the line ends → the record is flagged unbalanced. The
+    // newline still splits the record (no multi-line spanning).
     var it = LineIterator.init("\"a\"\"b\nc\"\nnext\n", '"', 0);
     const r1 = it.next().?;
-    try t.expectEqualStrings("\"a\"\"b\nc\"", r1.bytes);
+    try t.expectEqualStrings("\"a\"\"b", r1.bytes);
+    try t.expect(r1.unbalanced_quote);
     const r2 = it.next().?;
-    try t.expectEqualStrings("next", r2.bytes);
+    try t.expectEqualStrings("c\"", r2.bytes);
+    try t.expect(r2.unbalanced_quote);
+    const r3 = it.next().?;
+    try t.expectEqualStrings("next", r3.bytes);
+    try t.expect(!r3.unbalanced_quote);
+}
+
+test "LineIterator: balanced quoted field with embedded delimiter stays one field" {
+    // Quoting still protects the DELIMITER within a line — only the newline
+    // is no longer protected. "a,b" is a single record with the comma inside.
+    var it = LineIterator.init("\"a,b\",c\nd\n", '"', 0);
+    const r1 = it.next().?;
+    try t.expectEqualStrings("\"a,b\",c", r1.bytes);
+    try t.expect(!r1.unbalanced_quote);
+    const r2 = it.next().?;
+    try t.expectEqualStrings("d", r2.bytes);
 }
 
 test "LineIterator: CRLF line endings strip the CR" {

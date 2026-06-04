@@ -39,86 +39,6 @@ Open design questions to resolve before implementation:
 - `--list-templates` / `--fetch-template` semantics when the same name
   exists in bundle + user dir.
 
-### ~~Decimal numeric core (`f80` → `i128 @ 1e12`)~~ — DONE 2026-06-02
-
-Shipped. The evaluator's number type is now a fixed-point `Decimal`
-(`i128` at scale 1e12 = 12 decimal places, in `bxp-core/src/decimal.zig`),
-replacing `f80` + the `{d:.8}` print cap. Add/subtract are exact; multiply,
-divide and `ROUND()` all round the 12th digit **half-away-from-zero** ("school"
-rounding, matching Excel/LibreOffice — the target users aren't programmers).
-`i256` intermediates guard multiply overflow, and arithmetic past the ±1.7e26
-range is a clean `NotANumber`-class error (never a trap). `0.02 + 0.08` is now
-exactly `0.10` — no cap, no binary-float noise.
-
-What landed:
-
-- `Decimal { raw: i128 }` with float-free `parse`/`toString` (the ~22× format
-  win), overflow-checked add/sub/mul/neg/abs, div/round/floor/ceil/order; full
-  unit-test coverage.
-- `expr.zig` fully migrated: `toNumber`→`Decimal` (keeps lenient
-  `parseGroupedNumber` and sci-notation), all binary ops/comparisons,
-  `ABS/ROUND/FLOOR/CEILING/GREATEST/LEAST/RAND`, index/length clamps, date
-  builtins (`Decimal.fromInt`). The `@intFromFloat` Inf/NaN guards are gone —
-  there is no Inf/NaN. The non-finite tokens `nan`/`inf`/`-inf` are treated as
-  missing data (→ 0, like an empty field, no error) so a bad export doesn't
-  raise false errors; a genuinely out-of-range value is `NotANumber` and
-  arithmetic past the range is a `NumberOverflow` error.
-- `json.zig`: plain non-integer JSON decimals canonicalise via a string-only
-  trailing-zero trim (no `f64` round-trip), preserving input precision.
-  (Follow-up 2026-06-04: JSON **and** xlsx scientific notation now expand
-  through the same `Decimal` core too — exact to i128, float-free — so the
-  CSV / JSON / xlsx input paths parse an identical numeric string identically.)
-- Passthrough ≠ computed invariant preserved — high-precision IDs/coords never
-  enter `Decimal` (verified: 15-digit airbnb coords survive verbatim).
-- Re-baselined `datasets/` (4 price fixtures: 8→12 digit divisions), expr
-  corpus (`test-06`, inf/nan → missing/0), `examples/` (ngc computed coords
-  8→12 digit); rounding contract documented in `bxp-cli/CLAUDE.md` +
-  `bxp-core/CLAUDE.md`.
-
-Out of scope (recorded so it isn't re-litigated): per-number exponent /
-BigDecimal (rejected — relocates the rounding decision, adds complexity);
-scientific ranges + transcendental functions (sqrt/pow/log); `>12` computed
-decimals (raise the single scale constant if a real use-case appears);
-`excelSerialToDatetime` f64 (date concern).
-
-### ~~`bxp-fmt --expr` is silent on success~~ — DONE 2026-06-02
-
-`runExpr` now emits `{"ok":true}` on stdout on success (exit 0); the error path
-still keeps stdout empty and writes JSON to stderr. `test-01-console.sh` asserts
-the success line. Note: `--expr` still cannot return a *value* (no row context —
-column refs error); the value-returning evaluators are `--expr-trace` /
-`--expr-batch`.
-
-### RAND() carries only 12 random digits — follow-up to the decimal core
-
-`RAND()` returns a value in `[0, 1)`, and the fixed-point scale is 1e12, so its
-result holds at most **12 random digits**. For probability/jitter that is fine,
-but a user generating large random integers (e.g. UIDs) via the idiom
-`RAND() * 10^N` gets only 12 random digits followed by zeros — the rest are
-never generated, because `RAND()` is materialised to its 12-digit value
-*before* the multiply, which can then only shift + zero-pad.
-
-Desired behaviour (designed with the user 2026-06-02): treat `RAND()` as a
-**lazy random token**; when it is **directly multiplied by a power-of-ten
-literal** `10^N`, generate `N` fully-random digits in one fused step and return
-them as a **string** (an integer beyond ~26 digits is not a representable
-`Decimal`). Bare `RAND()` stays the 12-digit `[0,1)` value (Excel-compatible).
-
-```text
-RAND()              → "0.123456789012"        (12 digits, [0,1))
-RAND() * 1000000000 → "123456789"             (9 random digits)
-RAND() * 10^18      → "123456789012345678"     (18 random digits, string)
-```
-
-Implementation sketch: add a lazy-random `Value` sentinel; `parseMul` detects
-`<random> * <power-of-ten Decimal>` → draw a uniform random in `[0, 10^N)` →
-format as a string. Anywhere else the sentinel materialises to the 12-digit
-`[0,1)` Decimal. Boundary: the multiplier literal `10^N` itself caps at N≤26
-(a bigger literal overflows the `Decimal` range); supporting N>26 needs
-intercepting the literal too. Alternative considered (and rejected by the user
-in favour of the `RAND() * 10^N` syntax): an explicit `RAND(n)` /
-`RANDBETWEEN(lo, hi)` builtin.
-
 ### Future example candidates (low priority)
 
 Carried over from the (now-deleted) `DEV/*-todo` scratch when the example
@@ -275,15 +195,6 @@ quirk is a real broker-export pattern that the current bxp-cli template
 language can't express cleanly; the workaround today is "tell the user
 to pre-process the file" or "skip the affected rows".
 
-- ~~**CSV preamble / title line skipping.**~~ — DONE 2026-06-04. Shipped as
-  the per-template `csv_header_line` key (1-based, default 1): `N>1` skips the
-  `N-1` preamble lines and treats line `N` as the header (Schwab's title-line
-  case), and `0` means the file has no header at all — no line is consumed,
-  the first row is data, and columns are reachable only by position via
-  `FIELDS(n)`. CSV-only; threaded through both read paths (`parseCsvHeader`
-  serial/pre_pass + `skipBomAndHeader` parallel). `config.zig` FieldDoc + load,
-  parse + defaults unit tests.
-
 - **Multi-CSV-in-one-file (blank-line separated).** Some brokers
   concatenate multiple sub-CSVs into a single `.csv`, separated by one
   or more empty lines, with each block having its own header row.
@@ -421,17 +332,6 @@ fixed before release instead, not parked here).
   "logs are out of scope — pre-process with a log parser" note. Decide vs
   the CSV-tool scope. (The *date* inside the bracket already parses fine via
   `DATE_CONVERT(..., 'DD/MMM/YYYY:hh:mm:ss', ...)`.)
-
-- **Warn on unterminated quote (EOF inside an open quoted field).** *(High
-  value, cheap.)* A single stray unescaped `"` makes the RFC-4180 reader
-  swallow every following row into one field, silently — `warnings:0`,
-  rows just vanish. Reproduced 2026-05-31 (3 rows → 1). This is the exact
-  mechanism by which the IMDb dataset lost ~256k rows before we caught it
-  (now handled there with `csv_text_quote_in: "none"`). The lenient parse
-  itself is defensible; the silent row loss is not. Emit a warning when a
-  quoted field reaches EOF still open (and ideally when a record's column
-  count diverges wildly from the header — a secondary tell). Touches the
-  chunk reader / `LineIterator` quote state + the diagnostics sink.
 
 - **`REPLACE_MAP` builtin — bulk/chained replace.** Consider on a concrete
   use-case. Templates that normalise several tokens at once today nest

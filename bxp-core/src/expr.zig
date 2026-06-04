@@ -26,7 +26,7 @@
 ///   ROUND(f, n)               — round f to n decimal places
 ///   FLOOR(f)                  — round f down to nearest integer
 ///   CEILING(f)                — round f up to nearest integer
-///   RAND()                    — random value in [0, 1) (up to 12 decimals)
+///   RAND(n)                   — string of n random digits (first 1–9, rest 0–9; n clamped 1–65)
 ///   COALESCE(a, b, ...)       — first non-empty argument (empty = whitespace-only string)
 ///   DATE_CONVERT(f, from, to) — reformat a date/time string; format tokens use datefmt syntax
 ///   PRICE_VALUE(f)            — strip currency symbol/code, return numeric string
@@ -2069,24 +2069,44 @@ fn adaptCeiling(_: *Parser, args: []Value) anyerror!Value {
 }
 
 // ── RAND ────────────────────────────────────────────────────────────────
+/// Upper bound on RAND(n) digit count. Matches MySQL's `DECIMAL(M,…)` max
+/// precision (M ≤ 65) — the most widely-recognised "max digits" limit across
+/// SQL engines. `n` is clamped to `[1, 65]` by the integer_in_range guard.
+const RAND_MAX_DIGITS: i64 = 65;
 const rand_doc: FnDoc = .{
     .name = "RAND",
-    .signature = "RAND()",
-    .example = "RAND()",
-    .description = "Random value in [0, 1) with up to 12 decimal places.",
-    .args = &.{},
-    .min_args = 0,
-    .max_args = 0,
+    .signature = "RAND(n)",
+    .example = "RAND(8)",
+    .description = "A string of exactly `n` random digits (each position 0–9, except the first which is 1–9 so a leading zero can't be dropped by a downstream numeric import). Use it for synthetic IDs; `n` is clamped to [1, 65]. Cryptographically seeded — not for security tokens.",
+    .args = &.{
+        .{ .name = "n", .kind = .{ .integer_in_range = .{
+            .min = 1,
+            .max = RAND_MAX_DIGITS,
+        } } },
+    },
+    .min_args = 1,
+    .max_args = 1,
 };
-/// RAND() — cryptographically random fixed-point value in [0, 1). Draws a
-/// uniform raw integer in [0, SCALE) so the result has up to 12 decimals.
-fn builtinRand(args: []Value) !Value {
-    if (args.len != 0) return error.WrongArgCount;
-    const r = std.crypto.random.intRangeLessThan(i128, 0, Decimal.SCALE);
-    return Value{ .decimal = .{ .raw = r } };
-}
-fn adaptRand(_: *Parser, args: []Value) anyerror!Value {
-    return builtinRand(args);
+/// RAND(n) — a string of exactly n random digits (first digit 1–9, rest 0–9),
+/// returned as a passthrough string so it bypasses the 12-decimal fixed-point
+/// scale entirely (unbounded digit count up to n=65). `validateArgs` has
+/// already clamped a numeric n to [1, 65] via the integer_in_range domain
+/// before this runs.
+fn adaptRand(p: *Parser, args: []Value) anyerror!Value {
+    const t = (args[0].toNumber() catch {
+        switch (args[0]) {
+            .string => |s| p.setNotANumber(s),
+            else => {},
+        }
+        return error.NotANumber;
+    }).trunc();
+    // Defence-in-depth: the guard clamps numeric args, but re-clamp here so the
+    // length is always a sane usize even if the guard contract ever changes.
+    const n: usize = @intCast(@max(1, @min(t, @as(i128, RAND_MAX_DIGITS))));
+    const buf = try p.ctx.alloc.alloc(u8, n);
+    buf[0] = '1' + std.crypto.random.intRangeLessThan(u8, 0, 9); // 1..9
+    for (buf[1..]) |*c| c.* = '0' + std.crypto.random.intRangeLessThan(u8, 0, 10); // 0..9
+    return Value{ .string = buf };
 }
 
 // ── COALESCE ────────────────────────────────────────────────────────────
@@ -4087,26 +4107,43 @@ test "eval: CEILING rounds up" {
 // RAND
 // ------------------------------------------------------------
 
-test "eval: RAND returns float in [0, 1)" {
+test "eval: RAND(n) returns exactly n digits, first non-zero" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
     var h = TestHelper.init(a);
     const ctx = h.ctx(&.{}, a);
-    for (0..20) |_| {
-        const v = try eval("RAND()", &ctx);
-        const n = try v.toNumber();
-        try testing.expect(n.raw >= 0 and n.raw < Decimal.SCALE);
+    for ([_]usize{ 1, 5, 12, 20, 65 }) |want| {
+        const expr = try std.fmt.allocPrint(a, "RAND({d})", .{want});
+        for (0..20) |_| {
+            const v = try eval(expr, &ctx);
+            const s = v.string;
+            try testing.expectEqual(want, s.len);
+            try testing.expect(s[0] >= '1' and s[0] <= '9');
+            for (s) |c| try testing.expect(c >= '0' and c <= '9');
+        }
     }
 }
 
-test "eval: RAND rejects wrong arg count" {
+test "eval: RAND(n) clamps out-of-range n to [1, 65]" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
     var h = TestHelper.init(a);
     const ctx = h.ctx(&.{}, a);
-    try testing.expectError(error.WrongArgCount, eval("RAND(5)", &ctx));
+    try testing.expectEqual(@as(usize, 1), (try eval("RAND(0)", &ctx)).string.len);
+    try testing.expectEqual(@as(usize, 1), (try eval("RAND(-3)", &ctx)).string.len);
+    try testing.expectEqual(@as(usize, 65), (try eval("RAND(100)", &ctx)).string.len);
+}
+
+test "eval: RAND requires exactly one arg" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    try testing.expectError(error.WrongArgCount, eval("RAND()", &ctx));
+    try testing.expectError(error.WrongArgCount, eval("RAND(5, 6)", &ctx));
 }
 
 // ------------------------------------------------------------

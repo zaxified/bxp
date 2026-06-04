@@ -731,39 +731,21 @@ fn checkUnknownFields(
 //
 // `processBroker` streams CSV input in CHUNK_SIZE blocks and resets a
 // dedicated per-chunk arena between blocks so peak memory is bounded by
-// the chunk size — not by the file size. Quoted multi-line fields are
-// respected: chunk boundaries always land on a '\n' that occurs
-// OUTSIDE a quoted field (RFC 4180 §2 rule 6).
+// the chunk size — not by the file size. A '\n' is an unconditional
+// record separator (quoted fields may not span lines — see
+// `csv.LineIterator`), so any '\n' is a safe chunk boundary.
 
 /// Target chunk size in bytes. The buffer may grow above this when a
-/// single record is longer than CHUNK_SIZE (no '\n' outside quotes
-/// within the chunk window).
+/// single record is longer than CHUNK_SIZE (no '\n' within the window).
 const CHUNK_SIZE: usize = 10 * 1024 * 1024;
 
-/// Scans bytes tracking RFC-4180 quote state; returns the index of the
-/// LAST '\n' that occurs OUTSIDE a quoted field, or null if no such
-/// boundary exists.
-fn findLastBoundary(bytes: []const u8, quote: u8) ?usize {
-    var pos: usize = 0;
-    var in_quotes: bool = false;
-    var last_nl: ?usize = null;
-    while (pos < bytes.len) {
-        const c = bytes[pos];
-        if (quote != 0 and c == quote) {
-            if (in_quotes and pos + 1 < bytes.len and bytes[pos + 1] == quote) {
-                pos += 2;
-                continue;
-            }
-            in_quotes = !in_quotes;
-            pos += 1;
-        } else if (c == '\n' and !in_quotes) {
-            last_nl = pos;
-            pos += 1;
-        } else {
-            pos += 1;
-        }
-    }
-    return last_nl;
+/// Returns the index of the LAST '\n' in `bytes`, or null if there is
+/// none. Every '\n' is a record boundary (no multi-line quoted fields),
+/// so this is just the last newline — no quote-state tracking needed.
+/// This is what bounds chunk memory: an unbalanced quote can no longer
+/// hide every newline and force the buffer to grow without limit.
+fn findLastBoundary(bytes: []const u8) ?usize {
+    return std.mem.lastIndexOfScalar(u8, bytes, '\n');
 }
 
 /// Streaming file reader that yields chunks ending on record boundaries.
@@ -771,7 +753,6 @@ fn findLastBoundary(bytes: []const u8, quote: u8) ?usize {
 /// The slice returned by `nextChunk` is valid only until the next call.
 const ChunkReader = struct {
     file: std.fs.File,
-    quote: u8,
     buffer: std.array_list.Managed(u8),
     /// Number of bytes returned by the previous nextChunk() call. Those
     /// bytes are discarded from the front of `buffer` at the start of the
@@ -790,11 +771,10 @@ const ChunkReader = struct {
     /// `source_locator` for sub-ms drill-down in fmt.
     chunk_start_in_file: u64,
 
-    pub fn init(alloc: std.mem.Allocator, file: std.fs.File, quote: u8) !ChunkReader {
+    pub fn init(alloc: std.mem.Allocator, file: std.fs.File) !ChunkReader {
         const stat = try file.stat();
         return .{
             .file = file,
-            .quote = quote,
             .buffer = std.array_list.Managed(u8).init(alloc),
             .last_emit_len = 0,
             .total_size = stat.size,
@@ -809,8 +789,8 @@ const ChunkReader = struct {
     }
 
     /// Returns the next chunk of bytes ending at a record boundary
-    /// (the last '\n' outside a quoted field). At EOF, returns the
-    /// remaining bytes verbatim. Returns null when nothing is left.
+    /// (the last '\n' in the window). At EOF, returns the remaining
+    /// bytes verbatim. Returns null when nothing is left.
     pub fn nextChunk(self: *ChunkReader) !?[]const u8 {
         // Drop bytes returned by the previous call so only residual remains.
         if (self.last_emit_len > 0) {
@@ -830,7 +810,7 @@ const ChunkReader = struct {
             self.last_emit_len = 0;
         }
         while (true) {
-            if (findLastBoundary(self.buffer.items, self.quote)) |boundary| {
+            if (findLastBoundary(self.buffer.items)) |boundary| {
                 self.last_emit_len = boundary + 1;
                 return self.buffer.items[0..self.last_emit_len];
             }
@@ -2133,7 +2113,7 @@ pub fn processBroker(
             // where body records begin. The same `first_chunk` view is
             // reused both by the pre_pass block loop (when configured)
             // and by the main-pass block loop below.
-            chunk_reader = try ChunkReader.init(file_alloc, in_file, bc.csv_text_quote_in);
+            chunk_reader = try ChunkReader.init(file_alloc, in_file);
             chunk_reader_inited = true;
             first_chunk = (try chunk_reader.nextChunk()) orelse "";
             if (first_chunk.len > 0) {
@@ -2307,7 +2287,7 @@ pub fn processBroker(
                 // pre-pass header parse.
                 try in_file.seekTo(0);
                 chunk_reader.deinit();
-                chunk_reader = try ChunkReader.init(file_alloc, in_file, bc.csv_text_quote_in);
+                chunk_reader = try ChunkReader.init(file_alloc, in_file);
                 first_chunk = (try chunk_reader.nextChunk()) orelse "";
                 first_chunk_body_start = skipBomAndHeader(first_chunk, bc.csv_text_quote_in, bc.csv_header_line);
             }
@@ -2436,6 +2416,10 @@ pub fn processBroker(
         // it directly with no cast.
         var file_rows_written: u64 = 0;
         var file_row_idx: usize = 0;
+        // Count of source records that ended with an unbalanced/stray quote
+        // (treated as a literal byte — see `csv.LineIterator`). Surfaced as a
+        // single per-file warning at file end so silent row loss can't recur.
+        var file_unbalanced_quotes: u32 = 0;
 
         // Constant folding (Phase 3A): evaluate every row-invariant input_schema
         // expression ONCE here, before the parallel block fork, and reuse the
@@ -2638,6 +2622,7 @@ pub fn processBroker(
                     chunk_reader.chunk_start_in_file + first_chunk_body_start,
                 );
                 while (it.next()) |line| {
+                    if (line.unbalanced_quote) file_unbalanced_quotes += 1;
                     try pending.append(line);
                     file_row_idx += 1;
                 }
@@ -2667,6 +2652,7 @@ pub fn processBroker(
                     chunk_reader.chunk_start_in_file,
                 );
                 while (it.next()) |line| {
+                    if (line.unbalanced_quote) file_unbalanced_quotes += 1;
                     try pending.append(line);
                     file_row_idx += 1;
                 }
@@ -2710,6 +2696,15 @@ pub fn processBroker(
         if (file_expr_errors > 0) {
             out.warning("warning: {d} input_schema expression error(s) in '{s}' (run with --debug to see details)\n", .{ file_expr_errors, filename });
             stats.warnings += 1;
+        }
+
+        // Unbalanced/stray quotes: each was treated as a literal byte so no
+        // rows were lost (unlike the old RFC-4180 merge), but surface it once
+        // per file — a stray quote usually means a malformed export.
+        if (file_unbalanced_quotes > 0) {
+            out.warning("warning: {d} row(s) in '{s}' had an unbalanced quote — treated as literal text (set csv_text_quote_in:\"none\" if the file is not quoted)\n", .{ file_unbalanced_quotes, filename });
+            stats.warnings += 1;
+            file_warnings += 1;
         }
 
         out.binEmitFileEnd(

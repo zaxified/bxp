@@ -340,7 +340,7 @@ reserved.
 | `LOOKUP(key, 'field')` | string | Retrieve a value stored by `pre_pass` under `key` / `field` |
 | `FIELDS(n)` | string | Same as `[n]` — raw field by 1-based index |
 | `NOW()` | string | Current UTC datetime, format `YYYY-MM-DDTHH:MM:SSZ` |
-| `RAND()` | number | Cryptographically random float in `[0, 1)` |
+| `RAND(n)` | string | `n` random digits (first 1–9, rest 0–9); `n` clamped to 1–65 |
 | `COALESCE(a, b, ...)` | any | First non-empty argument (empty = whitespace-only string); falls back to last arg verbatim if all empty |
 
 #### Function semantics — common gotchas

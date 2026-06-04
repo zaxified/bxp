@@ -8,10 +8,10 @@
       csv_delimiter_in:   "\t",
       // TRICK 0b — the TSV is UNQUOTED, yet titles contain literal `"`
       // characters (e.g. `"Giliap"`, `Mujeres ... "nervios"`). BXP defaults
-      // csv_text_quote_in to `"` (RFC 4180), which would treat those quotes
-      // as field delimiters and silently MERGE every physical line up to the
-      // next `"` into one record. On the full 12.5M-row file that drops
-      // ~256k rows without any error. Disable input quoting for TSV.
+      // csv_text_quote_in to `"` (RFC 4180). With lazy-quote handling a stray
+      // `"` no longer merges rows — bxp keeps every row and warns per affected
+      // line (older RFC-4180 tools silently drop ~256k rows on the full file).
+      // `none` declares the TSV unquoted: `"` is plain data, no warning.
       csv_text_quote_in:  "none",
       csv_delimiter_out:  ",",
       csv_text_quote_out: "double",

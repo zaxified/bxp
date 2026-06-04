@@ -34,18 +34,25 @@ Measured on the reference machine (ReleaseFast, 8 cores):
 | wall time | ~24.5 s                                 |
 | peak RSS  | ~26 MB (flat — does not grow with rows) |
 
-The 1:1 row count is the whole point of TRICK 0b: with the default `"`
-input quoting left on, the same run produces only ~12.28M rows and reports
-no error. `full/` is gitignored — the download stays local.
+The 1:1 row count: `csv_text_quote_in:"none"` declares the TSV unquoted, so a
+stray `"` in a title is plain data. Even with default `"` quoting left on,
+bxp's lazy-quote handling now keeps all 12,533,197 rows and emits a warning on
+the 2 lines carrying an unbalanced `"` — it no longer silently merges them
+(older RFC-4180 tools drop ~256k rows here). `none` is still the right call:
+same 1:1 result with no spurious warning. `full/` is gitignored — the download
+stays local.
 
 **The tricks** (see inline comments in `sample.json`):
 
 0. **TSV not CSV** — `csv_delimiter_in: "\t"` switches the parser to tab
    delimiting; output stays CSV for downstream tools.
    - **Unquoted TSV with literal `"`** — `csv_text_quote_in: "none"` turns
-     off RFC-4180 quote handling. BXP defaults the input quote to `"`; left
-     on, the `"` inside titles merges lines and silently drops ~256k rows on
-     the full file. This is invisible on the 500-row slice (no quoted titles
+     off RFC-4180 quote handling, so a `"` in a title is plain data. BXP
+     defaults the input quote to `"`; with lazy-quote handling it no longer
+     merges rows even then — every row is kept and the 2 lines with an
+     unbalanced `"` get a warning (older RFC-4180 tools silently drop ~256k
+     rows). `none` is preferred for a known-unquoted format: same result,
+     no warning. This is invisible on the 500-row slice (no quoted titles
      in it) — see the scale note above.
 1. **`\N` null marker** — `IF([X] = '\N', '', [X])` rewritten three times
    (startYear, endYear, runtimeMinutes) plus once for the whole `genres`
