@@ -267,9 +267,21 @@ const Tokenizer = struct {
     /// offending token through every parse-method call site.
     last_offset: u32 = 0,
     last_len: u32 = 0,
+    /// Phase 3B (tokenize-once): when non-null, `next`/`peek` replay these
+    /// pre-tokenized tokens instead of lexing `src` again. Built once per file
+    /// by `tokenizeAll`; `cache_idx` is the replay cursor. `src` is kept as the
+    /// original source so token slices and trace offsets stay valid.
+    cache: ?[]const Token = null,
+    cache_idx: usize = 0,
 
     fn init(src: []const u8) Tokenizer {
         return .{ .src = src, .pos = 0 };
+    }
+
+    /// Tokenizer that replays a cached token slice (no re-lexing). The slice
+    /// must end with the `.eof` token produced by `tokenizeAll`.
+    fn initCache(src: []const u8, toks: []const Token) Tokenizer {
+        return .{ .src = src, .pos = 0, .cache = toks };
     }
 
     // Only spaces are stripped — tabs/newlines are not valid in bxp
@@ -299,6 +311,21 @@ const Tokenizer = struct {
     }
 
     fn next(self: *Tokenizer) !Token {
+        // Phase 3B: replay from the token cache (no re-lexing). Keep `pos` and
+        // `last_offset`/`last_len` in sync so error spans and the function-call
+        // trace (which read `tok.pos` / `tok.src`) behave exactly as the lexing
+        // path. Past the cached `.eof`, keep returning eof.
+        if (self.cache) |c| {
+            const tok = if (self.cache_idx < c.len)
+                c[self.cache_idx]
+            else
+                Token{ .kind = .eof, .text = "", .offset = @intCast(self.src.len), .len = 0 };
+            self.cache_idx += 1;
+            self.last_offset = tok.offset;
+            self.last_len = tok.len;
+            self.pos = tok.offset + tok.len;
+            return tok;
+        }
         self.skipWs();
         if (self.pos >= self.src.len) return self.mkTok(.eof, "", self.pos);
 
@@ -413,6 +440,12 @@ const Tokenizer = struct {
     // so the net result is correct. The Parser's `setDetail` always runs
     // AFTER a confirming `next()`, so the span it picks up is accurate.
     fn peek(self: *Tokenizer) !Token {
+        if (self.cache != null) {
+            const saved = self.cache_idx;
+            const tok = try self.next();
+            self.cache_idx = saved;
+            return tok;
+        }
         const saved = self.pos;
         const tok = try self.next();
         self.pos = saved;
@@ -2964,22 +2997,61 @@ pub const Node = union(enum) {
     /// A bare `[Name]` column reference, resolved against this file's header.
     /// `null` = the column is absent in this file (evaluates to "").
     col_ref: ?usize,
+    /// Phase 3B (tokenize-once): the expression source plus its tokens, lexed
+    /// once. Per row the parser/evaluator runs over `tokens` without re-lexing
+    /// `src`. `src` is retained for trace offsets and error context.
+    tokenized: struct { src: []const u8, tokens: []const Token },
 };
 
+/// Lex `src` into an owned token slice ending in `.eof`. Propagates the
+/// tokenizer's `error.UnexpectedChar` so the caller can fall back to `.raw`.
+fn tokenizeAll(src: []const u8, alloc: std.mem.Allocator) ![]const Token {
+    var list: std.ArrayList(Token) = .empty;
+    errdefer list.deinit(alloc);
+    var tok = Tokenizer.init(src);
+    while (true) {
+        const t = try tok.next();
+        try list.append(alloc, t);
+        if (t.kind == .eof) break;
+    }
+    return list.toOwnedSlice(alloc);
+}
+
 /// Compile `src` against a (per-file) `col_index` into a `Node`. Never fails to
-/// produce a node: anything unsupported becomes `.raw`. `alloc` is reserved for
-/// future node kinds that need to own data.
+/// produce a node: anything unsupported becomes `.raw`.
 pub fn compile(src: []const u8, col_index: *const std.StringHashMap(usize), alloc: std.mem.Allocator) Node {
-    _ = alloc;
-    // Phase 1: a source that is exactly one named column reference `[Name]`.
-    // Numeric `[n]` index refs are left to `.raw` for now.
+    // Empty source: the fused evaluator short-circuits to "" — keep `.raw`.
+    if (src.len == 0) return .{ .raw = src };
+    // A source that is exactly one named column reference `[Name]` — resolve the
+    // index once (no per-row hash lookup). Numeric `[n]` refs stay on the token
+    // path below.
     var tok = Tokenizer.init(src);
     const t0 = tok.next() catch return .{ .raw = src };
     if (t0.kind == .field_ref and t0.text.len > 0 and !std.ascii.isDigit(t0.text[0])) {
         const t1 = tok.next() catch return .{ .raw = src };
         if (t1.kind == .eof) return .{ .col_ref = col_index.get(t0.text) };
     }
-    return .{ .raw = src };
+    // Tokenize-once: lex the whole expression now; per row the parser replays
+    // these tokens. On a lex error, fall back to `.raw` (the per-row path
+    // re-lexes and fails identically).
+    const toks = tokenizeAll(src, alloc) catch return .{ .raw = src };
+    return .{ .tokenized = .{ .src = src, .tokens = toks } };
+}
+
+/// Evaluate a compiled node to a `Value`, byte-identical to `eval(src, ctx)`
+/// for the equivalent source. Used where the caller needs the raw value (e.g.
+/// `row_rules` `when` → `.toBool()`), not the string coercion.
+pub fn evalNode(node: *const Node, ctx: *const Context) !Value {
+    switch (node.*) {
+        .raw => |s| return eval(s, ctx),
+        // Mirrors eval("[Name]"): the trimmed field value (or "" when absent),
+        // with no numeric canonicalisation (that is an evalString concern).
+        .col_ref => |idx| return Value{ .string = if (idx) |i| ctx.field(i) else "" },
+        .tokenized => |nd| {
+            var p = Parser{ .tok = Tokenizer.initCache(nd.src, nd.tokens), .ctx = ctx };
+            return p.parseExpr();
+        },
+    }
 }
 
 /// Evaluate a compiled node to its string form, byte-identical to
@@ -2992,6 +3064,15 @@ pub fn evalNodeString(node: *const Node, ctx: *const Context) ![]const u8 {
         .col_ref => |idx| {
             const raw = if (idx) |i| ctx.field(i) else "";
             return canonicaliseNumericString(raw, ctx.alloc);
+        },
+        // Mirrors eval(src)+evalString coercion, but parses over cached tokens.
+        .tokenized => {
+            const v = try evalNode(node, ctx);
+            const s = try v.toString(ctx.alloc);
+            return switch (v) {
+                .string => canonicaliseNumericString(s, ctx.alloc),
+                else => s,
+            };
         },
     }
 }

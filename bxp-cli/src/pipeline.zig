@@ -982,6 +982,19 @@ const RowEvalConst = struct {
     /// declaration order). `evalAllVars` evaluates these nodes per row instead
     /// of re-parsing the source string each time. `null` on the pre_pass path.
     compiled_schema: ?[]const expr_mod.Node = null,
+    /// Phase 3B: row_rules expressions precompiled once per file, indexed by
+    /// `row_rules` position. Each `when` + every override value is a compiled
+    /// node so the per-row rule walk parses over cached tokens instead of
+    /// re-lexing. `null` on the pre_pass path.
+    compiled_rules: ?[]const CompiledRule = null,
+};
+
+/// Phase 3B: one rule's precompiled expressions. `when` mirrors `rule.when`;
+/// `rows[ri]` holds the compiled override-value nodes for the ri-th output row,
+/// aligned with that row's `StringArrayHashMap` iteration order.
+const CompiledRule = struct {
+    when: expr_mod.Node,
+    rows: []const []const expr_mod.Node,
 };
 
 /// Mutable per-evaluation emit sinks. In the serial path these point at
@@ -1067,7 +1080,12 @@ fn evalAndEmitRow(
     var matched_rule_index: ?usize = null;
     for (rules, 0..) |rule, rule_index| {
         row_detail = "";
-        const when_val = expr_mod.eval(rule.when, &row_ctx) catch |err| {
+        // Phase 3B: evaluate the precompiled `when` node (cached tokens) when
+        // available; byte-identical to re-lexing `rule.when`.
+        const when_val = (if (rec.compiled_rules) |cr|
+            expr_mod.evalNode(&cr[rule_index].when, &row_ctx)
+        else
+            expr_mod.eval(rule.when, &row_ctx)) catch |err| {
             if (out.debug) {
                 if (row_detail.len > 0) {
                     out.writer.print("[row_rules when error] \"{s}\": {s} ({s})\n", .{ rule.when, @errorName(err), row_detail }) catch {};
@@ -1098,15 +1116,20 @@ fn evalAndEmitRow(
     var row_bin_frame_emitted = false;
     if (matched_rule_index) |rule_index| {
         const rule = rules[rule_index];
-        for (rule.rows) |row_override| {
+        for (rule.rows, 0..) |row_override, ri| {
             // Start from base vars, then apply per-row overrides.
             var merged = std.StringHashMap([]const u8).init(line_alloc);
             var base_it = vars.iterator();
             while (base_it.next()) |entry| try merged.put(entry.key_ptr.*, entry.value_ptr.*);
             var ov_it = row_override.iterator();
-            while (ov_it.next()) |entry| {
+            var ov_k: usize = 0;
+            while (ov_it.next()) |entry| : (ov_k += 1) {
                 row_detail = "";
-                const val = expr_mod.evalString(entry.value_ptr.*, &row_ctx) catch |err| blk: {
+                // Phase 3B: evaluate the precompiled override node when available.
+                const val = (if (rec.compiled_rules) |cr|
+                    expr_mod.evalNodeString(&cr[rule_index].rows[ri][ov_k], &row_ctx)
+                else
+                    expr_mod.evalString(entry.value_ptr.*, &row_ctx)) catch |err| blk: {
                     if (out.debug) {
                         if (row_detail.len > 0) {
                             out.writer.print("[row_rules error] {s} = \"{s}\": {s} ({s})\n", .{ entry.key_ptr.*, entry.value_ptr.*, @errorName(err), row_detail }) catch {};
@@ -2485,6 +2508,28 @@ pub fn processBroker(
             compiled_schema[i] = expr_mod.compile(src, &col_index, file_alloc);
         }
 
+        // Phase 3B: precompile row_rules `when` + override values once per file,
+        // aligned with each override map's iteration order so the per-row walk
+        // can index into `compiled_rules` instead of re-lexing.
+        var compiled_rules: ?[]const CompiledRule = null;
+        if (bc.row_rules) |rrules| {
+            const cr = try file_alloc.alloc(CompiledRule, rrules.len);
+            for (rrules, 0..) |rule, ri| {
+                const rows_nodes = try file_alloc.alloc([]const expr_mod.Node, rule.rows.len);
+                for (rule.rows, 0..) |orow, rj| {
+                    const ov = try file_alloc.alloc(expr_mod.Node, orow.count());
+                    var it = orow.iterator();
+                    var k: usize = 0;
+                    while (it.next()) |entry| : (k += 1) {
+                        ov[k] = expr_mod.compile(entry.value_ptr.*, &col_index, file_alloc);
+                    }
+                    rows_nodes[rj] = ov;
+                }
+                cr[ri] = .{ .when = expr_mod.compile(rule.when, &col_index, file_alloc), .rows = rows_nodes };
+            }
+            compiled_rules = cr;
+        }
+
         // Const inputs shared between JSON serial loop and CSV parallel
         // workers. Both paths thread this through `evalAndEmitRow`; the
         // const view stays read-only inside workers.
@@ -2501,6 +2546,7 @@ pub fn processBroker(
             .date_fast_path = date_fast_path,
             .rule_skip_sets = rule_skip_sets,
             .compiled_schema = compiled_schema,
+            .compiled_rules = compiled_rules,
         };
 
         if (json_streaming) {
