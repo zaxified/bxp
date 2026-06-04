@@ -64,8 +64,10 @@ What landed:
   raise false errors; a genuinely out-of-range value is `NotANumber` and
   arithmetic past the range is a `NumberOverflow` error.
 - `json.zig`: plain non-integer JSON decimals canonicalise via a string-only
-  trailing-zero trim (no `f64` round-trip), preserving input precision;
-  sci-notation still expands via `f64`.
+  trailing-zero trim (no `f64` round-trip), preserving input precision.
+  (Follow-up 2026-06-04: JSON **and** xlsx scientific notation now expand
+  through the same `Decimal` core too — exact to i128, float-free — so the
+  CSV / JSON / xlsx input paths parse an identical numeric string identically.)
 - Passthrough ≠ computed invariant preserved — high-precision IDs/coords never
   enter `Decimal` (verified: 15-digit airbnb coords survive verbatim).
 - Re-baselined `datasets/` (4 price fixtures: 8→12 digit divisions), expr
@@ -273,13 +275,14 @@ quirk is a real broker-export pattern that the current bxp-cli template
 language can't express cleanly; the workaround today is "tell the user
 to pre-process the file" or "skip the affected rows".
 
-- **CSV preamble / title line skipping.** Schwab's transactions CSV
-  starts with `"Transactions for account XXXX-1234 as of …"` on line 1
-  and the actual headers on line 2. bxp-cli has `xlsx_sheet.header_row`
-  for xlsx but no equivalent for plain CSV. Add
-  `csv_header_row: N` (default `1`) — skip the first `N-1` lines before
-  treating line `N` as the header. Touches `pipeline.zig` (`ChunkReader`
-  header skip) + `config.zig` (FieldDoc + load) + integration test.
+- ~~**CSV preamble / title line skipping.**~~ — DONE 2026-06-04. Shipped as
+  the per-template `csv_header_line` key (1-based, default 1): `N>1` skips the
+  `N-1` preamble lines and treats line `N` as the header (Schwab's title-line
+  case), and `0` means the file has no header at all — no line is consumed,
+  the first row is data, and columns are reachable only by position via
+  `FIELDS(n)`. CSV-only; threaded through both read paths (`parseCsvHeader`
+  serial/pre_pass + `skipBomAndHeader` parallel). `config.zig` FieldDoc + load,
+  parse + defaults unit tests.
 
 - **Multi-CSV-in-one-file (blank-line separated).** Some brokers
   concatenate multiple sub-CSVs into a single `.csv`, separated by one
