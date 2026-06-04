@@ -523,36 +523,46 @@ fn evalAllVars(
     source_locator: u64,
     folded: ?*const std.StringHashMap([]const u8),
     skip: ?*const std.StringHashMap(void),
+    compiled: ?[]const expr_mod.Node,
 ) !std.StringHashMap([]const u8) {
     var vars = std.StringHashMap([]const u8).init(ctx.alloc);
     var detail: []const u8 = "";
     const saved_detail = ctx.error_detail;
     ctx.error_detail = &detail;
     defer ctx.error_detail = saved_detail;
-    var it = schema.iterator();
-    while (it.next()) |e| {
+    // Index-based walk so `compiled[i]` (Phase 3B) aligns with the i-th schema
+    // entry (StringArrayHashMap preserves declaration order).
+    const keys = schema.keys();
+    const values = schema.values();
+    for (keys, values, 0..) |key, value, i| {
         // bod 2: the winning rule overwrites this var in every output row, so its
         // base value is dead work — skip it. The override supplies the value.
         if (skip) |sk| {
-            if (sk.contains(e.key_ptr.*)) continue;
+            if (sk.contains(key)) continue;
         }
         // Constant fold: row-invariant vars were evaluated once at file-start.
         // Reuse the precomputed value — byte-identical to per-row eval since
         // the expression references no field/lookup/nondeterministic builtin.
         if (folded) |fm| {
-            if (fm.get(e.key_ptr.*)) |fv| {
-                try vars.put(e.key_ptr.*, fv);
+            if (fm.get(key)) |fv| {
+                try vars.put(key, fv);
                 continue;
             }
         }
         detail = "";
-        const val = expr_mod.evalString(e.value_ptr.*, ctx) catch |err| blk: {
+        // Phase 3B: evaluate the precompiled node when available (byte-identical
+        // to evalString of the source); else evaluate the source directly.
+        const eval_result = if (compiled) |nodes|
+            expr_mod.evalNodeString(&nodes[i], ctx)
+        else
+            expr_mod.evalString(value, ctx);
+        const val = eval_result catch |err| blk: {
             error_count.* += 1;
             if (out.debug) {
                 if (detail.len > 0) {
-                    out.writer.print("[expr error] {s} = \"{s}\": {s} ({s})\n  fields:", .{ e.key_ptr.*, e.value_ptr.*, @errorName(err), detail }) catch {};
+                    out.writer.print("[expr error] {s} = \"{s}\": {s} ({s})\n  fields:", .{ key, value, @errorName(err), detail }) catch {};
                 } else {
-                    out.writer.print("[expr error] {s} = \"{s}\": {s}\n  fields:", .{ e.key_ptr.*, e.value_ptr.*, @errorName(err) }) catch {};
+                    out.writer.print("[expr error] {s} = \"{s}\": {s}\n  fields:", .{ key, value, @errorName(err) }) catch {};
                 }
                 for (ctx.fields) |f| {
                     out.writer.print(" \"{s}\"", .{f}) catch {};
@@ -560,10 +570,10 @@ fn evalAllVars(
                 out.writer.print("\n", .{}) catch {};
                 out.writer.flush() catch {};
             }
-            out.binEmitErrorRow(source_locator, e.key_ptr.*, @errorName(err), detail, "input_schema");
+            out.binEmitErrorRow(source_locator, key, @errorName(err), detail, "input_schema");
             break :blk "";
         };
-        try vars.put(e.key_ptr.*, val);
+        try vars.put(key, val);
     }
     return vars;
 }
@@ -968,6 +978,10 @@ const RowEvalConst = struct {
     /// skips those vars' base eval — the override supplies them. Empty on the
     /// pre_pass path.
     rule_skip_sets: []const std.StringHashMap(void) = &.{},
+    /// Phase 3B: input_schema expressions precompiled once per file (indexed in
+    /// declaration order). `evalAllVars` evaluates these nodes per row instead
+    /// of re-parsing the source string each time. `null` on the pre_pass path.
+    compiled_schema: ?[]const expr_mod.Node = null,
 };
 
 /// Mutable per-evaluation emit sinks. In the serial path these point at
@@ -1074,7 +1088,7 @@ fn evalAndEmitRow(
     // per-row error frames) for unmatched rows.
     const skip: ?*const std.StringHashMap(void) =
         if (matched_rule_index) |mi| &rec.rule_skip_sets[mi] else null;
-    var vars = try evalAllVars(bc.input_schema, &row_ctx, out, e.expr_errors, row_offset, rec.folded_vars, skip);
+    var vars = try evalAllVars(bc.input_schema, &row_ctx, out, e.expr_errors, row_offset, rec.folded_vars, skip, rec.compiled_schema);
 
     // Track whether this source row produced any row-level bin frame
     // (output_row or filtered_row). If not, we synthesise a `filtered_row`
@@ -2461,6 +2475,16 @@ pub fn processBroker(
             }
         }
 
+        // Phase 3B: precompile every input_schema expression once per file (the
+        // file's col_index is now known). evalAllVars evaluates these nodes per
+        // row instead of re-parsing the source string. Unsupported shapes fall
+        // back to `.raw` (legacy fused eval) — byte-identical until later phases
+        // lower more node kinds.
+        const compiled_schema = try file_alloc.alloc(expr_mod.Node, bc.input_schema.count());
+        for (bc.input_schema.values(), 0..) |src, i| {
+            compiled_schema[i] = expr_mod.compile(src, &col_index, file_alloc);
+        }
+
         // Const inputs shared between JSON serial loop and CSV parallel
         // workers. Both paths thread this through `evalAndEmitRow`; the
         // const view stays read-only inside workers.
@@ -2476,6 +2500,7 @@ pub fn processBroker(
             .folded_vars = &folded_vars,
             .date_fast_path = date_fast_path,
             .rule_skip_sets = rule_skip_sets,
+            .compiled_schema = compiled_schema,
         };
 
         if (json_streaming) {

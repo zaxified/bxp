@@ -2944,6 +2944,58 @@ pub fn evalString(src: []const u8, ctx: *const Context) ![]const u8 {
     };
 }
 
+// ---------------------------------------------------------------------------
+// Phase 3B — compile-once / eval-many (incremental, fallback-based)
+// ---------------------------------------------------------------------------
+//
+// A `Node` is a compiled expression form, built once per file (when the file's
+// `col_index` is known) and re-evaluated per row WITHOUT re-tokenizing or
+// re-parsing the source string. The split is introduced incrementally: every
+// shape `compile` does not yet specialise collapses to `.raw`, which simply
+// re-invokes the fused `eval`/`evalString` — byte-identical to the legacy path.
+// Each later phase teaches `compile` (and `evalNodeString`) one more node kind,
+// shrinking the `.raw` fallback set, and is gated bit-by-bit on its own.
+
+/// One compiled expression. Non-exhaustive in spirit: `.raw` is the catch-all
+/// that preserves exact legacy behaviour for any construct not yet lowered.
+pub const Node = union(enum) {
+    /// Unspecialised: re-parse + evaluate `src` with the fused evaluator.
+    raw: []const u8,
+    /// A bare `[Name]` column reference, resolved against this file's header.
+    /// `null` = the column is absent in this file (evaluates to "").
+    col_ref: ?usize,
+};
+
+/// Compile `src` against a (per-file) `col_index` into a `Node`. Never fails to
+/// produce a node: anything unsupported becomes `.raw`. `alloc` is reserved for
+/// future node kinds that need to own data.
+pub fn compile(src: []const u8, col_index: *const std.StringHashMap(usize), alloc: std.mem.Allocator) Node {
+    _ = alloc;
+    // Phase 1: a source that is exactly one named column reference `[Name]`.
+    // Numeric `[n]` index refs are left to `.raw` for now.
+    var tok = Tokenizer.init(src);
+    const t0 = tok.next() catch return .{ .raw = src };
+    if (t0.kind == .field_ref and t0.text.len > 0 and !std.ascii.isDigit(t0.text[0])) {
+        const t1 = tok.next() catch return .{ .raw = src };
+        if (t1.kind == .eof) return .{ .col_ref = col_index.get(t0.text) };
+    }
+    return .{ .raw = src };
+}
+
+/// Evaluate a compiled node to its string form, byte-identical to
+/// `evalString(src, ctx)` for the equivalent source.
+pub fn evalNodeString(node: *const Node, ctx: *const Context) ![]const u8 {
+    switch (node.*) {
+        .raw => |s| return evalString(s, ctx),
+        // Mirrors evalString("[Name]"): eval yields the trimmed field string
+        // (or "" when the column is absent), then canonicaliseNumericString.
+        .col_ref => |idx| {
+            const raw = if (idx) |i| ctx.field(i) else "";
+            return canonicaliseNumericString(raw, ctx.alloc);
+        },
+    }
+}
+
 /// Canonicalises a STRING value that may look numeric, WITHOUT quantising it
 /// through the fixed-point core (which would truncate high-precision
 /// passthrough data to 12 decimals):
