@@ -16,12 +16,24 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/diagnostics.zig"),
     });
 
+    // decimal.zig is the fixed-point numeric core shared by every input path
+    // that turns a numeric string into a value: expr.zig (expression eval),
+    // json.zig and xlsx.zig (input number canonicalisation). It must be a
+    // single named module — file-relative @import from more than one module
+    // would put the same file in multiple modules (compile error).
+    const decimal_mod = b.addModule("decimal", .{
+        .root_source_file = b.path("src/decimal.zig"),
+    });
+
     _ = b.addModule("csv", .{
         .root_source_file = b.path("src/csv.zig"),
     });
 
     _ = b.addModule("json", .{
         .root_source_file = b.path("src/json.zig"),
+        .imports = &.{
+            .{ .name = "decimal", .module = decimal_mod },
+        },
     });
 
     _ = b.addModule("btrace", .{
@@ -30,12 +42,18 @@ pub fn build(b: *std.Build) void {
 
     _ = b.addModule("xlsx", .{
         .root_source_file = b.path("src/xlsx.zig"),
+        .imports = &.{
+            .{ .name = "decimal", .module = decimal_mod },
+        },
     });
 
     // expr.zig pulls in its date core via a file-relative @import("datefmt.zig"),
-    // so no named module wiring is needed for it.
+    // and the shared decimal numeric core via the named "decimal" module.
     const expr_mod = b.addModule("expr", .{
         .root_source_file = b.path("src/expr.zig"),
+        .imports = &.{
+            .{ .name = "decimal", .module = decimal_mod },
+        },
     });
 
     // config.zig uses @import("json5.zig") — the import name must match.
@@ -78,6 +96,9 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .strip = false,
+            .imports = &.{
+                .{ .name = "decimal", .module = decimal_mod },
+            },
         }),
     });
 
@@ -96,6 +117,9 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .strip = false,
+            .imports = &.{
+                .{ .name = "decimal", .module = decimal_mod },
+            },
         }),
     });
 
@@ -108,9 +132,9 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
-    // decimal.zig is the fixed-point numeric core; expr.zig pulls it in via a
-    // file-relative @import (like datefmt.zig), so no named module is needed —
-    // only the standalone test artifact.
+    // decimal.zig is the fixed-point numeric core, wired as the named "decimal"
+    // module above (shared by expr/json/xlsx). This is its standalone test
+    // artifact — the file is both a module root and a test root, same as json5.
     const decimal_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/decimal.zig"),
@@ -144,6 +168,9 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .strip = false,
+            .imports = &.{
+                .{ .name = "decimal", .module = decimal_mod },
+            },
         }),
     });
 

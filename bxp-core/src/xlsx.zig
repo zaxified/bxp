@@ -11,6 +11,7 @@
 /// Not supported: encrypted workbooks, LZMA-compressed ZIP entries.
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const Decimal = @import("decimal").Decimal;
 
 const ZIP_READ_BUF_SIZE: usize = 8192;
 const CSV_OUT_BUF_SIZE: usize = 65536;
@@ -576,8 +577,8 @@ fn parseSheet(
 
 /// Normalizes a numeric string:
 /// - Strips trailing zeros after the decimal point: "518.740000" → "518.74", "1.0000" → "1".
-/// - Converts scientific notation to decimal when the value is a whole number:
-///   "2.087960758E9" → "2087960758".
+/// - Expands scientific notation to plain decimal: "2.087960758E9" →
+///   "2087960758", "1.5E-3" → "0.0015".
 /// - Leaves other forms unchanged.
 ///
 /// Excel stores numeric values at full f64 precision in the XML (e.g. ISIN
@@ -585,18 +586,20 @@ fn parseSheet(
 /// Downstream bxp-cli expressions expect clean integers or minimal decimals,
 /// so normalization here prevents noise in rule comparisons and output values.
 ///
-/// The 1e15 guard on scientific notation prevents precision loss: f64 has
-/// ~15–16 significant decimal digits, so integers beyond 1e15 cannot round-
-/// trip exactly through @intFromFloat and should be left in their raw form.
+/// Scientific notation expands through the shared fixed-point `Decimal` core
+/// (exact across the full i128 range, no float round-trip), the same numeric
+/// core json.zig and expr.zig use — so the xlsx, JSON and CSV input paths all
+/// turn an identical numeric string into an identical value.
 fn normalizeNumber(alloc: Allocator, raw: []const u8) ![]u8 {
-    // Scientific notation — parse and reformat as integer if the value is whole.
+    // Scientific notation — expand through the shared fixed-point decimal core
+    // (exact to i128, float-free), the same numeric core json.zig and expr.zig
+    // use. Replaces the former f64 round-trip + `@abs(f) < 1e15` guard: Decimal
+    // is exact across the full i128 range, and canonicalises fractional values
+    // too ("1.5E-3" → "0.0015"), not only whole ones. Overflow / unparseable
+    // falls back to the raw token. `@constCast` is sound — toString returns a
+    // freshly allocated, single-owner buffer that this function owns.
     if (std.mem.indexOfAny(u8, raw, "Ee")) |_| {
-        const f = std.fmt.parseFloat(f64, raw) catch return alloc.dupe(u8, raw);
-        const rounded = @round(f);
-        if (f == rounded and @abs(f) < 1e15) {
-            const i: i64 = @intFromFloat(rounded);
-            return std.fmt.allocPrint(alloc, "{d}", .{i});
-        }
+        if (Decimal.parse(raw)) |d| return @constCast(try d.toString(alloc));
         return alloc.dupe(u8, raw);
     }
     // Decimal — strip trailing zeros.
@@ -1047,7 +1050,7 @@ test "colRefToIndex: bijective base-26, row digits ignored, case-insensitive" {
     try testing.expectEqual(@as(u32, 0), colRefToIndex("7")); // no letters → 0
 }
 
-test "normalizeNumber: trailing-zero strip + scientific reformat + 1e15 guard" {
+test "normalizeNumber: trailing-zero strip + decimal-core scientific expansion" {
     const a = testing.allocator;
     const cases = [_]struct { in: []const u8, want: []const u8 }{
         .{ .in = "1.0000", .want = "1" }, // all decimals stripped → drop point
@@ -1056,8 +1059,11 @@ test "normalizeNumber: trailing-zero strip + scientific reformat + 1e15 guard" {
         .{ .in = "1.5", .want = "1.5" },
         .{ .in = "1E5", .want = "100000" }, // whole-valued sci → integer
         .{ .in = "1.5E2", .want = "150" },
-        // Past the 1e15 exactness guard the raw string is preserved untouched.
-        .{ .in = "1e20", .want = "1e20" },
+        .{ .in = "1.5E-3", .want = "0.0015" }, // fractional sci now expands too
+        // Decimal core is exact across the full i128 range — no 1e15 guard.
+        .{ .in = "1e20", .want = "100000000000000000000" },
+        // Genuinely out of i128 range → raw token preserved (passthrough).
+        .{ .in = "1e40", .want = "1e40" },
     };
     for (cases) |c| {
         const got = try normalizeNumber(a, c.in);

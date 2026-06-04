@@ -26,14 +26,16 @@
 ///   .string         → owned dupe in row_alloc
 ///   integer-like #  → owned dupe of the number text (passes JSON literal
 ///                     verbatim — matches `allocPrint("{d}", .{i64})`)
-///   non-integer #   → parsed to f64, re-formatted via `allocPrint("{d}",
-///                     .{f64})` so "415.20" canonicalises to "415.2"
+///   non-integer #   → trailing-zero trimmed as a string ("415.20" → "415.2");
+///                     scientific notation expands through the fixed-point
+///                     `Decimal` core (exact to i128, float-free)
 ///   nested {} / []  → silently collapsed to "" (skipValue advances the
 ///                     scanner past the structure)
 
 const std = @import("std");
 const Scanner = std.json.Scanner;
 const Reader = std.json.Reader;
+const Decimal = @import("decimal").Decimal;
 
 /// Scanner read buffer. Sized to absorb a few records per refill without
 /// being so large that a tiny input over-allocates. Records bigger than
@@ -317,17 +319,22 @@ pub const RecordReader = struct {
 ///     verbatim — full precision regardless of digit count.
 ///   * plain decimals get a string-only trailing-zero trim ("415.20" → "415.2",
 ///     but "40.718807220458984" is kept intact — no `f64` truncation).
-///   * scientific notation is the one form that genuinely needs a numeric
-///     round-trip; it still expands via `f64` ("1e3" → "1000"). Such values
-///     are not the precision-sensitive (>15-digit) class the trim protects.
+///   * scientific notation expands through the shared fixed-point `Decimal`
+///     core ("1e3" → "1000"), exact to i128 with no float round-trip — the
+///     same numeric core the CSV path uses at field access, so JSON and CSV
+///     parse identical numeric strings identically.
 fn numberStringToOutput(row_alloc: std.mem.Allocator, num_str: []const u8) ![]const u8 {
     if (std.json.isNumberFormattedLikeAnInteger(num_str)) {
         return try row_alloc.dupe(u8, num_str);
     }
-    // Scientific notation: expand via f64 (round-trip acceptable here).
+    // Scientific notation: expand through the shared fixed-point decimal core
+    // (exact to i128, no float round-trip — mirrors the CSV path, which defers
+    // numeric strings to `Decimal` at field access rather than parsing them
+    // through a float at read time). If the value overflows i128 or isn't
+    // parseable, pass the source token through verbatim (passthrough resilience).
     if (std.mem.indexOfAny(u8, num_str, "eE") != null) {
-        const f = try std.fmt.parseFloat(f64, num_str);
-        return try std.fmt.allocPrint(row_alloc, "{d}", .{f});
+        if (Decimal.parse(num_str)) |d| return try d.toString(row_alloc);
+        return try row_alloc.dupe(u8, num_str);
     }
     // Plain decimal: trim trailing zeros (and a dangling '.') as a string op.
     var end = num_str.len;
@@ -462,4 +469,27 @@ test "RecordReader: unknown keys silently skipped (col_index miss)" {
     defer row_arena.deinit();
     const r = (try rr.next(row_arena.allocator())).?;
     try testing.expectEqualStrings("1", r[0]);
+}
+
+test "numberStringToOutput: decimal-core canonicalisation (CSV-parity, float-free)" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_]struct { in: []const u8, want: []const u8 }{
+        .{ .in = "123", .want = "123" }, // integer-like → verbatim
+        .{ .in = "415.20", .want = "415.2" }, // plain decimal → trailing-zero trim
+        .{ .in = "1e3", .want = "1000" }, // sci → expand
+        .{ .in = "1.5E2", .want = "150" },
+        .{ .in = "1.5e-3", .want = "0.0015" },
+        // The case f64 used to truncate (it dropped the trailing 8). Expansion
+        // now goes through the i128 fixed-point core: 18 significant digits with
+        // exactly 12 fractional places fit scale 1e12 exactly — no rounding.
+        .{ .in = "1.23456789012345678e5", .want = "123456.789012345678" },
+        // Out of i128 range → source token passes through verbatim.
+        .{ .in = "1e40", .want = "1e40" },
+    };
+    for (cases) |c| {
+        const got = try numberStringToOutput(a, c.in);
+        try testing.expectEqualStrings(c.want, got);
+    }
 }

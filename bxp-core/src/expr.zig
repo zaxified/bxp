@@ -35,7 +35,7 @@
 ///   LOOKUP([name,] key, field) — retrieve a value stored by a pre_pass table
 const std = @import("std");
 const datefmt = @import("datefmt.zig");
-const Decimal = @import("decimal.zig").Decimal;
+const Decimal = @import("decimal").Decimal;
 
 // ---------------------------------------------------------------------------
 // Value — the three types an expression can produce

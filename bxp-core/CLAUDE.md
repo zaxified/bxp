@@ -158,8 +158,10 @@ whole-file slurp, no upper file-size limit.
   decimals canonicalise via a **string-only trailing-zero trim** (no `f64`
   round-trip), mirroring the CSV passthrough invariant — so a high-precision
   JSON decimal (e.g. a 15-digit coordinate) survives intact. Scientific
-  notation still expands via `f64` (the one case that needs a numeric
-  round-trip; not the precision-sensitive >15-digit class).
+  notation expands through the shared `decimal.zig` fixed-point core (exact
+  to i128, float-free) — the same numeric core the CSV path uses at field
+  access, so JSON and CSV turn an identical numeric string into an identical
+  value. Out-of-i128-range literals pass through verbatim.
 
 ### btrace.zig
 
@@ -235,15 +237,15 @@ Module exports in `build.zig`: `csv`, `json`, `json5`, `xlsx`, `expr`, `config`,
 Audit follow-up rationale captured here so future audits don't re-flag
 the same observations. If the rationale stops applying, revisit.
 
-- **`xlsx.zig normalizeNumber` 1e15 guard.** A 2026-05-06 audit
-  flagged the `@abs(f) < 1e15` check as letting 16-digit f64 values
-  through. The example given (`9_999_999_999_999_999.0`) actually
-  exceeds 1e15, so the guard correctly rejects it. f64 represents
-  integers exactly up to `2^53 ≈ 9.007e15`; the 1e15 cap leaves a 9×
-  margin below that boundary. Anything passing both `f == rounded`
-  and `@abs(f) < 1e15` is bit-exact through `@intFromFloat` —
-  no precision loss possible. The guard could be raised to
-  `0x20000000000000` (`2^53`) but that's an optimisation, not a fix.
+- **`xlsx.zig normalizeNumber` f64 sci-notation path — removed.** Up to
+  2026-06-04 this expanded scientific notation through `f64` behind an
+  `@abs(f) < 1e15` exactness guard. It now routes through the shared
+  `decimal.zig` fixed-point core (exact across the full i128 range,
+  float-free), the same numeric core json.zig and expr.zig use — so the
+  xlsx, JSON and CSV input paths parse an identical numeric string into an
+  identical value. The 1e15 guard is gone (Decimal is exact well past it),
+  and fractional sci-notation now canonicalises too (`1.5E-3` → `0.0015`),
+  not only whole-valued. Out-of-i128-range literals pass through verbatim.
 
 - **`expr.zig adaptReplace` OOM detail.** A previous audit suggested
   routing OOM through the `setNotANumber` / `error_detail` convention so
