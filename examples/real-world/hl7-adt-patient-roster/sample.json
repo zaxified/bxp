@@ -14,6 +14,12 @@
       // read the whole feed as pipe-delimited rows.
       csv_delimiter_in:  "|",
       csv_delimiter_out: ",",
+      // TRICK 0b — an HL7 feed has NO header row: the first line is an MSH
+      // segment, not column names. csv_header_line: 0 says "headerless" — no
+      // line is consumed as headers, every segment (including the first) is a
+      // data row, and fields are addressed by position via FIELDS(n). Without
+      // it the first MSH line would be silently eaten as a bogus header.
+      csv_header_line:   0,
 
       input_schema: {
         // TRICK 1 — PID field layout (positional): FIELDS(1)=segment id, FIELDS(4)=PID-3

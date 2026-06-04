@@ -10,6 +10,8 @@
       file_pattern_out:  ".csvx",
       csv_delimiter_in:  "|",
       csv_delimiter_out: ",",
+      // Headerless feed (first line is an MSH segment, not column names).
+      csv_header_line:   0,
 
       input_schema: {
         $mrn:    "SPLIT_PART(FIELDS(4), '^', 1)",
