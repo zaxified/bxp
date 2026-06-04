@@ -407,7 +407,7 @@ graph TD
     unary -"]
     UNARY --> ATOM["parseAtom"]
     ATOM --> LIT["string / number literal"]
-    ATOM --> FIELD["[ColumnName] / [n]"]
+    ATOM --> FIELD["[ColumnName]"]
     ATOM --> FUNC["function call
     IF, ABS, COALESCE,
     DATE_CONVERT, NOW, RAND,
@@ -425,8 +425,8 @@ graph TD
     FUNC -.TICKER.-> CTX_TM["Context.ticker_map"]
 ```
 
-Side context dependencies (dotted lines): `[ColumnName]` and `[n]` references
-read `Context.fields` via `Context.col_index`; `LOOKUP(...)` reads
+Side context dependencies (dotted lines): `[ColumnName]` references (and
+`FIELDS(n)` positional access) read `Context.fields` via `Context.col_index`; `LOOKUP(...)` reads
 `Context.lookup_table` populated by the pre-pass; `TICKER(...)` reads
 `Context.ticker_map` (resolved at config-load time from inline objects or the
 top-level `ticker_maps` registry).

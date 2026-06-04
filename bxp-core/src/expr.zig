@@ -223,7 +223,7 @@ const TokKind = enum {
     triple_quote, // ''' — output quote character placeholder
     number_lit, // 123 / 3.14
     ident, // function name or AND/OR keyword
-    field_ref, // [ColumnName] or [3]
+    field_ref, // [ColumnName] (header-name lookup; positional access is FIELDS(n))
     lparen, // (
     rparen, // )
     comma, // ,
@@ -662,9 +662,11 @@ fn tryScanArg(
 
 /// Phase G8: collect static cross-reference data from an expression
 /// source. Walks tokens (no AST, no eval) and gathers:
-///   - `fields` set: every named `[ColumnName]` reference (numeric
-///     `[1]`-style indexes are skipped — they reference columns by
-///     position, not name).
+///   - `fields` set: every named `[ColumnName]` reference. A bracketed
+///     numeric `[1]` is a header-name lookup for a column literally named
+///     "1" (positional access is FIELDS(n), not `[n]`); such all-digit
+///     names are skipped here so the did-you-mean typo consumer doesn't
+///     treat a stray "4" as a misspelled header.
 ///   - `lookups` set: literal first-arg string of every 3-arg
 ///     `LOOKUP("name", key, field)` call. Used to cross-walk against
 ///     declared `pre_passes` block names.
@@ -702,8 +704,10 @@ pub fn staticReferences(src: []const u8, alloc: std.mem.Allocator) !StaticRefs {
         const t = tok.next() catch break;
         if (t.kind == .eof) break;
 
-        // [Name] field references — record by name. Skip numeric
-        // indexes which reference position, not a header name.
+        // [Name] field references — record by name. All-digit bracket names
+        // (`[4]`) are header-name lookups for a column literally named "4"
+        // (positional access is FIELDS(n)); skip them so the did-you-mean typo
+        // consumer doesn't treat a stray numeric name as a misspelled header.
         if (t.kind == .field_ref) {
             if (t.text.len == 0) continue;
             if (std.ascii.isDigit(t.text[0])) continue;
@@ -766,11 +770,12 @@ pub fn staticReferences(src: []const u8, alloc: std.mem.Allocator) !StaticRefs {
 }
 
 /// True when an expression's value is row-invariant — it references no input
-/// column (`[Col]`) and no `LOOKUP` table, and contains no nondeterministic
-/// builtin (`NOW`/`RAND`). Such an expression yields the same value for every
-/// row, so it can be evaluated once per file and the result reused (constant
-/// folding). Conservative: any uncertainty (computed LOOKUP name, tokenizer
-/// error) returns false, leaving the expression on the normal per-row path.
+/// column (`[Col]`), no positional field (`FIELDS(n)`) and no `LOOKUP` table,
+/// and contains no nondeterministic builtin (`NOW`/`RAND`). Such an expression
+/// yields the same value for every row, so it can be evaluated once per file
+/// and the result reused (constant folding). Conservative: any uncertainty
+/// (computed LOOKUP name, tokenizer error) returns false, leaving the
+/// expression on the normal per-row path.
 pub fn isRowInvariant(src: []const u8, alloc: std.mem.Allocator) bool {
     var refs = staticReferences(src, alloc) catch return false;
     defer refs.deinit();
@@ -778,8 +783,12 @@ pub fn isRowInvariant(src: []const u8, alloc: std.mem.Allocator) bool {
     if (refs.lookups.count() != 0) return false;
     if (refs.has_two_arg_lookup or refs.has_computed_lookup_name) return false;
 
-    // Reject the two nondeterministic builtins. Token-level check (not a
-    // substring scan) so a string literal like 'KNOW' is not mistaken for NOW.
+    // Reject the two nondeterministic builtins (NOW/RAND) and the positional
+    // field accessor FIELDS(n): the latter reads row state through a numeric
+    // index, which carries no `[Name]` field_ref token for `staticReferences`
+    // to catch, so it must be rejected here or it would be wrongly folded to a
+    // single empty value. Token-level check (not a substring scan) so a string
+    // literal like 'KNOW' is not mistaken for NOW.
     var tok = Tokenizer.init(src);
     while (true) {
         const t = tok.next() catch return false;
@@ -787,6 +796,7 @@ pub fn isRowInvariant(src: []const u8, alloc: std.mem.Allocator) bool {
         if (t.kind != .ident) continue;
         if (std.ascii.eqlIgnoreCase(t.text, "NOW")) return false;
         if (std.ascii.eqlIgnoreCase(t.text, "RAND")) return false;
+        if (std.ascii.eqlIgnoreCase(t.text, "FIELDS")) return false;
     }
     return true;
 }
@@ -1134,57 +1144,22 @@ const Parser = struct {
         }
     }
 
-    /// Resolves [ColumnName] or [n] (1-based index).
+    /// Resolves [ColumnName] — a header-name lookup only.
+    /// A numeric `[4]` is NOT positional access: it looks up a column literally
+    /// named "4" (normally absent → ""). Positional access by column number is
+    /// FIELDS(n). Keeping the two syntaxes disjoint avoids a numeric `[n]`
+    /// silently constant-folding to "" (it carries no resolvable header).
     /// When decimal_sep_in is not '.', numeric-looking field values are normalized
     /// so that the decimal separator becomes '.' for correct arithmetic evaluation.
     fn evalFieldRef(self: *Parser, name: []const u8) !Value {
-        // Numeric index: [1], [2], ...
-        const raw = if (std.fmt.parseInt(usize, name, 10)) |idx|
-            self.ctx.field(idx - 1) // 1-based → 0-based
-        else |_|
-            self.ctx.fieldByName(name);
+        const raw = self.ctx.fieldByName(name);
 
         // Record the field name so setNotANumber can include it in error
         // detail — "[Price]" in the message is far more actionable than
         // a bare "not a number: '1.234,56'" when decimal_sep_in is wrong.
         self.last_field_name = name;
 
-        // Decimal separator normalisation for non-default locales. Two
-        // shapes are recognised when `decimal_sep_in != '.'`:
-        //
-        //  * Plain decimal-only ("1234,56", "-1,5"): one alternate separator,
-        //    digits otherwise. Validated by `isNumericWithSep`; converted by
-        //    swapping the separator to '.'.
-        //  * Grouped EU thousands ("1.234,56", "-1.234.567,89"): '.' groups of
-        //    three digits + optional decimal. Validated by `parseGroupedNumber`
-        //    with `thousands='.'`, `decimal=decimal_sep_in`; converted by
-        //    stripping '.' and swapping the decimal char.
-        //
-        // Mirrors the American thousands fallback in `Value.toNumber`
-        // (`parseGroupedNumber(s, ',', '.')`) — same algorithm, swapped
-        // separators. Only allocate a copy when the field is genuinely a
-        // recognised numeric shape; raw strings like "N/A" are returned as-is.
-        if (self.ctx.decimal_sep_in != '.') {
-            const sep = self.ctx.decimal_sep_in;
-            if (parseGroupedNumber(raw, '.', sep) != null) {
-                const copy = try self.ctx.alloc.alloc(u8, raw.len);
-                var ci: usize = 0;
-                for (raw) |c| {
-                    if (c == '.') continue;
-                    copy[ci] = if (c == sep) '.' else c;
-                    ci += 1;
-                }
-                return Value{ .string = copy[0..ci] };
-            }
-            if (std.mem.indexOfScalar(u8, raw, sep) != null and
-                isNumericWithSep(raw, sep))
-            {
-                const copy = try self.ctx.alloc.dupe(u8, raw);
-                std.mem.replaceScalar(u8, copy, sep, '.');
-                return Value{ .string = copy };
-            }
-        }
-        return Value{ .string = raw };
+        return Value{ .string = try normalizeFieldDecimalSep(raw, self.ctx) };
     }
 
     /// Returns true when s looks like a plain number using sep as decimal separator.
@@ -2951,6 +2926,46 @@ pub fn eval(src: []const u8, ctx: *const Context) !Value {
 ///     zero-padded IDs whose leading zeros carry meaning;
 ///   - long all-digit integers (>15 digits) — e.g. a 21-digit account/order
 ///     ID. Short-circuited verbatim before any numeric parse touches them.
+/// Applies `decimal_sep_in` locale normalisation to a raw field value: when the
+/// configured separator is not '.', a recognised numeric shape has its separator
+/// swapped to '.' so downstream arithmetic and output see a canonical decimal.
+/// Two shapes are recognised:
+///   * Plain decimal-only ("1234,56", "-1,5"): one alternate separator, digits
+///     otherwise — validated by `isNumericWithSep`, converted by swapping it.
+///   * Grouped EU thousands ("1.234,56", "-1.234.567,89"): '.' thousands groups +
+///     optional decimal — validated by `parseGroupedNumber`, converted by
+///     stripping '.' and swapping the decimal char.
+///
+/// This is a PURE STRING operation: it swaps the separator character WITHOUT
+/// converting to a number (the `parseGroupedNumber` call is only a validity
+/// predicate; its value is discarded). So a high-precision value — a 15-digit
+/// coordinate "40,718807220458984" or a long ID — keeps every digit and never
+/// touches the fixed-point core; nothing is quantised to 12 decimals.
+///
+/// Shared by the fused field-ref path (`Parser.evalFieldRef`) and the compiled
+/// `col_ref` fast path so both locale-normalise identically. Non-numeric input,
+/// or a default '.' separator, returns `raw` unchanged.
+fn normalizeFieldDecimalSep(raw: []const u8, ctx: *const Context) ![]const u8 {
+    if (ctx.decimal_sep_in == '.') return raw;
+    const sep = ctx.decimal_sep_in;
+    if (parseGroupedNumber(raw, '.', sep) != null) {
+        const copy = try ctx.alloc.alloc(u8, raw.len);
+        var ci: usize = 0;
+        for (raw) |c| {
+            if (c == '.') continue;
+            copy[ci] = if (c == sep) '.' else c;
+            ci += 1;
+        }
+        return copy[0..ci];
+    }
+    if (std.mem.indexOfScalar(u8, raw, sep) != null and Parser.isNumericWithSep(raw, sep)) {
+        const copy = try ctx.alloc.dupe(u8, raw);
+        std.mem.replaceScalar(u8, copy, sep, '.');
+        return copy;
+    }
+    return raw;
+}
+
 fn isPrecisionSensitiveText(s: []const u8) bool {
     if (s.len >= 2 and s[0] == '0' and s[1] >= '0' and s[1] <= '9') return true;
     if (s.len > 15) {
@@ -3045,8 +3060,9 @@ pub fn evalNode(node: *const Node, ctx: *const Context) !Value {
     switch (node.*) {
         .raw => |s| return eval(s, ctx),
         // Mirrors eval("[Name]"): the trimmed field value (or "" when absent),
-        // with no numeric canonicalisation (that is an evalString concern).
-        .col_ref => |idx| return Value{ .string = if (idx) |i| ctx.field(i) else "" },
+        // locale-normalised exactly as `Parser.evalFieldRef` does, with no
+        // numeric canonicalisation (that is an evalString concern).
+        .col_ref => |idx| return Value{ .string = if (idx) |i| try normalizeFieldDecimalSep(ctx.field(i), ctx) else "" },
         .tokenized => |nd| {
             var p = Parser{ .tok = Tokenizer.initCache(nd.src, nd.tokens), .ctx = ctx };
             return p.parseExpr();
@@ -3059,10 +3075,11 @@ pub fn evalNode(node: *const Node, ctx: *const Context) !Value {
 pub fn evalNodeString(node: *const Node, ctx: *const Context) ![]const u8 {
     switch (node.*) {
         .raw => |s| return evalString(s, ctx),
-        // Mirrors evalString("[Name]"): eval yields the trimmed field string
-        // (or "" when the column is absent), then canonicaliseNumericString.
+        // Mirrors evalString("[Name]"): eval yields the trimmed, locale-
+        // normalised field string (or "" when the column is absent), then
+        // canonicaliseNumericString.
         .col_ref => |idx| {
-            const raw = if (idx) |i| ctx.field(i) else "";
+            const raw = if (idx) |i| try normalizeFieldDecimalSep(ctx.field(i), ctx) else "";
             return canonicaliseNumericString(raw, ctx.alloc);
         },
         // Mirrors eval(src)+evalString coercion, but parses over cached tokens.
@@ -3779,24 +3796,31 @@ test "eval: [ColumnName] field lookup" {
     try testing.expectEqualStrings("Apple", try evalString("[Name]",  &ctx));
 }
 
-test "eval: [n] 1-based numeric index" {
+test "eval: [n] numeric is a name lookup, not positional (use FIELDS for position)" {
+    // Bracket refs resolve by header name only. A numeric `[1]` looks up a
+    // column literally named "1"; with no such header it yields "". Positional
+    // access by column number is FIELDS(n) (covered by the FIELDS tests).
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
     var h = TestHelper.init(a);
     const ctx = h.ctx(&.{ "first", "second", "third" }, a);
-    try testing.expectEqualStrings("first",  try evalString("[1]", &ctx));
-    try testing.expectEqualStrings("second", try evalString("[2]", &ctx));
-    try testing.expectEqualStrings("third",  try evalString("[3]", &ctx));
+    try testing.expectEqualStrings("", try evalString("[1]", &ctx));
+    try testing.expectEqualStrings("first", try evalString("FIELDS(1)", &ctx));
+    // A header genuinely named "1" is resolved by name like any other column.
+    var h2 = TestHelper.init(a);
+    try h2.col_index.put("1", 0);
+    const ctx2 = h2.ctx(&.{"hit"}, a);
+    try testing.expectEqualStrings("hit", try evalString("[1]", &ctx2));
 }
 
-test "eval: out-of-bounds field returns empty string" {
+test "eval: unknown column name returns empty string" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
     var h = TestHelper.init(a);
     const ctx = h.ctx(&.{ "only" }, a);
-    try testing.expectEqualStrings("", try evalString("[5]", &ctx));
+    try testing.expectEqualStrings("", try evalString("[Missing]", &ctx));
 }
 
 test "eval: decimal_sep_in=',' normalises numeric field value" {
@@ -3804,10 +3828,11 @@ test "eval: decimal_sep_in=',' normalises numeric field value" {
     defer arena.deinit();
     const a = arena.allocator();
     var h = TestHelper.init(a);
+    try h.col_index.put("V", 0);
     var ctx = h.ctx(&.{ "1,5" }, a);
     ctx.decimal_sep_in = ',';
     // The field "1,5" is recognised as numeric → comma replaced by dot → "1.5"
-    try testing.expectEqualStrings("1.5", try evalString("[1]", &ctx));
+    try testing.expectEqualStrings("1.5", try evalString("[V]", &ctx));
 }
 
 test "eval: decimal_sep_in=',' leaves non-numeric fields unchanged" {
@@ -3815,9 +3840,10 @@ test "eval: decimal_sep_in=',' leaves non-numeric fields unchanged" {
     defer arena.deinit();
     const a = arena.allocator();
     var h = TestHelper.init(a);
+    try h.col_index.put("V", 0);
     var ctx = h.ctx(&.{ "hello,world" }, a);
     ctx.decimal_sep_in = ',';
-    try testing.expectEqualStrings("hello,world", try evalString("[1]", &ctx));
+    try testing.expectEqualStrings("hello,world", try evalString("[V]", &ctx));
 }
 
 test "eval: decimal_sep_in=',' parses EU thousands group (1.234,56)" {
@@ -3825,9 +3851,10 @@ test "eval: decimal_sep_in=',' parses EU thousands group (1.234,56)" {
     defer arena.deinit();
     const a = arena.allocator();
     var h = TestHelper.init(a);
+    try h.col_index.put("V", 0);
     var ctx = h.ctx(&.{ "1.234,56" }, a);
     ctx.decimal_sep_in = ',';
-    try testing.expectEqualStrings("1234.56", try evalString("[1]", &ctx));
+    try testing.expectEqualStrings("1234.56", try evalString("[V]", &ctx));
 }
 
 test "eval: decimal_sep_in=',' parses multi-group EU thousands (-1.234.567,89)" {
@@ -3835,9 +3862,10 @@ test "eval: decimal_sep_in=',' parses multi-group EU thousands (-1.234.567,89)" 
     defer arena.deinit();
     const a = arena.allocator();
     var h = TestHelper.init(a);
+    try h.col_index.put("V", 0);
     var ctx = h.ctx(&.{ "-1.234.567,89" }, a);
     ctx.decimal_sep_in = ',';
-    try testing.expectEqualStrings("-1234567.89", try evalString("[1]", &ctx));
+    try testing.expectEqualStrings("-1234567.89", try evalString("[V]", &ctx));
 }
 
 test "eval: decimal_sep_in=',' parses integer-only EU thousands (1.234)" {
@@ -3845,9 +3873,10 @@ test "eval: decimal_sep_in=',' parses integer-only EU thousands (1.234)" {
     defer arena.deinit();
     const a = arena.allocator();
     var h = TestHelper.init(a);
+    try h.col_index.put("V", 0);
     var ctx = h.ctx(&.{ "1.234" }, a);
     ctx.decimal_sep_in = ',';
-    try testing.expectEqualStrings("1234", try evalString("[1]", &ctx));
+    try testing.expectEqualStrings("1234", try evalString("[V]", &ctx));
 }
 
 test "eval: decimal_sep_in=',' rejects invalid grouping (1.5)" {
@@ -3857,9 +3886,10 @@ test "eval: decimal_sep_in=',' rejects invalid grouping (1.5)" {
     defer arena.deinit();
     const a = arena.allocator();
     var h = TestHelper.init(a);
+    try h.col_index.put("V", 0);
     var ctx = h.ctx(&.{ "1.5" }, a);
     ctx.decimal_sep_in = ',';
-    try testing.expectEqualStrings("1.5", try evalString("[1]", &ctx));
+    try testing.expectEqualStrings("1.5", try evalString("[V]", &ctx));
 }
 
 test "eval: decimal_sep_in=',' arithmetic on EU thousands group" {
@@ -3869,9 +3899,10 @@ test "eval: decimal_sep_in=',' arithmetic on EU thousands group" {
     defer arena.deinit();
     const a = arena.allocator();
     var h = TestHelper.init(a);
+    try h.col_index.put("V", 0);
     var ctx = h.ctx(&.{ "1.234,50" }, a);
     ctx.decimal_sep_in = ',';
-    try testing.expectEqualStrings("2469", try evalString("[1] * 2", &ctx));
+    try testing.expectEqualStrings("2469", try evalString("[V] * 2", &ctx));
 }
 
 test "parseGroupedNumber: American format" {
@@ -3902,8 +3933,38 @@ test "evalString: normalises numeric string result (99.00 → 99)" {
     const a = arena.allocator();
     var h = TestHelper.init(a);
     // Field contains "99.00"; evalString re-parses as float → strips trailing zeros.
+    try h.col_index.put("V", 0);
     const ctx = h.ctx(&.{ "99.00" }, a);
-    try testing.expectEqualStrings("99", try evalString("[1]", &ctx));
+    try testing.expectEqualStrings("99", try evalString("[V]", &ctx));
+}
+
+test "col_ref fast-path: decimal_sep_in normalisation matches fused evalFieldRef" {
+    // Regression: the compiled `.col_ref` fast path for a bare `[Name]` used to
+    // call ctx.field() directly, skipping the decimal_sep_in locale swap that
+    // the fused evalFieldRef applies — so a passthrough `[Valeur]` kept its
+    // French comma. Both paths must now produce byte-identical output.
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_]struct { in: []const u8, want: []const u8 }{
+        .{ .in = "346,50", .want = "346.5" }, // plain comma decimal
+        .{ .in = "1.234,56", .want = "1234.56" }, // EU thousands grouping
+        // High-precision comma coordinate: separator swapped, every digit kept
+        // (pure string op — never quantised through the fixed-point core).
+        .{ .in = "40,718807220458984", .want = "40.718807220458984" },
+    };
+    for (cases) |c| {
+        var h = TestHelper.init(a);
+        try h.col_index.put("V", 0);
+        var ctx = h.ctx(&.{c.in}, a);
+        ctx.decimal_sep_in = ',';
+        const node = compile("[V]", &h.col_index, a);
+        try testing.expect(std.meta.activeTag(node) == .col_ref); // exercise the fast path
+        const compiled = try evalNodeString(&node, &ctx);
+        const fused = try evalString("[V]", &ctx);
+        try testing.expectEqualStrings(c.want, fused); // fused is the oracle
+        try testing.expectEqualStrings(fused, compiled); // col_ref == fused
+    }
 }
 
 // ------------------------------------------------------------

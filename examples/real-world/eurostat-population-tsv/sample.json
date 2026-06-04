@@ -19,32 +19,32 @@
       csv_delimiter_out: ",",
 
       input_schema: {
-        // TRICK 1 — POSITIONAL field refs. The year headers are bare integers,
-        // and bxp reads `[2023]` as "the 2023rd column" (its `[N]` positional
-        // syntax), NOT a column named "2023" — numeric headers are unreachable
-        // by name. So the whole file is addressed positionally: [1] is the
-        // packed dimension column, [2]/[3]/[4] are years 2021/2022/2023.
+        // TRICK 1 — POSITIONAL field refs via FIELDS(n). The year headers are
+        // bare integers, so `[2023]` would look for a column *named* "2023" by
+        // header — which the bracket syntax can't reach meaningfully here. FIELDS(n)
+        // addresses by column position instead: FIELDS(1) is the packed dimension
+        // column, FIELDS(2)/FIELDS(3)/FIELDS(4) are years 2021/2022/2023.
 
         // TRICK 2 — UNPACK the dimension column. Column 1 is
         // `A,NR,TOTAL,T,DE` — five comma-joined dimension codes. SPLIT_PART
         // pulls each one out (freq=1, unit=2, age=3, sex=4, geo=5).
-        $geo: "SPLIT_PART([1], ',', 5)",
-        $age: "SPLIT_PART([1], ',', 3)",
-        $sex: "SPLIT_PART([1], ',', 4)",
+        $geo: "SPLIT_PART(FIELDS(1), ',', 5)",
+        $age: "SPLIT_PART(FIELDS(1), ',', 3)",
+        $sex: "SPLIT_PART(FIELDS(1), ',', 4)",
 
         // TRICK 3 — CLEAN each observation. Each cell is e.g. `83118501 b `
         // (value + flag + trailing space) or `: ` (missing). The idiom:
         //   TRIM       → drop the trailing space            "83118501 b"
         //   SPLIT_PART → keep the value, drop the flag       "83118501"
         //   NULLIF     → turn the `:` missing-marker → ""    "" for ": "
-        $pop_2021: "NULLIF(SPLIT_PART(TRIM([2]), ' ', 1), ':')",
-        $pop_2022: "NULLIF(SPLIT_PART(TRIM([3]), ' ', 1), ':')",
-        $pop_2023: "NULLIF(SPLIT_PART(TRIM([4]), ' ', 1), ':')",
+        $pop_2021: "NULLIF(SPLIT_PART(TRIM(FIELDS(2)), ' ', 1), ':')",
+        $pop_2022: "NULLIF(SPLIT_PART(TRIM(FIELDS(3)), ' ', 1), ':')",
+        $pop_2023: "NULLIF(SPLIT_PART(TRIM(FIELDS(4)), ' ', 1), ':')",
 
         // TRICK 4 — PRESERVE the quality flag instead of discarding it. The
         // flag (`b`/`p`/`bep`) is data, not noise — it tells an analyst the
         // figure is a break/provisional. Empty when the value is clean.
-        $flag_2023: "SPLIT_PART(TRIM([4]), ' ', 2)"
+        $flag_2023: "SPLIT_PART(TRIM(FIELDS(4)), ' ', 2)"
       },
 
       row_rules: [ { when: "1 = 1", rows: [ {} ] } ],

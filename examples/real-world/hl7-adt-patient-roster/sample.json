@@ -16,31 +16,31 @@
       csv_delimiter_out: ",",
 
       input_schema: {
-        // TRICK 1 — PID field layout (positional): [1]=segment id, [4]=PID-3
-        // identifier list, [6]=PID-5 patient name, [8]=PID-7 birth date,
-        // [9]=PID-8 sex. (Positional refs because HL7 segments have no header.)
-        $mrn: "SPLIT_PART([4], '^', 1)",
+        // TRICK 1 — PID field layout (positional): FIELDS(1)=segment id, FIELDS(4)=PID-3
+        // identifier list, FIELDS(6)=PID-5 patient name, FIELDS(8)=PID-7 birth date,
+        // FIELDS(9)=PID-8 sex. (Positional refs because HL7 segments have no header.)
+        $mrn: "SPLIT_PART(FIELDS(4), '^', 1)",
 
         // TRICK 2 — PID-5 is an XPN: family^given^middle^… and the family
         // component can itself carry &-subcomponents (e.g. "EVERYMAN&&&&Aniston").
         // Split on '^' for family/given, then on '&' for the surname proper.
-        $family: "SPLIT_PART(SPLIT_PART([6], '^', 1), '&', 1)",
-        $given:  "SPLIT_PART([6], '^', 2)",
+        $family: "SPLIT_PART(SPLIT_PART(FIELDS(6), '^', 1), '&', 1)",
+        $given:  "SPLIT_PART(FIELDS(6), '^', 2)",
 
         // TRICK 3 — PID-7 birth date is YYYYMMDD (sometimes a full timestamp
         // like "198808181126+0215"). This is a pure REFORMAT, so slice the
         // first 8 chars with string ops rather than DATE_CONVERT — string
         // slicing has no lower-year limit (DATE_CONVERT silently drops dates
         // before 1970; a 1924 birthdate would vanish). Guard the empty case.
-        $dob: "IF(LEN(TRIM([8])) = 0, '', LEFT([8], 4) & '-' & SUBSTR([8], 5, 2) & '-' & SUBSTR([8], 7, 2))",
+        $dob: "IF(LEN(TRIM(FIELDS(8))) = 0, '', LEFT(FIELDS(8), 4) & '-' & SUBSTR(FIELDS(8), 5, 2) & '-' & SUBSTR(FIELDS(8), 7, 2))",
 
-        $sex: "[9]"
+        $sex: "FIELDS(9)"
       },
 
       // TRICK 4 — ROW FILTER. Each message has many segment types; emit a row
       // ONLY for PID segments (`when` is false for MSH/EVN/PV1/OBX/… → those
       // rows produce no output). One PID per message → one patient per message.
-      row_rules: [ { when: "[1] = 'PID'", rows: [ {} ] } ],
+      row_rules: [ { when: "FIELDS(1) = 'PID'", rows: [ {} ] } ],
 
       output_schema: {
         mrn:    "$mrn",
