@@ -32,20 +32,20 @@ redesign replaces:
   CLI-only user, `--debug` is the only human-readable inspection surface
   today.
 - Stale blocks to rewrite (identical text in both): `resources/console/
-  readme.md` Pass B (~716–737) and `resources/desktop/readme.md` Pass B
+readme.md` Pass B (~716–737) and `resources/desktop/readme.md` Pass B
   (~898–919). The other `--expr-trace` NDJSON mentions in the desktop
   readme (~170 / 211 / 1083 / 1089) are **correct** and stay — `bxp-fmt
-  --expr-trace` genuinely emits NDJSON. Root README already de-NDJSON'd
+--expr-trace` genuinely emits NDJSON. Root README already de-NDJSON'd
   to "stream past live" (2026-06-05).
 
 Open design questions (absorbs the former "AI-authoring workflow —
 rethink fmt / `--debug` / `--trace=bin` split" item, previously under
-*Later → Real-world broker CSV quirks*):
+_Later → Real-world broker CSV quirks_):
 
 - What does an agent actually need in **one** round-trip to author + verify
   a template: matched + unmatched + errored rows, the computed `$variable`
   values, the chosen rule index, and the resulting output row — for a
-  *sample* of rows, not the whole file.
+  _sample_ of rows, not the whole file.
 - Which surface provides it? Candidates: a structured-JSON `--debug`
   covering matched/unmatched/error rows (today `--debug` only dumps
   unmatched rows + expr errors, gated by `row_rules_debug_missing`); a
@@ -54,7 +54,7 @@ rethink fmt / `--debug` / `--trace=bin` split" item, previously under
   `--trace=bin` directly. `--debug` and `--trace` are mutually exclusive
   on stdout today — the redesign decides whether that split survives.
 - How does the GUI "import wizard / point-the-agent-at-a-file" idea
-  (under *bxp-gui*, Later) fold into the same flow?
+  (under _bxp-gui_, Later) fold into the same flow?
 
 Resolve the surface + emit format here **first**, then rewrite both
 readmes' Pass B sections (and any root README debugging blurb) against
@@ -105,7 +105,7 @@ backlog was otherwise exhausted:
   problem first.
 - **`basic/csv-to-json`** teaching example — isolated CSV → JSON array
   (`file_type_out: json`), the basic-tier mirror of `squirrel-census-json`. Low
-  priority: JSON *output* is already shown by `advanced/multi-stage-etl`.
+  priority: JSON _output_ is already shown by `advanced/multi-stage-etl`.
 
 ## v0.3.0
 
@@ -289,7 +289,7 @@ and German `ß`/`ẞ`; full locale-aware case (ICU-level) is a later upgrade
 gated on a concrete use-case, not a v0.4.0 goal.
 
 > This subsection supersedes the standalone "Input character-encoding /
-> charset transcoding" item under *Later → Real-world data quirks* — the
+> charset transcoding" item under _Later → Real-world data quirks_ — the
 > `input_encoding` idea is folded in here as Layer 0 (`csv_input_encoding`).
 
 ## Later (no specific version)
@@ -354,7 +354,7 @@ to pre-process the file" or "skip the affected rows".
   is cheap and unblocks today; (b) is a real feature later.
 
 - **AI-authoring workflow — rethink fmt / `--debug` / `--trace=bin` split.**
-  → Promoted to *Pre-release → Agent-driven configuration authoring* at
+  → Promoted to _Pre-release → Agent-driven configuration authoring_ at
   the top of this file (it now also owns the stale bundled-readme "Pass B"
   rewrite). Resolve there before adding flags.
 
@@ -362,11 +362,11 @@ to pre-process the file" or "skip the affected rows".
 
 Surfaced by the problem-first examples initiative: start from a real,
 documented data-cleaning problem, attempt it with bxp-cli, and record
-genuine *feature* gaps here (bugs — where BXP does something wrong — get
+genuine _feature_ gaps here (bugs — where BXP does something wrong — get
 fixed before release instead, not parked here).
 
 - **Input character-encoding / charset transcoding.** → Promoted to
-  v0.4.0 as Layer 0 of the *Unicode / text subsystem* (`csv_input_encoding`
+  v0.4.0 as Layer 0 of the _Unicode / text subsystem_ (`csv_input_encoding`
   / `csv_output_encoding`). A huge share of real-world CSVs — especially
   European and Windows-origin exports — are Windows-1252 / ISO-8859-1 /
   Latin-1, not UTF-8. bxp-cli reads bytes verbatim: it does not corrupt
@@ -374,7 +374,7 @@ fixed before release instead, not parked here).
   (`0x41 0x6e 0x64 0x72 0xe9`) passes straight through and the `.csvx` is
   then invalid UTF-8 for any downstream consumer that assumes UTF-8 (the
   GUI, Wealthfolio, a database import). Reproduced 2026-05-31. Note: a
-  *known-pattern* mojibake (`cafÃ©` → `café`) can already be patched today
+  _known-pattern_ mojibake (`cafÃ©` → `café`) can already be patched today
   with explicit `REPLACE(...)`; the encoding feature is for the general
   case where the whole file is in one non-UTF-8 charset.
 
@@ -383,7 +383,7 @@ fixed before release instead, not parked here).
   below it (`Fruit,apple` / `,banana` / `,cherry`). De-merging — carrying
   the last non-empty value down a column — is one of the most common
   spreadsheet-cleaning chores. bxp-cli can't do it today: it needs the
-  *previous row's* value (positional cross-row state), which the keyed
+  _previous row's_ value (positional cross-row state), which the keyed
   `pre_pass`/`LOOKUP` model doesn't provide and which clashes with the
   per-block parallel pipeline (blocks are processed independently). Repro
   2026-05-31: blanks pass through unchanged. Feature: an opt-in
@@ -428,10 +428,10 @@ fixed before release instead, not parked here).
   time-series exports exceed it: the Johns Hopkins COVID-19 daily series ships
   one column per day (1147 columns by March 2023), so everything past column
   1024 is silently dropped (`warning: '<file>' has more than 1024 columns;
-  extra columns are ignored`, reproduced 2026-05-31). 1024 is a deliberate,
+extra columns are ignored`, reproduced 2026-05-31). 1024 is a deliberate,
   generous ceiling (the field buffer is `[MAX_COLUMNS][]const u8`), but
   day-per-column datasets are a real shape. Options: raise it, or make it a
-  config/dynamic allocation. Note: such files usually *want* unpivoting to long
+  config/dynamic allocation. Note: such files usually _want_ unpivoting to long
   form anyway (bxp does that via multi-row `row_rules`), which sidesteps the
   width entirely once the columns are reachable.
 
@@ -444,14 +444,14 @@ fixed before release instead, not parked here).
   Options: a `bracket_group: true` (treat `[...]` like a quote that protects
   the delimiter), a general `group_open`/`group_close` pair, or an explicit
   "logs are out of scope — pre-process with a log parser" note. Decide vs
-  the CSV-tool scope. (The *date* inside the bracket already parses fine via
+  the CSV-tool scope. (The _date_ inside the bracket already parses fine via
   `DATE_CONVERT(..., 'DD/MMM/YYYY:hh:mm:ss', ...)`.)
 
 - **Overload `REPLACE` for bulk/chained replace.** Consider on a concrete
   use-case. Templates that normalise several tokens at once today nest
   `REPLACE(REPLACE(REPLACE(x, 'a', '1'), 'b', '2'), …)` — unreadable past two
   or three pairs (the thousands-separator idiom `REPLACE(REPLACE(x,' ',''),
-  ',','.')` is the common case, and a foreign-month-name normaliser would be
+',','.')` is the common case, and a foreign-month-name normaliser would be
   another). **Decided 2026-06-05: extend the existing `REPLACE` rather than
   add a new `REPLACE_MAP` builtin** — this mirrors how scripting languages
   do it (Python `str.replace`, Ruby `gsub`, Pandas `replace` all overload
@@ -484,7 +484,7 @@ fixed before release instead, not parked here).
   - **`SWITCH` / `CASE`** — multi-branch conditional. Collapses the
     unreadable nested `IF(IF(IF(...)))` pyramid into one call; the single
     biggest readability win available. Decide `SWITCH(x, v1,r1, v2,r2, …,
-    default)` (Excel-style) vs SQL `CASE WHEN` shape — the variadic
+default)` (Excel-style) vs SQL `CASE WHEN` shape — the variadic
     `SWITCH` form is closer to the existing builtin call style.
   - **`IS_EMPTY(x)`** — true when `x` is empty or whitespace-only. Cheap,
     and directly retires the documented `"0" == ''` coercion footgun

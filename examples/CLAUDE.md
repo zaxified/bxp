@@ -29,17 +29,17 @@ by `scripts/bench/verify-output.sh` (which runs `bxp-cli` over every
 - **Teaching examples** (`basic/` → `intermediate/` → `advanced/`) — small,
   synthetic, hand-constructed inputs that isolate one engine feature at a time.
   The data is fabricated **on purpose** and the readme says so explicitly
-  ("Synthetic / teaching example."). The *problem class* must still be real and
+  ("Synthetic / teaching example."). The _problem class_ must still be real and
   universal; only the rows are invented.
 
 ## Tiers
 
-| Dir             | Tier         | Content                                                            |
-| --------------- | ------------ | ----------------------------------------------------------------- |
-| `real-world/`   | —            | Real sourced datasets, one documented problem each                |
-| `basic/`        | teaching     | One feature, minimal input                                        |
-| `intermediate/` | teaching     | A few features combined                                           |
-| `advanced/`     | teaching     | Multi-pass pipelines, combine/join patterns, capstones            |
+| Dir             | Tier     | Content                                                |
+| --------------- | -------- | ------------------------------------------------------ |
+| `real-world/`   | —        | Real sourced datasets, one documented problem each     |
+| `basic/`        | teaching | One feature, minimal input                             |
+| `intermediate/` | teaching | A few features combined                                |
+| `advanced/`     | teaching | Multi-pass pipelines, combine/join patterns, capstones |
 
 ## Per-example directory layout
 
