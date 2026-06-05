@@ -18,7 +18,7 @@ as a local path dependency.
 | `xlsx`        | `xlsx.zig`        | `xlsxToCsv()`, `SheetSpec`                                                |
 | `expr`        | `expr.zig`        | `eval()`, `evalString()`, `Context`, `Value`, `FnDoc` catalog             |
 | `datefmt`     | `datefmt.zig`     | `parse()`, `format()`, civil/arithmetic helpers — date core (file-rel @import by `expr.zig`, not a named module) |
-| `decimal`     | `decimal.zig`     | `Decimal` fixed-point i128 @ 1e12 — numeric core (file-rel @import by `expr.zig`, not a named module) |
+| `decimal`     | `decimal.zig`     | `Decimal` fixed-point i128 @ 1e12 — numeric core (named `"decimal"` module, shared by every input path) |
 | `config`      | `config.zig`      | `Config`, `BrokerConfig`, `load()`, `validate()`, `FieldDoc`              |
 | `json`        | `json.zig`        | `scanColNames()` + `RecordReader` — streaming JSON array-of-objects input |
 | `btrace`      | `btrace.zig`      | Binary trace `Writer` / `Reader` for `--trace=bin`                        |
@@ -39,11 +39,11 @@ RFC 4180 CSV parser.
   `LineSlice { bytes, byte_offset }` until the buffer is exhausted.
 - Spaces are preserved per RFC 4180. The bxp pipeline intentionally trims them
   _outside_ csv.zig: field values at access time in `expr.Context.field`
-  (`expr.zig:138`), header names when building `col_index` in
-  `bxp-cli/src/pipeline.zig:517`. Brokers frequently pad fields, so the rest
+  (`expr.zig:161`), header names when building `col_index` in
+  `bxp-cli/src/pipeline.zig:1660`. Brokers frequently pad fields, so the rest
   of the pipeline (date parsing, numeric conversion, comparisons) sees clean
   values without csv.zig having to mutate the slices it returns.
-- Unit tests inline (12 test cases).
+- Unit tests inline (22 test cases).
 
 ### xlsx.zig
 
@@ -76,13 +76,13 @@ Expression evaluator for `input_schema` and `row_rules` in bxp-cli.json.
 - `DATE_CONVERT()` date/time parsing and formatting is handled in-process by
   `datefmt.zig` (file-relative `@import`) — no external dependency. Pre-1970
   dates are fully supported (pure parse → format reshuffle, no epoch round-trip).
-- Unit tests inline (83 test cases).
+- Unit tests inline (136 test cases).
 
 **Built-in functions:** IF, ABS, DATE_CONVERT, PRICE_VALUE, PRICE_CURRENCY,
 TICKER, LOOKUP, SPLIT_PART, CONTAINS, REPLACE, TRIM, ROUND, FLOOR, CEILING,
 NOW, RAND, COALESCE, FIELDS, UPPER, LOWER, LEFT, RIGHT, SUBSTR,
 STARTS_WITH, ENDS_WITH, NULLIF, IN, LEN, GREATEST, LEAST, DATEADD,
-DATEDIFF, WORKDAY, YEAR, MONTH, DAY, WEEKDAY, EOMONTH.
+DATEDIFF, WORKDAY, YEAR, MONTH, DAY, WEEKDAY, EOMONTH, NTH_DOW.
 
 **Doc catalog** (`pub const builtins`, `keywords`, `operators`, `tokens`): each
 builtin sits next to its `FnDoc` declaration (search for `── <NAME> ──`
@@ -98,11 +98,11 @@ JSON5 configuration loader.
   Missing file → returns empty Config. Malformed JSON5 → returns error with diagnostics.
 - `Config` — owns all heap memory; `deinit()` frees everything.
 - `BrokerConfig` — per-template config struct (see field list in bxp-cli/CLAUDE.md).
-- `BrokerConfig.validate(id, writer)` — validates config consistency (e.g. `@date` required
+- `BrokerConfig.validate(id, writer)` — validates config consistency (e.g. `$date` required
   when `date_filter_from_filename=true`).
 - Config file size limit: `CONFIG_MAX_FILE_SIZE=1MB`.
 - Internally uses `json5.zig` to preprocess JSON5 → standard JSON before `std.json` parsing.
-- Inline unit tests (10) cover the pure did-you-mean / parsing helpers
+- Inline unit tests (11) cover the pure did-you-mean / parsing helpers
   (`levenshteinIgnoreCase`, `closestBuiltin`, `closestKey`, `suffixOverlap`,
   `isAnnotationKey`, `extractQuotedName`, `jsonErrorDesc`) plus two
   `loadFromBytes` integration cases (enum/punctuation parse + invalid-enum
@@ -172,16 +172,18 @@ aggregate stats); per-row drill-down (vars, rules, output cell values) is
 recomputed on demand by `bxp-fmt` seeking to a row's `source_locator`
 byte offset.
 
-- `Writer.init(w)` writes `FRAME_MAGIC` ("BXTB") + `SCHEMA_VERSION` once.
+- `Writer.init(w)` writes `FRAME_MAGIC` ("BXTB") once. There is no
+  schema-version field — producer and consumer ship together in every
+  release, so protocol drift is a build error, not a runtime concern.
 - Writer methods: `writeFileStart`, `writeFileEnd`, `writeOutputRow`,
   `writeFilteredRow`, `writeErrorRow`, `writePrepassEntry`, `writeDone`.
-- `Reader.init(r, alloc)` verifies magic + version; `nextFrame()` returns
+- `Reader.init(r, alloc)` verifies the magic; `nextFrame()` returns
   `?Frame` (null at EOF). Unknown frame types are silently skipped via the
   `pay_len` prefix (forward compat).
 - Each frame: `[1B type][2B chunk_id][4B pay_len][payload]`. `chunk_id` is
   reserved for future multicore chunk dispatch (always 0 today).
 - Variable-length strings use length-prefix (lp): `[u32 len][bytes]`.
-- Inline tests (16): per-frame roundtrip + adversarial UTF-8 + empty
+- Inline tests (14): per-frame roundtrip + adversarial UTF-8 + empty
   strings + forward-compat unknown-type skip + EOF returns null.
 
 ### json5.zig
@@ -217,11 +219,11 @@ Structured diagnostics collector for config/json5/expr validation.
 # Build all modules (no standalone binary):
 cd bxp-core && zig build
 
-# Run unit tests (csv, json, btrace, expr, datefmt, json5, diagnostics, xlsx, config, docs):
+# Run unit tests (csv, json, btrace, expr, datefmt, decimal, json5, diagnostics, xlsx, config, docs):
 cd bxp-core && zig build test
 ```
 
-Module exports in `build.zig`: `csv`, `json`, `json5`, `xlsx`, `expr`, `config`, `docs`, `diagnostics`.
+Module exports in `build.zig`: `csv`, `json`, `json5`, `xlsx`, `btrace`, `decimal`, `expr`, `config`, `docs`, `diagnostics`.
 `expr` imports `datefmt.zig` (file-relative, not a named module); `config` imports `json5` (as `"json5.zig"` — internal import name);
 `docs` imports `config`, `expr`, `json5`; `diagnostics` has no bxp-core dependencies.
 

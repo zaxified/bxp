@@ -19,7 +19,7 @@
 //!   stdin-echo         — read stdin to EOF, write the bytes back to stdout
 //!                        (exercises bridge_run stdin pipe)
 //!   stdout-binary <N>  — write N bytes 0x00..0xFF cycling (no newlines;
-//!                        exercises bridge_run_streaming binary_mode)
+//!                        exercises bridge_run_streaming raw-chunk streaming)
 //!
 //! Unknown subcommand → exit 2 + diagnostic on stderr so a typo in the
 //! test surfaces loudly instead of as "unexplained exit 0".
@@ -176,8 +176,8 @@ fn copyStdinToStdout() !void {
 }
 
 /// Write N bytes whose values cycle through 0x00..0xFF (i.e. byte i has
-/// value `i & 0xFF`). Exercises `bridge_run_streaming` binary_mode: no
-/// newlines, full byte range, deterministic content so the test can
+/// value `i & 0xFF`). Exercises `bridge_run_streaming` raw-chunk (binary-
+/// safe) streaming: no newlines, full byte range, deterministic content so the test can
 /// assert chunk-stream equality against a generated reference. Caller
 /// picks N to span multiple read() chunks (>16 KB recommended).
 fn writeStdoutCyclingBytes(count: usize) !void {

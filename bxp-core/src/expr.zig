@@ -12,6 +12,7 @@
 ///   &         (string concatenation)
 ///   + -       (numeric add / subtract)
 ///   = != < > <= >=  (comparison; string equality only for = and !=)
+///   NOT       (boolean negation; binds looser than comparison, tighter than AND)
 ///   AND
 ///   OR
 ///
@@ -1484,24 +1485,6 @@ const if_doc: FnDoc = .{
 // Number parsing helpers
 // ---------------------------------------------------------------------------
 
-/// Parses a number in thousands-grouped format, generalised over both
-/// American (`thousands=','`, `decimal='.'`) and European (`thousands='.'`,
-/// `decimal=','`) conventions. Accepts:
-///   `[-]?d{1,3}(<thousands>d{3})+(<decimal>d+)?`
-/// Requires at least one thousands group — plain numbers without grouping
-/// (`"123"`, `"1,5"`, `"1.5"`) are caller's `parseFloat` responsibility.
-/// Returns `error.NotANumber` if `s` does not match the pattern for the
-/// given separators.
-///
-/// The strict structural validation (1–3 leading digits, exactly 3 digits
-/// per group, no trailing non-numeric characters) is intentional. It
-/// prevents false positives on strings like `"2025,06,01"` (date
-/// components) or American thousands input misread as a European number.
-///
-/// Examples:
-///   parseGroupedNumber("1,234.56", ',', '.') → 1234.56  (American)
-///   parseGroupedNumber("1.234,56", '.', ',') → 1234.56  (European)
-///   parseGroupedNumber("-1.234.567,89", '.', ',') → -1234567.89
 /// True for the non-finite tokens `nan` / `inf` / `infinity` (case-insensitive,
 /// optional leading sign, surrounding whitespace ignored). These are treated as
 /// missing numeric data — coerced to 0 like an empty field — so a bad-export
@@ -1515,6 +1498,23 @@ fn isNonFiniteToken(s: []const u8) bool {
         std.ascii.eqlIgnoreCase(body, "infinity");
 }
 
+/// Parses a number in thousands-grouped format, generalised over both
+/// American (`thousands=','`, `decimal='.'`) and European (`thousands='.'`,
+/// `decimal=','`) conventions. Accepts:
+///   `[-]?d{1,3}(<thousands>d{3})+(<decimal>d+)?`
+/// Requires at least one thousands group — plain numbers without grouping
+/// (`"123"`, `"1,5"`, `"1.5"`) are the caller's `Decimal.parse` responsibility.
+/// Returns null if `s` does not match the pattern for the given separators.
+///
+/// The strict structural validation (1–3 leading digits, exactly 3 digits
+/// per group, no trailing non-numeric characters) is intentional. It
+/// prevents false positives on strings like `"2025,06,01"` (date
+/// components) or American thousands input misread as a European number.
+///
+/// Examples:
+///   parseGroupedNumber("1,234.56", ',', '.') → 1234.56  (American)
+///   parseGroupedNumber("1.234,56", '.', ',') → 1234.56  (European)
+///   parseGroupedNumber("-1.234.567,89", '.', ',') → -1234567.89
 fn parseGroupedNumber(s: []const u8, thousands: u8, decimal: u8) ?Decimal {
     var i: usize = 0;
     if (i < s.len and s[i] == '-') i += 1;
@@ -2125,7 +2125,7 @@ const coalesce_doc: FnDoc = .{
 /// A string is considered empty if its trimmed length is 0 (whitespace-only
 /// counts as empty). Numbers and booleans are never empty — even 0 and false
 /// are returned. If every argument is empty, the last argument is returned
-/// verbatim so callers can supply a default: COALESCE(@a, @b, "0").
+/// verbatim so callers can supply a default: COALESCE([a], [b], '0').
 ///
 /// The loop intentionally excludes the last argument so it's always returned
 /// as-is — this guarantees that COALESCE(x, '') returns '' instead of the
@@ -3967,7 +3967,8 @@ test "evalString: normalises numeric string result (99.00 → 99)" {
     defer arena.deinit();
     const a = arena.allocator();
     var h = TestHelper.init(a);
-    // Field contains "99.00"; evalString re-parses as float → strips trailing zeros.
+    // Field contains "99.00"; evalString canonicalises it (Decimal-validated,
+    // trailing zeros trimmed as a string op) → "99".
     try h.col_index.put("V", 0);
     const ctx = h.ctx(&.{ "99.00" }, a);
     try testing.expectEqualStrings("99", try evalString("[V]", &ctx));
@@ -4310,9 +4311,11 @@ test "eval: 'nan'/'inf' field coerces to 0 in arithmetic (no error)" {
 // BrokerConfig.validate at startup. Guard now flags such literals as
 // "violation with bad_idx=0" and returns without invoking @intFromFloat.
 test "staticCheckCalls: SPLIT_PART literal index out-of-i64 range does not panic" {
-    // 24-digit positive literal parses as f80 ≈ 1e24, well past i64 max
-    // (~9.22e18); pre-guard `@intFromFloat(f80 → i64)` was undefined
-    // behaviour and panicked in Debug/ReleaseSafe.
+    // 24-digit positive literal is ≈ 1e24, well past i64 max (~9.22e18) —
+    // it parses fine via the i128 Decimal core but is out of usize index
+    // range, so it is flagged with the bad_idx=0 printable sentinel.
+    // Historically the pre-Decimal scanner cast `parseFloat(f80) → i64`
+    // here, which was undefined behaviour and panicked in Debug/ReleaseSafe.
     const r_pos = staticCheckCalls("SPLIT_PART([Field], '/', 999999999999999999999999)");
     try testing.expect(r_pos.split_part != null);
     try testing.expectEqual(@as(i64, 0), r_pos.split_part.?.bad_idx);
@@ -4486,7 +4489,7 @@ test "eval: SUBSTR start non-positive returns empty" {
 // Regression guard: parallels [[feedback_expr_intfromfloat_pattern]] —
 // SUBSTR/LEFT/RIGHT must not panic on huge floats, Inf, or NaN. The
 // tokenizer rejects `1e30` / `Inf` literals, so we drive these through
-// field-string parseFloat which DOES accept them.
+// field-string coercion (Value.toNumber), which still sees them.
 // With the fixed-point core there is no Inf/NaN. An in-range huge index clamps
 // to the string length; a non-finite token ("Inf"/"NaN") coerces to 0 (missing
 // → empty contract) so the length is 0 → ""; a genuinely out-of-range value

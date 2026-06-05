@@ -1886,7 +1886,7 @@ class _ActionBtn extends StatelessWidget {
   }
 }
 
-// ── Dialog pro přidání nového uzlu ─────────────────────────────────
+// ── Dialog for adding a new node ───────────────────────────────────
 class _AddChildDialog extends StatefulWidget {
   final bool isMap;
   final List<InsertKeyCandidate> suggestions;
@@ -2261,7 +2261,7 @@ class _AddChildDialogState extends State<_AddChildDialog> {
   }
 }
 
-// ── Expression leaf – kliknutím otevře ExprPanel ───────────────────────────
+// ── Expression leaf – click to open the ExprPanel ──────────────────────────
 class _ExprLeaf extends StatefulWidget {
   final String text;
   final List<String> path;

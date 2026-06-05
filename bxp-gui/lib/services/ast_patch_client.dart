@@ -3,7 +3,7 @@
 ///
 /// Pipeline: rawBytes → parse to JsonAstNode → replay [ConfigOp] log via
 /// `applyConfigOp` → deterministic dump → UTF-8 bytes. No spans, no byte
-/// patching, no `$meta_*` aparát.
+/// patching, no `$meta_*` machinery.
 library;
 
 import 'dart:convert';

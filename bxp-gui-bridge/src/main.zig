@@ -978,9 +978,10 @@ export fn bridge_eval_expr_trace(
     const invalid_input = @intFromEnum(BridgeFfiError.invalid_input);
     const oom = @intFromEnum(BridgeFfiError.out_of_memory);
 
-    // Parse headers + fields into parallel string lists. Mirrors
-    // `bxp-fmt/src/main.zig:1032-1093`: must be JSON arrays of strings
-    // with matching lengths; anything else is INVALID_INPUT (-3).
+    // Parse headers + fields into parallel string lists. Mirrors the
+    // header/field decoding in `bxp-fmt`'s `runExprTrace`: must be JSON
+    // arrays of strings with matching lengths; anything else is
+    // INVALID_INPUT (-3).
     var headers_list: std.ArrayList([]const u8) = .empty;
     var fields_list: std.ArrayList([]const u8) = .empty;
     if (headers_json_len > 0) {

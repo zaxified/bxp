@@ -32,7 +32,8 @@ const VAL_BUF_SIZE: usize = 64;
 // work per spawn, while keeping the block arena footprint bounded
 // (records' field bytes accumulate until the block drains).
 const JSON_PARALLEL_BLOCK_SIZE: usize = 1024;
-/// Runtime key for the date variable in the merged vars map (JSON5 converts @date → $date).
+/// Runtime key for the date variable in the merged vars map (the `$date`
+/// entry declared in input_schema).
 const VAR_DATE: []const u8 = "$date";
 
 /// Writer abstraction used throughout the pipeline. Named for the role

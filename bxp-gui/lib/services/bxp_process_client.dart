@@ -317,10 +317,13 @@ class BxpProcessClient {
     // Non-Windows: by default dart:io's pipes work, so we stay on
     // Process.start. The pre-release smoke gate (`BXP_FORCE_BRIDGE_PROXY=1`)
     // routes through bridge_run instead to validate the cross-platform
-    // bridge build. Gate explicitly on the env var rather than `dllPath`
-    // alone — `_resolveEvalBridgeClient` (in-process expr family) also
-    // populates `_bridgeDllPath` on all platforms, so a non-null path
-    // doesn't imply the user asked for the proxy smoke.
+    // bridge build. `_resolveBridgePath` already returns null on non-Windows
+    // unless the env var is set, so re-checking `_forceBridgeProxy()` here
+    // is belt-and-suspenders: it keeps the opt-in intent explicit and guards
+    // against a future probe ever caching a non-null `dllPath` without the
+    // user asking for the proxy smoke. (The eval-bridge probe shares
+    // `findBridgeLibrary` but deliberately keeps its path out of
+    // `_bridgeDllPath`, so it can't trip this gate.)
     if (_forceBridgeProxy() && dllPath != null) {
       return _runOneShotViaBridge(
         dllPath,
@@ -672,12 +675,6 @@ class BxpProcessClient {
   static String _peek(String s, {int n = 200}) =>
       s.length <= n ? s : '${s.substring(0, n)}... (+${s.length - n} more)';
 
-  /// Enumerates conversion templates declared in a config via
-  /// `bxp-fmt --config <path> --list-templates`. Returns an empty list when
-  /// the binary is missing or the call fails — the caller falls back to its
-  /// own enumeration of `configJson['conversion_templates']` keys, so a
-  /// failure here only loses the metadata (data_dir / file_pattern_in /
-  /// description) that powers the richer template-selector subtitle.
   /// Fetch one template's raw JSON block via
   /// `bxp-fmt --config <path> --fetch-template <id>`. Returns the parsed
   /// JSON object (input_schema, row_rules, ticker_map, …) or null on any
@@ -705,6 +702,12 @@ class BxpProcessClient {
     }
   }
 
+  /// Enumerates conversion templates declared in a config via
+  /// `bxp-fmt --config <path> --list-templates`. Returns an empty list when
+  /// the binary is missing or the call fails — the caller falls back to its
+  /// own enumeration of `configJson['conversion_templates']` keys, so a
+  /// failure here only loses the metadata (data_dir / file_pattern_in /
+  /// description) that powers the richer template-selector subtitle.
   static Future<List<TemplateInfo>> listTemplates(String path) async {
     final bin = findBin('bxp-fmt');
     if (bin == null) return const [];
@@ -730,8 +733,8 @@ class BxpProcessClient {
     }
   }
 
-  /// Validates a single expression via `bxp-fmt --expr <text>`.
-  /// Validate an expression via `bxp-fmt --expr`. Returns a record
+  /// Validate an expression via `bxp-fmt --expr` (or the in-process bridge
+  /// FFI path when the bridge library is loadable). Returns a record
   /// with `error` (null on success), and optional `offset` / `length`
   /// for token highlighting (Phase G1).
   ///

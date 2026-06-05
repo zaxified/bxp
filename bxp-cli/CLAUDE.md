@@ -219,7 +219,7 @@ Expressions are evaluated per row. Operator precedence (high → low):
 | `CEILING(f)`                                            | Smallest integer ≥ `f`                                                                                                                                                                                          |
 | `NOW()`                                                 | Current UTC datetime as `"YYYY-MM-DDTHH:MM:SSZ"`                                                                                                                                                                |
 | `RAND(n)`                                               | String of exactly `n` cryptographically random digits (first 1–9, rest 0–9); `n` clamped to `[1, 65]`                                                                                                           |
-| `COALESCE(a, b, ...)`                                   | Return first non-empty argument (empty = whitespace-only string; numbers/booleans are never empty). If all args are empty, returns the last arg verbatim — use `COALESCE(@a, @b, "0")` for a guaranteed default |
+| `COALESCE(a, b, ...)`                                   | Return first non-empty argument (empty = whitespace-only string; numbers/booleans are never empty). If all args are empty, returns the last arg verbatim — use `COALESCE([a],[b],'0')` for a guaranteed default |
 
 Type coercions: empty string → `0` in numeric context; any non-empty string → `true` in boolean context.
 

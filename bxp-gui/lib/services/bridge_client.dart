@@ -468,10 +468,10 @@ class BridgeClient {
   }
 
   /// Streaming variant of [run]. Spawns the child, returns a Future that
-  /// completes with its exit code, and reports stdout / stderr progressively
-  /// via [onLine] / [onStderr] callbacks. Designed for the GUI's `--trace`
-  /// dry-run path, where the user expects file-list + per-row counters to
-  /// update in real time.
+  /// completes with its exit code, and reports stdout as raw binary chunks
+  /// via [onChunk] and stderr via [onStderr]. Designed for the GUI's
+  /// `--trace` dry-run path, where the user expects file-list + per-row
+  /// counters to update in real time.
   ///
   /// Threading model: the bridge runs the child + drainers on its own native
   /// threads. Each batch / chunk fires through a `NativeCallable.listener`

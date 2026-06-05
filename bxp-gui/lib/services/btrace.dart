@@ -144,8 +144,8 @@ class Done extends Frame {
 /// streaming modes.
 ///
 /// **Bulk mode** ([fromBytes]): the caller hands over a fully-loaded
-/// buffer (e.g. read from disk). Constructor verifies magic + schema
-/// version eagerly. `nextFrame()` returns one frame at a time and throws
+/// buffer (e.g. read from disk). Constructor verifies the magic
+/// eagerly. `nextFrame()` returns one frame at a time and throws
 /// `FormatException` on truncated headers/payloads.
 ///
 /// **Streaming mode** ([streaming]): constructor starts with an empty
@@ -153,8 +153,8 @@ class Done extends Frame {
 /// [appendBytes] as they arrive on a Process stdout pipe, then drains
 /// frames via [nextFrame] which returns `null` when there aren't enough
 /// bytes for the next full frame (caller waits for more chunks before
-/// retrying). Magic + version are validated lazily once the first 8
-/// bytes have been buffered.
+/// retrying). The magic is validated lazily once the first 4 bytes have
+/// been buffered (there is no schema version on the wire).
 class BtraceReader {
   Uint8List _data;
   ByteData _bd;
@@ -181,10 +181,10 @@ class BtraceReader {
   }
 
   /// Empty reader for streaming mode. Caller pumps bytes via [appendBytes]
-  /// and drains frames via [nextFrame] (returns null when starved). Magic
-  /// + version are verified lazily once the first 8 bytes have been fed;
+  /// and drains frames via [nextFrame] (returns null when starved). The
+  /// magic is verified lazily once the first 4 bytes have been fed;
   /// the first nextFrame call on an unverified stream may throw
-  /// `FormatException` if the magic/version checks fail.
+  /// `FormatException` if the magic check fails.
   factory BtraceReader.streaming() {
     final empty = Uint8List(0);
     return BtraceReader._(

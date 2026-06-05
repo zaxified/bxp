@@ -34,7 +34,7 @@ and persist the stream for offline inspection.
 
 ### Wire format
 
-The stream begins with a 4-byte little-endian magic `0x42585442` (ASCII
+The stream begins with a 4-byte little-endian magic `0x42545842` (ASCII
 `BXTB`) and is followed by a sequence of frames. There is **no schema-version
 field** — bxp-cli and bxp-gui ship together in every release and the magic is
 the only handshake.

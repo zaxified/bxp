@@ -20,26 +20,6 @@ pub const Severity = diagnostics.Severity;
 
 const CONFIG_MAX_FILE_SIZE: usize = 1024 * 1024;
 
-/// Per-field documentation entry. Co-located with the config struct it
-/// describes (search for `pub const fields` below); aggregated and
-/// serialized by `bxp-core/src/docs.zig` as the `config_schema` array
-/// inside `bxp-fmt --docs` output.
-///
-/// `key` is the dotted path segment for this entry. Per-struct tables
-/// hold the local field name (e.g. "data_dir"); the docs aggregator
-/// prepends the binding prefix (e.g. "conversion_templates.*") when
-/// flattening. Top-level envelope entries declared directly in docs.zig
-/// store the full path here.
-///
-/// `insert_order` (Phase 5f) controls how the GUI orders new keys when
-/// inserting INTO this object: "schema" = match this `fields` table's
-/// declaration order; "alpha" = alphabetical; "append" (or null) = end
-/// of object. Arrays always append.
-///
-/// `insert_template` (Phase 5f) is a JSON5 snippet used as the scaffold
-/// when the GUI inserts a new value matching this entry. The string is
-/// preprocessed to JSON via bxp-core's json5 module at serialize time
-/// and emitted as a nested JSON value.
 /// Per-field semantic validator. Default `none` means "no special
 /// check"; specialized values drive the bxp-gui Dart-side tree
 /// validator + per-edit feedback. Pure metadata today — no Zig
@@ -83,6 +63,26 @@ pub const AutocompleteSource = enum {
     enum_values,
 };
 
+/// Per-field documentation entry. Co-located with the config struct it
+/// describes (search for `pub const fields` below); aggregated and
+/// serialized by `bxp-core/src/docs.zig` as the `config_schema` array
+/// inside `bxp-fmt --docs` output.
+///
+/// `key` is the dotted path segment for this entry. Per-struct tables
+/// hold the local field name (e.g. "data_dir"); the docs aggregator
+/// prepends the binding prefix (e.g. "conversion_templates.*") when
+/// flattening. Top-level envelope entries declared directly in docs.zig
+/// store the full path here.
+///
+/// `insert_order` (Phase 5f) controls how the GUI orders new keys when
+/// inserting INTO this object: "schema" = match this `fields` table's
+/// declaration order; "alpha" = alphabetical; "append" (or null) = end
+/// of object. Arrays always append.
+///
+/// `insert_template` (Phase 5f) is a JSON5 snippet used as the scaffold
+/// when the GUI inserts a new value matching this entry. The string is
+/// preprocessed to JSON via bxp-core's json5 module at serialize time
+/// and emitted as a nested JSON value.
 pub const FieldDoc = struct {
     key: []const u8,
     type_name: []const u8,
@@ -262,7 +262,7 @@ pub const BrokerConfig = struct {
     /// Maps broker symbol names to Yahoo Finance tickers, e.g. "BTC" -> "BTC-USD".
     ticker_map: std.StringHashMap([]const u8),
     /// Variable definitions evaluated per row: name → expression string.
-    /// Required — must not be empty.  "@date" is required when date_filter_from_filename is true.
+    /// Required — must not be empty.  "$date" is required when date_filter_from_filename is true.
     /// `StringArrayHashMap` (not `StringHashMap`): preserves JSON5
     /// declaration order so `var_eval` trace events emit in the same
     /// order as the user wrote them — the bxp-gui row-transform
@@ -279,7 +279,7 @@ pub const BrokerConfig = struct {
     /// When non-null, the xlsx file in data_dir is converted to an intermediate CSV
     /// file before the normal CSV processing loop.  Null when no "xlsx_sheet" key is present in config.
     xlsx_sheet: ?XlsxSheet,
-    /// When true, rows whose "@date" value falls outside the date range encoded in
+    /// When true, rows whose "$date" value falls outside the date range encoded in
     /// the input filename (YYYY-MM-DD_YYYY-MM-DD) are silently skipped.
     /// Default: false — no date filtering unless explicitly enabled.
     date_filter_from_filename: bool,
@@ -2711,7 +2711,7 @@ pub fn loadFromBytes(
                         }
                     }
 
-                    // input_schema: @variable → expression string, evaluated per row.
+                    // input_schema: $variable → expression string, evaluated per row.
                     if (bobj.get("input_schema")) |is_val| {
                         if (is_val == .object) {
                             var is_it = is_val.object.iterator();
@@ -2787,7 +2787,7 @@ pub fn loadFromBytes(
                         }
                     }
 
-                    // output_schema: ordered output column header → @variable mappings.
+                    // output_schema: ordered output column header → $variable mappings.
                     // Per-template and required — validated after this block.
                     if (bobj.get("output_schema")) |os_val| {
                         if (os_val == .object) {

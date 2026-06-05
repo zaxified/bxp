@@ -57,16 +57,16 @@ FontWeight resolveBxpWeight(BxpTextScheme s, BxpWeight key) {
   }
 }
 
-/// Sémantické varianty postavené nad aktivním [BxpTextScheme].
+/// Semantic variants built on top of the active [BxpTextScheme].
 ///
-/// Každý sans/prose `Text` v aplikaci by měl jít přes tyto helper
-/// metody — ne stavět `TextStyle(fontSize: ...)` ručně. Změna fontu /
-/// velikosti / letter-spacingu pak proběhne editací jediné konstanty
-/// v [BxpTextScheme] a propíše se do celé aplikace.
+/// Every sans/prose `Text` in the app should go through these helper
+/// methods — not build `TextStyle(fontSize: ...)` by hand. Changing the
+/// font / size / letter-spacing then happens by editing a single constant
+/// in [BxpTextScheme] and propagates across the whole app.
 ///
-/// Color defaults čte z aktivního [BxpTheme] přes `context.bxpTheme`,
-/// takže tytéž metody fungují pro light i dark theme bez dalších
-/// parametrů. Override barvy je možný explicitním `color:`.
+/// Color defaults are read from the active [BxpTheme] via `context.bxpTheme`,
+/// so the same methods work for both light and dark themes without extra
+/// parameters. A color override is possible via an explicit `color:`.
 ///
 /// All app text (prose AND code-style cells/syntax) flows through this
 /// helper — bxp-gui no longer maintains a separate mono typography

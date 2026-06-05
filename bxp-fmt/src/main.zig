@@ -588,11 +588,13 @@ fn annotateRaw(a: std.mem.Allocator, raw: []const u8, path_label: []const u8, ch
         return .{ .json = try formatRootErr(a, @errorName(err)), .exit_code = 1 };
     };
 
-    // Structured diagnostic sink. In Phase A nothing emits to it yet
-    // (the parameter is reserved for upcoming path-aware deep-validation
-    // sites in config.zig / json5.zig / expr.zig). The bag is created,
-    // passed through, and rendered via `injectDiagnostics` after the
-    // existing ValidationError path runs — an empty bag is a no-op.
+    // Structured diagnostic sink, populated by the deep-validation passes
+    // below — `loadFromBytes` (parse-time), `validateExprsCollect`,
+    // `validateUnusedCollect`, `validateCrossTemplate`,
+    // `validateUnknownKeysCollect`, and `validateFilesystemWithTimeout` —
+    // then unified with the legacy ValidationError list and rendered into
+    // the tree via `injectDiagnostics`. An empty bag (no findings) is a
+    // no-op at injection time.
     var diag: diagnostics_mod.Diagnostics = .init(a);
 
     // Load+parse the config into a BrokerConfig. On failure the
@@ -2222,7 +2224,7 @@ test "annotateRaw Phase G4: DATE_CONVERT format with bare non-vocab letter → \
     const a = arena.allocator();
 
     // `MN` is a typo (user meant `MM`). The strict walker must flag
-    // any letter outside `[...]` not in the sunrise vocabulary.
+    // any letter outside `[...]` not in the date-format vocabulary.
     const fixture =
         \\{
         \\  conversion_templates: {
