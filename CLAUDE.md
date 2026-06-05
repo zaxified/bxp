@@ -13,8 +13,9 @@ bxp/
 │   ├── build.zig
 │   └── build.zig.zon     # depends on bxp-core (path dep)
 ├── bxp-fmt/              # Developer utility binary used by bxp-gui and scripts/test.sh
-│   ├── src/main.zig      # 6 subcommands: --config / --expr / --expr-trace / --docs /
-│   │                     # --list-templates / --fetch-template
+│   ├── src/main.zig      # 5 actions: --config / --expr / --expr-trace / --expr-batch /
+│   │                     # --docs (+ --list-templates / --fetch-template / --check-fs
+│   │                     # modifiers on --config)
 │   ├── build.zig
 │   └── build.zig.zon     # depends on bxp-core (path dep)
 ├── bxp-core/             # Internal Zig library (shared modules)
@@ -24,6 +25,10 @@ bxp/
 │   │   ├── expr.zig        # Expression evaluator + per-builtin FnDoc catalog
 │   │   ├── config.zig      # JSON5 config loader + per-struct FieldDoc tables
 │   │   ├── json.zig        # JSON array-of-objects → CSV rows
+│   │   ├── datefmt.zig     # In-house date core (parse/format/arith) — file-rel
+│   │   │                   # @import by expr.zig, replaced the sunrise dep
+│   │   ├── decimal.zig     # Fixed-point i128 @ 1e12 numeric core (named module)
+│   │   ├── btrace.zig      # Binary BXTB trace Writer/Reader for --trace
 │   │   ├── json5.zig       # JSON5 preprocessor (comments, unquoted keys, ...)
 │   │   ├── docs.zig        # Aggregator: re-exports expr catalog + flattens
 │   │   │                   # config FieldDoc tables; serves bxp-fmt --docs
@@ -55,6 +60,9 @@ bxp/
 │                         #   for compile-time embed); all 4 PNGs ship in archive's icons/
 │                         #   for user-side shortcut icon swap.
 ├── datasets/             # Anonymized sample data + expected outputs for regression tests
+├── examples/             # Runnable teaching + real-world demos (tiered: basic /
+│                         # intermediate / advanced + real-world). Docs/demo
+│                         # material, NOT a test gate — see examples/CLAUDE.md.
 ├── scripts/
 │   ├── test.sh           # Wrapper — runs every test-NN-*.sh in numeric order
 │   ├── test-lib.sh       # Shared section/step/summary helpers (sourced)
@@ -83,7 +91,8 @@ bxp/
 │   ├── gui.md                # bxp-gui user-facing guide
 │   ├── release.md            # Release operator walkthrough
 │   ├── roadmap.md            # Long-term backlog mirrored to memory
-│   ├── trace-protokol.md     # NDJSON trace stream protocol reference
+│   ├── trace-protokol.md     # Subprocess protocol reference: binary BXTB --trace
+│   │                         # stream + bxp-fmt output formats
 │   └── demo.gif              # README hero asset
 ├── .github/workflows/
 │   └── release.yml       # Multi-host release pipeline triggered by `v*` tag push
@@ -171,13 +180,17 @@ services/prefs_service.dart`.
   C-ABI surface, Debug→ReleaseSafe rewrite rationale, platform role.
 - [`bxp-gui/packages/json5_ast/CLAUDE.md`](bxp-gui/packages/json5_ast/CLAUDE.md) — standalone
   Dart JSON5 AST library; parser, dumper, mutation API.
+- [`examples/CLAUDE.md`](examples/CLAUDE.md) — authoring conventions for the
+  teaching + real-world example tree (tiers, dir layout, readme structure,
+  generated index).
 
 ## CLAUDE.md files
 
 New CLAUDE.md files may be created anywhere inside `bxp/` as needed.
 Existing files: `bxp/CLAUDE.md` (this file), `bxp/bxp-cli/CLAUDE.md`,
 `bxp/bxp-core/CLAUDE.md`, `bxp/bxp-fmt/CLAUDE.md`, `bxp/bxp-gui/CLAUDE.md`,
-`bxp/bxp-gui-bridge/CLAUDE.md`, `bxp/bxp-gui/packages/json5_ast/CLAUDE.md`.
+`bxp/bxp-gui-bridge/CLAUDE.md`, `bxp/bxp-gui/packages/json5_ast/CLAUDE.md`,
+`bxp/examples/CLAUDE.md`.
 
 ## Git & GitHub
 

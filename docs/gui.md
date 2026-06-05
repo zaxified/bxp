@@ -214,7 +214,9 @@ bxp-gui/
 │   │   ├── ast_patch_client.dart             # Apply AST mutations + dump back to disk
 │   │   ├── bridge_client.dart                # Dart FFI shim for bxp-gui-bridge (DLL on Win,
 │   │   │                                     # .so/.dylib on Linux/macOS for bridge_eval_expr)
-│   │   ├── bxp_process_client.dart           # Process.run wrappers for bxp-cli / bxp-fmt
+│   │   ├── btrace.dart                       # Dart-side BXTB binary-trace parser (mirrors btrace.zig)
+│   │   ├── bxp_process_client.dart           # Subprocess wrapper — bridge on Win, Process.start elsewhere
+│   │   ├── csv_row_fetcher.dart              # Random-access source/output row fetch by byte offset
 │   │   ├── dart_validator.dart               # Dart-side per-edit expression validator
 │   │   ├── debug_binding.dart                # WidgetsFlutterBinding hook for diagnostic capture
 │   │   ├── debug_settings.dart               # Opt-in regression knobs (paint, hover, scroll filters)
@@ -228,7 +230,7 @@ bxp-gui/
 │   │   ├── schema_gate.dart                  # Schema-aware "may the user do X here?"
 │   │   └── updater_service.dart              # GitHub release poller + download/verify/install
 │   ├── store/
-│   │   ├── trace_store.dart         # Central ChangeNotifier (~4.3k lines, BXTB ingest inline)
+│   │   ├── trace_store.dart         # Central ChangeNotifier (~4.1k lines, BXTB ingest inline)
 │   │   └── trace_model.dart         # Plain-Dart shapes for trace frame payloads
 │   └── ui/
 │       ├── main_view.dart           # 3-pane layout root
@@ -237,6 +239,7 @@ bxp-gui/
 │       ├── debug_panes.dart         # Trace/output bottom panes
 │       ├── settings_inspector.dart  # Ctrl+Shift+S internal-state drawer
 │       ├── layout_defaults.dart     # Fractional split sizes (single source)
+│       ├── platform_shortcuts.dart  # Command-modifier helper (Cmd on macOS, Ctrl elsewhere)
 │       ├── shader_warmup.dart       # Skia shader pre-warmup (Windows perf)
 │       ├── zoom_limits.dart         # Window / zoom guards
 │       ├── theme/                   # App theme (bxp_theme, bxp_text, bxp_text_scheme,
@@ -426,7 +429,11 @@ All resizable panels hold **fractions**, not pixels.
 
 Use `HardwareKeyboard.instance.addHandler` in `initState`, not
 `CallbackShortcuts` — the latter only fires when focus bubbles up, which
-misses shortcuts while e.g. PlutoGrid has focus.
+misses shortcuts while e.g. PlutoGrid has focus. The command modifier is
+resolved per-host by `isCommandModifierPressed()` in
+`ui/platform_shortcuts.dart` — `Cmd` (Meta) on macOS, `Ctrl` elsewhere —
+so bindings follow host convention and don't clash with macOS
+`Ctrl+Up`/`Ctrl+Down`.
 
 ### Load-time vs mid-edit error gating
 

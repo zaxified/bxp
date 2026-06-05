@@ -436,6 +436,7 @@ mybroker_to_wealthfolio: {
 | `csv_decimal_separator_out` | string | no | `"."` | Decimal separator in numeric fields (output) |
 | `csv_text_quote_in` | string | no | `"double"` | `"none"`, `"single"` (`'`), or `"double"` (`"`) |
 | `csv_text_quote_out` | string | no | `"none"` | Same values as `csv_text_quote_in` |
+| `csv_header_line` | number | no | `1` | 1-based line of the CSV header. `0` = headerless (first line is data, columns reachable only by `FIELDS(n)`); `N>1` skips `N-1` preamble lines. CSV input only |
 | `date_filter_from_filename` | bool | no | `false` | Filter rows by `YYYY-MM-DD_YYYY-MM-DD` range in filename |
 | `ticker_map` | string \| object | no | `{}` | Name from `ticker_maps`, or inline `{ "SYM": "YAHOO" }` |
 | `xlsx_sheet` | object | no | — | `{ name, header_row, output_suffix }` — convert xlsx before CSV |
@@ -477,7 +478,7 @@ Expressions are strings evaluated once per row. Operator precedence,
 high → low:
 
 ```text
-unary -    →    * /    →    & (concat)    →    + -    →    = != < > <= >=    →    AND    →    OR
+unary -    →    * /    →    & (concat)    →    + -    →    = != < > <= >=    →    NOT    →    AND    →    OR
 ```
 
 #### Column and literal syntax
@@ -519,6 +520,29 @@ reserved.
 | `NOW()` | string | Current UTC datetime, format `YYYY-MM-DDTHH:MM:SSZ` |
 | `RAND(n)` | string | `n` random digits (first 1–9, rest 0–9); `n` clamped to 1–65 |
 | `COALESCE(a, b, ...)` | any | First non-empty argument (empty = whitespace-only string); falls back to last arg verbatim if all empty |
+| `LEFT(s, n)` | string | First `n` bytes of `s` (`n` clamped to `[0, len]`; negative / non-finite → `""`) |
+| `RIGHT(s, n)` | string | Last `n` bytes of `s` (same clamping) |
+| `SUBSTR(s, start, len)` | string | `len` bytes from 1-based `start`; non-positive / non-finite `start` or `len` → `""` |
+| `UPPER(s)` / `LOWER(s)` | string | ASCII case conversion; non-ASCII (UTF-8 multi-byte) bytes pass through unchanged |
+| `LEN(s)` | number | Byte length of `s` (UTF-8 byte count, not codepoints); empty → `0` |
+| `STARTS_WITH(s, prefix)` | bool | `true` when `s` begins with `prefix` (case-sensitive); empty `prefix` always matches |
+| `ENDS_WITH(s, suffix)` | bool | `true` when `s` ends with `suffix` (case-sensitive); empty `suffix` always matches |
+| `IN(value, v1, v2, ...)` | bool | `true` when `value` equals any of `v1, v2, …` — variadic equality OR-chain |
+| `NULLIF(value, sentinel)` | any | `""` when `value` = `sentinel`, else `value`; collapses sentinels (`-9999`, `\N`, `N/A`) |
+| `GREATEST(a, b, ...)` | number | Largest numeric value among args — per-row maximum, not cross-row aggregation |
+| `LEAST(a, b, ...)` | number | Smallest numeric value among args — per-row minimum |
+
+**Date arithmetic functions** — all take/return ISO `YYYY-MM-DD` strings; an empty date arg yields `""`, a malformed one errors. Pre-1970 dates fully supported.
+
+| Function | Returns | Description |
+| --- | --- | --- |
+| `DATEADD(d, n)` | string | Add `n` calendar days to `d` (negative subtracts) |
+| `DATEDIFF(d1, d2)` | number | Calendar days from `d2` to `d1` (positive when `d1` is later) |
+| `WORKDAY(d, n)` | string | Add `n` business days to `d`, skipping Sat/Sun (negative subtracts); `n=0` returns `d`. No exchange-holiday awareness |
+| `YEAR(d)` / `MONTH(d)` / `DAY(d)` | number | Year / month (1–12) / day-of-month (1–31) component of `d` |
+| `WEEKDAY(d)` | number | ISO day-of-week (Mon=1 … Sun=7); weekend trade = `WEEKDAY([Date]) > 5` |
+| `EOMONTH(d)` | string | Last calendar day of `d`'s month (month-end snapping) |
+| `NTH_DOW(year, month, weekday, n)` | string | Date of the `n`-th `weekday` (Mon=1 … Sun=7) in `year`/`month`; negative `n` counts from month end (`-1` = last); `""` if it doesn't exist. EU DST = `NTH_DOW(YEAR(d), 3, 7, -1)` … `NTH_DOW(YEAR(d), 10, 7, -1)` |
 
 #### Function semantics — common gotchas
 

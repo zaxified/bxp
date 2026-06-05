@@ -28,8 +28,12 @@ bxp-gui/
 │   │   ├── ast_patch_client.dart             # Apply AST mutations + dump back to disk
 │   │   ├── bridge_client.dart                # Dart FFI shim for bxp-gui-bridge (DLL on Win,
 │   │   │                                     # .so/.dylib on Linux/macOS for bridge_eval_expr)
+│   │   ├── btrace.dart                       # Dart-side BXTB binary-trace parser (mirrors btrace.zig)
 │   │   ├── bxp_process_client.dart           # Subprocess wrapper — bridge on Windows, Process.start elsewhere
+│   │   ├── csv_row_fetcher.dart              # Random-access source/output row fetch by byte offset
+│   │   │                                     # (drill-down reconstructs dropped per-row trace frames)
 │   │   ├── dart_validator.dart               # Dart-side per-edit expression validator (DartValidator)
+│   │   │                                     # (dart_validator_coverage.md tracks builtin coverage)
 │   │   ├── debug_binding.dart                # WidgetsFlutterBinding hook for diagnostic capture
 │   │   ├── debug_settings.dart               # Opt-in regression knobs (paint, hover, scroll filters)
 │   │   ├── desktop_integration_service.dart  # First-run .desktop + hicolor icon writer (Linux AppImage)
@@ -42,7 +46,7 @@ bxp-gui/
 │   │   ├── schema_gate.dart                  # Schema-aware "may the user do X here?"
 │   │   └── updater_service.dart              # GitHub release poller + download/verify/install
 │   ├── store/
-│   │   ├── trace_store.dart         # ChangeNotifier — central state (~4.3k lines, includes BXTB ingest)
+│   │   ├── trace_store.dart         # ChangeNotifier — central state (~4.1k lines, includes BXTB ingest)
 │   │   └── trace_model.dart         # POJO shapes for trace events
 │   └── ui/
 │       ├── main_view.dart           # 3-pane layout root
@@ -51,6 +55,7 @@ bxp-gui/
 │       ├── debug_panes.dart         # Trace/output bottom panes
 │       ├── settings_inspector.dart  # Ctrl+Shift+S internal-state drawer
 │       ├── layout_defaults.dart     # Centralised fractional split sizes
+│       ├── platform_shortcuts.dart  # Command-modifier helper (Cmd on macOS, Ctrl elsewhere)
 │       ├── shader_warmup.dart       # Skia shader pre-warmup (Windows perf — see below)
 │       ├── zoom_limits.dart         # Window/zoom guards
 │       ├── theme/                   # App theme (bxp_theme, bxp_text, bxp_text_scheme,
@@ -75,7 +80,7 @@ bxp-gui/
 │   ├── lib/                         # parser, tokenizer, ast, dumper,
 │   │                                # operations, path, value_builder —
 │   │                                # all pure Dart, no bxp-specific code
-│   ├── test/                        # ~105 unit tests incl. round-trip
+│   ├── test/                        # ~107 unit tests incl. round-trip
 │   │                                # canonicalisation
 │   ├── pubspec.yaml                 # name: json5_ast — candidate for
 │   │                                # extraction to a standalone repo
@@ -83,7 +88,12 @@ bxp-gui/
 │   └── (post-Phase-5e replacement for the deleted CST byte-patcher)
 ├── linux/, macos/, windows/, web/   # Per-platform Flutter shells
 ├── test/
+│   ├── btrace_format_contract_test.dart  # BXTB wire-format contract (Dart parser vs Zig writer)
+│   ├── btrace_test.dart                  # BXTB parser roundtrip
+│   ├── csv_row_fetcher_test.dart         # byte-offset random-access row fetch
 │   ├── desktop_integration_service_test.dart
+│   ├── examples_unique_name_test.dart    # open-dialog "create examples" unique-naming
+│   ├── expr_batch_test.dart              # --expr-batch request/response shape
 │   ├── expr_corpus_bridge_test.dart      # cross-runner expr corpus parity (bridge vs bxp-fmt)
 │   ├── prefs_service_test.dart
 │   └── zoom_overflow_test.dart
@@ -181,8 +191,9 @@ dispatched to a platform-native install:
 
 The client maps each subcommand to a method:
 
-- `validateConfig(path)` → `bxp-fmt --config <path>` → annotated JSON with
-  `$comm_*`/`$err_*` siblings.
+- `validateConfig(path)` → `bxp-fmt --config <path> [--check-fs=N]` → annotated
+  JSON with `$comm_*`/`$err_*` siblings. The GUI passes `--check-fs=2` on every
+  load/save to enable the filesystem-existence diagnostics.
 - `getDocs()` → `bxp-fmt --docs` → cached at startup, drives FnDoc
   tooltips, the schema gate, and `_AddChildDialog` insert scaffolds.
 - `listTemplates(path)` → `bxp-fmt --config ... --list-templates`.
@@ -247,9 +258,13 @@ preference to shell calls:
 - Streaming traces: never call top-level `notifyListeners()` per trace
   event. Use per-cell `ValueNotifier` (e.g. `traceLinesCounter`,
   `fileGen`) to avoid quadratic PlutoGrid rebuild storms.
-- Global keyboard shortcuts (Ctrl+S/Z/Y) use
+- Global keyboard shortcuts (Save/Undo/Redo/Open/Zoom) use
   `HardwareKeyboard.instance.addHandler` in `initState`, not
   `CallbackShortcuts` — the latter only fires when focus bubbles up.
+  The command modifier is resolved per-host via `isCommandModifierPressed()`
+  in [lib/ui/platform_shortcuts.dart](lib/ui/platform_shortcuts.dart) — `Cmd`
+  (Meta) on macOS, `Ctrl` elsewhere — so bindings follow host convention and
+  don't collide with macOS `Ctrl+Up`/`Ctrl+Down` Mission Control.
 
 ## Windows performance notes
 

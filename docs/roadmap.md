@@ -7,6 +7,59 @@ lands on master. `CHANGELOG.md` is generated independently from `git log`
 at release time by `scripts/release-changelog.sh` and is not coupled
 to this file.
 
+## Pre-release — design before the next cut
+
+### Agent-driven configuration authoring (new logic)
+
+Design an entirely new flow for an AI agent (or the GUI acting on the
+user's behalf) to **author and iterate a conversion template against
+sample data** in as few round-trips as possible. This supersedes the
+scattered "point the AI at the binaries and have it read traces" advice
+currently baked into the bundled readmes, which has drifted out of sync
+with the engine and must not be patched piecemeal.
+
+Why this blocks the bundled docs — the console + desktop readmes' "Pass B
+— trace" debugging workflow is stale and is **exactly** what this
+redesign replaces:
+
+- Both readmes tell users to run `bxp-cli --template <id> --trace` and
+  read an "NDJSON event stream" of `var_eval` / `rule_match` /
+  `row_output` events. Both halves are wrong since the v0.3.0 trace
+  rework: `--trace` emits a **binary BXTB** frame stream on stdout (an
+  input for the GUI, unreadable in a terminal), and those per-row events
+  were dropped from the stream in schema v3 (per-row drill-down is
+  recomputed on demand by `bxp-fmt` from source byte offsets). For a
+  CLI-only user, `--debug` is the only human-readable inspection surface
+  today.
+- Stale blocks to rewrite (identical text in both): `resources/console/
+  readme.md` Pass B (~716–737) and `resources/desktop/readme.md` Pass B
+  (~898–919). The other `--expr-trace` NDJSON mentions in the desktop
+  readme (~170 / 211 / 1083 / 1089) are **correct** and stay — `bxp-fmt
+  --expr-trace` genuinely emits NDJSON. Root README already de-NDJSON'd
+  to "stream past live" (2026-06-05).
+
+Open design questions (absorbs the former "AI-authoring workflow —
+rethink fmt / `--debug` / `--trace=bin` split" item, previously under
+*Later → Real-world broker CSV quirks*):
+
+- What does an agent actually need in **one** round-trip to author + verify
+  a template: matched + unmatched + errored rows, the computed `$variable`
+  values, the chosen rule index, and the resulting output row — for a
+  *sample* of rows, not the whole file.
+- Which surface provides it? Candidates: a structured-JSON `--debug`
+  covering matched/unmatched/error rows (today `--debug` only dumps
+  unmatched rows + expr errors, gated by `row_rules_debug_missing`); a
+  `bxp-fmt`-side multi-row simulation (extend `--expr-batch` from one row
+  to N); or a documented small BXTB parser so the agent can consume
+  `--trace=bin` directly. `--debug` and `--trace` are mutually exclusive
+  on stdout today — the redesign decides whether that split survives.
+- How does the GUI "import wizard / point-the-agent-at-a-file" idea
+  (under *bxp-gui*, Later) fold into the same flow?
+
+Resolve the surface + emit format here **first**, then rewrite both
+readmes' Pass B sections (and any root README debugging blurb) against
+the decided workflow in a single pass — no piecemeal NDJSON term-swaps.
+
 ## v0.2.5
 
 ### External template JSON files
@@ -301,19 +354,9 @@ to pre-process the file" or "skip the affected rows".
   is cheap and unblocks today; (b) is a real feature later.
 
 - **AI-authoring workflow — rethink fmt / `--debug` / `--trace=bin` split.**
-  Today three surfaces partially overlap for the "AI agent iterating on
-  a template against sample data" use case: `bxp-fmt` (static config /
-  expr validation, per-row drill-down via `--expr-batch`), `bxp-cli
---debug` (per-row JSON for unmatched rows + expr errors on stdout),
-  and `bxp-cli --trace=bin` (binary BXTB frame stream on stdout — needs
-  a parser the AI agent doesn't have). `--debug` and `--trace` are
-  mutually exclusive on stdout. The question: what does an AI agent
-  actually need in one round-trip, and which tool should provide it?
-  Re-design before adding flags. Possibilities surfaced so far:
-  structured NDJSON `--debug` covering matched + unmatched + error rows
-  (not just `row_rules_debug_missing`); a `bxp-fmt`-side multi-row
-  simulation; or accepting that `--trace=bin` plus a small parser
-  helper is the right path for AI even though it's binary.
+  → Promoted to *Pre-release → Agent-driven configuration authoring* at
+  the top of this file (it now also owns the stale bundled-readme "Pass B"
+  rewrite). Resolve there before adding flags.
 
 ### Real-world data quirks (problem-first)
 

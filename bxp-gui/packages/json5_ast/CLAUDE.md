@@ -59,7 +59,7 @@ comment to the next sibling.
 cd bxp-gui/packages/json5_ast && dart test
 ```
 
-~105 tests covering tokenizer/parser features, all 11 mutation
+~107 tests covering tokenizer/parser features, all 11 mutation
 primitives, path navigation edge cases, and round-trip canonicalisation.
 The round-trip test asserts **idempotent canonicalisation** (not
 byte-identity) — the first dump may reformat input, but subsequent

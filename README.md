@@ -50,7 +50,7 @@ adapt. A new broker takes a JSON5 entry, not a code change.
 ## Why use BXP
 
 - **GUI with live debugger.** Edit a template, hit dry-run, watch every
-  row's variables / rule matches / output stream past in NDJSON. Click
+  row's variables / rule matches / output stream past live. Click
   any trace event to jump to the expression that produced it. Typos
   surface as red underlines on the offending token before you save.
 - **Universal mini-ETL.** Wealthfolio and brycht.app are the shipping

@@ -127,6 +127,30 @@ All broker logic is defined in `bxp-cli.json` — there are no compiled-in broke
 - `output_schema` — **required** — ordered map of output CSV header → `$variable` name.
   Determines both output columns and their order.
 
+### Input/output format and CSV-dialect fields
+
+Optional per-template keys controlling how input is parsed and output is
+written. All default to a standard comma/dot/UTF-8 CSV, so a plain broker
+export needs none of them.
+
+- `file_type_in` / `file_type_out` — `"csv"` (default) or `"json"`. `json` in =
+  array-of-objects input (streamed via `json.zig`); `json` out = the
+  `output_schema` rows emitted as a JSON array instead of CSV.
+- `csv_delimiter_in` / `csv_delimiter_out` — field separator (single char,
+  default `","`; e.g. `";"`, `"\t"`, `"|"`). CSV only.
+- `csv_decimal_separator_in` / `csv_decimal_separator_out` — decimal char in
+  numeric fields (default `"."`). Set `_in` to `","` for European exports.
+- `csv_text_quote_in` / `csv_text_quote_out` — `"none"`, `"single"` (`'`), or
+  `"double"` (`"`); input default `"double"`, output default `"none"`.
+- `csv_header_line` — 1-based line of the CSV header (default `1`). `0` =
+  headerless input — no header row, first line is data, columns reachable only
+  by position via `FIELDS(n)`; `N>1` skips `N-1` preamble lines. CSV input only.
+- `combined_output` — boolean (default `false`). When `true`, every input file
+  *additionally* writes its rows into one merged file
+  `1-{template_id}-combined{file_pattern_out}` in `data_dir`, alongside the
+  normal per-file outputs. The combined roll-up is always rebuilt in full
+  (a `--fresh`-skipped input is still iterated into it).
+
 ### Variable naming convention
 
 All template-internal variables use the `$` prefix:
@@ -220,6 +244,24 @@ Expressions are evaluated per row. Operator precedence (high → low):
 | `NOW()`                                                 | Current UTC datetime as `"YYYY-MM-DDTHH:MM:SSZ"`                                                                                                                                                                |
 | `RAND(n)`                                               | String of exactly `n` cryptographically random digits (first 1–9, rest 0–9); `n` clamped to `[1, 65]`                                                                                                           |
 | `COALESCE(a, b, ...)`                                   | Return first non-empty argument (empty = whitespace-only string; numbers/booleans are never empty). If all args are empty, returns the last arg verbatim — use `COALESCE([a],[b],'0')` for a guaranteed default |
+| `LEN(s)`                                                | Byte length of `s` (UTF-8 byte count, not codepoint/grapheme); empty → `0`                                                                                                                                      |
+| `GREATEST(a, b, ...)`                                   | Largest numeric value among args — per-row maximum (not cross-row aggregation); empty coerces to `0`, non-numeric raises an error                                                                                |
+| `LEAST(a, b, ...)`                                      | Smallest numeric value among args — per-row minimum; same coercion rules as `GREATEST`                                                                                                                          |
+
+### Date arithmetic functions
+
+All take/return ISO `YYYY-MM-DD` strings. An empty date arg yields `""`; a
+malformed one raises an error. Pre-1970 dates are fully supported.
+
+| Syntax                              | Description                                                                                                                                            |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DATEADD(d, n)`                     | Add `n` calendar days to `d` (negative subtracts). For business days use `WORKDAY`.                                                                   |
+| `DATEDIFF(d1, d2)`                  | Calendar days from `d2` to `d1` (positive when `d1` is later)                                                                                         |
+| `WORKDAY(d, n)`                     | Add `n` business days to `d`, skipping Sat/Sun (negative subtracts). T+2 settlement math; does **not** account for exchange holidays. `n=0` returns `d` |
+| `YEAR(d)` / `MONTH(d)` / `DAY(d)`   | Year / month (1–12) / day-of-month (1–31) component of `d` as a number                                                                                |
+| `WEEKDAY(d)`                        | ISO day-of-week (Mon=1 … Sun=7); weekend trade detection = `WEEKDAY([Date]) > 5`                                                                      |
+| `EOMONTH(d)`                        | Last calendar day of `d`'s month, as `YYYY-MM-DD` (month-end snapping)                                                                                |
+| `NTH_DOW(year, month, weekday, n)`  | Date of the `n`-th `weekday` (ISO Mon=1 … Sun=7) in `year`/`month`; negative `n` counts from month end (`-1` = last). `""` when it doesn't exist. EU DST = `NTH_DOW(YEAR(d), 3, 7, -1)` … `NTH_DOW(YEAR(d), 10, 7, -1)` |
 
 Type coercions: empty string → `0` in numeric context; any non-empty string → `true` in boolean context.
 

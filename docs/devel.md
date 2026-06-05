@@ -31,6 +31,7 @@
   - [Adding a new bridge FFI export](#adding-a-new-bridge-ffi-export)
   - [Testing](#testing)
   - [Release process](#release-process)
+  - [Performance model](#performance-model)
   - [Release optimize mode (Small vs Fast)](#release-optimize-mode-small-vs-fast)
   - [GUI development](#gui-development)
   - [Where to dig deeper (CLAUDE.md map)](#where-to-dig-deeper-claudemd-map)
@@ -335,9 +336,12 @@ of each `bridge_*` entry point.
 | ------------- | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `csv`         | `csv.zig`         | RFC 4180 parser. `LineIterator` yields records from an in-memory chunk; `splitFields()` unquotes fields. Spaces preserved — trimmed outside csv.zig at access time in `expr.Context`.                                                                                             |
 | `xlsx`        | `xlsx.zig`        | Converts `.xlsx` to intermediate `.csv`. Reads ZIP+XML, handles shared strings, formula results, dates (via `styles.xml` numFmtId). Max file size 10 MB.                                                                                                                          |
-| `expr`        | `expr.zig`        | Expression evaluator. Recursive-descent parser → evaluator. Per-row `Context` holds field values, ticker map, lookup table. `eval()` returns `Value` (number/string/bool); `evalString()` coerces to string. Each built-in has a co-located `FnDoc` entry consumed by `docs.zig`. |
+| `expr`        | `expr.zig`        | Expression evaluator. Recursive-descent parser → evaluator. Per-row `Context` holds field values, ticker map, lookup table. `eval()` returns `Value` (string/decimal/bool — decimal is fixed-point i128, see `decimal.zig`); `evalString()` coerces to string. Each built-in has a co-located `FnDoc` entry consumed by `docs.zig`. |
+| `datefmt`     | `datefmt.zig`     | In-house date core (parse / format / civil arithmetic), file-relative `@import` by `expr.zig` — replaced the former `sunrise` dependency. Pre-1970 dates supported (pure parse → format, no epoch round-trip).                                                                     |
+| `decimal`     | `decimal.zig`     | Fixed-point `i128` at scale 1e12 (12 fractional digits) numeric core: exact `+ −`, half-away-from-zero `× ÷` / `ROUND`. The named module behind `Value.decimal`; shared by the csv / json / xlsx input paths so an identical numeric string parses identically everywhere.       |
 | `config`      | `config.zig`      | Reads `bxp-cli.json` via `json5.zig` preprocessor then `std.json`. Returns `Config` owning all heap memory. `BrokerConfig.validate()` checks semantic constraints. Each struct has a co-located `FieldDoc` table consumed by `docs.zig`.                                          |
 | `json`        | `json.zig`        | Reads a JSON array-of-objects into a flat row representation. Builds a union of all keys across all objects; fills missing keys with empty string.                                                                                                                                |
+| `btrace`      | `btrace.zig`      | Binary BXTB trace `Writer` / `Reader` for `bxp-cli --trace`. Carries metadata only (per-row source byte offsets, errors, pre_pass dump, stats); per-row drill-down is recomputed on demand by `bxp-fmt`. The sole trace format since the v0.3.0 NDJSON removal.                   |
 | `json5`       | `json5.zig`       | Single-pass tokenizer that converts JSON5 → standard JSON. Strips comments, converts unquoted keys, removes trailing commas, normalizes single-quoted strings.                                                                                                                    |
 | `docs`        | `docs.zig`        | Aggregates `expr.zig` FnDoc catalog and `config.zig` FieldDoc tables into the `bxp-fmt --docs` JSON. Single source of truth consumed by bxp-gui at startup.                                                                                                                       |
 | `diagnostics` | `diagnostics.zig` | Structured validation collector. `Severity` (.error / .warning / .info), `Diagnostic` (path, position, code, message, suggest), `Diagnostics` (ArrayList collector). Used by bxp-fmt deep validation; bxp-cli passes a null sink.                                                 |
@@ -390,6 +394,7 @@ serialization.
 | `--config <path> --fetch-template <id>`                    | `config.load`                            | Raw JSON5 block of one template                                                          |
 | `--expr '<text>'`                                          | `expr.eval` (empty `Context`)            | One-shot expression validation                                                           |
 | `--expr-trace '<text>' [--row-headers …] [--row-fields …]` | `expr.evalTrace`                         | Per-call NDJSON trace stream (used by ExprPlayground)                                    |
+| `--expr-batch` (request on stdin)                          | `expr.eval` ×N                           | Evaluate N exprs against one row in a single spawn; `{results:[…]}` on stdout (drill-down) |
 | `--docs`                                                   | `docs.writeDocs`                         | Full FnDoc / FieldDoc catalog (single source for bxp-gui startup)                        |
 | `--version`, `--help`                                      | —                                        | Standard. `--version` writes to stdout, not stderr                                       |
 
@@ -445,8 +450,8 @@ Key types:
 
 ```c
 pub const Value = union(enum) {
-    number: f64,
     string: []const u8,
+    decimal: Decimal,   // fixed-point i128 @ 1e12 (decimal.zig), not f64/f80
     boolean: bool,
 };
 
@@ -879,6 +884,79 @@ bash scripts/release-02-desktop.sh v0.3.0-rc1   # host-OS desktop bundle
 
 The GitHub Actions pipeline fans out across ubuntu / windows / macos runners so
 all native installers come from real native builds.
+
+---
+
+### Performance model
+
+A simplified map of what makes the runtime fast and what slows it down, plus
+where the benchmarks live. The whole model rests on one invariant: **every
+output row is a pure function of one input row plus the (already-built)
+pre_pass lookup table** — no cross-row state in the main loop. That purity is
+what unlocks streaming, parallelism, and parse-once below.
+
+**What speeds it up** (roughly in order of impact):
+
+- **Streaming + bounded memory.** `processBroker` reads CSV in
+  `CHUNK_SIZE = 10 MiB` blocks (`ChunkReader`) and resets a per-chunk arena
+  between blocks; JSON streams through `std.json.Reader` in a two-pass design.
+  Peak RSS is `O(longest row + pre_pass table)`, **not** `O(file size)` — a
+  pre-2026-05-17 pipeline grew RSS `O(N)` (~10 GB on 2M rows); the streaming
+  rewrite holds it to a small constant (~24 MB across the bench matrix).
+- **Per-block parallel evaluation.** Rows within a chunk are independent, so
+  they fan out across a `std.Thread.Pool` and re-stitch in source order — see
+  [architecture.md → Parallel Evaluation](architecture.md#parallel-evaluation-per-block-fork-join).
+- **Parse-once expression eval (Phase 3B).** `input_schema` and `row_rules`
+  expressions are tokenized/parsed **once per file** into `compiled_schema` /
+  `compiled_rules` `Node` arrays (`pipeline.zig`), then evaluated per row
+  without re-parsing.
+- **Constant folding.** Row-invariant `input_schema` vars (no column / field
+  reference) are evaluated once at file-start and reused for every row
+  (`folded_vars`).
+- **Skip dead work.** The `date_fast_path` evaluates `$date` first and drops
+  an out-of-range row **before** `evalAllVars` when `date_filter_from_filename`
+  is on; a var that a matched rule overrides skips its base evaluation (the
+  override supplies the value).
+- **Free passthrough.** A field copied straight to output never routes through
+  the numeric core — it keeps full precision _and_ pays no parse cost. Only
+  genuinely _computed_ numbers go through `decimal.zig` (fixed-point `i128`,
+  exact, float-free).
+- **`memchr`-based scanning.** CSV record/field boundaries are found with
+  `std.mem.indexOfScalar` / `lastIndexOfScalar` (lazy-quotes parser), 12–41 %
+  faster than the prior byte loop on large inputs.
+
+**What slows it down** (cost factors to expect):
+
+- **`--trace`** emits a BXTB metadata frame per output/filtered/error row —
+  budget extra IO for dry-runs vs a plain conversion.
+- **ReleaseSmall** (the shipped console binary) is ~1.3–1.7× slower than
+  `ReleaseFast` on compute-heavy runs — see the table below.
+- **Wide columns** cost `O(cols)` per row (field split + `col_index` lookups);
+  a 1024-col file is dominated by per-row column work, not codegen.
+- **Heavy computed arithmetic** (vs passthrough) routes every value through the
+  decimal core; lots of `ROUND` / `*` / `/` per row shows up here.
+- **Debug builds** are 10–50× slower with a different RSS profile — never
+  perf-measure a `zig build` (Debug) artifact; build `-Doptimize=ReleaseFast`.
+
+**Benchmarking.** Two harnesses, different jobs:
+
+- **`scripts/bench/bench.sh`** — the stress-test matrix. Sweeps rows / columns
+  / cell-width / expr-count / trace on/off (`S1`–`S6`); `gen.py` emits a
+  synthetic `input.in.csv` + `bxp-cli.json` per point; each run is measured
+  under `/usr/bin/time -f '%e %M'`. Output → `scripts/bench/results/results-<UTC>.csv`
+  (columns: `wall_s`, RSS, output bytes, trace event count/bytes). It rebuilds
+  `ReleaseFast` first; knobs: `BENCH_WORK`, `BENCH_TIMEOUT`, `BENCH_PARALLEL`,
+  `BENCH_SKIP_BUILD`. Dev-only — **not** part of `test.sh`.
+- **`scripts/test-07-bench-guard.sh`** — the coarse CI perf gate (runs in
+  `test.sh`). Asserts only two **machine-independent** invariants so it can't
+  flake on absolute seconds: an **RSS ceiling** (`GUARD_RSS_MB`, default 64 MB
+  — catches any regression back to `O(N)` buffering) and a **scaling ratio**
+  (`wall(large N) / wall(small N)` must stay near the row ratio — catches an
+  accidental `O(n²)` path). Builds its own `ReleaseFast` binary into a
+  gitignored work prefix.
+- **`scripts/bench/verify-output.sh`** — correctness, not speed: runs bxp-cli
+  over `datasets/` + `examples/real-world/` into a dir for a before/after
+  `diff -r` (use around any optimization to prove output stays byte-identical).
 
 ---
 

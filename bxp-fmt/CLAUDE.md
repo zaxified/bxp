@@ -46,11 +46,23 @@ arena setup, and JSON serialization on stdout/stderr.
   bxp-gui's template picker.
 - `bxp-fmt --config <path> --fetch-template <id>` — emit the raw JSON5
   block for a single template as JSON.
+- `bxp-fmt --config <path> --check-fs <seconds>` — **modifier** on bare
+  `--config` (not a standalone action): enable the load-time filesystem
+  validation pass (each template's `data_dir` exists, has matching input
+  files, …) with a wall-clock budget of `<seconds>`. `0` (the default when
+  the flag is absent) skips the FS pass entirely — pure structural/expression
+  validation, no syscalls. bxp-gui passes `--check-fs=2` on every config
+  load/save; manual/scripted callers opt in only when they want the FS
+  diagnostics. Accepts both `--check-fs N` and `--check-fs=N` forms.
 - `--version`, `--help` — standard.
 
-`--list-templates` and `--fetch-template` are **modifiers** on `--config`;
-all other subcommands are mutually exclusive with each other and with the
-modifiers. The `--version` output goes to stdout (not stderr) so callers
+`--list-templates`, `--fetch-template`, and `--check-fs` are **modifiers**
+on `--config`. `--list-templates` and `--fetch-template` route to their own
+handlers and are mutually exclusive with each other; `--check-fs` only tunes
+the bare `--config` validate-and-emit action (it has no effect alongside the
+list/fetch modifiers). All non-`--config` actions (`--expr`, `--expr-trace`,
+`--expr-batch`, `--docs`) are mutually exclusive with each other and with
+`--config`. The `--version` output goes to stdout (not stderr) so callers
 that capture it (e.g. bxp-gui's runtime info panel) get the version.
 
 ## Annotated JSON output (`--config`)
@@ -98,8 +110,11 @@ tree consumed by the conversion pipeline.
 ```text
 bxp-fmt/
   src/
-    main.zig      ← single file: arg parsing + 6 subcommand dispatchers
-                    (~2400 lines — bulk is JSON serialization helpers,
+    main.zig      ← single file: arg parsing + 5 action dispatchers
+                    (`--config` / `--expr` / `--expr-trace` / `--expr-batch` /
+                     `--docs`) plus the `--list-templates` / `--fetch-template`
+                     / `--check-fs` modifiers on `--config`
+                    (~2700 lines — bulk is JSON serialization helpers,
                      `--config` annotation glue, and deep validation logic)
   build.zig       ← depends on bxp-core path dep (../bxp-core); imports
                     the `config`, `expr`, `json5`, `docs`, and `diagnostics` modules
@@ -116,6 +131,7 @@ zig build
 ./zig-out/bin/bxp-fmt --expr "IF([Qty] > 0, 'BUY', 'SELL')"
 ./zig-out/bin/bxp-fmt --docs | jq '.config_schema | length'
 ./zig-out/bin/bxp-fmt --config ../DEV/bxp-cli.json --list-templates
+./zig-out/bin/bxp-fmt --config ../DEV/bxp-cli.json --check-fs=2   # + FS validation
 ```
 
 ## Notes

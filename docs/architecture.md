@@ -77,6 +77,10 @@ graph TD
         expression evaluator"]
         DATEFMT["datefmt.zig
         date parse/format core"]
+        DECIMAL["decimal.zig
+        fixed-point i128 numeric core"]
+        BTRACE["btrace.zig
+        binary BXTB trace I/O"]
         CFG2["config.zig
         config loader"]
         JSON["json.zig
@@ -99,6 +103,8 @@ graph TD
     PIPE --> JSON
     CFG2 --> JSON5
     EXPR --> DATEFMT
+    EXPR --> DECIMAL
+    PIPE -->|--trace BXTB frames| BTRACE
     PIPE -->|write| OUT[".csvx output files"]
 
     FMTMAIN --> CFG2
@@ -243,6 +249,75 @@ The `--debug` flag prints rows that match no rule when
 authoring a new template. xlsx files take an earlier path: `xlsxPrePass`
 extracts each sheet to an intermediate `.csv` before this loop runs, so
 xlsx and csv inputs follow the same code from the chunked CSV reader onwards.
+
+The `Main loop - per row` box above is the **logical** view. Physically each
+chunk's rows are evaluated by a fork-join worker pool — see
+[Parallel Evaluation](#parallel-evaluation-per-block-fork-join) below.
+
+---
+
+## Parallel Evaluation (per-block fork-join)
+
+`input_schema` / `row_rules` evaluation is the CPU-bound hot path, and each
+output row is a pure function of one input row plus the (already-built)
+pre_pass lookup table — so rows within a block are independent and evaluate
+in parallel. `processBlockParallel` (`bxp-cli/src/pipeline.zig`) buffers a
+block of rows, fans them out across `K = runtime.max_workers` worker tasks on
+a shared `std.Thread.Pool` (owned by `main.zig`, carried on `Runtime`,
+`K = std.Thread.getCpuCount()` typically), then re-stitches the results in
+source order so the output stays byte-identical to the serial path.
+
+```mermaid
+flowchart TD
+    READ[ChunkReader
+    10 MiB chunk] --> BLK[Buffer one block of rows
+    pending_rows]
+    BLK --> FORK[Fork K = max_workers tasks
+    std.Thread.Pool + WaitGroup]
+    FORK --> W0[worker 0
+    disjoint row slice]
+    FORK --> W1[worker 1
+    disjoint row slice]
+    FORK --> WK[worker K-1
+    disjoint row slice]
+    W0 --> E0[evalAllVars + row_rules
+    per-worker out buffer
+    + partial_lookup]
+    W1 --> E1[same, own slice]
+    WK --> EK[same, own slice]
+    E0 --> JOIN[WaitGroup.wait]
+    E1 --> JOIN
+    EK --> JOIN
+    JOIN --> DRAIN[Drain per-worker buffers
+    in worker-index order
+    deterministic source-row order]
+    DRAIN --> MERGE[Merge partial_lookup
+    last-writer-wins
+    re-stitch BXTB frames in order]
+    MERGE --> WRITE[Write .csvx + combined sink + BXTB]
+    WRITE --> READ
+```
+
+Determinism guarantees that make the parallel path a drop-in for the serial
+one:
+
+- **Output order** — workers write into private buffers; the main thread
+  drains them in worker-index (= source-row) order after `WaitGroup.wait()`,
+  so `.csvx` rows and BXTB `output_row` frames come out in input order.
+- **pre_pass writes** — each worker accumulates into its own `partial_lookup`
+  map; the drain merges them into the shared `lookup_table` with
+  last-writer-wins, matching the serial "later row overwrites earlier" rule.
+- **Memory** — block size (`JSON_PARALLEL_BLOCK_SIZE = 1024` for JSON;
+  chunk-bounded for CSV) amortises dispatch overhead while keeping the
+  per-block arena footprint bounded.
+
+The BXTB trace stream itself stays single-stream — the `chunk_id` frame field
+is reserved for a future multi-stream dispatch but is always `0` today
+(see [trace-protokol.md](trace-protokol.md)).
+
+For the broader runtime cost model (what else speeds up / slows down a run)
+and the benchmark harness, see
+[devel.md → Performance model](devel.md#performance-model).
 
 ---
 
@@ -989,8 +1064,8 @@ classDiagram
     }
 
     class Value {
-        +number: f64
         +string: []const u8
+        +decimal: Decimal
         +boolean: bool
     }
 
