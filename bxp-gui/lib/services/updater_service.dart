@@ -307,7 +307,11 @@ class UpdaterService extends ChangeNotifier {
       final file = File(dest);
       final sink = file.openWrite();
       var received = 0;
-      _downloadProgress = 0.0;
+      // When the server omits Content-Length (total <= 0) we can't compute a
+      // ratio — leave progress null so the dialog renders the indeterminate
+      // bar instead of a determinate one frozen at 0 %. GitHub release assets
+      // always send Content-Length; this only bites a CDN that doesn't.
+      _downloadProgress = total > 0 ? 0.0 : null;
       notifyListeners();
       // Inner try/finally guarantees the sink is closed even if the
       // stream loop or notifyListeners throws. Without it, a network
