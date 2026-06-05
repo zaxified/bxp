@@ -1290,7 +1290,7 @@ fn runExprBatch(gpa: std.mem.Allocator) !u8 {
 fn runExprBatchBytes(
     alloc: std.mem.Allocator,
     body: []const u8,
-    out: *std.io.Writer,
+    out: *std.Io.Writer,
 ) !u8 {
     const parsed = std.json.parseFromSlice(std.json.Value, alloc, body, .{}) catch {
         std.debug.print("error: --expr-batch stdin must be a JSON object\n", .{});
@@ -2667,7 +2667,7 @@ test "annotateRaw Phase B: output_schema missing attaches at template path" {
 /// Drive `runExprBatchBytes` over an in-memory buffer and return the
 /// `{exit, json}` pair so tests can assert without stdin/stdout.
 fn batchOnBytes(a: std.mem.Allocator, body: []const u8) !struct { exit: u8, json: []const u8 } {
-    var buf: std.io.Writer.Allocating = .init(a);
+    var buf: std.Io.Writer.Allocating = .init(a);
     const code = try runExprBatchBytes(a, body, &buf.writer);
     return .{ .exit = code, .json = buf.written() };
 }
