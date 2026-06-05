@@ -175,7 +175,7 @@
         // deposit → cash placeholder symbol; trade fill → mapped ticker
         $ticker:          "IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))",
         $quantity:        "IF([Type] = 'deposit', 1, [Amount])",
-        $unitprice:       "IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount') / [Amount])",
+        $unitprice:       "IF([Type] = 'deposit', [Amount], ROUND(LOOKUP([Order ID], 'amount') / [Amount], 8))",
         $currency:        "IF([Type] = 'deposit', [Currency], LOOKUP([Order ID], 'currency'))",
         $fee:             "",  // no fee column in this broker's export
         $amount:          "IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount'))",
@@ -387,7 +387,7 @@
         $isin:            "",                    // optional ISIN output column
         $quantity:        "IF([Ticker] != '', [No. of shares], 1)",
         // net price = total minus conversion fee and stamp duty, divided by share count
-        $unitprice:       "IF([Ticker] != '', (ABS([Total]) - ABS([Currency conversion fee]) - ABS([Stamp duty reserve tax])) / [No. of shares], ABS([Total]))",
+        $unitprice:       "IF([Ticker] != '', ROUND((ABS([Total]) - ABS([Currency conversion fee]) - ABS([Stamp duty reserve tax])) / [No. of shares], 8), ABS([Total]))",
         $currency:        "[Currency (Total)]",
         // fee = sum of conversion fee + stamp duty; empty when both are zero
         $fee:             "IF(ABS([Currency conversion fee]) + ABS([Stamp duty reserve tax]) > 0, ABS([Currency conversion fee]) + ABS([Stamp duty reserve tax]), '')",
@@ -489,7 +489,7 @@
               $quantity:   "",
               $unitprice:  "",
               $fee:        "",
-              $amount:     "LOOKUP([Ticker] & '_' & [Time], 'shares') / [No. of shares]",
+              $amount:     "ROUND(LOOKUP([Ticker] & '_' & [Time], 'shares') / [No. of shares], 8)",
               $comment:    "'split-correction-' & SPLIT_PART([Time], ' ', 1)"
             }
           ]
@@ -617,7 +617,7 @@
         $ticker:          "TICKER([Symbol])",
         $quantity:        "[Volume]",
         // sale value divided by volume = per-share price
-        $unitprice:       "[Sale value] / [Volume]",
+        $unitprice:       "ROUND([Sale value] / [Volume], 8)",
         $currency:        "'CZK'",  // XTB account currency; adjust if different
         $fee:             "",
         $amount:          "[Sale value]",
@@ -760,7 +760,7 @@
               $action:     "'BUY'",
               $ticker:     "TICKER([Symbol])",
               $quantity:   "SPLIT_PART(SPLIT_PART([Comment], ' ', 3), '/', 1)",
-              $unitprice:  "ABS([Amount]) / SPLIT_PART(SPLIT_PART([Comment], ' ', 3), '/', 1)",
+              $unitprice:  "ROUND(ABS([Amount]) / SPLIT_PART(SPLIT_PART([Comment], ' ', 3), '/', 1), 8)",
               $comment:    "''' & [ID] & '_' & [Time] & '_' & [Comment] & '''"
             }
           ]
@@ -822,7 +822,7 @@
         $date:            "[Close Time (UTC)]",  // new format uses UTC timestamps
         $ticker:          "TICKER([Ticker])",    // new format uses "Ticker" column (was "Symbol")
         $quantity:        "[Volume]",
-        $unitprice:       "[Sale Value] / [Volume]",
+        $unitprice:       "ROUND([Sale Value] / [Volume], 8)",
         $currency:        "'CZK'",
         $fee:             "",
         $amount:          "[Sale Value]",
@@ -959,7 +959,7 @@
               $action:     "'BUY'",
               $ticker:     "TICKER([Ticker])",
               $quantity:   "SPLIT_PART(SPLIT_PART([Comment], ' ', 3), '/', 1)",
-              $unitprice:  "ABS([Amount]) / SPLIT_PART(SPLIT_PART([Comment], ' ', 3), '/', 1)",
+              $unitprice:  "ROUND(ABS([Amount]) / SPLIT_PART(SPLIT_PART([Comment], ' ', 3), '/', 1), 8)",
               $comment:    "''' & [ID] & '_' & [Time] & '_' & [Comment] & '''"
             }
           ]
@@ -1059,7 +1059,7 @@
               $type:      "'BUY'",
               $ticker:    "TICKER([Currency])",
               $quantity:  "[Amount]",
-              $price:     "LOOKUP([Order ID], 'amount') / [Amount]",
+              $price:     "ROUND(LOOKUP([Order ID], 'amount') / [Amount], 8)",
               $currency:  "LOOKUP([Order ID], 'currency')"
             }
           ]
