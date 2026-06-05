@@ -647,7 +647,7 @@ class _RowListInnerState extends State<_RowListInner> {
   /// Pass is O(cols * visible_rows) of `TextPainter.layout()` — on a
   /// 900-col x 1000-row file that's ~900k layouts, multi-second main-
   /// isolate block (and Wayland compositor ping timeout on Linux).
-  /// Skip the pass entirely above `kAutoFitColLimit` data columns;
+  /// Skip the pass entirely above `kWideColLimit` data columns;
   /// PlutoColumn falls back to its declared 150 px default and the
   /// user can still drag any edge to override.
   void _autoFitDataColumns(PlutoGridStateManager sm) {
@@ -869,8 +869,8 @@ class _RowListInnerState extends State<_RowListInner> {
       ),
       PlutoColumn(
         // Icon-only status column — the glyph itself is small, but a hover
-        // tooltip explains what each one means (▶ written, ▼ filtered,
-        // ⊘ skipped, ? unmatched, ✕ error).
+        // tooltip explains what each one means (▶ written, ⏩ written-multi,
+        // ▼ filtered, ⊘ skipped, ? unmatched, ⚠ warning).
         title: '',
         field: 'status',
         type: PlutoColumnType.text(),
@@ -1321,8 +1321,6 @@ class _FilterScanSpinner extends StatelessWidget {
   }
 }
 
-/// Sticky filter row above the column headers — one input per column,
-/// case-insensitive substring match.
 /// Single TextField rendered above the grid for wide-CSV files in place
 /// of the per-column [_FilterRow]. The needle matches against ANY cell
 /// in a row (case-insensitive substring) — wired into both the eager
@@ -1606,6 +1604,9 @@ class _StatusFilterButton extends StatelessWidget {
   }
 }
 
+/// Sticky filter row above the column headers — one input per column,
+/// case-insensitive substring match. Used on narrow files (≤
+/// [kWideColLimit] columns); wide files swap in [_WideGlobalFilterBar].
 class _FilterRow extends StatelessWidget {
   final List<String> headers;
   final Map<String, String> filters;
@@ -1631,11 +1632,11 @@ class _FilterRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = context.bxpTheme;
-    // No horizontal padding on the Container: the parent gives us
-    // exactly `44 + 28 + 150*N` width and the Row inside expects the
-    // same. The 8 px that the previous `horizontal: 4` padding ate
-    // was triggering a RenderFlex overflow on the right side of the
-    // last filter cell. Vertical padding stays — it only affects
+    // No horizontal padding on the Container: the parent sizes us to
+    // exactly `rowNumWidth + 28 + Σ(per-column widths)` and the Row
+    // inside expects the same. The 8 px that the previous `horizontal: 4`
+    // padding ate was triggering a RenderFlex overflow on the right side
+    // of the last filter cell. Vertical padding stays — it only affects
     // height, which the parent doesn't constrain.
     return Container(
       decoration: BoxDecoration(

@@ -220,7 +220,7 @@ class _ExprEditorState extends State<ExprEditor> {
   ///   1. Inside `[Field]` — suggest CSV header names from the latest
   ///      dry-run cache for the active template (Phase 5b).
   ///   2. Inside `LOOKUP("..."` first arg — suggest pre_pass block
-  ///      names declared in the active template's `pre_passes` map
+  ///      names declared in the active template's `pre_pass` map
   ///      (Phase 5b). Triggered also for `LOOKUP('`.
   ///   3. Identifier prefix — function/keyword catalog (default).
   void _refreshAutocomplete({bool force = false}) {

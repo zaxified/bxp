@@ -174,11 +174,11 @@ class _Body extends StatelessWidget {
     String? cliEnv,
     int traceLines,
   ) {
-    // Whole-panel sections list. Built as flat (title, rows) groups so a
-    // single Table at the bottom can compute one shared `IntrinsicColumnWidth`
-    // for every label across every section — that way "lastExitCode" and
-    // "$BXP_FMT_PATH" line up with "preset" and "dirty" in a single column,
-    // which a per-section Table can't do.
+    // Whole-panel sections list, each a (title, rows) group. Rendered
+    // below as one `_SectionTable` per group, so the label column's
+    // `IntrinsicColumnWidth` is computed per section (labels line up
+    // within a section, not across sections — see the rationale on the
+    // render loop further down).
     final sections = <(String, List<(String, String)>)>[
       ('Versions', [
         ('bxp-gui', store.bxpGuiVersion ?? '(unknown)'),

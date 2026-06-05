@@ -6,10 +6,12 @@ import 'dart:ui';
 // future widget that exceeds these dimensions, so this constant is a hint
 // for the proactive pre-check, not a single point of correctness.
 //
-// Distinct from the OS window minimum (1280×800, see `main.dart` window
-// setup): this is the rendering target for the zoom math — when the
-// physical window shrinks below 1280×800 we cap zoom so the logical
-// frame still fits the smaller logical box (1024×768) without overflow.
+// Distinct from the OS window minimum, which is enforced by the native
+// runners (Linux/Windows pin 1280×800 via `linux/runner/my_application.cc`
+// + `windows/runner/main.cpp`; macOS sets a 1024×768 content-min in
+// `macos/Runner/MainFlutterWindow.swift`): this is the rendering target
+// for the zoom math — when the physical window shrinks toward the logical
+// box (1024×768) we cap zoom so the frame still fits without overflow.
 const double kLogicalMinWidth = 1024.0;
 const double kLogicalMinHeight = 768.0;
 

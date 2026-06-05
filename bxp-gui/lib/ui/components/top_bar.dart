@@ -49,7 +49,7 @@ class TopBar extends StatelessWidget {
             onTap: _openGithub,
           ),
           // Theme cycle button: label shows the current preset's short name
-          // (e.g. "SLATE", "AMOLED") so the user knows what clicking will do.
+          // (e.g. "SLATE", "ZINC") so the user knows what clicking will do.
           _TopTab(
             label: t.label,
             active: false,

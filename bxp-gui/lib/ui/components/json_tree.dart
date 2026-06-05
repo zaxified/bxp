@@ -18,11 +18,11 @@ import '../theme/bxp_theme.dart';
 import '../theme/bxp_text.dart';
 import 'expr_highlight.dart';
 
-/// Phase 5c-C3: walks the live AST (`TraceStore.astRoot`) directly.
-/// `$err_*` diagnostic markers are looked up via `TraceStore.errorsAt` /
-/// `TraceStore.hasErrorIn` at render time — they live in `configJson`
-/// (still maintained as a Map by the adapter) until Phase 5c-D folds
-/// them into a dedicated path-keyed structure.
+/// Walks the live AST (`TraceStore.astRoot`) directly. `$err_*` / `$warn_*`
+/// diagnostic markers are looked up via `TraceStore.errorsAt` /
+/// `TraceStore.warningsAt` / `TraceStore.hasErrorIn` at render time — these
+/// read from the store's dedicated path-keyed validation maps (bxp-fmt's
+/// `$err_*`/`$warn_*` buckets merged with the Dart-side `$dart_<N>` ones).
 class JsonTree extends StatefulWidget {
   final JsonAstNode? root;
   final bool expandAll;
@@ -510,9 +510,10 @@ class _JsonNodeState extends State<_JsonNode> {
   /// becomes a `_JsonNode` row; each [CommentLine] becomes either an
   /// inline trailing tag on the previous row (when `inlinePlacement` is
   /// true) or a standalone `_CommentRow`. After the row is built, any
-  /// `$err_*` markers that the validator attached to the row's path
-  /// follow as red banner widgets — looked up via TraceStore so the AST
-  /// itself stays unburdened by diagnostic state.
+  /// `$err_*` / `$warn_*` / `$info_*` markers that the validator attached
+  /// to the row's path follow as severity-styled banner widgets — looked
+  /// up via TraceStore so the AST itself stays unburdened by diagnostic
+  /// state.
   List<Widget> _mapChildNodes(JsonObject obj) {
     final out = <Widget>[];
     int? lastRowIdx;
@@ -574,13 +575,10 @@ class _JsonNodeState extends State<_JsonNode> {
         ));
         lastRowIdx = out.length - 1;
         // Surface any validator $err_* / $warn_* / $info_* markers
-        // attached to this child. `select` (not `read`) so the row
-        // rebuilds the moment the validator's diagnostic maps change —
-        // without it, the banner only refreshed when `treeLoadGen`
-        // ticked, leaving stale entries showing for live edits between
-        // full reloads. Phase 3 — Dart-side `$dart_<N>` entries are
+        // attached to this child. Dart-side `$dart_<N>` entries are
         // merged in alongside bxp-fmt's `$err_<N>` (same bucket, same
         // banner style).
+        //
         // Banners use `read` here (not `select`) because the dedup
         // helper consults paths and bucket contents that change in
         // lockstep with the diagnostic maps themselves — every map
@@ -732,8 +730,10 @@ class _JsonNodeState extends State<_JsonNode> {
     return out;
   }
 
-  // Detects whether this path is a BXP expression leaf.
-  // Mirrors isExprPath() from ConfigTree.tsx.
+  // Detects whether this path is a BXP expression leaf (input_schema
+  // value, row_rules `when` / override value, or pre_pass `when`/`key`/
+  // `values` entry) so `_buildPrimitive` renders it through `_ExprLeaf`
+  // with syntax highlighting instead of a plain editable string.
   bool get _isExprPath {
     final p = widget.path;
     if (p.length < 4) return false;
@@ -1202,7 +1202,8 @@ class _JsonNodeState extends State<_JsonNode> {
 }
 
 /// Inline diagnostic row rendered beneath a `_JsonNode` whose path
-/// carries one or more `$err_*` markers from the background validator.
+/// carries one or more `$err_*` / `$warn_*` / `$info_*` markers from the
+/// background validator. [severity] selects the palette + chrome.
 enum _DiagSeverity { error, warning, info }
 
 class _ErrorRow extends StatelessWidget {
@@ -2742,8 +2743,8 @@ class _EditableEnum extends StatelessWidget {
       tooltip: '',
       // Default `_kMenuDuration` of 300 ms makes the menu visibly
       // linger after the user picks an item before the underlying
-      // value updates — reads as input lag. 80 ms is fast enough to
-      // feel instant while still keeping the close animation visible.
+      // value updates — reads as input lag. `AnimationStyle.noAnimation`
+      // drops the fade entirely so the menu opens and closes instantly.
       popUpAnimationStyle: AnimationStyle.noAnimation,
       child: Text('"${_displayLabel(value)}"',
           style: BxpText.body(context, color: color, size: BxpSize.md)

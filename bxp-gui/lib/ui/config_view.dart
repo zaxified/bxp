@@ -124,9 +124,10 @@ class _ConfigViewState extends State<ConfigView> {
                   Text('● load error',
                       style: BxpText.label(context, color: t.errorText)),
                 // Phase 5b — VALIDATE button result toast. Transient
-                // (auto-clears after 3s in the store). Coloured by
-                // semantic meaning: green when clean, warn-yellow when
-                // any non-error diagnostic, red when any error.
+                // (auto-clears after `_validateToastMs` = 8s in the
+                // store). Coloured by semantic meaning: green when clean,
+                // warn-yellow when any non-error diagnostic, red when any
+                // error.
                 if (store.validateToast != null) ...[
                   const SizedBox(width: 12),
                   Builder(builder: (ctx) {

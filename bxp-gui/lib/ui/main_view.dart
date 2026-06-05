@@ -555,11 +555,6 @@ class _StatusBarState extends State<_StatusBar> {
   }
 }
 
-/// Format raw bytes received from bxp-cli stdout into a 6-digit tier
-/// display: `N B` while under ~1 MB, `N KB` until ~1 GB, then `N MB`,
-/// `N GB`, `N TB`. Decimal thresholds for tier switches (more
-/// predictable) but binary division (1024-based) for the integer
-/// shown — matches what file managers display.
 /// Human-readable run duration with a unit chosen by magnitude:
 ///   < 1 s   → whole milliseconds   ("847 ms")
 ///   < 60 s  → seconds, 1 decimal   ("3.4 s")
@@ -573,6 +568,11 @@ String _formatRunDuration(Duration d) {
   return '$m m ${s.toString().padLeft(2, '0')} s';
 }
 
+/// Format raw bytes received from bxp-cli stdout into a tier display:
+/// `N B` while under ~1 MB, `N KB` until ~1 GB, then `N MB`, `N GB`,
+/// `N TB`. Decimal thresholds for tier switches (more predictable) but
+/// binary division (1024-based) for the integer shown — matches what
+/// file managers display.
 String _formatTraces(int b) {
   if (b < 1000000) return '$b B';
   if (b < 1000000000) return '${b ~/ 1024} KB';

@@ -4,7 +4,9 @@ import 'package:provider/provider.dart';
 import '../../store/trace_store.dart';
 import 'bxp_theme_animator.dart';
 
-/// A palette preset identifier. Stored in [TraceStore.theme].
+/// A palette preset identifier. The active preset is persisted by name
+/// via [TraceStore.themePresetName] and resolved back to a [BxpTheme]
+/// through [themeByName].
 enum BxpThemePreset {
   light,
   dark,

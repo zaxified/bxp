@@ -342,13 +342,14 @@ class _ZoomContainerState extends State<ZoomContainer> {
           _bump(-kZoomStep);
           return true;
         } else if (key == '0' || physical == PhysicalKeyboardKey.numpad0 || physical == PhysicalKeyboardKey.digit0) {
-          // Reset to platform default, NOT a literal 1.0. On Windows the
-          // default is 0.8 (compensates for the typical 125 % display
-          // scaling); resetting to 1.0 there would just trip the
-          // ZoomContainer's post-frame `maxSafeZoom` auto-clamp and
-          // settle on whatever fits the current window — usually
-          // something like 0.99, which then gets persisted to prefs
-          // and looks like Ctrl+0 forgot the user's intent.
+          // Reset to the platform default zoom. Today that's 1.0 (100 %)
+          // on every platform: DPR compensation moved out of the zoom
+          // factor and into the `textScaler: 1 / devicePixelRatio`
+          // MediaQuery override (see MaterialApp.builder above), so the
+          // user's zoom intent no longer needs a per-platform baseline.
+          // Routed through `defaultZoomForPlatform()` rather than a
+          // literal 1.0 so a future per-platform default lands here for
+          // free.
           _store.setZoom(TraceStore.defaultZoomForPlatform());
           return true;
         }

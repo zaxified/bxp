@@ -38,8 +38,8 @@ class _ResizeHandleState extends State<ResizeHandle> {
     // Three-tier brightness on top of the panel background. Picking
     // colours from the theme tokens (rather than hard-coded slate
     // values) keeps the feedback in scale with whatever preset is
-    // active — on amoled the highlight stays subtle, on slate it
-    // matches the original Tailwind hover intensity.
+    // active — on the light preset the highlight stays subtle, on slate
+    // it matches the original Tailwind hover intensity.
     final Color bg;
     if (_dragging) {
       bg = t.textSubtle.withValues(alpha: 0.5);

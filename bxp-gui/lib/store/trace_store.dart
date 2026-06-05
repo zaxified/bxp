@@ -259,12 +259,16 @@ class TraceStore extends ChangeNotifier {
   /// the first validator response lands.
   Map<String, Map<String, String>> _validationErrors = const {};
 
-  /// Phase A plumbing for the `bxp-fmt --config` deep-validation
-  /// pass. `$warn_<N>` and `$info_<N>` siblings live in their own
-  /// path-keyed maps so the tree renderer can route them to a different
-  /// badge style and the save pre-flight (`_firstErrTraceIn`) stays
-  /// strict on `.@"error"` severity only. Populated by phases B+ that
-  /// add deep-validation emit sites — empty by design today.
+  /// `bxp-fmt --config` deep-validation siblings. `$warn_<N>` and
+  /// `$info_<N>` live in their own path-keyed maps so the tree renderer
+  /// can route them to a different badge style and the save pre-flight
+  /// (`_firstErrTraceIn`) stays strict on `.@"error"` severity only.
+  /// `_validationWarnings` is populated in practice — bxp-fmt's
+  /// deep-validation pass emits `$warn_*` for wrong-type-silent fields,
+  /// unused pre_pass blocks, unused input_schema `$variables`, and
+  /// distance-based outliers. `_validationInfo` stays empty today: the
+  /// `.info` severity is plumbed through bxp-core but no production emit
+  /// site uses it yet.
   Map<String, Map<String, String>> _validationWarnings = const {};
   Map<String, Map<String, String>> _validationInfo = const {};
 
@@ -364,7 +368,7 @@ class TraceStore extends ChangeNotifier {
   /// expression — all of them).
   List<String>? focusedNodePath;
   // The text the editor was opened with — i.e. the value committed in
-  // configJson at the time of selection, plus whatever Apply has pushed
+  // the AST at the time of selection, plus whatever Apply has pushed
   // since. The Reset button restores the editor to this baseline; without
   // a separate field we can't tell the original text from the working
   // copy because every keystroke flows through `selectedExprText`.
@@ -379,7 +383,7 @@ class TraceStore extends ChangeNotifier {
   int? exprValidationOffset;
   int? exprValidationLength;
   // Validation lifecycle. The editor and Playground show "checking…"
-  // while a validateExpr spawn is in flight (200ms debounce + bxp-fmt
+  // while a validateExpr spawn is in flight (500ms debounce + bxp-fmt
   // round-trip), then flip to "valid"/"invalid" when the result lands.
   //   idle    — no expression selected OR text is whitespace
   //   pending — debounce timer running OR spawn in flight
@@ -558,7 +562,7 @@ class TraceStore extends ChangeNotifier {
 
   // Debouncer for expression validation. Spawn-based validateExpr costs
   // ~10–20ms per call — fine when fired on explicit selection, but would
-  // hammer the CLI on every keystroke. 200ms balances responsiveness
+  // hammer the CLI on every keystroke. 500ms balances responsiveness
   // against CPU load and feels instant to the typist.
   Timer? _validationDebounce;
 
@@ -923,12 +927,14 @@ class TraceStore extends ChangeNotifier {
   /// Returns three buckets that share the same outer-key shape (encoded
   /// parent path) so the renderer can route by severity.
   ///
-  /// Phase A note: today bxp-fmt only emits `$err_*` (the existing
-  /// validateCollect path). Warning / info maps are empty until phases
-  /// B+ wire deep-validation emit sites in core. Walking still skips
-  /// the `$warn_*` / `$info_*` prefixes so future emissions are
-  /// captured directly without recursing into them as if they were
-  /// data nodes.
+  /// bxp-fmt emits both `$err_*` (the validateCollect path) and `$warn_*`
+  /// (deep-validation: wrong-type-silent fields, unused pre_pass blocks,
+  /// unused input_schema `$variables`, distance-based outliers), so the
+  /// errors and warnings buckets both fill in practice. `$info_*` is
+  /// recognised here but stays empty — the `.info` severity is plumbed
+  /// through bxp-core yet no production emit site uses it. Walking skips
+  /// recursing into `$warn_*` / `$info_*` so their object payloads are
+  /// captured as diagnostics rather than treated as data nodes.
   /// Phase G1: $err_/$warn_/$info_ values are objects
   /// `{message, off?, len?, suggest?}` — extract the displayable message.
   /// Falls back to the legacy plain-string shape for forward-compat with
@@ -1204,8 +1210,9 @@ class TraceStore extends ChangeNotifier {
   ///
   /// Pattern semantics: `*` in a schema key matches any single segment, so
   /// `"conversion_templates.*.data_dir"` matches every template's data_dir.
-  /// Mirrors `_SchemaTooltipKey._matches` in json_tree.dart — kept here so
-  /// the delete guard, enum dropdown, and reorder gate share one rule.
+  /// Delegates to the shared `findSchemaDocIn` (schema_doc_lookup.dart) —
+  /// the same resolver json_tree's `_SchemaTooltipKey` uses, so the delete
+  /// guard, enum dropdown, reorder gate, and key tooltip share one rule.
   Map<String, dynamic>? findSchemaDoc(List<String> path) =>
       findSchemaDocIn(docConfigSchema, path);
 
@@ -1359,8 +1366,8 @@ class TraceStore extends ChangeNotifier {
 
       // AST is the primary loader. Parse the file via the Dart JSON5 AST
       // library; bxp-fmt runs alongside as a background validator that
-      // contributes only `$err_*` diagnostics (mapped into the path-keyed
-      // `_validationErrors` table).
+      // contributes `$err_*` and `$warn_*` diagnostics (mapped into the
+      // path-keyed `_validationErrors` / `_validationWarnings` tables).
       final astResult = await AstLoader.loadFromFile(configPath);
       _rawConfigInput = utf8.encode(astResult.rawText);
 
@@ -1493,10 +1500,10 @@ class TraceStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Phase 5c-A: apply [op] to the live AST, regenerate `configJson` via
-  /// the adapter (preserving any `$err_*` markers attached by the
-  /// background validator), record the op in `_opLog`, push history, and
-  /// refresh the UI. Returns true on success; false if the AST mutation
+  /// Apply [op] to the live AST in place via `applyConfigOp`, record the
+  /// op in `_opLog`, push history, invalidate the path-keyed UI state
+  /// (which re-runs the Dart-side validator), and refresh the UI. Returns
+  /// true on success; false if the AST mutation
   /// threw (in which case nothing is recorded — the live tree is unchanged
   /// and op_log stays consistent with what the AST patcher could replay).
   bool _applyOpToAst(ConfigOp op, String traceEvent,
@@ -2484,7 +2491,7 @@ class TraceStore extends ChangeNotifier {
     return _streamRunBtrace(dry: false);
   }
 
-  /// Live handle to the bxp-cli process spawned by `_streamRun`. Set inside
+  /// Live handle to the bxp-cli process spawned by `_streamRunBtrace`. Set inside
   /// the spawn callback and cleared in the run's `finally` block, so a
   /// non-null value means a streaming run is currently executing and can
   /// be killed by [cancelRun].
@@ -2507,7 +2514,7 @@ class TraceStore extends ChangeNotifier {
   bool _cancelRequested = false;
   bool get isCancelling => _cancelRequested;
 
-  /// Sends SIGTERM to the running bxp-cli child. The streaming `_streamRun`
+  /// Sends SIGTERM to the running bxp-cli child. The streaming `_streamRunBtrace`
   /// future then collapses to the post-loop cleanup with whatever lines
   /// landed before the kill — partial output stays visible. No-op when no
   /// run is in flight.
@@ -2581,12 +2588,14 @@ class TraceStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Per-file runtime state for btrace-backed runs. Holds the open
-  /// [CsvRowFetcher] handles, the precomputed output-row byte offsets, and
-  /// the template's input_schema / ticker_map / rule_when list that
-  /// [ensureDetailLoaded] needs to reconstruct per-row drill-down. Keyed
-  /// by `FileModel.id`. Emptied + disposed at the top of every
-  /// `_streamRun*` to avoid leaking file handles across runs.
+  /// Per-file runtime state for btrace-backed runs. Holds the template's
+  /// input_schema / ticker_map / rule_when + override rows / output_schema /
+  /// pre_pass lookups that [ensureDetailLoaded] needs to reconstruct per-row
+  /// drill-down. Source-row bytes are NOT held here — they're read on demand
+  /// through the active file's [RandomAccessFile] in [_activateFile], so
+  /// `_BtraceFileRuntime.sourceFetcher` stays null. Keyed by `FileModel.id`.
+  /// Emptied + disposed at the top of every `_streamRun*` to avoid leaking
+  /// file handles across runs.
   final Map<String, _BtraceFileRuntime> _btraceRuntimes = {};
 
   /// Public accessor for the per-file output_schema snapshot captured at
@@ -3004,7 +3013,7 @@ class TraceStore extends ChangeNotifier {
   ///
   /// Iteration order: `_validationErrors` is a `LinkedHashMap` keyed by
   /// path string in the order entries were inserted by
-  /// `_extractValidationErrors` (DFS over the annotated `bxp-fmt --config`
+  /// `_extractDiagnostics` (DFS over the annotated `bxp-fmt --config`
   /// output, top-down). Within each path, the inner map preserves
   /// `$err_<N>` insertion order (i.e. emission order in the annotated
   /// JSON). Callers may treat the first non-empty hit as "the visually
@@ -3152,17 +3161,18 @@ class TraceStore extends ChangeNotifier {
   void debugNotify() => notifyListeners();
 
   // ─────────────────────────────────────────────────────────────────────
-  // Btrace-mode pipeline (schema v3, since 2026-05-22)
+  // Btrace-mode pipeline (binary BXTB stream, since 2026-05-22)
   // ─────────────────────────────────────────────────────────────────────
 
-  /// Spawn `bxp-cli --trace-file=<temp>.bxtb`, wait for it to complete,
-  /// then load the produced binary trace into a sparse skeleton TraceModel.
-  /// Per-row drill-down detail (vars, rules, output values, raw fields)
-  /// stays unpopulated until [ensureDetailLoaded] fires on user selection.
+  /// Spawn `bxp-cli --trace=bin --trace-file=<temp>.bxtb`, ingesting the
+  /// binary BXTB stream off stdout into a sparse skeleton TraceModel as it
+  /// arrives. Per-row drill-down detail (vars, rules, output values, raw
+  /// fields) stays unpopulated until [ensureDetailLoaded] fires on user
+  /// selection.
   ///
-  /// Lifecycle parity with [_streamRunNdjson]: status flips
-  /// running → done|error|cancelled, stderr is captured, the cancel
-  /// button works mid-spawn, traceModel is replaced once at the end.
+  /// Run lifecycle: status flips running → done|error|cancelled, stderr is
+  /// captured, the cancel button works mid-spawn, traceModel is replaced
+  /// once at the start and mutated in place as frames land.
   Future<void> _streamRunBtrace({required bool dry}) async {
     if (configPath.isEmpty) return;
     status = RunStatus.running;
@@ -3849,7 +3859,6 @@ class TraceStore extends ChangeNotifier {
     return true;
   }
 
-  /// Minimal CSV splitter for drill-down: handles double-quoted fields with
   /// Synchronous "extract one CSV line starting at byte [offset]" against
   /// an eager-loaded source CSV held as `Uint8List`. Used by the btrace
   /// ingest path to avoid the per-frame await chain on
@@ -3864,6 +3873,7 @@ class TraceStore extends ChangeNotifier {
     return utf8.decode(bytes.sublist(offset, hardEnd), allowMalformed: true);
   }
 
+  /// Minimal CSV splitter for drill-down: handles double-quoted fields with
   /// embedded commas and `""` escapes. Mirrors `BtraceView._splitCsvLine`;
   /// keep in sync if RFC 4180 edge cases emerge in real broker exports.
   List<String> _splitCsv(String line, int columnHint) {

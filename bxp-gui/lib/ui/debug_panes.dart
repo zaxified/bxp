@@ -329,9 +329,10 @@ class _TemplateSelectState extends State<_TemplateSelect> {
       color: t.panelBg,
       elevation: 2,
       padding: EdgeInsets.zero,
-      // 80 ms close animation instead of the default 300 ms — picking
-      // a template feels instant rather than laggy. See the matching
-      // override in `_EditableEnum` (json_tree.dart).
+      // Suppress the menu open/close animation entirely (the default
+      // `_kMenuDuration` 300 ms fade made the menu visibly linger after
+      // the user picked a template, reading as input lag). See the
+      // matching override in `_EditableEnum` (json_tree.dart).
       popUpAnimationStyle: AnimationStyle.noAnimation,
       onSelected: (val) => store.setTemplateId(val),
       itemBuilder: (_) => [

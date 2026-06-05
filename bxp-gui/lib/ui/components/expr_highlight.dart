@@ -10,16 +10,13 @@ import '../theme/bxp_text.dart';
 // VS Code Light Modern syntax (keyword=#0000FF, string=#A31515, ...),
 // dark theme renders Dark Modern (keyword=#569CD6, string=#CE9178, ...).
 
-/// Cached active function/keyword sets, refreshed from the live docs
-/// each time the highlighter runs. Keeping this at module scope avoids
-/// allocating two new Sets per repaint of every cell with an expression.
-/// Never empty in normal operation: the startup gate refuses to launch
-/// MainView until `bxp-fmt --docs` populates `TraceStore.docFunctions`
-/// and `docKeywords`.
 /// Per-build snapshot of the live function/keyword sets. Captured locally
-/// each call instead of mutated at module scope — the highlighter is run
-/// from multiple builds simultaneously in test fixtures, and shared
-/// mutable state caused subtle keyword-class bleed between stores.
+/// each call (in [_liveSets]) instead of mutated at module scope — the
+/// highlighter is run from multiple builds simultaneously in test
+/// fixtures, and shared mutable state caused subtle keyword-class bleed
+/// between stores. Never empty in normal operation: the startup gate
+/// refuses to launch MainView until `bxp-fmt --docs` populates
+/// `TraceStore.docFunctions` and `docKeywords`.
 class _LiveSets {
   final Set<String> functions;
   final Set<String> keywords;

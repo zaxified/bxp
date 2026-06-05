@@ -217,7 +217,7 @@ class _ExprPanelState extends State<ExprPanel> {
               ),
               const SizedBox(width: 8),
               // 4-state validation badge (idle/pending/ok/error) so the user
-              // sees a "checking" pulse during the 200ms debounce + bxp-fmt
+              // sees a "checking" pulse during the 500ms debounce + bxp-fmt
               // spawn instead of stale flicker between "valid" and "invalid".
               // Muted to "idle" while the autocomplete popup is up: the
               // user is mid-completion, a stale INVALID from the previous
@@ -798,9 +798,9 @@ class ExprValidationBadgeSlot extends StatelessWidget {
   }
 }
 
-/// Reset/Apply pair use the same button shell so the editor footer reads
+/// Cancel/Apply pair use the same button shell so the editor footer reads
 /// as one consistent control row. Apply is differentiated by background
-/// fill only — same height, padding, and font as Reset. Disabled state
+/// fill only — same height, padding, and font as Cancel. Disabled state
 /// (no `onPressed`) mutes both background and foreground.
 class _ExprActionButton extends StatelessWidget {
   final String label;
