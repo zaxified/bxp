@@ -19,12 +19,14 @@ wrappers ignore them.
 | Bridge tests only                                     | `bash scripts/test-04-bridge.sh`                 |
 | Docs format-fix + lint (pre-release only)             | `bash scripts/check-formatting.sh`               |
 | Expression corpus only                                | `bash scripts/test-06-expr-corpus.sh`            |
+| Perf regression guard only                            | `bash scripts/test-07-bench-guard.sh`            |
+| Full benchmark matrix (dev only, not in `test.sh`)    | `bash scripts/bench/bench.sh`                    |
 | Local smoke build (no publish)                        | `bash scripts/release.sh`                        |
 | Console build only                                    | `bash scripts/release-01-console.sh`             |
 | Desktop build only (host platform)                    | `bash scripts/release-02-desktop.sh`             |
 | Generate `SHA256SUMS` for built artifacts             | `bash scripts/release-03-checksums.sh releases/` |
 | **Publish — step 1**: bump versions + write CHANGELOG | `bash scripts/release-changelog.sh patch`        |
-| **Publish — step 2**: tag CalVer + push (triggers CI) | `bash scripts/release-tag.sh`                    |
+| **Publish — step 2**: tag semver + push (triggers CI) | `bash scripts/release-tag.sh`                    |
 
 ## Publishing a release
 
@@ -32,17 +34,18 @@ wrappers ignore them.
 # Make sure tests pass and you're on master with everything pushed.
 bash scripts/test.sh
 
-# Bump versions across all 5 manifests (lockstep) and prepend a
+# Bump versions across all 6 manifests (lockstep) and prepend a
 # CHANGELOG.md entry generated from `git log <last-tag>..HEAD`.
 bash scripts/release-changelog.sh patch    # or: minor / major / 0.3.0
 
 # Review CHANGELOG.md, edit if needed.
 git push origin master
 
-# Tag with today's date (YYYY.MM.DD), append `-N` if a tag already
-# exists for today. Pushing the tag triggers
-# `.github/workflows/release.yml` which produces console + desktop
-# archives + SHA256SUMS and publishes a GitHub Release.
+# Tag `v<version>` read from bxp-cli/build.zig.zon (the semver just
+# bumped above). Refuses if the tag already exists or the tree is dirty.
+# Pushing the tag triggers `.github/workflows/release.yml`, which
+# produces console + desktop archives + SHA256SUMS and publishes a
+# GitHub Release.
 bash scripts/release-tag.sh
 ```
 
@@ -56,6 +59,7 @@ test-02-datasets.sh           bxp-cli regression vs datasets/*/*.expected
 test-03-desktop.sh            flutter analyze + flutter test + json5_ast dart test
 test-04-bridge.sh             bxp-gui-bridge unit tests (FFI surface)
 test-06-expr-corpus.sh        bxp-fmt --expr corpus regression gate
+test-07-bench-guard.sh        coarse perf gate — own ReleaseFast build, RSS ceiling + wall scaling ratio
 
 release.sh                    wrapper — runs every release-NN-*.sh in order
 release-01-console.sh         cross-compile bxp-cli for 3 platforms via Zig
@@ -63,8 +67,12 @@ release-02-desktop.sh         flutter build for host OS only + native packagers
 release-03-checksums.sh       generate SHA256SUMS over release artifacts
 
 release-changelog.sh          standalone — bump versions + prepend CHANGELOG.md
-release-tag.sh                standalone — CalVer tag + push (triggers CI)
+release-tag.sh                standalone — semver tag (v<build.zig.zon version>) + push (triggers CI)
 check-formatting.sh           standalone — prettier --write + markdownlint + mermaid (pre-release docs; NOT auto-run by test.sh)
+
+bench/bench.sh                dev-only — full stress-test matrix (S1–S6); writes results/results-<ts>.csv
+bench/gen.py                  synthetic CSV + config generator (shared by bench.sh and test-07)
+bench/verify-output.sh        dev-only — run bxp-cli over all inputs into <dir> for before/after `diff -r`
 ```
 
 ## Platform requirements

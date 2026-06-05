@@ -15,6 +15,17 @@ Thumbs.db
 *.swp
 scripts/bench/work/
 
+# Bench run outputs are regenerated artifacts — don't track new ones, or
+# scripts/bench/results/ grows unbounded one CSV per run. A handful of
+# baselines stay tracked (negated below) because PROGRESS.md /
+# COMPARISON-ndjson-vs-bin.md cite them by filename.
+scripts/bench/results/results-*.csv
+!scripts/bench/results/results-20260522-010048.csv
+!scripts/bench/results/results-20260524-024521.csv
+!scripts/bench/results/results-20260602-064320.csv
+!scripts/bench/results/results-20260604-005730.csv
+!scripts/bench/results/results-20260604-071536.csv
+
 # Full real-world datasets fetched on demand by examples/*/fetch-full.sh
 # (hundreds of MB — never committed; the small sample.* slices are enough
 # for the repo, the full pull is a local scale demonstration).

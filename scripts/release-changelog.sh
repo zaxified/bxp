@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Bump versions across all 5 manifests + generate a CHANGELOG.md entry
+# Bump versions across all 6 manifests + generate a CHANGELOG.md entry
 # from commits since the last release tag, in one step. Commits both
 # changes as "release: prepare <version> (<date>)". Push manually after
 # review.
@@ -13,7 +13,7 @@
 #
 # After review:
 #   git push origin master
-#   bash scripts/release-tag.sh                  # CalVer tag → CI publishes
+#   bash scripts/release-tag.sh                  # semver tag (v<version>) → CI publishes
 
 set -e
 
