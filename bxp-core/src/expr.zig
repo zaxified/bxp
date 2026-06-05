@@ -2940,12 +2940,6 @@ pub fn eval(src: []const u8, ctx: *const Context) !Value {
     };
 }
 
-/// True for numeric-looking strings that must NOT be re-formatted, because
-/// doing so would corrupt them:
-///   - leading-zero integers ("07666", "00012345") — ZIP / postal codes /
-///     zero-padded IDs whose leading zeros carry meaning;
-///   - long all-digit integers (>15 digits) — e.g. a 21-digit account/order
-///     ID. Short-circuited verbatim before any numeric parse touches them.
 /// Applies `decimal_sep_in` locale normalisation to a raw field value: when the
 /// configured separator is not '.', a recognised numeric shape has its separator
 /// swapped to '.' so downstream arithmetic and output see a canonical decimal.
@@ -2986,6 +2980,12 @@ fn normalizeFieldDecimalSep(raw: []const u8, ctx: *const Context) ![]const u8 {
     return raw;
 }
 
+/// True for numeric-looking strings that must NOT be re-formatted, because
+/// doing so would corrupt them:
+///   - leading-zero integers ("07666", "00012345") — ZIP / postal codes /
+///     zero-padded IDs whose leading zeros carry meaning;
+///   - long all-digit integers (>15 digits) — e.g. a 21-digit account/order
+///     ID. Short-circuited verbatim before any numeric parse touches them.
 fn isPrecisionSensitiveText(s: []const u8) bool {
     if (s.len >= 2 and s[0] == '0' and s[1] >= '0' and s[1] <= '9') return true;
     if (s.len > 15) {
@@ -4917,6 +4917,10 @@ test "eval: date builtins reject malformed dates" {
     try testing.expectError(error.InvalidDate, eval("DATEADD('2024-13-01', 1)", &ctx));
     try testing.expectError(error.InvalidDate, eval("DATEDIFF('2024-01-01', 'bad')", &ctx));
     try testing.expectError(error.InvalidDate, eval("WORKDAY('24-01-01', 1)", &ctx));
+    // Extreme negative arithmetic crosses year 0 → a negative result year.
+    // -3652500 is exactly -MAX_DATE_OFFSET_DAYS (in range, not silent-skipped),
+    // so it reaches formatIsoDate with a negative year → InvalidDate, not UB.
+    try testing.expectError(error.InvalidDate, eval("DATEADD('0001-06-15', -3652500)", &ctx));
 }
 
 test "eval: date builtins arg count errors" {

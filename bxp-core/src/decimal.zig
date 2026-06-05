@@ -141,7 +141,8 @@ pub const Decimal = struct {
     /// i128 range. Thousands-grouped input ("1,234.56") is intentionally
     /// rejected here — the caller handles grouping separately.
     ///
-    /// Fractional digits beyond 12 are rounded half-even into the 12th.
+    /// Fractional digits beyond 12 are rounded half-away-from-zero into the
+    /// 12th (matching `divRoundHalfAway` and the rest of the module).
     pub fn parse(s: []const u8) ?Decimal {
         if (s.len == 0) return null;
         var i: usize = 0;

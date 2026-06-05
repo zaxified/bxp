@@ -254,3 +254,26 @@ the same observations. If the rationale stops applying, revisit.
   systemic — the next `allocPrint` for the diagnostic itself would also
   OOM. We propagate `error.OutOfMemory` unchanged as a non-recoverable
   failure.
+
+- **`config.zig loadFromBytes` partial `errdefer` coverage.** Only
+  `data_dir` / `file_pattern_in` / `file_pattern_out` have `errdefer`s; the
+  later locals (`ticker_map`, `input_schema`, `pre_passes`, `row_rules`,
+  `output_schema`) leak if construction `return error.InvalidConfig`s
+  mid-way (xlsx_sheet / csv_header_line / ticker_map bad-type). Harmless
+  today: every production caller drives `loadFromBytes` with an
+  `ArenaAllocator` and a config error exits the process (`process.exit(1)`),
+  so the leak is reclaimed wholesale. Only matters if a future in-process
+  caller (e.g. the GUI) ever catches `InvalidConfig` against a GPA and keeps
+  running — add the missing `errdefer`s then. Flagged in the 2026-06-05 audit.
+
+- **`expr.zig NOW()` builds its ISO string via `std.time.epoch`, not
+  `datefmt`.** Cosmetic inconsistency with the "datefmt is the single date
+  core" principle adopted after the sunrise removal. Harmless (current time is
+  always positive, never hits the negative-year path), so not rerouted through
+  `datefmt.epochDayToYmd` + `formatIsoDate`. Pure cleanup if ever touched.
+
+- **Mixed `ArrayList` API style.** Most new code uses unmanaged `.empty` +
+  `(alloc)` methods; a few spots keep legacy `std.array_list.Managed(...)`
+  (`csv.zig unescapeQuotes`, `expr.zig normalizeMonthAbbrev`; `json.zig
+  scanColNames` is `Managed` by signature, intentional). Works, just
+  non-uniform — optional unifying cleanup, no functional impact.

@@ -559,7 +559,14 @@ pub fn format(alloc: std.mem.Allocator, parts: DateParts, fmt: []const u8) ![]u8
 
     // Weekday is only needed for E*/e tokens; compute lazily-ish (cheap anyway).
     const dow = isoWeekday(ymdToEpochDay(parts.year, parts.month, parts.day));
-    const year_u: u32 = @intCast(parts.year); // realistic CSV range is positive
+    // A negative year is only reachable from extreme date arithmetic across
+    // year 0 (DATEADD/WORKDAY at ±MAX_DATE_OFFSET_DAYS). `@intCast` of it into
+    // u32 is silent UB in ReleaseSmall (and a panic in safe modes). Reject as
+    // InvalidDate — the same contract as month 13 / Feb 30 — so the field
+    // yields "" rather than garbage. (`year_short` below uses `@mod` and is
+    // already safe for negatives.)
+    if (parts.year < 0) return error.InvalidDate;
+    const year_u: u32 = @intCast(parts.year);
 
     for (tk.toks[0..tk.n]) |token| {
         switch (token) {
@@ -707,6 +714,9 @@ pub fn parseIsoDate(s: []const u8) ParseError!DateParts {
 
 /// Render a date as canonical `YYYY-MM-DD`.
 pub fn formatIsoDate(alloc: std.mem.Allocator, parts: DateParts) ![]const u8 {
+    // See `format` above: reject negative years (UB on `@intCast` to u32 in
+    // ReleaseSmall) as InvalidDate rather than emit garbage.
+    if (parts.year < 0) return error.InvalidDate;
     const y_u: u32 = @intCast(parts.year);
     return std.fmt.allocPrint(alloc, "{d:0>4}-{d:0>2}-{d:0>2}", .{ y_u, parts.month, parts.day });
 }
@@ -911,4 +921,16 @@ test "firstInvalidFormatChar: flags stray letters, accepts tokens + literals" {
     try testing.expect(firstInvalidFormatChar("DD.MM.YYYY") == null);
     // 'Z' outside brackets is not a token → flagged at its offset.
     try testing.expectEqual(@as(?usize, 8), firstInvalidFormatChar("YYYY-MM-Z"));
+}
+
+test "format/formatIsoDate reject negative years instead of @intCast UB" {
+    const a = testing.allocator;
+    const neg: DateParts = .{ .year = -9000, .month = 6, .day = 15 };
+    try testing.expectError(error.InvalidDate, formatIsoDate(a, neg));
+    try testing.expectError(error.InvalidDate, format(a, neg, "YYYY-MM-DD"));
+    // Year 0 is non-negative → formats fine (no false positive on the boundary).
+    const zero: DateParts = .{ .year = 0, .month = 1, .day = 1 };
+    const s = try formatIsoDate(a, zero);
+    defer a.free(s);
+    try testing.expectEqualStrings("0000-01-01", s);
 }
