@@ -1991,6 +1991,16 @@ pub fn processBroker(
         // that empties every $ticker (or any other variable) flips the
         // exit code to 2 and surfaces in the summary, instead of silently
         // producing useless output with exit 0.
+        //
+        // Date-filtered rows do NOT contribute: the `date_fast_path` (above,
+        // L1042) evaluates only `$date` and `return`s on an out-of-range row
+        // before `evalAllVars` runs, so a broken non-`$date` expr on a row
+        // that is excluded from the output never counts an error. This is
+        // intentional — a row that produces no output line should not drag the
+        // exit code to 2 — and is the one accounting difference from the
+        // pre-optimization slow path (which evaluated every row's vars first
+        // and dropped the row later). Output bytes stay byte-identical; only
+        // the exit code on the broken-expr + filtered-out edge case differs.
         var file_expr_errors: u32 = 0;
         // Per-file non-fatal warnings (date-filter no-range, malformed range,
         // …) so `file_end.stats.warnings` reports a meaningful per-file

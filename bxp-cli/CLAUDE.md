@@ -353,3 +353,28 @@ the same observations. If the rationale stops applying, revisit.
   A summary would either always print `0 errors` (useless noise)
   or — if we counted empty results — print 30k+ on every run as
   pure FUD against intentional emptiness.
+
+- **`date_fast_path` does not count expr errors on date-filtered rows.**
+  When `date_filter_from_filename` is on, `$date` is declared, and no
+  `row_rules` overrides `$date`, the pipeline evaluates `$date` first and
+  `return`s on an out-of-range row before `evalAllVars` (`pipeline.zig`
+  `date_fast_path`). A broken non-`$date` expression on a row that is filtered
+  out of the output therefore never bumps `file_expr_errors`, so it cannot flip
+  the exit code to 2. This is intentional — a row that produces no output line
+  should not affect the exit code — and is the single accounting difference
+  from the pre-optimization slow path, which evaluated every row's vars (and
+  counted their errors) before dropping the row in the late filter. Output is
+  byte-identical; only the exit code on the broken-expr + filtered-out edge
+  case differs. Confirmed acceptable in the 2026-06-05 audit.
+
+- **The ~10 repeated fatal-exit epilogues in `run()` are left inline.** The
+  block `overall.has_fatal = true; out.info("=== overall summary ===");
+  overall.time_ns = timer.read(); out.overallLine(overall); return
+  error.Fatal;` recurs ~10× and looks like pure duplication, but it sits
+  alongside deliberate near-variants — usage errors (`unknown argument`,
+  `--data requires --template`) exit fatal WITHOUT printing the summary, and
+  the xlsx pre-pass path `merge`s stats before the same tail. A blanket
+  `fatalEpilogue` helper would invite homogenising those intentional
+  differences for a purely cosmetic line-count win in the control-flow
+  function CLAUDE.md keeps deliberately linear. Considered and declined in the
+  2026-06-05 audit.
