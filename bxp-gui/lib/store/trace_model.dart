@@ -274,9 +274,8 @@ class FileModel {
 
 /// Top-level container for all data produced by one bxp-cli `--trace` run.
 ///
-/// Populated incrementally by `TraceStore._streamRunBtrace` /
-/// `_buildModelFromBtrace` as BXTB frames arrive from the streaming
-/// producer or are read from a saved `.bxtb` file. Consumers (RowList,
+/// Populated incrementally by `TraceStore._streamRunBtrace` as BXTB
+/// frames arrive from the streaming producer. Consumers (RowList,
 /// FileList, OutputPanel) read from this model via `TraceStore.traceModel`;
 /// they must not hold direct references across runs because
 /// `TraceStore._streamRunBtrace` replaces the whole model at the start
