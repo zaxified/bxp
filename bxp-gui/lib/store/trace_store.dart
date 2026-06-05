@@ -242,7 +242,16 @@ class TraceStore extends ChangeNotifier {
   //   0 → success (emerald), 2 → completed with warnings (amber),
   //   anything else → red.
   int? lastExitCode;
-  
+
+  /// Wall-clock duration of the most recent run (start → terminal state:
+  /// done / error / cancelled). Null until the first run completes. The
+  /// status bar surfaces it as "last run" with an ms / s / m unit.
+  Duration? lastRunDuration;
+
+  /// Start timestamp of the in-flight run, captured when status flips to
+  /// running. Consumed once at completion to compute [lastRunDuration].
+  DateTime? _runStartedAt;
+
   /// Phase 5c-D: validation diagnostics keyed by encoded path
   /// (`segment\x00segment\x00…`). Populated by `loadConfig` and the
   /// pre-save validation in `saveConfig` from `bxp-fmt --config` output;
@@ -2820,6 +2829,8 @@ class TraceStore extends ChangeNotifier {
     required String fileId,
     required Map<String, String> filters,
     String? globalFilter,
+    Set<String> statusFilter = const {},
+    String Function(RowModel row)? statusOf,
     int fromIdx = 0,
     int maxMatches = kLazyExpandBatch,
     required void Function(int matched, int scanned) onProgress,
@@ -2840,7 +2851,12 @@ class TraceStore extends ChangeNotifier {
     // TextField per column (900+ widgets per rebuild).
     final globalLower = globalFilter?.trim().toLowerCase();
     final hasGlobal = globalLower != null && globalLower.isNotEmpty;
-    if (preds.isEmpty && !hasGlobal) {
+    // Status filter is resolved from the in-memory RowModel (skeleton) —
+    // no disk read needed. When it's the only active predicate we skip
+    // `populateRowSync` entirely for non-matching rows.
+    final hasStatus = statusFilter.isNotEmpty && statusOf != null;
+    final hasContent = preds.isNotEmpty || hasGlobal;
+    if (!hasContent && !hasStatus) {
       // No predicate active — return the slice as-is.
       final end = (fromIdx + maxMatches).clamp(0, file.rowIds.length);
       return (
@@ -2864,25 +2880,35 @@ class TraceStore extends ChangeNotifier {
         return (matched: matched, nextFromIdx: i, done: true);
       }
       final rid = file.rowIds[i];
-      populateRowSync(rid);
-      final row = traceModel?.rows[rid];
-      if (row != null) {
-        bool ok = true;
-        for (final entry in preds.entries) {
-          final col = entry.key;
-          final needle = entry.value;
-          final cell =
-              col < row.fields.length ? row.fields[col].toLowerCase() : '';
-          if (!cell.contains(needle)) { ok = false; break; }
-        }
-        if (ok && hasGlobal) {
-          ok = false;
-          for (final f in row.fields) {
-            if (f.toLowerCase().contains(globalLower)) { ok = true; break; }
-          }
-        }
-        if (ok) matched.add(rid);
+      bool ok = true;
+      // Cheap in-memory status gate first — lets a status-only filter
+      // skip the disk populate for rows it rejects.
+      final modelRow = traceModel?.rows[rid];
+      if (hasStatus) {
+        ok = modelRow != null && statusFilter.contains(statusOf(modelRow));
       }
+      if (ok && hasContent) {
+        populateRowSync(rid);
+        final row = traceModel?.rows[rid];
+        if (row != null) {
+          for (final entry in preds.entries) {
+            final col = entry.key;
+            final needle = entry.value;
+            final cell =
+                col < row.fields.length ? row.fields[col].toLowerCase() : '';
+            if (!cell.contains(needle)) { ok = false; break; }
+          }
+          if (ok && hasGlobal) {
+            ok = false;
+            for (final f in row.fields) {
+              if (f.toLowerCase().contains(globalLower)) { ok = true; break; }
+            }
+          }
+        } else {
+          ok = false;
+        }
+      }
+      if (ok) matched.add(rid);
       i++;
       if ((i % kFilterScanYieldEvery) == 0) {
         onProgress(matched.length, i);
@@ -3140,6 +3166,7 @@ class TraceStore extends ChangeNotifier {
   Future<void> _streamRunBtrace({required bool dry}) async {
     if (configPath.isEmpty) return;
     status = RunStatus.running;
+    _runStartedAt = DateTime.now();
     runMode = dry ? RunMode.dry : RunMode.full;
     runError = null;
     stderrText = '';
@@ -3323,6 +3350,14 @@ class TraceStore extends ChangeNotifier {
       }
       if (_tracesBytesCounter.value != rawBytes) {
         _tracesBytesCounter.value = rawBytes;
+      }
+      // Record how long the run took for the status bar. Runs in `finally`
+      // so every terminal path (done / error / cancelled / spawn fail)
+      // records it once.
+      final startedAt = _runStartedAt;
+      if (startedAt != null) {
+        lastRunDuration = DateTime.now().difference(startedAt);
+        _runStartedAt = null;
       }
       notifyListeners();
     }

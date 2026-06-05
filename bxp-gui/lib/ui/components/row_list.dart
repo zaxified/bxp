@@ -184,6 +184,13 @@ class _RowListInnerState extends State<_RowListInner> {
   /// mounting one TextField per column blew the main isolate.
   String _wideGlobalFilter = '';
 
+  /// Selected subset of row statuses (written / filtered / skipped /
+  /// unmatched / warning / written-multi). Empty = no status filter (show
+  /// all). Status is derived from the in-memory RowModel by [widget.rowStatus],
+  /// so it filters without any disk read — combined with the text filters
+  /// in both the eager `setFilter` path and the lazy scan.
+  final Set<String> _statusFilter = {};
+
   /// Subset of `widget.file.rowIds` currently materialised into
   /// PlutoRows. For eager (small) files this equals `widget.file.rowIds`
   /// after activation; for lazy (large) files it starts at the first
@@ -467,6 +474,8 @@ class _RowListInnerState extends State<_RowListInner> {
       fileId: widget.fileId,
       filters: _filters,
       globalFilter: _wideGlobalFilter,
+      statusFilter: _statusFilter,
+      statusOf: widget.rowStatus,
       fromIdx: 0,
       maxMatches: kLazyExpandBatch,
       onProgress: (m, s) {
@@ -515,6 +524,8 @@ class _RowListInnerState extends State<_RowListInner> {
       fileId: widget.fileId,
       filters: _filters,
       globalFilter: _wideGlobalFilter,
+      statusFilter: _statusFilter,
+      statusOf: widget.rowStatus,
       fromIdx: _filterScanCursor,
       maxMatches: kLazyExpandBatch,
       onProgress: (m, s) {
@@ -711,7 +722,8 @@ class _RowListInnerState extends State<_RowListInner> {
     final perColEmpty = _filters.values.every((v) => v.isEmpty);
     final globalNeedle = _wideGlobalFilter.trim().toLowerCase();
     final hasGlobal = globalNeedle.isNotEmpty;
-    final allEmpty = perColEmpty && !hasGlobal;
+    final hasStatus = _statusFilter.isNotEmpty;
+    final allEmpty = perColEmpty && !hasGlobal && !hasStatus;
 
     if (widget.file.sourceLoadEager) {
       if (sm == null) return;
@@ -721,6 +733,14 @@ class _RowListInnerState extends State<_RowListInner> {
         return;
       }
       sm.setFilter((row) {
+        // Status gate first — the cell stores the status NAME (or a
+        // `warning|count|detail` triple), so split on `|` and match the
+        // leading token against the selected set.
+        if (hasStatus) {
+          final raw = row.cells['status']?.value?.toString() ?? '';
+          final st = raw.split('|').first;
+          if (!_statusFilter.contains(st)) return false;
+        }
         for (final h in headers) {
           final f = _filters[h];
           if (f == null || f.isEmpty) continue;
@@ -749,6 +769,19 @@ class _RowListInnerState extends State<_RowListInner> {
     // Fire-and-forget. Subsequent keystrokes stamp a fresh
     // `_filterScanKey` and the older scan aborts.
     unawaited(_startLargeFilterScan());
+  }
+
+  /// Replace the active status-filter set and re-apply. Empty set clears
+  /// the status gate (shows all statuses again). Routed through the same
+  /// [_applyFilter] machinery as the text filters so eager / lazy paths
+  /// and the displayed-count publish stay unified.
+  void _setStatusFilter(Set<String> next) {
+    setState(() {
+      _statusFilter
+        ..clear()
+        ..addAll(next);
+    });
+    _applyFilter();
   }
 
   @override
@@ -962,6 +995,9 @@ class _RowListInnerState extends State<_RowListInner> {
         if (isWide)
           _WideGlobalFilterBar(
             initial: _wideGlobalFilter,
+            statusFilter: _statusFilter,
+            statusIcon: widget.statusIcon,
+            onStatusChanged: _setStatusFilter,
             onChanged: (v) {
               setState(() => _wideGlobalFilter = v);
               _applyFilter();
@@ -985,6 +1021,9 @@ class _RowListInnerState extends State<_RowListInner> {
             child: _FilterRow(
               headers: headers,
               filters: _filters,
+              statusFilter: _statusFilter,
+              statusIcon: widget.statusIcon,
+              onStatusChanged: _setStatusFilter,
               // Per-column widths sourced from the live grid; missing
               // entries (first paint) fall back to 150 px so the row
               // doesn't render with zero-width inputs.
@@ -1291,10 +1330,16 @@ class _FilterScanSpinner extends StatelessWidget {
 /// through [_RowListInnerState._wideGlobalFilter].
 class _WideGlobalFilterBar extends StatefulWidget {
   final String initial;
+  final Set<String> statusFilter;
+  final String Function(String) statusIcon;
+  final ValueChanged<Set<String>> onStatusChanged;
   final ValueChanged<String> onChanged;
   final VoidCallback? onFocus;
   const _WideGlobalFilterBar({
     required this.initial,
+    required this.statusFilter,
+    required this.statusIcon,
+    required this.onStatusChanged,
     required this.onChanged,
     this.onFocus,
   });
@@ -1338,6 +1383,12 @@ class _WideGlobalFilterBarState extends State<_WideGlobalFilterBar> {
       padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
       child: Row(
         children: [
+          _StatusFilterButton(
+            selected: widget.statusFilter,
+            statusIcon: widget.statusIcon,
+            onChanged: widget.onStatusChanged,
+          ),
+          const SizedBox(width: 8),
           Text(
             'filter all columns:',
             style: BxpText.body(context, color: t.textMuted, size: BxpSize.sm),
@@ -1381,9 +1432,186 @@ class _WideGlobalFilterBarState extends State<_WideGlobalFilterBar> {
   }
 }
 
+/// Canonical status names a row can carry, in display order. Mirrors the
+/// values produced by [RowList._rowStatus]; the status-filter dropdown
+/// offers exactly this set (no per-file scan — keeps the menu O(1) even
+/// on multi-million-row files).
+const List<String> _kStatusFilterCatalog = <String>[
+  'written',
+  'written-multi',
+  'filtered',
+  'skipped',
+  'unmatched',
+  'warning',
+];
+
+/// Short human label for a status name, used in the dropdown rows.
+String _statusFilterLabel(String s) {
+  switch (s) {
+    case 'written':
+      return 'Written';
+    case 'written-multi':
+      return 'Written (1:N)';
+    case 'filtered':
+      return 'Filtered';
+    case 'skipped':
+      return 'Skipped';
+    case 'unmatched':
+      return 'Unmatched';
+    case 'warning':
+      return 'Warning';
+    default:
+      return s;
+  }
+}
+
+/// Compact funnel button that opens a multi-select status filter. The
+/// glyph tints active (accent) whenever a subset is selected. Selecting
+/// statuses narrows the rows-in grid to matching rows; an empty selection
+/// means "show all". Toggling is live — each tap re-applies the filter
+/// without closing the menu, so the user can refine the set and watch the
+/// grid update underneath.
+class _StatusFilterButton extends StatelessWidget {
+  final Set<String> selected;
+  final String Function(String) statusIcon;
+  final ValueChanged<Set<String>> onChanged;
+  const _StatusFilterButton({
+    required this.selected,
+    required this.statusIcon,
+    required this.onChanged,
+  });
+
+  Future<void> _open(BuildContext context) async {
+    final t = context.bxpTheme;
+    final button = context.findRenderObject() as RenderBox;
+    final overlay =
+        Overlay.of(context).context.findRenderObject() as RenderBox;
+    final pos = RelativeRect.fromRect(
+      Rect.fromPoints(
+        button.localToGlobal(Offset.zero, ancestor: overlay),
+        button.localToGlobal(button.size.bottomRight(Offset.zero),
+            ancestor: overlay),
+      ),
+      Offset.zero & overlay.size,
+    );
+    // Working copy mutated live as the user toggles; parent state is the
+    // source of truth, kept in sync on every toggle via onChanged.
+    final working = Set<String>.of(selected);
+    await showMenu<void>(
+      context: context,
+      position: pos,
+      color: t.panelBg,
+      items: [
+        PopupMenuItem<void>(
+          enabled: false,
+          padding: EdgeInsets.zero,
+          child: StatefulBuilder(
+            builder: (context, setMenuState) {
+              void toggle(String s) {
+                setMenuState(() {
+                  if (!working.remove(s)) working.add(s);
+                });
+                onChanged(Set<String>.of(working));
+              }
+
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Padding(
+                    padding:
+                        const EdgeInsets.fromLTRB(12, 8, 12, 4),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text('Filter by status',
+                            style: BxpText.body(context,
+                                color: t.textMuted, size: BxpSize.sm)),
+                        const SizedBox(width: 16),
+                        if (working.isNotEmpty)
+                          InkWell(
+                            onTap: () {
+                              setMenuState(working.clear);
+                              onChanged(const <String>{});
+                            },
+                            child: Text('Clear',
+                                style: BxpText.body(context,
+                                    color: t.valueWarn, size: BxpSize.sm)),
+                          ),
+                      ],
+                    ),
+                  ),
+                  for (final s in _kStatusFilterCatalog)
+                    InkWell(
+                      onTap: () => toggle(s),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 6),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              working.contains(s)
+                                  ? Icons.check_box
+                                  : Icons.check_box_outline_blank,
+                              size: 16,
+                              color: working.contains(s)
+                                  ? t.valueWarn
+                                  : t.textMuted,
+                            ),
+                            const SizedBox(width: 8),
+                            SizedBox(
+                              width: 16,
+                              child: Text(statusIcon(s),
+                                  textAlign: TextAlign.center,
+                                  style: BxpText.body(context,
+                                      color: t.textSubtle, size: BxpSize.md)),
+                            ),
+                            const SizedBox(width: 6),
+                            Text(_statusFilterLabel(s),
+                                style: BxpText.body(context,
+                                    color: t.textPrimary, size: BxpSize.sm)),
+                          ],
+                        ),
+                      ),
+                    ),
+                  const SizedBox(height: 4),
+                ],
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.bxpTheme;
+    final active = selected.isNotEmpty;
+    return Tooltip(
+      message: active
+          ? 'Status filter: ${selected.length} selected (click to change)'
+          : 'Filter rows by status',
+      waitDuration: const Duration(milliseconds: 400),
+      child: InkWell(
+        onTap: () => _open(context),
+        child: Icon(
+          Icons.filter_list,
+          size: 16,
+          color: active ? t.valueWarn : t.textMuted,
+        ),
+      ),
+    );
+  }
+}
+
 class _FilterRow extends StatelessWidget {
   final List<String> headers;
   final Map<String, String> filters;
+  final Set<String> statusFilter;
+  final String Function(String) statusIcon;
+  final ValueChanged<Set<String>> onStatusChanged;
   final Map<String, double> widths;
   final double rowNumWidth;
   final void Function(String header, String value) onChanged;
@@ -1391,6 +1619,9 @@ class _FilterRow extends StatelessWidget {
   const _FilterRow({
     required this.headers,
     required this.filters,
+    required this.statusFilter,
+    required this.statusIcon,
+    required this.onStatusChanged,
     required this.widths,
     required this.rowNumWidth,
     required this.onChanged,
@@ -1414,10 +1645,18 @@ class _FilterRow extends StatelessWidget {
       padding: const EdgeInsets.symmetric(vertical: 3),
       child: Row(
         children: [
-          // Two leading spacer cells matching the # and status columns
-          // in the grid, so filter inputs align with their data columns.
+          // Leading spacer matching the # column, then the status-filter
+          // dropdown sitting over the status column (both 28 px wide so the
+          // data filter inputs still align with their columns).
           SizedBox(width: rowNumWidth),
-          const SizedBox(width: 28),
+          SizedBox(
+            width: 28,
+            child: _StatusFilterButton(
+              selected: statusFilter,
+              statusIcon: statusIcon,
+              onChanged: onStatusChanged,
+            ),
+          ),
           for (final h in headers)
             SizedBox(
               width: widths[h] ?? 150.0,

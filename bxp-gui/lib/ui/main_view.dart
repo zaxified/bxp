@@ -517,6 +517,12 @@ class _StatusBarState extends State<_StatusBar> {
                 const SizedBox(width: 6),
                 _BrailleSpinner(color: runStatusColor),
               ],
+              if (store.lastRunDuration != null) ...[
+                const SizedBox(width: 12),
+                _StatCell(
+                    label: 'last run',
+                    value: _formatRunDuration(store.lastRunDuration!)),
+              ],
               const SizedBox(width: 16),
               ValueListenableBuilder<int>(
                 valueListenable: store.tracesBytesCounter,
@@ -554,6 +560,19 @@ class _StatusBarState extends State<_StatusBar> {
 /// `N GB`, `N TB`. Decimal thresholds for tier switches (more
 /// predictable) but binary division (1024-based) for the integer
 /// shown — matches what file managers display.
+/// Human-readable run duration with a unit chosen by magnitude:
+///   < 1 s   → whole milliseconds   ("847 ms")
+///   < 60 s  → seconds, 1 decimal   ("3.4 s")
+///   ≥ 60 s  → minutes + seconds    ("2 m 05 s")
+String _formatRunDuration(Duration d) {
+  final ms = d.inMilliseconds;
+  if (ms < 1000) return '$ms ms';
+  if (ms < 60000) return '${(ms / 1000).toStringAsFixed(1)} s';
+  final m = d.inMinutes;
+  final s = d.inSeconds - m * 60;
+  return '$m m ${s.toString().padLeft(2, '0')} s';
+}
+
 String _formatTraces(int b) {
   if (b < 1000000) return '$b B';
   if (b < 1000000000) return '${b ~/ 1024} KB';
