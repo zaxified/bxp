@@ -163,6 +163,82 @@ walk first references each string. Acceptable if the total memory
 ceiling drops from `O(workbook size)` to
 `O(shared-strings index + one row)`.
 
+### Unicode / text subsystem (one cohesive module)
+
+As bxp generalises beyond EU broker CSVs into a general CSV→JSON / data
+cleaning tool, three separate gaps all turn out to be the same problem
+seen from different angles — non-UTF-8 input files, ASCII-only `UPPER`/
+`LOWER`, and no diacritic stripping. Rather than ship three ad-hoc
+builtins that each re-derive UTF-8 iteration and Unicode tables, build
+**one in-house `bxp-core/src/unicode.zig` module** (zero external deps,
+same philosophy as the in-house `datefmt.zig` / `decimal.zig` cores — no
+libiconv, no multi-MB ICU/unidecode tables).
+
+**Architecture — two layers, one currency.** Everything internal stays
+**UTF-8**. The two layers share only the UTF-8 plumbing, never each
+other's semantics (do not merge encoding detection with case mapping):
+
+- **Layer 0 — encoding conversion (the "iconv" job).** Transcode a
+  non-UTF-8 input file to UTF-8 **at read time** and back **at write
+  time**, driven by config. The rest of the pipeline never sees a
+  foreign encoding. New per-template config keys `csv_input_encoding` /
+  `csv_output_encoding` (default `utf-8`). **CSV only** — JSON (RFC 8259)
+  and xlsx (XML-in-ZIP) are always UTF-8, so they need no such key.
+  Replaces today's detect-only behaviour (`pipeline.zig` already emits
+  `warning: '<file>' is not valid UTF-8` but cannot transcode).
+- **Layer 1 — text operations on UTF-8 cells (expr builtins).** Case
+  mapping (`UPPER` / `LOWER`) and transliteration (`unaccent`), invoked
+  per-field. These stop being byte loops and become UTF-8 codepoint
+  walks (`std.unicode` iterators), so output length may differ from
+  input (`ß`→`SS`) — no `s.len` pre-allocation.
+
+**Scope decisions — "proper, but small" (resolved 2026-06-05):** the
+right coverage differs per operation, and picking it per-operation lets
+us be correct globally without bloat.
+
+- **`UPPER` / `LOWER` → full Unicode, ship complete.** Only ~1500
+  codepoints carry case mappings (Latin, Greek, Cyrillic, Armenian, …),
+  so the table is tens of KB, not MB. Swedish `å ä ö`, Greek, Russian
+  `я` all work correctly; unicameral scripts (CJK, Arabic, Hebrew) have
+  no case and correctly pass through unchanged. No Latin-only MVP here —
+  do it right from the start. Generated from `UnicodeData.txt`
+  (simple case) + `SpecialCasing.txt` (1:N like `ß`→`SS`).
+- **`unaccent` → deliberately Latin-scope (this IS the proper answer,
+  not a shortcut).** Renamed from the working title `TO_ASCII` per user
+  preference, matching Postgres's `unaccent` extension. Strips diacritics
+  for Latin (`café`→`cafe`, `ß`→`ss`, `ø`→`o`). For non-Latin scripts the
+  correct behaviour is **pass-through** (keep the UTF-8), NOT romanisation:
+  `unaccent('日本語')`→`'Ri Ben Yu'` is lossy, ambiguous, and almost never
+  wanted — which is exactly why Postgres `unaccent` is Latin-focused too.
+  Full unidecode-style romanise-everything is explicitly out of scope.
+  Generated from Unicode decomposition (NFD, strip combining marks) + a
+  small hand-list for non-decomposing letters (`ß ø ł đ æ þ`), i.e. the
+  CLDR `Latin-ASCII.xml` data Postgres's `generate_unaccent_rules.py`
+  uses. Distinct table from the case table (`ü`→case `Ü`, translit `u`).
+- **Encoding tables → tiered.** Ship **European single-byte first**
+  (Latin-1, Windows-1252, Latin-2/9 — trivial 256-entry tables, a few KB
+  total). **CJK multibyte** (Shift-JIS, GB18030, Big5, EUC-JP/KR) are
+  larger (~tens to hundreds of KB each) — add as separate, optional
+  table modules when a real user needs them. Note: this is a
+  legacy-file feature regardless of region — modern Japanese / Swedish
+  CSVs are overwhelmingly UTF-8 already, needing no conversion.
+
+**Module shape.** `unicode.zig` exports `toUpper(cp)` / `toLower(cp)`
+(feeds `UPPER`/`LOWER`), `toAscii(cp) []const u8` (feeds `unaccent`), and
+`decodeToUtf8(bytes, enc)` / `encodeFromUtf8(utf8, enc)` (feeds the
+`csv_*_encoding` config). A `build.zig` generator step emits the tables
+from committed UCD / CLDR source files; regenerate on a Unicode version
+bump. May later split into `encoding.zig` + `unicode.zig` if it grows.
+
+**Locale caveat (document, don't solve).** Use the root/invariant locale
+for case mapping. The only real collisions are Turkish dotless `i`/`İ`
+and German `ß`/`ẞ`; full locale-aware case (ICU-level) is a later upgrade
+gated on a concrete use-case, not a v0.4.0 goal.
+
+> This subsection supersedes the standalone "Input character-encoding /
+> charset transcoding" item under *Later → Real-world data quirks* — the
+> `input_encoding` idea is folded in here as Layer 0 (`csv_input_encoding`).
+
 ## Later (no specific version)
 
 ### CI hardening
@@ -246,23 +322,18 @@ documented data-cleaning problem, attempt it with bxp-cli, and record
 genuine *feature* gaps here (bugs — where BXP does something wrong — get
 fixed before release instead, not parked here).
 
-- **Input character-encoding / charset transcoding.** A huge share of
-  real-world CSVs — especially European and Windows-origin exports — are
-  Windows-1252 / ISO-8859-1 / Latin-1, not UTF-8. bxp-cli reads bytes
-  verbatim: it does not corrupt them, but it also does not transcode, so a
-  Latin-1 `André` (`0x41 0x6e 0x64 0x72 0xe9`) passes straight through and
-  the `.csvx` is then invalid UTF-8 for any downstream consumer that
-  assumes UTF-8 (the GUI, Wealthfolio, a database import). bxp-cli already
-  *detects* the situation — it emits `warning: '<file>' is not valid UTF-8;
-  non-ASCII characters may be garbled` — but there is no `input_encoding`
-  config to actually transcode. Reproduced 2026-05-31: raw passthrough of a
-  Latin-1 field emits the raw `0xe9` byte (with the warning). Feature: an
-  `input_encoding: "windows-1252" | "latin1" | "utf-8"` (default `utf-8`)
-  per-template option that transcodes input to UTF-8 before parsing.
-  Touches the chunk reader (`pipeline.zig`) + `config.zig`. Note: a
+- **Input character-encoding / charset transcoding.** → Promoted to
+  v0.4.0 as Layer 0 of the *Unicode / text subsystem* (`csv_input_encoding`
+  / `csv_output_encoding`). A huge share of real-world CSVs — especially
+  European and Windows-origin exports — are Windows-1252 / ISO-8859-1 /
+  Latin-1, not UTF-8. bxp-cli reads bytes verbatim: it does not corrupt
+  them, but it also does not transcode, so a Latin-1 `André`
+  (`0x41 0x6e 0x64 0x72 0xe9`) passes straight through and the `.csvx` is
+  then invalid UTF-8 for any downstream consumer that assumes UTF-8 (the
+  GUI, Wealthfolio, a database import). Reproduced 2026-05-31. Note: a
   *known-pattern* mojibake (`cafÃ©` → `café`) can already be patched today
-  with explicit `REPLACE(...)`; this feature is for the general case where
-  the whole file is in one non-UTF-8 charset.
+  with explicit `REPLACE(...)`; the encoding feature is for the general
+  case where the whole file is in one non-UTF-8 charset.
 
 - **Forward-fill / unmerge-cells (`fill_down`).** Spreadsheets exported
   from merged cells leave the group label on the first row and blanks
@@ -333,19 +404,49 @@ fixed before release instead, not parked here).
   the CSV-tool scope. (The *date* inside the bracket already parses fine via
   `DATE_CONVERT(..., 'DD/MMM/YYYY:hh:mm:ss', ...)`.)
 
-- **`REPLACE_MAP` builtin — bulk/chained replace.** Consider on a concrete
+- **Overload `REPLACE` for bulk/chained replace.** Consider on a concrete
   use-case. Templates that normalise several tokens at once today nest
   `REPLACE(REPLACE(REPLACE(x, 'a', '1'), 'b', '2'), …)` — unreadable past two
   or three pairs (the thousands-separator idiom `REPLACE(REPLACE(x,' ',''),
   ',','.')` is the common case, and a foreign-month-name normaliser would be
-  another). A `REPLACE_MAP(s, 'from1','to1', 'from2','to2', …)` variadic (or a
-  named-map form mirroring `ticker_maps`, e.g. `REPLACE_MAP(s, 'mymap')`) would
-  collapse the nest into one call. Open questions: variadic pairs vs a
-  config-level named map; left-to-right apply order + whether an earlier
-  replacement's output is eligible for a later rule (it is in a nested chain —
-  document the semantics). This would also be the lightweight answer to the
-  deferred `date_locales` idea (a named month-name map applied before
-  `DATE_CONVERT`), avoiding a dedicated locale subsystem.
+  another). **Decided 2026-06-05: extend the existing `REPLACE` rather than
+  add a new `REPLACE_MAP` builtin** — this mirrors how scripting languages
+  do it (Python `str.replace`, Ruby `gsub`, Pandas `replace` all overload
+  one name with a dict/extra args; PHP `strtr($s, $array)` is the closest
+  named precedent), so users learn no second name, and a Latin-only
+  `TRANSLATE` name is avoided (that word means char-level in SQL/Perl).
+  Today's 3-arg `REPLACE(s, from, to)` (single literal pair, all
+  occurrences, left-to-right, non-overlapping, case-sensitive, backed by
+  `std.mem.replaceOwned`) stays valid. New variadic form
+  `REPLACE(s, 'a','1', 'b','2', …)` applies pairs **left-to-right in one
+  pass** (one allocation, not one per nested call — the perf win over the
+  nest, which does K allocations + 2K passes for K pairs). Open questions:
+  variadic pairs vs also a config-level named map
+  (`REPLACE(s, 'mymapname')`, mirroring `ticker_maps`); whether an earlier
+  replacement's output is eligible for a later pair (it is in a nested
+  chain — document whichever we pick). This is also the lightweight answer
+  to the deferred `date_locales` idea (a named month-name map applied
+  before `DATE_CONVERT`), avoiding a dedicated locale subsystem.
+
+- **Basic expression builtins — top gaps.** Surfaced 2026-06-05 reviewing
+  the 38-function catalog against the SQL / Excel baseline for a general
+  CSV cleaning tool. Three stand out as cheap, common, and genuinely
+  missing today (the rest — `MOD`, `POSITION`/`FIND`, `DATE_TRUNC`,
+  `QUARTER`/`WEEKNUM`, `HOUR`/`MINUTE`/`SECOND`, `PROPER`,
+  `IS_NUMERIC`/`IS_DATE`, `REPT`, and niche math `POWER`/`SQRT`/`SIGN`/
+  `TRUNC`/`MROUND` — are parked as a secondary list, add per use-case):
+  - **`LPAD(s, n, pad)` / `RPAD(s, n, pad)`** — pad a string to a fixed
+    width. The most common real gap: zero-padding account numbers, ISINs,
+    postal codes, fixed-width IDs. No way to express it today.
+  - **`SWITCH` / `CASE`** — multi-branch conditional. Collapses the
+    unreadable nested `IF(IF(IF(...)))` pyramid into one call; the single
+    biggest readability win available. Decide `SWITCH(x, v1,r1, v2,r2, …,
+    default)` (Excel-style) vs SQL `CASE WHEN` shape — the variadic
+    `SWITCH` form is closer to the existing builtin call style.
+  - **`IS_EMPTY(x)`** — true when `x` is empty or whitespace-only. Cheap,
+    and directly retires the documented `"0" == ''` coercion footgun
+    (today the safe idiom is `LEN(TRIM(x)) = 0`, easy to get wrong as a
+    bare `x = ''` which matches `'0'`). One builtin removes the trap.
 
 ### bxp-gui
 
