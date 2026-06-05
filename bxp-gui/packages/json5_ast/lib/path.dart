@@ -196,6 +196,12 @@ CommentLocation? findCommentByGlobalN(JsonAstNode root, int targetN) {
 /// order index. Used by the UI when constructing `$comm_<N>` paths for
 /// comment-row click handlers — a single O(N) walk per build avoids the
 /// O(N×comments) cost of looking up each comment via a global walker.
+///
+/// MUST traverse in the exact same source-order as [findCommentByGlobalN]'s
+/// `_CommentWalker` (entries in order, recurse into non-comment nodes), or
+/// the UI's `$comm_<N>` numbering and the resolver's lookup drift apart and
+/// a comment-row click edits the wrong comment. Keep the two walkers in
+/// lockstep if a new container node type is added.
 Map<CommentLine, int> globalCommentNumbering(JsonAstNode root) {
   final out = <CommentLine, int>{};
   void walk(JsonAstNode n) {

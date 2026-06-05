@@ -291,7 +291,11 @@ class Tokenizer {
     final hasSign = (c == 0x2D || c == 0x2B);
     if (hasSign) {
       _advance();
-      if (_i >= src.length) { _i = start; return null; }
+      // Reset _line/_col too (not just _i) so a trailing sign at EOF doesn't
+      // leave the cursor one column past `start` — otherwise the caller's
+      // "unexpected character" throw reports an off-by-one column. Mirrors
+      // the Infinity/NaN/bare-digit no-match resets below.
+      if (_i >= src.length) { _i = start; _line = sl; _col = sc; return null; }
       c = src.codeUnitAt(_i);
     }
     if (c == 0x49) {
