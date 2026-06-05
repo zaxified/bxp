@@ -635,9 +635,14 @@ export fn bridge_run_streaming(
     // raises this flag. Reader threads check it before invoking a Dart callback
     // — if set, they free the per-batch buffer locally instead of handing it
     // across the FFI, where it would orphan in Dart's port queue after the
-    // listener closes. Declared BEFORE child.spawn so it runs LAST on rollback
-    // (defers are LIFO), which means subsequent rollback defers (kill child,
-    // join readers) all execute with the flag already raised.
+    // listener closes.
+    //
+    // This defer is declared BEFORE child.spawn, so in LIFO order it runs
+    // AFTER the `child_ok` defer (kill child + join readers) below — i.e. too
+    // late to protect that join. The `child_ok` defer therefore raises the
+    // flag itself before joining; this block is the residual cover for the
+    // narrow pre-reader-spawn window (a `child.spawn` failure, where no reader
+    // threads exist yet so the raise is a harmless no-op).
     var started_ok = false;
     defer if (!started_ok) {
         ctx.shutting_down.store(true, .release);
@@ -663,6 +668,17 @@ export fn bridge_run_streaming(
     var stderr_spawned = false;
     var child_ok = false;
     defer if (!child_ok) {
+        // Raise the shutdown flag and wake any blocked reader BEFORE killing
+        // the child and joining the reader threads. A reader that drains the
+        // last buffered bytes during the join must observe `shutting_down` and
+        // self-free its batch rather than hand it across the FFI, where it
+        // would orphan in Dart's port queue after the listener closes. The
+        // separate `started_ok` defer below ALSO raises the flag, but defers
+        // are LIFO so it runs AFTER this block — too late for this join. So
+        // this rollback path must raise the flag itself.
+        ctx.shutting_down.store(true, .release);
+        var wake: usize = 0;
+        while (wake < default_queue_permits) : (wake += 1) ctx.queue_sema.post();
         _ = ctx.child.kill() catch {};
         if (stdout_spawned) ctx.stdout_thread.join();
         if (stderr_spawned) ctx.stderr_thread.join();
