@@ -1,7 +1,7 @@
 .{
     .name = .bxp_core,
     .fingerprint = 0xd3c3e96b8303f761,
-    .version = "0.2.3",
+    .version = "0.2.4",
     // No external dependencies — date parsing/formatting lives in
     // src/datefmt.zig (replaced the former vendored `sunrise` dep).
     .dependencies = .{},

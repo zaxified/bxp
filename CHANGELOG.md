@@ -1,5 +1,167 @@
 # Changelog
 
+## 2026.06.07 — bxp-cli 0.2.4, bxp-fmt 0.2.4, bxp-gui 0.2.4
+
+### Fixes
+
+- fix(bxp-gui): correct DartValidator positive_integer ArgKind drift
+
+### Internal
+
+- docs: architecture.md — fix mermaid syntax in validation + run-state diagrams
+- docs: explain custom expr DSL choice + defer REGEX to Zig 0.16
+- docs: relocate bridge FFI conventions + note template-strict/data-lenient policy
+- test: add coarse perf-regression guard phase (test-07-bench-guard)
+- docs: correct noaa "no column cap" claim + roadmap the 1024-column ceiling
+- docs: comment/doc review sweep — stale refs, misattributed doc-comments, @-typos
+- docs: comment/doc review sweep — bxp-gui/lib (store + main + ui + json_tree)
+- docs: accuracy review sweep — CLAUDE.md + README + docs/ + examples
+- docs: prettier --write (markdown table realignment)
+- test(bxp-gui): add Windows bridge transport smoke harness
+- test: make scripts/test.sh green on the Windows runner (CI-hardening prep)
+- ci: cross-platform PR/push test workflow + portable bench-guard probe
+- test(bench): self-measure wall+RSS so perf guard & bench run on macOS/Windows
+
+### Other
+
+- community: add PR template + SECURITY policy + README install polish
+- scripts: test-05 — add mermaid block parse check
+- bxp-cli: lift file-size cap to 1 GiB + MAX_COLUMNS to 1024
+- examples: real-world dataset showcase with autoindex generator
+- scripts: add bench harness for bxp-cli RAM/wall-time matrix
+- scripts: add verify-output.sh + post-refactor bench result
+- bxp-cli: stream input in 10 MiB chunks, bound peak RSS by chunk size
+- bxp-cli: right-size ChunkReader buffer by remaining file bytes
+- bxp-cli: reuse RowIterator row_buf across rows
+- scripts/bench: sort + parallel + atomic input cache
+- scripts/bench: post-row_buf-fix parallel matrix (2 min, full 25/25)
+- bxp-cli: TraceMode enum + scaffolding for selective trace modes
+- bxp-core: NDJSON writer fast-path in json.zig + Output.event delegation
+- bxp-cli: propagate Safe through splitFields + row_start/row_output/var_eval
+- bxp-cli: refactor rule_match via generic event() + trace snapshot in test-02
+- scripts/bench: pre/post fast-path matrix (5 runs across 4 commits)
+- bxp-core: add btrace module for binary --trace=bin stream
+- bxp-cli: track per-record file byte offset in ChunkReader + RowIterator
+- bxp-cli: wire --trace=bin through Output + main.zig
+- scripts/test-02-datasets.sh: smoke --trace=bin magic + version per dataset
+- scripts/bench: BXP_BENCH_TRACE_FORMAT=bin + M12 matrix vs M9 baseline
+- bxp-gui: PR-A — Dart-side btrace parser (pure additive, no UI wiring)
+- bxp-core: btrace v2 — symbol pools in file_start + 5 detail frame types
+- bxp-cli: SymbolPools + per-row detail bin emit + --trace-file flag
+- bxp-gui: Dart btrace parser updated to schema v2 (file_start pools)
+- scripts/test-02-datasets.sh: bump expected bin magic to schema v2
+- bxp-fmt: add --expr-batch subcommand for GUI drill-down re-eval
+- bxp-core+bxp-cli: btrace schema v3 — drop per-row detail by default
+- bxp-gui: SDK primitives for btrace-driven drill-down
+- bxp-gui: btrace browser view — on-disk drill-down at 500 ms target
+- bxp-gui: migrate RUNNER pipeline to live btrace stream (--trace=bin)
+- scripts/bench: add results-20260522-010048 — 25/25 wall wins vs 18/05 baseline
+- bxp: RUNNER btrace path completion + UX polish
+- bxp-gui: Win bridge stdin + binary streaming + lazy source-CSV load
+- bxp-gui: lazy source-CSV iterations — UX polish from Linux smoke
+- bxp-gui: rows-out via re-eval, drop csvx fetch from drill-down
+- bxp-gui: cleanup dead csvx I/O + eager btrace runtime publish
+- bxp: rip NDJSON trace path — bin BXTB is the only --trace format
+- bxp: shrink btrace to 7 metadata frames, drop schema version
+- bxp-gui: refresh stale 'NDJSON mode' docstrings + comments
+- bxp-gui: read _visibleRowIds fresh in PlutoGrid onSelected
+- scripts/bench: add NDJSON→BIN comparison + clean post-rip baseline
+- scripts/bench: add PROGRESS.md — wall/RSS progression across 13 sessions
+- scripts/bench: prettier fmt for COMPARISON + PROGRESS markdown
+- bxp-gui-bridge: drop dead line-mode streaming path
+- bxp-core/json5: drop stale Phase-5d FIXME block
+- bxp-cli, bxp-core/csv: drop dead row_safe / safe_buf fast-path
+- bxp-gui/services: drop stale binary_mode JSON field
+- bxp-gui/store: drop archaeological comments about ripped csvx path
+- docs, CLAUDE.md: surgical NDJSON→BXTB drift fixes
+- docs, bxp-core/expr: rewrite trace docs for BXTB protocol
+- docs/roadmap: add CPU parallelism + themes, drop stale Win runner entry
+- bxp-core/csv, bxp-cli: foundation for per-block parallel pipeline
+- bxp-cli: extract per-row eval helper + add parallel worker primitives
+- bxp-cli: wire per-block parallel CSV pipeline into processBroker
+- scripts/bench: S14 results — per-block parallel CSV pipeline
+- bxp: smp_allocator + worker btrace gate + sunrise FBA vendor patch
+- docs/devel: ReleaseSmall vs ReleaseFast bench section
+- bxp-core/json, bxp-cli: streaming JSON path + parallel per-block dispatch
+- resources, lint: OR example in Minimal examples + bench work dir ignore
+- bxp-cli, bxp-core: drop dead RowIterator + csv.splitRecords
+- bxp-core/expr: add LEFT/RIGHT/SUBSTR/UPPER/LOWER/STARTS_WITH/ENDS_WITH
+- bxp-core/expr: add NOT keyword + NULLIF and IN builtins
+- resources/console: rewrite 7 row_rules OR-chains as IN()
+- docs/roadmap: collapse v0.2.4 expr backlog to shipped summary
+- docs/roadmap: drop shipped Wide-CSV section
+- bxp-gui: survive wide-CSV (>64 col) drill-down without crashing
+- docs/roadmap: note two future wide-CSV optimisation paths
+- docs/devel: define BXTB acronym (BXP Trace Binary)
+- bxp-cli/fmt: accept both --flag=value and --flag value forms
+- docs/roadmap: align with backlog model + delete CPU-parallelism (shipped)
+- expr: handle EU thousands grouping at field-access (no new JSON flag)
+- bxp-gui: idiomatize keyboard shortcuts on macOS (Cmd vs Ctrl)
+- docs/roadmap: drop macOS keyboard idiomatization (shipped)
+- bxp-fmt/gui: ship v0.2.3 audit follow-on cluster
+- audit v0.2.3: close gui diagnostics + bridge dedup/flake + core validator test
+- expr: ship LEN/GREATEST/LEAST builtins
+- expr: ship date builtin cluster (DATEADD/DATEDIFF/WORKDAY + components)
+- docs/roadmap: triage post-v0.2.4 audit follow-up
+- expr: unify builtin arg-metadata into one ArgKind domain system
+- docs/expr: drop shipped arg-validation plan + roadmap entry
+- expr/gui: clickable FUNCTIONS doc panel with runnable examples
+- gui: open-dialog "create examples" button + bundle examples in desktop archive
+- expr: preserve leading-zero & oversized-integer strings in evalString
+- docs/roadmap: add problem-first findings from the real-world examples sweep
+- examples: full-scale fetch infrastructure + fixes for the existing real-world set
+- examples: add french-dvf-realestate + chicago-business-licenses (problem-first)
+- examples: add covid-wide-to-long (unpivot wide→long via multi-row row_rules)
+- examples: relocate synthetic hubspot to teaching tier + group index by tier
+- examples: add gtfs-stops-selfjoin (pre_pass + LOOKUP self-join)
+- expr: preserve passthrough precision in evalString (string-path canonicalisation)
+- examples: 5 real-world + 8 teaching examples (problem-first + messy-idiom set)
+- scripts: docs format/lint → pre-release-only check-formatting.sh
+- roadmap: TZ-help builtins + 3 pre-release polish items
+- examples: 7 multi-file COMBINE patterns + signpost index + per-readme run cmd
+- roadmap: BUG-3 (DATE_CONVERT pre-1970) + future example candidates
+- bxp-core: accept symlinks in data_dir filesystem validation
+- bxp-fmt: tolerate ragged rows in --expr-batch / --expr-trace
+- bxp-gui: pass singlePrepassName to row_rules override evalBatch
+- bxp: fix CSV-injection + over-prefix + wire orphaned unit tests
+- bxp-core: replace sunrise dependency with in-house datefmt.zig
+- expr: add NTH_DOW builtin (nth/last weekday of month) + post-sunrise bench baseline
+- roadmap: defer TZ_OFFSET/TZ_CONVERT + REPLACE_MAP to use-case-driven
+- bxp-cli: --fresh always rebuilds combined_output roll-up (bug #5)
+- roadmap: decide decimal numeric core (f80 → i128 @ 1e12)
+- bxp-fmt: --expr emits {"ok":true} on success
+- bxp-core: fixed-point decimal numeric core (f80 -> i128 @ 1e12)
+- bxp-cli: constant-fold row-invariant input_schema vars (Phase 3A)
+- bxp-cli: date-prefilter drops out-of-range rows before eval (bod 1)
+- bxp-cli: skip input_schema vars overwritten by the winning rule (bod 2)
+- change: update bxp-cli.examples.json
+- bxp-cli/core: compile-once expr scaffold + ColRef node (Phase 3B.0-1)
+- bxp-core/cli: tokenize-once for input_schema + row_rules (Phase 3B)
+- bench: new baseline matrix after per-row expr eval perf arc
+- bxp-core: route JSON/xlsx scientific notation through decimal core
+- expr: fix optimization-path field-access bugs; bracket refs are name-only
+- expr: treat numeric bracket [4] as a plain column name everywhere
+- config: add csv_header_line (headerless / preamble CSV support)
+- docs/roadmap: mark CSV preamble/headerless skipping done; sci-notation follow-up
+- docs/roadmap: move space/NBSP thousands grouping to Not planned
+- examples/hl7: use csv_header_line: 0 (the headerless case it motivated)
+- csv: lazy-quotes (newline ends record) + RAND(n) + roadmap purge
+- gui/runner: last-run duration in status bar + rows-in status filter
+- docs/roadmap: unify Unicode/text subsystem (v0.4.0) + REPLACE overload + basic-builtin top gaps
+- changed:   resources/console/bxp-cli.examples.json
+- bxp-gui: remove never-wired _buildModelFromBtrace offline path
+- bxp-gui: retire dead BtraceLoader; reshape its test to the live streaming reader
+- bxp-gui/updater: indeterminate progress when Content-Length is absent
+- scripts: fix publish-doc drift (semver not CalVer) + document test-07/bench + stop tracking bench-run CSVs
+- bxp-fmt: unify std.Io.Writer casing (audit 🔵#2)
+- json5_ast: fix off-by-one col on trailing-sign EOF + document dual comment-walker invariant
+- bxp-cli: document date_fast_path error-accounting + decline epilogue dedup (audit close)
+- bxp-core: guard negative-year @intCast UB in datefmt + audit doc fixes
+- bxp-gui-bridge: raise shutdown flag before kill+join in streaming rollback (audit ⚠️#1)
+- changed recomendation mermaid
+- docs+release: ship bxp-fmt in console archive, fix agent self-test docs, reconcile readmes
+
+
 All notable changes to BXP. New entries are prepended at the top by
 `scripts/release-changelog.sh`; pre-existing release tags (v0.1.0,
 v0.1.1) are hand-stubbed since they pre-date the automation.
