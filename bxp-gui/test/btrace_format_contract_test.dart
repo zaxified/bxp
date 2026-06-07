@@ -30,7 +30,8 @@ void main() {
 
   setUpAll(() async {
     monoRoot = _findMonoRoot();
-    bxpCli = p.join(monoRoot, 'bxp-cli', 'zig-out', 'bin', 'bxp-cli');
+    final exe = Platform.isWindows ? '.exe' : '';
+    bxpCli = p.join(monoRoot, 'bxp-cli', 'zig-out', 'bin', 'bxp-cli$exe');
     expect(File(bxpCli).existsSync(), isTrue,
         reason: 'bxp-cli binary missing — run `cd bxp-cli && zig build` first');
 

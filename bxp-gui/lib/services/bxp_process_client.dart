@@ -232,6 +232,20 @@ class BxpProcessClient {
     }
   }
 
+  /// Test seam: inject the bridge DLL path directly, short-circuiting the
+  /// [findBridgeLibrary] sibling/dev-tree probe. `flutter test` runs from a
+  /// CWD with no `bxp-gui(.exe)` sibling and `Platform.resolvedExecutable`
+  /// points at the test runner, so the Windows bridge path (used by
+  /// [evalBatch] and the other proxied calls) cannot self-resolve the DLL.
+  /// Tests that exercise that path on Windows call this with the dev-tree
+  /// DLL — mirroring the explicit `binPath` the binary calls already accept.
+  /// Not for production use; the real app resolves the DLL as a sibling.
+  static void setBridgeDllPathForTest(String dllPath) {
+    _bridgeDllPath = dllPath;
+    _bridgeVersion = null;
+    _bridgeProbed = true;
+  }
+
   /// Long-lived [BridgeClient] dedicated to the in-process expression
   /// family (`bridge_eval_expr` / `bridge_eval_expr_trace`). Unlike the
   /// subprocess-proxy path that re-opens the DLL inside each

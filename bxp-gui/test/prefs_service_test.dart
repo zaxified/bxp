@@ -44,7 +44,8 @@ void main() {
     test('configFilePath returns the canonical on-disk location', () async {
       final prefs = PrefsService(dirOverride: tmp.path);
       await prefs.load();
-      expect(prefs.configFilePath, equals('${tmp.path}/bxp-gui.json'));
+      expect(prefs.configFilePath,
+          equals('${tmp.path}${Platform.pathSeparator}bxp-gui.json'));
     });
   });
 }

@@ -276,6 +276,14 @@ intro binary list, IO section) may need a block-level `!GUI-ONLY!` /
   only the release workflow exists; PRs go untested by CI.
 - Flutter `integration_test` smoke run inside CI (Xvfb on Linux runners,
   headless setup on Mac / Win).
+- **Windows-runner test portability — already cleared (2026-06-07).**
+  `scripts/test.sh` was verified green on the Windows host so the planned
+  Windows leg won't trip over host-only assumptions: flutter tests now
+  resolve `.exe`/`.dll`/`bin` and path separators per-platform (+ a bridge
+  DLL test seam for `evalBatch`); the expr corpus is pinned `eol=lf` in
+  `.gitattributes` (a CRLF checkout made `bxp-fmt --expr` reject every line
+  as `UnexpectedChar '\r'`); the bench guard now SKIPs gracefully when GNU
+  `/usr/bin/time` / `python3` are absent instead of hard-failing.
 
 ### Distribution polish
 

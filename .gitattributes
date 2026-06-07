@@ -8,3 +8,11 @@ datasets/**/*.csvx    text eol=lf
 datasets/**/*.expected text eol=lf
 datasets/**/*.json    text eol=lf
 datasets/**/*.json5   text eol=lf
+
+# The expression corpus is fed line-by-line to `bxp-fmt --expr`
+# (scripts/test-06-expr-corpus.sh), which rejects a stray CR as
+# `UnexpectedChar '\r'`. On a Windows checkout (default core.autocrlf=true)
+# a CRLF-converted corpus would fail every line — same rationale as the
+# dataset fixtures above. Keep it LF on every platform so the planned
+# CI-hardening flutter/test.sh run is green on the Windows runner too.
+scripts/test-06-expr-corpus.txt text eol=lf

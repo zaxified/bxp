@@ -22,10 +22,24 @@ void main() {
 
   setUpAll(() {
     final monoRoot = _findMonoRoot();
-    bxpFmtPath = p.join(monoRoot, 'bxp-fmt', 'zig-out', 'bin', 'bxp-fmt');
+    final exe = Platform.isWindows ? '.exe' : '';
+    bxpFmtPath = p.join(monoRoot, 'bxp-fmt', 'zig-out', 'bin', 'bxp-fmt$exe');
     expect(File(bxpFmtPath).existsSync(), isTrue,
         reason: 'bxp-fmt missing at $bxpFmtPath — run '
             '`cd bxp-fmt && zig build` first');
+
+    // On Windows, evalBatch routes through the bridge DLL (dart:io pipe
+    // truncation workaround); under `flutter test` it can't self-resolve
+    // the DLL (no bxp-gui.exe sibling), so point it at the dev-tree build.
+    // Linux/macOS use Process.start directly and need no injection.
+    if (Platform.isWindows) {
+      final dll = p.join(
+          monoRoot, 'bxp-gui-bridge', 'zig-out', 'bin', 'bxp-gui-bridge.dll');
+      expect(File(dll).existsSync(), isTrue,
+          reason: 'bridge DLL missing at $dll — run '
+              '`cd bxp-gui-bridge && zig build` first');
+      BxpProcessClient.setBridgeDllPathForTest(dll);
+    }
   });
 
   test('evalBatch returns parallel results for happy path + error mix',

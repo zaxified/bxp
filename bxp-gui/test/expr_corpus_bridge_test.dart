@@ -36,16 +36,24 @@ void main() {
   setUpAll(() {
     monoRoot = _findMonoRoot();
     corpusPath = p.join(monoRoot, 'scripts', 'test-06-expr-corpus.txt');
-    bridgePath = p.join(
-      monoRoot,
-      'bxp-gui-bridge',
-      'zig-out',
-      'lib',
-      Platform.isMacOS
-          ? 'libbxp-gui-bridge.dylib'
-          : 'libbxp-gui-bridge.so',
-    );
-    bxpFmtPath = p.join(monoRoot, 'bxp-fmt', 'zig-out', 'bin', 'bxp-fmt');
+    // Zig emits the shared library under zig-out/bin on Windows (DLL
+    // convention) and zig-out/lib on POSIX (.so/.dylib) — mirror
+    // findBridgeLibrary()'s platform-aware probe so the test runs on
+    // every host (the planned CI-hardening flutter run includes Windows).
+    bridgePath = Platform.isWindows
+        ? p.join(monoRoot, 'bxp-gui-bridge', 'zig-out', 'bin',
+            'bxp-gui-bridge.dll')
+        : p.join(
+            monoRoot,
+            'bxp-gui-bridge',
+            'zig-out',
+            'lib',
+            Platform.isMacOS
+                ? 'libbxp-gui-bridge.dylib'
+                : 'libbxp-gui-bridge.so',
+          );
+    final exe = Platform.isWindows ? '.exe' : '';
+    bxpFmtPath = p.join(monoRoot, 'bxp-fmt', 'zig-out', 'bin', 'bxp-fmt$exe');
 
     expect(File(corpusPath).existsSync(), isTrue,
         reason: 'corpus missing at $corpusPath');
