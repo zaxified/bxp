@@ -1,12 +1,21 @@
-# Broker eXchange Parser (bxp-cli)
+# Broker eXchange Parser (BXP Console)
 
-A single-binary CLI tool that converts broker export statements (CSV,
+A CLI tool + FMT tool that converts broker export statements (CSV,
 XLSX, JSON) into portfolio-tracker CSV formats using declarative JSON5
 templates. [Wealthfolio](https://wealthfolio.app/) and
 [brycht.app](https://brycht.app/) are the two trackers with shipping
 templates today; any other tracker is reachable by writing an
 `output_schema` for it — no code changes. Everything runs locally; your
 data never leaves the machine.
+
+The console package ships two binaries that work together:
+
+- **`bxp-cli`** — the conversion engine. Produces the actual `.csvx`
+  files from your broker exports and the JSON5 templates.
+- **`bxp-fmt`** — companion validator and docs catalog: validates a
+  config (`--config`), evaluates one expression against a sample row
+  (`--expr-trace` / `--expr-batch`), and dumps the function / field
+  reference (`--docs`). Use it to self-test a template before running it.
 
 ---
 
@@ -59,6 +68,40 @@ from the current directory and processes every template in it.
 ./bxp-cli --template <id> --data ./my-data/       # override data_dir for that template
 ```
 
+### `bxp-fmt` reference
+
+bxp-fmt is a small validator / catalog binary that ships alongside
+bxp-cli. Each invocation runs exactly one action — subcommands are
+mutually exclusive.
+
+| Subcommand | Output | Purpose |
+| --- | --- | --- |
+| `--config <file>` | annotated JSON on stdout | Validate config, return tree with `$err_*` / `$warn_*` / `$info_*` / `$comm_*` siblings. Exit `1` on validation error, `0` on success. |
+| `--config <file> --list-templates` | JSON array on stdout | List every template id declared in the config. |
+| `--config <file> --fetch-template <id>` | JSON on stdout | Return the raw JSON5 block of one template. |
+| `--expr '<text>'` | empty on stdout, `{error,detail,off,len}` on stderr | One-shot expression syntax / static check. Exit `1` on error. |
+| `--expr-trace '<text>'` | NDJSON stream on stdout | Run an expression with optional row context and emit per-call trace events. Combine with `--row-headers '<json>'` and `--row-fields '<json>'`. |
+| `--docs` | JSON on stdout | Full FnDoc / FieldDoc catalog (single source for the GUI's autocomplete). |
+| `--check-fs=N` | (modifier on `--config`) | Add filesystem-existence checks to `--config`; `N` is the deadline in seconds. |
+| `--version` | — | Print version to stdout. |
+| `--help` | — | Print help to stdout. |
+
+```bash
+# Validate one expression in isolation:
+./bxp-fmt --expr "IF([Qty] > 0, 'BUY', 'SELL')"
+
+# Trace an expression against a fake row:
+./bxp-fmt --expr-trace "[Price] * [Qty]" \
+    --row-headers '["Price","Qty"]' \
+    --row-fields  '["12.50","100"]'
+
+# Pretty-print the full schema catalog:
+./bxp-fmt --docs | jq '.config_schema'
+
+# List templates a config defines:
+./bxp-fmt --config ~/my-bxp-cli.json --list-templates
+```
+
 ### Exit codes
 
 | Binary | Code | Meaning |
@@ -66,6 +109,9 @@ from the current directory and processes every template in it.
 | bxp-cli | `0` | Success — all matched rows converted, no warnings. |
 | bxp-cli | `1` | Fatal error — config invalid, file missing, expression failure. |
 | bxp-cli | `2` | Completed with warnings — output written but at least one warning emitted (typo'd field, no input rows, …). |
+| bxp-fmt | `0` | Success. |
+| bxp-fmt | `1` | Validation / runtime error. |
+| bxp-fmt | `2` | Usage error (unknown flag, missing argument, mutually-exclusive flags). |
 
 ### Where output goes
 
@@ -629,10 +675,10 @@ template, follow these rules strictly:
     unmatched rows surface.
 12. **Self-test before returning.** See the **Self-testing the
     generated template** section below — predict each sample row's
-    outcome, run `bxp-fmt --config` (validation) and the two
-    `bxp-cli` passes (`--debug` for problems, `--trace` for
-    understanding). Only return the template once `--debug` is
-    silent and every `row_output` matches prediction.
+    outcome, then verify with `bxp-fmt --config` (validation),
+    `bxp-fmt --expr-trace` (per-expression values), and `bxp-cli
+    --debug` (problems). Only return the template once `--debug` is
+    silent and the generated `.csvx` matches every prediction.
 
 13. **Return a commented JSON5, not bare JSON.** JSON5 supports `//`
     comments — use them to explain non-obvious decisions: why a
@@ -721,7 +767,7 @@ behaviour didn't drift after a code change.
 - For a stricter check that also verifies `data_dir` exists and
   contains files, append `--check-fs=2` (2-second deadline).
 
-**2. Predict, then run two passes.**
+**2. Predict, then verify in three steps.**
 
 For each sample row the user provided, write down beforehand:
 
@@ -730,35 +776,49 @@ For each sample row the user provided, write down beforehand:
   `$amount`, …)
 - how many output rows the input row should produce (0 / 1 / N)
 
-Then run TWO separate commands — `--trace` and `--debug` are mutually
-exclusive (the binary refuses to combine them):
+**Step A — per-expression check (`bxp-fmt --expr-trace`).** Before
+wiring an expression into the template, evaluate it on its own against
+one sample row and confirm the value matches your prediction — the
+fastest authoring loop, no full run needed:
 
 ```bash
-# Pass A — debug: surfaces unmatched rows + per-row expression errors
-./bxp-cli --config bxp-cli.json --template <new_id> --debug
-
-# Pass B — trace: NDJSON event stream of every row's evaluation
-./bxp-cli --config bxp-cli.json --template <new_id> --trace
+./bxp-fmt --expr-trace "DATE_CONVERT([Time], 'YYYY-MM-DD hh:mm:ss', 'YYYY-MM-DD')" \
+  --row-headers '["Action","Time","Ticker"]' \
+  --row-fields  '["Market buy","2024-04-25 07:00:35","RIO"]'
 ```
 
-Pass A's output: human-readable summary + `[expr error] $var = "expr": NotANumber (...)`
+It streams NDJSON; the `{"t":"final","value":...}` line is the computed
+result. Use `--expr-batch` (reads a JSON request on stdin) to evaluate
+several `$variable` expressions against the same row in one call.
+
+**Step B — find problems (`bxp-cli --debug`).** Run the whole template
+and surface unmatched rows + runtime expression errors:
+
+```bash
+./bxp-cli --config bxp-cli.json --template <new_id> --debug
+```
+
+Output: human-readable summary + `[expr error] $var = "expr": NotANumber (...)`
 lines for any expression that failed at runtime + JSON dumps of
-unmatched rows when `row_rules_debug_missing: true` is set. This is
-the fastest way to spot typos and locale-format bugs.
+unmatched rows when `row_rules_debug_missing: true` is set. This is the
+fastest way to spot typos and locale-format bugs.
 
-Pass B's NDJSON stream reveals what bxp-cli actually computed:
+**Step C — confirm the final output.** Run the template without
+`--debug` and read the generated `.csvx` directly — it is the exact
+result the user will import, so compare each row against your
+prediction:
 
-| Event | Use it to verify |
-| --- | --- |
-| `var_eval` | Each `$variable` evaluated to the predicted value |
-| `rule_match` / `rule_no_match` | The expected rule index matched |
-| `row_output` | The final CSV row contents match prediction |
-| `file_end` | `stats.errors == 0` and `stats.warnings == 0` |
+```bash
+./bxp-cli --config bxp-cli.json --template <new_id>
+cat <data_dir>/<sample>.csvx
+```
 
-Use `--debug` to **find** problems and `--trace` to **understand**
-them. Iterate until pass A is silent (zero `[expr error]`, zero
-unmatched rows) and pass B's `row_output` events match every
-prediction.
+(`--trace` is a separate, binary BXTB frame stream meant for the GUI's
+drill-down view — not human-readable in a terminal and not needed for
+self-testing.)
+
+Iterate until step B is silent (zero `[expr error]`, zero unmatched
+rows) and the `.csvx` from step C matches every prediction.
 
 **3. Inspect the `.csvx` output.**
 

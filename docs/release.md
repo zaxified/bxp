@@ -79,10 +79,13 @@ releases — the GH Actions matrix is sufficient for those.
 | `desktop-macos`   | macos-latest   | `bxp-desktop-<ver>-macos-aarch64.dmg`                                               |
 | `release`         | ubuntu-latest  | aggregates above + `SHA256SUMS`, publishes Release                                  |
 
-`bxp-console` archives are CLI-only (small, no GUI deps). `bxp-desktop`
-archives ship the Flutter GUI plus bundled `bxp-cli`, `bxp-fmt`, and
-(on Windows) `bxp-gui-bridge.dll` companion binaries so the GUI is
-self-contained.
+`bxp-console` archives are GUI-free (small, no Flutter deps) but ship
+both `bxp-cli` and `bxp-fmt` — the latter so a console user (or an AI
+assistant) can run the documented self-test (`bxp-fmt --config`
+validation + `--expr-trace` / `--expr-batch` expression authoring).
+`bxp-desktop` archives ship the Flutter GUI plus bundled `bxp-cli`,
+`bxp-fmt`, and (on Windows) `bxp-gui-bridge.dll` companion binaries so
+the GUI is self-contained.
 
 The Linux desktop runner is pinned to `ubuntu-22.04` (glibc 2.35
 baseline) so AppImages run on anything from 2022+. Bumping past glibc

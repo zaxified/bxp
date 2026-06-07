@@ -157,9 +157,9 @@ from the current directory and processes every template in it.
 
 ### `bxp-fmt` reference
 
-bxp-fmt is a small validator / catalog binary used by the GUI for
-schema lookups and expression validation. Each invocation runs exactly
-one action — subcommands are mutually exclusive.
+bxp-fmt is a small validator / catalog binary that ships alongside
+bxp-cli. Each invocation runs exactly one action — subcommands are
+mutually exclusive.
 
 | Subcommand | Output | Purpose |
 | --- | --- | --- |
@@ -736,26 +736,21 @@ report date-only (no time) result in `... 00:00:00` — that's accepted.
 European brokers (Comdirect, DKB, Flatex, BoursoBank, Fineco, …)
 typically export numbers with `.` as thousands separator and `,` as
 decimal: `5.000,00` means five thousand. Setting
-`csv_decimal_separator_in: ","` handles **simple** comma decimals
-(`75,00` → `75.00` internally) but **leaves multi-`.`-multi-`,` values
-unchanged** because the field-access pre-converter can't tell which
-form the user used. The result is a mix of pre-normalised and raw
-strings flowing into expressions.
+`csv_decimal_separator_in: ","` opts the template into EU parsing,
+and field access converts both shapes automatically:
 
-The pattern that works for both cases:
+| Raw field value      | Converted     | Reason                                  |
+| -------------------- | ------------- | --------------------------------------- |
+| `75,00`              | `75.00`       | Plain decimal, comma swapped            |
+| `1234,56`            | `1234.56`     | Plain decimal, comma swapped            |
+| `1.234,56`           | `1234.56`     | EU thousands group + decimal            |
+| `-1.234.567,89`      | `-1234567.89` | Multiple thousands groups               |
+| `1.234`              | `1234`        | EU thousands without decimal            |
+| `1.5`                | `1.5`         | `.` not followed by 3 digits → left raw |
+| `N/A`, `hello,world` | unchanged     | Non-numeric, left raw                   |
 
-```text
-$amount: "ABS(IF(CONTAINS([Betrag in EUR], ','),
-                 REPLACE(REPLACE([Betrag in EUR], '.', ''), ',', '.'),
-                 [Betrag in EUR]))"
-```
-
-`CONTAINS([X], ',')` distinguishes raw values (still have `,`) from
-pre-converted values (already pure `.` decimal). For raw values, strip
-the `.` thousands then swap `,` to `.`; for pre-converted values, pass
-through unchanged. Apply the same wrapper to every numeric field (`$amount`,
-`$quantity`, `$unitprice`, `$fee`) when authoring a European broker
-template.
+Expressions receive numeric fields ready to feed into arithmetic; no
+defensive `IF(CONTAINS(...), REPLACE(...), ...)` wrapper needed.
 
 US-style brokers (Schwab, Fidelity, Trading 212) use `.` decimal +
 optional `,` thousands — that path is handled automatically (see
@@ -811,10 +806,10 @@ template, follow these rules strictly:
     unmatched rows surface.
 12. **Self-test before returning.** See the **Self-testing the
     generated template** section below — predict each sample row's
-    outcome, run `bxp-fmt --config` (validation) and the two
-    `bxp-cli` passes (`--debug` for problems, `--trace` for
-    understanding). Only return the template once `--debug` is
-    silent and every `row_output` matches prediction.
+    outcome, then verify with `bxp-fmt --config` (validation),
+    `bxp-fmt --expr-trace` (per-expression values), and `bxp-cli
+    --debug` (problems). Only return the template once `--debug` is
+    silent and the generated `.csvx` matches every prediction.
 
 13. **Return a commented JSON5, not bare JSON.** JSON5 supports `//`
     comments — use them to explain non-obvious decisions: why a
@@ -903,7 +898,7 @@ behaviour didn't drift after a code change.
 - For a stricter check that also verifies `data_dir` exists and
   contains files, append `--check-fs=2` (2-second deadline).
 
-**2. Predict, then run two passes.**
+**2. Predict, then verify in three steps.**
 
 For each sample row the user provided, write down beforehand:
 
@@ -912,35 +907,52 @@ For each sample row the user provided, write down beforehand:
   `$amount`, …)
 - how many output rows the input row should produce (0 / 1 / N)
 
-Then run TWO separate commands — `--trace` and `--debug` are mutually
-exclusive (the binary refuses to combine them):
+**Step A — per-expression check (`bxp-fmt --expr-trace`).** Before
+wiring an expression into the template, evaluate it on its own against
+one sample row and confirm the value matches your prediction — the
+fastest authoring loop, no full run needed:
 
 ```bash
-# Pass A — debug: surfaces unmatched rows + per-row expression errors
-./bxp-cli --config bxp-cli.json --template <new_id> --debug
-
-# Pass B — trace: NDJSON event stream of every row's evaluation
-./bxp-cli --config bxp-cli.json --template <new_id> --trace
+./bxp-fmt --expr-trace "DATE_CONVERT([Time], 'YYYY-MM-DD hh:mm:ss', 'YYYY-MM-DD')" \
+  --row-headers '["Action","Time","Ticker"]' \
+  --row-fields  '["Market buy","2024-04-25 07:00:35","RIO"]'
 ```
 
-Pass A's output: human-readable summary + `[expr error] $var = "expr": NotANumber (...)`
+It streams NDJSON; the `{"t":"final","value":...}` line is the computed
+result. Use `--expr-batch` (reads a JSON request on stdin) to evaluate
+several `$variable` expressions against the same row in one call.
+
+**Step B — find problems (`bxp-cli --debug`).** Run the whole template
+and surface unmatched rows + runtime expression errors:
+
+```bash
+./bxp-cli --config bxp-cli.json --template <new_id> --debug
+```
+
+Output: human-readable summary + `[expr error] $var = "expr": NotANumber (...)`
 lines for any expression that failed at runtime + JSON dumps of
-unmatched rows when `row_rules_debug_missing: true` is set. This is
-the fastest way to spot typos and locale-format bugs.
+unmatched rows when `row_rules_debug_missing: true` is set. This is the
+fastest way to spot typos and locale-format bugs.
 
-Pass B's NDJSON stream reveals what bxp-cli actually computed:
+**Step C — confirm the final output.** Run the template without
+`--debug` and read the generated `.csvx` directly — it is the exact
+result the user will import, so compare each row against your
+prediction:
 
-| Event | Use it to verify |
-| --- | --- |
-| `var_eval` | Each `$variable` evaluated to the predicted value |
-| `rule_match` / `rule_no_match` | The expected rule index matched |
-| `row_output` | The final CSV row contents match prediction |
-| `file_end` | `stats.errors == 0` and `stats.warnings == 0` |
+```bash
+./bxp-cli --config bxp-cli.json --template <new_id>
+cat <data_dir>/<sample>.csvx
+```
 
-Use `--debug` to **find** problems and `--trace` to **understand**
-them. Iterate until pass A is silent (zero `[expr error]`, zero
-unmatched rows) and pass B's `row_output` events match every
-prediction.
+(`--trace` is a separate, binary BXTB frame stream meant for the GUI's
+drill-down view — not human-readable in a terminal and not needed for
+self-testing.)
+
+In the GUI, the equivalent of Step C is a **dry-run** — its trace panes
+show the same per-row outcome interactively, no terminal needed.
+
+Iterate until step B is silent (zero `[expr error]`, zero unmatched
+rows) and the `.csvx` from step C matches every prediction.
 
 **3. Inspect the `.csvx` output.**
 

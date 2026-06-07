@@ -7,59 +7,6 @@ lands on master. `CHANGELOG.md` is generated independently from `git log`
 at release time by `scripts/release-changelog.sh` and is not coupled
 to this file.
 
-## Pre-release — design before the next cut
-
-### Agent-driven configuration authoring (new logic)
-
-Design an entirely new flow for an AI agent (or the GUI acting on the
-user's behalf) to **author and iterate a conversion template against
-sample data** in as few round-trips as possible. This supersedes the
-scattered "point the AI at the binaries and have it read traces" advice
-currently baked into the bundled readmes, which has drifted out of sync
-with the engine and must not be patched piecemeal.
-
-Why this blocks the bundled docs — the console + desktop readmes' "Pass B
-— trace" debugging workflow is stale and is **exactly** what this
-redesign replaces:
-
-- Both readmes tell users to run `bxp-cli --template <id> --trace` and
-  read an "NDJSON event stream" of `var_eval` / `rule_match` /
-  `row_output` events. Both halves are wrong since the v0.3.0 trace
-  rework: `--trace` emits a **binary BXTB** frame stream on stdout (an
-  input for the GUI, unreadable in a terminal), and those per-row events
-  were dropped from the stream in schema v3 (per-row drill-down is
-  recomputed on demand by `bxp-fmt` from source byte offsets). For a
-  CLI-only user, `--debug` is the only human-readable inspection surface
-  today.
-- Stale blocks to rewrite (identical text in both): `resources/console/
-readme.md` Pass B (~716–737) and `resources/desktop/readme.md` Pass B
-  (~898–919). The other `--expr-trace` NDJSON mentions in the desktop
-  readme (~170 / 211 / 1083 / 1089) are **correct** and stay — `bxp-fmt
---expr-trace` genuinely emits NDJSON. Root README already de-NDJSON'd
-  to "stream past live" (2026-06-05).
-
-Open design questions (absorbs the former "AI-authoring workflow —
-rethink fmt / `--debug` / `--trace=bin` split" item, previously under
-_Later → Real-world broker CSV quirks_):
-
-- What does an agent actually need in **one** round-trip to author + verify
-  a template: matched + unmatched + errored rows, the computed `$variable`
-  values, the chosen rule index, and the resulting output row — for a
-  _sample_ of rows, not the whole file.
-- Which surface provides it? Candidates: a structured-JSON `--debug`
-  covering matched/unmatched/error rows (today `--debug` only dumps
-  unmatched rows + expr errors, gated by `row_rules_debug_missing`); a
-  `bxp-fmt`-side multi-row simulation (extend `--expr-batch` from one row
-  to N); or a documented small BXTB parser so the agent can consume
-  `--trace=bin` directly. `--debug` and `--trace` are mutually exclusive
-  on stdout today — the redesign decides whether that split survives.
-- How does the GUI "import wizard / point-the-agent-at-a-file" idea
-  (under _bxp-gui_, Later) fold into the same flow?
-
-Resolve the surface + emit format here **first**, then rewrite both
-readmes' Pass B sections (and any root README debugging blurb) against
-the decided workflow in a single pass — no piecemeal NDJSON term-swaps.
-
 ## v0.2.5
 
 ### External template JSON files
@@ -293,6 +240,35 @@ gated on a concrete use-case, not a v0.4.0 goal.
 > `input_encoding` idea is folded in here as Layer 0 (`csv_input_encoding`).
 
 ## Later (no specific version)
+
+### Single-source the console + desktop readmes
+
+`resources/console/readme.md` and `resources/desktop/readme.md` today
+duplicate a large shared body (template authoring, `$variable` /
+expression reference, AI-assistant rules, self-test, locale parsing,
+`bxp-fmt` reference, exit codes) and differ only in product-specific
+framing (title, intro, GUI features, IO notes). The console readme is
+meant to be a **subset** of the desktop one, but the two drift apart
+whenever shared content is edited in only one — maintaining the subset
+relationship by hand is error-prone (proven repeatedly: the EU
+number-parsing section silently went stale in desktop, and self-test /
+`bxp-fmt` content diverged during the 2026-06-07 edits).
+
+Fix: **merge into one source readme** with GUI/desktop-only lines tagged
+inline, e.g. a `!GUI-ONLY!` marker, and a small build step that emits the
+two shipped variants:
+
+- Console variant — strip every `!GUI-ONLY!` line (and its marker).
+- Desktop variant — keep everything, strip just the marker token.
+
+Open questions: marker syntax that survives Markdown rendering if a
+generation step is ever skipped (HTML comment `<!-- GUI-ONLY -->` vs a
+bare `!GUI-ONLY!` sentinel); whether the generator is a new
+`scripts/` step wired into `release-*.sh` + a `test-*` drift guard that
+fails if a committed variant doesn't match a fresh generation;
+product-specific blocks that are not a clean line-strip (the title,
+intro binary list, IO section) may need a block-level `!GUI-ONLY!` /
+`!CLI-ONLY!` pair rather than per-line tags.
 
 ### CI hardening
 
@@ -583,6 +559,62 @@ default)` (Excel-style) vs SQL `CASE WHEN` shape — the variadic
   must follow are already written up: see
   ["Adding a new bridge FFI export"](devel.md#adding-a-new-bridge-ffi-export)
   in the developer guide.
+
+### MCP + API library (external project)
+
+Idea captured from a 2026-06-07 brainstorm — a **separate Zig project**,
+not a per-app server. An embeddable agent-control / API layer that every
+bxp binary (and future programs) links, so a program can be **driven by
+an agent** instead of the `exe + flags → parse stdout/stderr` dance.
+
+Shape and rationale from the discussion:
+
+- **One core, thin adapters.** A clean Zig core (logic + structured
+  types) with separate adapters on top: an **MCP** adapter (JSON-RPC,
+  tools + notifications for an agent), an **HTTP** adapter (for a future
+  web front-end doing file in/out manipulation), and a **C-ABI** adapter
+  (link into Dart, as the existing `bxp-gui-bridge` already does). The
+  core must not know who is calling it — that boundary is what separates
+  "universal lib" from "MCP glued onto the bridge".
+- **Generalises the bridge.** `bxp-gui-bridge` is already a C-ABI core
+  called from Dart; this is its natural generalisation from "spawn a
+  subprocess" to "be an agent endpoint".
+- **Three intended jobs** (user framing): (1) let a program be
+  agent-controlled instead of argv + stdout parsing; (2) replace the
+  old NDJSON-style streaming API (the retired `--trace=json`) with
+  structured JSON-RPC notifications; (3) be **bidirectional** — e.g. a
+  long-lived GUI pushes debug info back to the agent (MCP natively
+  supports server→client notifications / sampling / elicitation).
+- **BXTB stays the internal fast-path.** The bridge/fmt could sit on the
+  binary BXTB stream from `bxp-cli --trace` and translate it to JSON-RPC
+  for the agent — so the agent never sees binary BXTB, and the
+  performance path (cli → bridge) is unchanged. (1:1 frame→notification
+  vs aggregated "simulate" result is a later detail.)
+- **Three consumers justify the separate project:** individual bxp apps,
+  an agent driving them, and a future web service — same core, different
+  adapter, written once instead of three times.
+
+Explicitly **not** the fix for agent-driven config authoring: that
+brainstorm concluded MCP adds only marginal utility _for config
+authoring specifically_ (the bottleneck is the structured `simulate`
+data surface, not the transport — a plain `--json` would deliver the
+same payload). That workflow was already unblocked the cheap way
+(2026-06-07): `bxp-fmt` ships in the console archive and both bundled
+readmes' self-test sections use the real `fmt --config` /
+`fmt --expr-trace` / `cli --debug` / read-`.csvx` loop. Decided **not**
+to re-add NDJSON to `bxp-cli` (CLI stays a workhorse). This library is
+the longer-term platform play, deferred until the engine and its
+structured surfaces stop churning (same pinning caution as the Bridge
+FFI expansion above).
+
+If a single-round-trip structured `simulate` surface is ever pursued
+(matched + unmatched + errored rows, computed `$variable` values, chosen
+rule index, resulting output row, for a _sample_ of rows), candidate
+shapes are: a structured-JSON `--debug`, an N-row extension of
+`bxp-fmt --expr-batch`, or a documented small BXTB parser — plus folding
+in the GUI "import wizard" (under _bxp-gui_, Later). `fmt` is stateless
+(no `pre_pass`/`LOOKUP`), so full template simulation stays CLI
+territory.
 
 ### Expression builtins (regex)
 
