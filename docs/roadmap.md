@@ -82,9 +82,9 @@ Plan for v0.3.0:
 
 ### Auto-updater security audit & hardening
 
-Planned for v0.2.4: switched `_verifyChecksum` to fail-closed — missing
+Shipped in v0.2.4: `_verifyChecksum` is fail-closed — missing
 `SHA256SUMS`, fetch failure, asset not listed in SUMS, and hash mismatch
-all now refuse the install with a specific message. Release page link in
+all refuse the install with a specific message. Release page link in
 the dialog remains as the user's escape hatch.
 
 Remaining hardening for v0.3.0 — treat as one cohesive audit pass:
@@ -272,30 +272,21 @@ intro binary list, IO section) may need a block-level `!GUI-ONLY!` /
 
 ### CI hardening
 
-- **`.github/workflows/ci.yml` — shipped (v0.2.4).** Runs
-  `scripts/test.sh` on every pull request and on pushes to `master`,
-  across the `ubuntu-latest` / `macos-latest` / `windows-latest` matrix
-  (`fail-fast: false`, one shared `bash scripts/test.sh` per leg, no
-  per-OS phase carve-outs). Previously only the release workflow existed,
-  so PRs and master pushes went untested by CI.
+The CI matrix (`.github/workflows/ci.yml`, shipped v0.2.4) runs
+`scripts/test.sh` on every pull request and master push across
+`ubuntu-latest` / `macos-latest` / `windows-latest`. `test.sh` is fully
+cross-platform — including the perf bench, which self-measures wall + peak
+RSS via bxp-cli's `BXP_METRICS` env var instead of GNU `/usr/bin/time`.
+Remaining:
+
 - Flutter `integration_test` smoke run inside CI (Xvfb on Linux runners,
-  headless setup on Mac / Win). Still outstanding — the current legs run
-  `flutter analyze` + `flutter test` (widget/unit) but not a launched-app
-  integration smoke.
-- **Cross-platform test portability — cleared (2026-06-07).**
-  `scripts/test.sh` runs green on all three runners: flutter tests resolve
-  `.exe`/`.dll`/`bin` and path separators per-platform (+ a bridge DLL
-  test seam for `evalBatch`); the expr corpus is pinned `eol=lf` in
-  `.gitattributes` (a CRLF checkout made `bxp-fmt --expr` reject every line
-  as `UnexpectedChar '\r'`); the bench guard (test-07) and dev bench
-  (`scripts/bench/bench.sh`) now run on **all three platforms** — bxp-cli
-  self-reports wall + peak RSS via the opt-in `BXP_METRICS` env var
-  (`getrusage` on POSIX, `GetProcessMemoryInfo` on Windows), replacing the
-  Linux-only GNU `/usr/bin/time` (absent on Windows, BSD-incompatible on
-  macOS); `stat -c` size checks were swapped for portable `wc -c`. The only
-  remaining external dependency is `python3` for the synthetic-input
-  generator (already a universal test dependency via test-01/test-06), so
-  the guard skips gracefully only where python3 is absent.
+  headless setup on Mac / Win). The current legs run `flutter analyze` +
+  `flutter test` (widget/unit) but not a launched-app integration smoke.
+- Pin `subosito/flutter-action` to an explicit Flutter version. CI's
+  `channel: stable` floats ahead of local SDKs, so a newer `flutter
+  analyze` can surface fresh `info` lints that fail CI while passing
+  locally (hit 2026-06-07: `use_null_aware_elements` on stable 3.44.1 vs
+  local 3.41.9). A pin makes CI reproducible; bump deliberately.
 
 ### Distribution polish
 
