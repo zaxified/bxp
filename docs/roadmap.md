@@ -493,23 +493,6 @@ default)` (Excel-style) vs SQL `CASE WHEN` shape — the variadic
 
 ### bxp-gui
 
-- **Fix `DartValidator` `positive_integer` ArgKind drift (dead branch).**
-  [bxp-gui/lib/services/dart_validator.dart](../bxp-gui/lib/services/dart_validator.dart)
-  `_checkCall` matches `case 'literal_int_positive'`, but `bxp-fmt --docs`
-  emits the ArgKind tag `positive_integer` (verified: SPLIT_PART / FIELDS /
-  SUBSTR all serialize `positive_integer`). The string never matches, so the
-  Dart-side `SplitPartBadIndex` check is dead in the tree-walk path
-  (`_validateExprStandalone`, used for load/save validation of `expr_string`
-  fields). Low user impact — `bxp-fmt --config` (the authoritative validator)
-  still flags the same `SPLIT_PART(..., 0)` mistake — but it is exactly the
-  Zig↔Dart drift the file's own header warns against. The Zig tag was renamed
-  `literal_int_positive` → `positive_integer` and the Dart mirror wasn't
-  updated. Fix is a one-line string change; deferred because activating the
-  previously-dead branch may surface new tree-walk diagnostics on existing
-  configs and shift golden-test output, so it needs a `flutter test` pass and
-  a check that the new diagnostics don't duplicate the bxp-fmt banner. Found
-  during the 2026-06-05 comment-review sweep.
-
 - **User-supplied themes from JSON files on disk.** Every field on
   `BxpTheme` ([bxp-gui/lib/ui/theme/bxp_theme.dart](../bxp-gui/lib/ui/theme/bxp_theme.dart))
   is either a `Color`, `Brightness`, enum-like preset id, or label string.

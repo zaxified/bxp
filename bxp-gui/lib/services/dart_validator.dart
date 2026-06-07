@@ -653,7 +653,7 @@ class DartValidator {
       if (argTokens.length != 1) continue;
       final t = argTokens.first;
       switch (kind) {
-        case 'literal_int_positive':
+        case 'positive_integer':
           if (t.kind != _TokKind.number) continue;
           final v = int.tryParse(t.text);
           if (v == null) continue;

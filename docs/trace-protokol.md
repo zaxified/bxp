@@ -409,8 +409,10 @@ bxp-fmt --docs
 }
 ```
 
-`args[].kind` values: `expr` (any expression) | `literal_string` (bare string
-literal) | `literal_int_positive` (positive integer literal, ≥ 1) |
+`args[].kind` values: `expr` (any expression) | `string` (any string-typed
+expression) | `literal_string` (bare string literal) | `number` (any
+numeric-typed expression) | `positive_integer` (positive integer literal, ≥ 1) |
+`integer_in_range` (integer literal within a builtin-specific range) |
 `date_format` (datefmt date-format pattern) | `pre_pass_name` (name of a
 declared `pre_pass` block).
 

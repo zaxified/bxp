@@ -56,7 +56,7 @@ duplicate diagnostics. See `dart_validator.dart:158-176`.
 - ✅ tree-walk only / 🛜 editor via bridge — Wrong arg count (checks
   `min_args` / `max_args`, variadic max of 255 = unbounded).
   `dart.expr.WrongArgCount`. Editor: `bridge_eval_expr`.
-- ✅ tree-walk only / 🛜 editor via bridge — `literal_int_positive`
+- ✅ tree-walk only / 🛜 editor via bridge — `positive_integer`
   (SPLIT_PART arg[2]) — bare int literal ≤ 0 is always `""`.
   `dart.expr.SplitPartBadIndex`. Editor: `bridge_eval_expr` via
   `expr.staticCheckCalls` since 2026-05-14.

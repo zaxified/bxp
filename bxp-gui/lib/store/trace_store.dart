@@ -697,7 +697,7 @@ class TraceStore extends ChangeNotifier {
     }
 
     // Phase 4 — Dart-side first pass. Catches UnknownFunction,
-    // WrongArgCount, FnArgDoc statics (literal_int_positive,
+    // WrongArgCount, FnArgDoc statics (positive_integer,
     // date_format), and LOOKUP unknown pre_pass instantly without
     // spawning a subprocess. Subprocess still runs afterward as the
     // oracle for syntax/precedence errors that the Dart walker
