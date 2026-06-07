@@ -78,10 +78,11 @@ _fail() {
     exit 1
 }
 
-# Graceful skip: the phase can't measure perf on this host (missing GNU
-# tooling), but that's not a regression. Emit a SKIP line and exit 0 so
-# the test.sh wrapper (set -e) keeps the suite green — the perf invariants
-# are validated on the Linux CI runner where the tooling exists.
+# Graceful skip: the phase can't run on this host (the synthetic-input
+# generator needs python3), but that's not a regression. Emit a SKIP line
+# and exit 0 so the test.sh wrapper (set -e) keeps the suite green. Wall +
+# peak RSS are measured by bxp-cli itself (BXP_METRICS), so the guard runs
+# on every platform that has python3 — Linux, macOS, and Windows alike.
 _skip() {
     local label="$1" reason="$2"
     local dots_n=$(( _BXP_OK_COL - 5 - ${#label} ))
@@ -98,17 +99,13 @@ t0=$(_now)
 if [[ ! -f "$GEN" ]]; then
     _fail "guard" 0 "generator missing: $GEN"
 fi
-# The RSS invariant needs GNU time's `-f '%e %M'` (bxp-cli does not report
-# its own peak RSS). Probe that the flag actually WORKS, not merely that a
-# `/usr/bin/time` binary exists: macOS ships a BSD `/usr/bin/time` that
-# rejects `-f` (it would error at measurement time, not here), and Windows
-# Git Bash has no `/usr/bin/time` at all. Either way the perf invariants are
-# validated on the Linux CI runner where GNU time is present.
-if ! /usr/bin/time -f '%e' true >/dev/null 2>&1; then
-    _skip "guard" "GNU '/usr/bin/time -f' not available on this host (macOS ships BSD time; Windows Git Bash has none) — perf guard runs on the Linux CI runner"
-fi
+# Wall + peak RSS come from bxp-cli's own BXP_METRICS line (no GNU
+# /usr/bin/time, which is absent on Windows and BSD-incompatible on macOS;
+# and the stdout time summary is suppressed under the --quiet we run with).
+# The only external dependency left is python3 for the synthetic-input
+# generator; skip gracefully where it is absent.
 if ! command -v python3 >/dev/null 2>&1; then
-    _skip "guard" "python3 not available on this host — generator (bench/gen.py) needs it; perf guard runs on the Linux CI runner"
+    _skip "guard" "python3 not available on this host — generator (bench/gen.py) needs it"
 fi
 
 # --- 1. Build ReleaseFast into the gitignored guard prefix -------------------
@@ -123,14 +120,17 @@ if [[ ! -x "$BXP" ]]; then
 fi
 
 # Debug-build sanity: a ReleaseFast bxp-cli is ~5 MB; Debug is 20+ MB. A Debug
-# binary here would silently invalidate the scaling check.
-bin_bytes=$(stat -c '%s' "$BXP")
+# binary here would silently invalidate the scaling check. `wc -c` is portable
+# (GNU `stat -c` / BSD `stat -f` differ across Linux/macOS).
+bin_bytes=$(wc -c < "$BXP" | tr -d '[:space:]')
 if (( bin_bytes > 10485760 )); then
     bin_mb=$(awk -v b="$bin_bytes" 'BEGIN{printf "%.1f", b/1048576}')
     _fail "guard" 0 "guard binary too large (${bin_mb} MB > 10 MB) — not ReleaseFast?"
 fi
 
-# Run one (rows) → echoes "wall rss_kb" or aborts the phase on a bad exit.
+# Run one (rows) → echoes "wall_s rss_kb" or aborts the phase on a bad exit.
+# bxp-cli self-reports wall + peak RSS on stderr when BXP_METRICS is set, so
+# no external timer is needed (works identically on Linux/macOS/Windows).
 _run_point() {
     local rows="$1"
     local dir="$WORK/n${rows}"
@@ -140,11 +140,15 @@ _run_point() {
         python3 "$GEN" --rows "$rows" --cols "$COLS" --cell-width "$CELL_W" \
             --out-dir "$dir" >/dev/null 2>&1 || return 1
     fi
-    local tf="$dir/time.txt"
-    /usr/bin/time -f '%e %M' -o "$tf" \
-        "$BXP" --config "$dir/bxp-cli.json" --quiet >/dev/null 2>/dev/null || return 1
-    [[ -s "$tf" ]] || return 1
-    cat "$tf"
+    # Capture stderr (the metrics line); discard stdout. --quiet keeps stderr
+    # to just the `bxp-metrics wall_ms=<N> peak_rss_kb=<N>` line.
+    local metrics
+    metrics=$(BXP_METRICS=1 "$BXP" --config "$dir/bxp-cli.json" --quiet 2>&1 >/dev/null) || return 1
+    local wall_ms rss_kb
+    wall_ms=$(printf '%s\n' "$metrics" | sed -n 's/.*wall_ms=\([0-9][0-9]*\).*/\1/p')
+    rss_kb=$(printf '%s\n' "$metrics" | sed -n 's/.*peak_rss_kb=\([0-9][0-9]*\).*/\1/p')
+    [[ -n "$wall_ms" && -n "$rss_kb" ]] || return 1
+    awk -v ms="$wall_ms" -v r="$rss_kb" 'BEGIN{printf "%.2f %s", ms/1000, r}'
 }
 
 small_out=$(_run_point "$SMALL_ROWS") || _fail "guard" 0 "small-N run failed (N=$SMALL_ROWS)"
@@ -193,5 +197,7 @@ if (( ratio_rc != 0 )); then
         "N=${SMALL_ROWS}: ${small_wall}s   N=${LARGE_ROWS}: ${large_wall}s"
 fi
 
-_emit "guard (rss<=${RSS_MB}MB, scale ${wall_ratio}x/${row_ratio}x)" OK "$dur"
+# Surface the measured numbers (peak RSS + wall, both points) alongside the
+# pass verdict, not just the ratio — so a run shows the real figures.
+_emit "guard (rss ${small_rss_mb}/${large_rss_mb}MB<=${RSS_MB}, wall ${small_wall}/${large_wall}s, scale ${wall_ratio}x/${row_ratio}x)" OK "$dur"
 exit 0

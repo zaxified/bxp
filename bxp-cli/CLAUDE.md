@@ -364,6 +364,14 @@ still go to stderr in trace mode so a stderr badge can surface them in the GUI.
 
 - All code comments and documentation must be in English.
 - User-facing error messages use `std.process.exit(1)` (no Zig stack trace).
+- `BXP_METRICS` env var (opt-in, dev/bench): when set to any non-empty
+  value, bxp-cli emits one `bxp-metrics wall_ms=<N> peak_rss_kb=<N>` line to
+  **stderr** just before exit (wall via `std.time.Timer`, peak RSS via
+  `getrusage(RUSAGE_SELF)` on POSIX / `GetProcessMemoryInfo` on Windows).
+  Lets `scripts/test-07-bench-guard.sh` + `scripts/bench/bench.sh` measure
+  perf cross-platform without GNU `/usr/bin/time`. Off by default; never on
+  stdout, so it doesn't disturb data/trace output. The self-handle is always
+  valid, so no child-process plumbing is needed (`peakRssKb` in `main.zig`).
 - `alloc` lifetime: `file_alloc` (ArenaAllocator) owns file content and parsed data,
   freed after each file. `line_alloc` (ArenaAllocator) is reset per row.
 - Real input/output data lives in `../data/<template_id>/` and can be used for testing.

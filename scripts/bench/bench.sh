@@ -4,7 +4,8 @@
 #
 # For each (sweep, N, C, cell_width, expr, trace) point:
 #   1. gen.py emits a synthetic input.in.csv + bxp-cli.json under $WORK/<key>/
-#   2. bxp-cli runs under `/usr/bin/time -f '%e %M'` + per-run timeout
+#   2. bxp-cli runs with BXP_METRICS=1 (self-reports wall+RSS on stderr) +
+#      per-run timeout — portable, no GNU /usr/bin/time
 #   3. wall_s, RSS, output bytes, trace event count/bytes go to the per-run
 #      sidecar result file; a final sweep collects them in matrix order.
 #
@@ -67,7 +68,7 @@ fi
 # Sanity guard: a ReleaseFast bxp-cli is ~5 MB; a Debug build is ~20+ MB.
 # Refuse to run on anything that looks like Debug — silent perf regression
 # is the failure mode this whole script exists to detect.
-BIN_BYTES=$(stat -c '%s' "$BXP_CLI")
+BIN_BYTES=$(wc -c < "$BXP_CLI" | tr -d '[:space:]')
 if [ "$BIN_BYTES" -gt 10485760 ]; then
   bin_mb=$(awk -v b="$BIN_BYTES" 'BEGIN { printf "%.1f", b/1048576 }')
   echo "binary too large ($bin_mb MB > 10 MB) — likely a Debug build" >&2
@@ -157,24 +158,29 @@ run_one() {
   #                              become 0 in this mode.
   local sink_mode="${BXP_BENCH_SINK:-wc}"
 
+  # bxp-cli self-reports `bxp-metrics wall_ms=<N> peak_rss_kb=<N>` on stderr
+  # when BXP_METRICS is set — portable across Linux/macOS/Windows (no GNU
+  # /usr/bin/time, absent on Windows and BSD-incompatible on macOS). Capture
+  # stderr to $time_file; stdout still carries data/trace as before.
   if [ "$trace" = "on" ]; then
     if [ "$sink_mode" = "devnull" ]; then
-      /usr/bin/time -f '%e %M' -o "$time_file" \
-        timeout "$TIMEOUT_SEC" "$BXP_CLI" "${cli_args[@]}" >/dev/null 2>/dev/null || rc=$?
+      BXP_METRICS=1 timeout "$TIMEOUT_SEC" "$BXP_CLI" "${cli_args[@]}" >/dev/null 2>"$time_file" || rc=$?
     else
-      /usr/bin/time -f '%e %M' -o "$time_file" \
-        timeout "$TIMEOUT_SEC" "$BXP_CLI" "${cli_args[@]}" 2>/dev/null \
+      BXP_METRICS=1 timeout "$TIMEOUT_SEC" "$BXP_CLI" "${cli_args[@]}" 2>"$time_file" \
         | wc -lc > "$trace_stats"
       rc="${PIPESTATUS[0]}"
     fi
   else
-    /usr/bin/time -f '%e %M' -o "$time_file" \
-      timeout "$TIMEOUT_SEC" "$BXP_CLI" "${cli_args[@]}" >/dev/null 2>/dev/null || rc=$?
+    BXP_METRICS=1 timeout "$TIMEOUT_SEC" "$BXP_CLI" "${cli_args[@]}" >/dev/null 2>"$time_file" || rc=$?
   fi
 
   local wall="0" rss="0"
   if [ -s "$time_file" ]; then
-    read -r wall rss < "$time_file"
+    local wall_ms
+    wall_ms=$(sed -n 's/.*wall_ms=\([0-9][0-9]*\).*/\1/p' "$time_file")
+    rss=$(sed -n 's/.*peak_rss_kb=\([0-9][0-9]*\).*/\1/p' "$time_file")
+    [ -n "$wall_ms" ] && wall=$(awk -v ms="$wall_ms" 'BEGIN { printf "%.2f", ms/1000 }')
+    [ -z "$rss" ] && rss=0
   fi
   local rss_mb
   rss_mb=$(awk -v k="$rss" 'BEGIN { printf "%.1f", k/1024 }')
@@ -182,7 +188,7 @@ run_one() {
   local out_bytes=0
   local out_file
   out_file=$(ls "$run_dir"/*.out.csv 2>/dev/null | head -1)
-  [ -n "$out_file" ] && out_bytes=$(stat -c '%s' "$out_file")
+  [ -n "$out_file" ] && out_bytes=$(wc -c < "$out_file" | tr -d '[:space:]')
 
   local trace_events=0 trace_bytes=0
   if [ -s "$trace_stats" ]; then

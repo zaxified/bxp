@@ -287,12 +287,15 @@ intro binary list, IO section) may need a block-level `!GUI-ONLY!` /
   `.exe`/`.dll`/`bin` and path separators per-platform (+ a bridge DLL
   test seam for `evalBatch`); the expr corpus is pinned `eol=lf` in
   `.gitattributes` (a CRLF checkout made `bxp-fmt --expr` reject every line
-  as `UnexpectedChar '\r'`); the bench guard SKIPs gracefully where GNU
-  `/usr/bin/time -f` is absent — Windows Git Bash (no binary) and macOS
-  (BSD time rejects `-f`) both skip, so the perf invariants run on the
-  Linux leg. The probe checks the `-f` flag actually works rather than
-  just that a `/usr/bin/time` binary exists, so the macOS leg skips cleanly
-  instead of failing at measurement time.
+  as `UnexpectedChar '\r'`); the bench guard (test-07) and dev bench
+  (`scripts/bench/bench.sh`) now run on **all three platforms** — bxp-cli
+  self-reports wall + peak RSS via the opt-in `BXP_METRICS` env var
+  (`getrusage` on POSIX, `GetProcessMemoryInfo` on Windows), replacing the
+  Linux-only GNU `/usr/bin/time` (absent on Windows, BSD-incompatible on
+  macOS); `stat -c` size checks were swapped for portable `wc -c`. The only
+  remaining external dependency is `python3` for the synthetic-input
+  generator (already a universal test dependency via test-01/test-06), so
+  the guard skips gracefully only where python3 is absent.
 
 ### Distribution polish
 

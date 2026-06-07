@@ -9,6 +9,7 @@ const json5_mod = @import("json5");
 const btrace = @import("btrace");
 const pipeline = @import("pipeline.zig");
 const build_options = @import("build_options");
+const builtin = @import("builtin");
 
 const SectionStats = pipeline.SectionStats;
 const Output = pipeline.Output;
@@ -242,7 +243,32 @@ test "validatePath: backslash separator counts as traversal on Windows builds" {
     }
 }
 
+/// Peak resident-set size of the current process, in kilobytes. Backs the
+/// opt-in `BXP_METRICS` self-measurement line so the perf-guard suite
+/// (`scripts/test-07-bench-guard.sh`) and the bench harness measure wall +
+/// peak RSS on every platform without GNU `/usr/bin/time` — which is absent
+/// on Windows (Git Bash) and BSD-incompatible on macOS (`-f` is rejected).
+/// The process always owns a valid self-handle, so no child-handle plumbing
+/// is needed.
+fn peakRssKb() u64 {
+    if (builtin.os.tag == .windows) {
+        const vmc = std.os.windows.GetProcessMemoryInfo(std.os.windows.GetCurrentProcess()) catch return 0;
+        return @intCast(vmc.PeakWorkingSetSize / 1024);
+    }
+    const ru = std.posix.getrusage(std.posix.rusage.SELF);
+    const maxrss: u64 = if (ru.maxrss > 0) @intCast(ru.maxrss) else 0;
+    // getrusage reports ru_maxrss in kilobytes on Linux but in bytes on
+    // Darwin/macOS — normalise the latter to kilobytes.
+    return if (builtin.os.tag == .macos) maxrss / 1024 else maxrss;
+}
+
 pub fn main() !void {
+    // Opt-in self-measurement: when `BXP_METRICS` is set, emit one
+    // `bxp-metrics wall_ms=<N> peak_rss_kb=<N>` line to stderr just before
+    // exit. Started first so the wall covers the whole process. See
+    // `peakRssKb` for why this lives in the binary rather than a wrapper.
+    var proc_timer = std.time.Timer.start() catch null;
+
     // Allocator pick: `DebugAllocator` in Debug builds for leak tracking +
     // double-free detection; `smp_allocator` in ReleaseFast / ReleaseSafe
     // because the per-block parallel pipeline forks N worker threads that
@@ -256,6 +282,14 @@ pub fn main() !void {
     const alloc: std.mem.Allocator = switch (@import("builtin").mode) {
         .Debug => gpa.allocator(),
         else => std.heap.smp_allocator,
+    };
+
+    // Resolve the `BXP_METRICS` opt-in now that an allocator exists. Any
+    // non-empty value enables the trailing metrics line; absence disables it.
+    const metrics_enabled = blk: {
+        const v = std.process.getEnvVarOwned(alloc, "BXP_METRICS") catch break :blk false;
+        defer alloc.free(v);
+        break :blk v.len > 0;
     };
 
     // Worker thread pool shared across every `processBroker` call in this
@@ -460,6 +494,22 @@ pub fn main() !void {
     const exit_code: u8 = if (stats.has_fatal) 1 else if (stats.warnings > 0) 2 else 0;
     out.binEmitDone(@intCast(exit_code));
     closeTraceFile(&trace_file_fw_storage, trace_file_handle);
+
+    // Opt-in self-measurement line on stderr (kept off stdout so it never
+    // pollutes data/trace output). Parsed by the perf-guard + bench scripts.
+    if (metrics_enabled) {
+        if (proc_timer) |*t| {
+            const wall_ms = t.read() / std.time.ns_per_ms;
+            var mbuf: [128]u8 = undefined;
+            var mfw = std.fs.File.stderr().writer(&mbuf);
+            mfw.interface.print(
+                "bxp-metrics wall_ms={d} peak_rss_kb={d}\n",
+                .{ wall_ms, peakRssKb() },
+            ) catch {};
+            mfw.interface.flush() catch {};
+        }
+    }
+
     if (exit_code != 0) std.process.exit(exit_code);
     // exit(0) implicit
 }

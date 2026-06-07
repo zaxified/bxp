@@ -91,10 +91,14 @@ run locally on all three hosts, with a few caveats:
   phase. macOS doesn't ship it; the wrapper degrades gracefully
   (no enforcement). `brew install coreutils` if you want the bound back.
   `release-03-checksums.sh` handles `sha256sum` vs BSD `shasum` itself.
-- **python3** — `test-01-console.sh` and `test-06-expr-corpus.sh` shell
-  out to `python3` for JSON validation. Pre-installed on all three GH
-  runners; on Windows local dev (Git Bash) you may need to add Python
-  to PATH explicitly.
+- **python3** — `test-01-console.sh` / `test-06-expr-corpus.sh` (JSON
+  validation) and `test-07-bench-guard.sh` / `bench/bench.sh` (the
+  `bench/gen.py` synthetic-input generator) shell out to `python3`.
+  Pre-installed on all three GH runners; on Windows local dev (Git Bash)
+  you may need to add Python to PATH explicitly. The bench phases measure
+  wall + peak RSS via bxp-cli's own `BXP_METRICS` env var (no GNU
+  `/usr/bin/time` — absent on Windows, BSD-incompatible on macOS), so they
+  run on every host that has python3.
 - **Maintainer-only scripts** (`release-changelog.sh`, `release-tag.sh`)
   use GNU-leaning idioms but have been written to work on BSD sed too
   (write-to-tmp instead of `sed -i`).
