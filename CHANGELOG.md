@@ -156,7 +156,7 @@
 - bxp-fmt: unify std.Io.Writer casing (audit 🔵#2)
 - json5_ast: fix off-by-one col on trailing-sign EOF + document dual comment-walker invariant
 - bxp-cli: document date_fast_path error-accounting + decline epilogue dedup (audit close)
-- bxp-core: guard negative-year @intCast UB in datefmt + audit doc fixes
+- bxp-core: guard negative-year `@intCast` UB in datefmt + audit doc fixes
 - bxp-gui-bridge: raise shutdown flag before kill+join in streaming rollback (audit ⚠️#1)
 - changed recomendation mermaid
 - docs+release: ship bxp-fmt in console archive, fix agent self-test docs, reconcile readmes

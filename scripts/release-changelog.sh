@@ -169,12 +169,17 @@ NEW_ENTRY=$(mktemp)
     while IFS= read -r line; do
         [ -z "$line" ] && continue
         if should_skip "$line"; then continue; fi
-        cat=$(classify "$line")
+        cat=$(classify "$line")  # classify on the raw subject (prefix only)
         if [ -z "${order[$cat]+x}" ]; then
             order[$cat]=$idx
             idx=$((idx + 1))
         fi
-        buckets[$cat]+="- $line"$'\n'
+        # GitHub linkifies any bare @token in the rendered release notes as
+        # a user mention — a Zig builtin like @intCast in a commit subject
+        # pinged a random real account in v0.2.4. Wrap @tokens (that aren't
+        # already in backticks) as code so they render literally.
+        safe=$(printf '%s' "$line" | sed -E 's/(^|[^`])@([A-Za-z0-9][A-Za-z0-9_-]*)/\1`@\2`/g')
+        buckets[$cat]+="- $safe"$'\n'
     done < <(git -C "$MONO_ROOT" log $RANGE --pretty='%s' --reverse)
 
     # Stable section order regardless of commit order:
