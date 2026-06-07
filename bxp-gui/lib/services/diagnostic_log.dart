@@ -348,7 +348,7 @@ class DiagnosticLog {
       log('action.end', {
         'name': name,
         'ms': sw.elapsedMilliseconds,
-        if (extra != null) ...extra,
+        ...?extra,
       });
     };
   }

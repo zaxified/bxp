@@ -1513,11 +1513,11 @@ class TraceStore extends ChangeNotifier {
       applyConfigOp(_astRoot!, op);
     } on ast_ops.AstOpError catch (e) {
       devTrace('$traceEvent.fail',
-          {'err': e.toString(), if (traceData != null) ...traceData});
+          {'err': e.toString(), ...?traceData});
       return false;
     } catch (e) {
       devTrace('$traceEvent.fail',
-          {'err': e.toString(), if (traceData != null) ...traceData});
+          {'err': e.toString(), ...?traceData});
       return false;
     }
     _opLog.truncate(_historyIndex);
