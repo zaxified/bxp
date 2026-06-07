@@ -1,0 +1,64 @@
+name: ci
+
+# Runs the full local test suite (scripts/test.sh) on every pull request and
+# on pushes to master, across the same three host OSes the release matrix
+# targets. The release workflow (.github/workflows/release.yml) only fires on
+# a v* tag, so without this PRs and master pushes would go untested by CI.
+#
+# Windows-runner portability of test.sh was cleared 2026-06-07 (flutter tests
+# resolve .exe/.dll/bin + path separators per-platform; the expr corpus is
+# pinned eol=lf in .gitattributes; the bench guard SKIPs gracefully on hosts
+# without GNU time). macOS likewise SKIPs the bench guard (BSD time has no
+# `-f`); the perf invariants run on the Linux leg.
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+# A newer push to the same ref cancels an in-flight run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+# Opt every Node-based action into the Node 24 runtime (matches release.yml).
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    strategy:
+      # Keep all three legs running so one platform's failure doesn't mask
+      # another's — no per-OS phase carve-outs, every leg runs the same
+      # scripts/test.sh and each phase self-selects where it can run.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        # test.sh and the test-NN-*.sh phases are bash; Git Bash ships with
+        # windows-latest and bash is the default shell on linux/macos.
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      # A fresh checkout has no .dart_tool. The flutter phases imply a pub
+      # get, but json5_ast's standalone `dart test` does not, so resolve
+      # both explicitly to keep the run deterministic.
+      - name: Resolve Dart/Flutter packages
+        run: |
+          (cd bxp-gui && flutter pub get)
+          (cd bxp-gui/packages/json5_ast && dart pub get)
+      - name: Run test suite
+        run: bash scripts/test.sh

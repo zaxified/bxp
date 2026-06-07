@@ -272,18 +272,27 @@ intro binary list, IO section) may need a block-level `!GUI-ONLY!` /
 
 ### CI hardening
 
-- `.github/workflows/ci.yml` — run `scripts/test.sh` on every PR. Today
-  only the release workflow exists; PRs go untested by CI.
+- **`.github/workflows/ci.yml` — shipped (v0.2.4).** Runs
+  `scripts/test.sh` on every pull request and on pushes to `master`,
+  across the `ubuntu-latest` / `macos-latest` / `windows-latest` matrix
+  (`fail-fast: false`, one shared `bash scripts/test.sh` per leg, no
+  per-OS phase carve-outs). Previously only the release workflow existed,
+  so PRs and master pushes went untested by CI.
 - Flutter `integration_test` smoke run inside CI (Xvfb on Linux runners,
-  headless setup on Mac / Win).
-- **Windows-runner test portability — already cleared (2026-06-07).**
-  `scripts/test.sh` was verified green on the Windows host so the planned
-  Windows leg won't trip over host-only assumptions: flutter tests now
-  resolve `.exe`/`.dll`/`bin` and path separators per-platform (+ a bridge
-  DLL test seam for `evalBatch`); the expr corpus is pinned `eol=lf` in
+  headless setup on Mac / Win). Still outstanding — the current legs run
+  `flutter analyze` + `flutter test` (widget/unit) but not a launched-app
+  integration smoke.
+- **Cross-platform test portability — cleared (2026-06-07).**
+  `scripts/test.sh` runs green on all three runners: flutter tests resolve
+  `.exe`/`.dll`/`bin` and path separators per-platform (+ a bridge DLL
+  test seam for `evalBatch`); the expr corpus is pinned `eol=lf` in
   `.gitattributes` (a CRLF checkout made `bxp-fmt --expr` reject every line
-  as `UnexpectedChar '\r'`); the bench guard now SKIPs gracefully when GNU
-  `/usr/bin/time` / `python3` are absent instead of hard-failing.
+  as `UnexpectedChar '\r'`); the bench guard SKIPs gracefully where GNU
+  `/usr/bin/time -f` is absent — Windows Git Bash (no binary) and macOS
+  (BSD time rejects `-f`) both skip, so the perf invariants run on the
+  Linux leg. The probe checks the `-f` flag actually works rather than
+  just that a `/usr/bin/time` binary exists, so the macOS leg skips cleanly
+  instead of failing at measurement time.
 
 ### Distribution polish
 

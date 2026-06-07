@@ -81,7 +81,7 @@ _fail() {
 # Graceful skip: the phase can't measure perf on this host (missing GNU
 # tooling), but that's not a regression. Emit a SKIP line and exit 0 so
 # the test.sh wrapper (set -e) keeps the suite green — the perf invariants
-# are validated on the Linux/macOS CI runners where the tooling exists.
+# are validated on the Linux CI runner where the tooling exists.
 _skip() {
     local label="$1" reason="$2"
     local dots_n=$(( _BXP_OK_COL - 5 - ${#label} ))
@@ -98,11 +98,17 @@ t0=$(_now)
 if [[ ! -f "$GEN" ]]; then
     _fail "guard" 0 "generator missing: $GEN"
 fi
-if ! command -v /usr/bin/time >/dev/null 2>&1; then
-    _skip "guard" "GNU /usr/bin/time not available on this host (e.g. Windows Git Bash) — perf guard runs on the Linux/macOS CI runners"
+# The RSS invariant needs GNU time's `-f '%e %M'` (bxp-cli does not report
+# its own peak RSS). Probe that the flag actually WORKS, not merely that a
+# `/usr/bin/time` binary exists: macOS ships a BSD `/usr/bin/time` that
+# rejects `-f` (it would error at measurement time, not here), and Windows
+# Git Bash has no `/usr/bin/time` at all. Either way the perf invariants are
+# validated on the Linux CI runner where GNU time is present.
+if ! /usr/bin/time -f '%e' true >/dev/null 2>&1; then
+    _skip "guard" "GNU '/usr/bin/time -f' not available on this host (macOS ships BSD time; Windows Git Bash has none) — perf guard runs on the Linux CI runner"
 fi
 if ! command -v python3 >/dev/null 2>&1; then
-    _skip "guard" "python3 not available on this host — generator (bench/gen.py) needs it; perf guard runs on the Linux/macOS CI runners"
+    _skip "guard" "python3 not available on this host — generator (bench/gen.py) needs it; perf guard runs on the Linux CI runner"
 fi
 
 # --- 1. Build ReleaseFast into the gitignored guard prefix -------------------
