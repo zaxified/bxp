@@ -19,6 +19,7 @@ as a local path dependency.
 | `expr`        | `expr.zig`        | `eval()`, `evalString()`, `Context`, `Value`, `FnDoc` catalog             |
 | `datefmt`     | `datefmt.zig`     | `parse()`, `format()`, civil/arithmetic helpers — date core (file-rel @import by `expr.zig`, not a named module) |
 | `decimal`     | `decimal.zig`     | `Decimal` fixed-point i128 @ 1e12 — numeric core (named `"decimal"` module, shared by every input path) |
+| `unicode`     | `unicode.zig`     | `toUpperStr()`, `toLowerStr()` — UTF-8 case mapping over `uucode` tables (file-rel @import by `expr.zig`, not a named module) |
 | `config`      | `config.zig`      | `Config`, `BrokerConfig`, `load()`, `validate()`, `FieldDoc`              |
 | `json`        | `json.zig`        | `scanColNames()` + `RecordReader` — streaming JSON array-of-objects input |
 | `btrace`      | `btrace.zig`      | Binary trace `Writer` / `Reader` for `--trace=bin`                        |
@@ -89,6 +90,25 @@ builtin sits next to its `FnDoc` declaration (search for `── <NAME> ──`
 section headers). The `docs` module re-exports these tables verbatim — adding
 a new builtin means writing the impl + `FnDoc` here once, no separate doc
 file to keep in sync.
+
+### unicode.zig
+
+UTF-8 text operations behind expr.zig's `UPPER` / `LOWER` builtins (Layer 1 of
+the planned Unicode subsystem; `unaccent` and the Layer 0 `csv_*_encoding`
+transcoding come later). File-relative `@import` by `expr.zig`, not a named
+module.
+
+- `toUpperStr(alloc, s)` / `toLowerStr(alloc, s)` — full-Unicode case mapping.
+  Codepoint walk, not a byte loop, so output byte length may differ from input
+  (`ß` → `SS`); callers must not pre-size to `s.len`. Latin/Greek/Cyrillic etc.
+  map correctly; unicameral scripts (CJK/Arabic/Hebrew) pass through unchanged.
+- Data-lenient: a byte sequence that is not valid UTF-8 is emitted verbatim
+  one byte at a time — never an error, never a crash (matches the previous
+  ASCII byte loop's passthrough and the blank-field resilience contract).
+- Unicode data comes from the `uucode` fetch dependency (see _External
+  dependency_ below); this file is only the UTF-8 plumbing.
+- Inline tests (8): ASCII, Latin-1 accents, Swedish/German/Cyrillic/Greek,
+  ß→SS expansion, unicameral passthrough, empty, invalid-UTF-8 passthrough.
 
 ### config.zig
 
@@ -219,13 +239,26 @@ Structured diagnostics collector for config/json5/expr validation.
 # Build all modules (no standalone binary):
 cd bxp-core && zig build
 
-# Run unit tests (csv, json, btrace, expr, datefmt, decimal, json5, diagnostics, xlsx, config, docs):
+# Run unit tests (csv, json, btrace, expr, datefmt, decimal, unicode, json5, diagnostics, xlsx, config, docs):
 cd bxp-core && zig build test
 ```
 
 Module exports in `build.zig`: `csv`, `json`, `json5`, `xlsx`, `btrace`, `decimal`, `expr`, `config`, `docs`, `diagnostics`.
-`expr` imports `datefmt.zig` (file-relative, not a named module); `config` imports `json5` (as `"json5.zig"` — internal import name);
+`expr` imports `datefmt.zig` and `unicode.zig` (both file-relative, not named modules); `config` imports `json5` (as `"json5.zig"` — internal import name);
 `docs` imports `config`, `expr`, `json5`; `diagnostics` has no bxp-core dependencies.
+
+### External dependency: uucode
+
+`bxp-core/build.zig.zon` pins one external (fetch) dependency: **uucode**
+(MIT), the Unicode case-mapping / decomposition table library, on its
+`zig-0.15` back-port branch (uucode's main line requires Zig 0.16 — revisit the
+pin on the Zig 0.16 migration). `build.zig` requests only the `uppercase_mapping`
+/ `lowercase_mapping` fields, so just those tables are generated + compiled in
+(field selection keeps the binary small; the ReleaseSmall `bxp-cli` stays ~0.4 MB).
+uucode is imported into the `expr` module and consumed by `unicode.zig`. Its own
+table generator runs internally in Debug + LLVM, sidestepping the Zig 0.15.2
+x86-backend codegen bug — our Debug `zig build test` is unaffected. `datefmt.zig`
+and `decimal.zig` remain in-house with no dependency.
 
 ## Coding conventions
 

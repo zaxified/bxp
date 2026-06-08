@@ -165,14 +165,27 @@ ceiling drops from `O(workbook size)` to
 
 ### Unicode / text subsystem (one cohesive module)
 
+> **Status 2026-06-08.** Layer 1 case mapping **shipped**: `UPPER` / `LOWER`
+> are now full-Unicode (`café`→`CAFÉ`, `ß`→`SS`, `я`→`Я`; unicameral scripts +
+> invalid UTF-8 pass through) via `bxp-core/src/unicode.zig`. The Unicode data
+> tables come from the **uucode** library (MIT), a field-selected fetch
+> dependency pinned in `bxp-core/build.zig.zon` — **not** in-house generation.
+> The zero-external-dep stance was deliberately relaxed (it was a state, not a
+> rule): uucode delivers correct full-Unicode case mapping incl. `ß`→`SS`, zero
+> runtime allocation, and a ~5 MB field-pruned table source, which beat
+> hand-generating + maintaining tables from UCD. See the `reference_zig_unicode_libs`
+> memory for the uucode-vs-zg evaluation. **Remaining: `unaccent` (Layer 1) and
+> the Layer 0 `csv_*_encoding` transcoding** (both still to build; uucode already
+> exposes the decomposition fields `unaccent` needs).
+
 As bxp generalises beyond EU broker CSVs into a general CSV→JSON / data
 cleaning tool, three separate gaps all turn out to be the same problem
 seen from different angles — non-UTF-8 input files, ASCII-only `UPPER`/
 `LOWER`, and no diacritic stripping. Rather than ship three ad-hoc
-builtins that each re-derive UTF-8 iteration and Unicode tables, build
-**one in-house `bxp-core/src/unicode.zig` module** (zero external deps,
-same philosophy as the in-house `datefmt.zig` / `decimal.zig` cores — no
-libiconv, no multi-MB ICU/unidecode tables).
+builtins that each re-derive UTF-8 iteration and Unicode tables, the text
+operations live in **one `bxp-core/src/unicode.zig` module**, with the
+Unicode tables supplied by uucode (case mapping today; decomposition for
+`unaccent` next) and the encoding tables to be added in-house for Layer 0.
 
 **Architecture — two layers, one currency.** Everything internal stays
 **UTF-8**. The two layers share only the UTF-8 plumbing, never each
@@ -196,13 +209,13 @@ other's semantics (do not merge encoding detection with case mapping):
 right coverage differs per operation, and picking it per-operation lets
 us be correct globally without bloat.
 
-- **`UPPER` / `LOWER` → full Unicode, ship complete.** Only ~1500
-  codepoints carry case mappings (Latin, Greek, Cyrillic, Armenian, …),
-  so the table is tens of KB, not MB. Swedish `å ä ö`, Greek, Russian
-  `я` all work correctly; unicameral scripts (CJK, Arabic, Hebrew) have
-  no case and correctly pass through unchanged. No Latin-only MVP here —
-  do it right from the start. Generated from `UnicodeData.txt`
-  (simple case) + `SpecialCasing.txt` (1:N like `ß`→`SS`).
+- **`UPPER` / `LOWER` → full Unicode — SHIPPED 2026-06-08.** Swedish
+  `å ä ö`, Greek, Russian `я` all work correctly; unicameral scripts
+  (CJK, Arabic, Hebrew) have no case and pass through unchanged; `ß`→`SS`
+  expands on upper. No Latin-only MVP — done right from the start. The
+  case tables come from uucode (`uppercase_mapping` / `lowercase_mapping`
+  fields, generated from `UnicodeData.txt` + `SpecialCasing.txt`
+  upstream), not hand-rolled here.
 - **`unaccent` → deliberately Latin-scope (this IS the proper answer,
   not a shortcut).** Renamed from the working title `TO_ASCII` per user
   preference, matching Postgres's `unaccent` extension. Strips diacritics

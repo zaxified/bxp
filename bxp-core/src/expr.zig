@@ -36,6 +36,7 @@
 ///   LOOKUP([name,] key, field) — retrieve a value stored by a pre_pass table
 const std = @import("std");
 const datefmt = @import("datefmt.zig");
+const unicode = @import("unicode.zig");
 const Decimal = @import("decimal").Decimal;
 
 // ---------------------------------------------------------------------------
@@ -2382,7 +2383,7 @@ const upper_doc: FnDoc = .{
     .name = "UPPER",
     .signature = "UPPER(s)",
     .example = "UPPER('aapl')",
-    .description = "ASCII upper-case conversion: bytes a–z become A–Z; all other bytes (including non-ASCII UTF-8) pass through unchanged.",
+    .description = "Full-Unicode upper-case conversion: works across Latin, Greek, Cyrillic, etc. (café → CAFÉ, ß → SS); unicameral scripts (CJK, Arabic, Hebrew) pass through unchanged. Invalid UTF-8 bytes pass through verbatim.",
     .args = &.{.{ .name = "s", .kind = .string }},
     .min_args = 1,
     .max_args = 1,
@@ -2392,9 +2393,7 @@ fn builtinUpper(args: []Value, alloc: std.mem.Allocator) !Value {
         .string => |v| v,
         else => return error.StringExpected,
     };
-    const buf = try alloc.alloc(u8, s.len);
-    for (s, 0..) |c, i| buf[i] = std.ascii.toUpper(c);
-    return Value{ .string = buf };
+    return Value{ .string = try unicode.toUpperStr(alloc, s) };
 }
 fn adaptUpper(p: *Parser, args: []Value) anyerror!Value {
     return builtinUpper(args, p.ctx.alloc);
@@ -2405,7 +2404,7 @@ const lower_doc: FnDoc = .{
     .name = "LOWER",
     .signature = "LOWER(s)",
     .example = "LOWER('AAPL')",
-    .description = "ASCII lower-case conversion: bytes A–Z become a–z; all other bytes (including non-ASCII UTF-8) pass through unchanged.",
+    .description = "Full-Unicode lower-case conversion: works across Latin, Greek, Cyrillic, etc. (CAFÉ → café, Я → я); unicameral scripts (CJK, Arabic, Hebrew) pass through unchanged. Invalid UTF-8 bytes pass through verbatim.",
     .args = &.{.{ .name = "s", .kind = .string }},
     .min_args = 1,
     .max_args = 1,
@@ -2415,9 +2414,7 @@ fn builtinLower(args: []Value, alloc: std.mem.Allocator) !Value {
         .string => |v| v,
         else => return error.StringExpected,
     };
-    const buf = try alloc.alloc(u8, s.len);
-    for (s, 0..) |c, i| buf[i] = std.ascii.toLower(c);
-    return Value{ .string = buf };
+    return Value{ .string = try unicode.toLowerStr(alloc, s) };
 }
 fn adaptLower(p: *Parser, args: []Value) anyerror!Value {
     return builtinLower(args, p.ctx.alloc);
@@ -4529,17 +4526,21 @@ test "eval: UPPER and LOWER ASCII" {
     try testing.expectEqualStrings("123abc", try evalString("LOWER('123ABC')", &ctx));
 }
 
-// Non-ASCII bytes (e.g. UTF-8 multi-byte sequences) are left alone so
-// UPPER doesn't corrupt broker exports with accented chars.
-test "eval: UPPER/LOWER leave non-ASCII bytes unchanged" {
+// UPPER/LOWER are full-Unicode codepoint walks (see unicode.zig), so accented
+// and non-Latin letters case-map correctly instead of passing through.
+test "eval: UPPER/LOWER are full-Unicode" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
     var h = TestHelper.init(a);
     const ctx = h.ctx(&.{}, a);
-    // "Č" = 0xC4 0x8C; bytes pass through, ASCII letters get case-folded.
-    try testing.expectEqualStrings("ČAU",  try evalString("UPPER('Čau')",  &ctx));
-    try testing.expectEqualStrings("Čau",  try evalString("LOWER('ČaU')",  &ctx));
+    // Czech caron letters case-map both ways (Č↔č).
+    try testing.expectEqualStrings("ČAU", try evalString("UPPER('Čau')", &ctx));
+    try testing.expectEqualStrings("čau", try evalString("LOWER('ČaU')", &ctx));
+    // German sharp s expands on upper-case (ß → SS).
+    try testing.expectEqualStrings("STRASSE", try evalString("UPPER('straße')", &ctx));
+    // Unicameral scripts pass through unchanged.
+    try testing.expectEqualStrings("日本語", try evalString("UPPER('日本語')", &ctx));
 }
 
 test "eval: STARTS_WITH and ENDS_WITH" {

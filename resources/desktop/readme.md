@@ -523,7 +523,7 @@ reserved.
 | `LEFT(s, n)` | string | First `n` bytes of `s` (`n` clamped to `[0, len]`; negative / non-finite → `""`) |
 | `RIGHT(s, n)` | string | Last `n` bytes of `s` (same clamping) |
 | `SUBSTR(s, start, len)` | string | `len` bytes from 1-based `start`; non-positive / non-finite `start` or `len` → `""` |
-| `UPPER(s)` / `LOWER(s)` | string | ASCII case conversion; non-ASCII (UTF-8 multi-byte) bytes pass through unchanged |
+| `UPPER(s)` / `LOWER(s)` | string | Full-Unicode case conversion (`café`→`CAFÉ`, `ß`→`SS`, `я`→`Я`); unicameral scripts (CJK/Arabic/Hebrew) and invalid UTF-8 bytes pass through unchanged |
 | `LEN(s)` | number | Byte length of `s` (UTF-8 byte count, not codepoints); empty → `0` |
 | `STARTS_WITH(s, prefix)` | bool | `true` when `s` begins with `prefix` (case-sensitive); empty `prefix` always matches |
 | `ENDS_WITH(s, suffix)` | bool | `true` when `s` ends with `suffix` (case-sensitive); empty `suffix` always matches |

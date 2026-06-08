@@ -28,6 +28,8 @@ bxp/
 │   │   ├── datefmt.zig     # In-house date core (parse/format/arith) — file-rel
 │   │   │                   # @import by expr.zig, replaced the sunrise dep
 │   │   ├── decimal.zig     # Fixed-point i128 @ 1e12 numeric core (named module)
+│   │   ├── unicode.zig     # UTF-8 case mapping (UPPER/LOWER) over uucode tables
+│   │   │                   # — file-rel @import by expr.zig; uucode is fetch dep
 │   │   ├── btrace.zig      # Binary BXTB trace Writer/Reader for --trace
 │   │   ├── json5.zig       # JSON5 preprocessor (comments, unquoted keys, ...)
 │   │   ├── docs.zig        # Aggregator: re-exports expr catalog + flattens
@@ -35,7 +37,7 @@ bxp/
 │   │   └── diagnostics.zig # Structured Diagnostic / Severity collector for
 │   │                       # bxp-fmt --config deep validation
 │   ├── build.zig         # exports each file as a named Zig module
-│   └── build.zig.zon     # no external dependencies (date core is in-house: src/datefmt.zig)
+│   └── build.zig.zon     # one fetch dep: uucode (Unicode tables); date/decimal cores in-house
 ├── bxp-gui/              # Flutter desktop app (replaces bxp-ui; uses bxp-cli/bxp-fmt via subprocess)
 │   ├── lib/              # Dart source (services/, store/, ui/)
 │   ├── linux/, macos/, windows/, web/  # platform configs
@@ -138,14 +140,17 @@ that file. See `docs/release.md` for the operator walkthrough.
 ## Package dependency
 
 ```text
-bxp-cli  --[path dep]--> bxp-core   (no external deps)
+bxp-cli  --[path dep]--> bxp-core   --[fetch dep]--> uucode (Unicode tables)
 bxp-fmt  --[path dep]--> bxp-core
 bxp-gui  --[subprocess]-> bxp-cli, bxp-fmt
 ```
 
-`bxp-core` is a local path dependency (`../bxp-core`) with **no external
-dependencies** — no network fetch needed. (The former `sunrise` datetime
-dependency was replaced by the in-house `bxp-core/src/datefmt.zig` date core.)
+`bxp-core` is a local path dependency (`../bxp-core`) with a **single external
+dependency**: `uucode` (MIT), the field-selected Unicode case-mapping /
+decomposition tables behind `UPPER`/`LOWER` (and the upcoming `unaccent`),
+pinned to its `zig-0.15` branch in `bxp-core/build.zig.zon`. The date core
+(`datefmt.zig`) and numeric core (`decimal.zig`) remain fully in-house — the
+former `sunrise` datetime dependency was replaced by `datefmt.zig`.
 bxp-gui ships both bxp-cli and bxp-fmt binaries inside the Flutter bundle and
 invokes them via `Process.run` for conversions, validation, docs, etc.
 

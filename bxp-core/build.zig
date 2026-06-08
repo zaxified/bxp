@@ -4,6 +4,18 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    // uucode supplies the Unicode tables behind expr.zig's UPPER/LOWER (and the
+    // upcoming `unaccent`). Field-selected: only the case-mapping tables we use
+    // are generated + compiled in, keeping the binary small. The dependency's
+    // own table generator runs in Debug + LLVM internally (it works around the
+    // Zig x86 backend bug itself), so our optimize mode only governs the thin
+    // lookup `lib` module.
+    const uucode_mod = b.dependency("uucode", .{
+        .target = target,
+        .optimize = optimize,
+        .fields = @as([]const []const u8, &.{ "uppercase_mapping", "lowercase_mapping" }),
+    }).module("uucode");
+
     // json5 is used internally by config — export it and wire it in.
     const json5_mod = b.addModule("json5", .{
         .root_source_file = b.path("src/json5.zig"),
@@ -53,6 +65,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/expr.zig"),
         .imports = &.{
             .{ .name = "decimal", .module = decimal_mod },
+            .{ .name = "uucode", .module = uucode_mod },
         },
     });
 
@@ -119,6 +132,7 @@ pub fn build(b: *std.Build) void {
             .strip = false,
             .imports = &.{
                 .{ .name = "decimal", .module = decimal_mod },
+                .{ .name = "uucode", .module = uucode_mod },
             },
         }),
     });
@@ -129,6 +143,18 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .strip = false,
+        }),
+    });
+
+    const unicode_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/unicode.zig"),
+            .target = target,
+            .optimize = optimize,
+            .strip = false,
+            .imports = &.{
+                .{ .name = "uucode", .module = uucode_mod },
+            },
         }),
     });
 
@@ -210,6 +236,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(btrace_tests).step);
     test_step.dependOn(&b.addRunArtifact(expr_tests).step);
     test_step.dependOn(&b.addRunArtifact(datefmt_tests).step);
+    test_step.dependOn(&b.addRunArtifact(unicode_tests).step);
     test_step.dependOn(&b.addRunArtifact(decimal_tests).step);
     test_step.dependOn(&b.addRunArtifact(json5_tests).step);
     test_step.dependOn(&b.addRunArtifact(diagnostics_tests).step);

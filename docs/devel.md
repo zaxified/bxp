@@ -62,7 +62,11 @@ Install these extensions for a productive experience:
 | ---- | ---------- | --------------------------------------------------------------------- |
 | Zig  | **0.15.2** | Exact version - `build.zig.zon` sets `minimum_zig_version = "0.15.0"` |
 
-No other runtime dependencies — `bxp-core` has **no external dependencies** (the date core is in-house: `bxp-core/src/datefmt.zig`).
+`bxp-core` has a **single external (fetch) dependency** — `uucode` (MIT), the
+Unicode case-mapping tables behind `UPPER`/`LOWER`, pinned in
+`bxp-core/build.zig.zon`. The date and numeric cores stay in-house
+(`bxp-core/src/datefmt.zig`, `decimal.zig`). The fetch is cached after the first
+build; CI runners have network.
 
 In VS Code terminal:
 
@@ -115,13 +119,14 @@ bxp/                            # monorepo root (git root)
 │   │   ├── xlsx.zig            # .xlsx → CSV (ZIP+XML)
 │   │   ├── expr.zig            # expression evaluator + FnDoc catalog
 │   │   ├── datefmt.zig         # in-house date parse/format + civil arithmetic (DATE_CONVERT core)
+│   │   ├── unicode.zig         # UTF-8 case mapping (UPPER/LOWER) over uucode tables
 │   │   ├── config.zig          # JSON5 config loader + FieldDoc tables
 │   │   ├── json.zig            # JSON array-of-objects → row representation
 │   │   ├── json5.zig           # JSON5 preprocessor (comments, unquoted keys, ...)
 │   │   ├── docs.zig            # --docs aggregator: re-exports expr + config catalogs
 │   │   └── diagnostics.zig     # structured validation collector (Severity, Diagnostic)
 │   ├── build.zig               # exports named Zig modules
-│   └── build.zig.zon           # no external dependencies
+│   └── build.zig.zon           # one fetch dep: uucode (Unicode tables)
 ├── bxp-gui/                    # Flutter desktop app (Linux / macOS / Windows)
 │   ├── lib/
 │   │   ├── main.dart           # Flutter entry; window + theme + provider wiring
@@ -257,8 +262,8 @@ Consequences of this design:
 ### Package dependency graph
 
 ```text
-  bxp-cli         ── path dep ──►  bxp-core   (no external deps)
-  (binary)                         (library)
+  bxp-cli         ── path dep ──►  bxp-core   ── fetch dep ──►  uucode
+  (binary)                         (library)                    (Unicode tables)
   bxp-fmt         ── path dep ──►  bxp-core
   (binary)
   bxp-gui-bridge  ── path dep ──►  bxp-core           (links expr.zig directly)
@@ -270,9 +275,10 @@ Consequences of this design:
                                                 all platforms: in-proc expr eval)
 ```
 
-`bxp-core` is a **local path dependency** (`../bxp-core`) with **no external
-dependencies** — no network fetch needed. (The date core lives in-house at
-`bxp-core/src/datefmt.zig`, replacing the former `sunrise` URL dependency.)
+`bxp-core` is a **local path dependency** (`../bxp-core`) and pulls one external
+fetch dependency of its own: `uucode` (Unicode case-mapping tables, pinned in
+`build.zig.zon`). The date core lives in-house at `bxp-core/src/datefmt.zig`,
+replacing the former `sunrise` URL dependency.
 `bxp-gui` ships `bxp-cli`, `bxp-fmt`, and `bxp-gui-bridge.{dll,so,dylib}`
 inside the Flutter bundle.
 
