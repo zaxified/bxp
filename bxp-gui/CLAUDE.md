@@ -138,6 +138,12 @@ choice is hard-coded by host OS:
   when the bridge can't be loaded. (Subprocess-proxy consolidation across
   platforms is still on the v0.3.0 roadmap.)
 
+Set **`BXP_FORCE_BRIDGE=1`** to disable the `bxp-fmt`-spawn fallback for all
+in-process inspect/eval ops — a broken or unloadable bridge then surfaces as a
+visible error (fatal docs gate / config `{"error":...}`) instead of silently
+spawning `bxp-fmt`. Use it to confirm the bridge genuinely does the work; the
+analogue for the subprocess proxy is `BXP_FORCE_BRIDGE_PROXY`.
+
 Binary location for `bxp-cli` / `bxp-fmt` is resolved in this order on
 both transports:
 

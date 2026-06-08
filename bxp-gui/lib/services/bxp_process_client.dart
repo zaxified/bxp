@@ -173,6 +173,17 @@ class BxpProcessClient {
   static const Duration _configTimeout = Duration(seconds: 15);
   static const Duration _listTemplatesTimeout = Duration(seconds: 30);
 
+  /// Testing aid: when `BXP_FORCE_BRIDGE` is set (non-empty), the in-process
+  /// inspect/eval ops (`getDocs` / `loadConfig` / `listTemplates` /
+  /// `fetchTemplate` / `evalBatch` / `validateExpr` / `traceExpr`) do NOT fall
+  /// back to a `bxp-fmt` spawn when the bridge is unavailable or returns a
+  /// failure — the error is surfaced instead. Confirms the bridge path is
+  /// genuinely doing the work, with no silent subprocess fallback masking a
+  /// broken bridge. Mirrors `BXP_FORCE_BRIDGE_PROXY` for the proxy path; does
+  /// not affect `bxp-cli` dry-runs (those legitimately need the binary).
+  static final bool _forceBridge =
+      (Platform.environment['BXP_FORCE_BRIDGE'] ?? '').isNotEmpty;
+
   /// Cached path to the bridge DLL — null when unavailable (non-Windows,
   /// missing file, probe failed). Resolved once via [_resolveBridgePath]
   /// so we don't re-stat the filesystem on every call. The DLL itself
@@ -602,6 +613,11 @@ class BxpProcessClient {
         return raw;
       }
     }
+    if (_forceBridge) {
+      endAction({'result': 'force_bridge_no_fallback'});
+      return '{"error": "BXP_FORCE_BRIDGE set: bridge config validation '
+          'unavailable or failed (bxp-fmt fallback disabled)"}';
+    }
     final bin = findBin('bxp-fmt');
     if (bin == null) {
       endAction({'result': 'binary_missing'});
@@ -662,6 +678,11 @@ class BxpProcessClient {
     final evalClient = _resolveEvalBridgeClient();
     String? out = evalClient?.inspect('{"op":"docs"}');
     if (out == null) {
+      if (_forceBridge) {
+        _lastDocsError = 'BXP_FORCE_BRIDGE set: bridge_inspect docs '
+            'unavailable or failed (bxp-fmt fallback disabled)';
+        return null;
+      }
       final bin = findBin('bxp-fmt');
       if (bin == null) return null;
       try {
@@ -724,6 +745,11 @@ class BxpProcessClient {
     String? out = evalClient
         ?.inspect(jsonEncode({'op': 'fetch_template', 'path': configPath, 'id': templateId}));
     if (out == null) {
+      if (_forceBridge) {
+        _lastSubprocessDiag =
+            'BXP_FORCE_BRIDGE set: fetchTemplate bridge unavailable/failed';
+        return null;
+      }
       final bin = findBin('bxp-fmt');
       if (bin == null) return null;
       try {
@@ -765,6 +791,11 @@ class BxpProcessClient {
     String? out =
         evalClient?.inspect(jsonEncode({'op': 'list_templates', 'path': path}));
     if (out == null) {
+      if (_forceBridge) {
+        _lastSubprocessDiag =
+            'BXP_FORCE_BRIDGE set: listTemplates bridge unavailable/failed';
+        return const [];
+      }
       final bin = findBin('bxp-fmt');
       if (bin == null) return const [];
       try {
@@ -814,6 +845,13 @@ class BxpProcessClient {
     if (evalClient != null) {
       DiagnosticLog.log('action.validateExpr', {'len': expr.length, 'path': 'bridge'});
       return evalClient.evalExpr(expr);
+    }
+    if (_forceBridge) {
+      return (
+        error: 'BXP_FORCE_BRIDGE set: expr bridge unavailable',
+        offset: null,
+        length: null
+      );
     }
     final bin = findBin('bxp-fmt');
     if (bin == null) return (error: 'bxp-fmt not found', offset: null, length: null);
@@ -870,6 +908,11 @@ class BxpProcessClient {
           evalClient.evalExprTrace(text: expr, headers: headers, fields: fields);
       if (ndjson != null) return _parseTraceNdjson(ndjson);
       // null = bridge-level failure → fall through to subprocess
+    }
+    if (_forceBridge) {
+      _lastSubprocessDiag =
+          'BXP_FORCE_BRIDGE set: traceExpr bridge unavailable/failed';
+      return const [];
     }
     final bin = findBin('bxp-fmt');
     if (bin == null) return const [];
@@ -942,6 +985,11 @@ class BxpProcessClient {
           evalClient.inspect(jsonEncode({'op': 'eval_batch', 'request': request}));
       if (raw != null) return _parseBatchResults(raw);
       // bridge present but failed for this op → fall through to subprocess
+    }
+    if (_forceBridge) {
+      _lastSubprocessDiag =
+          'BXP_FORCE_BRIDGE set: evalBatch bridge unavailable/failed';
+      return const [];
     }
 
     final bin = binPath ?? findBin('bxp-fmt');
