@@ -585,6 +585,23 @@ class BxpProcessClient {
       'path': path,
       'check_fs': checkFsSeconds,
     });
+    // In-process via the bridge when loadable (no bxp-fmt spawn). Same annotated
+    // JSON, incl. $err_ siblings; the FS check resolves data_dir against the GUI
+    // process CWD — identical to the spawned bxp-fmt (config.zig opens data_dir
+    // via cwd). annotateConfigFromFile always returns JSON (even file errors as
+    // {"$err_1":...}), so a non-empty result means success.
+    final evalClient = _resolveEvalBridgeClient();
+    if (evalClient != null) {
+      final raw = evalClient.inspect(jsonEncode({
+        'op': 'config',
+        'path': path,
+        if (checkFsSeconds > 0) 'check_fs': checkFsSeconds,
+      }));
+      if (raw != null && raw.trim().isNotEmpty) {
+        endAction({'path_kind': 'bridge', 'bytes': raw.length});
+        return raw;
+      }
+    }
     final bin = findBin('bxp-fmt');
     if (bin == null) {
       endAction({'result': 'binary_missing'});
@@ -641,34 +658,39 @@ class BxpProcessClient {
   /// truth contract: tree tooltips, expression catalog, and autocomplete
   /// all read from the same data the CLI itself ships.
   static Future<Map<String, dynamic>?> getDocs() async {
-    final bin = findBin('bxp-fmt');
-    if (bin == null) return null;
-    try {
-      final result = await _runOneShot(bin, ['--docs'], _docsTimeout);
-      if (result.exitCode != 0) {
-        _lastDocsError = 'exit code ${result.exitCode}; '
-            'stderr: ${_peek(result.stderr as String)}';
-        return null;
-      }
-      final out = (result.stdout as String).trim();
-      if (out.isEmpty) {
-        _lastDocsError = 'stdout was empty; '
-            'stderr: ${_peek(result.stderr as String)}';
-        return null;
-      }
+    // In-process via the bridge when loadable (no bxp-fmt spawn); same JSON.
+    final evalClient = _resolveEvalBridgeClient();
+    String? out = evalClient?.inspect('{"op":"docs"}');
+    if (out == null) {
+      final bin = findBin('bxp-fmt');
+      if (bin == null) return null;
       try {
-        final parsed = jsonDecode(out);
-        if (parsed is Map<String, dynamic>) return parsed;
-        _lastDocsError = 'parsed JSON is ${parsed.runtimeType}, expected a Map; '
-            'stdout starts with: ${_peek(out)}';
-        return null;
-      } on FormatException catch (e) {
-        _lastDocsError = 'jsonDecode failed: ${e.message}; '
-            'stdout (${out.length} bytes) starts with: ${_peek(out)}';
+        final result = await _runOneShot(bin, ['--docs'], _docsTimeout);
+        if (result.exitCode != 0) {
+          _lastDocsError = 'exit code ${result.exitCode}; '
+              'stderr: ${_peek(result.stderr as String)}';
+          return null;
+        }
+        out = result.stdout as String;
+      } catch (e) {
+        _lastDocsError = 'exception: $e';
         return null;
       }
-    } catch (e) {
-      _lastDocsError = 'exception: $e';
+    }
+    final trimmed = out.trim();
+    if (trimmed.isEmpty) {
+      _lastDocsError = 'docs output was empty';
+      return null;
+    }
+    try {
+      final parsed = jsonDecode(trimmed);
+      if (parsed is Map<String, dynamic>) return parsed;
+      _lastDocsError = 'parsed JSON is ${parsed.runtimeType}, expected a Map; '
+          'starts with: ${_peek(trimmed)}';
+      return null;
+    } on FormatException catch (e) {
+      _lastDocsError = 'jsonDecode failed: ${e.message}; '
+          '(${trimmed.length} bytes) starts with: ${_peek(trimmed)}';
       return null;
     }
   }
@@ -697,20 +719,35 @@ class BxpProcessClient {
   /// expressions when reconstructing drill-down on click.
   static Future<Map<String, dynamic>?> fetchTemplate(
       String configPath, String templateId) async {
-    final bin = findBin('bxp-fmt');
-    if (bin == null) return null;
+    // In-process via the bridge when loadable (no bxp-fmt spawn).
+    final evalClient = _resolveEvalBridgeClient();
+    String? out = evalClient
+        ?.inspect(jsonEncode({'op': 'fetch_template', 'path': configPath, 'id': templateId}));
+    if (out == null) {
+      final bin = findBin('bxp-fmt');
+      if (bin == null) return null;
+      try {
+        final result = await _runOneShot(
+          bin,
+          ['--config', configPath, '--fetch-template', templateId],
+          _listTemplatesTimeout,
+        );
+        if (result.exitCode != 0) return null;
+        out = result.stdout as String;
+      } catch (_) {
+        return null;
+      }
+    }
     try {
-      final result = await _runOneShot(
-        bin,
-        ['--config', configPath, '--fetch-template', templateId],
-        _listTemplatesTimeout,
-      );
-      if (result.exitCode != 0) return null;
-      final out = (result.stdout as String).trim();
-      if (out.isEmpty) return null;
-      final parsed = jsonDecode(out);
-      if (parsed is Map) return parsed.cast<String, dynamic>();
-      return null;
+      final trimmed = out.trim();
+      if (trimmed.isEmpty) return null;
+      final parsed = jsonDecode(trimmed);
+      if (parsed is! Map) return null;
+      // Missing-id / read errors surface as {"$err_1":...} (the bridge path
+      // returns that JSON rather than a non-zero exit) — treat as null, same
+      // as the subprocess's exit-1 → null.
+      if (parsed.containsKey('\$err_1')) return null;
+      return parsed.cast<String, dynamic>();
     } catch (_) {
       return null;
     }
@@ -723,18 +760,29 @@ class BxpProcessClient {
   /// failure here only loses the metadata (data_dir / file_pattern_in /
   /// description) that powers the richer template-selector subtitle.
   static Future<List<TemplateInfo>> listTemplates(String path) async {
-    final bin = findBin('bxp-fmt');
-    if (bin == null) return const [];
+    // In-process via the bridge when loadable (no bxp-fmt spawn).
+    final evalClient = _resolveEvalBridgeClient();
+    String? out =
+        evalClient?.inspect(jsonEncode({'op': 'list_templates', 'path': path}));
+    if (out == null) {
+      final bin = findBin('bxp-fmt');
+      if (bin == null) return const [];
+      try {
+        final result = await _runOneShot(
+          bin,
+          ['--config', path, '--list-templates'],
+          _listTemplatesTimeout,
+        );
+        if (result.exitCode != 0) return const [];
+        out = result.stdout as String;
+      } catch (_) {
+        return const [];
+      }
+    }
     try {
-      final result = await _runOneShot(
-        bin,
-        ['--config', path, '--list-templates'],
-        _listTemplatesTimeout,
-      );
-      if (result.exitCode != 0) return const [];
-      final out = (result.stdout as String).trim();
-      if (out.isEmpty) return const [];
-      final parsed = jsonDecode(out);
+      final trimmed = out.trim();
+      if (trimmed.isEmpty) return const [];
+      final parsed = jsonDecode(trimmed);
       if (parsed is! Map) return const [];
       final list = parsed['templates'];
       if (list is! List) return const [];
@@ -866,9 +914,6 @@ class BxpProcessClient {
     Duration timeout = _exprTimeout,
     String? binPath,
   }) async {
-    final bin = binPath ?? findBin('bxp-fmt');
-    if (bin == null) return const [];
-
     final request = <String, dynamic>{
       'headers': headers,
       'fields': fields,
@@ -888,8 +933,20 @@ class BxpProcessClient {
     if (singlePrepassName != null && singlePrepassName.isNotEmpty) {
       request['single_prepass_name'] = singlePrepassName;
     }
-    final requestJson = jsonEncode(request);
-    final stdinBytes = Uint8List.fromList(utf8.encode(requestJson));
+
+    // In-process via the bridge when loadable (no bxp-fmt spawn). Same
+    // `{results:[...]}` shape, so `_parseBatchResults` works on both.
+    final evalClient = _resolveEvalBridgeClient();
+    if (evalClient != null) {
+      final raw =
+          evalClient.inspect(jsonEncode({'op': 'eval_batch', 'request': request}));
+      if (raw != null) return _parseBatchResults(raw);
+      // bridge present but failed for this op → fall through to subprocess
+    }
+
+    final bin = binPath ?? findBin('bxp-fmt');
+    if (bin == null) return const [];
+    final stdinBytes = Uint8List.fromList(utf8.encode(jsonEncode(request)));
 
     // Route through the shared one-shot path so the Win bridge handles
     // the pipe drain (sidesteps dart-lang/sdk#1727 on large responses —

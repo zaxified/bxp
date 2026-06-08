@@ -813,6 +813,22 @@ pub fn fetchTemplate(a: std.mem.Allocator, config_text: []const u8, id: []const 
     return fetchTemplateValue(a, root, id);
 }
 
+/// File-loading wrappers around `listTemplates` / `fetchTemplate` for callers
+/// holding a config path (the bridge's bridge_inspect; the same shape bxp-fmt's
+/// `--list-templates` / `--fetch-template` consume). A read failure surfaces as
+/// `{"$err_1":"<error>"}`, mirroring `annotateConfigFromFile`.
+pub fn listTemplatesFromFile(a: std.mem.Allocator, path: []const u8) ![]u8 {
+    const raw = readFileCapped(a, path) catch |err| return formatRootErr(a, @errorName(err));
+    return listTemplates(a, raw);
+}
+
+pub fn fetchTemplateFromFile(a: std.mem.Allocator, path: []const u8, id: []const u8) !TemplateResult {
+    const raw = readFileCapped(a, path) catch |err| {
+        return .{ .json = try formatRootErr(a, @errorName(err)), .exit_code = 1, .not_found = false };
+    };
+    return fetchTemplate(a, raw, id);
+}
+
 /// One template's input shape, for a caller that wants to *stage* a real run
 /// (e.g. bxp-mcp's `bxp_simulate`). Pure introspection — never reads files.
 pub const TemplateIo = struct {

@@ -95,6 +95,7 @@ bxp-gui/
 │   ├── examples_unique_name_test.dart    # open-dialog "create examples" unique-naming
 │   ├── expr_batch_test.dart              # --expr-batch request/response shape
 │   ├── expr_corpus_bridge_test.dart      # cross-runner expr corpus parity (bridge vs bxp-fmt)
+│   ├── bridge_inspect_test.dart          # bridge_inspect FFI parity vs bxp-fmt (docs/config/list/fetch/batch)
 │   ├── prefs_service_test.dart
 │   └── zoom_overflow_test.dart
 ├── pubspec.yaml
@@ -128,8 +129,14 @@ choice is hard-coded by host OS:
   error surfaced through the normal startup gate). The bridge sidesteps
   dart:io's Win pipe truncation (dart-lang/sdk#1727) on `--docs` /
   `--config` / `--trace`.
-- **Linux / macOS** — direct `Process.start`. The bridge is dormant on
-  these hosts (cross-platform consolidation is on the v0.3.0 roadmap).
+- **Linux / macOS** — the bridge's **subprocess proxy** is dormant
+  (`bxp-cli --trace` dry-runs use `Process.start` directly), but the
+  bridge's **in-process** paths are live and preferred: `bridge_eval_expr`/
+  `_trace` for per-keystroke expr validation, and `bridge_inspect` for the
+  stateless `bxp-fmt` ops (`getDocs` / `loadConfig` / `listTemplates` /
+  `fetchTemplate` / `evalBatch`) — each falls back to a `bxp-fmt` spawn only
+  when the bridge can't be loaded. (Subprocess-proxy consolidation across
+  platforms is still on the v0.3.0 roadmap.)
 
 Binary location for `bxp-cli` / `bxp-fmt` is resolved in this order on
 both transports:

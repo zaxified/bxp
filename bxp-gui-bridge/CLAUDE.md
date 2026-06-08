@@ -24,6 +24,13 @@ via `dart:ffi` (`DynamicLibrary.open`). Two responsibilities:
    to/from its fixed C-ABI out buffer; the eval/trace logic is no longer
    hand-rolled here. This path is cross-platform (Linux/macOS `.so`/`.dylib`
    ship and are loaded for eval even though the subprocess proxy is unused).
+3. **In-proc inspect ops (all platforms)** — `bridge_inspect` extends the same
+   idea to the rest of bxp-fmt's stateless surface (`docs` / `config` /
+   `list_templates` / `fetch_template` / `eval_batch`), so the GUI prefers an
+   in-process `bxp-core/inspect` call over spawning `bxp-fmt` for those too
+   (subprocess fallback kept while it beds in). This is the step that lets
+   bxp-fmt be retired from the GUI; on Windows it also sidesteps the
+   `--docs`/`--config` pipe-truncation the proxy existed to work around.
 
 ## Source layout
 
@@ -56,7 +63,8 @@ All exports use the `.c` calling convention.
 | `bridge_ack(handle)`         | Backpressure ACK (releases one queue permit)                  |
 | `bridge_free(ptr, len)`      | Return a `bridge_run` response buffer to the bridge allocator |
 | `bridge_eval_expr(...)`      | In-proc: parse + evaluate one expression, return result/error |
-| `bridge_eval_expr_trace(..)` | In-proc: same with NDJSON trace emission via callback         |
+| `bridge_eval_expr_trace(..)` | In-proc: same with per-call NDJSON trace + terminal sentinel   |
+| `bridge_inspect(...)`        | In-proc: stateless inspect ops (`docs` / `config` / `list_templates` / `fetch_template` / `eval_batch`) the GUI used to spawn `bxp-fmt` for — JSON request envelope → result JSON in out buffer |
 
 The Dart-side shim that calls these lives in
 [`../bxp-gui/lib/services/bridge_client.dart`](../bxp-gui/lib/services/bridge_client.dart).

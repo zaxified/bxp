@@ -943,6 +943,84 @@ export fn bridge_eval_expr_trace(
     return @intCast(written.len);
 }
 
+/// Optional string field from a parsed JSON object — null if missing/wrong type.
+fn objStr(obj: std.json.ObjectMap, key: []const u8) ?[]const u8 {
+    const v = obj.get(key) orelse return null;
+    return switch (v) {
+        .string => |s| s,
+        else => null,
+    };
+}
+
+/// In-process inspect dispatcher — serves the stateless bxp-fmt operations the
+/// GUI used to spawn (`--docs`, `--config`, `--list-templates`,
+/// `--fetch-template`, `--expr-batch`) directly from bxp-core/inspect, so the
+/// GUI no longer spawns bxp-fmt for them. Output is the same JSON the matching
+/// bxp-fmt stdout produced; the bridge runs in the GUI process, so relative
+/// `data_dir` paths in the config's FS check resolve against the same CWD the
+/// spawned bxp-fmt used (no behaviour change).
+///
+/// `request_json` is one object:
+///   {"op":"docs"}
+///   {"op":"config","path":"…","check_fs":N}
+///   {"op":"list_templates","path":"…"}
+///   {"op":"fetch_template","path":"…","id":"…"}
+///   {"op":"eval_batch","request":{ headers, fields, exprs, … }}
+///
+/// Returns: `> 0` byte count of result JSON in out_buf; `-1` OOM; `-2`
+/// BUF_TOO_SMALL (caller retries larger); `-3` INVALID_INPUT (bad request /
+/// unknown op / missing field / malformed eval_batch request).
+export fn bridge_inspect(
+    request_ptr: [*]const u8,
+    request_len: u32,
+    out_buf: [*]u8,
+    out_size: u32,
+) callconv(.c) i32 {
+    var arena = std.heap.ArenaAllocator.init(std.heap.c_allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const oom = @intFromEnum(BridgeFfiError.out_of_memory);
+    const invalid = @intFromEnum(BridgeFfiError.invalid_input);
+    const out = out_buf[0..out_size];
+
+    const parsed = std.json.parseFromSlice(std.json.Value, a, request_ptr[0..request_len], .{}) catch
+        return invalid;
+    defer parsed.deinit();
+    if (parsed.value != .object) return invalid;
+    const obj = parsed.value.object;
+    const op = objStr(obj, "op") orelse return invalid;
+
+    const result: []const u8 = if (std.mem.eql(u8, op, "docs"))
+        (inspect.docsJson(a) catch return oom)
+    else if (std.mem.eql(u8, op, "config")) blk: {
+        const path = objStr(obj, "path") orelse return invalid;
+        const check_fs: u8 = if (obj.get("check_fs")) |v| switch (v) {
+            .integer => |i| std.math.cast(u8, i) orelse 0,
+            else => 0,
+        } else 0;
+        const r = inspect.annotateConfigFromFile(a, path, check_fs) catch return oom;
+        break :blk r.json;
+    } else if (std.mem.eql(u8, op, "list_templates")) blk: {
+        const path = objStr(obj, "path") orelse return invalid;
+        break :blk inspect.listTemplatesFromFile(a, path) catch return oom;
+    } else if (std.mem.eql(u8, op, "fetch_template")) blk: {
+        const path = objStr(obj, "path") orelse return invalid;
+        const id = objStr(obj, "id") orelse return invalid;
+        const r = inspect.fetchTemplateFromFile(a, path, id) catch return oom;
+        break :blk r.json;
+    } else if (std.mem.eql(u8, op, "eval_batch")) blk: {
+        const reqv = obj.get("request") orelse return invalid;
+        const r = inspect.evalBatch(a, reqv) catch return oom;
+        if (r.error_message != null) return invalid;
+        break :blk r.json;
+    } else return invalid;
+
+    if (result.len > out.len) return @intFromEnum(BridgeFfiError.buf_too_small);
+    @memcpy(out[0..result.len], result);
+    return @intCast(result.len);
+}
+
 // ── Tests ───────────────────────────────────────────────────────────────
 //
 // Exercise the exported FFI surface end-to-end. Tests spawn a small helper
@@ -1747,4 +1825,41 @@ test "bridge_eval_expr error JSON matches Dart parser shape" {
     );
     defer parsed.deinit();
     try testing.expect(parsed.value.@"error".len > 0);
+}
+
+test "bridge_inspect docs returns the language/schema JSON" {
+    const req: []const u8 = "{\"op\":\"docs\"}";
+    var buf: [256 * 1024]u8 = undefined;
+    const n = bridge_inspect(req.ptr, @intCast(req.len), &buf, buf.len);
+    try testing.expect(n > 0);
+    const payload = buf[0..@intCast(n)];
+    try testing.expect(std.mem.indexOf(u8, payload, "\"functions\"") != null);
+    try testing.expect(std.mem.indexOf(u8, payload, "\"config_schema\"") != null);
+}
+
+test "bridge_inspect eval_batch evaluates exprs against a row" {
+    const req: []const u8 =
+        "{\"op\":\"eval_batch\",\"request\":{\"headers\":[\"P\"],\"fields\":[\"7\"],\"exprs\":[\"[P]\",\"BADFN()\"]}}";
+    var buf: [4096]u8 = undefined;
+    const n = bridge_inspect(req.ptr, @intCast(req.len), &buf, buf.len);
+    try testing.expect(n > 0);
+    const payload = buf[0..@intCast(n)];
+    try testing.expect(std.mem.indexOf(u8, payload, "\"value\":\"7\"") != null);
+    try testing.expect(std.mem.indexOf(u8, payload, "\"ok\":false") != null);
+}
+
+test "bridge_inspect rejects unknown op and bad request" {
+    var buf: [256]u8 = undefined;
+    const bad_op: []const u8 = "{\"op\":\"nope\"}";
+    try testing.expectEqual(@as(i32, -3), bridge_inspect(bad_op.ptr, @intCast(bad_op.len), &buf, buf.len));
+    const not_obj: []const u8 = "[1,2,3]";
+    try testing.expectEqual(@as(i32, -3), bridge_inspect(not_obj.ptr, @intCast(not_obj.len), &buf, buf.len));
+    const missing_path: []const u8 = "{\"op\":\"config\"}";
+    try testing.expectEqual(@as(i32, -3), bridge_inspect(missing_path.ptr, @intCast(missing_path.len), &buf, buf.len));
+}
+
+test "bridge_inspect BUF_TOO_SMALL when docs exceeds out_size" {
+    const req: []const u8 = "{\"op\":\"docs\"}";
+    var tiny: [16]u8 = undefined;
+    try testing.expectEqual(@as(i32, -2), bridge_inspect(req.ptr, @intCast(req.len), &tiny, tiny.len));
 }

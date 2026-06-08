@@ -145,6 +145,25 @@ typedef _BridgeEvalExprTraceDart = int Function(
   int,
 );
 
+// bridge_inspect(request_ptr, request_len, out_buf, out_size) -> int32_t
+//   In-process dispatcher for the stateless bxp-fmt ops the GUI used to spawn
+//   (docs / config / list_templates / fetch_template / eval_batch). The result
+//   JSON (same bytes the matching bxp-fmt stdout produced) is written to out_buf.
+//     >0 = bytes_written of result JSON in out_buf
+//     -1 OOM, -2 BUF_TOO_SMALL, -3 INVALID_INPUT
+typedef _BridgeInspectNative = Int32 Function(
+  Pointer<Uint8>,
+  Uint32,
+  Pointer<Uint8>,
+  Uint32,
+);
+typedef _BridgeInspectDart = int Function(
+  Pointer<Uint8>,
+  int,
+  Pointer<Uint8>,
+  int,
+);
+
 /// Result of a bridge-mediated subprocess invocation. Mirrors dart:io
 /// `ProcessResult` conceptually; `err` is non-null only when the bridge
 /// itself couldn't run the child (e.g. malformed request, spawn failed).
@@ -192,6 +211,7 @@ class BridgeClient {
   late final _BridgeFreeDart _bridgeFree;
   late final _BridgeEvalExprDart _bridgeEvalExpr;
   late final _BridgeEvalExprTraceDart _bridgeEvalExprTrace;
+  late final _BridgeInspectDart _bridgeInspect;
 
   BridgeClient(String dllPath) : _lib = DynamicLibrary.open(dllPath) {
     _bridgeRun = _lib
@@ -211,6 +231,8 @@ class BridgeClient {
         _BridgeEvalExprDart>('bridge_eval_expr');
     _bridgeEvalExprTrace = _lib.lookupFunction<_BridgeEvalExprTraceNative,
         _BridgeEvalExprTraceDart>('bridge_eval_expr_trace');
+    _bridgeInspect = _lib
+        .lookupFunction<_BridgeInspectNative, _BridgeInspectDart>('bridge_inspect');
   }
 
   /// DLL self-reported version string, e.g. "0.2.1". Read once at load.
@@ -465,6 +487,43 @@ class BridgeClient {
       malloc.free(fieldsPtr);
       malloc.free(outBuf);
     }
+  }
+
+  /// Default out_buf for [inspect]. 128 KB covers `--docs` (~30 KB) and most
+  /// annotated `--config` payloads; we retry once at [_inspectLargeBufSize].
+  static const int _inspectDefaultBufSize = 128 * 1024;
+
+  /// Retry buffer for [inspect] — fits a large annotated config or a
+  /// pathological eval_batch result.
+  static const int _inspectLargeBufSize = 4 * 1024 * 1024;
+
+  /// In-process counterpart to the stateless `bxp-fmt` subcommands the GUI used
+  /// to spawn — `--docs`, `--config`, `--list-templates`, `--fetch-template`,
+  /// `--expr-batch` — served from bxp-core/inspect via `bridge_inspect`.
+  /// `requestJson` is the op envelope (see the Zig export). Returns the result
+  /// JSON (the same bytes the matching bxp-fmt stdout produced), or null on any
+  /// bridge-level failure / overflow so the caller can fall back to the
+  /// subprocess. Synchronous FFI; callers run it on a discrete load/save/click
+  /// action, not per-keystroke.
+  String? inspect(String requestJson) {
+    final reqBytes = utf8.encode(requestJson);
+    for (final bufSize in const [_inspectDefaultBufSize, _inspectLargeBufSize]) {
+      final reqPtr = malloc.allocate<Uint8>(reqBytes.isEmpty ? 1 : reqBytes.length);
+      final outBuf = malloc.allocate<Uint8>(bufSize);
+      try {
+        if (reqBytes.isNotEmpty) {
+          reqPtr.asTypedList(reqBytes.length).setAll(0, reqBytes);
+        }
+        final n = _bridgeInspect(reqPtr, reqBytes.length, outBuf, bufSize);
+        if (n == -2) continue; // BUF_TOO_SMALL → retry larger
+        if (n < 0) return null; // OOM / INVALID_INPUT → caller falls back
+        return utf8.decode(outBuf.asTypedList(n));
+      } finally {
+        malloc.free(reqPtr);
+        malloc.free(outBuf);
+      }
+    }
+    return null; // still too big after the largest buffer
   }
 
   /// Streaming variant of [run]. Spawns the child, returns a Future that
