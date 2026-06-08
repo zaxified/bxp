@@ -99,12 +99,26 @@ pub fn build(b: *std.Build) void {
     // docs.zig aggregates the expression catalog (re-exported live from
     // expr.zig) and the config schema (per-struct `pub const fields`
     // tables co-located in config.zig). Consumed by bxp-fmt --docs.
-    _ = b.addModule("docs", .{
+    const docs_mod = b.addModule("docs", .{
         .root_source_file = b.path("src/docs.zig"),
         .imports = &.{
             .{ .name = "config", .module = config_mod },
             .{ .name = "expr",   .module = expr_mod },
             .{ .name = "json5",  .module = json5_mod },
+        },
+    });
+
+    // inspect.zig is the shared stateless inspection core (config validation,
+    // docs serialization, single-expression eval) behind both bxp-fmt (CLI
+    // adapter) and bxp-mcp (MCP server adapter). "One core, thin adapters".
+    _ = b.addModule("inspect", .{
+        .root_source_file = b.path("src/inspect.zig"),
+        .imports = &.{
+            .{ .name = "config",      .module = config_mod },
+            .{ .name = "expr",        .module = expr_mod },
+            .{ .name = "json5",       .module = json5_mod },
+            .{ .name = "docs",        .module = docs_mod },
+            .{ .name = "diagnostics", .module = diagnostics_mod },
         },
     });
 

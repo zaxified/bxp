@@ -1,0 +1,12 @@
+.{
+    .name = .bxp_mcp,
+    .fingerprint = 0x5252e30e33fee868,
+    .version = "0.0.1",
+    .dependencies = .{
+        .bxp_core = .{
+            .path = "../bxp-core",
+        },
+    },
+    .minimum_zig_version = "0.15.0",
+    .paths = .{"."},
+}
