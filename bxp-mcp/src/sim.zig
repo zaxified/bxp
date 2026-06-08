@@ -252,3 +252,25 @@ fn tmpDir(a: std.mem.Allocator) []const u8 {
     }
     return "/tmp";
 }
+
+test "countRecords: non-empty lines, trailing-newline and CRLF agnostic" {
+    const t = std.testing;
+    try t.expectEqual(@as(usize, 0), countRecords(""));
+    try t.expectEqual(@as(usize, 1), countRecords("a,b,c")); // no trailing \n
+    try t.expectEqual(@as(usize, 2), countRecords("h1,h2\n1,2\n"));
+    try t.expectEqual(@as(usize, 2), countRecords("h1,h2\n1,2")); // last line, no \n
+    try t.expectEqual(@as(usize, 2), countRecords("h1,h2\r\n1,2\r\n")); // CRLF
+    try t.expectEqual(@as(usize, 1), countRecords("a\n\n\n")); // blank lines ignored
+}
+
+test "sanitize: keeps [A-Za-z0-9_-], maps the rest, never empty, length-capped" {
+    const t = std.testing;
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    try t.expectEqualStrings("abc_DEF-9", try sanitize(a, "abc/DEF-9"));
+    try t.expectEqualStrings("a_b_c", try sanitize(a, "a b.c"));
+    try t.expectEqualStrings("_", try sanitize(a, ""));
+    const long = try sanitize(a, "x" ** 100);
+    try t.expectEqual(MAX_UID_LEN, long.len);
+}

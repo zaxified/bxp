@@ -87,6 +87,7 @@ bxp/
 │   ├── test-02-datasets.sh   # bxp-cli regression vs datasets/*/*.expected
 │   ├── test-03-desktop.sh    # flutter analyze + flutter test + json5_ast dart test
 │   ├── test-04-bridge.sh     # bxp-gui-bridge build + unit tests
+│   ├── test-05-mcp.sh        # bxp-mcp build + unit tests + JSON-RPC smoke (incl. bxp_simulate)
 │   ├── test-06-expr-corpus.sh    # cross-runner expression corpus regression gate
 │   ├── test-07-bench-guard.sh    # coarse perf gate: own ReleaseFast build, RSS
 │   │                             # ceiling + wall scaling-ratio (catches O(N) RSS

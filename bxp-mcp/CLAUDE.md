@@ -99,6 +99,7 @@ MCP itself is what carries dated versions.
 ```bash
 cd bxp-mcp
 zig build
+zig build test          # unit tests (sim.zig pure helpers)
 ./zig-out/bin/bxp-mcp --help
 
 # Drive it manually (one JSON-RPC object per line on stdin):
