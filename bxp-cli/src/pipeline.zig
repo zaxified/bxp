@@ -8,6 +8,10 @@ const std = @import("std");
 const csv = @import("csv");
 const config_mod = @import("config");
 const expr_mod = @import("expr");
+/// Layer 0 transcoder, re-exported by the config module. Used for output
+/// encoding (UTF-8 → target code page); input decoding happens inside
+/// `expr.Context.field` driven by `Context.input_encoding`.
+const encoding = config_mod.encoding;
 const xlsx_mod = @import("xlsx");
 const json_mod = @import("json");
 const btrace = @import("btrace");
@@ -389,6 +393,16 @@ fn isNumericValue(s: []const u8) bool {
 ///
 /// When decimal_sep_out != '.', numeric values have their '.' replaced with
 /// decimal_sep_out before writing.
+/// Transcode a UTF-8 output cell / header to the configured CSV output code
+/// page. `.utf8` (the default) returns the input unchanged with no allocation;
+/// any other encoding allocates the transcoded bytes from `alloc`. Applied at
+/// the CSV write edge so the internal UTF-8 currency lands in the file as the
+/// user's requested legacy encoding.
+fn encodeOutCell(alloc: std.mem.Allocator, value: []const u8, enc: encoding.Encoding) ![]const u8 {
+    if (enc == .utf8) return value;
+    return encoding.encodeFromUtf8(alloc, value, enc);
+}
+
 fn writeSafeValue(out: *Writer, value: []const u8, delimiter_out: u8, decimal_sep_out: u8, quote_out: u8, buf: []u8) !void {
     // Apply decimal separator conversion for numeric output values.
     //
@@ -868,6 +882,7 @@ fn evalPrepassRow(
         .lookup_table = null, // no self-reference during pre_pass
         .alloc = file_alloc,
         .decimal_sep_in = bc.csv_decimal_separator_in,
+        .input_encoding = bc.csv_input_encoding,
     };
     var pp_it = bc.pre_passes.iterator();
     while (pp_it.next()) |pp_entry| {
@@ -1030,6 +1045,7 @@ fn evalAndEmitRow(
         .single_prepass_name = rec.single_prepass_name,
         .alloc = line_alloc,
         .decimal_sep_in = bc.csv_decimal_separator_in,
+        .input_encoding = bc.csv_input_encoding,
         .error_detail = &row_detail,
     };
 
@@ -1153,17 +1169,25 @@ fn evalAndEmitRow(
                     try writeJsonRow(e.combined_fout, bc.output_schema.items, &merged);
                 }
             } else {
+                // Layer 0 output: transcode each UTF-8 cell to the configured
+                // output code page before the RFC-4180 quoting. The delimiter,
+                // quotes, CR/LF and decimal separator are all ASCII (identical
+                // in every target code page), so writeSafeValue's structural
+                // logic is unaffected by working on transcoded bytes.
+                const out_enc = bc.csv_output_encoding;
                 var val_buf: [VAL_BUF_SIZE]u8 = undefined;
                 for (bc.output_schema.items, 0..) |col, ci| {
                     if (ci > 0) try e.fout.writeAll(delim_out);
-                    try writeSafeValue(e.fout, merged.get(col.variable) orelse "", bc.csv_delimiter_out, bc.csv_decimal_separator_out, bc.csv_text_quote_out, &val_buf);
+                    const cell = try encodeOutCell(line_alloc, merged.get(col.variable) orelse "", out_enc);
+                    try writeSafeValue(e.fout, cell, bc.csv_delimiter_out, bc.csv_decimal_separator_out, bc.csv_text_quote_out, &val_buf);
                 }
                 try e.fout.writeAll("\n");
                 if (e.combined) {
                     var val_buf2: [VAL_BUF_SIZE]u8 = undefined;
                     for (bc.output_schema.items, 0..) |col, ci| {
                         if (ci > 0) try e.combined_fout.writeAll(delim_out);
-                        try writeSafeValue(e.combined_fout, merged.get(col.variable) orelse "", bc.csv_delimiter_out, bc.csv_decimal_separator_out, bc.csv_text_quote_out, &val_buf2);
+                        const cell = try encodeOutCell(line_alloc, merged.get(col.variable) orelse "", out_enc);
+                        try writeSafeValue(e.combined_fout, cell, bc.csv_delimiter_out, bc.csv_decimal_separator_out, bc.csv_text_quote_out, &val_buf2);
                     }
                     try e.combined_fout.writeAll("\n");
                 }
@@ -1622,6 +1646,7 @@ fn parseCsvHeader(
     delimiter: u8,
     quote: u8,
     header_line: u32,
+    input_encoding: encoding.Encoding,
     file_alloc: std.mem.Allocator,
     col_index: *std.StringHashMap(usize),
     col_names: *std.array_list.Managed([]const u8),
@@ -1658,7 +1683,12 @@ fn parseCsvHeader(
     }
     for (header_fields, 0..) |name, idx| {
         const trimmed = std.mem.trim(u8, name, " ");
-        const owned = try file_alloc.dupe(u8, trimmed);
+        // Layer 0: transcode header names to UTF-8 too, so they match the
+        // UTF-8 [ColumnName] references from the (always-UTF-8) config file.
+        const owned = if (input_encoding == .utf8)
+            try file_alloc.dupe(u8, trimmed)
+        else
+            try encoding.decodeToUtf8(file_alloc, trimmed, input_encoding);
         try col_index.put(owned, idx);
         try col_names.append(owned);
     }
@@ -1974,7 +2004,15 @@ pub fn processBroker(
         } else {
             for (bc.output_schema.items, 0..) |col, ci| {
                 if (ci > 0) try combined_fout.writeAll(delim_out_local);
-                try combined_fout.writeAll(col.header);
+                // Combined header is written once (outside the per-file arena),
+                // so transcode into the GPA and free immediately per column.
+                if (bc.csv_output_encoding == .utf8) {
+                    try combined_fout.writeAll(col.header);
+                } else {
+                    const hdr = try encoding.encodeFromUtf8(alloc, col.header, bc.csv_output_encoding);
+                    defer alloc.free(hdr);
+                    try combined_fout.writeAll(hdr);
+                }
             }
             try combined_fout.writeAll("\n");
         }
@@ -2134,8 +2172,11 @@ pub fn processBroker(
                 // validatable. We validate only the first chunk to
                 // approximate the legacy single-shot whole-file check
                 // (cheap proxy for the common "BOM + Windows-1250 export"
-                // failure mode).
-                if (!std.unicode.utf8ValidateSlice(first_chunk)) {
+                // failure mode). Skipped when csv_input_encoding declares a
+                // legacy code page — there the bytes are *expected* to be
+                // non-UTF-8 and are transcoded on access, so the warning
+                // would be noise.
+                if (bc.csv_input_encoding == .utf8 and !std.unicode.utf8ValidateSlice(first_chunk)) {
                     stats.warnings += 1;
                     out.warning("warning: '{s}' is not valid UTF-8; non-ASCII characters may be garbled\n", .{filename});
                 }
@@ -2144,6 +2185,7 @@ pub fn processBroker(
                     bc.csv_delimiter_in,
                     bc.csv_text_quote_in,
                     bc.csv_header_line,
+                    bc.csv_input_encoding,
                     file_alloc,
                     &col_index,
                     &col_names,
@@ -2406,7 +2448,10 @@ pub fn processBroker(
         } else {
             for (bc.output_schema.items, 0..) |col, ci| {
                 if (ci > 0) try fout.writeAll(delim_out);
-                try fout.writeAll(col.header);
+                // Per-file header transcodes into the per-file arena (file_alloc),
+                // reclaimed when the file's arena is torn down.
+                const hdr = try encodeOutCell(file_alloc, col.header, bc.csv_output_encoding);
+                try fout.writeAll(hdr);
             }
             try fout.writeAll("\n");
         }
@@ -2452,6 +2497,7 @@ pub fn processBroker(
                 .single_prepass_name = null,
                 .alloc = file_alloc,
                 .decimal_sep_in = bc.csv_decimal_separator_in,
+                .input_encoding = bc.csv_input_encoding,
                 .error_detail = &fold_detail,
             };
             var fold_it = bc.input_schema.iterator();
@@ -2857,6 +2903,13 @@ pub fn xlsxPrePass(
 
             out.info("converting '{s}'\n", .{xlsx_name});
             xlsx_mod.xlsxToCsv(alloc, xlsx_file, specs, dir, stem) catch |err| {
+                // A UTF-16 encoded XML part is unsupported but recoverable:
+                // warn and skip this file rather than aborting the whole run.
+                if (err == error.Utf16XmlUnsupported) {
+                    out.warning("warning: skipping '{s}': xlsx contains UTF-16 encoded XML, which is not supported — re-save the workbook from Excel as a normal .xlsx\n", .{xlsx_name});
+                    xlsx_stats.warnings += 1;
+                    continue;
+                }
                 out.fatal("fatal error: xlsx conversion failed for '{s}': {s}\n", .{ xlsx_name, @errorName(err) });
                 xlsx_stats.has_fatal = true;
                 xlsx_stats.time_ns = timer.read();

@@ -285,6 +285,7 @@ fn parseSharedStrings(alloc: Allocator, tmp_dir: std.fs.Dir) !std.ArrayList([]u8
 
     const xml = readFile(alloc, tmp_dir, "xl/sharedStrings.xml") catch return strings;
     defer alloc.free(xml);
+    if (hasUtf16Bom(xml)) return error.Utf16XmlUnsupported;
 
     var tok = XmlTok.init(xml);
     var in_si = false;
@@ -454,6 +455,7 @@ fn parseSheet(
 ) !void {
     const xml = try readFile(alloc, tmp_dir, xml_path);
     defer alloc.free(xml);
+    if (hasUtf16Bom(xml)) return error.Utf16XmlUnsupported;
 
     // Cells in the current row: index = 0-based column, value = owned string.
     var row_cells: std.ArrayList([]u8) = .empty;
@@ -1033,11 +1035,33 @@ fn readFile(alloc: Allocator, dir: std.fs.Dir, path: []const u8) ![]u8 {
     return file.readToEndAlloc(alloc, XLSX_MAX_FILE_SIZE);
 }
 
+/// Detects a UTF-16 byte-order mark (LE `FF FE` / BE `FE FF`) at the start of
+/// an XML part. OOXML (ECMA-376) permits UTF-8 or UTF-16, but Excel always
+/// writes UTF-8 and this parser only handles UTF-8; a UTF-16 part would
+/// otherwise be silently garbled (every other byte a NUL). Callers turn a true
+/// here into `error.Utf16XmlUnsupported` so the pipeline can warn-and-skip
+/// rather than emit garbage. (A UTF-8 BOM `EF BB BF` is harmless and not
+/// flagged — the XML tokenizer skips leading bytes before the first `<`.)
+fn hasUtf16Bom(bytes: []const u8) bool {
+    return bytes.len >= 2 and
+        ((bytes[0] == 0xFF and bytes[1] == 0xFE) or
+        (bytes[0] == 0xFE and bytes[1] == 0xFF));
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
 const testing = std.testing;
+
+test "hasUtf16Bom: detects LE/BE BOM, ignores UTF-8 and short input" {
+    try testing.expect(hasUtf16Bom("\xff\xfe<")); // UTF-16 LE
+    try testing.expect(hasUtf16Bom("\xfe\xff\x00<")); // UTF-16 BE
+    try testing.expect(!hasUtf16Bom("\xef\xbb\xbf<?xml")); // UTF-8 BOM is fine
+    try testing.expect(!hasUtf16Bom("<?xml version=\"1.0\"?>")); // plain UTF-8
+    try testing.expect(!hasUtf16Bom("\xff")); // too short to decide
+    try testing.expect(!hasUtf16Bom("")); // empty
+}
 
 test "colRefToIndex: bijective base-26, row digits ignored, case-insensitive" {
     try testing.expectEqual(@as(u32, 0), colRefToIndex("A1"));

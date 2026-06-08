@@ -44,6 +44,14 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/decimal.zig"),
     });
 
+    // encoding.zig is the Layer 0 single-byte code page ↔ UTF-8 transcoder.
+    // Shared by expr (per-field decode at read) and config (encoding key parse),
+    // so — like decimal — it must be a single named module rather than a
+    // file-relative @import from two modules (that would duplicate the file).
+    const encoding_mod = b.addModule("encoding", .{
+        .root_source_file = b.path("src/encoding.zig"),
+    });
+
     _ = b.addModule("csv", .{
         .root_source_file = b.path("src/csv.zig"),
     });
@@ -73,6 +81,7 @@ pub fn build(b: *std.Build) void {
         .imports = &.{
             .{ .name = "decimal", .module = decimal_mod },
             .{ .name = "uucode", .module = uucode_mod },
+            .{ .name = "encoding", .module = encoding_mod },
         },
     });
 
@@ -83,6 +92,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "json5.zig", .module = json5_mod },
             .{ .name = "diagnostics", .module = diagnostics_mod },
             .{ .name = "expr", .module = expr_mod },
+            .{ .name = "encoding", .module = encoding_mod },
         },
     });
 
@@ -140,6 +150,7 @@ pub fn build(b: *std.Build) void {
             .imports = &.{
                 .{ .name = "decimal", .module = decimal_mod },
                 .{ .name = "uucode", .module = uucode_mod },
+                .{ .name = "encoding", .module = encoding_mod },
             },
         }),
     });
@@ -171,6 +182,17 @@ pub fn build(b: *std.Build) void {
     const decimal_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/decimal.zig"),
+            .target = target,
+            .optimize = optimize,
+            .strip = false,
+        }),
+    });
+
+    // encoding.zig is the single-byte code page transcoder, wired as the named
+    // "encoding" module above (shared by expr/config). Standalone test artifact.
+    const encoding_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/encoding.zig"),
             .target = target,
             .optimize = optimize,
             .strip = false,
@@ -219,6 +241,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "json5.zig",   .module = json5_mod },
                 .{ .name = "diagnostics", .module = diagnostics_mod },
                 .{ .name = "expr",        .module = expr_mod },
+                .{ .name = "encoding",    .module = encoding_mod },
             },
         }),
     });
@@ -245,6 +268,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(datefmt_tests).step);
     test_step.dependOn(&b.addRunArtifact(unicode_tests).step);
     test_step.dependOn(&b.addRunArtifact(decimal_tests).step);
+    test_step.dependOn(&b.addRunArtifact(encoding_tests).step);
     test_step.dependOn(&b.addRunArtifact(json5_tests).step);
     test_step.dependOn(&b.addRunArtifact(diagnostics_tests).step);
     test_step.dependOn(&b.addRunArtifact(xlsx_tests).step);

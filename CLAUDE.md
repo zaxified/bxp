@@ -30,6 +30,10 @@ bxp/
 │   │   ├── decimal.zig     # Fixed-point i128 @ 1e12 numeric core (named module)
 │   │   ├── unicode.zig     # UTF-8 case mapping (UPPER/LOWER) over uucode tables
 │   │   │                   # — file-rel @import by expr.zig; uucode is fetch dep
+│   │   ├── encoding.zig    # Layer 0: single-byte code page ↔ UTF-8 transcode
+│   │   │                   # (Win-1250/1252, Latin-1/2/9); in-house 256-entry
+│   │   │                   # tables, no uucode. Named module: expr (per-field
+│   │   │                   # decode) + config (csv_*_encoding parse)
 │   │   ├── btrace.zig      # Binary BXTB trace Writer/Reader for --trace
 │   │   ├── json5.zig       # JSON5 preprocessor (comments, unquoted keys, ...)
 │   │   ├── docs.zig        # Aggregator: re-exports expr catalog + flattens

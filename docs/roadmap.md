@@ -165,7 +165,19 @@ ceiling drops from `O(workbook size)` to
 
 ### Unicode / text subsystem (one cohesive module)
 
-> **Status 2026-06-08.** **Layer 1 fully shipped** in
+> **Status 2026-06-08. Unicode subsystem COMPLETE — both layers shipped.**
+> **Layer 0 shipped** in `bxp-core/src/encoding.zig`: per-template
+> `csv_input_encoding` / `csv_output_encoding` (default `utf-8`) transcode
+> legacy single-byte CSVs ↔ UTF-8 — `windows-1250`, `windows-1252`,
+> `iso-8859-1`, `iso-8859-2`, `iso-8859-15`. In-house 256-entry tables (no
+> uucode). Offset-safe: structural bytes are ASCII, so only field values +
+> header names are transcoded (`expr.Context.field` decode at read,
+> `pipeline.writeSafeValue` sites encode at write) — `source_locator` / trace
+> drill-down stay correct, no fmt/GUI change. Both config keys are FieldDoc
+> entries with `enum_values`, so the GUI renders a dropdown automatically. The
+> GUI dropdown was free; xlsx UTF-16 XML now warn-and-skips (`hasUtf16Bom`).
+>
+> **Layer 1 fully shipped** in
 > `bxp-core/src/unicode.zig`: `UPPER` / `LOWER` are full-Unicode
 > (`café`→`CAFÉ`, `ß`→`SS`, `я`→`Я`) and `UNACCENT` strips Latin diacritics
 > (`café`→`cafe`, `ß`→`ss`, `ø`→`o`; non-Latin keeps its base script, e.g.
@@ -177,8 +189,9 @@ ceiling drops from `O(workbook size)` to
 > decomposition `unaccent` needs, with zero runtime allocation and a ~5 MB
 > field-pruned table source, beating hand-generating + maintaining UCD tables.
 > See the `reference_zig_unicode_libs` memory for the uucode-vs-zg evaluation.
-> **Remaining: only the Layer 0 `csv_*_encoding` transcoding** (in-house,
-> 256-entry single-byte tables — uucode does not cover it).
+> **Nothing remaining** — Layer 0 (above) was the last open item; the Unicode /
+> text subsystem is feature-complete. CJK multibyte code pages (Shift-JIS,
+> GB18030, …) remain deferred, to be added only on a concrete user request.
 
 As bxp generalises beyond EU broker CSVs into a general CSV→JSON / data
 cleaning tool, three separate gaps all turn out to be the same problem
@@ -659,6 +672,39 @@ territory.
   Decision: bundle with the Zig 0.16 migration above, then adopt
   zig-utils/zig-regex. v0.2.4 ships the other 9 builtins; the remaining
   ~10 % of real-world need (regex) waits.
+
+### Context builtins — `filename()` / `record_num()` / `sheet_name()`
+
+Expose per-row evaluation context to expressions as new builtins (same family
+as `now()` / `rand(n)` — no tokenizer change, just impl + `FnDoc`). Brainstormed
+2026-06-08.
+
+- **`filename()`** — the current input file's stem (name without extension /
+  directory). The high-value primitive: broker exports routinely embed the
+  account number, broker code, and period in the filename
+  (`XTB_12345_2024-01_2024-12.csv`). Composes with the existing string +
+  date builtins, so the whole "date range in filename" need is met without a
+  dedicated parser:
+  `DATE_CONVERT(SPLIT_PART(filename(), '_', 3), 'YYYY-MM-DD', 'YYYY-MM-DD')`,
+  and `date_filter_from_filename` becomes expressible as a plain `row_rules`
+  skip (`{ "when": "$date < SPLIT_PART(filename(),'_',3)", "rows": [] }`).
+  This **supersedes the rejected `filename_date_format` config key** — give the
+  primitive, not a special-case feature. (Optional sugar `file_part(n)` =
+  `SPLIT_PART(filename(), sep, n)` only if it earns its keep.)
+- **`record_num()`** — 1-based input record number (per file). For generating
+  IDs / dedup keys, "skip first N" logic, and debugging. Decide per-file vs
+  cumulative-across-files (lean per-file; add a separate accessor if a real
+  case needs the global counter).
+- **`sheet_name()`** — for xlsx-derived input, the source sheet name. Lower
+  value (a template already targets one sheet) but cheap and rounds out the
+  set; returns "" for native CSV/JSON input.
+
+Syntax note: deliberately builtins, **not** a new `$_1` token class — `$name`
+stays reserved for user-declared `input_schema` variables; positional context
+mirrors `FIELDS(n)` / `NOW()`. Impl note: `filename()` / `sheet_name()` are
+row-invariant **within a file** but vary between files, so any constant-fold
+must source them from the per-file context, never treat them as globally
+constant (see the `evalFieldRef` fast-path lesson in memory).
 
 ## Not planned
 

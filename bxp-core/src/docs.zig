@@ -353,7 +353,7 @@ test "config_schema covers known paths" {
     // and the GUI-side expectation in lockstep.
     var total: usize = envelope_entries.len;
     for (struct_bindings) |bind| total += bind.fields.len;
-    try testing.expectEqual(@as(usize, 43), total);
+    try testing.expectEqual(@as(usize, 45), total);
 
     // Spot-check that representative paths from each binding category are
     // present. Comptime walk; failure points at the missing key.
@@ -558,6 +558,8 @@ test "BrokerConfig defaults match FieldDoc.default" {
     try std.testing.expectEqual(@as(u8, '.'), broker.csv_decimal_separator_out); // "."
     try std.testing.expectEqual(@as(u8, '"'), broker.csv_text_quote_in); // "double"
     try std.testing.expectEqual(@as(u8, 0), broker.csv_text_quote_out); // "none"
+    try std.testing.expectEqual(config_mod.encoding.Encoding.utf8, broker.csv_input_encoding); // "utf-8"
+    try std.testing.expectEqual(config_mod.encoding.Encoding.utf8, broker.csv_output_encoding); // "utf-8"
     try std.testing.expectEqual(false, broker.date_filter_from_filename); // "false"
     try std.testing.expectEqual(false, broker.row_rules_debug_missing); // "false"
     try std.testing.expectEqual(false, broker.combined_output); // "false"

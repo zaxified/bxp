@@ -20,6 +20,7 @@ as a local path dependency.
 | `datefmt`     | `datefmt.zig`     | `parse()`, `format()`, civil/arithmetic helpers — date core (file-rel @import by `expr.zig`, not a named module) |
 | `decimal`     | `decimal.zig`     | `Decimal` fixed-point i128 @ 1e12 — numeric core (named `"decimal"` module, shared by every input path) |
 | `unicode`     | `unicode.zig`     | `toUpperStr()`, `toLowerStr()`, `unaccentStr()` — UTF-8 case mapping + diacritic stripping over `uucode` tables (file-rel @import by `expr.zig`, not a named module) |
+| `encoding`    | `encoding.zig`    | `Encoding`, `decodeToUtf8()`, `encodeFromUtf8()` — Layer 0 single-byte code page ↔ UTF-8 (named module; shared by `expr` + `config`; no `uucode` dep) |
 | `config`      | `config.zig`      | `Config`, `BrokerConfig`, `load()`, `validate()`, `FieldDoc`              |
 | `json`        | `json.zig`        | `scanColNames()` + `RecordReader` — streaming JSON array-of-objects input |
 | `btrace`      | `btrace.zig`      | Binary trace `Writer` / `Reader` for `--trace=bin`                        |
@@ -55,10 +56,16 @@ Converts `.xlsx` files (ZIP + XML) to intermediate CSV files.
 - Extracts to a temporary `.xlstmp` directory next to the output files; cleaned up on exit.
 - Supported cell types: shared strings, inline strings, formula results, booleans,
   plain numbers, date/time (detected via styles.xml numFmtId).
+- XML parts are assumed UTF-8 (what Excel always writes). A UTF-16 BOM on the
+  sheet or sharedStrings XML returns `error.Utf16XmlUnsupported` instead of
+  silently producing garbage; the pipeline turns that into a warn-and-skip
+  (`hasUtf16Bom`). There is no `csv_*_encoding`-style transcode for xlsx — OOXML
+  is effectively always UTF-8 in practice.
 - Buffer sizes: `ZIP_READ_BUF_SIZE=8192`, `CSV_OUT_BUF_SIZE=65536`, `XLSX_MAX_FILE_SIZE=10MB`.
-- Inline unit tests (10) cover the pure helpers: `colRefToIndex`,
+- Inline unit tests (11) cover the pure helpers: `colRefToIndex`,
   `normalizeNumber`, `excelSerialToDatetime`, `unixDayToYMD`, `decodeEntities`,
-  `isDateFormatCode`, `isBuiltinDateFmt`, `getAttr`, `stripNs`, `writeCsvField`.
+  `isDateFormatCode`, `isBuiltinDateFmt`, `getAttr`, `stripNs`, `writeCsvField`,
+  `hasUtf16Bom`.
   End-to-end ZIP/XML parsing is still exercised via bxp-cli integration tests.
 
 ### expr.zig
@@ -68,7 +75,9 @@ Expression evaluator for `input_schema` and `row_rules` in bxp-cli.json.
 - `eval(expr, ctx)` — parse and evaluate expression, returns `Value`.
 - `evalString(expr, ctx)` — like `eval()` but coerces result to string.
 - `Context` — per-row evaluation context: `fields`, `col_index`, `ticker_map`,
-  `lookup_table`, `alloc`, `decimal_sep_in`, `quote_out`.
+  `lookup_table`, `alloc`, `decimal_sep_in`, `quote_out`, `input_encoding`.
+  `input_encoding` (Layer 0) transcodes each accessed field value to UTF-8 in
+  `field()`; `.utf8` (default) is a zero-alloc pass-through.
 - `Value` — union of `decimal: Decimal`, `string: []const u8`, `boolean: bool`.
   `Decimal` (in `decimal.zig`) is a fixed-point `i128` at scale 1e12 (12
   fractional digits): exact `+ −`, half-away-from-zero `× ÷` and `ROUND`. Replaces
@@ -117,6 +126,34 @@ module.
   Swedish/German/Cyrillic/Greek, ß→SS, unicameral passthrough, empty,
   invalid-UTF-8); unaccent (Latin strip, hand-list letters, non-Latin
   base-script keep, empty + invalid-UTF-8 passthrough).
+
+### encoding.zig
+
+Layer 0 of the Unicode subsystem: legacy single-byte code page ↔ UTF-8
+transcoding (the "iconv" job). No `uucode` dependency — just 256-entry mapping
+tables. Drives the per-template `csv_input_encoding` / `csv_output_encoding`
+config keys. **CSV only**: JSON (RFC 8259) and xlsx (XML-in-ZIP) are always
+UTF-8 and never reach here.
+
+- `Encoding` — enum: `utf8` (default), `windows_1250`, `windows_1252`,
+  `iso_8859_1` (Latin-1), `iso_8859_2` (Latin-2), `iso_8859_15` (Latin-9).
+  `Encoding.parse(str)` accepts canonical names + aliases (case-insensitive,
+  null on no match); `canonicalName()` returns the GUI dropdown spelling.
+- `decodeToUtf8(alloc, bytes, enc)` — legacy → UTF-8 (`.utf8` = verbatim dupe).
+- `encodeFromUtf8(alloc, utf8, enc)` — UTF-8 → legacy; unrepresentable
+  codepoints become `'?'`; invalid UTF-8 passes through verbatim.
+- **Offset-safe by design**: in every code page the structural CSV bytes
+  (delimiter, quote, CR, LF) are ASCII and map to themselves, so the pipeline
+  parses records / counts `source_locator` offsets on the _raw_ bytes and only
+  transcodes individual field values + header names (`expr.Context.field`
+  decode at read; `pipeline.writeSafeValue` call sites encode at write). Trace
+  drill-down offsets stay correct on the original file — no `ChunkReader` /
+  fmt / GUI changes were needed.
+- Tables are an identity base (byte == codepoint = Latin-1 / C1) plus
+  per-code-page overrides where the mapping differs.
+- Inline tests (12): parse aliases, ASCII passthrough, Latin-1/9 identity +
+  divergence, Win-1250/1252 specials, Czech letters (CP1250 + ISO-8859-2),
+  encode round-trips, unrepresentable → `?`, empty + invalid-UTF-8.
 
 ### config.zig
 
@@ -251,8 +288,8 @@ cd bxp-core && zig build
 cd bxp-core && zig build test
 ```
 
-Module exports in `build.zig`: `csv`, `json`, `json5`, `xlsx`, `btrace`, `decimal`, `expr`, `config`, `docs`, `diagnostics`.
-`expr` imports `datefmt.zig` and `unicode.zig` (both file-relative, not named modules); `config` imports `json5` (as `"json5.zig"` — internal import name);
+Module exports in `build.zig`: `csv`, `json`, `json5`, `xlsx`, `btrace`, `decimal`, `encoding`, `expr`, `config`, `docs`, `diagnostics`.
+`expr` imports `datefmt.zig` and `unicode.zig` (both file-relative, not named modules) plus the named `decimal`, `uucode`, `encoding` modules; `config` imports `json5` (as `"json5.zig"` — internal import name), `diagnostics`, `expr`, `encoding`. `encoding` is a named module (not a file-relative @import) because it is shared by both `expr` and `config` — a file-relative @import from two modules would compile the file into each, a duplicate-symbol error (same reason `decimal` is named).
 `docs` imports `config`, `expr`, `json5`; `diagnostics` has no bxp-core dependencies.
 
 ### External dependency: uucode

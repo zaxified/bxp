@@ -37,7 +37,12 @@
 const std = @import("std");
 const datefmt = @import("datefmt.zig");
 const unicode = @import("unicode.zig");
+const encoding = @import("encoding");
 const Decimal = @import("decimal").Decimal;
+
+/// Re-export so callers that already import the `expr` module (bxp-cli pipeline,
+/// bxp-fmt) can name the encoding type / helpers without a separate dependency.
+pub const Encoding = encoding.Encoding;
 
 // ---------------------------------------------------------------------------
 // Value — the three types an expression can produce
@@ -130,6 +135,11 @@ pub const Context = struct {
     /// Output quote character resolved by ''' in expressions.
     /// 0 = none (''' produces ""), '\'' = single, '"' = double.
     quote_out: u8 = 0,
+    /// Layer 0 input encoding for raw CSV field bytes (`csv_input_encoding`).
+    /// `.utf8` (default) is a pass-through; any other value transcodes each
+    /// accessed field value to UTF-8 in `field()`. JSON / xlsx inputs are
+    /// always UTF-8 and leave this at the default.
+    input_encoding: encoding.Encoding = .utf8,
     /// When non-null, the evaluator writes a human-readable description of the last
     /// error here before returning the error.  String is allocated with ctx.alloc.
     /// Caller sets this and resets the pointed value to "" before each eval call.
@@ -160,7 +170,14 @@ pub const Context = struct {
     /// clean values.
     fn field(self: *const Context, idx: usize) []const u8 {
         if (idx >= self.fields.len) return "";
-        return std.mem.trim(u8, self.fields[idx], " ");
+        const trimmed = std.mem.trim(u8, self.fields[idx], " ");
+        // Layer 0: transcode legacy single-byte input to UTF-8 on access. The
+        // default `.utf8` short-circuits with no allocation (the hot path).
+        // Structural CSV bytes are ASCII, so trimming first (ASCII spaces) and
+        // transcoding the result is order-independent. Data-lenient: a transcode
+        // failure (OOM) falls back to the raw bytes rather than propagating.
+        if (self.input_encoding == .utf8) return trimmed;
+        return encoding.decodeToUtf8(self.alloc, trimmed, self.input_encoding) catch trimmed;
     }
 
     /// Looks up a field by its column header name and returns its value.

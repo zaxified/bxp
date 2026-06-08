@@ -13,6 +13,11 @@ const std = @import("std");
 const json5 = @import("json5.zig");
 const diagnostics = @import("diagnostics");
 const expr = @import("expr");
+/// Layer 0 single-byte ↔ UTF-8 transcoder. Re-exported (`pub`) so the bxp-cli
+/// pipeline — which already imports the `config` module — can reach
+/// `encoding.encodeFromUtf8` for output transcoding without a separate
+/// build-graph dependency.
+pub const encoding = @import("encoding");
 
 pub const Diagnostic = diagnostics.Diagnostic;
 pub const Diagnostics = diagnostics.Diagnostics;
@@ -332,6 +337,18 @@ pub const BrokerConfig = struct {
     /// 0 = no quoting (default); '\'' = single-quote; '"' = double-quote.
     /// Configured via "csv_text_quote_out": "none" | "single" | "double".
     csv_text_quote_out: u8,
+    /// Character encoding of the input CSV file (Layer 0). Default `.utf8`.
+    /// A non-UTF-8 value transcodes each field value + header name to UTF-8 at
+    /// read time (`expr.Context.field`); the rest of the pipeline only ever
+    /// sees UTF-8. CSV only — JSON / xlsx inputs are always UTF-8.
+    /// Configured via "csv_input_encoding": "utf-8" | "windows-1250" | ...
+    csv_input_encoding: encoding.Encoding,
+    /// Character encoding of the output CSV file (Layer 0). Default `.utf8`.
+    /// A non-UTF-8 value transcodes each written field value + header from the
+    /// UTF-8 internal currency to the target code page; codepoints with no
+    /// representation become '?'. CSV only.
+    /// Configured via "csv_output_encoding": "utf-8" | "windows-1250" | ...
+    csv_output_encoding: encoding.Encoding,
     /// Input file format.  Default: .csv.
     /// Set to .json to read JSON array-of-objects instead of CSV.
     /// Configured via "file_type_in": "csv" | "json".
@@ -348,6 +365,12 @@ pub const BrokerConfig = struct {
     const csv_quote_values = [_][]const u8{ "none", "single", "double" };
     const csv_delimiter_values = [_][]const u8{ ",", ";", "\t", "|" };
     const csv_decimal_values = [_][]const u8{ ".", "," };
+    // Order/spelling must match encoding.Encoding.canonicalName — these are the
+    // GUI dropdown options and the strings parseEncodingField accepts.
+    const csv_encoding_values = [_][]const u8{
+        "utf-8",        "windows-1250", "windows-1252",
+        "iso-8859-1",   "iso-8859-2",   "iso-8859-15",
+    };
 
     /// Schema docs for this struct's fields. Bound at
     /// `conversion_templates.*` by `bxp-core/src/docs.zig`.
@@ -443,6 +466,22 @@ pub const BrokerConfig = struct {
             .default = "none",
             .description = "Output CSV text quoting style.",
             .enum_values = &csv_quote_values,
+        },
+        .{
+            .key = "csv_input_encoding",
+            .type_name = "string",
+            .required = false,
+            .default = "utf-8",
+            .description = "Character encoding of the input CSV file. Transcoded to UTF-8 on read. Use for legacy non-UTF-8 exports (e.g. \"windows-1250\" for Czech Excel). CSV only — JSON/xlsx are always UTF-8.",
+            .enum_values = &csv_encoding_values,
+        },
+        .{
+            .key = "csv_output_encoding",
+            .type_name = "string",
+            .required = false,
+            .default = "utf-8",
+            .description = "Character encoding of the output CSV file. UTF-8 is transcoded to this code page on write; characters with no equivalent become '?'. CSV only.",
+            .enum_values = &csv_encoding_values,
         },
         .{
             .key = "ticker_map",
@@ -2403,6 +2442,35 @@ fn parseTextQuoteField(
     return 0;
 }
 
+/// Parse the `csv_input_encoding` / `csv_output_encoding` enum field. Accepts
+/// the canonical code page names (plus aliases — see `encoding.Encoding.parse`).
+/// A non-string value reports `wrong_type_silent`; an unrecognised string
+/// reports `invalid_enum` and falls back to `.utf8` (the safe pass-through).
+fn parseEncodingField(
+    alloc: std.mem.Allocator,
+    diag: ?*Diagnostics,
+    bobj: std.json.ObjectMap,
+    template_id: []const u8,
+    field: []const u8,
+    default_value: encoding.Encoding,
+) !encoding.Encoding {
+    const v = bobj.get(field) orelse return default_value;
+    if (v != .string) {
+        try emitTemplateDiag(alloc, diag, .warning, "config.wrong_type_silent",
+            template_id, field,
+            "{s} must be a string encoding name (e.g. 'utf-8', 'windows-1250'), got {s} — value ignored",
+            .{ field, @tagName(v) });
+        return default_value;
+    }
+    return encoding.Encoding.parse(v.string) orelse {
+        try emitTemplateDiag(alloc, diag, .warning, "config.invalid_enum",
+            template_id, field,
+            "{s} unknown encoding '{s}' — defaulting to utf-8",
+            .{ field, v.string });
+        return .utf8;
+    };
+}
+
 /// Parse the `file_type_in` / `file_type_out` enum field (`"json"` /
 /// `"csv"`). Anything else silently defaults to `.csv` today; this
 /// helper preserves that behavior but surfaces a warning so users see
@@ -2521,6 +2589,8 @@ pub fn loadFromBytes(
                 var csv_decimal_separator_out: u8 = '.';
                 var csv_text_quote_in: u8 = '"';
                 var csv_text_quote_out: u8 = 0;
+                var csv_input_encoding: encoding.Encoding = .utf8;
+                var csv_output_encoding: encoding.Encoding = .utf8;
                 var file_type_in: FileType = .csv;
                 var file_type_out: FileType = .csv;
 
@@ -2878,6 +2948,8 @@ pub fn loadFromBytes(
                     csv_decimal_separator_out = try parseSingleCharCsvField(alloc, diag, bobj, b_entry.key_ptr.*, "csv_decimal_separator_out", csv_decimal_separator_out);
                     csv_text_quote_in = try parseTextQuoteField(alloc, diag, bobj, b_entry.key_ptr.*, "csv_text_quote_in", csv_text_quote_in);
                     csv_text_quote_out = try parseTextQuoteField(alloc, diag, bobj, b_entry.key_ptr.*, "csv_text_quote_out", csv_text_quote_out);
+                    csv_input_encoding = try parseEncodingField(alloc, diag, bobj, b_entry.key_ptr.*, "csv_input_encoding", csv_input_encoding);
+                    csv_output_encoding = try parseEncodingField(alloc, diag, bobj, b_entry.key_ptr.*, "csv_output_encoding", csv_output_encoding);
                     file_type_in = try parseFileTypeField(alloc, diag, bobj, b_entry.key_ptr.*, "file_type_in", file_type_in);
                     file_type_out = try parseFileTypeField(alloc, diag, bobj, b_entry.key_ptr.*, "file_type_out", file_type_out);
                 }
@@ -2913,6 +2985,8 @@ pub fn loadFromBytes(
                         .csv_decimal_separator_out = csv_decimal_separator_out,
                         .csv_text_quote_in         = csv_text_quote_in,
                         .csv_text_quote_out        = csv_text_quote_out,
+                        .csv_input_encoding        = csv_input_encoding,
+                        .csv_output_encoding       = csv_output_encoding,
                         .file_type_in              = file_type_in,
                         .file_type_out             = file_type_out,
                     },

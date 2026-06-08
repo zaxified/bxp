@@ -142,6 +142,13 @@ export needs none of them.
   numeric fields (default `"."`). Set `_in` to `","` for European exports.
 - `csv_text_quote_in` / `csv_text_quote_out` — `"none"`, `"single"` (`'`), or
   `"double"` (`"`); input default `"double"`, output default `"none"`.
+- `csv_input_encoding` / `csv_output_encoding` — character encoding of the
+  input / output CSV file (default `"utf-8"`). Accepts `"utf-8"`,
+  `"windows-1250"`, `"windows-1252"`, `"iso-8859-1"`, `"iso-8859-2"`,
+  `"iso-8859-15"` (Layer 0). Input is transcoded to UTF-8 on read, output from
+  UTF-8 on write (unrepresentable characters become `?`). Use for legacy
+  non-UTF-8 exports, e.g. `"windows-1250"` for a Czech Excel CSV. CSV only —
+  JSON and xlsx are always UTF-8 (a UTF-16 xlsx is skipped with a warning).
 - `csv_header_line` — 1-based line of the CSV header (default `1`). `0` =
   headerless input — no header row, first line is data, columns reachable only
   by position via `FIELDS(n)`; `N>1` skips `N-1` preamble lines. CSV input only.

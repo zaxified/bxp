@@ -305,6 +305,8 @@ mybroker_to_wealthfolio: {
 | `csv_decimal_separator_out` | string | no | `"."` | Decimal separator in numeric fields (output) |
 | `csv_text_quote_in` | string | no | `"double"` | `"none"`, `"single"` (`'`), or `"double"` (`"`) |
 | `csv_text_quote_out` | string | no | `"none"` | Same values as `csv_text_quote_in` |
+| `csv_input_encoding` | string | no | `"utf-8"` | Encoding of the input CSV, transcoded to UTF-8 on read. `"utf-8"`, `"windows-1250"`, `"windows-1252"`, `"iso-8859-1"`, `"iso-8859-2"`, `"iso-8859-15"`. Use for legacy non-UTF-8 exports (e.g. Czech Excel `"windows-1250"`). CSV only |
+| `csv_output_encoding` | string | no | `"utf-8"` | Encoding of the output CSV. Same values as `csv_input_encoding`; characters with no equivalent become `?`. CSV only |
 | `csv_header_line` | number | no | `1` | 1-based line of the CSV header. `0` = headerless (first line is data, columns reachable only by `FIELDS(n)`); `N>1` skips `N-1` preamble lines. CSV input only |
 | `date_filter_from_filename` | bool | no | `false` | Filter rows by `YYYY-MM-DD_YYYY-MM-DD` range in filename |
 | `ticker_map` | string \| object | no | `{}` | Name from `ticker_maps`, or inline `{ "SYM": "YAHOO" }` |
