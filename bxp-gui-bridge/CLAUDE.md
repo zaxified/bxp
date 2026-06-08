@@ -16,11 +16,14 @@ via `dart:ffi` (`DynamicLibrary.open`). Two responsibilities:
    code, sidestepping the dart:io C++ pipe path entirely. On Linux/macOS
    this role is dormant — `BxpProcessClient` calls `Process.start` directly.
 2. **In-proc expression evaluator (all platforms)** — `bridge_eval_expr` /
-   `bridge_eval_expr_trace` link `bxp-core/expr` directly into the GUI
-   process so the expression playground and editor don't pay the ~50 ms
-   `bxp-fmt --expr` spawn cost per keystroke. This path is cross-platform
-   (Linux/macOS `.so`/`.dylib` ship and are loaded for eval even though
-   the subprocess proxy is unused).
+   `bridge_eval_expr_trace` call the shared `bxp-core/inspect` core
+   (`validateExpr` / `evalTrace` — the same logic behind `bxp-fmt --expr` /
+   `--expr-trace` and the MCP `bxp_eval`/`bxp_eval_trace` tools) directly in
+   the GUI process, so the expression playground and editor don't pay the
+   ~50 ms `bxp-fmt --expr` spawn cost per keystroke. The bridge only marshals
+   to/from its fixed C-ABI out buffer; the eval/trace logic is no longer
+   hand-rolled here. This path is cross-platform (Linux/macOS `.so`/`.dylib`
+   ship and are loaded for eval even though the subprocess proxy is unused).
 
 ## Source layout
 

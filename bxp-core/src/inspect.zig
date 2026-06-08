@@ -470,6 +470,55 @@ fn formatExprErrorJson(
     return aw.toOwnedSlice();
 }
 
+/// One expression-validation finding. `off`/`len` pin the offending token span
+/// (the GUI editor highlights it); `len == 0` means no span was pinned.
+pub const ExprError = struct {
+    name: []const u8,
+    detail: []const u8,
+    off: u32,
+    len: u32,
+};
+
+/// Validate one expression against an empty row context: runtime eval (syntax +
+/// semantics) followed by the static FnArgDoc checks (literal-only mistakes the
+/// runtime skips when a call never executes, e.g. SPLIT_PART(…, 0)). Returns the
+/// first error, or null when valid. Pure — the caller marshals the finding to
+/// its own channel (bxp-fmt `--expr` → stderr JSON; the bridge's
+/// `bridge_eval_expr` → its out buffer). Mirrors what `BrokerConfig.validate()`
+/// checks, keeping editor / Save / CLI diagnostics in sync.
+pub fn validateExpr(a: std.mem.Allocator, src: []const u8) !?ExprError {
+    var col_index = std.StringHashMap(usize).init(a);
+    var ticker_map = std.StringHashMap([]const u8).init(a);
+    var detail: []const u8 = "";
+    var err_offset: u32 = 0;
+    var err_len: u32 = 0;
+    const ctx = expr_mod.Context{
+        .fields = &.{},
+        .col_index = &col_index,
+        .ticker_map = &ticker_map,
+        .lookup_table = null,
+        .alloc = a,
+        .error_detail = &detail,
+        .error_offset = &err_offset,
+        .error_len = &err_len,
+    };
+
+    _ = expr_mod.eval(src, &ctx) catch |err| {
+        return ExprError{ .name = @errorName(err), .detail = detail, .off = err_offset, .len = err_len };
+    };
+
+    const sc = expr_mod.staticCheckCalls(src);
+    if (sc.split_part) |bad| {
+        const msg = try std.fmt.allocPrint(a, "index argument is 1-based; literal {d} always returns \"\"", .{bad.bad_idx});
+        return ExprError{ .name = "SplitPartBadIndex", .detail = msg, .off = bad.off, .len = bad.len };
+    }
+    if (sc.date_format) |bad| {
+        const msg = try std.fmt.allocPrint(a, "DATE_CONVERT format '{s}' has unrecognized letter '{c}' at offset {d} — wrap any literal letters in brackets, e.g. '[T]'", .{ bad.fmt, bad.fmt[bad.pos], bad.pos });
+        return ExprError{ .name = "DateFormatBadToken", .detail = msg, .off = bad.off, .len = bad.len };
+    }
+    return null;
+}
+
 /// Parse a JSON array of strings into `list` (arena-duped). Returns
 /// error.InvalidRowJson on any shape mismatch.
 fn parseStringArray(a: std.mem.Allocator, json_text: []const u8, list: *std.ArrayList([]const u8)) !void {

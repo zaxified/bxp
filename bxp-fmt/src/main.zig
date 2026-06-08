@@ -575,61 +575,14 @@ fn runExpr(gpa: std.mem.Allocator, src: []const u8) !u8 {
     defer arena.deinit();
     const alloc = arena.allocator();
 
-    // Empty column index and ticker map — --expr validates syntax only.
-    // Column references like [Date] and variable lookups will raise
-    // errors, which is intentional: the caller must supply real row
-    // context (via --expr-trace + --row-headers/--row-fields) if they
-    // need reference resolution.
-    var col_index = std.StringHashMap(usize).init(alloc);
-    defer col_index.deinit();
-    var ticker_map = std.StringHashMap([]const u8).init(alloc);
-    defer ticker_map.deinit();
-    var detail: []const u8 = "";
-    var err_offset: u32 = 0;
-    var err_len: u32 = 0;
-    const ctx = expr_mod.Context{
-        .fields = &.{},
-        .col_index = &col_index,
-        .ticker_map = &ticker_map,
-        .lookup_table = null,
-        .alloc = alloc,
-        .error_detail = &detail,
-        .error_offset = &err_offset,
-        .error_len = &err_len,
-    };
-
-    _ = expr_mod.eval(src, &ctx) catch |err| {
-        // Error JSON goes to stderr, not stdout — stdout is empty on
-        // failure so the caller can check exit code without parsing.
-        // Token off/len (Phase G1) let the GUI ExprPanel highlight the
-        // offending span; emitted only when the parser pinned one.
-        writeExprErrorJsonToStderr(stderr, null, @errorName(err), detail, err_offset, err_len);
-        return 1;
-    };
-
-    // Static-arg checks (FnArgDoc-driven walker) — catches literal-only
-    // mistakes that runtime eval skips when the call never executes
-    // (e.g. SPLIT_PART(..., 0) with no row context). Mirrors the same
-    // call from `BrokerConfig.validate()` in bxp-core/src/config.zig and
-    // `bridge_eval_expr` in bxp-gui-bridge so editor-time and Save-time
-    // diagnostics stay in sync across all three entry points.
-    const sc = expr_mod.staticCheckCalls(src);
-    if (sc.split_part) |bad| {
-        const msg = try std.fmt.allocPrint(
-            alloc,
-            "index argument is 1-based; literal {d} always returns \"\"",
-            .{bad.bad_idx},
-        );
-        writeExprErrorJsonToStderr(stderr, null, "SplitPartBadIndex", msg, bad.off, bad.len);
-        return 1;
-    }
-    if (sc.date_format) |bad| {
-        const msg = try std.fmt.allocPrint(
-            alloc,
-            "DATE_CONVERT format '{s}' has unrecognized letter '{c}' at offset {d} — wrap any literal letters in brackets, e.g. '[T]'",
-            .{ bad.fmt, bad.fmt[bad.pos], bad.pos },
-        );
-        writeExprErrorJsonToStderr(stderr, null, "DateFormatBadToken", msg, bad.off, bad.len);
+    // Validation core (runtime eval + static FnArgDoc checks) lives in
+    // inspect.validateExpr, shared with the bridge's bridge_eval_expr so
+    // editor-time and CLI diagnostics stay in sync. This handler only routes:
+    // error JSON → stderr (stdout stays empty on failure so callers can check
+    // the exit code without parsing); token off/len highlight the offending
+    // span in the GUI ExprPanel, emitted only when the parser pinned one.
+    if (try inspect.validateExpr(alloc, src)) |e| {
+        writeExprErrorJsonToStderr(stderr, null, e.name, e.detail, e.off, e.len);
         return 1;
     }
     // Success: emit a one-line `{"ok":true}` on stdout so callers can

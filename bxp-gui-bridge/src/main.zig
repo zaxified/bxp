@@ -19,7 +19,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
-const expr = @import("expr");
+const inspect = @import("inspect");
 
 /// Hard cap on captured bytes per stream (stdout, stderr) per call.
 /// 64 MB per stream covers every realistic `bridge_run` payload —
@@ -826,63 +826,26 @@ export fn bridge_eval_expr(
     const text = text_ptr[0..text_len];
     const out = out_buf[0..out_size];
 
-    // Empty col_index + ticker_map mirror `bxp-fmt --expr`: pure
-    // syntax/semantic check. `[ColumnName]` references resolve to ""
-    // (intentional — row-aware eval goes through bridge_eval_expr_trace).
-    var col_index = std.StringHashMap(usize).init(alloc);
-    var ticker_map = std.StringHashMap([]const u8).init(alloc);
-
-    var detail: []const u8 = "";
-    var err_offset: u32 = 0;
-    var err_len: u32 = 0;
-    const ctx = expr.Context{
-        .fields = &.{},
-        .col_index = &col_index,
-        .ticker_map = &ticker_map,
-        .lookup_table = null,
-        .alloc = alloc,
-        .error_detail = &detail,
-        .error_offset = &err_offset,
-        .error_len = &err_len,
-    };
-
-    _ = expr.eval(text, &ctx) catch |err| {
-        return writeExprErrorJson(out, err, detail, err_offset, err_len);
-    };
-
-    // Static-arg checks (FnArgDoc-driven walker) — catches literal-only
-    // mistakes that runtime eval skips when the call never executes
-    // (e.g. SPLIT_PART(..., 0) with no row context). Mirrors the same
-    // call from `BrokerConfig.validate()` in bxp-core/src/config.zig
-    // so editor-time and Save-time diagnostics stay in sync.
-    const sc = expr.staticCheckCalls(text);
-    if (sc.split_part) |bad| {
-        const msg = std.fmt.allocPrint(
-            alloc,
-            "index argument is 1-based; literal {d} always returns \"\"",
-            .{bad.bad_idx},
-        ) catch return @intFromEnum(BridgeFfiError.out_of_memory);
-        return writeStaticErrorJson(out, "SplitPartBadIndex", msg, bad.off, bad.len);
-    }
-    if (sc.date_format) |bad| {
-        const msg = std.fmt.allocPrint(
-            alloc,
-            "DATE_CONVERT format '{s}' has unrecognized letter '{c}' at offset {d} — wrap any literal letters in brackets, e.g. '[T]'",
-            .{ bad.fmt, bad.fmt[bad.pos], bad.pos },
-        ) catch return @intFromEnum(BridgeFfiError.out_of_memory);
-        return writeStaticErrorJson(out, "DateFormatBadToken", msg, bad.off, bad.len);
-    }
+    // Validation core (runtime eval against an empty row context + static
+    // FnArgDoc checks) lives in inspect.validateExpr, shared with bxp-fmt
+    // --expr so editor-time and CLI diagnostics stay in sync. `[ColumnName]`
+    // references resolve to "" here (row-aware eval goes through
+    // bridge_eval_expr_trace).
+    const maybe_err = inspect.validateExpr(alloc, text) catch
+        return @intFromEnum(BridgeFfiError.out_of_memory);
+    if (maybe_err) |e| return writeExprErrorJson(out, e.name, e.detail, e.off, e.len);
     return 0;
 }
 
-/// Serialise an expr eval error into the caller-supplied `out` buffer.
-/// Shape matches `bxp-fmt --expr` stderr JSON exactly, so Dart-side
-/// `BxpProcessClient.validateExpr` parses the bridge response identically
-/// to the subprocess response. Returns positive byte count on success or
-/// `BUF_TOO_SMALL` (-2) if `out` overflows mid-write.
+/// Serialise an expr validation finding (from inspect.validateExpr) into the
+/// caller-supplied `out` buffer: `{"error":<name>,"detail":<detail>,"off"?,
+/// "len"?}`. `off`/`len` appear only when `len > 0`. Shape matches `bxp-fmt
+/// --expr` stderr JSON exactly, so Dart-side `BxpProcessClient.validateExpr`
+/// parses the bridge response identically to the subprocess response. Returns
+/// positive byte count on success or `BUF_TOO_SMALL` (-2) on overflow.
 fn writeExprErrorJson(
     out: []u8,
-    err: anyerror,
+    name: []const u8,
     detail: []const u8,
     err_offset: u32,
     err_len: u32,
@@ -892,7 +855,7 @@ fn writeExprErrorJson(
     const buf_too_small = @intFromEnum(BridgeFfiError.buf_too_small);
     jw.beginObject() catch return buf_too_small;
     jw.objectField("error") catch return buf_too_small;
-    jw.write(@errorName(err)) catch return buf_too_small;
+    jw.write(name) catch return buf_too_small;
     jw.objectField("detail") catch return buf_too_small;
     jw.write(detail) catch return buf_too_small;
     if (err_len > 0) {
@@ -901,34 +864,6 @@ fn writeExprErrorJson(
         jw.objectField("len") catch return buf_too_small;
         jw.write(err_len) catch return buf_too_small;
     }
-    jw.endObject() catch return buf_too_small;
-    return @intCast(w.buffered().len);
-}
-
-/// Serialise a static-arg check finding into the caller-supplied `out`
-/// buffer. Same JSON shape as `writeExprErrorJson` but `name` is a
-/// hardcoded code string (e.g. `"SplitPartBadIndex"`) instead of a Zig
-/// `@errorName(...)`, and `off`/`len` are always emitted because the
-/// static walker always pins the offending literal token.
-fn writeStaticErrorJson(
-    out: []u8,
-    name: []const u8,
-    detail: []const u8,
-    off: u32,
-    len: u32,
-) i32 {
-    var w: std.Io.Writer = .fixed(out);
-    var jw: std.json.Stringify = .{ .writer = &w, .options = .{} };
-    const buf_too_small = @intFromEnum(BridgeFfiError.buf_too_small);
-    jw.beginObject() catch return buf_too_small;
-    jw.objectField("error") catch return buf_too_small;
-    jw.write(name) catch return buf_too_small;
-    jw.objectField("detail") catch return buf_too_small;
-    jw.write(detail) catch return buf_too_small;
-    jw.objectField("off") catch return buf_too_small;
-    jw.write(off) catch return buf_too_small;
-    jw.objectField("len") catch return buf_too_small;
-    jw.write(len) catch return buf_too_small;
     jw.endObject() catch return buf_too_small;
     return @intCast(w.buffered().len);
 }
@@ -972,128 +907,40 @@ export fn bridge_eval_expr_trace(
     const alloc = arena.allocator();
 
     const text = text_ptr[0..text_len];
-    const headers_json = headers_json_ptr[0..headers_json_len];
-    const fields_json = fields_json_ptr[0..fields_json_len];
     const out = out_buf[0..out_size];
-    const invalid_input = @intFromEnum(BridgeFfiError.invalid_input);
     const oom = @intFromEnum(BridgeFfiError.out_of_memory);
 
-    // Parse headers + fields into parallel string lists. Mirrors the
-    // header/field decoding in `bxp-fmt`'s `runExprTrace`: must be JSON
-    // arrays of strings with matching lengths; anything else is
-    // INVALID_INPUT (-3).
-    var headers_list: std.ArrayList([]const u8) = .empty;
-    var fields_list: std.ArrayList([]const u8) = .empty;
-    if (headers_json_len > 0) {
-        parseStringArrayInto(alloc, headers_json, &headers_list) catch return invalid_input;
-    }
-    if (fields_json_len > 0) {
-        parseStringArrayInto(alloc, fields_json, &fields_list) catch return invalid_input;
-    }
-    if (headers_list.items.len != fields_list.items.len) return invalid_input;
+    // Hand the headers/fields JSON blobs straight to inspect.evalTrace — the
+    // shared trace core also behind bxp-fmt --expr-trace and the MCP
+    // bxp_eval_trace tool. null blob = no row context. Ragged headers/fields
+    // are tolerated (matches the runtime engine + fmt; field access is by
+    // header→index), so unlike the old hand-rolled path this no longer rejects
+    // a length mismatch — the Dart caller always sends a matching pair anyway.
+    const headers_json: ?[]const u8 = if (headers_json_len > 0) headers_json_ptr[0..headers_json_len] else null;
+    const fields_json: ?[]const u8 = if (fields_json_len > 0) fields_json_ptr[0..fields_json_len] else null;
 
-    var col_index = std.StringHashMap(usize).init(alloc);
-    for (headers_list.items, 0..) |h, idx| {
-        col_index.put(h, idx) catch return oom;
-    }
-    var ticker_map = std.StringHashMap([]const u8).init(alloc);
-
-    // Accumulate the trace payload in an arena-backed writer first, then
-    // copy to out_buf at the end. Lets us know up-front whether the full
-    // payload fits in the caller's buffer (no "partial NDJSON without
-    // final sentinel" failure shape).
+    // Accumulate the trace payload (per-call lines + terminal sentinel) in an
+    // arena-backed writer first, then copy to out_buf — so we know up-front
+    // whether the full payload fits (no "partial NDJSON, no sentinel" shape).
     var aw: std.Io.Writer.Allocating = .init(alloc);
     defer aw.deinit();
 
-    var detail: []const u8 = "";
-    var err_offset: u32 = 0;
-    var err_len: u32 = 0;
-    const ctx = expr.Context{
-        .fields = fields_list.items,
-        .col_index = &col_index,
-        .ticker_map = &ticker_map,
-        .lookup_table = null,
-        .alloc = alloc,
-        .error_detail = &detail,
-        .error_offset = &err_offset,
-        .error_len = &err_len,
-        .trace_writer = &aw.writer,
+    const result = inspect.evalTrace(alloc, text, headers_json, fields_json, &aw.writer) catch |err| switch (err) {
+        error.InvalidRowJson => return @intFromEnum(BridgeFfiError.invalid_input),
+        else => return oom,
     };
-
-    if (expr.evalString(text, &ctx)) |result| {
-        if (!writeTraceFinalSentinel(&aw.writer, result)) return oom;
-    } else |err| {
-        if (!writeTraceErrorSentinel(&aw.writer, err, detail, err_offset, err_len)) return oom;
+    // On eval failure inspect.evalTrace returns the error sentinel rather than
+    // writing it; append it to the same stream (matches the old behaviour and
+    // the MCP tool — error sentinel rides inline after any partial traces).
+    if (result.error_json) |ej| {
+        aw.writer.writeAll(ej) catch return oom;
+        aw.writer.writeByte('\n') catch return oom;
     }
 
     const written = aw.written();
     if (written.len > out.len) return @intFromEnum(BridgeFfiError.buf_too_small);
     @memcpy(out[0..written.len], written);
     return @intCast(written.len);
-}
-
-/// Parse a JSON string-array blob into `dest`, duping each entry into
-/// `alloc`. Returns an error when the blob isn't a JSON array, when any
-/// entry isn't a string, or when allocation fails. Used by
-/// `bridge_eval_expr_trace` for the `--row-headers` / `--row-fields`
-/// pair.
-fn parseStringArrayInto(
-    alloc: std.mem.Allocator,
-    blob: []const u8,
-    dest: *std.ArrayList([]const u8),
-) !void {
-    const parsed = try std.json.parseFromSlice(std.json.Value, alloc, blob, .{});
-    defer parsed.deinit();
-    if (parsed.value != .array) return error.NotAnArray;
-    for (parsed.value.array.items) |item| {
-        if (item != .string) return error.NotAString;
-        // `parsed.deinit()` frees the original string bytes, so dupe into
-        // the arena before storing the reference.
-        try dest.append(alloc, try alloc.dupe(u8, item.string));
-    }
-}
-
-/// Append `{"t":"final","value":"..."}\n` to `w`. Returns false if any
-/// write fails (caller maps to BridgeFfiError.out_of_memory — the only
-/// realistic failure on an Allocating writer).
-fn writeTraceFinalSentinel(w: *std.Io.Writer, value: []const u8) bool {
-    var jw: std.json.Stringify = .{ .writer = w, .options = .{} };
-    jw.beginObject() catch return false;
-    jw.objectField("t") catch return false;
-    jw.write("final") catch return false;
-    jw.objectField("value") catch return false;
-    jw.write(value) catch return false;
-    jw.endObject() catch return false;
-    w.writeByte('\n') catch return false;
-    return true;
-}
-
-/// Append `{"t":"error","error":"...","detail":"...","off":N,"len":N}\n`
-/// to `w`. `off`/`len` are omitted when the parser didn't pin a token.
-fn writeTraceErrorSentinel(
-    w: *std.Io.Writer,
-    err: anyerror,
-    detail: []const u8,
-    err_offset: u32,
-    err_len: u32,
-) bool {
-    var jw: std.json.Stringify = .{ .writer = w, .options = .{} };
-    jw.beginObject() catch return false;
-    jw.objectField("t") catch return false;
-    jw.write("error") catch return false;
-    jw.objectField("error") catch return false;
-    jw.write(@errorName(err)) catch return false;
-    jw.objectField("detail") catch return false;
-    jw.write(detail) catch return false;
-    if (err_len > 0) {
-        jw.objectField("off") catch return false;
-        jw.write(err_offset) catch return false;
-        jw.objectField("len") catch return false;
-        jw.write(err_len) catch return false;
-    }
-    jw.endObject() catch return false;
-    w.writeByte('\n') catch return false;
-    return true;
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────
@@ -1819,8 +1666,11 @@ test "bridge_eval_expr_trace resolves column references via headers/fields" {
     try testing.expect(std.mem.indexOf(u8, out, "\"value\":\"B\"") != null);
 }
 
-test "bridge_eval_expr_trace returns INVALID_INPUT on length mismatch" {
-    const text: []const u8 = "[Action]";
+test "bridge_eval_expr_trace tolerates ragged headers/fields (matches engine)" {
+    // Ragged lengths used to be INVALID_INPUT; inspect.evalTrace tolerates them
+    // like the runtime engine (field access is by header→index; a missing index
+    // yields "") so a trailing-delimiter CSV row doesn't blank the trace.
+    const text: []const u8 = "ABS(-2)";
     const headers: []const u8 = "[\"A\",\"B\"]";
     const fields: []const u8 = "[\"only-one\"]";
     var buf: [256]u8 = undefined;
@@ -1834,7 +1684,8 @@ test "bridge_eval_expr_trace returns INVALID_INPUT on length mismatch" {
         &buf,
         buf.len,
     );
-    try testing.expectEqual(@as(i32, -3), n);
+    try testing.expect(n > 0);
+    try testing.expect(std.mem.indexOf(u8, buf[0..@intCast(n)], "\"t\":\"final\"") != null);
 }
 
 test "bridge_eval_expr_trace returns INVALID_INPUT on non-array JSON" {

@@ -30,7 +30,11 @@ pub fn build(b: *std.Build) void {
     // operations (e.g. `bridge_eval_expr`) so the Dart GUI can avoid the
     // ~50 ms spawn cost of `bxp-fmt --expr` per keystroke.
     const bxp_core = b.dependency("bxp_core", .{ .target = target, .optimize = optimize });
-    const expr_mod = bxp_core.module("expr");
+    // inspect: the shared stateless core (validate/eval/eval-trace/docs/templates)
+    // also wrapped by bxp-fmt and bxp-mcp, so the bridge's in-proc paths share
+    // one implementation instead of hand-rolling their own. (inspect pulls in
+    // expr transitively, so the bridge no longer imports expr directly.)
+    const inspect_mod = bxp_core.module("inspect");
 
     // Shared library: bxp-gui-bridge.dll on Windows, libbxp-gui-bridge.so
     // on Linux, libbxp-gui-bridge.dylib on macOS. Loaded at runtime by
@@ -44,7 +48,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "build_options", .module = options.createModule() },
-                .{ .name = "expr", .module = expr_mod },
+                .{ .name = "inspect", .module = inspect_mod },
             },
         }),
     });
@@ -80,7 +84,7 @@ pub fn build(b: *std.Build) void {
             .imports = &.{
                 .{ .name = "build_options", .module = options.createModule() },
                 .{ .name = "test_options", .module = test_options.createModule() },
-                .{ .name = "expr", .module = expr_mod },
+                .{ .name = "inspect", .module = inspect_mod },
             },
         }),
     });
