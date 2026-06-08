@@ -19,7 +19,7 @@ as a local path dependency.
 | `expr`        | `expr.zig`        | `eval()`, `evalString()`, `Context`, `Value`, `FnDoc` catalog             |
 | `datefmt`     | `datefmt.zig`     | `parse()`, `format()`, civil/arithmetic helpers — date core (file-rel @import by `expr.zig`, not a named module) |
 | `decimal`     | `decimal.zig`     | `Decimal` fixed-point i128 @ 1e12 — numeric core (named `"decimal"` module, shared by every input path) |
-| `unicode`     | `unicode.zig`     | `toUpperStr()`, `toLowerStr()` — UTF-8 case mapping over `uucode` tables (file-rel @import by `expr.zig`, not a named module) |
+| `unicode`     | `unicode.zig`     | `toUpperStr()`, `toLowerStr()`, `unaccentStr()` — UTF-8 case mapping + diacritic stripping over `uucode` tables (file-rel @import by `expr.zig`, not a named module) |
 | `config`      | `config.zig`      | `Config`, `BrokerConfig`, `load()`, `validate()`, `FieldDoc`              |
 | `json`        | `json.zig`        | `scanColNames()` + `RecordReader` — streaming JSON array-of-objects input |
 | `btrace`      | `btrace.zig`      | Binary trace `Writer` / `Reader` for `--trace=bin`                        |
@@ -81,7 +81,7 @@ Expression evaluator for `input_schema` and `row_rules` in bxp-cli.json.
 
 **Built-in functions:** IF, ABS, DATE_CONVERT, PRICE_VALUE, PRICE_CURRENCY,
 TICKER, LOOKUP, SPLIT_PART, CONTAINS, REPLACE, TRIM, ROUND, FLOOR, CEILING,
-NOW, RAND, COALESCE, FIELDS, UPPER, LOWER, LEFT, RIGHT, SUBSTR,
+NOW, RAND, COALESCE, FIELDS, UPPER, LOWER, UNACCENT, LEFT, RIGHT, SUBSTR,
 STARTS_WITH, ENDS_WITH, NULLIF, IN, LEN, GREATEST, LEAST, DATEADD,
 DATEDIFF, WORKDAY, YEAR, MONTH, DAY, WEEKDAY, EOMONTH, NTH_DOW.
 
@@ -93,22 +93,30 @@ file to keep in sync.
 
 ### unicode.zig
 
-UTF-8 text operations behind expr.zig's `UPPER` / `LOWER` builtins (Layer 1 of
-the planned Unicode subsystem; `unaccent` and the Layer 0 `csv_*_encoding`
-transcoding come later). File-relative `@import` by `expr.zig`, not a named
+UTF-8 text operations behind expr.zig's `UPPER` / `LOWER` / `UNACCENT` builtins
+(Layer 1 of the planned Unicode subsystem; the Layer 0 `csv_*_encoding`
+transcoding comes later). File-relative `@import` by `expr.zig`, not a named
 module.
 
 - `toUpperStr(alloc, s)` / `toLowerStr(alloc, s)` — full-Unicode case mapping.
   Codepoint walk, not a byte loop, so output byte length may differ from input
   (`ß` → `SS`); callers must not pre-size to `s.len`. Latin/Greek/Cyrillic etc.
   map correctly; unicameral scripts (CJK/Arabic/Hebrew) pass through unchanged.
+- `unaccentStr(alloc, s)` — Latin-scope diacritic stripping (`café`→`cafe`,
+  `ß`→`ss`, `ø`→`o`). Recurses the canonical (NFD) decomposition, drops
+  combining marks (non-zero canonical combining class), and keeps base letters;
+  a small `latinHandlist` covers the non-decomposing Latin letters
+  (`ß ø ł đ æ þ` …). Non-Latin keeps its base script (Greek `Ά`→`Α`, NOT `A`);
+  compatibility decompositions (ligatures, `①`) are deliberately not folded.
 - Data-lenient: a byte sequence that is not valid UTF-8 is emitted verbatim
   one byte at a time — never an error, never a crash (matches the previous
   ASCII byte loop's passthrough and the blank-field resilience contract).
 - Unicode data comes from the `uucode` fetch dependency (see _External
   dependency_ below); this file is only the UTF-8 plumbing.
-- Inline tests (8): ASCII, Latin-1 accents, Swedish/German/Cyrillic/Greek,
-  ß→SS expansion, unicameral passthrough, empty, invalid-UTF-8 passthrough.
+- Inline tests (12): case mapping (ASCII, Latin-1 accents,
+  Swedish/German/Cyrillic/Greek, ß→SS, unicameral passthrough, empty,
+  invalid-UTF-8); unaccent (Latin strip, hand-list letters, non-Latin
+  base-script keep, empty + invalid-UTF-8 passthrough).
 
 ### config.zig
 

@@ -2420,6 +2420,27 @@ fn adaptLower(p: *Parser, args: []Value) anyerror!Value {
     return builtinLower(args, p.ctx.alloc);
 }
 
+// ── UNACCENT ────────────────────────────────────────────────────────────
+const unaccent_doc: FnDoc = .{
+    .name = "UNACCENT",
+    .signature = "UNACCENT(s)",
+    .example = "UNACCENT('Café Crème')",
+    .description = "Strip diacritics from Latin text (café → cafe, ÀÉÎ → AEI, ß → ss, ø → o). Latin-scope like Postgres unaccent: non-Latin letters keep their base script (Greek Ά → Α, not A) and CJK/Arabic pass through unchanged; ligatures are NOT folded. Invalid UTF-8 bytes pass through verbatim.",
+    .args = &.{.{ .name = "s", .kind = .string }},
+    .min_args = 1,
+    .max_args = 1,
+};
+fn builtinUnaccent(args: []Value, alloc: std.mem.Allocator) !Value {
+    const s = switch (args[0]) {
+        .string => |v| v,
+        else => return error.StringExpected,
+    };
+    return Value{ .string = try unicode.unaccentStr(alloc, s) };
+}
+fn adaptUnaccent(p: *Parser, args: []Value) anyerror!Value {
+    return builtinUnaccent(args, p.ctx.alloc);
+}
+
 // ── STARTS_WITH ─────────────────────────────────────────────────────────
 const starts_with_doc: FnDoc = .{
     .name = "STARTS_WITH",
@@ -3212,6 +3233,7 @@ pub const builtins = [_]FnEntry{
     .{ .name = "SUBSTR",         .doc = substr_doc,         .impl = adaptSubstr },
     .{ .name = "UPPER",          .doc = upper_doc,          .impl = adaptUpper },
     .{ .name = "LOWER",          .doc = lower_doc,          .impl = adaptLower },
+    .{ .name = "UNACCENT",       .doc = unaccent_doc,       .impl = adaptUnaccent },
     .{ .name = "STARTS_WITH",    .doc = starts_with_doc,    .impl = adaptStartsWith },
     .{ .name = "ENDS_WITH",      .doc = ends_with_doc,      .impl = adaptEndsWith },
     .{ .name = "NULLIF",         .doc = nullif_doc,         .impl = adaptNullif },
@@ -4541,6 +4563,19 @@ test "eval: UPPER/LOWER are full-Unicode" {
     try testing.expectEqualStrings("STRASSE", try evalString("UPPER('straße')", &ctx));
     // Unicameral scripts pass through unchanged.
     try testing.expectEqualStrings("日本語", try evalString("UPPER('日本語')", &ctx));
+}
+
+test "eval: UNACCENT strips Latin diacritics" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    try testing.expectEqualStrings("Creme brulee", try evalString("UNACCENT('Crème brûlée')", &ctx));
+    try testing.expectEqualStrings("strasse", try evalString("UNACCENT('straße')", &ctx));
+    try testing.expectEqualStrings("Zlutoucky kun", try evalString("UNACCENT('Žluťoučký kůň')", &ctx));
+    // non-Latin keeps its script (no romanisation)
+    try testing.expectEqualStrings("日本語", try evalString("UNACCENT('日本語')", &ctx));
 }
 
 test "eval: STARTS_WITH and ENDS_WITH" {

@@ -165,18 +165,20 @@ ceiling drops from `O(workbook size)` to
 
 ### Unicode / text subsystem (one cohesive module)
 
-> **Status 2026-06-08.** Layer 1 case mapping **shipped**: `UPPER` / `LOWER`
-> are now full-Unicode (`café`→`CAFÉ`, `ß`→`SS`, `я`→`Я`; unicameral scripts +
-> invalid UTF-8 pass through) via `bxp-core/src/unicode.zig`. The Unicode data
-> tables come from the **uucode** library (MIT), a field-selected fetch
-> dependency pinned in `bxp-core/build.zig.zon` — **not** in-house generation.
-> The zero-external-dep stance was deliberately relaxed (it was a state, not a
-> rule): uucode delivers correct full-Unicode case mapping incl. `ß`→`SS`, zero
-> runtime allocation, and a ~5 MB field-pruned table source, which beat
-> hand-generating + maintaining tables from UCD. See the `reference_zig_unicode_libs`
-> memory for the uucode-vs-zg evaluation. **Remaining: `unaccent` (Layer 1) and
-> the Layer 0 `csv_*_encoding` transcoding** (both still to build; uucode already
-> exposes the decomposition fields `unaccent` needs).
+> **Status 2026-06-08.** **Layer 1 fully shipped** in
+> `bxp-core/src/unicode.zig`: `UPPER` / `LOWER` are full-Unicode
+> (`café`→`CAFÉ`, `ß`→`SS`, `я`→`Я`) and `UNACCENT` strips Latin diacritics
+> (`café`→`cafe`, `ß`→`ss`, `ø`→`o`; non-Latin keeps its base script, e.g.
+> Greek `Ά`→`Α`, not `A`). The Unicode data tables come from the **uucode**
+> library (MIT), a field-selected fetch dependency pinned in
+> `bxp-core/build.zig.zon` — **not** in-house generation. The zero-external-dep
+> stance was deliberately relaxed (it was a state, not a rule): uucode delivers
+> correct full-Unicode case mapping incl. `ß`→`SS` plus the canonical
+> decomposition `unaccent` needs, with zero runtime allocation and a ~5 MB
+> field-pruned table source, beating hand-generating + maintaining UCD tables.
+> See the `reference_zig_unicode_libs` memory for the uucode-vs-zg evaluation.
+> **Remaining: only the Layer 0 `csv_*_encoding` transcoding** (in-house,
+> 256-entry single-byte tables — uucode does not cover it).
 
 As bxp generalises beyond EU broker CSVs into a general CSV→JSON / data
 cleaning tool, three separate gaps all turn out to be the same problem
@@ -216,18 +218,16 @@ us be correct globally without bloat.
   case tables come from uucode (`uppercase_mapping` / `lowercase_mapping`
   fields, generated from `UnicodeData.txt` + `SpecialCasing.txt`
   upstream), not hand-rolled here.
-- **`unaccent` → deliberately Latin-scope (this IS the proper answer,
-  not a shortcut).** Renamed from the working title `TO_ASCII` per user
-  preference, matching Postgres's `unaccent` extension. Strips diacritics
-  for Latin (`café`→`cafe`, `ß`→`ss`, `ø`→`o`). For non-Latin scripts the
-  correct behaviour is **pass-through** (keep the UTF-8), NOT romanisation:
-  `unaccent('日本語')`→`'Ri Ben Yu'` is lossy, ambiguous, and almost never
-  wanted — which is exactly why Postgres `unaccent` is Latin-focused too.
-  Full unidecode-style romanise-everything is explicitly out of scope.
-  Generated from Unicode decomposition (NFD, strip combining marks) + a
-  small hand-list for non-decomposing letters (`ß ø ł đ æ þ`), i.e. the
-  CLDR `Latin-ASCII.xml` data Postgres's `generate_unaccent_rules.py`
-  uses. Distinct table from the case table (`ü`→case `Ü`, translit `u`).
+- **`unaccent` → deliberately Latin-scope — SHIPPED 2026-06-08.** Renamed
+  from the working title `TO_ASCII` per user preference, matching Postgres's
+  `unaccent` extension. Strips diacritics for Latin (`café`→`cafe`, `ß`→`ss`,
+  `ø`→`o`). For non-Latin scripts the behaviour is **pass-through** of the
+  base script (keep the UTF-8), NOT romanisation: `unaccent('日本語')`→`日本語`,
+  Greek `Ά`→`Α` (not `A`) — lossy unidecode-style romanise-everything is
+  explicitly out of scope, same as Postgres. Implemented in `unicode.zig` by
+  recursing uucode's canonical (NFD) decomposition, dropping combining marks,
+  and applying a `latinHandlist` for the non-decomposing letters
+  (`ß ø ł đ æ þ` …). Compatibility decompositions (ligatures, `①`) are not folded.
 - **Encoding tables → tiered.** Ship **European single-byte first**
   (Latin-1, Windows-1252, Latin-2/9 — trivial 256-entry tables, a few KB
   total). **CJK multibyte** (Shift-JIS, GB18030, Big5, EUC-JP/KR) are

@@ -4,16 +4,23 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // uucode supplies the Unicode tables behind expr.zig's UPPER/LOWER (and the
-    // upcoming `unaccent`). Field-selected: only the case-mapping tables we use
-    // are generated + compiled in, keeping the binary small. The dependency's
-    // own table generator runs in Debug + LLVM internally (it works around the
-    // Zig x86 backend bug itself), so our optimize mode only governs the thin
-    // lookup `lib` module.
+    // uucode supplies the Unicode tables behind expr.zig's text builtins:
+    // UPPER/LOWER (case mapping) and UNACCENT (canonical decomposition + the
+    // combining class, from which unicode.zig strips diacritics). Field-
+    // selected: only these tables are generated + compiled in, keeping the
+    // binary small. The dependency's own table generator runs in Debug + LLVM
+    // internally (it works around the Zig x86 backend bug itself), so our
+    // optimize mode only governs the thin lookup `lib` module.
     const uucode_mod = b.dependency("uucode", .{
         .target = target,
         .optimize = optimize,
-        .fields = @as([]const []const u8, &.{ "uppercase_mapping", "lowercase_mapping" }),
+        .fields = @as([]const []const u8, &.{
+            "uppercase_mapping",
+            "lowercase_mapping",
+            "decomposition_mapping",
+            "decomposition_type",
+            "canonical_combining_class",
+        }),
     }).module("uucode");
 
     // json5 is used internally by config — export it and wire it in.
