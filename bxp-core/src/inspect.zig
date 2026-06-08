@@ -368,6 +368,108 @@ pub fn evalExpr(
     return aw.toOwnedSlice();
 }
 
+/// Result of a traced single-expression eval. The per-call NDJSON trace lines
+/// (and, on success, the final sentinel) are written to the caller's
+/// `trace_out`; only the failure sentinel is returned here, so the caller can
+/// route it to a separate channel (bxp-fmt → stderr; bxp-mcp → its result).
+pub const TraceResult = struct {
+    /// On eval failure: the error-sentinel JSON line (no trailing newline) —
+    /// `{"t":"error","error":…,"detail":…,"off"?,"len"?}`. null on success.
+    error_json: ?[]u8,
+    exit_code: u8, // 0 success, 1 eval error
+};
+
+/// Evaluate one expression with per-call NDJSON tracing. The expr engine emits
+/// one NDJSON line per function call to `trace_out`; on success this also writes
+/// the final sentinel `{"t":"final","value":…}` there (newline-terminated). On
+/// failure no final sentinel is written — the error sentinel is returned in
+/// `error_json` for the caller to route, and any partial trace lines already on
+/// `trace_out` are kept. The caller owns flushing `trace_out`.
+///
+/// Shared by bxp-fmt `--expr-trace` (trace_out = stdout, error → stderr) and the
+/// MCP `bxp_eval_trace` tool (trace_out = a buffer; error appended after). Bad
+/// `headers_json`/`fields_json` shape → error.InvalidRowJson.
+pub fn evalTrace(
+    a: std.mem.Allocator,
+    src: []const u8,
+    headers_json: ?[]const u8,
+    fields_json: ?[]const u8,
+    trace_out: *std.Io.Writer,
+) !TraceResult {
+    var col_index = std.StringHashMap(usize).init(a);
+    var ticker_map = std.StringHashMap([]const u8).init(a);
+
+    var headers_list: std.ArrayList([]const u8) = .empty;
+    var fields_list: std.ArrayList([]const u8) = .empty;
+    if (headers_json) |hj| try parseStringArray(a, hj, &headers_list);
+    if (fields_json) |fj| try parseStringArray(a, fj, &fields_list);
+    for (headers_list.items, 0..) |h, idx| try col_index.put(h, idx);
+
+    var detail: []const u8 = "";
+    var err_offset: u32 = 0;
+    var err_len: u32 = 0;
+    const ctx = expr_mod.Context{
+        .fields = fields_list.items,
+        .col_index = &col_index,
+        .ticker_map = &ticker_map,
+        .lookup_table = null,
+        .alloc = a,
+        .error_detail = &detail,
+        .error_offset = &err_offset,
+        .error_len = &err_len,
+        // One NDJSON line per function call streams here during eval.
+        .trace_writer = trace_out,
+    };
+
+    if (expr_mod.evalString(src, &ctx)) |result| {
+        var jw: std.json.Stringify = .{ .writer = trace_out, .options = .{} };
+        try jw.beginObject();
+        try jw.objectField("t");
+        try jw.write("final");
+        try jw.objectField("value");
+        try jw.write(result);
+        try jw.endObject();
+        try trace_out.writeByte('\n');
+        return .{ .error_json = null, .exit_code = 0 };
+    } else |err| {
+        const error_json = try formatExprErrorJson(a, "error", @errorName(err), detail, err_offset, err_len);
+        return .{ .error_json = error_json, .exit_code = 1 };
+    }
+}
+
+/// Serialize an expression error sentinel (no trailing newline) into arena-owned
+/// bytes: `{"t":<t>,"error":<name>,"detail":<detail>,"off"?,"len"?}`. `off`/`len`
+/// appear only when `len > 0`. Mirrors bxp-fmt's stderr sentinel exactly.
+fn formatExprErrorJson(
+    a: std.mem.Allocator,
+    t: ?[]const u8,
+    err_name: []const u8,
+    detail: []const u8,
+    off: u32,
+    len: u32,
+) ![]u8 {
+    var aw: std.Io.Writer.Allocating = .init(a);
+    errdefer aw.deinit();
+    var jw: std.json.Stringify = .{ .writer = &aw.writer, .options = .{} };
+    try jw.beginObject();
+    if (t) |tt| {
+        try jw.objectField("t");
+        try jw.write(tt);
+    }
+    try jw.objectField("error");
+    try jw.write(err_name);
+    try jw.objectField("detail");
+    try jw.write(detail);
+    if (len > 0) {
+        try jw.objectField("off");
+        try jw.write(off);
+        try jw.objectField("len");
+        try jw.write(len);
+    }
+    try jw.endObject();
+    return aw.toOwnedSlice();
+}
+
 /// Parse a JSON array of strings into `list` (arena-duped). Returns
 /// error.InvalidRowJson on any shape mismatch.
 fn parseStringArray(a: std.mem.Allocator, json_text: []const u8, list: *std.ArrayList([]const u8)) !void {

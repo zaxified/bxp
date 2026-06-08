@@ -15,6 +15,7 @@ pub const Tool = enum {
     bxp_validate,
     bxp_eval,
     bxp_eval_batch,
+    bxp_eval_trace,
     bxp_docs,
     bxp_list_templates,
     bxp_fetch_template,
@@ -27,6 +28,7 @@ pub const tools_list =
     \\{"name":"bxp_validate","description":"Validate a bxp-cli config (JSON5). Returns annotated JSON with $err_/$warn/$info diagnostics inserted before each offending key.","inputSchema":{"type":"object","properties":{"config":{"type":"string","description":"The full bxp-cli config text (JSON5)."}},"required":["config"]}},
     \\{"name":"bxp_eval","description":"Evaluate one bxp expression against an optional row context. Returns {ok,value} or {ok:false,error,detail,off,len}.","inputSchema":{"type":"object","properties":{"expr":{"type":"string","description":"The expression text, e.g. UPPER('hi') or [Price]*[Qty]."},"headers":{"type":"string","description":"Optional JSON array of column header names, e.g. [\"Price\",\"Qty\"]."},"fields":{"type":"string","description":"Optional JSON array of row field values (parallel to headers)."}},"required":["expr"]}},
     \\{"name":"bxp_eval_batch","description":"Evaluate many bxp expressions against one row in a single call. Returns {results:[{ok,value}|{ok:false,error,detail,off,len}, ...]} aligned to the input order. A well-formed request always succeeds; per-expr failures are carried by each result's ok flag.","inputSchema":{"type":"object","properties":{"headers":{"type":"array","items":{"type":"string"},"description":"Column header names."},"fields":{"type":"array","items":{"type":"string"},"description":"Row field values (parallel to headers; ragged rows tolerated)."},"exprs":{"type":"array","items":{"type":"string"},"description":"Expressions to evaluate against the row."},"ticker_map":{"type":"object","description":"Optional symbol-to-ticker overrides consulted by TICKER()."},"lookups":{"type":"object","description":"Optional flat pre_pass lookup blob for LOOKUP() (NUL-separated name/key/field keys)."},"single_prepass_name":{"type":"string","description":"Optional implicit pre_pass name enabling 2-arg LOOKUP(key, field)."}},"required":["headers","fields","exprs"]}},
+    \\{"name":"bxp_eval_trace","description":"Evaluate one bxp expression with a per-call execution trace. Returns NDJSON (one JSON object per line): one {\"fn\",\"src_start\",\"src_end\",\"value\"} line per function call as the engine evaluates inside-out, then a terminal line — {\"t\":\"final\",\"value\":\"...\"} on success or {\"t\":\"error\",\"error\",\"detail\",\"off\",\"len\"} on failure. Use to debug HOW a complex expression computes its result, beyond bxp_eval's final value.","inputSchema":{"type":"object","properties":{"expr":{"type":"string","description":"The expression text."},"headers":{"type":"string","description":"Optional JSON array of column header names, e.g. [\"Price\",\"Qty\"]."},"fields":{"type":"string","description":"Optional JSON array of row field values (parallel to headers)."}},"required":["expr"]}},
     \\{"name":"bxp_docs","description":"Return the full bxp language/schema documentation as JSON (functions, keywords, operators, tokens, config_schema).","inputSchema":{"type":"object","properties":{},"required":[]}},
     \\{"name":"bxp_list_templates","description":"List every conversion template declared in a bxp-cli config (JSON5). Returns {templates:[{id,data_dir,file_pattern_in,file_pattern_out,file_type_in,file_type_out,description}, ...]}; no semantic validation, so broken templates still appear with an error field.","inputSchema":{"type":"object","properties":{"config":{"type":"string","description":"The full bxp-cli config text (JSON5)."}},"required":["config"]}},
     \\{"name":"bxp_fetch_template","description":"Fetch one conversion template's raw JSON by id from a bxp-cli config (JSON5). Returns the template object, or {\"$err_1\":\"...\"} if the id is absent.","inputSchema":{"type":"object","properties":{"config":{"type":"string","description":"The full bxp-cli config text (JSON5)."},"id":{"type":"string","description":"The template id to fetch."}},"required":["config","id"]}},
@@ -38,6 +40,7 @@ pub fn parse(name: []const u8) ?Tool {
     if (std.mem.eql(u8, name, "bxp_validate")) return .bxp_validate;
     if (std.mem.eql(u8, name, "bxp_eval")) return .bxp_eval;
     if (std.mem.eql(u8, name, "bxp_eval_batch")) return .bxp_eval_batch;
+    if (std.mem.eql(u8, name, "bxp_eval_trace")) return .bxp_eval_trace;
     if (std.mem.eql(u8, name, "bxp_docs")) return .bxp_docs;
     if (std.mem.eql(u8, name, "bxp_list_templates")) return .bxp_list_templates;
     if (std.mem.eql(u8, name, "bxp_fetch_template")) return .bxp_fetch_template;
@@ -51,6 +54,7 @@ pub fn dispatch(alloc: std.mem.Allocator, tool: Tool, args: std.json.Value, out:
         .bxp_validate => validate(alloc, args, out),
         .bxp_eval => eval(alloc, args, out),
         .bxp_eval_batch => evalBatch(alloc, args, out),
+        .bxp_eval_trace => evalTrace(alloc, args, out),
         .bxp_docs => docs(alloc, out),
         .bxp_list_templates => listTemplates(alloc, args, out),
         .bxp_fetch_template => fetchTemplate(alloc, args, out),
@@ -108,6 +112,32 @@ fn evalBatch(alloc: std.mem.Allocator, args: std.json.Value, out: *std.ArrayList
         return;
     }
     out.appendSlice(alloc, result.json) catch {};
+}
+
+fn evalTrace(alloc: std.mem.Allocator, args: std.json.Value, out: *std.ArrayList(u8)) void {
+    const expr = strField(args, "expr") orelse {
+        appendErr(alloc, out, "missing 'expr'");
+        return;
+    };
+    const headers = strField(args, "headers");
+    const fields = strField(args, "fields");
+    // Collect the NDJSON stream (per-call traces + final sentinel) into a buffer
+    // and append the error sentinel (if any) so the agent gets the whole trace
+    // plus outcome in one blob — the MCP analogue of fmt's stdout+stderr split.
+    var aw: std.Io.Writer.Allocating = .init(alloc);
+    const result = inspect.evalTrace(alloc, expr, headers, fields, &aw.writer) catch |err| {
+        appendErr(alloc, out, @errorName(err));
+        return;
+    };
+    const trace = aw.toOwnedSlice() catch {
+        appendErr(alloc, out, "OutOfMemory");
+        return;
+    };
+    out.appendSlice(alloc, trace) catch {};
+    if (result.error_json) |ej| {
+        out.appendSlice(alloc, ej) catch {};
+        out.appendSlice(alloc, "\n") catch {};
+    }
 }
 
 fn listTemplates(alloc: std.mem.Allocator, args: std.json.Value, out: *std.ArrayList(u8)) void {

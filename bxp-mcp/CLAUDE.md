@@ -48,6 +48,7 @@ invokes it from a location where `bxp-cli` sits alongside.
 | `bxp_validate` | `annotateRaw(config_text, "<config>", 0)` | Annotated JSON with `$err_`/`$warn_`/`$info_` diagnostics (byte-identical to `bxp-fmt --config`). |
 | `bxp_eval` | `evalExpr(expr, headers?, fields?)` | `{"ok":true,"value":"..."}` or `{"ok":false,"error","detail","off","len"}`. |
 | `bxp_eval_batch` | `evalBatch(request)` | `{"results":[{"ok",…}, …]}` (byte-identical to `bxp-fmt --expr-batch`). The call `arguments` object _is_ the request `{headers, fields, exprs, ticker_map?, lookups?, single_prepass_name?}`. |
+| `bxp_eval_trace` | `evalTrace(expr, headers?, fields?, out)` | NDJSON: one `{"fn",…,"value"}` line per function call, then `{"t":"final","value":…}` or `{"t":"error",…}`. Same bytes as `bxp-fmt --expr-trace` (stdout trace + the stderr error sentinel concatenated into one blob). |
 | `bxp_docs` | `docsJson()` | Full language/schema JSON (`functions`, `keywords`, `operators`, `tokens`, `config_schema`). |
 | `bxp_list_templates` | `listTemplates(config_text)` | `{"templates":[{id,data_dir,…}, …]}` (byte-identical to `bxp-fmt --config … --list-templates`); no semantic validation. |
 | `bxp_fetch_template` | `fetchTemplate(config_text, id)` | The raw template JSON, or `{"$err_1":"…"}` when the id / config is bad (byte-identical to `bxp-fmt --config … --fetch-template <id>`). |
@@ -136,11 +137,19 @@ Register with an MCP client (e.g. Claude Code, `~/.claude.json`):
    `main_tests` in `bxp-fmt/build.zig`. Verified: `test-01-console.sh` green and
    `bxp-mcp bxp_validate` byte-identical to `bxp-fmt --config` on two datasets.
 
-2. **Share the expr-trace core.** `bxp-fmt --expr-trace` streams per-call
-   NDJSON to stdout (GUI playground contract) and sends its error sentinel to
-   stderr; `inspect.evalExpr` returns a single `{ok,value}`/`{ok:false,…}`
-   result instead. They share `expr.evalString` but not the output shaping.
-   Factor a common eval core if/when a second NDJSON-streaming consumer appears.
+2. **Share the expr-trace core — ✅ DONE (2026-06-08).** The expr-trace core
+   moved into `inspect.evalTrace(src, headers?, fields?, trace_out)`: it streams
+   the per-call NDJSON + (on success) the final sentinel to the caller's writer
+   and returns the failure sentinel for the caller to route. `bxp-fmt
+   --expr-trace` is now a thin wrapper (trace_out = stdout, error → stderr); the
+   MCP `bxp_eval_trace` tool points trace_out at a buffer and appends the error
+   sentinel. Verified byte-identical to the old `--expr-trace` on success, and
+   `bxp_eval_trace` == fmt's `stdout + stderr` on failure. (Side fix: fmt now
+   flushes partial traces on the error path too — previously a sub-buffer-size
+   partial trace was silently dropped despite the "traces are kept" contract.)
+   This was the last expr-family logic fmt still owned alone; `runDocs` and
+   `runExpr` are the only trivial leftovers before fmt can be retired (both
+   already near-equivalent to `inspect.docsJson` / `inspect.evalExpr`).
 
 3. **More tools — ✅ DONE (2026-06-08).** `bxp_eval_batch`, `bxp_list_templates`,
    and `bxp_fetch_template` shipped. The `--expr-batch` core moved into

@@ -55,6 +55,7 @@ call(4, "bxp_eval_batch",    {"headers":["P"],"fields":["7"],"exprs":["[P]","BAD
 call(5, "bxp_validate",      {"config": cfg})
 call(6, "bxp_list_templates",{"config": cfg})
 call(7, "bxp_simulate",      {"config": cfg, "template":"trading212_to_wealthfolio", "csv": csv})
+call(8, "bxp_eval_trace",    {"expr":"ABS(-2)"})
 PY
 
     "$stage/bxp-mcp" <"$reqs" >"$resp" || {
@@ -81,8 +82,9 @@ def tool_json(i):
 assert by_id[1]["result"]["protocolVersion"] == "2025-06-18", by_id[1]
 
 names = {t["name"] for t in by_id[2]["result"]["tools"]}
-assert names == {"bxp_validate","bxp_eval","bxp_eval_batch","bxp_docs",
-                 "bxp_list_templates","bxp_fetch_template","bxp_simulate"}, names
+assert names == {"bxp_validate","bxp_eval","bxp_eval_batch","bxp_eval_trace",
+                 "bxp_docs","bxp_list_templates","bxp_fetch_template",
+                 "bxp_simulate"}, names
 
 assert tool_json(3) == {"ok": True, "value": "3"}, tool_json(3)
 
@@ -100,6 +102,12 @@ assert sim["ok"] is True and sim["status"] == "ok", sim
 got = sim["outputs"][0]["csv"]
 want = open(os.environ["EXPECTED_CSVX"]).read()
 assert got == want, "bxp_simulate output != dataset .expected"
+
+# bxp_eval_trace — NDJSON: a per-call line for ABS, then the final sentinel
+trace = by_id[8]["result"]["content"][0]["text"].strip().splitlines()
+events = [json.loads(ln) for ln in trace if ln]
+assert any(e.get("fn") == "ABS" for e in events), events
+assert events[-1] == {"t": "final", "value": "2"}, events[-1]
 PY
 
     rm -rf "$stage"; rm -f "$reqs" "$resp"

@@ -49,8 +49,9 @@ bxp/
 │   │   │                   # config FieldDoc tables; serves bxp-fmt --docs
 │   │   ├── diagnostics.zig # Structured Diagnostic / Severity collector for
 │   │   │                   # bxp-fmt --config deep validation
-│   │   └── inspect.zig     # Shared stateless core (validate/eval/eval-batch/docs/
-│   │                       # templates introspection); one source for bxp-fmt + bxp-mcp
+│   │   └── inspect.zig     # Shared stateless core (validate/eval/eval-batch/
+│   │                       # eval-trace/docs/templates introspection); one
+│   │                       # source for bxp-fmt + bxp-mcp
 │   ├── build.zig         # exports each file as a named Zig module
 │   └── build.zig.zon     # one fetch dep: uucode (Unicode tables); date/decimal cores in-house
 ├── bxp-gui/              # Flutter desktop app (replaces bxp-ui; uses bxp-cli/bxp-fmt via subprocess)

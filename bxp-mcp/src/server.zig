@@ -13,7 +13,7 @@ const tools = @import("tools.zig");
 pub const PROTOCOL_VERSION = "2025-06-18";
 
 const INITIALIZE_RESULT =
-    \\{"protocolVersion":"2025-06-18","capabilities":{"tools":{"listChanged":false}},"serverInfo":{"name":"bxp-mcp","title":"bxp-mcp","version":"0.0.1"},"instructions":"bxp-mcp: validate bxp-cli configs (bxp_validate), evaluate one (bxp_eval) or many (bxp_eval_batch) bxp expressions, list/fetch conversion templates (bxp_list_templates, bxp_fetch_template), run a full conversion end-to-end against sample CSV (bxp_simulate), and fetch the bxp language docs (bxp_docs). Call bxp_docs first to learn the expression/config language; use bxp_simulate to verify a finished config for real."}
+    \\{"protocolVersion":"2025-06-18","capabilities":{"tools":{"listChanged":false}},"serverInfo":{"name":"bxp-mcp","title":"bxp-mcp","version":"0.0.1"},"instructions":"bxp-mcp: validate bxp-cli configs (bxp_validate), evaluate one (bxp_eval) or many (bxp_eval_batch) bxp expressions, trace one expression's per-call evaluation (bxp_eval_trace), list/fetch conversion templates (bxp_list_templates, bxp_fetch_template), run a full conversion end-to-end against sample CSV (bxp_simulate), and fetch the bxp language docs (bxp_docs). Call bxp_docs first to learn the expression/config language; use bxp_eval_trace to debug an expression and bxp_simulate to verify a finished config for real."}
 ;
 
 const Session = struct {

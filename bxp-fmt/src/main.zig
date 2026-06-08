@@ -667,117 +667,31 @@ fn runExprTrace(
     var stderr_fw = std.fs.File.stderr().writer(&stderr_buf);
     const stderr = &stderr_fw.interface;
 
-    // Arena collects every transient allocation made during JSON arg parsing
-    // and expression evaluation. The tool exits immediately after this call,
-    // so freeing per-allocation is needless overhead — and DebugAllocator's
-    // leak report would mask real bugs if we tracked them individually.
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
     const alloc = arena.allocator();
 
-    var col_index = std.StringHashMap(usize).init(alloc);
-    defer col_index.deinit();
-    var ticker_map = std.StringHashMap([]const u8).init(alloc);
-    defer ticker_map.deinit();
-
-    // Decode headers/fields JSON arrays. Mismatched lengths or non-array
-    // shapes are usage errors (exit 2) — the GUI sends a known-good pair.
-    var headers_list: std.ArrayList([]const u8) = .empty;
-    defer headers_list.deinit(alloc);
-    var fields_list: std.ArrayList([]const u8) = .empty;
-    defer fields_list.deinit(alloc);
-    if (headers_json) |hj| {
-        const parsed = std.json.parseFromSlice(std.json.Value, alloc, hj, .{}) catch {
-            std.debug.print("error: --row-headers must be a JSON array of strings\n", .{});
+    // The trace stream (per-call NDJSON + final sentinel) and the eval itself
+    // live in inspect.evalTrace, shared with the MCP bxp_eval_trace tool. This
+    // handler only owns stdout/stderr routing: traces → stdout, error → stderr.
+    const result = inspect.evalTrace(alloc, src, headers_json, fields_json, stdout) catch |err| switch (err) {
+        // The GUI always sends a known-good headers/fields pair; a bad shape is
+        // a usage error.
+        error.InvalidRowJson => {
+            std.debug.print("error: --row-headers / --row-fields must be JSON arrays of strings\n", .{});
             return 2;
-        };
-        defer parsed.deinit();
-        if (parsed.value != .array) {
-            std.debug.print("error: --row-headers must be a JSON array of strings\n", .{});
-            return 2;
-        }
-        for (parsed.value.array.items) |item| {
-            if (item != .string) {
-                std.debug.print("error: --row-headers entries must be strings\n", .{});
-                return 2;
-            }
-            // `parsed.deinit()` (deferred above) frees the original
-            // string bytes pointed to by `item.string`, so we must dupe
-            // the slice into the arena before storing the reference.
-            try headers_list.append(alloc, try alloc.dupe(u8, item.string));
-        }
-    }
-    if (fields_json) |fj| {
-        const parsed = std.json.parseFromSlice(std.json.Value, alloc, fj, .{}) catch {
-            std.debug.print("error: --row-fields must be a JSON array of strings\n", .{});
-            return 2;
-        };
-        defer parsed.deinit();
-        if (parsed.value != .array) {
-            std.debug.print("error: --row-fields must be a JSON array of strings\n", .{});
-            return 2;
-        }
-        for (parsed.value.array.items) |item| {
-            if (item != .string) {
-                std.debug.print("error: --row-fields entries must be strings\n", .{});
-                return 2;
-            }
-            // See headers_list above — same lifetime caveat applies here.
-            try fields_list.append(alloc, try alloc.dupe(u8, item.string));
-        }
-    }
-    // Ragged headers/fields are tolerated, matching the runtime engine and
-    // the `--expr-batch` path: field access is by header name → column index,
-    // and `Context.field` returns "" past the row's field count. A trailing
-    // delimiter in an xlsx-extracted CSV (header one column wider than the
-    // data rows) must not blank out the trace.
-    // Build col_index from headers so [ColumnName] references resolve to
-    // the correct field slot during eval. The index owns no allocations —
-    // the keys point into `headers_list` which lives in the arena.
-    for (headers_list.items, 0..) |h, idx| {
-        try col_index.put(h, idx);
-    }
-
-    var detail: []const u8 = "";
-    var err_offset: u32 = 0;
-    var err_len: u32 = 0;
-    const ctx = expr_mod.Context{
-        .fields = fields_list.items,
-        .col_index = &col_index,
-        .ticker_map = &ticker_map,
-        .lookup_table = null,
-        .alloc = alloc,
-        .error_detail = &detail,
-        // Phase G1 parity with runExpr + bridge_eval_expr_trace: capture
-        // token span on parse failures so the GUI ExprPanel highlights the
-        // offending range identically across all three execution paths.
-        .error_offset = &err_offset,
-        .error_len = &err_len,
-        // trace_writer receives one NDJSON line per function call.
-        // The GUI reads stdout line-by-line as a stream and renders each
-        // call in the Variables panel before the final sentinel arrives.
-        .trace_writer = stdout,
+        },
+        else => return err,
     };
-
-    const result = expr_mod.evalString(src, &ctx) catch |err| {
-        // Emit error sentinel on stderr then exit non-zero. Per-fn traces
-        // already on stdout up to the point of failure are kept — the GUI
-        // can surface partial results when an outer call blew up.
-        writeExprErrorJsonToStderr(stderr, "error", @errorName(err), detail, err_offset, err_len);
-        return 1;
-    };
-    // Emit the final sentinel on stdout so the GUI knows the stream is
-    // done and can close the "processing" indicator.
-    var jw: std.json.Stringify = .{ .writer = stdout, .options = .{} };
-    jw.beginObject() catch {};
-    jw.objectField("t") catch {};
-    jw.write("final") catch {};
-    jw.objectField("value") catch {};
-    jw.write(result) catch {};
-    jw.endObject() catch {};
-    stdout.writeByte('\n') catch {};
+    // Flush partial traces on both paths — on failure they're kept up to the
+    // point the outer call blew up so the GUI can surface partial results.
     stdout.flush() catch {};
-    return 0;
+    if (result.error_json) |ej| {
+        stderr.writeAll(ej) catch {};
+        stderr.writeByte('\n') catch {};
+        stderr.flush() catch {};
+    }
+    return result.exit_code;
 }
 
 // ── --expr-batch ─────────────────────────────────────────────────────────────
