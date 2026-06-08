@@ -63,11 +63,17 @@ bxp/
 │   │                                    # a second Dart consumer materialises)
 │   └── pubspec.yaml
 ├── bxp-gui-bridge/       # Zig FFI shared library (bxp-gui-bridge.dll on Windows,
-│   │                     # libbxp-gui-bridge.{so,dylib} on Linux/macOS — currently
-│   │                     # built and shipped only on Windows; Linux/macOS use
-│   │                     # Process.start directly. Sidesteps dart:io's Win pipe
-│   │                     # truncation (dart-lang/sdk#1727) on --docs/--config/--trace.)
-│   ├── src/main.zig      # C-ABI entrypoints: bridge_run, bridge_run_streaming, bridge_free
+│   │                     # libbxp-gui-bridge.{so,dylib} on Linux/macOS). Built +
+│   │                     # shipped on ALL platforms (release-02 + Linux CMake copy
+│   │                     # it next to bxp-gui). Win: also the subprocess proxy
+│   │                     # (sidesteps dart:io pipe truncation, sdk#1727, on
+│   │                     # --docs/--config/--trace). All platforms: in-proc
+│   │                     # bridge_eval_expr(_trace) + bridge_inspect (docs/config/
+│   │                     # list/fetch/eval-batch) — GUI prefers these over spawning
+│   │                     # bxp-fmt. Linux/macOS proxy stays dormant (dry-runs use
+│   │                     # Process.start). BXP_FORCE_BRIDGE=1 disables the fmt fallback.
+│   ├── src/main.zig      # C-ABI entrypoints: bridge_run, bridge_run_streaming,
+│   │                     # bridge_free, bridge_eval_expr(_trace), bridge_inspect
 │   ├── build.zig
 │   └── build.zig.zon
 ├── resources/
