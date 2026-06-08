@@ -37,5 +37,9 @@
     "scripts/bench/work/**",
     "**/.plugin_symlinks/**",
     "LICENSE.md",
+    // CLAUDE.md files are agent-facing guidance with dense tables + manual
+    // column alignment; markdownlint's table/emphasis rules fight that style
+    // and they are never rendered for end users. Exempt all of them.
+    "**/CLAUDE.md",
   ],
 }

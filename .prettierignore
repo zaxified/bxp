@@ -46,3 +46,7 @@ bxp-gui/CHANGELOG.md
 
 # Claude Code's own config — owned by the harness, not us.
 .claude/
+
+# Agent-facing guidance — dense tables + manual column alignment that prettier's
+# reflow would mangle; never rendered for end users.
+**/CLAUDE.md
