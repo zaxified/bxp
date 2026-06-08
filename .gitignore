@@ -9,6 +9,9 @@ releases/
 # Claude local state
 .claude/
 
+# codedb MCP index snapshot (local code-intelligence cache)
+codedb.snapshot
+
 # OS artifacts
 .DS_Store
 Thumbs.db
