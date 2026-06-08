@@ -380,3 +380,321 @@ fn parseStringArray(a: std.mem.Allocator, json_text: []const u8, list: *std.Arra
         try list.append(a, try a.dupe(u8, item.string));
     }
 }
+
+// ── expression batch ──────────────────────────────────────────────────────────
+
+/// Result of an expression batch. On success `json` holds `{"results":[...]}`
+/// (no trailing newline) and `error_message` is null. On a malformed request
+/// `json` is empty and `error_message` carries a human-readable reason — the
+/// caller routes it to stderr (bxp-fmt) or an MCP error response (bxp-mcp).
+pub const BatchResult = struct {
+    json: []u8,
+    error_message: ?[]const u8,
+    exit_code: u8,
+};
+
+fn batchErr(msg: []const u8) BatchResult {
+    return .{ .json = "", .error_message = msg, .exit_code = 1 };
+}
+
+/// Evaluate N expressions against one row in a single call. `request` is the
+/// already-parsed batch object `{headers, fields, exprs, ticker_map?, lookups?,
+/// single_prepass_name?}`. Both adapters share this core: bxp-fmt's
+/// `--expr-batch` parses stdin into a Value and hands it here; the MCP
+/// `bxp_eval_batch` tool passes the call arguments straight through.
+///
+/// Ragged headers/fields are tolerated (mirrors the runtime engine: field
+/// access is by header→index, and missing indices return ""). A well-formed
+/// request always returns exit 0 even if individual exprs fail — the per-result
+/// `ok` flag carries the per-expr outcome; only a malformed request is an error.
+pub fn evalBatch(a: std.mem.Allocator, request: std.json.Value) !BatchResult {
+    if (request != .object) return batchErr("--expr-batch stdin must be a JSON object");
+    const obj = request.object;
+
+    const headers_v = obj.get("headers") orelse return batchErr("missing 'headers' in --expr-batch request");
+    const fields_v = obj.get("fields") orelse return batchErr("missing 'fields' in --expr-batch request");
+    const exprs_v = obj.get("exprs") orelse return batchErr("missing 'exprs' in --expr-batch request");
+    if (headers_v != .array or fields_v != .array or exprs_v != .array)
+        return batchErr("headers/fields/exprs must be JSON arrays");
+
+    // Dupe every string into the arena: the caller may free the source Value
+    // (bxp-fmt defers `parsed.deinit()`) once this returns. Build col_index and
+    // the field slice independently — never zip them, so ragged rows survive.
+    var col_index = std.StringHashMap(usize).init(a);
+    for (headers_v.array.items, 0..) |h, idx| {
+        if (h != .string) return batchErr("headers entries must be strings");
+        try col_index.put(try a.dupe(u8, h.string), idx);
+    }
+    var fields: std.ArrayList([]const u8) = .empty;
+    for (fields_v.array.items) |f| {
+        if (f != .string) return batchErr("fields entries must be strings");
+        try fields.append(a, try a.dupe(u8, f.string));
+    }
+
+    // Optional ticker_map.
+    var ticker_map = std.StringHashMap([]const u8).init(a);
+    if (obj.get("ticker_map")) |tm| {
+        if (tm != .object) return batchErr("ticker_map must be a JSON object");
+        var it = tm.object.iterator();
+        while (it.next()) |e| {
+            if (e.value_ptr.* != .string) return batchErr("ticker_map values must be strings");
+            try ticker_map.put(try a.dupe(u8, e.key_ptr.*), try a.dupe(u8, e.value_ptr.string));
+        }
+    }
+
+    // Optional flat lookups blob ("name\x00key\x00field" → value). We only pass
+    // a non-null lookup_table when entries exist — a null table makes LOOKUP()
+    // resolve to "" instead of erroring on an empty map.
+    var lookups = std.StringHashMap([]const u8).init(a);
+    var have_lookups = false;
+    if (obj.get("lookups")) |lk| {
+        if (lk != .object) return batchErr("lookups must be a JSON object");
+        var it = lk.object.iterator();
+        while (it.next()) |e| {
+            if (e.value_ptr.* != .string) return batchErr("lookups values must be strings");
+            try lookups.put(try a.dupe(u8, e.key_ptr.*), try a.dupe(u8, e.value_ptr.string));
+            have_lookups = true;
+        }
+    }
+
+    // Optional single_prepass_name: enables 2-arg LOOKUP(key, field) when the
+    // template's pre_pass section has exactly one block.
+    var single_prepass_name: ?[]const u8 = null;
+    if (obj.get("single_prepass_name")) |sp| {
+        switch (sp) {
+            .string => |s| if (s.len > 0) {
+                single_prepass_name = try a.dupe(u8, s);
+            },
+            .null => {},
+            else => return batchErr("single_prepass_name must be a string"),
+        }
+    }
+
+    var aw: std.Io.Writer.Allocating = .init(a);
+    errdefer aw.deinit();
+    var jw: std.json.Stringify = .{ .writer = &aw.writer, .options = .{} };
+    try jw.beginObject();
+    try jw.objectField("results");
+    try jw.beginArray();
+
+    for (exprs_v.array.items) |e_v| {
+        if (e_v != .string) {
+            // Keep the result array aligned with the caller's input order.
+            try jw.beginObject();
+            try jw.objectField("ok");
+            try jw.write(false);
+            try jw.objectField("error");
+            try jw.write("BadInput");
+            try jw.objectField("detail");
+            try jw.write("exprs entries must be strings");
+            try jw.endObject();
+            continue;
+        }
+        const src = e_v.string;
+
+        var detail: []const u8 = "";
+        var err_off: u32 = 0;
+        var err_len: u32 = 0;
+        const ctx = expr_mod.Context{
+            .fields = fields.items,
+            .col_index = &col_index,
+            .ticker_map = &ticker_map,
+            .lookup_table = if (have_lookups) &lookups else null,
+            .single_prepass_name = single_prepass_name,
+            .alloc = a,
+            .error_detail = &detail,
+            .error_offset = &err_off,
+            .error_len = &err_len,
+        };
+
+        const result = expr_mod.evalString(src, &ctx);
+        try jw.beginObject();
+        if (result) |val| {
+            try jw.objectField("ok");
+            try jw.write(true);
+            try jw.objectField("value");
+            try jw.write(val);
+        } else |err| {
+            try jw.objectField("ok");
+            try jw.write(false);
+            try jw.objectField("error");
+            try jw.write(@errorName(err));
+            try jw.objectField("detail");
+            try jw.write(detail);
+            if (err_len > 0) {
+                try jw.objectField("off");
+                try jw.write(err_off);
+                try jw.objectField("len");
+                try jw.write(err_len);
+            }
+        }
+        try jw.endObject();
+    }
+
+    try jw.endArray();
+    try jw.endObject();
+    return .{ .json = try aw.toOwnedSlice(), .error_message = null, .exit_code = 0 };
+}
+
+// ── templates ─────────────────────────────────────────────────────────────────
+
+/// JSON5 config text → parsed Value (preprocess + parse). For the MCP tools,
+/// which receive config *text*; bxp-fmt reads from a file path instead and
+/// passes the parsed root straight to the *Value variants below.
+fn parseConfigText(a: std.mem.Allocator, text: []const u8) !std.json.Value {
+    const json_text = try json5_mod.preprocess(a, text);
+    return std.json.parseFromSliceLeaky(std.json.Value, a, json_text, .{
+        .duplicate_field_behavior = .use_last,
+    });
+}
+
+/// Optional string field from a JSON object — null if missing/wrong type.
+fn optString(obj: std.json.ObjectMap, key: []const u8) ?[]const u8 {
+    const v = obj.get(key) orelse return null;
+    return switch (v) {
+        .string => |s| s,
+        else => null,
+    };
+}
+
+/// Emit `{"templates":[...]}` listing every template id plus selected metadata.
+/// No semantic validation: structurally broken templates still appear (with an
+/// `error` field) so the GUI picker can badge them rather than silently omit
+/// them. Indented to stay byte-identical with bxp-fmt's `--list-templates`.
+pub fn listTemplatesValue(a: std.mem.Allocator, root: std.json.Value) ![]u8 {
+    var aw: std.Io.Writer.Allocating = .init(a);
+    errdefer aw.deinit();
+    var jw: std.json.Stringify = .{ .writer = &aw.writer, .options = .{ .whitespace = .indent_2 } };
+    try jw.beginObject();
+    try jw.objectField("templates");
+    try jw.beginArray();
+
+    // Intentional double-guard (root shape + ct shape) so a partial config
+    // doesn't crash the listing.
+    if (root == .object) {
+        if (root.object.get("conversion_templates")) |ct| {
+            if (ct == .object) {
+                var it = ct.object.iterator();
+                while (it.next()) |entry| {
+                    try jw.beginObject();
+                    try jw.objectField("id");
+                    try jw.write(entry.key_ptr.*);
+
+                    if (entry.value_ptr.* == .object) {
+                        const tobj = entry.value_ptr.object;
+                        // Nullable fields emit JSON null when absent so the GUI
+                        // can tell "not set" from "empty string".
+                        try jw.objectField("data_dir");
+                        if (optString(tobj, "data_dir")) |s| try jw.write(s) else try jw.write(null);
+                        try jw.objectField("file_pattern_in");
+                        if (optString(tobj, "file_pattern_in")) |s| try jw.write(s) else try jw.write(null);
+                        try jw.objectField("file_pattern_out");
+                        if (optString(tobj, "file_pattern_out")) |s| try jw.write(s) else try jw.write(null);
+                        // file_type_{in,out} default to "csv" so the GUI picker
+                        // always shows a concrete value.
+                        try jw.objectField("file_type_in");
+                        try jw.write(optString(tobj, "file_type_in") orelse "csv");
+                        try jw.objectField("file_type_out");
+                        try jw.write(optString(tobj, "file_type_out") orelse "csv");
+                        try jw.objectField("description");
+                        if (optString(tobj, "description")) |s| try jw.write(s) else try jw.write(null);
+                    } else {
+                        try jw.objectField("error");
+                        try jw.write("template entry is not an object");
+                    }
+                    try jw.endObject();
+                }
+            }
+        }
+    }
+
+    try jw.endArray();
+    try jw.endObject();
+    return aw.toOwnedSlice();
+}
+
+/// Config-text wrapper around `listTemplatesValue` for the MCP `bxp_list_templates`
+/// tool. A JSON5 parse failure surfaces as `{"$err_1":"<error>"}` — the same
+/// shape the GUI already sees from the CLI.
+pub fn listTemplates(a: std.mem.Allocator, config_text: []const u8) ![]u8 {
+    const root = parseConfigText(a, config_text) catch |err| {
+        return formatRootErr(a, @errorName(err));
+    };
+    return listTemplatesValue(a, root);
+}
+
+/// Result of a template fetch. `json` is the template JSON (success) or
+/// `{"$err_1":"<msg>"}` (error), no trailing newline. `not_found` is true only
+/// for the id-not-found case — bxp-fmt adds a stderr line that also names the
+/// config path, which this pure core does not know.
+pub const TemplateResult = struct {
+    json: []u8,
+    exit_code: u8,
+    not_found: bool,
+};
+
+/// Fetch one template's raw JSON by id from an already-parsed config root.
+/// Shared by bxp-fmt `--fetch-template` and the MCP `bxp_fetch_template` tool.
+pub fn fetchTemplateValue(a: std.mem.Allocator, root: std.json.Value, id: []const u8) !TemplateResult {
+    if (root != .object)
+        return .{ .json = try formatRootErr(a, "config root is not an object"), .exit_code = 1, .not_found = false };
+    const ct = root.object.get("conversion_templates") orelse
+        return .{ .json = try formatRootErr(a, "no conversion_templates in config"), .exit_code = 1, .not_found = false };
+    if (ct != .object)
+        return .{ .json = try formatRootErr(a, "conversion_templates is not an object"), .exit_code = 1, .not_found = false };
+    const t = ct.object.get(id) orelse {
+        const msg = try std.fmt.allocPrint(a, "template id '{s}' not found", .{id});
+        return .{ .json = try formatRootErr(a, msg), .exit_code = 1, .not_found = true };
+    };
+
+    var aw: std.Io.Writer.Allocating = .init(a);
+    errdefer aw.deinit();
+    try std.json.Stringify.value(t, .{ .whitespace = .indent_2 }, &aw.writer);
+    return .{ .json = try aw.toOwnedSlice(), .exit_code = 0, .not_found = false };
+}
+
+/// Config-text wrapper around `fetchTemplateValue` for the MCP `bxp_fetch_template`
+/// tool. A JSON5 parse failure surfaces as `{"$err_1":"<error>"}`.
+pub fn fetchTemplate(a: std.mem.Allocator, config_text: []const u8, id: []const u8) !TemplateResult {
+    const root = parseConfigText(a, config_text) catch |err| {
+        return .{ .json = try formatRootErr(a, @errorName(err)), .exit_code = 1, .not_found = false };
+    };
+    return fetchTemplateValue(a, root, id);
+}
+
+/// One template's input shape, for a caller that wants to *stage* a real run
+/// (e.g. bxp-mcp's `bxp_simulate`). Pure introspection — never reads files.
+pub const TemplateIo = struct {
+    /// false when the id is absent or the config is unparseable.
+    found: bool,
+    /// Input-file suffix filter (e.g. ".csv", "_cash.csv"); "" if absent.
+    file_pattern_in: []const u8,
+    /// file_type_in is absent or "csv" (so the input is a plain CSV file).
+    csv_input: bool,
+    /// Template declares an xlsx_sheet — its input is xlsx, not feedable as
+    /// inline CSV text.
+    has_xlsx_sheet: bool,
+};
+
+/// Introspect one template's input shape. Returns `found = false` (with safe
+/// defaults) when the id is missing or the config can't be parsed — the caller
+/// turns that into a user-facing error. The returned `file_pattern_in` is owned
+/// by the arena `a`.
+pub fn templateIo(a: std.mem.Allocator, config_text: []const u8, id: []const u8) !TemplateIo {
+    const not_found: TemplateIo = .{ .found = false, .file_pattern_in = "", .csv_input = true, .has_xlsx_sheet = false };
+    const root = parseConfigText(a, config_text) catch return not_found;
+    if (root != .object) return not_found;
+    const ct = root.object.get("conversion_templates") orelse return not_found;
+    if (ct != .object) return not_found;
+    const t = ct.object.get(id) orelse return not_found;
+    if (t != .object) return not_found;
+    const tobj = t.object;
+    const fti = optString(tobj, "file_type_in") orelse "csv";
+    const has_xlsx = if (tobj.get("xlsx_sheet")) |xs| xs == .object else false;
+    return .{
+        .found = true,
+        .file_pattern_in = optString(tobj, "file_pattern_in") orelse "",
+        .csv_input = std.mem.eql(u8, fti, "csv"),
+        .has_xlsx_sheet = has_xlsx,
+    };
+}

@@ -391,15 +391,6 @@ fn loadConfigValue(a: std.mem.Allocator, path: []const u8, stdout: *std.Io.Write
     };
 }
 
-/// Returns an optional string field from a JSON object — null if missing/wrong type.
-fn optString(obj: std.json.ObjectMap, key: []const u8) ?[]const u8 {
-    const v = obj.get(key) orelse return null;
-    return switch (v) {
-        .string => |s| s,
-        else => null,
-    };
-}
-
 fn runListTemplates(alloc: std.mem.Allocator, path: []const u8) !u8 {
     var arena = std.heap.ArenaAllocator.init(alloc);
     defer arena.deinit();
@@ -414,58 +405,10 @@ fn runListTemplates(alloc: std.mem.Allocator, path: []const u8) !u8 {
         else => return err,
     };
 
-    var jw: std.json.Stringify = .{ .writer = stdout, .options = .{ .whitespace = .indent_2 } };
-    try jw.beginObject();
-    try jw.objectField("templates");
-    try jw.beginArray();
-
-    // Walk conversion_templates without semantic validation so that
-    // structurally broken templates still appear in the listing (the GUI
-    // renders them with an "(error)" badge rather than silently omitting
-    // them). Intentional double-guard: we check both root shape and ct
-    // shape individually so partial configs don't crash the listing.
-    if (root == .object) {
-        if (root.object.get("conversion_templates")) |ct| {
-            if (ct == .object) {
-                var it = ct.object.iterator();
-                while (it.next()) |entry| {
-                    const id = entry.key_ptr.*;
-                    try jw.beginObject();
-                    try jw.objectField("id"); try jw.write(id);
-
-                    if (entry.value_ptr.* == .object) {
-                        const tobj = entry.value_ptr.object;
-                        // Emit nullable fields as JSON null when absent — the GUI
-                        // can distinguish "not set" from "empty string".
-                        try jw.objectField("data_dir");
-                        if (optString(tobj, "data_dir")) |s| try jw.write(s) else try jw.write(null);
-                        try jw.objectField("file_pattern_in");
-                        if (optString(tobj, "file_pattern_in")) |s| try jw.write(s) else try jw.write(null);
-                        try jw.objectField("file_pattern_out");
-                        if (optString(tobj, "file_pattern_out")) |s| try jw.write(s) else try jw.write(null);
-                        // file_type_{in,out} are enums with a "csv" default — emit
-                        // the default rather than null so the GUI picker always
-                        // shows a concrete value even for configs that omit the field.
-                        try jw.objectField("file_type_in");
-                        try jw.write(optString(tobj, "file_type_in") orelse "csv");
-                        try jw.objectField("file_type_out");
-                        try jw.write(optString(tobj, "file_type_out") orelse "csv");
-                        try jw.objectField("description");
-                        if (optString(tobj, "description")) |s| try jw.write(s) else try jw.write(null);
-                    } else {
-                        // Template value is not an object (e.g. a bare string or
-                        // number). Surface the error as a field so the GUI can
-                        // show it inline in the template picker row.
-                        try jw.objectField("error"); try jw.write("template entry is not an object");
-                    }
-                    try jw.endObject();
-                }
-            }
-        }
-    }
-
-    try jw.endArray();
-    try jw.endObject();
+    // Listing logic lives in `inspect` (shared with the MCP bxp_list_templates
+    // tool); this handler only owns file load + stdout.
+    const json = try inspect.listTemplatesValue(a, root);
+    try stdout.writeAll(json);
     try stdout.writeByte('\n');
     try stdout.flush();
     return 0;
@@ -485,33 +428,18 @@ fn runFetchTemplate(alloc: std.mem.Allocator, path: []const u8, id: []const u8) 
         else => return err,
     };
 
-    if (root != .object) {
-        try emitRootErr(stdout, "config root is not an object");
-        return 1;
-    }
-    const ct = root.object.get("conversion_templates") orelse {
-        try emitRootErr(stdout, "no conversion_templates in config");
-        return 1;
-    };
-    if (ct != .object) {
-        try emitRootErr(stdout, "conversion_templates is not an object");
-        return 1;
-    }
-    const t = ct.object.get(id) orelse {
-        // Dual output: stderr carries the human-readable message for
-        // interactive callers; stdout carries the machine-parseable JSON
-        // error for bxp-gui (which reads stdout and ignores stderr here).
+    // Fetch logic lives in `inspect` (shared with the MCP bxp_fetch_template
+    // tool). The id-not-found case additionally gets a stderr line that names
+    // the config path here — the pure core does not know it. stdout carries the
+    // machine-parseable JSON (template, or {"$err_1":...}) bxp-gui reads.
+    const r = try inspect.fetchTemplateValue(a, root, id);
+    if (r.not_found) {
         std.debug.print("error: template id '{s}' not found in {s}\n", .{ id, path });
-        const msg = try std.fmt.allocPrint(a, "template id '{s}' not found", .{id});
-        try emitRootErr(stdout, msg);
-        return 1;
-    };
-
-    var jw: std.json.Stringify = .{ .writer = stdout, .options = .{ .whitespace = .indent_2 } };
-    try jw.write(t);
+    }
+    try stdout.writeAll(r.json);
     try stdout.writeByte('\n');
     try stdout.flush();
-    return 0;
+    return r.exit_code;
 }
 
 // ── --config ─────────────────────────────────────────────────────────────────
@@ -903,10 +831,11 @@ fn runExprBatch(gpa: std.mem.Allocator) !u8 {
     return code;
 }
 
-/// Pure core of [runExprBatch]: parse one JSON request from `body`,
-/// evaluate every expr against the row, and write the `{results:[...]}`
-/// JSON to `out` (no flush — the caller owns that). Split out so inline
-/// tests can drive it without stdin/stdout, mirroring `annotateRaw`.
+/// Pure core of [runExprBatch]: parse one JSON request from `body`, evaluate
+/// every expr against the row via `inspect.evalBatch`, and write the
+/// `{results:[...]}` JSON to `out` (no flush — the caller owns that). Split out
+/// so inline tests can drive it without stdin/stdout. The batch logic itself
+/// lives in `inspect` so bxp-mcp's `bxp_eval_batch` shares it exactly.
 fn runExprBatchBytes(
     alloc: std.mem.Allocator,
     body: []const u8,
@@ -918,188 +847,14 @@ fn runExprBatchBytes(
     };
     defer parsed.deinit();
 
-    if (parsed.value != .object) {
-        std.debug.print("error: --expr-batch stdin must be a JSON object\n", .{});
-        return 1;
+    const r = try inspect.evalBatch(alloc, parsed.value);
+    if (r.error_message) |msg| {
+        std.debug.print("error: {s}\n", .{msg});
+        return r.exit_code;
     }
-    const obj = parsed.value.object;
-
-    const headers_v = obj.get("headers") orelse {
-        std.debug.print("error: missing 'headers' in --expr-batch request\n", .{});
-        return 1;
-    };
-    const fields_v = obj.get("fields") orelse {
-        std.debug.print("error: missing 'fields' in --expr-batch request\n", .{});
-        return 1;
-    };
-    const exprs_v = obj.get("exprs") orelse {
-        std.debug.print("error: missing 'exprs' in --expr-batch request\n", .{});
-        return 1;
-    };
-    if (headers_v != .array or fields_v != .array or exprs_v != .array) {
-        std.debug.print("error: headers/fields/exprs must be JSON arrays\n", .{});
-        return 1;
-    }
-    // Ragged headers/fields are tolerated, matching the runtime engine:
-    // field access is by header name → column index, and `Context.field`
-    // returns "" for an index past the row's field count. xlsx-extracted
-    // CSVs frequently carry a trailing delimiter that makes the header row
-    // one column wider (or narrower) than the data rows; erroring here would
-    // blank out the entire drill-down (no vars, no rules) for an otherwise
-    // valid row. Build col_index from headers and the field-slice array from
-    // fields, independently — never zip them. We dupe every string into the
-    // arena because `parsed.deinit()` (deferred above) frees the original
-    // JSON-owned bytes once we exit this scope.
-    var col_index = std.StringHashMap(usize).init(alloc);
-    defer col_index.deinit();
-    for (headers_v.array.items, 0..) |h, idx| {
-        if (h != .string) {
-            std.debug.print("error: headers entries must be strings\n", .{});
-            return 1;
-        }
-        try col_index.put(try alloc.dupe(u8, h.string), idx);
-    }
-    var fields: std.ArrayList([]const u8) = .empty;
-    defer fields.deinit(alloc);
-    for (fields_v.array.items) |f| {
-        if (f != .string) {
-            std.debug.print("error: fields entries must be strings\n", .{});
-            return 1;
-        }
-        try fields.append(alloc, try alloc.dupe(u8, f.string));
-    }
-
-    // Optional ticker_map.
-    var ticker_map = std.StringHashMap([]const u8).init(alloc);
-    defer ticker_map.deinit();
-    if (obj.get("ticker_map")) |tm| {
-        if (tm != .object) {
-            std.debug.print("error: ticker_map must be a JSON object\n", .{});
-            return 1;
-        }
-        var it = tm.object.iterator();
-        while (it.next()) |e| {
-            if (e.value_ptr.* != .string) {
-                std.debug.print("error: ticker_map values must be strings\n", .{});
-                return 1;
-            }
-            try ticker_map.put(
-                try alloc.dupe(u8, e.key_ptr.*),
-                try alloc.dupe(u8, e.value_ptr.string),
-            );
-        }
-    }
-
-    // Optional flat lookups blob (pre_pass result, "name\x00key\x00field" → value).
-    // We always allocate the map so `lookup_table` is non-null — passing null
-    // would make LOOKUP() silently return "" instead of resolving entries.
-    var lookups = std.StringHashMap([]const u8).init(alloc);
-    defer lookups.deinit();
-    var have_lookups = false;
-    if (obj.get("lookups")) |lk| {
-        if (lk != .object) {
-            std.debug.print("error: lookups must be a JSON object\n", .{});
-            return 1;
-        }
-        var it = lk.object.iterator();
-        while (it.next()) |e| {
-            if (e.value_ptr.* != .string) {
-                std.debug.print("error: lookups values must be strings\n", .{});
-                return 1;
-            }
-            try lookups.put(
-                try alloc.dupe(u8, e.key_ptr.*),
-                try alloc.dupe(u8, e.value_ptr.string),
-            );
-            have_lookups = true;
-        }
-    }
-
-    // Optional single_prepass_name: enables 2-arg LOOKUP(key, field) when
-    // the template's pre_pass section has exactly one block. Without this,
-    // legacy single-block configs (where the synthetic name is `_default`)
-    // would have to switch to 3-arg LOOKUP at the source — instead the GUI
-    // passes the implicit name here and the expressions stay unchanged.
-    var single_prepass_name: ?[]const u8 = null;
-    if (obj.get("single_prepass_name")) |sp| {
-        switch (sp) {
-            .string => |s| if (s.len > 0) {
-                single_prepass_name = try alloc.dupe(u8, s);
-            },
-            .null => {},
-            else => {
-                std.debug.print("error: single_prepass_name must be a string\n", .{});
-                return 1;
-            },
-        }
-    }
-
-    // Eval each expression. Reset detail/off/len before each call so a
-    // prior failure doesn't bleed into the next result.
-    var jw: std.json.Stringify = .{ .writer = out, .options = .{} };
-    try jw.beginObject();
-    try jw.objectField("results");
-    try jw.beginArray();
-
-    for (exprs_v.array.items) |e_v| {
-        if (e_v != .string) {
-            // Emit a synthetic per-result error so the array stays aligned
-            // with the caller's input order, then move on.
-            try jw.beginObject();
-            try jw.objectField("ok");
-            try jw.write(false);
-            try jw.objectField("error");
-            try jw.write("BadInput");
-            try jw.objectField("detail");
-            try jw.write("exprs entries must be strings");
-            try jw.endObject();
-            continue;
-        }
-        const src = e_v.string;
-
-        var detail: []const u8 = "";
-        var err_off: u32 = 0;
-        var err_len: u32 = 0;
-        const ctx = expr_mod.Context{
-            .fields = fields.items,
-            .col_index = &col_index,
-            .ticker_map = &ticker_map,
-            .lookup_table = if (have_lookups) &lookups else null,
-            .single_prepass_name = single_prepass_name,
-            .alloc = alloc,
-            .error_detail = &detail,
-            .error_offset = &err_off,
-            .error_len = &err_len,
-        };
-
-        const result = expr_mod.evalString(src, &ctx);
-        try jw.beginObject();
-        if (result) |val| {
-            try jw.objectField("ok");
-            try jw.write(true);
-            try jw.objectField("value");
-            try jw.write(val);
-        } else |err| {
-            try jw.objectField("ok");
-            try jw.write(false);
-            try jw.objectField("error");
-            try jw.write(@errorName(err));
-            try jw.objectField("detail");
-            try jw.write(detail);
-            if (err_len > 0) {
-                try jw.objectField("off");
-                try jw.write(err_off);
-                try jw.objectField("len");
-                try jw.write(err_len);
-            }
-        }
-        try jw.endObject();
-    }
-
-    try jw.endArray();
-    try jw.endObject();
+    try out.writeAll(r.json);
     try out.writeByte('\n');
-    return 0;
+    return r.exit_code;
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────

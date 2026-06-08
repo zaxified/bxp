@@ -18,6 +18,15 @@ bxp/
 │   │                     # modifiers on --config)
 │   ├── build.zig
 │   └── build.zig.zon     # depends on bxp-core (path dep)
+├── bxp-mcp/              # MCP server (JSON-RPC 2.0 over stdio): exposes bxp as
+│   │                     # agent-callable tools. Stateless tools call bxp-core
+│   │                     # inspect in-process; bxp_simulate spawns co-located bxp-cli.
+│   ├── src/main.zig      # entry: arena + --help + server.run()
+│   ├── src/server.zig    # MCP stdio loop + JSON-RPC writers (per-request arena)
+│   ├── src/tools.zig     # tool catalog + handlers
+│   ├── src/sim.zig       # bxp_simulate orchestration (stage + spawn bxp-cli + diff)
+│   ├── build.zig
+│   └── build.zig.zon     # depends on bxp-core (path dep)
 ├── bxp-core/             # Internal Zig library (shared modules)
 │   ├── src/
 │   │   ├── csv.zig         # RFC 4180 CSV parser + splitFields + LineIterator
@@ -38,8 +47,10 @@ bxp/
 │   │   ├── json5.zig       # JSON5 preprocessor (comments, unquoted keys, ...)
 │   │   ├── docs.zig        # Aggregator: re-exports expr catalog + flattens
 │   │   │                   # config FieldDoc tables; serves bxp-fmt --docs
-│   │   └── diagnostics.zig # Structured Diagnostic / Severity collector for
-│   │                       # bxp-fmt --config deep validation
+│   │   ├── diagnostics.zig # Structured Diagnostic / Severity collector for
+│   │   │                   # bxp-fmt --config deep validation
+│   │   └── inspect.zig     # Shared stateless core (validate/eval/eval-batch/docs/
+│   │                       # templates introspection); one source for bxp-fmt + bxp-mcp
 │   ├── build.zig         # exports each file as a named Zig module
 │   └── build.zig.zon     # one fetch dep: uucode (Unicode tables); date/decimal cores in-house
 ├── bxp-gui/              # Flutter desktop app (replaces bxp-ui; uses bxp-cli/bxp-fmt via subprocess)
@@ -81,7 +92,7 @@ bxp/
 │   │                             # ceiling + wall scaling-ratio (catches O(N) RSS
 │   │                             # + O(n^2) regressions; no absolute wall thresholds)
 │   ├── release.sh            # Wrapper — runs release-01-console.sh + release-02-desktop.sh
-│   ├── release-01-console.sh    # Cross-compile bxp-cli, package bxp-console-* archives
+│   ├── release-01-console.sh    # Cross-compile bxp-cli + bxp-fmt + bxp-mcp, package bxp-console-* archives
 │   ├── release-02-desktop.sh    # Host-OS-specific Flutter desktop bundle → .AppImage / .deb
 │   │                            # / .tar.gz / NSIS .exe / DMG (matrixed by GH Actions)
 │   ├── release-03-checksums.sh  # Emit SHA256SUMS for every release artifact
@@ -131,8 +142,10 @@ cd bxp-core && zig build test
 
 Two channels, distinct archives:
 
-- **bxp-console** — `bxp-console-<ver>-<platform>.{tar.gz,zip}` — CLI only.
-- **bxp-desktop** — `bxp-desktop-<ver>-<platform>.{tar.gz,AppImage,deb,exe,dmg}` — Flutter GUI + bundled bxp-cli + bxp-fmt.
+- **bxp-console** — `bxp-console-<ver>-<platform>.{tar.gz,zip}` — bxp-cli +
+  bxp-fmt + bxp-mcp (the three co-located so bxp-mcp's `bxp_simulate` can spawn
+  bxp-cli).
+- **bxp-desktop** — `bxp-desktop-<ver>-<platform>.{tar.gz,AppImage,deb,exe,dmg}` — Flutter GUI + bundled bxp-cli + bxp-fmt + bxp-mcp.
 
 Cut a release by pushing a `v*` tag; `.github/workflows/release.yml`
 fans out to ubuntu / windows / macos runners, each producing its native
@@ -146,6 +159,7 @@ that file. See `docs/release.md` for the operator walkthrough.
 ```text
 bxp-cli  --[path dep]--> bxp-core   --[fetch dep]--> uucode (Unicode tables)
 bxp-fmt  --[path dep]--> bxp-core
+bxp-mcp  --[path dep]--> bxp-core    --[subprocess]-> bxp-cli (bxp_simulate only)
 bxp-gui  --[subprocess]-> bxp-cli, bxp-fmt
 ```
 
@@ -182,6 +196,8 @@ services/prefs_service.dart`.
   template guide, broker list.
 - [`bxp-fmt/CLAUDE.md`](bxp-fmt/CLAUDE.md) — all subcommands, `--docs` JSON shape,
   `$comm_*`/`$err_*`/`$warn_*`/`$info_*` output format.
+- [`bxp-mcp/CLAUDE.md`](bxp-mcp/CLAUDE.md) — MCP server: tool catalog, wire
+  protocol, the shared `inspect` core, `bxp_simulate` spawn design.
 - [`bxp-core/CLAUDE.md`](bxp-core/CLAUDE.md) — module API overview, build details, test coverage.
 - [`bxp-gui/CLAUDE.md`](bxp-gui/CLAUDE.md) — Flutter app structure, services/store/ui split,
   bxp-cli/bxp-fmt subprocess wiring.
@@ -197,9 +213,9 @@ services/prefs_service.dart`.
 
 New CLAUDE.md files may be created anywhere inside `bxp/` as needed.
 Existing files: `bxp/CLAUDE.md` (this file), `bxp/bxp-cli/CLAUDE.md`,
-`bxp/bxp-core/CLAUDE.md`, `bxp/bxp-fmt/CLAUDE.md`, `bxp/bxp-gui/CLAUDE.md`,
-`bxp/bxp-gui-bridge/CLAUDE.md`, `bxp/bxp-gui/packages/json5_ast/CLAUDE.md`,
-`bxp/examples/CLAUDE.md`.
+`bxp/bxp-core/CLAUDE.md`, `bxp/bxp-fmt/CLAUDE.md`, `bxp/bxp-mcp/CLAUDE.md`,
+`bxp/bxp-gui/CLAUDE.md`, `bxp/bxp-gui-bridge/CLAUDE.md`,
+`bxp/bxp-gui/packages/json5_ast/CLAUDE.md`, `bxp/examples/CLAUDE.md`.
 
 ## Git & GitHub
 

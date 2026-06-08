@@ -13,26 +13,43 @@ const tools = @import("tools.zig");
 pub const PROTOCOL_VERSION = "2025-06-18";
 
 const INITIALIZE_RESULT =
-    \\{"protocolVersion":"2025-06-18","capabilities":{"tools":{"listChanged":false}},"serverInfo":{"name":"bxp-mcp","title":"bxp-mcp","version":"0.0.1"},"instructions":"bxp-mcp: validate bxp-cli configs (bxp_validate), evaluate bxp expressions (bxp_eval), and fetch the bxp language docs (bxp_docs). Call bxp_docs first to learn the expression/config language."}
+    \\{"protocolVersion":"2025-06-18","capabilities":{"tools":{"listChanged":false}},"serverInfo":{"name":"bxp-mcp","title":"bxp-mcp","version":"0.0.1"},"instructions":"bxp-mcp: validate bxp-cli configs (bxp_validate), evaluate one (bxp_eval) or many (bxp_eval_batch) bxp expressions, list/fetch conversion templates (bxp_list_templates, bxp_fetch_template), run a full conversion end-to-end against sample CSV (bxp_simulate), and fetch the bxp language docs (bxp_docs). Call bxp_docs first to learn the expression/config language; use bxp_simulate to verify a finished config for real."}
 ;
 
 const Session = struct {
+    /// Base allocator: persistent, reused-across-requests buffers live here
+    /// (they keep capacity via clearRetainingCapacity, so they don't grow
+    /// unbounded). Never reset.
     alloc: std.mem.Allocator,
+    /// Per-request arena: every transient allocation for one request (the
+    /// incoming JSON parse, the tool dispatch, response-serialization temps)
+    /// goes here and is freed wholesale after the response is written. Without
+    /// this a long-lived server leaks one request's allocations per call into
+    /// the process arena. `retain_capacity` keeps the backing pages so the
+    /// arena reaches a steady state sized to the largest single request.
+    req_arena: std.heap.ArenaAllocator,
     stdout: std.fs.File,
     line_buf: std.ArrayList(u8) = .empty,
     out_buf: std.ArrayList(u8) = .empty,
     tool_buf: std.ArrayList(u8) = .empty,
 
+    /// Allocator for this request's transient work — reset after each request.
+    fn reqAlloc(self: *Session) std.mem.Allocator {
+        return self.req_arena.allocator();
+    }
+
     fn deinit(self: *Session) void {
         self.line_buf.deinit(self.alloc);
         self.out_buf.deinit(self.alloc);
         self.tool_buf.deinit(self.alloc);
+        self.req_arena.deinit();
     }
 };
 
 pub fn run(alloc: std.mem.Allocator) void {
     var session: Session = .{
         .alloc = alloc,
+        .req_arena = std.heap.ArenaAllocator.init(alloc),
         .stdout = std.fs.File.stdout(),
     };
     defer session.deinit();
@@ -43,6 +60,9 @@ pub fn run(alloc: std.mem.Allocator) void {
 
     while (readLine(alloc, reader, &session.line_buf)) |line| {
         handleLine(&session, line);
+        // The full response is already written to stdout by handleLine; the
+        // request's transient allocations are now dead.
+        _ = session.req_arena.reset(.retain_capacity);
     }
 }
 
@@ -65,7 +85,7 @@ fn handleLine(s: *Session, line: []u8) void {
     const input = std.mem.trim(u8, line, " \t\r");
     if (input.len == 0) return;
 
-    const parsed = std.json.parseFromSlice(std.json.Value, s.alloc, input, .{}) catch {
+    const parsed = std.json.parseFromSlice(std.json.Value, s.reqAlloc(), input, .{}) catch {
         writeError(s, null, -32700, "Parse error");
         return;
     };
@@ -128,7 +148,7 @@ fn handleCall(s: *Session, id: ?std.json.Value, params_opt: ?std.json.Value) voi
     const args: std.json.Value = params.object.get("arguments") orelse .null;
 
     s.tool_buf.clearRetainingCapacity();
-    tools.dispatch(s.alloc, tool, args, &s.tool_buf);
+    tools.dispatch(s.reqAlloc(), tool, args, &s.tool_buf);
     writeToolResult(s, id, s.tool_buf.items);
 }
 
@@ -176,14 +196,15 @@ fn writeError(s: *Session, id: ?std.json.Value, code: i32, msg: []const u8) void
 
 /// Append the request id verbatim (re-serialized from its parsed Value, so an
 /// integer stays an integer and a string keeps its quotes). Null => `null`.
+/// `buf` (the persistent out-buffer) grows on the base allocator; the temporary
+/// serialization buffer comes from the per-request arena (freed on reset).
 fn appendId(s: *Session, buf: *std.ArrayList(u8), id: ?std.json.Value) void {
     const alloc = s.alloc;
     if (id) |v| {
-        const txt = std.json.Stringify.valueAlloc(alloc, v, .{}) catch {
+        const txt = std.json.Stringify.valueAlloc(s.reqAlloc(), v, .{}) catch {
             buf.appendSlice(alloc, "null") catch {};
             return;
         };
-        defer alloc.free(txt);
         buf.appendSlice(alloc, txt) catch {};
     } else {
         buf.appendSlice(alloc, "null") catch {};
@@ -193,11 +214,10 @@ fn appendId(s: *Session, buf: *std.ArrayList(u8), id: ?std.json.Value) void {
 /// Append `text` as a properly escaped JSON string (including the quotes).
 fn appendJsonString(s: *Session, buf: *std.ArrayList(u8), text: []const u8) void {
     const alloc = s.alloc;
-    const quoted = std.json.Stringify.valueAlloc(alloc, text, .{}) catch {
+    const quoted = std.json.Stringify.valueAlloc(s.reqAlloc(), text, .{}) catch {
         buf.appendSlice(alloc, "\"\"") catch {};
         return;
     };
-    defer alloc.free(quoted);
     buf.appendSlice(alloc, quoted) catch {};
 }
 
