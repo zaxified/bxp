@@ -8,6 +8,7 @@ import 'services/debug_binding.dart';
 import 'services/debug_settings.dart';
 import 'services/desktop_integration_service.dart';
 import 'services/diagnostic_log.dart';
+import 'services/gui_mcp_server.dart';
 import 'services/updater_service.dart';
 import 'store/trace_store.dart';
 import 'ui/components/integrate_dialog.dart';
@@ -32,6 +33,70 @@ final GlobalKey<ScaffoldMessengerState> bxpMessengerKey =
 /// keyboard handler nor the counter overlay (both wrapped via
 /// MaterialApp.builder) has.
 final GlobalKey<NavigatorState> bxpNavigatorKey = GlobalKey<NavigatorState>();
+
+/// Confirm gate for critical agent (GUI-MCP) actions. Lives here because it
+/// is the one place that owns [bxpNavigatorKey] — the MCP tool callback fires
+/// from the HTTP request handler (no widget context of its own), so it pushes
+/// the dialog through the navigator key. Returns `false` (treated as a
+/// rejection, never a hang) when there is no live navigator context.
+Future<bool> _agentConfirm(String title, String detail) async {
+  final ctx = bxpNavigatorKey.currentContext;
+  if (ctx == null) return false;
+  final approved = await showDialog<bool>(
+    context: ctx,
+    builder: (dialogCtx) => AlertDialog(
+      title: Text(title),
+      content: Text(detail),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(dialogCtx).pop(false),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(dialogCtx).pop(true),
+          child: const Text('Allow'),
+        ),
+      ],
+    ),
+  );
+  return approved ?? false;
+}
+
+/// Production adapter binding [GuiMcpHost] (services layer) to the concrete
+/// [TraceStore]. Lives here — not in the service — so the service stays free
+/// of a `store/` import and remains unit-testable against a fake host.
+class _TraceStoreMcpHost implements GuiMcpHost {
+  _TraceStoreMcpHost(this._store);
+  final TraceStore _store;
+
+  @override
+  String get configPath => _store.configPath;
+  @override
+  bool get isDirty => _store.isDirty;
+  @override
+  bool get configLoadHadErrors => _store.configLoadHadErrors;
+  @override
+  bool get configHasErrors => _store.configHasErrors;
+  @override
+  String get runStatusName => _store.status.name;
+  @override
+  String get runModeName => _store.runMode.name;
+  @override
+  int? get lastExitCode => _store.lastExitCode;
+  @override
+  String get activeTemplate => _store.templateId;
+  @override
+  String get diagnosticBlob => _store.diagnosticBlob;
+  @override
+  String? get configSaveError => _store.configSaveError;
+  @override
+  Map<String, String> errorsAt(List<String> path) => _store.errorsAt(path);
+  @override
+  void editConfigNode(List<String> path, dynamic newValue) =>
+      _store.editConfigNode(path, newValue);
+  @override
+  Future<void> saveConfig() => _store.saveConfig();
+}
 
 void main() {
   // Everything must run in the same zone. Flutter's zone-mismatch
@@ -75,6 +140,8 @@ void main() {
 
     final traceStore = TraceStore();
     final updaterService = UpdaterService();
+    final guiMcpServer =
+        GuiMcpServer(_TraceStoreMcpHost(traceStore), confirm: _agentConfirm);
     _installOverflowGuard(traceStore);
     _installDiagnosticErrorHooks();
     // Fire-and-forget — the periodic check runs even before the user
@@ -85,6 +152,7 @@ void main() {
         providers: [
           ChangeNotifierProvider<TraceStore>.value(value: traceStore),
           ChangeNotifierProvider<UpdaterService>.value(value: updaterService),
+          ChangeNotifierProvider<GuiMcpServer>.value(value: guiMcpServer),
           ChangeNotifierProvider<DebugSettings>.value(
               value: DebugSettings.instance),
         ],
@@ -271,7 +339,9 @@ class BxpApp extends StatelessWidget {
             );
           },
           home: const _UpdaterListener(
-            child: _IntegrationListener(child: _StartupGate()),
+            child: _IntegrationListener(
+              child: _AgentServerListener(child: _StartupGate()),
+            ),
           ),
         );
       }),
@@ -596,6 +666,54 @@ class _IntegrationListenerState extends State<_IntegrationListener> {
         ),
       );
     });
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
+}
+
+/// Starts the embedded GUI-MCP server once [TraceStore] has finished
+/// initialising (so prefs are loaded). The `bxp-gui.mcp-enabled` pref is
+/// **default-on**: only an explicit `"false"` keeps the server down. A bind
+/// failure is non-fatal — [GuiMcpServer.start] records it in `lastError`,
+/// surfaced in the SettingsInspector. Mirrors [_IntegrationListener]'s
+/// store-listener lifecycle.
+class _AgentServerListener extends StatefulWidget {
+  final Widget child;
+  const _AgentServerListener({required this.child});
+
+  @override
+  State<_AgentServerListener> createState() => _AgentServerListenerState();
+}
+
+class _AgentServerListenerState extends State<_AgentServerListener> {
+  bool _started = false;
+  TraceStore? _store;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final next = context.read<TraceStore>();
+    if (identical(next, _store)) return;
+    _store?.removeListener(_maybeStart);
+    _store = next;
+    _store?.addListener(_maybeStart);
+    _maybeStart();
+  }
+
+  @override
+  void dispose() {
+    _store?.removeListener(_maybeStart);
+    super.dispose();
+  }
+
+  void _maybeStart() {
+    if (_started) return;
+    final store = _store;
+    if (store == null || !store.initialized) return;
+    _started = true;
+    if (store.prefs.getString('bxp-gui.mcp-enabled') == 'false') return;
+    unawaited(context.read<GuiMcpServer>().start());
   }
 
   @override

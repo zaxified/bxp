@@ -10,6 +10,7 @@ import '../services/bxp_process_client.dart';
 import '../services/debug_settings.dart';
 import '../services/desktop_integration_service.dart';
 import '../services/diagnostic_log.dart';
+import '../services/gui_mcp_server.dart';
 import '../store/trace_store.dart';
 import 'components/integrate_dialog.dart';
 import 'layout_defaults.dart';
@@ -261,6 +262,7 @@ class _Body extends StatelessWidget {
           for (final (title, rows) in sections)
             _SectionTable(title: title, rows: rows),
           const _IntegrationSection(),
+          const _AgentSection(),
           const _DebugSection(),
         ],
       ),
@@ -439,6 +441,108 @@ class _IntegrationSectionState extends State<_IntegrationSection> {
                   ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Agent-control section — the master switch for the embedded GUI-MCP
+/// server ([GuiMcpServer]), its live listening status, and a strip of the
+/// most recent agent tool calls so the user can see what the agent did.
+/// Default-on (persisted under `bxp-gui.mcp-enabled`); the switch reflects
+/// the user's intent while the status line below reports the real socket
+/// state (including a non-fatal bind error).
+class _AgentSection extends StatefulWidget {
+  const _AgentSection();
+
+  @override
+  State<_AgentSection> createState() => _AgentSectionState();
+}
+
+class _AgentSectionState extends State<_AgentSection> {
+  static const String _prefKey = 'bxp-gui.mcp-enabled';
+  bool _busy = false;
+
+  Future<void> _toggle(bool enable) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    final mcp = context.read<GuiMcpServer>();
+    await context.read<TraceStore>().prefs.setString(
+          _prefKey,
+          enable ? 'true' : 'false',
+        );
+    if (enable) {
+      await mcp.start();
+    } else {
+      await mcp.stop();
+    }
+    if (!mounted) return;
+    setState(() => _busy = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.bxpTheme;
+    final store = context.watch<TraceStore>();
+    final mcp = context.watch<GuiMcpServer>();
+    final enabled = store.prefs.getString(_prefKey) != 'false';
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(bottom: 4),
+            child: Text('AGENT CONTROL', style: BxpText.label(context)),
+          ),
+          _DebugSwitchRow(
+            label: 'Agent control (MCP server)',
+            subtitle:
+                'Lets a local AI agent read and edit the live config over '
+                '127.0.0.1 (StreamableHTTP). Critical actions ask first.',
+            value: enabled,
+            onChanged: _toggle,
+          ),
+          Padding(
+            padding: const EdgeInsets.only(left: 56, top: 2),
+            child: _statusLine(context, t, mcp),
+          ),
+          if (mcp.activity.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            _Subheader('Recent agent activity'),
+            for (final e in mcp.activity.take(8)) _activityRow(context, t, e),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _statusLine(BuildContext context, BxpTheme t, GuiMcpServer mcp) {
+    if (mcp.lastError != null) {
+      return SelectableText(
+        'Error: ${mcp.lastError}',
+        style: BxpText.body(context, color: t.errorText, size: BxpSize.xs),
+      );
+    }
+    final muted = BxpText.body(context, color: t.textMuted, size: BxpSize.xs);
+    if (!mcp.isRunning) return Text('Stopped', style: muted);
+    final conn =
+        mcp.agentConnected ? ' · agent connected' : ' · waiting for agent';
+    return SelectableText(
+      'Listening on 127.0.0.1:${mcp.port}$conn',
+      style: muted,
+    );
+  }
+
+  Widget _activityRow(BuildContext context, BxpTheme t, AgentActivityEntry e) {
+    final color = e.outcome == 'error' ? t.errorText : t.textMuted;
+    String two(int n) => n.toString().padLeft(2, '0');
+    final ts = '${two(e.time.hour)}:${two(e.time.minute)}:${two(e.time.second)}';
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 1),
+      child: Text(
+        '$ts  ${e.tool} · ${e.summary} [${e.outcome}]',
+        style: BxpText.body(context, color: color, size: BxpSize.xs),
       ),
     );
   }
