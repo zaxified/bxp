@@ -264,7 +264,7 @@ fn appendJsonStr(out: *std.ArrayList(u8), alloc: std.mem.Allocator, s: []const u
 
 pub const AnnotatedResult = struct {
     out: []u8,
-    next_id: u32, // first unused id; bxp-fmt continues numbering from here
+    next_id: u32, // first unused id; the inspect core continues numbering from here
 };
 
 fn isWs(c: u8) bool {
@@ -332,7 +332,7 @@ fn isInObject(nest: []const u8) bool {
 /// Like preprocess, but emits recovered syntax errors as `$err_<N>` entries.
 /// Comments are stripped silently (Phase 5d cleanup — the GUI consumes only
 /// `$err_*` after the AST migration). The result is valid JSON suitable for
-/// bxp-fmt's `--config` output contract.
+/// inspect.annotateRaw's output contract.
 pub fn preprocessAnnotated(alloc: std.mem.Allocator, input: []const u8) !AnnotatedResult {
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(alloc);
@@ -350,7 +350,7 @@ pub fn preprocessAnnotated(alloc: std.mem.Allocator, input: []const u8) !Annotat
         pending_value_errs.deinit(alloc);
     }
     // counter is the shared $err_<N> sequence. It is returned as next_id so
-    // bxp-fmt's outer annotation pass can continue numbering without collisions.
+    // the inspect core's outer annotation pass can continue numbering without collisions.
     var counter: u32 = 0;
     var key_pos = false;
     var i: usize = 0;
@@ -658,7 +658,7 @@ pub fn preprocessAnnotated(alloc: std.mem.Allocator, input: []const u8) !Annotat
     // EOF recovery: flush any pending $err_<N> entries, then auto-close
     // remaining containers. Without this, an input that ends mid-string
     // or mid-object leaves the queued diagnostic stranded and emits
-    // syntactically invalid JSON — bxp-fmt's caller then falls back to a
+    // syntactically invalid JSON — the inspect core's caller then falls back to a
     // generic root error, losing the per-error context. Errs flush only
     // when the immediate parent is `{` (array siblings would corrupt
     // structure); array contexts drop their queued errs silently, mirroring

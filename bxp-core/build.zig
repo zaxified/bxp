@@ -28,7 +28,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/json5.zig"),
     });
 
-    // Structured diagnostic sink consumed by bxp-fmt's deep validation
+    // Structured diagnostic sink consumed by the inspect core's deep validation
     // pass. config/expr/json5 modules accept an optional pointer to it
     // so bxp-cli (which passes null) is unaffected.
     const diagnostics_mod = b.addModule("diagnostics", .{
@@ -98,7 +98,7 @@ pub fn build(b: *std.Build) void {
 
     // docs.zig aggregates the expression catalog (re-exported live from
     // expr.zig) and the config schema (per-struct `pub const fields`
-    // tables co-located in config.zig). Consumed by bxp-fmt --docs.
+    // tables co-located in config.zig). Consumed by inspect.docsJson.
     const docs_mod = b.addModule("docs", .{
         .root_source_file = b.path("src/docs.zig"),
         .imports = &.{
@@ -109,8 +109,8 @@ pub fn build(b: *std.Build) void {
     });
 
     // inspect.zig is the shared stateless inspection core (config validation,
-    // docs serialization, single-expression eval) behind both bxp-fmt (CLI
-    // adapter) and bxp-mcp (MCP server adapter). "One core, thin adapters".
+    // docs serialization, single-expression eval) behind both bxp-mcp (MCP
+    // server adapter) and the bxp-gui-bridge FFI. "One core, thin adapters".
     _ = b.addModule("inspect", .{
         .root_source_file = b.path("src/inspect.zig"),
         .imports = &.{
@@ -274,6 +274,26 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    // inspect.zig is both a module root and a test root. Its tests (config
+    // annotation Phases A–G8 + expr-batch) used to live in bxp-fmt/src/main.zig;
+    // they moved here when bxp-fmt was deleted, since they exercise the shared
+    // inspect core, not the CLI adapter. Imports mirror the inspect module above.
+    const inspect_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/inspect.zig"),
+            .target = target,
+            .optimize = optimize,
+            .strip = false,
+            .imports = &.{
+                .{ .name = "config",      .module = config_mod },
+                .{ .name = "expr",        .module = expr_mod },
+                .{ .name = "json5",       .module = json5_mod },
+                .{ .name = "docs",        .module = docs_mod },
+                .{ .name = "diagnostics", .module = diagnostics_mod },
+            },
+        }),
+    });
+
     const test_step = b.step("test", "Run bxp-core unit tests");
     test_step.dependOn(&b.addRunArtifact(csv_tests).step);
     test_step.dependOn(&b.addRunArtifact(json_tests).step);
@@ -288,4 +308,5 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(xlsx_tests).step);
     test_step.dependOn(&b.addRunArtifact(config_tests).step);
     test_step.dependOn(&b.addRunArtifact(docs_tests).step);
+    test_step.dependOn(&b.addRunArtifact(inspect_tests).step);
 }

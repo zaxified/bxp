@@ -1,5 +1,5 @@
 /// Aggregates and serializes the full documentation surface that
-/// `bxp-fmt --docs` exposes to the GUI:
+/// `inspect.docsJson` exposes to the GUI:
 ///
 ///   * Expression catalog (functions / keywords / operators / tokens) —
 ///     re-exported live from `bxp-core/src/expr.zig` where each `FnDoc`
@@ -323,7 +323,7 @@ fn writeSchemaEntry(alloc: std.mem.Allocator, jw: *std.json.Stringify, full_key:
         // Templates are stored as JSON5 source strings (allowing comments and
         // unquoted keys for readability in config.zig). We preprocess → parse
         // → re-emit so the GUI receives a proper JSON value, not a raw string.
-        // Failures here surface as runtime errors during `bxp-fmt --docs`,
+        // Failures here surface as runtime errors during `inspect.docsJson`,
         // catching template typos early — the same templates are also validated
         // by the "every insert_template parses as JSON5" unit test.
         const json_bytes = try json5.preprocess(alloc, snippet);
@@ -470,7 +470,7 @@ test "FieldDoc.validator tag is right for representative expression fields" {
 
 test "every insert_template / scaffold_template parses as JSON5" {
     // Schema templates ship as JSON5 source strings — a typo in any of them
-    // surfaces only at `bxp-fmt --docs` runtime. Parse each template here so
+    // surfaces only at `inspect.docsJson` runtime. Parse each template here so
     // breakage is caught at `zig build test` time.
     const Source = struct { origin: []const u8, src: []const u8 };
     var templates: std.array_list.Managed(Source) = .init(std.testing.allocator);

@@ -41,7 +41,7 @@ const encoding = @import("encoding");
 const Decimal = @import("decimal").Decimal;
 
 /// Re-export so callers that already import the `expr` module (bxp-cli pipeline,
-/// bxp-fmt) can name the encoding type / helpers without a separate dependency.
+/// the inspect core, bxp-mcp) can name the encoding type / helpers without a separate dependency.
 pub const Encoding = encoding.Encoding;
 
 // ---------------------------------------------------------------------------
@@ -120,7 +120,7 @@ pub const Context = struct {
     /// error and callers must use the explicit 3-arg form.
     single_prepass_name: ?[]const u8 = null,
     /// Validate-mode whitelist of pre_pass block names. Set non-null
-    /// alongside `lookup_table == null` (the bxp-fmt --config deep
+    /// alongside `lookup_table == null` (the inspect.annotateRaw deep
     /// pass) so `builtinLookup` can flag unknown first arguments at
     /// parse time — typo / undefined block — instead of silently
     /// returning "". Runtime callers leave this null to preserve the
@@ -146,7 +146,7 @@ pub const Context = struct {
     error_detail: ?*[]const u8 = null,
     /// Phase G1: byte offset of the offending token in the expression
     /// source. Set by the Parser/Tokenizer alongside `error_detail` so
-    /// callers (bxp-fmt --expr stderr, bxp-fmt --config $err_* shape)
+    /// callers (inspect.validateExpr stderr, inspect.annotateRaw $err_* shape)
     /// can pinpoint the location for the GUI ExprPanel highlight.
     /// Both offset and len are zero when no specific token is at fault
     /// (e.g. allocator failures, format-only complaints).
@@ -900,8 +900,8 @@ const Parser = struct {
     ///
     /// **Flush policy:** the writer is intentionally NOT flushed here.
     /// Per-event flush would be one syscall per traced call, so a long
-    /// expression with N FN-calls translates to N writes. `bxp-fmt
-    /// runExprTrace` (and the in-process `bridge_eval_expr_trace`)
+    /// expression with N FN-calls translates to N writes. `inspect.evalTrace`
+    /// (and the in-process `bridge_eval_expr_trace`)
     /// flush once at the end of evaluating a single expression, so the
     /// per-call bytes ride out on that final flush. Skipping the
     /// per-call flush is safe because the buffer auto-flushes on
@@ -1368,7 +1368,7 @@ const Parser = struct {
 };
 
 // ---------------------------------------------------------------------------
-// Catalog types — exposed via `bxp-fmt --docs` for the GUI's expression
+// Catalog types — exposed via `inspect.docsJson` for the GUI's expression
 // catalog (functions / keywords / operators / tokens). Per-fn FnDoc
 // declarations live RIGHT NEXT to each builtin impl + adapter further down,
 // so adding a function in one place keeps doc/impl/adapter visibly in sync.
@@ -1385,7 +1385,7 @@ const Parser = struct {
 /// consumers: (a) the central runtime guard in `evalCall` (coerce / skip /
 /// clamp before the impl runs), (b) the static literal checker
 /// `staticCheckCalls` (config-load diagnostics), and (c) the
-/// `bxp-fmt --docs` JSON the GUI autocomplete reads.
+/// `inspect.docsJson` JSON the GUI autocomplete reads.
 ///
 /// Runtime failure policy is chosen per variant to preserve the historical
 /// observable behavior of the impls these guards replaced — see the
@@ -1800,7 +1800,7 @@ fn builtinLookup(args: []Value, ctx: *const Context) !Value {
     // populated `pre_pass_names` whitelist, resolve the first argument
     // immediately and flag unknown names. Runtime callers leave
     // `pre_pass_names` null and skip this branch entirely, preserving
-    // the historical "silent '' on miss" contract that bxp-fmt --expr
+    // the historical "silent '' on miss" contract that inspect.validateExpr
     // also relies on (LOOKUP in bare contexts must not blow up).
     if (ctx.pre_pass_names) |names| {
         const name: []const u8 = if (args.len == 3) switch (args[0]) {
@@ -1810,7 +1810,7 @@ fn builtinLookup(args: []Value, ctx: *const Context) !Value {
         if (!names.contains(name)) return error.LookupUnknownPrePass;
         return Value{ .string = "" };
     }
-    // No lookup_table → either validation context (bxp-fmt --expr) or runtime
+    // No lookup_table → either validation context (inspect.validateExpr) or runtime
     // without any pre_pass defined. Both cases existed pre-namespacing and
     // returned empty so validators don't choke on bare LOOKUP(...) exprs.
     const table = ctx.lookup_table orelse return Value{ .string = "" };
@@ -2615,7 +2615,7 @@ const formatYmd = datefmt.formatIsoDate;
 
 /// Parse arg[0] as a date string and return its epoch day. On parse failure
 /// writes a descriptive diagnostic via `setDetail` and returns InvalidDate so
-/// callers see a clickable error in bxp-fmt / GUI. Empty input must be
+/// callers see a clickable error in the validator / GUI. Empty input must be
 /// pre-handled by the caller (return "" silently) — see DATE_CONVERT's
 /// rationale at builtinDateConvert.
 fn parseDateArg(p: *Parser, s: []const u8) !i64 {
@@ -3184,7 +3184,7 @@ fn canonicaliseNumericString(s: []const u8, alloc: std.mem.Allocator) ![]const u
 
 // ---------------------------------------------------------------------------
 // Catalog — single source of truth for FnDoc / OperatorDoc / KeywordDoc /
-// TokenDoc surfaced by `bxp-fmt --docs` and consumed by the GUI. Per-fn
+// TokenDoc surfaced by `inspect.docsJson` and consumed by the GUI. Per-fn
 // FnDoc declarations live RIGHT NEXT to each builtin impl + adapter above
 // (search for "── <NAME> ──" headers); the `builtins` table at the very
 // bottom of this file just collects refs to them so the dispatcher in
@@ -4343,7 +4343,7 @@ test "eval: 'nan'/'inf' field coerces to 0 in arithmetic (no error)" {
 // scanner cast `parseFloat(f80) -> i64` without bounds-checking, so a
 // finite-but-huge literal (e.g. `1e30`) or a parse-as-Inf literal
 // triggered `@intFromFloat` UB. Reachable from user input in three
-// places: bxp-fmt --expr / --config, bxp-gui-bridge bridge_eval_expr,
+// places: inspect.validateExpr / --config, bxp-gui-bridge bridge_eval_expr,
 // BrokerConfig.validate at startup. Guard now flags such literals as
 // "violation with bad_idx=0" and returns without invoking @intFromFloat.
 test "staticCheckCalls: SPLIT_PART literal index out-of-i64 range does not panic" {

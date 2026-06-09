@@ -32,7 +32,7 @@ const CONFIG_MAX_FILE_SIZE: usize = 1024 * 1024;
 /// `BrokerConfig.validate` and friends remain hardcoded; adding Zig
 /// dispatch is a follow-up). Adding a kind = add an enum variant +
 /// populate relevant FieldDoc entries; bxp-gui consumes via
-/// `bxp-fmt --docs`.
+/// `inspect.docsJson`.
 pub const FieldValidator = enum {
     /// No special check.
     none,
@@ -71,7 +71,7 @@ pub const AutocompleteSource = enum {
 /// Per-field documentation entry. Co-located with the config struct it
 /// describes (search for `pub const fields` below); aggregated and
 /// serialized by `bxp-core/src/docs.zig` as the `config_schema` array
-/// inside `bxp-fmt --docs` output.
+/// inside `inspect.docsJson` output.
 ///
 /// `key` is the dotted path segment for this entry. Per-struct tables
 /// hold the local field name (e.g. "data_dir"); the docs aggregator
@@ -606,8 +606,8 @@ pub const BrokerConfig = struct {
     /// Prints a descriptive error to writer and returns error.InvalidConfig on the first violation.
     ///
     /// This is the bxp-cli fail-fast path: the first error aborts processing and
-    /// the user sees a single clear message. `validateCollect` is the bxp-fmt
-    /// deep-pass equivalent that accumulates all errors in one pass.
+    /// the user sees a single clear message. `validateCollect` is the deep-validation
+    /// pass equivalent that accumulates all errors in one pass.
     pub fn validate(self: *const BrokerConfig, template_id: []const u8, config_path: []const u8, writer: anytype) !void {
         if (self.data_dir.len == 0) {
             try writer.print("---\n# {s}: config error: template '{s}': data_dir must not be empty\n", .{ config_path, template_id });
@@ -746,7 +746,7 @@ pub const BrokerConfig = struct {
     /// Like validate() but collects ALL errors instead of stopping at the first one.
     /// Appends ValidationError items to `errors`; caller owns the strings (free via deinit).
     ///
-    /// Used by bxp-fmt's deep validation pass so the user sees the complete picture
+    /// Used by the inspect core's deep validation pass so the user sees the complete picture
     /// in one run. Error text is kept identical to validate() so both paths produce
     /// the same wording — the only difference is accumulation vs. early-exit.
     pub fn validateCollect(
@@ -816,7 +816,7 @@ pub const BrokerConfig = struct {
                         const msg = try std.fmt.allocPrint(alloc, "'{s}' is not in input_schema and not set by all row_rules rows", .{col.variable});
                         defer alloc.free(msg);
                         // The path uses the JSON5-side header (the object key under
-                        // output_schema), not the OutputColumn array index — bxp-fmt's
+                        // output_schema), not the OutputColumn array index — the inspect core's
                         // path resolver navigates the loaded JSON tree, where
                         // output_schema is `{ header: "$variable", ... }`.
                         const field = try std.fmt.allocPrint(alloc, "output_schema.{s}", .{col.header});
@@ -1009,7 +1009,7 @@ pub const BrokerConfig = struct {
         // Phase G2 layer B: gather every expression source in this
         // broker, run frequency clustering, surface a warning when one
         // `[X]` looks like a typo of a high-frequency reference. Loads
-        // without a real CSV header (bxp-fmt and bxp-cli load path), so
+        // without a real CSV header (the inspect core and bxp-cli load path), so
         // this complements the runtime header check (layer A) — both
         // are warnings, both share the `expr.UnknownField` code.
         var sources = std.array_list.Managed([]const u8).init(alloc);
@@ -1288,7 +1288,7 @@ pub fn staticCheckFieldClustering(
         // Length-relative threshold. At length 4 edit-distance 2 means
         // half the characters differ — more likely a different word
         // than a typo. Mirror the dart_validator gate so the GUI and
-        // bxp-fmt agree on `Time` vs `Type`-class pairs.
+        // the config validator agree on `Time` vs `Type`-class pairs.
         const max_d: usize = if (bad.len < 6) 1 else 2;
         if (best != null and best_d <= max_d) {
             return .{ .bad = bad, .suggest = best.? };
@@ -1446,7 +1446,7 @@ pub const Config = struct {
 /// the same file twice (once per template), which is rarely intended.
 ///
 /// Only emits warnings, never errors — bxp-cli's load path stays
-/// untouched (this function is only invoked by bxp-fmt's deep
+/// untouched (this function is only invoked by the inspect core's deep
 /// validation pass via a non-null diag sink). Returns immediately
 /// when `diag == null`.
 pub fn validateCrossTemplate(
@@ -1477,7 +1477,7 @@ pub fn validateCrossTemplate(
 /// warning), then iterated to count files whose name ends with
 /// `file_pattern_in` — zero matches → `fs.no_input_files` warning.
 /// bxp-cli skips this entirely (early return on null sink); the deep
-/// pass in bxp-fmt and the opt-in `--check-fs=N` path in bxp-cli both
+/// pass in the inspect core and the opt-in `--check-fs=N` path in bxp-cli both
 /// invoke it.
 ///
 /// Implementation is synchronous; `validateFilesystemWithTimeout`
@@ -1580,7 +1580,7 @@ pub fn validateFilesystemWithTimeout(
         // Timeout. Detach the worker (it will continue to completion in
         // the background and exit when its syscall returns; OS reaps
         // the thread on process exit). The ctx and its page-allocated
-        // diagnostics leak intentionally — bxp-fmt / bxp-cli are
+        // diagnostics leak intentionally — the inspect core / bxp-cli are
         // short-lived processes, the cost is negligible.
         thread.detach();
         try emitGlobalDiag(alloc, sink, .warning, "fs.timeout",
@@ -1804,7 +1804,7 @@ const root_keys = [_][]const u8{ "ticker_maps", "conversion_templates" };
 const legacy_pre_pass_keys = [_][]const u8{ "when", "key", "values" };
 
 /// Phase G7: walk the raw JSON5 tree (the `std.json.Value` produced by
-/// `preprocessAnnotated` + `parseFromSliceLeaky` in bxp-fmt) and emit a
+/// `preprocessAnnotated` + `parseFromSliceLeaky` in the inspect core) and emit a
 /// `config.unknown_key` warning for every key that isn't in the
 /// FieldDoc whitelist for its schema path. Includes a Levenshtein-based
 /// `did_you_mean` hint when a sibling within distance 2 exists.
@@ -2128,7 +2128,7 @@ fn diagDuplicateKey(
                         // Found the first duplicate. We stop here — finding
                         // further duplicates in the same document would just
                         // confuse the user who hasn't fixed the first one yet.
-                        // Emit a structured diagnostic for bxp-fmt before
+                        // Emit a structured diagnostic for the inspect core before
                         // printing to stderr (bxp-cli's existing behavior).
                         if (diag) |d| {
                             const msg = std.fmt.allocPrint(
@@ -2355,7 +2355,7 @@ pub fn load(alloc: std.mem.Allocator, config_path: []const u8) !Config {
 /// always rooted at `conversion_templates.<id>.<field_suffix>`. The
 /// message is built with `std.fmt.allocPrint` from the format string +
 /// args, mirroring the existing `std.debug.print` text so bxp-cli's
-/// stderr stays untouched and bxp-fmt's `$err_*` annotation gets the
+/// stderr stays untouched and the inspect core's `$err_*` annotation gets the
 /// same human-readable wording.
 fn emitTemplateDiag(
     alloc: std.mem.Allocator,
@@ -2503,7 +2503,7 @@ fn parseFileTypeField(
 /// Parse + validate a config from in-memory JSON5 bytes. The path label
 /// is only used in diagnostic messages — pass an arbitrary marker
 /// (`"<inline>"`, `"test"`, ...) when the source isn't a real file. Carved
-/// out of `load()` so `bxp-fmt --config` can avoid double-reading the
+/// out of `load()` so `inspect.annotateRaw` can avoid double-reading the
 /// file (it already has the raw bytes for `preprocessAnnotated`) and so
 /// inline tests can exercise the loader without touching disk.
 ///
@@ -2511,7 +2511,7 @@ fn parseFileTypeField(
 /// future phases will append path-aware errors / warnings into it
 /// alongside the existing `std.debug.print` + `return error` behavior.
 /// bxp-cli passes null so its load path is unchanged bit by bit; only
-/// bxp-fmt's deep-validation pass passes a non-null sink today.
+/// the inspect core's deep-validation pass passes a non-null sink today.
 pub fn loadFromBytes(
     alloc: std.mem.Allocator,
     raw: []const u8,
@@ -3080,7 +3080,7 @@ test "jsonErrorDesc: maps known parse errors, falls back to @errorName" {
 }
 
 // `loadFromBytes` (and its diagnostic sink) allocate into a caller-owned
-// arena in production — bxp-fmt wraps a GPA in an ArenaAllocator before
+// arena in production — the inspect core wraps a GPA in an ArenaAllocator before
 // calling. Diagnostics.deinit does not free per-message strings, so these
 // integration tests mirror that contract with an arena rather than the
 // leak-checking testing.allocator.

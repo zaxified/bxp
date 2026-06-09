@@ -7,8 +7,8 @@ For monorepo-level context see [`../CLAUDE.md`](../CLAUDE.md).
 
 **bxp-core** — shared Zig modules for CSV parsing, xlsx conversion, expression evaluation,
 JSON/JSON5 handling, configuration loading, and documentation aggregation.
-Consumed by bxp-cli (conversion engine) and bxp-fmt (validator + docs emitter)
-as a local path dependency.
+Consumed by bxp-cli (conversion engine) and the stateless-inspect adapters
+(bxp-mcp + bxp-gui-bridge, both via `inspect.zig`) as a local path dependency.
 
 ## Module overview
 
@@ -25,8 +25,9 @@ as a local path dependency.
 | `json`        | `json.zig`        | `scanColNames()` + `RecordReader` — streaming JSON array-of-objects input |
 | `btrace`      | `btrace.zig`      | Binary trace `Writer` / `Reader` for `--trace=bin`                        |
 | `json5`       | `json5.zig`       | `preprocess()` (internal; also exported for direct use)                   |
-| `docs`        | `docs.zig`        | `writeDocs(alloc, writer)` — emits the `bxp-fmt --docs` JSON              |
+| `docs`        | `docs.zig`        | `writeDocs(alloc, writer)` — emits the language/schema docs JSON                   |
 | `diagnostics` | `diagnostics.zig` | `Diagnostics`, `Diagnostic`, `Severity` — structured validation collector |
+| `inspect`     | `inspect.zig`     | Shared stateless core: `annotateRaw()`, `validateExpr()`, `validateExprJson()`, `evalExpr()`, `evalTrace()`, `evalBatch()`, `docsJson()`, `listTemplates()`, `fetchTemplate()` — wrapped by bxp-mcp + bxp-gui-bridge |
 
 ## Module details
 
@@ -172,19 +173,19 @@ JSON5 configuration loader.
   `isAnnotationKey`, `extractQuotedName`, `jsonErrorDesc`) plus two
   `loadFromBytes` integration cases (enum/punctuation parse + invalid-enum
   warning). `loadFromBytes` allocates into a caller-owned arena — tests pass
-  an `ArenaAllocator`, matching how bxp-fmt drives it.
+  an `ArenaAllocator`, matching how the inspect adapters drive it.
 
 **Doc catalog** (`pub const FieldDoc`, plus `pub const fields = [_]FieldDoc{...}`
 on each public struct + `pub const scaffold_template` where a struct can be
 scaffolded by the GUI): co-located with the struct each entry describes —
 same pattern as `expr.FnDoc`. Adding a config field = update the struct AND
 its `fields` table in one place. Aggregated by `docs.zig`; serves
-`bxp-fmt --docs`.
+the docs catalog.
 
 ### docs.zig
 
-Aggregator for `bxp-fmt --docs`. Single source of truth that the GUI
-(bxp-gui) consumes at startup.
+Aggregator for the language/schema docs catalog. Single source of truth that
+the GUI (bxp-gui) consumes at startup.
 
 - `writeDocs(alloc, writer)` — emits the full JSON: `functions`, `keywords`,
   `operators`, `tokens` (re-exported live from `expr.zig`), and
@@ -234,8 +235,8 @@ Binary framed trace stream emitted by `bxp-cli --trace`. The sole trace
 format since the v0.3.0 NDJSON removal. Carries metadata only
 (per-output-row pointers into source CSV/JSON, error list, pre_pass dump,
 aggregate stats); per-row drill-down (vars, rules, output cell values) is
-recomputed on demand by `bxp-fmt` seeking to a row's `source_locator`
-byte offset.
+recomputed on demand by the GUI (via the bridge) seeking to a row's
+`source_locator` byte offset.
 
 - `Writer.init(w)` writes `FRAME_MAGIC` ("BXTB") once. There is no
   schema-version field — producer and consumer ship together in every
@@ -271,9 +272,9 @@ Structured diagnostics collector for config/json5/expr validation.
   `message`, and optional `suggest` (did-you-mean hint).
 - `Diagnostics` — owned `ArrayList(Diagnostic)` collector with `init`, `deinit`, `append`,
   `count`, `countBySeverity`.
-- Used by bxp-fmt's `--config` deep validation pass. bxp-cli passes a null sink; existing
+- Used by the config validator's deep validation pass. bxp-cli passes a null sink; existing
   fail-fast/stderr behavior is preserved.
-- Severity routing in bxp-fmt annotated JSON: `.@"error"` → `$err_<N>` object,
+- Severity routing in the annotated JSON output: `.@"error"` → `$err_<N>` object,
   `.warning` → `$warn_<N>` object, `.info` → `$info_<N>` object. Each object may contain
   `message`, `off`, `len`, `suggest` fields.
 - Unit tests inline (1 test case).
@@ -284,11 +285,11 @@ Structured diagnostics collector for config/json5/expr validation.
 # Build all modules (no standalone binary):
 cd bxp-core && zig build
 
-# Run unit tests (csv, json, btrace, expr, datefmt, decimal, unicode, json5, diagnostics, xlsx, config, docs):
+# Run unit tests (csv, json, btrace, expr, datefmt, decimal, unicode, json5, diagnostics, xlsx, config, docs, inspect):
 cd bxp-core && zig build test
 ```
 
-Module exports in `build.zig`: `csv`, `json`, `json5`, `xlsx`, `btrace`, `decimal`, `encoding`, `expr`, `config`, `docs`, `diagnostics`.
+Module exports in `build.zig`: `csv`, `json`, `json5`, `xlsx`, `btrace`, `decimal`, `encoding`, `expr`, `config`, `docs`, `diagnostics`, `inspect`.
 `expr` imports `datefmt.zig` and `unicode.zig` (both file-relative, not named modules) plus the named `decimal`, `uucode`, `encoding` modules; `config` imports `json5` (as `"json5.zig"` — internal import name), `diagnostics`, `expr`, `encoding`. `encoding` is a named module (not a file-relative @import) because it is shared by both `expr` and `config` — a file-relative @import from two modules would compile the file into each, a duplicate-symbol error (same reason `decimal` is named).
 `docs` imports `config`, `expr`, `json5`; `diagnostics` has no bxp-core dependencies.
 

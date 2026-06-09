@@ -722,7 +722,7 @@ pub fn formatIsoDate(alloc: std.mem.Allocator, parts: DateParts) ![]const u8 {
 }
 
 // ---------------------------------------------------------------------------
-// Format-string validation (drives the bxp-fmt / GUI diagnostic squiggle)
+// Format-string validation (drives the validator / GUI diagnostic squiggle)
 // ---------------------------------------------------------------------------
 
 /// Scan a format string for a letter that is NOT part of the token vocabulary

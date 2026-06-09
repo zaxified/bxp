@@ -1,13 +1,13 @@
 /// Structured diagnostics for config / json5 / expr validation.
 ///
-/// Used by bxp-fmt's `--config` deep validation pass to collect every
+/// Used by inspect.annotateRaw's deep validation pass to collect every
 /// error / warning / info finding with a JSON-tree path, optional
 /// source line/col, optional in-expression byte offset, machine-readable
 /// code, and optional did-you-mean suggestion. bxp-cli passes a null
 /// sink — the existing fail-fast / stderr behavior is preserved bit by
 /// bit.
 ///
-/// Severity routing (in bxp-fmt's annotated JSON output, Phase G1):
+/// Severity routing (in the inspect core's annotated JSON output, Phase G1):
 ///   .@"error"  → "$err_<N>":  { "message": ..., "off": N, "len": N, "suggest": "..." }
 ///   .warning   → "$warn_<N>": { "message": ..., "off": N, "len": N, "suggest": "..." }
 ///   .info      → "$info_<N>": { "message": ..., "off": N, "len": N, "suggest": "..." }
@@ -50,7 +50,7 @@ pub const Diagnostic = struct {
 };
 
 /// Owned collector. All strings appended into Diagnostic fields are
-/// expected to live as long as this collector — typically the bxp-fmt
+/// expected to live as long as this collector — typically the inspect core
 /// arena, which is freed in one shot when the binary exits. Callers
 /// that need persistent ownership across allocator boundaries should
 /// dupe before append.
@@ -75,7 +75,7 @@ pub const Diagnostics = struct {
     }
 
     /// Number of diagnostics matching the given severity. Used by the
-    /// pre-save guard (only `.@"error"` blocks save) and by the bxp-fmt
+    /// pre-save guard (only `.@"error"` blocks save) and by the inspect core
     /// summary line.
     pub fn countBySeverity(self: *const Diagnostics, sev: Severity) usize {
         var n: usize = 0;
