@@ -29,7 +29,10 @@ const MAX_TRACE_SAMPLE: usize = 200;
 /// Cap on the sanitized workspace-id length.
 const MAX_UID_LEN: usize = 64;
 
-const OutputFile = struct { name: []const u8, content: []const u8 };
+/// A produced output file. `read_error` is set (and `content` empty) when the
+/// file could not be read back — e.g. it exceeds `MAX_FILE_BYTES` — so the
+/// report surfaces it explicitly instead of silently dropping it.
+const OutputFile = struct { name: []const u8, content: []const u8, read_error: ?[]const u8 = null };
 
 /// Run a simulation and serialize the JSON report into `out`. Logical failures
 /// (template not found, unsupported input, spawn/IO problems) come back as
@@ -131,15 +134,25 @@ fn run(
         while (it.next() catch null) |entry| {
             if (entry.kind != .file) continue;
             if (std.mem.eql(u8, entry.name, input_name)) continue;
-            const content = d.readFileAlloc(a, entry.name, MAX_FILE_BYTES) catch continue;
-            try outputs.append(a, .{ .name = try a.dupe(u8, entry.name), .content = content });
+            const name = try a.dupe(u8, entry.name);
+            // A read failure (too large, IO error) is reported as a marked
+            // output entry, never silently skipped.
+            const content = d.readFileAlloc(a, entry.name, MAX_FILE_BYTES) catch |err| {
+                try outputs.append(a, .{ .name = name, .content = "", .read_error = @errorName(err) });
+                continue;
+            };
+            try outputs.append(a, .{ .name = name, .content = content });
         }
     }
 
     // 7. bxp-mcp's own diff: input vs output record counts → outcome status.
-    const input_records = countRecords(csv_text);
+    //    Counts are data rows (header excluded) so they line up with the BXTB
+    //    trace's source_rows / written_rows.
+    const input_records = countDataRecords(csv_text);
     var output_records: usize = 0;
-    for (outputs.items) |o| output_records += countRecords(o.content);
+    for (outputs.items) |o| {
+        if (o.read_error == null) output_records += countDataRecords(o.content);
+    }
 
     return buildReport(a, .{
         .template = template,
@@ -205,10 +218,15 @@ fn buildReport(a: std.mem.Allocator, r: Report) ![]u8 {
         try jw.beginObject();
         try jw.objectField("file");
         try jw.write(o.name);
-        try jw.objectField("records");
-        try jw.write(countRecords(o.content));
-        try jw.objectField("csv");
-        try jw.write(o.content);
+        if (o.read_error) |e| {
+            try jw.objectField("error");
+            try jw.write(e);
+        } else {
+            try jw.objectField("records");
+            try jw.write(countDataRecords(o.content));
+            try jw.objectField("csv");
+            try jw.write(o.content);
+        }
         try jw.endObject();
     }
     try jw.endArray();
@@ -452,6 +470,14 @@ fn countRecords(bytes: []const u8) usize {
     return n;
 }
 
+/// Data-row count: non-empty lines minus the header row (every bxp CSV — input
+/// and output — carries a header). Lines up with the BXTB trace's per-file
+/// `source_rows` / `written_rows`, unlike the raw line count.
+fn countDataRecords(bytes: []const u8) usize {
+    const n = countRecords(bytes);
+    return if (n > 0) n - 1 else 0;
+}
+
 /// Filesystem-safe workspace id: keep [A-Za-z0-9_-], map everything else to
 /// '_', cap the length, never empty.
 fn sanitize(a: std.mem.Allocator, s: []const u8) ![]u8 {
@@ -484,6 +510,14 @@ test "countRecords: non-empty lines, trailing-newline and CRLF agnostic" {
     try t.expectEqual(@as(usize, 2), countRecords("h1,h2\n1,2")); // last line, no \n
     try t.expectEqual(@as(usize, 2), countRecords("h1,h2\r\n1,2\r\n")); // CRLF
     try t.expectEqual(@as(usize, 1), countRecords("a\n\n\n")); // blank lines ignored
+}
+
+test "countDataRecords: excludes the header row, never underflows" {
+    const t = std.testing;
+    try t.expectEqual(@as(usize, 0), countDataRecords("")); // empty → 0, no underflow
+    try t.expectEqual(@as(usize, 0), countDataRecords("h1,h2")); // header only
+    try t.expectEqual(@as(usize, 1), countDataRecords("h1,h2\n1,2\n")); // 1 data row
+    try t.expectEqual(@as(usize, 2), countDataRecords("h1,h2\n1,2\n3,4")); // no trailing \n
 }
 
 test "sanitize: keeps [A-Za-z0-9_-], maps the rest, never empty, length-capped" {

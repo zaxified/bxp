@@ -1018,6 +1018,7 @@ automatically by Claude Code, but you can read them directly any time.
 | Monorepo         | [`CLAUDE.md`](../CLAUDE.md)                                                       | Top-level layout + package dep graph + cross-cutting conventions                         |
 | `bxp-cli`        | [`bxp-cli/CLAUDE.md`](../bxp-cli/CLAUDE.md)                                       | Full config reference, expression syntax, broker list, exit codes, output stream routing |
 | `bxp-fmt`        | [`bxp-fmt/CLAUDE.md`](../bxp-fmt/CLAUDE.md)                                       | Subcommands, annotated JSON shape (`$comm_*`/`$err_*`/…), exit codes                     |
+| `bxp-mcp`        | [`bxp-mcp/CLAUDE.md`](../bxp-mcp/CLAUDE.md)                                       | MCP server: adapter model, tool catalog, in-proc vs spawn, wire protocol, bxp_simulate   |
 | `bxp-core`       | [`bxp-core/CLAUDE.md`](../bxp-core/CLAUDE.md)                                     | Per-module API surface, build details, "known non-issues" rationale                      |
 | `bxp-gui`        | [`bxp-gui/CLAUDE.md`](../bxp-gui/CLAUDE.md)                                       | Flutter app structure, services/store/ui split, MCP debug workflow                       |
 | `bxp-gui-bridge` | [`bxp-gui-bridge/CLAUDE.md`](../bxp-gui-bridge/CLAUDE.md)                         | C-ABI surface, Debug→ReleaseSafe rewrite rationale, Win-mandatory / cross-platform roles |

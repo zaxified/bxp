@@ -1,8 +1,10 @@
 // bxp-mcp — minimal MCP server (JSON-RPC 2.0 over stdio)
 //
 // Newline-delimited JSON: every write to stdout is exactly one JSON object
-// followed by one \n. Handles initialize / tools/list / tools/call / ping.
-// No roots / logging / progress yet (see CLAUDE.md TODO).
+// followed by one \n. Handles initialize / tools/list / tools/call / ping, plus
+// server→client notifications/progress (opt-in via params._meta.progressToken).
+// Request-only methods are answered only when an `id` is present; an id-less
+// line for them is a stray notification and gets no response.
 //
 // Pure std: each incoming line is parsed with std.json; ids and tool text are
 // re-serialized with std.json.Stringify. No third-party code.
@@ -129,17 +131,22 @@ fn handleLine(s: *Session, line: []u8) void {
     }
     const method = method_v.string;
 
-    if (eql(method, "initialize")) {
+    // A request (has `id`) gets exactly one response; a notification (no `id`)
+    // must get none. `notifications/initialized` is the only method we accept
+    // without an id — every other id-less line is a stray notification we drop.
+    if (eql(method, "notifications/initialized")) {
+        // fire-and-forget
+    } else if (id == null) {
+        // notification for a request-only method: ignore, never respond.
+    } else if (eql(method, "initialize")) {
         handleInitialize(s, id, obj.get("params"));
     } else if (eql(method, "tools/list")) {
         writeResultRaw(s, id, tools.tools_list);
     } else if (eql(method, "ping")) {
         writeResultRaw(s, id, "{}");
-    } else if (eql(method, "notifications/initialized")) {
-        // fire-and-forget
     } else if (eql(method, "tools/call")) {
         handleCall(s, id, obj.get("params"));
-    } else if (id != null) {
+    } else {
         writeError(s, id, -32601, "Method not found");
     }
 }
@@ -207,8 +214,8 @@ fn handleCall(s: *Session, id: ?std.json.Value, params_opt: ?std.json.Value) voi
     // could alias its own output over the live request (observed corrupting a
     // second bxp_simulate's report). The arena reset reclaims this each turn.
     var tool_buf: std.ArrayList(u8) = .empty;
-    tools.dispatch(s.reqAlloc(), tool, args, prog, &tool_buf);
-    writeToolResult(s, id, tool_buf.items);
+    const is_error = tools.dispatch(s.reqAlloc(), tool, args, prog, &tool_buf);
+    writeToolResult(s, id, tool_buf.items, tools.allowsStructured(tool), is_error);
 }
 
 // ── JSON-RPC writers ───────────────────────────────────────────────────────
@@ -225,7 +232,7 @@ fn writeResultRaw(s: *Session, id: ?std.json.Value, result: []const u8) void {
     _ = s.stdout.write(buf.items) catch 0;
 }
 
-fn writeToolResult(s: *Session, id: ?std.json.Value, text: []const u8) void {
+fn writeToolResult(s: *Session, id: ?std.json.Value, text: []const u8, allow_structured: bool, is_error: bool) void {
     const alloc = s.alloc;
     const buf = &s.out_buf;
     buf.clearRetainingCapacity();
@@ -234,14 +241,18 @@ fn writeToolResult(s: *Session, id: ?std.json.Value, text: []const u8) void {
     buf.appendSlice(alloc, ",\"result\":{\"content\":[{\"type\":\"text\",\"text\":") catch return;
     appendJsonString(s, buf, text);
     buf.appendSlice(alloc, "}]") catch return;
-    // MCP 2025-06-18+ structuredContent: when the tool's output is a JSON
+    // MCP 2025-06-18+ structuredContent: when the tool's output is a single JSON
     // object, hand it back parsed so the agent doesn't re-parse the text blob.
-    // Must be an object (spec); array / NDJSON tools keep text-only.
-    if (isSingleJsonObject(text)) {
+    // Gated on the tool's declared shape (`allow_structured`) — an NDJSON tool
+    // stays text-only even when a trivial input yields one object — and on a
+    // structural re-check so an error/text blob never emits invalid structure.
+    if (allow_structured and isSingleJsonObject(text)) {
         buf.appendSlice(alloc, ",\"structuredContent\":") catch return;
         appendStrippingNewlines(alloc, buf, text);
     }
-    buf.appendSlice(alloc, ",\"isError\":false}}\n") catch return;
+    // isError:true marks a tool failure (missing arg, unexpected error) so the
+    // agent notices; a domain `{"ok":false}` answer keeps isError:false.
+    buf.appendSlice(alloc, if (is_error) ",\"isError\":true}}\n" else ",\"isError\":false}}\n") catch return;
     _ = s.stdout.write(buf.items) catch 0;
 }
 

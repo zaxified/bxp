@@ -823,6 +823,58 @@ plain stderr warning line during a real run.
 
 ---
 
+## bxp-mcp: MCP adapter over the shared core
+
+`bxp-mcp` is a second adapter over the same stateless `inspect` core that
+`bxp-fmt` wraps — but speaking MCP (JSON-RPC 2.0 over stdio) to an AI agent
+instead of argv/stdout to a shell. An agent host spawns it as a child and pipes
+one JSON object per line; every stateless tool is a direct in-process `inspect`
+call (microseconds, no subprocess). The lone exception is `bxp_simulate`, which
+needs the full conversion pipeline and therefore spawns the **co-located
+`bxp-cli`** — the same "heavy workhorse runs as a child, the adapter translates"
+pattern the GUI uses.
+
+```mermaid
+flowchart TD
+    AGENT([AI agent / MCP host]) -->|JSON-RPC line| LOOP[server.zig
+    stdin loop + per-request arena]
+    LOOP --> DISP[tools.zig dispatch
+    name → handler]
+
+    DISP -->|stateless| CORE[("inspect.zig<br/>validate / eval / eval-batch /<br/>eval-trace / docs / templates")]
+    DISP -->|bxp_simulate| SIM[sim.zig
+    stage config+CSV in scratch ws]
+    SIM -->|spawn| CLI[[bxp-cli
+    --config/--template/--data
+    + --trace-file BXTB sidecar]]
+    CLI --> READ[read outputs + parse BXTB
+    fold per-row trace into report]
+
+    CORE --> RES["writeToolResult<br/>text + structuredContent? + isError"]
+    READ --> RES
+    RES -->|JSON-RPC line| AGENT
+    SIM -. notifications/progress .-> AGENT
+```
+
+Key boundaries a developer should keep straight:
+
+- **`isError` vs domain `ok:false`.** `isError:true` is reserved for a transport
+  failure (missing required argument, unexpected error, spawn/IO). An expression
+  error, a not-found template id, or a `bxp_simulate` orchestration report comes
+  back as a normal result with `isError:false` — it is a valid answer to read.
+- **`structuredContent` is gated by tool identity**, not by sniffing the output
+  shape: a single-object tool exposes the parsed object; `bxp_eval_trace` is
+  NDJSON and stays text-only even when a trivial expression yields one line.
+- **Memory is two-tier**: a base arena for startup + persistent reused buffers,
+  and a per-request arena reset (`retain_capacity`) after every response, so RSS
+  reaches a steady state sized to the largest single request.
+
+Full detail — tool catalog, wire protocol, the `bxp_simulate` workspace + BXTB
+fold, build/test — lives in [`mcp.md`](mcp.md) and
+[`bxp-mcp/CLAUDE.md`](../bxp-mcp/CLAUDE.md).
+
+---
+
 ## Config Editing and AST
 
 Every user edit in the config tree (insert field, delete, setValue, reorder) is

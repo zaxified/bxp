@@ -62,6 +62,13 @@ print(json.dumps({"jsonrpc":"2.0","id":9,"method":"initialize","params":{"protoc
 print(json.dumps({"jsonrpc":"2.0","id":10,"method":"tools/call",
                   "params":{"name":"bxp_simulate","_meta":{"progressToken":"p10"},
                             "arguments":{"config":cfg,"template":"trading212_to_wealthfolio","csv":csv}}}))
+# Tool failure (missing required arg) → isError:true, no structuredContent.
+call(11, "bxp_eval", {})
+# eval_trace on a function-free expr is a single sentinel line — still NDJSON by
+# tool identity, so it must NOT expose structuredContent.
+call(12, "bxp_eval_trace", {"expr":"1 + 2"})
+# A request-only method without an id is a stray notification — no response.
+print(json.dumps({"jsonrpc":"2.0","method":"tools/list"}))
 PY
 
     "$stage/bxp-mcp" <"$reqs" >"$resp" || {
@@ -120,6 +127,9 @@ tr = sim["trace"]
 assert tr["available"] is True, tr
 assert tr["source_rows"] > 0 and tr["written_rows"] > 0, tr
 assert tr["output_rows"]["count"] == tr["written_rows"], tr
+# Record counts exclude the header row, so they line up with the BXTB trace.
+assert sim["input"]["records"] == tr["source_rows"], (sim["input"]["records"], tr["source_rows"])
+assert sim["output_records"] == tr["written_rows"], (sim["output_records"], tr["written_rows"])
 for key in ("filtered", "row_errors", "output_rows"):
     assert isinstance(tr[key]["count"], int) and isinstance(tr[key]["sample"], list), (key, tr)
 # An object-returning tool also exposes structuredContent (5a); NDJSON does not.
@@ -139,6 +149,15 @@ trace = by_id[8]["result"]["content"][0]["text"].strip().splitlines()
 events = [json.loads(ln) for ln in trace if ln]
 assert any(e.get("fn") == "ABS" for e in events), events
 assert events[-1] == {"t": "final", "value": "2"}, events[-1]
+
+# A tool failure sets isError:true (so the agent notices) and carries no
+# structuredContent; a domain {"ok":false} answer would keep isError:false.
+assert by_id[11]["result"]["isError"] is True, by_id[11]
+assert "structuredContent" not in by_id[11]["result"], by_id[11]
+# eval_trace stays text-only even when the expression has no function calls
+# (single sentinel line) — structuredContent is gated by tool identity, not shape.
+assert by_id[12]["result"].get("isError") is False, by_id[12]
+assert "structuredContent" not in by_id[12]["result"], "single-line eval_trace must stay text-only"
 PY
 
     rm -rf "$stage"; rm -f "$reqs" "$resp"

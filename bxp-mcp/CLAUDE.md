@@ -52,7 +52,7 @@ invokes it from a location where `bxp-cli` sits alongside.
 | `bxp_docs` | `docsJson()` | Full language/schema JSON (`functions`, `keywords`, `operators`, `tokens`, `config_schema`). |
 | `bxp_list_templates` | `listTemplates(config_text)` | `{"templates":[{id,data_dir,…}, …]}` (byte-identical to `bxp-fmt --config … --list-templates`); no semantic validation. |
 | `bxp_fetch_template` | `fetchTemplate(config_text, id)` | The raw template JSON, or `{"$err_1":"…"}` when the id / config is bad (byte-identical to `bxp-fmt --config … --fetch-template <id>`). |
-| `bxp_simulate` | spawns `bxp-cli` (see `sim.zig`) | Runs the chosen template end-to-end against the supplied CSV. `{ok:true, exit_code, status, input, outputs:[{file,records,csv}], output_records, summary, diagnostics, trace, workspace}`. `trace` is the BXTB sidecar folded in (per-row filtered/error/output counts + capped samples with input line numbers). `ok:false` only on orchestration failure (no run). CSV-input templates only. Declares an `outputSchema`. |
+| `bxp_simulate` | spawns `bxp-cli` (see `sim.zig`) | Runs the chosen template end-to-end against the supplied CSV. `{ok:true, exit_code, status, input, outputs:[{file,records,csv}], output_records, summary, diagnostics, trace, workspace}`. All `records` counts (input + per-output + `output_records`) are **data rows, header excluded**, so they line up with `trace.source_rows` / `written_rows`. An output that can't be read back (e.g. exceeds the 16 MB cap) appears as `{file,error}` instead of `{file,records,csv}` — never silently dropped. `trace` is the BXTB sidecar folded in (per-row filtered/error/output counts + capped samples with input line numbers). `ok:false` only on orchestration failure (no run). CSV-input templates only. Declares an `outputSchema`. |
 
 `bxp_validate` runs with `check_fs = 0` (pure structural/expression validation,
 no filesystem syscalls — the agent validates config _text_, not a deployed tree).
@@ -94,8 +94,14 @@ stdout. stderr is free for logs.
 - **request** (has `id`) → exactly one response line with the same `id`.
 - **notification** (no `id`, e.g. `notifications/initialized`) → no response.
 - **response** → `result` or `error: {code, message}`. A tool result is
-  `{content:[{type:text,text}], isError:false}`, plus `structuredContent` (the
-  parsed object) when the tool's output is a single JSON object.
+  `{content:[{type:text,text}], isError}`. `isError` is `true` only for a tool
+  *failure* (a missing required argument, an unexpected Zig error, a spawn/IO
+  problem); a domain `{"ok":false,…}` answer (an expression error, a
+  not-found-but-asked template id, an orchestration report) keeps `isError:false`
+  — it is a valid result the agent should read. `structuredContent` (the parsed
+  object) is added when the tool's declared output is a single JSON object;
+  `bxp_eval_trace` is NDJSON by identity and stays text-only even when a
+  function-free expression happens to emit a single sentinel line.
 - **server→client** `notifications/progress` are emitted mid-call for a
   request that supplied `params._meta.progressToken` (see `progress.zig`).
 
@@ -189,10 +195,12 @@ Register with an MCP client (e.g. Claude Code, `~/.claude.json`):
    `source_locator` byte offset. The `--debug` text dump stays unparsed.
 
 5. **Protocol depth — ✅ DONE (2026-06-09).**
-   - **`structuredContent`** (`server.zig writeToolResult`): when a tool's text
-     output is exactly one top-level JSON object (brace-matched via
-     `isSingleJsonObject`, so NDJSON like `bxp_eval_trace` and bare arrays stay
-     text-only), it is also returned parsed under `structuredContent`.
+   - **`structuredContent`** (`server.zig writeToolResult`): returned (parsed)
+     when the tool's declared output is a single JSON object —
+     `tools.allowsStructured(tool)` gates by tool identity (so NDJSON
+     `bxp_eval_trace` stays text-only even on a single-line trivial trace), then
+     `isSingleJsonObject` brace-matches as a structural safety net (so an
+     `error:`/array blob never emits invalid structure).
    - **`outputSchema`** declared for `bxp_simulate` (the full report shape) in
      `tools_list`; other tools emit `structuredContent` without a declared
      schema (spec-valid — it's a SHOULD).
