@@ -21,18 +21,18 @@ all cross-platform:
    keep a separate `Process.start` route.
 2. **In-proc expression evaluator (all platforms)** — `bridge_eval_expr` /
    `bridge_eval_expr_trace` call the shared `bxp-core/inspect` core
-   (`validateExpr` / `evalTrace` — the same logic behind `bxp-fmt --expr` /
-   `--expr-trace` and the MCP `bxp_eval`/`bxp_eval_trace` tools) directly in
-   the GUI process, so the expression playground and editor don't pay a
-   ~50 ms spawn cost per keystroke. The bridge only marshals to/from its fixed
-   C-ABI out buffer; the eval/trace logic is no longer hand-rolled here.
+   (`validateExpr` / `evalTrace` — the same logic behind the MCP
+   `bxp_validate_expr` / `bxp_eval_trace` tools) directly in the GUI process,
+   so the expression playground and editor don't pay a ~50 ms spawn cost per
+   keystroke. The bridge only marshals to/from its fixed C-ABI out buffer; the
+   eval/trace logic is no longer hand-rolled here.
 3. **In-proc inspect ops (all platforms)** — `bridge_inspect` covers the rest
-   of bxp-fmt's stateless surface (`docs` / `config` / `list_templates` /
+   of the stateless inspect surface (`docs` / `config` / `list_templates` /
    `fetch_template` / `eval_batch`), so the GUI runs an in-process
-   `bxp-core/inspect` call instead of spawning `bxp-fmt`. With (2)+(3) the GUI
-   no longer needs `bxp-fmt` at all — the bridge links `bxp-core/inspect`
-   directly. There is no subprocess fallback: a missing library is a fatal
-   startup on every platform.
+   `bxp-core/inspect` call with no subprocess. The bridge links
+   `bxp-core/inspect` directly, so the GUI needs no separate validator binary.
+   There is no subprocess fallback: a missing library is a fatal startup on
+   every platform.
 
 ## Source layout
 
@@ -66,7 +66,7 @@ All exports use the `.c` calling convention.
 | `bridge_free(ptr, len)`      | Return a `bridge_run` response buffer to the bridge allocator |
 | `bridge_eval_expr(...)`      | In-proc: parse + evaluate one expression, return result/error |
 | `bridge_eval_expr_trace(..)` | In-proc: same with per-call NDJSON trace + terminal sentinel   |
-| `bridge_inspect(...)`        | In-proc: stateless inspect ops (`docs` / `config` / `list_templates` / `fetch_template` / `eval_batch`) the GUI used to spawn `bxp-fmt` for — JSON request envelope → result JSON in out buffer |
+| `bridge_inspect(...)`        | In-proc: stateless inspect ops (`docs` / `config` / `list_templates` / `fetch_template` / `eval_batch`) — JSON request envelope → result JSON in out buffer |
 
 The Dart-side shim that calls these lives in
 [`../bxp-gui/lib/services/bridge_client.dart`](../bxp-gui/lib/services/bridge_client.dart).
@@ -86,7 +86,7 @@ zig build -Doptimize=ReleaseSmall   # production release flag
 The library is consumed by bxp-gui in three places:
 
 1. **Windows release** (`scripts/release-02-desktop.sh` Windows leg) —
-   copied into the Flutter bundle next to `bxp-cli.exe` / `bxp-fmt.exe`.
+   copied into the Flutter bundle next to `bxp-cli.exe`.
 2. **Linux/macOS release** — same bundle slot for the eval path.
 3. **Dev tree** (`flutter run -d linux`) — the Flutter CMake hook copies
    whatever sits in `bxp-gui-bridge/zig-out/lib/`; **changing a `.so`
@@ -125,11 +125,11 @@ verify the corpus, then drop the rewrite.
   gate. Both the subprocess proxy (`bridge_run` / `bridge_run_streaming` for
   `bxp-cli`) and the in-proc families (`bridge_eval_expr*` / `bridge_inspect`)
   are live on every host.
-- **Next session (tracked):** the Windows `bridge_inspect` smoke leg is now
-  load-bearing — verify it on a Win runner (Linux is live-verified, and the
-  same DLL is already mandatory there for the proxy + eval families). Then
-  delete `bxp-fmt` (still used by the console archive's agent self-test and
-  `scripts/test.sh` as a parity oracle).
+- **Tracked:** the Windows `bridge_inspect` smoke leg is now load-bearing —
+  verify it on a Win runner (Linux is live-verified, and the same DLL is
+  already mandatory there for the proxy + eval families). `bxp-fmt` has been
+  deleted; the console archive ships `bxp-mcp` as the agent-facing surface and
+  `scripts/test.sh` drives `inspect` via bxp-mcp / the bridge.
 
 ## Coding conventions
 

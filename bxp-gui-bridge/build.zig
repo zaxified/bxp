@@ -28,10 +28,10 @@ pub fn build(b: *std.Build) void {
     // bxp-core: shared library with the actual expression evaluator,
     // config parser, etc. The bridge calls into it directly for in-process
     // operations (e.g. `bridge_eval_expr`) so the Dart GUI can avoid the
-    // ~50 ms spawn cost of `bxp-fmt --expr` per keystroke.
+    // ~50 ms spawn cost of `inspect.validateExpr` per keystroke.
     const bxp_core = b.dependency("bxp_core", .{ .target = target, .optimize = optimize });
     // inspect: the shared stateless core (validate/eval/eval-trace/docs/templates)
-    // also wrapped by bxp-fmt and bxp-mcp, so the bridge's in-proc paths share
+    // also wrapped by bxp-mcp, so the bridge's in-proc paths share
     // one implementation instead of hand-rolling their own. (inspect pulls in
     // expr transitively, so the bridge no longer imports expr directly.)
     const inspect_mod = bxp_core.module("inspect");

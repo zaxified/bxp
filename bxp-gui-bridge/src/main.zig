@@ -1,7 +1,7 @@
-//! bxp-gui-bridge — Dart FFI shim that proxies bxp-fmt / bxp-cli calls.
+//! bxp-gui-bridge — Dart FFI shim that proxies bxp-core inspect ops / bxp-cli calls.
 //!
 //! Why this exists: Dart's Process.start on Windows hits a deterministic
-//! ~8 KB cutoff when reading subprocess stdout — bxp-fmt's --docs (~30 KB)
+//! ~8 KB cutoff when reading subprocess stdout — the docs catalog (~30 KB)
 //! never makes it back through the pipe and the GUI startup fails with
 //! "error: WriteFailed". The root cause is in the dart:io C++ pipe layer
 //! (see dart-lang/sdk#1727 + #51273, both still open). Three Dart-side
@@ -23,7 +23,7 @@ const inspect = @import("inspect");
 
 /// Hard cap on captured bytes per stream (stdout, stderr) per call.
 /// 64 MB per stream covers every realistic `bridge_run` payload —
-/// `bxp-fmt --docs` / `--config` / `--list-templates` / `--expr-batch`
+/// `inspect.docsJson` / `--config` / `--list-templates` / `--expr-batch`
 /// all produce bounded responses well under this. When a child exceeds
 /// the cap, the bridge keeps the prefix and continues draining without
 /// storing — the response carries `truncated: true` so the Dart side
@@ -32,7 +32,7 @@ const max_output_bytes: usize = 64 * 1024 * 1024;
 
 /// Request shape: which executable to run with which arguments.
 /// Caller (Dart) is responsible for resolving the absolute path to
-/// bxp-fmt.exe / bxp-cli.exe; we don't probe PATH.
+/// bxp-cli.exe; we don't probe PATH.
 ///
 /// `cwd` is optional — when non-null the child runs with that working
 /// directory. Used by the streaming dry-run path so relative
@@ -79,12 +79,12 @@ export fn bridge_version() [*:0]const u8 {
 ///
 /// `stdin_ptr` + `stdin_len` carry an optional input body to write to the
 /// child's stdin. When `stdin_len == 0` the child's stdin is closed
-/// immediately (legacy behaviour, used by `bxp-fmt --docs` etc). When
+/// immediately (legacy behaviour, used by `inspect.docsJson` etc). When
 /// non-zero the bridge spawns a writer thread that pushes the body and
 /// closes the pipe, running concurrently with the stdout/stderr drainers
 /// so a request larger than the OS pipe buffer doesn't deadlock against
 /// a child that won't flush stdout until it has consumed stdin (the
-/// `bxp-fmt --expr-batch` shape).
+/// `inspect.evalBatch` shape).
 ///
 /// Memory: all internal allocations go through std.heap.c_allocator and
 /// are released before returning. The response_buf is owned by the
@@ -285,7 +285,7 @@ fn drainerLoop(args: DrainerArgs) void {
 /// Pump `data` into the child's stdin pipe and close it. Runs on its own
 /// thread so a request body larger than the OS pipe buffer can't deadlock
 /// against a child holding its stdout flush until it has finished reading
-/// stdin (the `bxp-fmt --expr-batch` shape: write request, then read
+/// stdin (the `inspect.evalBatch` shape: write request, then read
 /// response). Stores the first error encountered in `out_err` for the
 /// caller to surface — there is no in-band channel back from a detached
 /// writer otherwise.
@@ -785,7 +785,7 @@ export fn bridge_free(ptr: [*]u8, len: u32) void {
 //   * stateless and thread-safe — safe to call direct from main isolate
 //
 // First member of the family: `bridge_eval_expr`, the in-process equivalent
-// of `bxp-fmt --expr <text>`. Replaces a ~50 ms subprocess spawn with a
+// of `inspect.validateExpr <text>`. Replaces a ~50 ms subprocess spawn with a
 // ~1 ms direct call so the GUI's per-keystroke validation no longer pays
 // the spawn tax.
 
@@ -799,14 +799,14 @@ const BridgeFfiError = enum(i32) {
 };
 
 /// Validate an expression's syntax + semantic correctness against an empty
-/// row context. Mirrors `bxp-fmt --expr <text>` runtime-wise but in-process,
+/// row context. Mirrors `inspect.validateExpr <text>` runtime-wise but in-process,
 /// avoiding the ~50 ms subprocess spawn the GUI pays per keystroke today.
 ///
 /// Returns:
 ///   * `0` — valid expression (out_buf untouched)
 ///   * `> 0` — invalid expression, `bytes_written` of JSON in out_buf:
 ///     `{"error":"<ErrorName>","detail":"<detail>","off":N,"len":N}`
-///     Matches the bxp-fmt --expr stderr shape so the existing Dart
+///     Matches the inspect.validateExpr stderr shape so the existing Dart
 ///     parser in `BxpProcessClient.validateExpr` works unchanged.
 ///   * `-1` OOM in bridge area (extreme edge — c_allocator can't satisfy)
 ///   * `-2` BUF_TOO_SMALL — caller retries with a bigger buffer
@@ -827,7 +827,7 @@ export fn bridge_eval_expr(
     const out = out_buf[0..out_size];
 
     // Validation core (runtime eval against an empty row context + static
-    // FnArgDoc checks) lives in inspect.validateExpr, shared with bxp-fmt
+    // FnArgDoc checks) lives in inspect.validateExpr, shared with bxp-mcp
     // --expr so editor-time and CLI diagnostics stay in sync. `[ColumnName]`
     // references resolve to "" here (row-aware eval goes through
     // bridge_eval_expr_trace).
@@ -911,7 +911,7 @@ export fn bridge_eval_expr_trace(
     const oom = @intFromEnum(BridgeFfiError.out_of_memory);
 
     // Hand the headers/fields JSON blobs straight to inspect.evalTrace — the
-    // shared trace core also behind bxp-fmt --expr-trace and the MCP
+    // shared trace core also behind inspect.evalTrace and the MCP
     // bxp_eval_trace tool. null blob = no row context. Ragged headers/fields
     // are tolerated (matches the runtime engine + fmt; field access is by
     // header→index), so unlike the old hand-rolled path this no longer rejects
@@ -952,11 +952,11 @@ fn objStr(obj: std.json.ObjectMap, key: []const u8) ?[]const u8 {
     };
 }
 
-/// In-process inspect dispatcher — serves the stateless bxp-fmt operations the
+/// In-process inspect dispatcher — serves the stateless inspect operations the
 /// GUI used to spawn (`--docs`, `--config`, `--list-templates`,
 /// `--fetch-template`, `--expr-batch`) directly from bxp-core/inspect, so the
 /// GUI no longer spawns bxp-fmt for them. Output is the same JSON the matching
-/// bxp-fmt stdout produced; the bridge runs in the GUI process, so relative
+/// the former bxp-fmt stdout produced; the bridge runs in the GUI process, so relative
 /// `data_dir` paths in the config's FS check resolve against the same CWD the
 /// spawned bxp-fmt used (no behaviour change).
 ///
@@ -1257,7 +1257,7 @@ test "bridge_run honours cwd" {
 
 test "bridge_run round-trips stdin to stdout through helper" {
     // Sanity check: small payload should flow stdin → child → stdout without
-    // any deadlock or corruption. Covers the bxp-fmt --expr-batch shape
+    // any deadlock or corruption. Covers the inspect.evalBatch shape
     // where Dart sends a JSON request body on stdin and reads the response
     // from stdout.
     var buf: [4096]u8 = undefined;
