@@ -367,6 +367,30 @@ class TraceStore extends ChangeNotifier {
   /// field tracks ANY clickable tree row (object/array container, scalar,
   /// expression — all of them).
   List<String>? focusedNodePath;
+
+  // Agent / programmatic "reveal this node" target. Distinct from
+  // focusedNodePath (keyboard highlight) because a reveal must also (a)
+  // expand the node's collapsed ancestors and (b) scroll it into view —
+  // and must re-fire even when the same path is revealed twice in a row,
+  // which the dedup in setFocusedNode would swallow. The json-tree watches
+  // `revealNodePath` to expand ancestors and bumps a scroll on each new
+  // `revealGen`. Used by the embedded GUI-MCP server so an agent edit/
+  // delete visibly jumps the tree to the affected node (mirrors a user
+  // clicking it).
+  List<String>? revealNodePath;
+  int revealGen = 0;
+
+  /// Reveal [path] in the config tree: expand its ancestors, scroll it into
+  /// view, and highlight it — without entering edit mode. Always bumps
+  /// [revealGen] so a repeat reveal of the same path re-scrolls.
+  void revealNode(List<String> path) {
+    devTrace('action.reveal', {'path': path});
+    revealNodePath = path;
+    focusedNodePath = path;
+    revealGen++;
+    notifyListeners();
+  }
+
   // The text the editor was opened with — i.e. the value committed in
   // the AST at the time of selection, plus whatever Apply has pushed
   // since. The Reset button restores the editor to this baseline; without

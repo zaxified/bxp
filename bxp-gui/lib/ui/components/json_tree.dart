@@ -212,6 +212,10 @@ class _JsonNode extends StatefulWidget {
 class _JsonNodeState extends State<_JsonNode> {
   late bool expanded;
   bool isHovered = false;
+  // Last `revealGen` this node scrolled itself into view for. Guards
+  // against re-scrolling on every Provider rebuild while it stays the
+  // reveal target (mirrors `_ExprLeafState._lastScrolledGen`).
+  int _lastRevealGen = -1;
   /// Anchor the row Container's `RenderBox` so `TreeActionsBinding`
   /// can sample the row's Y in the overlay Stack's coord space.
   /// Shared across the leaf / expandable render paths — only one is
@@ -238,11 +242,16 @@ class _JsonNodeState extends State<_JsonNode> {
   /// from the row-detail tables can reveal a deeply nested expression.
   /// Recomputed every build via `context.watch<TraceStore>()`.
   bool _isOnRevealPath(BuildContext ctx) {
-    final selected = ctx.watch<TraceStore>().selectedExprPath;
-    if (selected == null) return false;
-    if (selected.length <= widget.path.length) return false;
+    final store = ctx.watch<TraceStore>();
+    return _isStrictAncestorOf(store.selectedExprPath) ||
+        _isStrictAncestorOf(store.revealNodePath);
+  }
+
+  bool _isStrictAncestorOf(List<String>? target) {
+    if (target == null) return false;
+    if (target.length <= widget.path.length) return false;
     for (int i = 0; i < widget.path.length; i++) {
-      if (selected[i] != widget.path[i]) return false;
+      if (target[i] != widget.path[i]) return false;
     }
     return true;
   }
@@ -474,10 +483,35 @@ class _JsonNodeState extends State<_JsonNode> {
 
   @override
   Widget build(BuildContext context) {
+    _maybeScrollOnReveal(context);
     final v = widget.value;
     if (v is JsonObject) return _buildMap(v);
     if (v is JsonArray) return _buildList(v);
     return _buildPrimitive();
+  }
+
+  /// Scroll this node into view when it becomes the `revealNode` target
+  /// (e.g. an agent edit/delete jumps the tree here). Keyed on `revealGen`
+  /// so it fires once per reveal, not on every rebuild. Ancestor expansion
+  /// is handled separately via `_isOnRevealPath`.
+  void _maybeScrollOnReveal(BuildContext ctx) {
+    final store = ctx.watch<TraceStore>();
+    final target = store.revealNodePath;
+    if (target == null || store.revealGen == _lastRevealGen) return;
+    if (target.length != widget.path.length) return;
+    for (var i = 0; i < target.length; i++) {
+      if (target[i] != widget.path[i]) return;
+    }
+    _lastRevealGen = store.revealGen;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      Scrollable.ensureVisible(
+        context,
+        duration: const Duration(milliseconds: 220),
+        alignment: 0.3,
+        alignmentPolicy: ScrollPositionAlignmentPolicy.explicit,
+      );
+    });
   }
 
   Widget _buildMap(JsonObject obj) {

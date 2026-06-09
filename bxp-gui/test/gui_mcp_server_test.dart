@@ -42,6 +42,9 @@ class _FakeHost implements GuiMcpHost {
   int dryRunCount = 0;
   int fullRunCount = 0;
   bool exitCalled = false;
+  int configPanelShown = 0;
+  int runnerPanelShown = 0;
+  final List<List<String>> reveals = [];
 
   Map<String, dynamic>? trace;
 
@@ -97,6 +100,15 @@ class _FakeHost implements GuiMcpHost {
   Future<void> exitApp() async {
     exitCalled = true;
   }
+
+  @override
+  void showConfigPanel() => configPanelShown++;
+
+  @override
+  void showRunnerPanel() => runnerPanelShown++;
+
+  @override
+  void revealConfigNode(List<String> path) => reveals.add(path);
 }
 
 /// Decodes the single TextContent JSON payload from a tool result.
@@ -228,6 +240,9 @@ void main() {
     expect(host.edits.single.$1, ['brokers', '0', 'name']);
     expect(host.edits.single.$2, 'Acme');
     expect(server.activity.first.tool, 'edit_node');
+    // Visibility: jumps to the CONFIG panel and reveals the edited node.
+    expect(host.configPanelShown, greaterThan(0));
+    expect(host.reveals.single, ['brokers', '0', 'name']);
   });
 
   test('edit_node is blocked when the config loaded with errors', () async {
@@ -298,6 +313,8 @@ void main() {
     expect(out['exitCode'], 0);
     expect(host.dryRunCount, 1);
     expect(server.activity.first.tool, 'dry_run');
+    // Visibility: jumps to the RUNNER panel for the run.
+    expect(host.runnerPanelShown, greaterThan(0));
   });
 
   test('full_run is confirm-gated', () async {
@@ -343,6 +360,9 @@ void main() {
     );
     expect(_decode(ok)['deleted'], true);
     expect(host.deletes.single, ['brokers', '0']);
+    // Visibility: revealed the target on the CONFIG panel before deleting.
+    expect(host.configPanelShown, greaterThan(0));
+    expect(host.reveals.last, ['brokers', '0']);
   });
 
   test('exit confirms then defers teardown', () async {

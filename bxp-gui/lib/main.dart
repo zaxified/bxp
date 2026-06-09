@@ -140,6 +140,12 @@ class _TraceStoreMcpHost implements GuiMcpHost {
   Future<void> runFullRun() => _store.runFullRun();
   @override
   Future<void> exitApp() async => exit(0);
+  @override
+  void showConfigPanel() => _store.setActiveTab(0);
+  @override
+  void showRunnerPanel() => _store.setActiveTab(1);
+  @override
+  void revealConfigNode(List<String> path) => _store.revealNode(path);
 }
 
 void main() {

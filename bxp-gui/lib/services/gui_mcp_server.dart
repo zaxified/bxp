@@ -83,6 +83,16 @@ abstract interface class GuiMcpHost {
 
   /// Quit the application. Callers should flush their response first.
   Future<void> exitApp();
+
+  /// Bring the CONFIG panel to the front (mirrors clicking the CONFIG tab).
+  void showConfigPanel();
+
+  /// Bring the RUNNER panel to the front (mirrors clicking the RUNNER tab).
+  void showRunnerPanel();
+
+  /// Expand ancestors of [path], scroll it into view, and highlight it —
+  /// so an agent edit/delete is visible where it happens.
+  void revealConfigNode(List<String> path);
 }
 
 /// Asks the user to approve a critical agent action. Returns `true` when
@@ -371,7 +381,9 @@ class GuiMcpServer extends ChangeNotifier {
               'Edits are blocked: the config was loaded with errors. '
               'Fix the load errors first.');
         }
+        _host.showConfigPanel();
         _host.editConfigNode(path, value);
+        _host.revealConfigNode(path);
         final errs = _host.errorsAt(path);
         _record('edit_node', '${path.join('.')} = ${jsonEncode(value)}',
             errs.isEmpty ? 'ok' : 'error');
@@ -396,6 +408,7 @@ class GuiMcpServer extends ChangeNotifier {
       inputSchema: JsonSchema.object(properties: const {}, required: const []),
       annotations: const ToolAnnotations(title: 'Save config'),
       callback: (args, extra) async {
+        _host.showConfigPanel();
         if (!_host.isDirty) {
           _record('save', 'no unsaved changes', 'ok');
           return _json({'saved': false, 'reason': 'no unsaved changes'});
@@ -441,6 +454,7 @@ class GuiMcpServer extends ChangeNotifier {
           _record('open_config', '$path', 'error');
           return _error('`path` must be a non-empty string.');
         }
+        _host.showConfigPanel();
         _host.setConfigPath(path);
         await _host.loadConfig();
         final err = _host.configError;
@@ -467,6 +481,7 @@ class GuiMcpServer extends ChangeNotifier {
           _record('reload', '(none)', 'error');
           return _error('No config is open to reload.');
         }
+        _host.showConfigPanel();
         await _host.loadConfig();
         final err = _host.configError;
         _record('reload', _host.configPath, err == null ? 'ok' : 'error');
@@ -491,6 +506,7 @@ class GuiMcpServer extends ChangeNotifier {
           _record('dry_run', '(none)', 'error');
           return _error('No config is open to run.');
         }
+        _host.showRunnerPanel();
         await _host.runDryRun();
         return _runResult('dry_run');
       },
@@ -518,6 +534,7 @@ class GuiMcpServer extends ChangeNotifier {
           _record('full_run', _host.configPath, 'rejected');
           return _json({'ran': false, 'rejected': true});
         }
+        _host.showRunnerPanel();
         await _host.runFullRun();
         return _runResult('full_run');
       },
@@ -553,6 +570,10 @@ class GuiMcpServer extends ChangeNotifier {
               'Deletes are blocked: the config was loaded with errors. '
               'Fix the load errors first.');
         }
+        // Reveal the target before asking, so the user sees what the agent
+        // is about to delete while the confirm dialog is up.
+        _host.showConfigPanel();
+        _host.revealConfigNode(path);
         final approved = await _confirm(
           'Agent wants to delete a config node',
           'The agent is requesting to delete `${path.join('.')}`.',
