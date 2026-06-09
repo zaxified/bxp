@@ -14,6 +14,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "inspect", .module = core_dep.module("inspect") },
+                .{ .name = "btrace", .module = core_dep.module("btrace") },
             },
         }),
     });
@@ -34,6 +35,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "inspect", .module = core_dep.module("inspect") },
+                .{ .name = "btrace", .module = core_dep.module("btrace") },
             },
         }),
     });

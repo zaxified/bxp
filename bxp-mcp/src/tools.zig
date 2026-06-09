@@ -10,6 +10,7 @@
 const std = @import("std");
 const inspect = @import("inspect");
 const sim = @import("sim.zig");
+const Progress = @import("progress.zig").Progress;
 
 pub const Tool = enum {
     bxp_validate,
@@ -32,7 +33,7 @@ pub const tools_list =
     \\{"name":"bxp_docs","description":"Return the full bxp language/schema documentation as JSON (functions, keywords, operators, tokens, config_schema).","inputSchema":{"type":"object","properties":{},"required":[]}},
     \\{"name":"bxp_list_templates","description":"List every conversion template declared in a bxp-cli config (JSON5). Returns {templates:[{id,data_dir,file_pattern_in,file_pattern_out,file_type_in,file_type_out,description}, ...]}; no semantic validation, so broken templates still appear with an error field.","inputSchema":{"type":"object","properties":{"config":{"type":"string","description":"The full bxp-cli config text (JSON5)."}},"required":["config"]}},
     \\{"name":"bxp_fetch_template","description":"Fetch one conversion template's raw JSON by id from a bxp-cli config (JSON5). Returns the template object, or {\"$err_1\":\"...\"} if the id is absent.","inputSchema":{"type":"object","properties":{"config":{"type":"string","description":"The full bxp-cli config text (JSON5)."},"id":{"type":"string","description":"The template id to fetch."}},"required":["config","id"]}},
-    \\{"name":"bxp_simulate","description":"Run a full conversion end-to-end: stage the config (JSON5) + input CSV in a scratch workspace, run the chosen template through bxp-cli, and return the produced output, a record-count diff, and bxp-cli's summary + diagnostics. Verifies a config for real (pre_pass/LOOKUP/row_rules) — what bxp_eval/bxp_validate cannot. CSV-input templates only. ok=true means the run happened; consult exit_code/status/diagnostics (0=ok, 2=warnings, 1=error).","inputSchema":{"type":"object","properties":{"config":{"type":"string","description":"The full bxp-cli config text (JSON5)."},"template":{"type":"string","description":"The conversion template id to run."},"csv":{"type":"string","description":"The input CSV content (becomes the single input file for the run)."},"workspace":{"type":"string","description":"Optional scratch-workspace id (defaults to the template id). Reused across calls, so repeated runs don't litter temp with new dirs."}},"required":["config","template","csv"]}}
+    \\{"name":"bxp_simulate","description":"Run a full conversion end-to-end: stage the config (JSON5) + input CSV in a scratch workspace, run the chosen template through bxp-cli, and return the produced output, a record-count diff, bxp-cli's summary + diagnostics, and a per-row `trace` (BXTB sidecar): for each input row whether it was written, filtered (with reason: rule_skip / no_rule_match), or errored — each carrying the 1-based input-line number. Verifies a config for real (pre_pass/LOOKUP/row_rules) — what bxp_eval/bxp_validate cannot. CSV-input templates only. ok=true means the run happened; consult exit_code/status/diagnostics (0=ok, 2=warnings, 1=error).","inputSchema":{"type":"object","properties":{"config":{"type":"string","description":"The full bxp-cli config text (JSON5)."},"template":{"type":"string","description":"The conversion template id to run."},"csv":{"type":"string","description":"The input CSV content (becomes the single input file for the run)."},"workspace":{"type":"string","description":"Optional scratch-workspace id (defaults to the template id). Reused across calls, so repeated runs don't litter temp with new dirs."}},"required":["config","template","csv"]},"outputSchema":{"type":"object","properties":{"ok":{"type":"boolean"},"template":{"type":"string"},"exit_code":{"type":"integer"},"status":{"type":"string","enum":["ok","warnings","error"]},"input":{"type":"object","properties":{"records":{"type":"integer"},"csv":{"type":"string"}}},"output_records":{"type":"integer"},"outputs":{"type":"array","items":{"type":"object","properties":{"file":{"type":"string"},"records":{"type":"integer"},"csv":{"type":"string"}}}},"summary":{"type":"string"},"diagnostics":{"type":"string"},"trace":{"type":"object","properties":{"available":{"type":"boolean"},"source_rows":{"type":"integer"},"written_rows":{"type":"integer"},"errors":{"type":"integer"},"warnings":{"type":"integer"},"filtered":{"type":"object","properties":{"count":{"type":"integer"},"sample":{"type":"array","items":{"type":"object","properties":{"input_row":{"type":"integer"},"source_offset":{"type":"integer"},"reason":{"type":"string"}}}}}},"row_errors":{"type":"object","properties":{"count":{"type":"integer"},"sample":{"type":"array","items":{"type":"object","properties":{"input_row":{"type":"integer"},"source_offset":{"type":"integer"},"variable":{"type":"string"},"kind":{"type":"string"},"detail":{"type":"string"},"origin":{"type":"string"}}}}}},"output_rows":{"type":"object","properties":{"count":{"type":"integer"},"sample":{"type":"array","items":{"type":"object","properties":{"input_row":{"type":"integer"},"source_offset":{"type":"integer"},"output_idx":{"type":"integer"},"rule":{"type":"integer"},"action":{"type":"string"}}}}}},"prepass_entries":{"type":"integer"}}},"workspace":{"type":"string"},"error":{"type":"string"},"detail":{"type":"string"}}}}
     \\]}
 ;
 
@@ -49,7 +50,9 @@ pub fn parse(name: []const u8) ?Tool {
 }
 
 /// Dispatch a tool call. `args` is the parsed `arguments` object (or .null).
-pub fn dispatch(alloc: std.mem.Allocator, tool: Tool, args: std.json.Value, out: *std.ArrayList(u8)) void {
+/// `prog` carries the request's progressToken (null when the client supplied
+/// none); only `bxp_simulate` reports progress today.
+pub fn dispatch(alloc: std.mem.Allocator, tool: Tool, args: std.json.Value, prog: ?Progress, out: *std.ArrayList(u8)) void {
     switch (tool) {
         .bxp_validate => validate(alloc, args, out),
         .bxp_eval => eval(alloc, args, out),
@@ -58,7 +61,7 @@ pub fn dispatch(alloc: std.mem.Allocator, tool: Tool, args: std.json.Value, out:
         .bxp_docs => docs(alloc, out),
         .bxp_list_templates => listTemplates(alloc, args, out),
         .bxp_fetch_template => fetchTemplate(alloc, args, out),
-        .bxp_simulate => simulate(alloc, args, out),
+        .bxp_simulate => simulate(alloc, args, prog, out),
     }
 }
 
@@ -170,7 +173,7 @@ fn fetchTemplate(alloc: std.mem.Allocator, args: std.json.Value, out: *std.Array
     out.appendSlice(alloc, result.json) catch {};
 }
 
-fn simulate(alloc: std.mem.Allocator, args: std.json.Value, out: *std.ArrayList(u8)) void {
+fn simulate(alloc: std.mem.Allocator, args: std.json.Value, prog: ?Progress, out: *std.ArrayList(u8)) void {
     const config = strField(args, "config") orelse {
         appendErr(alloc, out, "missing 'config'");
         return;
@@ -186,7 +189,7 @@ fn simulate(alloc: std.mem.Allocator, args: std.json.Value, out: *std.ArrayList(
     const workspace = strField(args, "workspace"); // optional
     // sim.simulate handles its own logical failures as {"ok":false,...} JSON;
     // only OOM/unexpected surfaces here.
-    sim.simulate(alloc, config, template, csv_text, workspace, out) catch |err| {
+    sim.simulate(alloc, config, template, csv_text, workspace, prog, out) catch |err| {
         appendErr(alloc, out, @errorName(err));
     };
 }

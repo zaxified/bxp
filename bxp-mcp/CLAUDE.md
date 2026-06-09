@@ -52,7 +52,7 @@ invokes it from a location where `bxp-cli` sits alongside.
 | `bxp_docs` | `docsJson()` | Full language/schema JSON (`functions`, `keywords`, `operators`, `tokens`, `config_schema`). |
 | `bxp_list_templates` | `listTemplates(config_text)` | `{"templates":[{id,data_dir,…}, …]}` (byte-identical to `bxp-fmt --config … --list-templates`); no semantic validation. |
 | `bxp_fetch_template` | `fetchTemplate(config_text, id)` | The raw template JSON, or `{"$err_1":"…"}` when the id / config is bad (byte-identical to `bxp-fmt --config … --fetch-template <id>`). |
-| `bxp_simulate` | spawns `bxp-cli` (see `sim.zig`) | Runs the chosen template end-to-end against the supplied CSV. `{ok:true, exit_code, status, input, outputs:[{file,records,csv}], output_records, summary, diagnostics, workspace}`. `ok:false` only on orchestration failure (no run). CSV-input templates only. |
+| `bxp_simulate` | spawns `bxp-cli` (see `sim.zig`) | Runs the chosen template end-to-end against the supplied CSV. `{ok:true, exit_code, status, input, outputs:[{file,records,csv}], output_records, summary, diagnostics, trace, workspace}`. `trace` is the BXTB sidecar folded in (per-row filtered/error/output counts + capped samples with input line numbers). `ok:false` only on orchestration failure (no run). CSV-input templates only. Declares an `outputSchema`. |
 
 `bxp_validate` runs with `check_fs = 0` (pure structural/expression validation,
 no filesystem syscalls — the agent validates config _text_, not a deployed tree).
@@ -70,8 +70,11 @@ bxp-mcp/
                   arena reset between calls
     tools.zig   ← tool catalog + handlers → inspect calls (+ sim for bxp_simulate)
     sim.zig     ← bxp_simulate orchestration: stage config+CSV in a scratch
-                  workspace, spawn the co-located bxp-cli, read output, diff
-  build.zig     ← path-deps ../bxp-core, imports the `inspect` module
+                  workspace, spawn the co-located bxp-cli (+ --trace-file BXTB
+                  sidecar parsed via btrace.Reader), read output, diff, trace
+    progress.zig ← server→client notifications/progress (opt-in via
+                  params._meta.progressToken); used by bxp_simulate phases
+  build.zig     ← path-deps ../bxp-core, imports the `inspect` + `btrace` modules
   build.zig.zon
 ```
 
@@ -83,13 +86,18 @@ only — see the roadmap memory; nothing was vendored.)
 ## MCP wire protocol
 
 Newline-delimited JSON-RPC 2.0 over stdin/stdout — one JSON object per line.
-Protocol version `2025-06-18`. The client (agent host) spawns this process and
-pipes requests; the server reads stdin, writes one response line per request to
+Protocol version `2025-11-25` (also accepts + echoes `2025-06-18`; see
+`negotiateVersion`). The client (agent host) spawns this process and pipes
+requests; the server reads stdin, writes one response line per request to
 stdout. stderr is free for logs.
 
 - **request** (has `id`) → exactly one response line with the same `id`.
 - **notification** (no `id`, e.g. `notifications/initialized`) → no response.
-- **response** → `result` or `error: {code, message}`.
+- **response** → `result` or `error: {code, message}`. A tool result is
+  `{content:[{type:text,text}], isError:false}`, plus `structuredContent` (the
+  parsed object) when the tool's output is a single JSON object.
+- **server→client** `notifications/progress` are emitted mid-call for a
+  request that supplied `params._meta.progressToken` (see `progress.zig`).
 
 Methods handled: `initialize`, `tools/list`, `tools/call`, `ping`,
 `notifications/initialized`. JSON-RPC 2.0 is the final/only version of JSON-RPC;
@@ -170,26 +178,56 @@ Register with an MCP client (e.g. Claude Code, `~/.claude.json`):
    back, and returns a structured report with bxp-mcp's own record-count **diff**
    + status. CSV-input templates only (xlsx/JSON input rejected with a clear
    message). Verified: output **byte-identical** to the trading212 dataset's
-   `.expected`. Per-row drop-reason (which input row produced nothing) is a
-   future extension — it needs the BXTB `--trace` translation we deliberately
-   deferred; the `--debug` text dump is too fragile to parse.
+   `.expected`. **Per-row trace — ✅ DONE (2026-06-09):** the run now also
+   passes `--trace-file <workspace>/trace.bxtb` (sidecar BXTB, independent of
+   stdout, so the human summary is untouched). `sim.zig` reads it back with
+   `btrace.Reader` and folds a `trace` object into the report: aggregate
+   `source_rows`/`written_rows`/`errors`/`warnings` plus exact counts and a
+   capped (`MAX_TRACE_SAMPLE=200`) per-row sample for `filtered` (reason:
+   `rule_skip` / `no_rule_match`), `row_errors`, and `output_rows` (with
+   `rule`/`action`) — each carrying the 1-based input line resolved from the
+   `source_locator` byte offset. The `--debug` text dump stays unparsed.
 
-5. **Protocol depth.** Server→client notifications (progress for long runs),
-   `structuredContent` in tool results, bump MCP to `2025-11-25`. Add when a
-   tool needs streaming progress.
+5. **Protocol depth — ✅ DONE (2026-06-09).**
+   - **`structuredContent`** (`server.zig writeToolResult`): when a tool's text
+     output is exactly one top-level JSON object (brace-matched via
+     `isSingleJsonObject`, so NDJSON like `bxp_eval_trace` and bare arrays stay
+     text-only), it is also returned parsed under `structuredContent`.
+   - **`outputSchema`** declared for `bxp_simulate` (the full report shape) in
+     `tools_list`; other tools emit `structuredContent` without a declared
+     schema (spec-valid — it's a SHOULD).
+   - **Protocol bump to `2025-11-25`** with real negotiation: `initialize` echoes
+     the client's requested `protocolVersion` when it's in `SUPPORTED_VERSIONS`
+     (`2025-11-25`, `2025-06-18`), else answers the latest.
+   - **Progress notifications** (`progress.zig`): a request carrying
+     `params._meta.progressToken` opts into `notifications/progress`; `bxp_simulate`
+     emits 4 lifecycle phases (validate → stage → run → read). Phase-level, not
+     per-row: the run is a blocking `Child.run`, and the simulate workload is a
+     bounded sample CSV, so finer streaming would mean a piped-stdout rewrite
+     (with stderr-drain/diagnostics-capture tradeoffs) for negligible gain. The
+     mechanism is reusable by any future genuinely-long tool at finer granularity.
 
 6. **Per-request arena — ✅ DONE (2026-06-08).** `Session` now holds a separate
    `req_arena` reset with `retain_capacity` after every request; the base
    process arena keeps only startup (argv) + the persistent reused buffers
-   (`line_buf`/`out_buf`/`tool_buf`, which retain capacity across requests). All
-   transient per-request work — the incoming JSON parse, `tools.dispatch`, and
-   the id/string serialization temps in `appendId`/`appendJsonString` — routes
+   (`line_buf`/`out_buf`, which retain capacity across requests). All transient
+   per-request work — the incoming JSON parse, `tools.dispatch`, and the
+   id/string serialization temps in `appendId`/`appendJsonString` — routes
    through `req_arena`, so memory reaches a steady state sized to the largest
    single request instead of growing one request's allocations per call.
+   **Fix (2026-06-09):** the tool-output buffer was a *persistent* `Session`
+   field yet grew via the request arena, so after a reset its retained capacity
+   aliased the next request's parsed JSON — a second `bxp_simulate` corrupted its
+   own report. It is now a fresh per-request `tool_buf` on `req_arena` (no stale
+   capacity across resets).
 
-7. **GUI + bridge migration.** Today bxp-gui/bridge spawn `bxp-fmt` per call.
-   They can talk to a long-lived `bxp-mcp` instead (no per-call spawn). Separate
-   workstream; bxp-fmt stays for the console readme / tests regardless.
+7. **GUI + bridge migration — 🔵 SUPERSEDED (2026-06-09).** The original idea
+   (GUI talks to a long-lived `bxp-mcp` instead of spawning `bxp-fmt` per call)
+   is moot: the per-call spawn is already gone via the in-proc `bridge_inspect`
+   FFI path (faster than IPC for local desktop). What replaces this item is a
+   *separate* GUI-side **Dart MCP server** for agent-controlled GUI ops
+   (open-config / reload / run / exit) — see `docs/roadmap.md` →
+   "Agent-controllable GUI". bxp-fmt stays for the console readme / tests.
 
 8. **bxp-api sibling.** The HTTP/port adapter over the same `inspect`. New
    component when the web/remote case is real; needs concurrency (thread pool /

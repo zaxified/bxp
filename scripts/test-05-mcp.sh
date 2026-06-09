@@ -56,6 +56,12 @@ call(5, "bxp_validate",      {"config": cfg})
 call(6, "bxp_list_templates",{"config": cfg})
 call(7, "bxp_simulate",      {"config": cfg, "template":"trading212_to_wealthfolio", "csv": csv})
 call(8, "bxp_eval_trace",    {"expr":"ABS(-2)"})
+# Version negotiation: client asking for an older supported revision gets it echoed back.
+print(json.dumps({"jsonrpc":"2.0","id":9,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{}}}))
+# Progress: a request carrying a progressToken opts into notifications/progress.
+print(json.dumps({"jsonrpc":"2.0","id":10,"method":"tools/call",
+                  "params":{"name":"bxp_simulate","_meta":{"progressToken":"p10"},
+                            "arguments":{"config":cfg,"template":"trading212_to_wealthfolio","csv":csv}}}))
 PY
 
     "$stage/bxp-mcp" <"$reqs" >"$resp" || {
@@ -67,19 +73,26 @@ PY
     EXPECTED_CSVX="$SAMPLE_DIR/sample.expected" python3 - "$resp" <<'PY' || rc=1
 import json, os, sys
 by_id = {}
+progress_notes = []
 for ln in open(sys.argv[1]):
     ln = ln.strip()
     if ln:
         o = json.loads(ln)
+        if o.get("method") == "notifications/progress":
+            progress_notes.append(o["params"])
+            continue
         by_id[o.get("id")] = o
 
-# notification produced no response line
+# every request got exactly one id-keyed response; no stray null-id replies
 assert None not in by_id, "notification unexpectedly got a response"
 
 def tool_json(i):
     return json.loads(by_id[i]["result"]["content"][0]["text"])
 
-assert by_id[1]["result"]["protocolVersion"] == "2025-06-18", by_id[1]
+# No protocolVersion requested → server answers with its latest.
+assert by_id[1]["result"]["protocolVersion"] == "2025-11-25", by_id[1]
+# Negotiation: an older supported revision is echoed back verbatim.
+assert by_id[9]["result"]["protocolVersion"] == "2025-06-18", by_id[9]
 
 names = {t["name"] for t in by_id[2]["result"]["tools"]}
 assert names == {"bxp_validate","bxp_eval","bxp_eval_batch","bxp_eval_trace",
@@ -102,6 +115,24 @@ assert sim["ok"] is True and sim["status"] == "ok", sim
 got = sim["outputs"][0]["csv"]
 want = open(os.environ["EXPECTED_CSVX"]).read()
 assert got == want, "bxp_simulate output != dataset .expected"
+# BXTB sidecar trace folded into the report (5b-i): per-row counts + samples.
+tr = sim["trace"]
+assert tr["available"] is True, tr
+assert tr["source_rows"] > 0 and tr["written_rows"] > 0, tr
+assert tr["output_rows"]["count"] == tr["written_rows"], tr
+for key in ("filtered", "row_errors", "output_rows"):
+    assert isinstance(tr[key]["count"], int) and isinstance(tr[key]["sample"], list), (key, tr)
+# An object-returning tool also exposes structuredContent (5a); NDJSON does not.
+assert by_id[7]["result"].get("structuredContent", {}).get("status") == "ok", by_id[7]["result"].keys()
+assert "structuredContent" not in by_id[8]["result"], "NDJSON tool must stay text-only"
+
+# Progress (5b-ii): the progressToken'd call streamed notifications/progress
+# before its result, ending at progress == total; no-token calls stay silent.
+p10 = [n for n in progress_notes if n["progressToken"] == "p10"]
+assert len(p10) >= 1, progress_notes
+assert p10[-1]["progress"] == p10[-1]["total"], p10[-1]
+assert all(n["progressToken"] == "p10" for n in progress_notes), "only the p10 call should emit progress"
+assert by_id[10]["result"]["structuredContent"]["status"] == "ok", by_id[10]
 
 # bxp_eval_trace — NDJSON: a per-call line for ABS, then the final sentinel
 trace = by_id[8]["result"]["content"][0]["text"].strip().splitlines()

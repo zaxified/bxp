@@ -13,11 +13,19 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const inspect = @import("inspect");
+const btrace = @import("btrace");
+const progress = @import("progress.zig");
+const Progress = progress.Progress;
 
 /// Cap on captured bxp-cli stdout/stderr (the Child.run default is only 50 KB).
 const MAX_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
 /// Cap on a single read-back output file.
 const MAX_FILE_BYTES: usize = 16 * 1024 * 1024;
+/// Cap on the read-back BXTB sidecar trace file.
+const MAX_TRACE_BYTES: usize = 16 * 1024 * 1024;
+/// Max per-row entries echoed back per trace category (count is always exact;
+/// the sample is capped so a large run can't bloat the JSON-RPC response).
+const MAX_TRACE_SAMPLE: usize = 200;
 /// Cap on the sanitized workspace-id length.
 const MAX_UID_LEN: usize = 64;
 
@@ -33,9 +41,10 @@ pub fn simulate(
     template: []const u8,
     csv_text: []const u8,
     workspace_id: ?[]const u8,
+    prog: ?Progress,
     out: *std.ArrayList(u8),
 ) !void {
-    const json = try run(a, config_text, template, csv_text, workspace_id);
+    const json = try run(a, config_text, template, csv_text, workspace_id, prog);
     try out.appendSlice(a, json);
 }
 
@@ -45,7 +54,9 @@ fn run(
     template: []const u8,
     csv_text: []const u8,
     workspace_id: ?[]const u8,
+    prog: ?Progress,
 ) ![]u8 {
+    progress.report(prog, 1, 4, "validating template");
     // 1. Introspect the template's input shape and reject what we can't stage.
     const io = try inspect.templateIo(a, config_text, template);
     if (!io.found) return errJson(a, "template not found in config", template);
@@ -68,6 +79,7 @@ fn run(
     const workspace = try std.fs.path.join(a, &.{ tmp_base, "bxp-mcp-sim", uid });
     const data_dir = try std.fs.path.join(a, &.{ workspace, "data" });
     const config_path = try std.fs.path.join(a, &.{ workspace, "config.json" });
+    const trace_path = try std.fs.path.join(a, &.{ workspace, "trace.bxtb" });
 
     // Fresh contents each run, stable path: wipe then recreate. Left in place
     // afterwards so the agent (or user) can inspect the run's files.
@@ -84,10 +96,15 @@ fn run(
     std.fs.cwd().writeFile(.{ .sub_path = input_path, .data = csv_text }) catch
         return errJson(a, "cannot write scratch input", input_path);
 
-    // 5. Spawn bxp-cli — the actual run. --data overrides the template's data_dir.
+    progress.report(prog, 2, 4, "staging workspace");
+
+    // 5. Spawn bxp-cli — the actual run. --data overrides the template's
+    //    data_dir; --trace-file writes a sidecar BXTB stream (full per-row
+    //    detail, independent of stdout) we read back below for the trace report.
+    progress.report(prog, 3, 4, "running conversion");
     const result = std.process.Child.run(.{
         .allocator = a,
-        .argv = &.{ cli_path, "--config", config_path, "--template", template, "--data", data_dir },
+        .argv = &.{ cli_path, "--config", config_path, "--template", template, "--data", data_dir, "--trace-file", trace_path },
         .max_output_bytes = MAX_OUTPUT_BYTES,
     }) catch |err|
         return errJson(a, "bxp-cli spawn failed", @errorName(err));
@@ -96,6 +113,12 @@ fn run(
         .Exited => |c| @intCast(c),
         else => -1,
     };
+
+    progress.report(prog, 4, 4, "reading output and trace");
+
+    // Read back the BXTB sidecar (best-effort: a missing/empty file just means
+    // an empty trace section, never a simulation failure).
+    const trace_bytes = std.fs.cwd().readFileAlloc(a, trace_path, MAX_TRACE_BYTES) catch &.{};
 
     // 6. Read produced output(s): every file in data_dir that isn't the input.
     //    (combined_output can add a second file; report all.)
@@ -128,6 +151,7 @@ fn run(
         .outputs = outputs.items,
         .summary = result.stdout,
         .diagnostics = result.stderr,
+        .trace_bytes = trace_bytes,
     });
 }
 
@@ -141,6 +165,7 @@ const Report = struct {
     outputs: []const OutputFile,
     summary: []const u8,
     diagnostics: []const u8,
+    trace_bytes: []const u8,
 };
 
 /// `ok = true` means the run *happened* — consult `exit_code` / `status` /
@@ -191,10 +216,208 @@ fn buildReport(a: std.mem.Allocator, r: Report) ![]u8 {
     try jw.write(r.summary);
     try jw.objectField("diagnostics");
     try jw.write(r.diagnostics);
+    try jw.objectField("trace");
+    try writeTrace(a, &jw, r.trace_bytes, r.input_csv);
     try jw.objectField("workspace");
     try jw.write(r.workspace);
     try jw.endObject();
     return aw.toOwnedSlice();
+}
+
+// ── BXTB sidecar → JSON per-row trace ────────────────────────────────────────
+
+const FilteredSample = struct { input_row: usize, source_offset: u64, reason: []const u8 };
+const ErrorSample = struct {
+    input_row: usize,
+    source_offset: u64,
+    variable: []const u8,
+    kind: []const u8,
+    detail: []const u8,
+    origin: []const u8,
+};
+const OutputSample = struct {
+    input_row: usize,
+    source_offset: u64,
+    output_idx: u64,
+    rule: i32,
+    action: []const u8,
+};
+
+/// One pass over the BXTB frames: exact per-category counts plus a capped
+/// sample of each. `source_locator` byte offsets are resolved to 1-based input
+/// line numbers (the staged input file is `input_csv` verbatim).
+const TraceSummary = struct {
+    available: bool = false,
+    source_rows: u64 = 0,
+    written_rows: u64 = 0,
+    errors: u64 = 0,
+    warnings: u64 = 0,
+    filtered_count: usize = 0,
+    error_count: usize = 0,
+    output_count: usize = 0,
+    prepass_count: usize = 0,
+    filtered: []const FilteredSample = &.{},
+    row_errors: []const ErrorSample = &.{},
+    outputs: []const OutputSample = &.{},
+};
+
+fn parseTrace(a: std.mem.Allocator, trace_bytes: []const u8, input_csv: []const u8) TraceSummary {
+    var ts: TraceSummary = .{};
+    if (trace_bytes.len == 0) return ts;
+    var r: std.Io.Reader = .fixed(trace_bytes);
+    var reader = btrace.Reader.init(&r, a) catch return ts; // bad/short magic → unavailable
+    ts.available = true;
+
+    var filtered: std.ArrayList(FilteredSample) = .empty;
+    var row_errors: std.ArrayList(ErrorSample) = .empty;
+    var outputs: std.ArrayList(OutputSample) = .empty;
+
+    while (reader.nextFrame() catch null) |frame| {
+        switch (frame) {
+            .file_end => |fe| {
+                ts.source_rows += fe.source_rows;
+                ts.written_rows += fe.written_rows;
+                ts.errors += fe.errors;
+                ts.warnings += fe.warnings;
+            },
+            .filtered_row => |fr| {
+                ts.filtered_count += 1;
+                if (filtered.items.len < MAX_TRACE_SAMPLE) filtered.append(a, .{
+                    .input_row = lineAtOffset(input_csv, fr.source_locator),
+                    .source_offset = fr.source_locator,
+                    .reason = fr.reason,
+                }) catch {};
+            },
+            .error_row => |er| {
+                ts.error_count += 1;
+                if (row_errors.items.len < MAX_TRACE_SAMPLE) row_errors.append(a, .{
+                    .input_row = lineAtOffset(input_csv, er.source_locator),
+                    .source_offset = er.source_locator,
+                    .variable = er.var_name,
+                    .kind = er.error_kind,
+                    .detail = er.detail,
+                    .origin = er.origin,
+                }) catch {};
+            },
+            .output_row => |orw| {
+                ts.output_count += 1;
+                if (outputs.items.len < MAX_TRACE_SAMPLE) outputs.append(a, .{
+                    .input_row = lineAtOffset(input_csv, orw.source_locator),
+                    .source_offset = orw.source_locator,
+                    .output_idx = orw.output_idx,
+                    .rule = orw.rule_idx,
+                    .action = orw.action,
+                }) catch {};
+            },
+            .prepass_entry => ts.prepass_count += 1,
+            .file_start, .done => {},
+        }
+    }
+
+    ts.filtered = filtered.items;
+    ts.row_errors = row_errors.items;
+    ts.outputs = outputs.items;
+    return ts;
+}
+
+/// 1-based physical line number of byte `offset` within `csv` (header = line 1).
+fn lineAtOffset(csv: []const u8, offset: u64) usize {
+    const lim: usize = if (offset > csv.len) csv.len else @intCast(offset);
+    var line: usize = 1;
+    for (csv[0..lim]) |c| {
+        if (c == '\n') line += 1;
+    }
+    return line;
+}
+
+/// Emit the `trace` value: `{"available":false}` when no usable BXTB was
+/// produced, otherwise the aggregate stats + capped per-row samples.
+fn writeTrace(a: std.mem.Allocator, jw: *std.json.Stringify, trace_bytes: []const u8, input_csv: []const u8) !void {
+    const ts = parseTrace(a, trace_bytes, input_csv);
+    try jw.beginObject();
+    try jw.objectField("available");
+    try jw.write(ts.available);
+    if (ts.available) {
+        try jw.objectField("source_rows");
+        try jw.write(ts.source_rows);
+        try jw.objectField("written_rows");
+        try jw.write(ts.written_rows);
+        try jw.objectField("errors");
+        try jw.write(ts.errors);
+        try jw.objectField("warnings");
+        try jw.write(ts.warnings);
+
+        try jw.objectField("filtered");
+        try jw.beginObject();
+        try jw.objectField("count");
+        try jw.write(ts.filtered_count);
+        try jw.objectField("sample");
+        try jw.beginArray();
+        for (ts.filtered) |f| {
+            try jw.beginObject();
+            try jw.objectField("input_row");
+            try jw.write(f.input_row);
+            try jw.objectField("source_offset");
+            try jw.write(f.source_offset);
+            try jw.objectField("reason");
+            try jw.write(f.reason);
+            try jw.endObject();
+        }
+        try jw.endArray();
+        try jw.endObject();
+
+        try jw.objectField("row_errors");
+        try jw.beginObject();
+        try jw.objectField("count");
+        try jw.write(ts.error_count);
+        try jw.objectField("sample");
+        try jw.beginArray();
+        for (ts.row_errors) |e| {
+            try jw.beginObject();
+            try jw.objectField("input_row");
+            try jw.write(e.input_row);
+            try jw.objectField("source_offset");
+            try jw.write(e.source_offset);
+            try jw.objectField("variable");
+            try jw.write(e.variable);
+            try jw.objectField("kind");
+            try jw.write(e.kind);
+            try jw.objectField("detail");
+            try jw.write(e.detail);
+            try jw.objectField("origin");
+            try jw.write(e.origin);
+            try jw.endObject();
+        }
+        try jw.endArray();
+        try jw.endObject();
+
+        try jw.objectField("output_rows");
+        try jw.beginObject();
+        try jw.objectField("count");
+        try jw.write(ts.output_count);
+        try jw.objectField("sample");
+        try jw.beginArray();
+        for (ts.outputs) |o| {
+            try jw.beginObject();
+            try jw.objectField("input_row");
+            try jw.write(o.input_row);
+            try jw.objectField("source_offset");
+            try jw.write(o.source_offset);
+            try jw.objectField("output_idx");
+            try jw.write(o.output_idx);
+            try jw.objectField("rule");
+            try jw.write(o.rule);
+            try jw.objectField("action");
+            try jw.write(o.action);
+            try jw.endObject();
+        }
+        try jw.endArray();
+        try jw.endObject();
+
+        try jw.objectField("prepass_entries");
+        try jw.write(ts.prepass_count);
+    }
+    try jw.endObject();
 }
 
 fn errJson(a: std.mem.Allocator, msg: []const u8, detail: []const u8) ![]u8 {

@@ -9,12 +9,35 @@
 
 const std = @import("std");
 const tools = @import("tools.zig");
+const Progress = @import("progress.zig").Progress;
 
-pub const PROTOCOL_VERSION = "2025-06-18";
+/// Latest MCP protocol revision we advertise. Older revisions we also accept
+/// (and echo back) are listed in `SUPPORTED_VERSIONS`.
+pub const PROTOCOL_VERSION = "2025-11-25";
 
-const INITIALIZE_RESULT =
-    \\{"protocolVersion":"2025-06-18","capabilities":{"tools":{"listChanged":false}},"serverInfo":{"name":"bxp-mcp","title":"bxp-mcp","version":"0.0.1"},"instructions":"bxp-mcp: validate bxp-cli configs (bxp_validate), evaluate one (bxp_eval) or many (bxp_eval_batch) bxp expressions, trace one expression's per-call evaluation (bxp_eval_trace), list/fetch conversion templates (bxp_list_templates, bxp_fetch_template), run a full conversion end-to-end against sample CSV (bxp_simulate), and fetch the bxp language docs (bxp_docs). Call bxp_docs first to learn the expression/config language; use bxp_eval_trace to debug an expression and bxp_simulate to verify a finished config for real."}
+/// Revisions the server is compatible with — our tool surface is identical
+/// across them. On `initialize` we echo the client's requested version when it
+/// is one of these (spec requirement), otherwise we answer with the latest
+/// (`PROTOCOL_VERSION`).
+const SUPPORTED_VERSIONS = [_][]const u8{ "2025-11-25", "2025-06-18" };
+
+// The initialize result with the negotiated protocol version spliced between
+// the prefix and suffix (so a client asking for 2025-06-18 gets it back).
+const INITIALIZE_PREFIX = "{\"protocolVersion\":\"";
+const INITIALIZE_SUFFIX =
+    \\","capabilities":{"tools":{"listChanged":false}},"serverInfo":{"name":"bxp-mcp","title":"bxp-mcp","version":"0.0.1"},"instructions":"bxp-mcp: validate bxp-cli configs (bxp_validate), evaluate one (bxp_eval) or many (bxp_eval_batch) bxp expressions, trace one expression's per-call evaluation (bxp_eval_trace), list/fetch conversion templates (bxp_list_templates, bxp_fetch_template), run a full conversion end-to-end against sample CSV (bxp_simulate), and fetch the bxp language docs (bxp_docs). Call bxp_docs first to learn the expression/config language; use bxp_eval_trace to debug an expression and bxp_simulate to verify a finished config for real."}
 ;
+
+/// Pick the protocol version to answer with: the client's requested one if we
+/// support it, else our latest. `requested` is null when the client omits it.
+fn negotiateVersion(requested: ?[]const u8) []const u8 {
+    if (requested) |req| {
+        for (SUPPORTED_VERSIONS) |v| {
+            if (std.mem.eql(u8, v, req)) return req;
+        }
+    }
+    return PROTOCOL_VERSION;
+}
 
 const Session = struct {
     /// Base allocator: persistent, reused-across-requests buffers live here
@@ -31,7 +54,6 @@ const Session = struct {
     stdout: std.fs.File,
     line_buf: std.ArrayList(u8) = .empty,
     out_buf: std.ArrayList(u8) = .empty,
-    tool_buf: std.ArrayList(u8) = .empty,
 
     /// Allocator for this request's transient work — reset after each request.
     fn reqAlloc(self: *Session) std.mem.Allocator {
@@ -41,7 +63,6 @@ const Session = struct {
     fn deinit(self: *Session) void {
         self.line_buf.deinit(self.alloc);
         self.out_buf.deinit(self.alloc);
-        self.tool_buf.deinit(self.alloc);
         self.req_arena.deinit();
     }
 };
@@ -109,7 +130,7 @@ fn handleLine(s: *Session, line: []u8) void {
     const method = method_v.string;
 
     if (eql(method, "initialize")) {
-        writeResultRaw(s, id, INITIALIZE_RESULT);
+        handleInitialize(s, id, obj.get("params"));
     } else if (eql(method, "tools/list")) {
         writeResultRaw(s, id, tools.tools_list);
     } else if (eql(method, "ping")) {
@@ -121,6 +142,27 @@ fn handleLine(s: *Session, line: []u8) void {
     } else if (id != null) {
         writeError(s, id, -32601, "Method not found");
     }
+}
+
+fn handleInitialize(s: *Session, id: ?std.json.Value, params_opt: ?std.json.Value) void {
+    // Extract the client's requested protocolVersion (if any) and echo it back
+    // when supported; otherwise answer with our latest.
+    var requested: ?[]const u8 = null;
+    if (params_opt) |params| {
+        if (params == .object) {
+            if (params.object.get("protocolVersion")) |pv| {
+                if (pv == .string) requested = pv.string;
+            }
+        }
+    }
+    const version = negotiateVersion(requested);
+    const result = std.fmt.allocPrint(s.reqAlloc(), "{s}{s}{s}", .{
+        INITIALIZE_PREFIX, version, INITIALIZE_SUFFIX,
+    }) catch {
+        writeError(s, id, -32603, "Internal error");
+        return;
+    };
+    writeResultRaw(s, id, result);
 }
 
 fn handleCall(s: *Session, id: ?std.json.Value, params_opt: ?std.json.Value) void {
@@ -147,9 +189,26 @@ fn handleCall(s: *Session, id: ?std.json.Value, params_opt: ?std.json.Value) voi
 
     const args: std.json.Value = params.object.get("arguments") orelse .null;
 
-    s.tool_buf.clearRetainingCapacity();
-    tools.dispatch(s.reqAlloc(), tool, args, &s.tool_buf);
-    writeToolResult(s, id, s.tool_buf.items);
+    // MCP progress: a `params._meta.progressToken` opts the call into
+    // server→client `notifications/progress`. Serialize the token verbatim
+    // (string or number) so the reporter can echo it on every notification.
+    const prog: ?Progress = blk: {
+        const meta = params.object.get("_meta") orelse break :blk null;
+        if (meta != .object) break :blk null;
+        const token = meta.object.get("progressToken") orelse break :blk null;
+        if (token != .string and token != .integer) break :blk null;
+        const token_json = std.json.Stringify.valueAlloc(s.reqAlloc(), token, .{}) catch break :blk null;
+        break :blk Progress{ .stdout = s.stdout, .token_json = token_json };
+    };
+
+    // A fresh per-request buffer on the request arena — NOT a persistent
+    // reused one. A retained-capacity buffer would keep pointers into arena
+    // memory that the next request's JSON parse reuses, so a later tool call
+    // could alias its own output over the live request (observed corrupting a
+    // second bxp_simulate's report). The arena reset reclaims this each turn.
+    var tool_buf: std.ArrayList(u8) = .empty;
+    tools.dispatch(s.reqAlloc(), tool, args, prog, &tool_buf);
+    writeToolResult(s, id, tool_buf.items);
 }
 
 // ── JSON-RPC writers ───────────────────────────────────────────────────────
@@ -174,8 +233,66 @@ fn writeToolResult(s: *Session, id: ?std.json.Value, text: []const u8) void {
     appendId(s, buf, id);
     buf.appendSlice(alloc, ",\"result\":{\"content\":[{\"type\":\"text\",\"text\":") catch return;
     appendJsonString(s, buf, text);
-    buf.appendSlice(alloc, "}],\"isError\":false}}\n") catch return;
+    buf.appendSlice(alloc, "}]") catch return;
+    // MCP 2025-06-18+ structuredContent: when the tool's output is a JSON
+    // object, hand it back parsed so the agent doesn't re-parse the text blob.
+    // Must be an object (spec); array / NDJSON tools keep text-only.
+    if (isSingleJsonObject(text)) {
+        buf.appendSlice(alloc, ",\"structuredContent\":") catch return;
+        appendStrippingNewlines(alloc, buf, text);
+    }
+    buf.appendSlice(alloc, ",\"isError\":false}}\n") catch return;
     _ = s.stdout.write(buf.items) catch 0;
+}
+
+fn isWs(c: u8) bool {
+    return c == ' ' or c == '\t' or c == '\r' or c == '\n';
+}
+
+/// True when `text` is exactly one top-level JSON object (`{ … }`) followed by
+/// nothing but whitespace — the only shape MCP `structuredContent` accepts.
+/// Brace-matches with string/escape awareness so NDJSON (e.g. `bxp_eval_trace`,
+/// many `{…}` lines) and bare arrays are correctly rejected, not concatenated
+/// into invalid JSON by the later newline-strip.
+fn isSingleJsonObject(text: []const u8) bool {
+    var i: usize = 0;
+    while (i < text.len and isWs(text[i])) : (i += 1) {}
+    if (i >= text.len or text[i] != '{') return false;
+
+    var depth: usize = 0;
+    var in_str = false;
+    var escaped = false;
+    while (i < text.len) : (i += 1) {
+        const c = text[i];
+        if (in_str) {
+            if (escaped) {
+                escaped = false;
+            } else if (c == '\\') {
+                escaped = true;
+            } else if (c == '"') {
+                in_str = false;
+            }
+            continue;
+        }
+        switch (c) {
+            '"' => in_str = true,
+            '{', '[' => depth += 1,
+            '}', ']' => {
+                if (depth == 0) return false; // unbalanced
+                depth -= 1;
+                if (depth == 0) {
+                    // top-level value closed: the remainder must be whitespace.
+                    i += 1;
+                    while (i < text.len) : (i += 1) {
+                        if (!isWs(text[i])) return false;
+                    }
+                    return true;
+                }
+            },
+            else => {},
+        }
+    }
+    return false; // unterminated
 }
 
 fn writeError(s: *Session, id: ?std.json.Value, code: i32, msg: []const u8) void {
