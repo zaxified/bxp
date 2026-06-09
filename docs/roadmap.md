@@ -56,40 +56,6 @@ backlog was otherwise exhausted:
 
 ## v0.3.0
 
-### Flip bridge proxy to default on Linux/macOS — DONE 2026-06-09
-
-The `bxp-gui-bridge` shared library is the GUI's single backend on every
-platform now. In [`bxp_process_client.dart`](../bxp-gui/lib/services/bxp_process_client.dart):
-the `Platform.isWindows` branches, the `BXP_FORCE_BRIDGE_PROXY` /
-`BXP_FORCE_BRIDGE` opt-ins, and the entire `Process.start` machinery
-(`_runWithTimeout` / `_runOnce` + the 3-attempt fallback chain) were
-deleted. `bxp-cli` dry-runs stream through `bridge_run_streaming` on all
-hosts; `--version` goes through `bridge_run`; the stateless ops
-(`getDocs` / `loadConfig` / `listTemplates` / `fetchTemplate` /
-`evalBatch` / `validateExpr` / `traceExpr`) run in-process via
-`bridge_inspect` / `bridge_eval_*` with **no `bxp-fmt` spawn fallback**.
-The startup gate flipped from "is `bxp-fmt` on disk?" to "does the bridge
-library load + `docs` parse?" — a missing library is now a fatal startup
-on every platform (as Windows always was). This also completes the
-**GUI-side preparation for deleting `bxp-fmt`**: the GUI no longer needs
-the binary at all (the bridge links bxp-core/inspect directly).
-
-### Delete bxp-fmt — DONE 2026-06-09
-
-`bxp-fmt` has been removed entirely. Its stateless surface already lived in
-`bxp-core/src/inspect.zig`; the two surviving adapters (bxp-mcp + bxp-gui-bridge)
-cover every operation. To get there: the ~27 `annotateRaw`/`expr-batch` unit
-tests moved into `inspect.zig` (wired into `bxp-core` `zig build test`); a new
-MCP **`bxp_validate_expr`** tool (over `inspect.validateExpr`) gave the agent
-surface parity with the bridge's `bridge_eval_expr`; `test-06` drives the
-expression corpus through that tool and `test-01` dropped the fmt build/smoke;
-the console + desktop archives ship `bxp-mcp` in fmt's slot. The console +
-desktop readmes were single-sourced in the same pass (see below).
-
-Still tracked: the Windows `bridge_inspect` smoke leg (the path is now
-load-bearing on Windows; Linux is live-verified and the same DLL is already
-mandatory there for the proxy + eval families).
-
 ### Auto-updater security audit & hardening
 
 Shipped in v0.2.4: `_verifyChecksum` is fail-closed — missing
@@ -175,19 +141,6 @@ ceiling drops from `O(workbook size)` to
 
 ## Later (no specific version)
 
-### Single-source the console + desktop readmes — DONE 2026-06-09
-
-Both shipped readmes are now generated from one source, `resources/readme.src.md`,
-by `scripts/gen-readme.sh`. Product-specific blocks are tagged with HTML-comment
-block markers (`<!-- GUI-ONLY:START -->…<!-- GUI-ONLY:END -->` and the `CLI-ONLY`
-pair) that survive Markdown rendering even if a generation step is skipped; the
-generator drops the off-variant blocks and strips the kept variant's markers.
-The console + desktop `readme.md` files are committed generated artifacts (and
-prettier/markdownlint-ignored alongside the source). A `--check` drift guard is
-wired into `test-01-console.sh` (fails if a committed variant is out of sync) and
-both `release-*.sh` scripts regenerate before packaging. Landed together with the
-bxp-fmt removal, since the fmt→bxp-mcp rewrite then only had to happen once.
-
 ### CI hardening
 
 The CI matrix (`.github/workflows/ci.yml`, shipped v0.2.4) runs
@@ -257,11 +210,6 @@ to pre-process the file" or "skip the affected rows".
   `REGEX_EXTRACT(s, pattern)` built-in (deferred to Zig 0.16
   migration — see "Expression builtins (regex)" under Tooling). (a)
   is cheap and unblocks today; (b) is a real feature later.
-
-- **AI-authoring workflow — rethink fmt / `--debug` / `--trace=bin` split.**
-  → Promoted to _Pre-release → Agent-driven configuration authoring_ at
-  the top of this file (it now also owns the stale bundled-readme "Pass B"
-  rewrite). Resolve there before adding flags.
 
 ### Real-world data quirks (problem-first)
 
@@ -467,49 +415,13 @@ default)` (Excel-style) vs SQL `CASE WHEN` shape — the variadic
   supports 0.16; we deliberately pin the `zig-0.15` back-port branch for
   now, so migration just repoints the pin to master (+ new hash).
 
-### Bridge FFI expansion (more direct Zig calls)
+### bxp-api — HTTP adapter over the shared `inspect` core
 
-- Grow the in-proc `bridge_eval_*` FFI family beyond today's
-  `bridge_eval_expr` / `bridge_eval_expr_trace`. The intent: once
-  `bxp-core`'s `inspect` surface stops churning internally, move more
-  stateless inspect calls off any subprocess path and link them directly
-  into the GUI process. Deferred deliberately — not worth pinning the FFI
-  surface to code that is still changing. Conventions every new export
-  must follow are already written up: see
-  ["Adding a new bridge FFI export"](devel.md#adding-a-new-bridge-ffi-export)
-  in the developer guide.
-
-### MCP + adapters over the shared `inspect` core
-
-**Mostly shipped — in the monorepo, not the external project the
-2026-06-07 brainstorm first imagined.** One stateless core,
-`bxp-core/src/inspect.zig`, with thin adapters on top:
-
-- **bxp-mcp** — MCP/stdio adapter. Shipped: `bxp_validate`,
-  `bxp_validate_expr`, `bxp_eval`, `bxp_eval_batch`, `bxp_eval_trace`,
-  `bxp_list_templates`, `bxp_fetch_template`, `bxp_docs`, and
-  **`bxp_simulate`** (spawns the co-located `bxp-cli` for a full run),
-  with a per-request arena.
-- **bxp-gui-bridge** — FFI adapter for the Dart GUI (in-process). Shipped.
-- (A former **bxp-fmt** CLI adapter, argv → stdout, was removed once the
-  two above covered every operation.)
-
-The "core must not know who is calling it" boundary held: the MCP server
-and the `bxp-gui-bridge` C-ABI both call `inspect`. The original
-"separate embeddable Zig project" framing is superseded — it landed as
-monorepo packages.
-
-Remaining / future:
-
-- **bxp-api (HTTP adapter) — future extension, only if web integration
-  is pursued.** The same `inspect` core behind an HTTP/port transport
-  for a remote/web front-end. Needs concurrency (thread pool / event
-  loop) that stdio doesn't. Build only when a real web/remote case
-  appears.
-
-(Protocol depth — `structuredContent` + `outputSchema`, protocol
-`2025-11-25` + negotiation, and the `bxp_simulate` per-row BXTB trace +
-phased `notifications/progress` — all shipped 2026-06-09 in `2ea296c`.)
+The stateless `inspect` core (`bxp-core/src/inspect.zig`) already backs two
+shipped adapters — `bxp-mcp` (MCP/stdio) and `bxp-gui-bridge` (FFI). A
+third, **bxp-api**, would put the same core behind an HTTP/port transport
+for a remote/web front-end. Needs concurrency (thread pool / event loop)
+that stdio doesn't. Build only when a real web/remote case appears.
 
 The `inspect` core is stateless (no `pre_pass`/`LOOKUP`), so full template
 simulation stays CLI territory — hence `bxp_simulate` spawns `bxp-cli`
