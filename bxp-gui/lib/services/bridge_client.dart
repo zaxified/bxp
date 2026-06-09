@@ -1,7 +1,7 @@
 // Dart FFI client for bxp-gui-bridge — a small Zig shared library that is
 // the GUI's single backend on every platform. It serves the stateless ops
 // in-process (`bridge_inspect` / `bridge_eval_*`, linked against
-// bxp-core/inspect — no bxp-fmt) and proxies `bxp-cli` runs through
+// bxp-core/inspect — no separate validator binary) and proxies `bxp-cli` runs through
 // `bridge_run` / `bridge_run_streaming`, draining pipes from native code so
 // dart:io's Process.start can't truncate stdout (the original Windows driver,
 // dart-lang/sdk#1727 + #51273, that the cross-platform flip generalised).
@@ -22,9 +22,9 @@ import 'package:path/path.dart' as p;
 // Returns # of bytes written, or -1 on bridge-level failure.
 //
 // `stdin_ptr` + `stdin_len` carry an optional input body written to the
-// child's stdin pipe (e.g. the JSON request for `bxp-fmt --expr-batch`).
+// child's stdin pipe (e.g. the JSON request for `the bridge expr batch`).
 // When `stdin_len == 0` the child's stdin is closed immediately — the
-// legacy `bxp-fmt --docs` shape. The bridge runs the stdin writer on its
+// legacy `the bridge docs catalog` shape. The bridge runs the stdin writer on its
 // own thread so a body larger than the OS pipe buffer can't deadlock
 // against the stdout/stderr drainers.
 typedef _BridgeRunNative = Int32 Function(
@@ -98,7 +98,7 @@ typedef _BridgeFreeDart = void Function(Pointer<Uint8>, int);
 //   bridge_eval_expr(text_ptr, text_len, out_buf, out_size) -> int32_t
 //     0 = valid expression
 //     >0 = bytes_written of JSON error in out_buf
-//          (shape mirrors `bxp-fmt --expr` stderr — `{"error","detail","off","len"}`)
+//          (shape mirrors `the bridge expr validator` stderr — `{"error","detail","off","len"}`)
 //     -1 OOM, -2 BUF_TOO_SMALL, -3 INVALID_INPUT
 typedef _BridgeEvalExprNative = Int32 Function(
   Pointer<Uint8>,
@@ -143,9 +143,9 @@ typedef _BridgeEvalExprTraceDart = int Function(
 );
 
 // bridge_inspect(request_ptr, request_len, out_buf, out_size) -> int32_t
-//   In-process dispatcher for the stateless bxp-fmt ops the GUI used to spawn
+//   In-process dispatcher for the stateless the bridge ops the GUI used to spawn
 //   (docs / config / list_templates / fetch_template / eval_batch). The result
-//   JSON (same bytes the matching bxp-fmt stdout produced) is written to out_buf.
+//   JSON (same bytes the matching the bridge stdout produced) is written to out_buf.
 //     >0 = bytes_written of result JSON in out_buf
 //     -1 OOM, -2 BUF_TOO_SMALL, -3 INVALID_INPUT
 typedef _BridgeInspectNative = Int32 Function(
@@ -184,7 +184,7 @@ class BridgeResult {
 }
 
 class BridgeClient {
-  /// Response-buffer size for typical one-shot calls (bxp-fmt --docs /
+  /// Response-buffer size for typical one-shot calls (the bridge docs catalog /
   /// --config / --expr*). 4 MB covers --docs (~30 KB), --config
   /// annotations, and worst-case validation output with plenty of
   /// headroom. Used as the [run] default so per-keystroke calls don't
@@ -245,11 +245,11 @@ class BridgeClient {
   /// bxp-cli runs so relative `data_dir` paths in the user's config
   /// resolve against the config file rather than bxp-gui's own CWD.
   /// `stdin` is an optional input body written to the child's stdin
-  /// pipe — required by `bxp-fmt --expr-batch`, which reads a JSON
+  /// pipe — required by `the bridge expr batch`, which reads a JSON
   /// request body from stdin. When omitted the child's stdin is closed
   /// immediately (legacy shape used by `--docs` / `--config`).
   /// `bufSize` controls the response-buffer allocation; default is
-  /// large enough for `bxp-fmt --docs` / `--config` payloads but
+  /// large enough for `the bridge docs catalog` / `--config` payloads but
   /// streaming runs should pass [largeBufSize] (~64 MB) so the cap
   /// doesn't truncate big trace dumps.
   BridgeResult run(
@@ -350,7 +350,7 @@ class BridgeClient {
   /// expr-trace outputs (hundreds of nested function calls).
   static const int _evalLargeBufSize = 64 * 1024;
 
-  /// In-process counterpart to `bxp-fmt --expr <text>` — validates an
+  /// In-process counterpart to `the bridge expr validator <text>` — validates an
   /// expression's syntax + semantic correctness without spawning a
   /// subprocess. Sub-ms latency, safe to call from the main isolate.
   ///
@@ -426,7 +426,7 @@ class BridgeClient {
     }
   }
 
-  /// In-process counterpart to `bxp-fmt --expr-trace TEXT --row-headers
+  /// In-process counterpart to `the bridge expr trace TEXT --row-headers
   /// HEADERS_JSON --row-fields FIELDS_JSON`. Returns the raw NDJSON payload — per-fn
   /// call lines plus a final `{"t":"final"|"error",...}` sentinel — for
   /// the caller to parse. Sub-ms latency, safe from the main isolate.
@@ -494,11 +494,11 @@ class BridgeClient {
   /// pathological eval_batch result.
   static const int _inspectLargeBufSize = 4 * 1024 * 1024;
 
-  /// In-process counterpart to the stateless `bxp-fmt` subcommands the GUI used
+  /// In-process counterpart to the stateless `the bridge` subcommands the GUI used
   /// to spawn — `--docs`, `--config`, `--list-templates`, `--fetch-template`,
   /// `--expr-batch` — served from bxp-core/inspect via `bridge_inspect`.
   /// `requestJson` is the op envelope (see the Zig export). Returns the result
-  /// JSON (the same bytes the matching bxp-fmt stdout produced), or null on any
+  /// JSON (the same bytes the matching the bridge stdout produced), or null on any
   /// bridge-level failure / overflow so the caller can fall back to the
   /// subprocess. Synchronous FFI; callers run it on a discrete load/save/click
   /// action, not per-keystroke.
@@ -664,7 +664,7 @@ class BridgeClient {
 ///      `bxp-gui/` directory; its parent (the monorepo root) holds the
 ///      sibling `bxp-gui-bridge/zig-out/{bin,lib}/<name>` produced by
 ///      `zig build`. Mirrors the same pattern `findBin` uses for
-///      bxp-cli/bxp-fmt so the dev workflow doesn't need a CMake
+///      `bxp-cli` so the dev workflow doesn't need a CMake
 ///      install step to make the bridge discoverable.
 ///
 /// Returns null when probing fails. The bridge is mandatory on every

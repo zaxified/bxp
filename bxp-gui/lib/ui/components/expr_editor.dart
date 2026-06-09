@@ -106,7 +106,7 @@ class _ExprEditorState extends State<ExprEditor> {
   int _acReplaceStart = 0;
   int _acReplaceEnd = 0;
   /// Debouncer for the typing-driven autocomplete refresh. Lifted to
-  /// 500 ms (matching the bxp-fmt validation cadence) so the popup
+  /// 500 ms (matching the bridge validation cadence) so the popup
   /// rebuild + docs filter pass don't run on every keystroke — the
   /// previous immediate refresh produced the noticeable typing lag in
   /// the editor. Ctrl+Space and selection-driven hides bypass the
@@ -337,7 +337,7 @@ class _ExprEditorState extends State<ExprEditor> {
         ? const <String>{}
         : _prePassNamesFor(store, activeTid);
     // Live docs are guaranteed populated by the startup gate (see
-    // _StartupGate in main.dart) — bxp-fmt --docs is the only catalog.
+    // _StartupGate in main.dart) — the bridge docs catalog is the only catalog.
     final fnSrc = store.docFunctions
         .where((f) => (f['name']?.toString() ?? '').isNotEmpty)
         .toList();

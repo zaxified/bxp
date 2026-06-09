@@ -210,7 +210,7 @@ JsonAstNode duplicateAt(JsonAstNode root, List<String> path, {String? newKey}) {
 // MoveOp — swap the entry at `path` with its previous (-1) or next (+1)
 // container neighbour. Neighbours can be real props/elements OR CommentLine
 // pseudo-entries; both types are peers in the container after Phase 4's
-// model unification. This matches the bxp-fmt's flat row model that the GUI
+// model unification. This matches the bridge's flat row model that the GUI
 // uses for the live tree.
 //
 // Phase 4F.5: this is a *raw-peer* swap — if the neighbour is a

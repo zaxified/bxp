@@ -61,7 +61,7 @@ class _RowDetailState extends State<RowDetail> {
     // colour reflect "warning" semantics.
     final warningCount = row.vars.where((v) => v.kind == 'error').length;
     // Prefer the per-frame detail captured during ingest (carries
-    // errorKind + bxp-fmt detail text). Falls back to the re-eval
+    // errorKind + the bridge detail text). Falls back to the re-eval
     // VarEntry list above when ingest didn't see error_row frames.
     final ingestDetails = row.warningDetails;
 

@@ -127,30 +127,19 @@ if(NOT CMAKE_BUILD_TYPE MATCHES "Debug")
     COMPONENT Runtime)
 endif()
 
-# Symlink bxp-fmt next to the bxp-gui binary so BxpProcessClient.findBin's
-# sibling-lookup succeeds on `flutter run` builds. The bundle directory is
-# nuked at the start of every install (line 88), so a manually-created
-# symlink doesn't survive — recreating it here is the only stable way.
-# The release pipeline (scripts/release.sh) is responsible for shipping a
-# real binary instead of this dev symlink.
-get_filename_component(BXP_FMT_SRC_ABS
-  "${CMAKE_SOURCE_DIR}/../../bxp-fmt/zig-out/bin/bxp-fmt" ABSOLUTE)
-install(CODE "
-  if(EXISTS \"${BXP_FMT_SRC_ABS}\")
-    execute_process(COMMAND \${CMAKE_COMMAND} -E copy
-      \"${BXP_FMT_SRC_ABS}\"
-      \"${CMAKE_INSTALL_PREFIX}/bxp-fmt\")
-    message(STATUS \"Copied bxp-fmt to ${CMAKE_INSTALL_PREFIX}/bxp-fmt\")
-  else()
-    message(WARNING \"bxp-fmt not found at ${BXP_FMT_SRC_ABS}; UI will fail at startup\")
-  endif()
-  " COMPONENT Runtime)
-
-# Same dev-tree copy for the bxp-gui-bridge shared library. The bridge
-# hosts the in-process expression evaluator (bridge_eval_expr family) so
-# the GUI's per-keystroke validation runs sub-ms instead of paying a
-# ~50 ms subprocess spawn per call. The bridge is OPTIONAL on Linux —
-# absence just falls back to subprocess via BxpProcessClient.validateExpr.
+# Dev-tree copy of the bxp-gui-bridge shared library next to the bxp-gui
+# binary so findBridgeLibrary()'s sibling-lookup succeeds on `flutter run`
+# builds. The bundle directory is nuked at the start of every install
+# (line 88), so a manually-created symlink doesn't survive — recreating it
+# here is the only stable way. The release pipeline (scripts/release.sh)
+# ships a real release build instead of this dev copy.
+#
+# Since the v0.3.0 proxy flip the bridge is the GUI's SINGLE backend on every
+# platform: stateless ops (config/expr validation, docs, templates, eval-batch)
+# run in-process via bridge_inspect / bridge_eval_*, and bxp-cli runs are
+# proxied through bridge_run(_streaming). It is MANDATORY — a missing library
+# is a fatal startup error (the docs gate surfaces it), not a subprocess
+# fallback (that path was deleted with bxp-fmt).
 get_filename_component(BXP_BRIDGE_SRC_ABS
   "${CMAKE_SOURCE_DIR}/../../bxp-gui-bridge/zig-out/lib/libbxp-gui-bridge.so" ABSOLUTE)
 install(CODE "
@@ -160,6 +149,6 @@ install(CODE "
       \"${CMAKE_INSTALL_PREFIX}/libbxp-gui-bridge.so\")
     message(STATUS \"Copied libbxp-gui-bridge.so to ${CMAKE_INSTALL_PREFIX}/\")
   else()
-    message(STATUS \"bxp-gui-bridge.so not found at ${BXP_BRIDGE_SRC_ABS}; expr eval will fall back to subprocess\")
+    message(WARNING \"bxp-gui-bridge.so not found at ${BXP_BRIDGE_SRC_ABS}; the GUI will fail at startup\")
   endif()
   " COMPONENT Runtime)

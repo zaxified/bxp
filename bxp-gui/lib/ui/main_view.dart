@@ -398,10 +398,10 @@ class _StatusBarState extends State<_StatusBar> {
         final parseIssues = model?.issues.length ?? 0;
 
         // Single source of truth for "is there anything wrong?": the
-        // combined diagnostic blob (config error, save error, bxp-fmt
+        // combined diagnostic blob (config error, save error, the bridge
         // first trace, runtime stderr). One clickable `stderr (NB)`
         // badge replaces the three inline labels we used to render
-        // (bxp-fmt: …, config: …, save: …). Same UX as the runner panel.
+        // (the bridge: …, config: …, save: …). Same UX as the runner panel.
         final diagBlob = store.diagnosticBlob;
         final showErrRow = diagBlob.isNotEmpty;
 
@@ -453,7 +453,7 @@ class _StatusBarState extends State<_StatusBar> {
                         horizontal: 12, vertical: 3),
                     // Single clickable label. Same UX as the runner panel:
                     // a count badge that hides the actual text behind one
-                    // click. Replaces the older trio (bxp-fmt: …, config:
+                    // click. Replaces the older trio (the bridge: …, config:
                     // …, save: …) that showed the same content inline.
                     child: Text(
                       'stderr (${diagBlob.length}B)',

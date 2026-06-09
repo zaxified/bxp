@@ -21,7 +21,7 @@ import 'expr_highlight.dart';
 /// Walks the live AST (`TraceStore.astRoot`) directly. `$err_*` / `$warn_*`
 /// diagnostic markers are looked up via `TraceStore.errorsAt` /
 /// `TraceStore.warningsAt` / `TraceStore.hasErrorIn` at render time — these
-/// read from the store's dedicated path-keyed validation maps (bxp-fmt's
+/// read from the store's dedicated path-keyed validation maps (the bridge's
 /// `$err_*`/`$warn_*` buckets merged with the Dart-side `$dart_<N>` ones).
 class JsonTree extends StatefulWidget {
   final JsonAstNode? root;
@@ -576,7 +576,7 @@ class _JsonNodeState extends State<_JsonNode> {
         lastRowIdx = out.length - 1;
         // Surface any validator $err_* / $warn_* / $info_* markers
         // attached to this child. Dart-side `$dart_<N>` entries are
-        // merged in alongside bxp-fmt's `$err_<N>` (same bucket, same
+        // merged in alongside the bridge's `$err_<N>` (same bucket, same
         // banner style).
         //
         // Banners use `read` here (not `select`) because the dedup
@@ -2322,7 +2322,7 @@ class _ExprLeafState extends State<_ExprLeaf> {
     }
     final text = widget.text;
     final path = widget.path;
-    // Show red underline on the selected leaf when bxp-fmt reports an
+    // Show red underline on the selected leaf when the bridge reports an
     // error for its current text. Non-selected leaves never get marked —
     // validating every expression on load would require one spawn per leaf.
     final showError = isActive && store.exprValidationError != null;
@@ -2759,7 +2759,7 @@ class _EditableEnum extends StatelessWidget {
 
 /// Renders a config-tree key label with an optional schema-doc tooltip.
 ///
-/// Looks the path up against `bxp-fmt --docs` config_schema (with `*`
+/// Looks the path up against `the bridge docs catalog` config_schema (with `*`
 /// wildcards). When a description exists, the label gets a dotted
 /// underline + help cursor and a hover tooltip. When no doc is found
 /// (or docs haven't loaded yet), the label renders unchanged.

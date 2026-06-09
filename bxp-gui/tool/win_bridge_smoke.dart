@@ -3,6 +3,13 @@
 // completeness against shell-redirected ground truth (the dart-lang/sdk#1727
 // ~8 KB Win-pipe-truncation risk).
 //
+// OBSOLETE pending rework: the expr-batch / --config scenarios below proxied
+// the (now-deleted) bxp-fmt binary through bridge_run to exercise the pipe
+// drain. With bxp-fmt gone, those stateless ops run in-process via
+// bridge_inspect (no subprocess), so only the bxp-cli streaming/cancel paths
+// still represent a live bridge_run transport. Repoint the large-payload
+// scenarios at bxp-cli before relying on this harness again.
+//
 // This is a developer smoke tool, NOT a shipped test. Run on Windows:
 //   cd bxp-gui && dart run tool/win_bridge_smoke.dart
 //
@@ -16,7 +23,6 @@
 // Prerequisites (build first):
 //   cd bxp-gui-bridge && zig build      # → zig-out/bin/bxp-gui-bridge.dll
 //   cd bxp-cli        && zig build      # → zig-out/bin/bxp-cli.exe
-//   cd bxp-fmt        && zig build      # → zig-out/bin/bxp-fmt.exe
 // Plus a populated DEV/ working tree (DEV/bxp-cli.json + data dirs).
 
 import 'dart:convert';
@@ -181,7 +187,7 @@ void main() async {
   // ---- Scenario 4: --config large annotated output via bridge ----
   // DEV config is ~46 KB; annotated output (--check-fs=2) is larger still —
   // well past 8 KB. `--config` lacks the writeAllToStdoutPipeAware guard
-  // that `--docs` has, so this confirms the bridge child stdout drains
+  // that `--docs` has, so this confirms the bridge child's bxp-cli stdout drains
   // natively without truncation/panic. Must match shell ground truth.
   {
     final r = bridge.run(fmt, ['--config', devCfg, '--check-fs=2'], cwd: devCwd);
@@ -231,12 +237,12 @@ bool _bytesEqual(List<int> a, List<int> b) {
   return true;
 }
 
-/// Walk up from CWD until we find the monorepo root (has bxp-core + bxp-fmt).
+/// Walk up from CWD until we find the monorepo root (has bxp-core + bxp-gui-bridge).
 String _findMonoRoot() {
   var dir = Directory.current;
   for (var i = 0; i < 8; i++) {
     if (Directory(p.join(dir.path, 'bxp-core')).existsSync() &&
-        Directory(p.join(dir.path, 'bxp-fmt')).existsSync()) {
+        Directory(p.join(dir.path, 'bxp-core')).existsSync()) {
       return dir.path;
     }
     final parent = dir.parent;

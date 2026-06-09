@@ -56,7 +56,7 @@ class _ExprPlaygroundState extends State<ExprPlayground> {
   ExprValidationState _state = ExprValidationState.idle;
   String _errorMessage = '';
   /// Mirrors the panel-side suspension flag: while the autocomplete
-  /// popup is up, skip the bxp-fmt spawn so partial-input typing
+  /// popup is up, skip the bridge call so partial-input typing
   /// doesn't flicker an INVALID badge during selection.
   bool _autocompleteOpen = false;
 
@@ -77,7 +77,7 @@ class _ExprPlaygroundState extends State<ExprPlayground> {
   }
 
   /// Same newline rule as the in-panel editor: a typing aid only —
-  /// stripped before validation so bxp-fmt sees a single-line input
+  /// stripped before validation so the bridge sees a single-line input
   /// in both modes. Without this, the playground would surface a
   /// `UnexpectedChar '\n'` error the moment the user pressed Enter,
   /// while the panel silently accepted the same input — divergent UX.

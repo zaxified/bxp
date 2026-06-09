@@ -103,7 +103,7 @@ class _ExprPanelState extends State<ExprPanel> {
   /// Newlines in the editor are a typing aid (the user can press Enter
   /// to split a long expression across visual lines while editing).
   /// They are stripped before validation and before commit so neither
-  /// `bxp-fmt --expr validate` nor the persisted config sees them — both
+  /// `the bridge expr validator validate` nor the persisted config sees them — both
   /// would reject a literal newline mid-token.
   String _strip(String s) => s.replaceAll(RegExp(r'[\r\n]+'), ' ');
 
@@ -217,7 +217,7 @@ class _ExprPanelState extends State<ExprPanel> {
               ),
               const SizedBox(width: 8),
               // 4-state validation badge (idle/pending/ok/error) so the user
-              // sees a "checking" pulse during the 500ms debounce + bxp-fmt
+              // sees a "checking" pulse during the 500ms debounce + the bridge
               // spawn instead of stale flicker between "valid" and "invalid".
               // Muted to "idle" while the autocomplete popup is up: the
               // user is mid-completion, a stale INVALID from the previous
@@ -341,7 +341,7 @@ class _DocsPanel extends StatelessWidget {
     final store = context.watch<TraceStore>();
     final t = context.bxpTheme;
     // All four catalogs are guaranteed populated by the startup gate
-    // (see _StartupGate in main.dart) — bxp-fmt --docs is the only source
+    // (see _StartupGate in main.dart) — the bridge docs catalog is the only source
     // of truth.
     final kws = store.docKeywords
         .map(
@@ -718,7 +718,7 @@ class _SyntaxDoc extends StatelessWidget {
   }
 }
 
-// Map a `bxp-fmt --docs tokens[].kind` value to the active theme's
+// Map a `the bridge docs catalog tokens[].kind` value to the active theme's
 // matching syntax color so the docs swatch matches the inline
 // highlighter. Light theme paints VS Code Light Modern, dark paints
 // Dark Modern — without this the docs panel would freeze on a single

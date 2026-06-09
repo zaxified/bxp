@@ -44,7 +44,7 @@ class _ConfigViewState extends State<ConfigView> {
             child: Row(
               children: [
                 // When the loaded config contains `$err_*` diagnostic
-                // markers, bxp-fmt could parse it but treats it as broken
+                // markers, the bridge could parse it but treats it as broken
                 // — editing buttons go inert so the user can't pile changes
                 // on top of a broken file; only Open/Reload stay live so
                 // they can recover by editing externally and re-loading.
@@ -89,7 +89,7 @@ class _ConfigViewState extends State<ConfigView> {
                     _ToolbarBtn(
                         title: store.isValidating ? 'VALIDATING…' : 'VALIDATE',
                         tooltip:
-                            'Run bxp-fmt --config --check-fs=2 ($mod+E)',
+                            'Validate the config, with filesystem checks ($mod+E)',
                         disabled: store.configPath.isEmpty ||
                             store.astRoot == null ||
                             store.isValidating ||
@@ -182,7 +182,7 @@ class _ConfigViewState extends State<ConfigView> {
                             // here. The clickable `stderr (NB)` badge in
                             // the bottom status bar surfaces every
                             // diagnostic source (configError, save error,
-                            // bxp-fmt $err_*, runtime stderr) on click.
+                            // the bridge $err_*, runtime stderr) on click.
                             // Keep this branch only to suppress the empty
                             // hint below — config IS in error, not "no
                             // file loaded".
@@ -295,7 +295,7 @@ class _ConfigTreeScrollState extends State<_ConfigTreeScroll> {
 
   @override
   Widget build(BuildContext context) {
-    // Save flow is async: write tmp → bxp-fmt validate → backup → rename →
+    // Save flow is async: write tmp → the bridge validate → backup → rename →
     // post-save loadConfig. Anywhere from a few hundred ms to a second.
     // Edits made during that window race the final loadConfig, which
     // discards `_opLog` — the user's mid-flight changes silently

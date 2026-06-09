@@ -11,8 +11,8 @@ them on load and save, runs dry-runs and conversions through the bxp-cli engine,
 inspects per-row expression traces.
 
 The Flutter side does not parse JSON5 itself for runtime conversions —
-every backend operation goes through bxp-cli or bxp-fmt as a short-lived
-subprocess. The local **Dart JSON5 AST** library (`packages/json5_ast/`)
+every backend operation goes through the in-process `bxp-gui-bridge` (stateless
+ops + proxied `bxp-cli` runs). The local **Dart JSON5 AST** library (`packages/json5_ast/`)
 is used for in-place editing of the user's config file: parse → mutate →
 dump back, preserving comments and formatting.
 
@@ -94,8 +94,8 @@ bxp-gui/
 │   ├── desktop_integration_service_test.dart
 │   ├── examples_unique_name_test.dart    # open-dialog "create examples" unique-naming
 │   ├── expr_batch_test.dart              # --expr-batch request/response shape
-│   ├── expr_corpus_bridge_test.dart      # cross-runner expr corpus parity (bridge vs bxp-fmt)
-│   ├── bridge_inspect_test.dart          # bridge_inspect FFI parity vs bxp-fmt (docs/config/list/fetch/batch)
+│   ├── expr_corpus_bridge_test.dart      # corpus validation via bridge_eval_expr (vs expected outcome)
+│   ├── bridge_inspect_test.dart          # bridge_inspect FFI structural validity (docs/config/list/fetch/batch)
 │   ├── prefs_service_test.dart
 │   └── zoom_overflow_test.dart
 ├── pubspec.yaml
@@ -107,8 +107,8 @@ bxp-gui/
 Three layers, top-down:
 
 1. **services/** — wraps everything that talks to the outside world: the
-   bxp-cli/bxp-fmt subprocesses, the local AST library, the user's
-   filesystem. Pure Dart, no Flutter imports.
+   `bxp-gui-bridge` FFI (and the `bxp-cli` runs it proxies), the local AST
+   library, the user's filesystem. Pure Dart, no Flutter imports.
 2. **store/** — `TraceStore` is the single `ChangeNotifier` driving every
    pane. Holds the loaded config (as both `JsonAstNode` and
    `Map<String, dynamic>` views), the current dry-run trace, the op log,
@@ -205,24 +205,23 @@ dispatched to a platform-native install:
 `kDebugMode` skips the auto-check during dev runs.
 
 The client maps each operation to a method. The stateless ones are
-`bridge_inspect` / `bridge_eval_*` calls (the `bxp-fmt` subcommand each one
-replaced is noted for reference — that JSON shape is the contract); the
+`bridge_inspect` / `bridge_eval_*` calls (the `bxp-core/inspect` function behind
+each is noted for reference — that JSON shape is the contract); the
 `bxp-cli` ones are `bridge_run` / `bridge_run_streaming` proxies:
 
-- `loadConfig(path)` → `bridge_inspect {op:config}` (was `bxp-fmt --config
-  <path> [--check-fs=N]`) → annotated JSON with `$comm_*`/`$err_*` siblings.
-  The GUI passes `--check-fs=2` on every load/save for filesystem-existence
-  diagnostics.
-- `getDocs()` → `bridge_inspect {op:docs}` (was `bxp-fmt --docs`) → cached at
+- `loadConfig(path)` → `bridge_inspect {op:config}` (`inspect.annotateRaw`) →
+  annotated JSON with `$comm_*`/`$err_*` siblings. The GUI passes a `check-fs`
+  deadline of 2 s on every load/save for filesystem-existence diagnostics.
+- `getDocs()` → `bridge_inspect {op:docs}` (`inspect.docsJson`) → cached at
   startup, drives FnDoc tooltips, the schema gate, and `_AddChildDialog`
   insert scaffolds.
 - `listTemplates(path)` / `fetchTemplate(path,id)` → `bridge_inspect
   {op:list_templates|fetch_template}`.
 - `evalBatch(...)` → `bridge_inspect {op:eval_batch}` (drives drill-down
   re-eval).
-- `validateExpr(text)` → `bridge_eval_expr` (was `bxp-fmt --expr`).
+- `validateExpr(text)` → `bridge_eval_expr` (`inspect.validateExpr`).
 - `traceExpr(text, headers, fields)` → `bridge_eval_expr_trace` (NDJSON
-  stream; was `bxp-fmt --expr-trace`).
+  stream; `inspect.evalTrace`).
 - `runWithBtrace(path, template)` → `bridge_run_streaming` spawning
   `bxp-cli --trace=bin` (binary BXTB frame stream of per-row trace events).
 - `getVersion('bxp-cli')` → `bridge_run` spawning `bxp-cli --version`
@@ -233,7 +232,7 @@ replaced is noted for reference — that JSON shape is the contract); the
 A standalone Dart package that parses JSON5 to a comment-preserving AST,
 applies mutations (insert / delete / move / set), and dumps back to text.
 Used for the user's `bxp-cli.json` so saves don't reformat the file.
-Replaces the older `bxp-fmt`-based byte-patcher pipeline.
+Replaces the older byte-patcher pipeline.
 
 Round-trip identity is verified by `scripts/test.sh`'s "AST round-trip"
 phase against `DEV/bxp-cli.json`.
@@ -251,8 +250,8 @@ flutter run -d linux
 flutter test
 ```
 
-The dev run picks up sibling `bxp-cli`/`bxp-fmt` binaries; build them
-first if you haven't.
+The dev run picks up the sibling `bxp-cli` binary + the `bxp-gui-bridge`
+library; build them first if you haven't.
 
 ## MCP development workflow
 

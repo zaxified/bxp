@@ -1,4 +1,4 @@
-/// Pure helper for looking up a `bxp-fmt --docs` config-schema entry
+/// Pure helper for looking up a `the bridge docs catalog` config-schema entry
 /// by path. Shared by `TraceStore.findSchemaDoc`, `DartValidator`'s
 /// internal walker, and json_tree's `_SchemaTooltipKey`.
 ///

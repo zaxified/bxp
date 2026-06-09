@@ -14,8 +14,8 @@ import 'diagnostic_log.dart';
 /// Bridge-backed client for the bxp toolchain.
 ///
 /// Everything routes through the in-process `bxp-gui-bridge` shared library
-/// on every platform — there is no `bxp-fmt` subprocess and no Process.start
-/// path. Two call shapes share one library:
+/// on every platform — there is no separate validator subprocess and no
+/// Process.start path. Two call shapes share one library:
 ///   * Stateless ops (`getDocs` / `loadConfig` / `listTemplates` /
 ///     `fetchTemplate` / `evalBatch` / `validateExpr` / `traceExpr`) call
 ///     `bridge_inspect` / `bridge_eval_*` synchronously on the main isolate
@@ -26,15 +26,15 @@ import 'diagnostic_log.dart';
 ///     bridge drains the pipe in native Zig code (sidestepping dart:io's
 ///     Windows pipe truncation, dart-lang/sdk#1727).
 ///
-/// `bxp-cli` is still a real binary the bridge spawns; only `bxp-fmt` left
-/// the GUI's runtime dependency set (the bridge links bxp-core/inspect
-/// directly, so it needs neither). A missing bridge library is a fatal
+/// `bxp-cli` is still a real binary the bridge spawns; the former `bxp-fmt`
+/// validator subprocess is gone — the bridge links bxp-core/inspect directly,
+/// so the GUI needs no validator binary. A missing bridge library is a fatal
 /// startup error — same as Windows always had.
 class BxpProcessClient {
-  /// Resolve a sibling binary. Search order:
-  ///   1. Env override: `$BXP_CLI_PATH` / `$BXP_FMT_PATH`
+  /// Resolve a sibling binary (only `bxp-cli` today). Search order:
+  ///   1. Env override: `$BXP_CLI_PATH`
   ///      — when SET (non-empty), this wins absolutely. If the path doesn't
-  ///        exist we return null instead of falling through to the other
+  ///        exist we return null instead of falling through to the bundle
   ///        candidate: the user explicitly pinned this path and silently
   ///        running a different binary is worse than showing a fatal error.
   ///   2. `<name>` next to the bxp_gui executable.
@@ -45,11 +45,9 @@ class BxpProcessClient {
   ///      time the bundle is wiped by an install rebuild.
   ///
   /// Platform-aware binary filename: appends `.exe` on Windows, leaves
-  /// other platforms untouched. The release packager copies bxp-cli /
-  /// bxp-fmt as `*.exe` into the Windows bundle (release-02-desktop.sh),
-  /// so a bare 'bxp-fmt' lookup misses on disk and the GUI used to bail
-  /// out at startup with the misleading message
-  /// `same directory as bxp_gui = C:\Program Files\BXP/bxp-fmt`.
+  /// other platforms untouched. The release packager copies `bxp-cli` as
+  /// `bxp-cli.exe` into the Windows bundle (release-02-desktop.sh), so a bare
+  /// 'bxp-cli' lookup would miss on disk without the platform suffix.
   static String binaryFileName(String name) =>
       Platform.isWindows ? '$name.exe' : name;
 
@@ -57,7 +55,6 @@ class BxpProcessClient {
   static String? findBin(String name) {
     final envVar = switch (name) {
       'bxp-cli' => Platform.environment['BXP_CLI_PATH'],
-      'bxp-fmt' => Platform.environment['BXP_FMT_PATH'],
       _ => null,
     };
     if (envVar != null && envVar.isNotEmpty) {
@@ -77,7 +74,7 @@ class BxpProcessClient {
     if (File(sibling).existsSync()) return sibling;
 
     // Walk up looking for a `bxp-gui/` directory; its parent is the monorepo
-    // root that holds sibling packages `bxp-cli/` and `bxp-fmt/`. Use
+    // root that holds the sibling package `bxp-cli/`. Use
     // `p.basename` so the segment compare works on both POSIX (`/`) and
     // Windows (`\`) — `endsWith('/bxp-gui')` would silently miss on
     // Windows and could mismatch a path like `/foo/some-bxp-gui` on
@@ -168,13 +165,13 @@ class BxpProcessClient {
 
   /// Timeout for the only remaining one-shot subprocess call, `--version`,
   /// which the bridge runs in an `Isolate.run` worker wrapped in
-  /// `Future.timeout`. The stateless `bxp-fmt` ops are in-process now (no
+  /// `Future.timeout`. The stateless `the bridge` ops are in-process now (no
   /// spawn), so they carry no per-call spawn timeout.
   static const Duration _versionTimeout = Duration(seconds: 5);
 
   /// Cached bridge library path + main-isolate client. The bridge ships on
   /// every platform (release-02 + the Linux CMake copy place it next to
-  /// bxp-gui) and is the *only* backend — there is no `bxp-fmt` spawn
+  /// bxp-gui) and is the *only* backend — there is no `the bridge` spawn
   /// fallback. The in-process inspect/eval ops (`getDocs` / `loadConfig` /
   /// `listTemplates` / `fetchTemplate` / `evalBatch` / `validateExpr` /
   /// `traceExpr`) call [_bridgeClient] directly on the main isolate (sub-ms,
@@ -199,7 +196,7 @@ class BxpProcessClient {
   /// Probe + cache the bridge. Returns the main-isolate client, or null when
   /// the library can't be located/opened — in which case every op surfaces a
   /// visible error (fatal docs gate at startup, `{"error":...}` for config,
-  /// empty results for the rest). There is no `bxp-fmt` fallback: the bridge
+  /// empty results for the rest). There is no `the bridge` fallback: the bridge
   /// is the single sanctioned backend on every platform, so a missing library
   /// is a broken install.
   static BridgeClient? _bridge() {
@@ -242,7 +239,7 @@ class BxpProcessClient {
 
   /// One-shot run, always via the bridge (`bridge_run` in an `Isolate.run`
   /// worker). The only remaining caller is [getVersion]; the stateless
-  /// `bxp-fmt` ops moved in-process to [_bridge]'s inspect/eval calls. The
+  /// `the bridge` ops moved in-process to [_bridge]'s inspect/eval calls. The
   /// bridge is the single backend on every platform — a missing library
   /// surfaces a synthetic non-zero exit (no Process.start fallback).
   ///
@@ -326,11 +323,11 @@ class BxpProcessClient {
   static String? _lastSubprocessDiag;
   static String? get lastSubprocessDiag => _lastSubprocessDiag;
 
-  /// Validates config via `bxp-fmt --config <path>`.
+  /// Validates config via `the bridge config validation <path>`.
   /// Returns stdout (annotated JSON) on exit 0, throws on missing binary.
   /// Non-zero exit with stderr is returned wrapped in `{"error": "..."}`.
   ///
-  /// [checkFsSeconds] controls bxp-fmt's optional FS validation pass:
+  /// [checkFsSeconds] controls the bridge's optional FS validation pass:
   /// 0 (default) skips it entirely, >0 enables it with that many seconds
   /// total deadline. The TraceStore flips to 0 for the rest of the
   /// session if a previous call surfaced an `[fs.timeout]` warning.
@@ -339,9 +336,9 @@ class BxpProcessClient {
       'path': path,
       'check_fs': checkFsSeconds,
     });
-    // In-process via the bridge (no bxp-fmt spawn). Same annotated JSON, incl.
+    // In-process via the bridge (no spawn). Same annotated JSON, incl.
     // $err_ siblings; the FS check resolves data_dir against the GUI process
-    // CWD — identical to the former spawned bxp-fmt (config.zig opens data_dir
+    // CWD — identical to the former spawned the bridge (config.zig opens data_dir
     // via cwd). annotateConfigFromFile always returns JSON (even file errors as
     // {"$err_1":...}), so a non-empty result means success.
     final bridge = _bridge();
@@ -364,7 +361,7 @@ class BxpProcessClient {
   }
 
   /// Probe a sibling binary for its version string via `<bin> --version`.
-  /// Both bxp-cli and bxp-fmt print `"<name> <version>\n"` (the version is
+  /// Both bxp-cli and the bridge print `"<name> <version>\n"` (the version is
   /// injected from `build.zig.zon` via `build_options.version`), so we keep
   /// just the trailing token. Returns null when the binary is missing or
   /// the call fails — callers render that as "(unknown)".
@@ -385,12 +382,12 @@ class BxpProcessClient {
   }
 
   /// Fetch the canonical function/keyword/operator/token/config-schema
-  /// catalog from `bxp-fmt --docs`. Returns the parsed JSON tree, or
+  /// catalog from `the bridge docs catalog`. Returns the parsed JSON tree, or
   /// null if the binary is missing or returns garbage. Single-source-of-
   /// truth contract: tree tooltips, expression catalog, and autocomplete
   /// all read from the same data the CLI itself ships.
   static Future<Map<String, dynamic>?> getDocs() async {
-    // In-process via the bridge (no bxp-fmt spawn); same JSON.
+    // In-process via the bridge (no spawn); same JSON.
     final bridge = _bridge();
     if (bridge == null) {
       _lastDocsError = 'bxp-gui-bridge unavailable: '
@@ -422,7 +419,7 @@ class BxpProcessClient {
 
   /// Diagnostic detail captured on the most recent [getDocs] failure.
   /// Surfaced in `trace_store._fatalStartupError` so the user-facing
-  /// "bxp-fmt --docs failed" screen can name the actual failure mode
+  /// "the bridge docs catalog failed" screen can name the actual failure mode
   /// (timeout, non-zero exit, JSON parse error, ...) instead of a
   /// generic "no parseable JSON" message that gives the bug reporter
   /// nothing to work with.
@@ -437,14 +434,14 @@ class BxpProcessClient {
       s.length <= n ? s : '${s.substring(0, n)}... (+${s.length - n} more)';
 
   /// Fetch one template's raw JSON block via
-  /// `bxp-fmt --config <path> --fetch-template <id>`. Returns the parsed
+  /// `the bridge config validation <path> --fetch-template <id>`. Returns the parsed
   /// JSON object (input_schema, row_rules, ticker_map, …) or null on any
   /// failure (binary missing, exit non-zero, malformed JSON). Used by the
   /// btrace browser to drive `evalBatch` with the template's input_schema
   /// expressions when reconstructing drill-down on click.
   static Future<Map<String, dynamic>?> fetchTemplate(
       String configPath, String templateId) async {
-    // In-process via the bridge (no bxp-fmt spawn).
+    // In-process via the bridge (no spawn).
     final bridge = _bridge();
     if (bridge == null) {
       _lastSubprocessDiag = 'fetchTemplate: bridge unavailable';
@@ -469,13 +466,13 @@ class BxpProcessClient {
   }
 
   /// Enumerates conversion templates declared in a config via
-  /// `bxp-fmt --config <path> --list-templates`. Returns an empty list when
+  /// `the bridge config validation <path> --list-templates`. Returns an empty list when
   /// the binary is missing or the call fails — the caller falls back to its
   /// own enumeration of `configJson['conversion_templates']` keys, so a
   /// failure here only loses the metadata (data_dir / file_pattern_in /
   /// description) that powers the richer template-selector subtitle.
   static Future<List<TemplateInfo>> listTemplates(String path) async {
-    // In-process via the bridge (no bxp-fmt spawn).
+    // In-process via the bridge (no spawn).
     final bridge = _bridge();
     if (bridge == null) {
       _lastSubprocessDiag = 'listTemplates: bridge unavailable';
@@ -500,12 +497,12 @@ class BxpProcessClient {
     }
   }
 
-  /// Validate an expression via `bxp-fmt --expr` (or the in-process bridge
+  /// Validate an expression via `the bridge expr validator` (or the in-process bridge
   /// FFI path when the bridge library is loadable). Returns a record
   /// with `error` (null on success), and optional `offset` / `length`
   /// for token highlighting (Phase G1).
   ///
-  /// `bxp-fmt --expr` emits a structured
+  /// `the bridge expr validator` emits a structured
   /// `{"error":"X","detail":"Y","off":N,"len":M}` on failure. We
   /// unwrap that into `"X: Y"` (or just `"X"` when detail is empty).
   static Future<({String? error, int? offset, int? length})> validateExpr(
@@ -513,7 +510,7 @@ class BxpProcessClient {
   ) async {
     if (expr.isEmpty) return (error: null, offset: null, length: null);
     // In-process FFI (`bridge_eval_expr`). Sub-ms latency, safe on the main
-    // isolate (well under one frame budget). No bxp-fmt spawn fallback.
+    // isolate (well under one frame budget). No spawn fallback.
     final bridge = _bridge();
     if (bridge == null) {
       return (error: 'bxp-gui-bridge unavailable', offset: null, length: null);
@@ -523,7 +520,7 @@ class BxpProcessClient {
   }
 
   /// Re-evaluates an expression against a CSV row context and returns the
-  /// per-function-call NDJSON stream from `bxp-fmt --expr-trace`. Used by
+  /// per-function-call NDJSON stream from `the bridge expr trace`. Used by
   /// the GUI's hover-on-token feature to surface intermediate values for
   /// nested function calls (`ABS([Fee])` → "1.50") without re-running the
   /// whole pipeline.
@@ -537,8 +534,8 @@ class BxpProcessClient {
     required List<String> fields,
   }) async {
     // In-process FFI (`bridge_eval_expr_trace`). The NDJSON shape is identical
-    // to the former `bxp-fmt --expr-trace` stdout, so `_parseTraceNdjson`
-    // works unchanged. No bxp-fmt spawn fallback.
+    // to the former `the bridge expr trace` stdout, so `_parseTraceNdjson`
+    // works unchanged. No spawn fallback.
     final bridge = _bridge();
     if (bridge == null) {
       _lastSubprocessDiag = 'traceExpr: bridge unavailable';
@@ -552,7 +549,7 @@ class BxpProcessClient {
 
   /// Evaluate N expressions against one row context in a single spawn.
   ///
-  /// Calls `bxp-fmt --expr-batch` with a JSON request on stdin, returns
+  /// Calls `the bridge expr batch` with a JSON request on stdin, returns
   /// a parallel list of results. Amortises subprocess-spawn cost across
   /// the entire batch — typical GUI drill-down click runs ~14 input_schema
   /// vars + a few rule.when probes (~19 calls), and per-call latency at
@@ -593,7 +590,7 @@ class BxpProcessClient {
       request['single_prepass_name'] = singlePrepassName;
     }
 
-    // In-process via the bridge (no bxp-fmt spawn). Same `{results:[...]}`
+    // In-process via the bridge (no spawn). Same `{results:[...]}`
     // shape, so `_parseBatchResults` works unchanged.
     final bridge = _bridge();
     if (bridge == null) {
@@ -609,7 +606,7 @@ class BxpProcessClient {
     return _parseBatchResults(raw);
   }
 
-  /// Parse the `{"results":[...]}` shape from `bxp-fmt --expr-batch`.
+  /// Parse the `{"results":[...]}` shape from `the bridge expr batch`.
   /// Tolerates malformed individual entries (rendered as ok:false) so a
   /// single corrupt result line can't discard the rest of the batch.
   static List<ExprBatchResult> _parseBatchResults(String out) {
@@ -646,7 +643,7 @@ class BxpProcessClient {
     return out_;
   }
 
-  /// Parse NDJSON from `bxp-fmt --expr-trace` (or the bridge equivalent)
+  /// Parse NDJSON from `the bridge expr trace` (or the bridge equivalent)
   /// into a per-call list, dropping the final/error sentinel and any
   /// malformed lines. Shared between the bridge and subprocess paths so
   /// the same payload shape produces identical parsed results.
@@ -656,7 +653,7 @@ class BxpProcessClient {
       final trimmed = line.trim();
       if (trimmed.isEmpty) continue;
       // One bad NDJSON line must NOT discard the rest of the trace —
-      // per-line try/catch so a malformed sentinel from a future bxp-fmt
+      // per-line try/catch so a malformed sentinel from a future the bridge
       // doesn't drop the 200 lines that came before it.
       try {
         final parsed = jsonDecode(trimmed);
@@ -739,7 +736,7 @@ class BxpProcessClient {
     // bridge_run_streaming on every platform: dart:io's Process.start
     // suffers ~8 KB pipe truncation on the multi-MB stream on Windows
     // (dart-lang/sdk#1727), and the bridge is now the single backend
-    // everywhere (the Process.start path was retired with the bxp-fmt
+    // everywhere (the Process.start path was retired with the bridge
     // fallback). The bridge drains the pipe in native Zig code.
     // Cancellation goes through the [onBridgeSpawn] handle +
     // `cancelBtrace(handle)` since there is no [Process] object here.
@@ -891,7 +888,7 @@ class ProcessRunResult {
   const ProcessRunResult({required this.exitCode, required this.stderr});
 }
 
-/// One entry returned by `bxp-fmt --list-templates` — used to render the
+/// One entry returned by `the bridge template list` — used to render the
 /// template-selector subtitle (file pattern / description) without re-parsing
 /// the config inside the GUI.
 class TemplateInfo {
@@ -924,7 +921,7 @@ class TemplateInfo {
       );
 }
 
-/// One entry from a `bxp-fmt --expr-batch` result array.
+/// One entry from a `the bridge expr batch` result array.
 ///
 /// On success: `ok = true`, `value` holds the stringified result of evaluating
 /// the matching expression from the request. All other fields are null.

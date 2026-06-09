@@ -319,7 +319,7 @@ class _TemplateSelectState extends State<_TemplateSelect> {
         color: t.textMuted, size: BxpSize.xs, fontStyle: FontStyle.italic);
     // Build {id -> TemplateInfo} from the rich --list-templates result so
     // we can render data_dir + file_pattern as a subtitle. Fall back to
-    // bare ids when the lookup is empty (CLI missing, old bxp-fmt, etc.).
+    // bare ids when the lookup is empty (CLI missing, old the bridge, etc.).
     final infos = {
       for (final ti in store.availableTemplateInfos) ti.id: ti,
     };

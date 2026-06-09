@@ -1,5 +1,5 @@
-/// Phase 3 + 4: native Dart validator that consumes the `bxp-fmt --docs`
-/// catalog and emits per-edit diagnostics WITHOUT a bxp-fmt subprocess
+/// Phase 3 + 4: native Dart validator that consumes the `the bridge docs catalog`
+/// catalog and emits per-edit diagnostics WITHOUT a subprocess
 /// round-trip. Tree-level checks live next to expression-level checks
 /// because both share the AST + token walker plumbing.
 ///
@@ -20,7 +20,7 @@ import 'schema_doc_lookup.dart';
 /// One Dart-side diagnostic entry. Mirrors the path-keyed shape that
 /// `TraceStore._validationErrors / _validationWarnings / _validationInfo`
 /// expects so the caller can merge these into the same buckets that hold
-/// `bxp-fmt --config` output.
+/// `the bridge config validation` output.
 class DartDiagnostic {
   /// Path segments from config root (no leading "config."). Used as the
   /// outer key in TraceStore's path-keyed maps after NUL-encoding.
@@ -31,7 +31,7 @@ class DartDiagnostic {
 
   /// Stable code (e.g. `dart.field.NonEmpty`, `dart.expr.UnknownFunction`).
   /// Always prefixed with `dart.` so consumers can route by source. The
-  /// bxp-fmt side uses bare `expr.*` / `field.*` codes; combining the two
+  /// the bridge side uses bare `expr.*` / `field.*` codes; combining the two
   /// in one bucket therefore stays unambiguous.
   final String code;
   final String message;
@@ -58,7 +58,7 @@ class DartDiagnostic {
 enum DartSeverity { error, warning, info }
 
 /// Result of validating one expression. The walker emits at most one
-/// diagnostic for the first failure encountered (mirroring bxp-fmt
+/// diagnostic for the first failure encountered (mirroring the bridge
 /// `validateExpr` semantics) plus optional offset/length so the caller
 /// can underline the offending token in the editor.
 class ExprDiagnostic {
@@ -121,7 +121,7 @@ class DartValidator {
 
   /// Walk the full AST and return tree-level + expression-level
   /// diagnostics. The caller is expected to merge them into the same
-  /// path-keyed maps that hold bxp-fmt diagnostics — `DartDiagnostic.code`
+  /// path-keyed maps that hold the bridge diagnostics — `DartDiagnostic.code`
   /// is `dart.*`-prefixed so the two never collide.
   List<DartDiagnostic> validate(JsonAstNode root) {
     final out = <DartDiagnostic>[];
@@ -134,7 +134,7 @@ class DartValidator {
   /// active template. Returns null when the expression looks clean.
   ///
   /// Used by the inline ExprEditor / ExprPanel for per-keystroke
-  /// feedback that doesn't pay the bxp-fmt subprocess cost. Syntax /
+  /// feedback that doesn't pay the bridge-call cost. Syntax /
   /// precedence errors (UnexpectedToken, ExpectedRParen, ...) still
   /// require the subprocess fallback — Dart-side covers UnknownFunction,
   /// WrongArgCount, the FnArgDoc-driven specialised arg checks, and
@@ -319,7 +319,7 @@ class DartValidator {
     for (final p in obj.properties) {
       if (p is! JsonProperty) continue;
       if (validKeys.contains(p.key)) continue;
-      // Skip annotation keys emitted by bxp-fmt — they live alongside
+      // Skip annotation keys emitted by the bridge — they live alongside
       // real keys in `--config` output but shouldn't be flagged here.
       if (p.key.startsWith(r'$err_') ||
           p.key.startsWith(r'$warn_') ||
@@ -331,7 +331,7 @@ class DartValidator {
       // Severity mirrors `bxp-core`'s post-promotion contract for
       // `validateUnknownKeysCollect` (warning → error after the
       // long-term promotion landed alongside SplitPartBadIndex). Same
-      // bucket as bxp-fmt's `$err_*` so json_tree's existing leaf-level
+      // bucket as the bridge's `$err_*` so json_tree's existing leaf-level
       // error rendering picks it up without a separate warning path.
       // Wording is byte-identical to bxp-core's emit so that when both
       // validators flag the same key (live edit + saved file), the
@@ -688,7 +688,7 @@ class DartValidator {
           final name = _unquoteSingle(t.text);
           if (prePassNames.isEmpty) {
             // Template has no pre_pass block at all — any LOOKUP name
-            // is invalid. Mirrors `bxp-fmt --config`, which flags this
+            // is invalid. Mirrors `the bridge config validation`, which flags this
             // case via `Context.pre_pass_names` being an empty
             // whitelist (expr.zig:1539). The standalone caller
             // (`_validateExprStandalone`) passes an empty set too but
@@ -723,7 +723,7 @@ class DartValidator {
 
   // ── Helpers ───────────────────────────────────────────────────────────
 
-  /// Match [path] against the cached `bxp-fmt --docs` config schema.
+  /// Match [path] against the cached `the bridge docs catalog` config schema.
   /// Thin wrapper over [findSchemaDocIn] — kept as a private method so
   /// the validator stays free of a store reference.
   Map<String, dynamic>? _findSchemaDoc(List<String> path) =>

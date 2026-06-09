@@ -183,7 +183,7 @@ class PrepassEntry {
   /// Pre-pass namespace name. Legacy single-block form gets the synthetic
   /// `_default`; named blocks carry the explicit name (e.g. `orders`). The
   /// GUI uses this to namespace lookups when re-evaluating expressions in
-  /// drill-down and to derive the single-block name passed to bxp-fmt.
+  /// drill-down and to derive the single-block name passed to the bridge.
   final String name;
   /// The lookup key (value of the indexed CSV column for this entry).
   final String key;
@@ -194,7 +194,7 @@ class PrepassEntry {
   const PrepassEntry({this.name = '_default', required this.key, required this.field, required this.value});
 }
 
-/// One entry in the per-call trace produced by `bxp-fmt --expr-trace`. Used
+/// One entry in the per-call trace produced by `the bridge expr trace`. Used
 /// by the GUI's hover-on-token feature to surface the evaluated value of a
 /// nested function call (e.g. ABS([Fee]) → "1.50") without re-running the
 /// whole pipeline. `srcStart`/`srcEnd` are byte offsets into the expression

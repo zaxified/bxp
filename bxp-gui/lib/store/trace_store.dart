@@ -20,7 +20,7 @@ import '../services/schema_doc_lookup.dart';
 import 'trace_model.dart';
 import '../ui/theme/bxp_text_scheme.dart';
 
-/// Per-severity diagnostic buckets produced by walking a `bxp-fmt
+/// Per-severity diagnostic buckets produced by walking a `the bridge
 /// --config` annotated tree. Outer key: encoded parent path. Inner map:
 /// `$err_<N>` / `$warn_<N>` / `$info_<N>` → message.
 typedef _DiagnosticBuckets = ({
@@ -75,11 +75,11 @@ enum ExprValidationState { idle, pending, ok, error }
 /// Responsibilities:
 ///   - Config loading/saving via `AstLoader` + `AstPatchClient` + `BxpProcessClient`
 ///   - Undo/redo history via AST snapshots
-///   - Validation: bxp-fmt `$err_*` buckets + native Dart-side `_revalidateDart`
+///   - Validation: the bridge `$err_*` buckets + native Dart-side `_revalidateDart`
 ///   - Expression editor state (selection, validation lifecycle, autocomplete gating)
 ///   - Streaming dry-run / full-run orchestration with live row-count updates
 ///   - User preferences (theme, zoom, MRU list) via `PrefsService`
-///   - Schema docs cache from `bxp-fmt --docs`
+///   - Schema docs cache from `the bridge docs catalog`
 ///
 /// Streaming invariant: NEVER call `notifyListeners()` per trace line — use
 /// `_traceLinesCounter` and `_fileGen` ValueNotifiers to update live counters
@@ -254,16 +254,16 @@ class TraceStore extends ChangeNotifier {
 
   /// Phase 5c-D: validation diagnostics keyed by encoded path
   /// (`segment\x00segment\x00…`). Populated by `loadConfig` and the
-  /// pre-save validation in `saveConfig` from `bxp-fmt --config` output;
+  /// pre-save validation in `saveConfig` from `the bridge config validation` output;
   /// consulted by `errorsAt` / `hasErrorIn` from the UI. Empty until
   /// the first validator response lands.
   Map<String, Map<String, String>> _validationErrors = const {};
 
-  /// `bxp-fmt --config` deep-validation siblings. `$warn_<N>` and
+  /// `the bridge config validation` deep-validation siblings. `$warn_<N>` and
   /// `$info_<N>` live in their own path-keyed maps so the tree renderer
   /// can route them to a different badge style and the save pre-flight
   /// (`_firstErrTraceIn`) stays strict on `.@"error"` severity only.
-  /// `_validationWarnings` is populated in practice — bxp-fmt's
+  /// `_validationWarnings` is populated in practice — the bridge's
   /// deep-validation pass emits `$warn_*` for wrong-type-silent fields,
   /// unused pre_pass blocks, unused input_schema `$variables`, and
   /// distance-based outliers. `_validationInfo` stays empty today: the
@@ -274,15 +274,15 @@ class TraceStore extends ChangeNotifier {
 
   /// Phase 3 — native Dart-side per-edit diagnostics, populated by
   /// `_revalidateDart()` from `_applyOpToAst`/undo/redo/resetDraft and
-  /// after each `loadConfig`. Same path-keyed shape as the bxp-fmt
+  /// after each `loadConfig`. Same path-keyed shape as the bridge
   /// buckets above; merged at query time in `errorsAt`/`warningsAt`/
-  /// `infoAt`. Inner keys are `$dart_<N>` so collisions with bxp-fmt's
+  /// `infoAt`. Inner keys are `$dart_<N>` so collisions with the bridge's
   /// `$err_<N>` are impossible.
   Map<String, Map<String, String>> _dartErrors = const {};
   Map<String, Map<String, String>> _dartWarnings = const {};
   Map<String, Map<String, String>> _dartInfo = const {};
 
-  /// Default deadline (seconds) for bxp-fmt's FS validation pass on
+  /// Default deadline (seconds) for the bridge's FS validation pass on
   /// load / save. 2s is plenty on local disk (sub-millisecond per
   /// broker); the GUI degrades to 0 (skip) for the rest of the session
   /// if any call surfaces an `[fs.timeout]` warning — see
@@ -337,7 +337,7 @@ class TraceStore extends ChangeNotifier {
   String? configError;
   // True while a loadConfig spawn is in flight. Lets ConfigView show
   // a "Loading…" placeholder instead of momentarily flashing
-  // "Config not parsed." when the bxp-fmt spawn takes more than a
+  // "Config not parsed." when validation takes more than a
   // frame to return.
   bool isLoadingConfig = false;
 
@@ -376,14 +376,14 @@ class TraceStore extends ChangeNotifier {
   String? exprValidationError;
   /// Phase G1: byte offset + length of the offending token in
   /// `selectedExprText`. Set by `_validateNow` from
-  /// `bxp-fmt --expr` JSON's `off` / `len` fields. Both null when no
+  /// `the bridge expr validator` JSON's `off` / `len` fields. Both null when no
   /// validation issue (or when the parser couldn't pin a span — old
   /// errors, allocator failures, …). The ExprPanel renders these as
   /// a token-level red underline instead of underlining the whole cell.
   int? exprValidationOffset;
   int? exprValidationLength;
   // Validation lifecycle. The editor and Playground show "checking…"
-  // while a validateExpr spawn is in flight (500ms debounce + bxp-fmt
+  // while a validateExpr spawn is in flight (500ms debounce + the bridge
   // round-trip), then flip to "valid"/"invalid" when the result lands.
   //   idle    — no expression selected OR text is whitespace
   //   pending — debounce timer running OR spawn in flight
@@ -405,7 +405,7 @@ class TraceStore extends ChangeNotifier {
 
   // Per-call expression trace cache for the hover-on-token feature. Keyed
   // by `"${rowId}::${exprText}"`. Each entry is the parsed NDJSON output of
-  // `bxp-fmt --expr-trace` for that (row, expr) pair — list may be empty
+  // `the bridge expr trace` for that (row, expr) pair — list may be empty
   // when the expression has no function calls or the spawn failed. The
   // separate in-flight set prevents duplicate spawns when several Tooltip
   // widgets request the same expression on the same frame.
@@ -422,7 +422,7 @@ class TraceStore extends ChangeNotifier {
     return _exprCallCache[_exprCallKey(rowId, expr)];
   }
 
-  /// Lazily kicks off `bxp-fmt --expr-trace` for the given (row, expr) pair.
+  /// Lazily kicks off `the bridge expr trace` for the given (row, expr) pair.
   /// No-op when the cache already holds a result or another spawn is in
   /// flight. Calls [notifyListeners] when the result lands so widgets that
   /// depend on the cache rebuild and display the per-call values.
@@ -568,7 +568,7 @@ class TraceStore extends ChangeNotifier {
 
   /// True while the in-panel autocomplete popup is visible. Validation
   /// is suspended in that window — the user is mid-completion, the
-  /// expression is intentionally partial, and a `bxp-fmt --expr` spawn
+  /// expression is intentionally partial, and a `the bridge expr validator` spawn
   /// would just flicker an "INVALID" badge that flips back to "VALID"
   /// the moment they pick a function.
   bool _exprAutocompleteOpen = false;
@@ -644,7 +644,7 @@ class TraceStore extends ChangeNotifier {
 
   void updateSelectedExprText(String text) {
     // Newlines are a UI typing aid only — the editor lets the user split
-    // long expressions visually. bxp-fmt's expr parser would reject a
+    // long expressions visually. the bridge's expr parser would reject a
     // literal newline mid-token, so strip them defensively here so any
     // caller (including legacy paths) feeds a clean validator input.
     text = text.replaceAll(RegExp(r'[\r\n]+'), ' ');
@@ -773,10 +773,10 @@ class TraceStore extends ChangeNotifier {
   /// Merge two path-keyed diagnostic maps for the same path. Returns
   /// the combined inner map without mutating either input. Used by
   /// `errorsAt`/`warningsAt`/`infoAt` to overlay Phase-3 Dart-side
-  /// diagnostics on top of bxp-fmt entries at query time.
+  /// diagnostics on top of the bridge entries at query time.
   ///
   /// Polish 1 — dedupe by VALUE: when both maps carry the same
-  /// message text (e.g. bxp-fmt's `$err_1` and Dart's `$dart_1` both
+  /// message text (e.g. the bridge's `$err_1` and Dart's `$dart_1` both
   /// say `unknown config key 'data_dir2' — did you mean 'data_dir'?`
   /// because the wording is intentionally aligned), drop the
   /// duplicate from the second map. Bxp-fmt's keys come first since
@@ -794,7 +794,7 @@ class TraceStore extends ChangeNotifier {
   }
 
   /// Diagnostics on the node at [path]. Returns the `$err_<name>` →
-  /// message map captured by the most recent `bxp-fmt --config` run,
+  /// message map captured by the most recent `the bridge config validation` run,
   /// merged with `$dart_<N>` entries from the live Dart-side validator
   /// (`_revalidateDart`). Empty map when the node has no errors.
   Map<String, String> errorsAt(List<String> path) {
@@ -803,7 +803,7 @@ class TraceStore extends ChangeNotifier {
   }
 
   /// Phase A plumbing: same path-keyed lookup as `errorsAt` but for
-  /// `$warn_*` / `$info_*` siblings emitted by `bxp-fmt`'s deep
+  /// `$warn_*` / `$info_*` siblings emitted by the bridge's deep
   /// validation pass + Phase-3 Dart-side warnings/info.
   Map<String, String> warningsAt(List<String> path) {
     final key = _encodePath(path);
@@ -815,7 +815,7 @@ class TraceStore extends ChangeNotifier {
     return _mergeMaps(_validationInfo[key], _dartInfo[key]);
   }
 
-  /// Reset all six severity buckets (3 bxp-fmt + 3 Dart) in one call.
+  /// Reset all six severity buckets (3 bridge + 3 Dart) in one call.
   /// Used by loadConfig's reset paths so stale entries don't leak
   /// across loads.
   void _clearValidationDiagnostics() {
@@ -831,7 +831,7 @@ class TraceStore extends ChangeNotifier {
   /// appears at any STRICT descendant of [path] in the bucket
   /// matching [severity]. Used by json_tree's banner renderer to
   /// suppress a parent-level banner whose text is already shown
-  /// under a descendant leaf (the typical pattern when bxp-fmt
+  /// under a descendant leaf (the typical pattern when the bridge
   /// emits `$err_*` at the parent object level while the Dart-side
   /// validator places the same diagnostic at the offending leaf).
   ///
@@ -876,7 +876,7 @@ class TraceStore extends ChangeNotifier {
   }
 
   /// True if any descendant of the node at [path] (inclusive) carries a
-  /// `$err_*` marker — either bxp-fmt's or a Dart-side `$dart_<N>` from
+  /// `$err_*` marker — either the bridge's or a Dart-side `$dart_<N>` from
   /// `_revalidateDart`. Used by composite-row renderers to surface a
   /// small red dot when a collapsed subtree contains diagnostics.
   /// O(errors) per bucket.
@@ -896,7 +896,7 @@ class TraceStore extends ChangeNotifier {
 
   /// Quick predicate: any `$err_*` anywhere in [src]? Used by the save
   /// pre-flight validator (which would otherwise pass through "annotated
-  /// JSON with errors" silently because bxp-fmt exits with stdout even
+  /// JSON with errors" silently because the bridge returns annotated JSON even
   /// then). Mirrors the old `_findFirstErrTrace` behaviour without
   /// rebuilding the full path map.
   static String? _firstErrTraceIn(dynamic src) {
@@ -922,12 +922,12 @@ class TraceStore extends ChangeNotifier {
     return null;
   }
 
-  /// Walk a parsed `bxp-fmt --config` tree, collecting `$err_*`,
+  /// Walk a parsed `the bridge config validation` tree, collecting `$err_*`,
   /// `$warn_*`, and `$info_*` markers into per-severity path-keyed maps.
   /// Returns three buckets that share the same outer-key shape (encoded
   /// parent path) so the renderer can route by severity.
   ///
-  /// bxp-fmt emits both `$err_*` (the validateCollect path) and `$warn_*`
+  /// the bridge emits both `$err_*` (the validateCollect path) and `$warn_*`
   /// (deep-validation: wrong-type-silent fields, unused pre_pass blocks,
   /// unused input_schema `$variables`, distance-based outliers), so the
   /// errors and warnings buckets both fill in practice. `$info_*` is
@@ -955,7 +955,7 @@ class TraceStore extends ChangeNotifier {
     final info = <String, Map<String, String>>{};
     void walk(dynamic node, List<String> path) {
       if (node is Map) {
-        // bxp-fmt's contract (see bxp-fmt/CLAUDE.md): each `$err_<N>` /
+        // the bridge's contract (see bxp-mcp/CLAUDE.md): each `$err_<N>` /
         // `$warn_<N>` / `$info_<N>` is inserted "as a sibling immediately
         // before the offending key in its parent object"; when the
         // offending field is absent, the marker is appended at the end.
@@ -990,7 +990,7 @@ class TraceStore extends ChangeNotifier {
         }
         for (final e in entries) {
           final k = e.key.toString();
-          // Skip only the annotation prefixes bxp-fmt actually emits
+          // Skip only the annotation prefixes the bridge actually emits
           // (`$err_*`, `$warn_*`, `$info_*`, `$comm_*`). Walking into
           // any future `$`-keys (e.g. user `$variable` names that
           // surface in input_schema) keeps them visible to consumers
@@ -1038,7 +1038,7 @@ class TraceStore extends ChangeNotifier {
   bool _initialized = false;
   bool get initialized => _initialized;
 
-  /// Set by [_init] when bxp-fmt is missing or its `--docs` output is
+  /// Set by [_init] when the bridge is missing or its docs output is
   /// invalid. Non-null = render a blocking fatal-error screen and refuse
   /// every other operation. Null = normal operation; docs guaranteed loaded.
   String? _fatalStartupError;
@@ -1047,7 +1047,7 @@ class TraceStore extends ChangeNotifier {
   /// Versions of the three components, populated once at [_init] time.
   /// `bxpGuiVersion` comes from the embedded pubspec metadata via
   /// `package_info_plus` — same single-source-of-truth pattern as bxp-cli /
-  /// bxp-fmt, where `build.zig` reads `.version` from `build.zig.zon` and
+  /// the bridge, where `build.zig` reads `.version` from `build.zig.zon` and
   /// injects it as a comptime constant. Bumping the version anywhere in the
   /// monorepo therefore requires touching exactly one manifest.
   /// Null = lookup failed (binary missing, --version returned non-zero, etc.);
@@ -1100,7 +1100,7 @@ class TraceStore extends ChangeNotifier {
     // purpose — the bridge (via bxp-core/inspect) is the single source of
     // truth for the expression catalog (functions / keywords / operators /
     // tokens / config schema). The GUI used to ship hand-maintained fallback
-    // constants, then spawned bxp-fmt; both are gone — every stateless op now
+    // constants, then spawned the bridge; both are gone — every stateless op now
     // goes through bxp-gui-bridge. If the bridge library can't be loaded or
     // `docs` returns garbage, we set a fatal startup error and the app renders
     // a blocking error screen instead of MainView (see BxpApp.home in
@@ -1172,7 +1172,7 @@ class TraceStore extends ChangeNotifier {
   List<String> get recentFiles => List.unmodifiable(_recentFiles);
 
   // Live function/keyword/operator/token/config-schema catalog from
-  // `bxp-fmt --docs`. Single source of truth — the CLI's own dispatcher
+  // `the bridge docs catalog`. Single source of truth — the CLI's own dispatcher
   // emits the same data, so the UI catalog can never drift from
   // what the runtime actually supports. Null until the spawn completes
   // (or stays null if the binary is missing).
@@ -1354,7 +1354,7 @@ class TraceStore extends ChangeNotifier {
       }
 
       // AST is the primary loader. Parse the file via the Dart JSON5 AST
-      // library; bxp-fmt runs alongside as a background validator that
+      // library; the bridge runs alongside as a background validator that
       // contributes `$err_*` and `$warn_*` diagnostics (mapped into the
       // path-keyed `_validationErrors` / `_validationWarnings` tables).
       final astResult = await AstLoader.loadFromFile(configPath);
@@ -1378,7 +1378,7 @@ class TraceStore extends ChangeNotifier {
 
       _astRoot = astResult.root;
 
-      // Background validator: bxp-fmt --config gives us schema / expr /
+      // Background validator: the bridge config validation gives us schema / expr /
       // pre_pass diagnostics that the AST parser (pure JSON5) doesn't
       // know about. Parse its output, build the path-keyed error map.
       try {
@@ -1390,8 +1390,8 @@ class TraceStore extends ChangeNotifier {
         if (bxpTree is Map<String, dynamic>) {
           final bxpFatal = bxpTree['error'] as String?;
           if (bxpFatal != null) {
-            // bxp-fmt couldn't even parse — but AST did. Surface the
-            // bxp-fmt error so the user knows about the deeper failure;
+            // the bridge couldn't even parse — but AST did. Surface the
+            // the bridge error so the user knows about the deeper failure;
             // the editor stays openable since AST has a tree.
             configError = bxpFatal;
             _clearValidationDiagnostics();
@@ -1409,22 +1409,22 @@ class TraceStore extends ChangeNotifier {
           }
         } else {
           // Unexpected top-level shape (List, scalar, null) — possible only
-          // if bxp-fmt's contract changes. Clear any prior errors and log.
+          // if the bridge's contract changes. Clear any prior errors and log.
           devTrace('loadConfig.unexpectedShape',
               {'runtimeType': bxpTree.runtimeType.toString()});
           _clearValidationDiagnostics();
         }
       } catch (e) {
-        // bxp-fmt invocation itself failed (binary missing, crash, etc.).
+        // The bridge invocation itself failed (library missing, crash, etc.).
         // Don't block editing on validator failures.
-        configError ??= 'bxp-fmt validator unavailable: $e';
+        configError ??= 'config validator unavailable: $e';
         _clearValidationDiagnostics();
       }
 
-      // Deliberately NOT flipping `_loadedWithErrors` on bxp-fmt errors:
+      // Deliberately NOT flipping `_loadedWithErrors` on the bridge errors:
       // the readonly toolbar gate exists to keep the user from editing a
       // file the AST parser couldn't understand at all. Schema / expression
-      // errors that bxp-fmt finds are surfaced as `$err_*` markers and the
+      // errors that the bridge finds are surfaced as `$err_*` markers and the
       // pre-save guard (`_firstErrTraceIn` in `saveConfig`) blocks bad
       // saves from landing on disk — so the user can keep editing toward
       // the fix without getting trapped. Re-flip only on AST parse fail
@@ -1466,7 +1466,7 @@ class TraceStore extends ChangeNotifier {
     _historyIndex = 0;
     if (_astRoot != null) _astHistory.add(_astRoot!.clone());
     configSaveError = null;
-    // Add to MRU when the AST parsed (even if bxp-fmt found errors —
+    // Add to MRU when the AST parsed (even if the bridge found errors —
     // user can still re-open later). Skip when the spawn itself crashed
     // so paths to nonexistent / unreadable files don't pollute the
     // quick-pick list. Fire-and-forget — persistence write is non-critical
@@ -1578,7 +1578,7 @@ class TraceStore extends ChangeNotifier {
 
   /// Discard all unsaved edits and snap the AST back to the last
   /// loaded/saved baseline. Cheaper than [loadConfig] because it
-  /// doesn't re-spawn bxp-fmt — just clones `_astBaseline` and resets
+  /// doesn't re-spawn the bridge — just clones `_astBaseline` and resets
   /// the undo history. Bound to Ctrl+T.
   void resetDraft() {
     if (_astBaseline == null) return;
@@ -1777,7 +1777,7 @@ class TraceStore extends ChangeNotifier {
       final innerKey = '\$dart_${(counters[key] = (counters[key] ?? 0) + 1)}';
       // The displayable string includes suggest text when present so
       // existing consumers (StatusBar, TooltipKey) need no special
-      // routing — same shape as bxp-fmt $err_<N> messages.
+      // routing — same shape as the bridge $err_<N> messages.
       final msg = dg.suggest == null ? dg.message : '${dg.message} — ${dg.suggest}';
       switch (dg.severity) {
         case DartSeverity.error:
@@ -2166,7 +2166,7 @@ class TraceStore extends ChangeNotifier {
   // on re-press.
   bool isValidating = false;
 
-  /// True while a saveConfig is in flight — write tmp, spawn bxp-fmt
+  /// True while a saveConfig is in flight — write tmp, spawn the bridge
   /// validation, backup, rename, reload. The toolbar SAVE button uses
   /// this to show a "SAVING…" label so the user gets feedback during
   /// the (possibly slow) round-trip.
@@ -2177,7 +2177,7 @@ class TraceStore extends ChangeNotifier {
     if (isSaving) return; // re-entrancy guard against double-click
     // Nothing to save: the toolbar/Ctrl+S gates on `isDirty`, but a
     // programmatic call with an empty op log would otherwise round-trip
-    // through tmp-write + bxp-fmt validation + backup + rename for
+    // through tmp-write + the bridge validation + backup + rename for
     // bytes identical to the on-disk file. Skip the whole dance.
     if (_activeOps.isEmpty) {
       devTrace('saveConfig.noop', {'path': configPath});
@@ -2219,7 +2219,7 @@ class TraceStore extends ChangeNotifier {
       // on disk stays intact.
       await tmpFile.writeAsString(text, flush: true);
 
-      // Pre-save validation: round-trip through bxp-fmt --config. If the
+      // Pre-save validation: round-trip through the bridge config validation. If the
       // emitter produced something the parser rejects, abort and surface
       // the diagnostic — better than silently corrupting the user's file.
       // On failure we also refresh the diagnostic maps from `parsed` so
@@ -2251,7 +2251,7 @@ class TraceStore extends ChangeNotifier {
               parsedForDiag: parsed);
           return;
         }
-        // bxp-fmt exits with annotated JSON (no top-level "error") even when
+        // the bridge returns annotated JSON (no top-level "error") even when
         // it found `$err_*` markers inside the tree — exit code 1 + stdout.
         // Without this scan, a syntactically broken save would still go
         // through and trap the user in readonly-on-reload mode.
@@ -2262,7 +2262,7 @@ class TraceStore extends ChangeNotifier {
           return;
         }
       } catch (_) {
-        // bxp-fmt printed something unparseable — treat as failure.
+        // the bridge printed something unparseable — treat as failure.
         await failPreSave('pre-save validation produced unreadable output');
         return;
       }
@@ -2296,7 +2296,7 @@ class TraceStore extends ChangeNotifier {
       _opLog.clear();
       notifyListeners();
 
-      // Re-run bxp-fmt so validation markers ($err_/$comm_) refresh against
+      // Re-run the bridge so validation markers ($err_/$comm_) refresh against
       // the new on-disk content. (Also captures fresh raw bytes and resets
       // the op log baseline.) `preserveTreeState: true` keeps the user's
       // expansion state and active expr selection — Save isn't a "fresh
@@ -2324,7 +2324,7 @@ class TraceStore extends ChangeNotifier {
   }
 
   /// Manual deep-validation pass triggered by the VALIDATE toolbar button
-  /// (or Ctrl+V). Runs `bxp-fmt --config <path> --check-fs=2`, refreshes
+  /// (or Ctrl+V). Runs `the bridge config validation <path> --check-fs=2`, refreshes
   /// the path-keyed `$err_*`/`$warn_*`/`$info_*` maps, and re-uses the
   /// adaptive `[fs.timeout]` flag so a slow mount only pays the deadline
   /// once per session. When the user has unsaved edits the current draft
@@ -2394,7 +2394,7 @@ class TraceStore extends ChangeNotifier {
         } catch (_) {}
       }
       // Refresh Dart-side diagnostics so the toolbar's combined view
-      // reflects native checks alongside the bxp-fmt result that the
+      // reflects native checks alongside the bridge result that the
       // VALIDATE button is primarily about. _revalidateDart()
       // already runs from edit hooks; this extra call covers the
       // case where the user clicks VALIDATE without any pending
@@ -2422,7 +2422,7 @@ class TraceStore extends ChangeNotifier {
 
   /// Build the validate toast summary string from the current diagnostic
   /// bucket sizes and schedule its auto-clear after [_validateToastMs].
-  /// Counts both bxp-fmt and Dart-side buckets so the summary reflects all
+  /// Counts both the bridge and Dart-side buckets so the summary reflects all
   /// active diagnostics, not just what the most recent VALIDATE run found.
   void _setValidateToast() {
     final errs = _validationErrors.length + _dartErrors.length;
@@ -2482,7 +2482,7 @@ class TraceStore extends ChangeNotifier {
 
   /// Bridge stream handle for the current btrace run. Every platform now
   /// streams bxp-cli through `bridge_run_streaming` (the Process.start path
-  /// was retired with the bxp-fmt fallback), so this is the only live handle
+  /// was retired with the bridge fallback), so this is the only live handle
   /// to the child. Set by the `onBridgeSpawn` callback; cleared by the run's
   /// `finally` block or after [cancelRun] dispatched the bridge_cancel.
   int? _runBridgeHandle;
@@ -2950,7 +2950,7 @@ class TraceStore extends ChangeNotifier {
   }
 
   /// Rich template metadata (data_dir / file_pattern_in / description)
-  /// pulled from `bxp-fmt --config <path> --list-templates` after each
+  /// pulled from `the bridge config validation <path> --list-templates` after each
   /// successful config load. Empty when the lookup hasn't run yet or the
   /// CLI call failed — callers fall back to [availableTemplates] for IDs.
   List<TemplateInfo> _templateInfos = const [];
@@ -2967,7 +2967,7 @@ class TraceStore extends ChangeNotifier {
     return _astAt(encodedPath.split('\x00')) != null;
   }
 
-  /// True if the last `bxp-fmt --config` run OR the live Dart-side
+  /// True if the last `the bridge config validation` run OR the live Dart-side
   /// validator (`_revalidateDart`) produced any `$err_*` / `$dart_<N>`
   /// diagnostic that still points at a live AST node. Used to gate
   /// run buttons and display the error trace in the status bar.
@@ -2988,7 +2988,7 @@ class TraceStore extends ChangeNotifier {
   ///
   /// Iteration order: `_validationErrors` is a `LinkedHashMap` keyed by
   /// path string in the order entries were inserted by
-  /// `_extractDiagnostics` (DFS over the annotated `bxp-fmt --config`
+  /// `_extractDiagnostics` (DFS over the annotated `the bridge config validation`
   /// output, top-down). Within each path, the inner map preserves
   /// `$err_<N>` insertion order (i.e. emission order in the annotated
   /// JSON). Callers may treat the first non-empty hit as "the visually
@@ -3011,7 +3011,7 @@ class TraceStore extends ChangeNotifier {
   }
 
   /// Combined diagnostic text from every error source the UI surfaces:
-  /// load-side configError, save-side configSaveError, **all** bxp-fmt
+  /// load-side configError, save-side configSaveError, **all** the bridge
   /// `$err_*` / `$warn_*` / `$info_*` traces (stacked with one
   /// per line, severity-prefixed), Dart-side `$dart_<N>` entries from
   /// `_revalidateDart`, plus the runtime stderr stream from a dry/full
@@ -3895,7 +3895,7 @@ class _BtraceIngestCtx {
 
   // Template-level state — refreshed every time a `file_start` arrives
   // with a previously-unseen template id. `fetchTemplate` is the only
-  // bxp-fmt subprocess this whole pipeline spawns, so caching here keeps
+  // the bridge call this whole pipeline makes, so caching here keeps
   // multi-file templates from re-spawning per file.
   String? currentTemplate;
   Map<String, String> inputSchema = const {};
@@ -3957,7 +3957,7 @@ class _BtraceIngestCtx {
           ? '${sourcePath.substring(0, sourcePath.length - 4)}.csvx'
           : '$sourcePath.csvx';
 
-  /// Lazy template-config fetch. `bxp-fmt --config X --fetch-template Y`
+  /// Lazy template-config fetch. `the bridge config validation X --fetch-template Y`
   /// is ~30 ms per spawn on Linux; one cached fetch per template id keeps
   /// the live stream from stuttering on multi-file templates.
   Future<void> ensureTemplate(String templateId) async {
@@ -4073,10 +4073,10 @@ class _BtraceFileRuntime {
   /// the csvx file is never read, so this works for Dry-run, fresh-DEV,
   /// and synthetic source files that never went through a Full run.
   final List<({String header, String variable})> outputSchema;
-  /// Pre-pass lookup blob ready for `bxp-fmt --expr-batch`'s `lookups`
+  /// Pre-pass lookup blob ready for `the bridge expr batch`'s `lookups`
   /// field. Keys use `\x00` separator: `"<block>\x00<key>\x00<field>"`.
   final Map<String, String> lookups;
-  /// Single-block pre_pass name passed to bxp-fmt so 2-arg
+  /// Single-block pre_pass name passed to the bridge so 2-arg
   /// `LOOKUP(key, field)` resolves. Null when the template has no
   /// pre_pass or has multiple distinct blocks (caller must use 3-arg form).
   final String? singlePrepassName;

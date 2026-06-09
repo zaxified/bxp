@@ -603,10 +603,10 @@ class _IntegrationListenerState extends State<_IntegrationListener> {
 }
 
 /// Routes the home tab between three views:
-///   * loading splash while [TraceStore._init] runs the bxp-fmt smoke test
-///   * full-screen [_FatalErrorView] when bxp-fmt is missing or `--docs`
-///     fails — every other interaction is blocked here on purpose, the GUI
-///     cannot function without the catalog.
+///   * loading splash while [TraceStore._init] loads the docs catalog
+///   * full-screen [_FatalErrorView] when the bridge library is missing or
+///     the docs catalog fails to load — every other interaction is blocked
+///     here on purpose, the GUI cannot function without the catalog.
 ///   * [MainView] otherwise, with `store.docs` guaranteed populated so
 ///     downstream widgets can drop their fallback constants.
 class _StartupGate extends StatelessWidget {
@@ -689,8 +689,8 @@ class _FatalErrorView extends StatelessWidget {
                   ),
                   const SizedBox(height: 16),
                   Text(
-                    'The GUI cannot function without bxp-fmt. Fix the issue '
-                    'above and relaunch the app.',
+                    'The GUI cannot function without the docs catalog. Fix the '
+                    'issue above and relaunch the app.',
                     style: TextStyle(color: t.textMuted, fontSize: 13),
                   ),
                 ],

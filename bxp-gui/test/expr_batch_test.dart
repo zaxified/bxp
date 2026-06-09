@@ -2,7 +2,7 @@
 // GUI drill-down re-eval (schema v3 dropped per-row detail frames from btrace).
 //
 // evalBatch runs in-process through the bxp-gui-bridge `bridge_inspect`
-// eval_batch op now (the bxp-fmt subprocess path was retired). This test
+// eval_batch op now (a subprocess path was retired). This test
 // injects the dev-tree bridge library and verifies the end-to-end Dart
 // contract: build a multi-expression request, marshal it through the FFI,
 // parse the JSON response, and assert per-result ok/error shape matches what

@@ -1,4 +1,4 @@
-/// Phase 5b: schema-aware UI advisor backed by `bxp-fmt --docs` config
+/// Phase 5b: schema-aware UI advisor backed by `the bridge docs catalog` config
 /// schema. Centralises the "what may the user do here" rules so each UI
 /// button (delete, dup, move, insert, edit) consults one helper instead
 /// of replicating doc-lookup logic.
@@ -26,7 +26,7 @@ class InsertKeyCandidate {
   final String? description;
   final List<String>? enumValues;
 
-  /// Phase 5f: pre-decoded scaffold value from `bxp-fmt --docs`
+  /// Phase 5f: pre-decoded scaffold value from `the bridge docs catalog`
   /// `insert_template`. Already a Dart Map / List / scalar (the Zig side
   /// preprocessed the JSON5 source). When non-null, this is the value
   /// inserted under this candidate's key — replaces type-based defaults.
@@ -48,7 +48,7 @@ class InsertKeyCandidate {
 /// Schema-aware UI advisor.
 ///
 /// Consumes `TraceStore.findSchemaDoc` and `TraceStore.docConfigSchema`
-/// (populated from `bxp-fmt --docs`) to answer structural questions about
+/// (populated from `the bridge docs catalog`) to answer structural questions about
 /// a given tree path without coupling individual UI widgets to the raw docs
 /// format. The policy throughout is **permissive by default**: if the path
 /// is uncovered by the schema (e.g. user-authored broker-specific keys),

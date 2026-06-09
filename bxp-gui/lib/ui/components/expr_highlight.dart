@@ -15,7 +15,7 @@ import '../theme/bxp_text.dart';
 /// highlighter is run from multiple builds simultaneously in test
 /// fixtures, and shared mutable state caused subtle keyword-class bleed
 /// between stores. Never empty in normal operation: the startup gate
-/// refuses to launch MainView until `bxp-fmt --docs` populates
+/// refuses to launch MainView until `the bridge docs catalog` populates
 /// `TraceStore.docFunctions` and `docKeywords`.
 class _LiveSets {
   final Set<String> functions;
@@ -249,7 +249,7 @@ class ExprHighlight extends StatelessWidget {
     final headers = file?.headers ?? const <String>[];
     final docFunctions = store.docFunctions;
     // Lazily kick off the per-call expression trace. The first hover-enabled
-    // render for this (row, expr) pair queues a `bxp-fmt --expr-trace` spawn;
+    // render for this (row, expr) pair queues a `the bridge expr trace` spawn;
     // when the result lands the store fires notifyListeners and we rebuild
     // with populated `calls` — so the function-token tooltip can switch from
     // signature-only to signature + evaluated value.
@@ -375,7 +375,7 @@ String? _tooltipFor(
       final parts = <String>[];
       parts.add(sig ?? s.text);
       if (call != null) {
-        // LOOKUP is special: `bxp-fmt --expr-trace` evaluates without the
+        // LOOKUP is special: `the bridge expr trace` evaluates without the
         // pre_pass table (only bxp-cli's dry-run has it), so the engine
         // returns "" for every LOOKUP regardless of whether a matching
         // entry exists during the actual conversion. Surfacing that

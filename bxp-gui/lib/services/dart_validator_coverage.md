@@ -1,16 +1,16 @@
 # DartValidator coverage
 
 What `lib/services/dart_validator.dart` checks natively per edit, what
-still routes through `bxp-fmt` as a subprocess, and what is reachable
-only at conversion runtime.
+still routes through the in-process bridge (`bridge_inspect` /
+`bridge_eval_*`), and what is reachable only at conversion runtime.
 
-The validator is a thin interpreter of the `bxp-fmt --docs` catalog
+The validator is a thin interpreter of the bridge docs catalog
 (FnDoc + FieldDoc with `args` / `min_args` / `max_args` / `validator` /
 `autocomplete` populated by `bxp-core`'s Phase 1 metadata). Every
 specialised check is data-driven so the Zig and Dart sides cannot
 drift.
 
-## Native Dart (no `bxp-fmt` subprocess)
+## Native Dart (no bridge round-trip)
 
 Tree-level — driven by `FieldDoc.validator`:
 
@@ -86,18 +86,19 @@ UX:
 
 - ✅ Token-level wavy red underline on the offending span in the
   expression editor (driven by `exprValidationOffset` + length set by
-  the Dart-side validator first, bxp-fmt subprocess as fallback).
+  the Dart-side validator first, the bridge validator as fallback).
 
-## bxp-fmt subprocess fallback
+## Bridge validator fallback
 
-Still required because the Dart walker doesn't cover them:
+Still routed to the in-process bridge because the Dart walker doesn't
+cover them:
 
 - ⚠️ Expression syntax / precedence errors (UnexpectedToken,
   ExpectedRParen, ExpectedComma, …). The Dart token walker is
   sufficient for FnArgDoc-driven static checks but does not parse
   the full expression grammar.
-- ⚠️ Filesystem checks (`--check-fs=N`). Requires syscalls; runs only
-  on explicit VALIDATE button click and on save.
+- ⚠️ Filesystem checks (`check-fs` deadline). Requires syscalls; runs
+  only on explicit VALIDATE button click and on save.
 - ⚠️ Cross-template logic beyond what the AST already exposes (e.g.
   template-level `validate` invariants in `BrokerConfig.validate`).
 
