@@ -151,14 +151,19 @@ class _Body extends StatelessWidget {
 
     final cliPath = BxpProcessClient.findBin('bxp-cli');
     final cliEnv = Platform.environment['BXP_CLI_PATH'];
+    // The MCP server ships beside bxp-cli in the desktop bundle (so an agent
+    // can register it / its bxp_simulate tool can spawn bxp-cli). The GUI
+    // never runs it, but surface its resolved path here so the user can find
+    // the binary to wire into an MCP client.
+    final mcpPath = BxpProcessClient.findBin('bxp-mcp');
 
     // Live trace counter — ticks ~10 Hz during a stream. Reading once at
     // build time would freeze; ValueListenableBuilder keeps just the
     // "trace lines" cell reactive without rebuilding the whole panel.
     return ValueListenableBuilder<int>(
       valueListenable: store.traceLinesCounter,
-      builder: (context, traceLines, _) =>
-          _buildTable(context, store, templates, cliPath, cliEnv, traceLines),
+      builder: (context, traceLines, _) => _buildTable(
+          context, store, templates, cliPath, cliEnv, mcpPath, traceLines),
     );
   }
 
@@ -168,6 +173,7 @@ class _Body extends StatelessWidget {
     List<String> templates,
     String? cliPath,
     String? cliEnv,
+    String? mcpPath,
     int traceLines,
   ) {
     // Whole-panel sections list, each a (title, rows) group. Rendered
@@ -179,11 +185,13 @@ class _Body extends StatelessWidget {
       ('Versions', [
         ('bxp-gui', store.bxpGuiVersion ?? '(unknown)'),
         ('bxp-cli', store.bxpCliVersion ?? '(unknown)'),
+        ('bxp-mcp', store.bxpMcpVersion ?? '(unknown)'),
       ]),
       ('Binaries', [
         ('bxp-cli', cliPath ?? '(not found)'),
         if (cliEnv != null && cliEnv.isNotEmpty)
           (r'$BXP_CLI_PATH', cliEnv),
+        ('bxp-mcp', mcpPath ?? '(not found)'),
       ]),
       ('Bridge', [
         // The bridge is the single backend on every platform now — every

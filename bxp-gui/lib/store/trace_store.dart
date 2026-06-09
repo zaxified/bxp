@@ -1054,6 +1054,11 @@ class TraceStore extends ChangeNotifier {
   /// the SettingsInspector renders "(unknown)" in that case.
   String? bxpGuiVersion;
   String? bxpCliVersion;
+  // bxp-mcp ships beside bxp-cli in the desktop bundle and is bumped in
+  // lockstep at release time, so this normally matches bxpCliVersion; probed
+  // independently (via `bxp-mcp --version`) so a mismatch is visible rather
+  // than assumed.
+  String? bxpMcpVersion;
 
   final PrefsService _prefs = PrefsService();
 
@@ -1150,9 +1155,11 @@ class TraceStore extends ChangeNotifier {
     final results = await Future.wait<String?>([
       guiVer(),
       BxpProcessClient.getVersion('bxp-cli'),
+      BxpProcessClient.getVersion('bxp-mcp'),
     ]);
     bxpGuiVersion = results[0];
     bxpCliVersion = results[1];
+    bxpMcpVersion = results[2];
 
     _initialized = true;
     notifyListeners();

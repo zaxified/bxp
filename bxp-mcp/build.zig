@@ -1,10 +1,16 @@
 const std = @import("std");
+const zon = @import("build.zig.zon");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
     const core_dep = b.dependency("bxp_core", .{ .target = target, .optimize = optimize });
+
+    // Mirror bxp-cli: surface the manifest version to `--version` via a
+    // generated build_options module (kept in lockstep at release time).
+    const options = b.addOptions();
+    options.addOption([]const u8, "version", zon.version);
 
     const exe = b.addExecutable(.{
         .name = "bxp-mcp",
@@ -13,8 +19,9 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "inspect", .module = core_dep.module("inspect") },
-                .{ .name = "btrace", .module = core_dep.module("btrace") },
+                .{ .name = "inspect",       .module = core_dep.module("inspect") },
+                .{ .name = "btrace",        .module = core_dep.module("btrace") },
+                .{ .name = "build_options", .module = options.createModule() },
             },
         }),
     });
@@ -34,8 +41,9 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "inspect", .module = core_dep.module("inspect") },
-                .{ .name = "btrace", .module = core_dep.module("btrace") },
+                .{ .name = "inspect",       .module = core_dep.module("inspect") },
+                .{ .name = "btrace",        .module = core_dep.module("btrace") },
+                .{ .name = "build_options", .module = options.createModule() },
             },
         }),
     });

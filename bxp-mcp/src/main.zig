@@ -11,6 +11,7 @@
 
 const std = @import("std");
 const server = @import("server.zig");
+const build_options = @import("build_options");
 
 pub fn main() void {
     // Base arena over page_allocator: one mmap up front, bump allocation after.
@@ -25,6 +26,16 @@ pub fn main() void {
     };
     _ = args.skip();
     if (args.next()) |arg| {
+        if (std.mem.eql(u8, arg, "--version")) {
+            // Same "<name> <version>\n" shape bxp-cli prints, so the GUI's
+            // getVersion() (bridge_run <bin> --version) parses it identically.
+            // Without this, `--version` would fall through to server.run() and
+            // block reading stdin as an MCP server until the caller times out.
+            var buf: [64]u8 = undefined;
+            const line = std.fmt.bufPrint(&buf, "bxp-mcp {s}\n", .{build_options.version}) catch "bxp-mcp\n";
+            _ = std.fs.File.stdout().write(line) catch 0;
+            return;
+        }
         if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
             const msg =
                 \\bxp-mcp — MCP server (JSON-RPC 2.0 over stdio)

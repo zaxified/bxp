@@ -31,8 +31,9 @@ import 'diagnostic_log.dart';
 /// so the GUI needs no validator binary. A missing bridge library is a fatal
 /// startup error — same as Windows always had.
 class BxpProcessClient {
-  /// Resolve a sibling binary (only `bxp-cli` today). Search order:
-  ///   1. Env override: `$BXP_CLI_PATH`
+  /// Resolve a sibling binary (`bxp-cli` for runs, `bxp-mcp` for the
+  /// inspector's path display). Search order:
+  ///   1. Env override: `$BXP_CLI_PATH` (`bxp-cli` only)
   ///      — when SET (non-empty), this wins absolutely. If the path doesn't
   ///        exist we return null instead of falling through to the bundle
   ///        candidate: the user explicitly pinned this path and silently
