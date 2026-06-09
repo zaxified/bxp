@@ -1,8 +1,8 @@
 // bxp-mcp — tool handlers (in-process, no spawn)
 //
 // Each tool calls the shared bxp-core `inspect` module directly — the same
-// stateless action core bxp-fmt's CLI wraps. No subprocess: a tool call is a
-// function call, so latency is microseconds, not a process spawn.
+// stateless core the GUI's bxp-gui-bridge also calls. No subprocess: a tool
+// call is a function call, so latency is microseconds, not a process spawn.
 //
 // Handlers take the already-parsed `arguments` object (std.json.Value) and
 // write the tool's textual result into `out`.
@@ -14,6 +14,7 @@ const Progress = @import("progress.zig").Progress;
 
 pub const Tool = enum {
     bxp_validate,
+    bxp_validate_expr,
     bxp_eval,
     bxp_eval_batch,
     bxp_eval_trace,
@@ -27,7 +28,8 @@ pub const Tool = enum {
 pub const tools_list =
     \\{"tools":[
     \\{"name":"bxp_validate","description":"Validate a bxp-cli config (JSON5). Returns annotated JSON with $err_/$warn/$info diagnostics inserted before each offending key.","inputSchema":{"type":"object","properties":{"config":{"type":"string","description":"The full bxp-cli config text (JSON5)."}},"required":["config"]}},
-    \\{"name":"bxp_eval","description":"Evaluate one bxp expression against an optional row context. Returns {ok,value} or {ok:false,error,detail,off,len}.","inputSchema":{"type":"object","properties":{"expr":{"type":"string","description":"The expression text, e.g. UPPER('hi') or [Price]*[Qty]."},"headers":{"type":"string","description":"Optional JSON array of column header names, e.g. [\"Price\",\"Qty\"]."},"fields":{"type":"string","description":"Optional JSON array of row field values (parallel to headers)."}},"required":["expr"]}},
+    \\{"name":"bxp_validate_expr","description":"Validate one bxp expression the way the GUI config editor does at authoring time: syntax, semantics, AND static lint findings the lenient runtime silently swallows (e.g. a literal SPLIT_PART index of 0 — 1-based, so 0 always yields \"\" — or a DATE_CONVERT format with an unbracketed non-vocab letter). Returns {ok:true} when the expression is sound, or {ok:false,error,detail,off,len} for the first finding (off/len pin the offending token span). Use this when AUTHORING a config to catch mistakes before a run; use bxp_eval to see what an expression COMPUTES against a row. Mirrors the GUI's bridge_eval_expr.","inputSchema":{"type":"object","properties":{"expr":{"type":"string","description":"The expression text, e.g. SPLIT_PART([Sym], '/', 1)."}},"required":["expr"]}},
+    \\{"name":"bxp_eval","description":"Evaluate one bxp expression against an optional row context. Returns {ok,value} or {ok:false,error,detail,off,len}. This is the lenient runtime path (what a real bxp-cli run computes); for authoring-time validation that flags literal mistakes, use bxp_validate_expr.","inputSchema":{"type":"object","properties":{"expr":{"type":"string","description":"The expression text, e.g. UPPER('hi') or [Price]*[Qty]."},"headers":{"type":"string","description":"Optional JSON array of column header names, e.g. [\"Price\",\"Qty\"]."},"fields":{"type":"string","description":"Optional JSON array of row field values (parallel to headers)."}},"required":["expr"]}},
     \\{"name":"bxp_eval_batch","description":"Evaluate many bxp expressions against one row in a single call. Returns {results:[{ok,value}|{ok:false,error,detail,off,len}, ...]} aligned to the input order. A well-formed request always succeeds; per-expr failures are carried by each result's ok flag.","inputSchema":{"type":"object","properties":{"headers":{"type":"array","items":{"type":"string"},"description":"Column header names."},"fields":{"type":"array","items":{"type":"string"},"description":"Row field values (parallel to headers; ragged rows tolerated)."},"exprs":{"type":"array","items":{"type":"string"},"description":"Expressions to evaluate against the row."},"ticker_map":{"type":"object","description":"Optional symbol-to-ticker overrides consulted by TICKER()."},"lookups":{"type":"object","description":"Optional flat pre_pass lookup blob for LOOKUP() (NUL-separated name/key/field keys)."},"single_prepass_name":{"type":"string","description":"Optional implicit pre_pass name enabling 2-arg LOOKUP(key, field)."}},"required":["headers","fields","exprs"]}},
     \\{"name":"bxp_eval_trace","description":"Evaluate one bxp expression with a per-call execution trace. Returns NDJSON (one JSON object per line): one {\"fn\",\"src_start\",\"src_end\",\"value\"} line per function call as the engine evaluates inside-out, then a terminal line — {\"t\":\"final\",\"value\":\"...\"} on success or {\"t\":\"error\",\"error\",\"detail\",\"off\",\"len\"} on failure. Use to debug HOW a complex expression computes its result, beyond bxp_eval's final value.","inputSchema":{"type":"object","properties":{"expr":{"type":"string","description":"The expression text."},"headers":{"type":"string","description":"Optional JSON array of column header names, e.g. [\"Price\",\"Qty\"]."},"fields":{"type":"string","description":"Optional JSON array of row field values (parallel to headers)."}},"required":["expr"]}},
     \\{"name":"bxp_docs","description":"Return the full bxp language/schema documentation as JSON (functions, keywords, operators, tokens, config_schema).","inputSchema":{"type":"object","properties":{},"required":[]}},
@@ -49,6 +51,7 @@ pub fn allowsStructured(tool: Tool) bool {
 
 pub fn parse(name: []const u8) ?Tool {
     if (std.mem.eql(u8, name, "bxp_validate")) return .bxp_validate;
+    if (std.mem.eql(u8, name, "bxp_validate_expr")) return .bxp_validate_expr;
     if (std.mem.eql(u8, name, "bxp_eval")) return .bxp_eval;
     if (std.mem.eql(u8, name, "bxp_eval_batch")) return .bxp_eval_batch;
     if (std.mem.eql(u8, name, "bxp_eval_trace")) return .bxp_eval_trace;
@@ -71,6 +74,7 @@ pub fn parse(name: []const u8) ?Tool {
 pub fn dispatch(alloc: std.mem.Allocator, tool: Tool, args: std.json.Value, prog: ?Progress, out: *std.ArrayList(u8)) bool {
     return switch (tool) {
         .bxp_validate => validate(alloc, args, out),
+        .bxp_validate_expr => validateExpr(alloc, args, out),
         .bxp_eval => eval(alloc, args, out),
         .bxp_eval_batch => evalBatch(alloc, args, out),
         .bxp_eval_trace => evalTrace(alloc, args, out),
@@ -90,6 +94,17 @@ fn validate(alloc: std.mem.Allocator, args: std.json.Value, out: *std.ArrayList(
     const result = inspect.annotateRaw(alloc, config, "<config>", 0) catch |err|
         return appendErr(alloc, out, @errorName(err));
     out.appendSlice(alloc, result.json) catch {};
+    return false;
+}
+
+fn validateExpr(alloc: std.mem.Allocator, args: std.json.Value, out: *std.ArrayList(u8)) bool {
+    const expr = strField(args, "expr") orelse return appendErr(alloc, out, "missing 'expr'");
+    // Authoring-time verdict (runtime eval + static FnArgDoc lint), serialized as
+    // {ok:true} / {ok:false,error,…} by the shared core. A flagged expression is a
+    // domain result the agent should read, not a tool failure — isError stays false.
+    const result = inspect.validateExprJson(alloc, expr) catch |err|
+        return appendErr(alloc, out, @errorName(err));
+    out.appendSlice(alloc, result) catch {};
     return false;
 }
 
