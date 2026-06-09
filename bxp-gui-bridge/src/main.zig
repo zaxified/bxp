@@ -30,6 +30,61 @@ const inspect = @import("inspect");
 /// can surface "output was clipped" instead of failing the whole call.
 const max_output_bytes: usize = 64 * 1024 * 1024;
 
+/// Ensure SIGCHLD is reapable before we spawn children we wait on.
+///
+/// When the host process inherits `SIGCHLD = SIG_IGN` (some shells and CI
+/// harnesses ignore it), the kernel auto-reaps exited children, so a later
+/// `waitpid` returns ECHILD — which `std.process.Child.wait` treats as
+/// `unreachable` and panics (observed as a `bridge_run` crash when bxp-gui
+/// is launched from such an environment). We flip ONLY `SIG_IGN` → `SIG_DFL`:
+/// a real handler the host (e.g. the Dart VM) may have installed is left
+/// untouched, since a handler without `SA_NOCLDWAIT` still leaves children
+/// reapable by `waitpid`. No-op on Windows. Run once via [child_reaping_once].
+fn restoreChildReaping() void {
+    if (builtin.os.tag != .windows) {
+        const posix = std.posix;
+        var current: posix.Sigaction = undefined;
+        posix.sigaction(posix.SIG.CHLD, null, &current);
+        if (current.handler.handler == posix.SIG.IGN) {
+            const act: posix.Sigaction = .{
+                .handler = .{ .handler = posix.SIG.DFL },
+                .mask = posix.sigemptyset(),
+                .flags = 0,
+            };
+            posix.sigaction(posix.SIG.CHLD, &act, null);
+        }
+    }
+}
+
+var child_reaping_once = std.once(restoreChildReaping);
+
+test "restoreChildReaping flips SIG_IGN to SIG_DFL but leaves others alone" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    const posix = std.posix;
+    // Save + restore the process-global disposition around the test.
+    var saved: posix.Sigaction = undefined;
+    posix.sigaction(posix.SIG.CHLD, null, &saved);
+    defer posix.sigaction(posix.SIG.CHLD, &saved, null);
+
+    // Inherited SIG_IGN is the crash trigger — restoreChildReaping must
+    // flip it back to SIG_DFL so child.wait()'s waitpid won't see ECHILD.
+    const ign: posix.Sigaction = .{
+        .handler = .{ .handler = posix.SIG.IGN },
+        .mask = posix.sigemptyset(),
+        .flags = 0,
+    };
+    posix.sigaction(posix.SIG.CHLD, &ign, null);
+    restoreChildReaping();
+    var after: posix.Sigaction = undefined;
+    posix.sigaction(posix.SIG.CHLD, null, &after);
+    try std.testing.expect(after.handler.handler == posix.SIG.DFL);
+
+    // A non-IGN disposition must be left untouched (idempotent, no clobber).
+    restoreChildReaping();
+    posix.sigaction(posix.SIG.CHLD, null, &after);
+    try std.testing.expect(after.handler.handler == posix.SIG.DFL);
+}
+
 /// Request shape: which executable to run with which arguments.
 /// Caller (Dart) is responsible for resolving the absolute path to
 /// bxp-cli.exe; we don't probe PATH.
@@ -142,6 +197,7 @@ export fn bridge_run(
     // CREATE_NO_WINDOW flag in CreateProcessW.
     child.create_no_window = true;
 
+    child_reaping_once.call();
     child.spawn() catch |err| {
         return writeErr(out_buf, "spawn failed: {s}", .{@errorName(err)});
     };
@@ -655,6 +711,7 @@ export fn bridge_run_streaming(
         while (i < default_queue_permits) : (i += 1) ctx.queue_sema.post();
     };
 
+    child_reaping_once.call();
     ctx.child.spawn() catch return -1;
     // Single combined rollback for child + reader threads: kill the
     // child FIRST (so any spawned reader threads' read() calls return
