@@ -12,6 +12,11 @@ releases/
 # codedb MCP index snapshot (local code-intelligence cache)
 codedb.snapshot
 
+# Zig 0.16 project-local package dir: 0.16 still uses the global
+# ~/.cache/zig, but additionally materializes resolved deps into ./zig-pkg/.
+# Disposable (re-extracted on build); 0.15.2 never creates it.
+zig-pkg/
+
 # OS artifacts
 .DS_Store
 Thumbs.db
