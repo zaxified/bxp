@@ -6,31 +6,33 @@ For monorepo-level context see [`../CLAUDE.md`](../CLAUDE.md).
 ## Purpose
 
 **bxp-gui-bridge** — Zig shared library loaded at runtime by `bxp-gui`
-via `dart:ffi` (`DynamicLibrary.open`). Two responsibilities:
+via `dart:ffi` (`DynamicLibrary.open`). Since the v0.3.0 proxy flip
+(2026-06-09) it is the GUI's **single backend on every platform** — there
+is no `bxp-fmt` spawn and no `Process.start` path. Three responsibilities,
+all cross-platform:
 
-1. **Subprocess proxy (Windows only)** — wraps every `bxp-cli` / `bxp-fmt`
-   spawn the GUI needs. Dart's `Process.start` on Windows hits a
-   deterministic ~8 KB cutoff when reading subprocess stdout
-   (dart-lang/sdk#1727 + #51273), which kills `bxp-fmt --docs` (~30 KB)
-   and `bxp-cli --trace` (megabytes). The bridge reads pipes from native
-   code, sidestepping the dart:io C++ pipe path entirely. On Linux/macOS
-   this role is dormant — `BxpProcessClient` calls `Process.start` directly.
+1. **Subprocess proxy (all platforms)** — `bridge_run` / `bridge_run_streaming`
+   wrap the `bxp-cli` spawns the GUI needs (dry-run / full-run `--trace=bin`,
+   `--version`). Dart's `Process.start` on Windows hits a deterministic ~8 KB
+   cutoff when reading subprocess stdout (dart-lang/sdk#1727 + #51273), which
+   kills `bxp-cli --trace` (megabytes); the bridge reads pipes from native
+   code, sidestepping the dart:io C++ pipe path entirely. Windows was the
+   original mandatory case; the flip generalised it so Linux/macOS no longer
+   keep a separate `Process.start` route.
 2. **In-proc expression evaluator (all platforms)** — `bridge_eval_expr` /
    `bridge_eval_expr_trace` call the shared `bxp-core/inspect` core
    (`validateExpr` / `evalTrace` — the same logic behind `bxp-fmt --expr` /
    `--expr-trace` and the MCP `bxp_eval`/`bxp_eval_trace` tools) directly in
-   the GUI process, so the expression playground and editor don't pay the
-   ~50 ms `bxp-fmt --expr` spawn cost per keystroke. The bridge only marshals
-   to/from its fixed C-ABI out buffer; the eval/trace logic is no longer
-   hand-rolled here. This path is cross-platform (Linux/macOS `.so`/`.dylib`
-   ship and are loaded for eval even though the subprocess proxy is unused).
-3. **In-proc inspect ops (all platforms)** — `bridge_inspect` extends the same
-   idea to the rest of bxp-fmt's stateless surface (`docs` / `config` /
-   `list_templates` / `fetch_template` / `eval_batch`), so the GUI prefers an
-   in-process `bxp-core/inspect` call over spawning `bxp-fmt` for those too
-   (subprocess fallback kept while it beds in). This is the step that lets
-   bxp-fmt be retired from the GUI; on Windows it also sidesteps the
-   `--docs`/`--config` pipe-truncation the proxy existed to work around.
+   the GUI process, so the expression playground and editor don't pay a
+   ~50 ms spawn cost per keystroke. The bridge only marshals to/from its fixed
+   C-ABI out buffer; the eval/trace logic is no longer hand-rolled here.
+3. **In-proc inspect ops (all platforms)** — `bridge_inspect` covers the rest
+   of bxp-fmt's stateless surface (`docs` / `config` / `list_templates` /
+   `fetch_template` / `eval_batch`), so the GUI runs an in-process
+   `bxp-core/inspect` call instead of spawning `bxp-fmt`. With (2)+(3) the GUI
+   no longer needs `bxp-fmt` at all — the bridge links `bxp-core/inspect`
+   directly. There is no subprocess fallback: a missing library is a fatal
+   startup on every platform.
 
 ## Source layout
 
@@ -114,17 +116,20 @@ verify the corpus, then drop the rewrite.
 
 ## Platform notes
 
-- **Windows** — single transport path. DLL probe failure at GUI startup
-  is **fatal**; there is no `Process.start` fallback. `findBridgeLibrary()`
+- **All platforms** — single transport path since the v0.3.0 proxy flip
+  (2026-06-09). Library probe failure at GUI startup is **fatal**; there is
+  no `Process.start` and no `bxp-fmt` fallback anywhere. `findBridgeLibrary()`
   in `bxp-gui/lib/services/bridge_client.dart` walks sibling → bundle →
-  dev-tree slots; the synthetic startup error surfaces through the
-  normal startup gate.
-- **Linux/macOS** — subprocess proxy unused; only `bridge_eval_expr*` is
-  called. The Dart side falls back gracefully to `bxp-fmt --expr` if the
-  bridge can't be loaded at all (acceptable on these hosts because there
-  is no pipe-truncation bug to mask).
-- **Cross-platform consolidation** (subprocess proxy on Linux/macOS too)
-  is on the v0.3.0 roadmap; the in-proc eval path is already cross-platform.
+  dev-tree slots (`zig-out/lib/*.{so,dylib}` on POSIX, `zig-out/bin/*.dll` on
+  Windows); the synthetic startup error surfaces through the normal startup
+  gate. Both the subprocess proxy (`bridge_run` / `bridge_run_streaming` for
+  `bxp-cli`) and the in-proc families (`bridge_eval_expr*` / `bridge_inspect`)
+  are live on every host.
+- **Next session (tracked):** the Windows `bridge_inspect` smoke leg is now
+  load-bearing — verify it on a Win runner (Linux is live-verified, and the
+  same DLL is already mandatory there for the proxy + eval families). Then
+  delete `bxp-fmt` (still used by the console archive's agent self-test and
+  `scripts/test.sh` as a parity oracle).
 
 ## Coding conventions
 

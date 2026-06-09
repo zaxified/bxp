@@ -29,7 +29,7 @@ bxp-gui/
 │   │   ├── bridge_client.dart                # Dart FFI shim for bxp-gui-bridge (DLL on Win,
 │   │   │                                     # .so/.dylib on Linux/macOS for bridge_eval_expr)
 │   │   ├── btrace.dart                       # Dart-side BXTB binary-trace parser (mirrors btrace.zig)
-│   │   ├── bxp_process_client.dart           # Subprocess wrapper — bridge on Windows, Process.start elsewhere
+│   │   ├── bxp_process_client.dart           # Bridge-backed client — single backend all platforms (no Process.start)
 │   │   ├── csv_row_fetcher.dart              # Random-access source/output row fetch by byte offset
 │   │   │                                     # (drill-down reconstructs dropped per-row trace frames)
 │   │   ├── dart_validator.dart               # Dart-side per-edit expression validator (DartValidator)
@@ -120,48 +120,50 @@ Three layers, top-down:
 ## Subprocess wiring
 
 `BxpProcessClient` ([lib/services/bxp_process_client.dart](lib/services/bxp_process_client.dart)) is the
-single entry point for binary calls. Two transport paths exist; the
-choice is hard-coded by host OS:
+single entry point for binary calls. The `bxp-gui-bridge` shared library
+(a Zig library, see [`../bxp-gui-bridge/`](../bxp-gui-bridge/)) is the
+**single backend on every platform** — there is no `bxp-fmt` subprocess
+and no `Process.start` path (both were retired in the v0.3.0 proxy flip,
+2026-06-09). One library, two call shapes:
 
-- **Windows** — every call goes through `bxp-gui-bridge.dll` (a Zig
-  shared library, see [`../bxp-gui-bridge/`](../bxp-gui-bridge/)).
-  The DLL is mandatory; probe failure at startup is fatal (synthetic
-  error surfaced through the normal startup gate). The bridge sidesteps
-  dart:io's Win pipe truncation (dart-lang/sdk#1727) on `--docs` /
-  `--config` / `--trace`.
-- **Linux / macOS** — the bridge's **subprocess proxy** is dormant
-  (`bxp-cli --trace` dry-runs use `Process.start` directly), but the
-  bridge's **in-process** paths are live and preferred: `bridge_eval_expr`/
-  `_trace` for per-keystroke expr validation, and `bridge_inspect` for the
-  stateless `bxp-fmt` ops (`getDocs` / `loadConfig` / `listTemplates` /
-  `fetchTemplate` / `evalBatch`) — each falls back to a `bxp-fmt` spawn only
-  when the bridge can't be loaded. (Subprocess-proxy consolidation across
-  platforms is still on the v0.3.0 roadmap.)
+- **Stateless ops, in-process** — `getDocs` / `loadConfig` /
+  `listTemplates` / `fetchTemplate` / `evalBatch` (`bridge_inspect`) and
+  per-keystroke `validateExpr` / `traceExpr` (`bridge_eval_expr` /
+  `_trace`) run synchronously on the main isolate (sub-ms, served from
+  bxp-core/inspect). No spawn.
+- **`bxp-cli` runs, proxied** — dry-run / full-run stream through
+  `bridge_run_streaming`; `--version` through `bridge_run`. These run in
+  an `Isolate.run` worker so the blocking pipe drain doesn't stall the UI;
+  the bridge drains the pipe in native Zig code (sidestepping dart:io's
+  Windows pipe truncation, dart-lang/sdk#1727).
 
-Set **`BXP_FORCE_BRIDGE=1`** to disable the `bxp-fmt`-spawn fallback for all
-in-process inspect/eval ops — a broken or unloadable bridge then surfaces as a
-visible error (fatal docs gate / config `{"error":...}`) instead of silently
-spawning `bxp-fmt`. Use it to confirm the bridge genuinely does the work; the
-analogue for the subprocess proxy is `BXP_FORCE_BRIDGE_PROXY`.
+The bridge library is **mandatory**: probe failure at startup is fatal
+(the docs gate surfaces it) on every platform — a missing library means a
+broken install. The startup gate checks `ensureBridgeLoaded()` + a `docs`
+parse, not whether `bxp-fmt` is on disk. `bxp-cli` is still a real binary
+the bridge spawns; only `bxp-fmt` left the GUI's runtime dependency set
+(the bridge links bxp-core/inspect directly, so it needs neither binary).
 
-Binary location for `bxp-cli` / `bxp-fmt` is resolved in this order on
-both transports:
+`bxp-cli` location is resolved in this order:
 
-1. `BXP_CLI_PATH` / `BXP_FMT_PATH` env vars (developer override)
-2. Sibling binaries inside the Flutter bundle (`bundle/data/flutter_assets/`
+1. `BXP_CLI_PATH` env var (developer override)
+2. Sibling binary inside the Flutter bundle (`bundle/data/flutter_assets/`
    / Linux `bundle/lib/`)
 3. Workspace-root fallback when running `flutter run` from a dev tree
-   (`../bxp-cli/zig-out/bin/bxp-cli`, etc.)
+   (`../bxp-cli/zig-out/bin/bxp-cli`)
 
-The bridge DLL itself (Windows) is resolved by `findBridgeLibrary()` in
-[lib/services/bridge_client.dart](lib/services/bridge_client.dart)
-using the same sibling-then-dev-tree walk.
+The bridge library itself is resolved by `findBridgeLibrary()` in
+[lib/services/bridge_client.dart](lib/services/bridge_client.dart) using
+the same sibling-then-dev-tree walk (`zig-out/lib/libbxp-gui-bridge.{so,dylib}`
+on POSIX, `zig-out/bin/bxp-gui-bridge.dll` on Windows). Tests inject the
+dev-tree path via `setBridgeLibPathForTest`.
 
-**Linux dev tree gotcha:** the Linux CMake config copies `bxp-fmt` into
-the bundle at build time. After changing bxp-fmt, run a clean Flutter
-build (or maintain the symlink under `linux/`); the production release
-script (`scripts/release-02-desktop.sh`) overwrites both companions with
-release builds before packaging.
+**Linux dev tree gotcha:** the Linux CMake config copies the bridge
+library (and `bxp-cli`) into the bundle at build time. After rebuilding
+the bridge, run a clean Flutter build (or maintain the symlink under
+`linux/`); the production release script
+(`scripts/release-02-desktop.sh`) overwrites the companions with release
+builds before packaging.
 
 ## User preferences
 
@@ -202,21 +204,29 @@ dispatched to a platform-native install:
 
 `kDebugMode` skips the auto-check during dev runs.
 
-The client maps each subcommand to a method:
+The client maps each operation to a method. The stateless ones are
+`bridge_inspect` / `bridge_eval_*` calls (the `bxp-fmt` subcommand each one
+replaced is noted for reference — that JSON shape is the contract); the
+`bxp-cli` ones are `bridge_run` / `bridge_run_streaming` proxies:
 
-- `validateConfig(path)` → `bxp-fmt --config <path> [--check-fs=N]` → annotated
-  JSON with `$comm_*`/`$err_*` siblings. The GUI passes `--check-fs=2` on every
-  load/save to enable the filesystem-existence diagnostics.
-- `getDocs()` → `bxp-fmt --docs` → cached at startup, drives FnDoc
-  tooltips, the schema gate, and `_AddChildDialog` insert scaffolds.
-- `listTemplates(path)` → `bxp-fmt --config ... --list-templates`.
-- `validateExpr(text)` → `bxp-fmt --expr ...`.
-- `traceExpr(text, headers, fields)` → `bxp-fmt --expr-trace` (NDJSON
-  stream).
-- `runDryRun(path, template)` → `bxp-cli --trace ...` (binary BXTB frame
-  stream of per-row trace events).
-- `getVersion(name)` → `bxp-cli --version` / `bxp-fmt --version` (both go
-  to stdout, not stderr).
+- `loadConfig(path)` → `bridge_inspect {op:config}` (was `bxp-fmt --config
+  <path> [--check-fs=N]`) → annotated JSON with `$comm_*`/`$err_*` siblings.
+  The GUI passes `--check-fs=2` on every load/save for filesystem-existence
+  diagnostics.
+- `getDocs()` → `bridge_inspect {op:docs}` (was `bxp-fmt --docs`) → cached at
+  startup, drives FnDoc tooltips, the schema gate, and `_AddChildDialog`
+  insert scaffolds.
+- `listTemplates(path)` / `fetchTemplate(path,id)` → `bridge_inspect
+  {op:list_templates|fetch_template}`.
+- `evalBatch(...)` → `bridge_inspect {op:eval_batch}` (drives drill-down
+  re-eval).
+- `validateExpr(text)` → `bridge_eval_expr` (was `bxp-fmt --expr`).
+- `traceExpr(text, headers, fields)` → `bridge_eval_expr_trace` (NDJSON
+  stream; was `bxp-fmt --expr-trace`).
+- `runWithBtrace(path, template)` → `bridge_run_streaming` spawning
+  `bxp-cli --trace=bin` (binary BXTB frame stream of per-row trace events).
+- `getVersion('bxp-cli')` → `bridge_run` spawning `bxp-cli --version`
+  (stdout, not stderr).
 
 ## AST library (packages/json5_ast)
 
@@ -293,13 +303,13 @@ Three Windows-only concerns shaped the current architecture:
   ~10 % startup latency reduction on release builds. Does NOT mitigate
   the resize-event lag below — that path is GPU pipeline / swap chain,
   not shader compilation.
-- **Bridge subprocess (Windows-only)** — `bxp-gui-bridge.dll` hosts the
-  bxp-cli / bxp-fmt subprocess pipeline because the default
-  `Process.start` path occasionally hangs the Flutter event loop on
-  stdout drain. The bridge is the ONLY path on Windows; DLL probe
-  failure at startup is fatal (synthetic error surfaced through the
-  normal startup gate). Linux and macOS still use `Process.start`
-  directly. Cross-platform consolidation is on the v0.3.0 roadmap.
+- **Bridge subprocess (now all platforms)** — `bxp-gui-bridge` hosts the
+  `bxp-cli` subprocess pipeline because the default `Process.start` path
+  hangs the Flutter event loop on stdout drain (and truncates large stdout
+  on Windows, dart-lang/sdk#1727). Windows was the original mandatory case;
+  the v0.3.0 flip (2026-06-09) made the bridge the single backend on every
+  platform — the `Process.start` path was deleted. Library probe failure at
+  startup is fatal on all hosts (synthetic error through the startup gate).
 - **Engine stderr capture** —
   [windows/runner/win32_window.cpp](windows/runner/win32_window.cpp)
   redirects the Flutter engine's stderr through `CreatePipe` + a

@@ -412,11 +412,10 @@ void emitDiagnosticContextSnapshot(BuildContext context) {
 
   DiagnosticLog.log('runtime', {
     'bxp_gui_version': store.bxpGuiVersion,
-    'bxp_fmt_version': store.bxpFmtVersion,
     'bxp_cli_version': store.bxpCliVersion,
-    'bxp_fmt_path': BxpProcessClient.findBin('bxp-fmt'),
+    'bridge_version': BxpProcessClient.bridgeVersion,
+    'bridge_lib': BxpProcessClient.bridgeDllPath,
     'bxp_cli_path': BxpProcessClient.findBin('bxp-cli'),
-    'env_BXP_FMT_PATH': Platform.environment['BXP_FMT_PATH'],
     'env_BXP_CLI_PATH': Platform.environment['BXP_CLI_PATH'],
     'config_path': store.configPath,
     'config_dirty': store.isDirty,

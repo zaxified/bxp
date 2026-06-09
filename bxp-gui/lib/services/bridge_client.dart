@@ -1,13 +1,10 @@
-// Dart FFI client for bxp-gui-bridge — a small Zig shared library that
-// proxies bxp-fmt / bxp-cli calls. Exists because dart:io's Process.start
-// on Windows hits a deterministic ~8 KB cutoff when reading subprocess
-// stdout (dart-lang/sdk#1727 + #51273); the bridge drains pipes from
-// native code, sidestepping Dart's event loop entirely.
-//
-// On non-Windows platforms the bridge isn't load-bearing — Linux pipe
-// buffers are ~64 KB and macOS unaffected — but we keep the same code
-// path so the eventual `--expr` per-keystroke optimisation (no spawn
-// overhead per call) lands cross-platform later.
+// Dart FFI client for bxp-gui-bridge — a small Zig shared library that is
+// the GUI's single backend on every platform. It serves the stateless ops
+// in-process (`bridge_inspect` / `bridge_eval_*`, linked against
+// bxp-core/inspect — no bxp-fmt) and proxies `bxp-cli` runs through
+// `bridge_run` / `bridge_run_streaming`, draining pipes from native code so
+// dart:io's Process.start can't truncate stdout (the original Windows driver,
+// dart-lang/sdk#1727 + #51273, that the cross-platform flip generalised).
 
 import 'dart:async';
 import 'dart:convert';
@@ -670,15 +667,11 @@ class BridgeClient {
 ///      bxp-cli/bxp-fmt so the dev workflow doesn't need a CMake
 ///      install step to make the bridge discoverable.
 ///
-/// Returns null when probing fails. Windows: bridge is mandatory for the
-/// subprocess proxy path — callers must surface a synthetic error rather
-/// than fall back to Process.start (dart-lang/sdk#1727 truncates
-/// --docs/--config over the ~8 KB Win pipe limit). Linux/macOS: the
-/// subprocess proxy still goes through Process.start, but the in-process
-/// expr family (bridge_eval_expr / bridge_eval_expr_trace) loads the
-/// library here when it's deployed alongside the GUI — callers receive
-/// the path so they can opt in to FFI eval and fall back to subprocess
-/// when the lib is absent.
+/// Returns null when probing fails. The bridge is mandatory on every
+/// platform now — it is the GUI's only backend (stateless inspect/eval
+/// in-process + `bxp-cli` runs via the proxy), so a null here means a broken
+/// install and the startup gate surfaces a fatal error rather than falling
+/// back to anything.
 String? findBridgeLibrary() {
   final name = Platform.isWindows
       ? 'bxp-gui-bridge.dll'

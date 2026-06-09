@@ -1,15 +1,16 @@
-// Smoke test for `BxpProcessClient.evalBatch` — the Dart wrapper around
-// `bxp-fmt --expr-batch` that drives GUI drill-down re-eval since schema
-// v3 dropped per-row detail frames from btrace.
+// Smoke test for `BxpProcessClient.evalBatch` — the Dart wrapper that drives
+// GUI drill-down re-eval (schema v3 dropped per-row detail frames from btrace).
 //
-// Verifies the JSON-on-stdin contract end-to-end: spawn the real bxp-fmt
-// binary, push a multi-expression request through stdin, parse the JSON
-// response off stdout, assert per-result ok/error shape matches what the
-// GUI drill-down panel will assume.
+// evalBatch runs in-process through the bxp-gui-bridge `bridge_inspect`
+// eval_batch op now (the bxp-fmt subprocess path was retired). This test
+// injects the dev-tree bridge library and verifies the end-to-end Dart
+// contract: build a multi-expression request, marshal it through the FFI,
+// parse the JSON response, and assert per-result ok/error shape matches what
+// the GUI drill-down panel assumes.
 //
-// The test passes `binPath:` explicitly because `flutter test` runs from a
-// CWD that doesn't trigger `BxpProcessClient.findBin`'s dev-tree walk; the
-// monorepo root is located by walking up from the test file's CWD.
+// `flutter test` runs from a CWD where `Platform.resolvedExecutable` points at
+// the test runner (no `bxp-gui` sibling), so the bridge can't self-resolve —
+// hence the explicit `setBridgeLibPathForTest`.
 
 import 'dart:io';
 
@@ -18,34 +19,24 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 
 void main() {
-  late final String bxpFmtPath;
-
   setUpAll(() {
     final monoRoot = _findMonoRoot();
-    final exe = Platform.isWindows ? '.exe' : '';
-    bxpFmtPath = p.join(monoRoot, 'bxp-fmt', 'zig-out', 'bin', 'bxp-fmt$exe');
-    expect(File(bxpFmtPath).existsSync(), isTrue,
-        reason: 'bxp-fmt missing at $bxpFmtPath — run '
-            '`cd bxp-fmt && zig build` first');
-
-    // On Windows, evalBatch routes through the bridge DLL (dart:io pipe
-    // truncation workaround); under `flutter test` it can't self-resolve
-    // the DLL (no bxp-gui.exe sibling), so point it at the dev-tree build.
-    // Linux/macOS use Process.start directly and need no injection.
-    if (Platform.isWindows) {
-      final dll = p.join(
-          monoRoot, 'bxp-gui-bridge', 'zig-out', 'bin', 'bxp-gui-bridge.dll');
-      expect(File(dll).existsSync(), isTrue,
-          reason: 'bridge DLL missing at $dll — run '
-              '`cd bxp-gui-bridge && zig build` first');
-      BxpProcessClient.setBridgeDllPathForTest(dll);
-    }
+    final bridgePath = Platform.isWindows
+        ? p.join(monoRoot, 'bxp-gui-bridge', 'zig-out', 'bin',
+            'bxp-gui-bridge.dll')
+        : p.join(monoRoot, 'bxp-gui-bridge', 'zig-out', 'lib',
+            Platform.isMacOS
+                ? 'libbxp-gui-bridge.dylib'
+                : 'libbxp-gui-bridge.so');
+    expect(File(bridgePath).existsSync(), isTrue,
+        reason: 'bridge library missing at $bridgePath — run '
+            '`cd bxp-gui-bridge && zig build` first');
+    BxpProcessClient.setBridgeLibPathForTest(bridgePath);
   });
 
   test('evalBatch returns parallel results for happy path + error mix',
       () async {
     final results = await BxpProcessClient.evalBatch(
-      binPath: bxpFmtPath,
       headers: const ['Ticker', 'Qty', 'Price'],
       fields: const ['AGNC', '2', '100.50'],
       tickerMap: const {'AGNC': 'AGNC.NASDAQ'},
@@ -81,33 +72,22 @@ void main() {
 
   test('evalBatch handles empty exprs list', () async {
     final results = await BxpProcessClient.evalBatch(
-      binPath: bxpFmtPath,
       headers: const ['A'],
       fields: const ['1'],
       exprs: const [],
     );
     expect(results, isEmpty);
   });
-
-  test('evalBatch returns empty list when binary missing', () async {
-    final results = await BxpProcessClient.evalBatch(
-      binPath: '/nonexistent/path/to/bxp-fmt',
-      headers: const [],
-      fields: const [],
-      exprs: const ['[X]'],
-    );
-    expect(results, isEmpty);
-  });
 }
 
 /// Walk up from CWD until we find a directory containing both `bxp-core/`
-/// and `bxp-fmt/` — the monorepo root.
+/// and `bxp-gui-bridge/` — the monorepo root.
 String _findMonoRoot() {
   Directory dir = Directory.current;
   for (int i = 0; i < 8; i++) {
     final core = Directory(p.join(dir.path, 'bxp-core'));
-    final fmt = Directory(p.join(dir.path, 'bxp-fmt'));
-    if (core.existsSync() && fmt.existsSync()) return dir.path;
+    final bridge = Directory(p.join(dir.path, 'bxp-gui-bridge'));
+    if (core.existsSync() && bridge.existsSync()) return dir.path;
     final parent = dir.parent;
     if (parent.path == dir.path) break;
     dir = parent;

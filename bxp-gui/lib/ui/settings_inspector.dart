@@ -149,9 +149,7 @@ class _Body extends StatelessWidget {
       }
     }
 
-    final fmtPath = BxpProcessClient.findBin('bxp-fmt');
     final cliPath = BxpProcessClient.findBin('bxp-cli');
-    final fmtEnv = Platform.environment['BXP_FMT_PATH'];
     final cliEnv = Platform.environment['BXP_CLI_PATH'];
 
     // Live trace counter — ticks ~10 Hz during a stream. Reading once at
@@ -160,7 +158,7 @@ class _Body extends StatelessWidget {
     return ValueListenableBuilder<int>(
       valueListenable: store.traceLinesCounter,
       builder: (context, traceLines, _) =>
-          _buildTable(context, store, templates, fmtPath, cliPath, fmtEnv, cliEnv, traceLines),
+          _buildTable(context, store, templates, cliPath, cliEnv, traceLines),
     );
   }
 
@@ -168,9 +166,7 @@ class _Body extends StatelessWidget {
     BuildContext context,
     TraceStore store,
     List<String> templates,
-    String? fmtPath,
     String? cliPath,
-    String? fmtEnv,
     String? cliEnv,
     int traceLines,
   ) {
@@ -182,32 +178,20 @@ class _Body extends StatelessWidget {
     final sections = <(String, List<(String, String)>)>[
       ('Versions', [
         ('bxp-gui', store.bxpGuiVersion ?? '(unknown)'),
-        ('bxp-fmt', store.bxpFmtVersion ?? '(unknown)'),
         ('bxp-cli', store.bxpCliVersion ?? '(unknown)'),
       ]),
       ('Binaries', [
-        ('bxp-fmt', fmtPath ?? '(not found)'),
         ('bxp-cli', cliPath ?? '(not found)'),
-        if (fmtEnv != null && fmtEnv.isNotEmpty)
-          (r'$BXP_FMT_PATH', fmtEnv),
         if (cliEnv != null && cliEnv.isNotEmpty)
           (r'$BXP_CLI_PATH', cliEnv),
       ]),
       ('Bridge', [
-        // Win-only path; on Linux/macOS the bridge is dormant and
-        // every subprocess call goes straight through dart:io. We
-        // still surface the row so a Linux user pasting an inspector
-        // dump shows that the bridge isn't load-bearing on their side.
-        if (!Platform.isWindows)
-          ('platform', '(disabled — Linux/macOS use Process.start)')
-        else ...[
-          ('version',
-              BxpProcessClient.bridgeVersion ?? '(not loaded)'),
-          ('dll',
-              BxpProcessClient.bridgeDllPath ?? '(not found)'),
-        ],
-        ('lastDiag',
-            BxpProcessClient.lastSubprocessDiag ?? '(none)'),
+        // The bridge is the single backend on every platform now — every
+        // stateless op (docs/config/expr/eval) runs in-process, and bxp-cli
+        // dry-runs stream through it. A missing library is a fatal startup.
+        ('version', BxpProcessClient.bridgeVersion ?? '(not loaded)'),
+        ('lib', BxpProcessClient.bridgeDllPath ?? '(not found)'),
+        ('lastDiag', BxpProcessClient.lastSubprocessDiag ?? '(none)'),
       ]),
       ('Config', [
         ('path', store.configPath.isEmpty ? '(none)' : store.configPath),

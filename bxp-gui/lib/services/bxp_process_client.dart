@@ -11,14 +11,25 @@ import 'bridge_client.dart';
 import 'dev_trace.dart';
 import 'diagnostic_log.dart';
 
-/// Spawn-based client for `bxp-cli` and `bxp-fmt`.
+/// Bridge-backed client for the bxp toolchain.
 ///
-/// Every call is a short-lived sub-process. `--trace` runs stream stdout
-/// as a binary BXTB frame stream (chunk-by-chunk into the BtraceReader);
-/// validation calls capture stdout in full. The old FFI path
-/// (zig/bxp-ffi, a separate shared library re-exporting bxp-core) was
-/// deleted — keeping a parallel binding duplicated maintenance with zero
-/// UX upside now that validateExpr is debounced asynchronously.
+/// Everything routes through the in-process `bxp-gui-bridge` shared library
+/// on every platform — there is no `bxp-fmt` subprocess and no Process.start
+/// path. Two call shapes share one library:
+///   * Stateless ops (`getDocs` / `loadConfig` / `listTemplates` /
+///     `fetchTemplate` / `evalBatch` / `validateExpr` / `traceExpr`) call
+///     `bridge_inspect` / `bridge_eval_*` synchronously on the main isolate
+///     (sub-ms, served from bxp-core/inspect).
+///   * `bxp-cli` runs (`runWithBtrace` dry-run / full-run, `--version`) go
+///     through `bridge_run` / `bridge_run_streaming` in an `Isolate.run`
+///     worker so the blocking pipe drain never stalls the UI thread; the
+///     bridge drains the pipe in native Zig code (sidestepping dart:io's
+///     Windows pipe truncation, dart-lang/sdk#1727).
+///
+/// `bxp-cli` is still a real binary the bridge spawns; only `bxp-fmt` left
+/// the GUI's runtime dependency set (the bridge links bxp-core/inspect
+/// directly, so it needs neither). A missing bridge library is a fatal
+/// startup error — same as Windows always had.
 class BxpProcessClient {
   /// Resolve a sibling binary. Search order:
   ///   1. Env override: `$BXP_CLI_PATH` / `$BXP_FMT_PATH`
@@ -155,210 +166,104 @@ class BxpProcessClient {
 
   // ── One-shot invocations (stdout captured) ─────────────────────────────
 
-  /// Per-call timeouts. A hung child (deadlock, missing-stdin wait, broken
-  /// pipe loop) used to freeze the GUI forever — every call below now
-  /// surfaces a synthetic non-zero exit code after these durations and
-  /// SIGTERMs the child to keep it from leaking. Numbers chosen to be
-  /// generous on the slowest realistic input we've seen and still way
-  /// shorter than "user gives up and quits the app".
-  ///
-  /// Note: timeouts also wrap the bridge worker isolate via
-  /// `Future.timeout` — if a child invoked through the bridge hangs the
-  /// main isolate sees the timeout and falls through. The worker
-  /// isolate technically leaks until the OS process exits, which is
-  /// fine because bxp-fmt one-shot calls don't hang in practice.
+  /// Timeout for the only remaining one-shot subprocess call, `--version`,
+  /// which the bridge runs in an `Isolate.run` worker wrapped in
+  /// `Future.timeout`. The stateless `bxp-fmt` ops are in-process now (no
+  /// spawn), so they carry no per-call spawn timeout.
   static const Duration _versionTimeout = Duration(seconds: 5);
-  static const Duration _docsTimeout = Duration(seconds: 5);
-  static const Duration _exprTimeout = Duration(seconds: 15);
-  static const Duration _configTimeout = Duration(seconds: 15);
-  static const Duration _listTemplatesTimeout = Duration(seconds: 30);
 
-  /// Testing aid: when `BXP_FORCE_BRIDGE` is set (non-empty), the in-process
-  /// inspect/eval ops (`getDocs` / `loadConfig` / `listTemplates` /
-  /// `fetchTemplate` / `evalBatch` / `validateExpr` / `traceExpr`) do NOT fall
-  /// back to a `bxp-fmt` spawn when the bridge is unavailable or returns a
-  /// failure — the error is surfaced instead. Confirms the bridge path is
-  /// genuinely doing the work, with no silent subprocess fallback masking a
-  /// broken bridge. Mirrors `BXP_FORCE_BRIDGE_PROXY` for the proxy path; does
-  /// not affect `bxp-cli` dry-runs (those legitimately need the binary).
-  static final bool _forceBridge =
-      (Platform.environment['BXP_FORCE_BRIDGE'] ?? '').isNotEmpty;
-
-  /// Cached path to the bridge DLL — null when unavailable (non-Windows,
-  /// missing file, probe failed). Resolved once via [_resolveBridgePath]
-  /// so we don't re-stat the filesystem on every call. The DLL itself
-  /// gets opened freshly inside each worker isolate; we don't keep a
-  /// long-lived BridgeClient on the main isolate because all FFI work
-  /// must happen off the UI thread (see [_runOneShot]).
-  static String? _bridgeDllPath;
+  /// Cached bridge library path + main-isolate client. The bridge ships on
+  /// every platform (release-02 + the Linux CMake copy place it next to
+  /// bxp-gui) and is the *only* backend — there is no `bxp-fmt` spawn
+  /// fallback. The in-process inspect/eval ops (`getDocs` / `loadConfig` /
+  /// `listTemplates` / `fetchTemplate` / `evalBatch` / `validateExpr` /
+  /// `traceExpr`) call [_bridgeClient] directly on the main isolate (sub-ms,
+  /// well under a frame). The blocking subprocess-proxy ops (`bxp-cli`
+  /// dry-run via `bridge_run_streaming`, `--version` via `bridge_run`)
+  /// re-open the library inside an `Isolate.run` worker by [_bridgeLibPath]
+  /// so the blocking pipe drain never stalls the UI thread.
+  static String? _bridgeLibPath;
+  static BridgeClient? _bridgeClient;
   static String? _bridgeVersion;
   static bool _bridgeProbed = false;
 
-  /// DLL self-reported version, populated on first call to
-  /// [_resolveBridgePath]. Null until the probe runs (which any
-  /// `findBin` / `loadConfig` / `runDryRun` call triggers via
-  /// [_runOneShot] / [_runCliTrace]). Surfaced in the
-  /// SettingsInspector so a reporter can confirm which bridge build
-  /// the GUI is talking to.
+  /// Library self-reported version, populated on the first [_bridge] probe.
+  /// Surfaced in the SettingsInspector so a reporter can confirm which
+  /// bridge build the GUI is talking to. Null until the probe runs.
   static String? get bridgeVersion => _bridgeVersion;
 
-  /// Cached path of the bridge DLL after a successful probe. Mainly a
-  /// diagnostic surface — the SettingsInspector renders it next to
-  /// [bridgeVersion] so both endpoints of the FFI pair are visible
-  /// when triaging "is the GUI using a stale DLL?" reports.
-  static String? get bridgeDllPath => _bridgeDllPath;
+  /// Cached path of the bridge library after a successful probe. Diagnostic
+  /// surface — the SettingsInspector renders it next to [bridgeVersion].
+  static String? get bridgeDllPath => _bridgeLibPath;
 
-  /// Pre-release smoke gate: setting `BXP_FORCE_BRIDGE_PROXY=1` in the
-  /// environment opts Linux / macOS dev runs into the bridge subprocess
-  /// proxy path (same route Windows always takes), so we can validate
-  /// the cross-platform bridge build before shipping it. The flag is
-  /// intentionally cumbersome to enable (env var, not a checkbox) — it's
-  /// a developer testing knob, not a user-facing toggle. Drop this gate
-  /// once the bridge proxy is exercised on Linux/macOS via production
-  /// traffic.
-  static bool _forceBridgeProxy() =>
-      Platform.environment['BXP_FORCE_BRIDGE_PROXY'] == '1';
-
-  static String? _resolveBridgePath() {
-    if (_bridgeProbed) return _bridgeDllPath;
+  /// Probe + cache the bridge. Returns the main-isolate client, or null when
+  /// the library can't be located/opened — in which case every op surfaces a
+  /// visible error (fatal docs gate at startup, `{"error":...}` for config,
+  /// empty results for the rest). There is no `bxp-fmt` fallback: the bridge
+  /// is the single sanctioned backend on every platform, so a missing library
+  /// is a broken install.
+  static BridgeClient? _bridge() {
+    if (_bridgeProbed) return _bridgeClient;
     _bridgeProbed = true;
-    if (!Platform.isWindows && !_forceBridgeProxy()) return null;
-    final dllPath = findBridgeLibrary();
-    if (dllPath == null) {
-      _lastSubprocessDiag = 'bridge: DLL not found next to bxp-gui';
+    final path = _bridgeLibPath ?? findBridgeLibrary();
+    if (path == null) {
+      _lastSubprocessDiag = 'bridge: library not found next to bxp-gui';
       return null;
     }
-    // One-time probe: load the DLL on the main isolate just to confirm
-    // it's loadable and read its version string for diagnostics. The
-    // BridgeClient itself is discarded — every actual call is handled
-    // by a worker isolate that re-opens the DLL on its own side.
     try {
-      final probe = BridgeClient(dllPath);
-      _bridgeVersion = probe.bridgeVersion;
-      _bridgeDllPath = dllPath;
-      return dllPath;
+      _bridgeClient = BridgeClient(path);
+      _bridgeLibPath = path;
+      _bridgeVersion = _bridgeClient!.bridgeVersion;
+      return _bridgeClient;
     } catch (e) {
       _lastSubprocessDiag = 'bridge: probe failed: $e';
+      _bridgeLibPath = null;
       return null;
     }
   }
 
-  /// Test seam: inject the bridge DLL path directly, short-circuiting the
+  /// True when the bridge library loads. The GUI startup gate calls this to
+  /// distinguish "bridge missing" from "docs returned garbage" before
+  /// rendering its fatal screen.
+  static bool ensureBridgeLoaded() => _bridge() != null;
+
+  /// Test seam: inject the bridge library path directly, short-circuiting the
   /// [findBridgeLibrary] sibling/dev-tree probe. `flutter test` runs from a
-  /// CWD with no `bxp-gui(.exe)` sibling and `Platform.resolvedExecutable`
-  /// points at the test runner, so the Windows bridge path (used by
-  /// [evalBatch] and the other proxied calls) cannot self-resolve the DLL.
-  /// Tests that exercise that path on Windows call this with the dev-tree
-  /// DLL — mirroring the explicit `binPath` the binary calls already accept.
-  /// Not for production use; the real app resolves the DLL as a sibling.
-  static void setBridgeDllPathForTest(String dllPath) {
-    _bridgeDllPath = dllPath;
+  /// CWD where `Platform.resolvedExecutable` points at the test runner (no
+  /// `bxp-gui(.exe)` sibling), so the bridge can't self-resolve. Tests inject
+  /// the dev-tree library here; forcing a re-probe so the next [_bridge] call
+  /// opens the injected path. Not for production use.
+  static void setBridgeLibPathForTest(String path) {
+    _bridgeLibPath = path;
+    _bridgeClient = null;
     _bridgeVersion = null;
-    _bridgeProbed = true;
+    _bridgeProbed = false;
   }
 
-  /// Long-lived [BridgeClient] dedicated to the in-process expression
-  /// family (`bridge_eval_expr` / `bridge_eval_expr_trace`). Unlike the
-  /// subprocess-proxy path that re-opens the DLL inside each
-  /// [Isolate.run] worker, the eval calls are sub-ms and run direct on
-  /// the main isolate — keeping one cached client avoids paying the
-  /// `DynamicLibrary.open` cost per keystroke.
-  ///
-  /// Probed independently from [_resolveBridgePath] because the eval
-  /// family is intended to land on Linux/macOS too (once the build
-  /// pipeline ships the `.so`/`.dylib` alongside the GUI bundle), while
-  /// the subprocess proxy stays Win-only. Returns null when the library
-  /// can't be located — callers fall back to subprocess.
-  static BridgeClient? _evalBridgeClient;
-  static bool _evalBridgeProbed = false;
-
-  /// Probe + cache the eval-bridge client. Deliberately does NOT touch
-  /// `_bridgeDllPath` — that cache is reserved for the subprocess-proxy
-  /// path (Win mandatory + `BXP_FORCE_BRIDGE_PROXY` smoke). Mixing them
-  /// caused a Linux crash when `_runCliTrace`'s routing saw a non-null
-  /// `_bridgeDllPath` without the env var being set, and tried to route
-  /// dry-run through the untested cross-platform proxy code.
-  static BridgeClient? _resolveEvalBridgeClient() {
-    if (_evalBridgeProbed) return _evalBridgeClient;
-    _evalBridgeProbed = true;
-    final libPath = findBridgeLibrary();
-    if (libPath == null) return null;
-    try {
-      _evalBridgeClient = BridgeClient(libPath);
-      // Mirror the bridge version into the shared `_bridgeVersion`
-      // getter (used by SettingsInspector) only if the proxy probe
-      // didn't already populate it. The path itself stays out of
-      // `_bridgeDllPath` to keep proxy routing predictable.
-      _bridgeVersion ??= _evalBridgeClient!.bridgeVersion;
-      return _evalBridgeClient;
-    } catch (e) {
-      _lastSubprocessDiag = 'bridge: eval probe failed: $e';
-      return null;
-    }
-  }
-
-  /// One-shot run. On Windows the FFI bridge is the only path — the DLL
-  /// is mandatory; if probe failed we surface a synthetic error result
-  /// rather than falling back to dart:io's Process pipes (which would
-  /// silently truncate `--docs` / `--config` over the ~8 KB Win pipe
-  /// limit, dart-lang/sdk#1727). On Linux / macOS the bridge is dormant
-  /// and everything goes through [_runWithTimeout].
+  /// One-shot run, always via the bridge (`bridge_run` in an `Isolate.run`
+  /// worker). The only remaining caller is [getVersion]; the stateless
+  /// `bxp-fmt` ops moved in-process to [_bridge]'s inspect/eval calls. The
+  /// bridge is the single backend on every platform — a missing library
+  /// surfaces a synthetic non-zero exit (no Process.start fallback).
   ///
   /// Why a worker isolate: `bridge_run` is synchronous and blocks for
-  /// the duration of the child process (50–200 ms typical). Running it
-  /// on the main isolate freezes Flutter's frame loop and back-pressure
-  /// from queued mouse / keyboard events causes the GUI to stop
-  /// responding after a handful of fast hovers. `Isolate.run` offloads
-  /// the blocking call to a fresh worker isolate so the UI stays smooth.
-  /// The ~5 ms isolate-spawn overhead is negligible compared to the
-  /// pipe-drain time we're already paying.
+  /// the duration of the child process. Running it on the main isolate
+  /// would freeze Flutter's frame loop; `Isolate.run` offloads the
+  /// blocking call to a fresh worker isolate so the UI stays smooth.
   static Future<ProcessResult> _runOneShot(
     String executable,
     List<String> arguments,
     Duration timeout, {
     Uint8List? stdinBody,
   }) async {
-    final dllPath = _resolveBridgePath();
-    if (Platform.isWindows) {
-      if (dllPath == null) {
-        // Bridge probe failed at startup — `_lastSubprocessDiag` already
-        // describes why. Surface a synthetic non-zero exit so callers
-        // hit their existing error-rendering path; no Process.start
-        // fallback because dart:io can't be trusted with bxp-fmt's
-        // output volume on Windows.
-        return ProcessResult(
-          0, 1, '',
-          'bridge: ${_lastSubprocessDiag ?? "DLL unavailable"}',
-        );
-      }
-      return _runOneShotViaBridge(
-        dllPath,
-        executable,
-        arguments,
-        timeout,
-        stdinBody: stdinBody,
+    if (_bridge() == null) {
+      return ProcessResult(
+        0, 1, '',
+        'bridge: ${_lastSubprocessDiag ?? "library unavailable"}',
       );
     }
-    // Non-Windows: by default dart:io's pipes work, so we stay on
-    // Process.start. The pre-release smoke gate (`BXP_FORCE_BRIDGE_PROXY=1`)
-    // routes through bridge_run instead to validate the cross-platform
-    // bridge build. `_resolveBridgePath` already returns null on non-Windows
-    // unless the env var is set, so re-checking `_forceBridgeProxy()` here
-    // is belt-and-suspenders: it keeps the opt-in intent explicit and guards
-    // against a future probe ever caching a non-null `dllPath` without the
-    // user asking for the proxy smoke. (The eval-bridge probe shares
-    // `findBridgeLibrary` but deliberately keeps its path out of
-    // `_bridgeDllPath`, so it can't trip this gate.)
-    if (_forceBridgeProxy() && dllPath != null) {
-      return _runOneShotViaBridge(
-        dllPath,
-        executable,
-        arguments,
-        timeout,
-        stdinBody: stdinBody,
-      );
-    }
-    return _runWithTimeout(
+    return _runOneShotViaBridge(
+      _bridgeLibPath!,
       executable,
       arguments,
       timeout,
@@ -414,174 +319,12 @@ class BxpProcessClient {
     }
   }
 
-  /// `Process.run` + per-call timeout + child-process kill on timeout.
-  ///
-  /// A naive `Process.run(...).timeout(...)` would leave the child running
-  /// in the background after the Future resolves — so we spawn manually,
-  /// drain both streams, race the exitCode against the timeout, and kill
-  /// the child if it didn't finish. On timeout we synthesise a
-  /// `ProcessResult` whose stderr explains what happened so the caller's
-  /// existing error-rendering path picks it up unchanged.
-  /// Diagnostic trace of the most recent _runWithTimeout fallback chain.
-  /// Captures whether the direct call succeeded or whether we had to
-  /// retry through the OS shell. Surfaced in fatal startup messages and
-  /// the SettingsInspector so a Windows bug reporter can paste the
-  /// concrete failure mode instead of "didn't work".
+  /// Diagnostic trace of the most recent bridge subprocess call — exit
+  /// code, stdout/stderr sizes, or the failure reason. Surfaced in fatal
+  /// startup messages and the SettingsInspector so a bug reporter can paste
+  /// the concrete failure mode instead of "didn't work".
   static String? _lastSubprocessDiag;
   static String? get lastSubprocessDiag => _lastSubprocessDiag;
-
-  static Future<ProcessResult> _runWithTimeout(
-    String executable,
-    List<String> arguments,
-    Duration timeout, {
-    Uint8List? stdinBody,
-  }) async {
-    // When the caller supplied a stdin body the three-attempt
-    // direct → shell → Process.run chain doesn't apply — only the
-    // Process.start path can deliver bytes to the child. Run it once
-    // and return whatever exit we get.
-    if (stdinBody != null) {
-      return _runOnce(
-        executable,
-        arguments,
-        timeout,
-        runInShell: false,
-        stdinBody: stdinBody,
-      );
-    }
-    // Three-attempt diagnostic chain (direct → runInShell → Process.run)
-    // exists for the dart-lang/sdk#1727 spawn-vs-attach race that makes
-    // bxp-fmt's --docs output (~30 KB) trip its own WriteFailed before
-    // Dart's stream listener attaches. The race is Windows-only — Linux
-    // pipe buffers are ~64 KB and macOS isn't affected. On those hosts
-    // a tool like bxp-fmt that legitimately exits 1 with stdout (config
-    // validation errors) would triple-run for no benefit, so the retry
-    // chain is gated on Platform.isWindows. Windows production is the
-    // bridge path anyway; this fallback only executes if the bridge DLL
-    // isn't loadable, in which case the retries are a worthwhile last
-    // resort before surfacing a hard failure.
-    String describe(String tag, ProcessResult r) {
-      final out = r.stdout as String;
-      final err = (r.stderr as String).trim();
-      return '$tag: exit ${r.exitCode}, stdout=${out.length} B'
-          ', stderr=${err.length} B'
-          '${err.isEmpty ? '' : ' "${_peek(err)}"'}';
-    }
-    final r1 = await _runOnce(executable, arguments, timeout, runInShell: false);
-    if (!Platform.isWindows) {
-      _lastSubprocessDiag = describe('direct', r1);
-      return r1;
-    }
-    if (r1.exitCode == 0) {
-      _lastSubprocessDiag = describe('direct', r1);
-      return r1;
-    }
-    final diag1 = describe('direct', r1);
-    final r2 = await _runOnce(executable, arguments, timeout, runInShell: true);
-    if (r2.exitCode == 0) {
-      _lastSubprocessDiag = '$diag1\n  ${describe('shell', r2)}';
-      return r2;
-    }
-    final diag2 = describe('shell', r2);
-    // Attempt 3: Dart's built-in Process.run, which drains pipes in
-    // dart:io's native (C++) code without depending on the Dart event
-    // loop attaching a listener. If the failure mode in attempts 1+2
-    // really is the dart-lang/sdk#1727 spawn-vs-attach race, this path
-    // sidesteps it entirely. We give up kill control here, but for
-    // single-shot calls a stuck child is bounded by the Future.timeout.
-    try {
-      final r3 = await Process.run(executable, arguments).timeout(timeout);
-      _lastSubprocessDiag = '$diag1\n  $diag2\n  ${describe('processRun', r3)}';
-      return r3;
-    } on TimeoutException {
-      _lastSubprocessDiag =
-          '$diag1\n  $diag2\n  processRun: timeout after ${timeout.inSeconds}s';
-      return ProcessResult(
-        0,
-        ProcessRunResult.kExitTimeout,
-        '',
-        '$executable timed out after ${timeout.inSeconds}s',
-      );
-    }
-  }
-
-  static Future<ProcessResult> _runOnce(
-    String executable,
-    List<String> arguments,
-    Duration timeout, {
-    required bool runInShell,
-    Uint8List? stdinBody,
-  }) async {
-    final process = await Process.start(
-      executable,
-      arguments,
-      runInShell: runInShell,
-    );
-    if (stdinBody != null) {
-      // Fire-and-forget: write the request body, close stdin so the
-      // child sees EOF and proceeds. Errors here surface through the
-      // child's own exit code (likely non-zero) — there's no separate
-      // channel back to the parent for write failures.
-      process.stdin.add(stdinBody);
-      // ignore: unawaited_futures
-      process.stdin.close();
-    }
-    // Subscribe to both streams BEFORE any further await. On Windows the
-    // anonymous-pipe buffer is only ~4 KB, so a child that writes more
-    // than that (e.g. `--docs` emits ~30 KB of JSON) blocks on WriteFile
-    // until the parent drains. `.transform(utf8.decoder).join()` returns
-    // a Future whose listener subscription is delayed by an event-loop
-    // tick; if Flutter's startup work fills that tick the child trips
-    // its own flush and exits with `error: WriteFailed` (exit 1) before
-    // we even reach the timeout. `Stream.listen` attaches synchronously
-    // so the OS pipe is drained from the first byte.
-    final stdoutChunks = <List<int>>[];
-    final stderrChunks = <List<int>>[];
-    final stdoutSub = process.stdout.listen(stdoutChunks.add);
-    final stderrSub = process.stderr.listen(stderrChunks.add);
-    String decode(List<List<int>> chunks) =>
-        utf8.decode(chunks.expand((b) => b).toList(), allowMalformed: true);
-    // Yield one event-loop tick after exit so the listener's onData
-    // callbacks dispatch any chunks that landed in the OS pipe just
-    // before the child exited. We can't use `subscription.asFuture()` /
-    // `onDone` to wait for stream completion: on Windows the Stream
-    // backing `Process.stdout` doesn't reliably fire onDone after child
-    // exit (dart-lang/sdk#1727 has been open since 2012), so awaiting
-    // it would hang the call indefinitely.
-    Future<ProcessResult> finish(int exitCode, {String? extraStderr}) async {
-      await Future<void>.delayed(Duration.zero);
-      await stdoutSub.cancel();
-      await stderrSub.cancel();
-      final stdoutText = decode(stdoutChunks);
-      final stderrText = decode(stderrChunks);
-      return ProcessResult(
-        process.pid,
-        exitCode,
-        stdoutText,
-        extraStderr == null
-            ? stderrText
-            : (stderrText.isEmpty ? extraStderr : '$stderrText\n$extraStderr'),
-      );
-    }
-    try {
-      final exitCode = await process.exitCode.timeout(timeout);
-      return await finish(exitCode);
-    } on TimeoutException {
-      process.kill(ProcessSignal.sigterm);
-      // Best-effort drain: if the child ignores SIGTERM, escalate to
-      // SIGKILL after a short grace window so we don't wait forever.
-      try {
-        await process.exitCode.timeout(const Duration(seconds: 2));
-      } on TimeoutException {
-        process.kill(ProcessSignal.sigkill);
-        try { await process.exitCode; } catch (_) {}
-      }
-      return await finish(
-        ProcessRunResult.kExitTimeout,
-        extraStderr: '$executable timed out after ${timeout.inSeconds}s',
-      );
-    }
-  }
 
   /// Validates config via `bxp-fmt --config <path>`.
   /// Returns stdout (annotated JSON) on exit 0, throws on missing binary.
@@ -596,55 +339,28 @@ class BxpProcessClient {
       'path': path,
       'check_fs': checkFsSeconds,
     });
-    // In-process via the bridge when loadable (no bxp-fmt spawn). Same annotated
-    // JSON, incl. $err_ siblings; the FS check resolves data_dir against the GUI
-    // process CWD — identical to the spawned bxp-fmt (config.zig opens data_dir
+    // In-process via the bridge (no bxp-fmt spawn). Same annotated JSON, incl.
+    // $err_ siblings; the FS check resolves data_dir against the GUI process
+    // CWD — identical to the former spawned bxp-fmt (config.zig opens data_dir
     // via cwd). annotateConfigFromFile always returns JSON (even file errors as
     // {"$err_1":...}), so a non-empty result means success.
-    final evalClient = _resolveEvalBridgeClient();
-    if (evalClient != null) {
-      final raw = evalClient.inspect(jsonEncode({
-        'op': 'config',
-        'path': path,
-        if (checkFsSeconds > 0) 'check_fs': checkFsSeconds,
-      }));
-      if (raw != null && raw.trim().isNotEmpty) {
-        endAction({'path_kind': 'bridge', 'bytes': raw.length});
-        return raw;
-      }
+    final bridge = _bridge();
+    if (bridge == null) {
+      endAction({'result': 'bridge_unavailable'});
+      return '{"error": ${jsonEncode('bxp-gui-bridge unavailable: '
+          '${_lastSubprocessDiag ?? "library not found"}')}}';
     }
-    if (_forceBridge) {
-      endAction({'result': 'force_bridge_no_fallback'});
-      return '{"error": "BXP_FORCE_BRIDGE set: bridge config validation '
-          'unavailable or failed (bxp-fmt fallback disabled)"}';
+    final raw = bridge.inspect(jsonEncode({
+      'op': 'config',
+      'path': path,
+      if (checkFsSeconds > 0) 'check_fs': checkFsSeconds,
+    }));
+    if (raw != null && raw.trim().isNotEmpty) {
+      endAction({'path_kind': 'bridge', 'bytes': raw.length});
+      return raw;
     }
-    final bin = findBin('bxp-fmt');
-    if (bin == null) {
-      endAction({'result': 'binary_missing'});
-      return '{"error": "bxp-fmt binary not found"}';
-    }
-    final args = checkFsSeconds > 0
-        ? ['--config', path, '--check-fs=$checkFsSeconds']
-        : ['--config', path];
-    final result = await _runOneShot(bin, args, _configTimeout);
-    if (result.exitCode == 0) {
-      endAction({
-        'exit': 0,
-        'stdout_bytes': (result.stdout as String).length,
-      });
-      return result.stdout as String;
-    }
-    // Exit 1 = validation failure; bxp-fmt still emits annotated JSON with $err_ nodes.
-    if ((result.stdout as String).isNotEmpty) {
-      endAction({
-        'exit': result.exitCode,
-        'stdout_bytes': (result.stdout as String).length,
-      });
-      return result.stdout as String;
-    }
-    final err = (result.stderr as String).trim();
-    endAction({'exit': result.exitCode, 'stderr': err});
-    return '{"error": ${jsonEncode(err.isEmpty ? "unknown error" : err)}}';
+    endAction({'result': 'bridge_inspect_failed'});
+    return '{"error": "bxp-gui-bridge config validation failed"}';
   }
 
   /// Probe a sibling binary for its version string via `<bin> --version`.
@@ -674,29 +390,17 @@ class BxpProcessClient {
   /// truth contract: tree tooltips, expression catalog, and autocomplete
   /// all read from the same data the CLI itself ships.
   static Future<Map<String, dynamic>?> getDocs() async {
-    // In-process via the bridge when loadable (no bxp-fmt spawn); same JSON.
-    final evalClient = _resolveEvalBridgeClient();
-    String? out = evalClient?.inspect('{"op":"docs"}');
+    // In-process via the bridge (no bxp-fmt spawn); same JSON.
+    final bridge = _bridge();
+    if (bridge == null) {
+      _lastDocsError = 'bxp-gui-bridge unavailable: '
+          '${_lastSubprocessDiag ?? "library not found"}';
+      return null;
+    }
+    final String? out = bridge.inspect('{"op":"docs"}');
     if (out == null) {
-      if (_forceBridge) {
-        _lastDocsError = 'BXP_FORCE_BRIDGE set: bridge_inspect docs '
-            'unavailable or failed (bxp-fmt fallback disabled)';
-        return null;
-      }
-      final bin = findBin('bxp-fmt');
-      if (bin == null) return null;
-      try {
-        final result = await _runOneShot(bin, ['--docs'], _docsTimeout);
-        if (result.exitCode != 0) {
-          _lastDocsError = 'exit code ${result.exitCode}; '
-              'stderr: ${_peek(result.stderr as String)}';
-          return null;
-        }
-        out = result.stdout as String;
-      } catch (e) {
-        _lastDocsError = 'exception: $e';
-        return null;
-      }
+      _lastDocsError = 'bridge_inspect docs returned no payload';
+      return null;
     }
     final trimmed = out.trim();
     if (trimmed.isEmpty) {
@@ -740,30 +444,15 @@ class BxpProcessClient {
   /// expressions when reconstructing drill-down on click.
   static Future<Map<String, dynamic>?> fetchTemplate(
       String configPath, String templateId) async {
-    // In-process via the bridge when loadable (no bxp-fmt spawn).
-    final evalClient = _resolveEvalBridgeClient();
-    String? out = evalClient
-        ?.inspect(jsonEncode({'op': 'fetch_template', 'path': configPath, 'id': templateId}));
-    if (out == null) {
-      if (_forceBridge) {
-        _lastSubprocessDiag =
-            'BXP_FORCE_BRIDGE set: fetchTemplate bridge unavailable/failed';
-        return null;
-      }
-      final bin = findBin('bxp-fmt');
-      if (bin == null) return null;
-      try {
-        final result = await _runOneShot(
-          bin,
-          ['--config', configPath, '--fetch-template', templateId],
-          _listTemplatesTimeout,
-        );
-        if (result.exitCode != 0) return null;
-        out = result.stdout as String;
-      } catch (_) {
-        return null;
-      }
+    // In-process via the bridge (no bxp-fmt spawn).
+    final bridge = _bridge();
+    if (bridge == null) {
+      _lastSubprocessDiag = 'fetchTemplate: bridge unavailable';
+      return null;
     }
+    final String? out = bridge
+        .inspect(jsonEncode({'op': 'fetch_template', 'path': configPath, 'id': templateId}));
+    if (out == null) return null;
     try {
       final trimmed = out.trim();
       if (trimmed.isEmpty) return null;
@@ -786,30 +475,15 @@ class BxpProcessClient {
   /// failure here only loses the metadata (data_dir / file_pattern_in /
   /// description) that powers the richer template-selector subtitle.
   static Future<List<TemplateInfo>> listTemplates(String path) async {
-    // In-process via the bridge when loadable (no bxp-fmt spawn).
-    final evalClient = _resolveEvalBridgeClient();
-    String? out =
-        evalClient?.inspect(jsonEncode({'op': 'list_templates', 'path': path}));
-    if (out == null) {
-      if (_forceBridge) {
-        _lastSubprocessDiag =
-            'BXP_FORCE_BRIDGE set: listTemplates bridge unavailable/failed';
-        return const [];
-      }
-      final bin = findBin('bxp-fmt');
-      if (bin == null) return const [];
-      try {
-        final result = await _runOneShot(
-          bin,
-          ['--config', path, '--list-templates'],
-          _listTemplatesTimeout,
-        );
-        if (result.exitCode != 0) return const [];
-        out = result.stdout as String;
-      } catch (_) {
-        return const [];
-      }
+    // In-process via the bridge (no bxp-fmt spawn).
+    final bridge = _bridge();
+    if (bridge == null) {
+      _lastSubprocessDiag = 'listTemplates: bridge unavailable';
+      return const [];
     }
+    final String? out =
+        bridge.inspect(jsonEncode({'op': 'list_templates', 'path': path}));
+    if (out == null) return const [];
     try {
       final trimmed = out.trim();
       if (trimmed.isEmpty) return const [];
@@ -838,51 +512,14 @@ class BxpProcessClient {
     String expr,
   ) async {
     if (expr.isEmpty) return (error: null, offset: null, length: null);
-    // Prefer the in-process FFI path when the bridge library is loadable.
-    // Sub-ms latency vs ~50 ms spawn of `bxp-fmt --expr`. Sync FFI call
-    // is safe on the main isolate (well under one frame budget).
-    final evalClient = _resolveEvalBridgeClient();
-    if (evalClient != null) {
-      DiagnosticLog.log('action.validateExpr', {'len': expr.length, 'path': 'bridge'});
-      return evalClient.evalExpr(expr);
+    // In-process FFI (`bridge_eval_expr`). Sub-ms latency, safe on the main
+    // isolate (well under one frame budget). No bxp-fmt spawn fallback.
+    final bridge = _bridge();
+    if (bridge == null) {
+      return (error: 'bxp-gui-bridge unavailable', offset: null, length: null);
     }
-    if (_forceBridge) {
-      return (
-        error: 'BXP_FORCE_BRIDGE set: expr bridge unavailable',
-        offset: null,
-        length: null
-      );
-    }
-    final bin = findBin('bxp-fmt');
-    if (bin == null) return (error: 'bxp-fmt not found', offset: null, length: null);
-    DiagnosticLog.log('action.validateExpr', {'len': expr.length, 'path': 'subprocess'});
-    final result =
-        await _runOneShot(bin, ['--expr', expr], _exprTimeout);
-    if (result.exitCode == 0) return (error: null, offset: null, length: null);
-    final stdout = (result.stdout as String).trim();
-    final stderr = (result.stderr as String).trim();
-    final raw = stdout.isNotEmpty ? stdout : stderr;
-    if (raw.isEmpty) return (error: 'invalid expression', offset: null, length: null);
-    try {
-      final m = jsonDecode(raw);
-      if (m is Map) {
-        final err = m['error'];
-        final detail = m['detail'];
-        final off = m['off'];
-        final len = m['len'];
-        final offset = off is int ? off : null;
-        final length = len is int ? len : null;
-        if (err is String && err.isNotEmpty) {
-          final msg = (detail is String && detail.isNotEmpty)
-              ? '$err: $detail'
-              : err;
-          return (error: msg, offset: offset, length: length);
-        }
-      }
-    } catch (_) {
-      // Not JSON — fall through to the raw text.
-    }
-    return (error: raw, offset: null, length: null);
+    DiagnosticLog.log('action.validateExpr', {'len': expr.length, 'path': 'bridge'});
+    return bridge.evalExpr(expr);
   }
 
   /// Re-evaluates an expression against a CSV row context and returns the
@@ -899,38 +536,18 @@ class BxpProcessClient {
     required List<String> headers,
     required List<String> fields,
   }) async {
-    // Prefer in-process FFI when available. The trace NDJSON shape is
-    // identical to `bxp-fmt --expr-trace` stdout so the per-line parser
-    // below works on both payloads.
-    final evalClient = _resolveEvalBridgeClient();
-    if (evalClient != null) {
-      final ndjson =
-          evalClient.evalExprTrace(text: expr, headers: headers, fields: fields);
-      if (ndjson != null) return _parseTraceNdjson(ndjson);
-      // null = bridge-level failure → fall through to subprocess
-    }
-    if (_forceBridge) {
-      _lastSubprocessDiag =
-          'BXP_FORCE_BRIDGE set: traceExpr bridge unavailable/failed';
+    // In-process FFI (`bridge_eval_expr_trace`). The NDJSON shape is identical
+    // to the former `bxp-fmt --expr-trace` stdout, so `_parseTraceNdjson`
+    // works unchanged. No bxp-fmt spawn fallback.
+    final bridge = _bridge();
+    if (bridge == null) {
+      _lastSubprocessDiag = 'traceExpr: bridge unavailable';
       return const [];
     }
-    final bin = findBin('bxp-fmt');
-    if (bin == null) return const [];
-    try {
-      final result = await _runOneShot(
-        bin,
-        [
-          '--expr-trace', expr,
-          '--row-headers', jsonEncode(headers),
-          '--row-fields', jsonEncode(fields),
-        ],
-        _exprTimeout,
-      );
-      final out = (result.stdout as String);
-      return _parseTraceNdjson(out);
-    } catch (_) {
-      return const [];
-    }
+    final ndjson =
+        bridge.evalExprTrace(text: expr, headers: headers, fields: fields);
+    if (ndjson == null) return const [];
+    return _parseTraceNdjson(ndjson);
   }
 
   /// Evaluate N expressions against one row context in a single spawn.
@@ -954,9 +571,8 @@ class BxpProcessClient {
     Map<String, String>? tickerMap,
     Map<String, String>? lookups,
     String? singlePrepassName,
-    Duration timeout = _exprTimeout,
-    String? binPath,
   }) async {
+    if (exprs.isEmpty) return const [];
     final request = <String, dynamic>{
       'headers': headers,
       'fields': fields,
@@ -977,48 +593,20 @@ class BxpProcessClient {
       request['single_prepass_name'] = singlePrepassName;
     }
 
-    // In-process via the bridge when loadable (no bxp-fmt spawn). Same
-    // `{results:[...]}` shape, so `_parseBatchResults` works on both.
-    final evalClient = _resolveEvalBridgeClient();
-    if (evalClient != null) {
-      final raw =
-          evalClient.inspect(jsonEncode({'op': 'eval_batch', 'request': request}));
-      if (raw != null) return _parseBatchResults(raw);
-      // bridge present but failed for this op → fall through to subprocess
-    }
-    if (_forceBridge) {
-      _lastSubprocessDiag =
-          'BXP_FORCE_BRIDGE set: evalBatch bridge unavailable/failed';
+    // In-process via the bridge (no bxp-fmt spawn). Same `{results:[...]}`
+    // shape, so `_parseBatchResults` works unchanged.
+    final bridge = _bridge();
+    if (bridge == null) {
+      _lastSubprocessDiag = 'evalBatch: bridge unavailable';
       return const [];
     }
-
-    final bin = binPath ?? findBin('bxp-fmt');
-    if (bin == null) return const [];
-    final stdinBytes = Uint8List.fromList(utf8.encode(jsonEncode(request)));
-
-    // Route through the shared one-shot path so the Win bridge handles
-    // the pipe drain (sidesteps dart-lang/sdk#1727 on large responses —
-    // a drill-down with many lookups can exceed the 8 KB anonymous-pipe
-    // threshold and silently truncate over Process.start). On Linux/Mac
-    // `_runOneShot` keeps using Process.start with the stdin body.
-    try {
-      final result = await _runOneShot(
-        bin,
-        const ['--expr-batch'],
-        timeout,
-        stdinBody: stdinBytes,
-      );
-      if (result.exitCode != 0) {
-        final err = (result.stderr as String);
-        _lastSubprocessDiag =
-            'evalBatch exit=${result.exitCode} stderr="${_peek(err)}"';
-        return const [];
-      }
-      return _parseBatchResults(result.stdout as String);
-    } catch (e) {
-      _lastSubprocessDiag = 'evalBatch ${e.runtimeType}: $e';
+    final raw =
+        bridge.inspect(jsonEncode({'op': 'eval_batch', 'request': request}));
+    if (raw == null) {
+      _lastSubprocessDiag = 'evalBatch: bridge_inspect failed';
       return const [];
     }
+    return _parseBatchResults(raw);
   }
 
   /// Parse the `{"results":[...]}` shape from `bxp-fmt --expr-batch`.
@@ -1115,7 +703,6 @@ class BxpProcessClient {
     required bool dryRun,
     void Function(List<int> chunk)? onStdoutChunk,
     void Function(String chunk)? onStderr,
-    void Function(Process)? onSpawn,
     void Function(int handle)? onBridgeSpawn,
   }) async {
     final endAction = DiagnosticLog.action(
@@ -1148,81 +735,31 @@ class BxpProcessClient {
       '--trace-file=$btraceOutPath',
     ];
 
-    // Windows routes through bridge_run_streaming in binary mode —
-    // dart:io's Process.start suffers ~8 KB pipe truncation on the
-    // multi-MB binary BXTB stream (dart-lang/sdk#1727). The bridge
-    // drains the pipe in native Zig code. Cancellation goes through
-    // the [onBridgeSpawn] handle + `cancelBtrace(handle)` since there
-    // is no [Process] object on the bridge path.
-    final dllPath = _resolveBridgePath();
-    if (Platform.isWindows) {
-      if (dllPath == null) {
-        endAction({'result': 'bridge_unavailable'});
-        return ProcessRunResult(
-          exitCode: -1,
-          stderr: 'bridge: ${_lastSubprocessDiag ?? "DLL unavailable"}',
-        );
-      }
-      return _runWithBtraceViaBridge(
-        bin: bin,
-        args: args,
-        cwd: workingDir,
-        dllPath: dllPath,
-        onStdoutChunk: onStdoutChunk,
-        onStderr: onStderr,
-        onBridgeSpawn: onBridgeSpawn,
-        endAction: endAction,
-      );
-    }
-    if (_forceBridgeProxy() && dllPath != null) {
-      return _runWithBtraceViaBridge(
-        bin: bin,
-        args: args,
-        cwd: workingDir,
-        dllPath: dllPath,
-        onStdoutChunk: onStdoutChunk,
-        onStderr: onStderr,
-        onBridgeSpawn: onBridgeSpawn,
-        endAction: endAction,
-      );
-    }
-
-    try {
-      final proc = await Process.start(bin, args, workingDirectory: workingDir);
-      if (onSpawn != null) onSpawn(proc);
-      // Stream stdout BYTES (binary BXTB frames). The transform here
-      // intentionally avoids utf8 decoding — these are raw little-endian
-      // u32/u16/u8 fields plus arbitrary lp-prefixed strings, not text.
-      // Caller's incremental parser feeds them into BtraceReader.streaming.
-      int stdoutBytes = 0;
-      final stdoutFut = proc.stdout.listen((chunk) {
-        stdoutBytes += chunk.length;
-        if (onStdoutChunk != null) onStdoutChunk(chunk);
-      }).asFuture<void>();
-      final stderrBuf = StringBuffer();
-      final stderrFut = proc.stderr.transform(utf8.decoder).listen((chunk) {
-        stderrBuf.write(chunk);
-        if (onStderr != null) onStderr(chunk);
-      }).asFuture<void>();
-      final exitCode = await proc.exitCode;
-      await stdoutFut;
-      await stderrFut;
-      endAction({
-        'exit': exitCode,
-        'stdout_bytes': stdoutBytes,
-        'stderr_bytes': stderrBuf.length,
-      });
-      return ProcessRunResult(
-        exitCode: exitCode,
-        stderr: stderrBuf.toString(),
-      );
-    } catch (e) {
-      endAction({'result': 'spawn_failed', 'error': e.toString()});
+    // bxp-cli streams the binary BXTB frame stream through
+    // bridge_run_streaming on every platform: dart:io's Process.start
+    // suffers ~8 KB pipe truncation on the multi-MB stream on Windows
+    // (dart-lang/sdk#1727), and the bridge is now the single backend
+    // everywhere (the Process.start path was retired with the bxp-fmt
+    // fallback). The bridge drains the pipe in native Zig code.
+    // Cancellation goes through the [onBridgeSpawn] handle +
+    // `cancelBtrace(handle)` since there is no [Process] object here.
+    if (_bridge() == null) {
+      endAction({'result': 'bridge_unavailable'});
       return ProcessRunResult(
         exitCode: -1,
-        stderr: 'spawn failed: $e',
+        stderr: 'bridge: ${_lastSubprocessDiag ?? "library unavailable"}',
       );
     }
+    return _runWithBtraceViaBridge(
+      bin: bin,
+      args: args,
+      cwd: workingDir,
+      dllPath: _bridgeLibPath!,
+      onStdoutChunk: onStdoutChunk,
+      onStderr: onStderr,
+      onBridgeSpawn: onBridgeSpawn,
+      endAction: endAction,
+    );
   }
 
   /// Bridge variant of [runWithBtrace]. Streams the binary BXTB frames
@@ -1286,10 +823,9 @@ class BxpProcessClient {
   /// future resolves naturally with the exit code. No-op for unknown
   /// handles (already exited).
   static void cancelBtrace(int handle) {
-    final dllPath = _resolveBridgePath();
-    if (dllPath == null) return;
+    if (_bridge() == null) return;
     try {
-      BridgeClient(dllPath).cancel(handle);
+      BridgeClient(_bridgeLibPath!).cancel(handle);
     } catch (_) {
       // Best-effort — cancel is idempotent and the run will resolve
       // anyway when the child exits or the watchdog fires.
@@ -1347,7 +883,7 @@ class ProcessRunResult {
 
   /// Synthetic exit code for "the child process exceeded its per-call
   /// timeout and was killed". The caller surfaces a "timed out" message
-  /// in place of the usual stderr — see `BxpProcessClient._runWithTimeout`.
+  /// in place of the usual stderr — see `_runOneShotViaBridge`.
   static const int kExitTimeout = -3;
 
   final int exitCode;

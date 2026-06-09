@@ -54,7 +54,7 @@ bxp/
 │   │                       # source for bxp-fmt + bxp-mcp
 │   ├── build.zig         # exports each file as a named Zig module
 │   └── build.zig.zon     # one fetch dep: uucode (Unicode tables); date/decimal cores in-house
-├── bxp-gui/              # Flutter desktop app (replaces bxp-ui; uses bxp-cli/bxp-fmt via subprocess)
+├── bxp-gui/              # Flutter desktop app (replaces bxp-ui; talks to bxp-gui-bridge via FFI, which proxies bxp-cli)
 │   ├── lib/              # Dart source (services/, store/, ui/)
 │   ├── linux/, macos/, windows/, web/  # platform configs
 │   ├── packages/json5_ast/             # Path-dep Dart JSON5 AST library
@@ -65,13 +65,13 @@ bxp/
 ├── bxp-gui-bridge/       # Zig FFI shared library (bxp-gui-bridge.dll on Windows,
 │   │                     # libbxp-gui-bridge.{so,dylib} on Linux/macOS). Built +
 │   │                     # shipped on ALL platforms (release-02 + Linux CMake copy
-│   │                     # it next to bxp-gui). Win: also the subprocess proxy
-│   │                     # (sidesteps dart:io pipe truncation, sdk#1727, on
-│   │                     # --docs/--config/--trace). All platforms: in-proc
-│   │                     # bridge_eval_expr(_trace) + bridge_inspect (docs/config/
-│   │                     # list/fetch/eval-batch) — GUI prefers these over spawning
-│   │                     # bxp-fmt. Linux/macOS proxy stays dormant (dry-runs use
-│   │                     # Process.start). BXP_FORCE_BRIDGE=1 disables the fmt fallback.
+│   │                     # it next to bxp-gui). Since v0.3.0 (2026-06-09) the GUI's
+│   │                     # SINGLE backend on every platform — no bxp-fmt spawn, no
+│   │                     # Process.start. In-proc bridge_eval_expr(_trace) +
+│   │                     # bridge_inspect (docs/config/list/fetch/eval-batch) serve
+│   │                     # the stateless ops from bxp-core/inspect; bridge_run(_streaming)
+│   │                     # proxies bxp-cli runs (sidesteps dart:io pipe truncation,
+│   │                     # sdk#1727). Missing library = fatal startup (all platforms).
 │   ├── src/main.zig      # C-ABI entrypoints: bridge_run, bridge_run_streaming,
 │   │                     # bridge_free, bridge_eval_expr(_trace), bridge_inspect
 │   ├── build.zig
@@ -165,11 +165,18 @@ that file. See `docs/release.md` for the operator walkthrough.
 ## Package dependency
 
 ```text
-bxp-cli  --[path dep]--> bxp-core   --[fetch dep]--> uucode (Unicode tables)
-bxp-fmt  --[path dep]--> bxp-core
-bxp-mcp  --[path dep]--> bxp-core    --[subprocess]-> bxp-cli (bxp_simulate only)
-bxp-gui  --[subprocess]-> bxp-cli, bxp-fmt
+bxp-cli         --[path dep]--> bxp-core   --[fetch dep]--> uucode (Unicode tables)
+bxp-fmt         --[path dep]--> bxp-core
+bxp-mcp         --[path dep]--> bxp-core    --[subprocess]-> bxp-cli (bxp_simulate only)
+bxp-gui-bridge  --[path dep]--> bxp-core    (bridge_inspect / bridge_eval_* in-proc)
+bxp-gui         --[FFI]------> bxp-gui-bridge --[subprocess]-> bxp-cli (dry-run/version)
 ```
+
+The GUI talks only to `bxp-gui-bridge` (FFI) on every platform since the
+v0.3.0 proxy flip — stateless ops run in-process via the bridge's
+bxp-core/inspect link, and the bridge proxies `bxp-cli` runs. `bxp-fmt` is
+no longer in the GUI's dependency path (it remains a standalone dev/CLI
+utility + console-archive companion).
 
 `bxp-core` is a local path dependency (`../bxp-core`) with a **single external
 dependency**: `uucode` (MIT), the field-selected Unicode case-mapping /
@@ -177,8 +184,10 @@ decomposition tables behind `UPPER`/`LOWER` (and the upcoming `unaccent`),
 pinned to its `zig-0.15` branch in `bxp-core/build.zig.zon`. The date core
 (`datefmt.zig`) and numeric core (`decimal.zig`) remain fully in-house — the
 former `sunrise` datetime dependency was replaced by `datefmt.zig`.
-bxp-gui ships both bxp-cli and bxp-fmt binaries inside the Flutter bundle and
-invokes them via `Process.run` for conversions, validation, docs, etc.
+bxp-gui ships `bxp-cli` + the `bxp-gui-bridge` library inside the Flutter
+bundle. It talks to the bridge over FFI (stateless validation / docs / expr
+eval in-process; `bxp-cli` conversions proxied through it) — it no longer
+ships or invokes `bxp-fmt` (the v0.3.0 proxy flip, 2026-06-09).
 
 ## bxp-gui user prefs
 

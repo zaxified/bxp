@@ -1054,7 +1054,6 @@ class TraceStore extends ChangeNotifier {
   /// the SettingsInspector renders "(unknown)" in that case.
   String? bxpGuiVersion;
   String? bxpCliVersion;
-  String? bxpFmtVersion;
 
   final PrefsService _prefs = PrefsService();
 
@@ -1097,49 +1096,41 @@ class TraceStore extends ChangeNotifier {
     } catch (_) {}
     notifyListeners();
 
-    // Pull the canonical docs catalog from the CLI. AWAITED on purpose —
-    // bxp-fmt is the single source of truth for the expression catalog
-    // (functions / keywords / operators / tokens / config schema). The GUI
-    // used to ship hand-maintained fallback constants, but they drifted
-    // from the live catalog and needed parallel maintenance. Now: if the
-    // binary is missing or `--docs` returns garbage, we set a fatal
-    // startup error and the app renders a blocking error screen instead
-    // of MainView (see BxpApp.home in main.dart). Once we reach the
-    // _initialized=true happy path, every consumer can read store.docX
-    // directly without a fallback branch.
-    final fmtBin = BxpProcessClient.findBin('bxp-fmt');
-    if (fmtBin == null) {
-      final envPath = Platform.environment['BXP_FMT_PATH'] ?? '(unset)';
+    // Pull the canonical docs catalog from the in-process bridge. AWAITED on
+    // purpose — the bridge (via bxp-core/inspect) is the single source of
+    // truth for the expression catalog (functions / keywords / operators /
+    // tokens / config schema). The GUI used to ship hand-maintained fallback
+    // constants, then spawned bxp-fmt; both are gone — every stateless op now
+    // goes through bxp-gui-bridge. If the bridge library can't be loaded or
+    // `docs` returns garbage, we set a fatal startup error and the app renders
+    // a blocking error screen instead of MainView (see BxpApp.home in
+    // main.dart). Once we reach the _initialized=true happy path, every
+    // consumer can read store.docX directly without a fallback branch.
+    if (!BxpProcessClient.ensureBridgeLoaded()) {
       final exe = Platform.resolvedExecutable;
       final exeDir = File(exe).parent.path;
-      final cwd = Directory.current.path;
       _fatalStartupError =
-          'bxp-fmt binary not found.\n\n'
-          'The GUI requires bxp-fmt to validate configs, evaluate expressions, '
-          'and load the docs catalog (functions / keywords / operators / tokens / '
-          'config schema). Without it nothing in the editor would work.\n\n'
-          'Searched (in order):\n'
-          '  • \$BXP_FMT_PATH environment variable = $envPath\n'
-          '  • bxp-fmt in the same directory as bxp_gui = '
-          '${p.join(exeDir, BxpProcessClient.binaryFileName('bxp-fmt'))}\n\n'
+          'bxp-gui-bridge library not found.\n\n'
+          'The GUI requires the bxp-gui-bridge shared library to validate '
+          'configs, evaluate expressions, and load the docs catalog '
+          '(functions / keywords / operators / tokens / config schema). '
+          'Without it nothing in the editor would work.\n\n'
+          'Searched next to bxp_gui in: $exeDir\n\n'
           'Diagnostics:\n'
-          '  • Platform.resolvedExecutable = $exe\n'
-          '  • Directory.current (PWD) = $cwd';
+          '  • ${BxpProcessClient.lastSubprocessDiag ?? "(no detail)"}\n'
+          '  • Platform.resolvedExecutable = $exe';
     } else {
       final d = await BxpProcessClient.getDocs();
       if (d == null) {
         final detail = BxpProcessClient.lastDocsError ?? '(no detail captured)';
-        final subprocDiag =
-            BxpProcessClient.lastSubprocessDiag ?? '(no subprocess diag)';
         _fatalStartupError =
-            'bxp-fmt --docs failed.\n\n'
-            'Found bxp-fmt at: $fmtBin\n\n'
+            'bxp-gui-bridge docs failed.\n\n'
+            'Bridge: ${BxpProcessClient.bridgeDllPath ?? "(unknown)"} '
+            '(v${BxpProcessClient.bridgeVersion ?? "?"})\n\n'
             'Failure detail: $detail\n\n'
-            'Subprocess fallback chain:\n  $subprocDiag\n\n'
-            'Calling it with --docs returned no parseable JSON. The binary may '
-            'be from an incompatible bxp-fmt version (the GUI requires the '
-            '--docs flag), or its output is corrupted. Rebuild bxp-fmt from '
-            'the current monorepo and restart the GUI.';
+            'The bridge returned no parseable docs JSON. It may be an '
+            'incompatible bxp-gui-bridge build; rebuild it from the current '
+            'monorepo and restart the GUI.';
       } else {
         docs = d;
       }
@@ -1159,11 +1150,9 @@ class TraceStore extends ChangeNotifier {
     final results = await Future.wait<String?>([
       guiVer(),
       BxpProcessClient.getVersion('bxp-cli'),
-      BxpProcessClient.getVersion('bxp-fmt'),
     ]);
     bxpGuiVersion = results[0];
     bxpCliVersion = results[1];
-    bxpFmtVersion = results[2];
 
     _initialized = true;
     notifyListeners();
@@ -2491,48 +2480,34 @@ class TraceStore extends ChangeNotifier {
     return _streamRunBtrace(dry: false);
   }
 
-  /// Live handle to the bxp-cli process spawned by `_streamRunBtrace`. Set inside
-  /// the spawn callback and cleared in the run's `finally` block, so a
-  /// non-null value means a streaming run is currently executing and can
-  /// be killed by [cancelRun].
-  ///
-  /// On Windows the btrace path goes through the bridge — there is no
-  /// [Process] object, only [_runBridgeHandle]. Both fields are
-  /// mutually exclusive within a single run.
-  Process? _runProcess;
-
-  /// Bridge stream handle for btrace runs that go through
-  /// `bridge_run_streaming` (Windows + BXP_FORCE_BRIDGE_PROXY smoke).
-  /// Set by the `onBridgeSpawn` callback; cleared by the `finally` block
-  /// or after [cancelRun] dispatched the bridge_cancel.
+  /// Bridge stream handle for the current btrace run. Every platform now
+  /// streams bxp-cli through `bridge_run_streaming` (the Process.start path
+  /// was retired with the bxp-fmt fallback), so this is the only live handle
+  /// to the child. Set by the `onBridgeSpawn` callback; cleared by the run's
+  /// `finally` block or after [cancelRun] dispatched the bridge_cancel.
   int? _runBridgeHandle;
 
-  /// True between `cancelRun()` and the moment `_runProcess` reaches
-  /// `exitCode`. Used by the toolbar to flip the run-button label to
-  /// "cancelling…" so the user sees that the click registered even before
-  /// bxp-cli actually exits.
+  /// True between `cancelRun()` and the moment the streaming run resolves.
+  /// Used by the toolbar to flip the run-button label to "cancelling…" so the
+  /// user sees that the click registered even before bxp-cli actually exits.
   bool _cancelRequested = false;
   bool get isCancelling => _cancelRequested;
 
-  /// Sends SIGTERM to the running bxp-cli child. The streaming `_streamRunBtrace`
-  /// future then collapses to the post-loop cleanup with whatever lines
-  /// landed before the kill — partial output stays visible. No-op when no
-  /// run is in flight.
+  /// Sends SIGTERM to the running bxp-cli child via the bridge. The streaming
+  /// `_streamRunBtrace` future then collapses to the post-loop cleanup with
+  /// whatever lines landed before the kill — partial output stays visible.
+  /// No-op when no run is in flight.
   ///
-  /// When the user clicks Cancel between status=running and Process.start
-  /// returning, `_runProcess` is still null. We flip `_cancelRequested`
-  /// anyway so `onSpawn` (below) can kill the child the moment the handle
-  /// shows up — otherwise an early click would silently no-op and the
-  /// run would race to completion ignoring the user.
+  /// When the user clicks Cancel between status=running and the bridge handle
+  /// arriving, `_runBridgeHandle` is still null. We flip `_cancelRequested`
+  /// anyway so `onBridgeSpawn` (below) cancels the moment the handle shows up
+  /// — otherwise an early click would silently no-op and the run would race
+  /// to completion ignoring the user.
   void cancelRun() {
     if (status != RunStatus.running) return;
     _cancelRequested = true;
-    final proc = _runProcess;
     final handle = _runBridgeHandle;
-    if (proc != null) {
-      devTrace('action.run.cancel', {'pid': proc.pid});
-      proc.kill(ProcessSignal.sigterm);
-    } else if (handle != null) {
+    if (handle != null) {
       devTrace('action.run.cancel', {'bridgeHandle': handle});
       BxpProcessClient.cancelBtrace(handle);
     } else {
@@ -3267,10 +3242,6 @@ class TraceStore extends ChangeNotifier {
         templateId: templateId,
         btraceOutPath: bxtbPath,
         dryRun: dry,
-        onSpawn: (p) {
-          _runProcess = p;
-          if (_cancelRequested) p.kill(ProcessSignal.sigterm);
-        },
         onBridgeSpawn: (handle) {
           _runBridgeHandle = handle;
           if (_cancelRequested) BxpProcessClient.cancelBtrace(handle);
@@ -3345,7 +3316,6 @@ class TraceStore extends ChangeNotifier {
       return;
     } finally {
       ticker.cancel();
-      _runProcess = null;
       _runBridgeHandle = null;
       _cancelRequested = false;
       // Best-effort cleanup of the on-disk .bxtb. Today the in-memory
