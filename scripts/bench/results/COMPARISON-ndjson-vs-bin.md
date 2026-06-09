@@ -2,7 +2,7 @@
 
 Producer change: bxp-cli `--trace` previously emitted line-by-line
 NDJSON; now emits a binary BXTB frame stream (metadata-only by default,
-drill-down is recomputed on demand by `bxp-fmt --expr-batch`).
+drill-down is recomputed on demand via the bridge's `eval_batch` op).
 
 - **Old baseline**: `results-20260522-010048.csv` (pre-rip, NDJSON producer)
 - **New numbers**: `results-20260524-024521.csv` (post-rip, BIN producer)

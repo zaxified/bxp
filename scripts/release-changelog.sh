@@ -27,7 +27,7 @@ MONO_ROOT="$(dirname "$SCRIPT_DIR")"
 MANIFESTS=(
     "$MONO_ROOT/bxp-core/build.zig.zon"
     "$MONO_ROOT/bxp-cli/build.zig.zon"
-    "$MONO_ROOT/bxp-fmt/build.zig.zon"
+    "$MONO_ROOT/bxp-mcp/build.zig.zon"
     "$MONO_ROOT/bxp-gui-bridge/build.zig.zon"
     "$MONO_ROOT/bxp-gui/pubspec.yaml"
     "$MONO_ROOT/bxp-gui/packages/json5_ast/pubspec.yaml"
@@ -159,7 +159,7 @@ should_skip() {
 NEW_ENTRY=$(mktemp)
 {
     echo ""
-    echo "## $TODAY — bxp-cli $NEW, bxp-fmt $NEW, bxp-gui $NEW"
+    echo "## $TODAY — bxp-cli $NEW, bxp-mcp $NEW, bxp-gui $NEW"
     echo ""
 
     declare -A buckets

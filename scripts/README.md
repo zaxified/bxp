@@ -54,11 +54,11 @@ bash scripts/release-tag.sh
 ```text
 test.sh                       wrapper — runs every test-NN-*.sh in order
 test-lib.sh                   shared section/step/summary helpers (sourced)
-test-01-console.sh            bxp-core unit + bxp-cli/fmt build + bxp-fmt smoke + json5_ast unit
+test-01-console.sh            bxp-core unit (incl. inspect) + bxp-cli build + readme src-sync + json5_ast unit
 test-02-datasets.sh           bxp-cli regression vs datasets/*/*.expected
 test-03-desktop.sh            flutter analyze + flutter test + json5_ast dart test
 test-04-bridge.sh             bxp-gui-bridge unit tests (FFI surface)
-test-06-expr-corpus.sh        bxp-fmt --expr corpus regression gate
+test-06-expr-corpus.sh        bxp_validate_expr corpus regression gate (via bxp-mcp)
 test-07-bench-guard.sh        coarse perf gate — own ReleaseFast build, RSS ceiling + wall scaling ratio
 
 release.sh                    wrapper — runs every release-NN-*.sh in order

@@ -27,22 +27,25 @@ VERSION_BARE="${VERSION#v}"
 
 mkdir -p "$OUTDIR"
 
+# Regenerate the shipped readmes from the single source before packaging, so the
+# bundled readme.md is never stale relative to resources/readme.src.md.
+bash "$SCRIPT_DIR/gen-readme.sh"
+
 # ─── Shared helpers ─────────────────────────────────────────────────────
 
 build_companions() {
     local target=$1
-    echo "  Cross-compiling bxp-cli + bxp-fmt + bxp-mcp for $target..."
+    echo "  Cross-compiling bxp-cli + bxp-mcp for $target..."
     (cd "$MONO_ROOT/bxp-cli" && zig build -Dtarget="$target" -Doptimize=ReleaseSmall)
-    (cd "$MONO_ROOT/bxp-fmt" && zig build -Dtarget="$target" -Doptimize=ReleaseSmall)
     (cd "$MONO_ROOT/bxp-mcp" && zig build -Dtarget="$target" -Doptimize=ReleaseSmall)
 }
 
-# Build the FFI bridge for a given target. Windows: load-bearing for the
-# subprocess proxy (sdk#1727 pipe truncation workaround). Linux/macOS:
-# hosts the in-process expression evaluator family (bridge_eval_expr /
-# bridge_eval_expr_trace) so per-keystroke expr validation runs sub-ms
-# instead of paying a ~50 ms subprocess spawn. Absence on Linux/macOS is
-# non-fatal — BxpProcessClient falls back to subprocess.
+# Build the FFI bridge for a given target. Since the v0.3.0 proxy flip it is
+# the GUI's single backend on every platform: stateless ops (config/expr
+# validation, docs, templates, eval-batch) run in-process via bridge_inspect /
+# bridge_eval_*, and bxp-cli runs are proxied through bridge_run(_streaming)
+# (the latter sidesteps sdk#1727 pipe truncation on Windows). The library is
+# mandatory — a missing probe is a fatal startup error on all hosts.
 build_bridge() {
     local target=$1
     echo "  Cross-compiling bxp-gui-bridge for $target..."
@@ -51,9 +54,8 @@ build_bridge() {
 }
 
 restore_native_companions() {
-    echo "  Restoring native bxp-cli + bxp-fmt + bxp-mcp + bxp-gui-bridge..."
+    echo "  Restoring native bxp-cli + bxp-mcp + bxp-gui-bridge..."
     (cd "$MONO_ROOT/bxp-cli" && zig build)
-    (cd "$MONO_ROOT/bxp-fmt" && zig build)
     (cd "$MONO_ROOT/bxp-mcp" && zig build)
     (cd "$MONO_ROOT/bxp-gui-bridge" && zig build)
 }
@@ -79,7 +81,6 @@ build_linux() {
     # Companion binaries (overwrite the dev symlink the linux/CMake hook
     # would have placed when run via `flutter run`).
     cp "$MONO_ROOT/bxp-cli/zig-out/bin/bxp-cli" "$appdir/bxp-cli"
-    cp "$MONO_ROOT/bxp-fmt/zig-out/bin/bxp-fmt" "$appdir/bxp-fmt"
     # MCP server — sibling to bxp-cli so its bxp_simulate tool can spawn it.
     cp "$MONO_ROOT/bxp-mcp/zig-out/bin/bxp-mcp" "$appdir/bxp-mcp"
     # Starter templates — GUI-only installs lack the console archive, so
@@ -170,7 +171,6 @@ build_windows() {
     mkdir -p "$appdir"
     cp -R "$bundle"/* "$appdir/"
     cp "$MONO_ROOT/bxp-cli/zig-out/bin/bxp-cli.exe" "$appdir/bxp-cli.exe"
-    cp "$MONO_ROOT/bxp-fmt/zig-out/bin/bxp-fmt.exe" "$appdir/bxp-fmt.exe"
     # MCP server — sibling to bxp-cli so its bxp_simulate tool can spawn it.
     cp "$MONO_ROOT/bxp-mcp/zig-out/bin/bxp-mcp.exe" "$appdir/bxp-mcp.exe"
     # Starter templates for GUI-only installs (see Linux note above).
@@ -216,7 +216,6 @@ build_macos() {
     # Companions inside the .app bundle's MacOS dir alongside the main
     # binary, so BxpProcessClient.findBin finds them as siblings.
     cp "$MONO_ROOT/bxp-cli/zig-out/bin/bxp-cli" "$app/Contents/MacOS/bxp-cli"
-    cp "$MONO_ROOT/bxp-fmt/zig-out/bin/bxp-fmt" "$app/Contents/MacOS/bxp-fmt"
     # MCP server — sibling to bxp-cli so its bxp_simulate tool can spawn it.
     cp "$MONO_ROOT/bxp-mcp/zig-out/bin/bxp-mcp" "$app/Contents/MacOS/bxp-mcp"
     # Starter templates for GUI-only installs (see Linux note above).

@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
-# Console-side build + unit tests (bxp-core, bxp-cli, bxp-fmt, json5_ast).
+# Console-side build + unit tests (bxp-core, bxp-cli, json5_ast).
 # Dataset regression lives in test-02-datasets.sh; desktop tests in
-# test-03-desktop.sh.
+# test-03-desktop.sh. The stateless inspect surface that bxp-fmt used to
+# expose (config annotation, expr validation, expr-batch, docs, templates)
+# now lives in bxp-core/inspect.zig — its unit tests run in the bxp-core
+# phase below, and the agent-facing smoke of the same core runs in
+# test-05-mcp.sh (bxp_validate / bxp_validate_expr / bxp_eval_batch).
 #
 # Usage (from any directory):
 #   bash scripts/test-01-console.sh   — this phase alone
@@ -13,65 +17,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MONO_ROOT="$(dirname "$SCRIPT_DIR")"
 source "$SCRIPT_DIR/test-lib.sh"
 
-BXP_FMT="$MONO_ROOT/bxp-fmt/zig-out/bin/bxp-fmt"
-DATASETS="$MONO_ROOT/datasets"
-
 _zig_in() {
     local dir="$1"; shift
     (cd "$dir" && zig "$@")
-}
-
-# bxp-fmt's negative unit tests deliberately fire `loadFromBytes` paths
-# that emit a human-readable stderr line alongside the structured
-# Diagnostic. step() captures stderr and only surfaces it on failure,
-# so the harmless leakage stays hidden on green runs.
-
-_smoke_bxp_fmt() {
-    # --config must succeed and emit valid JSON (annotated output contract).
-    for sample_json in "$DATASETS"/*/sample.json; do
-        "$BXP_FMT" --config "$sample_json" | python3 -m json.tool > /dev/null
-    done
-    # --expr accepts valid syntax … and confirms it on stdout.
-    expr_ok=$("$BXP_FMT" --expr "IF([Qty] > 0, 'BUY', 'SELL')")
-    [ "$expr_ok" = '{"ok":true}' ] || {
-        echo "FAIL: bxp-fmt --expr did not emit {\"ok\":true} on success"
-        echo "$expr_ok"
-        return 1
-    }
-    # … and rejects broken syntax.
-    if "$BXP_FMT" --expr "IF([Qty"; then
-        echo "FAIL: bxp-fmt --expr did not reject broken expression"
-        return 1
-    fi
-    # --expr-batch evaluates N exprs against one row in a single spawn.
-    # Verifies the JSON contract used by bxp-gui drill-down on Linux/Mac
-    # (where Process.start cost makes per-expr fan-out unusable).
-    local batch_out
-    batch_out=$("$BXP_FMT" --expr-batch <<'EOF'
-{
-  "headers": ["Ticker","Qty","Price"],
-  "fields":  ["AGNC","2","100.50"],
-  "ticker_map": {"AGNC":"AGNC.NASDAQ"},
-  "exprs": [
-    "TICKER([Ticker])",
-    "[Qty]",
-    "[Qty] * [Price]",
-    "[NoSuchCol]",
-    "BROKEN(("
-  ]
-}
-EOF
-)
-    echo "$batch_out" | python3 -c '
-import json, sys
-r = json.loads(sys.stdin.read())["results"]
-assert len(r) == 5, f"expected 5 results, got {len(r)}"
-assert r[0] == {"ok": True,  "value": "AGNC.NASDAQ"}, r[0]
-assert r[1] == {"ok": True,  "value": "2"},           r[1]
-assert r[2] == {"ok": True,  "value": "201"},         r[2]
-assert r[3] == {"ok": True,  "value": ""},            r[3]  # missing col → ""
-assert r[4]["ok"] is False and "off" not in r[4] or True, r[4]
-' || { echo "FAIL: --expr-batch output did not match expected shape"; echo "$batch_out"; return 1; }
 }
 
 _json5_ast_tests() {
@@ -85,7 +33,8 @@ section "Console"
 step "$(_lab bxp-core   'unit tests')"  _zig_in "$MONO_ROOT/bxp-core" build test
 step "$(_lab bxp-cli    'build')"       _zig_in "$MONO_ROOT/bxp-cli"  build
 step "$(_lab bxp-cli    'unit tests')"  _zig_in "$MONO_ROOT/bxp-cli"  build test
-step "$(_lab bxp-fmt    'build')"       _zig_in "$MONO_ROOT/bxp-fmt"  build
-step "$(_lab bxp-fmt    'unit tests')"  _zig_in "$MONO_ROOT/bxp-fmt"  build test
-step "$(_lab bxp-fmt    'smoke')"       _smoke_bxp_fmt
 step "$(_lab json5_ast  'unit tests')"  _json5_ast_tests
+# Drift guard: the two shipped readmes are generated from resources/readme.src.md
+# (scripts/gen-readme.sh). Fail if a committed variant is out of sync with a
+# fresh generation — i.e. someone edited a generated readme instead of the source.
+step "$(_lab readmes    'src sync')"    bash "$SCRIPT_DIR/gen-readme.sh" --check

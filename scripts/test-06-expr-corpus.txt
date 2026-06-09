@@ -8,7 +8,7 @@
 # Section headers use box-drawing characters for visual scan.
 # Non-inline comments above complex cases explain the why.
 #
-# Function catalog (per `bxp-fmt --docs` 2026-05-29, 38 functions):
+# Function catalog (per `bxp-mcp` bxp_docs 2026-05-29, 38 functions):
 #   ABS, CEILING, COALESCE, CONTAINS, DATE_CONVERT, DATEADD, DATEDIFF,
 #   DAY, ENDS_WITH, EOMONTH, FIELDS, FLOOR, GREATEST, IF, IN, LEAST,
 #   LEFT, LEN, LOOKUP, LOWER, MONTH, NOW, NTH_DOW, NULLIF, PRICE_CURRENCY,

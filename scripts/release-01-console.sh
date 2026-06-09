@@ -8,17 +8,15 @@
 # Also runs as part of `scripts/release.sh` (console + desktop wrapper).
 #
 # Output: releases/console/bxp-console-<version>-<platform>.(tar.gz|zip)
-#         Archive contains bxp/ with: bxp-cli(.exe), bxp-fmt(.exe),
-#         bxp-mcp(.exe), bxp-cli.examples.json, bxp-cli.json (trading212
-#         sample), readme.md, sample.{csv,csvx,expected}
+#         Archive contains bxp/ with: bxp-cli(.exe), bxp-mcp(.exe),
+#         bxp-cli.examples.json, bxp-cli.json (trading212 sample), readme.md,
+#         sample.{csv,csvx,expected}
 #
-# bxp-fmt ships alongside bxp-cli so a console user (or an AI assistant
-# authoring a template) can run the documented self-test: --config
-# validation + --expr-trace / --expr-batch expression authoring.
-#
-# bxp-mcp (the MCP server) ships alongside both so an agent can drive bxp
-# over MCP; its bxp_simulate tool spawns bxp-cli from the same directory, so
-# the three binaries must stay co-located in the archive.
+# bxp-mcp (the MCP server) ships alongside bxp-cli so an agent (or a console
+# user) can drive bxp's stateless surface — validate a config / expression,
+# evaluate, list templates, read the docs — and run a full conversion via its
+# bxp_simulate tool, which spawns bxp-cli from the same directory. The two
+# binaries must stay co-located in the archive.
 
 # enable all command debugs
 #set -x
@@ -34,6 +32,10 @@ VERSION=${1:-$(git -C "$MONO_ROOT" describe --tags --abbrev=0 2>/dev/null || ech
 echo "Building bxp-console ${VERSION}"
 mkdir -p "$OUTDIR"
 
+# Regenerate the shipped readmes from the single source before packaging, so the
+# archived readme.md is never stale relative to resources/readme.src.md.
+bash "$SCRIPT_DIR/gen-readme.sh"
+
 build() {
     local target=$1   # zig target triple
     local name=$2     # output filename suffix
@@ -41,18 +43,15 @@ build() {
 
     echo "  [$target]"
     (cd "$MONO_ROOT/bxp-cli" && zig build -Dtarget="$target" -Doptimize=ReleaseSmall)
-    (cd "$MONO_ROOT/bxp-fmt" && zig build -Dtarget="$target" -Doptimize=ReleaseSmall)
     (cd "$MONO_ROOT/bxp-mcp" && zig build -Dtarget="$target" -Doptimize=ReleaseSmall)
 
     local bin="$MONO_ROOT/bxp-cli/zig-out/bin/bxp-cli${ext}"
-    local fmtbin="$MONO_ROOT/bxp-fmt/zig-out/bin/bxp-fmt${ext}"
     local mcpbin="$MONO_ROOT/bxp-mcp/zig-out/bin/bxp-mcp${ext}"
     local base="$OUTDIR/bxp-console-${VERSION}-${name}"
     local stage
     stage=$(mktemp -d)
     mkdir -p "$stage/bxp"
     cp "$bin"                                                          "$stage/bxp/bxp-cli${ext}"
-    cp "$fmtbin"                                                       "$stage/bxp/bxp-fmt${ext}"
     cp "$mcpbin"                                                       "$stage/bxp/bxp-mcp${ext}"
     cp "$MONO_ROOT/resources/console/bxp-cli.examples.json"            "$stage/bxp/bxp-cli.examples.json"
     cp "$MONO_ROOT/datasets/trading212_to_wealthfolio/sample.json"     "$stage/bxp/bxp-cli.json"
@@ -83,5 +82,4 @@ ls -lh "$OUTDIR"/bxp-console-"${VERSION}"-*
 echo ""
 echo "Restoring native binaries..."
 (cd "$MONO_ROOT/bxp-cli" && zig build)
-(cd "$MONO_ROOT/bxp-fmt" && zig build)
 (cd "$MONO_ROOT/bxp-mcp" && zig build)

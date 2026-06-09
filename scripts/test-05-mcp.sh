@@ -51,6 +51,10 @@ print(json.dumps({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabi
 print(json.dumps({"jsonrpc":"2.0","method":"notifications/initialized"}))  # no response
 print(json.dumps({"jsonrpc":"2.0","id":2,"method":"tools/list"}))
 call(3, "bxp_eval",          {"expr":"1 + 2"})
+# Authoring-time validator: a literal SPLIT_PART index of 0 is a static lint
+# finding (always yields ""), so validate flags it where eval would run it to "".
+call(13, "bxp_validate_expr", {"expr":"SPLIT_PART('a/b', '/', 0)"})
+call(14, "bxp_validate_expr", {"expr":"UPPER('hi')"})
 call(4, "bxp_eval_batch",    {"headers":["P"],"fields":["7"],"exprs":["[P]","BADFN()"]})
 call(5, "bxp_validate",      {"config": cfg})
 call(6, "bxp_list_templates",{"config": cfg})
@@ -102,11 +106,19 @@ assert by_id[1]["result"]["protocolVersion"] == "2025-11-25", by_id[1]
 assert by_id[9]["result"]["protocolVersion"] == "2025-06-18", by_id[9]
 
 names = {t["name"] for t in by_id[2]["result"]["tools"]}
-assert names == {"bxp_validate","bxp_eval","bxp_eval_batch","bxp_eval_trace",
-                 "bxp_docs","bxp_list_templates","bxp_fetch_template",
-                 "bxp_simulate"}, names
+assert names == {"bxp_validate","bxp_validate_expr","bxp_eval","bxp_eval_batch",
+                 "bxp_eval_trace","bxp_docs","bxp_list_templates",
+                 "bxp_fetch_template","bxp_simulate"}, names
 
 assert tool_json(3) == {"ok": True, "value": "3"}, tool_json(3)
+
+# bxp_validate_expr — authoring verdict: the literal-0 SPLIT_PART is flagged
+# (domain {ok:false}, isError stays false); a sound expression passes.
+v = tool_json(13)
+assert v["ok"] is False and v["error"] == "SplitPartBadIndex", v
+assert by_id[13]["result"]["isError"] is False, by_id[13]
+assert by_id[13]["result"]["structuredContent"]["ok"] is False, by_id[13]
+assert tool_json(14) == {"ok": True}, tool_json(14)
 
 r = tool_json(4)["results"]
 assert r[0] == {"ok": True, "value": "7"}, r       # field access
