@@ -97,6 +97,33 @@ class _TraceStoreMcpHost implements GuiMcpHost {
   @override
   Map<String, String> errorsAt(List<String> path) => _store.errorsAt(path);
   @override
+  Map<String, dynamic>? traceSummary() {
+    final m = _store.traceModel;
+    if (m == null) return null;
+    final files = <Map<String, dynamic>>[];
+    for (final id in m.fileOrder) {
+      final f = m.files[id];
+      if (f == null) continue;
+      files.add({
+        'template': f.template,
+        'path': f.path,
+        'rowsDeclared': f.rows,
+        'rowsTraced': f.rowIds.length,
+        'prepassEntries': f.prepass.length,
+        'stats': ?f.stats,
+      });
+    }
+    return {
+      'fromBtrace': m.fromBtrace,
+      'exitCode': ?m.done?['exitCode'],
+      'rawLines': _store.rawLines,
+      'totalRowsTraced': m.rows.length,
+      'fileCount': m.files.length,
+      'files': files,
+      'issues': m.issues,
+    };
+  }
+  @override
   void editConfigNode(List<String> path, dynamic newValue) =>
       _store.editConfigNode(path, newValue);
   @override

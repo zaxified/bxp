@@ -43,9 +43,14 @@ class _FakeHost implements GuiMcpHost {
   int fullRunCount = 0;
   bool exitCalled = false;
 
+  Map<String, dynamic>? trace;
+
   @override
   Map<String, String> errorsAt(List<String> path) =>
       errorsByPath[path.join('.')] ?? const {};
+
+  @override
+  Map<String, dynamic>? traceSummary() => trace;
 
   @override
   void editConfigNode(List<String> path, dynamic newValue) {
@@ -152,8 +157,34 @@ void main() {
         'full_run',
         'delete_node',
         'exit',
+        'get_trace',
       }),
     );
+  });
+
+  test('get_trace returns the run summary, null before any run', () async {
+    final before = await client!.callTool(
+      CallToolRequest(name: 'get_trace', arguments: const {}),
+    );
+    expect(_decode(before)['trace'], isNull);
+
+    host.trace = {
+      'fromBtrace': true,
+      'exitCode': 0,
+      'fileCount': 1,
+      'totalRowsTraced': 42,
+      'files': [
+        {'template': 't', 'path': '/in.csv', 'rowsDeclared': 42, 'rowsTraced': 42},
+      ],
+      'issues': <String>[],
+    };
+    final after = await client!.callTool(
+      CallToolRequest(name: 'get_trace', arguments: const {}),
+    );
+    final trace = _decode(after)['trace'] as Map<String, dynamic>;
+    expect(trace['fileCount'], 1);
+    expect(trace['totalRowsTraced'], 42);
+    expect((trace['files'] as List).single['path'], '/in.csv');
   });
 
   test('get_state returns the live state shape + logs activity', () async {

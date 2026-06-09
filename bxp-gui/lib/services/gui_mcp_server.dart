@@ -55,6 +55,11 @@ abstract interface class GuiMcpHost {
   /// Error diagnostics attached to the node at [path].
   Map<String, String> errorsAt(List<String> path);
 
+  /// JSON-friendly summary of the most recent dry/full run's btrace data
+  /// (per-file row counts + stats, totals, exit code, parse issues). Null
+  /// when no run has happened yet.
+  Map<String, dynamic>? traceSummary();
+
   /// Edit a scalar leaf — the same live, undoable action the UI uses.
   void editConfigNode(List<String> path, dynamic newValue);
 
@@ -559,6 +564,31 @@ class GuiMcpServer extends ChangeNotifier {
         _host.deleteConfigNode(path);
         _record('delete_node', path.join('.'), 'ok');
         return _json({'deleted': true, 'path': path, 'isDirty': _host.isDirty});
+      },
+    );
+
+    // get_trace — read-only summary of the most recent run's btrace data.
+    server.registerTool(
+      'get_trace',
+      description:
+          'Summarise the most recent dry/full run captured via btrace: '
+          'per-file row counts + file_end stats, total traced rows, exit '
+          'code, and any parse issues. `trace` is null when no run has '
+          'happened yet.',
+      inputSchema: JsonSchema.object(properties: const {}, required: const []),
+      annotations: const ToolAnnotations(
+        title: 'Get run trace',
+        readOnlyHint: true,
+        openWorldHint: false,
+      ),
+      callback: (args, extra) async {
+        final summary = _host.traceSummary();
+        _record(
+          'get_trace',
+          summary == null ? '(no run)' : '${summary['fileCount']} file(s)',
+          'ok',
+        );
+        return _json({'trace': summary});
       },
     );
 
