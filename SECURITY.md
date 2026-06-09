@@ -29,7 +29,7 @@ published with credit (unless you ask to remain anonymous).
 
 The realistic attack surfaces in bxp are:
 
-- **CSV / JSON5 / XLSX parsing** in `bxp-cli`, `bxp-fmt` and `bxp-core`
+- **CSV / JSON5 / XLSX parsing** in `bxp-cli`, `bxp-mcp` and `bxp-core`
   when fed crafted input files (parser crashes, allocator exhaustion,
   path traversal in xlsx ZIP entries, etc.).
 - **Expression evaluator** (`bxp-core/src/expr.zig`) — unchecked

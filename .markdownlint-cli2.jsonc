@@ -41,5 +41,10 @@
     // column alignment; markdownlint's table/emphasis rules fight that style
     // and they are never rendered for end users. Exempt all of them.
     "**/CLAUDE.md",
+    // readme.src.md is the single source the two shipped readmes are generated
+    // from (scripts/gen-readme.sh). It intentionally carries a dual H1
+    // (MD025) under GUI-ONLY/CLI-ONLY markers — only one survives per generated
+    // variant. The generated readmes are linted; the source is not.
+    "resources/readme.src.md",
   ],
 }

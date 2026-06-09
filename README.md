@@ -72,8 +72,8 @@ adapt. A new broker takes a JSON5 entry, not a code change.
 
 ### 1. Console cli with examples
 
-The console package ships `bxp-cli` + `bxp-fmt` (a validation /
-expression-authoring helper) + `bxp-cli.examples.json` (12 working
+The console package ships `bxp-cli` + `bxp-mcp` (an MCP server that lets an
+AI agent validate, evaluate, and self-test templates) + `bxp-cli.examples.json` (12 working
 templates with inline comments) + a sample `bxp-cli.json`. Use this when
 you want headless batch conversion, want to script `bxp-cli` into a
 pipeline, or just need to read the template catalog without installing

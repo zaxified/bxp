@@ -35,7 +35,11 @@ examples/README.md
 bxp-gui/packages/json5_ast/test/fixtures/
 
 # User-facing tutorials — hand-formatted for readability (long copy-paste
-# blocks, manual alignment). Auto-reflow would degrade the UX.
+# blocks, manual alignment). Auto-reflow would degrade the UX. readme.src.md
+# is the single source the two variants are generated from
+# (scripts/gen-readme.sh); it carries GUI-ONLY/CLI-ONLY marker comments and a
+# dual H1 that prettier would reflow and markdownlint would flag.
+resources/readme.src.md
 resources/console/readme.md
 resources/desktop/readme.md
 

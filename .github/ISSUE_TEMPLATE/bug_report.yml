@@ -16,7 +16,7 @@ body:
       options:
         - bxp-cli (command-line tool)
         - bxp-gui (desktop app)
-        - bxp-fmt (validator / docs binary)
+        - bxp-mcp (MCP server for agents)
         - Not sure
     validations:
       required: true

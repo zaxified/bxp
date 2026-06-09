@@ -11,7 +11,7 @@ name: debug-gui
 #   3. Download the `bxp-gui-windows-debug-<label>` artifact zip.
 #   4. Stop the installed BXP, replace bxp-gui.exe + flutter_windows.dll
 #      + the data/ folder under "C:\Program Files\BXP\" with the files
-#      from the zip. Leave bxp-cli.exe / bxp-fmt.exe / icons untouched
+#      from the zip. Leave bxp-cli.exe / bxp-gui-bridge.dll / icons untouched
 #      (they ship from the official installer).
 
 on:
@@ -45,7 +45,6 @@ jobs:
       - name: Build companion binaries + bridge DLL (windows target)
         run: |
           (cd bxp-cli         && zig build -Dtarget=x86_64-windows -Doptimize=ReleaseSmall)
-          (cd bxp-fmt         && zig build -Dtarget=x86_64-windows -Doptimize=ReleaseSmall)
           (cd bxp-gui-bridge  && zig build -Dtarget=x86_64-windows -Doptimize=ReleaseSmall)
       - name: Build Flutter Windows bundle
         run: |
@@ -58,7 +57,7 @@ jobs:
           cp -r bxp-gui/build/windows/x64/runner/Release/* staging/
           # Drop companions: the user's installed BXP already has them
           # (and these were rebuilt only to satisfy the bundle copy step).
-          rm -f staging/bxp-cli.exe staging/bxp-fmt.exe
+          rm -f staging/bxp-cli.exe
           # Ship the bridge DLL — bxp_process_client.findBridgeLibrary()
           # looks for it next to bxp-gui.exe, the install will be missing
           # it from the older v0.2.1 installer so we need to drop it in.

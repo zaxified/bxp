@@ -11,7 +11,7 @@ Open an issue at <https://github.com/zaxified/bxp/issues>.
 
 For bugs, please include:
 
-- The binary version (`bxp-cli --version` / `bxp-fmt --version`, or
+- The binary version (`bxp-cli --version`, or
   `Help → About` in `bxp-gui`).
 - A minimal config snippet plus a short input sample that reproduces
   the problem.
@@ -54,7 +54,7 @@ workflow is:
 1. Draft a template with the AI workflow described in
    [`resources/console/readme.md`](resources/console/readme.md)
    ("Need a broker that isn't listed?" section).
-2. Verify it with `bxp-fmt --config` (validation) and
+2. Verify it with the bxp-mcp tools (`bxp_validate` + `bxp_simulate`) or
    `bxp-cli --debug` (runtime check).
 3. Add the template to `resources/bxp-cli.examples.json` and a paired
    dataset under `datasets/`.
@@ -66,7 +66,7 @@ For build / test commands, repo layout, and architecture see
 [`docs/devel.md`](docs/devel.md). Module-level conventions live in the
 `CLAUDE.md` file inside each package
 ([`bxp-cli/`](bxp-cli/CLAUDE.md), [`bxp-core/`](bxp-core/CLAUDE.md),
-[`bxp-fmt/`](bxp-fmt/CLAUDE.md), [`bxp-gui/`](bxp-gui/CLAUDE.md)).
+[`bxp-mcp/`](bxp-mcp/CLAUDE.md), [`bxp-gui/`](bxp-gui/CLAUDE.md)).
 
 - Run `bash scripts/test.sh` before opening a PR.
 - Keep one logical change per PR — bundle dataset + template + code in
