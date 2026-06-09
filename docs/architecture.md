@@ -9,8 +9,8 @@
   - [Two-Pass Pipeline Detail](#two-pass-pipeline-detail)
   - [Expression Evaluator - Why a Custom DSL?](#expression-evaluator---why-a-custom-dsl)
   - [Expression Evaluator - Call Stack](#expression-evaluator---call-stack)
-- bxp-fmt
-  - [Validation Pipeline](#bxp-fmt-validation-pipeline)
+- Config validation
+  - [Validation Pipeline](#config-validation-pipeline)
 - bxp-gui
   - [Layers and Components](#bxp-gui-layers-and-components)
   - [Dry-run / Runner Flow](#dry-run--runner-flow)
@@ -62,7 +62,7 @@ graph TD
         processBroker()"]
     end
 
-    subgraph FMT["bxp-fmt (binary)"]
+    subgraph FMT["Config validation (bridge / inspect)"]
         FMTMAIN["main.zig
         --config / --expr / --docs
         --expr-trace / --list-templates"]
@@ -129,11 +129,11 @@ graph TD
 
 `bxp-gui-bridge` is the FFI shim the GUI loads via `dart:ffi` at startup. Two
 roles in one shared library: (1) on **Windows** it wraps every `bxp-cli` /
-`bxp-fmt` subprocess to sidestep dart-lang/sdk#1727 (~8 KB stdout cutoff that
+`bxp-cli` runs through the bridge to sidestep dart-lang/sdk#1727 (~8 KB stdout cutoff that
 kills `--docs` and `--trace`) — this path is mandatory; probe failure at
 startup is fatal. (2) on **all platforms** it links `bxp-core/expr` directly
 so the editor's live validation and the ExprPlayground avoid the ~50 ms
-`bxp-fmt --expr` spawn cost per keystroke. The subprocess proxy paths
+subprocess spawn cost per keystroke. The subprocess proxy paths
 (`bridge_run`/`bridge_run_streaming`) also compile on Linux/macOS but stay
 dormant behind a `BXP_FORCE_BRIDGE_PROXY=1` smoke gate until v0.3.0.
 
@@ -145,10 +145,10 @@ in [`bxp-gui-bridge/CLAUDE.md`](../bxp-gui-bridge/CLAUDE.md).
 
 `docs.zig` is an aggregator — it owns no schema of its own. The dotted arrows
 indicate that it re-exports `expr.builtins` (the `FnDoc` catalog) and flattens
-each `config.zig` struct's `fields[]` table into the `bxp-fmt --docs` JSON.
+each `config.zig` struct's `fields[]` table into the docs catalog JSON.
 Adding a new built-in or config field updates the docs automatically.
 
-`bxp-fmt`'s `--config` path also calls `json5.preprocessAnnotated` directly to
+the config validator (`inspect.annotateRaw`) also calls `json5.preprocessAnnotated` directly to
 emit `$comm_*` / `$err_*` siblings — that's the source of the FMT → JSON5
 arrow that bypasses the normal config loader.
 
@@ -508,15 +508,15 @@ top-level `ticker_maps` registry).
 
 ### Static analysis path (parallel to runtime eval)
 
-`bxp-fmt`'s validation passes don't run expressions — they walk the parse
+The config validator's passes don't run expressions — they walk the parse
 tree to find typos and dead references. Three top-level entry points in
 `expr.zig`:
 
 | Function                       | What it returns                                | Used by                                               |
 | ------------------------------ | ---------------------------------------------- | ----------------------------------------------------- |
 | `staticReferences(src, alloc)` | Set of every `[X]` and `$var` referenced       | `validateUnknownKeysCollect`, `validateUnusedCollect` |
-| `staticCheckCalls(src, …)`     | Per-call FnArg arity + signature errors        | `bxp-fmt --config` (added in Phase G6)                |
-| `staticCheckSplitPart(src, …)` | Token-scan for `SPLIT_PART(_, _, ≤0)` literals | `bxp-fmt --config`                                    |
+| `staticCheckCalls(src, …)`     | Per-call FnArg arity + signature errors        | config validation (added in Phase G6)                |
+| `staticCheckSplitPart(src, …)` | Token-scan for `SPLIT_PART(_, _, ≤0)` literals | config validation                                    |
 
 These share the parser front-end with `eval()` — same recursive descent, no
 duplicated grammar — but emit `Diagnostic` records into a `*Diagnostics` sink
@@ -528,7 +528,7 @@ instead of producing values.
 
 The GUI is divided into three layers. Each layer has a single direction of
 dependency: UI reads from Store, Store calls Services, Services talk to the OS
-and to bxp-cli / bxp-fmt subprocesses.
+and to the bxp-cli subprocess (proxied by the bridge).
 
 ```mermaid
 graph TD
@@ -558,7 +558,7 @@ graph TD
 
     subgraph SVC["lib/services/"]
         BPC["BxpProcessClient
-        spawns bxp-cli / bxp-fmt
+        spawns bxp-cli
         parses stdout / stderr streams"]
         ASTL["ast_loader.dart
         parse user config → JsonAstNode tree"]
@@ -612,9 +612,9 @@ Key invariants:
   Services are stateless; they do not cache results.
 - **json5_ast is the live config representation.** The config is held in memory
   as an `AstNode` tree so edits preserve JSON5 comments and produce canonical
-  JSON5 output. bxp-fmt annotated JSON output is overlaid as diagnostics, not
+  JSON5 output. The validator's annotated JSON output is overlaid as diagnostics, not
   merged into the AST.
-- **No fallback FnDocs.** bxp-fmt `--docs` is the single source for the
+- **No fallback FnDocs.** The docs catalog is the single source for the
   language catalog. If the binary is missing at startup, the app shows a fatal
   error gate; there are no hardcoded fallback catalogs.
 - **Two transport paths.** `BxpProcessClient` picks per call between
@@ -626,7 +626,7 @@ Key invariants:
     Linux/macOS for every subcommand.
   - **In-process expression eval** (`bridge_eval_expr` / `bridge_eval_expr_trace`)
     runs on **all platforms** for the expr editor's live validation and the
-    ExprPlayground — avoids ~50 ms `bxp-fmt --expr` spawn cost per keystroke.
+    ExprPlayground — avoids the ~50 ms subprocess spawn cost per keystroke.
   - **Subprocess proxy via bridge** (`bridge_run` / `bridge_run_streaming` +
     `bridge_cancel` + `bridge_ack` for backpressure) is **mandatory on Windows**
     to sidestep a `dart:io` pipe-truncation bug (dart-lang/sdk#1727) that kills
@@ -730,7 +730,7 @@ sequenceDiagram
     participant TS as TraceStore
     participant ASTL as ast_loader (Dart JSON5 AST)
     participant BPC as BxpProcessClient
-    participant FMT as bxp-fmt --config
+    participant FMT as bridge (config)
 
     UI->>TS: setConfigPath(path) + loadConfig()
     TS->>TS: clear stale state\n(diagnostics, run-state, expr cache)
@@ -754,25 +754,25 @@ sequenceDiagram
 
 Key points:
 
-- **AST is the primary loader.** Even if `bxp-fmt --config` fails or is slow,
+- **AST is the primary loader.** Even if config validation fails or is slow,
   the user can still see the tree because `ast_loader` only depends on the
   Dart JSON5 library — no subprocess.
 - **AST parse failure is the only readonly trigger.** `_loadedWithErrors` is
-  flipped only when AST can't build a tree at all; bxp-fmt diagnostics are
+  flipped only when AST can't build a tree at all; validator diagnostics are
   shown as inline `$err_*` markers and the pre-save guard blocks bad saves —
   but the user can keep editing toward the fix.
 - **Diagnostics are path-keyed.** `$err_*` siblings in the annotated JSON are
   flattened into `Map<String, List<Diagnostic>>` keyed by dot-path. The tree
   renderer queries this map per-node to draw inline error chips.
-- **Dart re-validation runs synchronously after the bxp-fmt response.** It
+- **Dart re-validation runs synchronously after the validator response.** It
   populates a separate set of buckets driven by `FnDoc.args` + `FieldDoc`
-  validators — instant feedback even for buckets bxp-fmt didn't surface yet.
+  validators — instant feedback even for buckets the validator didn't surface yet.
 
 ---
 
-## bxp-fmt validation pipeline
+## Config validation pipeline
 
-When the GUI calls `bxp-fmt --config <path>`, the binary runs a sequence of
+When the GUI validates a config (`bridge_inspect {config}` → `inspect.annotateRaw`), it runs a sequence of
 diagnostic passes against the loaded config. Each pass appends to either the
 legacy `errors[]` list or the structured `Diagnostics` bag; both are merged
 into the annotated JSON output before exit.
@@ -818,7 +818,7 @@ appended to the parent when the offending field doesn't exist).
 
 `bxp-cli` runs only the first three passes (load) and skips the entire
 diagnostic chain — its job is to convert files, not validate. Hence the same
-typo that surfaces as a `$warn_*` sibling in `bxp-fmt`'s JSON appears as a
+typo that surfaces as a `$warn_*` sibling in the annotated JSON appears as a
 plain stderr warning line during a real run.
 
 ---
@@ -826,7 +826,7 @@ plain stderr warning line during a real run.
 ## bxp-mcp: MCP adapter over the shared core
 
 `bxp-mcp` is a second adapter over the same stateless `inspect` core that
-`bxp-fmt` wraps — but speaking MCP (JSON-RPC 2.0 over stdio) to an AI agent
+the shared `inspect` core serves — but speaking MCP (JSON-RPC 2.0 over stdio) to an AI agent
 instead of argv/stdout to a shell. An agent host spawns it as a child and pipes
 one JSON object per line; every stateless tool is a direct in-process `inspect`
 call (microseconds, no subprocess). The lone exception is `bxp_simulate`, which
@@ -881,7 +881,7 @@ Every user edit in the config tree (insert field, delete, setValue, reorder) is
 expressed as a `ConfigOp` and applied to the live `AstNode` tree via
 `json5_ast/operations.dart`. The dumper re-serialises the AST to JSON5 for display and
 for saving. `DartValidator` runs synchronously for fast per-field feedback;
-`bxp-fmt --config` is called on every Save for the authoritative full-config
+Config validation runs on every Save for the authoritative full-config
 validation.
 
 ```mermaid
@@ -890,7 +890,7 @@ sequenceDiagram
     participant TS as TraceStore
     participant AST as json5_ast (Dart)
     participant DV as DartValidator
-    participant FMT as bxp-fmt --config
+    participant FMT as bridge (config)
 
     UI->>TS: applyOp(ConfigOp)
     TS->>AST: ops.apply(op, astRoot)
@@ -910,7 +910,7 @@ sequenceDiagram
 ```
 
 `DartValidator` is a thin Dart interpreter driven by the same `FnDoc.args` and
-`FieldDoc` tables exported by `bxp-fmt --docs`. It does not reimplement
+`FieldDoc` tables exported by the docs catalog. It does not reimplement
 validation logic — it reads the single-source-of-truth catalog so that adding a
 new built-in function automatically extends the live validator.
 
@@ -968,8 +968,8 @@ Edge cases handled:
 ## Expr Playground
 
 Expressions are validated live (per keystroke, debounced ~300 ms) via
-`bxp-fmt --expr`. When the user switches to the **Variables** panel, the
-playground calls `bxp-fmt --expr-trace` with the current row context and streams
+the bridge expr validator. When the user switches to the **Variables** panel, the
+playground calls the bridge's expr-trace with the current row context and streams
 per-call results into the Variables table. Token-level error spans (byte
 `off`/`len` from Phase G1) are used to underline the offending token directly
 in the expr editor.
@@ -979,7 +979,7 @@ sequenceDiagram
     participant UI as expr_editor.dart
     participant TS as TraceStore
     participant BPC as BxpProcessClient
-    participant FMT as bxp-fmt
+    participant FMT as bridge (inspect)
 
     Note over UI,FMT: Live validation (per edit, debounced)
     UI->>TS: setExprDraft(path, src)

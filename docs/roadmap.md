@@ -22,7 +22,7 @@ per-broker template library so:
   …) ships next to the binary; users can also drop their own files into
   a per-user dir and the discovery merges both with the user dir winning
   on name collision.
-- `bxp-fmt --list-templates` / `--fetch-template` work without a
+- bxp-mcp's `bxp_list_templates` / `bxp_fetch_template` work without a
   user-owned `bxp-cli.json` — they enumerate the discovered library.
 - Per-broker variants can be added or revised independently without
   re-shipping one bloated examples file.
@@ -74,11 +74,21 @@ on every platform (as Windows always was). This also completes the
 **GUI-side preparation for deleting `bxp-fmt`**: the GUI no longer needs
 the binary at all (the bridge links bxp-core/inspect directly).
 
-Bundled with this flip but tracked for next session: actually deleting
-`bxp-fmt` (still used by the console archive's agent self-test and
-`scripts/test.sh` as a parity oracle) and the Windows `bridge_inspect`
-smoke leg (the path is now load-bearing on Windows; Linux is live-verified
-and the same DLL is already mandatory there for the proxy + eval families).
+### Delete bxp-fmt — DONE 2026-06-09
+
+`bxp-fmt` has been removed entirely. Its stateless surface already lived in
+`bxp-core/src/inspect.zig`; the two surviving adapters (bxp-mcp + bxp-gui-bridge)
+cover every operation. To get there: the ~27 `annotateRaw`/`expr-batch` unit
+tests moved into `inspect.zig` (wired into `bxp-core` `zig build test`); a new
+MCP **`bxp_validate_expr`** tool (over `inspect.validateExpr`) gave the agent
+surface parity with the bridge's `bridge_eval_expr`; `test-06` drives the
+expression corpus through that tool and `test-01` dropped the fmt build/smoke;
+the console + desktop archives ship `bxp-mcp` in fmt's slot. The console +
+desktop readmes were single-sourced in the same pass (see below).
+
+Still tracked: the Windows `bridge_inspect` smoke leg (the path is now
+load-bearing on Windows; Linux is live-verified and the same DLL is already
+mandatory there for the proxy + eval families).
 
 ### Auto-updater security audit & hardening
 
@@ -165,34 +175,18 @@ ceiling drops from `O(workbook size)` to
 
 ## Later (no specific version)
 
-### Single-source the console + desktop readmes
+### Single-source the console + desktop readmes — DONE 2026-06-09
 
-`resources/console/readme.md` and `resources/desktop/readme.md` today
-duplicate a large shared body (template authoring, `$variable` /
-expression reference, AI-assistant rules, self-test, locale parsing,
-`bxp-fmt` reference, exit codes) and differ only in product-specific
-framing (title, intro, GUI features, IO notes). The console readme is
-meant to be a **subset** of the desktop one, but the two drift apart
-whenever shared content is edited in only one — maintaining the subset
-relationship by hand is error-prone (proven repeatedly: the EU
-number-parsing section silently went stale in desktop, and self-test /
-`bxp-fmt` content diverged during the 2026-06-07 edits).
-
-Fix: **merge into one source readme** with GUI/desktop-only lines tagged
-inline, e.g. a `!GUI-ONLY!` marker, and a small build step that emits the
-two shipped variants:
-
-- Console variant — strip every `!GUI-ONLY!` line (and its marker).
-- Desktop variant — keep everything, strip just the marker token.
-
-Open questions: marker syntax that survives Markdown rendering if a
-generation step is ever skipped (HTML comment `<!-- GUI-ONLY -->` vs a
-bare `!GUI-ONLY!` sentinel); whether the generator is a new
-`scripts/` step wired into `release-*.sh` + a `test-*` drift guard that
-fails if a committed variant doesn't match a fresh generation;
-product-specific blocks that are not a clean line-strip (the title,
-intro binary list, IO section) may need a block-level `!GUI-ONLY!` /
-`!CLI-ONLY!` pair rather than per-line tags.
+Both shipped readmes are now generated from one source, `resources/readme.src.md`,
+by `scripts/gen-readme.sh`. Product-specific blocks are tagged with HTML-comment
+block markers (`<!-- GUI-ONLY:START -->…<!-- GUI-ONLY:END -->` and the `CLI-ONLY`
+pair) that survive Markdown rendering even if a generation step is skipped; the
+generator drops the off-variant blocks and strips the kept variant's markers.
+The console + desktop `readme.md` files are committed generated artifacts (and
+prettier/markdownlint-ignored alongside the source). A `--check` drift guard is
+wired into `test-01-console.sh` (fails if a committed variant is out of sync) and
+both `release-*.sh` scripts regenerate before packaging. Landed together with the
+bxp-fmt removal, since the fmt→bxp-mcp rewrite then only had to happen once.
 
 ### CI hardening
 
@@ -477,8 +471,8 @@ default)` (Excel-style) vs SQL `CASE WHEN` shape — the variadic
 
 - Grow the in-proc `bridge_eval_*` FFI family beyond today's
   `bridge_eval_expr` / `bridge_eval_expr_trace`. The intent: once
-  `bxp-core` / `bxp-fmt` stop churning internally, move more stateless
-  `bxp-fmt`-style calls off the subprocess path and link them directly
+  `bxp-core`'s `inspect` surface stops churning internally, move more
+  stateless inspect calls off any subprocess path and link them directly
   into the GUI process. Deferred deliberately — not worth pinning the FFI
   surface to code that is still changing. Conventions every new export
   must follow are already written up: see
@@ -491,14 +485,17 @@ default)` (Excel-style) vs SQL `CASE WHEN` shape — the variadic
 2026-06-07 brainstorm first imagined.** One stateless core,
 `bxp-core/src/inspect.zig`, with thin adapters on top:
 
-- **bxp-fmt** — CLI adapter (argv → stdout). Shipped.
-- **bxp-mcp** — MCP/stdio adapter. Shipped: `bxp_validate`, `bxp_eval`,
-  `bxp_eval_batch`, `bxp_eval_trace`, `bxp_list_templates`,
-  `bxp_fetch_template`, `bxp_docs`, and **`bxp_simulate`** (spawns the
-  co-located `bxp-cli` for a full run), with a per-request arena.
+- **bxp-mcp** — MCP/stdio adapter. Shipped: `bxp_validate`,
+  `bxp_validate_expr`, `bxp_eval`, `bxp_eval_batch`, `bxp_eval_trace`,
+  `bxp_list_templates`, `bxp_fetch_template`, `bxp_docs`, and
+  **`bxp_simulate`** (spawns the co-located `bxp-cli` for a full run),
+  with a per-request arena.
+- **bxp-gui-bridge** — FFI adapter for the Dart GUI (in-process). Shipped.
+- (A former **bxp-fmt** CLI adapter, argv → stdout, was removed once the
+  two above covered every operation.)
 
-The "core must not know who is calling it" boundary held: fmt, the MCP
-server, and the `bxp-gui-bridge` C-ABI all call `inspect`. The original
+The "core must not know who is calling it" boundary held: the MCP server
+and the `bxp-gui-bridge` C-ABI both call `inspect`. The original
 "separate embeddable Zig project" framing is superseded — it landed as
 monorepo packages.
 
@@ -514,9 +511,9 @@ Remaining / future:
 `2025-11-25` + negotiation, and the `bxp_simulate` per-row BXTB trace +
 phased `notifications/progress` — all shipped 2026-06-09 in `2ea296c`.)
 
-`fmt` is stateless (no `pre_pass`/`LOOKUP`), so full template simulation
-stays CLI territory — hence `bxp_simulate` spawns `bxp-cli` rather than
-running in-core.
+The `inspect` core is stateless (no `pre_pass`/`LOOKUP`), so full template
+simulation stays CLI territory — hence `bxp_simulate` spawns `bxp-cli`
+rather than running in-core.
 
 ### Agent-controllable GUI — embedded Dart MCP server
 
@@ -527,7 +524,7 @@ commands: open-config, close, reload, run (dry-run / full), exit, and
 similar window/document actions. This realises the bidirectional "agent
 controls the app" half of the original brainstorm on the GUI side: the
 live window takes commands and can push state back. (The per-call
-`bxp-fmt` spawn the older "GUI talks to a long-lived bxp-mcp" idea
+validator spawn the older "GUI talks to a long-lived bxp-mcp" idea
 targeted is already gone — stateless ops go through in-proc
 `bridge_inspect`; see _bxp-gui-bridge_. This new server is about
 _controlling the GUI_, not running stateless evals.)

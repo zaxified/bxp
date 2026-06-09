@@ -2,8 +2,10 @@
 
 > [← docs/](README.md)
 
-Machine-readable output formats emitted by **bxp-cli** and **bxp-fmt**.
-Consumed by bxp-gui (Dart via subprocess) and by `scripts/test.sh`.
+Machine-readable output formats emitted by **bxp-cli** (the binary BXTB trace)
+and the stateless **inspect** core (config / expression / docs / template JSON,
+surfaced through bxp-mcp + the bxp-gui-bridge FFI). Consumed by bxp-gui (via the
+bridge) and by `scripts/test.sh`.
 
 - [bxp-cli --trace](#bxp-cli---trace)
   - [Wire format](#wire-format)
@@ -11,8 +13,7 @@ Consumed by bxp-gui (Dart via subprocess) and by `scripts/test.sh`.
   - [Ordering guarantees](#ordering-guarantees)
   - [Drill-down model](#drill-down-model)
   - [Versioning policy](#versioning-policy)
-- [bxp-fmt](#bxp-fmt)
-  - [Exit codes](#exit-codes)
+- [Stateless inspect formats](#stateless-inspect-formats)
   - [--expr](#--expr)
   - [--expr-trace](#--expr-trace)
   - [--config](#--config)
@@ -193,7 +194,8 @@ When the GUI needs that detail (user clicks one row in the drill-down panel),
 it:
 
 1. Seeks the source CSV to `source_locator` and reads one record.
-2. Spawns `bxp-fmt --expr-batch` with the row fields + the current config's
+2. Calls the bridge's `eval_batch` op (in-process; the same shape the former
+   `bxp-fmt --expr-batch` produced) with the row fields + the current config's
    `input_schema` and `row_rules` to recompute variable values, rule matches,
    and output cells.
 
@@ -221,19 +223,26 @@ new frame type (or a new release).
 
 ---
 
-## bxp-fmt
+## Stateless inspect formats
 
-bxp-fmt is a developer utility invoked with exactly one action flag. All
-subcommands emit to **stdout** on success; errors go to **stderr**. Each
-invocation is stateless and short-lived.
+These are the JSON output shapes of the stateless inspection core
+(`bxp-core/src/inspect.zig`): config annotation, single-expression validation
+and evaluation, expr-trace, template list/fetch, and the docs catalog. The
+shapes are transport-agnostic — they reach callers through the **bxp-mcp** tools
+(the agent surface, mapped per subsection below) and the **bxp-gui-bridge** FFI
+(in-process for the Dart GUI). The bash snippets below are illustrative of each
+shape; the now-removed `bxp-fmt` CLI emitted the same bytes on stdout/stderr.
 
-### Exit codes
+Each subsection notes the bxp-mcp tool that produces the shape today:
 
-| Code | Meaning                                                                          |
-| ---- | -------------------------------------------------------------------------------- |
-| `0`  | Success.                                                                         |
-| `1`  | Validation failure — config diagnostic, expression error, template id not found. |
-| `2`  | Usage error — unknown flag, missing argument, mutually-exclusive actions.        |
+| Shape (below)     | bxp-mcp tool         | bridge op                  |
+| ----------------- | -------------------- | -------------------------- |
+| `--expr`          | `bxp_validate_expr`  | `bridge_eval_expr`         |
+| `--expr-trace`    | `bxp_eval_trace`     | `bridge_eval_expr_trace`   |
+| `--config`        | `bxp_validate`       | `bridge_inspect {config}`  |
+| `--list-templates`| `bxp_list_templates` | `bridge_inspect {list_templates}` |
+| `--fetch-template`| `bxp_fetch_template` | `bridge_inspect {fetch_template}` |
+| `--docs`          | `bxp_docs`           | `bridge_inspect {docs}`    |
 
 ### --expr
 
@@ -481,7 +490,9 @@ logic). Each entry describes one config tree path.
 | ---------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------ |
 | `bxp-cli`  | Produces `--trace` BXTB frame stream | [`bxp-cli/src/pipeline.zig`](../bxp-cli/src/pipeline.zig) — `Output.binEmit*()`                                    |
 | `bxp-core` | BXTB writer / reader                 | [`bxp-core/src/btrace.zig`](../bxp-core/src/btrace.zig)                                                            |
-| `bxp-fmt`  | All subcommand outputs               | [`bxp-fmt/src/main.zig`](../bxp-fmt/src/main.zig)                                                                  |
+| `bxp-core` | All stateless inspect outputs        | [`bxp-core/src/inspect.zig`](../bxp-core/src/inspect.zig)                                                          |
+| `bxp-mcp`  | MCP wrappers over inspect            | [`bxp-mcp/src/tools.zig`](../bxp-mcp/src/tools.zig)                                                                |
+| `bxp-gui-bridge` | FFI wrappers over inspect      | [`bxp-gui-bridge/src/main.zig`](../bxp-gui-bridge/src/main.zig)                                                    |
 | `bxp-core` | Per-call trace in `--expr-trace`     | [`bxp-core/src/expr.zig`](../bxp-core/src/expr.zig) — `emitCallTrace()`                                            |
 | `bxp-core` | `--docs` catalog                     | [`bxp-core/src/docs.zig`](../bxp-core/src/docs.zig) — `writeDocs()`                                                |
 | `bxp-gui`  | Consumes `--trace`                   | [`bxp-gui/lib/store/trace_store.dart`](../bxp-gui/lib/store/trace_store.dart) — `_streamRunBtrace`                 |

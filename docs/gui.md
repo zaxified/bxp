@@ -3,7 +3,7 @@
 > [← docs/](README.md)
 
 Flutter desktop app (`bxp-gui`) that provides a visual config editor, dry-run
-debugger, and expression playground on top of the `bxp-cli` / `bxp-fmt` CLI
+debugger, and expression playground on top of the `bxp-cli` conversion
 pair. Runs on Linux, macOS, and Windows.
 
 ---
@@ -46,7 +46,7 @@ bxp-gui replaced an earlier Electrobun + React + CodeMirror 6 frontend
   a heavy JS dependency.
 
 The app never calls bxp-core directly. All heavy logic stays in bxp-cli /
-bxp-fmt subprocesses. Dart's role is: parse subprocess stdout, maintain UI
+the bxp-gui-bridge FFI. Dart's role is: marshal to/from the bridge, maintain UI
 state, render widgets. This boundary keeps the Dart codebase thin, testable,
 and decoupled from the Zig internals.
 
@@ -60,7 +60,7 @@ and decoupled from the Zig internals.
 | ----------- | ------- | --------------------------------------------------------------------------------------------------------------------------------- |
 | Flutter SDK | ≥ 3.x   | See `bxp-gui/pubspec.yaml` `environment.flutter` for the minimum. Install from [flutter.dev](https://flutter.dev) or via `fvm`.   |
 | Dart SDK    | bundled | Ships with Flutter; no separate install.                                                                                          |
-| Zig         | 0.15.2  | To build bxp-cli and bxp-fmt. See [devel.md](devel.md) for the pinned version.                                                    |
+| Zig         | 0.15.2  | To build bxp-cli, bxp-mcp, and the bxp-gui-bridge library. See [devel.md](devel.md) for the pinned version.                       |
 | VS Code     | any     | + [Flutter extension](https://marketplace.visualstudio.com/items?itemName=Dart-Code.flutter). IntelliJ / Android Studio work too. |
 
 ### First run
@@ -68,7 +68,7 @@ and decoupled from the Zig internals.
 ```bash
 # 1. Build the backend binaries (required before flutter run)
 cd bxp-cli && zig build
-cd ../bxp-fmt && zig build
+cd ../bxp-gui-bridge && zig build
 
 # 2. Install Dart/Flutter dependencies
 cd ../bxp-gui && flutter pub get
@@ -81,14 +81,14 @@ flutter run -d windows  # Windows (PowerShell)
 
 The dev-tree binary fallback in `findBin()` walks up from the Flutter
 executable until it finds the `bxp-gui/` segment, then resolves
-`../bxp-cli/zig-out/bin/bxp-cli` and `../bxp-fmt/zig-out/bin/bxp-fmt`
+`../bxp-cli/zig-out/bin/bxp-cli` and the `bxp-gui-bridge` library
 automatically. No environment variables needed for local dev.
 
 ### Verify the install
 
-On first launch the app probes `bxp-fmt --docs` to load the language catalog.
-If bxp-fmt is missing or unbuilt a fatal error gate appears — build bxp-fmt
-first. Then:
+On first launch the app loads the language catalog in-process from the bridge.
+If the `bxp-gui-bridge` library is missing or unbuilt a fatal error gate
+appears — build it first. Then:
 
 1. Open `DEV/bxp-cli.json` (the developer reference config) via the
    file-picker or drag-drop.
@@ -123,8 +123,8 @@ VS Code users: the Flutter extension auto-hot-reloads on save when
 Zig binaries are subprocesses; Flutter does not hot-reload them.
 
 ```bash
-# Terminal 1 — rebuild after editing bxp-fmt or bxp-cli source
-cd bxp-fmt && zig build   # or bxp-cli
+# Terminal 1 — rebuild after editing bxp-cli or bxp-gui-bridge source
+cd bxp-cli && zig build   # or bxp-gui-bridge
 
 # Terminal 2 — hot-restart the Flutter app to pick up the new binary
 # Press Shift+R in the flutter run terminal, or quit and re-run
@@ -190,13 +190,13 @@ Three layers, top-down:
         │      Process.start / Process.run      (Linux / macOS default)
         │      bxp-gui-bridge.{dll,so,dylib}    (Win mandatory; eval cross-plat)
         ↓
-  bxp-cli  (conversions via --trace BXTB frame stream)
-  bxp-fmt  (validation, docs, expr eval — out-of-process)
-  bxp-core (expr.zig linked directly via bridge_eval_expr — in-process)
+  bxp-cli  (conversions via --trace BXTB frame stream, proxied by the bridge)
+  bxp-core (inspect.zig + expr.zig linked directly into the bridge — in-process
+           validation / docs / expr eval / config annotation)
 ```
 
 The Flutter app never parses JSON5 directly for runtime data — all backend
-operations go through bxp-cli or bxp-fmt as short-lived subprocesses.
+operations go through the bxp-gui-bridge (in-process inspect + proxied bxp-cli runs).
 The Dart `json5_ast` library is used only for in-place AST mutations of
 the user's config file (parse → mutate → dump back preserving comments).
 
@@ -289,32 +289,30 @@ between them per call based on host OS and what the call needs.
 
 ### Transport paths
 
-| Transport                   | Used on             | Used for                                                                              |
-| --------------------------- | ------------------- | ------------------------------------------------------------------------------------- |
-| `Process.start` (`dart:io`) | Linux/macOS default | `bxp-cli --trace`, `bxp-fmt --config` / `--docs` / `--expr` / `--expr-trace`          |
-| `bridge_run_streaming`      | Windows mandatory   | `bxp-cli --trace` — sidesteps dart-lang/sdk#1727 (~8 KB stdout cutoff)                |
-| `bridge_run`                | Windows mandatory   | one-shot `bxp-fmt --config` / `--docs` — same pipe-truncation workaround              |
-| `bridge_eval_expr`          | All platforms       | expr editor live validation per keystroke — avoids ~50 ms `bxp-fmt --expr` spawn cost |
-| `bridge_eval_expr_trace`    | All platforms       | ExprPlayground per-call NDJSON — same reason, plus per-token trace stream             |
+Since the v0.3.0 proxy flip the bridge is the **single backend on every
+platform** — there is no `Process.start` path. All five entry points are
+`bridge_*` calls:
 
-The bridge is implemented as a Zig shared library that links `bxp-core/expr`
-directly (in-proc paths) and spawns subprocesses (proxy paths). For the
-**two-cause rationale** behind this split and a per-call transport matrix
-(every GUI call × OS → which `bridge_*` / `Process.*` it actually invokes),
-see [`devel.md`'s "Why the bridge exists" + "Per-call routing"](devel.md#why-the-bridge-exists)
+| Transport                   | Used for                                                                              |
+| --------------------------- | ------------------------------------------------------------------------------------- |
+| `bridge_inspect`            | Stateless ops in-process: config validation, docs, list/fetch templates, eval-batch   |
+| `bridge_eval_expr`          | expr editor live validation per keystroke (in-process) — avoids a ~50 ms spawn cost   |
+| `bridge_eval_expr_trace`    | ExprPlayground per-call NDJSON (in-process), plus per-token trace stream               |
+| `bridge_run_streaming`      | `bxp-cli --trace` dry-run / full-run — native pipe drain sidesteps dart-lang/sdk#1727  |
+| `bridge_run`                | one-shot `bxp-cli --version` — same pipe-truncation workaround                         |
+
+The bridge is implemented as a Zig shared library that links the
+`bxp-core/inspect` + `expr` modules directly (in-proc paths) and spawns the
+`bxp-cli` subprocess (proxy paths). For the **two-cause rationale** behind the in-proc / proxy split see
+[`devel.md`'s "Why the bridge exists"](devel.md#why-the-bridge-exists)
 section. The C-ABI surface and Debug→ReleaseSafe rewrite landmine live in
 [`bxp-gui-bridge/CLAUDE.md`](../bxp-gui-bridge/CLAUDE.md).
 
-**Windows is single-path.** DLL probe failure at startup is fatal (synthetic
-error surfaced through the normal startup gate). There is no `Process.start`
-fallback — dart-lang/sdk#1727 makes it unusable.
-
-**Linux/macOS dormant proxy.** `bridge_run` / `bridge_run_streaming` compile
-and work on these hosts but are gated behind `BXP_FORCE_BRIDGE_PROXY=1` as a
-pre-release smoke gate. The eval paths (`bridge_eval_expr*`) run unconditionally
-because no `Process.start` bug forces the fallback. Making the proxy paths the
-default on Linux/macOS is on the v0.3.0 roadmap
-([roadmap.md](roadmap.md#flip-bridge-proxy-to-default-on-linuxmacos)).
+**Mandatory on every platform.** Library probe failure at startup is fatal
+(synthetic error surfaced through the normal startup gate, which also parses
+the docs catalog). There is no subprocess fallback — Windows can't use
+`Process.start` (dart-lang/sdk#1727) and the v0.3.0 flip deleted the
+Linux/macOS `Process.start` route too.
 
 **Reloading bridge changes.** `dlopen` mmaps the file at process start, so
 editing a `.so`/`.dylib` and `mcp__dart__hot_reload` does NOT pick it up. After
@@ -324,7 +322,7 @@ editing a `.so`/`.dylib` and `mcp__dart__hot_reload` does NOT pick it up. After
 
 Resolved in this order:
 
-1. **Env override** — `$BXP_CLI_PATH` / `$BXP_FMT_PATH`. If set and non-empty,
+1. **Env override** — `$BXP_CLI_PATH`. If set and non-empty,
    used absolutely (missing file → fatal error, no fallthrough).
 2. **Bundle sibling** — `<name>` next to the Flutter executable inside the app
    bundle.
@@ -336,19 +334,20 @@ Resolved in this order:
 
 | Method                  | Binary                                    | Notes                                                   |
 | ----------------------- | ----------------------------------------- | ------------------------------------------------------- |
-| `validateConfig(path)`  | `bxp-fmt --config`                        | Returns annotated JSON with `$err_*`/`$warn_*` siblings |
-| `getDocs()`             | `bxp-fmt --docs`                          | Cached at startup; drives FnDoc tooltips + SchemaGate   |
-| `listTemplates(path)`   | `bxp-fmt --config … --list-templates`     | Template id array                                       |
-| `validateExpr(text)`    | `bxp-fmt --expr`                          | Returns `{error, offset, length}` on failure            |
-| `traceExpr(text, …)`    | `bxp-fmt --expr-trace`                    | NDJSON stream of per-call values                        |
+| `validateConfig(path)`  | `bridge_inspect {config}`                 | Returns annotated JSON with `$err_*`/`$warn_*` siblings |
+| `getDocs()`             | `bridge_inspect {docs}`                   | Cached at startup; drives FnDoc tooltips + SchemaGate   |
+| `listTemplates(path)`   | `bridge_inspect {list_templates}`         | Template id array                                       |
+| `validateExpr(text)`    | `bridge_eval_expr`                        | Returns `{error, offset, length}` on failure            |
+| `traceExpr(text, …)`    | `bridge_eval_expr_trace`                  | NDJSON stream of per-call values                        |
 | `runDryRun(path, tmpl)` | `bxp-cli --trace`                         | BXTB frame stream → in-store reader                     |
-| `getVersion(name)`      | `bxp-cli --version` / `bxp-fmt --version` | Both write to stdout                                    |
+| `getVersion(name)`      | `bridge_run` → `bxp-cli --version`        | Writes to stdout                                        |
 
 ### Linux dev-tree gotcha
 
-The Linux CMake config copies `bxp-fmt` into the bundle at build time. After
-changing bxp-fmt, either run a clean Flutter build or rely on the dev-tree
-fallback (option 3 above) which reads directly from `bxp-fmt/zig-out/bin/`.
+The Linux CMake config copies the `bxp-gui-bridge` library (and `bxp-cli`) into
+the bundle at build time. After rebuilding the bridge, either run a clean Flutter
+build or rely on the dev-tree fallback (option 3 above) which reads directly from
+`bxp-gui-bridge/zig-out/`.
 
 ---
 
@@ -396,8 +395,8 @@ every pane:
   `Map<String, dynamic>` view (for schema lookups).
 - **Dry-run trace** — per-file and per-row trace data from `bxp-cli --trace`.
 - **Op log** — undo/redo stack of `ConfigOp` entries.
-- **Schema docs** — `FnDoc` / `FieldDoc` catalog loaded from `bxp-fmt --docs`.
-- **Validation errors** — `$err_*` / `$warn_*` map from the last bxp-fmt run.
+- **Schema docs** — `FnDoc` / `FieldDoc` catalog loaded from the bridge docs op.
+- **Validation errors** — `$err_*` / `$warn_*` map from the last config-validation run.
 
 Edits flow back as `ConfigOp`s:
 
@@ -405,7 +404,7 @@ Edits flow back as `ConfigOp`s:
 UI widget  →  ConfigOp  →  op_log  →  op_to_ast  →  ast_patch_client  →  disk
 ```
 
-Save runs `bxp-fmt --config` for a validation pass; results refresh the
+Save runs config validation (`bridge_inspect {config}`) for a validation pass; results refresh the
 error map and the tree highlight state.
 
 ---
@@ -443,7 +442,7 @@ on every keystroke.
 
 ### Schema docs as single source of truth
 
-`bxp-fmt --docs` is loaded at startup and drives FnDoc tooltips,
+The docs catalog is loaded at startup (from the bridge) and drives FnDoc tooltips,
 `SchemaGate` insert-position logic, autocomplete, and the
 `_AddChildDialog` insert scaffolds. Do not reintroduce hardcoded fallback
 catalogs — the startup gate fails fatally if the binary is missing.
@@ -458,12 +457,12 @@ catalogs — the startup gate fails fatally if the binary is missing.
    `docs.zig` picks it up automatically.
 2. **Validation** — if the field needs semantic checks, add them to
    `BrokerConfig.validate()` or the `validateCollect` path (for
-   bxp-fmt diagnostics).
-3. **GUI** — rebuild bxp-fmt and restart bxp-gui; the field appears in the
+   config-validation diagnostics).
+3. **GUI** — rebuild the bridge and restart bxp-gui; the field appears in the
    tree editor's `_AddChildDialog` insert scaffold and tooltip automatically
    via `SchemaGate` + `FnDoc`/`FieldDoc`.
 4. **Tests** — add a dataset fixture if the field affects output; add a
-   bxp-fmt smoke test if it adds a new validation path.
+   bxp-mcp smoke test (test-05) if it adds a new validation path.
 
 ---
 

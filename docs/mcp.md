@@ -15,26 +15,26 @@ a bxp-cli config without driving the GUI**: validate config text, evaluate and
 trace expressions, read the language docs, and run a real conversion end-to-end
 against sample CSV.
 
-It is one of three thin **adapters** over a single shared stateless core,
+It is one of several thin **adapters** over a single shared stateless core,
 `bxp-core/src/inspect.zig`:
 
 ```mermaid
 flowchart LR
     subgraph adapters [Thin adapters - transport only]
-        fmt[bxp-fmt<br/>argv to stdout]
+        bridge[bxp-gui-bridge<br/>FFI in-process]
         mcp[bxp-mcp<br/>JSON-RPC on stdio]
         api[bxp-api<br/>HTTP - planned]
     end
     core[("inspect.zig<br/>stateless core")]
     cli[[bxp-cli<br/>full pipeline]]
 
-    fmt --> core
+    bridge --> core
     mcp --> core
     api -.-> core
     mcp -- "bxp_simulate only<br/>(subprocess spawn)" --> cli
 ```
 
-"One core, thin adapters": none of the three owns the stateless logic — it
+"One core, thin adapters": none of the adapters owns the stateless logic — it
 lives in `inspect`. The transport follows from **who** calls and **from where**:
 stdio = a local agent that spawns the server (private pipe, 1:1, zero config); a
 port would be bxp-api's job (remote/shared/web). The boundary rule is *the core
@@ -50,12 +50,12 @@ must not know who is calling it*.
 The "no spawn" rule is about µs-latency stateless calls. A full run is inherently
 heavyweight, so the spawn cost is noise. `bxp-mcp` locates `bxp-cli` **next to
 its own executable** — it ships in the same console/desktop bundle as
-`bxp-cli`/`bxp-fmt`, so the agent always invokes it where `bxp-cli` sits
+`bxp-cli`, so the agent always invokes it where `bxp-cli` sits
 alongside.
 
 ## Tool catalog
 
-All stateless tools are byte-identical to their `bxp-fmt` equivalents (same
+All stateless tools share the `bxp-core/inspect` core with the GUI bridge (same
 `inspect` core). The tools take config / expression **text** (not a file path) —
 the agent passes the config it is authoring.
 

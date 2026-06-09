@@ -18,7 +18,7 @@
   - [Package dependency graph](#package-dependency-graph)
   - [bxp-core modules](#bxp-core-modules)
   - [bxp-cli internals](#bxp-cli-internals)
-  - [bxp-fmt internals](#bxp-fmt-internals)
+  - [inspect core](#inspect-core-stateless-surface)
   - [Two-pass processing pipeline](#two-pass-processing-pipeline)
   - [Expression evaluator (expr.zig)](#expression-evaluator-exprzig)
   - [Configuration system (config.zig + json5.zig)](#configuration-system-configzig--json5zig)
@@ -81,7 +81,7 @@ zig version
 
 BXP development in Zig works seamlessly with [Claude Code](https://claude.ai/code).
 The monorepo ships seven `CLAUDE.md` files — root, `bxp-cli/`, `bxp-core/`,
-`bxp-fmt/`, `bxp-gui/`, `bxp-gui-bridge/`, and `bxp-gui/packages/json5_ast/` —
+`bxp-mcp/`, `bxp-gui/`, `bxp-gui-bridge/`, and `bxp-gui/packages/json5_ast/` —
 Claude loads these automatically and reads project conventions.
 
 ### Skills to use
@@ -107,10 +107,12 @@ bxp/                            # monorepo root (git root)
 │   │   └── pipeline.zig        # processBroker(), xlsxPrePass(), Output, SectionStats
 │   ├── build.zig               # imports bxp-core modules by name
 │   └── build.zig.zon           # depends on bxp-core (path dep)
-├── bxp-fmt/                    # developer utility binary (used by bxp-gui and scripts)
+├── bxp-mcp/                    # MCP server (JSON-RPC over stdio) for AI agents
 │   ├── src/
-│   │   └── main.zig            # --config / --expr / --expr-trace / --docs /
-│   │                           # --list-templates / --fetch-template
+│   │   ├── main.zig            # entry: arena + --help + server.run()
+│   │   ├── server.zig          # MCP stdio loop + JSON-RPC writers
+│   │   ├── tools.zig           # tool catalog → bxp-core/inspect calls
+│   │   └── sim.zig             # bxp_simulate: stage + spawn bxp-cli + diff
 │   ├── build.zig
 │   └── build.zig.zon           # depends on bxp-core (path dep)
 ├── bxp-core/                   # internal shared library (no binary)
@@ -152,7 +154,7 @@ bxp/                            # monorepo root (git root)
 │   ├── gui.md                  # bxp-gui developer guide
 │   ├── release.md              # release process walkthrough
 │   ├── roadmap.md              # forward-looking milestones
-│   └── trace-protokol.md       # bxp-cli --trace BXTB + bxp-fmt subcommand output formats
+│   └── trace-protokol.md       # bxp-cli --trace BXTB + stateless inspect output formats
 ├── resources/
 │   ├── console/                # bxp-cli sample config + readme (bundled in console archives)
 │   ├── desktop/                # bxp-gui.desktop template + readme (bundled in desktop archives)
@@ -160,7 +162,7 @@ bxp/                            # monorepo root (git root)
 ├── scripts/
 │   ├── test.sh                 # wrapper: runs every test-NN-*.sh in numeric order
 │   ├── test-lib.sh             # shared section/step/summary helpers (sourced)
-│   ├── test-01-console.sh      # bxp-core unit + bxp-cli/fmt build + bxp-fmt smoke + json5_ast unit
+│   ├── test-01-console.sh      # bxp-core unit (incl. inspect) + bxp-cli build + readme src-sync + json5_ast unit
 │   ├── test-02-datasets.sh     # bxp-cli regression vs datasets/*/*.expected
 │   ├── test-03-desktop.sh      # flutter analyze + flutter test + json5_ast dart test
 │   ├── test-04-bridge.sh       # bxp-gui-bridge build + unit tests
@@ -211,7 +213,7 @@ bash scripts/test.sh
 
 The test script auto-discovers `test-NN-*.sh` siblings and runs them in numeric order:
 
-1. `test-01-console.sh` — Zig unit tests + `bxp-cli` / `bxp-fmt` build smoke + `json5_ast` Dart tests.
+1. `test-01-console.sh` — Zig unit tests (incl. `inspect`) + `bxp-cli` build + readme src-sync + `json5_ast` Dart tests.
 2. `test-02-datasets.sh` — runs `bxp-cli` against every `datasets/<id>/sample.json` and diffs against `sample.expected`.
 3. `test-03-desktop.sh` — `flutter analyze` + `flutter test` for `bxp-gui`.
 4. `test-04-bridge.sh` — Zig unit tests for the FFI bridge.
@@ -225,7 +227,7 @@ cd bxp-core && zig build test
 
 #### Expression corpus
 
-`scripts/test-06-expr-corpus.sh` walks `scripts/test-06-expr-corpus.txt` and runs each line through `bxp-fmt --expr`. Format is TAB-separated:
+`scripts/test-06-expr-corpus.sh` walks `scripts/test-06-expr-corpus.txt` and runs each line through bxp-mcp's `bxp_validate_expr` tool. Format is TAB-separated:
 
 ```text
 expr<TAB>ok<TAB>expression
@@ -264,22 +266,20 @@ Consequences of this design:
 ```text
   bxp-cli         ── path dep ──►  bxp-core   ── fetch dep ──►  uucode
   (binary)                         (library)                    (Unicode tables)
-  bxp-fmt         ── path dep ──►  bxp-core
-  (binary)
-  bxp-gui-bridge  ── path dep ──►  bxp-core           (links expr.zig directly)
+  bxp-mcp         ── path dep ──►  bxp-core           (wraps inspect.zig; spawns bxp-cli
+  (binary)                                             for bxp_simulate)
+  bxp-gui-bridge  ── path dep ──►  bxp-core           (links inspect.zig + expr.zig directly)
   (.dll/.so/.dylib)
 
-  bxp-gui  ── subprocess ──►  bxp-cli   (conversions, --trace stream)
-  (Flutter)  ├─ subprocess ──►  bxp-fmt   (--config, --docs, --expr, --expr-trace)
-             └─ FFI       ──►  bxp-gui-bridge  (Win: subprocess proxy;
-                                                all platforms: in-proc expr eval)
+  bxp-gui  ── FFI ──►  bxp-gui-bridge   (single backend, all platforms:
+  (Flutter)                              in-proc inspect + proxied bxp-cli runs)
 ```
 
 `bxp-core` is a **local path dependency** (`../bxp-core`) and pulls one external
 fetch dependency of its own: `uucode` (Unicode case-mapping tables, pinned in
 `build.zig.zon`). The date core lives in-house at `bxp-core/src/datefmt.zig`,
 replacing the former `sunrise` URL dependency.
-`bxp-gui` ships `bxp-cli`, `bxp-fmt`, and `bxp-gui-bridge.{dll,so,dylib}`
+`bxp-gui` ships `bxp-cli`, `bxp-mcp`, and `bxp-gui-bridge.{dll,so,dylib}`
 inside the Flutter bundle.
 
 ### Why the bridge exists
@@ -290,43 +290,37 @@ shared library, but each role solves a different problem.
 1. **Windows-only: `dart:io` pipe truncation
    ([dart-lang/sdk#1727](https://github.com/dart-lang/sdk/issues/1727)).**
    `Process.start` on Windows silently cuts subprocess stdout at ~8 KB.
-   `bxp-fmt --docs` is ~30 KB and `bxp-cli --trace` is megabytes — both
+   The docs catalog is ~30 KB and `bxp-cli --trace` is megabytes — both
    unusable through `dart:io`. The bridge reads pipes from native Zig code
    so the drain doesn't depend on the Flutter event loop. On Windows the
    bridge is the **only** path for every subprocess; DLL probe failure at
    startup is fatal (no `Process.start` fallback to silently misbehave).
 2. **All platforms: per-keystroke expression eval needs to skip spawn.**
-   Validating an expression via `bxp-fmt --expr` costs ~50 ms of subprocess
-   startup before any actual evaluation. The expression editor validates
-   on every keystroke, so the spawn cost dominates. `bridge_eval_expr` links
-   `bxp-core/expr` directly into the GUI process — no spawn, no pipe drain,
-   sub-millisecond evaluation. This path runs on all platforms.
+   Validating an expression as a subprocess costs ~50 ms of startup before any
+   actual evaluation. The expression editor validates on every keystroke, so the
+   spawn cost dominates. `bridge_eval_expr` links `bxp-core/inspect` + `expr`
+   directly into the GUI process — no spawn, no pipe drain, sub-millisecond
+   evaluation. This path runs on all platforms.
 
 ### Per-call routing
 
-What `bxp-gui` actually does for each backend call:
+Since the v0.3.0 proxy flip every backend call goes through the bridge — there
+is no `Process.start` path and no subprocess fallback on any platform:
 
-| GUI call                                          | Linux / macOS                                  | Windows                                        |
-| ------------------------------------------------- | ---------------------------------------------- | ---------------------------------------------- |
-| `bxp-cli --trace` (dry-run / full-run)            | `Process.start`                                | `bridge_run_streaming`                         |
-| `bxp-fmt --docs` (startup gate)                   | `Process.run`                                  | `bridge_run`                                   |
-| `bxp-fmt --config` (load + save validation)       | `Process.run`                                  | `bridge_run`                                   |
-| `bxp-fmt --list-templates` / `--fetch-template`   | `Process.run`                                  | `bridge_run`                                   |
-| `bxp-fmt --version` / `bxp-cli --version` (probe) | `Process.run`                                  | `bridge_run`                                   |
-| `bxp-fmt --expr` (live validation per keystroke)  | `bridge_eval_expr` (subprocess fallback)       | `bridge_eval_expr` (subprocess fallback)       |
-| `bxp-fmt --expr-trace` (ExprPlayground)           | `bridge_eval_expr_trace` (subprocess fallback) | `bridge_eval_expr_trace` (subprocess fallback) |
+| GUI call                                  | Bridge entry point                            |
+| ----------------------------------------- | --------------------------------------------- |
+| config validation (load + save)          | `bridge_inspect {config}`                     |
+| docs catalog (startup gate)              | `bridge_inspect {docs}`                        |
+| list / fetch templates                   | `bridge_inspect {list_templates / fetch_template}` |
+| eval-batch (drill-down re-eval)          | `bridge_inspect {eval_batch}`                  |
+| live expr validation (per keystroke)     | `bridge_eval_expr`                             |
+| ExprPlayground per-call trace            | `bridge_eval_expr_trace`                       |
+| `bxp-cli --trace` (dry-run / full-run)   | `bridge_run_streaming`                         |
+| `bxp-cli --version` (probe)              | `bridge_run`                                   |
 
-Reading the table:
-
-- **Linux/macOS "subprocess fallback"** for the eval rows means `Process.start` /
-  `Process.run` — same `dart:io` path as the rest of the Linux/macOS column.
-- **Windows "subprocess fallback"** means `bridge_run` / `bridge_run_streaming` —
-  on Windows there is no `Process.start` path; the fallback is still the bridge,
-  just the proxy form instead of the in-proc eval form.
-- **Subprocess proxy on Linux/macOS** (`bridge_run` / `bridge_run_streaming` for
-  the first 5 rows) compiles and works but stays dormant behind
-  `BXP_FORCE_BRIDGE_PROXY=1` — that env var is the pre-release smoke gate that
-  validates the cross-platform bridge build before v0.3.0 makes it the default.
+The first six are in-process (no subprocess); the last two proxy the `bxp-cli`
+spawn, draining its pipes in native Zig code. Library probe failure at startup is
+fatal on every platform.
 
 Implementation: routing decisions live in
 [`bxp-gui/lib/services/bxp_process_client.dart`](../bxp-gui/lib/services/bxp_process_client.dart)
@@ -347,10 +341,10 @@ of each `bridge_*` entry point.
 | `decimal`     | `decimal.zig`     | Fixed-point `i128` at scale 1e12 (12 fractional digits) numeric core: exact `+ −`, half-away-from-zero `× ÷` / `ROUND`. The named module behind `Value.decimal`; shared by the csv / json / xlsx input paths so an identical numeric string parses identically everywhere.                                                          |
 | `config`      | `config.zig`      | Reads `bxp-cli.json` via `json5.zig` preprocessor then `std.json`. Returns `Config` owning all heap memory. `BrokerConfig.validate()` checks semantic constraints. Each struct has a co-located `FieldDoc` table consumed by `docs.zig`.                                                                                            |
 | `json`        | `json.zig`        | Reads a JSON array-of-objects into a flat row representation. Builds a union of all keys across all objects; fills missing keys with empty string.                                                                                                                                                                                  |
-| `btrace`      | `btrace.zig`      | Binary BXTB trace `Writer` / `Reader` for `bxp-cli --trace`. Carries metadata only (per-row source byte offsets, errors, pre_pass dump, stats); per-row drill-down is recomputed on demand by `bxp-fmt`. The sole trace format since the v0.3.0 NDJSON removal.                                                                     |
+| `btrace`      | `btrace.zig`      | Binary BXTB trace `Writer` / `Reader` for `bxp-cli --trace`. Carries metadata only (per-row source byte offsets, errors, pre_pass dump, stats); per-row drill-down is recomputed on demand by the GUI via the bridge. The sole trace format since the v0.3.0 NDJSON removal.                                                                     |
 | `json5`       | `json5.zig`       | Single-pass tokenizer that converts JSON5 → standard JSON. Strips comments, converts unquoted keys, removes trailing commas, normalizes single-quoted strings.                                                                                                                                                                      |
-| `docs`        | `docs.zig`        | Aggregates `expr.zig` FnDoc catalog and `config.zig` FieldDoc tables into the `bxp-fmt --docs` JSON. Single source of truth consumed by bxp-gui at startup.                                                                                                                                                                         |
-| `diagnostics` | `diagnostics.zig` | Structured validation collector. `Severity` (.error / .warning / .info), `Diagnostic` (path, position, code, message, suggest), `Diagnostics` (ArrayList collector). Used by bxp-fmt deep validation; bxp-cli passes a null sink.                                                                                                   |
+| `docs`        | `docs.zig`        | Aggregates `expr.zig` FnDoc catalog and `config.zig` FieldDoc tables into the docs catalog JSON. Single source of truth consumed by bxp-gui at startup.                                                                                                                                                                         |
+| `diagnostics` | `diagnostics.zig` | Structured validation collector. `Severity` (.error / .warning / .info), `Diagnostic` (path, position, code, message, suggest), `Diagnostics` (ArrayList collector). Used by the config validator's deep validation; bxp-cli passes a null sink.                                                                                                   |
 
 ---
 
@@ -382,37 +376,32 @@ Deeper detail: [`bxp-cli/CLAUDE.md`](../bxp-cli/CLAUDE.md).
 
 ---
 
-### bxp-fmt internals
+### inspect core (stateless surface)
 
-`bxp-fmt` is a small developer-utility binary sibling to `bxp-cli`. It holds
-everything that isn't "run a conversion": config validation, expression
-evaluation, schema/docs emission, template lookup. Consumed by `bxp-gui` (via
-`Process.run`) and by `scripts/test.sh`.
+Everything that isn't "run a conversion" — config validation, expression
+validation / evaluation / trace, expr-batch, schema/docs emission, template
+list/fetch — lives in one stateless module, `bxp-core/src/inspect.zig`. It is
+pure: it never reads argv, never writes stdout/stderr, never exits; callers own
+all I/O and the arena. Two thin adapters wrap it: **bxp-mcp** (MCP/stdio for
+agents) and **bxp-gui-bridge** (FFI for the GUI). A former `bxp-fmt` CLI adapter
+wrapped the same calls argv→stdout and was removed once both covered every op.
 
-The binary is intentionally a thin shim — every subcommand delegates to a
-`bxp-core` module. bxp-fmt's own job is arg parsing, arena setup, and JSON
-serialization.
+| inspect function                              | Backed by                                | Purpose                                                                                    |
+| --------------------------------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `annotateRaw` / `annotateConfigFromFile`      | `config.load` + `config.validateCollect` | Annotated JSON with `$comm_<N>` / `$err_<N>` / `$warn_<N>` / `$info_<N>` siblings          |
+| `listTemplatesValue` / `fetchTemplateValue`   | `config.load`                            | Template id array / one template's raw JSON                                                |
+| `validateExpr` / `validateExprJson`           | `expr.eval` + static FnArgDoc lint       | Authoring-time validation of one expression                                               |
+| `evalExpr`                                    | `expr.evalString`                        | Lenient runtime value of one expression                                                    |
+| `evalTrace`                                   | `expr.eval` (trace_writer)               | Per-call NDJSON trace stream                                                               |
+| `evalBatch`                                   | `expr.evalString` ×N                     | Evaluate N exprs against one row in a single call; `{results:[…]}`                          |
+| `docsJson`                                    | `docs.writeDocs`                         | Full FnDoc / FieldDoc catalog (single source for bxp-gui startup)                          |
 
-| Subcommand                                                 | Backed by                                | Purpose                                                                                    |
-| ---------------------------------------------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------ |
-| `--config <path>`                                          | `config.load` + `config.validateCollect` | Annotated JSON output with `$comm_<N>` / `$err_<N>` / `$warn_<N>` / `$info_<N>` siblings   |
-| `--config <path> --list-templates`                         | `config.load`                            | JSON array of template ids                                                                 |
-| `--config <path> --fetch-template <id>`                    | `config.load`                            | Raw JSON5 block of one template                                                            |
-| `--expr '<text>'`                                          | `expr.eval` (empty `Context`)            | One-shot expression validation                                                             |
-| `--expr-trace '<text>' [--row-headers …] [--row-fields …]` | `expr.evalTrace`                         | Per-call NDJSON trace stream (used by ExprPlayground)                                      |
-| `--expr-batch` (request on stdin)                          | `expr.eval` ×N                           | Evaluate N exprs against one row in a single spawn; `{results:[…]}` on stdout (drill-down) |
-| `--docs`                                                   | `docs.writeDocs`                         | Full FnDoc / FieldDoc catalog (single source for bxp-gui startup)                          |
-| `--version`, `--help`                                      | —                                        | Standard. `--version` writes to stdout, not stderr                                         |
+Adding an op: write the pure function in `inspect.zig`, then expose it from each
+adapter (a `bxp-mcp` tool in `bxp-mcp/src/tools.zig` + a `bridge_*` entry in
+`bxp-gui-bridge/src/main.zig`). No business logic lives in the adapters.
 
-Subcommands are mutually exclusive (one action per invocation). Each `runX`
-function wraps the input GPA in an `ArenaAllocator` — `expr.Context.alloc`
-doesn't garbage-collect, so a raw GPA leaks per call.
-
-Adding a subcommand: write a new `runX` in `bxp-fmt/src/main.zig`, dispatch
-from arg parsing, delegate the real work to a `bxp-core` module. No new
-business logic should land here.
-
-Deeper detail: [`bxp-fmt/CLAUDE.md`](../bxp-fmt/CLAUDE.md).
+Deeper detail: [`bxp-mcp/CLAUDE.md`](../bxp-mcp/CLAUDE.md),
+[`bxp-gui-bridge/CLAUDE.md`](../bxp-gui-bridge/CLAUDE.md).
 
 ---
 
@@ -529,7 +518,7 @@ text on stderr. CI scripts treat `2` as failure (see "datasets are exemplary"
 convention).
 
 **2. Diagnostics (deep validation).** `bxp-core/diagnostics.zig` defines a
-structured collector consumed by `bxp-fmt --config`:
+structured collector consumed by config validation (`inspect.annotateRaw`):
 
 ```text
 Severity   ∈ { .error, .warning, .info }
@@ -538,7 +527,7 @@ Diagnostic = { path, off?, len?, severity, code, message, suggest? }
 
 `config.zig`, `json5.zig`, and `expr.zig` accept an optional `*Diagnostics`
 sink — `bxp-cli` passes `null` (fail-fast / stderr behaviour preserved),
-`bxp-fmt` passes a real bag and renders findings as `$err_<N>` / `$warn_<N>` /
+The config validator passes a real bag and renders findings as `$err_<N>` / `$warn_<N>` /
 `$info_<N>` siblings in the annotated JSON output. The GUI reads those keys
 to decorate the tree with inline error markers.
 
@@ -595,16 +584,21 @@ the `""`.
 | `--trace`      | Emits BXTB frame stream on stdout (consumed by `bxp-gui`'s dry-run debugger). Implies `--quiet` |
 | `--check-fs=N` | Adds filesystem-existence checks (templates' `data_dir`, etc.) with N-second timeout            |
 
-**Inspecting an expression in isolation:**
+**Inspecting an expression in isolation** (via the `bxp-mcp` server — one
+JSON-RPC object per line on stdin):
 
 ```bash
-# Validate syntax only (no row context)
-./zig-out/bin/bxp-fmt --expr "IF([Qty] > 0, 'BUY', 'SELL')"
+# Validate one expression (authoring-time check; no row context)
+printf '%s\n' \
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"bxp_validate_expr","arguments":{"expr":"IF([Qty] > 0, '\''BUY'\'', '\''SELL'\'')"}}}' \
+  | ./bxp-mcp/zig-out/bin/bxp-mcp
 
-# Trace per-call values against a fake row
-./zig-out/bin/bxp-fmt --expr-trace "[Price] * [Qty]" \
-    --row-headers '["Price","Qty"]' \
-    --row-fields  '["12.50","100"]'
+# Trace per-call values against a fake row (bxp_eval_trace)
+printf '%s\n' \
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"bxp_eval_trace","arguments":{"expr":"[Price] * [Qty]","headers":"[\"Price\",\"Qty\"]","fields":"[\"12.50\",\"100\"]"}}}' \
+  | ./bxp-mcp/zig-out/bin/bxp-mcp
 ```
 
 **bxp-gui live debug (Claude Code MCP loop):** see [`gui.md`](gui.md#debugging-with-print)
@@ -704,9 +698,9 @@ Dev-only tips (not in the user guide):
 The bridge hosts a **new-style FFI family** — synchronous, in-process C-ABI
 exports that link a stateless `bxp-core` routine directly into the GUI process,
 skipping the subprocess spawn. The first two members are `bridge_eval_expr`
-(in-proc `bxp-fmt --expr`) and `bridge_eval_expr_trace` (in-proc
-`bxp-fmt --expr-trace`). The plan is to add more such direct calls once
-`bxp-core` / `bxp-fmt` stabilise and stop churning internally — every new
+(in-proc expr validation) and `bridge_eval_expr_trace` (in-proc expr
+trace). The plan is to add more such direct calls once `bxp-core`'s
+`inspect` surface stabilises and stops churning internally — every new
 member follows the conventions below so adding the tenth export is as
 mechanical as adding the first.
 
@@ -781,8 +775,8 @@ explicit length skips a `strlen`, and it stays consistent with the output buffer
 protocol. JSON args (e.g. `row_headers` / `row_fields` for the trace export)
 follow the same shape.
 
-**6 — Output JSON shape matches the `bxp-fmt` equivalent.** A failure payload is
-byte-identical to what the matching `bxp-fmt` subcommand emits on stderr today,
+**6 — Output JSON shape matches the `inspect` core contract.** A failure payload is
+byte-identical to the shape `inspect.validateExpr` produces (the same one bxp-mcp returns),
 so the existing Dart parser handles bridge and subprocess responses
 identically — no Dart parser change when wiring a new export:
 
@@ -792,7 +786,7 @@ identically — no Dart parser change when wiring a new export:
 
 `off` / `len` / `suggest` are optional (emitted only when the parser pins a token
 or has a "did-you-mean" candidate). The trace export instead emits an NDJSON
-stream identical to `bxp-fmt --expr-trace` stdout, where success/failure is read
+stream identical to `inspect.evalTrace` output, where success/failure is read
 from the `t` field of the last line.
 
 **Worked reference — the shipped `bridge_eval_expr`:** see
@@ -822,8 +816,8 @@ shim, so a stale `.so`/`.dll` against a new GUI silently misbehaves.
 **`test-01-console.sh`** — Zig / CLI build + unit:
 
 1. `zig build test` in `bxp-core` (unit tests for `csv.zig`, `expr.zig`, `json5.zig`, `docs.zig`, `diagnostics.zig`).
-2. Builds `bxp-cli` and `bxp-fmt`.
-3. Runs `bxp-fmt` smoke tests for each subcommand (`--config`, `--expr`, `--docs`, `--list-templates`, `--fetch-template`).
+2. Builds `bxp-cli` and `bxp-mcp`.
+3. Runs `bxp-mcp` JSON-RPC smoke tests for the stateless tools (`bxp_validate`, `bxp_validate_expr`, `bxp_eval_batch`, …) plus `bxp_simulate`.
 4. `dart test` inside `bxp-gui/packages/json5_ast/`.
 
 **`test-02-datasets.sh`** — bxp-cli regression: iterates every `datasets/<id>/`
@@ -871,7 +865,7 @@ Two release channels, distinct archives:
 | Channel       | Archives                                                                                    | Content                                 |
 | ------------- | ------------------------------------------------------------------------------------------- | --------------------------------------- |
 | `bxp-console` | `bxp-console-<ver>-{linux-x86_64.tar.gz, macos-aarch64.tar.gz, windows-x86_64.zip}`         | CLI binary only                         |
-| `bxp-desktop` | `bxp-desktop-<ver>-{linux.AppImage, linux.deb, linux.tar.gz, windows-setup.exe, macos.dmg}` | Flutter GUI + bundled bxp-cli + bxp-fmt |
+| `bxp-desktop` | `bxp-desktop-<ver>-{linux.AppImage, linux.deb, linux.tar.gz, windows-setup.exe, macos.dmg}` | Flutter GUI + bundled bxp-cli + bxp-mcp + bxp-gui-bridge |
 
 ```bash
 # 1. Bump manifests + CHANGELOG (commits "release: prepare X.Y.Z (YYYY.MM.DD)")
@@ -1017,7 +1011,7 @@ automatically by Claude Code, but you can read them directly any time.
 | ---------------- | --------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
 | Monorepo         | [`CLAUDE.md`](../CLAUDE.md)                                                       | Top-level layout + package dep graph + cross-cutting conventions                         |
 | `bxp-cli`        | [`bxp-cli/CLAUDE.md`](../bxp-cli/CLAUDE.md)                                       | Full config reference, expression syntax, broker list, exit codes, output stream routing |
-| `bxp-fmt`        | [`bxp-fmt/CLAUDE.md`](../bxp-fmt/CLAUDE.md)                                       | Subcommands, annotated JSON shape (`$comm_*`/`$err_*`/…), exit codes                     |
+| `bxp-mcp`        | [`bxp-mcp/CLAUDE.md`](../bxp-mcp/CLAUDE.md)                                       | MCP tool catalog, annotated JSON shape (`$comm_*`/`$err_*`/…), wire protocol             |
 | `bxp-mcp`        | [`bxp-mcp/CLAUDE.md`](../bxp-mcp/CLAUDE.md)                                       | MCP server: adapter model, tool catalog, in-proc vs spawn, wire protocol, bxp_simulate   |
 | `bxp-core`       | [`bxp-core/CLAUDE.md`](../bxp-core/CLAUDE.md)                                     | Per-module API surface, build details, "known non-issues" rationale                      |
 | `bxp-gui`        | [`bxp-gui/CLAUDE.md`](../bxp-gui/CLAUDE.md)                                       | Flutter app structure, services/store/ui split, MCP debug workflow                       |
