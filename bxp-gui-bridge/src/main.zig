@@ -58,6 +58,53 @@ fn restoreChildReaping() void {
 
 var child_reaping_once = std.once(restoreChildReaping);
 
+/// Decode a raw `waitpid` status word into a `Child.Term` (mirrors std's
+/// private `statusToTerm`).
+fn statusToTerm(status: u32) std.process.Child.Term {
+    const W = std.posix.W;
+    return if (W.IFEXITED(status))
+        .{ .Exited = W.EXITSTATUS(status) }
+    else if (W.IFSIGNALED(status))
+        .{ .Signal = W.TERMSIG(status) }
+    else if (W.IFSTOPPED(status))
+        .{ .Stopped = W.STOPSIG(status) }
+    else
+        .{ .Unknown = status };
+}
+
+/// Reap [pid], tolerating ECHILD. The Dart VM runs an `ExitCodeHandler`
+/// thread that calls `wait4(-1)` (reaps ANY child of the process, for
+/// dart:io Process bookkeeping); it is usually parked in that call and so
+/// reaps the bridge's bxp-cli child before the bridge's own `waitpid` runs.
+/// std's `posix.waitpid` then hits `unreachable` on the resulting ECHILD and
+/// panics (a hard SIGABRT at GUI startup, racy). Here we own the wait via
+/// libc and treat ECHILD as `.Unknown` — the child IS gone, we just can't
+/// read its status. Callers that need the real exit code read it from the
+/// data stream instead (bxp-cli's BXTB `done` frame carries it).
+fn reapTolerantPosix(pid: std.process.Child.Id) std.process.Child.Term {
+    while (true) {
+        var status: c_int = 0;
+        const rc = std.c.waitpid(pid, &status, 0);
+        if (rc == -1) {
+            if (std.posix.errno(rc) == .INTR) continue;
+            return .{ .Unknown = 0 };
+        }
+        return statusToTerm(@bitCast(status));
+    }
+}
+
+/// `Child.wait()` that survives the child being reaped by another in-process
+/// waiter (see [reapTolerantPosix]). On POSIX we reap first and pre-set
+/// `child.term`, so the subsequent `child.wait()` only closes the streams and
+/// returns that term — it never calls the panicking `waitpid` path. Windows
+/// has no `wait4(-1)` reaper, so we defer to std directly.
+fn waitTolerant(child: *std.process.Child) std.process.Child.Term {
+    if (builtin.os.tag != .windows and child.term == null) {
+        child.term = reapTolerantPosix(child.id);
+    }
+    return child.wait() catch .{ .Unknown = 0 };
+}
+
 test "restoreChildReaping flips SIG_IGN to SIG_DFL but leaves others alone" {
     if (builtin.os.tag == .windows) return error.SkipZigTest;
     const posix = std.posix;
@@ -582,39 +629,22 @@ fn streamingStderrLoop(ctx: *StreamingCtx) void {
 /// the streaming context. Must run detached because bridge_run_streaming
 /// returns to Dart immediately after spawn.
 fn streamingWaitLoop(ctx: *StreamingCtx) void {
-    const term_or_err = ctx.child.wait();
+    // ECHILD-tolerant (see waitTolerant): the Dart VM's ExitCodeHandler may
+    // reap our child first, so a panicking std waitpid is not safe here. The
+    // resulting `.Unknown` → exit_code -1 is harmless: the GUI reads the run's
+    // real exit code from bxp-cli's BXTB `done` frame, not from this value.
+    const term = waitTolerant(&ctx.child);
 
-    // Whether wait succeeded or not, reader threads will exit on pipe EOF
-    // (the child's exit closed the write ends). Joining is the synchronisation
-    // point that guarantees no callback fires after on_exit.
+    // Reader threads exit on pipe EOF (the child's exit closed the write
+    // ends). Joining is the synchronisation point that guarantees no callback
+    // fires after on_exit.
     ctx.stdout_thread.join();
     ctx.stderr_thread.join();
 
-    const exit_code: i32 = if (term_or_err) |term|
-        switch (term) {
-            .Exited => |c| @intCast(c),
-            .Signal => |s| -@as(i32, @intCast(s)),
-            .Stopped, .Unknown => -1,
-        }
-    else |wait_err| blk: {
-        // OS-level wait failure (extremely rare — waitpid ECHILD-after-reap
-        // race, or Windows handle invalidation). Without a diagnostic the
-        // Dart side sees only exit_code=-1 and can't distinguish this from
-        // a Stopped/Unknown signal. Emit the error name as a final stderr
-        // chunk before on_exit fires so the bug reporter has something to
-        // paste. Reader threads have already joined, so this is the last
-        // dispatch through ctx.on_stderr_chunk.
-        const a = std.heap.c_allocator;
-        var msg_buf: [128]u8 = undefined;
-        const msg = std.fmt.bufPrint(
-            &msg_buf,
-            "bridge: child.wait failed: {s}\n",
-            .{@errorName(wait_err)},
-        ) catch "bridge: child.wait failed\n";
-        if (a.dupe(u8, msg)) |heap_msg|
-            dispatchOrFree(ctx, ctx.on_stderr_chunk, heap_msg, a)
-        else |_| {}
-        break :blk -1;
+    const exit_code: i32 = switch (term) {
+        .Exited => |c| @intCast(c),
+        .Signal => |s| -@as(i32, @intCast(s)),
+        .Stopped, .Unknown => -1,
     };
 
     // Snapshot the callback before tearing down the context — Dart's handler
@@ -1431,6 +1461,34 @@ test "collectOutputCapped truncates and keeps prefix at unit level" {
 
     try testing.expectEqual(@as(usize, 128), stdout_buf.items.len);
     try testing.expectEqual(true, trunc.load(.acquire));
+}
+
+test "waitTolerant survives a child reaped by another waiter (no ECHILD panic)" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    const a = testing.allocator;
+    var argv = std.ArrayList([]const u8).empty;
+    defer argv.deinit(a);
+    try argv.append(a, helper_path);
+    try argv.append(a, "stdout-bytes");
+    try argv.append(a, "0");
+    var child = std.process.Child.init(argv.items, a);
+    child.stdout_behavior = .Ignore;
+    child.stderr_behavior = .Ignore;
+    child.stdin_behavior = .Close;
+    try child.spawn();
+
+    // Simulate the Dart VM's wait4(-1) ExitCodeHandler winning the race:
+    // reap the child ourselves first, leaving child.term unset. A naive
+    // child.wait() would now hit ECHILD → unreachable → panic.
+    const reaped = std.c.waitpid(child.id, null, 0);
+    try testing.expect(reaped == child.id);
+
+    // Must not panic; the status is gone so it reports .Unknown.
+    const term = waitTolerant(&child);
+    switch (term) {
+        .Unknown => {},
+        else => return error.TestExpectedUnknownTerm,
+    }
 }
 
 test "bridge_version returns build version string" {
