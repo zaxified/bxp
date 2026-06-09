@@ -584,6 +584,9 @@ default)` (Excel-style) vs SQL `CASE WHEN` shape — the variadic
   Assessment in `project_zig16_migration` memory. Bundle this with
   `REGEX_MATCH` / `REGEX_EXTRACT` below — the only mature native-Zig
   regex (zig-utils/zig-regex v0.2.0, 2026-05-18) requires Zig 0.16+.
+  Note: the `uucode` dep is **not** a blocker — its master branch already
+  supports 0.16; we deliberately pin the `zig-0.15` back-port branch for
+  now, so migration just repoints the pin to master (+ new hash).
 
 ### Bridge FFI expansion (more direct Zig calls)
 
@@ -597,61 +600,66 @@ default)` (Excel-style) vs SQL `CASE WHEN` shape — the variadic
   ["Adding a new bridge FFI export"](devel.md#adding-a-new-bridge-ffi-export)
   in the developer guide.
 
-### MCP + API library (external project)
+### MCP + adapters over the shared `inspect` core
 
-Idea captured from a 2026-06-07 brainstorm — a **separate Zig project**,
-not a per-app server. An embeddable agent-control / API layer that every
-bxp binary (and future programs) links, so a program can be **driven by
-an agent** instead of the `exe + flags → parse stdout/stderr` dance.
+**Mostly shipped — in the monorepo, not the external project the
+2026-06-07 brainstorm first imagined.** One stateless core,
+`bxp-core/src/inspect.zig`, with thin adapters on top:
 
-Shape and rationale from the discussion:
+- **bxp-fmt** — CLI adapter (argv → stdout). Shipped.
+- **bxp-mcp** — MCP/stdio adapter. Shipped: `bxp_validate`, `bxp_eval`,
+  `bxp_eval_batch`, `bxp_eval_trace`, `bxp_list_templates`,
+  `bxp_fetch_template`, `bxp_docs`, and **`bxp_simulate`** (spawns the
+  co-located `bxp-cli` for a full run), with a per-request arena.
 
-- **One core, thin adapters.** A clean Zig core (logic + structured
-  types) with separate adapters on top: an **MCP** adapter (JSON-RPC,
-  tools + notifications for an agent), an **HTTP** adapter (for a future
-  web front-end doing file in/out manipulation), and a **C-ABI** adapter
-  (link into Dart, as the existing `bxp-gui-bridge` already does). The
-  core must not know who is calling it — that boundary is what separates
-  "universal lib" from "MCP glued onto the bridge".
-- **Generalises the bridge.** `bxp-gui-bridge` is already a C-ABI core
-  called from Dart; this is its natural generalisation from "spawn a
-  subprocess" to "be an agent endpoint".
-- **Three intended jobs** (user framing): (1) let a program be
-  agent-controlled instead of argv + stdout parsing; (2) replace the
-  old NDJSON-style streaming API (the retired `--trace=json`) with
-  structured JSON-RPC notifications; (3) be **bidirectional** — e.g. a
-  long-lived GUI pushes debug info back to the agent (MCP natively
-  supports server→client notifications / sampling / elicitation).
-- **BXTB stays the internal fast-path.** The bridge/fmt could sit on the
-  binary BXTB stream from `bxp-cli --trace` and translate it to JSON-RPC
-  for the agent — so the agent never sees binary BXTB, and the
-  performance path (cli → bridge) is unchanged. (1:1 frame→notification
-  vs aggregated "simulate" result is a later detail.)
-- **Three consumers justify the separate project:** individual bxp apps,
-  an agent driving them, and a future web service — same core, different
-  adapter, written once instead of three times.
+The "core must not know who is calling it" boundary held: fmt, the MCP
+server, and the `bxp-gui-bridge` C-ABI all call `inspect`. The original
+"separate embeddable Zig project" framing is superseded — it landed as
+monorepo packages.
 
-Explicitly **not** the fix for agent-driven config authoring: that
-brainstorm concluded MCP adds only marginal utility _for config
-authoring specifically_ (the bottleneck is the structured `simulate`
-data surface, not the transport — a plain `--json` would deliver the
-same payload). That workflow was already unblocked the cheap way
-(2026-06-07): `bxp-fmt` ships in the console archive and both bundled
-readmes' self-test sections use the real `fmt --config` /
-`fmt --expr-trace` / `cli --debug` / read-`.csvx` loop. Decided **not**
-to re-add NDJSON to `bxp-cli` (CLI stays a workhorse). This library is
-the longer-term platform play, deferred until the engine and its
-structured surfaces stop churning (same pinning caution as the Bridge
-FFI expansion above).
+Remaining / future:
 
-If a single-round-trip structured `simulate` surface is ever pursued
-(matched + unmatched + errored rows, computed `$variable` values, chosen
-rule index, resulting output row, for a _sample_ of rows), candidate
-shapes are: a structured-JSON `--debug`, an N-row extension of
-`bxp-fmt --expr-batch`, or a documented small BXTB parser — plus folding
-in the GUI "import wizard" (under _bxp-gui_, Later). `fmt` is stateless
-(no `pre_pass`/`LOOKUP`), so full template simulation stays CLI
-territory.
+- **bxp-api (HTTP adapter) — future extension, only if web integration
+  is pursued.** The same `inspect` core behind an HTTP/port transport
+  for a remote/web front-end. Needs concurrency (thread pool / event
+  loop) that stdio doesn't. Build only when a real web/remote case
+  appears.
+- **Protocol depth (bxp-mcp), each independently shippable:**
+  - **`structuredContent` + `outputSchema` on tool results** — small.
+    The agent gets typed JSON instead of re-parsing a stringified blob;
+    biggest beneficiaries are the `bxp_simulate` report and
+    `bxp_eval_batch`. Do anytime.
+  - **Bump protocol to `2025-11-25`** — version string + any newly
+    required fields; only with a concrete need.
+  - **BXTB → JSON for a richer `bxp_simulate` (ready to build).** Today
+    `bxp_simulate` spawns `bxp-cli` _without_ `--trace` and returns the
+    output files + a record-count diff; the agent never sees the per-row
+    BXTB trace (which input row dropped and why, which rule matched,
+    per-row errors) — only the GUI consumes that. The reader already
+    exists (`bxp-core/src/btrace.zig` `Reader`/`Frame`) and `bxp-cli`
+    emits the stream, so spawning with `--trace`, parsing frames, and
+    folding per-row reasons into the simulate report is feasible now —
+    not blocked. Streaming those frames as `notifications/progress`
+    during a long run is a _further_ layer (needs a progressToken +
+    notification writes interleaved with the run).
+
+`fmt` is stateless (no `pre_pass`/`LOOKUP`), so full template simulation
+stays CLI territory — hence `bxp_simulate` spawns `bxp-cli` rather than
+running in-core.
+
+### Agent-controllable GUI — embedded Dart MCP server
+
+**Planned.** A Dart MCP implementation embedded in **bxp-gui** that
+exposes **GUI-specific, stateful operations** so an agent can drive the
+running app — distinct from `bxp-mcp`'s stateless data tools. Candidate
+commands: open-config, close, reload, run (dry-run / full), exit, and
+similar window/document actions. This realises the bidirectional "agent
+controls the app" half of the original brainstorm on the GUI side: the
+live window takes commands and can push state back. (The per-call
+`bxp-fmt` spawn the older "GUI talks to a long-lived bxp-mcp" idea
+targeted is already gone — stateless ops go through in-proc
+`bridge_inspect`; see _bxp-gui-bridge_. This new server is about
+_controlling the GUI_, not running stateless evals.)
 
 ### Expression builtins (regex)
 
