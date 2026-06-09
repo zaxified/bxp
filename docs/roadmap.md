@@ -56,29 +56,29 @@ backlog was otherwise exhausted:
 
 ## v0.3.0
 
-### Flip bridge proxy to default on Linux/macOS
+### Flip bridge proxy to default on Linux/macOS — DONE 2026-06-09
 
-Foundation shipped in v0.2.3: `bxp-gui-bridge.{so,dylib}` builds and
-ships alongside `bxp-gui` on all three hosts; `bridge_eval_expr` /
-`bridge_eval_expr_trace` already run in-process on every platform; the
-subprocess proxy path (`bridge_run` / `bridge_run_streaming` for
-spawning `bxp-cli` / `bxp-fmt`) compiles and works cross-platform
-behind a `BXP_FORCE_BRIDGE_PROXY=1` smoke gate. Windows has used the
-bridge proxy as its mandatory and only path since v0.2.2 to sidestep
-dart-lang/sdk#1727 (Win pipe truncation) and engine-stderr capture
-under `/SUBSYSTEM:WINDOWS`.
+The `bxp-gui-bridge` shared library is the GUI's single backend on every
+platform now. In [`bxp_process_client.dart`](../bxp-gui/lib/services/bxp_process_client.dart):
+the `Platform.isWindows` branches, the `BXP_FORCE_BRIDGE_PROXY` /
+`BXP_FORCE_BRIDGE` opt-ins, and the entire `Process.start` machinery
+(`_runWithTimeout` / `_runOnce` + the 3-attempt fallback chain) were
+deleted. `bxp-cli` dry-runs stream through `bridge_run_streaming` on all
+hosts; `--version` goes through `bridge_run`; the stateless ops
+(`getDocs` / `loadConfig` / `listTemplates` / `fetchTemplate` /
+`evalBatch` / `validateExpr` / `traceExpr`) run in-process via
+`bridge_inspect` / `bridge_eval_*` with **no `bxp-fmt` spawn fallback**.
+The startup gate flipped from "is `bxp-fmt` on disk?" to "does the bridge
+library load + `docs` parse?" — a missing library is now a fatal startup
+on every platform (as Windows always was). This also completes the
+**GUI-side preparation for deleting `bxp-fmt`**: the GUI no longer needs
+the binary at all (the bridge links bxp-core/inspect directly).
 
-Plan for v0.3.0:
-
-- Make the bridge proxy the default on Linux/macOS, removing the
-  `Platform.isWindows` branches in
-  [`bxp_process_client.dart`](../bxp-gui/lib/services/bxp_process_client.dart)
-  and the `BXP_FORCE_BRIDGE_PROXY` opt-in.
-- Drop the `Process.start` code path entirely once the bridge proxy
-  has shipped in at least one production release on Linux/macOS with
-  no regressions.
-- Audit the per-host Flutter shells (`linux/`, `macos/`) for any
-  remaining `Process.start`-specific assumptions before the flip.
+Bundled with this flip but tracked for next session: actually deleting
+`bxp-fmt` (still used by the console archive's agent self-test and
+`scripts/test.sh` as a parity oracle) and the Windows `bridge_inspect`
+smoke leg (the path is now load-bearing on Windows; Linux is live-verified
+and the same DLL is already mandatory there for the proxy + eval families).
 
 ### Auto-updater security audit & hardening
 
@@ -162,108 +162,6 @@ shared-strings means a second `inflate` pass when the worksheet row
 walk first references each string. Acceptable if the total memory
 ceiling drops from `O(workbook size)` to
 `O(shared-strings index + one row)`.
-
-### Unicode / text subsystem (one cohesive module)
-
-> **Status 2026-06-08. Unicode subsystem COMPLETE — both layers shipped.**
-> **Layer 0 shipped** in `bxp-core/src/encoding.zig`: per-template
-> `csv_input_encoding` / `csv_output_encoding` (default `utf-8`) transcode
-> legacy single-byte CSVs ↔ UTF-8 — `windows-1250`, `windows-1252`,
-> `iso-8859-1`, `iso-8859-2`, `iso-8859-15`. In-house 256-entry tables (no
-> uucode). Offset-safe: structural bytes are ASCII, so only field values +
-> header names are transcoded (`expr.Context.field` decode at read,
-> `pipeline.writeSafeValue` sites encode at write) — `source_locator` / trace
-> drill-down stay correct, no fmt/GUI change. Both config keys are FieldDoc
-> entries with `enum_values`, so the GUI renders a dropdown automatically. The
-> GUI dropdown was free; xlsx UTF-16 XML now warn-and-skips (`hasUtf16Bom`).
->
-> **Layer 1 fully shipped** in
-> `bxp-core/src/unicode.zig`: `UPPER` / `LOWER` are full-Unicode
-> (`café`→`CAFÉ`, `ß`→`SS`, `я`→`Я`) and `UNACCENT` strips Latin diacritics
-> (`café`→`cafe`, `ß`→`ss`, `ø`→`o`; non-Latin keeps its base script, e.g.
-> Greek `Ά`→`Α`, not `A`). The Unicode data tables come from the **uucode**
-> library (MIT), a field-selected fetch dependency pinned in
-> `bxp-core/build.zig.zon` — **not** in-house generation. The zero-external-dep
-> stance was deliberately relaxed (it was a state, not a rule): uucode delivers
-> correct full-Unicode case mapping incl. `ß`→`SS` plus the canonical
-> decomposition `unaccent` needs, with zero runtime allocation and a ~5 MB
-> field-pruned table source, beating hand-generating + maintaining UCD tables.
-> See the `reference_zig_unicode_libs` memory for the uucode-vs-zg evaluation.
-> **Nothing remaining** — Layer 0 (above) was the last open item; the Unicode /
-> text subsystem is feature-complete. CJK multibyte code pages (Shift-JIS,
-> GB18030, …) remain deferred, to be added only on a concrete user request.
-
-As bxp generalises beyond EU broker CSVs into a general CSV→JSON / data
-cleaning tool, three separate gaps all turn out to be the same problem
-seen from different angles — non-UTF-8 input files, ASCII-only `UPPER`/
-`LOWER`, and no diacritic stripping. Rather than ship three ad-hoc
-builtins that each re-derive UTF-8 iteration and Unicode tables, the text
-operations live in **one `bxp-core/src/unicode.zig` module**, with the
-Unicode tables supplied by uucode (case mapping today; decomposition for
-`unaccent` next) and the encoding tables to be added in-house for Layer 0.
-
-**Architecture — two layers, one currency.** Everything internal stays
-**UTF-8**. The two layers share only the UTF-8 plumbing, never each
-other's semantics (do not merge encoding detection with case mapping):
-
-- **Layer 0 — encoding conversion (the "iconv" job).** Transcode a
-  non-UTF-8 input file to UTF-8 **at read time** and back **at write
-  time**, driven by config. The rest of the pipeline never sees a
-  foreign encoding. New per-template config keys `csv_input_encoding` /
-  `csv_output_encoding` (default `utf-8`). **CSV only** — JSON (RFC 8259)
-  and xlsx (XML-in-ZIP) are always UTF-8, so they need no such key.
-  Replaces today's detect-only behaviour (`pipeline.zig` already emits
-  `warning: '<file>' is not valid UTF-8` but cannot transcode).
-- **Layer 1 — text operations on UTF-8 cells (expr builtins).** Case
-  mapping (`UPPER` / `LOWER`) and transliteration (`unaccent`), invoked
-  per-field. These stop being byte loops and become UTF-8 codepoint
-  walks (`std.unicode` iterators), so output length may differ from
-  input (`ß`→`SS`) — no `s.len` pre-allocation.
-
-**Scope decisions — "proper, but small" (resolved 2026-06-05):** the
-right coverage differs per operation, and picking it per-operation lets
-us be correct globally without bloat.
-
-- **`UPPER` / `LOWER` → full Unicode — SHIPPED 2026-06-08.** Swedish
-  `å ä ö`, Greek, Russian `я` all work correctly; unicameral scripts
-  (CJK, Arabic, Hebrew) have no case and pass through unchanged; `ß`→`SS`
-  expands on upper. No Latin-only MVP — done right from the start. The
-  case tables come from uucode (`uppercase_mapping` / `lowercase_mapping`
-  fields, generated from `UnicodeData.txt` + `SpecialCasing.txt`
-  upstream), not hand-rolled here.
-- **`unaccent` → deliberately Latin-scope — SHIPPED 2026-06-08.** Renamed
-  from the working title `TO_ASCII` per user preference, matching Postgres's
-  `unaccent` extension. Strips diacritics for Latin (`café`→`cafe`, `ß`→`ss`,
-  `ø`→`o`). For non-Latin scripts the behaviour is **pass-through** of the
-  base script (keep the UTF-8), NOT romanisation: `unaccent('日本語')`→`日本語`,
-  Greek `Ά`→`Α` (not `A`) — lossy unidecode-style romanise-everything is
-  explicitly out of scope, same as Postgres. Implemented in `unicode.zig` by
-  recursing uucode's canonical (NFD) decomposition, dropping combining marks,
-  and applying a `latinHandlist` for the non-decomposing letters
-  (`ß ø ł đ æ þ` …). Compatibility decompositions (ligatures, `①`) are not folded.
-- **Encoding tables → tiered.** Ship **European single-byte first**
-  (Latin-1, Windows-1252, Latin-2/9 — trivial 256-entry tables, a few KB
-  total). **CJK multibyte** (Shift-JIS, GB18030, Big5, EUC-JP/KR) are
-  larger (~tens to hundreds of KB each) — add as separate, optional
-  table modules when a real user needs them. Note: this is a
-  legacy-file feature regardless of region — modern Japanese / Swedish
-  CSVs are overwhelmingly UTF-8 already, needing no conversion.
-
-**Module shape.** `unicode.zig` exports `toUpper(cp)` / `toLower(cp)`
-(feeds `UPPER`/`LOWER`), `toAscii(cp) []const u8` (feeds `unaccent`), and
-`decodeToUtf8(bytes, enc)` / `encodeFromUtf8(utf8, enc)` (feeds the
-`csv_*_encoding` config). A `build.zig` generator step emits the tables
-from committed UCD / CLDR source files; regenerate on a Unicode version
-bump. May later split into `encoding.zig` + `unicode.zig` if it grows.
-
-**Locale caveat (document, don't solve).** Use the root/invariant locale
-for case mapping. The only real collisions are Turkish dotless `i`/`İ`
-and German `ß`/`ẞ`; full locale-aware case (ICU-level) is a later upgrade
-gated on a concrete use-case, not a v0.4.0 goal.
-
-> This subsection supersedes the standalone "Input character-encoding /
-> charset transcoding" item under _Later → Real-world data quirks_ — the
-> `input_encoding` idea is folded in here as Layer 0 (`csv_input_encoding`).
 
 ## Later (no specific version)
 
@@ -377,19 +275,6 @@ Surfaced by the problem-first examples initiative: start from a real,
 documented data-cleaning problem, attempt it with bxp-cli, and record
 genuine _feature_ gaps here (bugs — where BXP does something wrong — get
 fixed before release instead, not parked here).
-
-- **Input character-encoding / charset transcoding.** → Promoted to
-  v0.4.0 as Layer 0 of the _Unicode / text subsystem_ (`csv_input_encoding`
-  / `csv_output_encoding`). A huge share of real-world CSVs — especially
-  European and Windows-origin exports — are Windows-1252 / ISO-8859-1 /
-  Latin-1, not UTF-8. bxp-cli reads bytes verbatim: it does not corrupt
-  them, but it also does not transcode, so a Latin-1 `André`
-  (`0x41 0x6e 0x64 0x72 0xe9`) passes straight through and the `.csvx` is
-  then invalid UTF-8 for any downstream consumer that assumes UTF-8 (the
-  GUI, Wealthfolio, a database import). Reproduced 2026-05-31. Note: a
-  _known-pattern_ mojibake (`cafÃ©` → `café`) can already be patched today
-  with explicit `REPLACE(...)`; the encoding feature is for the general
-  case where the whole file is in one non-UTF-8 charset.
 
 - **Forward-fill / unmerge-cells (`fill_down`).** Spreadsheets exported
   from merged cells leave the group label on the first row and blanks
@@ -624,24 +509,10 @@ Remaining / future:
   for a remote/web front-end. Needs concurrency (thread pool / event
   loop) that stdio doesn't. Build only when a real web/remote case
   appears.
-- **Protocol depth (bxp-mcp), each independently shippable:**
-  - **`structuredContent` + `outputSchema` on tool results** — small.
-    The agent gets typed JSON instead of re-parsing a stringified blob;
-    biggest beneficiaries are the `bxp_simulate` report and
-    `bxp_eval_batch`. Do anytime.
-  - **Bump protocol to `2025-11-25`** — version string + any newly
-    required fields; only with a concrete need.
-  - **BXTB → JSON for a richer `bxp_simulate` (ready to build).** Today
-    `bxp_simulate` spawns `bxp-cli` _without_ `--trace` and returns the
-    output files + a record-count diff; the agent never sees the per-row
-    BXTB trace (which input row dropped and why, which rule matched,
-    per-row errors) — only the GUI consumes that. The reader already
-    exists (`bxp-core/src/btrace.zig` `Reader`/`Frame`) and `bxp-cli`
-    emits the stream, so spawning with `--trace`, parsing frames, and
-    folding per-row reasons into the simulate report is feasible now —
-    not blocked. Streaming those frames as `notifications/progress`
-    during a long run is a _further_ layer (needs a progressToken +
-    notification writes interleaved with the run).
+
+(Protocol depth — `structuredContent` + `outputSchema`, protocol
+`2025-11-25` + negotiation, and the `bxp_simulate` per-row BXTB trace +
+phased `notifications/progress` — all shipped 2026-06-09 in `2ea296c`.)
 
 `fmt` is stateless (no `pre_pass`/`LOOKUP`), so full template simulation
 stays CLI territory — hence `bxp_simulate` spawns `bxp-cli` rather than
