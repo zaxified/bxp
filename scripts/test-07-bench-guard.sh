@@ -63,9 +63,11 @@ _emit() {
     local dots
     dots=$(printf '.%.0s' $(seq 1 "$dots_n"))
     if [[ "$status" == OK ]]; then
-        printf '  %s %s OK %5ss\n' "$label" "$dots" "$dur"
+        # %6s / %4s: trailing "s" on the report's right margin — mirrors step()
+        # in test-lib.sh so guard lines align with every other suite + summary.
+        printf '  %s %s OK %6ss\n' "$label" "$dots" "$dur"
     else
-        printf '  %s %s FAIL %3ss\n' "$label" "$dots" "$dur"
+        printf '  %s %s FAIL %4ss\n' "$label" "$dots" "$dur"
     fi
 }
 
@@ -109,12 +111,16 @@ if ! command -v python3 >/dev/null 2>&1; then
 fi
 
 # --- 1. Build ReleaseFast into the gitignored guard prefix -------------------
+built=0
 if [[ "${GUARD_SKIP_BUILD:-0}" != "1" || ! -x "$BXP" ]]; then
     mkdir -p "$BUILD_PREFIX"
     if ! ( cd "$MONO_ROOT/bxp-cli" && zig build -Doptimize=ReleaseFast -p "$BUILD_PREFIX" ) 2>"$WORK/build.log"; then
         _fail "guard" 0 "ReleaseFast build failed (see $WORK/build.log)"
     fi
+    built=1
 fi
+t_build=$(_now)
+build_dur=$(awk -v a="$t0" -v b="$t_build" 'BEGIN{printf "%.1f", b-a}')
 if [[ ! -x "$BXP" ]]; then
     _fail "guard" 0 "guard binary missing after build: $BXP"
 fi
@@ -157,15 +163,12 @@ large_out=$(_run_point "$LARGE_ROWS") || _fail "guard" 0 "large-N run failed (N=
 read -r small_wall small_rss <<<"$small_out"
 read -r large_wall large_rss <<<"$large_out"
 
-t1=$(_now)
-dur=$(awk -v a="$t0" -v b="$t1" 'BEGIN{printf "%.1f", b-a}')
-
 # --- 2. Assert RSS ceiling ---------------------------------------------------
 rss_ceil_kb=$(( RSS_MB * 1024 ))
 small_rss_mb=$(awk -v k="$small_rss" 'BEGIN{printf "%.1f", k/1024}')
 large_rss_mb=$(awk -v k="$large_rss" 'BEGIN{printf "%.1f", k/1024}')
 if (( small_rss > rss_ceil_kb || large_rss > rss_ceil_kb )); then
-    _fail "guard (rss)" "$dur" \
+    _fail "guard rss" "$large_wall" \
         "RSS ceiling ${RSS_MB} MB exceeded — possible return to O(N) buffering" \
         "N=${SMALL_ROWS}: ${small_rss_mb} MB" \
         "N=${LARGE_ROWS}: ${large_rss_mb} MB"
@@ -175,6 +178,7 @@ fi
 # wall ratio should track the row ratio (linear). Fail if it exceeds
 # row_ratio * RATIO_SLACK. Guard against a ~0 small_wall (timing noise on a
 # fast machine) by flooring it before the division.
+t_chk0=$(_now)
 verdict=$(awk \
     -v sw="$small_wall" -v lw="$large_wall" \
     -v sr="$SMALL_ROWS" -v lr="$LARGE_ROWS" -v slack="$RATIO_SLACK" '
@@ -190,14 +194,26 @@ BEGIN {
 }')
 ratio_rc=$?
 read -r wall_ratio row_ratio ratio_limit <<<"$verdict"
+t_chk1=$(_now)
+chk_dur=$(awk -v a="$t_chk0" -v b="$t_chk1" 'BEGIN{printf "%.1f", b-a}')
 if (( ratio_rc != 0 )); then
-    _fail "guard (scaling)" "$dur" \
+    _fail "guard scaling" "$chk_dur" \
         "wall scaling ${wall_ratio}x for a ${row_ratio}x row increase (limit ${ratio_limit}x)" \
         "super-linear — suspect an O(n^2) regression in the row pipeline" \
         "N=${SMALL_ROWS}: ${small_wall}s   N=${LARGE_ROWS}: ${large_wall}s"
 fi
 
-# Surface the measured numbers (peak RSS + wall, both points) alongside the
-# pass verdict, not just the ratio — so a run shows the real figures.
-_emit "guard (rss ${small_rss_mb}/${large_rss_mb}MB<=${RSS_MB}, wall ${small_wall}/${large_wall}s, scale ${wall_ratio}x/${row_ratio}x)" OK "$dur"
+# One column-aligned OK line per check, each with its own real time — the
+# build (when it ran), each measured run (bxp-cli's self-reported wall, with
+# that point's peak RSS + the ceiling), and the scaling verdict. Cramming all
+# the numbers into a single label overflowed _BXP_OK_COL and pushed "OK" out
+# of line with every other suite; splitting keeps each line aligned.
+# Display the wall on 1 decimal to match every other suite's `step` output
+# (the raw %.2f walls stay above for the ratio math, which wants the precision).
+small_wall_1=$(awk -v w="$small_wall" 'BEGIN{printf "%.1f", w}')
+large_wall_1=$(awk -v w="$large_wall" 'BEGIN{printf "%.1f", w}')
+(( built )) && _emit "guard build (ReleaseFast)" OK "$build_dur"
+_emit "guard run N=${SMALL_ROWS} rss=${small_rss_mb}MB (<=${RSS_MB})" OK "$small_wall_1"
+_emit "guard run N=${LARGE_ROWS} rss=${large_rss_mb}MB (<=${RSS_MB})" OK "$large_wall_1"
+_emit "guard scaling ${wall_ratio}x (<=${ratio_limit}x, ${row_ratio}x rows)" OK "$chk_dur"
 exit 0

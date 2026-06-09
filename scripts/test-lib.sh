@@ -53,10 +53,14 @@ step() {
     dots=$(printf '.%.0s' $(seq 1 $dots_n))
 
     if [[ $rc -eq 0 ]]; then
-        printf '  %s %s OK %5ss\n' "$label" "$dots" "$dur"
+        # %6s (OK) / %4s (FAIL): right-align the time so its trailing "s"
+        # lands on the report's right margin (_BXP_LINE_W), flush with the
+        # section rules and the summary's total — "FAIL" is 2 chars wider
+        # than "OK", so its number field is 2 narrower to keep the same edge.
+        printf '  %s %s OK %6ss\n' "$label" "$dots" "$dur"
         rm -f "$out"
     else
-        printf '  %s %s FAIL %3ss\n' "$label" "$dots" "$dur"
+        printf '  %s %s FAIL %4ss\n' "$label" "$dots" "$dur"
         echo
         cat "$out" >&2
         rm -f "$out"
