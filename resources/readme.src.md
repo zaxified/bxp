@@ -1,4 +1,9 @@
+<!-- GUI-ONLY:START -->
+# Broker eXchange Parser (BXP Desktop)
+<!-- GUI-ONLY:END -->
+<!-- CLI-ONLY:START -->
 # Broker eXchange Parser (BXP Console)
+<!-- CLI-ONLY:END -->
 
 A converter for broker export statements (CSV, XLSX, JSON) into
 portfolio-tracker CSV formats using declarative JSON5 templates.
@@ -8,6 +13,27 @@ templates today; any other tracker is reachable by writing an
 `output_schema` for it — no code changes. Everything runs locally; your
 data never leaves the machine.
 
+<!-- GUI-ONLY:START -->
+The desktop bundle adds a graphical editor and dry-run debugger on top
+of the same conversion engine, so you can edit templates and preview
+their behaviour against your real broker exports without leaving the
+app. Three binaries ship together:
+
+- **`bxp-gui`** — the Flutter desktop application (this app).
+- **`bxp-cli`** — the conversion engine. Produces the actual `.csvx`
+  files. The GUI runs it (proxied through the bundled bridge library);
+  you can also run it directly from a terminal.
+- **`bxp-mcp`** — an MCP server (JSON-RPC over stdio) that exposes bxp's
+  stateless surface to an AI agent — validate a config or expression,
+  evaluate, list templates, read the docs — and runs a full conversion
+  end-to-end via its `bxp_simulate` tool. Lets an assistant author and
+  self-test a template without driving the GUI.
+
+This readme is a **superset of the bxp-console readme**: everything in
+the console package's documentation is included below, plus the GUI
+workflow sections.
+<!-- GUI-ONLY:END -->
+<!-- CLI-ONLY:START -->
 The console package ships two binaries that work together:
 
 - **`bxp-cli`** — the conversion engine. Produces the actual `.csvx`
@@ -17,12 +43,75 @@ The console package ships two binaries that work together:
   evaluate, list templates, read the docs — and runs a full conversion
   end-to-end via its `bxp_simulate` tool. Lets an assistant author and
   self-test a template without driving the GUI.
+<!-- CLI-ONLY:END -->
 
 ---
 
+<!-- GUI-ONLY:START -->
+## Installation
+
+Each release ships one artefact per platform, downloadable via stable
+GitHub URLs that always point at the latest version.
+
+### Linux
+
+```bash
+sudo apt install libfuse2t64   # libfuse2 on older distros
+mkdir -p ~/.local/bin && cd ~/.local/bin
+wget https://github.com/zaxified/bxp/releases/latest/download/bxp-desktop-linux-x86_64.AppImage
+chmod +x bxp-desktop-linux-x86_64.AppImage
+./bxp-desktop-linux-x86_64.AppImage   # first launch prompts to install menu + icons
+```
+
+The AppImage lives in `~/.local/bin/` (typically on `PATH`). User
+preferences auto-save to `~/.local/share/bxp-gui/bxp-gui.json` on first
+edit. The Linux AppImage is the only Linux distribution channel; `.deb`
+and plain tarballs were retired in v0.2.3 to keep one update path. On
+first launch the AppImage offers to write
+`~/.local/share/applications/bxp-gui.desktop` plus `hicolor` icons so
+the app shows up in the system menu — no `sudo` needed, reversible from
+the Settings drawer.
+
+### Windows
+
+Download
+[`bxp-desktop-windows-x86_64.exe`](https://github.com/zaxified/bxp/releases/latest/download/bxp-desktop-windows-x86_64.exe)
+and run the NSIS installer. SmartScreen may warn — "More info" → "Run
+anyway". The app installs to `C:\Program Files\bxp-gui\` with a Start
+menu entry and desktop shortcut. User preferences live at
+`%APPDATA%\bxp-gui\bxp-gui.json`.
+
+### macOS (Apple Silicon)
+
+Download
+[`bxp-desktop-macos-arm64.dmg`](https://github.com/zaxified/bxp/releases/latest/download/bxp-desktop-macos-arm64.dmg),
+open it, drag `bxp-gui.app` to `/Applications/`. First launch:
+right-click `bxp-gui.app` → Open → Open (bypasses Gatekeeper once).
+Subsequent launches go through Spotlight / Launchpad / Dock. User
+preferences live at `~/Library/Application Support/bxp-gui/bxp-gui.json`.
+
+---
+<!-- GUI-ONLY:END -->
+
 ## Basic usage
 
+<!-- GUI-ONLY:START -->
+The GUI is the primary entry point; the bundled CLI binaries are also
+runnable from a terminal for scripting or batch use.
+
+### Three-step recipe (GUI)
+
+1. **File → Open** (or `Ctrl+O`). Pick your `bxp-cli.json`.
+2. Select a template in the toolbar dropdown, click `dry-run`. The
+   bottom pane streams trace events for every input row.
+3. Inspect the trace, fix any errors that appear inline in the tree,
+   then click `full-run` to produce the `.csvx` files.
+
+### Three-step recipe (terminal — when running bxp-cli directly)
+<!-- GUI-ONLY:END -->
+<!-- CLI-ONLY:START -->
 ### Three-step recipe
+<!-- CLI-ONLY:END -->
 
 1. Drop the broker's export file into the template's `data_dir`.
 2. Run `./bxp-cli --template <id>`.
@@ -44,6 +133,33 @@ The console package ships two binaries that work together:
 | `trading212_to_brychtapp` | Trading 212 → brycht.app (tracker) |
 | `xtb2_cash_to_brychtapp` | XTB — cash operations (new) → brycht.app (tracker) |
 | `xtb2_closed_to_brychtapp` | XTB — closed positions (new) → brycht.app (tracker) |
+
+<!-- GUI-ONLY:START -->
+### Keyboard shortcuts
+
+All shortcuts are global (work even while a side panel has focus),
+except where noted.
+
+| Combo | Action |
+| --- | --- |
+| `Ctrl+O` | Open config file picker |
+| `Ctrl+S` | Save (writes the in-memory AST back to disk) |
+| `Ctrl+R` | Reload config from disk (discard unsaved edits) |
+| `Ctrl+Z` | Undo last edit (inside text fields: native typo-undo) |
+| `Ctrl+Y` | Redo |
+| `Ctrl+T` | Reset draft to the on-disk file |
+| `Ctrl+E` | Validate the current draft (in-process, via the bundled bridge) |
+| `Ctrl+Shift+S` | Toggle the settings / runtime inspector drawer |
+| `Ctrl+Shift+T` | Toggle theme inspector |
+| `Ctrl+Scroll` | Zoom the whole UI |
+| `Ctrl+0` | Reset zoom |
+| `Ctrl++` / `Ctrl+-` | Step zoom up / down |
+| `Esc` | Close any open dialog or inspector |
+
+The toolbar's `dry-run` and `full-run` buttons have no shortcuts —
+clicking them is the only way to start a run, and clicking again while
+a run is active cancels it (the label flips to `cancel`).
+<!-- GUI-ONLY:END -->
 
 ### `bxp-cli` reference
 
@@ -109,6 +225,13 @@ on the JSON-RPC result; a domain `{"ok":false,…}` answer (an expression
 error, a not-found template) is a valid result the agent should read,
 not a failure. See `docs/mcp.md` for the full wire protocol.
 
+<!-- GUI-ONLY:START -->
+### `bxp-gui` reference
+
+The GUI takes no command-line flags. It reads its preferences file (path
+listed below) and remembers the last-opened config across launches.
+<!-- GUI-ONLY:END -->
+
 ### Exit codes
 
 | Binary | Code | Meaning |
@@ -134,6 +257,41 @@ bxp-cli's streaming output assumes stdout and stderr stay separate.
 
 ---
 
+<!-- GUI-ONLY:START -->
+## User preferences
+
+Settings (theme, recent files, custom places, zoom level) are stored in
+a single visible JSON file:
+
+| Platform | Path |
+| --- | --- |
+| Linux | `~/.local/share/bxp-gui/bxp-gui.json` |
+| macOS | `~/Library/Application Support/bxp-gui/bxp-gui.json` |
+| Windows | `%APPDATA%\bxp-gui\bxp-gui.json` |
+
+Delete the file to reset everything to defaults.
+
+---
+
+## Auto-updates
+
+The app polls `github.com/zaxified/bxp` for new releases 5 seconds
+after launch and every 6 hours thereafter. When a newer version is
+available a dialog offers a one-click update that downloads,
+SHA256-verifies, and dispatches to the platform-native installer:
+
+- **Windows** — silent NSIS reinstall, GUI relaunches automatically.
+- **macOS** — DMG mount, copy to `/Applications/`, relaunch.
+- **Linux AppImage** — atomic in-place replace + re-`exec()`.
+
+The updater is skipped during development builds. Linux builds running
+outside an AppImage (rare — only when someone runs `flutter run`
+locally) and macOS Intel surface a "manual update required" message
+with the release page URL.
+
+---
+<!-- GUI-ONLY:END -->
+
 ## Need a broker that isn't listed?
 
 **Ask your AI assistant.** bxp-cli templates are plain JSON5 — a capable
@@ -158,6 +316,14 @@ Paste this prompt into your assistant, attach both files, then drop in
 > `bxp-cli --debug`) before returning, return JSON5 with `//` comments
 > explaining non-obvious decisions, and end your reply with a 'Things
 > to check in bxp-gui' list for anything you couldn't fully verify."*
+
+<!-- GUI-ONLY:START -->
+After the AI proposes a template, paste it into the GUI's tree editor
+(or directly into your `bxp-cli.json`) and run a dry-run. The GUI's
+inline error chips will tell you exactly which expressions need fixing,
+and the AI's "Things to check in bxp-gui" list tells you what to look
+for next.
+<!-- GUI-ONLY:END -->
 
 ---
 
@@ -845,6 +1011,11 @@ cat <data_dir>/<sample>.csvx
 GUI's drill-down view — not human-readable in a terminal and not needed
 for self-testing.)
 
+<!-- GUI-ONLY:START -->
+In the GUI, the equivalent of Step C is a **dry-run** — its trace panes
+show the same per-row outcome interactively, no terminal needed.
+<!-- GUI-ONLY:END -->
+
 Iterate until step B is silent (zero `[expr error]`, zero unmatched
 rows) and the `.csvx` from step C matches every prediction.
 
@@ -914,6 +1085,130 @@ Wealthfolio templates above — the `output_schema` shape and `$action`
 vocabulary differ.
 
 ---
+
+<!-- GUI-ONLY:START -->
+## Advanced GUI features
+
+These features are GUI-specific and have no terminal equivalent. They
+exist to make authoring and debugging a template faster than editing
+JSON5 by hand.
+
+### Inline schema docs
+
+Hover any field in the tree to see its description, type, default, and
+which expressions it accepts. The catalog is the bundled docs catalog
+(the GUI loads it in-process from the bridge library at startup) — the
+same source of truth that drives autocomplete in the expression editor.
+Add a built-in function to bxp-cli, run a clean rebuild, and the GUI
+sees it automatically with no client-side changes.
+
+### Expression playground
+
+Click any expression cell — a panel opens on the right with:
+
+- A live editor with syntax highlighting and per-keystroke validation.
+- Autocomplete (Ctrl+Space) for built-in functions, `$variables`, and
+  `[ColumnName]` references that exist in the loaded template.
+- Token-level error underlines: a typo'd `[Quanity]` (instead of
+  `[Quantity]`) gets a red underline on exactly the wrong token, with
+  a did-you-mean tooltip.
+- A **Variables** sub-panel that evaluates the expression against the
+  current row in-process (via the bundled bridge) and lists every nested
+  function call's intermediate value. Excellent for debugging "why did
+  this expression return empty string?" cases.
+
+### Add Field dialog
+
+When an object's parent schema permits new keys, a `+` chip appears.
+Clicking it opens a dialog showing only the keys that are valid here
+(driven by `FieldDoc` schema metadata), with default values and
+inserted templates pre-filled. No need to remember which fields go
+where.
+
+### Settings inspector (`Ctrl+Shift+S`)
+
+A drawer slides in from the right with the GUI's complete internal
+state:
+
+- Loaded config path, raw bytes, AST root.
+- Schema docs catalog (loaded in-process from the bundled bridge at startup).
+- Op log (undo / redo history).
+- Path-keyed validation errors / warnings / info.
+- Run state (last exit code, stderr text, trace event count).
+
+Use it when something looks weird and you want to confirm "is the GUI
+seeing what I think it's seeing?".
+
+### Cancel and watchdog
+
+The run can be cancelled mid-stream by clicking the `cancel` button
+(the run-button label flips). A 10-second internal idle watchdog also
+fires SIGTERM if the bxp-cli child stops emitting events; if SIGTERM
+doesn't take effect within 2 seconds, SIGKILL escalates. You'll never
+end up with a zombie subprocess blocking the UI.
+
+### Filesystem checks (slow paths)
+
+By default config validation skips filesystem checks (existence of
+`data_dir`, of input files) so loading is snappy. Triggering `Ctrl+E`
+(Validate) re-runs validation with a `check-fs` deadline of 2 seconds to
+add these checks. If a check times out, the GUI flips into a degraded mode for
+the rest of the session: subsequent reloads omit the flag too. This
+stops a network-mounted `data_dir` from making the editor feel
+sluggish.
+
+---
+
+## Working with an AI assistant in the GUI
+
+Two GUI-specific scenarios where an AI helps you go faster than the
+template-authoring prompt above.
+
+### Help with the GUI itself
+
+If you're stuck navigating bxp-gui — finding a feature, understanding
+an error message, choosing between dry-run and full-run — paste this
+readme into your assistant and ask:
+
+> *"I use BXP Desktop. Please read the bundled `readme.md`. I'm trying
+> to `<describe what you want to accomplish>`. The GUI is showing
+> `<paste any error chip text or describe the screen>`. Which features
+> should I use, and what keyboard shortcuts apply?"*
+
+The assistant has the full keyboard shortcut table, advanced feature
+descriptions, exit-code semantics, and bundled binary reference —
+enough context to walk you through almost any GUI workflow.
+
+### Debugging an expression that returns wrong values
+
+Open the expression in the playground (right-rail panel). Click
+**Variables** and pick a row that produces the wrong result. Copy the
+NDJSON trace lines (Settings inspector → trace section) and the
+expression text into your assistant:
+
+> *"This BXP expression `<paste expression>` should produce
+> `<expected>` for input row `<paste row from variables panel>` but
+> instead produces `<actual>`. The per-call trace looks like
+> `<paste NDJSON lines>`. What's wrong with the expression?"*
+
+The trace makes the AI's job almost mechanical — every nested function
+call's input and output is visible.
+
+---
+
+## Troubleshooting
+
+| Symptom | Likely cause / fix |
+| --- | --- |
+| Fatal error gate on launch | The `bxp-gui-bridge` library is missing from the bundle. Reinstall the desktop package. |
+| `dry-run` button greyed out | No template selected, or the config has a load-time AST parse error (red banner in the tree). |
+| Error chips on every field | Schema docs failed to load. Check the Settings inspector → Docs section for a load error from the bundled docs catalog. |
+| `cancel` button stuck | The bxp-cli child didn't respond to SIGTERM. Wait 2 seconds — the watchdog escalates to SIGKILL automatically. |
+| Slow first load on a new file | First invocation may include filesystem checks (`Ctrl+E`-driven). Subsequent loads skip them; you can force-skip by avoiding `Ctrl+E`. |
+| Tree shows `$comm_<N>` keys | A bug — those keys should be hidden by the renderer. Open an issue with the offending file attached. |
+
+---
+<!-- GUI-ONLY:END -->
 
 ## Contributing and newer templates
 

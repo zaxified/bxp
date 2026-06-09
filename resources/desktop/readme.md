@@ -1,8 +1,8 @@
 # Broker eXchange Parser (BXP Desktop)
 
-A desktop app + CLI suite that converts broker export statements (CSV,
-XLSX, JSON) into portfolio-tracker CSV formats using declarative JSON5
-templates. [Wealthfolio](https://wealthfolio.app/) and
+A converter for broker export statements (CSV, XLSX, JSON) into
+portfolio-tracker CSV formats using declarative JSON5 templates.
+[Wealthfolio](https://wealthfolio.app/) and
 [brycht.app](https://brycht.app/) are the two trackers with shipping
 templates today; any other tracker is reachable by writing an
 `output_schema` for it — no code changes. Everything runs locally; your
@@ -14,15 +14,18 @@ their behaviour against your real broker exports without leaving the
 app. Three binaries ship together:
 
 - **`bxp-gui`** — the Flutter desktop application (this app).
-- **`bxp-fmt`** — companion validator and docs catalog used by the GUI;
-  also useful from a terminal for one-shot expression checks.
 - **`bxp-cli`** — the conversion engine. Produces the actual `.csvx`
-  files. The GUI invokes it as a subprocess; you can also run it
-  directly from a terminal.
+  files. The GUI runs it (proxied through the bundled bridge library);
+  you can also run it directly from a terminal.
+- **`bxp-mcp`** — an MCP server (JSON-RPC over stdio) that exposes bxp's
+  stateless surface to an AI agent — validate a config or expression,
+  evaluate, list templates, read the docs — and runs a full conversion
+  end-to-end via its `bxp_simulate` tool. Lets an assistant author and
+  self-test a template without driving the GUI.
 
 This readme is a **superset of the bxp-console readme**: everything in
-the console package's documentation is included below, plus GUI
-workflow and bxp-fmt-specific sections.
+the console package's documentation is included below, plus the GUI
+workflow sections.
 
 ---
 
@@ -119,7 +122,7 @@ except where noted.
 | `Ctrl+Z` | Undo last edit (inside text fields: native typo-undo) |
 | `Ctrl+Y` | Redo |
 | `Ctrl+T` | Reset draft to the on-disk file |
-| `Ctrl+E` | Validate the current draft (run `bxp-fmt --config`) |
+| `Ctrl+E` | Validate the current draft (in-process, via the bundled bridge) |
 | `Ctrl+Shift+S` | Toggle the settings / runtime inspector drawer |
 | `Ctrl+Shift+T` | Toggle theme inspector |
 | `Ctrl+Scroll` | Zoom the whole UI |
@@ -155,39 +158,45 @@ from the current directory and processes every template in it.
 ./bxp-cli --template <id> --data ./my-data/       # override data_dir for that template
 ```
 
-### `bxp-fmt` reference
+### `bxp-mcp` reference (for AI agents)
 
-bxp-fmt is a small validator / catalog binary that ships alongside
-bxp-cli. Each invocation runs exactly one action — subcommands are
-mutually exclusive.
+`bxp-mcp` is an MCP server (JSON-RPC 2.0 over stdio) that exposes bxp's
+stateless surface as agent-callable tools — everything an assistant
+needs to author and self-test a template without touching the GUI. It
+ships next to `bxp-cli` so its `bxp_simulate` tool can spawn it.
 
-| Subcommand | Output | Purpose |
-| --- | --- | --- |
-| `--config <file>` | annotated JSON on stdout | Validate config, return tree with `$err_*` / `$warn_*` / `$info_*` / `$comm_*` siblings. Exit `1` on validation error, `0` on success. |
-| `--config <file> --list-templates` | JSON array on stdout | List every template id declared in the config. |
-| `--config <file> --fetch-template <id>` | JSON on stdout | Return the raw JSON5 block of one template. |
-| `--expr '<text>'` | empty on stdout, `{error,detail,off,len}` on stderr | One-shot expression syntax / static check. Exit `1` on error. |
-| `--expr-trace '<text>'` | NDJSON stream on stdout | Run an expression with optional row context and emit per-call trace events. Combine with `--row-headers '<json>'` and `--row-fields '<json>'`. |
-| `--docs` | JSON on stdout | Full FnDoc / FieldDoc catalog (single source for the GUI's autocomplete). |
-| `--check-fs=N` | (modifier on `--config`) | Add filesystem-existence checks to `--config`; `N` is the deadline in seconds. |
-| `--version` | — | Print version to stdout. |
-| `--help` | — | Print help to stdout. |
+Register it with an MCP-capable client (e.g. Claude Code, in
+`~/.claude.json`):
+
+```json
+{ "mcpServers": { "bxp": { "command": "/abs/path/to/bxp-mcp", "args": [] } } }
+```
+
+…or drive it directly — one JSON-RPC object per line on stdin:
 
 ```bash
-# Validate one expression in isolation:
-./bxp-fmt --expr "IF([Qty] > 0, 'BUY', 'SELL')"
-
-# Trace an expression against a fake row:
-./bxp-fmt --expr-trace "[Price] * [Qty]" \
-    --row-headers '["Price","Qty"]' \
-    --row-fields  '["12.50","100"]'
-
-# Pretty-print the full schema catalog:
-./bxp-fmt --docs | jq '.config_schema'
-
-# List templates a config defines:
-./bxp-fmt --config ~/my-bxp-cli.json --list-templates
+printf '%s\n' \
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"bxp_validate_expr","arguments":{"expr":"IF([Qty] > 0, '\''BUY'\'', '\''SELL'\'')"}}}' \
+  | ./bxp-mcp
 ```
+
+| Tool | Arguments | Purpose |
+| --- | --- | --- |
+| `bxp_validate` | `config` (JSON5 text) | Validate a config; returns annotated JSON with `$err_*` / `$warn_*` / `$info_*` / `$comm_*` siblings. |
+| `bxp_validate_expr` | `expr` | Authoring-time check of one expression (syntax + semantics + static lint, e.g. a literal `SPLIT_PART(…, 0)`). `{ok:true}` or `{ok:false,error,detail,off,len}`. |
+| `bxp_eval` | `expr`, `headers?`, `fields?` | Evaluate one expression against an optional row — what it *computes* (lenient runtime). `{ok,value}` or `{ok:false,…}`. |
+| `bxp_eval_trace` | `expr`, `headers?`, `fields?` | Evaluate with a per-call NDJSON trace (one line per nested function call, then a `final` / `error` sentinel). |
+| `bxp_eval_batch` | `headers`, `fields`, `exprs` | Evaluate many expressions against one row in a single call. |
+| `bxp_list_templates` | `config` | List every template id declared in the config. |
+| `bxp_fetch_template` | `config`, `id` | Return one template's raw JSON. |
+| `bxp_docs` | — | Full function / config-schema catalog (the same source the GUI's autocomplete uses). |
+| `bxp_simulate` | `config`, `template`, `csv` | Run a full conversion end-to-end against the supplied CSV; returns the output, a record-count diff, diagnostics, and a per-row trace. The strongest self-test — verifies `pre_pass` / `LOOKUP` / `row_rules` for real. |
+
+A tool *failure* (e.g. a missing required argument) sets `isError:true`
+on the JSON-RPC result; a domain `{"ok":false,…}` answer (an expression
+error, a not-found template) is a valid result the agent should read,
+not a failure. See `docs/mcp.md` for the full wire protocol.
 
 ### `bxp-gui` reference
 
@@ -201,19 +210,21 @@ listed below) and remembers the last-opened config across launches.
 | bxp-cli | `0` | Success — all matched rows converted, no warnings. |
 | bxp-cli | `1` | Fatal error — config invalid, file missing, expression failure. |
 | bxp-cli | `2` | Completed with warnings — output written but at least one warning emitted (typo'd field, no input rows, …). |
-| bxp-fmt | `0` | Success. |
-| bxp-fmt | `1` | Validation / runtime error. |
-| bxp-fmt | `2` | Usage error (unknown flag, missing argument, mutually-exclusive flags). |
+
+`bxp-mcp` exits `0` in normal operation; per-tool outcomes ride on the
+JSON-RPC response (the `isError` flag / a domain `{"ok":false}`), not the
+process exit code.
 
 ### Where output goes
 
-- **stdout** — bxp-cli per-template summaries and `--debug` JSON dumps;
-  bxp-fmt annotated JSON / docs / NDJSON traces.
+- **stdout** — bxp-cli per-template summaries and `--debug` JSON dumps.
+  (bxp-mcp also writes its JSON-RPC responses to stdout, but that's the
+  agent protocol channel, not something you pipe by hand.)
 - **stderr** — fatal errors and warning text. Pipe `2>/dev/null` to
   silence warnings while still capturing exit code.
 
-Don't pipe `2>&1` if you intend to feed stdout to another tool — both
-binaries' streaming output assumes stdout and stderr stay separate.
+Don't pipe `2>&1` if you intend to feed stdout to another tool —
+bxp-cli's streaming output assumes stdout and stderr stay separate.
 
 ---
 
@@ -269,8 +280,9 @@ Paste this prompt into your assistant, attach both files, then drop in
 > entry under `conversion_templates` in my `bxp-cli.json` that converts
 > this to Wealthfolio CSV, following the same patterns as the existing
 > templates. Follow the rules in the 'Rules for an AI assistant'
-> section: self-test your output (`bxp-fmt --config` + `bxp-cli
-> --debug`) before returning, return JSON5 with `//` comments
+> section: self-test your output (validate the config, then run it
+> against the sample rows — via the bxp-mcp tools if available, else
+> `bxp-cli --debug`) before returning, return JSON5 with `//` comments
 > explaining non-obvious decisions, and end your reply with a 'Things
 > to check in bxp-gui' list for anything you couldn't fully verify."*
 
@@ -809,10 +821,11 @@ template, follow these rules strictly:
     unmatched rows surface.
 12. **Self-test before returning.** See the **Self-testing the
     generated template** section below — predict each sample row's
-    outcome, then verify with `bxp-fmt --config` (validation),
-    `bxp-fmt --expr-trace` (per-expression values), and `bxp-cli
-    --debug` (problems). Only return the template once `--debug` is
-    silent and the generated `.csvx` matches every prediction.
+    outcome, then verify with the bxp-mcp tools (`bxp_validate` for the
+    config, `bxp_eval` / `bxp_eval_trace` for per-expression values,
+    `bxp_simulate` to run it end-to-end), or with `bxp-cli --debug` when
+    no MCP server is wired. Only return the template once the run is
+    clean and the generated `.csvx` matches every prediction.
 
 13. **Return a commented JSON5, not bare JSON.** JSON5 supports `//`
     comments — use them to explain non-obvious decisions: why a
@@ -889,19 +902,23 @@ expected result before running, then compare against actual output.
 This is the same loop you would write in pytest or bash to assert
 behaviour didn't drift after a code change.
 
-**1. Schema + JSON5 syntax check.**
+The self-test surface depends on what you have wired:
 
-```bash
-./bxp-fmt --config bxp-cli.json
-```
+- **With the bxp-mcp server** (the agent-facing path): use its tools —
+  `bxp_validate`, `bxp_validate_expr` / `bxp_eval` / `bxp_eval_trace` /
+  `bxp_eval_batch`, and `bxp_simulate` (a full end-to-end run). Each
+  takes config / expression *text* as arguments, so you never touch the
+  filesystem.
+- **With only `bxp-cli`** (no MCP): use `bxp-cli --debug` and a real run.
 
-- Expect exit `0` and no `$err_*` / `$warn_*` keys for the new
-  template's path in the output JSON.
+**1. Schema + JSON5 syntax check.** Call `bxp_validate` with the config
+text:
+
+- Expect no `$err_*` / `$warn_*` keys for the new template's path in the
+  returned annotated JSON.
 - If `$err_*` appears, fix the indicated error before going further.
-- For a stricter check that also verifies `data_dir` exists and
-  contains files, append `--check-fs=2` (2-second deadline).
 
-**2. Predict, then verify in three steps.**
+**2. Predict, then verify.**
 
 For each sample row the user provided, write down beforehand:
 
@@ -910,23 +927,33 @@ For each sample row the user provided, write down beforehand:
   `$amount`, …)
 - how many output rows the input row should produce (0 / 1 / N)
 
-**Step A — per-expression check (`bxp-fmt --expr-trace`).** Before
-wiring an expression into the template, evaluate it on its own against
-one sample row and confirm the value matches your prediction — the
-fastest authoring loop, no full run needed:
+**Step A — per-expression check.** Before wiring an expression into the
+template, evaluate it on its own against one sample row and confirm the
+value matches your prediction — the fastest authoring loop, no full run
+needed. Call `bxp_eval_trace` (or `bxp_eval`) with the expression plus
+`headers` / `fields` for the row, e.g.
 
-```bash
-./bxp-fmt --expr-trace "DATE_CONVERT([Time], 'YYYY-MM-DD hh:mm:ss', 'YYYY-MM-DD')" \
-  --row-headers '["Action","Time","Ticker"]' \
-  --row-fields  '["Market buy","2024-04-25 07:00:35","RIO"]'
+```json
+{"expr":"DATE_CONVERT([Time], 'YYYY-MM-DD hh:mm:ss', 'YYYY-MM-DD')",
+ "headers":["Action","Time","Ticker"],
+ "fields":["Market buy","2024-04-25 07:00:35","RIO"]}
 ```
 
-It streams NDJSON; the `{"t":"final","value":...}` line is the computed
-result. Use `--expr-batch` (reads a JSON request on stdin) to evaluate
-several `$variable` expressions against the same row in one call.
+`bxp_eval_trace` returns NDJSON; the `{"t":"final","value":...}` line is
+the computed result. Use `bxp_validate_expr` to additionally catch
+authoring-time mistakes the lenient runtime swallows (e.g. a literal
+`SPLIT_PART(…, 0)`), and `bxp_eval_batch` to evaluate several `$variable`
+expressions against the same row in one call.
 
-**Step B — find problems (`bxp-cli --debug`).** Run the whole template
-and surface unmatched rows + runtime expression errors:
+**Step B — run it end-to-end.** With MCP, call `bxp_simulate` with the
+config, the template id, and the sample CSV. It stages and runs the real
+`bxp-cli` pipeline and returns the produced output, a record-count diff,
+`bxp-cli`'s diagnostics, and a per-row `trace` (which rows were written /
+filtered / errored, with input line numbers) — the strongest check,
+because it exercises `pre_pass` / `LOOKUP` / `row_rules` for real.
+
+Without MCP, run the template and surface unmatched rows + runtime
+expression errors directly:
 
 ```bash
 ./bxp-cli --config bxp-cli.json --template <new_id> --debug
@@ -937,19 +964,19 @@ lines for any expression that failed at runtime + JSON dumps of
 unmatched rows when `row_rules_debug_missing: true` is set. This is the
 fastest way to spot typos and locale-format bugs.
 
-**Step C — confirm the final output.** Run the template without
-`--debug` and read the generated `.csvx` directly — it is the exact
-result the user will import, so compare each row against your
-prediction:
+**Step C — confirm the final output.** With `bxp_simulate`, read the
+returned `outputs[].csv` — it is the exact result the user will import,
+so compare each row against your prediction. Without MCP, run the
+template without `--debug` and read the generated `.csvx` directly:
 
 ```bash
 ./bxp-cli --config bxp-cli.json --template <new_id>
 cat <data_dir>/<sample>.csvx
 ```
 
-(`--trace` is a separate, binary BXTB frame stream meant for the GUI's
-drill-down view — not human-readable in a terminal and not needed for
-self-testing.)
+(`bxp-cli --trace` is a separate, binary BXTB frame stream meant for the
+GUI's drill-down view — not human-readable in a terminal and not needed
+for self-testing.)
 
 In the GUI, the equivalent of Step C is a **dry-run** — its trace panes
 show the same per-row outcome interactively, no terminal needed.
@@ -1033,10 +1060,11 @@ JSON5 by hand.
 ### Inline schema docs
 
 Hover any field in the tree to see its description, type, default, and
-which expressions it accepts. The catalog comes from `bxp-fmt --docs` —
-the same source of truth that drives autocomplete in the expression
-editor. Add a built-in function to bxp-cli, run a clean rebuild, and
-the GUI sees it automatically with no client-side changes.
+which expressions it accepts. The catalog is the bundled docs catalog
+(the GUI loads it in-process from the bridge library at startup) — the
+same source of truth that drives autocomplete in the expression editor.
+Add a built-in function to bxp-cli, run a clean rebuild, and the GUI
+sees it automatically with no client-side changes.
 
 ### Expression playground
 
@@ -1048,10 +1076,10 @@ Click any expression cell — a panel opens on the right with:
 - Token-level error underlines: a typo'd `[Quanity]` (instead of
   `[Quantity]`) gets a red underline on exactly the wrong token, with
   a did-you-mean tooltip.
-- A **Variables** sub-panel that runs `bxp-fmt --expr-trace` against
-  the current row and lists every nested function call's intermediate
-  value. Excellent for debugging "why did this expression return empty
-  string?" cases.
+- A **Variables** sub-panel that evaluates the expression against the
+  current row in-process (via the bundled bridge) and lists every nested
+  function call's intermediate value. Excellent for debugging "why did
+  this expression return empty string?" cases.
 
 ### Add Field dialog
 
@@ -1067,7 +1095,7 @@ A drawer slides in from the right with the GUI's complete internal
 state:
 
 - Loaded config path, raw bytes, AST root.
-- Schema docs catalog (loaded from `bxp-fmt --docs`).
+- Schema docs catalog (loaded in-process from the bundled bridge at startup).
 - Op log (undo / redo history).
 - Path-keyed validation errors / warnings / info.
 - Run state (last exit code, stderr text, trace event count).
@@ -1085,10 +1113,10 @@ end up with a zombie subprocess blocking the UI.
 
 ### Filesystem checks (slow paths)
 
-By default bxp-fmt skips filesystem checks (existence of `data_dir`,
-of input files) so loading is snappy. Triggering `Ctrl+E` (Validate)
-calls bxp-fmt with `--check-fs=2` (a 2-second deadline) to add these
-checks. If a check times out, the GUI flips into a degraded mode for
+By default config validation skips filesystem checks (existence of
+`data_dir`, of input files) so loading is snappy. Triggering `Ctrl+E`
+(Validate) re-runs validation with a `check-fs` deadline of 2 seconds to
+add these checks. If a check times out, the GUI flips into a degraded mode for
 the rest of the session: subsequent reloads omit the flag too. This
 stops a network-mounted `data_dir` from making the editor feel
 sluggish.
@@ -1136,9 +1164,9 @@ call's input and output is visible.
 
 | Symptom | Likely cause / fix |
 | --- | --- |
-| Fatal error gate on launch | `bxp-fmt` is missing from the bundle. Reinstall the desktop package. |
+| Fatal error gate on launch | The `bxp-gui-bridge` library is missing from the bundle. Reinstall the desktop package. |
 | `dry-run` button greyed out | No template selected, or the config has a load-time AST parse error (red banner in the tree). |
-| Error chips on every field | Schema docs failed to load. Check the Settings inspector → Docs section for a fetch error from `bxp-fmt --docs`. |
+| Error chips on every field | Schema docs failed to load. Check the Settings inspector → Docs section for a load error from the bundled docs catalog. |
 | `cancel` button stuck | The bxp-cli child didn't respond to SIGTERM. Wait 2 seconds — the watchdog escalates to SIGKILL automatically. |
 | Slow first load on a new file | First invocation may include filesystem checks (`Ctrl+E`-driven). Subsequent loads skip them; you can force-skip by avoiding `Ctrl+E`. |
 | Tree shows `$comm_<N>` keys | A bug — those keys should be hidden by the renderer. Open an issue with the offending file attached. |
