@@ -29,10 +29,19 @@ class _FakeHost implements GuiMcpHost {
   String diagnosticBlob = '';
   @override
   String? configSaveError;
+  @override
+  String? configError;
+  @override
+  String? runError;
 
   Map<String, Map<String, String>> errorsByPath = {};
   final List<(List<String>, dynamic)> edits = [];
+  final List<List<String>> deletes = [];
   int saveCount = 0;
+  int loadCount = 0;
+  int dryRunCount = 0;
+  int fullRunCount = 0;
+  bool exitCalled = false;
 
   @override
   Map<String, String> errorsAt(List<String> path) =>
@@ -45,9 +54,43 @@ class _FakeHost implements GuiMcpHost {
   }
 
   @override
+  void deleteConfigNode(List<String> path) {
+    deletes.add(path);
+    isDirty = true;
+  }
+
+  @override
   Future<void> saveConfig() async {
     saveCount++;
     isDirty = false;
+  }
+
+  @override
+  void setConfigPath(String path) => configPath = path;
+
+  @override
+  Future<void> loadConfig() async {
+    loadCount++;
+    isDirty = false;
+  }
+
+  @override
+  Future<void> runDryRun() async {
+    dryRunCount++;
+    runStatusName = 'done';
+    lastExitCode = 0;
+  }
+
+  @override
+  Future<void> runFullRun() async {
+    fullRunCount++;
+    runStatusName = 'done';
+    lastExitCode = 0;
+  }
+
+  @override
+  Future<void> exitApp() async {
+    exitCalled = true;
   }
 }
 
@@ -94,10 +137,23 @@ void main() {
     expect(server.isRunning, isFalse);
   });
 
-  test('lists the three Phase-1 tools', () async {
+  test('lists the full tool set', () async {
     final tools = await client!.listTools();
     final names = tools.tools.map((t) => t.name).toSet();
-    expect(names, containsAll(<String>{'get_state', 'edit_node', 'save'}));
+    expect(
+      names,
+      containsAll(<String>{
+        'get_state',
+        'edit_node',
+        'save',
+        'open_config',
+        'reload',
+        'dry_run',
+        'full_run',
+        'delete_node',
+        'exit',
+      }),
+    );
   });
 
   test('get_state returns the live state shape + logs activity', () async {
@@ -184,5 +240,88 @@ void main() {
     expect(out['saved'], true);
     expect(host.saveCount, 1);
     expect(server.activity.first.outcome, 'ok');
+  });
+
+  test('open_config sets the path and loads it', () async {
+    final result = await client!.callTool(
+      CallToolRequest(
+        name: 'open_config',
+        arguments: const {'path': '/cfg/new.json'},
+      ),
+    );
+    final out = _decode(result);
+
+    expect(out['opened'], true);
+    expect(out['configPath'], '/cfg/new.json');
+    expect(host.configPath, '/cfg/new.json');
+    expect(host.loadCount, 1);
+  });
+
+  test('dry_run reports status + exit code', () async {
+    final result = await client!.callTool(
+      CallToolRequest(name: 'dry_run', arguments: const {}),
+    );
+    final out = _decode(result);
+
+    expect(out['status'], 'done');
+    expect(out['exitCode'], 0);
+    expect(host.dryRunCount, 1);
+    expect(server.activity.first.tool, 'dry_run');
+  });
+
+  test('full_run is confirm-gated', () async {
+    allowSave = false; // confirm fn returns false → rejected
+    final rejected = await client!.callTool(
+      CallToolRequest(name: 'full_run', arguments: const {}),
+    );
+    expect(_decode(rejected)['rejected'], true);
+    expect(host.fullRunCount, 0);
+
+    allowSave = true;
+    final ran = await client!.callTool(
+      CallToolRequest(name: 'full_run', arguments: const {}),
+    );
+    expect(_decode(ran)['status'], 'done');
+    expect(host.fullRunCount, 1);
+  });
+
+  test('delete_node confirms and is blocked on load errors', () async {
+    // Blocked when the config loaded with errors (before any confirm).
+    host.configLoadHadErrors = true;
+    final blocked = await client!.callTool(
+      CallToolRequest(
+        name: 'delete_node',
+        arguments: const {
+          'path': ['x'],
+        },
+      ),
+    );
+    expect(blocked.isError, isTrue);
+    expect(host.deletes, isEmpty);
+
+    // Confirmed delete on a clean config.
+    host.configLoadHadErrors = false;
+    allowSave = true;
+    final ok = await client!.callTool(
+      CallToolRequest(
+        name: 'delete_node',
+        arguments: const {
+          'path': ['brokers', '0'],
+        },
+      ),
+    );
+    expect(_decode(ok)['deleted'], true);
+    expect(host.deletes.single, ['brokers', '0']);
+  });
+
+  test('exit confirms then defers teardown', () async {
+    allowSave = true;
+    final result = await client!.callTool(
+      CallToolRequest(name: 'exit', arguments: const {}),
+    );
+    expect(_decode(result)['exiting'], true);
+    expect(host.exitCalled, isFalse); // deferred
+    await Future<void>.delayed(const Duration(milliseconds: 400));
+    expect(host.exitCalled, isTrue);
   });
 }

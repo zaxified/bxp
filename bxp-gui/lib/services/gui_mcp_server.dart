@@ -46,14 +46,38 @@ abstract interface class GuiMcpHost {
   /// Save-time error from the most recent [saveConfig], or null on success.
   String? get configSaveError;
 
+  /// Load-time error from the most recent [loadConfig], or null on success.
+  String? get configError;
+
+  /// Error from the most recent dry/full run, or null on success.
+  String? get runError;
+
   /// Error diagnostics attached to the node at [path].
   Map<String, String> errorsAt(List<String> path);
 
   /// Edit a scalar leaf — the same live, undoable action the UI uses.
   void editConfigNode(List<String> path, dynamic newValue);
 
+  /// Delete the config entry at [path] — the same action as the tree delete.
+  void deleteConfigNode(List<String> path);
+
   /// Persist the edited config to disk (atomic + validated).
   Future<void> saveConfig();
+
+  /// Point the editor at [path] (does not load it; pair with [loadConfig]).
+  void setConfigPath(String path);
+
+  /// (Re)load the active config from disk.
+  Future<void> loadConfig();
+
+  /// Run the conversion in dry-run mode (no output files written).
+  Future<void> runDryRun();
+
+  /// Run the full conversion (writes output files).
+  Future<void> runFullRun();
+
+  /// Quit the application. Callers should flush their response first.
+  Future<void> exitApp();
 }
 
 /// Asks the user to approve a critical agent action. Returns `true` when
@@ -391,7 +415,190 @@ class GuiMcpServer extends ChangeNotifier {
       },
     );
 
+    // open_config — load a config file from disk (replaces the current one).
+    server.registerTool(
+      'open_config',
+      description:
+          'Load a config file from disk into the editor, replacing the '
+          'current one. `path` is an absolute filesystem path.',
+      inputSchema: JsonSchema.object(
+        properties: {
+          'path': JsonSchema.string(
+            description: 'Absolute path to the config file.',
+          ),
+        },
+        required: const ['path'],
+      ),
+      annotations: const ToolAnnotations(title: 'Open config'),
+      callback: (args, extra) async {
+        final path = args['path'];
+        if (path is! String || path.isEmpty) {
+          _record('open_config', '$path', 'error');
+          return _error('`path` must be a non-empty string.');
+        }
+        _host.setConfigPath(path);
+        await _host.loadConfig();
+        final err = _host.configError;
+        _record('open_config', path, err == null ? 'ok' : 'error');
+        return _json({
+          'opened': err == null,
+          'configPath': _host.configPath,
+          'loadedWithErrors': _host.configLoadHadErrors,
+          'error': ?err,
+        });
+      },
+    );
+
+    // reload — re-read the active config from disk (drops unsaved edits).
+    server.registerTool(
+      'reload',
+      description:
+          'Reload the active config from disk, discarding unsaved edits. '
+          'Fails when no config is open.',
+      inputSchema: JsonSchema.object(properties: const {}, required: const []),
+      annotations: const ToolAnnotations(title: 'Reload config'),
+      callback: (args, extra) async {
+        if (_host.configPath.isEmpty) {
+          _record('reload', '(none)', 'error');
+          return _error('No config is open to reload.');
+        }
+        await _host.loadConfig();
+        final err = _host.configError;
+        _record('reload', _host.configPath, err == null ? 'ok' : 'error');
+        return _json({
+          'reloaded': err == null,
+          'loadedWithErrors': _host.configLoadHadErrors,
+          'error': ?err,
+        });
+      },
+    );
+
+    // dry_run — run bxp-cli without writing output files.
+    server.registerTool(
+      'dry_run',
+      description:
+          'Run the conversion in dry-run mode (no output files written). '
+          'Returns the run status and exit code.',
+      inputSchema: JsonSchema.object(properties: const {}, required: const []),
+      annotations: const ToolAnnotations(title: 'Dry run'),
+      callback: (args, extra) async {
+        if (_host.configPath.isEmpty) {
+          _record('dry_run', '(none)', 'error');
+          return _error('No config is open to run.');
+        }
+        await _host.runDryRun();
+        return _runResult('dry_run');
+      },
+    );
+
+    // full_run — critical: writes output files. Confirmed.
+    server.registerTool(
+      'full_run',
+      description:
+          'Run the full conversion, writing output files to the configured '
+          'data_dir. Asks the user to confirm first.',
+      inputSchema: JsonSchema.object(properties: const {}, required: const []),
+      annotations: const ToolAnnotations(title: 'Full run'),
+      callback: (args, extra) async {
+        if (_host.configPath.isEmpty) {
+          _record('full_run', '(none)', 'error');
+          return _error('No config is open to run.');
+        }
+        final approved = await _confirm(
+          'Agent wants to run the full conversion',
+          'The agent is requesting a full run of ${_host.configPath}, which '
+              'writes output files to disk.',
+        );
+        if (!approved) {
+          _record('full_run', _host.configPath, 'rejected');
+          return _json({'ran': false, 'rejected': true});
+        }
+        await _host.runFullRun();
+        return _runResult('full_run');
+      },
+    );
+
+    // delete_node — critical: removes a config entry. Confirmed.
+    server.registerTool(
+      'delete_node',
+      description:
+          'Delete the config entry at `path` (the same action as the tree '
+          'delete button). Asks the user to confirm. Blocked when the config '
+          'was loaded with errors.',
+      inputSchema: JsonSchema.object(
+        properties: {
+          'path': JsonSchema.array(
+            items: JsonSchema.string(),
+            description: 'Keys/indices from the config root to the entry.',
+          ),
+        },
+        required: const ['path'],
+      ),
+      annotations: const ToolAnnotations(title: 'Delete config node'),
+      callback: (args, extra) async {
+        final rawPath = args['path'];
+        if (rawPath is! List || rawPath.isEmpty) {
+          _record('delete_node', '$rawPath', 'error');
+          return _error('`path` must be a non-empty array of keys/indices.');
+        }
+        final path = rawPath.map((e) => '$e').toList();
+        if (_host.configLoadHadErrors) {
+          _record('delete_node', path.join('.'), 'blocked');
+          return _error(
+              'Deletes are blocked: the config was loaded with errors. '
+              'Fix the load errors first.');
+        }
+        final approved = await _confirm(
+          'Agent wants to delete a config node',
+          'The agent is requesting to delete `${path.join('.')}`.',
+        );
+        if (!approved) {
+          _record('delete_node', path.join('.'), 'rejected');
+          return _json({'deleted': false, 'rejected': true});
+        }
+        _host.deleteConfigNode(path);
+        _record('delete_node', path.join('.'), 'ok');
+        return _json({'deleted': true, 'path': path, 'isDirty': _host.isDirty});
+      },
+    );
+
+    // exit — critical: quits the app. Confirmed. The response is returned
+    // before the process is torn down so the agent gets a clean reply.
+    server.registerTool(
+      'exit',
+      description: 'Quit the bxp-gui application. Asks the user to confirm.',
+      inputSchema: JsonSchema.object(properties: const {}, required: const []),
+      annotations: const ToolAnnotations(title: 'Exit app'),
+      callback: (args, extra) async {
+        final approved = await _confirm(
+          'Agent wants to close the app',
+          'The agent is requesting to quit bxp-gui.',
+        );
+        if (!approved) {
+          _record('exit', '', 'rejected');
+          return _json({'exiting': false, 'rejected': true});
+        }
+        _record('exit', '', 'ok');
+        // Defer teardown so this response flushes to the agent first.
+        unawaited(
+            Future.delayed(const Duration(milliseconds: 250), _host.exitApp));
+        return _json({'exiting': true});
+      },
+    );
+
     return server;
+  }
+
+  /// Shared shape for the dry/full run tools: status + exit code + error.
+  CallToolResult _runResult(String tool) {
+    final err = _host.runError;
+    final ok = err == null && _host.runStatusName != 'error';
+    _record(tool, _host.configPath, ok ? 'ok' : 'error');
+    return _json({
+      'status': _host.runStatusName,
+      'exitCode': _host.lastExitCode,
+      'runError': ?err,
+    });
   }
 
   /// JSON snapshot of the live GUI state. Public so the test can assert its

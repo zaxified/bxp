@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -90,12 +91,28 @@ class _TraceStoreMcpHost implements GuiMcpHost {
   @override
   String? get configSaveError => _store.configSaveError;
   @override
+  String? get configError => _store.configError;
+  @override
+  String? get runError => _store.runError;
+  @override
   Map<String, String> errorsAt(List<String> path) => _store.errorsAt(path);
   @override
   void editConfigNode(List<String> path, dynamic newValue) =>
       _store.editConfigNode(path, newValue);
   @override
+  void deleteConfigNode(List<String> path) => _store.deleteConfigNode(path);
+  @override
   Future<void> saveConfig() => _store.saveConfig();
+  @override
+  void setConfigPath(String path) => _store.setConfigPath(path);
+  @override
+  Future<void> loadConfig() => _store.loadConfig();
+  @override
+  Future<void> runDryRun() => _store.runDryRun();
+  @override
+  Future<void> runFullRun() => _store.runFullRun();
+  @override
+  Future<void> exitApp() async => exit(0);
 }
 
 void main() {
