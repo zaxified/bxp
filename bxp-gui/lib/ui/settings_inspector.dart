@@ -45,6 +45,11 @@ class _SettingsInspectorState extends State<SettingsInspector> {
     // stuck without a keyboard dismiss. HardwareKeyboard sees every key
     // before focus routing, so Escape always closes the drawer.
     HardwareKeyboard.instance.addHandler(_handleKey);
+    // Versions are probed lazily — this drawer is the only place they show.
+    // Deferred to post-frame so `context.read` is safe from initState.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) context.read<TraceStore>().ensureVersionsProbed();
+    });
   }
 
   @override

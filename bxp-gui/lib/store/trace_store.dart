@@ -1084,6 +1084,27 @@ class TraceStore extends ChangeNotifier {
   // than assumed.
   String? bxpMcpVersion;
 
+  bool _versionsProbed = false;
+
+  /// Lazily probe component versions — called by the SettingsInspector on
+  /// open, the only place they're shown. Kept OUT of startup on purpose: the
+  /// bxp-cli / bxp-mcp `--version` spawns (through the bridge) raced the Dart
+  /// VM's child reaper at boot. Idempotent; surfaces results via
+  /// `notifyListeners` so an open inspector updates from "(unknown)".
+  Future<void> ensureVersionsProbed() async {
+    if (_versionsProbed) return;
+    _versionsProbed = true;
+    try {
+      final p = await PackageInfo.fromPlatform();
+      bxpGuiVersion = p.version;
+    } catch (_) {/* leave null → "(unknown)" */}
+    // Serial (not concurrent): versions are cosmetic and lazy, so there's no
+    // reason to run two bridge spawns at once.
+    bxpCliVersion = await BxpProcessClient.getVersion('bxp-cli');
+    bxpMcpVersion = await BxpProcessClient.getVersion('bxp-mcp');
+    if (!_disposed) notifyListeners();
+  }
+
   final PrefsService _prefs = PrefsService();
 
   /// Read-only access to the prefs service. Used by the AppImage
@@ -1165,25 +1186,11 @@ class TraceStore extends ChangeNotifier {
       }
     }
 
-    // Probe versions in parallel — all three calls are independent and can
-    // tolerate failure (any null surfaces as "(unknown)" in the inspector).
-    // Run alongside the docs catalog so MainView opens with versions ready.
-    Future<String?> guiVer() async {
-      try {
-        final p = await PackageInfo.fromPlatform();
-        return p.version;
-      } catch (_) {
-        return null;
-      }
-    }
-    final results = await Future.wait<String?>([
-      guiVer(),
-      BxpProcessClient.getVersion('bxp-cli'),
-      BxpProcessClient.getVersion('bxp-mcp'),
-    ]);
-    bxpGuiVersion = results[0];
-    bxpCliVersion = results[1];
-    bxpMcpVersion = results[2];
+    // Component versions are NOT probed here. They're only ever displayed in
+    // the SettingsInspector, so they're fetched lazily on first open via
+    // [ensureVersionsProbed] — keeping the bxp-cli / bxp-mcp `--version`
+    // spawns out of the startup path entirely (they were the source of a
+    // startup-crash race with the Dart VM's child reaper).
 
     _initialized = true;
     notifyListeners();
@@ -3308,23 +3315,17 @@ class TraceStore extends ChangeNotifier {
         },
       );
       if (stderrText.isEmpty) stderrText = r.stderr;
-      lastExitCode = r.exitCode;
       if (_cancelRequested) {
+        lastExitCode = r.exitCode;
         status = RunStatus.done;
         runError = 'cancelled';
         return;
       }
-      if (r.exitCode < 0) {
-        runError = r.stderr.isEmpty ? 'spawn failed' : r.stderr;
-        status = RunStatus.error;
-        return;
-      }
-      // Drain any frames still queued after the process exited. The
-      // `draining` flag may be true if the last chunk landed mid-drain;
-      // wait until the previous drain finishes, then run one final
-      // sequential pass over whatever is left (which itself may grow if
-      // new chunks land while we await — unlikely after process exit,
-      // but harmless because the inner while is queue-driven).
+      // Drain any frames still queued after the process exited FIRST, so the
+      // BXTB `done` frame (which carries bxp-cli's real exit code) is parsed
+      // before we interpret the result. The `draining` flag may be true if
+      // the last chunk landed mid-drain; wait until the previous drain
+      // finishes, then run one final sequential pass over whatever is left.
       while (draining || pendingFrames.isNotEmpty) {
         // Busy-yield to the event loop until the in-flight drain task
         // releases the flag; then drain ourselves if anything is left.
@@ -3338,8 +3339,23 @@ class TraceStore extends ChangeNotifier {
       // Finalize whatever file context was still open when the producer
       // exited — publishes the per-file runtime so drill-down works.
       await ctx.finalizeCurrentFile();
-      if (r.exitCode != 0 && runError == null) {
-        runError = 'bxp-cli exited ${r.exitCode}';
+      // Prefer the exit code from the BXTB `done` frame over the bridge's
+      // wait. The bridge's streaming wait is ECHILD-tolerant (the Dart VM's
+      // ExitCodeHandler may reap bxp-cli before the bridge's own waitpid), so
+      // `r.exitCode` can be -1/.Unknown even on a clean run; the `done` frame
+      // is emitted by bxp-cli itself and is authoritative.
+      final streamExit = ctx.model.done?['exitCode'] as int?;
+      final effExit = streamExit ?? r.exitCode;
+      lastExitCode = effExit;
+      if (streamExit == null && r.exitCode < 0) {
+        // No `done` frame AND a negative bridge exit → genuine spawn/exec
+        // failure (the child never produced a trace stream).
+        runError = r.stderr.isEmpty ? 'spawn failed' : r.stderr;
+        status = RunStatus.error;
+        return;
+      }
+      if (effExit != 0 && runError == null) {
+        runError = 'bxp-cli exited $effExit';
       }
     } catch (e) {
       runError = e.toString();

@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:path/path.dart' as p;
@@ -248,75 +247,6 @@ class BxpProcessClient {
   /// the duration of the child process. Running it on the main isolate
   /// would freeze Flutter's frame loop; `Isolate.run` offloads the
   /// blocking call to a fresh worker isolate so the UI stays smooth.
-  static Future<ProcessResult> _runOneShot(
-    String executable,
-    List<String> arguments,
-    Duration timeout, {
-    Uint8List? stdinBody,
-  }) async {
-    if (_bridge() == null) {
-      return ProcessResult(
-        0, 1, '',
-        'bridge: ${_lastSubprocessDiag ?? "library unavailable"}',
-      );
-    }
-    return _runOneShotViaBridge(
-      _bridgeLibPath!,
-      executable,
-      arguments,
-      timeout,
-      stdinBody: stdinBody,
-    );
-  }
-
-  /// Bridge variant of [_runOneShot]. Hard error on any failure — no
-  /// fallback. Wraps [BridgeClient.run] in `Isolate.run` so the
-  /// blocking pipe drain doesn't stall the main isolate's frame loop.
-  static Future<ProcessResult> _runOneShotViaBridge(
-    String dllPath,
-    String executable,
-    List<String> arguments,
-    Duration timeout, {
-    Uint8List? stdinBody,
-  }) async {
-    try {
-      final result = await Isolate.run(
-        () => _bridgeRunInIsolate(dllPath, executable, arguments, stdinBody),
-      ).timeout(timeout);
-      if (result.err != null) {
-        _lastSubprocessDiag = 'bridge $_bridgeVersion: err=${result.err}';
-        return ProcessResult(0, 1, '', 'bridge: ${result.err}');
-      }
-      _lastSubprocessDiag = 'bridge $_bridgeVersion: '
-          'exit ${result.exitCode}, stdout=${result.stdout.length} B'
-          ', stderr=${result.stderr.length} B';
-      return ProcessResult(
-        0,
-        result.exitCode,
-        result.stdout,
-        result.stderr,
-      );
-    } on TimeoutException {
-      _lastSubprocessDiag =
-          'bridge $_bridgeVersion: timeout after ${timeout.inSeconds}s';
-      return ProcessResult(
-        0,
-        ProcessRunResult.kExitTimeout,
-        '',
-        '$executable timed out after ${timeout.inSeconds}s (bridge)',
-      );
-    } catch (e) {
-      // Worker-side exception (bad DLL, OOM allocating the response
-      // buffer, …). No fallback — the bridge is the only sanctioned
-      // path on Windows. Surface the failure.
-      _lastSubprocessDiag = 'bridge $_bridgeVersion: ${e.runtimeType} $e';
-      return ProcessResult(
-        0, 1, '',
-        'bridge ${e.runtimeType}: $e',
-      );
-    }
-  }
-
   /// Diagnostic trace of the most recent bridge subprocess call — exit
   /// code, stdout/stderr sizes, or the failure reason. Surfaced in fatal
   /// startup messages and the SettingsInspector so a bug reporter can paste
@@ -366,13 +296,55 @@ class BxpProcessClient {
   /// injected from `build.zig.zon` via `build_options.version`), so we keep
   /// just the trailing token. Returns null when the binary is missing or
   /// the call fails — callers render that as "(unknown)".
+  /// One-shot run via the TOLERANT streaming path (`bridge_run_streaming`),
+  /// collecting stdout. Used for `--version` instead of the one-shot
+  /// `bridge_run`: the latter's `child.wait()` panics on the ECHILD the Dart
+  /// VM's `ExitCodeHandler` (`wait4(-1)`) reaper produces when it reaps the
+  /// child first — and it can't be made ECHILD-tolerant under Zig 0.15.2 (a
+  /// codegen bug miscompiles `bridge_run`'s spawn path when its wait control
+  /// flow changes). The streaming wait loop IS tolerant, so routing version
+  /// probes through it removes the racy startup crash. Returns null when the
+  /// bridge library is unavailable.
+  static Future<ProcessResult?> _runOneShotStreaming(
+    String executable,
+    List<String> arguments,
+    Duration timeout,
+  ) async {
+    final dllPath = _bridgeLibPath;
+    if (_bridge() == null || dllPath == null) return null;
+    final client = BridgeClient(dllPath);
+    final stdoutBuf = BytesBuilder(copy: false);
+    final stderrBuf = StringBuffer();
+    try {
+      final exitCode = await client
+          .runStreamingBinary(
+            executable,
+            arguments,
+            onChunk: (chunk) => stdoutBuf.add(chunk),
+            onStderr: (chunk) => stderrBuf.write(chunk),
+          )
+          .timeout(timeout);
+      return ProcessResult(
+        0,
+        exitCode,
+        utf8.decode(stdoutBuf.takeBytes(), allowMalformed: true),
+        stderrBuf.toString(),
+      );
+    } catch (e) {
+      return ProcessResult(0, 1, '', 'bridge stream: $e');
+    }
+  }
+
   static Future<String?> getVersion(String name) async {
     final bin = findBin(name);
     if (bin == null) return null;
     try {
       final result =
-          await _runOneShot(bin, ['--version'], _versionTimeout);
-      if (result.exitCode != 0) return null;
+          await _runOneShotStreaming(bin, ['--version'], _versionTimeout);
+      if (result == null) return null;
+      // Deliberately NOT gated on exitCode: the streaming wait reports
+      // -1 / .Unknown when the Dart VM's reaper reaped the child before the
+      // bridge's own wait, but the version text already streamed to stdout.
       final out = (result.stdout as String).trim();
       if (out.isEmpty) return null;
       final parts = out.split(RegExp(r'\s+'));
@@ -830,35 +802,6 @@ class BxpProcessClient {
     }
   }
 
-}
-
-/// Worker-isolate entry point for FFI bridge calls. Top-level on purpose:
-/// `Isolate.run` requires the function (and its closure-captured values)
-/// to be sendable, and a top-level function never accidentally drags an
-/// enclosing class instance into the isolate boundary check.
-///
-/// Each invocation opens its own [BridgeClient] (the underlying
-/// DynamicLibrary is per-isolate; we can't share one with the main
-/// isolate). Re-opening costs a handful of milliseconds — well below
-/// the bridge's per-call pipe-drain cost — and lets us use the simple
-/// `Isolate.run` API instead of a long-lived worker with port plumbing.
-BridgeResult _bridgeRunInIsolate(
-  String dllPath,
-  String executable,
-  List<String> arguments,
-  Uint8List? stdinBody,
-) {
-  try {
-    final client = BridgeClient(dllPath);
-    return client.run(executable, arguments, stdin: stdinBody);
-  } catch (e) {
-    return BridgeResult(
-      exitCode: -1,
-      stdout: '',
-      stderr: '',
-      err: 'bridge isolate exception: $e',
-    );
-  }
 }
 
 class ProcessRunResult {
