@@ -68,7 +68,7 @@ pub const SectionStats = struct {
 ///            for the frame protocol.
 ///
 /// The NDJSON `--trace` / `--trace=json` mode was removed in v0.3.0;
-/// per-row drill-down detail is recomputed on demand by `bxp-fmt
+/// per-row drill-down detail is recomputed on demand by `bxp-cli
 /// --expr-batch` from the BXTB metadata + the source CSV.
 pub const TraceMode = enum(u2) { off, bin };
 
@@ -1886,7 +1886,7 @@ pub fn processBroker(
         workers_inited += 1;
     }
 
-    // LOOKUP-without-pre_pass guard: bxp-fmt --config catches this at
+    // LOOKUP-without-pre_pass guard: inspect.annotateRaw catches this at
     // validate time, but a hot-swapped config skips that gate. Warn once
     // per template so the silent runtime symptom (LOOKUP returning "")
     // surfaces. Substring scan accepts false positives on string-literal
