@@ -259,16 +259,24 @@ class _Body extends StatelessWidget {
     // means column widths reset per section, so labels never line up across
     // sections — but they always line up within one, and the layout reads
     // top-to-bottom without surprises.
+    final t = context.bxpTheme;
+    final blocks = <Widget>[
+      for (final (title, rows) in sections)
+        _SectionTable(title: title, rows: rows),
+      const _IntegrationSection(),
+      const _AgentSection(),
+      const _DebugSection(),
+    ];
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          for (final (title, rows) in sections)
-            _SectionTable(title: title, rows: rows),
-          const _IntegrationSection(),
-          const _AgentSection(),
-          const _DebugSection(),
+          for (var i = 0; i < blocks.length; i++) ...[
+            if (i > 0)
+              Divider(height: 20, thickness: 1, color: t.borderColor),
+            blocks[i],
+          ],
         ],
       ),
     );
@@ -466,7 +474,33 @@ class _AgentSection extends StatefulWidget {
 
 class _AgentSectionState extends State<_AgentSection> {
   static const String _prefKey = 'bxp-gui.mcp-enabled';
+  static const String _hostKey = 'bxp-gui.mcpHost';
+  static const String _portKey = 'bxp-gui.mcpPort';
+  static const String _allowlistKey = 'bxp-gui.mcpOriginAllowlist';
   bool _busy = false;
+
+  final _hostCtl = TextEditingController();
+  final _portCtl = TextEditingController();
+  final _allowlistCtl = TextEditingController();
+  bool _fieldsInit = false;
+
+  @override
+  void dispose() {
+    _hostCtl.dispose();
+    _portCtl.dispose();
+    _allowlistCtl.dispose();
+    super.dispose();
+  }
+
+  /// Prime the editable fields once from the server's resolved config
+  /// (which has already folded in prefs/env at startup).
+  void _initFields(GuiMcpServer mcp) {
+    if (_fieldsInit) return;
+    _fieldsInit = true;
+    _hostCtl.text = mcp.configuredHost;
+    _portCtl.text = mcp.configuredPort.toString();
+    _allowlistCtl.text = mcp.originAllowlist.join(', ');
+  }
 
   Future<void> _toggle(bool enable) async {
     if (_busy) return;
@@ -485,12 +519,40 @@ class _AgentSectionState extends State<_AgentSection> {
     setState(() => _busy = false);
   }
 
+  /// Persist host/port/origin-allowlist and re-bind the server.
+  Future<void> _applyEndpoint() async {
+    if (_busy) return;
+    final host = _hostCtl.text.trim().isEmpty
+        ? GuiMcpServer.kDefaultMcpHost
+        : _hostCtl.text.trim();
+    final port =
+        int.tryParse(_portCtl.text.trim()) ?? GuiMcpServer.kDefaultMcpPort;
+    final allowlist = _allowlistCtl.text
+        .split(',')
+        .map((s) => s.trim())
+        .where((s) => s.isNotEmpty)
+        .toList();
+    setState(() => _busy = true);
+    final mcp = context.read<GuiMcpServer>();
+    final prefs = context.read<TraceStore>().prefs;
+    await prefs.setString(_hostKey, host);
+    await prefs.setInt(_portKey, port);
+    await prefs.setStringList(_allowlistKey, allowlist);
+    await mcp.restart(host: host, port: port, originAllowlist: allowlist);
+    if (!mounted) return;
+    setState(() => _busy = false);
+  }
+
+  static bool _isLoopback(String host) =>
+      host == '127.0.0.1' || host == 'localhost' || host == '::1';
+
   @override
   Widget build(BuildContext context) {
     final t = context.bxpTheme;
     final store = context.watch<TraceStore>();
     final mcp = context.watch<GuiMcpServer>();
     final enabled = store.prefs.getString(_prefKey) != 'false';
+    _initFields(mcp);
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: Column(
@@ -509,17 +571,102 @@ class _AgentSectionState extends State<_AgentSection> {
             onChanged: _toggle,
           ),
           Padding(
-            padding: const EdgeInsets.only(left: 56, top: 2),
+            padding: const EdgeInsets.only(top: 2),
             child: _statusLine(context, t, mcp),
           ),
+          if (enabled) ...[
+            const SizedBox(height: 10),
+            _Subheader('Endpoint'),
+            _card(t, _endpointEditor(context, t)),
+          ],
           if (mcp.activity.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            _Subheader('Recent agent activity'),
-            for (final e in mcp.activity.take(8)) _activityRow(context, t, e),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(child: _Subheader('Recent agent activity')),
+                _miniAction(context, t, Icons.clear_all, 'Clear',
+                    mcp.clearActivity),
+              ],
+            ),
+            _card(
+              t,
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 168),
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      for (final e in mcp.activity.take(50))
+                        _activityRow(context, t, e),
+                    ],
+                  ),
+                ),
+              ),
+            ),
           ],
         ],
       ),
     );
+  }
+
+  /// Recessed framed group — gives the endpoint + activity blocks a visible
+  /// surface so they read as panels, not loose widgets on the drawer bg.
+  Widget _card(BxpTheme t, Widget child) => Container(
+        margin: const EdgeInsets.only(top: 6),
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: t.surfaceBg,
+          border: Border.all(color: t.borderColor),
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: child,
+      );
+
+  /// Small icon+label header action (e.g. the activity log "Clear").
+  Widget _miniAction(BuildContext context, BxpTheme t, IconData icon,
+          String label, VoidCallback onTap) =>
+      InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(4),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 13, color: t.textMuted),
+              const SizedBox(width: 4),
+              Text(label,
+                  style: BxpText.body(context,
+                      color: t.textMuted, size: BxpSize.xs)),
+            ],
+          ),
+        ),
+      );
+
+  /// Outcome → (icon, colour). Distinguishes rejected/blocked from plain ok,
+  /// which the old single-colour line could not.
+  static (IconData, Color) _outcomeStyle(BxpTheme t, String outcome) {
+    switch (outcome) {
+      case 'error':
+        return (Icons.error_outline, t.errorText);
+      case 'rejected':
+        return (Icons.cancel_outlined, t.warnText);
+      case 'blocked':
+        return (Icons.block, t.warnText);
+      default:
+        return (Icons.check_circle_outline, t.okText);
+    }
+  }
+
+  /// Compact relative age: `now`, `5s`, `3m`, `2h`, else clock time.
+  static String _relTime(DateTime when) {
+    final d = DateTime.now().difference(when);
+    if (d.inSeconds < 1) return 'now';
+    if (d.inSeconds < 60) return '${d.inSeconds}s';
+    if (d.inMinutes < 60) return '${d.inMinutes}m';
+    if (d.inHours < 24) return '${d.inHours}h';
+    String two(int n) => n.toString().padLeft(2, '0');
+    return '${two(when.hour)}:${two(when.minute)}';
   }
 
   Widget _statusLine(BuildContext context, BxpTheme t, GuiMcpServer mcp) {
@@ -534,20 +681,136 @@ class _AgentSectionState extends State<_AgentSection> {
     final conn =
         mcp.agentConnected ? ' · agent connected' : ' · waiting for agent';
     return SelectableText(
-      'Listening on 127.0.0.1:${mcp.port}$conn',
+      'Listening on ${mcp.configuredHost}:${mcp.port}$conn',
       style: muted,
     );
   }
 
+  Widget _endpointEditor(BuildContext context, BxpTheme t) {
+    final host = _hostCtl.text.trim();
+    final showWarning = host.isNotEmpty && !_isLoopback(host);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                flex: 3,
+                child: _field(context, t, _hostCtl, 'Host',
+                    onChanged: (_) => setState(() {})),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                flex: 2,
+                child: _field(context, t, _portCtl, 'Port',
+                    keyboardType: TextInputType.number),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          _field(context, t, _allowlistCtl, 'Origin allowlist',
+              helper: 'comma-separated; empty = allow all'),
+          if (showWarning)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text(
+                'Binding to a non-loopback address exposes an unauthenticated '
+                'control surface on your network.',
+                style:
+                    BxpText.body(context, color: t.errorText, size: BxpSize.xs),
+              ),
+            ),
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton(
+              onPressed: _busy ? null : _applyEndpoint,
+              style: TextButton.styleFrom(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                foregroundColor: t.textPrimary,
+                backgroundColor: t.okBg,
+              ),
+              child: Text(
+                _busy ? 'Applying…' : 'Apply & restart server',
+                style: BxpText.body(context,
+                    color: t.textPrimary, size: BxpSize.xs),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _field(
+    BuildContext context,
+    BxpTheme t,
+    TextEditingController ctl,
+    String label, {
+    String? helper,
+    TextInputType? keyboardType,
+    ValueChanged<String>? onChanged,
+  }) {
+    return TextField(
+      controller: ctl,
+      keyboardType: keyboardType,
+      onChanged: onChanged,
+      style: BxpText.body(context, color: t.textPrimary, size: BxpSize.xs),
+      decoration: InputDecoration(
+        isDense: true,
+        labelText: label,
+        labelStyle: BxpText.body(context,
+            color: t.textSubtle, size: BxpSize.xs, weight: BxpWeight.semiBold),
+        helperText: helper,
+        helperStyle:
+            BxpText.body(context, color: t.textMuted, size: BxpSize.xs),
+        filled: true,
+        fillColor: t.panelBg,
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+        border: OutlineInputBorder(borderSide: BorderSide(color: t.borderColor)),
+        enabledBorder:
+            OutlineInputBorder(borderSide: BorderSide(color: t.borderColor)),
+      ),
+    );
+  }
+
   Widget _activityRow(BuildContext context, BxpTheme t, AgentActivityEntry e) {
-    final color = e.outcome == 'error' ? t.errorText : t.textMuted;
-    String two(int n) => n.toString().padLeft(2, '0');
-    final ts = '${two(e.time.hour)}:${two(e.time.minute)}:${two(e.time.second)}';
+    final (icon, color) = _outcomeStyle(t, e.outcome);
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 1),
-      child: Text(
-        '$ts  ${e.tool} · ${e.summary} [${e.outcome}]',
-        style: BxpText.body(context, color: color, size: BxpSize.xs),
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 1, right: 6),
+            child: Icon(icon, size: 13, color: color),
+          ),
+          Expanded(
+            child: RichText(
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              text: TextSpan(
+                style: BxpText.body(context, color: t.textPrimary,
+                    size: BxpSize.xs),
+                children: [
+                  TextSpan(text: e.tool, style: BxpText.body(context,
+                      color: color, size: BxpSize.xs, weight: BxpWeight.semiBold)),
+                  TextSpan(text: '  ${_relTime(e.time)}',
+                      style: BxpText.body(context,
+                          color: t.textSubtle, size: BxpSize.xs)),
+                  if (e.summary.isNotEmpty)
+                    TextSpan(text: '\n${e.summary}',
+                        style: BxpText.body(context,
+                            color: t.textMuted, size: BxpSize.xs)),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

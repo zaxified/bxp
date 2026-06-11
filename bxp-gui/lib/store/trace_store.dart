@@ -1614,6 +1614,15 @@ class TraceStore extends ChangeNotifier {
     _isDirty = _historyIndex > 0;
   }
 
+  /// Monotonic-within-a-session counter bumped on every APPLIED config
+  /// mutation (each successful `_pushHistory`). A no-op edit rejected by a
+  /// guard (required/duplicate key, out-of-range move, load-errors) does NOT
+  /// bump it. Callers compare the value before/after a mutation to detect
+  /// whether it actually took effect — used by the gui-mcp tools so they
+  /// never report success when the store silently refused. (Resets on
+  /// load/resetDraft, which never happen mid-mutation.)
+  int get editRevision => _historyIndex;
+
   /// Discard all unsaved edits and snap the AST back to the last
   /// loaded/saved baseline. Cheaper than [loadConfig] because it
   /// doesn't re-spawn the bridge — just clones `_astBaseline` and resets

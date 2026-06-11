@@ -10,6 +10,7 @@ import 'services/debug_settings.dart';
 import 'services/desktop_integration_service.dart';
 import 'services/diagnostic_log.dart';
 import 'services/gui_mcp_server.dart';
+import 'services/prefs_service.dart';
 import 'services/updater_service.dart';
 import 'store/trace_store.dart';
 import 'ui/components/integrate_dialog.dart';
@@ -75,6 +76,8 @@ class _TraceStoreMcpHost implements GuiMcpHost {
   @override
   bool get isDirty => _store.isDirty;
   @override
+  int get editRevision => _store.editRevision;
+  @override
   bool get configLoadHadErrors => _store.configLoadHadErrors;
   @override
   bool get configHasErrors => _store.configHasErrors;
@@ -128,6 +131,86 @@ class _TraceStoreMcpHost implements GuiMcpHost {
       _store.editConfigNode(path, newValue);
   @override
   void deleteConfigNode(List<String> path) => _store.deleteConfigNode(path);
+  @override
+  void insertConfigNode(List<String> path, String? newKey, dynamic value,
+          {int? atIndex}) =>
+      _store.insertConfigNode(path, newKey, value, atIndex: atIndex);
+  @override
+  void renameConfigKey(List<String> path, String newKey) =>
+      _store.renameConfigKey(path, newKey);
+  @override
+  void moveConfigNode(List<String> path, int delta) =>
+      _store.moveConfigNode(path, delta);
+  @override
+  List<String> get availableTemplates => _store.availableTemplates;
+  @override
+  void setActiveTemplate(String id) => _store.setTemplateId(id);
+  @override
+  Future<Map<String, dynamic>?> rowDetail(
+      {required int fileRow, String? file}) async {
+    final m = _store.traceModel;
+    if (m == null) return null;
+    // Optional file disambiguation by path (exact or suffix) or template id.
+    String? wantFileId;
+    if (file != null) {
+      for (final id in m.fileOrder) {
+        final f = m.files[id];
+        if (f == null) continue;
+        if (f.path == file || f.path.endsWith(file) || f.template == file) {
+          wantFileId = id;
+          break;
+        }
+      }
+      if (wantFileId == null) {
+        return {'found': false, 'reason': 'no such file: $file'};
+      }
+    }
+    // Locate the traced row by 1-based source line within the chosen file.
+    String? rowId;
+    for (final r in m.rows.values) {
+      if (r.fileRow != fileRow) continue;
+      if (wantFileId != null && r.fileId != wantFileId) continue;
+      rowId = r.id;
+      break;
+    }
+    if (rowId == null) {
+      return {'found': false, 'reason': 'no traced row at file_row $fileRow'};
+    }
+    await _store.ensureDetailLoaded(rowId);
+    final row = m.rows[rowId];
+    if (row == null) return {'found': false, 'reason': 'row unavailable'};
+    final f = m.files[row.fileId];
+    return {
+      'found': true,
+      'file': ?f?.path,
+      'template': ?f?.template,
+      'fileRow': row.fileRow,
+      'filtered': row.filteredReason != null,
+      'filteredReason': ?row.filteredReason,
+      'hasWarning': row.hasError,
+      'warnings': row.warningDetails,
+      'fields': row.fieldsPopulated ? row.fields : const <String>[],
+      'matchedRuleIndex': ?row.matchedRuleIndex,
+      'variables': [
+        for (final v in row.vars)
+          {
+            'name': v.name,
+            'kind': v.kind,
+            'expr': ?v.expr,
+            'value': ?v.value,
+            'error': ?v.error,
+            'detail': ?v.detail,
+            'origin': v.origin,
+            'ruleIndex': ?v.ruleIndex,
+          },
+      ],
+      'rules': [
+        for (final ru in row.rules)
+          {'ruleIndex': ru.ruleIndex, 'when': ru.when, 'matched': ru.matched},
+      ],
+      'outputs': row.outputs,
+    };
+  }
   @override
   Future<void> saveConfig() => _store.saveConfig();
   @override
@@ -763,7 +846,26 @@ class _AgentServerListenerState extends State<_AgentServerListener> {
     if (store == null || !store.initialized) return;
     _started = true;
     if (store.prefs.getString('bxp-gui.mcp-enabled') == 'false') return;
-    unawaited(context.read<GuiMcpServer>().start());
+    // Resolve bind config: persisted prefs → env override → built-in default.
+    final prefs = store.prefs;
+    final host = prefs.getString('bxp-gui.mcpHost') ??
+        Platform.environment['BXP_GUI_MCP_HOST'] ??
+        GuiMcpServer.kDefaultMcpHost;
+    final port = prefs.getDouble('bxp-gui.mcpPort')?.toInt() ??
+        int.tryParse(Platform.environment['BXP_GUI_MCP_PORT'] ?? '') ??
+        GuiMcpServer.kDefaultMcpPort;
+    final allowlist = _readOriginAllowlist(prefs);
+    unawaited(context
+        .read<GuiMcpServer>()
+        .start(host: host, port: port, originAllowlist: allowlist));
+  }
+
+  List<String> _readOriginAllowlist(PrefsService prefs) {
+    try {
+      return prefs.getStringList('bxp-gui.mcpOriginAllowlist') ?? const [];
+    } catch (_) {
+      return const [];
+    }
   }
 
   @override

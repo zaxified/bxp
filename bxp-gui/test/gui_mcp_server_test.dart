@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mcp_dart/mcp_dart.dart';
@@ -34,9 +35,20 @@ class _FakeHost implements GuiMcpHost {
   @override
   String? runError;
 
+  /// When true, mutating methods become no-ops that do NOT bump
+  /// [editRevision] — mimicking the store silently refusing a guarded edit
+  /// (required/duplicate key, out-of-range move).
+  bool refuseMutations = false;
+  int _rev = 0;
+  @override
+  int get editRevision => _rev;
+
   Map<String, Map<String, String>> errorsByPath = {};
   final List<(List<String>, dynamic)> edits = [];
   final List<List<String>> deletes = [];
+  final List<(List<String>, String?, dynamic, int?)> inserts = [];
+  final List<(List<String>, String)> renames = [];
+  final List<(List<String>, int)> moves = [];
   int saveCount = 0;
   int loadCount = 0;
   int dryRunCount = 0;
@@ -58,13 +70,65 @@ class _FakeHost implements GuiMcpHost {
   @override
   void editConfigNode(List<String> path, dynamic newValue) {
     edits.add((path, newValue));
+    _rev++;
     isDirty = true;
   }
 
   @override
   void deleteConfigNode(List<String> path) {
+    if (refuseMutations) return;
     deletes.add(path);
+    _rev++;
     isDirty = true;
+  }
+
+  @override
+  void insertConfigNode(List<String> path, String? newKey, dynamic value,
+      {int? atIndex}) {
+    if (refuseMutations) return;
+    inserts.add((path, newKey, value, atIndex));
+    _rev++;
+    isDirty = true;
+  }
+
+  @override
+  void renameConfigKey(List<String> path, String newKey) {
+    if (refuseMutations) return;
+    renames.add((path, newKey));
+    _rev++;
+    isDirty = true;
+  }
+
+  @override
+  void moveConfigNode(List<String> path, int delta) {
+    if (refuseMutations) return;
+    moves.add((path, delta));
+    _rev++;
+    isDirty = true;
+  }
+
+  @override
+  List<String> availableTemplates = ['alpha', 'beta'];
+
+  @override
+  void setActiveTemplate(String id) => activeTemplate = id;
+
+  /// Canned detail returned by [rowDetail]; null mimics "no run trace yet".
+  Map<String, dynamic>? rowDetailResult = {
+    'found': true,
+    'fileRow': 7,
+    'fields': ['a', 'b'],
+    'variables': [],
+    'rules': [],
+    'outputs': [],
+  };
+  final List<(int, String?)> rowDetailCalls = [];
+
+  @override
+  Future<Map<String, dynamic>?> rowDetail(
+      {required int fileRow, String? file}) async {
+    rowDetailCalls.add((fileRow, file));
+    return rowDetailResult;
   }
 
   @override
@@ -140,7 +204,7 @@ void main() {
     host = _FakeHost();
     allowSave = true;
     server = GuiMcpServer(host, confirm: (_, _) async => allowSave);
-    await server.start(); // ephemeral port
+    await server.start(port: 0); // ephemeral port (avoid the fixed default)
     expect(server.isRunning, isTrue);
     expect(server.port, isNotNull);
     client = await connect();
@@ -170,6 +234,11 @@ void main() {
         'delete_node',
         'exit',
         'get_trace',
+        'insert_node',
+        'rename_key',
+        'move_node',
+        'set_template',
+        'get_row_detail',
       }),
     );
   });
@@ -374,5 +443,211 @@ void main() {
     expect(host.exitCalled, isFalse); // deferred
     await Future<void>.delayed(const Duration(milliseconds: 400));
     expect(host.exitCalled, isTrue);
+  });
+
+  test('insert_node routes through the host insert action', () async {
+    final result = await client!.callTool(
+      CallToolRequest(
+        name: 'insert_node',
+        arguments: const {
+          'path': ['conversion_templates'],
+          'key': 'new_tmpl',
+          'value': {'id': 'x'},
+        },
+      ),
+    );
+    final out = _decode(result);
+    expect(out['inserted'], true);
+    expect(out['key'], 'new_tmpl');
+    expect(host.inserts.single.$1, ['conversion_templates']);
+    expect(host.inserts.single.$2, 'new_tmpl');
+    // Visibility: jumps to the CONFIG panel and reveals the inserted child.
+    expect(host.configPanelShown, greaterThan(0));
+    expect(host.reveals.last, ['conversion_templates', 'new_tmpl']);
+  });
+
+  test('rename_key routes through the host rename action', () async {
+    final result = await client!.callTool(
+      CallToolRequest(
+        name: 'rename_key',
+        arguments: const {
+          'path': ['brokers', 'old'],
+          'new_key': 'fresh',
+        },
+      ),
+    );
+    final out = _decode(result);
+    expect(out['renamed'], true);
+    expect(out['path'], ['brokers', 'fresh']);
+    expect(host.renames.single.$1, ['brokers', 'old']);
+    expect(host.renames.single.$2, 'fresh');
+  });
+
+  test('move_node routes through the host move action', () async {
+    final result = await client!.callTool(
+      CallToolRequest(
+        name: 'move_node',
+        arguments: const {
+          'path': ['brokers', '0', 'rules', '2'],
+          'delta': -1,
+        },
+      ),
+    );
+    final out = _decode(result);
+    expect(out['moved'], true);
+    expect(host.moves.single.$1, ['brokers', '0', 'rules', '2']);
+    expect(host.moves.single.$2, -1);
+  });
+
+  test('structural tools are blocked when the config loaded with errors',
+      () async {
+    host.configLoadHadErrors = true;
+    final cases = <String, Map<String, dynamic>>{
+      'insert_node': {
+        'path': ['x'],
+        'value': 1,
+      },
+      'rename_key': {
+        'path': ['x'],
+        'new_key': 'y',
+      },
+      'move_node': {
+        'path': ['x'],
+        'delta': 1,
+      },
+    };
+    for (final entry in cases.entries) {
+      final r = await client!.callTool(
+        CallToolRequest(name: entry.key, arguments: entry.value),
+      );
+      expect(r.isError, isTrue, reason: entry.key);
+    }
+    expect(host.inserts, isEmpty);
+    expect(host.renames, isEmpty);
+    expect(host.moves, isEmpty);
+  });
+
+  test('structural tools report failure when the store silently refuses',
+      () async {
+    // The store guard no-ops (e.g. deleting a schema-required key) without a
+    // load error — the tools must detect the unchanged editRevision and
+    // report {<verb>:false, reason}, not a false success.
+    host.refuseMutations = true;
+
+    final del = await client!.callTool(CallToolRequest(
+        name: 'delete_node', arguments: const {
+      'path': ['conversion_templates', 'x', 'data_dir']
+    }));
+    final delOut = _decode(del);
+    expect(delOut['deleted'], false);
+    expect(delOut['reason'], isNotNull);
+
+    final ins = await client!.callTool(CallToolRequest(
+        name: 'insert_node',
+        arguments: const {'path': ['a'], 'key': 'b', 'value': 1}));
+    expect(_decode(ins)['inserted'], false);
+
+    final ren = await client!.callTool(CallToolRequest(
+        name: 'rename_key',
+        arguments: const {'path': ['a', 'b'], 'new_key': 'c'}));
+    expect(_decode(ren)['renamed'], false);
+
+    final mov = await client!.callTool(CallToolRequest(
+        name: 'move_node', arguments: const {'path': ['a', 'b'], 'delta': 1}));
+    expect(_decode(mov)['moved'], false);
+  });
+
+  test('/health reports server + live config state', () async {
+    host.configPath = '/cfg/live.json';
+    final hc = HttpClient();
+    final req =
+        await hc.getUrl(Uri.parse('http://127.0.0.1:${server.port}/health'));
+    final resp = await req.close();
+    expect(resp.statusCode, 200);
+    final body = jsonDecode(await resp.transform(utf8.decoder).join())
+        as Map<String, dynamic>;
+    hc.close();
+    expect(body['name'], 'bxp-gui');
+    expect(body['config_path'], '/cfg/live.json');
+    expect(body['config_loaded'], true);
+    expect(body.containsKey('agent_connected'), isTrue);
+  });
+
+  test('origin allowlist: permissive by default, rejects once configured',
+      () async {
+    Future<int> hit(String origin) async {
+      final hc = HttpClient();
+      final req =
+          await hc.getUrl(Uri.parse('http://127.0.0.1:${server.port}/health'));
+      req.headers.set('origin', origin);
+      final resp = await req.close();
+      await resp.drain<void>();
+      hc.close();
+      return resp.statusCode;
+    }
+
+    // Empty allowlist (default): any Origin is accepted — webview agents.
+    expect(await hit('http://evil.example'), 200);
+
+    // With an allowlist, an off-list Origin is rejected; an on-list one ok.
+    await server.restart(originAllowlist: ['http://good.example']);
+    expect(await hit('http://evil.example'), 403);
+    expect(await hit('http://good.example'), 200);
+  });
+
+  test('set_template activates a known template, rejects unknown', () async {
+    final ok = await client!.callTool(
+      CallToolRequest(name: 'set_template', arguments: const {'template': 'beta'}),
+    );
+    final out = _decode(ok);
+    expect(out['activeTemplate'], 'beta');
+    expect(out['availableTemplates'], ['alpha', 'beta']);
+    expect(host.activeTemplate, 'beta');
+
+    final bad = await client!.callTool(
+      CallToolRequest(
+          name: 'set_template', arguments: const {'template': 'nope'}),
+    );
+    expect(bad.isError, isTrue);
+    // The rejected call did not change the active template.
+    expect(host.activeTemplate, 'beta');
+  });
+
+  test('set_template with empty string selects all templates', () async {
+    final r = await client!.callTool(
+      CallToolRequest(name: 'set_template', arguments: const {'template': ''}),
+    );
+    expect(_decode(r)['activeTemplate'], '');
+    expect(host.activeTemplate, '');
+  });
+
+  test('get_row_detail returns the row projection', () async {
+    final r = await client!.callTool(
+      CallToolRequest(
+          name: 'get_row_detail', arguments: const {'file_row': 7}),
+    );
+    final out = _decode(r);
+    expect(out['found'], true);
+    expect(out['fileRow'], 7);
+    expect(host.rowDetailCalls.single.$1, 7);
+    expect(host.rowDetailCalls.single.$2, isNull);
+  });
+
+  test('get_row_detail errors when no run trace exists', () async {
+    host.rowDetailResult = null;
+    final r = await client!.callTool(
+      CallToolRequest(
+          name: 'get_row_detail', arguments: const {'file_row': 1}),
+    );
+    expect(r.isError, isTrue);
+  });
+
+  test('clearActivity empties the log', () async {
+    await client!.callTool(
+      CallToolRequest(name: 'get_state', arguments: const {}),
+    );
+    expect(server.activity, isNotEmpty);
+    server.clearActivity();
+    expect(server.activity, isEmpty);
   });
 }

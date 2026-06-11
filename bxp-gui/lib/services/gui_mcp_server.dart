@@ -22,6 +22,12 @@ abstract interface class GuiMcpHost {
   /// Whether there are unsaved edits.
   bool get isDirty;
 
+  /// Counter bumped on every APPLIED config mutation; unchanged when the
+  /// store silently refuses one (required/duplicate key, out-of-range move).
+  /// The structural tools compare it before/after so they never report
+  /// success on a no-op.
+  int get editRevision;
+
   /// Whether the config was loaded with errors (edits are blocked then).
   bool get configLoadHadErrors;
 
@@ -65,6 +71,32 @@ abstract interface class GuiMcpHost {
 
   /// Delete the config entry at [path] — the same action as the tree delete.
   void deleteConfigNode(List<String> path);
+
+  /// Insert a child into the container at [path] — the same action as the
+  /// tree insert. For an object container pass [newKey]; for an array pass
+  /// `null` (append) or an [atIndex] position. [value] is the entry value.
+  void insertConfigNode(List<String> path, String? newKey, dynamic value,
+      {int? atIndex});
+
+  /// Rename the object key at [path] to [newKey] — the same action as the
+  /// tree rename.
+  void renameConfigKey(List<String> path, String newKey);
+
+  /// Reorder the entry at [path] by [delta] (+1 down / -1 up) — the same
+  /// action as the tree move.
+  void moveConfigNode(List<String> path, int delta);
+
+  /// Conversion template ids declared in the loaded config.
+  List<String> get availableTemplates;
+
+  /// Set the active conversion template dry/full runs target — the same as
+  /// the GUI's template selector. Empty string = run all templates.
+  void setActiveTemplate(String id);
+
+  /// Project one input row of the most recent run to JSON: source fields,
+  /// variable evaluations, rule decisions, and output rows. Lazy-loads the
+  /// row's detail on demand. Null when no run trace exists.
+  Future<Map<String, dynamic>?> rowDetail({required int fileRow, String? file});
 
   /// Persist the edited config to disk (atomic + validated).
   Future<void> saveConfig();
@@ -145,15 +177,41 @@ class GuiMcpServer extends ChangeNotifier {
   static const String mcpPath = '/mcp';
   static const int _activityCap = 200;
 
+  /// Reported in the MCP `Implementation` handshake and the `/health` probe.
+  static const String _version = '0.2.4';
+
+  /// Default loopback host the control server binds to.
+  static const String kDefaultMcpHost = '127.0.0.1';
+
+  /// Default TCP port. Fixed (not OS-assigned) so an external agent can
+  /// reach the server on a known endpoint without a discovery file; the
+  /// user can change host + port in the settings inspector.
+  static const int kDefaultMcpPort = 7717;
+
   HttpServer? _http;
   StreamSubscription<HttpRequest>? _sub;
   final Map<String, StreamableHTTPServerTransport> _transports = {};
+
+  // Desired bind config (the actual bound port is read back via [port]).
+  String _bindHost = kDefaultMcpHost;
+  int _bindPort = kDefaultMcpPort;
+  // Empty = accept every Origin (default; webview agents must keep working).
+  List<String> _originAllowlist = const [];
 
   final List<AgentActivityEntry> _activity = [];
   String? _lastError;
 
   bool get isRunning => _http != null;
   int? get port => _http?.port;
+
+  /// The host the server is (or will next be) bound to.
+  String get configuredHost => _bindHost;
+
+  /// The port the server is (or will next be) bound to.
+  int get configuredPort => _bindPort;
+
+  /// Origins allowed when non-empty; empty (default) accepts all.
+  List<String> get originAllowlist => List.unmodifiable(_originAllowlist);
 
   /// True while at least one agent session is connected.
   bool get agentConnected => _transports.isNotEmpty;
@@ -164,6 +222,13 @@ class GuiMcpServer extends ChangeNotifier {
   /// Most-recent-first view of the activity log.
   List<AgentActivityEntry> get activity => List.unmodifiable(_activity);
 
+  /// Clear the agent activity log (the inspector's "Clear" action).
+  void clearActivity() {
+    if (_activity.isEmpty) return;
+    _activity.clear();
+    notifyListeners();
+  }
+
   // ── Lifecycle ─────────────────────────────────────────────────────────
 
   /// Bind the loopback HTTP server and start serving MCP. [port] `0` lets
@@ -171,23 +236,45 @@ class GuiMcpServer extends ChangeNotifier {
   /// NOT fatal — it is recorded in [lastError] and surfaced in the inspector
   /// (unlike the bridge library, the GUI is fully usable without the agent
   /// server).
-  Future<void> start({int port = 0}) async {
+  Future<void> start(
+      {String? host, int? port, List<String>? originAllowlist}) async {
     if (isRunning) return;
+    if (host != null) _bindHost = host;
+    if (port != null) _bindPort = port;
+    if (originAllowlist != null) _originAllowlist = List.of(originAllowlist);
     _lastError = null;
     try {
-      final http = await HttpServer.bind(InternetAddress.loopbackIPv4, port);
+      final http = await HttpServer.bind(_resolveBindAddress(_bindHost), _bindPort);
       _http = http;
       _sub = http.listen(
         _handleRequest,
         onError: (Object e) => devTrace('mcp.http.error', {'error': '$e'}),
       );
-      devTrace('mcp.start', {'port': http.port});
+      devTrace('mcp.start', {'host': _bindHost, 'port': http.port});
     } catch (e) {
       _lastError = '$e';
       _http = null;
       devTrace('mcp.start.error', {'error': '$e'});
     }
     notifyListeners();
+  }
+
+  /// Stop, then re-bind with new settings. Used by the inspector's Apply
+  /// action; idempotent on the stop side.
+  Future<void> restart(
+      {String? host, int? port, List<String>? originAllowlist}) async {
+    await stop();
+    await start(host: host, port: port, originAllowlist: originAllowlist);
+  }
+
+  /// Parse [host] to a bind address, falling back to loopback for a
+  /// hostname (e.g. `localhost`) or an unparseable value. An IP literal
+  /// like `0.0.0.0` binds all interfaces (the user's explicit choice).
+  static InternetAddress _resolveBindAddress(String host) {
+    if (host == 'localhost' || host.isEmpty) {
+      return InternetAddress.loopbackIPv4;
+    }
+    return InternetAddress.tryParse(host) ?? InternetAddress.loopbackIPv4;
   }
 
   /// Stop serving: cancel the accept loop, close every live session
@@ -219,8 +306,20 @@ class GuiMcpServer extends ChangeNotifier {
   // ── HTTP plumbing (per-session transports) ───────────────────────────
 
   Future<void> _handleRequest(HttpRequest req) async {
-    if (req.uri.path != mcpPath) {
+    final path = req.uri.path;
+    // Unauthenticated health probe — lets an agent confirm it reached the
+    // right server (and whether a config is open) before the MCP handshake.
+    if (req.method == 'GET' && (path == '/health' || path == '/')) {
+      await _handleHealth(req);
+      return;
+    }
+    if (path != mcpPath) {
       req.response.statusCode = HttpStatus.notFound;
+      await req.response.close();
+      return;
+    }
+    if (!_originAllowed(req)) {
+      req.response.statusCode = HttpStatus.forbidden;
       await req.response.close();
       return;
     }
@@ -249,6 +348,41 @@ class GuiMcpServer extends ChangeNotifier {
         await req.response.close();
       } catch (_) {/* response may already be committed */}
     }
+  }
+
+  /// Origin policy. An empty allowlist (the default) accepts every request —
+  /// webview-based agents send the page's `Origin` and must keep working;
+  /// the loopback bind is the baseline protection. When the user configures
+  /// an allowlist (typically after binding to a network interface), a
+  /// present `Origin` must be on it; a missing `Origin` (native MCP agents)
+  /// is always allowed.
+  bool _originAllowed(HttpRequest req) {
+    if (_originAllowlist.isEmpty) return true;
+    final origin = req.headers.value('origin');
+    if (origin == null) return true;
+    return _originAllowlist.contains(origin);
+  }
+
+  Future<void> _handleHealth(HttpRequest req) async {
+    if (!_originAllowed(req)) {
+      req.response.statusCode = HttpStatus.forbidden;
+      await req.response.close();
+      return;
+    }
+    final body = jsonEncode({
+      'name': 'bxp-gui',
+      'version': _version,
+      'config_path': _host.configPath,
+      'config_loaded': _host.configPath.isNotEmpty,
+      'loaded_with_errors': _host.configLoadHadErrors,
+      'dirty': _host.isDirty,
+      'agent_connected': agentConnected,
+    });
+    req.response
+      ..statusCode = HttpStatus.ok
+      ..headers.set(HttpHeaders.contentTypeHeader, 'application/json')
+      ..write(body);
+    await req.response.close();
   }
 
   StreamableHTTPServerTransport? _transportFor(HttpRequest req) {
@@ -318,7 +452,7 @@ class GuiMcpServer extends ChangeNotifier {
 
   McpServer _buildServer() {
     final server = McpServer(
-      const Implementation(name: 'bxp-gui', version: '0.2.4'),
+      const Implementation(name: 'bxp-gui', version: _version),
     );
 
     // get_state — read-only "see the screen" tool. The single biggest
@@ -582,9 +716,290 @@ class GuiMcpServer extends ChangeNotifier {
           _record('delete_node', path.join('.'), 'rejected');
           return _json({'deleted': false, 'rejected': true});
         }
+        final rev0 = _host.editRevision;
         _host.deleteConfigNode(path);
-        _record('delete_node', path.join('.'), 'ok');
-        return _json({'deleted': true, 'path': path, 'isDirty': _host.isDirty});
+        final changed = _host.editRevision != rev0;
+        _record('delete_node', path.join('.'), changed ? 'ok' : 'error');
+        return _json({
+          'deleted': changed,
+          'path': path,
+          'isDirty': _host.isDirty,
+          if (!changed)
+            'reason': 'The store refused the delete — the node is likely a '
+                'schema-required key, or the path did not resolve.',
+        });
+      },
+    );
+
+    // insert_node — add a child to a container via the SAME action the UI
+    // uses. Additive (not destructive), so no confirm — like edit_node.
+    server.registerTool(
+      'insert_node',
+      description:
+          'Insert a new entry into a container in the loaded config. `path` '
+          'is the keys/indices to the CONTAINER (object or array); pass `[]` '
+          'for the root object. For an object container pass `key` (the new '
+          'property name); for an array omit `key` to append or pass `index` '
+          'for the position. `value` is the new entry (scalar, object, or '
+          'array). Routed through the same live, undoable insert the UI uses. '
+          'Blocked when the config was loaded with errors.',
+      inputSchema: JsonSchema.object(
+        properties: {
+          'path': JsonSchema.array(
+            items: JsonSchema.string(),
+            description: 'Keys/indices to the container ([] = root object).',
+          ),
+          'key': JsonSchema.string(
+            description: 'New property name (object containers only).',
+          ),
+          'value': JsonSchema.fromJson(const {
+            'description': 'New entry value (scalar / object / array).',
+          }),
+          'index': JsonSchema.fromJson(const {
+            'type': 'integer',
+            'description': 'Insertion position (array containers; optional).',
+          }),
+        },
+        required: const ['path', 'value'],
+      ),
+      annotations: const ToolAnnotations(title: 'Insert config node'),
+      callback: (args, extra) async {
+        final rawPath = args['path'];
+        if (rawPath is! List) {
+          _record('insert_node', '$rawPath', 'error');
+          return _error('`path` must be an array of keys/indices.');
+        }
+        final path = rawPath.map((e) => '$e').toList();
+        if (_host.configLoadHadErrors) {
+          _record('insert_node', path.join('.'), 'blocked');
+          return _error(
+              'Inserts are blocked: the config was loaded with errors. '
+              'Fix the load errors first.');
+        }
+        final key = args['key'] is String ? args['key'] as String : null;
+        final value = args['value'];
+        final index = args['index'] is num ? (args['index'] as num).toInt() : null;
+        _host.showConfigPanel();
+        final rev0 = _host.editRevision;
+        _host.insertConfigNode(path, key, value, atIndex: index);
+        final changed = _host.editRevision != rev0;
+        // Reveal the inserted child where its path is known (object case).
+        if (changed) {
+          _host.revealConfigNode(key != null ? [...path, key] : path);
+        }
+        _record(
+          'insert_node',
+          '${path.join('.')}${key != null ? '.$key' : '[]'} = ${jsonEncode(value)}',
+          changed ? 'ok' : 'error',
+        );
+        return _json({
+          'inserted': changed,
+          'path': path,
+          'key': ?key,
+          'isDirty': _host.isDirty,
+          if (!changed)
+            'reason': 'The store refused the insert — the container did not '
+                'resolve, an object key is missing/duplicate, or it was '
+                'schema-rejected.',
+        });
+      },
+    );
+
+    // rename_key — rename an object key via the SAME action the UI uses.
+    server.registerTool(
+      'rename_key',
+      description:
+          'Rename the object key at `path` to `new_key` (the same action as '
+          'the tree rename). `path` ends at the property being renamed. '
+          'Blocked when the config was loaded with errors.',
+      inputSchema: JsonSchema.object(
+        properties: {
+          'path': JsonSchema.array(
+            items: JsonSchema.string(),
+            description: 'Keys/indices from the config root to the property.',
+          ),
+          'new_key': JsonSchema.string(description: 'The new property name.'),
+        },
+        required: const ['path', 'new_key'],
+      ),
+      annotations: const ToolAnnotations(title: 'Rename config key'),
+      callback: (args, extra) async {
+        final rawPath = args['path'];
+        final newKey = args['new_key'];
+        if (rawPath is! List || rawPath.isEmpty) {
+          _record('rename_key', '$rawPath', 'error');
+          return _error('`path` must be a non-empty array of keys/indices.');
+        }
+        if (newKey is! String || newKey.isEmpty) {
+          _record('rename_key', rawPath.join('.'), 'error');
+          return _error('`new_key` must be a non-empty string.');
+        }
+        final path = rawPath.map((e) => '$e').toList();
+        if (_host.configLoadHadErrors) {
+          _record('rename_key', path.join('.'), 'blocked');
+          return _error(
+              'Renames are blocked: the config was loaded with errors. '
+              'Fix the load errors first.');
+        }
+        _host.showConfigPanel();
+        final rev0 = _host.editRevision;
+        _host.renameConfigKey(path, newKey);
+        final changed = _host.editRevision != rev0;
+        final newPath = [...path.sublist(0, path.length - 1), newKey];
+        if (changed) _host.revealConfigNode(newPath);
+        _record('rename_key', '${path.join('.')} -> $newKey',
+            changed ? 'ok' : 'error');
+        return _json({
+          'renamed': changed,
+          'path': changed ? newPath : path,
+          'isDirty': _host.isDirty,
+          if (!changed)
+            'reason': 'The store refused the rename — the new key may collide '
+                'with a sibling, the parent is not an object, or the path did '
+                'not resolve.',
+        });
+      },
+    );
+
+    // move_node — reorder an entry among its siblings (non-destructive).
+    server.registerTool(
+      'move_node',
+      description:
+          'Reorder the entry at `path` among its siblings by `delta` '
+          '(+1 = down/later, -1 = up/earlier). Works for both object '
+          'properties and array elements. Blocked when the config was loaded '
+          'with errors.',
+      inputSchema: JsonSchema.object(
+        properties: {
+          'path': JsonSchema.array(
+            items: JsonSchema.string(),
+            description: 'Keys/indices from the config root to the entry.',
+          ),
+          'delta': JsonSchema.fromJson(const {
+            'type': 'integer',
+            'description': 'Positions to move: +1 down, -1 up.',
+          }),
+        },
+        required: const ['path', 'delta'],
+      ),
+      annotations: const ToolAnnotations(title: 'Move config node'),
+      callback: (args, extra) async {
+        final rawPath = args['path'];
+        final rawDelta = args['delta'];
+        if (rawPath is! List || rawPath.isEmpty) {
+          _record('move_node', '$rawPath', 'error');
+          return _error('`path` must be a non-empty array of keys/indices.');
+        }
+        if (rawDelta is! num || rawDelta == 0) {
+          _record('move_node', rawPath.join('.'), 'error');
+          return _error('`delta` must be a non-zero integer (+1 / -1).');
+        }
+        final path = rawPath.map((e) => '$e').toList();
+        final delta = rawDelta.toInt();
+        if (_host.configLoadHadErrors) {
+          _record('move_node', path.join('.'), 'blocked');
+          return _error(
+              'Moves are blocked: the config was loaded with errors. '
+              'Fix the load errors first.');
+        }
+        _host.showConfigPanel();
+        final rev0 = _host.editRevision;
+        _host.moveConfigNode(path, delta);
+        final changed = _host.editRevision != rev0;
+        if (changed) _host.revealConfigNode(path);
+        _record('move_node', '${path.join('.')} delta=$delta',
+            changed ? 'ok' : 'error');
+        return _json({
+          'moved': changed,
+          'path': path,
+          'isDirty': _host.isDirty,
+          if (!changed)
+            'reason': 'The store refused the move — already at the boundary, '
+                'or the path did not resolve.',
+        });
+      },
+    );
+
+    // set_template — choose which template dry/full runs target.
+    server.registerTool(
+      'set_template',
+      description:
+          'Set the active conversion template that dry_run / full_run '
+          'target. Pass an empty string to run ALL templates. Returns the '
+          'available template ids so the agent can pick a valid one.',
+      inputSchema: JsonSchema.object(
+        properties: {
+          'template': JsonSchema.string(
+            description: 'Template id to activate, or "" for all templates.',
+          ),
+        },
+        required: const ['template'],
+      ),
+      annotations: const ToolAnnotations(title: 'Set active template'),
+      callback: (args, extra) async {
+        final id = args['template'];
+        if (id is! String) {
+          _record('set_template', '$id', 'error');
+          return _error('`template` must be a string ("" = all templates).');
+        }
+        final available = _host.availableTemplates;
+        if (id.isNotEmpty && !available.contains(id)) {
+          _record('set_template', id, 'error');
+          return _error(
+              'Unknown template "$id". Available: ${available.join(', ')}');
+        }
+        _host.setActiveTemplate(id);
+        _record('set_template', id.isEmpty ? '(all templates)' : id, 'ok');
+        return _json({
+          'activeTemplate': _host.activeTemplate,
+          'availableTemplates': available,
+        });
+      },
+    );
+
+    // get_row_detail — drill into one input row of the most recent run.
+    server.registerTool(
+      'get_row_detail',
+      description:
+          'Drill into one input row of the most recent run: its source '
+          'field values, every input_schema/row_rules variable evaluation '
+          '(value or error), the rule-match decisions, and any output rows '
+          'produced. `file_row` is the 1-based source line number (as '
+          'reported in the trace); `file` optionally disambiguates by path '
+          'or template when the run spanned several files. Requires a prior '
+          'dry_run / full_run.',
+      inputSchema: JsonSchema.object(
+        properties: {
+          'file_row': JsonSchema.fromJson(const {
+            'type': 'integer',
+            'description': '1-based source line number to inspect.',
+          }),
+          'file': JsonSchema.string(
+            description: 'Optional path or template id to disambiguate.',
+          ),
+        },
+        required: const ['file_row'],
+      ),
+      annotations: const ToolAnnotations(
+        title: 'Get row detail',
+        readOnlyHint: true,
+        openWorldHint: false,
+      ),
+      callback: (args, extra) async {
+        final rawRow = args['file_row'];
+        if (rawRow is! num) {
+          _record('get_row_detail', '$rawRow', 'error');
+          return _error('`file_row` must be an integer (1-based source line).');
+        }
+        final file = args['file'] is String ? args['file'] as String : null;
+        final detail = await _host.rowDetail(fileRow: rawRow.toInt(), file: file);
+        if (detail == null) {
+          _record('get_row_detail', 'row $rawRow', 'error');
+          return _error('No run trace available. Run dry_run or full_run first.');
+        }
+        _record('get_row_detail', 'row $rawRow',
+            detail['found'] == true ? 'ok' : 'error');
+        return _json(detail);
       },
     );
 
