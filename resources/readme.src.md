@@ -1161,8 +1161,48 @@ sluggish.
 
 ## Working with an AI assistant in the GUI
 
-Two GUI-specific scenarios where an AI helps you go faster than the
+GUI-specific scenarios where an AI helps you go faster than the
 template-authoring prompt above.
+
+### Letting an agent drive the GUI (gui-mcp)
+
+BXP Desktop runs a small **MCP control server** so a local AI agent can
+read and edit the live config in the running app — the same actions you
+take by hand, but driven step by step while you watch and approve. This is
+the half of the workflow where, after an agent has drafted a config, the
+two of you fine-tune the tricky expressions together inside the GUI.
+
+- **Endpoint** — `http://127.0.0.1:7717/mcp` (StreamableHTTP). The host
+  and port are editable under **Settings inspector → Agent control**
+  (`Ctrl+Shift+S`), where you can also see the live listening address and a
+  log of what the agent did.
+- **Connecting** — the agent should launch BXP Desktop, poll
+  `GET /health` on the endpoint until it returns `200` (the body reports
+  whether a config is already open), then run the MCP `initialize`
+  handshake and call `open_config` with the path it wrote.
+- **Safety** — the server binds loopback only. Critical actions (`save`,
+  `full_run`, `delete_node`, `exit`) pop a confirmation dialog you must
+  accept. If you change the bind host to a network address, an optional
+  Origin allowlist is available in the same panel.
+
+Tools the agent can call:
+
+| Tool | What it does |
+| --- | --- |
+| `get_state` | Read the live config path, dirty flag, run status, diagnostics |
+| `open_config` / `reload` | Load (or re-read) a config file from disk |
+| `edit_node` | Change a scalar leaf (e.g. an expression) |
+| `insert_node` / `rename_key` / `move_node` | Add, rename, or reorder config entries |
+| `delete_node` | Remove a config entry (asks first) |
+| `set_template` | Choose which template runs target (empty = all) |
+| `dry_run` / `full_run` | Run the conversion (full run asks first) |
+| `get_trace` | Summarise the most recent run's per-row trace |
+| `get_row_detail` | Drill into one input row: fields, variables, rules, outputs |
+| `save` | Write the edited config back to disk (asks first) |
+| `exit` | Quit the app (asks first) |
+
+You stay in control throughout: every agent edit is revealed in the tree
+where it happens, and nothing is written or run without your click.
 
 ### Help with the GUI itself
 

@@ -237,6 +237,55 @@ Replaces the older byte-patcher pipeline.
 Round-trip identity is verified by `scripts/test.sh`'s "AST round-trip"
 phase against `DEV/bxp-cli.json`.
 
+## Agent control (gui-mcp)
+
+`GuiMcpServer` ([lib/services/gui_mcp_server.dart](lib/services/gui_mcp_server.dart))
+embeds an MCP server **inside the Flutter process** so a local agent can
+drive the live GUI — distinct from the standalone stateless `bxp-mcp` (Zig,
+stdio). Transport is localhost **StreamableHTTP**; every tool is a thin
+wrapper over the `GuiMcpHost` interface, whose production adapter
+(`_TraceStoreMcpHost` in [lib/main.dart](lib/main.dart)) delegates to the
+**same** `TraceStore` actions the UI uses, so state changes repaint for
+free and parity is definitional.
+
+- **Endpoint** — default `127.0.0.1:7717` (`kDefaultMcpHost` /
+  `kDefaultMcpPort`). Host + port are resolved at startup as prefs
+  (`bxp-gui.mcpHost` / `bxp-gui.mcpPort`) → env (`BXP_GUI_MCP_HOST` /
+  `BXP_GUI_MCP_PORT`) → defaults, and are editable live in the settings
+  inspector (Agent control), which persists + `restart()`s the server.
+  A fixed (not OS-assigned) default means an external agent reaches a known
+  endpoint without a discovery file; a bind clash is surfaced in `lastError`
+  (non-fatal — unlike the bridge, the GUI is fully usable without it).
+- **`GET /health`** — unauthenticated probe returning `{name, version,
+  config_path, config_loaded, dirty, agent_connected}`; the handshake an
+  agent uses to confirm it reached the right server before MCP `initialize`.
+- **Origin policy** — permissive by default (empty allowlist accepts every
+  Origin, so webview-based agents that send an `Origin` keep working);
+  loopback bind is the baseline protection. A persisted
+  `bxp-gui.mcpOriginAllowlist` (editable in the inspector) tightens this
+  when the user binds to a network interface.
+- **Tools** — `get_state`, `open_config`, `reload`, `edit_node`,
+  `insert_node`, `rename_key`, `move_node`, `delete_node`, `set_template`,
+  `dry_run`, `full_run`, `get_trace`, `get_row_detail`, `save`, `exit`.
+  Mutating-but-additive tools (`edit_node` / `insert_node` / `rename_key` /
+  `move_node`) are blocked when the config loaded with errors;
+  destructive/side-effecting ones (`save` / `full_run` / `delete_node` /
+  `exit`) are gated by an `AgentConfirmFn` dialog (navigatorKey-backed).
+  The structural verbs (`insert_node` / `rename_key` / `move_node` /
+  `delete_node`) compare `TraceStore.editRevision` before/after the call and
+  report `{<verb>:false, reason}` when the store **silently no-ops** a guarded
+  edit (a schema-`required` key, a duplicate key, an out-of-range move) — so
+  the tool never reports a false success.
+  `get_row_detail` lazy-loads a row's trace detail via
+  `TraceStore.ensureDetailLoaded` and is projected to JSON in the
+  `_TraceStoreMcpHost` adapter. Every call appends one `AgentActivityEntry`
+  and reveals its target node in the tree.
+
+Tested over real HTTP in
+[test/gui_mcp_server_test.dart](test/gui_mcp_server_test.dart) against a
+`_FakeHost` (no `TraceStore` / bridge probe). Deferred follow-up:
+activity-log UI polish.
+
 ## Build and run
 
 ```bash

@@ -450,37 +450,6 @@ The `inspect` core is stateless (no `pre_pass`/`LOOKUP`), so full template
 simulation stays CLI territory — hence `bxp_simulate` spawns `bxp-cli`
 rather than running in-core.
 
-### Agent-controllable GUI — embedded Dart MCP server
-
-**Shipped (Phases 1+2, 2026-06-09).** A Dart MCP server (`mcp_dart`,
-StreamableHTTP on `127.0.0.1`) embedded in **bxp-gui** that exposes
-**GUI-specific, stateful operations** so an agent can drive the running
-app — distinct from `bxp-mcp`'s stateless data tools. `GuiMcpServer`
-([bxp-gui/lib/services/gui_mcp_server.dart](../bxp-gui/lib/services/gui_mcp_server.dart))
-serves nine tools, each a thin wrapper over the same `TraceStore` actions
-the UI uses (parity + live UI repaint are definitional): `get_state`,
-`edit_node`, `save`, `open_config`, `reload`, `dry_run`, `full_run`,
-`delete_node`, `exit`. Critical actions (`save` / `full_run` /
-`delete_node` / `exit`) block on a `bxpNavigatorKey` confirm dialog.
-Default-on switch + listening status + recent-activity strip in the
-SettingsInspector (pref `bxp-gui.mcp-enabled`); a bind failure is
-non-fatal. The service depends on a narrow `GuiMcpHost` interface (not
-`TraceStore` directly) so `services/` stays free of a `store/` import and
-the server is unit-testable; the production adapter lives in `main.dart`.
-
-This realises the bidirectional "agent controls the app" half of the
-original brainstorm on the GUI side: the live window takes commands and
-pushes state back. (The per-call validator spawn the older "GUI talks to
-a long-lived bxp-mcp" idea targeted is already gone — stateless ops go
-through in-proc `bridge_inspect`; see _bxp-gui-bridge_. This server is
-about _controlling the GUI_, not running stateless evals.)
-
-**Follow-ups (not blocking):** Origin-header CSRF mitigation (a browser
-page can reach a localhost port); release-archive smoke for the pure-Dart
-dep (expected trivial — no native lib); live human-click verification of
-the confirm dialog (structurally proven via `_toggleDiagnosticMode`,
-await/result unit-test-proven, but a real modal click was not automatable).
-
 ### Expression builtins (regex)
 
 - `REGEX_MATCH(s, pattern)` and `REGEX_EXTRACT(s, pattern)` — deferred
