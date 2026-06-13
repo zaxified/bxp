@@ -260,6 +260,68 @@ pub const XlsxSheet = struct {
     ;
 };
 
+/// How the zipped-CSV pre-pass turns a member's in-zip path into a flat output
+/// filename in data_dir. The main CSV loop iterates data_dir non-recursively,
+/// so extracted files MUST be flat.
+pub const ZipDirMode = enum {
+    /// Keep only the last path segment: "CSV/x.csv" -> "x.csv". Assumes member
+    /// basenames are unique across directories (true for RÚIAN OB_ADR: one
+    /// file per obec keyed by a unique code).
+    basename,
+    /// Replace every '/' with `path_separator`: "CSV/x.csv" -> "CSV_x.csv".
+    /// Collision-safe at any nesting depth.
+    keep_path,
+};
+
+/// Opts a template into the zipped-CSV pre-pass. Every member of each *.zip in
+/// data_dir whose in-zip name ends with `entry_pattern` is streamed out to a
+/// flat intermediate CSV (named per `dir_mode`) before the normal CSV loop
+/// runs — N CSVs per zip, not 1:1. Mirrors `XlsxSheet`; owned by Config
+/// (heap-allocated strings). All sub-keys carry defaults, so `zip_input: {}`
+/// is valid.
+pub const ZipInput = struct {
+    /// Literal suffix filter for zip members (NOT a glob). Default ".csv".
+    entry_pattern: []const u8,
+    /// In-zip path -> flat output filename policy. Default `.basename`.
+    dir_mode: ZipDirMode,
+    /// '/' replacement used when `dir_mode == .keep_path`. Default "_".
+    path_separator: []const u8,
+
+    const dir_mode_values = [_][]const u8{ "basename", "keep_path" };
+
+    /// Schema docs for this struct's fields. Bound at
+    /// `conversion_templates.*.zip_input` by `bxp-core/src/docs.zig`.
+    pub const fields = [_]FieldDoc{
+        .{
+            .key = "entry_pattern",
+            .type_name = "string",
+            .required = false,
+            .default = ".csv",
+            .description = "Literal suffix filter for zip members to extract — NOT a glob. A member matches when its in-zip name ends with this exact text. Default \".csv\".",
+        },
+        .{
+            .key = "dir_mode",
+            .type_name = "string",
+            .required = false,
+            .default = "basename",
+            .description = "How a member's in-zip path becomes a flat output filename in data_dir (the CSV loop reads data_dir non-recursively). \"basename\" keeps the last path segment; \"keep_path\" replaces every '/' with path_separator (collision-safe).",
+            .enum_values = &dir_mode_values,
+        },
+        .{
+            .key = "path_separator",
+            .type_name = "string",
+            .required = false,
+            .default = "_",
+            .description = "Replacement for '/' when dir_mode is \"keep_path\" (e.g. \"CSV/x.csv\" -> \"CSV_x.csv\"). Ignored for \"basename\".",
+        },
+    };
+
+    /// JSON5 scaffold the GUI inserts for a new `zip_input` block.
+    pub const scaffold_template =
+        \\{ entry_pattern: ".csv" }
+    ;
+};
+
 /// Per-template configuration loaded from a single entry inside "conversion_templates" in bxp-cli.json.
 pub const BrokerConfig = struct {
     /// Path to the directory containing input CSV files for this broker.
@@ -285,6 +347,10 @@ pub const BrokerConfig = struct {
     /// When non-null, the xlsx file in data_dir is converted to an intermediate CSV
     /// file before the normal CSV processing loop.  Null when no "xlsx_sheet" key is present in config.
     xlsx_sheet: ?XlsxSheet,
+    /// When non-null, every matching member of each *.zip in data_dir is
+    /// streamed out to a flat intermediate CSV before the normal CSV loop.
+    /// Null when no "zip_input" key is present in config.
+    zip_input: ?ZipInput,
     /// When true, rows whose "$date" value falls outside the date range encoded in
     /// the input filename (YYYY-MM-DD_YYYY-MM-DD) are silently skipped.
     /// Default: false — no date filtering unless explicitly enabled.
@@ -519,6 +585,14 @@ pub const BrokerConfig = struct {
             .description = "When set, the xlsx file in data_dir is converted to an intermediate CSV before the normal CSV processing loop.",
             .insert_order = "schema",
             .insert_template = XlsxSheet.scaffold_template,
+        },
+        .{
+            .key = "zip_input",
+            .type_name = "object",
+            .required = false,
+            .description = "When set, every member of each *.zip in data_dir whose name ends with entry_pattern is streamed out to a flat intermediate CSV (N per zip) before the normal CSV loop. For zipped CSV exports (e.g. RÚIAN address registry).",
+            .insert_order = "schema",
+            .insert_template = ZipInput.scaffold_template,
         },
         // Declared before input_schema so the GUI's schema-ordered insert
         // (BrokerConfig.fields uses `insert_order = "schema"`) drops a new
@@ -1374,6 +1448,12 @@ pub const Config = struct {
                 self._alloc.free(s.output_suffix);
             }
 
+            // Free zip_input string fields.
+            if (entry.value_ptr.zip_input) |zi| {
+                self._alloc.free(zi.entry_pattern);
+                self._alloc.free(zi.path_separator);
+            }
+
             // Free ticker_map keys and values.
             var tm = entry.value_ptr.ticker_map;
             var tm_it = tm.iterator();
@@ -1920,6 +2000,13 @@ fn walkBroker(
         var keys: [XlsxSheet.fields.len][]const u8 = undefined;
         inline for (XlsxSheet.fields, 0..) |f, i| keys[i] = f.key;
         try walkObjectKeys(xs, path, &keys, alloc, diag);
+    }
+    if (broker.object.getPtr("zip_input")) |zi| {
+        const path = try std.fmt.allocPrint(alloc, "{s}.zip_input", .{broker_path});
+        defer alloc.free(path);
+        var keys: [ZipInput.fields.len][]const u8 = undefined;
+        inline for (ZipInput.fields, 0..) |f, i| keys[i] = f.key;
+        try walkObjectKeys(zi, path, &keys, alloc, diag);
     }
     if (broker.object.getPtr("row_rules")) |rr| {
         if (rr.* == .array) {
@@ -2584,6 +2671,7 @@ pub fn loadFromBytes(
                 var file_pattern_out: []const u8 = try alloc.dupe(u8, "");
                 errdefer alloc.free(file_pattern_out);
                 var xlsx_sheet: ?XlsxSheet = null;
+                var zip_input: ?ZipInput = null;
                 var ticker_map = std.StringHashMap([]const u8).init(alloc);
                 var input_schema = std.StringArrayHashMap([]const u8).init(alloc);
                 var date_filter_from_filename: bool = false;
@@ -2727,6 +2815,87 @@ pub fn loadFromBytes(
                             .name          = name,
                             .header_row    = header_row,
                             .output_suffix = output_suffix,
+                        };
+                    }
+
+                    // zip_input: object opting the template into the zipped-CSV
+                    // pre-pass. Every member of each *.zip in data_dir whose
+                    // name ends with `entry_pattern` (default ".csv") is
+                    // streamed out to a flat intermediate CSV (named per
+                    // `dir_mode`) before the normal CSV loop. Unlike xlsx_sheet,
+                    // every sub-key has a default, so `zip_input: {}` is valid —
+                    // but a present sub-key of the wrong type/value is a hard
+                    // error (same strictness as xlsx_sheet). Remove the whole
+                    // block to disable.
+                    if (bobj.get("zip_input")) |zi_val| {
+                        if (zi_val != .object) {
+                            try emitTemplateDiag(alloc, diag, .@"error", "config.wrong_type",
+                                b_entry.key_ptr.*, "zip_input",
+                                "zip_input must be an object, got {s}", .{@tagName(zi_val)});
+                            std.debug.print(
+                                "---\n# {s}: config error: template '{s}': zip_input must be an object, got {s}\n",
+                                .{ config_path, b_entry.key_ptr.*, @tagName(zi_val) },
+                            );
+                            return error.InvalidConfig;
+                        }
+                        const obj = zi_val.object;
+                        const entry_pattern = if (obj.get("entry_pattern")) |v| switch (v) {
+                            .string => |s| try alloc.dupe(u8, s),
+                            else => {
+                                try emitTemplateDiag(alloc, diag, .@"error", "config.wrong_type",
+                                    b_entry.key_ptr.*, "zip_input.entry_pattern",
+                                    "zip_input.entry_pattern must be a string, got {s}", .{@tagName(v)});
+                                std.debug.print(
+                                    "---\n# {s}: config error: template '{s}': zip_input.entry_pattern must be a string, got {s}\n",
+                                    .{ config_path, b_entry.key_ptr.*, @tagName(v) },
+                                );
+                                return error.InvalidConfig;
+                            },
+                        } else try alloc.dupe(u8, ".csv");
+                        errdefer alloc.free(entry_pattern);
+                        const dir_mode: ZipDirMode = if (obj.get("dir_mode")) |v| switch (v) {
+                            .string => |s| if (std.mem.eql(u8, s, "basename"))
+                                ZipDirMode.basename
+                            else if (std.mem.eql(u8, s, "keep_path"))
+                                ZipDirMode.keep_path
+                            else {
+                                try emitTemplateDiag(alloc, diag, .@"error", "config.invalid_value",
+                                    b_entry.key_ptr.*, "zip_input.dir_mode",
+                                    "zip_input.dir_mode must be \"basename\" or \"keep_path\", got \"{s}\"", .{s});
+                                std.debug.print(
+                                    "---\n# {s}: config error: template '{s}': zip_input.dir_mode must be \"basename\" or \"keep_path\", got \"{s}\"\n",
+                                    .{ config_path, b_entry.key_ptr.*, s },
+                                );
+                                return error.InvalidConfig;
+                            },
+                            else => {
+                                try emitTemplateDiag(alloc, diag, .@"error", "config.wrong_type",
+                                    b_entry.key_ptr.*, "zip_input.dir_mode",
+                                    "zip_input.dir_mode must be a string, got {s}", .{@tagName(v)});
+                                std.debug.print(
+                                    "---\n# {s}: config error: template '{s}': zip_input.dir_mode must be a string, got {s}\n",
+                                    .{ config_path, b_entry.key_ptr.*, @tagName(v) },
+                                );
+                                return error.InvalidConfig;
+                            },
+                        } else ZipDirMode.basename;
+                        const path_separator = if (obj.get("path_separator")) |v| switch (v) {
+                            .string => |s| try alloc.dupe(u8, s),
+                            else => {
+                                try emitTemplateDiag(alloc, diag, .@"error", "config.wrong_type",
+                                    b_entry.key_ptr.*, "zip_input.path_separator",
+                                    "zip_input.path_separator must be a string, got {s}", .{@tagName(v)});
+                                std.debug.print(
+                                    "---\n# {s}: config error: template '{s}': zip_input.path_separator must be a string, got {s}\n",
+                                    .{ config_path, b_entry.key_ptr.*, @tagName(v) },
+                                );
+                                return error.InvalidConfig;
+                            },
+                        } else try alloc.dupe(u8, "_");
+                        zip_input = ZipInput{
+                            .entry_pattern  = entry_pattern,
+                            .dir_mode       = dir_mode,
+                            .path_separator = path_separator,
                         };
                     }
 
@@ -2980,6 +3149,7 @@ pub fn loadFromBytes(
                         .file_pattern_in           = file_pattern_in,
                         .file_pattern_out          = file_pattern_out,
                         .xlsx_sheet                = xlsx_sheet,
+                        .zip_input                 = zip_input,
                         .ticker_map                = ticker_map,
                         .input_schema              = input_schema,
                         .date_filter_from_filename = date_filter_from_filename,

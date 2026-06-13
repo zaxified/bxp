@@ -50,6 +50,7 @@ const StructBinding = struct {
 const struct_bindings = [_]StructBinding{
     .{ .prefix = "conversion_templates.*",             .fields = &config.BrokerConfig.fields },
     .{ .prefix = "conversion_templates.*.xlsx_sheet",  .fields = &config.XlsxSheet.fields },
+    .{ .prefix = "conversion_templates.*.zip_input",   .fields = &config.ZipInput.fields },
     .{ .prefix = "conversion_templates.*.row_rules.*", .fields = &config.RowRule.fields },
     .{ .prefix = "conversion_templates.*.pre_pass.*",  .fields = &config.PrePass.fields },
 };
@@ -353,7 +354,7 @@ test "config_schema covers known paths" {
     // and the GUI-side expectation in lockstep.
     var total: usize = envelope_entries.len;
     for (struct_bindings) |bind| total += bind.fields.len;
-    try testing.expectEqual(@as(usize, 45), total);
+    try testing.expectEqual(@as(usize, 49), total);
 
     // Spot-check that representative paths from each binding category are
     // present. Comptime walk; failure points at the missing key.
@@ -365,6 +366,8 @@ test "config_schema covers known paths" {
         "conversion_templates.*.data_dir",
         "conversion_templates.*.xlsx_sheet",
         "conversion_templates.*.xlsx_sheet.name",
+        "conversion_templates.*.zip_input",
+        "conversion_templates.*.zip_input.entry_pattern",
         "conversion_templates.*.row_rules.*",
         "conversion_templates.*.row_rules.*.when",
         "conversion_templates.*.pre_pass.when",

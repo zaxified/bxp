@@ -966,6 +966,18 @@ fn run(args: [][:0]u8, out: Output, fresh: bool, check_fs_seconds: u8, runtime: 
         };
     }
 
+    // zip pre-pass: unpack each *.zip in a data_dir into flat intermediate CSV
+    // files before the xlsx/main passes (a zipped CSV export, e.g. RÚIAN).
+    const zip_stats = try pipeline.zipPrePass(&cfg, alloc, out, fresh, template_id, dir_path_arg);
+    if (zip_stats.has_fatal) {
+        overall.merge(zip_stats);
+        out.info("\n=== overall summary ===\n", .{});
+        overall.time_ns = timer.read();
+        out.overallLine(overall);
+        return error.Fatal;
+    }
+    overall.merge(zip_stats);
+
     // xlsx pre-pass: convert xlsx files to intermediate CSV before the main processing loop.
     const xlsx_stats = try pipeline.xlsxPrePass(&cfg, alloc, out, fresh, template_id, dir_path_arg);
     if (xlsx_stats.has_fatal) {

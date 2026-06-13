@@ -13,6 +13,7 @@ const expr_mod = @import("expr");
 /// `expr.Context.field` driven by `Context.input_encoding`.
 const encoding = config_mod.encoding;
 const xlsx_mod = @import("xlsx");
+const zipstream = @import("zipstream");
 const json_mod = @import("json");
 const btrace = @import("btrace");
 
@@ -3043,6 +3044,186 @@ pub fn xlsxPrePass(
     xlsx_stats.time_ns = timer.read();
     out.summary(xlsx_stats);
     return xlsx_stats;
+}
+
+/// Derives the flat intermediate-CSV filename for one zip member, per the
+/// template's `zip_input.dir_mode`. The member name has already had '\' → '/'
+/// normalised by zipstream, so `basename` splits on '/' on every host.
+/// Allocated from `alloc`.
+fn zipEntryOutputName(alloc: std.mem.Allocator, entry_name: []const u8, zi: config_mod.ZipInput) ![]u8 {
+    return switch (zi.dir_mode) {
+        .basename => try alloc.dupe(u8, std.fs.path.basename(entry_name)),
+        .keep_path => try std.mem.replaceOwned(u8, alloc, entry_name, "/", zi.path_separator),
+    };
+}
+
+/// Unpacks each *.zip in a template's data_dir into flat intermediate CSV
+/// files before the main processing loop. Mirrors `xlsxPrePass`: groups by
+/// data_dir so a shared directory is unpacked once, streams every member
+/// whose in-zip name ends with `zip_input.entry_pattern` out of the archive
+/// (memory bounded to one inflate window via the `zipstream` primitive), and
+/// names each output per `zip_input.dir_mode`. N members → N CSVs, not 1:1.
+///
+/// Output names are always flat (no path separator), so a member can never
+/// escape data_dir (zip-slip); a member mapping to a separator, "."/"..", or
+/// a name already produced by another member is a fatal error rather than a
+/// silent clobber. Prints its own section header + summary when any zip work
+/// was found.
+pub fn zipPrePass(
+    cfg: *const config_mod.Config,
+    alloc: std.mem.Allocator,
+    out: Output,
+    fresh: bool,
+    template_id: ?[]const u8,
+    dir_path_arg: ?[]const u8,
+) !SectionStats {
+    var stats = SectionStats{};
+    var timer = try std.time.Timer.start();
+
+    // data_dir -> ZipInput (first active template wins; a shared dir is
+    // unpacked once). Mirrors xlsxPrePass's per-dir dedupe.
+    var dir_specs = std.StringArrayHashMap(config_mod.ZipInput).init(alloc);
+    defer dir_specs.deinit();
+
+    var bc_it = cfg.brokers.iterator();
+    while (bc_it.next()) |entry| {
+        const bc = entry.value_ptr;
+        const zi = bc.zip_input orelse continue;
+        const dir_path: []const u8 = if (template_id) |tid| blk: {
+            if (!std.mem.eql(u8, tid, entry.key_ptr.*)) continue;
+            break :blk dir_path_arg orelse bc.data_dir;
+        } else bc.data_dir;
+        const gop = try dir_specs.getOrPut(dir_path);
+        if (!gop.found_existing) gop.value_ptr.* = zi;
+    }
+
+    if (dir_specs.count() == 0) return stats;
+
+    out.info("\n=== unpacking zip archives ===\n", .{});
+
+    // One inflate history window, reused across every entry (each EntryReader
+    // reseeks the shared file cursor).
+    var window: [std.compress.flate.max_window_len]u8 = undefined;
+
+    var ds_it = dir_specs.iterator();
+    while (ds_it.next()) |e| {
+        const dir_path = e.key_ptr.*;
+        const zi = e.value_ptr.*;
+
+        var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch |err| {
+            if (err == error.FileNotFound) {
+                out.fatal("error: directory not found: '{s}'\n", .{dir_path});
+                stats.has_fatal = true;
+                continue;
+            }
+            return err;
+        };
+        defer dir.close();
+
+        // Collect + sort the *.zip files so extraction order is deterministic.
+        var zip_names = std.array_list.Managed([]u8).init(alloc);
+        defer {
+            for (zip_names.items) |n| alloc.free(n);
+            zip_names.deinit();
+        }
+        {
+            var fit = dir.iterate();
+            while (try fit.next()) |de| {
+                if (de.kind != .file and de.kind != .sym_link) continue;
+                if (!std.mem.endsWith(u8, de.name, ".zip")) continue;
+                try zip_names.append(try alloc.dupe(u8, de.name));
+            }
+        }
+        std.mem.sort([]u8, zip_names.items, {}, struct {
+            fn lessThan(_: void, a: []u8, b: []u8) bool {
+                return std.mem.order(u8, a, b) == .lt;
+            }
+        }.lessThan);
+
+        for (zip_names.items) |zip_name| {
+            const zip_file = dir.openFile(zip_name, .{}) catch |err| {
+                out.fatal("fatal error: cannot open zip '{s}': {s}\n", .{ zip_name, @errorName(err) });
+                stats.has_fatal = true;
+                stats.time_ns = timer.read();
+                out.summary(stats);
+                return error.Fatal;
+            };
+            defer zip_file.close();
+
+            var archive: zipstream.Archive = undefined;
+            archive.init(alloc, zip_file) catch |err| {
+                if (err == zipstream.Error.UnsupportedCompressionMethod) {
+                    out.warning("warning: skipping '{s}': uses an unsupported compression method (only store + deflate are read)\n", .{zip_name});
+                    stats.warnings += 1;
+                    continue;
+                }
+                out.fatal("fatal error: cannot read zip '{s}': {s}\n", .{ zip_name, @errorName(err) });
+                stats.has_fatal = true;
+                stats.time_ns = timer.read();
+                out.summary(stats);
+                return error.Fatal;
+            };
+            defer archive.deinit();
+
+            // Per-zip arena: derived output names + the collision set. Freed
+            // when this archive is done.
+            var name_arena = std.heap.ArenaAllocator.init(alloc);
+            defer name_arena.deinit();
+            const na = name_arena.allocator();
+            var seen = std.StringHashMap(void).init(na);
+
+            var n_out: usize = 0;
+            for (archive.entries.items) |*member| {
+                if (!std.mem.endsWith(u8, member.name, zi.entry_pattern)) continue;
+
+                const out_name = try zipEntryOutputName(na, member.name, zi);
+                // Zip-slip / sanity guard: a flat name only — never a path
+                // separator (so it can't escape data_dir), never empty/"."/"..".
+                if (out_name.len == 0 or
+                    std.mem.indexOfScalar(u8, out_name, '/') != null or
+                    std.mem.eql(u8, out_name, ".") or std.mem.eql(u8, out_name, ".."))
+                {
+                    out.fatal("fatal error: zip '{s}': member '{s}' maps to an unsafe output name '{s}'\n", .{ zip_name, member.name, out_name });
+                    stats.has_fatal = true;
+                    stats.time_ns = timer.read();
+                    out.summary(stats);
+                    return error.Fatal;
+                }
+                // Collision guard: two members must not target the same file.
+                if (seen.contains(out_name)) {
+                    out.fatal("fatal error: zip '{s}': two members map to the same output file '{s}' — set zip_input.dir_mode to \"keep_path\"\n", .{ zip_name, out_name });
+                    stats.has_fatal = true;
+                    stats.time_ns = timer.read();
+                    out.summary(stats);
+                    return error.Fatal;
+                }
+                try seen.put(out_name, {});
+
+                // --fresh: skip members whose intermediate CSV already exists.
+                if (fresh) {
+                    if (dir.access(out_name, .{})) |_| {
+                        continue;
+                    } else |_| {}
+                }
+
+                var er: zipstream.EntryReader = undefined;
+                try er.init(&archive, member, &window);
+
+                const dest = try dir.createFile(out_name, .{});
+                defer dest.close();
+                var wbuf: [OUT_FILE_BUF_SIZE]u8 = undefined;
+                var fw = dest.writer(&wbuf);
+                _ = try er.reader().streamRemaining(&fw.interface);
+                try fw.interface.flush();
+                n_out += 1;
+            }
+            out.info("  unpacked '{s}' ({d} members)\n", .{ zip_name, n_out });
+        }
+    }
+
+    stats.time_ns = timer.read();
+    out.summary(stats);
+    return stats;
 }
 
 // ---------------------------------------------------------------------------
