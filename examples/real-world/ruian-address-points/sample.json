@@ -1,0 +1,63 @@
+{
+  // RÚIAN address points (OB_ADR): the Czech state address register, exported
+  // by ČÚZK as a ZIP of one Windows-1250, ';'-delimited CSV per municipality,
+  // all under a `CSV/` folder inside the archive. `zip_input` unpacks every
+  // member to a flat intermediate CSV first (the unpack runs in parallel — see
+  // the readme); the main loop then converts each to a clean UTF-8 table, and
+  // `combined_output` rolls them into one `1-ruian_adr-combined.csvx` ready for
+  // a Postgres `COPY`.
+  conversion_templates: {
+    ruian_adr: {
+      data_dir: ".",
+
+      // Unpack *.zip in data_dir before processing. `dir_mode: basename`
+      // (default) flattens the in-archive `CSV/…` prefix to a bare filename;
+      // entry_pattern ".csv" (default) selects the member CSVs.
+      zip_input: { entry_pattern: ".csv" },
+
+      file_pattern_in: ".csv",
+      file_pattern_out: ".csvx",
+      combined_output: true,
+
+      // The source CSVs are Windows-1250, semicolon-delimited.
+      csv_delimiter_in: ";",
+      csv_input_encoding: "windows-1250",
+      csv_header_line: 1,
+
+      input_schema: {
+        $adm_code:    "[Kód ADM]",
+        $obec_code:   "[Kód obce]",
+        $obec:        "[Název obce]",
+        $cast_obce:   "[Název části obce]",
+        $ulice:       "[Název ulice]",
+        $cislo_dom:   "[Číslo domovní]",
+        $cislo_or:    "[Číslo orientační]",
+        $psc:         "[PSČ]",
+        $y:           "[Souřadnice Y]",
+        $x:           "[Souřadnice X]",
+        // Platí Od is an ISO datetime; keep the date, drop the time component.
+        $plati_od:    "DATE_CONVERT([Platí Od], 'YYYY-MM-DD[*]', 'YYYY-MM-DD')",
+      },
+
+      // Pass-through: one catch-all rule emits every row with the input_schema
+      // values (a plain column remap needs no routing).
+      row_rules: [
+        { when: "1 = 1", rows: [ {} ] },
+      ],
+
+      output_schema: {
+        adm_code:           "$adm_code",
+        municipality_code:  "$obec_code",
+        municipality:       "$obec",
+        municipality_part:  "$cast_obce",
+        street:             "$ulice",
+        house_number:       "$cislo_dom",
+        orientation_number: "$cislo_or",
+        postcode:           "$psc",
+        coord_y:            "$y",
+        coord_x:            "$x",
+        valid_from:         "$plati_od",
+      },
+    },
+  },
+}

@@ -107,6 +107,14 @@ Real public datasets — each readme cites its source and the documented problem
 
 📄 [real-world/nyc-taxi-trips/00-readme.md](real-world/nyc-taxi-trips/00-readme.md)
 
+### RÚIAN address points — a zipped CSV-per-municipality export
+
+**What.** The Czech state address register (RÚIAN) is published as a single ZIP
+
+**Why interesting.** Government open-data registers ship as a _zip of many
+
+📄 [real-world/ruian-address-points/00-readme.md](real-world/ruian-address-points/00-readme.md)
+
 ### NYC Squirrel Census (JSON API) → Flat CSV
 
 **What.** Flatten the 2018 NYC Central Park Squirrel Census — published as a
