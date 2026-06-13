@@ -15,15 +15,15 @@
 
         // THE TRICK — LOWER+TRIM, then IN() against the truthy / falsy spellings.
         //
-        // Two coercion traps, both fixed by the LEN(...) = 0 empty guard:
+        // Two coercion traps, both fixed by the ISEMPTY() guard:
         //   * empty cell vs the '0' in the falsy list — bxp coerces ""→0 and
         //     '0'→0, so a blank would WRONGLY match '0' and become "false";
-        //   * the guard itself: TRIM([x]) = '' would also coerce "0"→0 == ""→0
-        //     and wrongly treat a real "0" as blank. LEN(TRIM([x])) = 0 compares
-        //     length (no coercion): blank → 0, "0" → 1.
-        // So: guard blanks with LEN first, THEN it's safe to keep '0' as falsy.
-        $active:   "IF(LEN(TRIM([Active])) = 0, '', IF(IN(LOWER(TRIM([Active])), 'yes', 'y', '1', 'true', 't'), 'true', IF(IN(LOWER(TRIM([Active])), 'no', 'n', '0', 'false', 'f'), 'false', '')))",
-        $verified: "IF(LEN(TRIM([Verified])) = 0, '', IF(IN(LOWER(TRIM([Verified])), 'yes', 'y', '1', 'true', 't'), 'true', IF(IN(LOWER(TRIM([Verified])), 'no', 'n', '0', 'false', 'f'), 'false', '')))"
+        //   * a bare [x] = '' guard would ALSO coerce "0"→0 == ""→0 and wrongly
+        //     treat a real "0" as blank. ISEMPTY([x]) tests the trimmed length
+        //     (no coercion): blank / whitespace → true, "0" → false.
+        // So: guard blanks with ISEMPTY first, THEN it's safe to keep '0' as falsy.
+        $active:   "IF(ISEMPTY([Active]), '', IF(IN(LOWER(TRIM([Active])), 'yes', 'y', '1', 'true', 't'), 'true', IF(IN(LOWER(TRIM([Active])), 'no', 'n', '0', 'false', 'f'), 'false', '')))",
+        $verified: "IF(ISEMPTY([Verified]), '', IF(IN(LOWER(TRIM([Verified])), 'yes', 'y', '1', 'true', 't'), 'true', IF(IN(LOWER(TRIM([Verified])), 'no', 'n', '0', 'false', 'f'), 'false', '')))"
       },
 
       row_rules: [ { when: "1 = 1", rows: [ {} ] } ],

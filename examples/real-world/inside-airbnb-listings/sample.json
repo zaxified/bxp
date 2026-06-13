@@ -54,8 +54,9 @@
         // TRICK 4 — NYC requires short-term rentals to register since 2023.
         // license is one of: empty (unlicensed), "Exempt" (statutory carve-out),
         // or "OSE-STRREG-NNNNNNN" (registered). Normalize into a 3-state
-        // status field — "unlicensed" rows are the regulatory risk.
-        $reg_status: "IF([license] = '',       'unlicensed', IF([license] = 'Exempt', 'exempt', 'registered'))"
+        // status field — "unlicensed" rows are the regulatory risk. CASE maps
+        // the two sentinel values to labels with "registered" as the default.
+        $reg_status: "CASE([license], '', 'unlicensed', 'Exempt', 'exempt', 'registered')"
       },
 
       row_rules: [ { when: "1 = 1", rows: [ {} ] } ],

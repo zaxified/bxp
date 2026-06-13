@@ -24,7 +24,7 @@
         $license:    "[license_description]",
         $zip:        "[zip_code]",
         $status:     "TICKER([license_status])",
-        $app_type:   "IF([application_type] = 'ISSUE',  'initial_application', IF([application_type] = 'RENEW', 'renewal', IF([application_type] = 'C_LOC', 'change_of_location', IF([application_type] = 'C_CAPA', 'change_of_capacity', IF([application_type] = 'C_EXPA', 'liquor_area_expansion', IF([application_type] = 'C_SBA', 'change_of_business_activity', [application_type]))))))",
+        $app_type:   "CASE([application_type], 'ISSUE', 'initial_application', 'RENEW', 'renewal', 'C_LOC', 'change_of_location', 'C_CAPA', 'change_of_capacity', 'C_EXPA', 'liquor_area_expansion', 'C_SBA', 'change_of_business_activity', [application_type])",
         $start:      "DATE_CONVERT([license_start_date], 'YYYY-MM-DD[T]hh:mm:ss', 'YYYY-MM-DD')",
         $expires:    "DATE_CONVERT([expiration_date], 'YYYY-MM-DD[T]hh:mm:ss', 'YYYY-MM-DD')",
         $applied:    "IF([application_created_date] = '', '<not-on-file>', DATE_CONVERT([application_created_date], 'YYYY-MM-DD[T]hh:mm:ss', 'YYYY-MM-DD'))"

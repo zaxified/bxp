@@ -15,8 +15,8 @@
         // THE TRICK — split on the space:
         //   SPLIT_PART("5.0 kg", ' ', 1) → "5.0"  (×1 → clean number 5)
         //   SPLIT_PART("5.0 kg", ' ', 2) → "kg"
-        // LEN(...) = 0 guards a blank cell so it stays empty instead of 0.
-        $amount: "IF(LEN(TRIM([Measure])) = 0, '', SPLIT_PART([Measure], ' ', 1) * 1)",
+        // ISEMPTY guards a blank cell so it stays empty instead of 0.
+        $amount: "IF(ISEMPTY([Measure]), '', SPLIT_PART([Measure], ' ', 1) * 1)",
         $unit:   "SPLIT_PART([Measure], ' ', 2)"
       },
 

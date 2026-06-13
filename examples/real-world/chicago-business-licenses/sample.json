@@ -34,9 +34,12 @@
         // "cancelled_during_term" is self-explanatory.
         $status:     "TICKER([license_status])",
 
-        // TRICK 3 — APPLICATION TYPE code → label via an IF chain (a second
-        // controlled vocabulary; TICKER's one active map is used by status).
-        $app_type:   "IF([application_type] = 'ISSUE',  'initial_application', IF([application_type] = 'RENEW', 'renewal', IF([application_type] = 'C_LOC', 'change_of_location', IF([application_type] = 'C_CAPA', 'change_of_capacity', IF([application_type] = 'C_EXPA', 'liquor_area_expansion', IF([application_type] = 'C_SBA', 'change_of_business_activity', [application_type]))))))",
+        // TRICK 3 — APPLICATION TYPE code → label via a CASE multi-branch map
+        // (a second controlled vocabulary; TICKER's one active map is used by
+        // status). CASE compares its first arg against each value/label pair
+        // and returns the first match, with the raw code as the trailing
+        // default — far more readable than a six-deep nested IF.
+        $app_type:   "CASE([application_type], 'ISSUE', 'initial_application', 'RENEW', 'renewal', 'C_LOC', 'change_of_location', 'C_CAPA', 'change_of_capacity', 'C_EXPA', 'liquor_area_expansion', 'C_SBA', 'change_of_business_activity', [application_type])",
 
         // TRICK 4 — dates are ISO with a midnight time + millis; keep the date
         // part only. The application date is blank on ~84% of rows — make the

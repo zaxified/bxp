@@ -38,7 +38,7 @@
         // first 8 chars with string ops rather than DATE_CONVERT — string
         // slicing has no lower-year limit (DATE_CONVERT silently drops dates
         // before 1970; a 1924 birthdate would vanish). Guard the empty case.
-        $dob: "IF(LEN(TRIM(FIELDS(8))) = 0, '', LEFT(FIELDS(8), 4) & '-' & SUBSTR(FIELDS(8), 5, 2) & '-' & SUBSTR(FIELDS(8), 7, 2))",
+        $dob: "IF(ISEMPTY(FIELDS(8)), '', LEFT(FIELDS(8), 4) & '-' & SUBSTR(FIELDS(8), 5, 2) & '-' & SUBSTR(FIELDS(8), 7, 2))",
 
         $sex: "FIELDS(9)"
       },

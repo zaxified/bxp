@@ -40,7 +40,7 @@
         $reviews_pm: "[reviews_per_month]",
         $avail_365:  "[availability_365]",
 
-        $reg_status: "IF([license] = '',       'unlicensed', IF([license] = 'Exempt', 'exempt', 'registered'))"
+        $reg_status: "CASE([license], '', 'unlicensed', 'Exempt', 'exempt', 'registered')"
       },
 
       row_rules: [ { when: "1 = 1", rows: [ {} ] } ],

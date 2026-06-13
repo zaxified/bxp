@@ -68,8 +68,10 @@ Two things the full run surfaces that the slice can't:
    business is never blank.
 2. **Status code → label** — `TICKER([license_status])` over a `ticker_map`
    built from the documented `AAI/AAC/REV/REA` meanings.
-3. **Application type → label** — an `IF` chain (a second controlled vocabulary;
-   `TICKER`'s one active map is spent on status).
+3. **Application type → label** — a `CASE` multi-branch map (a second
+   controlled vocabulary; `TICKER`'s one active map is spent on status). `CASE`
+   matches the code against value/label pairs with the raw code as the
+   fallback — one call in place of a six-deep nested `IF`.
 4. **ISO date trim + missing-date sentinel** — `DATE_CONVERT(..., 'YYYY-MM-DD[T]hh:mm:ss', 'YYYY-MM-DD')`
    keeps the date part; `IF([application_created_date] = '', '<not-on-file>', …)`
    turns the 84%-blank column into an explicit marker.

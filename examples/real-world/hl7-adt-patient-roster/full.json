@@ -17,7 +17,7 @@
         $mrn:    "SPLIT_PART(FIELDS(4), '^', 1)",
         $family: "SPLIT_PART(SPLIT_PART(FIELDS(6), '^', 1), '&', 1)",
         $given:  "SPLIT_PART(FIELDS(6), '^', 2)",
-        $dob:    "IF(LEN(TRIM(FIELDS(8))) = 0, '', LEFT(FIELDS(8), 4) & '-' & SUBSTR(FIELDS(8), 5, 2) & '-' & SUBSTR(FIELDS(8), 7, 2))",
+        $dob:    "IF(ISEMPTY(FIELDS(8)), '', LEFT(FIELDS(8), 4) & '-' & SUBSTR(FIELDS(8), 5, 2) & '-' & SUBSTR(FIELDS(8), 7, 2))",
         $sex:    "FIELDS(9)"
       },
 

@@ -54,7 +54,7 @@ stay intact in a single field, exactly as TRICK 0 promises.
    the gap is visible in every row instead of silently empty.
 3. **last_review empty == "never reviewed"** — kept as empty on purpose;
    not every absent value is an error.
-4. **Three-state regulatory column** — `IF` chain over `[license]` derives
+4. **Three-state regulatory column** — a `CASE` map over `[license]` derives
    `unlicensed` / `exempt` / `registered`.
 
 **Run it.**

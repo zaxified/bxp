@@ -13,8 +13,8 @@
 
       input_schema: {
         $name:    "[Name]",
-        $ra_deg:  "IF(LEN(TRIM([RA])) = 0, '', (SPLIT_PART([RA], ':', 1) + SPLIT_PART([RA], ':', 2) / 60 + SPLIT_PART([RA], ':', 3) / 3600) * 15)",
-        $dec_deg: "IF(LEN(TRIM([Dec])) = 0, '', IF(STARTS_WITH(TRIM([Dec]), '-'), -1, 1) * (ABS(SPLIT_PART([Dec], ':', 1)) + SPLIT_PART([Dec], ':', 2) / 60 + SPLIT_PART([Dec], ':', 3) / 3600))"
+        $ra_deg:  "IF(ISEMPTY([RA]), '', (SPLIT_PART([RA], ':', 1) + SPLIT_PART([RA], ':', 2) / 60 + SPLIT_PART([RA], ':', 3) / 3600) * 15)",
+        $dec_deg: "IF(ISEMPTY([Dec]), '', IF(STARTS_WITH(TRIM([Dec]), '-'), -1, 1) * (ABS(SPLIT_PART([Dec], ':', 1)) + SPLIT_PART([Dec], ':', 2) / 60 + SPLIT_PART([Dec], ':', 3) / 3600))"
       },
 
       row_rules: [ { when: "1 = 1", rows: [ {} ] } ],
