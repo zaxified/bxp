@@ -408,7 +408,7 @@ class BxpProcessClient {
 
   /// Fetch one template's raw JSON block via
   /// `the bridge config validation <path> --fetch-template <id>`. Returns the parsed
-  /// JSON object (input_schema, row_rules, ticker_map, …) or null on any
+  /// JSON object (input_schema, row_rules, maps, …) or null on any
   /// failure (binary missing, exit non-zero, malformed JSON). Used by the
   /// btrace browser to drive `evalBatch` with the template's input_schema
   /// expressions when reconstructing drill-down on click.
@@ -538,7 +538,7 @@ class BxpProcessClient {
     required List<String> headers,
     required List<String> fields,
     required List<String> exprs,
-    Map<String, String>? tickerMap,
+    Map<String, Map<String, String>>? maps,
     Map<String, String>? lookups,
     String? singlePrepassName,
   }) async {
@@ -548,8 +548,8 @@ class BxpProcessClient {
       'fields': fields,
       'exprs': exprs,
     };
-    if (tickerMap != null && tickerMap.isNotEmpty) {
-      request['ticker_map'] = tickerMap;
+    if (maps != null && maps.isNotEmpty) {
+      request['maps'] = maps;
     }
     if (lookups != null && lookups.isNotEmpty) {
       request['lookups'] = lookups;

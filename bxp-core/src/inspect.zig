@@ -318,7 +318,6 @@ pub fn evalExpr(
     fields_json: ?[]const u8,
 ) ![]u8 {
     var col_index = std.StringHashMap(usize).init(a);
-    var ticker_map = std.StringHashMap([]const u8).init(a);
 
     var headers_list: std.ArrayList([]const u8) = .empty;
     var fields_list: std.ArrayList([]const u8) = .empty;
@@ -332,7 +331,6 @@ pub fn evalExpr(
     const ctx = expr_mod.Context{
         .fields = fields_list.items,
         .col_index = &col_index,
-        .ticker_map = &ticker_map,
         .lookup_table = null,
         .alloc = a,
         .error_detail = &detail,
@@ -399,7 +397,6 @@ pub fn evalTrace(
     trace_out: *std.Io.Writer,
 ) !TraceResult {
     var col_index = std.StringHashMap(usize).init(a);
-    var ticker_map = std.StringHashMap([]const u8).init(a);
 
     var headers_list: std.ArrayList([]const u8) = .empty;
     var fields_list: std.ArrayList([]const u8) = .empty;
@@ -413,7 +410,6 @@ pub fn evalTrace(
     const ctx = expr_mod.Context{
         .fields = fields_list.items,
         .col_index = &col_index,
-        .ticker_map = &ticker_map,
         .lookup_table = null,
         .alloc = a,
         .error_detail = &detail,
@@ -490,14 +486,12 @@ pub const ExprError = struct {
 /// checks, keeping editor / Save / CLI diagnostics in sync.
 pub fn validateExpr(a: std.mem.Allocator, src: []const u8) !?ExprError {
     var col_index = std.StringHashMap(usize).init(a);
-    var ticker_map = std.StringHashMap([]const u8).init(a);
     var detail: []const u8 = "";
     var err_offset: u32 = 0;
     var err_len: u32 = 0;
     const ctx = expr_mod.Context{
         .fields = &.{},
         .col_index = &col_index,
-        .ticker_map = &ticker_map,
         .lookup_table = null,
         .alloc = a,
         .error_detail = &detail,
@@ -586,7 +580,7 @@ fn batchErr(msg: []const u8) BatchResult {
 }
 
 /// Evaluate N expressions against one row in a single call. `request` is the
-/// already-parsed batch object `{headers, fields, exprs, ticker_map?, lookups?,
+/// already-parsed batch object `{headers, fields, exprs, maps?, lookups?,
 /// single_prepass_name?}`. Both adapters share this core: bxp-fmt's
 /// `--expr-batch` parses stdin into a Value and hands it here; the MCP
 /// `bxp_eval_batch` tool passes the call arguments straight through.
@@ -619,14 +613,22 @@ pub fn evalBatch(a: std.mem.Allocator, request: std.json.Value) !BatchResult {
         try fields.append(a, try a.dupe(u8, f.string));
     }
 
-    // Optional ticker_map.
-    var ticker_map = std.StringHashMap([]const u8).init(a);
-    if (obj.get("ticker_map")) |tm| {
-        if (tm != .object) return batchErr("ticker_map must be a JSON object");
-        var it = tm.object.iterator();
-        while (it.next()) |e| {
-            if (e.value_ptr.* != .string) return batchErr("ticker_map values must be strings");
-            try ticker_map.put(try a.dupe(u8, e.key_ptr.*), try a.dupe(u8, e.value_ptr.string));
+    // Optional maps registry: { map_name: { key: value } }. Resolved by REMAP /
+    // REPLACE 'name' arguments. Values stored as ordered NamedMaps (insertion
+    // order preserved for REPLACE).
+    var maps = expr_mod.MapRegistry.init(a);
+    if (obj.get("maps")) |mv| {
+        if (mv != .object) return batchErr("maps must be a JSON object");
+        var m_it = mv.object.iterator();
+        while (m_it.next()) |m_entry| {
+            if (m_entry.value_ptr.* != .object) return batchErr("maps entries must be JSON objects");
+            var nm = expr_mod.NamedMap.init(a);
+            var it = m_entry.value_ptr.object.iterator();
+            while (it.next()) |e| {
+                if (e.value_ptr.* != .string) return batchErr("map values must be strings");
+                try nm.put(try a.dupe(u8, e.key_ptr.*), try a.dupe(u8, e.value_ptr.string));
+            }
+            try maps.put(try a.dupe(u8, m_entry.key_ptr.*), nm);
         }
     }
 
@@ -686,7 +688,7 @@ pub fn evalBatch(a: std.mem.Allocator, request: std.json.Value) !BatchResult {
         const ctx = expr_mod.Context{
             .fields = fields.items,
             .col_index = &col_index,
-            .ticker_map = &ticker_map,
+            .maps = &maps,
             .lookup_table = if (have_lookups) &lookups else null,
             .single_prepass_name = single_prepass_name,
             .alloc = a,
@@ -913,7 +915,7 @@ pub fn templateIo(a: std.mem.Allocator, config_text: []const u8, id: []const u8)
 // Phase letters in test names correspond to validation passes added
 // incrementally during the audit:
 //   A  — basic structure (comments preserved, missing conversion_templates)
-//   B  — per-template hard errors (xlsx_sheet, ticker_map, output_schema)
+//   B  — per-template hard errors (xlsx_sheet, maps, output_schema)
 //   C  — duplicate key detection
 //   D  — wrong-type silent warnings (bool/enum fall-throughs)
 //   E  — cross-template pattern collision
@@ -1078,12 +1080,15 @@ test "annotateRaw Phase B: xlsx_sheet missing 'name' attaches \\$err_ at xlsx_sh
     try testing.expect(has_err);
 }
 
-test "annotateRaw Phase B: ticker_map unknown named ref attaches at ticker_map path" {
+test "annotateRaw: REMAP referencing an undefined map name is flagged" {
     const testing = std.testing;
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
 
+    // No `maps` block defines `missing_named_map`, so the validate-mode
+    // whitelist (Context.map_names) flags the REMAP reference — mirroring how
+    // a LOOKUP to an undefined pre_pass block is flagged.
     const fixture =
         \\{
         \\  conversion_templates: {
@@ -1091,9 +1096,8 @@ test "annotateRaw Phase B: ticker_map unknown named ref attaches at ticker_map p
         \\      data_dir: ".",
         \\      file_pattern_in: ".csv",
         \\      file_pattern_out: ".csvx",
-        \\      ticker_map: "missing_named_map",
-        \\      input_schema: { $date: "[Date]" },
-        \\      output_schema: { date: "$date" },
+        \\      input_schema: { $sym: "REMAP([Sym], 'missing_named_map')" },
+        \\      output_schema: { symbol: "$sym" },
         \\    }
         \\  }
         \\}
@@ -1101,26 +1105,34 @@ test "annotateRaw Phase B: ticker_map unknown named ref attaches at ticker_map p
 
     const result = try annotateRaw(a, fixture, "<inline>", 0);
     try testing.expectEqual(@as(u8, 1), result.exit_code);
+    // End-to-end: the diagnostic surfaces with the friendly "unknown named map"
+    // wording set by expr.resolveNamedMap.
+    try testing.expect(std.mem.indexOf(u8, result.json, "unknown named map") != null);
+}
 
-    var parsed = try std.json.parseFromSliceLeaky(std.json.Value, a, result.json, .{});
-    const ct = parsed.object.get("conversion_templates") orelse return error.MissingCT;
-    const sample = ct.object.get("sample") orelse return error.MissingSample;
+test "annotateRaw: REMAP against a defined map loads clean" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
 
-    // For an "unknown named ref" the value is a string, so the
-    // diagnostic attaches to the parent (sample) immediately before the
-    // `ticker_map` field — same placement contract as
-    // `injectSemanticErrors`.
-    var has_err = false;
-    var it = sample.object.iterator();
-    while (it.next()) |kv| {
-        if (std.mem.startsWith(u8, kv.key_ptr.*, "$err_") and
-            diagHas(kv.value_ptr, "unknown named map"))
-        {
-            has_err = true;
-            break;
-        }
-    }
-    try testing.expect(has_err);
+    const fixture =
+        \\{
+        \\  maps: { syms: { "VOW.DE": "VOW.DE.XETRA" } },
+        \\  conversion_templates: {
+        \\    sample: {
+        \\      data_dir: ".",
+        \\      file_pattern_in: ".csv",
+        \\      file_pattern_out: ".csvx",
+        \\      input_schema: { $sym: "REMAP([Sym], 'syms')" },
+        \\      output_schema: { symbol: "$sym" },
+        \\    }
+        \\  }
+        \\}
+    ;
+
+    const result = try annotateRaw(a, fixture, "<inline>", 0);
+    try testing.expectEqual(@as(u8, 0), result.exit_code);
 }
 
 test "annotateRaw Phase C: duplicate top-level key surfaces \\$err_ with key name" {

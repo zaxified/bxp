@@ -22,7 +22,7 @@
         // convert only the one that needs it, so both land as YYYY-MM-DD.
         $date: "IF(LEN([Date]) > 0, [Date], DATE_CONVERT([trade_date], 'DD.MM.YYYY', 'YYYY-MM-DD'))",
 
-        // TICKER — just a rename across vintages; COALESCE takes the non-empty one.
+        // $ticker — just a rename across vintages; COALESCE takes the non-empty one.
         $ticker: "COALESCE([Ticker], [symbol])",
 
         // AMOUNT — legacy is plain (1000.50); current is EU '1 250,50'. Pick by

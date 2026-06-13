@@ -2,10 +2,10 @@
   // Teaching example (advanced) — synthetic data. One messy brokerage/ERP
   // transaction export that needs SIX cleanups at once, each shown on its own
   // in the basic/intermediate tier, here combined into a single realistic
-  // pipeline: US date → ISO, transaction-code → label (ticker_map), accounting
+  // pipeline: US date → ISO, transaction-code → label (REMAP), accounting
   // negatives → signed, currency-symbol price → value + currency, percent/bps
   // fee → fraction, and null-variant notes → empty.
-  ticker_maps: {
+  maps: {
     // Transaction-code → human label.
     txn_type_label: {
       "BUY":  "purchase",
@@ -21,14 +21,13 @@
       file_pattern_out:   ".csvx",
       csv_text_quote_in:  "double",
       csv_text_quote_out: "double",
-      ticker_map:         "txn_type_label",
 
       input_schema: {
         // 1 — US MM/DD/YYYY → ISO-8601.
         $date:     "DATE_CONVERT([TradeDate], 'MM/DD/YYYY', 'YYYY-MM-DD')",
 
-        // 2 — transaction code → label via ticker_map.
-        $type:     "TICKER([Type])",
+        // 2 — transaction code → label via REMAP over a maps table.
+        $type:     "REMAP([Type], 'txn_type_label')",
 
         $security: "[Security]",
 

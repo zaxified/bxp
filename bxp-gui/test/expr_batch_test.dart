@@ -39,9 +39,11 @@ void main() {
     final results = await BxpProcessClient.evalBatch(
       headers: const ['Ticker', 'Qty', 'Price'],
       fields: const ['AGNC', '2', '100.50'],
-      tickerMap: const {'AGNC': 'AGNC.NASDAQ'},
+      maps: const {
+        'syms': {'AGNC': 'AGNC.NASDAQ'}
+      },
       exprs: const [
-        'TICKER([Ticker])',
+        "REMAP([Ticker], 'syms')",
         '[Qty]',
         '[Qty] * [Price]',
         '[NoSuchCol]', // missing column → "" per expr.zig semantics

@@ -491,6 +491,7 @@ class _ExprEditorState extends State<ExprEditor> {
           break;
         case 'literal_string':
         case 'date_format':
+        case 'map_name':
           parts.add("'<$argName>'");
           break;
         default:
@@ -517,6 +518,8 @@ class _ExprEditorState extends State<ExprEditor> {
         return 'date format';
       case 'pre_pass_name':
         return 'pre_pass name';
+      case 'map_name':
+        return 'map name';
       case 'number':
         return 'number';
       case 'finite_number':

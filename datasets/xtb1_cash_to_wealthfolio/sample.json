@@ -1,5 +1,5 @@
 {
-  ticker_maps: {
+  maps: {
     xtb: {
       "ASML.NL":   "ASML.AS",
       "BNTX.US":   "BNTX",
@@ -38,10 +38,9 @@
       csv_text_quote_in:   "none",
       csv_text_quote_out:  "double",
       date_filter_from_filename: false,
-      ticker_map:          "xtb",
       input_schema: {
         $date:            "[Time]",
-        $ticker:          "IF([Symbol] != '', TICKER([Symbol]), '$CASH-CZK')",
+        $ticker:          "IF([Symbol] != '', REMAP([Symbol], 'xtb'), '$CASH-CZK')",
         $quantity:        "'1'",
         $unitprice:       "ABS([Amount])",
         $currency:        "'CZK'",
@@ -108,7 +107,7 @@
           rows: [
             {
               $action:     "'BUY'",
-              $ticker:     "TICKER([Symbol])",
+              $ticker:     "REMAP([Symbol], 'xtb')",
               $quantity:   "SPLIT_PART(SPLIT_PART([Comment], ' ', 3), '/', 1)",
               $unitprice:  "ABS([Amount]) / SPLIT_PART(SPLIT_PART([Comment], ' ', 3), '/', 1)",
               $comment:    "''' & [ID] & '_' & [Time] & '_' & [Comment] & '''"

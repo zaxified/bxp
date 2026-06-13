@@ -23,7 +23,7 @@ no glue script orchestrating per-column cleanups.
 **The idioms combined** (each has its own example — see links):
 
 1. `DATE_CONVERT([TradeDate], 'MM/DD/YYYY', 'YYYY-MM-DD')`
-2. transaction code → label via a `ticker_map` (`BUY` → `purchase`)
+2. transaction code → label via `REMAP` over a named map (`BUY` → `purchase`)
 3. accounting negatives → signed — see
    [intermediate/accounting-negatives](../../intermediate/accounting-negatives/00-readme.md)
 4. price + currency split — see

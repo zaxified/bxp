@@ -2611,7 +2611,7 @@ class TraceStore extends ChangeNotifier {
   }
 
   /// Per-file runtime state for btrace-backed runs. Holds the template's
-  /// input_schema / ticker_map / rule_when + override rows / output_schema /
+  /// input_schema / maps / rule_when + override rows / output_schema /
   /// pre_pass lookups that [ensureDetailLoaded] needs to reconstruct per-row
   /// drill-down. Source-row bytes are NOT held here — they're read on demand
   /// through the active file's [RandomAccessFile] in [_activateFile], so
@@ -3481,7 +3481,7 @@ class TraceStore extends ChangeNotifier {
       _btraceRuntimes[file.id] = _BtraceFileRuntime(
         sourceFetcher: null,
         inputSchema: ctx.inputSchema,
-        tickerMap: ctx.tickerMap,
+        maps: ctx.maps,
         ruleWhens: ctx.ruleWhens,
         ruleRows: ctx.ruleRows,
         outputSchema: ctx.outputSchema,
@@ -3732,7 +3732,7 @@ class TraceStore extends ChangeNotifier {
         headers: file.headers,
         fields: row.fields,
         exprs: exprs,
-        tickerMap: runtime.tickerMap.isNotEmpty ? runtime.tickerMap : null,
+        maps: runtime.maps.isNotEmpty ? runtime.maps : null,
         lookups: runtime.lookups.isNotEmpty ? runtime.lookups : null,
         singlePrepassName: runtime.singlePrepassName,
       );
@@ -3763,7 +3763,7 @@ class TraceStore extends ChangeNotifier {
         headers: file.headers,
         fields: row.fields,
         exprs: runtime.ruleWhens,
-        tickerMap: runtime.tickerMap.isNotEmpty ? runtime.tickerMap : null,
+        maps: runtime.maps.isNotEmpty ? runtime.maps : null,
         lookups: runtime.lookups.isNotEmpty ? runtime.lookups : null,
         singlePrepassName: runtime.singlePrepassName,
       );
@@ -3809,7 +3809,7 @@ class TraceStore extends ChangeNotifier {
           headers: file.headers,
           fields: row.fields,
           exprs: exprs,
-          tickerMap: runtime.tickerMap.isNotEmpty ? runtime.tickerMap : null,
+          maps: runtime.maps.isNotEmpty ? runtime.maps : null,
           lookups: runtime.lookups.isNotEmpty ? runtime.lookups : null,
           // Row_rules override exprs reach LOOKUP just like input_schema /
           // rule-when exprs do; without the single pre_pass name a 2-arg
@@ -3955,7 +3955,10 @@ class _BtraceIngestCtx {
   // multi-file templates from re-spawning per file.
   String? currentTemplate;
   Map<String, String> inputSchema = const {};
-  Map<String, String> tickerMap = const {};
+  // Template-local named maps ({ map_name: { key: value } }) for REMAP/REPLACE
+  // drill-down resolution. The global top-level `maps` registry is not fetched
+  // here (named refs into it were never resolved in drill-down either).
+  Map<String, Map<String, String>> maps = const {};
   List<String> ruleWhens = const [];
   List<List<Map<String, String>>> ruleRows = const [];
   List<({String header, String variable})> outputSchema = const [];
@@ -4021,7 +4024,7 @@ class _BtraceIngestCtx {
     currentTemplate = templateId;
     final tpl = await BxpProcessClient.fetchTemplate(configPath, templateId);
     inputSchema = const {};
-    tickerMap = const {};
+    maps = const {};
     ruleWhens = const [];
     ruleRows = const [];
     outputSchema = const [];
@@ -4033,11 +4036,15 @@ class _BtraceIngestCtx {
           e.key.toString(): e.value?.toString() ?? '',
       };
     }
-    final tm = tpl['ticker_map'];
-    if (tm is Map) {
-      tickerMap = <String, String>{
-        for (final e in tm.entries)
-          e.key.toString(): e.value?.toString() ?? '',
+    final mv = tpl['maps'];
+    if (mv is Map) {
+      maps = <String, Map<String, String>>{
+        for (final e in mv.entries)
+          if (e.value is Map)
+            e.key.toString(): <String, String>{
+              for (final kv in (e.value as Map).entries)
+                kv.key.toString(): kv.value?.toString() ?? '',
+            },
       };
     }
     final rr = tpl['row_rules'];
@@ -4093,7 +4100,7 @@ class _BtraceIngestCtx {
       // per-file persistent CsvRowFetcher.
       sourceFetcher: null,
       inputSchema: inputSchema,
-      tickerMap: tickerMap,
+      maps: maps,
       ruleWhens: ruleWhens,
       ruleRows: ruleRows,
       outputSchema: outputSchema,
@@ -4114,8 +4121,9 @@ class _BtraceFileRuntime {
   /// `input_schema`. Iterated in declaration order so the per-row vars
   /// table renders predictably.
   final Map<String, String> inputSchema;
-  /// Broker ticker map for `TICKER()` resolution during drill-down eval.
-  final Map<String, String> tickerMap;
+  /// Template-local named maps ({ map_name: { key: value } }) for REMAP /
+  /// REPLACE `'name'` resolution during drill-down eval.
+  final Map<String, Map<String, String>> maps;
   /// Rule `when` expressions in declaration order. Drill-down walks these
   /// to find the first match (matches bxp-cli first-match-wins semantics).
   final List<String> ruleWhens;
@@ -4140,7 +4148,7 @@ class _BtraceFileRuntime {
   _BtraceFileRuntime({
     required this.sourceFetcher,
     required this.inputSchema,
-    required this.tickerMap,
+    required this.maps,
     required this.ruleWhens,
     required this.ruleRows,
     required this.outputSchema,

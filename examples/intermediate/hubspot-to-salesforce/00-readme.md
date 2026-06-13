@@ -22,8 +22,8 @@ documented; the rows are not.
 
 **The tricks** (see inline comments in `sample.json`):
 
-1. **Long picklist** (Industry) → `TICKER()` + `ticker_map` repurposed as
-   string lookup table.
+1. **Long picklist** (Industry) → `REMAP()` over a named map — a reusable
+   whole-value string lookup table.
 2. **Short picklists** (Status, LeadSource) → `IF` chain with `TRIM` at the
    leaf to absorb trailing whitespace.
 3. **Required-but-empty field** (Company) → `COALESCE(..., '<missing>')`
@@ -38,8 +38,8 @@ bxp-cli --config ./sample.json --template hubspot_to_sfdc_lead
 ```
 
 **Smoking gun.** Open `sample.csv` row 7 (Lisa Brown / Cyberdyne) in the GUI.
-Industry value `"Foo Bar Industry"` is not in the lookup map — `TICKER()`
+Industry value `"Foo Bar Industry"` is not in the lookup map — `REMAP()`
 passes it through unchanged. CLI says `errors:0`, but Salesforce would reject
 the row. Click the Industry cell: the trace pane shows
-`TICKER("Foo Bar Industry") → "Foo Bar Industry"` — input equals output, the
+`REMAP("Foo Bar Industry") → "Foo Bar Industry"` — input equals output, the
 smoking gun. Add the missing key and watch the cell go green live.

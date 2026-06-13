@@ -408,7 +408,7 @@ Built-ins map onto recognisable SQL/Excel functions wherever possible:
 `TRIM`, `ROUND`, `FLOOR`/`CEILING`, `REPLACE`, `SPLIT_PART` (PostgreSQL),
 `STARTS_WITH`/`ENDS_WITH` (PostgreSQL `starts_with`/`ends_with`),
 `CONTAINS` (SQL Server), `LOOKUP` (Excel). Domain extensions (`DATE_CONVERT`,
-`PRICE_VALUE`, `PRICE_CURRENCY`, `TICKER`) follow the same `UPPER_CASE`
+`PRICE_VALUE`, `PRICE_CURRENCY`, `REMAP`) follow the same `UPPER_CASE`
 shape.
 
 The target persona is an Excel-comfortable analyst (broker statement
@@ -487,8 +487,8 @@ graph TD
     IF, ABS, COALESCE,
     DATE_CONVERT, NOW, RAND,
     PRICE_VALUE, PRICE_CURRENCY,
-    TICKER, LOOKUP,
-    SPLIT_PART, CONTAINS, REPLACE,
+    REMAP, REPLACE, LOOKUP,
+    SPLIT_PART, CONTAINS,
     TRIM, ROUND, FLOOR, CEILING,
     FIELDS"]
     FUNC --> DATEFMT_CALL["datefmt.zig
@@ -497,14 +497,15 @@ graph TD
     FIELD -->|reads| CTX_FIELDS["Context.fields
     Context.col_index"]
     FUNC -.LOOKUP.-> CTX_LT["Context.lookup_table"]
-    FUNC -.TICKER.-> CTX_TM["Context.ticker_map"]
+    FUNC -."REMAP/REPLACE".-> CTX_TM["Context.maps"]
 ```
 
 Side context dependencies (dotted lines): `[ColumnName]` references (and
 `FIELDS(n)` positional access) read `Context.fields` via `Context.col_index`; `LOOKUP(...)` reads
-`Context.lookup_table` populated by the pre-pass; `TICKER(...)` reads
-`Context.ticker_map` (resolved at config-load time from inline objects or the
-top-level `ticker_maps` registry).
+`Context.lookup_table` populated by the pre-pass; `REMAP(...)` (whole-value) and
+`REPLACE(..., 'name')` (substring) read `Context.maps` — the named-map registry
+resolved at config-load time from the top-level `maps` registry merged with each
+template's local `maps` block.
 
 ### Static analysis path (parallel to runtime eval)
 
@@ -1064,7 +1065,6 @@ Notes:
 classDiagram
     class Config {
         +brokers: StringArrayHashMap~BrokerConfig~
-        +ticker_maps: StringHashMap~TickerMap~
         +deinit()
     }
 
@@ -1074,7 +1074,7 @@ classDiagram
         +file_pattern_out: ?string
         +date_filter_from_filename: bool
         +combined_output: bool
-        +ticker_map: TickerMap
+        +maps: MapRegistry
         +xlsx_sheet: ?XlsxSheet
         +pre_passes: StringArrayHashMap~PrePass~
         +input_schema: StringArrayHashMap~string~
@@ -1124,15 +1124,19 @@ classDiagram
     class Context {
         +fields: [][]const u8
         +col_index: StringHashMap~usize~
-        +ticker_map: StringHashMap~string~
+        +maps: ?*MapRegistry
         +lookup_table: ?*LookupTable
         +alloc: Allocator
         +decimal_sep_in: u8
         +quote_out: u8
     }
 
-    class TickerMap {
-        +entries: StringHashMap~string~
+    class MapRegistry {
+        +maps: StringHashMap~NamedMap~
+    }
+
+    class NamedMap {
+        +entries: StringArrayHashMap~string~
     }
 
     class LookupTable {
@@ -1154,14 +1158,14 @@ classDiagram
     }
 
     Config "1" *-- "many" BrokerConfig
-    Config "1" *-- "many" TickerMap
     BrokerConfig "1" *-- "0..*" PrePass
     BrokerConfig "1" *-- "many" RowRule
     BrokerConfig "1" *-- "0..1" XlsxSheet
-    BrokerConfig --> TickerMap : ticker_map ref
+    BrokerConfig "1" *-- "1" MapRegistry
+    MapRegistry "1" *-- "many" NamedMap
     Context --> Value : eval returns
     Context --> LookupTable : Context.lookup_table
-    Context --> TickerMap : Context.ticker_map
+    Context --> MapRegistry : Context.maps
     XlsxSheet ..> SheetSpec : runtime form\nfor xlsx.zig
     Diagnostics "1" *-- "many" Diagnostic
 ```
@@ -1174,7 +1178,9 @@ completes; errors push it to 1.
 loop. The composite key encoding keeps multi-namespace `pre_passes` sharing
 one storage map without needing nested structures.
 
-`TickerMap` can be inline (per-template `ticker_map: { ... }`) or a named
-reference into the top-level `ticker_maps: { name: { ... } }` registry —
-config loader resolves the reference at load time, so by the time `Context`
-gets it, it's always a flat `StringHashMap`.
+`MapRegistry` is each template's resolved named-map view: the top-level
+`maps: { name: { ... } }` registry merged with the template's own `maps` block
+(template-local wins on a name collision), built once at config-load time. Each
+`NamedMap` preserves JSON key order (`StringArrayHashMap`) so `REPLACE` applies a
+map's pairs in declaration order; `REMAP` uses the same map for O(1) whole-value
+lookup. `REMAP(s, 'name')` / `REPLACE(s, 'name')` resolve the name against it.

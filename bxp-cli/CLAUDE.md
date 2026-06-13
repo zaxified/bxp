@@ -69,8 +69,10 @@ All broker logic is defined in `bxp-cli.json` — there are no compiled-in broke
 
 ### Top-level fields
 
-- `ticker_maps` — optional map of named, reusable ticker maps. Each entry is a map name → object
-  (same structure as an inline `ticker_map`). Templates reference them by name via `"ticker_map": "name"`.
+- `maps` — optional registry of named, reusable `key→value` tables. Each entry is a map name →
+  object `{ key: value }`. Referenced from expressions by name via `REMAP(s, 'name')` (whole-value
+  lookup) / `REPLACE(s, 'name')` (substring). A template may also define its own `maps` block that
+  overrides a same-named global entry. Key order is preserved (REPLACE applies pairs in order).
 - `conversion_templates` — map of template ID → template config. At least one required.
 - `data_dir` paths are relative to the `bxp-cli.json` location (i.e. `../data/...` for shared `data/` directory).
 
@@ -82,7 +84,7 @@ All broker logic is defined in `bxp-cli.json` — there are no compiled-in broke
   "file_pattern_in": ".csv",
   "file_pattern_out": ".csvx",
   "date_filter_from_filename": false,
-  "ticker_map": {},
+  "maps": {},
   "zip_input": {},
   "xlsx_sheet": {},
   "pre_pass": {},
@@ -107,8 +109,9 @@ All broker logic is defined in `bxp-cli.json` — there are no compiled-in broke
   `$date` MUST evaluate to ISO `YYYY-MM-DD` (or longer ISO prefix like `YYYY-MM-DDTHH:MM:SS`).
   Non-ISO formats (`DD.MM.YYYY`, `MM/DD/YYYY`, …) will mis-filter silently — use
   `DATE_CONVERT` in `input_schema` to normalise first.
-- `ticker_map` — optional symbol remapping. Either an inline object `{ "BTC": "BTC-USD" }` or a
-  string name referencing an entry in the top-level `ticker_maps` section (e.g. `"xtb"`).
+- `maps` — optional template-local named maps `{ map_name: { key: value } }`, merged over the
+  top-level `maps` registry (this template's entry wins on a name collision). Referenced from
+  expressions via `REMAP`/`REPLACE`'s `'name'` argument.
 - `zip_input` — optional object `{ "entry_pattern", "dir_mode", "path_separator" }`.
   When present, every `*.zip` in `data_dir` is unpacked into flat intermediate CSV files
   **before** the xlsx and main passes (so the chain is zip → (xlsx) → csv → csvx), e.g. a
@@ -203,7 +206,7 @@ maps output column headers to `$variable` names, controlling column set and orde
 ```json
 "<broker>_to_<tracker>": {
   "data_dir": "../data/<broker>_to_<tracker>",
-  "ticker_map": {},
+  "maps": {},
   "input_schema": {
     "$date":      "<date expression>",
     "$ticker":    "<ticker expression>",
@@ -256,7 +259,7 @@ Expressions are evaluated per row. Operator precedence (high → low):
 | `DATE_CONVERT(f, from, to)`                             | Reformat date/time; format tokens use datefmt syntax (see section below)                                                                                                                                        |
 | `PRICE_VALUE(f)`                                        | Strip currency symbol/code, return numeric string (`"24.00 CZK"` → `"24.00"`)                                                                                                                                   |
 | `PRICE_CURRENCY(f)`                                     | Extract currency code (`"24.00 CZK"` → `"CZK"`, `"$100"` → `"USD"`)                                                                                                                                             |
-| `TICKER(f)`                                             | Map field through broker's `ticker_map`; returns as-is if not found                                                                                                                                             |
+| `REMAP(s, 'name' \| k, v, ...)`                         | Whole-value lookup: if `s` exactly equals a map key, return its value, else `s` unchanged. Named form resolves a `maps` entry; inline form `REMAP(s, k1,v1, ...)` gives pairs directly. Whole-value sibling of `REPLACE` (symbol/code/enum remap) |
 | `LOOKUP(key, 'field')` / `LOOKUP('name', key, 'field')` | Retrieve value from `pre_pass` table — 2-arg form for legacy single block, 3-arg form for named blocks                                                                                                          |
 | `SPLIT_PART(f, delim, n)`                               | Split `f` by `delim`, return nth part (1-based); `""` if fewer than n parts                                                                                                                                     |
 | `CONTAINS(f, sub)`                                      | `true` when `sub` is found inside `f`                                                                                                                                                                           |
@@ -275,7 +278,7 @@ Expressions are evaluated per row. Operator precedence (high → low):
 | `ISEMPTY(x)`                                            | `true` when `x` is empty or whitespace-only — the safe emptiness test (`x = ''` wrongly matches `'0'`)                                                                                                          |
 | `UPPER(f)` / `LOWER(f)`                                 | Full-Unicode case conversion (`café`→`CAFÉ`, `ß`→`SS`, `я`→`Я`); unicameral scripts (CJK/Arabic/Hebrew) and invalid UTF-8 bytes pass through unchanged                                                            |
 | `UNACCENT(f)`                                           | Strip Latin diacritics (`café`→`cafe`, `ÀÉ`→`AE`, `ß`→`ss`, `ø`→`o`); Latin-scope like Postgres — non-Latin keeps its base script (`Ά`→`Α`), CJK/Arabic pass through, ligatures not folded                       |
-| `REPLACE(f, old, new)`                                  | Replace all occurrences of `old` with `new` in `f`; returns `f` unchanged if `old` is empty                                                                                                                     |
+| `REPLACE(f, old, new, ...)`                             | Replace all occurrences of `old` with `new` in `f` (substring match, multi-byte UTF-8 safe). Variadic `REPLACE(f, o1, n1, o2, n2, ...)` applies the pairs in one left-to-right pass (first match per position wins; output not re-scanned) — one allocation instead of nesting. Empty `old` matches nothing                       |
 | `TRIM(f)`                                               | Strip leading and trailing whitespace (space, tab, CR, LF)                                                                                                                                                      |
 | `ROUND(f, n)`                                           | Round `f` to `n` decimal places, half away from zero — Excel-style (`n` may be negative for tens/hundreds; `n>=12` is a no-op)                                                                                  |
 | `FLOOR(f)`                                              | Largest integer ≤ `f`                                                                                                                                                                                           |

@@ -23,13 +23,15 @@
    * "Locale-aware number parsing" section.
    */
   /*
-   * ticker_maps — optional; named, reusable symbol remapping tables.
-   * Each entry: map_name → { broker_symbol: yahoo_symbol, ... }
-   * Templates reference a map by name: ticker_map: anycoin
-   * Or define an inline map: ticker_map: { "BTC": "BTC-EUR" }
-   * Symbols not found in the map are passed through unchanged.
+   * maps — optional; named, reusable key→value tables.
+   * Each entry: map_name → { key: value, ... }
+   * Reference a map by name from an expression:
+   *   REMAP([Symbol], 'anycoin')          — whole-value lookup (symbol remap)
+   *   REPLACE([Amount], 'thousands')      — substring replacement
+   * A template may also define its own `maps: { ... }` block; a same-named
+   * entry there overrides the global one. Keys not found pass through unchanged.
    */
-  ticker_maps: {
+  maps: {
     anycoin: {
       BTC:  "BTC-EUR"
     },
@@ -144,9 +146,6 @@
       // encoded in the filename (YYYY-MM-DD_YYYY-MM-DD) are silently skipped.
       // Requires $date in input_schema.
       date_filter_from_filename: true,
-      // optional; ticker remapping — string = name from ticker_maps, object = inline map
-      // e.g. "anycoin", "xtb", { "BTC": "BTC-EUR" }, {}
-      ticker_map:          "anycoin",
       /*
        * pre_pass — optional; first-pass lookup table built before the main loop.
        * Iterates all rows, collects those matching `when`, stores `values` keyed by `key`.
@@ -165,7 +164,7 @@
        * input_schema — required; $variable → expression evaluated per row.
        * [Column Name] = field from CSV header   [n] = field by 1-based index
        * Available functions: IF, ABS, DATE_CONVERT, PRICE_VALUE, PRICE_CURRENCY,
-       *   TICKER, LOOKUP, SPLIT_PART, CONTAINS, REPLACE, ROUND, FLOOR, CEILING,
+       *   REMAP, LOOKUP, SPLIT_PART, CONTAINS, REPLACE, ROUND, FLOOR, CEILING,
        *   TRIM, NOW, RAND
        * Empty string "" = variable is empty (omit from output or use as blank)
        */
@@ -173,7 +172,7 @@
         // ISO datetime with timezone suffix → Wealthfolio format
         $date:            "DATE_CONVERT([Date], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')",
         // deposit → cash placeholder symbol; trade fill → mapped ticker
-        $ticker:          "IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))",
+        $ticker:          "IF([Type] = 'deposit', '$CASH-' & [Currency], REMAP([Currency], 'anycoin'))",
         $quantity:        "IF([Type] = 'deposit', 1, [Amount])",
         $unitprice:       "IF([Type] = 'deposit', [Amount], ROUND(LOOKUP([Order ID], 'amount') / [Amount], 8))",
         $currency:        "IF([Type] = 'deposit', [Currency], LOOKUP([Order ID], 'currency'))",
@@ -270,12 +269,11 @@
       csv_text_quote_in:   "double",  // Revolut wraps fields in double quotes
       csv_text_quote_out:  "none",
       date_filter_from_filename: true,
-      ticker_map:          "revolutx",
       input_schema: {
         // Revolut date: "26 Jun 2022, 16:02:36"
         $date:            "DATE_CONVERT([Date], 'D MMM YYYY, hh:mm:ss', 'YYYY-MM-DD hh:mm:ss')",
         // 'Other' type = cash movement → cash placeholder; otherwise map symbol
-        $ticker:          "IF([Type] = 'Other', '$CASH-' & PRICE_CURRENCY([Value]), TICKER([Symbol]))",
+        $ticker:          "IF([Type] = 'Other', '$CASH-' & PRICE_CURRENCY([Value]), REMAP([Symbol], 'revolutx'))",
         $quantity:        "IF([Type] = 'Other', 1, [Quantity])",
         // PRICE_VALUE strips currency symbol/code from values like "24.00 CZK" or "$100"
         $unitprice:       "IF([Type] = 'Other', PRICE_VALUE([Value]), PRICE_VALUE([Price]))",
@@ -371,7 +369,6 @@
       csv_text_quote_in:   "double",
       csv_text_quote_out:  "none",
       date_filter_from_filename: false,  // T212 export already scoped to date range
-      ticker_map:          "trading212",
       // pair "Stock split open" rows so "Stock split close" can compute split ratio = open.shares / close.shares
       pre_pass: {
         when:  "[Action] = 'Stock split open'",
@@ -383,7 +380,7 @@
       input_schema: {
         $date:            "[Time]",              // T212 already emits ISO datetime
         // stock row: map ticker; cash row (no ticker): cash placeholder
-        $ticker:          "IF([Ticker] != '', TICKER([Ticker]), '$CASH-' & [Currency (Total)])",
+        $ticker:          "IF([Ticker] != '', REMAP([Ticker], 'trading212'), '$CASH-' & [Currency (Total)])",
         $isin:            "",                    // optional ISIN output column
         $quantity:        "IF([Ticker] != '', [No. of shares], 1)",
         // net price = total minus conversion fee and stamp duty, divided by share count
@@ -611,10 +608,9 @@
       csv_text_quote_in:   "none",
       csv_text_quote_out:  "double",       // wrap output fields in double quotes
       date_filter_from_filename: false,
-      ticker_map:          "xtb",
       input_schema: {
         $date:            "[Close time]",
-        $ticker:          "TICKER([Symbol])",
+        $ticker:          "REMAP([Symbol], 'xtb')",
         $quantity:        "[Volume]",
         // sale value divided by volume = per-share price
         $unitprice:       "ROUND([Sale value] / [Volume], 8)",
@@ -684,11 +680,10 @@
       csv_text_quote_in:   "none",
       csv_text_quote_out:  "double",
       date_filter_from_filename: false,
-      ticker_map:          "xtb",
       input_schema: {
         $date:            "[Time]",
         // cash rows without symbol → cash placeholder; stock rows → mapped ticker
-        $ticker:          "IF([Symbol] != '', TICKER([Symbol]), '$CASH-CZK')",
+        $ticker:          "IF([Symbol] != '', REMAP([Symbol], 'xtb'), '$CASH-CZK')",
         $quantity:        "'1'",  // cash operations have no share quantity
         $unitprice:       "ABS([Amount])",
         $currency:        "'CZK'",
@@ -758,7 +753,7 @@
           rows: [
             {
               $action:     "'BUY'",
-              $ticker:     "TICKER([Symbol])",
+              $ticker:     "REMAP([Symbol], 'xtb')",
               $quantity:   "SPLIT_PART(SPLIT_PART([Comment], ' ', 3), '/', 1)",
               $unitprice:  "ROUND(ABS([Amount]) / SPLIT_PART(SPLIT_PART([Comment], ' ', 3), '/', 1), 8)",
               $comment:    "''' & [ID] & '_' & [Time] & '_' & [Comment] & '''"
@@ -817,10 +812,9 @@
       csv_text_quote_in:   "none",
       csv_text_quote_out:  "double",
       date_filter_from_filename: false,
-      ticker_map:          "xtb",
       input_schema: {
         $date:            "[Close Time (UTC)]",  // new format uses UTC timestamps
-        $ticker:          "TICKER([Ticker])",    // new format uses "Ticker" column (was "Symbol")
+        $ticker:          "REMAP([Ticker], 'xtb')",    // new format uses "Ticker" column (was "Symbol")
         $quantity:        "[Volume]",
         $unitprice:       "ROUND([Sale Value] / [Volume], 8)",
         $currency:        "'CZK'",
@@ -886,10 +880,9 @@
       csv_text_quote_in:   "none",
       csv_text_quote_out:  "double",
       date_filter_from_filename: false,
-      ticker_map:          "xtb",
       input_schema: {
         $date:            "[Time]",
-        $ticker:          "IF([Ticker] != '', TICKER([Ticker]), '$CASH-CZK')",
+        $ticker:          "IF([Ticker] != '', REMAP([Ticker], 'xtb'), '$CASH-CZK')",
         $quantity:        "'1'",
         $unitprice:       "ABS([Amount])",
         $currency:        "'CZK'",
@@ -957,7 +950,7 @@
           rows: [
             {
               $action:     "'BUY'",
-              $ticker:     "TICKER([Ticker])",
+              $ticker:     "REMAP([Ticker], 'xtb')",
               $quantity:   "SPLIT_PART(SPLIT_PART([Comment], ' ', 3), '/', 1)",
               $unitprice:  "ROUND(ABS([Amount]) / SPLIT_PART(SPLIT_PART([Comment], ' ', 3), '/', 1), 8)",
               $comment:    "''' & [ID] & '_' & [Time] & '_' & [Comment] & '''"
@@ -1036,7 +1029,6 @@
       csv_text_quote_out:  "none",
       date_filter_from_filename: true,
       combined_output:     true,
-      ticker_map:          "anycoin",
       pre_pass: {
         when:  "[Type] = 'trade payment'",
         key:   "[Order ID]",
@@ -1057,7 +1049,7 @@
           rows: [
             {
               $type:      "'BUY'",
-              $ticker:    "TICKER([Currency])",
+              $ticker:    "REMAP([Currency], 'anycoin')",
               $quantity:  "[Amount]",
               $price:     "ROUND(LOOKUP([Order ID], 'amount') / [Amount], 8)",
               $currency:  "LOOKUP([Order ID], 'currency')"
@@ -1091,11 +1083,10 @@
       csv_text_quote_in:   "double",
       csv_text_quote_out:  "none",
       date_filter_from_filename: false,
-      ticker_map:          "revolutx",
       combined_output:     true,
       input_schema: {
         $date:      "DATE_CONVERT([Date], 'D MMM YYYY, hh:mm:ss', 'YYYY-MM-DD')",
-        $ticker:    "TICKER([Symbol])",
+        $ticker:    "REMAP([Symbol], 'revolutx')",
         $quantity:  "[Quantity]",
         $price:     "PRICE_VALUE([Price])",
         $currency:  "PRICE_CURRENCY([Value])",
@@ -1155,11 +1146,10 @@
       csv_text_quote_in:   "double",
       csv_text_quote_out:  "none",
       date_filter_from_filename: false,
-      ticker_map:          "t212_brychtapp",
       combined_output:     true,
       input_schema: {
         $date:      "DATE_CONVERT([Time], 'YYYY-MM-DD[ ]hh:mm:ss', 'YYYY-MM-DD')",
-        $ticker:    "TICKER([Ticker])",
+        $ticker:    "REMAP([Ticker], 't212_brychtapp')",
         $isin:      "[ISIN]",
         $quantity:  "[No. of shares]",
         $price:     "[Price / share]",
@@ -1237,7 +1227,6 @@
       csv_text_quote_out:  "double",
       date_filter_from_filename: false,
       combined_output:     true,
-      ticker_map:          "xtb",
       input_schema: {
         $date:      "DATE_CONVERT([Time], 'YYYY-MM-DD hh:mm:ss', 'YYYY-MM-DD')",
         $type:      "",
@@ -1256,7 +1245,7 @@
           rows: [
             {
               $type:      "'BUY'",
-              $ticker:    "TICKER([Ticker])",
+              $ticker:    "REMAP([Ticker], 'xtb')",
               $quantity:  "SPLIT_PART(SPLIT_PART([Comment], ' ', 3), '/', 1)",
               $price:     "SPLIT_PART([Comment], ' ', 5)"
             }
@@ -1296,7 +1285,6 @@
       csv_text_quote_out:  "double",
       date_filter_from_filename: false,
       combined_output:     true,
-      ticker_map:          "xtb",
       input_schema: {
         $date:      "DATE_CONVERT([Close Time (UTC)], 'YYYY-MM-DD hh:mm:ss', 'YYYY-MM-DD')",
         $type:      "",
@@ -1315,7 +1303,7 @@
           rows: [
             {
               $type:      "'SELL'",
-              $ticker:    "TICKER([Ticker])",
+              $ticker:    "REMAP([Ticker], 'xtb')",
               $quantity:  "[Volume]",
               $price:     "[Close Price]"
             }

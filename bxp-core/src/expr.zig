@@ -32,7 +32,7 @@
 ///   DATE_CONVERT(f, from, to) — reformat a date/time string; format tokens use datefmt syntax
 ///   PRICE_VALUE(f)            — strip currency symbol/code, return numeric string
 ///   PRICE_CURRENCY(f)         — extract currency code from a price string
-///   TICKER(f)                 — map field value through broker's ticker_map
+///   REMAP(s, 'name'|k,v,...)  — whole-value lookup through a `maps` entry / inline pairs
 ///   LOOKUP([name,] key, field) — retrieve a value stored by a pre_pass table
 const std = @import("std");
 const datefmt = @import("datefmt.zig");
@@ -104,13 +104,29 @@ pub const Value = union(enum) {
 // Context — per-row evaluation state passed to every expression
 // ---------------------------------------------------------------------------
 
+/// A single named map: ordered `key→value` pairs. `StringArrayHashMap`
+/// preserves insertion (JSON) order — `REPLACE` applies pairs first-match-wins
+/// in order — while still giving O(1) `get` for `REMAP`'s whole-value lookup.
+pub const NamedMap = std.StringArrayHashMap([]const u8);
+/// Registry of named maps (the `maps` config block; global + template-local
+/// already merged into one per-template view).
+pub const MapRegistry = std.StringHashMap(NamedMap);
+
 pub const Context = struct {
     /// Field values for the current CSV row, in column order.
     fields: []const []const u8,
     /// Maps CSV column header names to 0-based column indices.
     col_index: *const std.StringHashMap(usize),
-    /// Symbol remapping table from broker config (e.g. "BTC" → "BTC-USD").
-    ticker_map: *const std.StringHashMap([]const u8),
+    /// Named `key→value` maps (`maps` config block, global + template-local
+    /// merged) resolved by `REMAP` (whole-value) and `REPLACE` (substring).
+    /// Null in bare/stateless eval contexts.
+    maps: ?*const MapRegistry = null,
+    /// Validate-mode whitelist of map names. Set non-null (the
+    /// inspect.annotateRaw deep pass) so `REMAP`/`REPLACE` can flag a name
+    /// referencing an undefined map at parse time instead of silently passing
+    /// the value through. Runtime callers leave this null (silent passthrough
+    /// on miss is intentional there), mirroring `pre_pass_names`.
+    map_names: ?*const std.StringHashMap(void) = null,
     /// Lookup table populated by the pre_pass scan; keys are "name\x00key\x00field".
     /// Null when no pre_pass is configured, or during the pre_pass scan itself.
     lookup_table: ?*const std.StringHashMap([]const u8),
@@ -685,6 +701,7 @@ fn tryScanArg(
         .string,
         .literal_string,
         .pre_pass_name,
+        .map_name,
         .number,
         .finite_number,
         .integer_in_range,
@@ -1441,7 +1458,7 @@ const Parser = struct {
         for (doc.args, 0..) |a, i| {
             if (i >= args.len) break;
             switch (a.kind) {
-                .expr, .string, .literal_string, .date_format, .pre_pass_name => {},
+                .expr, .string, .literal_string, .date_format, .pre_pass_name, .map_name => {},
                 .number => _ = args[i].toNumber() catch {
                     switch (args[i]) {
                         .string => |s| self.setNotANumber(s),
@@ -1531,6 +1548,11 @@ pub const ArgKind = union(enum) {
     /// in bxp-gui (no static check today — runtime-resolved via
     /// Context.pre_pass_names; documented for catalog completeness).
     pre_pass_name,
+    /// Bare string literal naming a `maps` entry (REMAP/REPLACE named form).
+    /// Drives autocomplete; resolved at runtime via Context.maps, with the
+    /// validate-mode Context.map_names whitelist flagging unknown names —
+    /// mirrors `pre_pass_name`.
+    map_name,
     /// Must coerce to a number via `toNumber`; failure → NotANumber
     /// (loud, attributed to the failing arg).
     number,
@@ -1958,26 +1980,60 @@ fn adaptPriceCurrency(_: *Parser, args: []Value) anyerror!Value {
     return builtinPriceCurrency(args);
 }
 
-// ── TICKER ──────────────────────────────────────────────────────────────
-const ticker_doc: FnDoc = .{
-    .name = "TICKER",
-    .signature = "TICKER(f)",
-    .example = "TICKER('AAPL')",
-    .description = "Map field value through the template's `ticker_map` (per-template config block that translates broker-specific symbols to canonical tickers, e.g. \"VOW.DE\" → \"VOW.DE.XETRA\"). Returns value unchanged if not found.",
-    .args = &.{.{ .name = "f", .kind = .string }},
-    .min_args = 1,
-    .max_args = 1,
+// ── REMAP ───────────────────────────────────────────────────────────────
+const remap_doc: FnDoc = .{
+    .name = "REMAP",
+    .signature = "REMAP(s, 'name' | k, v, ...)",
+    .example = "REMAP('VOW.DE', 'VOW.DE', 'VOW.DE.XETRA')",
+    .description = "Whole-value lookup: if `s` exactly equals a map key, return that key's value, else return `s` unchanged. Named form REMAP(s, 'mapname') resolves a `maps` registry entry; inline form REMAP(s, k1,v1, k2,v2, ...) gives the pairs directly. The whole-value sibling of REPLACE (which matches substrings) — use it to remap broker symbols, codes or enum values.",
+    .args = &.{
+        .{ .name = "s", .kind = .string },
+        .{ .name = "name", .kind = .map_name },
+    },
+    .min_args = 2,
+    .max_args = 255,
 };
-/// TICKER(field) — look up in ticker_map, return as-is if not found.
-fn builtinTicker(args: []Value, ctx: *const Context) !Value {
+/// REMAP(s, 'name' | k,v,...) — whole-value map lookup, passthrough on miss.
+///   Named (2 args):  REMAP(s, 'mapname')  — resolve a `maps` registry entry.
+///   Inline (odd ≥3): REMAP(s, k1,v1, ...) — first key equal to `s` wins.
+/// Exact match of the entire `s` against a key (not substring — that is
+/// REPLACE). Returns `s` unchanged when nothing matches.
+fn builtinRemap(args: []Value, ctx: *const Context) !Value {
     const s = switch (args[0]) {
         .string => |v| v,
         else => return error.StringExpected,
     };
-    return Value{ .string = ctx.ticker_map.get(s) orelse s };
+
+    // Named form: REMAP(s, 'mapname').
+    if (args.len == 2) {
+        const name = switch (args[1]) {
+            .string => |v| v,
+            else => return error.StringExpected,
+        };
+        const map = (try resolveNamedMap(ctx, name)) orelse return Value{ .string = s };
+        return Value{ .string = map.get(s) orelse s };
+    }
+
+    // Inline pairs: REMAP(s, k1,v1, k2,v2, ...). String plus an even number of
+    // pair operands ⇒ the total arg count must be odd.
+    if (args.len % 2 == 0) return error.WrongArgCount;
+    var k: usize = 1;
+    while (k + 1 < args.len) : (k += 2) {
+        const key = switch (args[k]) {
+            .string => |v| v,
+            else => return error.StringExpected,
+        };
+        if (std.mem.eql(u8, s, key)) {
+            return switch (args[k + 1]) {
+                .string => |v| Value{ .string = v },
+                else => error.StringExpected,
+            };
+        }
+    }
+    return Value{ .string = s };
 }
-fn adaptTicker(p: *Parser, args: []Value) anyerror!Value {
-    return builtinTicker(args, p.ctx);
+fn adaptRemap(p: *Parser, args: []Value) anyerror!Value {
+    return builtinRemap(args, p.ctx);
 }
 
 // ── LOOKUP ──────────────────────────────────────────────────────────────
@@ -2140,36 +2196,133 @@ fn adaptContains(_: *Parser, args: []Value) anyerror!Value {
 // ── REPLACE ─────────────────────────────────────────────────────────────
 const replace_doc: FnDoc = .{
     .name = "REPLACE",
-    .signature = "REPLACE(s, from, to)",
-    .example = "REPLACE('A.B.C', '.', '-')",
-    .description = "Replace all occurrences of `from` in `s` with `to` (case-sensitive byte match). Returns `s` unchanged when `from` is empty.",
+    .signature = "REPLACE(s, 'name' | from, to, ...)",
+    .example = "REPLACE('1 234,56', ' ', '', ',', '.')",
+    .description = "Replace substrings in `s`. Named form REPLACE(s, 'mapname') applies a `maps` registry entry's pairs. Inline single-pair REPLACE(s, from, to) replaces every occurrence of `from` with `to` (case-sensitive byte match, so multi-byte UTF-8 needles work — this is substring replace, not char-by-char). Inline variadic REPLACE(s, from1, to1, from2, to2, ...) applies the pairs in one left-to-right pass: at each position the first pair (in declared order) whose `from` matches wins and the emitted `to` is not re-scanned, so one pass replaces several tokens at once without nesting. An empty `from` matches nothing. Whole-value sibling: REMAP.",
     .args = &.{
         .{ .name = "s", .kind = .string },
-        .{ .name = "from", .kind = .string },
+        .{ .name = "name", .kind = .map_name },
         .{ .name = "to", .kind = .string },
     },
-    .min_args = 3,
-    .max_args = 3,
+    .min_args = 2,
+    .max_args = 255,
 };
-/// REPLACE(string, old, new) — replace all occurrences of old with new.
-fn builtinReplace(args: []Value, alloc: std.mem.Allocator) !Value {
+/// REPLACE(s, from, to[, from2, to2, ...]) — substring replacement.
+///
+/// One pair: every non-overlapping, left-to-right occurrence of `from` becomes
+/// `to` (a byte-substring match, so a multi-byte UTF-8 `from` is replaced as a
+/// whole sequence — not SQL/Perl-style char translation). `from` empty returns
+/// `s` unchanged.
+///
+/// Multiple pairs: applied in a single left-to-right scan. At each position the
+/// first pair (in argument order) whose non-empty `from` matches wins; scanning
+/// resumes after the emitted `to`, so a replacement's output is never re-matched
+/// by a later pair. This is the one-allocation, one-pass alternative to nesting
+/// REPLACE calls (which allocates and rescans per pair). Requires an odd arg
+/// count (the string plus N from/to pairs).
+fn builtinReplace(args: []Value, ctx: *const Context) !Value {
+    const alloc = ctx.alloc;
     const s = switch (args[0]) {
         .string => |v| v,
         else => return error.StringExpected,
     };
-    const old = switch (args[1]) {
-        .string => |v| v,
-        else => return error.StringExpected,
-    };
-    const new = switch (args[2]) {
-        .string => |v| v,
-        else => return error.StringExpected,
-    };
-    if (old.len == 0) return Value{ .string = s };
-    return Value{ .string = try std.mem.replaceOwned(u8, alloc, s, old, new) };
+
+    // Named form: REPLACE(s, 'mapname') — apply the named map's ordered pairs
+    // as substring replacements (same single-pass scan as the inline form).
+    if (args.len == 2) {
+        const name = switch (args[1]) {
+            .string => |v| v,
+            else => return error.StringExpected,
+        };
+        const map = (try resolveNamedMap(ctx, name)) orelse return Value{ .string = s };
+        return Value{ .string = try replaceScan(alloc, s, map.keys(), map.values()) };
+    }
+
+    // Single-pair fast path — byte-identical to the historical impl, including
+    // the "empty `from` returns `s` unchanged" contract and the std.mem jump
+    // scan (faster than a per-byte loop for the common one-pair case).
+    if (args.len == 3) {
+        const old = switch (args[1]) {
+            .string => |v| v,
+            else => return error.StringExpected,
+        };
+        const new = switch (args[2]) {
+            .string => |v| v,
+            else => return error.StringExpected,
+        };
+        if (old.len == 0) return Value{ .string = s };
+        return Value{ .string = try std.mem.replaceOwned(u8, alloc, s, old, new) };
+    }
+
+    // Inline variadic form: REPLACE(s, from1, to1, from2, to2, ...). The string
+    // plus an even number of pair operands ⇒ the total arg count must be odd.
+    if (args.len % 2 == 0) return error.WrongArgCount;
+    const npairs = (args.len - 1) / 2;
+    // Heap the pair tables rather than a fixed stack array: max_args = 255 is
+    // treated as unbounded by validateArgs, so the pair count is parser-limited,
+    // not capped at a small constant.
+    const froms = try alloc.alloc([]const u8, npairs);
+    const tos = try alloc.alloc([]const u8, npairs);
+    for (0..npairs) |k| {
+        froms[k] = switch (args[1 + 2 * k]) {
+            .string => |v| v,
+            else => return error.StringExpected,
+        };
+        tos[k] = switch (args[2 + 2 * k]) {
+            .string => |v| v,
+            else => return error.StringExpected,
+        };
+    }
+    return Value{ .string = try replaceScan(alloc, s, froms, tos) };
 }
 fn adaptReplace(p: *Parser, args: []Value) anyerror!Value {
-    return builtinReplace(args, p.ctx.alloc);
+    return builtinReplace(args, p.ctx);
+}
+
+/// Single left-to-right substring pass shared by REPLACE's inline and named
+/// forms: at each position the first pair (declared order) whose non-empty
+/// `from` matches wins; scanning resumes after the emitted `to`, so a
+/// replacement's output is never re-matched. One allocation for the result.
+fn replaceScan(
+    alloc: std.mem.Allocator,
+    s: []const u8,
+    froms: []const []const u8,
+    tos: []const []const u8,
+) ![]const u8 {
+    var out: std.ArrayListUnmanaged(u8) = .empty;
+    var i: usize = 0;
+    scan: while (i < s.len) {
+        for (froms, tos) |from, to| {
+            if (from.len > 0 and std.mem.startsWith(u8, s[i..], from)) {
+                try out.appendSlice(alloc, to);
+                i += from.len;
+                continue :scan;
+            }
+        }
+        try out.append(alloc, s[i]);
+        i += 1;
+    }
+    return out.toOwnedSlice(alloc);
+}
+
+/// Resolve a named `maps` entry for REMAP/REPLACE. In validate mode
+/// (`ctx.map_names` set) an unknown name is a loud error so the GUI can flag a
+/// typo / undefined map; at runtime an unknown name or absent registry yields
+/// null and the caller passes the value through unchanged — the same silent-miss
+/// contract `LOOKUP` uses via `ctx.pre_pass_names` / `ctx.lookup_table`.
+fn resolveNamedMap(ctx: *const Context, name: []const u8) !?*const NamedMap {
+    if (ctx.map_names) |names| {
+        if (!names.contains(name)) {
+            if (ctx.error_detail) |d| d.* = std.fmt.allocPrint(
+                ctx.alloc,
+                "unknown named map '{s}' — define it under the top-level `maps` registry or the template's `maps` block",
+                .{name},
+            ) catch "unknown named map";
+            return error.MapUnknownName;
+        }
+    }
+    const reg = ctx.maps orelse return null;
+    return reg.getPtr(name);
 }
 
 // ── NOW ─────────────────────────────────────────────────────────────────
@@ -3685,7 +3838,7 @@ pub const builtins = [_]FnEntry{
     .{ .name = "DATE_CONVERT",   .doc = date_convert_doc,   .impl = adaptDateConvert },
     .{ .name = "PRICE_VALUE",    .doc = price_value_doc,    .impl = adaptPriceValue },
     .{ .name = "PRICE_CURRENCY", .doc = price_currency_doc, .impl = adaptPriceCurrency },
-    .{ .name = "TICKER",         .doc = ticker_doc,         .impl = adaptTicker },
+    .{ .name = "REMAP",          .doc = remap_doc,          .impl = adaptRemap },
     .{ .name = "LOOKUP",         .doc = lookup_doc,         .impl = adaptLookup },
     .{ .name = "SPLIT_PART",     .doc = split_part_doc,     .impl = adaptSplitPart },
     .{ .name = "CONTAINS",       .doc = contains_doc,       .impl = adaptContains },
@@ -3749,16 +3902,16 @@ const builtin_index = std.StaticStringMap(usize).initComptime(blk: {
 
 const testing = std.testing;
 
-/// Minimal test fixture: col_index + ticker_map kept alive for the test.
+/// Minimal test fixture: col_index + `maps` registry kept alive for the test.
 /// Use ctx() to build a Context pointing into this helper.
 const TestHelper = struct {
     col_index: std.StringHashMap(usize),
-    ticker_map: std.StringHashMap([]const u8),
+    maps: MapRegistry,
 
     fn init(alloc: std.mem.Allocator) TestHelper {
         return .{
             .col_index = std.StringHashMap(usize).init(alloc),
-            .ticker_map = std.StringHashMap([]const u8).init(alloc),
+            .maps = MapRegistry.init(alloc),
         };
     }
 
@@ -3766,7 +3919,7 @@ const TestHelper = struct {
         return .{
             .fields = fields,
             .col_index = &self.col_index,
-            .ticker_map = &self.ticker_map,
+            .maps = &self.maps,
             .lookup_table = null,
             .alloc = alloc,
         };
@@ -5069,6 +5222,75 @@ test "eval: UNACCENT strips Latin diacritics" {
     try testing.expectEqualStrings("日本語", try evalString("UNACCENT('日本語')", &ctx));
 }
 
+test "eval: REPLACE single pair (substring, all occurrences)" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    try testing.expectEqualStrings("A-B-C", try evalString("REPLACE('A.B.C', '.', '-')", &ctx));
+    // Multi-byte UTF-8 needle replaced as a whole sequence, not char-by-char.
+    try testing.expectEqualStrings("cafe", try evalString("REPLACE('café', 'é', 'e')", &ctx));
+    // Empty `from` returns the string unchanged.
+    try testing.expectEqualStrings("abc", try evalString("REPLACE('abc', '', 'X')", &ctx));
+}
+
+test "eval: REPLACE variadic pairs (one left-to-right pass)" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    // Thousands-separator idiom: strip spaces, comma → dot.
+    try testing.expectEqualStrings("1234.56", try evalString("REPLACE('1 234,56', ' ', '', ',', '.')", &ctx));
+    // First matching pair in declared order wins; its output is not re-scanned
+    // (a→b, then b→2 leaves the produced 'b' alone: 'aXb' → 'bX2').
+    try testing.expectEqualStrings("bX2", try evalString("REPLACE('aXb', 'a', 'b', 'b', '2')", &ctx));
+    // An empty `from` pair is a no-op and never stalls the scan.
+    try testing.expectEqualStrings("xy", try evalString("REPLACE('xy', '', 'Z', 'q', 'Q')", &ctx));
+    // Even arg count (incomplete pair) is a wrong-arity error.
+    try testing.expectError(error.WrongArgCount, evalString("REPLACE('x', 'a', 'b', 'c')", &ctx));
+}
+
+test "eval: REMAP named + inline whole-value lookup" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    var syms = NamedMap.init(a);
+    try syms.put("VOW.DE", "VOW.DE.XETRA");
+    try syms.put("BTC", "BTC-USD");
+    try h.maps.put("syms", syms);
+    const ctx = h.ctx(&.{}, a);
+    // Named: exact whole-value hit.
+    try testing.expectEqualStrings("VOW.DE.XETRA", try evalString("REMAP('VOW.DE', 'syms')", &ctx));
+    // Named: miss → passthrough unchanged.
+    try testing.expectEqualStrings("AAPL", try evalString("REMAP('AAPL', 'syms')", &ctx));
+    // Named: unknown map name at runtime (map_names null) → passthrough, no error.
+    try testing.expectEqualStrings("VOW.DE", try evalString("REMAP('VOW.DE', 'nope')", &ctx));
+    // Inline pairs: first exact key wins.
+    try testing.expectEqualStrings("X", try evalString("REMAP('a', 'a', 'X', 'b', 'Y')", &ctx));
+    // Whole-value, not substring: 'ab' does not match key 'a'.
+    try testing.expectEqualStrings("ab", try evalString("REMAP('ab', 'a', 'X')", &ctx));
+    // Even arg count (incomplete pair) errors.
+    try testing.expectError(error.WrongArgCount, evalString("REMAP('a', 'a', 'X', 'b')", &ctx));
+}
+
+test "eval: REPLACE named map applies ordered substring pairs" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    var num = NamedMap.init(a);
+    try num.put(" ", ""); // ordered: strip spaces first,
+    try num.put(",", "."); // then comma → dot
+    try h.maps.put("num", num);
+    const ctx = h.ctx(&.{}, a);
+    try testing.expectEqualStrings("1234.56", try evalString("REPLACE('1 234,56', 'num')", &ctx));
+    // Unknown name at runtime → passthrough.
+    try testing.expectEqualStrings("1 234,56", try evalString("REPLACE('1 234,56', 'nope')", &ctx));
+}
+
 test "eval: STARTS_WITH and ENDS_WITH" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -5515,7 +5737,7 @@ test "FnDoc examples: every builtin has one that parses + evaluates" {
 
     defer helper.col_index.deinit();
 
-    defer helper.ticker_map.deinit();
+    defer helper.maps.deinit();
 
 
 

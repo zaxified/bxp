@@ -51,7 +51,7 @@ skew every average-fare and tip-rate aggregate computed over the raw column.
 1. **US datetime with AM/PM** — `02/09/2018 01:25:25 PM` → ISO 8601 via
    `DATE_CONVERT(..., 'MM/DD/YYYY hh:mm:ss A', 'YYYY-MM-DD[T]hh:mm:ss[Z]')`.
 2. **store_and_fwd_flag** — `"N"`/`"Y"` → readable `false`/`true` with `IF`.
-3. **payment_type code → label** — `TICKER()` over a 1-6 → text lookup map
+3. **payment_type code → label** — `REMAP()` over a 1-6 → text named map
    built from the TLC dictionary.
 4. **Data-quality sentinel column** — `IF([passenger_count] = '0', ...)`
    classifies each row as `ok` / `no_passengers` / `refund` so the

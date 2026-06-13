@@ -121,7 +121,7 @@ Expression evaluator for `input_schema` and `row_rules` in bxp-cli.json.
 
 - `eval(expr, ctx)` — parse and evaluate expression, returns `Value`.
 - `evalString(expr, ctx)` — like `eval()` but coerces result to string.
-- `Context` — per-row evaluation context: `fields`, `col_index`, `ticker_map`,
+- `Context` — per-row evaluation context: `fields`, `col_index`, `maps`,
   `lookup_table`, `alloc`, `decimal_sep_in`, `quote_out`, `input_encoding`,
   plus the per-file/row source context `filename` / `sheet_name` / `record_num`
   (behind `FILENAME()` / `SHEET_NAME()` / `RECORD_NUM()`; default ""/""/0 for
@@ -138,7 +138,7 @@ Expression evaluator for `input_schema` and `row_rules` in bxp-cli.json.
 - Unit tests inline (144 test cases).
 
 **Built-in functions:** IF, CASE, IFERROR, ABS, DATE_CONVERT, PRICE_VALUE,
-PRICE_CURRENCY, TICKER, LOOKUP, SPLIT_PART, CONTAINS, REPLACE, TRIM, ROUND,
+PRICE_CURRENCY, REMAP, LOOKUP, SPLIT_PART, CONTAINS, REPLACE, TRIM, ROUND,
 FLOOR, CEILING, MOD, NOW, RAND, FILENAME, RECORD_NUM, SHEET_NAME, COALESCE,
 FIELDS, UPPER, LOWER, UNACCENT, LEFT, RIGHT, SUBSTR, LPAD, RPAD, POSITION,
 PROPER, STARTS_WITH, ENDS_WITH, NULLIF, IN, ISEMPTY, LEN, GREATEST, LEAST,
@@ -397,9 +397,9 @@ the same observations. If the rationale stops applying, revisit.
 
 - **`config.zig loadFromBytes` partial `errdefer` coverage.** Only
   `data_dir` / `file_pattern_in` / `file_pattern_out` have `errdefer`s; the
-  later locals (`ticker_map`, `input_schema`, `pre_passes`, `row_rules`,
+  later locals (`maps`, `input_schema`, `pre_passes`, `row_rules`,
   `output_schema`) leak if construction `return error.InvalidConfig`s
-  mid-way (xlsx_sheet / csv_header_line / ticker_map bad-type). Harmless
+  mid-way (xlsx_sheet / csv_header_line / maps bad-type). Harmless
   today: every production caller drives `loadFromBytes` with an
   `ArenaAllocator` and a config error exits the process (`process.exit(1)`),
   so the leak is reclaimed wholesale. Only matters if a future in-process

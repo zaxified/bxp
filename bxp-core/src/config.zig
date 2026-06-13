@@ -57,9 +57,9 @@ pub const AutocompleteSource = enum {
     /// Suggest $variable identifiers declared in the active template's
     /// `input_schema` map (e.g. for `output_schema.*` values).
     input_schema_keys,
-    /// Suggest top-level `ticker_maps` entry names (e.g. for the
-    /// `ticker_map` field's string form).
-    ticker_map_names,
+    /// Suggest top-level `maps` registry entry names (e.g. for the
+    /// `name` argument of REMAP / REPLACE in an expression).
+    map_names,
     /// Suggest CSV header names cached from the most recent dry-run
     /// `file_start` event (per active template).
     csv_headers_via_dryrun,
@@ -326,8 +326,13 @@ pub const ZipInput = struct {
 pub const BrokerConfig = struct {
     /// Path to the directory containing input CSV files for this broker.
     data_dir: []const u8,
-    /// Maps broker symbol names to Yahoo Finance tickers, e.g. "BTC" -> "BTC-USD".
-    ticker_map: std.StringHashMap([]const u8),
+    /// Named `key→value` maps for this template — the top-level `maps` registry
+    /// merged with the template's own `maps` block (template-local wins on a
+    /// name collision). Resolved by `REMAP` (whole-value) / `REPLACE` (substring)
+    /// via their `'name'` argument. Each map preserves JSON key order
+    /// (`expr.NamedMap` = StringArrayHashMap) so `REPLACE` applies pairs
+    /// first-match-wins in declaration order.
+    maps: expr.MapRegistry,
     /// Variable definitions evaluated per row: name → expression string.
     /// Required — must not be empty.  "$date" is required when date_filter_from_filename is true.
     /// `StringArrayHashMap` (not `StringHashMap`): preserves JSON5
@@ -551,11 +556,10 @@ pub const BrokerConfig = struct {
             .enum_values = &csv_encoding_values,
         },
         .{
-            .key = "ticker_map",
-            .type_name = "string | object",
+            .key = "maps",
+            .type_name = "object",
             .required = false,
-            .description = "Ticker remapping for this template. String = reference to a named ticker_maps entry. Object = inline map { broker_symbol: yahoo_symbol }.",
-            .autocomplete = .ticker_map_names,
+            .description = "Template-local named `key→value` maps: { map_name: { key: value } }. Merged over the top-level `maps` registry (this template's entry wins on a name collision). Referenced by REMAP / REPLACE via their `'name'` argument.",
         },
         .{
             .key = "date_filter_from_filename",
@@ -804,15 +808,19 @@ pub const BrokerConfig = struct {
             }
         }
         {
-            var it = self.ticker_map.iterator();
-            while (it.next()) |e| {
-                if (e.key_ptr.*.len == 0) {
-                    try writer.print("---\n# {s}: config error: template '{s}': ticker_map key must not be empty\n", .{ config_path, template_id });
-                    return error.InvalidConfig;
-                }
-                if (e.value_ptr.*.len == 0) {
-                    try writer.print("---\n# {s}: config error: template '{s}': ticker_map value for '{s}' must not be empty\n", .{ config_path, template_id, e.key_ptr.* });
-                    return error.InvalidConfig;
+            var m_it = self.maps.iterator();
+            while (m_it.next()) |m_entry| {
+                const map_name = m_entry.key_ptr.*;
+                var it = m_entry.value_ptr.iterator();
+                while (it.next()) |e| {
+                    if (e.key_ptr.*.len == 0) {
+                        try writer.print("---\n# {s}: config error: template '{s}': maps.{s} key must not be empty\n", .{ config_path, template_id, map_name });
+                        return error.InvalidConfig;
+                    }
+                    if (e.value_ptr.*.len == 0) {
+                        try writer.print("---\n# {s}: config error: template '{s}': maps.{s} value for '{s}' must not be empty\n", .{ config_path, template_id, map_name, e.key_ptr.* });
+                        return error.InvalidConfig;
+                    }
                 }
             }
         }
@@ -940,14 +948,20 @@ pub const BrokerConfig = struct {
             }
         }
         {
-            var it = self.ticker_map.iterator();
-            while (it.next()) |e| {
-                if (e.key_ptr.*.len == 0)
-                    try errors.append(alloc, try ValidationError.init(alloc, base, "ticker_map", "ticker_map key must not be empty"));
-                if (e.value_ptr.*.len == 0) {
-                    const msg = try std.fmt.allocPrint(alloc, "ticker_map value for '{s}' must not be empty", .{e.key_ptr.*});
-                    defer alloc.free(msg);
-                    try errors.append(alloc, try ValidationError.init(alloc, base, "ticker_map", msg));
+            var m_it = self.maps.iterator();
+            while (m_it.next()) |m_entry| {
+                const map_name = m_entry.key_ptr.*;
+                const field = try std.fmt.allocPrint(alloc, "maps.{s}", .{map_name});
+                defer alloc.free(field);
+                var it = m_entry.value_ptr.iterator();
+                while (it.next()) |e| {
+                    if (e.key_ptr.*.len == 0)
+                        try errors.append(alloc, try ValidationError.init(alloc, base, field, "map key must not be empty"));
+                    if (e.value_ptr.*.len == 0) {
+                        const msg = try std.fmt.allocPrint(alloc, "map value for '{s}' must not be empty", .{e.key_ptr.*});
+                        defer alloc.free(msg);
+                        try errors.append(alloc, try ValidationError.init(alloc, base, field, msg));
+                    }
                 }
             }
         }
@@ -956,7 +970,7 @@ pub const BrokerConfig = struct {
     /// Phase G expression parse-time validation. Walks every expression
     /// string the broker config holds (input_schema values + each
     /// row_rules.when), invokes `expr.eval` against a bare Context (no
-    /// fields, no ticker_map, no lookup table) and surfaces any error
+    /// fields, no maps, no lookup table) and surfaces any error
     /// as a path-aware Diagnostic. Bare-Context evaluation catches the
     /// errors that don't depend on row data: UnknownFunction
     /// (`BLAH(...)`), syntax errors, mismatched parens, wrong arg
@@ -998,6 +1012,14 @@ pub const BrokerConfig = struct {
         else
             null;
 
+        // Validate-mode whitelist of `maps` entry names (global + template-local,
+        // already merged into self.maps) so a 2-arg REMAP/REPLACE referencing an
+        // undefined map name is flagged — mirrors `pre_pass_names` for LOOKUP.
+        var map_names = std.StringHashMap(void).init(alloc);
+        defer map_names.deinit();
+        var m_names_it = self.maps.iterator();
+        while (m_names_it.next()) |e| try map_names.put(e.key_ptr.*, {});
+
         // input_schema values: $variable → expression
         var is_it = self.input_schema.iterator();
         while (is_it.next()) |entry| {
@@ -1010,6 +1032,7 @@ pub const BrokerConfig = struct {
                 entry.value_ptr.*,
                 &pre_pass_names,
                 single_prepass_name,
+                &map_names,
             );
         }
 
@@ -1027,6 +1050,7 @@ pub const BrokerConfig = struct {
                 rule.when,
                 &pre_pass_names,
                 single_prepass_name,
+                &map_names,
             );
             // Phase G6: each rule.rows[j] is a RowOverride map ($var →
             // expression). Typos here today silently emit "" into the
@@ -1046,6 +1070,7 @@ pub const BrokerConfig = struct {
                         ov.value_ptr.*,
                         &pre_pass_names,
                         single_prepass_name,
+                        &map_names,
                     );
                 }
             }
@@ -1077,6 +1102,7 @@ pub const BrokerConfig = struct {
                     v.value_ptr.*,
                     &pre_pass_names,
                     single_prepass_name,
+                    &map_names,
                 );
             }
         }
@@ -1137,11 +1163,15 @@ pub const BrokerConfig = struct {
 /// emit a Diagnostic on failure. Empty source is treated as success
 /// (matches `eval`'s explicit empty-string short-circuit).
 ///
-/// "Bare Context" means: no actual CSV fields, no ticker_map entries, no
+/// "Bare Context" means: no actual CSV fields, no map entries, no
 /// lookup table. This catches structural/syntax errors (unknown function,
 /// unbalanced parens, wrong arg count) without needing a real row. Errors
 /// that only fire on real data (e.g. type mismatches on specific field values)
 /// are intentionally not caught here — they surface at dry-run time.
+///
+/// `map_names` is the validate-mode whitelist of `maps` entry names: a 2-arg
+/// `REMAP`/`REPLACE` referencing a name not in it is flagged (mirrors how
+/// `pre_pass_names` flags an unknown `LOOKUP` block).
 fn checkOneExpr(
     alloc: std.mem.Allocator,
     diag: ?*Diagnostics,
@@ -1151,21 +1181,23 @@ fn checkOneExpr(
     src: []const u8,
     pre_pass_names: *const std.StringHashMap(void),
     single_prepass_name: ?[]const u8,
+    map_names: *const std.StringHashMap(void),
 ) !void {
     if (src.len == 0) return;
     const d = diag orelse return;
 
     var col_index = std.StringHashMap(usize).init(alloc);
     defer col_index.deinit();
-    var ticker_map_ = std.StringHashMap([]const u8).init(alloc);
-    defer ticker_map_.deinit();
+    var maps_ = expr.MapRegistry.init(alloc);
+    defer maps_.deinit();
     var detail: []const u8 = "";
     var err_offset: u32 = 0;
     var err_len: u32 = 0;
     const ctx = expr.Context{
         .fields = &.{},
         .col_index = &col_index,
-        .ticker_map = &ticker_map_,
+        .maps = &maps_,
+        .map_names = map_names,
         .lookup_table = null,
         .pre_pass_names = pre_pass_names,
         .single_prepass_name = single_prepass_name,
@@ -1454,14 +1486,20 @@ pub const Config = struct {
                 self._alloc.free(zi.path_separator);
             }
 
-            // Free ticker_map keys and values.
-            var tm = entry.value_ptr.ticker_map;
-            var tm_it = tm.iterator();
-            while (tm_it.next()) |te| {
-                self._alloc.free(te.key_ptr.*);
-                self._alloc.free(te.value_ptr.*);
+            // Free the `maps` registry: each named map's keys/values + name.
+            var maps = entry.value_ptr.maps;
+            var maps_it = maps.iterator();
+            while (maps_it.next()) |m_entry| {
+                self._alloc.free(m_entry.key_ptr.*);
+                var nm = m_entry.value_ptr.*;
+                var nm_it = nm.iterator();
+                while (nm_it.next()) |te| {
+                    self._alloc.free(te.key_ptr.*);
+                    self._alloc.free(te.value_ptr.*);
+                }
+                nm.deinit();
             }
-            tm.deinit();
+            maps.deinit();
 
             // Free input_schema keys and expression strings.
             var is = entry.value_ptr.input_schema;
@@ -1873,10 +1911,10 @@ pub fn validateUnusedCollect(
 // ── Phase G7: unknown-key detection (D2) ─────────────────────────────────
 
 /// Top-level keys recognized by the loader. Hardcoded because there's
-/// no Config.fields table — only `ticker_maps` and `conversion_templates`
+/// no Config.fields table — only `maps` and `conversion_templates`
 /// reach this level. Must stay in sync with `loadFromBytes`'s root
 /// dispatch (and `docs.zig`'s envelope_entries).
-const root_keys = [_][]const u8{ "ticker_maps", "conversion_templates" };
+const root_keys = [_][]const u8{ "maps", "conversion_templates" };
 
 /// Legacy single-block pre_pass form. `_default` synthetic name is
 /// detected by the presence of any of these literal child keys at the
@@ -1891,7 +1929,7 @@ const legacy_pre_pass_keys = [_][]const u8{ "when", "key", "values" };
 /// `did_you_mean` hint when a sibling within distance 2 exists.
 ///
 /// User-defined-key parents are skipped entirely:
-/// `input_schema`, `output_schema`, `ticker_map(s)`, `row_rules[].rows[]`,
+/// `input_schema`, `output_schema`, `maps`, `row_rules[].rows[]`,
 /// and `pre_pass.{values, *.values}` — those are typed by the user with
 /// custom names. Annotation siblings (`$comm_*`, `$err_*`, `$warn_*`,
 /// `$info_*`) are also silently skipped so the walker can run on the
@@ -1918,7 +1956,7 @@ pub fn validateUnknownKeysCollect(
             }
         }
     }
-    // ticker_maps children are user-defined names → user-defined values.
+    // maps children are user-defined names → user-defined values.
     // No whitelist applies anywhere inside.
 }
 
@@ -2023,8 +2061,9 @@ fn walkBroker(
     if (broker.object.getPtr("pre_pass")) |pp| {
         try walkPrePass(pp, broker_path, alloc, diag);
     }
-    // input_schema / output_schema / ticker_map: user-defined-key
-    // territory — no recursion into per-key whitelist applies.
+    // input_schema / output_schema / maps: user-defined-key territory
+    // (maps has two levels: map name → {key: value}) — no recursion into a
+    // per-key whitelist applies.
 }
 
 /// Recurse into `pre_pass` — branch on legacy single-block vs
@@ -2588,6 +2627,21 @@ fn parseFileTypeField(
     return .csv;
 }
 
+/// Deep-dupe a JSON object into an ordered `expr.NamedMap` (insertion order
+/// preserved so REPLACE applies pairs in declaration order). String values only;
+/// non-string entries are skipped, matching the historical ticker_map loader.
+/// Keys/values are duped into `alloc` (owned by the resulting Config).
+fn dupeNamedMap(alloc: std.mem.Allocator, src: std.json.ObjectMap) !expr.NamedMap {
+    var m = expr.NamedMap.init(alloc);
+    var it = src.iterator();
+    while (it.next()) |e| {
+        if (e.value_ptr.* == .string) {
+            try m.put(try alloc.dupe(u8, e.key_ptr.*), try alloc.dupe(u8, e.value_ptr.string));
+        }
+    }
+    return m;
+}
+
 /// Parse + validate a config from in-memory JSON5 bytes. The path label
 /// is only used in diagnostic messages — pass an arbitrary marker
 /// (`"<inline>"`, `"test"`, ...) when the source isn't a real file. Carved
@@ -2640,19 +2694,22 @@ pub fn loadFromBytes(
     const root = parsed.value;
     if (root != .object) return config;
 
-    // "ticker_maps": named, reusable ticker maps referenced by templates via string key.
-    // Values are kept as raw JSON objects; entries are duped into each referencing template.
-    // We hold a reference to the parsed JSON tree's ObjectMap directly (no alloc per entry)
-    // because the `parsed` value is deferred-deinitialized at the end of this function —
-    // the map entries live long enough for the per-template duplication below.
-    var named_ticker_maps = std.StringHashMap(std.json.ObjectMap).init(alloc);
-    defer named_ticker_maps.deinit();
-    if (root.object.get("ticker_maps")) |tm_root| {
+    // "maps": named, reusable `key→value` tables referenced by REMAP/REPLACE.
+    // Values are kept as raw JSON objects; entries are merged into every template
+    // below (global ∪ template-local, local winning). We hold a reference to the
+    // parsed JSON tree's ObjectMap directly (no alloc per entry) because the
+    // `parsed` value is deferred-deinitialized at the end of this function — the
+    // map entries live long enough for the per-template duplication below. JSON
+    // object key order is preserved (std.json ObjectMap is an array hash map), so
+    // REPLACE applies a named map's pairs in declaration order.
+    var named_maps = std.StringHashMap(std.json.ObjectMap).init(alloc);
+    defer named_maps.deinit();
+    if (root.object.get("maps")) |tm_root| {
         if (tm_root == .object) {
             var nm_it = tm_root.object.iterator();
             while (nm_it.next()) |e| {
                 if (e.value_ptr.* == .object) {
-                    try named_ticker_maps.put(e.key_ptr.*, e.value_ptr.object);
+                    try named_maps.put(e.key_ptr.*, e.value_ptr.object);
                 }
             }
         }
@@ -2672,7 +2729,16 @@ pub fn loadFromBytes(
                 errdefer alloc.free(file_pattern_out);
                 var xlsx_sheet: ?XlsxSheet = null;
                 var zip_input: ?ZipInput = null;
-                var ticker_map = std.StringHashMap([]const u8).init(alloc);
+                // `maps` registry: seed with every global `maps` entry (deep
+                // duped), then overlay the template-local `maps` block below
+                // (template-local wins on a name collision).
+                var maps = expr.MapRegistry.init(alloc);
+                {
+                    var g_it = named_maps.iterator();
+                    while (g_it.next()) |g| {
+                        try maps.put(try alloc.dupe(u8, g.key_ptr.*), try dupeNamedMap(alloc, g.value_ptr.*));
+                    }
+                }
                 var input_schema = std.StringArrayHashMap([]const u8).init(alloc);
                 var date_filter_from_filename: bool = false;
                 var combined_output: bool = false;
@@ -2919,43 +2985,47 @@ pub fn loadFromBytes(
                         }
                     }
 
-                    // ticker_map: symbol → Yahoo Finance ticker remapping.
-                    // Accepts either an inline object or a string key referencing "ticker_maps".
-                    if (bobj.get("ticker_map")) |tm_val| {
-                        const src_obj: std.json.ObjectMap = switch (tm_val) {
-                            .string => |name| named_ticker_maps.get(name) orelse {
-                                try emitTemplateDiag(alloc, diag, .@"error", "config.unknown_named_map",
-                                    b_entry.key_ptr.*, "ticker_map",
-                                    "ticker_map references unknown named map '{s}'", .{name});
-                                std.debug.print(
-                                    "error: template '{s}': ticker_map references unknown named map '{s}'\n",
-                                    .{ b_entry.key_ptr.*, name },
-                                );
-                                return error.InvalidConfig;
-                            },
-                            .object => |obj| obj,
-                            // Bad type (number, null, array, ...) — hard error rather than `continue`.
-                            // `continue` here would jump out of the broker-construction loop body
-                            // and skip `config.brokers.put(...)` below, leaking every string already
-                            // duped for this broker (data_dir, file_pattern_in/out, input_schema entries).
-                            else => {
+                    // maps: template-local named `key→value` tables, each merged
+                    // over the global `maps` registry (this template's entry wins
+                    // on a name collision). REMAP/REPLACE resolve them by name.
+                    if (bobj.get("maps")) |maps_val| {
+                        if (maps_val != .object) {
+                            try emitTemplateDiag(alloc, diag, .@"error", "config.wrong_type",
+                                b_entry.key_ptr.*, "maps",
+                                "maps must be an object {{ map_name: {{ key: value }} }}, got {s}", .{@tagName(maps_val)});
+                            std.debug.print(
+                                "error: template '{s}': maps must be an object, got {s}\n",
+                                .{ b_entry.key_ptr.*, @tagName(maps_val) },
+                            );
+                            return error.InvalidConfig;
+                        }
+                        var lm_it = maps_val.object.iterator();
+                        while (lm_it.next()) |lm| {
+                            if (lm.value_ptr.* != .object) {
                                 try emitTemplateDiag(alloc, diag, .@"error", "config.wrong_type",
-                                    b_entry.key_ptr.*, "ticker_map",
-                                    "ticker_map must be a string (named-map ref) or an object, got {s}", .{@tagName(tm_val)});
+                                    b_entry.key_ptr.*, "maps",
+                                    "maps.{s} must be an object {{ key: value }}, got {s}", .{ lm.key_ptr.*, @tagName(lm.value_ptr.*) });
                                 std.debug.print(
-                                    "error: template '{s}': ticker_map must be a string (named-map ref) or an object, got {s}\n",
-                                    .{ b_entry.key_ptr.*, @tagName(tm_val) },
+                                    "error: template '{s}': maps.{s} must be an object\n",
+                                    .{ b_entry.key_ptr.*, lm.key_ptr.* },
                                 );
                                 return error.InvalidConfig;
-                            },
-                        };
-                        var tm_it = src_obj.iterator();
-                        while (tm_it.next()) |te| {
-                            if (te.value_ptr.* == .string) {
-                                try ticker_map.put(
-                                    try alloc.dupe(u8, te.key_ptr.*),
-                                    try alloc.dupe(u8, te.value_ptr.string),
-                                );
+                            }
+                            const new_map = try dupeNamedMap(alloc, lm.value_ptr.object);
+                            if (maps.getEntry(lm.key_ptr.*)) |existing| {
+                                // Template-local overrides a same-named global map:
+                                // free the global-duped entry's contents, keep its
+                                // (already-duped) key, swap in the local map.
+                                var old = existing.value_ptr.*;
+                                var oit = old.iterator();
+                                while (oit.next()) |oe| {
+                                    alloc.free(oe.key_ptr.*);
+                                    alloc.free(oe.value_ptr.*);
+                                }
+                                old.deinit();
+                                existing.value_ptr.* = new_map;
+                            } else {
+                                try maps.put(try alloc.dupe(u8, lm.key_ptr.*), new_map);
                             }
                         }
                     }
@@ -3150,7 +3220,7 @@ pub fn loadFromBytes(
                         .file_pattern_out          = file_pattern_out,
                         .xlsx_sheet                = xlsx_sheet,
                         .zip_input                 = zip_input,
-                        .ticker_map                = ticker_map,
+                        .maps                      = maps,
                         .input_schema              = input_schema,
                         .date_filter_from_filename = date_filter_from_filename,
                         .combined_output           = combined_output,

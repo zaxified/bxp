@@ -184,10 +184,10 @@ JSON.
 
 ```json5
 {
-  ticker_maps: {
-    // optional; named, reusable symbol remapping tables
-    // map_name → { broker_symbol: yahoo_symbol, ... }
-    // templates reference a map by name or define one inline
+  maps: {
+    // optional; named, reusable key→value tables
+    // map_name → { key: value, ... }
+    // referenced from expressions by name: REMAP([Symbol], 'anycoin')
     anycoin:  { "BTC": "BTC-EUR" },
     revolutx: { "BTC": "BTC-USD" },
   },
@@ -236,8 +236,9 @@ mybroker_to_wealthfolio: {
   // 1-{template_id}-combined{file_pattern_out} file in data_dir
   // combined_output:              false,
 
-  // optional; either a name from top-level ticker_maps, or an inline object
-  ticker_map:                { /* "BROKER-SYM": "YAHOO-SYM" */ },
+  // optional; template-local named maps, merged over the top-level `maps`
+  // registry (this template wins on a name clash)
+  maps:                      { /* my_map: { "KEY": "VALUE" } */ },
 
   // optional; xlsx sheet extraction — omit for plain CSV input
   // xlsx_sheet: { name: "CLOSED POSITION", header_row: 13, output_suffix: "_closed" },
@@ -256,7 +257,7 @@ mybroker_to_wealthfolio: {
   // [Column Name] = raw CSV field by header; [n] = field by 1-based index.
   input_schema: {
     $date:           "DATE_CONVERT([Date], 'DD/MM/YYYY hh:mm:ss', 'YYYY-MM-DD hh:mm:ss')",
-    $ticker:         "TICKER([Symbol])",
+    $ticker:         "REMAP([Symbol], 'anycoin')",
     $quantity:       "[Quantity]",
     $unitprice:      "[Price]",
     $currency:       "[Currency]",
@@ -320,7 +321,7 @@ mybroker_to_wealthfolio: {
 | `csv_output_encoding` | string | no | `"utf-8"` | Encoding of the output CSV. Same values as `csv_input_encoding`; characters with no equivalent become `?`. CSV only |
 | `csv_header_line` | number | no | `1` | 1-based line of the CSV header. `0` = headerless (first line is data, columns reachable only by `FIELDS(n)`); `N>1` skips `N-1` preamble lines. CSV input only |
 | `date_filter_from_filename` | bool | no | `false` | Filter rows by `YYYY-MM-DD_YYYY-MM-DD` range in filename |
-| `ticker_map` | string \| object | no | `{}` | Name from `ticker_maps`, or inline `{ "SYM": "YAHOO" }` |
+| `maps` | object | no | `{}` | Template-local named maps `{ name: { key: value } }`, merged over the top-level `maps` registry. Referenced by `REMAP`/`REPLACE` |
 | `xlsx_sheet` | object | no | — | `{ name, header_row, output_suffix }` — convert xlsx before CSV |
 | `pre_pass` | object | no | — | `{ when, key, values }` — first-pass lookup table |
 | `input_schema` | object | yes | — | `$variable` → expression, evaluated per row |
@@ -337,7 +338,7 @@ eight map 1:1 to Wealthfolio's import columns; the rest are optional.
 | Variable | Meaning |
 | --- | --- |
 | `$date` | Transaction datetime, format `YYYY-MM-DD hh:mm:ss` |
-| `$ticker` | Yahoo Finance ticker (after `TICKER()` mapping) |
+| `$ticker` | Yahoo Finance ticker (after `REMAP()` mapping) |
 | `$quantity` | Number of units |
 | `$unitprice` | Price per unit |
 | `$currency` | Currency code (`USD`, `EUR`, `CZK`, …) |
@@ -393,12 +394,12 @@ reserved.
 | `CEILING(x)` | number | Smallest integer ≥ `x` |
 | `MOD(a, b)` | number | Remainder of `a / b` with the sign of `a` (like SQL/C `%`); `MOD(a, 0)` → `""` |
 | `TRIM(s)` | string | Strip leading/trailing whitespace |
-| `REPLACE(s, old, new)` | string | Replace all occurrences of `old` with `new`; if `old` is empty, returns `s` |
+| `REPLACE(s, old, new, ...)` | string | Replace every `old` with `new` (substring, UTF-8 safe). Variadic `REPLACE(s, o1, n1, o2, n2, ...)` applies the pairs in one left-to-right pass (first match per position wins, output not re-scanned) instead of nesting; empty `old` matches nothing |
 | `SPLIT_PART(s, delim, n)` | string | Split `s` by `delim`, return 1-based nth part; `""` if out of range |
 | `CONTAINS(s, sub)` | bool | `true` when `sub` is found inside `s` |
 | `PRICE_VALUE(s)` | string | Strip currency symbol/code: `"24.00 CZK"` → `"24.00"`, `"$100"` → `"100"` |
 | `PRICE_CURRENCY(s)` | string | Extract ISO currency: `"24.00 CZK"` → `"CZK"`, `"$100"` → `"USD"` |
-| `TICKER(s)` | string | Map `s` through the template's `ticker_map`; pass through if not found |
+| `REMAP(s, 'name' \| k, v, ...)` | string | Whole-value lookup: if `s` exactly equals a map key, return its value, else `s` unchanged. Named form resolves a `maps` entry; inline `REMAP(s, k1,v1, ...)` gives pairs directly |
 | `DATE_CONVERT(s, from, to)` | string | Parse `s` using `from` format, emit using `to` format (tokens below) |
 | `LOOKUP(key, 'field')` | string | Retrieve a value stored by `pre_pass` under `key` / `field` |
 | `FIELDS(n)` | string | Same as `[n]` — raw field by 1-based index |
@@ -603,7 +604,7 @@ two valid patterns — pick the one that matches your broker, do not
 invent a third:
 
 - **Centralised in `input_schema`** (Anycoin, Revolut X, XTB cash) —
-  `IF([type] = 'cash', '$CASH-XXX', TICKER([Symbol]))` style branching
+  `IF([type] = 'cash', '$CASH-XXX', REMAP([Symbol], 'mymap'))` style branching
   at variable definition time. `row_rules` then only sets `$action`.
   Compact when most cash events take the same shape and the input has a
   single column that distinguishes cash from stock rows.
@@ -676,9 +677,9 @@ template, follow these rules strictly:
    a value from another row (paired transaction legs, fee refunds,
    order/fill pairs), use `pre_pass` and `LOOKUP`. Otherwise omit it
    entirely.
-6. **Prefer named `ticker_map`s.** If the broker's symbols overlap an
-   existing named map (e.g. `xtb`, `trading212`), reference it by name.
-   Otherwise define a small inline map.
+6. **Prefer named `maps`.** If the broker's symbols overlap an
+   existing named map (e.g. `xtb`, `trading212`), reference it by name with
+   `REMAP([Symbol], 'xtb')`. Otherwise define a small inline `REMAP(s, k, v, ...)`.
 7. **One-to-many rows.** When one input row must produce multiple
    output rows (currency conversion = FEE + WITHDRAWAL + DEPOSIT;
    dividend with tax; split fees), return multiple objects in the same

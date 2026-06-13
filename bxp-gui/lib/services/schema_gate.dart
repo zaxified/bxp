@@ -170,7 +170,7 @@ class SchemaGate {
     // Compute the candidate list once — the previous version re-ran
     // `validInsertKeys` to find a wildcard fallback, doubling the schema
     // walk on every literal-match miss (the common case for free-form
-    // child keys like ticker_maps[*] or row_rules[*]).
+    // child keys like maps[*] or row_rules[*]).
     final candidates = validInsertKeys(parentPath, existingKeys);
     for (final c in candidates) {
       if (c.key == key) return c;

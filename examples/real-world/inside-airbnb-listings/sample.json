@@ -4,7 +4,7 @@
   // but requires registration. We treat empty price as a real-world signal,
   // not an error: COALESCE downstream gives `<price-redacted>` so the gap is
   // visible at a glance instead of silently zero.
-  ticker_maps: {
+  maps: {
     room_type_short: {
       "Entire home/apt": "ENTIRE",
       "Private room":    "PRIVATE",
@@ -22,7 +22,6 @@
       // every quoted name shifts every downstream column by one field.
       csv_text_quote_in:  "double",
       csv_text_quote_out: "double",
-      ticker_map:         "room_type_short",
 
       input_schema: {
         $listing_id: "[id]",
@@ -33,8 +32,8 @@
         $lat:        "[latitude]",
         $lon:        "[longitude]",
 
-        // TRICK 1 — room_type free-form text → 4-value enum via ticker_map.
-        $room_type:  "TICKER([room_type])",
+        // TRICK 1 — room_type free-form text → 4-value enum via REMAP + named map.
+        $room_type:  "REMAP([room_type], 'room_type_short')",
 
         // TRICK 2 — empty price gets a visible sentinel. Salesforce/Airtable
         // would silently drop empty numerics; this preserves the gap.

@@ -49,7 +49,7 @@ stay intact in a single field, exactly as TRICK 0 promises.
    like `"Maison des Sirenes1,bohemian, luminous apartment"` don't shift
    every following column.
 1. **room_type enum** — `Entire home/apt` / `Private room` / `Hotel room` /
-   `Shared room` → short codes via `TICKER()` + `ticker_map`.
+   `Shared room` → short codes via `REMAP()` + a named map.
 2. **Redacted price sentinel** — `COALESCE([price], '<price-redacted>')` so
    the gap is visible in every row instead of silently empty.
 3. **last_review empty == "never reviewed"** — kept as empty on purpose;

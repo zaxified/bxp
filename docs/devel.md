@@ -453,7 +453,7 @@ pub const Value = union(enum) {
 pub const Context = struct {
     fields: []const []const u8,                 // raw CSV field values for current row
     col_index: std.StringHashMap(usize),        // header name → field index
-    ticker_map: std.StringHashMap([]const u8),
+    maps: ?*MapRegistry,                        // named maps for REMAP/REPLACE
     lookup_table: ?*LookupTable,
     alloc: std.mem.Allocator,
     decimal_sep_in: u8,                         // '.' or ','

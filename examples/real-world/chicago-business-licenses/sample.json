@@ -3,7 +3,7 @@
   // columns are cryptic codes that mean nothing without the data dictionary;
   // the application date is blank on most rows. Every mapping below is taken
   // verbatim from the dataset's official description (see 00-readme.md).
-  ticker_maps: {
+  maps: {
     // LICENSE STATUS codes — from the City of Chicago dataset description.
     license_status_label: {
       "AAI": "issued",
@@ -20,7 +20,6 @@
       // TRICK 0 — Socrata CSV is double-quoted; legal/DBA names embed commas.
       csv_text_quote_in:  "double",
       csv_text_quote_out: "double",
-      ticker_map:         "license_status_label",
 
       input_schema: {
         // TRICK 1 — many rows have no DBA; fall back to the legal name so the
@@ -29,14 +28,14 @@
         $license:    "[license_description]",
         $zip:        "[zip_code]",
 
-        // TRICK 2 — cryptic LICENSE STATUS code → human-readable via the
-        // documented ticker_map. "AAC" alone tells an analyst nothing;
+        // TRICK 2 — cryptic LICENSE STATUS code → human-readable via a
+        // documented named map. "AAC" alone tells an analyst nothing;
         // "cancelled_during_term" is self-explanatory.
-        $status:     "TICKER([license_status])",
+        $status:     "REMAP([license_status], 'license_status_label')",
 
-        // TRICK 3 — APPLICATION TYPE code → label via a CASE multi-branch map
-        // (a second controlled vocabulary; TICKER's one active map is used by
-        // status). CASE compares its first arg against each value/label pair
+        // TRICK 3 — APPLICATION TYPE code → label, here via a CASE multi-branch
+        // (a second controlled vocabulary kept inline to show CASE; it could
+        // equally be a second named map). CASE compares its first arg against each value/label pair
         // and returns the first match, with the raw code as the trailing
         // default — far more readable than a six-deep nested IF.
         $app_type:   "CASE([application_type], 'ISSUE', 'initial_application', 'RENEW', 'renewal', 'C_LOC', 'change_of_location', 'C_CAPA', 'change_of_capacity', 'C_EXPA', 'liquor_area_expansion', 'C_SBA', 'change_of_business_activity', [application_type])",

@@ -52,7 +52,7 @@ agent always invokes it from a location where `bxp-cli` sits alongside.
 | `bxp_validate` | `annotateRaw(config_text, "<config>", 0)` | Annotated JSON with `$err_`/`$warn_`/`$info_` diagnostics inserted before each offending key. |
 | `bxp_validate_expr` | `validateExprJson(expr)` | Authoring-time verdict for one expression: runtime eval + the static FnArgDoc lint (e.g. a literal `SPLIT_PART(…, 0)`). `{"ok":true}` or `{"ok":false,"error","detail","off","len"}`. The MCP analogue of the GUI bridge's `bridge_eval_expr`. |
 | `bxp_eval` | `evalExpr(expr, headers?, fields?)` | Lenient runtime value: `{"ok":true,"value":"..."}` or `{"ok":false,"error","detail","off","len"}`. |
-| `bxp_eval_batch` | `evalBatch(request)` | `{"results":[{"ok",…}, …]}` aligned to input order. The call `arguments` object _is_ the request `{headers, fields, exprs, ticker_map?, lookups?, single_prepass_name?}`. |
+| `bxp_eval_batch` | `evalBatch(request)` | `{"results":[{"ok",…}, …]}` aligned to input order. The call `arguments` object _is_ the request `{headers, fields, exprs, maps?, lookups?, single_prepass_name?}`. |
 | `bxp_eval_trace` | `evalTrace(expr, headers?, fields?, out)` | NDJSON: one `{"fn",…,"value"}` line per function call, then `{"t":"final","value":…}` or `{"t":"error",…}`. |
 | `bxp_docs` | `docsJson()` | Full language/schema JSON (`functions`, `keywords`, `operators`, `tokens`, `config_schema`). |
 | `bxp_list_templates` | `listTemplates(config_text)` | `{"templates":[{id,data_dir,…}, …]}`; no semantic validation. |

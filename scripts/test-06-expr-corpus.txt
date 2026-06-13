@@ -12,8 +12,8 @@
 #   ABS, CEILING, COALESCE, CONTAINS, DATE_CONVERT, DATEADD, DATEDIFF,
 #   DAY, ENDS_WITH, EOMONTH, FIELDS, FLOOR, GREATEST, IF, IN, LEAST,
 #   LEFT, LEN, LOOKUP, LOWER, MONTH, NOW, NTH_DOW, NULLIF, PRICE_CURRENCY,
-#   PRICE_VALUE, RAND, REPLACE, RIGHT, ROUND, SPLIT_PART, STARTS_WITH,
-#   SUBSTR, TICKER, TRIM, UPPER, WEEKDAY, WORKDAY, YEAR
+#   PRICE_VALUE, RAND, REMAP, REPLACE, RIGHT, ROUND, SPLIT_PART, STARTS_WITH,
+#   SUBSTR, TRIM, UPPER, WEEKDAY, WORKDAY, YEAR
 # Keywords: AND, OR, NOT
 # Keywords: AND, OR
 # Operators: &  =  !=  <  >  <=  >=  +  -  *  /
@@ -58,7 +58,7 @@ expr	ok	PRICE_VALUE('100 USD')
 expr	ok	RAND(8)
 expr	ok	REPLACE([A], 'old', 'new')
 expr	ok	SPLIT_PART([A], ',', 1)
-expr	ok	TICKER([Symbol])
+expr	ok	REMAP([Symbol], 'syms')
 expr	ok	TRIM([Symbol])
 # v0.2.4 string utilities.
 expr	ok	LEFT([A], 3)
@@ -120,7 +120,11 @@ expr	err	ABS()	WrongArgCount
 # args) before semantic arity check. Same error as IF([A] without close-paren.
 expr	err	IF([A])	ExpectedComma
 expr	err	IF([A]	ExpectedComma
-expr	err	REPLACE([A], 'x')	WrongArgCount
+# REPLACE/REMAP 2-arg = named-map form (valid); even arg count = incomplete pair.
+expr	ok	REPLACE([A], 'mymap')
+expr	err	REPLACE([A], 'a', 'b', 'c')	WrongArgCount
+expr	ok	REMAP([A], 'mymap')
+expr	err	REMAP([A], 'a', 'b', 'c')	WrongArgCount
 expr	err	ROUND(1.5)	WrongArgCount
 # v0.2.4 string utilities arity errors.
 expr	err	LEFT([A])	WrongArgCount
@@ -272,7 +276,7 @@ expr	ok	[Action] = 'Dividend (Dividend)' OR [Action] = 'Dividend (Dividend manuf
 # Multi-OR + AND — Trading 212 buy variants with zero-total predicate.
 expr	ok	([Action] = 'Market buy' OR [Action] = 'Limit buy' OR [Action] = 'Stock distribution') AND [Total] = 0
 # IF with arithmetic in true-branch + currency string concat fallback.
-expr	ok	IF([Ticker] != '', TICKER([Ticker]), '$CASH-' & [Currency (Total)])
+expr	ok	IF([Ticker] != '', REMAP([Ticker], 'syms'), '$CASH-' & [Currency (Total)])
 # Sum-of-ABS arithmetic branch.
 expr	ok	IF(ABS([Currency conversion fee]) + ABS([Stamp duty reserve tax]) > 0, ABS([Currency conversion fee]) + ABS([Stamp duty reserve tax]), '')
 # Empty-string fallback pattern.
@@ -289,7 +293,7 @@ expr	ok	SPLIT_PART(SPLIT_PART([Comment], ' ', 3), '/', 1)
 expr	ok	''' & [Position ID] & '_' & [Open Time (UTC)] & ''''
 expr	ok	'split-correction-' & SPLIT_PART([Time], ' ', 1)
 # IF with simple Type=value branching.
-expr	ok	IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))
+expr	ok	IF([Type] = 'deposit', '$CASH-' & [Currency], REMAP([Currency], 'syms'))
 expr	ok	IF([Total] > 0, 'DEPOSIT', 'WITHDRAWAL')
 expr	ok	IF([Type] = 'Other', PRICE_VALUE([Value]), PRICE_VALUE([Price]))
 
@@ -301,6 +305,6 @@ expr	ok	ABS([Total])
 expr	ok	'BUY'
 expr	ok	'SELL'
 expr	ok	IF([Type] = 'deposit', 1, [Amount])
-expr	ok	IF([Symbol] != '', TICKER([Symbol]), '$CASH-CZK')
+expr	ok	IF([Symbol] != '', REMAP([Symbol], 'syms'), '$CASH-CZK')
 expr	ok	PRICE_CURRENCY([Value])
-expr	ok	TICKER([Currency])
+expr	ok	REMAP([Currency], 'syms')

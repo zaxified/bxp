@@ -1,5 +1,5 @@
 {
-  ticker_maps: {
+  maps: {
     xtb: {
       "ASML.NL":   "ASML.AS",
       "BNTX.US":   "BNTX",
@@ -38,10 +38,9 @@
       csv_text_quote_in:   "none",
       csv_text_quote_out:  "double",
       date_filter_from_filename: false,
-      ticker_map:          "xtb",
       input_schema: {
         $date:            "[Close Time (UTC)]",
-        $ticker:          "TICKER([Ticker])",
+        $ticker:          "REMAP([Ticker], 'xtb')",
         $quantity:        "[Volume]",
         $unitprice:       "[Sale Value] / [Volume]",
         $currency:        "'CZK'",

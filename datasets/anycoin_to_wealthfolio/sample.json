@@ -1,5 +1,5 @@
 {
-  ticker_maps: {
+  maps: {
     anycoin: {
       BTC:  "BTC-EUR"
     }
@@ -18,7 +18,6 @@
       csv_text_quote_in:   "none",
       csv_text_quote_out:  "none",
       date_filter_from_filename: true,
-      ticker_map:          "anycoin",
       pre_pass: {
         when:  "[Type] = 'trade payment'",
         key:   "[Order ID]",
@@ -29,7 +28,7 @@
       },
       input_schema: {
         $date:            "DATE_CONVERT([Date], 'YYYY-MM-DD[T]hh:mm:ss[*]', 'YYYY-MM-DD hh:mm:ss')",
-        $ticker:          "IF([Type] = 'deposit', '$CASH-' & [Currency], TICKER([Currency]))",
+        $ticker:          "IF([Type] = 'deposit', '$CASH-' & [Currency], REMAP([Currency], 'anycoin'))",
         $quantity:        "IF([Type] = 'deposit', 1, [Amount])",
         $unitprice:       "IF([Type] = 'deposit', [Amount], LOOKUP([Order ID], 'amount') / [Amount])",
         $currency:        "IF([Type] = 'deposit', [Currency], LOOKUP([Order ID], 'currency'))",

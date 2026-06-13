@@ -57,7 +57,7 @@ Two things the full run surfaces that the slice can't:
 - **1,453 revoked + 78,329 cancelled licences** decoded out of the cryptic
   `REV`/`AAC` codes — a compliance query can finally filter on a readable label.
 - **One row carries an undocumented `INQ` status** (the dataset description
-  lists only `AAI/AAC/REV/REA`). `TICKER` leaves an unmapped code **visible and
+  lists only `AAI/AAC/REV/REA`). `REMAP` leaves an unmapped code **visible and
   unchanged** rather than blanking it, so the gap surfaces instead of silently
   vanishing — a forward-safe lookup, not a silent drop.
 
@@ -66,12 +66,12 @@ Two things the full run surfaces that the slice can't:
 0. **Quoted commas** — `csv_text_quote_in: "double"`; legal/DBA names embed commas.
 1. **DBA fallback** — `COALESCE([doing_business_as_name], [legal_name])` so the
    business is never blank.
-2. **Status code → label** — `TICKER([license_status])` over a `ticker_map`
-   built from the documented `AAI/AAC/REV/REA` meanings.
-3. **Application type → label** — a `CASE` multi-branch map (a second
-   controlled vocabulary; `TICKER`'s one active map is spent on status). `CASE`
-   matches the code against value/label pairs with the raw code as the
-   fallback — one call in place of a six-deep nested `IF`.
+2. **Status code → label** — `REMAP([license_status], 'license_status_label')`
+   over a named map built from the documented `AAI/AAC/REV/REA` meanings.
+3. **Application type → label** — a `CASE` multi-branch (a second controlled
+   vocabulary kept inline to show `CASE`; it could equally be a second named
+   map). `CASE` matches the code against value/label pairs with the raw code as
+   the fallback — one call in place of a six-deep nested `IF`.
 4. **ISO date trim + missing-date sentinel** — `DATE_CONVERT(..., 'YYYY-MM-DD[T]hh:mm:ss', 'YYYY-MM-DD')`
    keeps the date part; `IF([application_created_date] = '', '<not-on-file>', …)`
    turns the 84%-blank column into an explicit marker.

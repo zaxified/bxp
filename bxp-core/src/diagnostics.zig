@@ -106,10 +106,10 @@ test "Diagnostics: append + count + countBySeverity" {
         .suggest = "did you mean 'file_pattern_in'?",
     });
     try diag.append(.{
-        .path = "conversion_templates.x.ticker_map",
+        .path = "conversion_templates.x.maps",
         .severity = .info,
         .code = "config.empty_optional",
-        .message = "empty ticker map; no remapping will occur",
+        .message = "empty map; no remapping will occur",
     });
 
     try std.testing.expectEqual(@as(usize, 3), diag.count());

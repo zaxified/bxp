@@ -7,53 +7,6 @@ lands on master. `CHANGELOG.md` is generated independently from `git log`
 at release time by `scripts/release-changelog.sh` and is not coupled
 to this file.
 
-## v0.2.5
-
-### External template JSON files
-
-Today bxp-cli has no concept of a template library: all templates live
-inside one user-owned config file (`bxp-cli.json`), and the starter
-set ships as a single monolithic `resources/console/bxp-cli.examples.json`.
-Users who want a specific broker template have to copy/paste it out of
-the examples file into their own config. Split the starter set into a
-per-broker template library so:
-
-- A discovery dir (`templates/revolut.json`, `templates/trading212.json`,
-  …) ships next to the binary; users can also drop their own files into
-  a per-user dir and the discovery merges both with the user dir winning
-  on name collision.
-- bxp-mcp's `bxp_list_templates` / `bxp_fetch_template` work without a
-  user-owned `bxp-cli.json` — they enumerate the discovered library.
-- Per-broker variants can be added or revised independently without
-  re-shipping one bloated examples file.
-
-Open design questions to resolve before implementation:
-
-- Discovery path order — bundled `templates/*.json` next to the binary,
-  then `~/.config/bxp/templates/` (Linux) / `%APPDATA%\bxp\templates\`
-  (Windows) / `~/Library/Application Support/bxp/templates/` (macOS)?
-- JSON5 or strict JSON for template files? (consistency with config
-  loader argues JSON5).
-- Migration: keep `bxp-cli.examples.json` working during the transition
-  or replace it outright on the v0.2.5 cut.
-- `--list-templates` / `--fetch-template` semantics when the same name
-  exists in bundle + user dir.
-
-### Future example candidates (low priority)
-
-Carried over from the (now-deleted) `DEV/*-todo` scratch when the example
-backlog was otherwise exhausted:
-
-- **`olist_ecommerce`** real-world multi-file normalisation — Kaggle
-  CC-BY-NC-SA; the login wall conflicts with a no-login `fetch-full.sh` → needs
-  a mirror or a different multi-file dataset.
-- **`czech_public_contracts`** (smlouvy.gov.cz, CC0) — `DD.MM.YYYY` +
-  space-thousands + contract-type maps; confirm a stable export URL + a cited
-  problem first.
-- **`basic/csv-to-json`** teaching example — isolated CSV → JSON array
-  (`file_type_out: json`), the basic-tier mirror of `squirrel-census-json`. Low
-  priority: JSON _output_ is already shown by `advanced/multi-stage-etl`.
-
 ## v0.3.0
 
 ### Auto-updater security audit & hardening
@@ -119,6 +72,51 @@ One real lever, revisit when that throughput matters:
   "reader cap" under _bxp-cli → Parallelism follow-ups_.
 
 ## Later (no specific version)
+
+### External template JSON files
+
+Today bxp-cli has no concept of a template library: all templates live
+inside one user-owned config file (`bxp-cli.json`), and the starter
+set ships as a single monolithic `resources/console/bxp-cli.examples.json`.
+Users who want a specific broker template have to copy/paste it out of
+the examples file into their own config. Split the starter set into a
+per-broker template library so:
+
+- A discovery dir (`templates/revolut.json`, `templates/trading212.json`,
+  …) ships next to the binary; users can also drop their own files into
+  a per-user dir and the discovery merges both with the user dir winning
+  on name collision.
+- bxp-mcp's `bxp_list_templates` / `bxp_fetch_template` work without a
+  user-owned `bxp-cli.json` — they enumerate the discovered library.
+- Per-broker variants can be added or revised independently without
+  re-shipping one bloated examples file.
+
+Open design questions to resolve before implementation:
+
+- Discovery path order — bundled `templates/*.json` next to the binary,
+  then `~/.config/bxp/templates/` (Linux) / `%APPDATA%\bxp\templates\`
+  (Windows) / `~/Library/Application Support/bxp/templates/` (macOS)?
+- JSON5 or strict JSON for template files? (consistency with config
+  loader argues JSON5).
+- Migration: keep `bxp-cli.examples.json` working during the transition
+  or replace it outright.
+- `--list-templates` / `--fetch-template` semantics when the same name
+  exists in bundle + user dir.
+
+### Future example candidates (low priority)
+
+Carried over from the (now-deleted) `*-todo` scratch when the example
+backlog was otherwise exhausted:
+
+- **`olist_ecommerce`** real-world multi-file normalisation — Kaggle
+  CC-BY-NC-SA; the login wall conflicts with a no-login `fetch-full.sh` → needs
+  a mirror or a different multi-file dataset.
+- **`czech_public_contracts`** (smlouvy.gov.cz, CC0) — `DD.MM.YYYY` +
+  space-thousands + contract-type maps; confirm a stable export URL + a cited
+  problem first.
+- **`basic/csv-to-json`** teaching example — isolated CSV → JSON array
+  (`file_type_out: json`), the basic-tier mirror of `squirrel-census-json`. Low
+  priority: JSON _output_ is already shown by `advanced/multi-stage-etl`.
 
 ### CI hardening
 
@@ -224,9 +222,9 @@ to pre-process the file" or "skip the affected rows".
 - **Description-based ticker extraction.** Lime.co's dividend rows have
   empty `Symbol` and the ticker is embedded in `Description`
   (`"Qualified Dividend APPLE INC 100"`). Today there's no clean way
-  to extract the ticker. Two design options: (a) document
-  `ticker_map` keyed by company name (`"APPLE INC": "AAPL"`) — works
-  with the existing engine, just needs a readme tip; (b) add a
+  to extract the ticker. Two design options: (a) document a named
+  `maps` entry keyed by company name (`"APPLE INC": "AAPL"`) used via
+  `REMAP` — works with the existing engine, just needs a readme tip; (b) add a
   `REGEX_EXTRACT(s, pattern)` built-in (deferred to Zig 0.16
   migration — see "Expression builtins (regex)" under Tooling). (a)
   is cheap and unblocks today; (b) is a real feature later.
@@ -307,29 +305,31 @@ extra columns are ignored`, reproduced 2026-05-31). 1024 is a deliberate,
   the CSV-tool scope. (The _date_ inside the bracket already parses fine via
   `DATE_CONVERT(..., 'DD/MMM/YYYY:hh:mm:ss', ...)`.)
 
-- **Overload `REPLACE` for bulk/chained replace.** Consider on a concrete
-  use-case. Templates that normalise several tokens at once today nest
-  `REPLACE(REPLACE(REPLACE(x, 'a', '1'), 'b', '2'), …)` — unreadable past two
-  or three pairs (the thousands-separator idiom `REPLACE(REPLACE(x,' ',''),
-',','.')` is the common case, and a foreign-month-name normaliser would be
-  another). **Decided 2026-06-05: extend the existing `REPLACE` rather than
-  add a new `REPLACE_MAP` builtin** — this mirrors how scripting languages
-  do it (Python `str.replace`, Ruby `gsub`, Pandas `replace` all overload
-  one name with a dict/extra args; PHP `strtr($s, $array)` is the closest
-  named precedent), so users learn no second name, and a Latin-only
-  `TRANSLATE` name is avoided (that word means char-level in SQL/Perl).
-  Today's 3-arg `REPLACE(s, from, to)` (single literal pair, all
-  occurrences, left-to-right, non-overlapping, case-sensitive, backed by
-  `std.mem.replaceOwned`) stays valid. New variadic form
-  `REPLACE(s, 'a','1', 'b','2', …)` applies pairs **left-to-right in one
-  pass** (one allocation, not one per nested call — the perf win over the
-  nest, which does K allocations + 2K passes for K pairs). Open questions:
-  variadic pairs vs also a config-level named map
-  (`REPLACE(s, 'mymapname')`, mirroring `ticker_maps`); whether an earlier
-  replacement's output is eligible for a later pair (it is in a nested
-  chain — document whichever we pick). This is also the lightweight answer
-  to the deferred `date_locales` idea (a named month-name map applied
-  before `DATE_CONVERT`), avoiding a dedicated locale subsystem.
+- **Named-map registry + `REMAP` — SHIPPED 2026-06-13.** Two stages landed:
+  - The variadic `REPLACE(s, 'a','1', 'b','2', …)` form (one left-to-right
+    pass, first match per position wins, output not re-scanned, one allocation),
+    with the single-pair `REPLACE(s, from, to)` byte-identical.
+  - The unified `maps` registry + `REMAP`. `TICKER` and the per-template
+    `ticker_map` field were **removed**; the top-level `ticker_maps` registry was
+    renamed `maps` and is now shared by both apply-modes. `REMAP(s, 'name'|k,v,…)`
+    is the whole-value sibling (exact-match, passthrough on miss); `REPLACE(s,
+    'name'|f,t,…)` the substring one — both resolve a name against the same
+    registry. Definition polymorphism is uniform: inline pairs in the expression,
+    a name reference, or a top-level `maps` block merged with a per-template
+    `maps` block (template-local wins). Storage is ordered (`StringArrayHashMap`)
+    so REPLACE applies pairs in declaration order while REMAP keeps O(1) lookup.
+    The three stay separate builtins forming a **cost hierarchy** — O(1) hash
+    (`REMAP`) < literal substring (`REPLACE`) < regex engine — so a template pays
+    only for the cheapest tool; regex is an extraction-only sibling, never a map.
+    All 21 internal configs/datasets/examples were migrated (test-02
+    byte-identical). This also subsumes the deferred `date_locales` idea (a named
+    month-name map applied before `DATE_CONVERT`), avoiding a locale subsystem.
+
+  Remaining (only on a concrete use-case): drill-down re-eval in bxp-gui resolves
+  only **template-local** `maps` today; named refs into the global registry are
+  not fetched during drill-down (a pre-existing gap carried over from the old
+  named-`ticker_map` behaviour). Wire the global `maps` into the drill-down
+  runtime if a user hits it.
 
 ### bxp-gui
 
@@ -446,6 +446,14 @@ rather than running in-core.
   Decision: bundle with the Zig 0.16 migration above, then adopt
   zig-utils/zig-regex. v0.2.4 ships the other 9 builtins; the remaining
   ~10 % of real-world need (regex) waits.
+
+  Scope (decided 2026-06-13): regex is an **extraction-only sibling**, scoped
+  to what `REMAP`/`REPLACE` can't do (pull a substring by pattern). It is
+  **not** a superset that replaces them — the three form a cost hierarchy (O(1)
+  hash lookup < literal substring scan < regex engine) and a template should pay
+  only for the cheapest tool that does the job. So regex stays a single-pattern
+  builtin, not a named-map feature (see the `REPLACE` named-map note under
+  _Real-world broker CSV quirks_).
 
 ### Expression builtins (non-regex)
 

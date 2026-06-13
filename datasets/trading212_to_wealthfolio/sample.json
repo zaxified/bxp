@@ -1,5 +1,5 @@
 {
-  ticker_maps: {
+  maps: {
     trading212: {
       ASML:  "ASML.AS",
       CMBT:  "CMBT.BR",
@@ -33,10 +33,9 @@
       csv_text_quote_in:   "double",
       csv_text_quote_out:  "none",
       date_filter_from_filename: false,
-      ticker_map:          "trading212",
       input_schema: {
         $date:            "[Time]",
-        $ticker:          "IF([Ticker] != '', TICKER([Ticker]), '$CASH-' & [Currency (Total)])",
+        $ticker:          "IF([Ticker] != '', REMAP([Ticker], 'trading212'), '$CASH-' & [Currency (Total)])",
         $isin:            "",
         $quantity:        "IF([Ticker] != '', [No. of shares], 1)",
         $unitprice:       "IF([Ticker] != '', (ABS([Total]) - ABS([Currency conversion fee]) - ABS([Stamp duty reserve tax])) / [No. of shares], ABS([Total]))",

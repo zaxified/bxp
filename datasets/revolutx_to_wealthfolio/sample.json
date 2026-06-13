@@ -1,5 +1,5 @@
 {
-  ticker_maps: {
+  maps: {
     revolutx: {
       BTC:  "BTC-USD"
     }
@@ -18,10 +18,9 @@
       csv_text_quote_in:   "double",
       csv_text_quote_out:  "none",
       date_filter_from_filename: true,
-      ticker_map:          "revolutx",
       input_schema: {
         $date:            "DATE_CONVERT([Date], 'D MMM YYYY, hh:mm:ss', 'YYYY-MM-DD hh:mm:ss')",
-        $ticker:          "IF([Type] = 'Other', '$CASH-' & PRICE_CURRENCY([Value]), TICKER([Symbol]))",
+        $ticker:          "IF([Type] = 'Other', '$CASH-' & PRICE_CURRENCY([Value]), REMAP([Symbol], 'revolutx'))",
         $quantity:        "IF([Type] = 'Other', 1, [Quantity])",
         $unitprice:       "IF([Type] = 'Other', PRICE_VALUE([Value]), PRICE_VALUE([Price]))",
         $currency:        "PRICE_CURRENCY([Value])",

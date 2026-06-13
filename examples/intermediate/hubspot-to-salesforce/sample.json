@@ -1,9 +1,9 @@
 {
-  // TRICK 1 — long picklist via ticker_map.
-  // ticker_map is repurposed as a general-purpose string lookup table:
-  // unmapped keys pass through unchanged (visible in GUI as "TICKER input
-  // == output", the smoking gun for row 7).
-  ticker_maps: {
+  // TRICK 1 — long picklist via a named map + REMAP.
+  // REMAP is a general-purpose whole-value string lookup: unmapped keys pass
+  // through unchanged (visible in the GUI as input == output, the smoking gun
+  // for row 7).
+  maps: {
     industry_hs_to_sfdc: {
       "Software":                "Technology",
       "Software & Technology":   "Technology",
@@ -21,7 +21,6 @@
       file_pattern_in:    ".csv",
       file_pattern_out:   ".csvx",
       csv_text_quote_out: "double",
-      ticker_map:         "industry_hs_to_sfdc",
       input_schema: {
         // TRICK 4 — mixed date formats. HubSpot legacy/edited rows can leak
         // US format ("1/12/2024 10:30:00") into otherwise-ISO exports.
@@ -38,7 +37,7 @@
         // than silently empty.
         $company:     "COALESCE(TRIM([Company Name]), '<missing>')",
 
-        $industry:    "TICKER(TRIM([Industry]))",
+        $industry:    "REMAP(TRIM([Industry]), 'industry_hs_to_sfdc')",
 
         // TRICK 2 — short picklist via IF chain, with TRIM at every leaf
         // (row 2 has "Open " with trailing whitespace — silent kill without TRIM).

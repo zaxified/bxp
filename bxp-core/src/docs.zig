@@ -67,21 +67,21 @@ const struct_bindings = [_]StructBinding{
 
 const envelope_entries = [_]FieldDoc{
     .{
-        .key = "ticker_maps",
+        .key = "maps",
         .type_name = "object",
         .required = false,
-        .description = "Named ticker remapping tables. Each entry: map_name -> { broker_symbol: yahoo_symbol }. Referenced by templates via ticker_map: map_name.",
+        .description = "Named, reusable key→value tables. Each entry: map_name -> { key: value }. Referenced by REMAP (whole-value lookup) / REPLACE (substring) via their 'name' argument. A template may also define a same-named maps block that overrides a global entry.",
         .insert_order = "alpha",
         .insert_template = "{}",
     },
     .{
-        .key = "ticker_maps.*",
+        .key = "maps.*",
         .type_name = "object",
         .required = false,
-        .description = "One named ticker map. Keys are broker symbols, values are the remapped target symbols (typically Yahoo Finance tickers).",
+        .description = "One named map. Keys and values are arbitrary strings; key order is preserved (REPLACE applies pairs in declaration order).",
         .insert_order = "alpha",
         .insert_template =
-        \\{ BROKER_SYMBOL: "YAHOO_SYMBOL" }
+        \\{ KEY: "VALUE" }
         ,
     },
     .{
@@ -359,8 +359,8 @@ test "config_schema covers known paths" {
     // Spot-check that representative paths from each binding category are
     // present. Comptime walk; failure points at the missing key.
     const wanted = [_][]const u8{
-        "ticker_maps",
-        "ticker_maps.*",
+        "maps",
+        "maps.*",
         "conversion_templates",
         "conversion_templates.*",
         "conversion_templates.*.data_dir",
