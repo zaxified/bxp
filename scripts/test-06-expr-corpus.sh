@@ -152,11 +152,13 @@ dots_n=$(( _BXP_OK_COL - 5 - ${#label} ))
 dots=$(printf '.%.0s' $(seq 1 $dots_n))
 
 if (( failed == 0 )); then
-    printf '  %s %s OK %5ss\n' "$label" "$dots" "$dur"
+    # %6s (OK) / %4s (FAIL): match test-lib.sh step() exactly so the trailing
+    # "s" lands on the report's right margin, flush with every other phase.
+    printf '  %s %s OK %6ss\n' "$label" "$dots" "$dur"
     exit 0
 fi
 
-printf '  %s %s FAIL %3ss\n' "$label" "$dots" "$dur"
+printf '  %s %s FAIL %4ss\n' "$label" "$dots" "$dur"
 echo
 echo "  Failures:"
 printf '%s\n' "$summary" | while IFS=$'\t' read -r tag detail; do

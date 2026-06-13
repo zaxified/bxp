@@ -32,7 +32,7 @@ Measured on the reference machine (ReleaseFast, 8 cores):
 
 | metric            | value                                       |
 | ----------------- | ------------------------------------------- |
-| input / output    | 84,399,020 rows (1:1) / 7.7 GB → 6.5 GB     |
+| input / output    | 84,399,019 rows (1:1) / 7.7 GB → 6.5 GB     |
 | wall time         | ~285 s (two `DATE_CONVERT` calls per row)   |
 | peak RSS          | ~23 MB (flat — does not grow with 84M rows) |
 | `no_passengers`   | **1,772,399 rows (2.1%)** — physically impossible, paid fare with `passenger_count = 0` |

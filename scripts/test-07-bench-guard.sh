@@ -10,7 +10,10 @@
 #   1. RSS ceiling — peak resident memory must stay bounded regardless of row
 #      count. The pre-2026-05-17 pipeline grew RSS O(N) (10 GB on 2M rows);
 #      the streaming rewrite holds it to a small constant. A hard ceiling
-#      catches any regression back to O(N) buffering.
+#      catches any regression back to O(N) buffering. Asserted for both the
+#      CSV pipeline and (v0.4.0 streaming .xlsx ingest) a synthetic .xlsx
+#      worksheet — the .xlsx point checks the RSS ceiling only, since flat RSS
+#      is the whole point of the streaming rewrite.
 #
 #   2. Scaling ratio — wall(large N) / wall(small N) must stay near the row
 #      ratio (linear). A super-linear blow-up (e.g. an accidental O(n^2) path)
@@ -25,6 +28,8 @@
 # Env overrides:
 #   GUARD_SMALL_ROWS   small-N row count   (default 25000)
 #   GUARD_LARGE_ROWS   large-N row count   (default 250000)
+#   GUARD_XLSX_ROWS    .xlsx worksheet row count (default 500000) — sized so an
+#                      O(N)-buffering regression would blow the RSS ceiling
 #   GUARD_RSS_MB       RSS ceiling in MB   (default 64)
 #   GUARD_RATIO_SLACK  allowed multiple of the row ratio before failing
 #                      (default 4 — row ratio 10x tolerates up to 40x;
@@ -42,12 +47,17 @@ MONO_ROOT="$(dirname "$SCRIPT_DIR")"
 source "$SCRIPT_DIR/test-lib.sh"
 
 GEN="$SCRIPT_DIR/bench/gen.py"
+XLSX_GEN="$SCRIPT_DIR/bench/gen-xlsx.py"
+XLSX_CFG="$SCRIPT_DIR/bench/xlsx-bench.json"
 WORK="$SCRIPT_DIR/bench/work/guard"
 BUILD_PREFIX="$WORK/build"
 BXP="$BUILD_PREFIX/bin/bxp-cli"
 
 SMALL_ROWS="${GUARD_SMALL_ROWS:-25000}"
 LARGE_ROWS="${GUARD_LARGE_ROWS:-250000}"
+XLSX_ROWS="${GUARD_XLSX_ROWS:-500000}"
+WIDE_COLS="${GUARD_WIDE_COLS:-900}"
+WIDE_ROWS="${GUARD_WIDE_ROWS:-20000}"
 RSS_MB="${GUARD_RSS_MB:-64}"
 RATIO_SLACK="${GUARD_RATIO_SLACK:-4}"
 COLS=16
@@ -100,6 +110,9 @@ t0=$(_now)
 
 if [[ ! -f "$GEN" ]]; then
     _fail "guard" 0 "generator missing: $GEN"
+fi
+if [[ ! -f "$XLSX_GEN" || ! -f "$XLSX_CFG" ]]; then
+    _fail "guard" 0 "xlsx generator/config missing: $XLSX_GEN / $XLSX_CFG"
 fi
 # Wall + peak RSS come from bxp-cli's own BXP_METRICS line (no GNU
 # /usr/bin/time, which is absent on Windows and BSD-incompatible on macOS;
@@ -157,6 +170,57 @@ _run_point() {
     awk -v ms="$wall_ms" -v r="$rss_kb" 'BEGIN{printf "%.2f %s", ms/1000, r}'
 }
 
+# Like _run_point but for the streaming .xlsx path: generate a synthetic
+# single-sheet workbook (worksheet stream sized by rows; small fixed vocab so
+# the sharedStrings table stays negligible), then convert it through the xlsx
+# pre-pass. Echoes "wall_s rss_kb". gen-xlsx.py uses only the Python stdlib
+# (zipfile/struct/datetime), so the existing python3 gate already covers it.
+_run_xlsx_point() {
+    local rows="$1"
+    local dir="$WORK/xlsx-n${rows}"
+    mkdir -p "$dir"
+    # Regenerate only if the workbook is absent — gen-xlsx.py is deterministic.
+    if [[ ! -f "$dir/bench.xlsx" ]]; then
+        python3 "$XLSX_GEN" "$dir/bench.xlsx" --rows "$rows" --vocab 5000 \
+            --symbols 200 --tmp "$dir/parts" >/dev/null 2>&1 || return 1
+    fi
+    cp "$XLSX_CFG" "$dir/bxp-cli.json"
+    # Drop any prior intermediate/output so a stale skip doesn't mask the run.
+    rm -f "$dir"/*_data.csv "$dir"/*_data.csvx 2>/dev/null
+    # Config uses data_dir "." — run from the workbook's directory.
+    local metrics
+    metrics=$( cd "$dir" && BXP_METRICS=1 "$BXP" --config bxp-cli.json --quiet 2>&1 >/dev/null ) || return 1
+    local wall_ms rss_kb
+    wall_ms=$(printf '%s\n' "$metrics" | sed -n 's/.*wall_ms=\([0-9][0-9]*\).*/\1/p')
+    rss_kb=$(printf '%s\n' "$metrics" | sed -n 's/.*peak_rss_kb=\([0-9][0-9]*\).*/\1/p')
+    [[ -n "$wall_ms" && -n "$rss_kb" ]] || return 1
+    awk -v ms="$wall_ms" -v r="$rss_kb" 'BEGIN{printf "%.2f %s", ms/1000, r}'
+}
+
+# Like _run_point but wide: many columns, modest rows, full passthrough (every
+# source column routed to output via --passthrough-only) so the wide-column
+# field/output path is actually exercised. test-07's other points fix COLS=16
+# and vary rows; this one fixes rows and widens to guard the per-row buffer +
+# output streaming against a return to O(cols)-buffered RSS. Echoes
+# "wall_s rss_kb". (The DEV PlutoGrid fixture was GUI-render stress — not
+# headless-runnable; this is the CLI-side wide-column guard.)
+_run_wide_point() {
+    local rows="$1" cols="$2"
+    local dir="$WORK/wide-c${cols}-n${rows}"
+    mkdir -p "$dir"
+    if [[ ! -f "$dir/input.in.csv" || ! -f "$dir/bxp-cli.json" ]]; then
+        python3 "$GEN" --rows "$rows" --cols "$cols" --cell-width "$CELL_W" \
+            --passthrough-only --out-dir "$dir" >/dev/null 2>&1 || return 1
+    fi
+    local metrics
+    metrics=$(BXP_METRICS=1 "$BXP" --config "$dir/bxp-cli.json" --quiet 2>&1 >/dev/null) || return 1
+    local wall_ms rss_kb
+    wall_ms=$(printf '%s\n' "$metrics" | sed -n 's/.*wall_ms=\([0-9][0-9]*\).*/\1/p')
+    rss_kb=$(printf '%s\n' "$metrics" | sed -n 's/.*peak_rss_kb=\([0-9][0-9]*\).*/\1/p')
+    [[ -n "$wall_ms" && -n "$rss_kb" ]] || return 1
+    awk -v ms="$wall_ms" -v r="$rss_kb" 'BEGIN{printf "%.2f %s", ms/1000, r}'
+}
+
 small_out=$(_run_point "$SMALL_ROWS") || _fail "guard" 0 "small-N run failed (N=$SMALL_ROWS)"
 large_out=$(_run_point "$LARGE_ROWS") || _fail "guard" 0 "large-N run failed (N=$LARGE_ROWS)"
 
@@ -203,6 +267,36 @@ if (( ratio_rc != 0 )); then
         "N=${SMALL_ROWS}: ${small_wall}s   N=${LARGE_ROWS}: ${large_wall}s"
 fi
 
+# --- 4. Assert .xlsx streaming RSS ceiling -----------------------------------
+# The v0.4.0 streaming .xlsx ingest holds RSS flat regardless of worksheet
+# size. XLSX_ROWS is sized so the uncompressed worksheet comfortably exceeds
+# the ceiling, so a regression to O(N) buffering trips it. Only the RSS ceiling
+# is checked (not the scaling ratio) — flat RSS is the invariant the streaming
+# rewrite delivers; the wall is reported for context only.
+xlsx_out=$(_run_xlsx_point "$XLSX_ROWS") || _fail "guard xlsx" 0 "xlsx-N run failed (N=$XLSX_ROWS)"
+read -r xlsx_wall xlsx_rss <<<"$xlsx_out"
+xlsx_rss_mb=$(awk -v k="$xlsx_rss" 'BEGIN{printf "%.1f", k/1024}')
+if (( xlsx_rss > rss_ceil_kb )); then
+    _fail "guard xlsx rss" "$xlsx_wall" \
+        "RSS ceiling ${RSS_MB} MB exceeded on .xlsx ingest — possible return to O(N) buffering" \
+        "N=${XLSX_ROWS}: ${xlsx_rss_mb} MB"
+fi
+
+# --- 5. Assert wide-column RSS ceiling ---------------------------------------
+# Near the MAX_COLUMNS=1024 ceiling, full passthrough. RSS must stay bounded:
+# the streaming pipeline processes row-by-row, so column count widens the
+# per-row buffer but not the resident set. A regression that buffers the whole
+# wide output would blow the ceiling. RSS-only (no scaling ratio — this point
+# fixes rows and varies width, not rows).
+wide_out=$(_run_wide_point "$WIDE_ROWS" "$WIDE_COLS") || _fail "guard wide" 0 "wide run failed (cols=$WIDE_COLS rows=$WIDE_ROWS)"
+read -r wide_wall wide_rss <<<"$wide_out"
+wide_rss_mb=$(awk -v k="$wide_rss" 'BEGIN{printf "%.1f", k/1024}')
+if (( wide_rss > rss_ceil_kb )); then
+    _fail "guard wide rss" "$wide_wall" \
+        "RSS ceiling ${RSS_MB} MB exceeded on ${WIDE_COLS}-column ingest — possible O(cols) buffering" \
+        "cols=${WIDE_COLS} rows=${WIDE_ROWS}: ${wide_rss_mb} MB"
+fi
+
 # One column-aligned OK line per check, each with its own real time — the
 # build (when it ran), each measured run (bxp-cli's self-reported wall, with
 # that point's peak RSS + the ceiling), and the scaling verdict. Cramming all
@@ -212,8 +306,12 @@ fi
 # (the raw %.2f walls stay above for the ratio math, which wants the precision).
 small_wall_1=$(awk -v w="$small_wall" 'BEGIN{printf "%.1f", w}')
 large_wall_1=$(awk -v w="$large_wall" 'BEGIN{printf "%.1f", w}')
+xlsx_wall_1=$(awk -v w="$xlsx_wall" 'BEGIN{printf "%.1f", w}')
+wide_wall_1=$(awk -v w="$wide_wall" 'BEGIN{printf "%.1f", w}')
 (( built )) && _emit "guard build (ReleaseFast)" OK "$build_dur"
 _emit "guard run N=${SMALL_ROWS} rss=${small_rss_mb}MB (<=${RSS_MB})" OK "$small_wall_1"
 _emit "guard run N=${LARGE_ROWS} rss=${large_rss_mb}MB (<=${RSS_MB})" OK "$large_wall_1"
 _emit "guard scaling ${wall_ratio}x (<=${ratio_limit}x, ${row_ratio}x rows)" OK "$chk_dur"
+_emit "guard xlsx N=${XLSX_ROWS} rss=${xlsx_rss_mb}MB (<=${RSS_MB})" OK "$xlsx_wall_1"
+_emit "guard wide cols=${WIDE_COLS} rss=${wide_rss_mb}MB (<=${RSS_MB})" OK "$wide_wall_1"
 exit 0

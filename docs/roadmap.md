@@ -100,15 +100,6 @@ test, path validation removes part of the shell-injection concern).
 
 ## v0.4.0
 
-### `.xlsx` ingest bench harness entry
-
-Streaming `.xlsx` ingest itself shipped in v0.4.0 (the `zipstream` primitive +
-reader-driven `XmlTok`; flat RSS, all size caps removed, byte-identical `xtb*`
-gate). One non-blocking follow-up remains:
-
-- **Bench harness entry** for the synthetic `.xlsx` (the `DEV/xlsx-bench`
-  generator exists; wire a point into `scripts/test-07-bench-guard.sh`).
-
 ### Future parallelism for single-stream ZIP ingest — deferred
 
 Multi-entry parallelism shipped (bxp-cli's `zip_input` pre-pass unpacks a
