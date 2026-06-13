@@ -17,7 +17,7 @@ the shipping targets today; any other tracker can be reached by writing an
 bxp-cli/
   src/
     main.zig      ← CLI layer: arg parsing, config loading, dispatch
-    pipeline.zig  ← Processing: processBroker(), xlsxPrePass(), helpers
+    pipeline.zig  ← Processing: processBroker(), zipPrePass(), xlsxPrePass(), helpers
   build.zig       ← depends on bxp-core (path dep ../bxp-core)
   build.zig.zon
   (scripts/, test-data/ and resources/ moved to monorepo root)
@@ -83,6 +83,7 @@ All broker logic is defined in `bxp-cli.json` — there are no compiled-in broke
   "file_pattern_out": ".csvx",
   "date_filter_from_filename": false,
   "ticker_map": {},
+  "zip_input": {},
   "xlsx_sheet": {},
   "pre_pass": {},
   "input_schema": {},
@@ -108,6 +109,20 @@ All broker logic is defined in `bxp-cli.json` — there are no compiled-in broke
   `DATE_CONVERT` in `input_schema` to normalise first.
 - `ticker_map` — optional symbol remapping. Either an inline object `{ "BTC": "BTC-USD" }` or a
   string name referencing an entry in the top-level `ticker_maps` section (e.g. `"xtb"`).
+- `zip_input` — optional object `{ "entry_pattern", "dir_mode", "path_separator" }`.
+  When present, every `*.zip` in `data_dir` is unpacked into flat intermediate CSV files
+  **before** the xlsx and main passes (so the chain is zip → (xlsx) → csv → csvx), e.g. a
+  RÚIAN/Oracle "zip of one CSV per region" export. Each member whose in-archive name ends with
+  `entry_pattern` (default `".csv"`) is streamed out (memory bounded to one inflate window) and
+  written under a flat name per `dir_mode`: `"basename"` (default) keeps only the final path
+  component (flattening an in-archive `CSV/foo.csv` → `foo.csv`); `"keep_path"` replaces every
+  `/` with `path_separator` (default `"_"`). Output names are always flat, so a member can never
+  escape `data_dir` (zip-slip); a member mapping to a separator, `"."`/`".."`, or a name already
+  produced by another member is a fatal error rather than a silent clobber. `--fresh` skips a
+  member whose intermediate CSV already exists. The unpack runs **in parallel** — the members are
+  independent, so workers steal jobs off a shared queue (each with its own file cursor + inflate
+  window), beating a single-threaded `unzip` on a multi-core host. Templates sharing a `data_dir`
+  unpack it once. See `examples/real-world/ruian-address-points/`.
 - `xlsx_sheet` — optional object `{ "name", "header_row", "output_suffix" }`.
   When present, xlsx files in `data_dir` are converted to an intermediate CSV file before the
   normal CSV processing loop. `name` is a prefix of the sheet name in the workbook (prefix

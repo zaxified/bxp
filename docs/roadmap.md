@@ -100,69 +100,27 @@ test, path validation removes part of the shell-injection concern).
 
 ## v0.4.0
 
-### Streaming `.xlsx` ingest — SHIPPED 2026-06-13
+### `.xlsx` ingest bench harness entry
 
-CSV and JSON paths went streaming in earlier releases (CSV via
-`ChunkReader` + `csv.LineIterator`; JSON via `std.json.Reader`). `.xlsx` was
-the last path with an `O(workbook size)` ceiling; it is now streaming too.
-
-**What shipped.** A new shared streaming-ZIP primitive
-(`bxp-core/src/zipstream.zig`: central-directory walk + per-entry inflate,
-exposing each member as a `*std.Io.Reader` over its decompressed bytes) plus a
-reader-driven `XmlTok` (windowed pull-tokenizer that scans a 128 KiB window with
-lazy O(n) compaction). Every XML part is now parsed by streaming it through the
-tokenizer — no part is materialised whole; the worksheet never lands in RAM. The
-shared-strings table is the only resident structure (cells index into it by
-arbitrary position — irreducible, an industry-wide constraint), guarded
-defensively by `XLSX_SHARED_STRINGS_CAP` (1 GiB) against a zip-bomb.
-
-**Deleted as a result:** the dual extraction backend (`ZipParts`,
-`extractZipToMemory`, the on-disk temp-dir path), `fixZipLocalVersionNeeded`
-(zipstream reads local headers directly, so the XTB `version_needed` mismatch is
-a non-issue), and _every_ size cap (`XLSX_MAX_FILE_SIZE`, `XLSX_INMEM_LIMIT`,
-`XLSX_INMEM_TOTAL_CAP`). Temp-dir hygiene hazards (read-only data dirs,
-antivirus) are gone with the temp dir.
-
-**Measured** (ReleaseSmall, synthetic worksheet-dominated workbook): a 206 MB
-uncompressed worksheet went **393 MB → 37 MB peak RSS** (~10×; the residual is
-the downstream CSV-processing phase, not xlsx ingest), wall +18 %. Workbooks
-above the old 100 MB-zip cutoff — which previously failed outright with
-`FileTooBig` — now convert. Correctness gated byte-identical by the `xtb*`
-datasets (real deflate + version mismatch).
-
-**Decision:** went straight to true streaming (not the cheap cap-raise) because
-the user wants the same primitive to back a future zipped-CSV pre-pass.
-
-Remaining (not blocking):
+Streaming `.xlsx` ingest itself shipped in v0.4.0 (the `zipstream` primitive +
+reader-driven `XmlTok`; flat RSS, all size caps removed, byte-identical `xtb*`
+gate). One non-blocking follow-up remains:
 
 - **Bench harness entry** for the synthetic `.xlsx` (the `DEV/xlsx-bench`
   generator exists; wire a point into `scripts/test-07-bench-guard.sh`).
 
-### Zipped-CSV pre-pass (`zip_input`) — deferred, primitive ready
+### Future parallelism for single-stream ZIP ingest — deferred
 
-The `zipstream` primitive above was designed reusable for this. A template
-opts in (config **A**, explicit: `zip_input: { entry_pattern: ".csv" }`); the
-pre-pass enumerates **all** matching `.csv` members of each `*.zip` in
-`data_dir` (N CSVs per zip, not 1:1) and streams each out to `data_dir` named by
-its **entry name inside the zip**, then the normal CSV pipeline runs. Real
-use-case: `ruian_adr.zip` (~8000 `cityname.csv` members). Mirrors `xlsxPrePass`.
-No `zipstream` refactor needed — only `pipeline.zig` + a `config.zig` field.
-Details to be settled when picked up.
+Multi-entry parallelism shipped (bxp-cli's `zip_input` pre-pass unpacks a
+many-member archive across worker threads). What remains is the _single large
+stream_ case, which is a different problem:
+DEFLATE of **one** stream is inherently serial — each block depends on the prior
+32 KiB output window (LZ77 back-refs), so no ZIP implementation parallel-decodes
+a single stream (pigz parallelises compression only; bgzip/BGZF needs the writer
+to emit a special block format Excel doesn't). So a single huge `.xlsx`
+worksheet, or a zip holding one giant member, stays single-threaded on inflate.
+One real lever, revisit when that throughput matters:
 
-### Future parallelism for ZIP ingest — deferred
-
-The streaming conversion (`xlsxPrePass` / a future zipped-CSV pre-pass) is
-single-threaded today. DEFLATE of **one** stream is inherently serial — each
-block depends on the prior 32 KiB output window (LZ77 back-refs), so no ZIP
-implementation parallel-decodes a single stream (pigz parallelises compression
-only; bgzip/BGZF needs the writer to emit a special block format Excel doesn't).
-Two real levers, revisit when ingest throughput matters:
-
-- **Multi-entry parallelism (the big win for the zipped-CSV pre-pass).** A ZIP
-  with many members is embarrassingly parallel — each entry is an independent
-  DEFLATE stream. `zipstream.Archive` already enumerates entries; a worker pool
-  could decompress N entries on N threads. Marginal for `.xlsx` (few parts) but
-  ideal for `ruian_adr.zip` (~8000 CSVs).
 - **Reader/worker pipelining (for one large worksheet).** Overlap the serial
   inflate+tokenise (producer) with the downstream parallel CSV processing
   (consumer) — convert block N+1 while processing block N. Doesn't make inflate

@@ -9,7 +9,7 @@ bxp/
 ├── bxp-cli/              # CLI batch tool (main user-facing binary)
 │   ├── src/
 │   │   ├── main.zig      # CLI layer: arg parsing, config loading, dispatch
-│   │   └── pipeline.zig  # Processing: processBroker(), xlsxPrePass()
+│   │   └── pipeline.zig  # Processing: processBroker(), zipPrePass() (parallel), xlsxPrePass()
 │   ├── build.zig
 │   └── build.zig.zon     # depends on bxp-core (path dep)
 ├── bxp-mcp/              # MCP server (JSON-RPC 2.0 over stdio): exposes bxp as

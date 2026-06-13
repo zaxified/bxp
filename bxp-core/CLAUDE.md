@@ -16,7 +16,7 @@ Consumed by bxp-cli (conversion engine) and the stateless-inspect adapters
 | ------------- | ----------------- | ------------------------------------------------------------------------- |
 | `csv`         | `csv.zig`         | `splitFields()`, `LineIterator`                                           |
 | `xlsx`        | `xlsx.zig`        | `xlsxToCsv()`, `SheetSpec` — streams every XML part via `zipstream`       |
-| `zipstream`   | `zipstream.zig`   | `Archive`, `EntryReader` — streaming ZIP central-dir walk + per-entry inflate (named module; shared by `xlsx`, future zipped-CSV pre-pass) |
+| `zipstream`   | `zipstream.zig`   | `Archive`, `EntryReader` — streaming ZIP central-dir walk + per-entry inflate (named module; shared by `xlsx` ingest + bxp-cli's parallel `zipPrePass`) |
 | `expr`        | `expr.zig`        | `eval()`, `evalString()`, `Context`, `Value`, `FnDoc` catalog             |
 | `datefmt`     | `datefmt.zig`     | `parse()`, `format()`, civil/arithmetic helpers — date core (file-rel @import by `expr.zig`, not a named module) |
 | `decimal`     | `decimal.zig`     | `Decimal` fixed-point i128 @ 1e12 — numeric core (named `"decimal"` module, shared by every input path) |
@@ -90,10 +90,11 @@ Converts `.xlsx` files (ZIP + XML) to intermediate CSV files.
 
 ### zipstream.zig
 
-Streaming ZIP-archive reader — the shared primitive behind xlsx ingest (and the
-planned zipped-CSV pre-pass). Walks the central directory once and exposes each
-member as an on-demand `*std.Io.Reader` over its decompressed bytes; a consumer's
-memory ceiling is O(one inflate window) regardless of archive/entry size.
+Streaming ZIP-archive reader — the shared primitive behind xlsx ingest and
+bxp-cli's `zipPrePass` (the zipped-CSV unpacker). Walks the central directory
+once and exposes each member as an on-demand `*std.Io.Reader` over its
+decompressed bytes; a consumer's memory ceiling is O(one inflate window)
+regardless of archive/entry size.
 
 - `Archive.init(self, alloc, file)` — in-place init (holds the file reader's
   self-pointer); walks the central directory recording every entry (name +
@@ -104,7 +105,9 @@ memory ceiling is O(one inflate window) regardless of archive/entry size.
   central-vs-local `version_needed` mismatch some writers emit is irrelevant) and
   sets up streaming inflate (deflate) or a limited reader (store). `reader()`
   returns the decompressed-byte `*std.Io.Reader`. One archive drives one file
-  cursor — finish one `EntryReader` before opening the next.
+  cursor — finish one `EntryReader` before opening the next. (This single-cursor
+  contract is why bxp-cli's parallel `zipPrePass` opens one `Archive` per worker:
+  concurrent `EntryReader`s would race the shared cursor.)
 - Store + Deflate only; anything else is `error.UnsupportedCompressionMethod`.
 - Both `Archive` and `EntryReader` carry internal self-pointers — init in place,
   never move after init.
