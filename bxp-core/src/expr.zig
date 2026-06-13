@@ -1057,17 +1057,24 @@ const Parser = struct {
 
     // cat_expr := mul_expr ('&' mul_expr)*
     fn parseCat(self: *Parser) anyerror!Value {
-        var left = try self.parseMul();
+        const left = try self.parseMul();
+        // Common case: no '&' — return the operand untouched, no allocation.
+        if ((try self.tok.peek()).kind != .amp) return left;
+
+        // One or more concatenations: collect every operand's string form and
+        // join once at the end. Joining pairwise (`a & b & c & …`) would copy
+        // the growing prefix per operator → O(n²); a single `concat` over the
+        // segment list is O(total length).
+        var segs: std.ArrayListUnmanaged([]const u8) = .empty;
+        try segs.append(self.ctx.alloc, try left.toString(self.ctx.alloc));
         while (true) {
             const t = try self.tok.peek();
             if (t.kind != .amp) break;
             _ = try self.tok.next();
             const right = try self.parseMul();
-            const ls = try left.toString(self.ctx.alloc);
-            const rs = try right.toString(self.ctx.alloc);
-            left = Value{ .string = try std.mem.concat(self.ctx.alloc, u8, &.{ ls, rs }) };
+            try segs.append(self.ctx.alloc, try right.toString(self.ctx.alloc));
         }
-        return left;
+        return Value{ .string = try std.mem.concat(self.ctx.alloc, u8, segs.items) };
     }
 
     // mul_expr := unary (('*' | '/') unary)*
@@ -1252,17 +1259,18 @@ const Parser = struct {
         }
 
         // Parse argument list (eagerly) for all other functions.
-        // Args are held in an arena-backed list; the individual Value.string
-        // slices may point into ctx.fields (no alloc) or into ctx.alloc-owned
-        // strings (concat, date-format results, etc.). The list itself is freed
-        // after the impl call; the strings it holds are either static or arena-
-        // owned and will outlive the call frame.
-        var args = std.array_list.Managed(Value).init(self.ctx.alloc);
-        defer args.deinit();
-
+        // Args accumulate into an inline stack buffer for the common small-
+        // arity case (no per-call allocation); only a variadic call
+        // (COALESCE/IN/GREATEST/LEAST) exceeding the inline slots spills the
+        // tail into the arena. The individual Value.string slices may point
+        // into ctx.fields (no alloc) or into ctx.alloc-owned strings (concat,
+        // date-format results, etc.); whichever backing the slice uses, the
+        // strings it holds are either static or arena-owned and will outlive
+        // the call frame.
+        var arg_acc: ArgAccumulator = .empty;
         var t = try self.tok.peek();
         while (t.kind != .rparen and t.kind != .eof) {
-            try args.append(try self.parseExpr());
+            try arg_acc.append(self.ctx.alloc, try self.parseExpr());
             t = try self.tok.peek();
             if (t.kind == .comma) {
                 _ = try self.tok.next();
@@ -1270,16 +1278,23 @@ const Parser = struct {
             }
         }
         _ = try self.tok.next(); // consume ')'
+        const args = arg_acc.slice();
 
-        // Linear scan over the catalog; case-insensitive name match.
-        // Skips lazy entries (IF is handled above; any future lazy fn must add its
-        // own special case before this loop).
-        for (builtins) |b| {
-            if (b.lazy) continue;
-            if (std.ascii.eqlIgnoreCase(name, b.name)) {
-                if (try self.validateArgs(b.doc, args.items)) |short_circuit|
-                    return short_circuit;
-                return b.impl.?(self, args.items);
+        // O(1) dispatch: uppercase the ident once and look it up in the
+        // comptime `builtin_index`. Idents longer than any builtin name, or
+        // not in the map, fall through to the unknown-function path. A lazy
+        // entry (only IF today, already handled above) is never dispatched
+        // here — its `impl` is null.
+        if (name.len <= max_builtin_name_len) {
+            var name_buf: [max_builtin_name_len]u8 = undefined;
+            const upper = std.ascii.upperString(name_buf[0..name.len], name);
+            if (builtin_index.get(upper)) |idx| {
+                const b = builtins[idx];
+                if (!b.lazy) {
+                    if (try self.validateArgs(b.doc, args)) |short_circuit|
+                        return short_circuit;
+                    return b.impl.?(self, args);
+                }
             }
         }
 
@@ -1481,6 +1496,39 @@ pub const FnEntry = struct {
     lazy: bool = false,
     doc: FnDoc,
     impl: ?FnImpl = null,
+};
+
+/// Argument accumulator used by `evalCall`. Collects parsed args into an
+/// inline stack array — covering every fixed-arity builtin (max 4 args) and
+/// the typical variadic call — so the common path allocates nothing. A
+/// variadic call (COALESCE/IN/GREATEST/LEAST) that exceeds the inline slots
+/// migrates the inline contents into an arena-backed list on first overflow
+/// so the returned slice stays contiguous.
+const ArgAccumulator = struct {
+    const inline_cap = 8;
+    buf: [inline_cap]Value = undefined,
+    n: usize = 0,
+    spill: std.ArrayListUnmanaged(Value) = .empty,
+
+    const empty: ArgAccumulator = .{};
+
+    fn append(self: *ArgAccumulator, alloc: std.mem.Allocator, v: Value) !void {
+        if (self.spill.items.len > 0) {
+            try self.spill.append(alloc, v);
+        } else if (self.n < inline_cap) {
+            self.buf[self.n] = v;
+            self.n += 1;
+        } else {
+            try self.spill.ensureTotalCapacity(alloc, inline_cap * 2);
+            self.spill.appendSliceAssumeCapacity(self.buf[0..self.n]);
+            self.spill.appendAssumeCapacity(v);
+        }
+    }
+
+    /// Mutable view of the collected args — `validateArgs` may coerce in place.
+    fn slice(self: *ArgAccumulator) []Value {
+        return if (self.spill.items.len > 0) self.spill.items else self.buf[0..self.n];
+    }
 };
 
 /// IF — lazy/short-circuit. The dispatcher matches IF by name BEFORE reaching
@@ -3268,6 +3316,25 @@ pub const builtins = [_]FnEntry{
     .{ .name = "EOMONTH",        .doc = eomonth_doc,        .impl = adaptEomonth },
     .{ .name = "NTH_DOW",        .doc = nth_dow_doc,        .impl = adaptNthDow },
 };
+
+/// Longest builtin name (PRICE_CURRENCY = 14). `evalCall` uppercases the call
+/// ident into a stack buffer of this size for the `builtin_index` lookup; a
+/// longer ident cannot match any builtin, so it skips the map and falls
+/// straight to the unknown-function path.
+pub const max_builtin_name_len = blk: {
+    var m: usize = 0;
+    for (builtins) |b| m = @max(m, b.name.len);
+    break :blk m;
+};
+
+/// Comptime name → `builtins` index map. Names in the catalog are already
+/// uppercase, so `evalCall` uppercases the call ident once and does an O(1)
+/// lookup here instead of a linear `eqlIgnoreCase` scan per call per row.
+const builtin_index = std.StaticStringMap(usize).initComptime(blk: {
+    var entries: [builtins.len]struct { []const u8, usize } = undefined;
+    for (builtins, 0..) |b, i| entries[i] = .{ b.name, i };
+    break :blk entries;
+});
 
 // ============================================================
 // Tests
