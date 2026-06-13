@@ -185,7 +185,7 @@ Remaining:
   check phase.
 
 - **`data_dir` multi-dir / array (`data_dir: [...]` or a `*` glob segment).**
-  Audit 2026-06-13, "v budoucnu zvážit". Brokers that export into dated
+  Audit 2026-06-13, deferred. Brokers that export into dated
   subdirectories (`exports/2026-06/`) need config edits per month today.
   Accepting an array of dirs (process all listed) or a `*` glob path segment
   would close that recurring operator chore. Demand-driven — only if a real
@@ -234,7 +234,7 @@ to pre-process the file" or "skip the affected rows".
   based on the user's actual file.
 
 - **Opt-in multiline quoted fields (`csv_multiline_quotes: true`).** Audit
-  2026-06-13, "v budoucnu zvážit". `csv.LineIterator` deliberately uses
+  2026-06-13, deferred. `csv.LineIterator` deliberately uses
   lazy-quotes semantics (a newline always ends the record; documented + tested
   intent). Some broker exports carry embedded newlines in description/notes
   columns (RFC 4180 §2.6). An opt-in per-template flag could switch the
@@ -362,26 +362,6 @@ extra columns are ignored`, reproduced 2026-05-31). 1024 is a deliberate,
   to the deferred `date_locales` idea (a named month-name map applied
   before `DATE_CONVERT`), avoiding a dedicated locale subsystem.
 
-- **Basic expression builtins — top gaps.** Surfaced 2026-06-05 reviewing
-  the 38-function catalog against the SQL / Excel baseline for a general
-  CSV cleaning tool. Three stand out as cheap, common, and genuinely
-  missing today (the rest — `MOD`, `POSITION`/`FIND`, `DATE_TRUNC`,
-  `QUARTER`/`WEEKNUM`, `HOUR`/`MINUTE`/`SECOND`, `PROPER`,
-  `IS_NUMERIC`/`IS_DATE`, `REPT`, and niche math `POWER`/`SQRT`/`SIGN`/
-  `TRUNC`/`MROUND` — are parked as a secondary list, add per use-case):
-  - **`LPAD(s, n, pad)` / `RPAD(s, n, pad)`** — pad a string to a fixed
-    width. The most common real gap: zero-padding account numbers, ISINs,
-    postal codes, fixed-width IDs. No way to express it today.
-  - **`SWITCH` / `CASE`** — multi-branch conditional. Collapses the
-    unreadable nested `IF(IF(IF(...)))` pyramid into one call; the single
-    biggest readability win available. Decide `SWITCH(x, v1,r1, v2,r2, …,
-default)` (Excel-style) vs SQL `CASE WHEN` shape — the variadic
-    `SWITCH` form is closer to the existing builtin call style.
-  - **`IS_EMPTY(x)`** — true when `x` is empty or whitespace-only. Cheap,
-    and directly retires the documented `"0" == ''` coercion footgun
-    (today the safe idiom is `LEN(TRIM(x)) = 0`, easy to get wrong as a
-    bare `x = ''` which matches `'0'`). One builtin removes the trap.
-
 ### bxp-gui
 
 - **User-supplied themes from JSON files on disk.** Every field on
@@ -498,69 +478,39 @@ rather than running in-core.
   zig-utils/zig-regex. v0.2.4 ships the other 9 builtins; the remaining
   ~10 % of real-world need (regex) waits.
 
-### Expression builtins (non-regex) — audit 2026-06-13, "v budoucnu zvážit"
+### Expression builtins (non-regex)
 
-From the 2026-06-13 bxp-core audit. None of these exist today (verified
-against the `builtins` catalog); all fit the existing `FnDoc` + `ArgKind`
-pattern, no tokenizer change. Ordered by expected user value:
+The high-value primary builtins (`CASE`, `IFERROR`, `LPAD`/`RPAD`, `POSITION`,
+`PROPER`, `MOD`, `ISEMPTY`) and the per-file/row context builtins
+(`FILENAME()`, `RECORD_NUM()`, `SHEET_NAME()`) have landed. What remains:
 
-- **`CASE(expr, m1, r1, m2, r2, …, default)`** — multi-branch mapping;
-  today done as nested `IF` chains, the single biggest readability pain in
-  real configs. Lazy like `IF` (skipExpr the non-selected arms). Highest value.
-- **`IFERROR(expr, fallback)`** — second lazy builtin; catches
-  `NotANumber` / `BadDate*` from the guarded arm. Lets a config author opt
-  into leniency **explicitly** instead of relying on silent-`""` semantics —
-  pairs with the template-strict/data-lenient philosophy.
-- **`LPAD` / `RPAD`(s, len, pad)** — account numbers, ISINs, fixed-width targets.
-- **`POSITION(needle, haystack)`** — 1-based, 0 = not found; complements
-  CONTAINS / SPLIT_PART for ad-hoc parsing.
-- **`PROPER(s)`** — title-case for name columns; trivial over the existing
-  uucode case-mapping tables.
-- **`MOD(a, b)`** — the only basic arithmetic op still missing; the Decimal
-  core already has div/trunc so the remainder is cheap.
+**Secondary / niche — on hold indefinitely.** No concrete use-case; add only
+when a real one appears. All fit the existing `FnDoc` + `ArgKind` pattern
+unless noted:
 
-Explicitly **not** in this set: regex builtins (separate section above —
-needs the Zig 0.16 migration + a new dep).
+- String / parsing: `FIND` (exact alias of the shipped `POSITION`), `REPT(s, n)`.
+- Calendar / clock components: `QUARTER(d)`, `WEEKNUM(d)`, `DATE_TRUNC(unit, d)`,
+  `HOUR(d)` / `MINUTE(d)` / `SECOND(d)`. The time extractors need a canonical
+  ISO-datetime input decision first (bxp's date model is date-only today).
+  These are plain calendar/clock accessors — **distinct from** the timezone
+  work under _Real-world data quirks → Timezone-aware datetimes_
+  (`TZ_OFFSET` / `TZ_CONVERT` / `IS_DST`), which carries the DST/zone logic.
+- Validation: `IS_NUMERIC(x)`, `IS_DATE(x)`.
+- Math: `SIGN(x)`, `TRUNC(x)`, `MROUND(x, m)` are exact on the fixed-point
+  decimal core. `POWER(base, exp)` and `SQRT(x)` are **blocked on a design
+  call** — both need floating point, which conflicts with the deliberately
+  float-free decimal core; revisit only with an integer-exponent-only `POWER`
+  or an explicit float-approximation mode.
 
-### Encoding — more single-byte code pages — audit 2026-06-13, "v budoucnu zvážit"
+Regex builtins (`REGEX_MATCH` / `REGEX_EXTRACT`) are tracked separately above —
+they need the Zig 0.16 migration + a new dependency.
+
+### Encoding — more single-byte code pages
 
 `encoding.zig` covers Win-1250/1252, ISO-8859-1/2/15 today. The 256-entry
 override-table pattern makes each new code page ~mechanical (Win-1251
 Cyrillic, ISO-8859-5, …). Marginal cost is low; no work until a broker
 export actually demands one.
-
-### Context builtins — `filename()` / `record_num()` / `sheet_name()`
-
-Expose per-row evaluation context to expressions as new builtins (same family
-as `now()` / `rand(n)` — no tokenizer change, just impl + `FnDoc`). Brainstormed
-2026-06-08.
-
-- **`filename()`** — the current input file's stem (name without extension /
-  directory). The high-value primitive: broker exports routinely embed the
-  account number, broker code, and period in the filename
-  (`XTB_12345_2024-01_2024-12.csv`). Composes with the existing string +
-  date builtins, so the whole "date range in filename" need is met without a
-  dedicated parser:
-  `DATE_CONVERT(SPLIT_PART(filename(), '_', 3), 'YYYY-MM-DD', 'YYYY-MM-DD')`,
-  and `date_filter_from_filename` becomes expressible as a plain `row_rules`
-  skip (`{ "when": "$date < SPLIT_PART(filename(),'_',3)", "rows": [] }`).
-  This **supersedes the rejected `filename_date_format` config key** — give the
-  primitive, not a special-case feature. (Optional sugar `file_part(n)` =
-  `SPLIT_PART(filename(), sep, n)` only if it earns its keep.)
-- **`record_num()`** — 1-based input record number (per file). For generating
-  IDs / dedup keys, "skip first N" logic, and debugging. Decide per-file vs
-  cumulative-across-files (lean per-file; add a separate accessor if a real
-  case needs the global counter).
-- **`sheet_name()`** — for xlsx-derived input, the source sheet name. Lower
-  value (a template already targets one sheet) but cheap and rounds out the
-  set; returns "" for native CSV/JSON input.
-
-Syntax note: deliberately builtins, **not** a new `$_1` token class — `$name`
-stays reserved for user-declared `input_schema` variables; positional context
-mirrors `FIELDS(n)` / `NOW()`. Impl note: `filename()` / `sheet_name()` are
-row-invariant **within a file** but vary between files, so any constant-fold
-must source them from the per-file context, never treat them as globally
-constant (see the `evalFieldRef` fast-path lesson in memory).
 
 ## Not planned
 
