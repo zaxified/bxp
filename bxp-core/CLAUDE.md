@@ -86,9 +86,11 @@ Expression evaluator for `input_schema` and `row_rules` in bxp-cli.json.
 - `eval(expr, ctx)` — parse and evaluate expression, returns `Value`.
 - `evalString(expr, ctx)` — like `eval()` but coerces result to string.
 - `Context` — per-row evaluation context: `fields`, `col_index`, `ticker_map`,
-  `lookup_table`, `alloc`, `decimal_sep_in`, `quote_out`, `input_encoding`.
-  `input_encoding` (Layer 0) transcodes each accessed field value to UTF-8 in
-  `field()`; `.utf8` (default) is a zero-alloc pass-through.
+  `lookup_table`, `alloc`, `decimal_sep_in`, `quote_out`, `input_encoding`,
+  plus the per-file/row source context `filename` / `sheet_name` / `record_num`
+  (behind `FILENAME()` / `SHEET_NAME()` / `RECORD_NUM()`; default ""/""/0 for
+  stateless eval). `input_encoding` (Layer 0) transcodes each accessed field
+  value to UTF-8 in `field()`; `.utf8` (default) is a zero-alloc pass-through.
 - `Value` — union of `decimal: Decimal`, `string: []const u8`, `boolean: bool`.
   `Decimal` (in `decimal.zig`) is a fixed-point `i128` at scale 1e12 (12
   fractional digits): exact `+ −`, half-away-from-zero `× ÷` and `ROUND`. Replaces
@@ -97,13 +99,17 @@ Expression evaluator for `input_schema` and `row_rules` in bxp-cli.json.
 - `DATE_CONVERT()` date/time parsing and formatting is handled in-process by
   `datefmt.zig` (file-relative `@import`) — no external dependency. Pre-1970
   dates are fully supported (pure parse → format reshuffle, no epoch round-trip).
-- Unit tests inline (136 test cases).
+- Unit tests inline (144 test cases).
 
-**Built-in functions:** IF, ABS, DATE_CONVERT, PRICE_VALUE, PRICE_CURRENCY,
-TICKER, LOOKUP, SPLIT_PART, CONTAINS, REPLACE, TRIM, ROUND, FLOOR, CEILING,
-NOW, RAND, COALESCE, FIELDS, UPPER, LOWER, UNACCENT, LEFT, RIGHT, SUBSTR,
-STARTS_WITH, ENDS_WITH, NULLIF, IN, LEN, GREATEST, LEAST, DATEADD,
-DATEDIFF, WORKDAY, YEAR, MONTH, DAY, WEEKDAY, EOMONTH, NTH_DOW.
+**Built-in functions:** IF, CASE, IFERROR, ABS, DATE_CONVERT, PRICE_VALUE,
+PRICE_CURRENCY, TICKER, LOOKUP, SPLIT_PART, CONTAINS, REPLACE, TRIM, ROUND,
+FLOOR, CEILING, MOD, NOW, RAND, FILENAME, RECORD_NUM, SHEET_NAME, COALESCE,
+FIELDS, UPPER, LOWER, UNACCENT, LEFT, RIGHT, SUBSTR, LPAD, RPAD, POSITION,
+PROPER, STARTS_WITH, ENDS_WITH, NULLIF, IN, ISEMPTY, LEN, GREATEST, LEAST,
+DATEADD, DATEDIFF, WORKDAY, YEAR, MONTH, DAY, WEEKDAY, EOMONTH, NTH_DOW.
+IF/CASE/IFERROR are lazy (parse their own arg lists; only the selected /
+non-erroring branch is evaluated). FILENAME/RECORD_NUM/SHEET_NAME read the
+per-file/row `Context` and are excluded from constant-folding (`isRowInvariant`).
 
 **Doc catalog** (`pub const builtins`, `keywords`, `operators`, `tokens`): each
 builtin sits next to its `FnDoc` declaration (search for `── <NAME> ──`

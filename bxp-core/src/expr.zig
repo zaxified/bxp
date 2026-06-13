@@ -159,6 +159,19 @@ pub const Context = struct {
     /// passed to `eval()`. Default null disables the writer entirely so the
     /// runtime path (bxp-cli pipeline) pays no overhead.
     trace_writer: ?*std.Io.Writer = null,
+    /// Per-file source name behind `FILENAME()` — the input file stem with the
+    /// directory and the matched `file_pattern_in` suffix removed. Row-invariant
+    /// within a file but VARIES between files; the pipeline sets it once per
+    /// file. Default "" (stateless inspect eval has no source file).
+    filename: []const u8 = "",
+    /// Per-file source sheet behind `SHEET_NAME()` — the configured
+    /// `xlsx_sheet.name` for an xlsx-derived input, else "". Same per-file
+    /// invariance caveat as `filename`.
+    sheet_name: []const u8 = "",
+    /// 1-based input record number of the current row behind `RECORD_NUM()`.
+    /// Set per row by the pipeline; 0 when unknown (stateless inspect eval,
+    /// or the pre_pass scan where no main-pass record counter exists).
+    record_num: u64 = 0,
 
     /// Returns the field value at idx, trimmed of surrounding spaces.
     /// Returns "" when idx is out of range.
@@ -802,12 +815,14 @@ pub fn isRowInvariant(src: []const u8, alloc: std.mem.Allocator) bool {
     if (refs.lookups.count() != 0) return false;
     if (refs.has_two_arg_lookup or refs.has_computed_lookup_name) return false;
 
-    // Reject the two nondeterministic builtins (NOW/RAND) and the positional
-    // field accessor FIELDS(n): the latter reads row state through a numeric
-    // index, which carries no `[Name]` field_ref token for `staticReferences`
-    // to catch, so it must be rejected here or it would be wrongly folded to a
-    // single empty value. Token-level check (not a substring scan) so a string
-    // literal like 'KNOW' is not mistaken for NOW.
+    // Reject the nondeterministic / context builtins and the positional field
+    // accessor FIELDS(n). None carries a `[Name]` field_ref token for
+    // `staticReferences` to catch, so they must be rejected here or they would
+    // be wrongly folded to a single value. NOW/RAND are nondeterministic;
+    // RECORD_NUM varies per row; FILENAME/SHEET_NAME are per-file constants
+    // that vary BETWEEN files (folding once per template would freeze the
+    // first file's value — see the evalFieldRef fast-path lesson). Token-level
+    // check (not a substring scan) so a literal like 'KNOW' isn't taken for NOW.
     var tok = Tokenizer.init(src);
     while (true) {
         const t = tok.next() catch return false;
@@ -816,6 +831,9 @@ pub fn isRowInvariant(src: []const u8, alloc: std.mem.Allocator) bool {
         if (std.ascii.eqlIgnoreCase(t.text, "NOW")) return false;
         if (std.ascii.eqlIgnoreCase(t.text, "RAND")) return false;
         if (std.ascii.eqlIgnoreCase(t.text, "FIELDS")) return false;
+        if (std.ascii.eqlIgnoreCase(t.text, "RECORD_NUM")) return false;
+        if (std.ascii.eqlIgnoreCase(t.text, "FILENAME")) return false;
+        if (std.ascii.eqlIgnoreCase(t.text, "SHEET_NAME")) return false;
     }
     return true;
 }
@@ -1222,6 +1240,87 @@ const Parser = struct {
         }
     }
 
+    /// CASE(subject, m1, r1, m2, r2, …, default?) — lazy multi-branch mapping.
+    /// Evaluates `subject` once, then walks the match/result pairs in order
+    /// and returns the first result whose match equals `subject` (same
+    /// equality as the `=` operator / IN — numeric when both parse as numbers,
+    /// else byte-exact string). A lone trailing arg is the default returned
+    /// when nothing matches; with no default an unmatched CASE returns "".
+    /// Only the selected result expression is evaluated; the rest are skipped.
+    /// The dispatcher has already consumed the opening '('.
+    fn evalCase(self: *Parser) anyerror!Value {
+        const subject = try self.parseExpr();
+        if ((try self.tok.next()).kind != .comma) return error.ExpectedComma;
+        var pairs: usize = 0;
+        while (true) {
+            const cand = try self.parseExpr();
+            const after = try self.tok.peek();
+            if (after.kind == .rparen) {
+                _ = try self.tok.next(); // consume ')'
+                // A lone trailing arg is the default. Require at least one
+                // match/result pair so CASE(x, y) is a loud arity error rather
+                // than a silent "always y".
+                if (pairs == 0) return error.WrongArgCount;
+                return cand;
+            }
+            if (after.kind != .comma) return error.ExpectedComma;
+            _ = try self.tok.next(); // consume comma after the match value
+            pairs += 1;
+            if (try valuesEqual(subject, cand, self.ctx.alloc)) {
+                const result = try self.parseExpr();
+                // Drain the remaining unmatched pairs + optional default
+                // without evaluating them.
+                var t = try self.tok.peek();
+                while (t.kind == .comma) {
+                    _ = try self.tok.next();
+                    try self.skipExpr();
+                    t = try self.tok.peek();
+                }
+                if (t.kind != .rparen) return error.ExpectedRParen;
+                _ = try self.tok.next();
+                return result;
+            }
+            // No match: skip this pair's result unevaluated, then continue to
+            // the next pair or the trailing default.
+            try self.skipExpr();
+            const t = try self.tok.peek();
+            if (t.kind == .rparen) {
+                _ = try self.tok.next();
+                return Value{ .string = "" }; // pairs but no default, nothing matched
+            }
+            if (t.kind != .comma) return error.ExpectedComma;
+            _ = try self.tok.next(); // consume comma, loop
+        }
+    }
+
+    /// IFERROR(expr, fallback) — return `expr`'s value, or `fallback` when
+    /// evaluating `expr` raises a DATA error (see `isDataError`: bad number,
+    /// bad date, numeric overflow, unordered string compare). `fallback` is
+    /// evaluated only on error. Template errors (unknown function, wrong arg
+    /// count, syntax) propagate unchanged — IFERROR is a runtime safety net
+    /// for messy data, not a way to silence template mistakes. The dispatcher
+    /// has already consumed the opening '('.
+    fn evalIferror(self: *Parser) anyerror!Value {
+        // Snapshot the tokenizer so a data-error in `expr` can be rolled back
+        // and the (syntactically valid) guarded expression skipped cleanly,
+        // regardless of where mid-expression evaluation stopped.
+        const saved = self.tok;
+        if (self.parseExpr()) |val| {
+            if ((try self.tok.next()).kind != .comma) return error.ExpectedComma;
+            try self.skipExpr(); // fallback not needed
+            if ((try self.tok.next()).kind != .rparen) return error.ExpectedRParen;
+            return val;
+        } else |err| {
+            if (!isDataError(err)) return err;
+            self.tok = saved;
+            try self.skipExpr(); // skip the guarded expr unevaluated
+            if ((try self.tok.next()).kind != .comma) return error.ExpectedComma;
+            const fallback = try self.parseExpr();
+            if ((try self.tok.next()).kind != .rparen) return error.ExpectedRParen;
+            return fallback;
+        }
+    }
+
     /// Dispatches function calls via the `builtins` catalog (single source of
     /// truth — see "Catalog" section near end of file). IF is the only lazy
     /// (short-circuit) builtin and is handled inline; everything else flows
@@ -1257,6 +1356,11 @@ const Parser = struct {
                 return no;
             }
         }
+
+        // CASE / IFERROR: also lazy — they parse their own arg lists so only
+        // the selected / non-erroring branch is evaluated (see if_doc note).
+        if (std.ascii.eqlIgnoreCase(name, "CASE")) return self.evalCase();
+        if (std.ascii.eqlIgnoreCase(name, "IFERROR")) return self.evalIferror();
 
         // Parse argument list (eagerly) for all other functions.
         // Args accumulate into an inline stack buffer for the common small-
@@ -1531,6 +1635,34 @@ const ArgAccumulator = struct {
     }
 };
 
+/// Equality test shared by CASE — numeric when both sides parse as numbers,
+/// otherwise byte-exact string compare. Mirrors the `=` operator and IN().
+fn valuesEqual(a: Value, b: Value, alloc: std.mem.Allocator) !bool {
+    const an = a.toNumber() catch null;
+    const bn = b.toNumber() catch null;
+    if (an != null and bn != null) return an.?.eql(bn.?);
+    const as = try a.toString(alloc);
+    const bs = try b.toString(alloc);
+    return std.mem.eql(u8, as, bs);
+}
+
+/// True for the data-driven evaluation errors IFERROR catches — the ones a
+/// messy CSV value (not a real number, malformed date, out-of-range magnitude)
+/// can trigger. Structural / template errors (unknown function, wrong arg
+/// count, syntax) and systemic OutOfMemory are deliberately NOT in this set so
+/// they stay loud: IFERROR is a data safety net, not a template-error muffler.
+fn isDataError(err: anyerror) bool {
+    return switch (err) {
+        error.NotANumber,
+        error.InvalidDate,
+        error.NumberOverflow,
+        error.NumberOutOfRange,
+        error.StringComparisonUnsupported,
+        => true,
+        else => false,
+    };
+}
+
 /// IF — lazy/short-circuit. The dispatcher matches IF by name BEFORE reaching
 /// the table loop and parses its own arg list via Parser; no adapter exists.
 const if_doc: FnDoc = .{
@@ -1545,6 +1677,36 @@ const if_doc: FnDoc = .{
     },
     .min_args = 3,
     .max_args = 3,
+};
+
+/// CASE — lazy multi-branch. Like IF, the dispatcher matches it by name and it
+/// parses its own arg list via `Parser.evalCase`; no adapter exists.
+const case_doc: FnDoc = .{
+    .name = "CASE",
+    .signature = "CASE(expr, m1, r1, …, default)",
+    .example = "CASE('B', 'B', 'BUY', 'S', 'SELL', '?')",
+    .description = "Multi-branch mapping. Compares `expr` against each `m`/`r` pair in order and returns the first matching `r`; returns the trailing `default` when nothing matches (or \"\" if no default is given). Equality matches the `=` operator (numeric when both sides parse as numbers, else byte-exact string). Only the selected result is evaluated. Collapses nested `IF(IF(IF(…)))` chains.",
+    .args = &.{
+        .{ .name = "expr" },
+        .{ .name = "m1" },
+        .{ .name = "r1" },
+    },
+    .min_args = 3,
+    .max_args = 255,
+};
+
+/// IFERROR — lazy. Matched by name; parses its own args via `Parser.evalIferror`.
+const iferror_doc: FnDoc = .{
+    .name = "IFERROR",
+    .signature = "IFERROR(expr, fallback)",
+    .example = "IFERROR(YEAR('not-a-date'), '')",
+    .description = "Return `expr`'s value, or `fallback` if evaluating `expr` raises a data error (not-a-number, bad date, numeric overflow). `fallback` is evaluated only on error. Template errors — unknown function, wrong argument count, syntax — are NOT caught: IFERROR guards against messy data, not template mistakes.",
+    .args = &.{
+        .{ .name = "expr" },
+        .{ .name = "fallback" },
+    },
+    .min_args = 2,
+    .max_args = 2,
 };
 
 // ---------------------------------------------------------------------------
@@ -3274,8 +3436,244 @@ pub const tokens = [_]TokenDoc{
 /// new "── NAME ──" block above + one line here. Order is the iteration
 /// order in `evalCall` (case-insensitive lookup so order doesn't matter for
 /// correctness).
+// ── FILENAME ────────────────────────────────────────────────────────────
+const filename_doc: FnDoc = .{
+    .name = "FILENAME",
+    .signature = "FILENAME()",
+    .example = "FILENAME()",
+    .description = "Input file stem — the file name with its directory and the matched `file_pattern_in` suffix removed (the same stem used for output naming). Broker exports often encode account/broker/period in the name, so e.g. `SPLIT_PART(FILENAME(), '_', 3)` extracts a field from it. Empty during stateless evaluation (no source file).",
+    .min_args = 0,
+    .max_args = 0,
+};
+fn adaptFilename(p: *Parser, args: []Value) anyerror!Value {
+    if (args.len != 0) return error.WrongArgCount;
+    return Value{ .string = p.ctx.filename };
+}
+
+// ── RECORD_NUM ──────────────────────────────────────────────────────────
+const record_num_doc: FnDoc = .{
+    .name = "RECORD_NUM",
+    .signature = "RECORD_NUM()",
+    .example = "RECORD_NUM()",
+    .description = "1-based input record number of the current row within the file (the first data row is 1). Use it for synthetic IDs, dedup keys, or skip-first-N logic. 0 during stateless evaluation and inside the pre_pass scan.",
+    .min_args = 0,
+    .max_args = 0,
+};
+fn adaptRecordNum(p: *Parser, args: []Value) anyerror!Value {
+    if (args.len != 0) return error.WrongArgCount;
+    return Value{ .decimal = Decimal.fromInt(@intCast(p.ctx.record_num)) };
+}
+
+// ── SHEET_NAME ──────────────────────────────────────────────────────────
+const sheet_name_doc: FnDoc = .{
+    .name = "SHEET_NAME",
+    .signature = "SHEET_NAME()",
+    .example = "SHEET_NAME()",
+    .description = "For xlsx-derived input, the configured `xlsx_sheet.name` the row came from; \"\" for native CSV/JSON input and during stateless evaluation.",
+    .min_args = 0,
+    .max_args = 0,
+};
+fn adaptSheetName(p: *Parser, args: []Value) anyerror!Value {
+    if (args.len != 0) return error.WrongArgCount;
+    return Value{ .string = p.ctx.sheet_name };
+}
+
+// ── LPAD ────────────────────────────────────────────────────────────────
+/// Defensive cap on LPAD/RPAD target width — the width is normally an
+/// author-written literal, but bound the allocation so a stray huge value
+/// can't blow up memory. 64 KiB is far beyond any real fixed-width field.
+const PAD_MAX_LEN: usize = 65535;
+const lpad_doc: FnDoc = .{
+    .name = "LPAD",
+    .signature = "LPAD(s, len, pad)",
+    .example = "LPAD('42', 5, '0')",
+    .description = "Left-pad `s` with the `pad` string (repeated, then clipped) until it is `len` bytes long. If `s` is already `len` or longer it is truncated to the first `len` bytes; an empty `pad` returns `s` unchanged. `len` is clamped to [0, 65535]. Byte-based (UTF-8 byte count).",
+    .args = &.{
+        .{ .name = "s", .kind = .string },
+        .{ .name = "len", .kind = .number },
+        .{ .name = "pad", .kind = .string },
+    },
+    .min_args = 3,
+    .max_args = 3,
+};
+fn builtinPad(args: []Value, alloc: std.mem.Allocator, comptime left: bool) !Value {
+    const s = switch (args[0]) {
+        .string => |v| v,
+        else => return error.StringExpected,
+    };
+    const pad = switch (args[2]) {
+        .string => |v| v,
+        else => return error.StringExpected,
+    };
+    const len_t = (try args[1].toNumber()).trunc();
+    const target: usize = if (len_t <= 0) 0 else if (len_t > PAD_MAX_LEN) PAD_MAX_LEN else @intCast(len_t);
+    if (s.len >= target) return Value{ .string = s[0..target] };
+    if (pad.len == 0) return Value{ .string = s }; // nothing to pad with
+    const fill = target - s.len;
+    const buf = try alloc.alloc(u8, target);
+    // Fill region: repeat `pad` cyclically to cover `fill` bytes.
+    const fill_start: usize = if (left) 0 else s.len;
+    const body_start: usize = if (left) fill else 0;
+    @memcpy(buf[body_start .. body_start + s.len], s);
+    var i: usize = 0;
+    while (i < fill) : (i += 1) buf[fill_start + i] = pad[i % pad.len];
+    return Value{ .string = buf };
+}
+fn adaptLpad(p: *Parser, args: []Value) anyerror!Value {
+    return builtinPad(args, p.ctx.alloc, true);
+}
+
+// ── RPAD ────────────────────────────────────────────────────────────────
+const rpad_doc: FnDoc = .{
+    .name = "RPAD",
+    .signature = "RPAD(s, len, pad)",
+    .example = "RPAD('42', 5, ' ')",
+    .description = "Right-pad `s` with the `pad` string (repeated, then clipped) until it is `len` bytes long. If `s` is already `len` or longer it is truncated to the first `len` bytes; an empty `pad` returns `s` unchanged. `len` is clamped to [0, 65535]. Byte-based (UTF-8 byte count).",
+    .args = &.{
+        .{ .name = "s", .kind = .string },
+        .{ .name = "len", .kind = .number },
+        .{ .name = "pad", .kind = .string },
+    },
+    .min_args = 3,
+    .max_args = 3,
+};
+fn adaptRpad(p: *Parser, args: []Value) anyerror!Value {
+    return builtinPad(args, p.ctx.alloc, false);
+}
+
+// ── POSITION ────────────────────────────────────────────────────────────
+const position_doc: FnDoc = .{
+    .name = "POSITION",
+    .signature = "POSITION(needle, haystack)",
+    .example = "POSITION('Inc', 'Apple Inc')",
+    .description = "1-based byte position of the first occurrence of `needle` inside `haystack`, or 0 when not found. An empty `needle` returns 1. Byte-based (UTF-8 byte offset), case-sensitive.",
+    .args = &.{
+        .{ .name = "needle", .kind = .string },
+        .{ .name = "haystack", .kind = .string },
+    },
+    .min_args = 2,
+    .max_args = 2,
+};
+fn builtinPosition(args: []Value) !Value {
+    const needle = switch (args[0]) {
+        .string => |v| v,
+        else => return error.StringExpected,
+    };
+    const haystack = switch (args[1]) {
+        .string => |v| v,
+        else => return error.StringExpected,
+    };
+    const idx = std.mem.indexOf(u8, haystack, needle) orelse return Value{ .decimal = Decimal.zero };
+    return Value{ .decimal = Decimal.fromInt(@intCast(idx + 1)) };
+}
+fn adaptPosition(_: *Parser, args: []Value) anyerror!Value {
+    return builtinPosition(args);
+}
+
+// ── PROPER ──────────────────────────────────────────────────────────────
+const proper_doc: FnDoc = .{
+    .name = "PROPER",
+    .signature = "PROPER(s)",
+    .example = "PROPER('apple inc')",
+    .description = "Title-case `s`: upper-case the first letter of every word and lower-case the rest (`apple inc` → `Apple Inc`, `o'brien` → `O'Brien`). Words break on any non-letter (spaces, digits, punctuation), like Excel PROPER. Full-Unicode via the same case tables as UPPER/LOWER; invalid UTF-8 passes through.",
+    .args = &.{.{ .name = "s", .kind = .string }},
+    .min_args = 1,
+    .max_args = 1,
+};
+fn builtinProper(args: []Value, alloc: std.mem.Allocator) !Value {
+    const s0 = switch (args[0]) {
+        .string => |v| v,
+        else => return error.StringExpected,
+    };
+    // Lower-case the whole string first, then re-upper the first letter of
+    // each word. Casing a single leading codepoint via toUpperStr handles
+    // multi-byte expansion (e.g. ß → SS) and non-ASCII letters (über → Über).
+    const lower = try unicode.toLowerStr(alloc, s0);
+    var out: std.ArrayListUnmanaged(u8) = .empty;
+    var at_word_start = true;
+    var i: usize = 0;
+    while (i < lower.len) {
+        const b = lower[i];
+        const cp_len = std.unicode.utf8ByteSequenceLength(b) catch 1;
+        const end = @min(i + cp_len, lower.len);
+        const cp_bytes = lower[i..end];
+        // Any non-ASCII byte is treated as a word letter; ASCII letters are
+        // letters, ASCII digits / punctuation / spaces are word breaks.
+        const is_letter = (b >= 0x80) or std.ascii.isAlphabetic(b);
+        if (is_letter and at_word_start) {
+            try out.appendSlice(alloc, try unicode.toUpperStr(alloc, cp_bytes));
+        } else {
+            try out.appendSlice(alloc, cp_bytes);
+        }
+        at_word_start = !is_letter;
+        i = end;
+    }
+    return Value{ .string = try out.toOwnedSlice(alloc) };
+}
+fn adaptProper(p: *Parser, args: []Value) anyerror!Value {
+    return builtinProper(args, p.ctx.alloc);
+}
+
+// ── MOD ─────────────────────────────────────────────────────────────────
+const mod_doc: FnDoc = .{
+    .name = "MOD",
+    .signature = "MOD(a, b)",
+    .example = "MOD(7, 3)",
+    .description = "Remainder of `a` divided by `b`, with the sign of the dividend `a` (truncated division, like SQL/C `%`: `MOD(-7, 3) = -1`). `MOD(a, 0)` returns \"\" (mirrors the `/` operator's silent divide-by-zero). Exact over the fixed-point decimal core.",
+    .args = &.{
+        .{ .name = "a", .kind = .number },
+        .{ .name = "b", .kind = .number },
+    },
+    .min_args = 2,
+    .max_args = 2,
+};
+fn builtinMod(args: []Value) !Value {
+    const a = try args[0].toNumber();
+    const b = try args[1].toNumber();
+    if (b.isZero()) return Value{ .string = "" };
+    // Truncated remainder on the raw fixed-point integers: the SCALE factors
+    // cancel in the quotient, so @divTrunc(a.raw, b.raw) is trunc(a/b), and
+    // rem = a - b*trunc(a/b). Compute the product in i256 to avoid overflow;
+    // |rem| < |b| so it always fits back into i128.
+    const ar: i256 = a.raw;
+    const br: i256 = b.raw;
+    const k = @divTrunc(ar, br);
+    const rem: i128 = @intCast(ar - br * k);
+    return Value{ .decimal = .{ .raw = rem } };
+}
+fn adaptMod(p: *Parser, args: []Value) anyerror!Value {
+    return builtinMod(args) catch |err| {
+        if (args.len >= 1) switch (args[0]) { .string => |s| p.setNotANumber(s), else => {} };
+        return err;
+    };
+}
+
+// ── ISEMPTY ─────────────────────────────────────────────────────────────
+const isempty_doc: FnDoc = .{
+    .name = "ISEMPTY",
+    .signature = "ISEMPTY(x)",
+    .example = "ISEMPTY('  ')",
+    .description = "Return \"true\" when `x` is empty or whitespace-only, else \"false\". The safe emptiness test: a bare `x = ''` wrongly matches `'0'` (which coerces to empty in numeric context), whereas ISEMPTY checks the trimmed string length.",
+    .args = &.{.{ .name = "x", .kind = .string }},
+    .min_args = 1,
+    .max_args = 1,
+};
+fn builtinIsEmpty(args: []Value) !Value {
+    const s = switch (args[0]) {
+        .string => |v| v,
+        // Numbers and booleans are never empty (even 0 / false).
+        else => return Value{ .boolean = false },
+    };
+    return Value{ .boolean = std.mem.trim(u8, s, " \t\r\n").len == 0 };
+}
+fn adaptIsEmpty(_: *Parser, args: []Value) anyerror!Value {
+    return builtinIsEmpty(args);
+}
+
 pub const builtins = [_]FnEntry{
     .{ .name = "IF",             .lazy = true, .doc = if_doc },
+    .{ .name = "CASE",           .lazy = true, .doc = case_doc },
+    .{ .name = "IFERROR",        .lazy = true, .doc = iferror_doc },
     .{ .name = "ABS",            .doc = abs_doc,            .impl = adaptAbs },
     .{ .name = "NOW",            .doc = now_doc,            .impl = adaptNow },
     .{ .name = "TRIM",           .doc = trim_doc,           .impl = adaptTrim },
@@ -3315,6 +3713,15 @@ pub const builtins = [_]FnEntry{
     .{ .name = "WEEKDAY",        .doc = weekday_doc,        .impl = adaptWeekday },
     .{ .name = "EOMONTH",        .doc = eomonth_doc,        .impl = adaptEomonth },
     .{ .name = "NTH_DOW",        .doc = nth_dow_doc,        .impl = adaptNthDow },
+    .{ .name = "FILENAME",       .doc = filename_doc,       .impl = adaptFilename },
+    .{ .name = "RECORD_NUM",     .doc = record_num_doc,     .impl = adaptRecordNum },
+    .{ .name = "SHEET_NAME",     .doc = sheet_name_doc,     .impl = adaptSheetName },
+    .{ .name = "LPAD",           .doc = lpad_doc,           .impl = adaptLpad },
+    .{ .name = "RPAD",           .doc = rpad_doc,           .impl = adaptRpad },
+    .{ .name = "POSITION",       .doc = position_doc,       .impl = adaptPosition },
+    .{ .name = "PROPER",         .doc = proper_doc,         .impl = adaptProper },
+    .{ .name = "MOD",            .doc = mod_doc,            .impl = adaptMod },
+    .{ .name = "ISEMPTY",        .doc = isempty_doc,        .impl = adaptIsEmpty },
 };
 
 /// Longest builtin name (PRICE_CURRENCY = 14). `evalCall` uppercases the call
@@ -5132,4 +5539,156 @@ test "FnDoc examples: every builtin has one that parses + evaluates" {
 
     }
 
+}
+
+// ── Tests: context builtins (FILENAME / RECORD_NUM / SHEET_NAME) ─────────
+
+test "FILENAME / RECORD_NUM / SHEET_NAME: read per-file/row context" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    var ctx = h.ctx(&.{}, a);
+    ctx.filename = "XTB_12345_2024-01_2024-12";
+    ctx.record_num = 7;
+    ctx.sheet_name = "CASH OPERATION";
+    try testing.expectEqualStrings("XTB_12345_2024-01_2024-12", try evalString("FILENAME()", &ctx));
+    try testing.expectEqualStrings("7", try evalString("RECORD_NUM()", &ctx));
+    try testing.expectEqualStrings("CASH OPERATION", try evalString("SHEET_NAME()", &ctx));
+    // Composes with string/date builtins, the headline FILENAME() use-case.
+    try testing.expectEqualStrings("2024-01", try evalString("SPLIT_PART(FILENAME(), '_', 3)", &ctx));
+    // Defaults (stateless eval) — empty stem / sheet, record 0.
+    const ctx0 = h.ctx(&.{}, a);
+    try testing.expectEqualStrings("", try evalString("FILENAME()", &ctx0));
+    try testing.expectEqualStrings("0", try evalString("RECORD_NUM()", &ctx0));
+    try testing.expectEqualStrings("", try evalString("SHEET_NAME()", &ctx0));
+    // Arity: extra args are a loud error (0-arg context family).
+    try testing.expectError(error.WrongArgCount, eval("FILENAME('x')", &ctx));
+}
+
+// ── Tests: CASE ──────────────────────────────────────────────────────────
+
+test "CASE: matches a pair, falls back to default, lazy-skips others" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    // First matching pair wins.
+    try testing.expectEqualStrings("BUY", try evalString("CASE('B', 'B', 'BUY', 'S', 'SELL', '?')", &ctx));
+    try testing.expectEqualStrings("SELL", try evalString("CASE('S', 'B', 'BUY', 'S', 'SELL', '?')", &ctx));
+    // No match → trailing default.
+    try testing.expectEqualStrings("?", try evalString("CASE('X', 'B', 'BUY', 'S', 'SELL', '?')", &ctx));
+    // No match, no default → "".
+    try testing.expectEqualStrings("", try evalString("CASE('X', 'B', 'BUY')", &ctx));
+    // Numeric equality (subject/ matches coerce like the `=` operator).
+    try testing.expectEqualStrings("one", try evalString("CASE(1, 1, 'one', 2, 'two', 'other')", &ctx));
+    // Laziness: a non-selected arm that would error is never evaluated.
+    try testing.expectEqualStrings("ok", try evalString("CASE('a', 'a', 'ok', 'b', YEAR('bad'), 'def')", &ctx));
+    // Arity: a subject + single arg (no pair) is a loud error, not silent passthrough.
+    try testing.expectError(error.WrongArgCount, eval("CASE('x', 'y')", &ctx));
+}
+
+// ── Tests: IFERROR ───────────────────────────────────────────────────────
+
+test "IFERROR: catches data errors, passes through template errors" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    try h.col_index.put("n", 0);
+    const ctx = h.ctx(&.{"abc"}, a);
+    // Data error (bad date) → fallback; fallback evaluated only on error.
+    try testing.expectEqualStrings("", try evalString("IFERROR(YEAR('not-a-date'), '')", &ctx));
+    // Bad number in arithmetic → fallback.
+    try testing.expectEqualStrings("0", try evalString("IFERROR([n] * 2, '0')", &ctx));
+    // No error → the guarded value, fallback ignored.
+    try testing.expectEqualStrings("3", try evalString("IFERROR(1 + 2, '0')", &ctx));
+    // Template error (unknown function) stays loud — NOT swallowed.
+    try testing.expectError(error.UnknownFunction, eval("IFERROR(NOSUCHFN(1), '0')", &ctx));
+}
+
+// ── Tests: LPAD / RPAD ───────────────────────────────────────────────────
+
+test "LPAD / RPAD: pad, truncate, empty-pad, clamp" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    try testing.expectEqualStrings("00042", try evalString("LPAD('42', 5, '0')", &ctx));
+    try testing.expectEqualStrings("42   ", try evalString("RPAD('42', 5, ' ')", &ctx));
+    // Cyclic multi-char pad.
+    try testing.expectEqualStrings("abab1", try evalString("LPAD('1', 5, 'ab')", &ctx));
+    // Already long enough → truncated to len.
+    try testing.expectEqualStrings("ab", try evalString("LPAD('abcdef', 2, '0')", &ctx));
+    // Empty pad → unchanged.
+    try testing.expectEqualStrings("42", try evalString("LPAD('42', 5, '')", &ctx));
+    // Non-positive len → "".
+    try testing.expectEqualStrings("", try evalString("RPAD('42', 0, '0')", &ctx));
+}
+
+// ── Tests: POSITION ──────────────────────────────────────────────────────
+
+test "POSITION: 1-based index, 0 when missing, empty needle = 1" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    try testing.expectEqualStrings("7", try evalString("POSITION('Inc', 'Apple Inc')", &ctx));
+    try testing.expectEqualStrings("1", try evalString("POSITION('Ap', 'Apple')", &ctx));
+    try testing.expectEqualStrings("0", try evalString("POSITION('zz', 'Apple')", &ctx));
+    try testing.expectEqualStrings("1", try evalString("POSITION('', 'Apple')", &ctx));
+}
+
+// ── Tests: PROPER ────────────────────────────────────────────────────────
+
+test "PROPER: title-case across word breaks and Unicode" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    try testing.expectEqualStrings("Apple Inc", try evalString("PROPER('apple inc')", &ctx));
+    try testing.expectEqualStrings("Apple Inc", try evalString("PROPER('APPLE INC')", &ctx));
+    // Words break on any non-letter (hyphen here; spaces/digits below).
+    try testing.expectEqualStrings("Mary-Jane", try evalString("PROPER('mary-jane')", &ctx));
+    // Digits break words (Excel-style).
+    try testing.expectEqualStrings("Abc123Def", try evalString("PROPER('abc123def')", &ctx));
+    // Non-ASCII letter at a word start is upper-cased.
+    try testing.expectEqualStrings("Über Café", try evalString("PROPER('über café')", &ctx));
+}
+
+// ── Tests: MOD ───────────────────────────────────────────────────────────
+
+test "MOD: truncated remainder, sign of dividend, div-by-zero" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    try testing.expectEqualStrings("1", try evalString("MOD(7, 3)", &ctx));
+    try testing.expectEqualStrings("-1", try evalString("MOD(-7, 3)", &ctx));
+    try testing.expectEqualStrings("1", try evalString("MOD(7, -3)", &ctx));
+    try testing.expectEqualStrings("0", try evalString("MOD(6, 3)", &ctx));
+    // Fractional operands.
+    try testing.expectEqualStrings("0.5", try evalString("MOD(2.5, 1)", &ctx));
+    // Divide by zero → "" (mirrors the `/` operator).
+    try testing.expectEqualStrings("", try evalString("MOD(7, 0)", &ctx));
+}
+
+// ── Tests: ISEMPTY ───────────────────────────────────────────────────────
+
+test "ISEMPTY: empty / whitespace true, '0' is not empty" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    try testing.expectEqualStrings("true", try evalString("ISEMPTY('')", &ctx));
+    try testing.expectEqualStrings("true", try evalString("ISEMPTY('   ')", &ctx));
+    try testing.expectEqualStrings("false", try evalString("ISEMPTY('x')", &ctx));
+    // The footgun ISEMPTY retires: '0' is NOT empty (a bare `= ''` would match it).
+    try testing.expectEqualStrings("false", try evalString("ISEMPTY('0')", &ctx));
 }

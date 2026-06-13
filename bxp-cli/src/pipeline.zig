@@ -911,6 +911,9 @@ fn evalPrepassRow(
     col_index: *const std.StringHashMap(usize),
     lookup_table: *std.StringHashMap([]const u8),
     bc: *const config_mod.BrokerConfig,
+    filename: []const u8,
+    sheet_name: []const u8,
+    record_num: u64,
     file_alloc: std.mem.Allocator,
     out: Output,
 ) !void {
@@ -923,6 +926,9 @@ fn evalPrepassRow(
         .alloc = file_alloc,
         .decimal_sep_in = bc.csv_decimal_separator_in,
         .input_encoding = bc.csv_input_encoding,
+        .filename = filename,
+        .sheet_name = sheet_name,
+        .record_num = record_num,
     };
     var pp_it = bc.pre_passes.iterator();
     while (pp_it.next()) |pp_entry| {
@@ -998,6 +1004,14 @@ const RowEvalConst = struct {
     date_min: []const u8,
     date_max: []const u8,
     bid: []const u8,
+    /// Per-file source context for the FILENAME() / SHEET_NAME() builtins.
+    /// `filename` is the input file stem (suffix + directory stripped);
+    /// `sheet_name` is the configured `xlsx_sheet.name` for xlsx-derived
+    /// input, else "". Both are file-level constants threaded into every
+    /// row's `expr.Context`. RECORD_NUM() is threaded separately per row
+    /// via the worker's `base_row_idx` (varies within the file).
+    filename: []const u8 = "",
+    sheet_name: []const u8 = "",
     /// Constant-folded `input_schema` vars: name → precomputed value for every
     /// expression that `expr.isRowInvariant` proved row-invariant and that
     /// evaluated without error at file-start. `evalAllVars` reuses these instead
@@ -1065,6 +1079,7 @@ const RowEmit = struct {
 fn evalAndEmitRow(
     fields: [][]const u8,
     row_offset: u64,
+    record_num: u64,
     rec: *const RowEvalConst,
     line_arena: *std.heap.ArenaAllocator,
     e: *RowEmit,
@@ -1087,6 +1102,9 @@ fn evalAndEmitRow(
         .decimal_sep_in = bc.csv_decimal_separator_in,
         .input_encoding = bc.csv_input_encoding,
         .error_detail = &row_detail,
+        .filename = rec.filename,
+        .sheet_name = rec.sheet_name,
+        .record_num = record_num,
     };
 
     // bod 1: date-prefilter. When the filter is active and `$date` is declared
@@ -1434,6 +1452,7 @@ const WorkerSlice = struct {
         self.rows_written = 0;
         self.expr_errors = 0;
         self.error_value = null;
+        self.base_row_idx = 0; // orchestrator sets the real per-slice base
     }
 
     /// Clear per-file state. Called by the orchestrator at file
@@ -1468,7 +1487,7 @@ fn workerMainPass(ws: *WorkerSlice, rec: *const RowEvalConst) void {
         .expr_errors = &ws.expr_errors,
     };
     const field_slice = ws.fieldBufSlice();
-    for (ws.lines) |line| {
+    for (ws.lines, 0..) |line, j| {
         _ = ws.field_arena.reset(.retain_capacity);
         const fields = csv.splitFields(
             line.bytes,
@@ -1480,7 +1499,9 @@ fn workerMainPass(ws: *WorkerSlice, rec: *const RowEvalConst) void {
             ws.error_value = err;
             return;
         };
-        evalAndEmitRow(fields, line.byte_offset, rec, &ws.line_arena, &emit) catch |err| {
+        // 1-based input record number within the file (RECORD_NUM()): this
+        // worker's slice base + local row index.
+        evalAndEmitRow(fields, line.byte_offset, ws.base_row_idx + j + 1, rec, &ws.line_arena, &emit) catch |err| {
             ws.error_value = err;
             return;
         };
@@ -1501,8 +1522,8 @@ fn workerJsonMainPass(ws: *WorkerSlice, rec: *const RowEvalConst) void {
         .rows_written = &ws.rows_written,
         .expr_errors = &ws.expr_errors,
     };
-    for (ws.json_records) |rrec| {
-        evalAndEmitRow(rrec.fields, rrec.byte_offset, rec, &ws.line_arena, &emit) catch |err| {
+    for (ws.json_records, 0..) |rrec, j| {
+        evalAndEmitRow(rrec.fields, rrec.byte_offset, ws.base_row_idx + j + 1, rec, &ws.line_arena, &emit) catch |err| {
             ws.error_value = err;
             return;
         };
@@ -1512,12 +1533,15 @@ fn workerJsonMainPass(ws: *WorkerSlice, rec: *const RowEvalConst) void {
 /// JSON pre_pass worker: same idea as `workerPrePass` but skips field
 /// parsing (records arrive pre-parsed from the serial Scanner reader).
 fn workerJsonPrePass(ws: *WorkerSlice, rec: *const RowEvalConst) void {
-    for (ws.json_records) |rrec| {
+    for (ws.json_records, 0..) |rrec, j| {
         evalPrepassRow(
             rrec.fields,
             rec.col_index,
             &ws.partial_lookup,
             rec.bc,
+            rec.filename,
+            rec.sheet_name,
+            ws.base_row_idx + j + 1,
             ws.prepass_arena.allocator(),
             ws.worker_out,
         ) catch |err| {
@@ -1590,6 +1614,7 @@ fn processBlockParallel(
     runtime: Runtime,
     rec: *const RowEvalConst,
     is_prepass: bool,
+    block_base: u64,
 ) !usize {
     if (lines.len == 0) return 0;
     const k_raw = @min(runtime.max_workers, lines.len);
@@ -1608,6 +1633,8 @@ fn processBlockParallel(
     for (workers[0..K], 0..) |*w, i| {
         w.resetForBlock();
         w.lines = lines[boundaries[i]..boundaries[i + 1]];
+        // 0-based count of records before this slice in the file → RECORD_NUM().
+        w.base_row_idx = block_base + boundaries[i];
     }
 
     var wg: std.Thread.WaitGroup = .{};
@@ -1640,6 +1667,7 @@ fn processBlockParallelJson(
     runtime: Runtime,
     rec: *const RowEvalConst,
     is_prepass: bool,
+    block_base: u64,
 ) !usize {
     if (records.len == 0) return 0;
     const k_raw = @min(runtime.max_workers, records.len);
@@ -1658,6 +1686,8 @@ fn processBlockParallelJson(
     for (workers[0..K], 0..) |*w, i| {
         w.resetForBlock();
         w.json_records = records[boundaries[i]..boundaries[i + 1]];
+        // 0-based count of records before this slice in the file → RECORD_NUM().
+        w.base_row_idx = block_base + boundaries[i];
     }
 
     var wg: std.Thread.WaitGroup = .{};
@@ -1856,7 +1886,7 @@ fn drainBlockPrePass(
 /// barrier into the main pass.
 fn workerPrePass(ws: *WorkerSlice, rec: *const RowEvalConst) void {
     const field_slice = ws.fieldBufSlice();
-    for (ws.lines) |line| {
+    for (ws.lines, 0..) |line, j| {
         _ = ws.field_arena.reset(.retain_capacity);
         const fields = csv.splitFields(
             line.bytes,
@@ -1873,6 +1903,9 @@ fn workerPrePass(ws: *WorkerSlice, rec: *const RowEvalConst) void {
             rec.col_index,
             &ws.partial_lookup,
             rec.bc,
+            rec.filename,
+            rec.sheet_name,
+            ws.base_row_idx + j + 1,
             ws.prepass_arena.allocator(),
             ws.worker_out,
         ) catch |err| {
@@ -2104,6 +2137,10 @@ pub fn processBroker(
             filename[0 .. filename.len - bc.file_pattern_in.len]
         else
             filename;
+        // FILENAME()/SHEET_NAME() per-file context. `stem` is the FILENAME()
+        // value (same stem used for output naming + date extraction);
+        // SHEET_NAME() is the configured xlsx sheet, "" for native CSV/JSON.
+        const sheet_name_val: []const u8 = if (bc.xlsx_sheet) |xs| xs.name else "";
         const dr: DateRangeResult = if (bc.date_filter_from_filename)
             extractDateRange(stem)
         else
@@ -2312,16 +2349,20 @@ pub fn processBroker(
                     .date_min = date_min,
                     .date_max = date_max,
                     .bid = bid,
+                    .filename = stem,
+                    .sheet_name = sheet_name_val,
                 };
+                var pp_idx: u64 = 0; // cumulative records → RECORD_NUM() base
                 while (true) {
                     const fields_opt = try rr.next(block_arena.allocator());
                     if (fields_opt) |fields| {
                         try pending.append(.{ .fields = fields, .byte_offset = rr.recordStartOffset() });
+                        pp_idx += 1;
                     }
                     const flush_now = (fields_opt == null and pending.items.len > 0) or
                         pending.items.len >= JSON_PARALLEL_BLOCK_SIZE;
                     if (flush_now) {
-                        const k_used = try processBlockParallelJson(pending.items, workers, runtime, &rec_prepass, true);
+                        const k_used = try processBlockParallelJson(pending.items, workers, runtime, &rec_prepass, true, pp_idx - pending.items.len);
                         try drainBlockPrePass(workers, k_used, out, &lookup_table);
                         pending.clearRetainingCapacity();
                         _ = block_arena.reset(.retain_capacity);
@@ -2343,6 +2384,7 @@ pub fn processBroker(
                 }
                 var pending = std.array_list.Managed(csv.LineSlice).init(file_alloc);
                 defer pending.deinit();
+                var pp_idx: u64 = 0; // cumulative records → RECORD_NUM() base
                 const rec_prepass = RowEvalConst{
                     .bc = bc,
                     .col_index = &col_index,
@@ -2352,6 +2394,8 @@ pub fn processBroker(
                     .date_min = date_min,
                     .date_max = date_max,
                     .bid = bid,
+                    .filename = stem,
+                    .sheet_name = sheet_name_val,
                 };
                 // First chunk: body lines starting after the header.
                 if (first_chunk.len > first_chunk_body_start) {
@@ -2360,10 +2404,13 @@ pub fn processBroker(
                         bc.csv_text_quote_in,
                         chunk_reader.chunk_start_in_file + first_chunk_body_start,
                     );
-                    while (it.next()) |line| try pending.append(line);
+                    while (it.next()) |line| {
+                        try pending.append(line);
+                        pp_idx += 1;
+                    }
                 }
                 if (pending.items.len > 0) {
-                    const k_used = try processBlockParallel(pending.items, workers, runtime, &rec_prepass, true);
+                    const k_used = try processBlockParallel(pending.items, workers, runtime, &rec_prepass, true, pp_idx - pending.items.len);
                     try drainBlockPrePass(workers, k_used, out, &lookup_table);
                     pending.clearRetainingCapacity();
                 }
@@ -2376,9 +2423,12 @@ pub fn processBroker(
                         bc.csv_text_quote_in,
                         chunk_reader.chunk_start_in_file,
                     );
-                    while (it.next()) |line| try pending.append(line);
+                    while (it.next()) |line| {
+                        try pending.append(line);
+                        pp_idx += 1;
+                    }
                     if (pending.items.len > 0) {
-                        const k_used = try processBlockParallel(pending.items, workers, runtime, &rec_prepass, true);
+                        const k_used = try processBlockParallel(pending.items, workers, runtime, &rec_prepass, true, pp_idx - pending.items.len);
                         try drainBlockPrePass(workers, k_used, out, &lookup_table);
                         pending.clearRetainingCapacity();
                     }
@@ -2649,6 +2699,8 @@ pub fn processBroker(
             .date_min = date_min,
             .date_max = date_max,
             .bid = bid,
+            .filename = stem,
+            .sheet_name = sheet_name_val,
             .folded_vars = &folded_vars,
             .date_fast_path = date_fast_path,
             .rule_skip_sets = rule_skip_sets,
@@ -2688,7 +2740,7 @@ pub fn processBroker(
                 const flush_now = (fields_opt == null and pending.items.len > 0) or
                     pending.items.len >= JSON_PARALLEL_BLOCK_SIZE;
                 if (flush_now) {
-                    const k_used = try processBlockParallelJson(pending.items, workers, runtime, &rec, false);
+                    const k_used = try processBlockParallelJson(pending.items, workers, runtime, &rec, false, @intCast(file_row_idx - pending.items.len));
                     try drainBlockMain(
                         workers,
                         k_used,
@@ -2735,7 +2787,7 @@ pub fn processBroker(
                 }
             }
             if (pending.items.len > 0) {
-                const k_used = try processBlockParallel(pending.items, workers, runtime, &rec, false);
+                const k_used = try processBlockParallel(pending.items, workers, runtime, &rec, false, @intCast(file_row_idx - pending.items.len));
                 try drainBlockMain(
                     workers,
                     k_used,
@@ -2764,7 +2816,7 @@ pub fn processBroker(
                     file_row_idx += 1;
                 }
                 if (pending.items.len > 0) {
-                    const k_used = try processBlockParallel(pending.items, workers, runtime, &rec, false);
+                    const k_used = try processBlockParallel(pending.items, workers, runtime, &rec, false, @intCast(file_row_idx - pending.items.len));
                     try drainBlockMain(
                         workers,
                         k_used,

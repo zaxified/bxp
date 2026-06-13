@@ -518,10 +518,13 @@ reserved.
 | Function | Returns | Description |
 | --- | --- | --- |
 | `IF(cond, yes, no)` | any | Short-circuit conditional; only the selected branch is evaluated |
+| `CASE(expr, m1, r1, …, default)` | any | Multi-branch mapping: first `r` whose `m` equals `expr`, else trailing `default` (or `""`); only the chosen result is evaluated. Collapses nested `IF` chains |
+| `IFERROR(expr, fallback)` | any | `expr`'s value, or `fallback` on a data error (bad number/date, overflow). Template errors (unknown function, arity, syntax) still surface — it guards messy data, not template mistakes |
 | `ABS(x)` | number | Absolute numeric value |
 | `ROUND(x, n)` | number | Round `x` to `n` decimal places (negative `n` rounds tens/hundreds) |
 | `FLOOR(x)` | number | Largest integer ≤ `x` |
 | `CEILING(x)` | number | Smallest integer ≥ `x` |
+| `MOD(a, b)` | number | Remainder of `a / b` with the sign of `a` (like SQL/C `%`); `MOD(a, 0)` → `""` |
 | `TRIM(s)` | string | Strip leading/trailing whitespace |
 | `REPLACE(s, old, new)` | string | Replace all occurrences of `old` with `new`; if `old` is empty, returns `s` |
 | `SPLIT_PART(s, delim, n)` | string | Split `s` by `delim`, return 1-based nth part; `""` if out of range |
@@ -534,10 +537,16 @@ reserved.
 | `FIELDS(n)` | string | Same as `[n]` — raw field by 1-based index |
 | `NOW()` | string | Current UTC datetime, format `YYYY-MM-DDTHH:MM:SSZ` |
 | `RAND(n)` | string | `n` random digits (first 1–9, rest 0–9); `n` clamped to 1–65 |
+| `FILENAME()` | string | Input file stem (directory + matched `file_pattern_in` suffix removed); e.g. `SPLIT_PART(FILENAME(), '_', 3)` reads a field from the name |
+| `RECORD_NUM()` | number | 1-based input record number of the current row within the file |
+| `SHEET_NAME()` | string | Source `xlsx_sheet.name` for xlsx-derived input; `""` for CSV/JSON |
 | `COALESCE(a, b, ...)` | any | First non-empty argument (empty = whitespace-only string); falls back to last arg verbatim if all empty |
 | `LEFT(s, n)` | string | First `n` bytes of `s` (`n` clamped to `[0, len]`; negative / non-finite → `""`) |
 | `RIGHT(s, n)` | string | Last `n` bytes of `s` (same clamping) |
 | `SUBSTR(s, start, len)` | string | `len` bytes from 1-based `start`; non-positive / non-finite `start` or `len` → `""` |
+| `LPAD(s, len, pad)` / `RPAD(s, len, pad)` | string | Pad `s` (left / right) with `pad` to `len` bytes; truncates if longer; empty `pad` → `s`. `len` clamped to `[0, 65535]` |
+| `POSITION(needle, haystack)` | number | 1-based byte position of first `needle` in `haystack`, `0` if absent; empty `needle` → `1` |
+| `PROPER(s)` | string | Title-case: upper-case the first letter of each word, lower-case the rest (`apple inc` → `Apple Inc`); words break on any non-letter |
 | `UPPER(s)` / `LOWER(s)` | string | Full-Unicode case conversion (`café`→`CAFÉ`, `ß`→`SS`, `я`→`Я`); unicameral scripts (CJK/Arabic/Hebrew) and invalid UTF-8 bytes pass through unchanged |
 | `UNACCENT(s)` | string | Strip Latin diacritics (`café`→`cafe`, `ÀÉ`→`AE`, `ß`→`ss`, `ø`→`o`); Latin-scope like Postgres — non-Latin keeps its base script (`Ά`→`Α`), CJK/Arabic pass through, ligatures not folded |
 | `LEN(s)` | number | Byte length of `s` (UTF-8 byte count, not codepoints); empty → `0` |
@@ -545,6 +554,7 @@ reserved.
 | `ENDS_WITH(s, suffix)` | bool | `true` when `s` ends with `suffix` (case-sensitive); empty `suffix` always matches |
 | `IN(value, v1, v2, ...)` | bool | `true` when `value` equals any of `v1, v2, …` — variadic equality OR-chain |
 | `NULLIF(value, sentinel)` | any | `""` when `value` = `sentinel`, else `value`; collapses sentinels (`-9999`, `\N`, `N/A`) |
+| `ISEMPTY(x)` | bool | `true` when `x` is empty or whitespace-only — the safe emptiness test (`x = ''` wrongly matches `'0'`) |
 | `GREATEST(a, b, ...)` | number | Largest numeric value among args — per-row maximum, not cross-row aggregation |
 | `LEAST(a, b, ...)` | number | Smallest numeric value among args — per-row minimum |
 
