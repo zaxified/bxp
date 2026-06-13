@@ -107,9 +107,19 @@ CSV and JSON paths went streaming in earlier releases (CSV via
 Memory ceiling on those paths is now `O(longest row + pre_pass table)`,
 so multi-GiB CSV / JSON inputs work fine.
 
-`.xlsx` is the remaining ceiling. `bxp-core/src/xlsx.zig` caps the
-file at **10 MB** (`XLSX_MAX_FILE_SIZE`), which rejects realistic
-workbooks (multi-sheet broker exports, NOAA / public datasets
+**Partly addressed 2026-06-13** (audit K7): `.xlsx` ≤ `XLSX_INMEM_LIMIT`
+(100 MB) now extracts the ZIP straight into memory (`ZipParts.mem` /
+`extractZipToMemory`) instead of to a temp dir — removing the temp-dir
+hygiene hazards (read-only data dirs, antivirus) and a disk round-trip, and
+sidestepping the XTB `version_needed` fixup. Larger files still use the
+on-disk path. The per-part `XLSX_MAX_FILE_SIZE` (10 MB) still applies on the
+on-disk path; the in-memory path is bounded instead by `XLSX_INMEM_TOTAL_CAP`
+(512 MB uncompressed). The remaining work below is the streaming / cap-raise
+optimisation, which is independent of where extraction lands.
+
+`.xlsx` is the remaining ceiling for the on-disk path. `bxp-core/src/xlsx.zig`
+caps each part at **10 MB** (`XLSX_MAX_FILE_SIZE`) there, which rejects
+realistic workbooks (multi-sheet broker exports, NOAA / public datasets
 distributed as `.xlsx`). Raising the cap is cheap; making large
 `.xlsx` ingest fast is the real work — ZIP central-directory parse,
 DEFLATE inflate of `xl/sharedStrings.xml` and `xl/worksheets/sheet1.xml`,

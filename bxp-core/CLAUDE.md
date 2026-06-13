@@ -54,7 +54,15 @@ Converts `.xlsx` files (ZIP + XML) to intermediate CSV files.
 
 - `xlsxToCsv(alloc, xlsx_file, sheets, out_dir, stem)` — extracts selected sheets to CSV.
 - `SheetSpec` — `{ name, header_row, output_suffix }` describing one sheet to extract.
-- Extracts to a temporary `.xlstmp` directory next to the output files; cleaned up on exit.
+- Two extraction backends behind the `ZipParts` interface: for `.xlsx` ≤
+  `XLSX_INMEM_LIMIT` (100 MB) the ZIP is decompressed straight into memory
+  (no temp dir → no read-only-data-dir / antivirus / disk-round-trip hazards,
+  and the XTB `version_needed` mismatch is sidestepped — `extractZipToMemory`
+  reads only the local header's filename/extra lengths, not its version).
+  Larger files, or any in-memory failure, fall back to extracting to a
+  temporary `.xlstmp` directory next to the output (cleaned up on exit). Both
+  paths produce byte-identical CSV — gated by the `xtb*` datasets (test-02,
+  real deflate + version mismatch) plus a store-path unit test.
 - Supported cell types: shared strings, inline strings, formula results, booleans,
   plain numbers, date/time (detected via styles.xml numFmtId).
 - XML parts are assumed UTF-8 (what Excel always writes). A UTF-16 BOM on the
@@ -62,12 +70,14 @@ Converts `.xlsx` files (ZIP + XML) to intermediate CSV files.
   silently producing garbage; the pipeline turns that into a warn-and-skip
   (`hasUtf16Bom`). There is no `csv_*_encoding`-style transcode for xlsx — OOXML
   is effectively always UTF-8 in practice.
-- Buffer sizes: `ZIP_READ_BUF_SIZE=8192`, `CSV_OUT_BUF_SIZE=65536`, `XLSX_MAX_FILE_SIZE=10MB`.
-- Inline unit tests (11) cover the pure helpers: `colRefToIndex`,
+- Buffer sizes: `ZIP_READ_BUF_SIZE=8192`, `CSV_OUT_BUF_SIZE=65536`,
+  `XLSX_MAX_FILE_SIZE=10MB` (per on-disk part), `XLSX_INMEM_LIMIT=100MB`
+  (in-memory backend cutoff), `XLSX_INMEM_TOTAL_CAP=512MB` (in-memory blowup guard).
+- Inline unit tests (12) cover the pure helpers: `colRefToIndex`,
   `normalizeNumber`, `excelSerialToDatetime`, `unixDayToYMD`, `decodeEntities`,
   `isDateFormatCode`, `isBuiltinDateFmt`, `getAttr`, `stripNs`, `writeCsvField`,
-  `hasUtf16Bom`.
-  End-to-end ZIP/XML parsing is still exercised via bxp-cli integration tests.
+  `hasUtf16Bom`, plus `extractZipToMemory` (store path + ZIP central-dir walk).
+  End-to-end ZIP/XML parsing (deflate) is still exercised via bxp-cli integration tests.
 
 ### expr.zig
 

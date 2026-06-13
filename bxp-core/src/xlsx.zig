@@ -17,6 +17,122 @@ const ZIP_READ_BUF_SIZE: usize = 8192;
 const CSV_OUT_BUF_SIZE: usize = 65536;
 pub const XLSX_MAX_FILE_SIZE: usize = 10 * 1024 * 1024;
 
+/// Largest `.xlsx` (compressed, on disk) extracted into memory rather than to
+/// a temp directory next to the output. Below this, in-memory extraction
+/// avoids the temp-dir round-trip and its hygiene hazards (read-only data
+/// dirs, antivirus interference on Windows). Above it, the on-disk path runs.
+pub const XLSX_INMEM_LIMIT: usize = 100 * 1024 * 1024;
+/// Defensive ceiling on the TOTAL uncompressed bytes held in memory during
+/// in-memory extraction — a ratio guard against pathological compression.
+/// Exceeding it abandons the in-memory attempt and falls back to on-disk.
+const XLSX_INMEM_TOTAL_CAP: usize = 512 * 1024 * 1024;
+
+// ---------------------------------------------------------------------------
+// ZIP part access — one interface over the two extraction backends
+// ---------------------------------------------------------------------------
+
+/// Backing store for the handful of XML parts the converter reads. Either an
+/// in-memory map (entry name → uncompressed bytes) or the on-disk temp dir.
+/// The part-readers go through `read`, which always returns caller-owned bytes
+/// — identical ownership to the old `readFile(alloc, tmp_dir, path)` so their
+/// `defer alloc.free(...)` is unchanged for both backends.
+const ZipParts = union(enum) {
+    disk: std.fs.Dir,
+    mem: *const std.StringHashMap([]u8),
+
+    /// Returns the named part's bytes (caller frees with `alloc`).
+    /// `error.FileNotFound` when the part is absent — the readers treat that
+    /// as "optional part missing", same as the on-disk open failing.
+    fn read(self: ZipParts, alloc: Allocator, path: []const u8) ![]u8 {
+        return switch (self) {
+            .disk => |dir| readFile(alloc, dir, path),
+            .mem => |m| alloc.dupe(u8, m.get(path) orelse return error.FileNotFound),
+        };
+    }
+};
+
+/// Frees an in-memory parts map (keys + values).
+fn freeMemParts(map: *std.StringHashMap([]u8), alloc: Allocator) void {
+    var it = map.iterator();
+    while (it.next()) |e| {
+        alloc.free(e.key_ptr.*);
+        alloc.free(e.value_ptr.*);
+    }
+    map.deinit();
+}
+
+/// Decompresses every ZIP entry of `file` into an in-memory map (entry name →
+/// uncompressed bytes). On any error the caller falls back to on-disk
+/// extraction, so this is free to bail (unsupported method, size ceiling, …).
+///
+/// Unlike `std.zip.extract`, this reads the LOCAL header only for its
+/// filename/extra lengths to locate the compressed data — it does NOT enforce
+/// the local-vs-central `version_needed` match. That mismatch (XTB writes
+/// version_needed=45 locally but 20 centrally) is exactly what forces the
+/// on-disk path through `fixZipLocalVersionNeeded`; the in-memory path
+/// sidesteps it for free.
+fn extractZipToMemory(alloc: Allocator, file: std.fs.File, total_cap: usize) !std.StringHashMap([]u8) {
+    try file.seekTo(0);
+    var rbuf: [ZIP_READ_BUF_SIZE]u8 = undefined;
+    var reader = file.reader(&rbuf);
+    var iter = try std.zip.Iterator.init(&reader);
+
+    var map = std.StringHashMap([]u8).init(alloc);
+    errdefer freeMemParts(&map, alloc);
+
+    var total: usize = 0;
+    var name_buf: [1024]u8 = undefined;
+
+    while (try iter.next()) |entry| {
+        switch (entry.compression_method) {
+            .store, .deflate => {},
+            else => return error.UnsupportedCompressionMethod,
+        }
+        if (entry.filename_len == 0 or entry.filename_len > name_buf.len)
+            return error.ZipInsufficientBuffer;
+        const filename = name_buf[0..entry.filename_len];
+        try reader.seekTo(entry.header_zip_offset + @sizeOf(std.zip.CentralDirectoryFileHeader));
+        try reader.interface.readSliceAll(filename);
+        std.mem.replaceScalar(u8, filename, '\\', '/'); // XTB-style backslash paths
+
+        // Directory entries carry no content.
+        if (filename[filename.len - 1] == '/') continue;
+
+        // Locate the compressed data: read the local header for its own
+        // filename_len + extra_len (which can differ from the central header),
+        // then skip past both. The version_needed field is deliberately ignored.
+        try reader.seekTo(entry.file_offset);
+        const local = try reader.interface.takeStruct(std.zip.LocalFileHeader, .little);
+        if (!std.mem.eql(u8, &local.signature, &std.zip.local_file_header_sig))
+            return error.ZipBadFileOffset;
+        const data_off = entry.file_offset + @sizeOf(std.zip.LocalFileHeader) +
+            @as(u64, local.filename_len) + @as(u64, local.extra_len);
+
+        const uncompressed = std.math.cast(usize, entry.uncompressed_size) orelse return error.FileTooBig;
+        total = std.math.add(usize, total, uncompressed) catch return error.FileTooBig;
+        if (total > total_cap) return error.FileTooBig;
+
+        const out = try alloc.alloc(u8, uncompressed);
+        errdefer alloc.free(out);
+        var w = std.Io.Writer.fixed(out);
+        try reader.seekTo(data_off);
+        switch (entry.compression_method) {
+            .store => reader.interface.streamExact64(&w, entry.uncompressed_size) catch return error.ZipDecompressTruncated,
+            .deflate => {
+                var flate_buf: [std.compress.flate.max_window_len]u8 = undefined;
+                var dz: std.compress.flate.Decompress = .init(&reader.interface, .raw, &flate_buf);
+                dz.reader.streamExact64(&w, entry.uncompressed_size) catch return error.ZipDecompressTruncated;
+            },
+            else => unreachable,
+        }
+
+        const name_owned = try alloc.dupe(u8, filename);
+        errdefer alloc.free(name_owned);
+        try map.put(name_owned, out);
+    }
+    return map;
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -45,44 +161,60 @@ pub fn xlsxToCsv(
     out_basename: []const u8,
 ) !void {
 
-    // Create a temporary directory next to the output files. The name is
-    // derived from `out_basename` alone — safe because bxp-cli runs templates
-    // serially, so two concurrent calls with the same basename can't collide.
-    // The leading dot makes the directory invisible to file_pattern_in globs
-    // that use "." as their data_dir, preventing the converter from trying to
-    // parse its own partially-written temporary XML files.
-    const tmp_name = try std.fmt.allocPrint(alloc, ".{s}.xlstmp", .{out_basename});
-    defer alloc.free(tmp_name);
-
-    // Remove any leftover temp dir from a previous crashed run.
-    out_dir.deleteTree(tmp_name) catch {}; // best-effort cleanup — ignore errors
-
-    var tmp_dir = try out_dir.makeOpenPath(tmp_name, .{});
-    defer {
-        tmp_dir.close();
-        out_dir.deleteTree(tmp_name) catch {}; // best-effort cleanup — ignore errors
+    // Pick the extraction backend. For files within XLSX_INMEM_LIMIT, decompress
+    // the ZIP straight into memory — no temp directory, so the read-only-data-dir
+    // / antivirus / disk-round-trip hazards disappear, and the XTB version_needed
+    // mismatch is sidestepped (see extractZipToMemory). Larger files, or any
+    // in-memory failure, fall back to the on-disk temp extraction below.
+    const file_size: u64 = if (xlsx_file.stat()) |st| st.size else |_| std.math.maxInt(u64);
+    var mem_parts: ?std.StringHashMap([]u8) = null;
+    defer if (mem_parts) |*m| freeMemParts(m, alloc);
+    if (file_size <= XLSX_INMEM_LIMIT) {
+        mem_parts = extractZipToMemory(alloc, xlsx_file, XLSX_INMEM_TOTAL_CAP) catch null;
     }
 
-    // Extract the xlsx (which is a ZIP) to tmp_dir. allow_backslashes is
-    // required because some Excel generators produce ZIP entries with
-    // Windows-style paths (xl\worksheets\sheet1.xml).
-    var zip_buf: [ZIP_READ_BUF_SIZE]u8 = undefined;
-    var zip_reader = xlsx_file.reader(&zip_buf);
-    std.zip.extract(tmp_dir, &zip_reader, .{ .allow_backslashes = true }) catch |err| {
-        if (err != error.ZipMismatchVersionNeeded) return err;
-        // Some xlsx files (e.g. XTB exports) have version_needed=45 in local
-        // file headers but version_needed=20 in the central directory.  Patch
-        // all local file headers to use the version required by their
-        // compression method and retry.
-        const fixed_file = try fixZipLocalVersionNeeded(alloc, xlsx_file, tmp_dir);
-        defer fixed_file.close();
-        var fixed_buf: [ZIP_READ_BUF_SIZE]u8 = undefined;
-        var fixed_reader = fixed_file.reader(&fixed_buf);
-        try std.zip.extract(tmp_dir, &fixed_reader, .{ .allow_backslashes = true });
+    // On-disk fallback state — only populated when in-memory extraction is not used.
+    var tmp_name: ?[]u8 = null;
+    defer if (tmp_name) |s| alloc.free(s);
+    var tmp_dir: std.fs.Dir = undefined;
+    var tmp_open = false;
+    // Runs before the `tmp_name` free above (LIFO) so deleteTree still has the name.
+    defer if (tmp_open) {
+        tmp_dir.close();
+        if (tmp_name) |s| out_dir.deleteTree(s) catch {}; // best-effort cleanup
+    };
+
+    const parts: ZipParts = blk: {
+        if (mem_parts) |*m| break :blk .{ .mem = m };
+
+        // On-disk extraction. The temp dir is named from `out_basename` alone
+        // (templates run serially, so same-basename calls can't collide) with a
+        // leading dot so a `data_dir: "."` config never re-ingests the partial
+        // XML. allow_backslashes handles Windows-style entry paths.
+        const name = try std.fmt.allocPrint(alloc, ".{s}.xlstmp", .{out_basename});
+        tmp_name = name;
+        out_dir.deleteTree(name) catch {}; // clear a crashed run's leftovers
+        tmp_dir = try out_dir.makeOpenPath(name, .{});
+        tmp_open = true;
+
+        var zip_buf: [ZIP_READ_BUF_SIZE]u8 = undefined;
+        var zip_reader = xlsx_file.reader(&zip_buf);
+        std.zip.extract(tmp_dir, &zip_reader, .{ .allow_backslashes = true }) catch |err| {
+            if (err != error.ZipMismatchVersionNeeded) return err;
+            // XTB exports: version_needed=45 in local headers, 20 in the central
+            // directory. Patch every local header to match its compression method
+            // and retry. (The in-memory path above doesn't need this.)
+            const fixed_file = try fixZipLocalVersionNeeded(alloc, xlsx_file, tmp_dir);
+            defer fixed_file.close();
+            var fixed_buf: [ZIP_READ_BUF_SIZE]u8 = undefined;
+            var fixed_reader = fixed_file.reader(&fixed_buf);
+            try std.zip.extract(tmp_dir, &fixed_reader, .{ .allow_backslashes = true });
+        };
+        break :blk .{ .disk = tmp_dir };
     };
 
     // sheet name → relative path within xl/ (e.g. "worksheets/sheet3.xml")
-    var sheet_paths = try parseWorkbook(alloc, tmp_dir);
+    var sheet_paths = try parseWorkbook(alloc, parts);
     defer {
         var it = sheet_paths.iterator();
         while (it.next()) |e| {
@@ -93,14 +225,14 @@ pub fn xlsxToCsv(
     }
 
     // Shared strings table (may be absent for number-only workbooks).
-    var shared_strings = try parseSharedStrings(alloc, tmp_dir);
+    var shared_strings = try parseSharedStrings(alloc, parts);
     defer {
         for (shared_strings.items) |s| alloc.free(s);
         shared_strings.deinit(alloc);
     }
 
     // Set of 0-based cellXfs indices that map to date/time formats.
-    var date_styles = try parseDateStyles(alloc, tmp_dir);
+    var date_styles = try parseDateStyles(alloc, parts);
     defer date_styles.deinit();
 
     for (sheets) |spec| {
@@ -132,7 +264,7 @@ pub fn xlsxToCsv(
 
         try parseSheet(
             alloc,
-            tmp_dir,
+            parts,
             xml_path,
             spec.header_row,
             shared_strings.items,
@@ -205,7 +337,7 @@ fn fixZipLocalVersionNeeded(
 ///   xl/workbook.xml            → sheet name and relationship ID (r:id)
 ///   xl/_rels/workbook.xml.rels → relationship ID and target worksheet path
 /// Two-phase join is required to get name→path.
-fn parseWorkbook(alloc: Allocator, tmp_dir: std.fs.Dir) !std.StringHashMap([]const u8) {
+fn parseWorkbook(alloc: Allocator, parts: ZipParts) !std.StringHashMap([]const u8) {
     // Use an arena for the intermediate name→rId and rId→path maps so that we
     // don't have to individually free every entry on the happy path.
     var arena = std.heap.ArenaAllocator.init(alloc);
@@ -216,7 +348,7 @@ fn parseWorkbook(alloc: Allocator, tmp_dir: std.fs.Dir) !std.StringHashMap([]con
     var rid_to_path = std.StringHashMap([]const u8).init(aa);
 
     // xl/_rels/workbook.xml.rels  →  rId → worksheet target path
-    if (readFile(aa, tmp_dir, "xl/_rels/workbook.xml.rels")) |rels_xml| {
+    if (parts.read(aa, "xl/_rels/workbook.xml.rels")) |rels_xml| {
         var tok = XmlTok.init(rels_xml);
         while (tok.next()) |token| {
             switch (token) {
@@ -234,7 +366,7 @@ fn parseWorkbook(alloc: Allocator, tmp_dir: std.fs.Dir) !std.StringHashMap([]con
     } else |_| {}
 
     // xl/workbook.xml  →  sheet name → rId
-    if (readFile(aa, tmp_dir, "xl/workbook.xml")) |wb_xml| {
+    if (parts.read(aa, "xl/workbook.xml")) |wb_xml| {
         var tok = XmlTok.init(wb_xml);
         while (tok.next()) |token| {
             switch (token) {
@@ -280,10 +412,10 @@ fn parseWorkbook(alloc: Allocator, tmp_dir: std.fs.Dir) !std.StringHashMap([]con
 /// concatenate all <t> runs into a single string per <si> because bxp-cli
 /// only cares about the plain text content, not the per-run formatting.
 /// The result is indexed by the integer value stored in the 's' cell attribute.
-fn parseSharedStrings(alloc: Allocator, tmp_dir: std.fs.Dir) !std.ArrayList([]u8) {
+fn parseSharedStrings(alloc: Allocator, parts: ZipParts) !std.ArrayList([]u8) {
     var strings: std.ArrayList([]u8) = .empty;
 
-    const xml = readFile(alloc, tmp_dir, "xl/sharedStrings.xml") catch return strings;
+    const xml = parts.read(alloc, "xl/sharedStrings.xml") catch return strings;
     defer alloc.free(xml);
     if (hasUtf16Bom(xml)) return error.Utf16XmlUnsupported;
 
@@ -328,10 +460,10 @@ fn parseSharedStrings(alloc: Allocator, tmp_dir: std.fs.Dir) !std.ArrayList([]u8
 // ---------------------------------------------------------------------------
 
 /// Returns a set of 0-based cellXfs indices that correspond to date/time formats.
-fn parseDateStyles(alloc: Allocator, tmp_dir: std.fs.Dir) !std.AutoHashMap(u32, void) {
+fn parseDateStyles(alloc: Allocator, parts: ZipParts) !std.AutoHashMap(u32, void) {
     var date_xf: std.AutoHashMap(u32, void) = std.AutoHashMap(u32, void).init(alloc);
 
-    const xml = readFile(alloc, tmp_dir, "xl/styles.xml") catch return date_xf;
+    const xml = parts.read(alloc, "xl/styles.xml") catch return date_xf;
     defer alloc.free(xml);
 
     // First pass: collect custom numFmtIds that represent date/time formats.
@@ -446,14 +578,14 @@ fn isDateFormatCode(code: []const u8) bool {
 /// Row header_row becomes the CSV header; subsequent rows become data rows.
 fn parseSheet(
     alloc: Allocator,
-    tmp_dir: std.fs.Dir,
+    parts: ZipParts,
     xml_path: []const u8,
     header_row: u32,
     shared_strings: []const []u8,
     date_styles: *const std.AutoHashMap(u32, void),
     out: *std.Io.Writer,
 ) !void {
-    const xml = try readFile(alloc, tmp_dir, xml_path);
+    const xml = try parts.read(alloc, xml_path);
     defer alloc.free(xml);
     if (hasUtf16Bom(xml)) return error.Utf16XmlUnsupported;
 
@@ -1061,6 +1193,83 @@ test "hasUtf16Bom: detects LE/BE BOM, ignores UTF-8 and short input" {
     try testing.expect(!hasUtf16Bom("<?xml version=\"1.0\"?>")); // plain UTF-8
     try testing.expect(!hasUtf16Bom("\xff")); // too short to decide
     try testing.expect(!hasUtf16Bom("")); // empty
+}
+
+test "extractZipToMemory: reads a stored entry by name" {
+    // Deflate + the real XTB version_needed mismatch are covered end-to-end by
+    // the xtb* datasets (test-02). This isolates the store path + the ZIP
+    // central-directory walk, building the archive from the same std.zip
+    // structs the extractor parses so the byte layout can't drift.
+    const a = testing.allocator;
+    const name = "x";
+    const data = "hi";
+
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(a);
+
+    const lfh = std.zip.LocalFileHeader{
+        .signature = std.zip.local_file_header_sig,
+        .version_needed_to_extract = 20,
+        .flags = @bitCast(@as(u16, 0)),
+        .compression_method = .store,
+        .last_modification_time = 0,
+        .last_modification_date = 0,
+        .crc32 = 0,
+        .compressed_size = data.len,
+        .uncompressed_size = data.len,
+        .filename_len = name.len,
+        .extra_len = 0,
+    };
+    try buf.appendSlice(a, std.mem.asBytes(&lfh));
+    try buf.appendSlice(a, name);
+    try buf.appendSlice(a, data);
+
+    const cd_offset: u32 = @intCast(buf.items.len);
+    const cdh = std.zip.CentralDirectoryFileHeader{
+        .signature = std.zip.central_file_header_sig,
+        .version_made_by = 20,
+        .version_needed_to_extract = 20,
+        .flags = @bitCast(@as(u16, 0)),
+        .compression_method = .store,
+        .last_modification_time = 0,
+        .last_modification_date = 0,
+        .crc32 = 0,
+        .compressed_size = data.len,
+        .uncompressed_size = data.len,
+        .filename_len = name.len,
+        .extra_len = 0,
+        .comment_len = 0,
+        .disk_number = 0,
+        .internal_file_attributes = 0,
+        .external_file_attributes = 0,
+        .local_file_header_offset = 0,
+    };
+    try buf.appendSlice(a, std.mem.asBytes(&cdh));
+    try buf.appendSlice(a, name);
+    const cd_size: u32 = @intCast(buf.items.len - cd_offset);
+
+    const eocd = std.zip.EndRecord{
+        .signature = std.zip.end_record_sig,
+        .disk_number = 0,
+        .central_directory_disk_number = 0,
+        .record_count_disk = 1,
+        .record_count_total = 1,
+        .central_directory_size = cd_size,
+        .central_directory_offset = cd_offset,
+        .comment_len = 0,
+    };
+    try buf.appendSlice(a, std.mem.asBytes(&eocd));
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(.{ .sub_path = "t.zip", .data = buf.items });
+    var f = try tmp.dir.openFile("t.zip", .{});
+    defer f.close();
+
+    var map = try extractZipToMemory(a, f, XLSX_INMEM_TOTAL_CAP);
+    defer freeMemParts(&map, a);
+    const got = map.get(name) orelse return error.TestUnexpectedResult;
+    try testing.expectEqualStrings(data, got);
 }
 
 test "colRefToIndex: bijective base-26, row digits ignored, case-insensitive" {
