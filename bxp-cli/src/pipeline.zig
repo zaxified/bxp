@@ -3057,6 +3057,92 @@ fn zipEntryOutputName(alloc: std.mem.Allocator, entry_name: []const u8, zi: conf
     };
 }
 
+/// One unpack job produced by the serial planning phase: which archive member
+/// to inflate, and the validated flat output filename it writes to. Names are
+/// pre-derived + zip-slip/collision-checked serially, so workers share no
+/// mutable naming state — they only inflate + write independent files.
+const ZipJob = struct {
+    entry_idx: usize,
+    out_name: []const u8,
+};
+
+/// Shared state for the parallel unpack of ONE zip. Workers steal jobs off the
+/// `next` atomic cursor (so the wildly uneven per-member sizes load-balance
+/// automatically) and stash the first error they hit; the main thread
+/// re-raises it after the WaitGroup barrier — workers can't propagate errors
+/// through `spawnWg`, the same constraint the main pipeline's blocks have.
+const ZipUnpackCtx = struct {
+    dir: std.fs.Dir,
+    zip_name: []const u8,
+    jobs: []const ZipJob,
+    next: std.atomic.Value(usize) = .init(0),
+    failed: std.atomic.Value(bool) = .init(false),
+    err_mutex: std.Thread.Mutex = .{},
+    first_err: ?anyerror = null,
+    first_err_name: []const u8 = "",
+
+    fn record(self: *ZipUnpackCtx, err: anyerror, name: []const u8) void {
+        self.err_mutex.lock();
+        defer self.err_mutex.unlock();
+        if (self.first_err == null) {
+            self.first_err = err;
+            self.first_err_name = name;
+        }
+        self.failed.store(true, .monotonic);
+    }
+};
+
+/// Inflate one archive member to a flat file in `dir`. Pure per-entry work with
+/// no shared state — the parallel unpack worker calls this once per job.
+fn unpackOneEntry(
+    archive: *zipstream.Archive,
+    member: *const zipstream.Entry,
+    out_name: []const u8,
+    dir: std.fs.Dir,
+    window: []u8,
+    wbuf: []u8,
+) !void {
+    var er: zipstream.EntryReader = undefined;
+    try er.init(archive, member, window);
+    const dest = try dir.createFile(out_name, .{});
+    defer dest.close();
+    var fw = dest.writer(wbuf);
+    _ = try er.reader().streamRemaining(&fw.interface);
+    try fw.interface.flush();
+}
+
+/// One parallel unpack worker. Opens its OWN file handle and walks the central
+/// directory into its OWN `Archive` — that gives it an independent file cursor,
+/// which the shared-cursor contract requires (concurrent `EntryReader`s on one
+/// `Archive` would race the single cursor). The walk is ~1 ms and deterministic,
+/// so `entry_idx` from the planner indexes this archive's entries identically.
+/// Drains jobs until the queue empties or another worker has failed.
+fn zipUnpackWorker(ctx: *ZipUnpackCtx) void {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const wa = arena.allocator();
+
+    const file = ctx.dir.openFile(ctx.zip_name, .{}) catch |err| return ctx.record(err, ctx.zip_name);
+    defer file.close();
+
+    var archive: zipstream.Archive = undefined;
+    archive.init(wa, file) catch |err| return ctx.record(err, ctx.zip_name);
+    defer archive.deinit();
+
+    const window = wa.alloc(u8, std.compress.flate.max_window_len) catch |err| return ctx.record(err, ctx.zip_name);
+    var wbuf: [OUT_FILE_BUF_SIZE]u8 = undefined;
+
+    while (!ctx.failed.load(.monotonic)) {
+        const i = ctx.next.fetchAdd(1, .monotonic);
+        if (i >= ctx.jobs.len) break;
+        const job = ctx.jobs[i];
+        unpackOneEntry(&archive, &archive.entries.items[job.entry_idx], job.out_name, ctx.dir, window, &wbuf) catch |err| {
+            ctx.record(err, job.out_name);
+            return;
+        };
+    }
+}
+
 /// Unpacks each *.zip in a template's data_dir into flat intermediate CSV
 /// files before the main processing loop. Mirrors `xlsxPrePass`: groups by
 /// data_dir so a shared directory is unpacked once, streams every member
@@ -3076,6 +3162,7 @@ pub fn zipPrePass(
     fresh: bool,
     template_id: ?[]const u8,
     dir_path_arg: ?[]const u8,
+    runtime: Runtime,
 ) !SectionStats {
     var stats = SectionStats{};
     var timer = try std.time.Timer.start();
@@ -3100,10 +3187,6 @@ pub fn zipPrePass(
     if (dir_specs.count() == 0) return stats;
 
     out.info("\n=== unpacking zip archives ===\n", .{});
-
-    // One inflate history window, reused across every entry (each EntryReader
-    // reseeks the shared file cursor).
-    var window: [std.compress.flate.max_window_len]u8 = undefined;
 
     var ds_it = dir_specs.iterator();
     while (ds_it.next()) |e| {
@@ -3165,15 +3248,20 @@ pub fn zipPrePass(
             };
             defer archive.deinit();
 
-            // Per-zip arena: derived output names + the collision set. Freed
-            // when this archive is done.
+            // Per-zip arena: derived output names + the collision set + the
+            // job list. Freed when this archive is done — i.e. after the
+            // parallel unpack below joins (workers read job.out_name).
             var name_arena = std.heap.ArenaAllocator.init(alloc);
             defer name_arena.deinit();
             const na = name_arena.allocator();
             var seen = std.StringHashMap(void).init(na);
 
-            var n_out: usize = 0;
-            for (archive.entries.items) |*member| {
+            // Planning phase (serial): derive + validate every output name and
+            // collect the unpack jobs. Naming, the zip-slip guard and collision
+            // detection need the global view, so they stay single-threaded;
+            // only the independent inflate + file writes are parallelised.
+            var jobs = std.array_list.Managed(ZipJob).init(na);
+            for (archive.entries.items, 0..) |*member, idx| {
                 if (!std.mem.endsWith(u8, member.name, zi.entry_pattern)) continue;
 
                 const out_name = try zipEntryOutputName(na, member.name, zi);
@@ -3205,19 +3293,34 @@ pub fn zipPrePass(
                         continue;
                     } else |_| {}
                 }
-
-                var er: zipstream.EntryReader = undefined;
-                try er.init(&archive, member, &window);
-
-                const dest = try dir.createFile(out_name, .{});
-                defer dest.close();
-                var wbuf: [OUT_FILE_BUF_SIZE]u8 = undefined;
-                var fw = dest.writer(&wbuf);
-                _ = try er.reader().streamRemaining(&fw.interface);
-                try fw.interface.flush();
-                n_out += 1;
+                try jobs.append(.{ .entry_idx = idx, .out_name = out_name });
             }
-            out.info("  unpacked '{s}' ({d} members)\n", .{ zip_name, n_out });
+
+            // Execution phase: inflate + write the jobs in parallel. The N
+            // members are independent (validated flat names, distinct files), so
+            // this is embarrassingly parallel — workers steal jobs off a shared
+            // atomic cursor (load-balances the very uneven per-member sizes),
+            // each driving its own file cursor + inflate window. `unzip` is
+            // single-threaded, so this is where we pull ahead of it.
+            if (jobs.items.len > 0) {
+                const k = @min(runtime.max_workers, jobs.items.len);
+                var ctx = ZipUnpackCtx{
+                    .dir = dir,
+                    .zip_name = zip_name,
+                    .jobs = jobs.items,
+                };
+                var wg: std.Thread.WaitGroup = .{};
+                for (0..k) |_| runtime.pool.spawnWg(&wg, zipUnpackWorker, .{&ctx});
+                wg.wait();
+                if (ctx.first_err) |err| {
+                    out.fatal("fatal error: zip '{s}': failed unpacking '{s}': {s}\n", .{ zip_name, ctx.first_err_name, @errorName(err) });
+                    stats.has_fatal = true;
+                    stats.time_ns = timer.read();
+                    out.summary(stats);
+                    return error.Fatal;
+                }
+            }
+            out.info("  unpacked '{s}' ({d} members)\n", .{ zip_name, jobs.items.len });
         }
     }
 
