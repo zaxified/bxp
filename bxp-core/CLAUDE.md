@@ -310,8 +310,14 @@ and `decimal.zig` remain in-house with no dependency.
 
 - All code comments and documentation in English.
 - Zig 0.15.2 API.
-- `processBroker()` in pipeline.zig and `load()` in config.zig are intentionally large
-  (~320–336 lines) linear pipelines — do not split unless there is a concrete duplication problem.
+- `processBroker()` in pipeline.zig (~930 lines) and `loadFromBytes()` in
+  config.zig (~480 lines) are large, deliberately linear pipelines. Splitting
+  them is pure reorganisation (no behaviour change), so weigh it against
+  regression risk rather than doing it for line-count alone. `processBroker`'s
+  combined-output path is now covered by `datasets/combined_output_demo`
+  (test-02 gate); see the REFACTOR NOTE on the function. config's
+  `loadFromBytes` is well-covered by test-01 + test-02 + inspect tests, so a
+  per-section split there is lower-risk if a maintenance need arises.
 
 ## Known non-issues — deliberately not refactored
 

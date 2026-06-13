@@ -44,6 +44,13 @@ zig build
 # Print skipped/unmatched rows as JSON
 ./zig-out/bin/bxp-cli --debug
 
+# Machine-readable run summary: ONE JSON object on stdout (per-template +
+# overall files/rows_in/rows_out/warnings/errors/time_ms + captured message
+# lines) instead of the human stdout summaries and stderr diagnostics.
+# Built for bxp_simulate / CI — counts are structured, so it doesn't break
+# when the human wording changes. Conflicts with --trace / --quiet / --debug.
+./zig-out/bin/bxp-cli --debug=json
+
 # Suppress all output (exit code still reflects result)
 ./zig-out/bin/bxp-cli --quiet
 
@@ -86,8 +93,10 @@ All broker logic is defined in `bxp-cli.json` — there are no compiled-in broke
 ```
 
 - `data_dir` — path to directory containing input CSV files.
-- `file_pattern_in` — **required** — suffix filter for input files, e.g. `".csv"` for all CSV files,
-  `"_3.csv"` to restrict to files ending in `_3.csv`.
+- `file_pattern_in` — **required** — **literal** suffix filter for input files (a plain
+  `endsWith` match, **not** a glob — `*` is not special), e.g. `".csv"` for all CSV files,
+  `"_3.csv"` to restrict to files ending in `_3.csv`. The matched suffix is also stripped
+  from the filename to derive the output name (with `file_pattern_out`).
 - `file_pattern_out` — optional output filename suffix. Replaces `file_pattern_in` in the output
   filename (e.g. `"_cash.csv"` → `"_cash.csvx"`). Defaults to appending `"x"` when omitted.
 - `date_filter_from_filename` — optional boolean (default `false`). When `true`, rows whose

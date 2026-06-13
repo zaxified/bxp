@@ -23,7 +23,7 @@ pub const Diagnostic = diagnostics.Diagnostic;
 pub const Diagnostics = diagnostics.Diagnostics;
 pub const Severity = diagnostics.Severity;
 
-const CONFIG_MAX_FILE_SIZE: usize = 1024 * 1024;
+pub const CONFIG_MAX_FILE_SIZE: usize = 1024 * 1024;
 
 /// Per-field semantic validator. Default `none` means "no special
 /// check"; specialized values drive the bxp-gui Dart-side tree
@@ -273,7 +273,8 @@ pub const BrokerConfig = struct {
     /// order as the user wrote them — the bxp-gui row-transform
     /// `variables` table relies on this for deterministic display.
     input_schema: std.StringArrayHashMap([]const u8),
-    /// When non-empty, only CSV files whose name ends with this suffix are processed.
+    /// When non-empty, only CSV files whose name ends with this exact suffix are
+    /// processed. This is a literal suffix match, NOT a glob — "*" is not special.
     /// Example: "_3.csv" processes only files like "account_..._3.csv".
     file_pattern_in: []const u8,
     /// Output filename suffix.  The file_pattern_in suffix is stripped from the input
@@ -402,7 +403,7 @@ pub const BrokerConfig = struct {
             .key = "file_pattern_in",
             .type_name = "string",
             .required = true,
-            .description = "Suffix filter for input files in data_dir. e.g. \".csv\" (all), \"_cash.csv\" (specific suffix).",
+            .description = "Literal suffix filter for input files in data_dir — NOT a glob. e.g. \".csv\" (all), \"_cash.csv\" (specific suffix). A file matches when its name ends with this exact text; \"*\" has no special meaning. The matched suffix is also stripped to form the output filename (with file_pattern_out).",
             .validator = .non_empty,
         },
         .{
@@ -2512,6 +2513,15 @@ fn parseFileTypeField(
 /// alongside the existing `std.debug.print` + `return error` behavior.
 /// bxp-cli passes null so its load path is unchanged bit by bit; only
 /// the inspect core's deep-validation pass passes a non-null sink today.
+///
+/// REFACTOR NOTE (2026-06-13 audit): this is a long (~480-line) linear parse
+/// loop. A future cleanup could split it into per-section parsers
+/// (parseTickerMaps / parseTemplate / parseRowRules / …). Deliberately not
+/// done now — it is pure reorganisation with no behaviour change, weighed the
+/// same way as `processBroker` in pipeline.zig. It IS well-covered (test-01
+/// config unit tests + test-02 every dataset loads config + inspect tests), so
+/// a split here is lower-risk than `processBroker`'s — take it on with a
+/// concrete maintenance need and keep those gates byte-green.
 pub fn loadFromBytes(
     alloc: std.mem.Allocator,
     raw: []const u8,

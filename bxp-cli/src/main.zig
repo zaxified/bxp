@@ -43,6 +43,8 @@ const USAGE_TEMPLATE =
     \\  --trace-file <path> write a full binary trace (every row, every event) to <path>;
     \\                     independent of --trace; useful for offline GUI drill-down
     \\  --debug            suppresses informational stdout summaries; prints unmatched rows as JSON when row_rules_debug_missing is set
+    \\  --debug=json       emit ONE machine-readable JSON run summary on stdout (per-template + overall counts,
+    \\                     captured warnings/errors) instead of human stdout+stderr output; conflicts with --trace/--quiet/--debug
     \\  --quiet            suppress informational stdout (errors still go to stderr)
     \\  --check-fs <n>     opt-in: validate data_dir + input-file existence before any processing,
     \\                     with N-second total timeout (e.g. --check-fs 5). Default off.
@@ -322,6 +324,7 @@ pub fn main() !void {
     // called. --version and --help short-circuit immediately; the rest are
     // stored as booleans and forwarded via the Output struct.
     var debug = false;
+    var debug_json = false;
     var quiet = false;
     var fresh = false;
     var trace = false;
@@ -346,6 +349,21 @@ pub fn main() !void {
             return;
         }
         if (std.mem.eql(u8, arg, "--debug")) { debug = true; continue; }
+        // `--debug=json` is the machine-readable variant: instead of the human
+        // stdout summaries + stderr diagnostics, the whole run produces ONE
+        // JSON document on stdout (per-template + overall counts + captured
+        // message lines). It does NOT enable the per-row unmatched-row dump
+        // that bare `--debug` triggers — that would pollute the JSON stream.
+        if (std.mem.startsWith(u8, arg, "--debug=")) {
+            const val = arg["--debug=".len..];
+            if (std.mem.eql(u8, val, "json")) {
+                debug_json = true;
+            } else {
+                std.debug.print("error: --debug value must be 'json': got '{s}'\n", .{val});
+                std.process.exit(1);
+            }
+            continue;
+        }
         if (std.mem.eql(u8, arg, "--quiet")) { quiet = true; continue; }
         if (std.mem.eql(u8, arg, "--fresh")) { fresh = true; continue; }
         if (std.mem.eql(u8, arg, "--dry-run")) { dry_run = true; continue; }
@@ -405,12 +423,16 @@ pub fn main() !void {
     // picking a winner: --quiet and --debug are opposites; --trace and
     // --debug both affect raw row output in incompatible ways (binary
     // BXTB stream vs. human-readable JSON dumps).
-    if (quiet and debug) {
+    if (quiet and (debug or debug_json)) {
         std.debug.print("error: --quiet and --debug cannot be used together\n", .{});
         std.process.exit(1);
     }
-    if (trace and debug) {
+    if (trace and (debug or debug_json)) {
         std.debug.print("error: --trace and --debug cannot be used together\n", .{});
+        std.process.exit(1);
+    }
+    if (debug and debug_json) {
+        std.debug.print("error: --debug and --debug=json cannot be used together\n", .{});
         std.process.exit(1);
     }
 
@@ -457,12 +479,21 @@ pub fn main() !void {
         trace_file_btw_init_ok = true;
     }
 
+    // `--debug=json` captures every warning/fatal line into this sink instead
+    // of stderr, so they can be folded into the single JSON document. Lives
+    // for the whole run; strings are allocated from `alloc`.
+    var msg_sink = std.array_list.Managed([]const u8).init(alloc);
+    defer msg_sink.deinit();
+
     const out = Output{
         .writer = stdout,
         .quiet = quiet,
         .debug = debug,
         .trace = trace_mode,
         .dry_run = dry_run,
+        .json_debug = debug_json,
+        .msg_sink = if (debug_json) &msg_sink else null,
+        .msg_alloc = alloc,
         .btrace_writer = if (btw_init_ok) &btw_storage else null,
         .btrace_file_writer = if (trace_file_btw_init_ok) &trace_file_btw_storage else null,
     };
@@ -473,13 +504,20 @@ pub fn main() !void {
     // the error name rather than crashing with an unformatted Zig trace. In
     // --debug mode we re-throw so the Zig runtime prints its full stack trace.
     const stats = run(args, out, fresh, check_fs_seconds, runtime, alloc) catch |err| {
-        if (err == error.Fatal) {
-            out.binEmitDone(1);
-            closeTraceFile(&trace_file_fw_storage, trace_file_handle);
-            std.process.exit(1); // message already printed
+        // `error.Fatal` means a diagnostic was already emitted (printed to
+        // stderr, or captured into `msg_sink` under --debug=json). Any other
+        // error is unexpected (e.g. OOM): re-throw under --debug for a stack
+        // trace, else surface the error name through the same diagnostic sink.
+        if (err != error.Fatal) {
+            if (debug) return err; // propagate — Zig prints trace
+            out.fatal("---\n# fatal error: {s}\n", .{@errorName(err)});
         }
-        if (debug) return err; // propagate — Zig prints trace
-        out.fatal("---\n# fatal error: {s}\n", .{@errorName(err)});
+        // --debug=json: the early-exit path has no per-template breakdown, so
+        // emit a minimal document — `fatal:true` + the captured message lines
+        // carry the reason.
+        if (debug_json) {
+            emitDebugJson(stdout, &[_]TmplJsonEntry{}, .{ .has_fatal = true }, msg_sink.items, true);
+        }
         out.binEmitDone(1);
         closeTraceFile(&trace_file_fw_storage, trace_file_handle);
         std.process.exit(1);
@@ -526,12 +564,80 @@ fn closeTraceFile(fw: *std.fs.File.Writer, handle: ?std.fs.File) void {
     }
 }
 
+/// One per-template entry in the `--debug=json` run-summary document.
+const TmplJsonEntry = struct {
+    id: []const u8,
+    files: u32,
+    rows_in: u64,
+    rows_out: u64,
+    warnings: u32,
+    errors: u32,
+    time_ms: u64,
+};
+
+/// Appends one template's stats to the `--debug=json` collector. Allocation
+/// failure silently drops the entry — a summary line is never worth aborting
+/// the run for.
+fn appendTemplateJson(list: *std.array_list.Managed(TmplJsonEntry), id: []const u8, stats: SectionStats) void {
+    list.append(.{
+        .id = id,
+        .files = stats.files,
+        .rows_in = stats.rows_in,
+        .rows_out = stats.rows_out,
+        .warnings = stats.warnings,
+        .errors = if (stats.has_fatal) 1 else 0,
+        .time_ms = stats.time_ns / std.time.ns_per_ms,
+    }) catch {};
+}
+
+/// Serialises the machine-readable run summary for `--debug=json` to `writer`
+/// (stdout) as one JSON object. Stable schema for `bxp_simulate` / CI: counts
+/// are structured (robust to wording changes in the human output) and the
+/// `messages` array preserves the captured warning/fatal text for detail.
+/// `fatal=true` is emitted on the early-exit path where per-template data is
+/// unavailable — the `messages` array then carries the failure reason.
+fn emitDebugJson(
+    writer: *pipeline.Writer,
+    templates: []const TmplJsonEntry,
+    overall: SectionStats,
+    messages: []const []const u8,
+    fatal: bool,
+) void {
+    const Doc = struct {
+        fatal: bool,
+        templates: []const TmplJsonEntry,
+        overall: TmplJsonEntry,
+        messages: []const []const u8,
+    };
+    const doc = Doc{
+        .fatal = fatal,
+        .templates = templates,
+        .overall = .{
+            .id = "*",
+            .files = overall.files,
+            .rows_in = overall.rows_in,
+            .rows_out = overall.rows_out,
+            .warnings = overall.warnings,
+            .errors = if (overall.has_fatal) 1 else 0,
+            .time_ms = overall.time_ns / std.time.ns_per_ms,
+        },
+        .messages = messages,
+    };
+    std.json.Stringify.value(doc, .{ .whitespace = .indent_2 }, writer) catch {};
+    writer.writeAll("\n") catch {};
+    writer.flush() catch {};
+}
+
 /// Parses CLI arguments, loads config, validates all templates, then dispatches
 /// to the processing pipeline for each selected template.
 /// Returns overall SectionStats; exit code is determined by the caller.
 fn run(args: [][:0]u8, out: Output, fresh: bool, check_fs_seconds: u8, runtime: pipeline.Runtime, alloc: std.mem.Allocator) !SectionStats {
     var overall = SectionStats{};
     var timer = try std.time.Timer.start();
+
+    // Per-template entries for the `--debug=json` summary (empty otherwise).
+    var json_templates = std.array_list.Managed(TmplJsonEntry).init(alloc);
+    defer json_templates.deinit();
 
     // Determine config path from --config before loading.
     var config_path: []const u8 = DEFAULT_CONFIG_PATH;
@@ -580,8 +686,15 @@ fn run(args: [][:0]u8, out: Output, fresh: bool, check_fs_seconds: u8, runtime: 
     // structs, and validates field types. On failure it has already written
     // a human-readable diagnostic to stderr (`diagJsonError`), so we only
     // need to flush stdout, update stats, and return the sentinel error.
-    var cfg = config_mod.load(alloc, config_path) catch {
-        // diagJsonError already printed the diagnostic to stderr.
+    var cfg = config_mod.load(alloc, config_path) catch |err| {
+        // For parse/validation failures `diagJsonError` has already written a
+        // human-readable diagnostic to stderr. `FileTooBig` fires inside the
+        // initial `readToEndAlloc`, BEFORE any diagnostic is produced, so it
+        // would otherwise be a silent fatal — name the cap and the actual size.
+        if (err == error.FileTooBig) {
+            const on_disk: u64 = if (std.fs.cwd().statFile(config_path)) |st| st.size else |_| 0;
+            out.fatal("fatal error: config '{s}' is {d} bytes, exceeding the {d} MB limit (CONFIG_MAX_FILE_SIZE)\n", .{ config_path, on_disk, config_mod.CONFIG_MAX_FILE_SIZE / (1024 * 1024) });
+        }
         out.writer.flush() catch {};
         overall.has_fatal = true;
         out.info("\n=== overall summary ===\n", .{});
@@ -818,6 +931,7 @@ fn run(args: [][:0]u8, out: Output, fresh: bool, check_fs_seconds: u8, runtime: 
         // Pure flags (no value).
         const a = args[i];
         if (std.mem.eql(u8, a, "--debug") or
+            std.mem.startsWith(u8, a, "--debug=") or
             std.mem.eql(u8, a, "--quiet") or
             std.mem.eql(u8, a, "--fresh") or
             std.mem.eql(u8, a, "--trace") or
@@ -881,12 +995,14 @@ fn run(args: [][:0]u8, out: Output, fresh: bool, check_fs_seconds: u8, runtime: 
         const dir_path = dir_path_arg orelse bc.data_dir;
         const template_stats = try pipeline.processBroker(bid, dir_path, bc, fresh, out, runtime, alloc);
         out.summary(template_stats);
+        if (out.json_debug) appendTemplateJson(&json_templates, bid, template_stats);
         overall.merge(template_stats);
     } else {
         var it = cfg.brokers.iterator();
         while (it.next()) |entry| {
             const template_stats = try pipeline.processBroker(entry.key_ptr.*, entry.value_ptr.data_dir, entry.value_ptr, fresh, out, runtime, alloc);
             out.summary(template_stats);
+            if (out.json_debug) appendTemplateJson(&json_templates, entry.key_ptr.*, template_stats);
             overall.merge(template_stats);
         }
     }
@@ -894,5 +1010,8 @@ fn run(args: [][:0]u8, out: Output, fresh: bool, check_fs_seconds: u8, runtime: 
     out.info("\n=== overall summary ===\n", .{});
     overall.time_ns = timer.read();
     out.overallLine(overall);
+    if (out.json_debug) {
+        emitDebugJson(out.writer, json_templates.items, overall, out.msg_sink.?.items, false);
+    }
     return overall;
 }

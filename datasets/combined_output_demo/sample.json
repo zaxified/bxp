@@ -1,0 +1,39 @@
+// Synthetic fixture exercising `combined_output`: every input file ALSO
+// appends its rows to one merged sink (`1-<template>-combined.csvx`) on top
+// of its normal per-file output. Two input files (a.csv, b.csv) so the
+// roll-up genuinely concatenates across files in sorted order, and the
+// merged header is emitted exactly once.
+//
+// This is the regression GATE for the combined-output path in
+// pipeline.zig `processBroker()`. That path was previously demonstrated only
+// in examples/ (explicitly NOT a test gate), so a refactor of that function
+// could silently break the merged output with nothing noticing. Keep this
+// fixture so the combined path stays byte-checked by test-02.
+{
+  conversion_templates: {
+    combined_output_demo: {
+      data_dir:         ".",
+      file_pattern_in:  ".csv",
+      file_pattern_out: ".csvx",
+      combined_output:  true,
+      input_schema: {
+        $date:      "[Date]",
+        $ticker:    "[Symbol]",
+        $quantity:  "[Qty]",
+        $unitprice: "[Price]",
+        $currency:  "[Currency]",
+      },
+      row_rules: [
+        { when: "1", rows: [ { $action: "'BUY'" } ] },
+      ],
+      output_schema: {
+        date:         "$date",
+        symbol:       "$ticker",
+        quantity:     "$quantity",
+        activityType: "$action",
+        unitPrice:    "$unitprice",
+        currency:     "$currency",
+      },
+    },
+  },
+}

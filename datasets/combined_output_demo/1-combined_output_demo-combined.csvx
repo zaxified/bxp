@@ -1,0 +1,4 @@
+date,symbol,quantity,activityType,unitPrice,currency
+2026-01-02,AAPL,10,BUY,150,USD
+2026-01-03,MSFT,5,BUY,300,USD
+2026-02-01,GOOG,2,BUY,2800,USD

@@ -15,7 +15,7 @@ const Decimal = @import("decimal").Decimal;
 
 const ZIP_READ_BUF_SIZE: usize = 8192;
 const CSV_OUT_BUF_SIZE: usize = 65536;
-const XLSX_MAX_FILE_SIZE: usize = 10 * 1024 * 1024;
+pub const XLSX_MAX_FILE_SIZE: usize = 10 * 1024 * 1024;
 
 // ---------------------------------------------------------------------------
 // Public API

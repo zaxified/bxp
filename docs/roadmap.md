@@ -174,6 +174,13 @@ Remaining:
   the named sheet exists inside the `.xlsx` file during the filesystem
   check phase.
 
+- **`data_dir` multi-dir / array (`data_dir: [...]` or a `*` glob segment).**
+  Audit 2026-06-13, "v budoucnu zvážit". Brokers that export into dated
+  subdirectories (`exports/2026-06/`) need config edits per month today.
+  Accepting an array of dirs (process all listed) or a `*` glob path segment
+  would close that recurring operator chore. Demand-driven — only if a real
+  workflow asks; examples/ currently show flat dirs.
+
 - **Parallelism follow-ups** (from a 2026-06-09 review of
   [judofyr/spice](https://github.com/judofyr/spice), a sub-ns-overhead
   fork/join library). Spice's heartbeat scheduling targets _irregular,
@@ -215,6 +222,17 @@ to pre-process the file" or "skip the affected rows".
   only the first block (cheaper, less complete). Touches
   `csv.zig` + `config.zig` + `pipeline.zig`. Decide on (a) vs (b)
   based on the user's actual file.
+
+- **Opt-in multiline quoted fields (`csv_multiline_quotes: true`).** Audit
+  2026-06-13, "v budoucnu zvážit". `csv.LineIterator` deliberately uses
+  lazy-quotes semantics (a newline always ends the record; documented + tested
+  intent). Some broker exports carry embedded newlines in description/notes
+  columns (RFC 4180 §2.6). An opt-in per-template flag could switch the
+  iterator to RFC mode for those templates while keeping the safer lazy
+  default. Cost: a `LineIterator` branch + config field + `FieldDoc`, and the
+  per-block parallel pipeline needs care — record boundaries no longer align
+  with `'\n'`, so chunk splitting must become quote-aware or fall back to
+  serial for that template.
 
 - **Wealthfolio target spec vocabulary expansion (remaining).** The
   readme now documents `TRANSFER_IN`, `TRANSFER_OUT`, and `SPLIT`
@@ -470,6 +488,37 @@ rather than running in-core.
   zig-utils/zig-regex. v0.2.4 ships the other 9 builtins; the remaining
   ~10 % of real-world need (regex) waits.
 
+### Expression builtins (non-regex) — audit 2026-06-13, "v budoucnu zvážit"
+
+From the 2026-06-13 bxp-core audit. None of these exist today (verified
+against the `builtins` catalog); all fit the existing `FnDoc` + `ArgKind`
+pattern, no tokenizer change. Ordered by expected user value:
+
+- **`CASE(expr, m1, r1, m2, r2, …, default)`** — multi-branch mapping;
+  today done as nested `IF` chains, the single biggest readability pain in
+  real configs. Lazy like `IF` (skipExpr the non-selected arms). Highest value.
+- **`IFERROR(expr, fallback)`** — second lazy builtin; catches
+  `NotANumber` / `BadDate*` from the guarded arm. Lets a config author opt
+  into leniency **explicitly** instead of relying on silent-`""` semantics —
+  pairs with the template-strict/data-lenient philosophy.
+- **`LPAD` / `RPAD`(s, len, pad)** — account numbers, ISINs, fixed-width targets.
+- **`POSITION(needle, haystack)`** — 1-based, 0 = not found; complements
+  CONTAINS / SPLIT_PART for ad-hoc parsing.
+- **`PROPER(s)`** — title-case for name columns; trivial over the existing
+  uucode case-mapping tables.
+- **`MOD(a, b)`** — the only basic arithmetic op still missing; the Decimal
+  core already has div/trunc so the remainder is cheap.
+
+Explicitly **not** in this set: regex builtins (separate section above —
+needs the Zig 0.16 migration + a new dep).
+
+### Encoding — more single-byte code pages — audit 2026-06-13, "v budoucnu zvážit"
+
+`encoding.zig` covers Win-1250/1252, ISO-8859-1/2/15 today. The 256-entry
+override-table pattern makes each new code page ~mechanical (Win-1251
+Cyrillic, ISO-8859-5, …). Marginal cost is low; no work until a broker
+export actually demands one.
+
 ### Context builtins — `filename()` / `record_num()` / `sheet_name()`
 
 Expose per-row evaluation context to expressions as new builtins (same family
@@ -543,6 +592,16 @@ discussion doesn't keep restarting. Reopen only if the rationale changes.
   next to each `data_dir`), which clashes with the stateless engine
   contract — every run today is reproducible from inputs alone. No
   user has reported the duplicate-row problem in practice.
+- **Watch / daemon mode (continuous `data_dir` ingestion).** Audit
+  2026-06-13. `cron` + `--fresh` already covers periodic ingestion
+  idempotently (a skipped per-file output is never rebuilt; the combined
+  roll-up is). A long-running daemon would add process state and a platform
+  supervision surface for no capability the scheduled-run path lacks.
+- **Single-file stdin→stdout mode.** Audit 2026-06-13. Ad-hoc agent
+  evaluation is already served by the stateless inspect surface
+  (`bxp-mcp` eval / eval-batch) and staged runs by `bxp_simulate`; a third
+  entry path would reopen the "stateless eval vs LOOKUP orchestration"
+  design split that was settled during the fmt removal.
 - **Space / NBSP thousands grouping (`csv_thousands_separator_in`).**
   Space- or NBSP-grouped European numbers (`1 234 567,89`) are not
   auto-normalised: `parseGroupedNumber` disambiguates dot/comma grouping

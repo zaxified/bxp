@@ -53,11 +53,23 @@ pub const SectionStats = struct {
     has_fatal: bool = false,
     /// Wall-clock nanoseconds elapsed during this section (set by the owning function).
     time_ns: u64 = 0,
+    /// Counters fed to the `--debug=json` machine-readable run summary. The
+    /// human stdout summary ignores them (it only prints errors/warnings/time),
+    /// so they cost nothing on the normal path. `files` = input files actually
+    /// processed (skipped-existing files do not count); `rows_in` = source
+    /// records read; `rows_out` = output rows written (may exceed `rows_in`
+    /// when a `row_rules` rule expands one input row into several).
+    files: u32 = 0,
+    rows_in: u64 = 0,
+    rows_out: u64 = 0,
 
     pub fn merge(self: *SectionStats, other: SectionStats) void {
         self.warnings += other.warnings;
         if (other.has_fatal) self.has_fatal = true;
         self.time_ns += other.time_ns;
+        self.files += other.files;
+        self.rows_in += other.rows_in;
+        self.rows_out += other.rows_out;
     }
 };
 
@@ -92,6 +104,20 @@ pub const Output = struct {
     debug: bool,
     trace: TraceMode = .off,
     dry_run: bool = false,
+    /// `--debug=json` mode. When true, all human-readable stdout (info /
+    /// per-section summary / overall line) is suppressed and `warning` /
+    /// `fatal` text is captured into `msg_sink` instead of going to stderr,
+    /// so the run produces exactly one machine-readable JSON document on
+    /// stdout (emitted by `run()` / `main()`). Mutually exclusive with
+    /// `--trace` and `--quiet` (rejected up-front in main).
+    json_debug: bool = false,
+    /// Collector for captured `warning` / `fatal` lines in `json_debug` mode.
+    /// Null in every other mode. Owned by main(); strings are allocated with
+    /// `msg_alloc`.
+    msg_sink: ?*std.array_list.Managed([]const u8) = null,
+    /// Allocator backing the captured `msg_sink` strings. Only read when
+    /// `msg_sink != null`.
+    msg_alloc: std.mem.Allocator = undefined,
     /// Non-null iff `trace == .bin`. Owned by the caller (main.zig); we just
     /// route bin-mode emits through it.
     btrace_writer: ?*btrace.Writer = null,
@@ -108,9 +134,20 @@ pub const Output = struct {
         return self.trace != .off;
     }
 
-    /// Print an informational line. Suppressed in --quiet or --trace mode.
+    /// Captures one formatted diagnostic line into `msg_sink` (json_debug
+    /// mode). The trailing newline that the call sites include for stderr is
+    /// trimmed so each array entry is a clean one-line message. Allocation
+    /// failure silently drops the line — never abort a run over a diagnostic.
+    fn captureMsg(self: Output, comptime fmt: []const u8, args: anytype) void {
+        const sink = self.msg_sink orelse return;
+        const s = std.fmt.allocPrint(self.msg_alloc, fmt, args) catch return;
+        sink.append(std.mem.trimRight(u8, s, "\n")) catch {};
+    }
+
+    /// Print an informational line. Suppressed in --quiet, --trace, or
+    /// --debug=json mode (the last reserves stdout for the JSON document).
     pub fn info(self: Output, comptime fmt: []const u8, args: anytype) void {
-        if (self.quiet or self.traceOn()) return;
+        if (self.quiet or self.traceOn() or self.json_debug) return;
         self.writer.print(fmt, args) catch {};
         self.writer.flush() catch {};
     }
@@ -123,6 +160,7 @@ pub const Output = struct {
     /// warnings inlined into their data.
     pub fn warning(self: Output, comptime fmt: []const u8, args: anytype) void {
         if (self.quiet) return;
+        if (self.json_debug) return self.captureMsg(fmt, args);
         std.debug.print(fmt, args);
     }
 
@@ -132,12 +170,14 @@ pub const Output = struct {
     /// `bxp-cli > out.csvx` need diagnostics out-of-band from the data.
     pub fn fatal(self: Output, comptime fmt: []const u8, args: anytype) void {
         if (self.quiet) return;
+        if (self.json_debug) return self.captureMsg(fmt, args);
         std.debug.print(fmt, args);
     }
 
-    /// Print a per-section summary line. Suppressed in --quiet or --trace mode.
+    /// Print a per-section summary line. Suppressed in --quiet, --trace, or
+    /// --debug=json mode.
     pub fn summary(self: Output, stats: SectionStats) void {
-        if (self.quiet or self.traceOn()) return;
+        if (self.quiet or self.traceOn() or self.json_debug) return;
         const errors: u32 = if (stats.has_fatal) 1 else 0;
         const secs = stats.time_ns / 1_000_000_000;
         const ms = (stats.time_ns % 1_000_000_000) / 1_000_000;
@@ -146,9 +186,9 @@ pub const Output = struct {
     }
 
     /// Print the overall summary line (no leading "summary:" label).
-    /// Suppressed in --quiet or --trace mode.
+    /// Suppressed in --quiet, --trace, or --debug=json mode.
     pub fn overallLine(self: Output, stats: SectionStats) void {
-        if (self.quiet or self.traceOn()) return;
+        if (self.quiet or self.traceOn() or self.json_debug) return;
         const errors: u32 = if (stats.has_fatal) 1 else 0;
         const secs = stats.time_ns / 1_000_000_000;
         const ms = (stats.time_ns % 1_000_000_000) / 1_000_000;
@@ -1849,6 +1889,16 @@ fn workerPrePass(ws: *WorkerSlice, rec: *const RowEvalConst) void {
 ///   3. Builds pre_pass lookup table if configured (streaming first pass over the file).
 ///   4. Evaluates input_schema expressions per row and writes output (CSV or JSON).
 /// Returns accumulated SectionStats for this template.
+///
+/// REFACTOR NOTE (2026-06-13 audit): this function is long (~930 lines) and a
+/// future cleanup could lift the combined-output bookkeeping into a small
+/// `CombinedSink` struct (open/header/flush/close) and the per-file body into
+/// a `processOneFile` helper. Deliberately NOT done now: it is pure
+/// reorganisation with no behaviour change, and the win (readability) did not
+/// justify the regression risk while the combined-output path had no test
+/// gate. That gate now exists (`datasets/combined_output_demo`), so a future
+/// split is safer — take it on only with a concrete maintenance need, and
+/// keep test-02 (datasets) + test-06 (corpus) byte-green across the change.
 pub fn processBroker(
     bid: []const u8,
     dir_path: []const u8,
@@ -2770,6 +2820,14 @@ pub fn processBroker(
             file_expr_errors,
             file_warnings,
         );
+
+        // Machine-readable run-summary accounting (--debug=json). Cheap, only
+        // counters; the human summary path ignores these fields. Counted here
+        // (not at loop top) so files skipped via --fresh `continue` above are
+        // excluded — this branch runs once per file actually processed.
+        stats.files += 1;
+        stats.rows_in += @as(u64, file_row_idx);
+        stats.rows_out += file_rows_written;
     }
 
     // Combined mode: close the JSON array (if applicable) and flush the
@@ -2910,6 +2968,17 @@ pub fn xlsxPrePass(
                     xlsx_stats.warnings += 1;
                     continue;
                 }
+                if (err == error.FileTooBig) {
+                    // The cap is per extracted XML part (sharedStrings / a sheet),
+                    // not the .xlsx as a whole — name the limit and the on-disk
+                    // size so the user can tell whether to split the workbook.
+                    const on_disk: u64 = if (xlsx_file.stat()) |st| st.size else |_| 0;
+                    out.fatal("fatal error: xlsx '{s}' ({d} bytes on disk) has an internal XML part exceeding the {d} MB limit (XLSX_MAX_FILE_SIZE); split the workbook into smaller sheets\n", .{ xlsx_name, on_disk, xlsx_mod.XLSX_MAX_FILE_SIZE / (1024 * 1024) });
+                    xlsx_stats.has_fatal = true;
+                    xlsx_stats.time_ns = timer.read();
+                    out.summary(xlsx_stats);
+                    return error.Fatal;
+                }
                 out.fatal("fatal error: xlsx conversion failed for '{s}': {s}\n", .{ xlsx_name, @errorName(err) });
                 xlsx_stats.has_fatal = true;
                 xlsx_stats.time_ns = timer.read();
@@ -2964,4 +3033,110 @@ test "writeSafeValue: non-numeric +/- leads are still guarded" {
     try expectSafeValue("-- comment", "'-- comment");
     try expectSafeValue("+", "'+"); // lone sign: safe default
     try expectSafeValue("-", "'-");
+}
+
+// ── Pure helpers exercised end-to-end by the dataset gate, but with no
+//    edge-case coverage of their own. These pin the boundary behaviour a
+//    structural refactor could silently regress without a dataset noticing
+//    (e.g. a filename date-range shape no fixture uses). ─────────────────
+
+test "extractDateRange: valid, embedded, none, too-short" {
+    // Bare range at the start of the stem.
+    switch (extractDateRange("2026-01-01_2026-03-31")) {
+        .valid => |r| {
+            try std.testing.expectEqualStrings("2026-01-01", r.min);
+            try std.testing.expectEqualStrings("2026-03-31", r.max);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+    // Range embedded between a prefix and suffix.
+    switch (extractDateRange("CZK_2025-12-01_2025-12-31_cash")) {
+        .valid => |r| {
+            try std.testing.expectEqualStrings("2025-12-01", r.min);
+            try std.testing.expectEqualStrings("2025-12-31", r.max);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+    // No range present.
+    try std.testing.expect(extractDateRange("statement_q1") == .none);
+    // Shorter than the 21-char pattern can't match.
+    try std.testing.expect(extractDateRange("2026-01-01") == .none);
+}
+
+test "extractDateRange: min>max and bad components are .invalid (not silent .none)" {
+    // Well-formed shape but min later than max — a typo'd range, flagged so
+    // the row filter doesn't silently drop every row.
+    try std.testing.expect(extractDateRange("2026-03-31_2026-01-01") == .invalid);
+    // Right shape, impossible components (month 13, day 99).
+    try std.testing.expect(extractDateRange("2026-13-01_2026-99-31") == .invalid);
+}
+
+test "findLastBoundary: last newline, none, trailing newline" {
+    // Chunk ending mid-record: boundary is the '\n' before the partial tail.
+    try std.testing.expectEqual(@as(?usize, 3), findLastBoundary("a\nb\nc"));
+    // No newline at all — nothing can be emitted, the whole window is residual.
+    try std.testing.expectEqual(@as(?usize, null), findLastBoundary("abc"));
+    // Trailing newline — boundary is the final byte, no residual.
+    try std.testing.expectEqual(@as(?usize, 1), findLastBoundary("a\n"));
+    try std.testing.expectEqual(@as(?usize, null), findLastBoundary(""));
+}
+
+test "skipBomAndHeader: BOM, no BOM, headerless, multi-line preamble" {
+    const q = '"';
+    // No BOM, single header line skipped → body starts after "h1,h2\n".
+    try std.testing.expectEqual(@as(usize, 6), skipBomAndHeader("h1,h2\nv1,v2\n", q, 1));
+    // Leading UTF-8 BOM (3 bytes) + one header line.
+    try std.testing.expectEqual(@as(usize, 9), skipBomAndHeader("\xEF\xBB\xBFh1,h2\nv1,v2\n", q, 1));
+    // Headerless (header_line == 0): only the BOM is skipped, first line is data.
+    try std.testing.expectEqual(@as(usize, 0), skipBomAndHeader("v1,v2\n", q, 0));
+    try std.testing.expectEqual(@as(usize, 3), skipBomAndHeader("\xEF\xBB\xBFv1,v2\n", q, 0));
+    // Preamble: header on line 3 → skip 3 lines total ("pre1\n"+"pre2\n"+"h1,h2\n").
+    try std.testing.expectEqual(@as(usize, 16), skipBomAndHeader("pre1\npre2\nh1,h2\nv1,v2\n", q, 3));
+    // Header beyond the chunk → clamps to chunk length (caller treats as no body).
+    try std.testing.expectEqual(@as(usize, 6), skipBomAndHeader("h1,h2\n", q, 5));
+}
+
+test "ChunkReader: residual + chunk_start_in_file bookkeeping" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const body = "a,1\nb,2\nc,3\n";
+    try tmp.dir.writeFile(.{ .sub_path = "in.csv", .data = body });
+    var f = try tmp.dir.openFile("in.csv", .{});
+    defer f.close();
+    var cr = try ChunkReader.init(std.testing.allocator, f);
+    defer cr.deinit();
+    // File is far below CHUNK_SIZE, so the whole body comes back as one chunk
+    // ending on its final '\n'; offset starts at 0.
+    const c0 = (try cr.nextChunk()) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings(body, c0);
+    try std.testing.expectEqual(@as(u64, 0), cr.chunk_start_in_file);
+    // Nothing left after the trailing newline.
+    try std.testing.expect((try cr.nextChunk()) == null);
+}
+
+test "patchBtraceOutputIdx: rebases output_row idx, leaves other frames" {
+    // Hand-build one output_row frame per the documented layout:
+    //   [1B type=0x03][2B chunk_id][4B pay_len]
+    //   [8B source_locator][8B output_idx][4B rule_idx][4B action_len][N action]
+    var buf: [64]u8 = undefined;
+    const action = "BUY";
+    const pay_len: u32 = 8 + 8 + 4 + 4 + @as(u32, action.len);
+    buf[0] = @intFromEnum(btrace.FrameType.output_row);
+    std.mem.writeInt(u16, buf[1..3], 0, .little); // chunk_id
+    std.mem.writeInt(u32, buf[3..7], pay_len, .little);
+    std.mem.writeInt(u64, buf[7..15], 42, .little); // source_locator
+    std.mem.writeInt(u64, buf[15..23], 5, .little); // output_idx (pre-patch)
+    std.mem.writeInt(u32, buf[23..27], 1, .little); // rule_idx
+    std.mem.writeInt(u32, buf[27..31], action.len, .little);
+    @memcpy(buf[31 .. 31 + action.len], action);
+    const frame_len = 7 + pay_len;
+
+    patchBtraceOutputIdx(buf[0..frame_len], 100);
+    try std.testing.expectEqual(@as(u64, 105), std.mem.readInt(u64, buf[15..23], .little));
+
+    // A non-output frame at the same offset must be left untouched.
+    buf[0] = @intFromEnum(btrace.FrameType.file_end);
+    std.mem.writeInt(u64, buf[15..23], 5, .little);
+    patchBtraceOutputIdx(buf[0..frame_len], 100);
+    try std.testing.expectEqual(@as(u64, 5), std.mem.readInt(u64, buf[15..23], .little));
 }
