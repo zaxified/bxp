@@ -3021,11 +3021,11 @@ pub fn xlsxPrePass(
                     continue;
                 }
                 if (err == error.FileTooBig) {
-                    // The cap is per extracted XML part (sharedStrings / a sheet),
-                    // not the .xlsx as a whole — name the limit and the on-disk
-                    // size so the user can tell whether to split the workbook.
+                    // The worksheet itself is streamed, so size is unbounded; the
+                    // only resident structure is the shared-strings table, capped
+                    // defensively against a zip-bomb (XLSX_SHARED_STRINGS_CAP).
                     const on_disk: u64 = if (xlsx_file.stat()) |st| st.size else |_| 0;
-                    out.fatal("fatal error: xlsx '{s}' ({d} bytes on disk) has an internal XML part exceeding the {d} MB limit (XLSX_MAX_FILE_SIZE); split the workbook into smaller sheets\n", .{ xlsx_name, on_disk, xlsx_mod.XLSX_MAX_FILE_SIZE / (1024 * 1024) });
+                    out.fatal("fatal error: xlsx '{s}' ({d} bytes on disk) has a shared-strings table exceeding the {d} MB safety limit (XLSX_SHARED_STRINGS_CAP)\n", .{ xlsx_name, on_disk, xlsx_mod.XLSX_SHARED_STRINGS_CAP / (1024 * 1024) });
                     xlsx_stats.has_fatal = true;
                     xlsx_stats.time_ns = timer.read();
                     out.summary(xlsx_stats);

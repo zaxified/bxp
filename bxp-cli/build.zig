@@ -3,7 +3,22 @@ const zon = @import("build.zig.zon");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
-    const optimize = b.standardOptimizeOption(.{});
+    // Default a bare `zig build` to ReleaseSafe, not Debug. (`preferred_optimize_mode`
+    // does NOT do this — it only applies under `--release`; a plain `zig build`
+    // would still be Debug.) Reasons:
+    //   * Profiling footgun: a plain `zig build` (e.g. inside scripts/test-01)
+    //     used to leave a Debug binary at zig-out/bin/bxp-cli — 10-50× slower,
+    //     and its Debug DebugAllocator serialises the parallel workers, which
+    //     once looked like a hang on large inputs. ReleaseSafe is fast yet keeps
+    //     runtime safety (UB / bounds / overflow → panic, not silent garbage).
+    //   * Shipping is unaffected: scripts/release.sh passes -Doptimize=ReleaseSmall
+    //     explicitly (the -Doptimize form overrides this). Use -Doptimize=Debug
+    //     when you need a debugger.
+    const optimize = b.option(
+        std.builtin.OptimizeMode,
+        "optimize",
+        "Prioritize performance, safety, or binary size",
+    ) orelse .ReleaseSafe;
 
     const core_dep = b.dependency("bxp_core", .{ .target = target, .optimize = optimize });
 

@@ -100,54 +100,74 @@ test, path validation removes part of the shell-injection concern).
 
 ## v0.4.0
 
-### Raise XLSX cap + optimise large `.xlsx` ingest
+### Streaming `.xlsx` ingest — SHIPPED 2026-06-13
 
 CSV and JSON paths went streaming in earlier releases (CSV via
-`ChunkReader` + `csv.LineIterator`; JSON via `std.json.Reader`).
-Memory ceiling on those paths is now `O(longest row + pre_pass table)`,
-so multi-GiB CSV / JSON inputs work fine.
+`ChunkReader` + `csv.LineIterator`; JSON via `std.json.Reader`). `.xlsx` was
+the last path with an `O(workbook size)` ceiling; it is now streaming too.
 
-**Partly addressed 2026-06-13** (audit K7): `.xlsx` ≤ `XLSX_INMEM_LIMIT`
-(100 MB) now extracts the ZIP straight into memory (`ZipParts.mem` /
-`extractZipToMemory`) instead of to a temp dir — removing the temp-dir
-hygiene hazards (read-only data dirs, antivirus) and a disk round-trip, and
-sidestepping the XTB `version_needed` fixup. Larger files still use the
-on-disk path. The per-part `XLSX_MAX_FILE_SIZE` (10 MB) still applies on the
-on-disk path; the in-memory path is bounded instead by `XLSX_INMEM_TOTAL_CAP`
-(512 MB uncompressed). The remaining work below is the streaming / cap-raise
-optimisation, which is independent of where extraction lands.
+**What shipped.** A new shared streaming-ZIP primitive
+(`bxp-core/src/zipstream.zig`: central-directory walk + per-entry inflate,
+exposing each member as a `*std.Io.Reader` over its decompressed bytes) plus a
+reader-driven `XmlTok` (windowed pull-tokenizer that scans a 128 KiB window with
+lazy O(n) compaction). Every XML part is now parsed by streaming it through the
+tokenizer — no part is materialised whole; the worksheet never lands in RAM. The
+shared-strings table is the only resident structure (cells index into it by
+arbitrary position — irreducible, an industry-wide constraint), guarded
+defensively by `XLSX_SHARED_STRINGS_CAP` (1 GiB) against a zip-bomb.
 
-`.xlsx` is the remaining ceiling for the on-disk path. `bxp-core/src/xlsx.zig`
-caps each part at **10 MB** (`XLSX_MAX_FILE_SIZE`) there, which rejects
-realistic workbooks (multi-sheet broker exports, NOAA / public datasets
-distributed as `.xlsx`). Raising the cap is cheap; making large
-`.xlsx` ingest fast is the real work — ZIP central-directory parse,
-DEFLATE inflate of `xl/sharedStrings.xml` and `xl/worksheets/sheet1.xml`,
-and the XML walk that produces our row stream all currently materialise
-intermediate buffers.
+**Deleted as a result:** the dual extraction backend (`ZipParts`,
+`extractZipToMemory`, the on-disk temp-dir path), `fixZipLocalVersionNeeded`
+(zipstream reads local headers directly, so the XTB `version_needed` mismatch is
+a non-issue), and _every_ size cap (`XLSX_MAX_FILE_SIZE`, `XLSX_INMEM_LIMIT`,
+`XLSX_INMEM_TOTAL_CAP`). Temp-dir hygiene hazards (read-only data dirs,
+antivirus) are gone with the temp dir.
 
-Plan for v0.4.0:
+**Measured** (ReleaseSmall, synthetic worksheet-dominated workbook): a 206 MB
+uncompressed worksheet went **393 MB → 37 MB peak RSS** (~10×; the residual is
+the downstream CSV-processing phase, not xlsx ingest), wall +18 %. Workbooks
+above the old 100 MB-zip cutoff — which previously failed outright with
+`FileTooBig` — now convert. Correctness gated byte-identical by the `xtb*`
+datasets (real deflate + version mismatch).
 
-- Lift `XLSX_MAX_FILE_SIZE` from 10 MB to something workbook-realistic
-  (256 MB candidate; multi-sheet bookkeeping rarely exceeds that).
-  Keep as a sanity cap, not a feature limit.
-- Profile a 50–100 MB workbook end-to-end. Likely hotspots:
-  shared-strings table (loaded whole into RAM today), per-row XML
-  parsing, and the intermediate CSV buffer we hand to `processBroker`.
-- Stream the shared-strings table where possible (build a string-index
-  → offset map and `pread` on demand) instead of slurping it all.
-- Stream the worksheet `<row>` walk directly into the existing CSV
-  pipeline (skip the intermediate full-file CSV buffer); each row
-  becomes one `LineSlice`-equivalent record fed to the same
-  `processBroker` chunk path.
-- Bench harness entry: synthetic `.xlsx` matching the worst public
-  dataset shape we want to support.
+**Decision:** went straight to true streaming (not the cheap cap-raise) because
+the user wants the same primitive to back a future zipped-CSV pre-pass.
 
-Trade-off: ZIP+DEFLATE has no random-seek primitive, so streaming
-shared-strings means a second `inflate` pass when the worksheet row
-walk first references each string. Acceptable if the total memory
-ceiling drops from `O(workbook size)` to
-`O(shared-strings index + one row)`.
+Remaining (not blocking):
+
+- **Bench harness entry** for the synthetic `.xlsx` (the `DEV/xlsx-bench`
+  generator exists; wire a point into `scripts/test-07-bench-guard.sh`).
+
+### Zipped-CSV pre-pass (`zip_input`) — deferred, primitive ready
+
+The `zipstream` primitive above was designed reusable for this. A template
+opts in (config **A**, explicit: `zip_input: { entry_pattern: ".csv" }`); the
+pre-pass enumerates **all** matching `.csv` members of each `*.zip` in
+`data_dir` (N CSVs per zip, not 1:1) and streams each out to `data_dir` named by
+its **entry name inside the zip**, then the normal CSV pipeline runs. Real
+use-case: `ruian_adr.zip` (~8000 `cityname.csv` members). Mirrors `xlsxPrePass`.
+No `zipstream` refactor needed — only `pipeline.zig` + a `config.zig` field.
+Details to be settled when picked up.
+
+### Future parallelism for ZIP ingest — deferred
+
+The streaming conversion (`xlsxPrePass` / a future zipped-CSV pre-pass) is
+single-threaded today. DEFLATE of **one** stream is inherently serial — each
+block depends on the prior 32 KiB output window (LZ77 back-refs), so no ZIP
+implementation parallel-decodes a single stream (pigz parallelises compression
+only; bgzip/BGZF needs the writer to emit a special block format Excel doesn't).
+Two real levers, revisit when ingest throughput matters:
+
+- **Multi-entry parallelism (the big win for the zipped-CSV pre-pass).** A ZIP
+  with many members is embarrassingly parallel — each entry is an independent
+  DEFLATE stream. `zipstream.Archive` already enumerates entries; a worker pool
+  could decompress N entries on N threads. Marginal for `.xlsx` (few parts) but
+  ideal for `ruian_adr.zip` (~8000 CSVs).
+- **Reader/worker pipelining (for one large worksheet).** Overlap the serial
+  inflate+tokenise (producer) with the downstream parallel CSV processing
+  (consumer) — convert block N+1 while processing block N. Doesn't make inflate
+  parallel; hides its cost behind work already happening. Same lever as the CSV
+  "reader cap" under _bxp-cli → Parallelism follow-ups_.
 
 ## Later (no specific version)
 

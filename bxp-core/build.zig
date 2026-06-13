@@ -67,10 +67,19 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/btrace.zig"),
     });
 
+    // zipstream.zig is the streaming ZIP-entry reader (central-dir walk +
+    // per-entry inflate). A named module so both xlsx.zig (XML parts) and the
+    // future bxp-cli zipped-CSV pre-pass can consume it without duplicating the
+    // file into two modules.
+    const zipstream_mod = b.addModule("zipstream", .{
+        .root_source_file = b.path("src/zipstream.zig"),
+    });
+
     _ = b.addModule("xlsx", .{
         .root_source_file = b.path("src/xlsx.zig"),
         .imports = &.{
             .{ .name = "decimal", .module = decimal_mod },
+            .{ .name = "zipstream", .module = zipstream_mod },
         },
     });
 
@@ -231,6 +240,15 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    const zipstream_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/zipstream.zig"),
+            .target = target,
+            .optimize = optimize,
+            .strip = false,
+        }),
+    });
+
     const xlsx_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/xlsx.zig"),
@@ -239,6 +257,7 @@ pub fn build(b: *std.Build) void {
             .strip = false,
             .imports = &.{
                 .{ .name = "decimal", .module = decimal_mod },
+                .{ .name = "zipstream", .module = zipstream_mod },
             },
         }),
     });
@@ -305,6 +324,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(encoding_tests).step);
     test_step.dependOn(&b.addRunArtifact(json5_tests).step);
     test_step.dependOn(&b.addRunArtifact(diagnostics_tests).step);
+    test_step.dependOn(&b.addRunArtifact(zipstream_tests).step);
     test_step.dependOn(&b.addRunArtifact(xlsx_tests).step);
     test_step.dependOn(&b.addRunArtifact(config_tests).step);
     test_step.dependOn(&b.addRunArtifact(docs_tests).step);

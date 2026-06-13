@@ -15,7 +15,8 @@ Consumed by bxp-cli (conversion engine) and the stateless-inspect adapters
 | Module        | File              | Public API                                                                |
 | ------------- | ----------------- | ------------------------------------------------------------------------- |
 | `csv`         | `csv.zig`         | `splitFields()`, `LineIterator`                                           |
-| `xlsx`        | `xlsx.zig`        | `xlsxToCsv()`, `SheetSpec`                                                |
+| `xlsx`        | `xlsx.zig`        | `xlsxToCsv()`, `SheetSpec` — streams every XML part via `zipstream`       |
+| `zipstream`   | `zipstream.zig`   | `Archive`, `EntryReader` — streaming ZIP central-dir walk + per-entry inflate (named module; shared by `xlsx`, future zipped-CSV pre-pass) |
 | `expr`        | `expr.zig`        | `eval()`, `evalString()`, `Context`, `Value`, `FnDoc` catalog             |
 | `datefmt`     | `datefmt.zig`     | `parse()`, `format()`, civil/arithmetic helpers — date core (file-rel @import by `expr.zig`, not a named module) |
 | `decimal`     | `decimal.zig`     | `Decimal` fixed-point i128 @ 1e12 — numeric core (named `"decimal"` module, shared by every input path) |
@@ -54,30 +55,62 @@ Converts `.xlsx` files (ZIP + XML) to intermediate CSV files.
 
 - `xlsxToCsv(alloc, xlsx_file, sheets, out_dir, stem)` — extracts selected sheets to CSV.
 - `SheetSpec` — `{ name, header_row, output_suffix }` describing one sheet to extract.
-- Two extraction backends behind the `ZipParts` interface: for `.xlsx` ≤
-  `XLSX_INMEM_LIMIT` (100 MB) the ZIP is decompressed straight into memory
-  (no temp dir → no read-only-data-dir / antivirus / disk-round-trip hazards,
-  and the XTB `version_needed` mismatch is sidestepped — `extractZipToMemory`
-  reads only the local header's filename/extra lengths, not its version).
-  Larger files, or any in-memory failure, fall back to extracting to a
-  temporary `.xlstmp` directory next to the output (cleaned up on exit). Both
-  paths produce byte-identical CSV — gated by the `xtb*` datasets (test-02,
-  real deflate + version mismatch) plus a store-path unit test.
+- **Fully streaming** (since 2026-06-13): every XML part (workbook, rels, styles,
+  sharedStrings, each worksheet) is parsed by streaming its decompressed bytes
+  through the reader-driven `XmlTok` windowed tokenizer — opened via the
+  `zipstream` module (`Archive` central-dir walk + per-entry `EntryReader`
+  inflate). Nothing is materialised whole; the worksheet never lands in RAM, so
+  the memory ceiling is O(inflate window + 128 KiB token window + shared-strings
+  table + one output row), independent of workbook size. There is no temp dir,
+  no size cap, and no `version_needed` fixup (the streaming reader reads local
+  headers directly, so the XTB local-vs-central mismatch is a non-issue).
+- The shared-strings table is the one resident structure (cells index into it by
+  arbitrary position — irreducible), guarded defensively by
+  `XLSX_SHARED_STRINGS_CAP` (1 GiB) against a zip-bomb → `error.FileTooBig`.
+- `XmlTok` returns token slices into its window, valid only until the next
+  `next()` (lazy O(n) compaction). A value held across calls is copied — the
+  worksheet parser copies the tiny `cell_type` attribute from the `<c>` open to
+  its close. A single token must fit in half the window (64 KiB) else
+  `error.XmlTokenTooLong`.
 - Supported cell types: shared strings, inline strings, formula results, booleans,
   plain numbers, date/time (detected via styles.xml numFmtId).
 - XML parts are assumed UTF-8 (what Excel always writes). A UTF-16 BOM on the
-  sheet or sharedStrings XML returns `error.Utf16XmlUnsupported` instead of
-  silently producing garbage; the pipeline turns that into a warn-and-skip
-  (`hasUtf16Bom`). There is no `csv_*_encoding`-style transcode for xlsx — OOXML
-  is effectively always UTF-8 in practice.
-- Buffer sizes: `ZIP_READ_BUF_SIZE=8192`, `CSV_OUT_BUF_SIZE=65536`,
-  `XLSX_MAX_FILE_SIZE=10MB` (per on-disk part), `XLSX_INMEM_LIMIT=100MB`
-  (in-memory backend cutoff), `XLSX_INMEM_TOTAL_CAP=512MB` (in-memory blowup guard).
-- Inline unit tests (12) cover the pure helpers: `colRefToIndex`,
-  `normalizeNumber`, `excelSerialToDatetime`, `unixDayToYMD`, `decodeEntities`,
-  `isDateFormatCode`, `isBuiltinDateFmt`, `getAttr`, `stripNs`, `writeCsvField`,
-  `hasUtf16Bom`, plus `extractZipToMemory` (store path + ZIP central-dir walk).
-  End-to-end ZIP/XML parsing (deflate) is still exercised via bxp-cli integration tests.
+  sheet or sharedStrings XML returns `error.Utf16XmlUnsupported` (`XmlTok.peekUtf16Bom`)
+  instead of silently producing garbage; the pipeline turns that into a
+  warn-and-skip. No `csv_*_encoding`-style transcode for xlsx — OOXML is
+  effectively always UTF-8 in practice.
+- Buffer sizes: `CSV_OUT_BUF_SIZE=65536`, `ZIP_WINDOW_SIZE=64KB` (inflate
+  history), `XML_WINDOW_SIZE=128KB` (tokenizer window).
+- Inline unit tests cover the pure helpers (`colRefToIndex`, `normalizeNumber`,
+  `excelSerialToDatetime`, `unixDayToYMD`, `decodeEntities`, `isDateFormatCode`,
+  `isBuiltinDateFmt`, `getAttr`, `stripNs`, `writeCsvField`, `hasUtf16Bom`). The
+  ZIP central-dir walk + store/deflate read is unit-tested in `zipstream.zig`;
+  end-to-end streaming (real deflate + XTB version mismatch) is gated
+  byte-identical by the `xtb*` datasets (test-02).
+
+### zipstream.zig
+
+Streaming ZIP-archive reader — the shared primitive behind xlsx ingest (and the
+planned zipped-CSV pre-pass). Walks the central directory once and exposes each
+member as an on-demand `*std.Io.Reader` over its decompressed bytes; a consumer's
+memory ceiling is O(one inflate window) regardless of archive/entry size.
+
+- `Archive.init(self, alloc, file)` — in-place init (holds the file reader's
+  self-pointer); walks the central directory recording every entry (name +
+  location + sizes). Borrows the file (does not close it). `find` / `findSuffix`
+  locate an entry by exact name / suffix.
+- `EntryReader.init(self, archive, entry, window)` — in-place; seeks to the
+  entry's compressed data (reads the **local** header directly, so the
+  central-vs-local `version_needed` mismatch some writers emit is irrelevant) and
+  sets up streaming inflate (deflate) or a limited reader (store). `reader()`
+  returns the decompressed-byte `*std.Io.Reader`. One archive drives one file
+  cursor — finish one `EntryReader` before opening the next.
+- Store + Deflate only; anything else is `error.UnsupportedCompressionMethod`.
+- Both `Archive` and `EntryReader` carry internal self-pointers — init in place,
+  never move after init.
+- Inline unit tests are small + functional (store-only, hand-built zips):
+  enumeration / `find` / `findSuffix` and the streaming read of two entries off
+  the shared cursor. The deflate path is covered end-to-end by the xtb datasets.
 
 ### expr.zig
 
@@ -301,11 +334,12 @@ Structured diagnostics collector for config/json5/expr validation.
 # Build all modules (no standalone binary):
 cd bxp-core && zig build
 
-# Run unit tests (csv, json, btrace, expr, datefmt, decimal, unicode, json5, diagnostics, xlsx, config, docs, inspect):
+# Run unit tests (csv, json, btrace, expr, datefmt, decimal, unicode, json5, diagnostics, zipstream, xlsx, config, docs, inspect):
 cd bxp-core && zig build test
 ```
 
-Module exports in `build.zig`: `csv`, `json`, `json5`, `xlsx`, `btrace`, `decimal`, `encoding`, `expr`, `config`, `docs`, `diagnostics`, `inspect`.
+Module exports in `build.zig`: `csv`, `json`, `json5`, `xlsx`, `zipstream`, `btrace`, `decimal`, `encoding`, `expr`, `config`, `docs`, `diagnostics`, `inspect`.
+`xlsx` imports the named `decimal` and `zipstream` modules; `zipstream` has no bxp-core dependencies (std only).
 `expr` imports `datefmt.zig` and `unicode.zig` (both file-relative, not named modules) plus the named `decimal`, `uucode`, `encoding` modules; `config` imports `json5` (as `"json5.zig"` — internal import name), `diagnostics`, `expr`, `encoding`. `encoding` is a named module (not a file-relative @import) because it is shared by both `expr` and `config` — a file-relative @import from two modules would compile the file into each, a duplicate-symbol error (same reason `decimal` is named).
 `docs` imports `config`, `expr`, `json5`; `diagnostics` has no bxp-core dependencies.
 
