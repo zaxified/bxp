@@ -1,0 +1,5 @@
+adm_code,municipality_code,municipality,municipality_part,street,house_number,orientation_number,postcode,coord_y,coord_x,valid_from
+10000001,500001,Lhota,Dolní Lhota,Hlavní,12,3,78901,540123.45,1099876.54,2020-05-01
+10000002,500001,Lhota,Dolní Lhota,,7,,78901,540200.1,1099900,2020-05-01
+10000003,500002,Žďár,Žďár nad Lesem,Náměstí Míru,1,1,79002,551234.56,1088765.43,2019-03-15
+10000004,500002,Žďár,Žďár nad Lesem,Křivá,9,,79002,551300,1088800,2019-03-15

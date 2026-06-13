@@ -1,0 +1,3 @@
+adm_code,municipality_code,municipality,municipality_part,street,house_number,orientation_number,postcode,coord_y,coord_x,valid_from
+10000003,500002,Žďár,Žďár nad Lesem,Náměstí Míru,1,1,79002,551234.56,1088765.43,2019-03-15
+10000004,500002,Žďár,Žďár nad Lesem,Křivá,9,,79002,551300,1088800,2019-03-15

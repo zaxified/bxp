@@ -1,0 +1,55 @@
+{
+  // Regression fixture for the `zip_input` pre-pass (the zipped-CSV unpacker).
+  // sample.zip holds two Windows-1250, ';'-delimited CSVs under a `CSV/` folder
+  // (RÚIAN address-points shape). `zip_input` unpacks them to flat intermediate
+  // CSVs first; dir_mode "basename" (default) flattens the `CSV/` prefix. The
+  // main loop then transcodes Win-1250 → UTF-8 and `combined_output` rolls both
+  // municipalities into one merged file. See examples/real-world/
+  // ruian-address-points/ for the narrative version.
+  conversion_templates: {
+    ruian_zip_demo: {
+      data_dir: ".",
+      zip_input: { entry_pattern: ".csv" },
+
+      file_pattern_in: ".csv",
+      file_pattern_out: ".csvx",
+      combined_output: true,
+
+      csv_delimiter_in: ";",
+      csv_input_encoding: "windows-1250",
+      csv_header_line: 1,
+
+      input_schema: {
+        $adm_code:    "[Kód ADM]",
+        $obec_code:   "[Kód obce]",
+        $obec:        "[Název obce]",
+        $cast_obce:   "[Název části obce]",
+        $ulice:       "[Název ulice]",
+        $cislo_dom:   "[Číslo domovní]",
+        $cislo_or:    "[Číslo orientační]",
+        $psc:         "[PSČ]",
+        $y:           "[Souřadnice Y]",
+        $x:           "[Souřadnice X]",
+        $plati_od:    "DATE_CONVERT([Platí Od], 'YYYY-MM-DD[*]', 'YYYY-MM-DD')",
+      },
+
+      row_rules: [
+        { when: "1 = 1", rows: [ {} ] },
+      ],
+
+      output_schema: {
+        adm_code:           "$adm_code",
+        municipality_code:  "$obec_code",
+        municipality:       "$obec",
+        municipality_part:  "$cast_obce",
+        street:             "$ulice",
+        house_number:       "$cislo_dom",
+        orientation_number: "$cislo_or",
+        postcode:           "$psc",
+        coord_y:            "$y",
+        coord_x:            "$x",
+        valid_from:         "$plati_od",
+      },
+    },
+  },
+}
