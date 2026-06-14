@@ -8,7 +8,6 @@ import 'package:flutter/services.dart';
 import 'services/debug_binding.dart';
 import 'services/debug_settings.dart';
 import 'services/desktop_integration_service.dart';
-import 'services/dev_trace.dart';
 import 'services/diagnostic_log.dart';
 import 'services/gui_mcp_server.dart';
 import 'services/prefs_service.dart';
@@ -37,24 +36,22 @@ final GlobalKey<ScaffoldMessengerState> bxpMessengerKey =
 /// MaterialApp.builder) has.
 final GlobalKey<NavigatorState> bxpNavigatorKey = GlobalKey<NavigatorState>();
 
-/// Confirm gate for critical agent (GUI-MCP) actions. Lives here because it
+/// Env var that seeds the gui-mcp auto-approve gate at startup. When set
+/// (non-empty), destructive-action confirmation dialogs (`save` / `full_run` /
+/// `delete_node` / `exit`) are auto-approved without prompting — for headless
+/// agent-driven testing. The persistent equivalent is the `bxp-gui.mcpAutoApprove`
+/// pref (the inspector's "Auto-approve agent actions" toggle); both feed
+/// [GuiMcpServer.autoApprove], the single source of truth for the gate.
+/// Default off, so an interactive user always sees the dialog.
+const String kAgentAutoApproveEnv = 'BXP_GUI_MCP_AUTO_APPROVE';
+
+/// Confirm dialog for critical agent (GUI-MCP) actions. Lives here because it
 /// is the one place that owns [bxpNavigatorKey] — the MCP tool callback fires
 /// from the HTTP request handler (no widget context of its own), so it pushes
 /// the dialog through the navigator key. Returns `false` (treated as a
-/// rejection, never a hang) when there is no live navigator context.
-/// When this env var is set (non-empty), the gui-mcp's destructive-action
-/// confirmation dialogs (`save` / `full_run` / `delete_node` / `exit`) are
-/// auto-approved without prompting. For agent-driven development / headless
-/// GUI testing only — default off, so an interactive user always sees the
-/// dialog. The user still watches the live app; this only removes the
-/// per-action click from the agent's loop.
-const String kAgentAutoApproveEnv = 'BXP_GUI_MCP_AUTO_APPROVE';
-
+/// rejection, never a hang) when there is no live navigator context. The
+/// auto-approve short-circuit lives in [GuiMcpServer], not here.
 Future<bool> _agentConfirm(String title, String detail) async {
-  if ((Platform.environment[kAgentAutoApproveEnv] ?? '').isNotEmpty) {
-    devTrace('gui_mcp.auto_approved', {'title': title});
-    return true;
-  }
   final ctx = bxpNavigatorKey.currentContext;
   if (ctx == null) return false;
   final approved = await showDialog<bool>(
@@ -872,9 +869,13 @@ class _AgentServerListenerState extends State<_AgentServerListener> {
         int.tryParse(Platform.environment['BXP_GUI_MCP_PORT'] ?? '') ??
         GuiMcpServer.kDefaultMcpPort;
     final allowlist = _readOriginAllowlist(prefs);
-    unawaited(context
-        .read<GuiMcpServer>()
-        .start(host: host, port: port, originAllowlist: allowlist));
+    // Overlay the persisted auto-approve toggle onto the env-seeded value
+    // (env wins when either is set) now that prefs have loaded.
+    final server = context.read<GuiMcpServer>();
+    server.autoApprove = server.autoApprove ||
+        prefs.getBool('bxp-gui.mcpAutoApprove');
+    unawaited(
+        server.start(host: host, port: port, originAllowlist: allowlist));
   }
 
   List<String> _readOriginAllowlist(PrefsService prefs) {

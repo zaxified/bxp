@@ -357,6 +357,44 @@ void main() {
     expect(server.activity.first.outcome, 'ok');
   });
 
+  test('autoApprove getter reflects the setter', () {
+    final s = GuiMcpServer(_FakeHost(), confirm: (_, _) async => false);
+    expect(s.autoApprove, isFalse);
+    s.autoApprove = true;
+    expect(s.autoApprove, isTrue);
+  });
+
+  test('autoApprove skips the confirm gate for destructive tools', () async {
+    // Dedicated server whose confirm fn always REJECTS — so a successful
+    // save proves the auto-approve short-circuit ran instead of the dialog.
+    final aaHost = _FakeHost()..isDirty = true;
+    final aaServer = GuiMcpServer(
+      aaHost,
+      confirm: (_, _) async => false,
+      autoApprove: true,
+    );
+    await aaServer.start(port: 0);
+    final aaClient = McpClient(
+      const Implementation(name: 'test-client-aa', version: '1.0.0'),
+    );
+    final aaTransport = StreamableHttpClientTransport(
+      Uri.parse('http://127.0.0.1:${aaServer.port}${GuiMcpServer.mcpPath}'),
+      opts: const StreamableHttpClientTransportOptions(),
+    );
+    await aaClient.connect(aaTransport);
+    try {
+      final result = await aaClient.callTool(
+        CallToolRequest(name: 'save', arguments: const {}),
+      );
+      final out = _decode(result);
+      expect(out['saved'], true); // confirm would reject; auto-approve wins
+      expect(aaHost.saveCount, 1);
+    } finally {
+      await aaTransport.close();
+      await aaServer.stop();
+    }
+  });
+
   test('open_config sets the path and loads it', () async {
     final result = await client!.callTool(
       CallToolRequest(

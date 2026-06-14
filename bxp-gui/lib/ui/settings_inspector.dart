@@ -477,6 +477,7 @@ class _AgentSectionState extends State<_AgentSection> {
   static const String _hostKey = 'bxp-gui.mcpHost';
   static const String _portKey = 'bxp-gui.mcpPort';
   static const String _allowlistKey = 'bxp-gui.mcpOriginAllowlist';
+  static const String _autoApproveKey = 'bxp-gui.mcpAutoApprove';
   bool _busy = false;
 
   final _hostCtl = TextEditingController();
@@ -543,6 +544,15 @@ class _AgentSectionState extends State<_AgentSection> {
     setState(() => _busy = false);
   }
 
+  /// Persist + apply the dev auto-approve toggle. When on, the gui-mcp's
+  /// destructive tools (`save` / `full_run` / `delete_node` / `exit`) run
+  /// without the per-action confirm dialog — for agent-driven testing.
+  Future<void> _setAutoApprove(bool enable) async {
+    final mcp = context.read<GuiMcpServer>();
+    await context.read<TraceStore>().prefs.setBool(_autoApproveKey, enable);
+    mcp.autoApprove = enable;
+  }
+
   static bool _isLoopback(String host) =>
       host == '127.0.0.1' || host == 'localhost' || host == '::1';
 
@@ -578,6 +588,16 @@ class _AgentSectionState extends State<_AgentSection> {
             const SizedBox(height: 10),
             _Subheader('Endpoint'),
             _card(t, _endpointEditor(context, t)),
+            const SizedBox(height: 10),
+            _DebugSwitchRow(
+              label: 'Auto-approve agent actions (dev)',
+              subtitle:
+                  'Skip the confirm dialog for save / full run / delete / '
+                  'exit so an agent can drive the GUI headlessly. Leave OFF '
+                  'unless you are testing — destructive actions run unprompted.',
+              value: mcp.autoApprove,
+              onChanged: _setAutoApprove,
+            ),
           ],
           if (mcp.activity.isNotEmpty) ...[
             const SizedBox(height: 10),

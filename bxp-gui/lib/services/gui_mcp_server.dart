@@ -167,17 +167,36 @@ class AgentActivityEntry {
 /// transports keyed by `mcp-session-id`, mirroring the mcp_dart streamable
 /// HTTP server example.
 class GuiMcpServer extends ChangeNotifier {
-  GuiMcpServer(this._host, {required AgentConfirmFn confirm, this.autoApprove = false})
-      : _confirm = confirm;
+  GuiMcpServer(this._host, {required AgentConfirmFn confirm, bool autoApprove = false})
+      : _confirm = confirm,
+        _autoApprove = autoApprove;
 
   final GuiMcpHost _host;
   final AgentConfirmFn _confirm;
 
-  /// True when destructive-action confirmation dialogs are being auto-approved
-  /// (the `BXP_GUI_MCP_AUTO_APPROVE` env path in main.dart). Surfaced in
-  /// `/health` + `get_state` so a driving agent can see the gate is off
-  /// (and a watching user knows actions won't prompt).
-  final bool autoApprove;
+  bool _autoApprove;
+
+  /// True when destructive-action confirmation dialogs are auto-approved
+  /// without prompting. Seeded from `BXP_GUI_MCP_AUTO_APPROVE` at startup and
+  /// overlaid with the persisted `bxp-gui.mcpAutoApprove` pref (the inspector
+  /// toggle) once prefs load — so it is the single live source of truth for
+  /// both the confirm gate ([_confirmAction]) and the report below. Surfaced
+  /// in `/health` + `get_state` (and the red status-bar chip) so a driving
+  /// agent — and a watching user — can see the gate is off.
+  bool get autoApprove => _autoApprove;
+  set autoApprove(bool value) {
+    if (_autoApprove == value) return;
+    _autoApprove = value;
+    notifyListeners();
+  }
+
+  /// Confirm gate for a destructive tool: short-circuits to `true` (no prompt)
+  /// when [autoApprove] is on, otherwise defers to the injected [_confirm]
+  /// dialog. One place so every destructive tool honours the toggle.
+  Future<bool> _confirmAction(String title, String detail) async {
+    if (_autoApprove) return true;
+    return _confirm(title, detail);
+  }
 
   /// Path the MCP endpoint is served from.
   static const String mcpPath = '/mcp';
@@ -554,7 +573,7 @@ class GuiMcpServer extends ChangeNotifier {
           _record('save', 'no unsaved changes', 'ok');
           return _json({'saved': false, 'reason': 'no unsaved changes'});
         }
-        final approved = await _confirm(
+        final approved = await _confirmAction(
           'Agent wants to save the config',
           'The agent is requesting to write '
               '${_host.configPath.isEmpty ? "the config" : _host.configPath} '
@@ -666,7 +685,7 @@ class GuiMcpServer extends ChangeNotifier {
           _record('full_run', '(none)', 'error');
           return _error('No config is open to run.');
         }
-        final approved = await _confirm(
+        final approved = await _confirmAction(
           'Agent wants to run the full conversion',
           'The agent is requesting a full run of ${_host.configPath}, which '
               'writes output files to disk.',
@@ -715,7 +734,7 @@ class GuiMcpServer extends ChangeNotifier {
         // is about to delete while the confirm dialog is up.
         _host.showConfigPanel();
         _host.revealConfigNode(path);
-        final approved = await _confirm(
+        final approved = await _confirmAction(
           'Agent wants to delete a config node',
           'The agent is requesting to delete `${path.join('.')}`.',
         );
@@ -1043,7 +1062,7 @@ class GuiMcpServer extends ChangeNotifier {
       inputSchema: JsonSchema.object(properties: const {}, required: const []),
       annotations: const ToolAnnotations(title: 'Exit app'),
       callback: (args, extra) async {
-        final approved = await _confirm(
+        final approved = await _confirmAction(
           'Agent wants to close the app',
           'The agent is requesting to quit bxp-gui.',
         );

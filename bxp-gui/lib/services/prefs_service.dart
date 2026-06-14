@@ -85,6 +85,14 @@ class PrefsService {
     return null;
   }
 
+  /// Returns the stored bool for [key], or [orElse] (default false) when
+  /// absent or not a bool. Type mismatch (a string/num under this key from an
+  /// older version) falls back to [orElse] rather than throwing.
+  bool getBool(String key, {bool orElse = false}) {
+    final v = _data[key];
+    return v is bool ? v : orElse;
+  }
+
   /// Returns the stored list for [key] as a `List<String>`, or null when absent.
   /// The JSON store may hold a heterogeneous list from a future version; `cast()`
   /// will throw if the list contains non-String values — callers should guard
@@ -112,6 +120,12 @@ class PrefsService {
   /// on-disk value in clean integer percent units is the whole point
   /// of storing it as `int` in memory.
   Future<void> setInt(String key, int value) async {
+    _data[key] = value;
+    await _flush();
+  }
+
+  /// Persist a bool value and flush to disk atomically via a tmp rename.
+  Future<void> setBool(String key, bool value) async {
     _data[key] = value;
     await _flush();
   }

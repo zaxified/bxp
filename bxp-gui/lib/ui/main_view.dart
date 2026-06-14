@@ -284,10 +284,12 @@ class _StatusBarState extends State<_StatusBar> {
     final t = context.bxpTheme;
 
     // Dev/testing banner: the gui-mcp's confirmation dialogs are being
-    // auto-approved (BXP_GUI_MCP_AUTO_APPROVE). Surfaced as a red-framed chip
-    // so a watching user always sees the safety gate is off. Constant for the
-    // app's lifetime, so a plain read (no rebuild dependency) is enough.
-    final autoApprove = context.read<GuiMcpServer>().autoApprove;
+    // auto-approved (env BXP_GUI_MCP_AUTO_APPROVE or the persisted inspector
+    // toggle). Surfaced as a red-framed chip so a watching user always sees the
+    // safety gate is off. Toggle-able live, so select the bool (rebuilds only
+    // when it flips, not on every agent-activity notify).
+    final autoApprove =
+        context.select<GuiMcpServer, bool>((s) => s.autoApprove);
 
     final bg = t.panelBg;
     final borderColor = t.borderColor;

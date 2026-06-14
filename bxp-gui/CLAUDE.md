@@ -281,15 +281,21 @@ free and parity is definitional.
   `TraceStore.ensureDetailLoaded` and is projected to JSON in the
   `_TraceStoreMcpHost` adapter. Every call appends one `AgentActivityEntry`
   and reveals its target node in the tree.
-- **`BXP_GUI_MCP_AUTO_APPROVE`** (dev/testing) — when this env var is set
-  (non-empty) the `AgentConfirmFn` dialogs are auto-approved without
-  prompting, so an agent can drive the live GUI headlessly (a semantic
+- **Auto-approve** (dev/testing) — auto-approves the `AgentConfirmFn` dialogs
+  without prompting, so an agent can drive the live GUI headlessly (a semantic
   alternative to Playwright — every tool is a real `TraceStore` action, so
-  parity is definitional). Default off → an interactive user always sees the
-  dialog. The state is surfaced as `auto_approve` in `/health` + `get_state`
-  so a driving agent (and a watching user) can see the gate is off. The
-  project `.mcp.json` registers the server at `127.0.0.1:7717` (the default
-  port) so the tools are reachable whenever the GUI is running.
+  parity is definitional). `GuiMcpServer.autoApprove` is the single source of
+  truth for the gate ([_confirmAction](lib/services/gui_mcp_server.dart)) and is
+  fed by two inputs: the `BXP_GUI_MCP_AUTO_APPROVE` env var (seeds it at
+  startup — for headless CI) and the **persisted `bxp-gui.mcpAutoApprove`
+  pref** (the inspector's *Agent control → Auto-approve agent actions* toggle).
+  The pref is the one that matters for `launch_app`-driven debugging: `mcp-flutter`
+  cannot pass env, so the persisted toggle is what survives across launches.
+  Default off → an interactive user always sees the dialog. State is surfaced as
+  `auto_approve` in `/health` + `get_state` and a red `devel-auto-approve-mode`
+  status-bar chip, so a driving agent (and a watching user) can see the gate is
+  off. The project `.mcp.json` registers the server at `127.0.0.1:7717` (the
+  default port) so the tools are reachable whenever the GUI is running.
 
 Tested over real HTTP in
 [test/gui_mcp_server_test.dart](test/gui_mcp_server_test.dart) against a
@@ -324,6 +330,30 @@ preference to shell calls:
   `dev_trace.dart`.
 - `mcp__dart__hot_reload` — reload after Dart changes. Reload + log read
   is the live debug cycle.
+
+### Self-debug cycle (gui-mcp, headless)
+
+To verify a GUI change end-to-end without manual clicking, drive the live app
+through the embedded gui-mcp (the `.mcp.json` server at `127.0.0.1:7717`) —
+every tool is a real `TraceStore` action, so this is the semantic Playwright
+replacement. The gui-mcp endpoint is **ephemeral**: it only exists while the
+GUI runs, so launch first.
+
+1. **One-time** — turn on *Settings inspector (Ctrl+Shift+S) → Agent control →
+   Auto-approve agent actions*. Persisted in `bxp-gui.json`
+   (`bxp-gui.mcpAutoApprove`), so it survives across launches — `launch_app`
+   can't set the env var, so this persisted toggle is what enables headless
+   driving. A red `devel-auto-approve-mode` chip confirms it is on.
+2. `mcp__dart__launch_app(root: <abs path>, device: linux)` — env not needed.
+3. Poll `GET http://127.0.0.1:7717/health` until it returns
+   `{"auto_approve": true, ...}` (server up + gate off).
+4. Drive via the gui-mcp tools (`open_config` → `edit_node` / `dry_run` /
+   `get_trace` / `get_row_detail` …) — destructive tools (`save` / `full_run` /
+   `delete_node` / `exit`) no longer prompt.
+5. Close with the gui-mcp `exit` tool.
+
+Default is off, so an interactive user is never silently bypassed; flipping the
+toggle is an explicit, visible (red chip) developer action.
 
 ## Conventions
 
