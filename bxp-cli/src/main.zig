@@ -302,12 +302,18 @@ pub fn main() !void {
     // number of logical CPUs available to the process (respects cpuset
     // affinity on Linux), which is the natural worker count.
     const ncpu = std.Thread.getCpuCount() catch 1;
+    // Clamp to the pipeline's per-block worker ceiling. Above it, any block
+    // with more records than the limit would otherwise hit
+    // `error.TooManyWorkers` and abort the whole run with no output (reachable
+    // today on >256-logical-CPU hosts, e.g. dual-socket EPYC). The cap only
+    // governs parallel fan-out, so the output is serial-equivalent regardless.
+    const max_workers = @min(ncpu, pipeline.MAX_WORKERS_LIMIT);
     var pool: std.Thread.Pool = undefined;
-    try pool.init(.{ .allocator = alloc, .n_jobs = ncpu });
+    try pool.init(.{ .allocator = alloc, .n_jobs = max_workers });
     defer pool.deinit();
     const runtime = pipeline.Runtime{
         .pool = &pool,
-        .max_workers = ncpu,
+        .max_workers = max_workers,
     };
 
     // Buffered stdout writer. 4 KB is enough for --version / --help; the

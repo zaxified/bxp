@@ -1557,12 +1557,14 @@ fn workerJsonPrePass(ws: *WorkerSlice, rec: *const RowEvalConst) void {
     }
 }
 
-/// Upper bound on per-block worker count. Way above any realistic CPU
-/// count (today's biggest server SKUs are < 200 cores); used only to
-/// size the stack-allocated `boundaries` array in
-/// `processBlockParallel`. If this ever needs to grow, swap the stack
-/// array for a heap allocation.
-const MAX_WORKERS_LIMIT: usize = 256;
+/// Upper bound on per-block worker count. Sizes the stack-allocated
+/// `boundaries` array in `processBlockParallel`. `main.zig` clamps the
+/// CPU-derived worker count to this before constructing the Runtime, so
+/// a host with more than this many logical CPUs caps parallel fan-out
+/// here instead of aborting (serial-equivalent output is unchanged — `K`
+/// only governs fan-out). If this ever needs to grow past a stack-array
+/// size that's comfortable, swap the array for a heap allocation.
+pub const MAX_WORKERS_LIMIT: usize = 256;
 
 /// In-place rewrite of the `outputIdx` u64 field in every `output_row`
 /// frame within `bytes`. Each worker emits its frames with a per-slice
