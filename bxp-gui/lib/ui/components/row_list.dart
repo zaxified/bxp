@@ -123,8 +123,11 @@ class RowList extends StatelessWidget {
     return _RowListInner(
       // Hard remount on file change — PlutoGrid would otherwise keep the
       // old columns/rows and ignore new inputs.
-      key: ValueKey(
-          'rowlist::$fileId::${file.headers.join("|")}::$populateGen'),
+      // Identity key bounded for wide files: header count plus the first
+      // kMaxDisplayCols names (joining all 16k+ on every rebuild is wasted
+      // work, and the count already disambiguates a width change).
+      key: ValueKey('rowlist::$fileId::${file.headers.length}::'
+          '${file.headers.take(kMaxDisplayCols).join("|")}::$populateGen'),
       fileId: fileId,
       file: file,
       model: model,
@@ -162,6 +165,18 @@ class _RowListInner extends StatefulWidget {
 
 class _RowListInnerState extends State<_RowListInner> {
   PlutoGridStateManager? _stateManager;
+
+  /// Data columns actually rendered in the grid. bxp-gui is a fast-debug
+  /// view, not a wide-CSV viewer — above [kMaxDisplayCols] we render only
+  /// the first N columns (a banner reports how many were hidden). Every
+  /// PlutoColumn / PlutoCell builder reads through this getter, so the
+  /// grid's column + cell count stays bounded no matter how wide the
+  /// output is (bxp-cli's MAX_COLUMNS is far higher). The full column set
+  /// is still on `widget.file.headers` for the banner's hidden-count.
+  List<String> get _displayHeaders {
+    final h = widget.file.headers;
+    return h.length > kMaxDisplayCols ? h.sublist(0, kMaxDisplayCols) : h;
+  }
   /// Previous-frame `activeTabIndex` snapshot. When the user swaps to a
   /// non-Runner tab and returns, PlutoGrid's keyboard focus snaps back
   /// to (row 0, row_num) instead of the previously selected row — a
@@ -398,7 +413,7 @@ class _RowListInnerState extends State<_RowListInner> {
     final end = (start + kLazyExpandBatch).clamp(0, rowIds.length);
     widget.store.ensureRowsPopulated(widget.fileId, start, end);
     final newIds = rowIds.sublist(start, end);
-    final headers = widget.file.headers;
+    final headers = _displayHeaders;
     final newPlutoRows = <PlutoRow>[];
     for (final id in newIds) {
       final row = widget.model.rows[id];
@@ -555,7 +570,7 @@ class _RowListInnerState extends State<_RowListInner> {
   /// the state manager (same logic as `_expandVisibleWindow` minus the
   /// `_visibleRowIds` bookkeeping). Used by `_continueLargeFilterScan`.
   void _appendPlutoRows(PlutoGridStateManager sm, List<String> rowIds) {
-    final headers = widget.file.headers;
+    final headers = _displayHeaders;
     final fresh = <PlutoRow>[];
     for (final id in rowIds) {
       final row = widget.model.rows[id];
@@ -585,7 +600,7 @@ class _RowListInnerState extends State<_RowListInner> {
   /// initial window) — both need to replace the entire grid contents
   /// without remounting.
   void _replacePlutoRows(PlutoGridStateManager sm, List<String> rowIds) {
-    final headers = widget.file.headers;
+    final headers = _displayHeaders;
     final fresh = <PlutoRow>[];
     for (final id in rowIds) {
       final row = widget.model.rows[id];
@@ -718,7 +733,7 @@ class _RowListInnerState extends State<_RowListInner> {
   ///   walks, yielding to the event loop so the UI stays responsive.
   void _applyFilter() {
     final sm = _stateManager;
-    final headers = widget.file.headers;
+    final headers = _displayHeaders;
     final perColEmpty = _filters.values.every((v) => v.isEmpty);
     final globalNeedle = _wideGlobalFilter.trim().toLowerCase();
     final hasGlobal = globalNeedle.isNotEmpty;
@@ -819,7 +834,7 @@ class _RowListInnerState extends State<_RowListInner> {
       weight: BxpWeight.medium,
     );
     _cachedCellStyle = BxpText.body(context, size: BxpSize.md);
-    final headers = widget.file.headers;
+    final headers = _displayHeaders;
     // For eager (small) files this is identical to `widget.file.rowIds`.
     // For lazy (large) files this is the materialised window — first
     // [kLazyInitialRows] initially, growing in batches as the user
@@ -989,9 +1004,16 @@ class _RowListInnerState extends State<_RowListInner> {
     // per rebuild was the largest cost on the wide-CSV path (135 k-px
     // wide layout, per-frame measure walk across every child).
     final isWide = headers.length > kWideColLimit;
+    // Number of data columns the grid is NOT rendering (cap overflow).
+    final hiddenCols = widget.file.headers.length - headers.length;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        if (hiddenCols > 0)
+          _ColumnCapBanner(
+            shown: headers.length,
+            total: widget.file.headers.length,
+          ),
         if (isWide)
           _WideGlobalFilterBar(
             initial: _wideGlobalFilter,
@@ -1316,6 +1338,47 @@ class _FilterScanSpinner extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Thin strip above the grid shown when the file has more data columns
+/// than [kMaxDisplayCols] — the grid renders only the first N. bxp-gui is
+/// a fast-debug view, not a wide-CSV viewer; the cap keeps the grid bounded
+/// while bxp-cli still processes the full width (its MAX_COLUMNS is far
+/// higher). The banner makes the truncation explicit so data isn't silently
+/// hidden.
+class _ColumnCapBanner extends StatelessWidget {
+  final int shown;
+  final int total;
+  const _ColumnCapBanner({required this.shown, required this.total});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.bxpTheme;
+    return Container(
+      color: t.panelBg,
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      child: Row(
+        children: [
+          Text(
+            '⚠',
+            style: BxpText.body(context, size: BxpSize.sm, color: t.valueWarn),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Showing first $shown of $total columns — bxp-gui is a debug '
+              'view, not a wide-CSV viewer.',
+              style: BxpText.body(
+                context,
+                size: BxpSize.sm,
+                color: t.textMuted,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

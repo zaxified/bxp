@@ -18,11 +18,16 @@ const json_mod = @import("json");
 const btrace = @import("btrace");
 
 // Broker exports typically have 10–30 columns; real-world public datasets
-// can reach 100+ (NOAA GHCN daily has 124, with paired measurement +
-// quality-flag columns). 1024 is a generous ceiling that costs ~16 KB per
-// file in arena-heap `hdr_buf` and ~16 KB per row in `row_buf`. Rows
-// beyond this are truncated with a warning.
-const MAX_COLUMNS: usize = 1024;
+// can reach 100+ (NOAA GHCN daily has 124) and wide time-series go much
+// further (Johns Hopkins COVID-19 daily series = 1147 day-columns). The
+// per-worker field buffer is heap-allocated (`field_buf`, one
+// `[]const u8` slot per column), so the ceiling costs only
+// `@sizeOf([]const u8) * MAX_COLUMNS` (~128 KB) per worker — measured peak
+// RSS for a 5000-col × 100k-row input was ~13 MB. 16384 is therefore a
+// generous ceiling at negligible cost; header/rows beyond it are truncated
+// with a warning. The GUI renders far fewer (see `kMaxDisplayCols`) — it is
+// a debug view, not a wide-CSV viewer — so the CLI cap is the real limit.
+const MAX_COLUMNS: usize = 16384;
 // One 64 KB write buffer per output file. Kept in the per-file stack frame;
 // the OS then decides when to flush to disk. Smaller buffers cause noticeable
 // syscall overhead on files with thousands of short rows.

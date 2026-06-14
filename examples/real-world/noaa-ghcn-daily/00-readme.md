@@ -55,9 +55,9 @@ The consistency flag earns its keep here: two instrument-fault days hidden in
 measurement element pairs with a `_ATTRIBUTES` quality-flag column). BXP
 parses all of them — the full run reports `warnings:0` and every referenced
 element resolves, including `TAVG` at column 57. bxp-cli's column ceiling is
-**1024** (`MAX_COLUMNS`); a 124-column climate file sits comfortably under it.
-Inputs wider than that (e.g. a daily time-series with one column per day) warn
-and ignore the overflow — see the roadmap entry on raising the cap.
+**16384** (`MAX_COLUMNS`); a 124-column climate file sits comfortably under it,
+as do day-per-column time-series (the Johns Hopkins COVID-19 daily series has
+1147 columns). Inputs wider than the ceiling warn and ignore the overflow.
 
 **Run it.**
 

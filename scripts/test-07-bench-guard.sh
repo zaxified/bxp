@@ -311,8 +311,8 @@ if (( xlsx_rss > rss_ceil_kb )); then
 fi
 
 # --- 5. Assert wide-column RSS ceiling ---------------------------------------
-# Near the MAX_COLUMNS=1024 ceiling, full passthrough. RSS must stay bounded:
-# the streaming pipeline processes row-by-row, so column count widens the
+# Wide passthrough (well below the MAX_COLUMNS=16384 ceiling). RSS must stay
+# bounded: the streaming pipeline processes row-by-row, so column count widens the
 # per-row buffer but not the resident set. A regression that buffers the whole
 # wide output would blow the ceiling. RSS-only (no scaling ratio — this point
 # fixes rows and varies width, not rows).

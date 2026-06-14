@@ -329,12 +329,35 @@ class _FieldsTable extends StatelessWidget {
     );
 
     if (headers.length > kWideColLimit) {
+      // Render at most kMaxDisplayCols fields — bxp-gui is a debug view, not
+      // a wide-CSV viewer, and the row-selected dump matches the grid's
+      // column cap. A trailing banner reports how many were hidden. The
+      // referenced columns are still visible in the row-transform variable
+      // trace, so capping the raw dump loses no debug signal.
+      final shownCount =
+          headers.length > kMaxDisplayCols ? kMaxDisplayCols : headers.length;
+      final hiddenCount = headers.length - shownCount;
       return LayoutBuilder(
         builder: (context, constraints) {
           final headerColWidth = constraints.maxWidth * 0.4;
           return ListView.builder(
-            itemCount: headers.length,
+            itemCount: shownCount + (hiddenCount > 0 ? 1 : 0),
             itemBuilder: (context, i) {
+              if (i == shownCount) {
+                // Trailing cap banner.
+                return Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
+                  child: Text(
+                    '⚠ Showing first $shownCount of ${headers.length} fields '
+                    '— bxp-gui is a debug view, not a wide-CSV viewer.',
+                    style: BxpText.body(
+                      context,
+                      color: t.textMuted,
+                      size: BxpSize.sm,
+                    ),
+                  ),
+                );
+              }
               final val = i < values.length ? values[i] : '';
               return DecoratedBox(
                 decoration: BoxDecoration(

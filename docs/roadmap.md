@@ -153,17 +153,6 @@ to pre-process the file" or "skip the affected rows".
   `csv.zig` + `config.zig` + `pipeline.zig`. Decide on (a) vs (b)
   based on the user's actual file.
 
-- **Opt-in multiline quoted fields (`csv_multiline_quotes: true`).** Audit
-  2026-06-13, deferred. `csv.LineIterator` deliberately uses
-  lazy-quotes semantics (a newline always ends the record; documented + tested
-  intent). Some broker exports carry embedded newlines in description/notes
-  columns (RFC 4180 §2.6). An opt-in per-template flag could switch the
-  iterator to RFC mode for those templates while keeping the safer lazy
-  default. Cost: a `LineIterator` branch + config field + `FieldDoc`, and the
-  per-block parallel pipeline needs care — record boundaries no longer align
-  with `'\n'`, so chunk splitting must become quote-aware or fall back to
-  serial for that template.
-
 - **Wealthfolio target spec vocabulary expansion (remaining).** The
   readme now documents `TRANSFER_IN`, `TRANSFER_OUT`, and `SPLIT`
   alongside the eight standard actions. Real Wealthfolio also accepts
@@ -231,17 +220,6 @@ fixed before release instead, not parked here).
     conversion appears. Excel offers neither (no TZ/DST concept at all), so
     these would put bxp ahead of the spreadsheet baseline, not just at parity.
 
-- **Raise / make-configurable the 1024-column cap (`MAX_COLUMNS`).** Wide
-  time-series exports exceed it: the Johns Hopkins COVID-19 daily series ships
-  one column per day (1147 columns by March 2023), so everything past column
-  1024 is silently dropped (`warning: '<file>' has more than 1024 columns;
-extra columns are ignored`, reproduced 2026-05-31). 1024 is a deliberate,
-  generous ceiling (the field buffer is `[MAX_COLUMNS][]const u8`), but
-  day-per-column datasets are a real shape. Options: raise it, or make it a
-  config/dynamic allocation. Note: such files usually _want_ unpivoting to long
-  form anyway (bxp does that via multi-row `row_rules`), which sidesteps the
-  width entirely once the columns are reachable.
-
 - **Bracket-protected fields (web-server access logs).** Apache/nginx
   combined-log format is space-delimited but wraps the timestamp in
   `[10/Oct/2000:13:55:36 -0700]` — a group containing the delimiter. bxp-cli
@@ -270,10 +248,14 @@ extra columns are ignored`, reproduced 2026-05-31). 1024 is a deliberate,
 - **Wide-CSV rendering: two possible future optimisation paths.**
   After the 2026-05-26 survival session, the GUI handles 900-col x
   100k-row CSVs but RSS scales linearly with `visible_rows × cols`
-  (~13.5 GB at full-file scroll on the bench). Real-world data (broker
-  exports 10-30 cols, NOAA GHCN 124 cols) sits well below the limit
-  and current Pluto + the `kWideColLimit=64` gate is enough. Revisit
-  these if a 1000+ col use case becomes real:
+  (~13.5 GB at full-file scroll on the bench). Since the `MAX_COLUMNS`
+  bump to 16384 (CLI can now emit far wider output), the grid hard-caps
+  rendering at `kMaxDisplayCols = 200` columns with a banner — bxp-gui is
+  a debug view, not a wide-CSV viewer, so the linear-RSS blow-up is bounded
+  by construction. Real-world data (broker exports 10-30 cols, NOAA GHCN
+  124 cols) sits well below the cap. Both paths below are therefore
+  **deferred indefinitely** — revisit only if a genuine in-GUI wide-display
+  (1000+ visible cols) use case appears:
   - **Query-driven viewport (csvql or in-house slicer).** PlutoGrid
     becomes a windowed display of `~30 visible cols x ~50 visible rows`.
     On scroll, query a slice from disk
@@ -380,15 +362,11 @@ rather than running in-core.
 
 ### Expression builtins (non-regex)
 
-The high-value primary builtins (`CASE`, `IFERROR`, `LPAD`/`RPAD`, `POSITION`,
-`PROPER`, `MOD`, `ISEMPTY`) and the per-file/row context builtins
-(`FILENAME()`, `RECORD_NUM()`, `SHEET_NAME()`) have landed. What remains:
-
 **Secondary / niche — on hold indefinitely.** No concrete use-case; add only
 when a real one appears. All fit the existing `FnDoc` + `ArgKind` pattern
 unless noted:
 
-- String / parsing: `FIND` (exact alias of the shipped `POSITION`), `REPT(s, n)`.
+- String / parsing: `REPT(s, n)`.
 - Calendar / clock components: `QUARTER(d)`, `WEEKNUM(d)`, `DATE_TRUNC(unit, d)`,
   `HOUR(d)` / `MINUTE(d)` / `SECOND(d)`. The time extractors need a canonical
   ISO-datetime input decision first (bxp's date model is date-only today).
@@ -418,6 +396,12 @@ Features that surface repeatedly in audits and reverse-simulations but
 are deliberately **out of scope** — documented here so the same
 discussion doesn't keep restarting. Reopen only if the rationale changes.
 
+- **Multiline quoted fields (`csv_multiline_quotes: true`).** `csv.LineIterator`
+  deliberately uses lazy-quotes semantics — a newline always ends the record
+  (design decision 2026-06-04, validated on IMDb 12.5M rows). This is
+  intentionally NOT RFC 4180 §2.6. An opt-in RFC mode would require
+  quote-aware chunk splitting in the parallel pipeline or a serial fallback;
+  no real broker file with embedded newlines has ever been confirmed.
 - **Aggregation across rows (SUM / COUNT / GROUP BY).** Conflicts with
   bxp's row-by-row engine philosophy — every output row is a pure
   function of one input row plus the pre-pass lookup table, no global
@@ -433,10 +417,6 @@ discussion doesn't keep restarting. Reopen only if the rationale changes.
   produces one output stream (plus optional `combined_output`).
   Workaround: define two templates with different `row_rules` filters
   pointing at the same `data_dir`.
-- **Step-through expression debugger.** The Expression Playground
-  (single-eval against a sample row) plus per-call NDJSON traces from
-  `--expr-trace` cover ~all real debugging needs. A breakpoint-style
-  debugger would be massive surface area for marginal gain.
 - **Output row deduplication (`dedup_output: bool`).** The re-import
   scenario it would solve — overlapping date ranges across successive
   broker exports producing duplicate `.csvx` rows — is a workflow

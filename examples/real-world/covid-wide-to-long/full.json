@@ -1,9 +1,8 @@
 {
   // Scale/complete-run config: same unpivot as sample.json, pointed at the
-  // full JHU confirmed-global file in ./full/. NB: that file has 1147 columns
-  // (one per day) and exceeds bxp's 1024-column cap — the overflow days warn
-  // and are ignored, but the three snapshot columns we reference (≤ col 714)
-  // are well within range. See the roadmap note on raising MAX_COLUMNS.
+  // full JHU confirmed-global file in ./full/. That file has 1147 columns
+  // (one per day) — well within bxp's 16384-column cap, so every day-column
+  // is reachable (the three snapshot columns we reference sit at ≤ col 714).
   conversion_templates: {
     covid_wide_to_long: {
       data_dir:           "full",

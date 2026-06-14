@@ -61,6 +61,13 @@ const int kFilterScanYieldEvery = 2000;
 /// wide public datasets (NOAA GHCN ~124 cols, sensor dumps, stress-
 /// tests near the 1024 ceiling) cross it.
 const int kWideColLimit = 64;
+/// Hard cap on how many data columns the grid actually renders. bxp-gui is
+/// a fast-debug view, not a wide-CSV viewer: above this we build PlutoColumns
+/// + PlutoCells for only the first N columns and a banner reports how many
+/// were hidden. Keeps grid RSS/layout cost bounded regardless of how wide
+/// the output is — bxp-cli's `MAX_COLUMNS` is far higher (16384), so the CLI
+/// can process extreme widths while the GUI stays responsive.
+const int kMaxDisplayCols = 200;
 /// Debug aid — artificial sleep before each lazy populate batch (scroll
 /// expand + filter scan continuation) so an NVMe-fast load is visible
 /// in the UI. Set 0 for production, 2000 ms for showing the spinner.
