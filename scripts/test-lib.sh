@@ -1,6 +1,16 @@
 # Shared helpers for test-NN-*.sh phase scripts and the test.sh wrapper.
 # Sourced; not executable on its own.
 
+# Force Python UTF-8 Mode (PEP 540) for every python3 the harness invokes.
+# Without it, Python on Windows defaults to the locale ANSI code page (cp1252
+# on the GitHub windows-latest runner), so any inline helper that reads a
+# UTF-8 file with a bare open() — corpus walks (test-06), MCP fixtures
+# (test-05), the readme generator (test-01) — dies with UnicodeDecodeError on
+# the first non-ASCII byte. UTF-8 Mode makes open()/stdio default to UTF-8
+# regardless of locale; this is the documented fix for CI (PEP 540). Exported,
+# so child shells (e.g. the gen-readme.sh subprocess) inherit it too.
+export PYTHONUTF8=1
+
 # Sub-second timing via bash 5+ EPOCHREALTIME; fall back to whole seconds.
 # EPOCHREALTIME honours the locale's decimal point (e.g. "1.234,56" in cs_CZ),
 # which awk would parse as an integer. Normalise comma → period.
