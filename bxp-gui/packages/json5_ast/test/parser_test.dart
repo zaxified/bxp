@@ -35,6 +35,35 @@ void main() {
     }
   });
 
+  group('deep nesting surfaces a diagnostic, never a StackOverflowError', () {
+    // Pathological bracket nesting (well inside a 1 MB file) must bail with
+    // a ParseDiagnostic rather than recursing into a StackOverflowError that
+    // would escape Parser.parse's catch clauses and crash the loader.
+    test('5000-deep array nest yields an error diagnostic', () {
+      final src = '${'[' * 5000}${']' * 5000}';
+      final r = Parser.parse(src);
+      expect(r.diagnostics, isNotEmpty,
+          reason: 'expected a depth diagnostic, got none');
+      expect(r.hasErrors, isTrue);
+    });
+
+    test('5000-deep object nest yields an error diagnostic', () {
+      final src = '${'{a:' * 5000}1${'}' * 5000}';
+      final r = Parser.parse(src);
+      expect(r.diagnostics, isNotEmpty,
+          reason: 'expected a depth diagnostic, got none');
+      expect(r.hasErrors, isTrue);
+    });
+
+    test('moderately nested config still parses clean', () {
+      // 32 levels — below the cap — must remain valid.
+      final src = '${'[' * 32}1${']' * 32}';
+      final r = Parser.parse(src);
+      expect(r.diagnostics, isEmpty,
+          reason: 'sane nesting should parse: ${r.diagnostics}');
+    });
+  });
+
   group('CRLF input round-trips through the dumper', () {
     test('object with CRLF separators parses and dumps identically twice',
         () {

@@ -13,6 +13,14 @@ class Parser {
   final List<Token> _toks;
   int _p = 0;
 
+  /// Max value-nesting depth before the parser bails with a
+  /// `ParserError` (→ `ParseDiagnostic`) instead of recursing into a
+  /// `StackOverflowError` that would escape `parse`'s catch clauses and
+  /// crash the loader. Mirrors `value_builder._kMaxDepth` so the ingest
+  /// and mutation sides reject the same pathological nesting. Real
+  /// hand-authored configs stay far below this.
+  static const int _kMaxDepth = 64;
+
   Parser(this._toks);
 
   static ParseResult parse(String src) {
@@ -25,7 +33,7 @@ class Parser {
       final tokens = Tokenizer(src).tokenize();
       final p = Parser(tokens);
       final leadingComments = p._collectStandaloneComments();
-      root = p._parseValue();
+      root = p._parseValue(0);
       // Top-of-file standalone comments: prepend as CommentLine pseudo-entries
       // into the root container (Object/Array) so they live as siblings of
       // the real entries — matching how mid-file standalone comments are
@@ -150,14 +158,18 @@ class Parser {
     return null;
   }
 
-  JsonAstNode _parseValue() {
+  JsonAstNode _parseValue(int depth) {
+    if (depth > _kMaxDepth) {
+      throw ParserError(
+          'nesting deeper than $_kMaxDepth levels', _peek().span);
+    }
     _skipNewlines();
     final tok = _peek();
     switch (tok.kind) {
       case TokKind.lbrace:
-        return _parseObject();
+        return _parseObject(depth);
       case TokKind.lbracket:
-        return _parseArray();
+        return _parseArray(depth);
       case TokKind.string:
         _advance();
         final n = JsonString(tok.value ?? '');
@@ -195,7 +207,7 @@ class Parser {
     }
   }
 
-  JsonObject _parseObject() {
+  JsonObject _parseObject(int depth) {
     final start = _advance();
     final obj = JsonObject();
     obj.sourceSpan = start.span;
@@ -246,7 +258,7 @@ class Parser {
       for (final c in betweenColonAndValue) {
         obj.properties.add(CommentLine(c));
       }
-      final value = _parseValue();
+      final value = _parseValue(depth + 1);
       final prop = JsonProperty(key, value);
       // Phase 4D: the gap between value and the comma/closer can contain
       // both an inline same-line comment (e.g. `value // trail`) AND
@@ -290,7 +302,7 @@ class Parser {
     }
   }
 
-  JsonArray _parseArray() {
+  JsonArray _parseArray(int depth) {
     final start = _advance();
     final arr = JsonArray();
     arr.sourceSpan = start.span;
@@ -305,7 +317,7 @@ class Parser {
         _advance();
         return arr;
       }
-      final el = _parseValue();
+      final el = _parseValue(depth + 1);
       // Phase 4D: same as object's after-value handling — capture
       // inline same-line trail first (preserves `value // trail` layout
       // through the round-trip), then standalone comments before the
