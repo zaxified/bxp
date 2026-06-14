@@ -2978,7 +2978,23 @@ pub fn loadFromBytes(
                         };
                         errdefer alloc.free(name);
                         const header_row: u32 = if (obj.get("header_row")) |v| switch (v) {
-                            .integer => |n| @intCast(n),
+                            .integer => |n| blk: {
+                                // Range-guard before the cast — mirrors the sibling
+                                // csv_header_line check below. A negative or
+                                // out-of-u32-range i64 reaching @intCast is illegal
+                                // behaviour (panic in the ReleaseSafe bridge / GUI
+                                // backend, wrap in ReleaseSmall) on a hostile config.
+                                if (n < 0 or n > std.math.maxInt(u32)) {
+                                    try emitTemplateDiag(alloc, diag, .@"error", "config.invalid_value",
+                                        b_entry.key_ptr.*, "xlsx_sheet.header_row",
+                                        "xlsx_sheet.header_row must be between 0 and {d}, got {d}", .{ std.math.maxInt(u32), n });
+                                    std.debug.print(
+                                        "---\n# {s}: config error: template '{s}': xlsx_sheet.header_row out of range, got {d}\n",
+                                        .{ config_path, b_entry.key_ptr.*, n });
+                                    return error.InvalidConfig;
+                                }
+                                break :blk @as(u32, @intCast(n));
+                            },
                             else => {
                                 try emitTemplateDiag(alloc, diag, .@"error", "config.wrong_type",
                                     b_entry.key_ptr.*, "xlsx_sheet.header_row",
