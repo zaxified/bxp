@@ -900,10 +900,25 @@ const concat_op_doc: OperatorDoc = .{ .token = "&", .description = "String conca
 const mul_op_doc: OperatorDoc = .{ .token = "*", .description = "Numeric multiplication." };
 const div_op_doc: OperatorDoc = .{ .token = "/", .description = "Numeric division." };
 
+/// Maximum (sub)expression nesting depth. Every `(...)`, function argument,
+/// and IF/CASE/IFERROR branch re-enters `parseExpr`, and the tree-walking
+/// parser recurses on the native stack — without a cap a deeply nested
+/// expression overflows the stack into an uncatchable SIGSEGV (stack overflow
+/// bypasses ReleaseSafe checks; reachable from the agent/GUI/CLI input surface
+/// with untrusted expression text). 256 is far beyond any hand-written or
+/// realistically generated config expression, while keeping the worst-case
+/// frame count (~256 × the ~10-deep precedence chain) safely inside the thread
+/// stack on every build mode.
+const MAX_PARSE_DEPTH: u16 = 256;
+
 const Parser = struct {
     tok: Tokenizer,
     ctx: *const Context,
     last_field_name: []const u8 = "",
+    /// Current recursion depth, bounded by [MAX_PARSE_DEPTH]. Incremented on
+    /// entry to `parseExpr` (the single re-entry point for every nested
+    /// sub-expression) and decremented on return.
+    depth: u16 = 0,
 
     fn init(src: []const u8, ctx: *const Context) Parser {
         return .{ .tok = Tokenizer.init(src), .ctx = ctx };
@@ -979,6 +994,16 @@ const Parser = struct {
 
     // expr := or_expr
     pub fn parseExpr(self: *Parser) anyerror!Value {
+        // Depth guard: every nested sub-expression (`(...)`, function arg,
+        // IF/CASE/IFERROR branch) re-enters here, so a single counter here
+        // bounds the native-stack recursion and turns a pathological nesting
+        // into a normal template error instead of a SIGSEGV. See MAX_PARSE_DEPTH.
+        if (self.depth >= MAX_PARSE_DEPTH) {
+            self.setDetail("expression nested too deeply (max {d} levels)", .{MAX_PARSE_DEPTH});
+            return error.ExpressionTooDeep;
+        }
+        self.depth += 1;
+        defer self.depth -= 1;
         return self.parseOr();
     }
 
@@ -4069,6 +4094,29 @@ test "eval: addition and subtraction" {
     const ctx = h.ctx(&.{}, a);
     try testing.expectEqualStrings("7", try evalString("3 + 4", &ctx));
     try testing.expectEqualStrings("1", try evalString("3 - 2", &ctx));
+}
+
+test "eval: deeply nested expression errors instead of overflowing the stack" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    var detail: []const u8 = "";
+    var ctx = h.ctx(&.{}, a);
+    ctx.error_detail = &detail;
+
+    // 300 > MAX_PARSE_DEPTH (256): "((( … 1 … )))" must be rejected with a clean
+    // error, never an uncatchable stack-overflow SIGSEGV. Regression guard for
+    // the unbounded parser-recursion finding (audit 2026-06-14).
+    const depth = 300;
+    const src = try a.alloc(u8, depth * 2 + 1);
+    @memset(src[0..depth], '(');
+    src[depth] = '1';
+    @memset(src[depth + 1 ..], ')');
+    try testing.expectError(error.ExpressionTooDeep, eval(src, &ctx));
+
+    // Nesting comfortably under the cap still evaluates normally.
+    try testing.expectEqualStrings("1", try evalString("(((1)))", &ctx));
 }
 
 test "eval: multiplication has higher precedence than addition" {
