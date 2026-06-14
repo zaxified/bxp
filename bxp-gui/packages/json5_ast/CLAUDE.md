@@ -73,6 +73,19 @@ parse → dump cycles must produce identical bytes.
   reachable from `package:json5_ast/X.dart`. Keep the API stable so
   future extraction doesn't break consumers.
 
+## Known non-issues (audit-acknowledged)
+
+Residual 🔵 from the 2026-06-14 audit (the 🟡 unbounded parser recursion was
+fixed with `_kMaxDepth = 64`; invalid-UTF-8 load is now `allowMalformed`).
+
+- **Duplicate object keys are kept silently; resolution targets the FIRST.**
+  `_parseObject` appends every `JsonProperty` (a faithful AST, correct for
+  round-trip), but `_findPropertyIndex` returns the first match. JSON /
+  bxp-core semantics is **last-wins**, so editing a dup-keyed config would
+  mutate a different instance than the engine reads. Benign in practice: dup
+  keys are already a config-level error flagged by bxp-core + the Dart
+  validator, so this is a divergence only on an already-invalid file.
+
 ## Future extraction
 
 Recipe for spinning out to its own repo:

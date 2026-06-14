@@ -37,7 +37,11 @@ class AstLoader {
   /// list when parsing fails).
   static Future<AstLoadResult> loadFromFile(String path) async {
     final bytes = await File(path).readAsBytes();
-    final src = utf8.decode(bytes);
+    // allowMalformed: a corrupt/binary config must surface as a parse
+    // diagnostic, never an uncaught FormatException (the "loader never
+    // crashes" contract). Invalid sequences become U+FFFD, which the
+    // JSON5 parser then rejects with a normal diagnostic.
+    final src = utf8.decode(bytes, allowMalformed: true);
     final parsed = Parser.parse(src);
     return AstLoadResult(parsed.root, parsed.diagnostics, src);
   }

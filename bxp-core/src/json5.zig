@@ -333,6 +333,12 @@ fn isInObject(nest: []const u8) bool {
 /// Comments are stripped silently (Phase 5d cleanup — the GUI consumes only
 /// `$err_*` after the AST migration). The result is valid JSON suitable for
 /// inspect.annotateRaw's output contract.
+///
+/// AUDIT-OK (2026-06-14): this is the most intricate state machine in bxp-core
+/// — many interacting recovery branches (unterminated string, missing colon,
+/// missing comma, invalid literal, EOF auto-close). Not a bug, but a prime
+/// regression site: gate any change here behind the existing recovery unit
+/// tests below + a fuzz pass over mutated JSON5, not just the happy path.
 pub fn preprocessAnnotated(alloc: std.mem.Allocator, input: []const u8) !AnnotatedResult {
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(alloc);

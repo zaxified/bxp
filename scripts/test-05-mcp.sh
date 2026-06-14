@@ -77,7 +77,7 @@ PY
 
     "$stage/bxp-mcp" <"$reqs" >"$resp" || {
         echo "FAIL: bxp-mcp exited non-zero"; cat "$resp"
-        rm -rf "$stage"; rm -f "$reqs" "$resp"; return 1
+        rm -f "$stage/bxp-mcp" "$stage/bxp-cli"; rmdir "$stage"; rm -f "$reqs" "$resp"; return 1
     }
 
     local rc=0
@@ -172,7 +172,7 @@ assert by_id[12]["result"].get("isError") is False, by_id[12]
 assert "structuredContent" not in by_id[12]["result"], "single-line eval_trace must stay text-only"
 PY
 
-    rm -rf "$stage"; rm -f "$reqs" "$resp"
+    rm -f "$stage/bxp-mcp" "$stage/bxp-cli"; rmdir "$stage"; rm -f "$reqs" "$resp"
     return $rc
 }
 

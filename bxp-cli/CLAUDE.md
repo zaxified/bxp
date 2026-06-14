@@ -473,3 +473,26 @@ error.Fatal;` recurs ~10× and looks like pure duplication, but it sits
   differences for a purely cosmetic line-count win in the control-flow
   function CLAUDE.md keeps deliberately linear. Considered and declined in the
   2026-06-05 audit.
+
+- **Thread pool is spawned before the `--version` / `--help` short-circuit.**
+  `pool.init(.{ .n_jobs = ncpu })` runs before the arg scan that handles the
+  two info flags, so `bxp-cli --version` spins up `ncpu` OS threads just to
+  print one line (torn down via `defer pool.deinit()`). Harmless but a
+  measurable startup cost on a high-core host for the two most common no-op
+  invocations. Could move the pool init after the short-circuit scan, or
+  lazy-init on first `processBroker`. Flagged in the 2026-06-14 audit.
+
+- **`--data` / `--config` value-flags swallow a following flag token.**
+  `matchValueArg`'s space form returns the next token verbatim with no
+  "looks like a flag" check, so `--data --fresh` treats `--fresh` as the data
+  dir → a confusing "directory not found: --fresh" instead of "--data needs a
+  value". Same class as most hand-rolled parsers; a UX papercut, not a
+  correctness bug. Not worth special-casing unless reported.
+
+- **`validatePath` permits absolute paths and a single `..`.** It blocks shell
+  metacharacters and `> 1` `..`, so `--data /tmp/out` or `--data ../foo` write
+  outside the cwd subtree. This is correct for a user-run CLI with the user's
+  own privileges (not a server boundary) and is required by the default
+  `../data/...` layout. Noted only because the doc-comment frames it as a
+  "path traversal" defense — the real, narrower guarantee is blocking injection
+  chars + accidental deep traversal, which is the appropriate scope here.

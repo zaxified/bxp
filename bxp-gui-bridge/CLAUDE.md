@@ -139,3 +139,25 @@ verify the corpus, then drop the rewrite.
 - Tests use the `test_helper.zig` re-exec pattern — never call out to
   real OS binaries; the suite must be identical on every host
   ([[feedback_test_helper_subprocess]]).
+
+## Known non-issues (audit-acknowledged)
+
+Residual 🔵 notes from the 2026-06-14 audit (the 🟡 `bridge_run` one-shot
+ECHILD-intolerance is dead code — the only caller reroutes through
+`bridge_run_streaming`). No 🔴/🟠.
+
+- **`streamingStderrLoop` has no backpressure bound.** It dispatches every
+  stderr chunk without the `queue_sema.wait()` gate that bounds stdout —
+  intentional (bxp-cli stderr is low-volume warnings). A pathological stderr
+  flood could accumulate unbounded in-flight heap buffers in Dart's port
+  queue. Acceptable by design; on record so the assumption is explicit.
+- **`bridge_verify_minisign` accepts legacy `"Ed"` alongside prehashed
+  `"ED"`.** Not a downgrade vulnerability — both are full Ed25519 over the
+  content, forging either needs the private key; CI emits prehashed `"ED"`
+  only. Could tighten to prehashed-only to shrink the accepted surface, but no
+  security impact today.
+- **`trusted_comment` is capped at 2048 B** (`gbuf: [64 + 2048]u8`,
+  length-checked before the memcpy → `bad_sig_file` if longer, no overflow). A
+  legitimately long trusted comment would false-reject; the release pipeline
+  controls the comment (short `timestamp:… file:… hashed`), so no practical
+  impact.

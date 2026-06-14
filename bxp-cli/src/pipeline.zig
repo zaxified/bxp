@@ -22,8 +22,9 @@ const btrace = @import("btrace");
 // further (Johns Hopkins COVID-19 daily series = 1147 day-columns). The
 // per-worker field buffer is heap-allocated (`field_buf`, one
 // `[]const u8` slot per column), so the ceiling costs only
-// `@sizeOf([]const u8) * MAX_COLUMNS` (~128 KB) per worker — measured peak
-// RSS for a 5000-col × 100k-row input was ~13 MB. 16384 is therefore a
+// `@sizeOf([]const u8) * MAX_COLUMNS` (16 B/slot × 16384 = 256 KiB) per
+// worker — measured peak RSS for a 5000-col × 100k-row input was ~13 MB.
+// 16384 is therefore a
 // generous ceiling at negligible cost; header/rows beyond it are truncated
 // with a warning. The GUI renders far fewer (see `kMaxDisplayCols`) — it is
 // a debug view, not a wide-CSV viewer — so the CLI cap is the real limit.

@@ -166,3 +166,31 @@ new component when the web/remote case is real; needs concurrency (thread pool /
 event loop), which stdio does not. A separate GUI-side **Dart MCP server** for
 agent-controlled GUI ops (open-config / reload / run / exit) is tracked in
 `docs/roadmap.md` → "Agent-controllable GUI".
+
+## Known non-issues (audit-acknowledged)
+
+Residual 🔵 notes from the 2026-06-14 audit (all 🟠/🟡 fixed). They share one
+**threat model**: the stdio server is **single-process + single-threaded** and
+stdin is a **trusted 1:1 local pipe** from the spawning agent host. The caps
+and races below are bounded by that model and only re-open under a future
+**threaded `bxp-api` sibling** or a network transport over the same `sim.zig` —
+revisit them there.
+
+- **`sim.zig` wipes the reused workspace on every call** (`deleteTree` +
+  `makePath`). Two concurrent `bxp_simulate` calls sharing a `workspace` id
+  (default = template id) would race wipe-vs-read; single-threaded stdio makes
+  that unreachable today. Path is confined to `tmp_base/bxp-mcp-sim/<uid>`.
+- **`sim.zig tmpDir` trusts `TMPDIR`/`TMP`/`TEMP`.** Standard, and the env is
+  the user's own; the subsequent `deleteTree` only ever targets the sanitized
+  `bxp-mcp-sim/<uid>` subtree, so a redirected temp base cannot widen the
+  delete blast radius.
+- **`server.zig readLine` grows `line_buf` unboundedly** (no max-line cap), so
+  a multi-GB request line OOMs the server. Same "uncapped text entry point"
+  theme as `inspect.zig`; low risk on the trusted local pipe. A generous cap
+  (a few× the 1 MB config limit) + an oversize JSON-RPC error would bound it —
+  do this when the bxp-api sibling exposes the same reader to untrusted input.
+- **`sim.zig` output capture is confined to `data_dir`.** A template whose
+  output path escapes `--data` (absolute, or `..` in `file_pattern_out`) writes
+  outside and is never read back → `output_records` 0 and a misleading
+  input-vs-output diff. Edge / config-dependent; "everything in `data_dir`" is
+  the documented design.

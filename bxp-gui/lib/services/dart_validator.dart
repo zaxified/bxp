@@ -9,6 +9,16 @@
 /// check (per-arg ArgKind, per-field FieldValidator) is driven by the
 /// catalog so the Zig and Dart sides cannot drift.
 ///
+/// AUDIT-OK (2026-06-14): the *catalog-driven* checks cannot drift, and the
+/// four codes the bridge now also emits (`UnknownFunction` / `WrongArgCount`
+/// / `SplitPartBadIndex` / `DateFormatBadToken`) are suppressed in
+/// `validateExpr` so the authoritative bridge response wins. The remaining
+/// drift risk is confined to the hand-ported *heuristics* — `_scanDateFormat`
+/// (mirrors `datefmt.zig::firstInvalidFormatChar`) and `_clusterOutlier`
+/// (mirrors `staticCheckFieldClustering`) — which are editor hints only,
+/// never the correctness of the saved config. Keep them in step with their
+/// Zig originals when either side changes; a false hint is the worst outcome.
+///
 /// The Dart-side coverage doc lives next to this file:
 /// `dart_validator_coverage.md`.
 library;

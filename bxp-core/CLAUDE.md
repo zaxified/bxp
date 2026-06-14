@@ -417,3 +417,45 @@ the same observations. If the rationale stops applying, revisit.
   (`csv.zig unescapeQuotes`, `expr.zig normalizeMonthAbbrev`; `json.zig
   scanColNames` is `Managed` by signature, intentional). Works, just
   non-uniform — optional unifying cleanup, no functional impact.
+
+### Audit notes (2026-06-14 full sweep — acknowledged, no action)
+
+The 🔴/🟠/🟡 tiers from the 2026-06-14 audit are all fixed; these are the
+residual 🔵 design observations. Greppable in-code marker: `AUDIT-OK`.
+
+- **`csv.zig splitFields` silently drops fields past `buf.len`.** Correctness
+  depends on the caller sizing `buf` ≥ the widest row. Resolved by the bxp-cli
+  side: the body-row path sizes `field_buf` to `MAX_COLUMNS` and the header
+  warning already flags any file wider than that (see the documented
+  header/body asymmetry at `pipeline.zig fieldBufSlice`). A `MAX_COLUMNS`
+  change must keep the two paths in sync.
+- **`zipstream.zig` deflate path has no CRC32 / uncompressed_size check.** A
+  corrupt/truncated entry yields whatever bytes inflate produced, silently —
+  a data-integrity gap, not a memory-safety one (the consumer reads to EOF and
+  stops; no zip-bomb exposure, that is window-bounded separately). Acceptable
+  for the xlsx use case (the workbook is the user's own export).
+- **`inspect.zig formatRootErr` shape ≠ injected-diagnostic shape.** Root
+  errors emit `{"$err_1":"<msg>"}` (bare string); injected diagnostics emit
+  `{"$err_N":{message,off?,len?,suggest?}}` (object). The in-code doc comment
+  flags it; the GUI extractor branches on value type, so it is benign — but a
+  new strict consumer must handle both. Worth unifying to the object form if
+  the error surface is ever reworked.
+- **`inspect.zig insertNumberedBefore` is O(K·N) per annotated object.** Each
+  insertion re-dupes every key of the target object. Configs are ≤ 1 MB with
+  small objects so cost is negligible; only a future "annotate a huge generated
+  config" use-case would notice.
+- **`inspect.zig` text entry points are uncapped.** `readFileCapped` enforces
+  the 1 MB `CONFIG_MAX_FILE_SIZE` only on the `*FromFile` wrappers; the
+  text-based entries (`annotateRaw`, `parseConfigText`, `evalBatch`) accept
+  unbounded input by design — the size cap is the adapter's job (bxp-mcp
+  request size, bridge FFI caller), and everything is arena-bounded + freed per
+  request. Part of the cross-cutting "input caps live at the trust boundary"
+  model (see the bxp-mcp / bxp-gui-bridge known-non-issues).
+- **`config.zig diagDuplicateKey` compares only the trailing segment of an
+  escaped key.** The non-allocating `std.json.Scanner` emits a final `.string`
+  holding only the last segment of a key with JSON escapes, so the dedup
+  compares tails and the caret column mis-points. Config keys with escapes are
+  exotic (field names, `$vars`, headers), so impact is negligible.
+- **`json5.zig preprocessAnnotated` recovery state machine** — `AUDIT-OK`
+  anchor in-file: most intricate state machine in bxp-core, gate edits with the
+  recovery unit tests + a fuzz pass. Not a bug today.
