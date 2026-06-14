@@ -85,23 +85,125 @@ pub const SheetSpec = struct {
     output_suffix: []const u8,
 };
 
-/// Converts selected sheets from an xlsx file to CSV files in out_dir.
-///
-/// Output files are named "<out_basename><spec.output_suffix>" (output_suffix includes the extension, e.g. "_open.csv").
-/// Always re-extracts every requested sheet.
-/// Sheets whose name is not found in the workbook are silently skipped.
-pub fn xlsxToCsv(
+/// The workbook-global parts shared by every sheet: the sheet name → path
+/// map, the shared-strings table, and the date-style index set. Parsed once
+/// by `init` and **read-only** afterwards, so a `*const Workbook` is safe to
+/// share across threads that each extract a different sheet (the bxp-cli
+/// `xlsxPrePass` sheet fan-out relies on this).
+pub const Workbook = struct {
+    /// sheet name → relative path within xl/ (e.g. "worksheets/sheet3.xml").
+    sheet_paths: std.StringHashMap([]const u8),
+    /// Shared strings table (may be empty for number-only workbooks). This is
+    /// the one part that must be fully resident — cells index into it.
+    shared_strings: std.ArrayList([]u8),
+    /// Set of 0-based cellXfs indices that map to date/time formats.
+    date_styles: std.AutoHashMap(u32, void),
+
+    /// Walk the archive's central directory once and parse the workbook,
+    /// shared-strings and styles parts. A self-contained archive + windows
+    /// are opened and freed inside; the returned structures own their memory
+    /// (`alloc`) and outlive the file handle.
+    pub fn init(alloc: Allocator, xlsx_file: std.fs.File) !Workbook {
+        var archive: zipstream.Archive = undefined;
+        try archive.init(alloc, xlsx_file);
+        defer archive.deinit();
+
+        const zip_window = try alloc.alloc(u8, ZIP_WINDOW_SIZE);
+        defer alloc.free(zip_window);
+        const xml_window = try alloc.alloc(u8, XML_WINDOW_SIZE);
+        defer alloc.free(xml_window);
+
+        var ctx: PartCtx = .{ .archive = &archive, .zip_window = zip_window, .xml_window = xml_window };
+
+        var sheet_paths = try parseWorkbook(alloc, &ctx);
+        errdefer {
+            var it = sheet_paths.iterator();
+            while (it.next()) |e| {
+                alloc.free(e.key_ptr.*);
+                alloc.free(e.value_ptr.*);
+            }
+            sheet_paths.deinit();
+        }
+        var shared_strings = try parseSharedStrings(alloc, &ctx);
+        errdefer {
+            for (shared_strings.items) |s| alloc.free(s);
+            shared_strings.deinit(alloc);
+        }
+        const date_styles = try parseDateStyles(alloc, &ctx);
+        return .{ .sheet_paths = sheet_paths, .shared_strings = shared_strings, .date_styles = date_styles };
+    }
+
+    pub fn deinit(self: *Workbook, alloc: Allocator) void {
+        var it = self.sheet_paths.iterator();
+        while (it.next()) |e| {
+            alloc.free(e.key_ptr.*);
+            alloc.free(e.value_ptr.*);
+        }
+        self.sheet_paths.deinit();
+        for (self.shared_strings.items) |s| alloc.free(s);
+        self.shared_strings.deinit(alloc);
+        self.date_styles.deinit();
+    }
+};
+
+/// Extract one sheet to `<out_basename><spec.output_suffix>` in `out_dir`,
+/// using a `ctx` whose archive is already open on the xlsx file. A sheet whose
+/// name is not found (prefix match) is silently skipped (no output), matching
+/// the historical behaviour. `wb` is read-only.
+fn extractSheetWithCtx(
     alloc: Allocator,
-    xlsx_file: std.fs.File,
-    sheets: []const SheetSpec,
+    ctx: *PartCtx,
+    wb: *const Workbook,
+    spec: SheetSpec,
     out_dir: std.fs.Dir,
     out_basename: []const u8,
 ) !void {
+    // Prefix match: "OPEN POSITION" matches "OPEN POSITION 28022026".
+    // Also handles exact names since startsWith("X", "X") == true.
+    const rel_path = blk: {
+        var sit = wb.sheet_paths.iterator();
+        while (sit.next()) |e| {
+            if (std.mem.startsWith(u8, e.key_ptr.*, spec.name)) break :blk e.value_ptr.*;
+        }
+        return; // sheet not found → skip (no output)
+    };
 
-    // Walk the archive's central directory once; every part is then streamed on
-    // demand. No temp directory, no whole-archive materialisation, and the XTB
-    // central-vs-local version_needed mismatch is a non-issue (zipstream reads
-    // local headers directly). The two windows are reused across all parts.
+    const csv_name = try std.fmt.allocPrint(alloc, "{s}{s}", .{ out_basename, spec.output_suffix });
+    defer alloc.free(csv_name);
+    const xml_path = try std.fmt.allocPrint(alloc, "xl/{s}", .{rel_path});
+    defer alloc.free(xml_path);
+
+    const out_file = try out_dir.createFile(csv_name, .{});
+    defer out_file.close();
+
+    var out_buf: [CSV_OUT_BUF_SIZE]u8 = undefined;
+    var out_fw = out_file.writer(&out_buf);
+
+    try parseSheet(
+        alloc,
+        ctx,
+        xml_path,
+        spec.header_row,
+        wb.shared_strings.items,
+        &wb.date_styles,
+        &out_fw.interface,
+    );
+    try out_fw.interface.flush();
+}
+
+/// Extract one sheet, opening its OWN archive + windows on `xlsx_file`. Because
+/// it drives an independent file cursor (zipstream is single-cursor per
+/// archive), this is safe to call concurrently from multiple threads as long
+/// as each call is given its own `xlsx_file` handle; `wb` is shared read-only.
+/// This is the unit of the bxp-cli sheet fan-out (mirrors `zipPrePass`).
+pub fn extractSheet(
+    alloc: Allocator,
+    xlsx_file: std.fs.File,
+    wb: *const Workbook,
+    spec: SheetSpec,
+    out_dir: std.fs.Dir,
+    out_basename: []const u8,
+) !void {
     var archive: zipstream.Archive = undefined;
     try archive.init(alloc, xlsx_file);
     defer archive.deinit();
@@ -112,67 +214,41 @@ pub fn xlsxToCsv(
     defer alloc.free(xml_window);
 
     var ctx: PartCtx = .{ .archive = &archive, .zip_window = zip_window, .xml_window = xml_window };
+    try extractSheetWithCtx(alloc, &ctx, wb, spec, out_dir, out_basename);
+}
 
-    // sheet name → relative path within xl/ (e.g. "worksheets/sheet3.xml")
-    var sheet_paths = try parseWorkbook(alloc, &ctx);
-    defer {
-        var it = sheet_paths.iterator();
-        while (it.next()) |e| {
-            alloc.free(e.key_ptr.*);
-            alloc.free(e.value_ptr.*);
-        }
-        sheet_paths.deinit();
-    }
+/// Converts selected sheets from an xlsx file to CSV files in out_dir.
+///
+/// Output files are named "<out_basename><spec.output_suffix>" (output_suffix includes the extension, e.g. "_open.csv").
+/// Always re-extracts every requested sheet. Sheets whose name is not found in
+/// the workbook are silently skipped. Serial loop — bxp-cli's `xlsxPrePass`
+/// fans the per-sheet extraction out across threads via `Workbook` +
+/// `extractSheet` instead; this entry point keeps the simple single-threaded
+/// path for direct callers and tests.
+pub fn xlsxToCsv(
+    alloc: Allocator,
+    xlsx_file: std.fs.File,
+    sheets: []const SheetSpec,
+    out_dir: std.fs.Dir,
+    out_basename: []const u8,
+) !void {
+    var wb = try Workbook.init(alloc, xlsx_file);
+    defer wb.deinit(alloc);
 
-    // Shared strings table (may be absent for number-only workbooks). This is
-    // the one part that must be fully resident — cells index into it.
-    var shared_strings = try parseSharedStrings(alloc, &ctx);
-    defer {
-        for (shared_strings.items) |s| alloc.free(s);
-        shared_strings.deinit(alloc);
-    }
+    // A second archive drives the sheet streaming (the one in `Workbook.init`
+    // is already closed). The two windows are reused across all sheets.
+    var archive: zipstream.Archive = undefined;
+    try archive.init(alloc, xlsx_file);
+    defer archive.deinit();
 
-    // Set of 0-based cellXfs indices that map to date/time formats.
-    var date_styles = try parseDateStyles(alloc, &ctx);
-    defer date_styles.deinit();
+    const zip_window = try alloc.alloc(u8, ZIP_WINDOW_SIZE);
+    defer alloc.free(zip_window);
+    const xml_window = try alloc.alloc(u8, XML_WINDOW_SIZE);
+    defer alloc.free(xml_window);
 
+    var ctx: PartCtx = .{ .archive = &archive, .zip_window = zip_window, .xml_window = xml_window };
     for (sheets) |spec| {
-        const csv_name = try std.fmt.allocPrint(
-            alloc,
-            "{s}{s}",
-            .{ out_basename, spec.output_suffix },
-        );
-        defer alloc.free(csv_name);
-
-        // Prefix match: "OPEN POSITION" matches "OPEN POSITION 28022026".
-        // Also handles exact names since startsWith("X", "X") == true.
-        const rel_path = blk: {
-            var sit = sheet_paths.iterator();
-            while (sit.next()) |e| {
-                if (std.mem.startsWith(u8, e.key_ptr.*, spec.name)) break :blk e.value_ptr.*;
-            }
-            continue;
-        };
-
-        const xml_path = try std.fmt.allocPrint(alloc, "xl/{s}", .{rel_path});
-        defer alloc.free(xml_path);
-
-        const out_file = try out_dir.createFile(csv_name, .{});
-        defer out_file.close();
-
-        var out_buf: [CSV_OUT_BUF_SIZE]u8 = undefined;
-        var out_fw = out_file.writer(&out_buf);
-
-        try parseSheet(
-            alloc,
-            &ctx,
-            xml_path,
-            spec.header_row,
-            shared_strings.items,
-            &date_styles,
-            &out_fw.interface,
-        );
-        try out_fw.interface.flush();
+        try extractSheetWithCtx(alloc, &ctx, &wb, spec, out_dir, out_basename);
     }
 }
 

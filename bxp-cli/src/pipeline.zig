@@ -2896,10 +2896,90 @@ pub fn processBroker(
     return stats;
 }
 
+const XlsxErrAction = enum { skip_file, fatal };
+
+/// Map an xlsx conversion error to a user-facing message + action, shared by
+/// the serial workbook setup and the parallel sheet workers. A UTF-16 XML part
+/// is recoverable (warn + skip the file); everything else is fatal. The caller
+/// owns the fatal tail (`time_ns` + summary + `return error.Fatal`).
+fn classifyXlsxErr(
+    err: anyerror,
+    xlsx_name: []const u8,
+    xlsx_file: std.fs.File,
+    stats: *SectionStats,
+    out: Output,
+) XlsxErrAction {
+    if (err == error.Utf16XmlUnsupported) {
+        out.warning("warning: skipping '{s}': xlsx contains UTF-16 encoded XML, which is not supported — re-save the workbook from Excel as a normal .xlsx\n", .{xlsx_name});
+        stats.warnings += 1;
+        return .skip_file;
+    }
+    if (err == error.FileTooBig) {
+        // The worksheet itself is streamed, so size is unbounded; the only
+        // resident structure is the shared-strings table, capped defensively
+        // against a zip-bomb (XLSX_SHARED_STRINGS_CAP).
+        const on_disk: u64 = if (xlsx_file.stat()) |st| st.size else |_| 0;
+        out.fatal("fatal error: xlsx '{s}' ({d} bytes on disk) has a shared-strings table exceeding the {d} MB safety limit (XLSX_SHARED_STRINGS_CAP)\n", .{ xlsx_name, on_disk, xlsx_mod.XLSX_SHARED_STRINGS_CAP / (1024 * 1024) });
+        stats.has_fatal = true;
+        return .fatal;
+    }
+    out.fatal("fatal error: xlsx conversion failed for '{s}': {s}\n", .{ xlsx_name, @errorName(err) });
+    stats.has_fatal = true;
+    return .fatal;
+}
+
+/// Shared state for the parallel per-sheet extraction of ONE xlsx file.
+/// Mirrors `ZipUnpackCtx`: workers steal sheet indices off the `next` atomic
+/// cursor (per-sheet sizes can be very uneven, so this load-balances) and
+/// stash the first error; the main thread re-raises it after the barrier.
+const XlsxFanCtx = struct {
+    dir: std.fs.Dir,
+    xlsx_name: []const u8,
+    wb: *const xlsx_mod.Workbook,
+    specs: []const xlsx_mod.SheetSpec,
+    stem: []const u8,
+    alloc: std.mem.Allocator,
+    next: std.atomic.Value(usize) = .init(0),
+    failed: std.atomic.Value(bool) = .init(false),
+    err_mutex: std.Thread.Mutex = .{},
+    first_err: ?anyerror = null,
+
+    fn record(self: *XlsxFanCtx, err: anyerror) void {
+        self.err_mutex.lock();
+        defer self.err_mutex.unlock();
+        if (self.first_err == null) self.first_err = err;
+        self.failed.store(true, .monotonic);
+    }
+};
+
+/// One parallel sheet-extraction worker. Opens its OWN file handle once (the
+/// shared-cursor contract requires an independent archive per concurrent
+/// reader, which `extractSheet` opens per sheet on this handle) and drains
+/// sheet jobs off the shared cursor until the queue empties or another worker
+/// fails. The `Workbook` is shared read-only.
+///
+/// Uses the pipeline's reclaiming allocator (`smp_allocator` in release, the
+/// same one the serial path passes) — deliberately NOT a private arena:
+/// `parseSheet` frees each row's cells as it advances to the next row, which
+/// an arena turns into a no-op, accumulating every row's cells (~a whole
+/// sheet's worth, ~10 MB on a 400k-row sheet) until the arena is reset.
+fn xlsxExtractWorker(ctx: *XlsxFanCtx) void {
+    const file = ctx.dir.openFile(ctx.xlsx_name, .{}) catch |err| return ctx.record(err);
+    defer file.close();
+
+    while (!ctx.failed.load(.monotonic)) {
+        const i = ctx.next.fetchAdd(1, .monotonic);
+        if (i >= ctx.specs.len) break;
+        xlsx_mod.extractSheet(ctx.alloc, file, ctx.wb, ctx.specs[i], ctx.dir, ctx.stem) catch |err| return ctx.record(err);
+    }
+}
+
 /// Converts xlsx files to intermediate CSV before the main processing loop.
 ///
 /// Groups SheetSpecs by data_dir so each xlsx file is extracted only once,
-/// even when multiple templates share the same directory.
+/// even when multiple templates share the same directory. Within a file the
+/// sheets are extracted in parallel (fan-out across `runtime.pool`, mirroring
+/// `zipPrePass`); the shared workbook parts are parsed once up front.
 /// Prints its own section header and summary when any xlsx files were found.
 /// Returns accumulated SectionStats for this pre-pass.
 pub fn xlsxPrePass(
@@ -2909,6 +2989,7 @@ pub fn xlsxPrePass(
     fresh: bool,
     template_id: ?[]const u8,
     dir_path_arg: ?[]const u8,
+    runtime: Runtime,
 ) !SectionStats {
     var xlsx_stats = SectionStats{};
     var timer = try std.time.Timer.start();
@@ -3013,31 +3094,50 @@ pub fn xlsxPrePass(
             defer xlsx_file.close();
 
             out.info("converting '{s}'\n", .{xlsx_name});
-            xlsx_mod.xlsxToCsv(alloc, xlsx_file, specs, dir, stem) catch |err| {
-                // A UTF-16 encoded XML part is unsupported but recoverable:
-                // warn and skip this file rather than aborting the whole run.
-                if (err == error.Utf16XmlUnsupported) {
-                    out.warning("warning: skipping '{s}': xlsx contains UTF-16 encoded XML, which is not supported — re-save the workbook from Excel as a normal .xlsx\n", .{xlsx_name});
-                    xlsx_stats.warnings += 1;
-                    continue;
+
+            // Shared setup (serial): parse the workbook-global parts once
+            // (sheet name→path map, shared-strings table, date styles).
+            var wb = xlsx_mod.Workbook.init(alloc, xlsx_file) catch |err| {
+                switch (classifyXlsxErr(err, xlsx_name, xlsx_file, &xlsx_stats, out)) {
+                    .skip_file => continue,
+                    .fatal => {
+                        xlsx_stats.time_ns = timer.read();
+                        out.summary(xlsx_stats);
+                        return error.Fatal;
+                    },
                 }
-                if (err == error.FileTooBig) {
-                    // The worksheet itself is streamed, so size is unbounded; the
-                    // only resident structure is the shared-strings table, capped
-                    // defensively against a zip-bomb (XLSX_SHARED_STRINGS_CAP).
-                    const on_disk: u64 = if (xlsx_file.stat()) |st| st.size else |_| 0;
-                    out.fatal("fatal error: xlsx '{s}' ({d} bytes on disk) has a shared-strings table exceeding the {d} MB safety limit (XLSX_SHARED_STRINGS_CAP)\n", .{ xlsx_name, on_disk, xlsx_mod.XLSX_SHARED_STRINGS_CAP / (1024 * 1024) });
-                    xlsx_stats.has_fatal = true;
-                    xlsx_stats.time_ns = timer.read();
-                    out.summary(xlsx_stats);
-                    return error.Fatal;
-                }
-                out.fatal("fatal error: xlsx conversion failed for '{s}': {s}\n", .{ xlsx_name, @errorName(err) });
-                xlsx_stats.has_fatal = true;
-                xlsx_stats.time_ns = timer.read();
-                out.summary(xlsx_stats);
-                return error.Fatal;
             };
+            defer wb.deinit(alloc);
+
+            // Execution (parallel): fan the per-sheet extraction out across
+            // workers. The sheets are independent XML members of the one
+            // archive, so this load-balances across cores the same way
+            // zipPrePass unpacks independent zip members — the serial sheet
+            // loop was the xlsx ingest cap.
+            if (specs.len > 0) {
+                var fan = XlsxFanCtx{
+                    .dir = dir,
+                    .xlsx_name = xlsx_name,
+                    .wb = &wb,
+                    .specs = specs,
+                    .stem = stem,
+                    .alloc = alloc,
+                };
+                const k = @min(runtime.max_workers, specs.len);
+                var wg: std.Thread.WaitGroup = .{};
+                for (0..k) |_| runtime.pool.spawnWg(&wg, xlsxExtractWorker, .{&fan});
+                wg.wait();
+                if (fan.first_err) |err| {
+                    switch (classifyXlsxErr(err, xlsx_name, xlsx_file, &xlsx_stats, out)) {
+                        .skip_file => continue,
+                        .fatal => {
+                            xlsx_stats.time_ns = timer.read();
+                            out.summary(xlsx_stats);
+                            return error.Fatal;
+                        },
+                    }
+                }
+            }
         }
     }
 

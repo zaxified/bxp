@@ -979,7 +979,7 @@ fn run(args: [][:0]u8, out: Output, fresh: bool, check_fs_seconds: u8, runtime: 
     overall.merge(zip_stats);
 
     // xlsx pre-pass: convert xlsx files to intermediate CSV before the main processing loop.
-    const xlsx_stats = try pipeline.xlsxPrePass(&cfg, alloc, out, fresh, template_id, dir_path_arg);
+    const xlsx_stats = try pipeline.xlsxPrePass(&cfg, alloc, out, fresh, template_id, dir_path_arg, runtime);
     if (xlsx_stats.has_fatal) {
         overall.merge(xlsx_stats);
         out.info("\n=== overall summary ===\n", .{});

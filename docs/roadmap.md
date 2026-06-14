@@ -51,26 +51,6 @@ Track as a single "auto-update hardening" workstream — these layer on
 each other (e.g. signed SUMS removes the need for parts of the CI
 test, path validation removes part of the shell-injection concern).
 
-## v0.4.0
-
-### Future parallelism for single-stream ZIP ingest — deferred
-
-Multi-entry parallelism shipped (bxp-cli's `zip_input` pre-pass unpacks a
-many-member archive across worker threads). What remains is the _single large
-stream_ case, which is a different problem:
-DEFLATE of **one** stream is inherently serial — each block depends on the prior
-32 KiB output window (LZ77 back-refs), so no ZIP implementation parallel-decodes
-a single stream (pigz parallelises compression only; bgzip/BGZF needs the writer
-to emit a special block format Excel doesn't). So a single huge `.xlsx`
-worksheet, or a zip holding one giant member, stays single-threaded on inflate.
-One real lever, revisit when that throughput matters:
-
-- **Reader/worker pipelining (for one large worksheet).** Overlap the serial
-  inflate+tokenise (producer) with the downstream parallel CSV processing
-  (consumer) — convert block N+1 while processing block N. Doesn't make inflate
-  parallel; hides its cost behind work already happening. Same lever as the CSV
-  "reader cap" under _bxp-cli → Parallelism follow-ups_.
-
 ## Later (no specific version)
 
 ### External template JSON files
@@ -157,29 +137,6 @@ Remaining:
   Accepting an array of dirs (process all listed) or a `*` glob path segment
   would close that recurring operator chore. Demand-driven — only if a real
   workflow asks; examples/ currently show flat dirs.
-
-- **Parallelism follow-ups** (from a 2026-06-09 review of
-  [judofyr/spice](https://github.com/judofyr/spice), a sub-ns-overhead
-  fork/join library). Spice's heartbeat scheduling targets _irregular,
-  recursive_ fork/join (unknown task granularity); our row pipeline is
-  _regular, coarse-grained_ data-parallelism with a static even
-  partition (`processBlockParallel` splits a block into `K = lines.len/K`
-  equal slices), so heartbeat itself doesn't apply. Two takeaways do:
-  - **Serial fast-path for tiny blocks (cheap, low-risk).** `processBlockParallel`
-    routes through `spawnWg` + `WaitGroup` even when `K == 1` (single CPU)
-    or the block is a handful of rows — pure barrier overhead. Add an inline
-    branch (`K == 1` / block under a small row threshold → loop on the
-    calling thread, no pool) so the small/serial case never pays the
-    fork-join tax. This is Spice's "never regress the serial case" principle.
-  - **Reader/worker pipelining (the real scaling lever, bigger).** Our cap
-    is the serial read+parse phase that does not overlap with the workers
-    (read block → fork → wait → drain → read next); that's an Amdahl
-    serial-fraction limit (the bench "reader cap"), solved by
-    double-buffering the reader (parse block N+1 while workers process N),
-    **not** by finer scheduling. Separate, larger workstream.
-  - Spice _would_ be the right tool if a recursive/irregular workload ever
-    lands (e.g. large multi-sheet `.xlsx` with nested ZIP/XML walks).
-    Revisit then.
 
 ### Real-world broker CSV quirks
 
