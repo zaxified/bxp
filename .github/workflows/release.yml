@@ -42,13 +42,13 @@ jobs:
     name: console (cross-compile via Zig)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: mlugg/setup-zig@v2
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
         with:
           version: 0.15.2
       - name: Build console archives
         run: bash scripts/release-01-console.sh "$RELEASE_VERSION"
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
           name: console
           path: releases/console/*
@@ -61,11 +61,11 @@ jobs:
     # `ubuntu-latest` rolls forward.
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v5
-      - uses: mlugg/setup-zig@v2
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
         with:
           version: 0.15.2
-      - uses: subosito/flutter-action@v2
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:
           channel: stable
       - name: Install Linux desktop deps
@@ -75,7 +75,7 @@ jobs:
               libstdc++-12-dev fuse libfuse2
       - name: Build desktop archives
         run: bash scripts/release-02-desktop.sh "$RELEASE_VERSION"
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
           name: desktop-linux
           path: releases/desktop/*
@@ -89,11 +89,11 @@ jobs:
         # release-02-desktop.sh is bash; Git Bash ships with windows-latest.
         shell: bash
     steps:
-      - uses: actions/checkout@v5
-      - uses: mlugg/setup-zig@v2
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
         with:
           version: 0.15.2
-      - uses: subosito/flutter-action@v2
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:
           channel: stable
       - name: Install NSIS
@@ -102,7 +102,7 @@ jobs:
           echo 'C:\Program Files (x86)\NSIS\Bin' >> $GITHUB_PATH
       - name: Build desktop archives
         run: bash scripts/release-02-desktop.sh "$RELEASE_VERSION"
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
           name: desktop-windows
           path: releases/desktop/*
@@ -112,18 +112,18 @@ jobs:
     name: desktop (macos-aarch64)
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: mlugg/setup-zig@v2
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
         with:
           version: 0.15.2
-      - uses: subosito/flutter-action@v2
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:
           channel: stable
       - name: Install create-dmg
         run: brew install create-dmg
       - name: Build desktop archives
         run: bash scripts/release-02-desktop.sh "$RELEASE_VERSION"
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
           name: desktop-macos
           path: releases/desktop/*
@@ -139,9 +139,9 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       - name: Download all artifacts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
           path: artifacts
       - name: Flatten + checksum
@@ -170,9 +170,16 @@ jobs:
         run: |
           if [ -n "$MINISIGN_KEY" ]; then
             echo "enabled=true" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            # Real tag release: the client updater is fail-closed and refuses
+            # an unsigned release for 100% of users. Publishing one would
+            # silently brick the whole auto-update channel — so refuse here
+            # rather than ship a release nobody can install.
+            echo "::error::MINISIGN_KEY not set on a tag release — refusing to publish an unsigned release (clients fail-closed reject it)"
+            exit 1
           else
             echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::MINISIGN_KEY not set — skipping SHA256SUMS signing"
+            echo "::notice::MINISIGN_KEY not set — skipping SHA256SUMS signing (workflow_dispatch test run)"
           fi
       - name: Sign SHA256SUMS (minisign)
         if: steps.signing.outputs.enabled == 'true'
@@ -201,7 +208,7 @@ jobs:
           echo "--- release_notes.md preview (first 20 lines) ---"
           head -20 release_notes.md
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3
         with:
           tag_name: ${{ env.RELEASE_VERSION }}
           name: ${{ env.RELEASE_VERSION }}
@@ -239,9 +246,14 @@ jobs:
               exit 1
             fi
           done
-          # Signature is expected once MINISIGN_KEY is configured, but the
-          # signing step skips gracefully without it — so warn, don't fail.
+          # A real tag release must be signed (the client rejects unsigned
+          # releases), so a missing signature is a hard failure on push; a
+          # workflow_dispatch test run may legitimately be unsigned → warn.
           if [ ! -f "$tmp/SHA256SUMS.minisig" ]; then
-            echo "::warning::SHA256SUMS.minisig missing — release is unsigned"
+            if [ "${{ github.event_name }}" = "push" ]; then
+              echo "::error::SHA256SUMS.minisig missing — a tag release must be signed (clients fail-closed reject unsigned)"
+              exit 1
+            fi
+            echo "::warning::SHA256SUMS.minisig missing — release is unsigned (workflow_dispatch test run)"
           fi
           echo "release $tag: SHA256SUMS present, all desktop installers listed"
