@@ -170,6 +170,13 @@ class RowModel {
   /// for transient state changes.
   bool detailLoading = false;
 
+  /// The in-flight ensureDetailLoaded() future for this row, or null when
+  /// none is running. A concurrent caller (e.g. the gui-mcp `get_row_detail`
+  /// tool racing the UI's auto-load of the selected row) awaits this instead
+  /// of returning early and reading not-yet-populated `vars`. Tied to the
+  /// row object so it never leaks across trace models. Not serialised.
+  Future<void>? detailLoadFuture;
+
   RowModel({required this.id, required this.fileId, required this.fileRow, required this.fields});
 }
 

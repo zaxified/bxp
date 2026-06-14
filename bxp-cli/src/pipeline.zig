@@ -1760,8 +1760,40 @@ fn parseCsvHeader(
             try file_alloc.dupe(u8, trimmed)
         else
             try encoding.decodeToUtf8(file_alloc, trimmed, input_encoding);
+        // Duplicate header names resolve last-wins: a later `[Name]` reference
+        // picks the rightmost column. Kept for back-compat; flagged below.
         try col_index.put(owned, idx);
         try col_names.append(owned);
+    }
+
+    // Warn about duplicate header names. `[Name]` resolves last-wins via
+    // col_index (above), but every column stays reachable positionally through
+    // FIELDS(n) — so the warning names the exact 1-based columns and which one
+    // `[Name]` reads, letting the user either fix the header or read a shadowed
+    // column with FIELDS(n). Empty header cells (trailing delimiters) aren't
+    // addressable by name, so repeats there mask nothing and stay silent. The
+    // scan is O(cols^2) but only runs when a duplicate exists, and cols is
+    // bounded by MAX_COLUMNS.
+    var dup_warned = std.StringHashMap(void).init(hdr_arena.allocator());
+    for (col_names.items) |dname| {
+        if (dname.len == 0 or dup_warned.contains(dname)) continue;
+        var cols = std.Io.Writer.Allocating.init(hdr_arena.allocator());
+        var count: usize = 0;
+        var last_col: usize = 0;
+        for (col_names.items, 0..) |other, j| {
+            if (!std.mem.eql(u8, other, dname)) continue;
+            if (count > 0) cols.writer.writeAll(", ") catch {};
+            cols.writer.print("{d}", .{j + 1}) catch {};
+            count += 1;
+            last_col = j + 1;
+        }
+        if (count < 2) continue;
+        try dup_warned.put(dname, {});
+        stats.warnings += 1;
+        out.warning(
+            "warning: '{s}' has a duplicate column header '{s}' at columns {s}; [{s}] reads column {d} — use FIELDS(n) to read the others\n",
+            .{ filename, dname, cols.written(), dname, last_col },
+        );
     }
     return pos + hdr_it.pos;
 }
@@ -3530,6 +3562,51 @@ test "skipBomAndHeader: BOM, no BOM, headerless, multi-line preamble" {
     try std.testing.expectEqual(@as(usize, 16), skipBomAndHeader("pre1\npre2\nh1,h2\nv1,v2\n", q, 3));
     // Header beyond the chunk → clamps to chunk length (caller treats as no body).
     try std.testing.expectEqual(@as(usize, 6), skipBomAndHeader("h1,h2\n", q, 5));
+}
+
+test "parseCsvHeader: duplicate names warn once, last-wins, empties silent" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const fa = arena.allocator();
+
+    // Capture warnings via json_debug's msg_sink so nothing hits stderr. The
+    // captured strings are arena-owned (`captureMsg` stores a trimmed sub-slice
+    // of its allocation, so they can't be individually freed by their pointer).
+    var sink = std.array_list.Managed([]const u8).init(std.testing.allocator);
+    defer sink.deinit();
+    var aw = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer aw.deinit();
+    const out = Output{
+        .writer = &aw.writer,
+        .quiet = false,
+        .debug = false,
+        .json_debug = true,
+        .msg_sink = &sink,
+        .msg_alloc = fa,
+    };
+
+    var col_index = std.StringHashMap(usize).init(std.testing.allocator);
+    defer col_index.deinit();
+    var col_names = std.array_list.Managed([]const u8).init(std.testing.allocator);
+    defer col_names.deinit();
+    var stats = SectionStats{};
+
+    // "amount" appears 3× (1-based columns 2, 4, 6) → one warning; two trailing
+    // empty headers (columns 7, 8) repeat but must stay silent.
+    const chunk = "id,amount,fee,amount,note,amount,,\nx,1,2,3,4,5,6,7\n";
+    _ = try parseCsvHeader(chunk, ',', '"', 1, .utf8, fa, &col_index, &col_names, out, "dup.csv", &stats);
+
+    // Exactly one warning for the one repeated non-empty name, naming every
+    // 1-based column and which one `[amount]` reads.
+    try std.testing.expectEqual(@as(u32, 1), stats.warnings);
+    try std.testing.expectEqual(@as(usize, 1), sink.items.len);
+    try std.testing.expect(std.mem.indexOf(u8, sink.items[0], "duplicate column header 'amount' at columns 2, 4, 6") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sink.items[0], "[amount] reads column 6") != null);
+
+    // Last-wins: [amount] resolves to its rightmost column (index 5 = column 6).
+    try std.testing.expectEqual(@as(usize, 5), col_index.get("amount").?);
+    // Non-repeated names keep their position.
+    try std.testing.expectEqual(@as(usize, 2), col_index.get("fee").?);
 }
 
 test "ChunkReader: residual + chunk_start_in_file bookkeeping" {

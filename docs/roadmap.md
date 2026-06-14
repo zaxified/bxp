@@ -231,10 +231,6 @@ fixed before release instead, not parked here).
     conversion appears. Excel offers neither (no TZ/DST concept at all), so
     these would put bxp ahead of the spreadsheet baseline, not just at parity.
 
-- **Load-time warning on duplicate column headers** (surfaced 2026-05-31, low
-  priority). `[name]` currently resolves last-wins silently, which can mask a
-  malformed export.
-
 - **Raise / make-configurable the 1024-column cap (`MAX_COLUMNS`).** Wide
   time-series exports exceed it: the Johns Hopkins COVID-19 daily series ships
   one column per day (1147 columns by March 2023), so everything past column
@@ -257,32 +253,6 @@ extra columns are ignored`, reproduced 2026-05-31). 1024 is a deliberate,
   "logs are out of scope — pre-process with a log parser" note. Decide vs
   the CSV-tool scope. (The _date_ inside the bracket already parses fine via
   `DATE_CONVERT(..., 'DD/MMM/YYYY:hh:mm:ss', ...)`.)
-
-- **Named-map registry + `REMAP` — SHIPPED 2026-06-13.** Two stages landed:
-  - The variadic `REPLACE(s, 'a','1', 'b','2', …)` form (one left-to-right
-    pass, first match per position wins, output not re-scanned, one allocation),
-    with the single-pair `REPLACE(s, from, to)` byte-identical.
-  - The unified `maps` registry + `REMAP`. `TICKER` and the per-template
-    `ticker_map` field were **removed**; the top-level `ticker_maps` registry was
-    renamed `maps` and is now shared by both apply-modes. `REMAP(s, 'name'|k,v,…)`
-    is the whole-value sibling (exact-match, passthrough on miss); `REPLACE(s,
-    'name'|f,t,…)` the substring one — both resolve a name against the same
-    registry. Definition polymorphism is uniform: inline pairs in the expression,
-    a name reference, or a top-level `maps` block merged with a per-template
-    `maps` block (template-local wins). Storage is ordered (`StringArrayHashMap`)
-    so REPLACE applies pairs in declaration order while REMAP keeps O(1) lookup.
-    The three stay separate builtins forming a **cost hierarchy** — O(1) hash
-    (`REMAP`) < literal substring (`REPLACE`) < regex engine — so a template pays
-    only for the cheapest tool; regex is an extraction-only sibling, never a map.
-    All 21 internal configs/datasets/examples were migrated (test-02
-    byte-identical). This also subsumes the deferred `date_locales` idea (a named
-    month-name map applied before `DATE_CONVERT`), avoiding a locale subsystem.
-
-  Remaining (only on a concrete use-case): drill-down re-eval in bxp-gui resolves
-  only **template-local** `maps` today; named refs into the global registry are
-  not fetched during drill-down (a pre-existing gap carried over from the old
-  named-`ticker_map` behaviour). Wire the global `maps` into the drill-down
-  runtime if a user hits it.
 
 ### bxp-gui
 
@@ -463,11 +433,6 @@ discussion doesn't keep restarting. Reopen only if the rationale changes.
   produces one output stream (plus optional `combined_output`).
   Workaround: define two templates with different `row_rules` filters
   pointing at the same `data_dir`.
-- **Inline test assertions inside a template** ("this row should match
-  rule N"). The `datasets/<id>/sample.expected` baseline mechanism
-  already covers this from outside the template; adding assertions
-  inline would duplicate that surface area without adding new
-  capability.
 - **Step-through expression debugger.** The Expression Playground
   (single-eval against a sample row) plus per-call NDJSON traces from
   `--expr-trace` cover ~all real debugging needs. A breakpoint-style
@@ -482,16 +447,6 @@ discussion doesn't keep restarting. Reopen only if the rationale changes.
   next to each `data_dir`), which clashes with the stateless engine
   contract — every run today is reproducible from inputs alone. No
   user has reported the duplicate-row problem in practice.
-- **Watch / daemon mode (continuous `data_dir` ingestion).** Audit
-  2026-06-13. `cron` + `--fresh` already covers periodic ingestion
-  idempotently (a skipped per-file output is never rebuilt; the combined
-  roll-up is). A long-running daemon would add process state and a platform
-  supervision surface for no capability the scheduled-run path lacks.
-- **Single-file stdin→stdout mode.** Audit 2026-06-13. Ad-hoc agent
-  evaluation is already served by the stateless inspect surface
-  (`bxp-mcp` eval / eval-batch) and staged runs by `bxp_simulate`; a third
-  entry path would reopen the "stateless eval vs LOOKUP orchestration"
-  design split that was settled during the fmt removal.
 - **Space / NBSP thousands grouping (`csv_thousands_separator_in`).**
   Space- or NBSP-grouped European numbers (`1 234 567,89`) are not
   auto-normalised: `parseGroupedNumber` disambiguates dot/comma grouping

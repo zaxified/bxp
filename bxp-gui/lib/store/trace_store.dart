@@ -3657,15 +3657,28 @@ class TraceStore extends ChangeNotifier {
   /// calling on an already-loaded row returns immediately. Coalesces
   /// concurrent calls via [detailLoading] so a double-click doesn't
   /// trigger duplicate work.
-  Future<void> ensureDetailLoaded(String rowId) async {
+  Future<void> ensureDetailLoaded(String rowId) {
     final model = traceModel;
-    if (model == null || !model.fromBtrace) return;
+    if (model == null || !model.fromBtrace) return Future<void>.value();
     final row = model.rows[rowId];
-    if (row == null || row.detailLoaded) return;
-    if (row.detailLoading) return;
+    if (row == null || row.detailLoaded) return Future<void>.value();
+    // A load is already in flight for this row (the UI auto-loads the
+    // selected row's detail the moment the trace view mounts). A concurrent
+    // caller — e.g. the gui-mcp `get_row_detail` tool — must AWAIT that same
+    // future, not return early: otherwise it would read `row.vars` while the
+    // load is mid-flight and see an empty row. The future is stored on the
+    // row, so awaiting it resolves exactly when the fields/vars are ready.
+    final inFlight = row.detailLoadFuture;
+    if (inFlight != null) return inFlight;
+
+    final future = _runDetailLoad(row, rowId);
+    row.detailLoadFuture = future;
+    return future;
+  }
+
+  Future<void> _runDetailLoad(RowModel row, String rowId) async {
     row.detailLoading = true;
     notifyListeners();
-
     try {
       await _loadRowDetail(row);
       row.detailLoaded = true;
@@ -3676,6 +3689,7 @@ class TraceStore extends ChangeNotifier {
       row.detailLoaded = true;
     } finally {
       row.detailLoading = false;
+      row.detailLoadFuture = null;
       notifyListeners();
     }
   }
@@ -3688,34 +3702,32 @@ class TraceStore extends ChangeNotifier {
 
     // 1. Source row → fields list.
     //
-    // Active-file path: rows of the user-visible (clicked) file have
-    // their `RandomAccessFile` open, so [populateRowSync] hits sub-ms
-    // with no I/O overhead beyond an OS read.
-    //
-    // Inactive-file path: drill-down can still be triggered on a row
-    // belonging to a file the user has not activated (rare — usually
-    // happens if a previous selection persists across a file switch).
-    // We open an ad-hoc RAF for this one read and close it immediately
-    // so we don't violate the "1 active RAF" invariant. Cost is
-    // negligible — drill-down already pays one evalBatch subprocess
-    // round-trip.
-    if (!row.fieldsPopulated && row.sourceLocator >= 0) {
-      if (row.fileId == _activeFileId) {
-        populateRowSync(row.id);
-      } else if (file.sourceCsvPath.isNotEmpty) {
-        RandomAccessFile? raf;
-        try {
-          raf = File(file.sourceCsvPath).openSync(mode: FileMode.read);
-          final line = _readLineFromRafSync(raf, row.sourceLocator);
-          if (line != null) {
-            row.fields = _splitCsv(line, file.headers.length);
-            row.fieldsPopulated = true;
-          }
-        } catch (_) {
-          // best-effort — leave row.fields empty
-        } finally {
-          try { raf?.closeSync(); } catch (_) {}
+    // Drill-down ALWAYS reads through its own short-lived `RandomAccessFile`,
+    // never the shared active-file RAF / eager bytes. The active file's RAF is
+    // a single cursor that `_activateFile` is itself reading (the eager
+    // `await raf.read(...)`) right after `file_end` auto-activates the file.
+    // A drill-down racing that window via `populateRowSync` would share the
+    // cursor, read garbage, and — worse — `populateRowSync` would then mark the
+    // row `fieldsPopulated = true` with an EMPTY field list, poisoning it so no
+    // retry ever fires. A dedicated one-row seek+read is race-free and its cost
+    // is negligible next to the evalBatch round-trip below. We only re-read
+    // when the row isn't already cleanly populated (the activation sweep may
+    // have filled it from eager bytes).
+    if (!row.fieldsPopulated &&
+        row.sourceLocator >= 0 &&
+        file.sourceCsvPath.isNotEmpty) {
+      RandomAccessFile? raf;
+      try {
+        raf = File(file.sourceCsvPath).openSync(mode: FileMode.read);
+        final line = _readLineFromRafSync(raf, row.sourceLocator);
+        if (line != null) {
+          row.fields = _splitCsv(line, file.headers.length);
+          row.fieldsPopulated = true;
         }
+      } catch (_) {
+        // best-effort — leave row.fields empty
+      } finally {
+        try { raf?.closeSync(); } catch (_) {}
       }
     }
 
@@ -3938,6 +3950,32 @@ class TraceStore extends ChangeNotifier {
   }
 }
 
+/// Parse a `{ map_name: { key: value } }` registry into the drill-down map
+/// shape, skipping any `$`-prefixed annotation keys. The `loadConfig` path
+/// returns the config annotated with `$comm_*`/`$err_*` siblings, so they must
+/// be filtered out; `fetchTemplate` output is already clean, so the filter is a
+/// no-op there. Exposed for unit testing.
+Map<String, Map<String, String>> parseMapsRegistry(Map mv) => {
+      for (final e in mv.entries)
+        if (!e.key.toString().startsWith(r'$') && e.value is Map)
+          e.key.toString(): <String, String>{
+            for (final kv in (e.value as Map).entries)
+              if (!kv.key.toString().startsWith(r'$'))
+                kv.key.toString(): kv.value?.toString() ?? '',
+          },
+    };
+
+/// Merge the global top-level `maps` registry with a template-local one for
+/// drill-down REMAP/REPLACE `'name'` resolution. Mirrors the engine: a
+/// template-local block overrides a same-named global entry **wholesale** (not
+/// key-by-key), so global is spread first and local wins the clash. Exposed for
+/// unit testing.
+Map<String, Map<String, String>> mergeMapsRegistries(
+  Map<String, Map<String, String>> global,
+  Map<String, Map<String, String>> local,
+) =>
+    global.isEmpty ? local : {...global, ...local};
+
 /// Per-stream ingest context for [TraceStore._streamRunBtrace]. Bundles all
 /// the per-template + per-file state the frame-by-frame dispatcher needs
 /// to mutate as the BXTB stream lands. Owned by `_streamRunBtrace` for the
@@ -3955,10 +3993,15 @@ class _BtraceIngestCtx {
   // multi-file templates from re-spawning per file.
   String? currentTemplate;
   Map<String, String> inputSchema = const {};
-  // Template-local named maps ({ map_name: { key: value } }) for REMAP/REPLACE
-  // drill-down resolution. The global top-level `maps` registry is not fetched
-  // here (named refs into it were never resolved in drill-down either).
+  // Effective named maps ({ map_name: { key: value } }) for REMAP/REPLACE
+  // `'name'` resolution during drill-down: the global top-level `maps`
+  // registry merged under the template-local block (template-local wins on a
+  // name clash, mirroring the engine). Rebuilt per template in [ensureTemplate];
+  // the global half is fetched once via [_ensureGlobalMaps].
   Map<String, Map<String, String>> maps = const {};
+  // Global top-level `maps` registry, fetched from disk once per ingest and
+  // cached (null until first fetch; empty map when the config declares none).
+  Map<String, Map<String, String>>? _globalMaps;
   List<String> ruleWhens = const [];
   List<List<Map<String, String>>> ruleRows = const [];
   List<({String header, String variable})> outputSchema = const [];
@@ -4016,6 +4059,27 @@ class _BtraceIngestCtx {
           ? '${sourcePath.substring(0, sourcePath.length - 4)}.csvx'
           : '$sourcePath.csvx';
 
+  /// Global top-level `maps` registry, fetched from disk once and cached.
+  /// Read from `loadConfig` (the same on-disk source `fetchTemplate` reads)
+  /// so drill-down resolves the global names the engine used — not the live,
+  /// possibly-unsaved in-memory AST. Best-effort: a fetch failure leaves
+  /// global-named REMAP/REPLACE refs unresolved (the prior behaviour).
+  Future<Map<String, Map<String, String>>> _ensureGlobalMaps() async {
+    final cached = _globalMaps;
+    if (cached != null) return cached;
+    var result = const <String, Map<String, String>>{};
+    try {
+      final tree = jsonDecode(await BxpProcessClient.loadConfig(configPath));
+      if (tree is Map && tree['maps'] is Map) {
+        result = parseMapsRegistry(tree['maps'] as Map);
+      }
+    } catch (_) {
+      // Drill-down detail is best-effort; keep the empty fallback.
+    }
+    _globalMaps = result;
+    return result;
+  }
+
   /// Lazy template-config fetch. `the bridge config validation X --fetch-template Y`
   /// is ~30 ms per spawn on Linux; one cached fetch per template id keeps
   /// the live stream from stuttering on multi-file templates.
@@ -4037,16 +4101,9 @@ class _BtraceIngestCtx {
       };
     }
     final mv = tpl['maps'];
-    if (mv is Map) {
-      maps = <String, Map<String, String>>{
-        for (final e in mv.entries)
-          if (e.value is Map)
-            e.key.toString(): <String, String>{
-              for (final kv in (e.value as Map).entries)
-                kv.key.toString(): kv.value?.toString() ?? '',
-            },
-      };
-    }
+    final localMaps =
+        mv is Map ? parseMapsRegistry(mv) : const <String, Map<String, String>>{};
+    maps = mergeMapsRegistries(await _ensureGlobalMaps(), localMaps);
     final rr = tpl['row_rules'];
     if (rr is List) {
       final whens = <String>[];
