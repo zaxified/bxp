@@ -301,6 +301,12 @@ fn parseTrace(a: std.mem.Allocator, trace_bytes: []const u8, input_csv: []const 
     var row_errors: std.ArrayList(ErrorSample) = .empty;
     var outputs: std.ArrayList(OutputSample) = .empty;
 
+    // Build the newline-offset index once (O(csv_len)); every per-sample
+    // line lookup is then an O(log n) binary search. Previously each of up
+    // to 3×MAX_TRACE_SAMPLE samples rescanned the whole CSV from offset 0,
+    // i.e. O(samples × csv_len) over an uncapped inline payload.
+    const line_index = LineIndex{ .newlines = buildLineIndex(a, input_csv) };
+
     while (reader.nextFrame() catch null) |frame| {
         switch (frame) {
             .file_end => |fe| {
@@ -312,7 +318,7 @@ fn parseTrace(a: std.mem.Allocator, trace_bytes: []const u8, input_csv: []const 
             .filtered_row => |fr| {
                 ts.filtered_count += 1;
                 if (filtered.items.len < MAX_TRACE_SAMPLE) filtered.append(a, .{
-                    .input_row = lineAtOffset(input_csv, fr.source_locator),
+                    .input_row = line_index.lineAt(fr.source_locator),
                     .source_offset = fr.source_locator,
                     .reason = fr.reason,
                 }) catch {};
@@ -320,7 +326,7 @@ fn parseTrace(a: std.mem.Allocator, trace_bytes: []const u8, input_csv: []const 
             .error_row => |er| {
                 ts.error_count += 1;
                 if (row_errors.items.len < MAX_TRACE_SAMPLE) row_errors.append(a, .{
-                    .input_row = lineAtOffset(input_csv, er.source_locator),
+                    .input_row = line_index.lineAt(er.source_locator),
                     .source_offset = er.source_locator,
                     .variable = er.var_name,
                     .kind = er.error_kind,
@@ -331,7 +337,7 @@ fn parseTrace(a: std.mem.Allocator, trace_bytes: []const u8, input_csv: []const 
             .output_row => |orw| {
                 ts.output_count += 1;
                 if (outputs.items.len < MAX_TRACE_SAMPLE) outputs.append(a, .{
-                    .input_row = lineAtOffset(input_csv, orw.source_locator),
+                    .input_row = line_index.lineAt(orw.source_locator),
                     .source_offset = orw.source_locator,
                     .output_idx = orw.output_idx,
                     .rule = orw.rule_idx,
@@ -349,14 +355,35 @@ fn parseTrace(a: std.mem.Allocator, trace_bytes: []const u8, input_csv: []const 
     return ts;
 }
 
-/// 1-based physical line number of byte `offset` within `csv` (header = line 1).
-fn lineAtOffset(csv: []const u8, offset: u64) usize {
-    const lim: usize = if (offset > csv.len) csv.len else @intCast(offset);
-    var line: usize = 1;
-    for (csv[0..lim]) |c| {
-        if (c == '\n') line += 1;
+/// Sorted newline offsets of a CSV, enabling O(log n) line-number lookups
+/// instead of an O(n) from-offset-0 rescan per query.
+const LineIndex = struct {
+    newlines: []const u64,
+
+    /// 1-based physical line number of byte `offset` (header = line 1) —
+    /// the count of newlines strictly before `offset`, plus one. Matches
+    /// the former linear scan exactly (a newline AT `offset` is not counted;
+    /// offsets past EOF count every newline).
+    fn lineAt(self: LineIndex, offset: u64) usize {
+        var lo: usize = 0;
+        var hi: usize = self.newlines.len;
+        while (lo < hi) {
+            const mid = lo + (hi - lo) / 2;
+            if (self.newlines[mid] < offset) lo = mid + 1 else hi = mid;
+        }
+        return lo + 1;
     }
-    return line;
+};
+
+/// One pass over `csv` collecting every `\n` byte offset (ascending by
+/// construction). On OOM returns whatever was collected so far — a degraded
+/// (possibly low) line number is preferable to failing the whole trace.
+fn buildLineIndex(a: std.mem.Allocator, csv: []const u8) []const u64 {
+    var nl: std.ArrayList(u64) = .empty;
+    for (csv, 0..) |c, i| {
+        if (c == '\n') nl.append(a, @intCast(i)) catch break;
+    }
+    return nl.items;
 }
 
 /// Emit the `trace` value: `{"available":false}` when no usable BXTB was
