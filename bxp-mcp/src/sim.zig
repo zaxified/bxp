@@ -66,6 +66,17 @@ fn run(
     if (io.has_xlsx_sheet) return errJson(a, "xlsx-input templates cannot be simulated from inline CSV", template);
     if (!io.csv_input) return errJson(a, "only CSV-input templates can be simulated (file_type_in must be csv)", template);
     if (io.file_pattern_in.len == 0) return errJson(a, "template is missing required file_pattern_in", template);
+    // file_pattern_in is folded into the staged input filename (input<suffix>)
+    // and comes back raw from the config (templateIo does not sanitize it). A
+    // value containing a path separator or ".." would let path.join + the
+    // kernel's ".." resolution climb out of the confined scratch workspace and
+    // write the agent-supplied CSV to an arbitrary path — defeating the same
+    // sandbox boundary the workspace-id sanitizer enforces. A legitimate
+    // pattern is a pure filename suffix (".csv", "_cash.csv"), so reject any
+    // path-shape input here, before staging.
+    if (std.mem.indexOfAny(u8, io.file_pattern_in, "/\\") != null or
+        std.mem.indexOf(u8, io.file_pattern_in, "..") != null)
+        return errJson(a, "file_pattern_in must be a plain filename suffix (no path separators or '..')", io.file_pattern_in);
 
     // 2. Locate the co-located bxp-cli (shared bxp-gui bundle).
     var exe_dir_buf: [std.fs.max_path_bytes]u8 = undefined;
