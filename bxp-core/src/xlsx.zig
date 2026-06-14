@@ -146,6 +146,25 @@ pub const Workbook = struct {
     }
 };
 
+/// Parse ONLY the workbook part — the sheet name → relative-path map — without
+/// the shared-strings table or styles. Cheap relative to a full extraction (the
+/// worksheet streams are never touched), so it suits the `--check-fs`
+/// sheet-name validation. Caller owns the returned map: free each key + value,
+/// then `deinit()` — the same pattern as `Workbook.sheet_paths`.
+pub fn listSheets(alloc: Allocator, xlsx_file: std.fs.File) !std.StringHashMap([]const u8) {
+    var archive: zipstream.Archive = undefined;
+    try archive.init(alloc, xlsx_file);
+    defer archive.deinit();
+
+    const zip_window = try alloc.alloc(u8, ZIP_WINDOW_SIZE);
+    defer alloc.free(zip_window);
+    const xml_window = try alloc.alloc(u8, XML_WINDOW_SIZE);
+    defer alloc.free(xml_window);
+
+    var ctx: PartCtx = .{ .archive = &archive, .zip_window = zip_window, .xml_window = xml_window };
+    return parseWorkbook(alloc, &ctx);
+}
+
 /// Extract one sheet to `<out_basename><spec.output_suffix>` in `out_dir`,
 /// using a `ctx` whose archive is already open on the xlsx file. A sheet whose
 /// name is not found (prefix match) is silently skipped (no output), matching

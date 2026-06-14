@@ -127,10 +127,6 @@ Remaining:
 
 ### bxp-cli
 
-- `xlsx_sheet.name` validation under the `--check-fs` umbrella. Verify
-  the named sheet exists inside the `.xlsx` file during the filesystem
-  check phase.
-
 - **`data_dir` multi-dir / array (`data_dir: [...]` or a `*` glob segment).**
   Audit 2026-06-13, deferred. Brokers that export into dated
   subdirectories (`exports/2026-06/`) need config edits per month today.

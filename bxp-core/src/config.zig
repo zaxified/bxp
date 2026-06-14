@@ -13,6 +13,7 @@ const std = @import("std");
 const json5 = @import("json5.zig");
 const diagnostics = @import("diagnostics");
 const expr = @import("expr");
+const xlsx = @import("xlsx");
 /// Layer 0 single-byte ↔ UTF-8 transcoder. Re-exported (`pub`) so the bxp-cli
 /// pipeline — which already imports the `config` module — can reach
 /// `encoding.encodeFromUtf8` for output transcoding without a separate
@@ -1651,6 +1652,55 @@ pub fn validateFilesystem(
                 id, "data_dir",
                 "data_dir '{s}' contains no files matching '{s}'",
                 .{ broker.data_dir, broker.file_pattern_in });
+        }
+
+        // xlsx sheet-name existence: a template with an `xlsx_sheet` names a
+        // worksheet matched by prefix inside the workbook; a typo silently
+        // produces no rows (the extractor skips an unmatched sheet). Verify the
+        // named sheet exists in at least one .xlsx in the data_dir. Cheap —
+        // `listSheets` parses only the workbook part, never the worksheet data
+        // or shared strings. A fresh dir handle is opened because the scan above
+        // already consumed this directory's iterator.
+        if (broker.xlsx_sheet) |sheet| {
+            var xdir = std.fs.cwd().openDir(broker.data_dir, .{ .iterate = true }) catch continue;
+            defer xdir.close();
+            var xlsx_seen = false; // at least one readable .xlsx was parsed
+            var sheet_found = false;
+            var xit = xdir.iterate();
+            while (!sheet_found) {
+                const dir_entry = (xit.next() catch break) orelse break;
+                if (dir_entry.kind != .file and dir_entry.kind != .sym_link) continue;
+                if (!std.mem.endsWith(u8, dir_entry.name, ".xlsx")) continue;
+                const xfile = xdir.openFile(dir_entry.name, .{}) catch continue;
+                defer xfile.close();
+                // A malformed / UTF-16 workbook surfaces at extraction time; for
+                // this existence check just skip files we can't read.
+                var names = xlsx.listSheets(alloc, xfile) catch continue;
+                defer {
+                    var nit = names.iterator();
+                    while (nit.next()) |e| {
+                        alloc.free(e.key_ptr.*);
+                        alloc.free(e.value_ptr.*);
+                    }
+                    names.deinit();
+                }
+                xlsx_seen = true;
+                // Prefix match mirrors the extractor (xlsx.zig): a workbook sheet
+                // "CASH OPERATION 28022026" matches config name "CASH OPERATION".
+                var kit = names.keyIterator();
+                while (kit.next()) |k| {
+                    if (std.mem.startsWith(u8, k.*, sheet.name)) {
+                        sheet_found = true;
+                        break;
+                    }
+                }
+            }
+            if (xlsx_seen and !sheet_found) {
+                try emitTemplateDiag(alloc, diag, .warning, "fs.xlsx_sheet_not_found",
+                    id, "xlsx_sheet",
+                    "no sheet in any .xlsx in data_dir '{s}' has a name starting with xlsx_sheet.name '{s}'",
+                    .{ broker.data_dir, sheet.name });
+            }
         }
     }
 }

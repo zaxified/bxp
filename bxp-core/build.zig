@@ -75,7 +75,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/zipstream.zig"),
     });
 
-    _ = b.addModule("xlsx", .{
+    const xlsx_mod = b.addModule("xlsx", .{
         .root_source_file = b.path("src/xlsx.zig"),
         .imports = &.{
             .{ .name = "decimal", .module = decimal_mod },
@@ -102,6 +102,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "diagnostics", .module = diagnostics_mod },
             .{ .name = "expr", .module = expr_mod },
             .{ .name = "encoding", .module = encoding_mod },
+            .{ .name = "xlsx", .module = xlsx_mod },
         },
     });
 
@@ -275,6 +276,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "diagnostics", .module = diagnostics_mod },
                 .{ .name = "expr",        .module = expr_mod },
                 .{ .name = "encoding",    .module = encoding_mod },
+                .{ .name = "xlsx",        .module = xlsx_mod },
             },
         }),
     });
