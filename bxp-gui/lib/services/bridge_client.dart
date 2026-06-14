@@ -161,6 +161,30 @@ typedef _BridgeInspectDart = int Function(
   int,
 );
 
+// bridge_verify_minisign(file_ptr, file_len, sig_ptr, sig_len,
+//                        pubkey_ptr, pubkey_len) -> int32_t
+//   Verifies a minisign signature (`sig` = the `.minisig` file text) over
+//   `file` (the release SHA256SUMS) against `pubkey` (the base64 key part of
+//   minisign.pub). Pure native std.crypto (Ed25519 + Blake2b-512), no alloc.
+//   Returns a result code: 0 = authentic; 1 = bad pubkey; 2 = bad sig file;
+//   3 = key id mismatch; 4 = verification failed. Any non-zero = refuse.
+typedef _BridgeVerifyMinisignNative = Int32 Function(
+  Pointer<Uint8>,
+  Uint32,
+  Pointer<Uint8>,
+  Uint32,
+  Pointer<Uint8>,
+  Uint32,
+);
+typedef _BridgeVerifyMinisignDart = int Function(
+  Pointer<Uint8>,
+  int,
+  Pointer<Uint8>,
+  int,
+  Pointer<Uint8>,
+  int,
+);
+
 /// Result of a bridge-mediated subprocess invocation. Mirrors dart:io
 /// `ProcessResult` conceptually; `err` is non-null only when the bridge
 /// itself couldn't run the child (e.g. malformed request, spawn failed).
@@ -209,6 +233,7 @@ class BridgeClient {
   late final _BridgeEvalExprDart _bridgeEvalExpr;
   late final _BridgeEvalExprTraceDart _bridgeEvalExprTrace;
   late final _BridgeInspectDart _bridgeInspect;
+  late final _BridgeVerifyMinisignDart _bridgeVerifyMinisign;
 
   BridgeClient(String dllPath) : _lib = DynamicLibrary.open(dllPath) {
     _bridgeRun = _lib
@@ -230,6 +255,8 @@ class BridgeClient {
         _BridgeEvalExprTraceDart>('bridge_eval_expr_trace');
     _bridgeInspect = _lib
         .lookupFunction<_BridgeInspectNative, _BridgeInspectDart>('bridge_inspect');
+    _bridgeVerifyMinisign = _lib.lookupFunction<_BridgeVerifyMinisignNative,
+        _BridgeVerifyMinisignDart>('bridge_verify_minisign');
   }
 
   /// DLL self-reported version string, e.g. "0.2.1". Read once at load.
@@ -521,6 +548,52 @@ class BridgeClient {
       }
     }
     return null; // still too big after the largest buffer
+  }
+
+  /// Verify a minisign signature over [fileBytes] (the downloaded
+  /// `SHA256SUMS`) using [sigBytes] (the `.minisig` file) against
+  /// [pubkeyBase64] (the embedded public key). Returns the bridge result
+  /// code: `0` = authentic; non-zero = refuse (`1` bad pubkey, `2` bad sig
+  /// file, `3` key-id mismatch, `4` verification failed). Pure native crypto,
+  /// synchronous and fast — safe to call from the calling isolate.
+  int verifyMinisign(
+    Uint8List fileBytes,
+    Uint8List sigBytes,
+    String pubkeyBase64,
+  ) {
+    final pubkeyBytes = utf8.encode(pubkeyBase64);
+    // The C ABI requires non-null pointers even for empty inputs (the bridge
+    // treats a zero length as "malformed" and never dereferences); allocate a
+    // 1-byte placeholder so the pointer is valid.
+    final filePtr =
+        malloc.allocate<Uint8>(fileBytes.isEmpty ? 1 : fileBytes.length);
+    final sigPtr =
+        malloc.allocate<Uint8>(sigBytes.isEmpty ? 1 : sigBytes.length);
+    final pubPtr =
+        malloc.allocate<Uint8>(pubkeyBytes.isEmpty ? 1 : pubkeyBytes.length);
+    try {
+      if (fileBytes.isNotEmpty) {
+        filePtr.asTypedList(fileBytes.length).setAll(0, fileBytes);
+      }
+      if (sigBytes.isNotEmpty) {
+        sigPtr.asTypedList(sigBytes.length).setAll(0, sigBytes);
+      }
+      if (pubkeyBytes.isNotEmpty) {
+        pubPtr.asTypedList(pubkeyBytes.length).setAll(0, pubkeyBytes);
+      }
+      return _bridgeVerifyMinisign(
+        filePtr,
+        fileBytes.length,
+        sigPtr,
+        sigBytes.length,
+        pubPtr,
+        pubkeyBytes.length,
+      );
+    } finally {
+      malloc.free(filePtr);
+      malloc.free(sigPtr);
+      malloc.free(pubPtr);
+    }
   }
 
   /// Streaming variant of [run]. Spawns the child, returns a Future that

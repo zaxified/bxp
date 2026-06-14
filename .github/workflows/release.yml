@@ -133,6 +133,9 @@ jobs:
     name: aggregate + publish release
     needs: [console, desktop-linux, desktop-windows, desktop-macos]
     runs-on: ubuntu-latest
+    # Gated environment holding the minisign signing secrets, restricted to
+    # `v*` tags so the signing key is only reachable from real releases.
+    environment: release
     permissions:
       contents: write
     steps:
@@ -148,7 +151,41 @@ jobs:
               \( -name 'bxp-console-*' -o -name 'bxp-desktop-*' \) \
               -exec cp {} staging/ \;
           bash scripts/release-03-checksums.sh staging > staging/SHA256SUMS
+          # Re-verify every hash + assert the manifest is non-empty before we
+          # sign + upload, so a truncated/corrupt artifact fails loudly here.
+          bash scripts/release-03-checksums.sh --check staging staging/SHA256SUMS
           ls -lh staging
+      # Sign SHA256SUMS with minisign so the in-app updater can verify the
+      # checksum manifest is authentic (defends a leaked upload token — a
+      # forged installer + matching SUMS can't produce a valid signature
+      # without the private key). Uses the maintainer's single minisign key
+      # (shared across repos) supplied via repo secrets. Skipped — not failed —
+      # when the secret is absent, so releases still publish before the key
+      # is wired up; once MINISIGN_KEY is set the .minisig is produced and
+      # uploaded with staging/* automatically.
+      - name: Detect signing key
+        id: signing
+        env:
+          MINISIGN_KEY: ${{ secrets.MINISIGN_KEY }}
+        run: |
+          if [ -n "$MINISIGN_KEY" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::MINISIGN_KEY not set — skipping SHA256SUMS signing"
+          fi
+      - name: Sign SHA256SUMS (minisign)
+        if: steps.signing.outputs.enabled == 'true'
+        env:
+          MINISIGN_KEY: ${{ secrets.MINISIGN_KEY }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+        run: |
+          sudo apt-get update && sudo apt-get install -y minisign
+          printf '%s' "$MINISIGN_KEY" > "$RUNNER_TEMP/minisign.key"
+          echo "$MINISIGN_PASSWORD" | \
+            minisign -S -s "$RUNNER_TEMP/minisign.key" -m staging/SHA256SUMS
+          rm -f "$RUNNER_TEMP/minisign.key"
+          ls -lh staging/SHA256SUMS.minisig
       # Extract the latest CHANGELOG.md entry (between the first two `## 2026`
       # headings, with the heading line itself stripped) for use as the
       # release body. CHANGELOG.md is the single source of truth — using
@@ -171,3 +208,40 @@ jobs:
           body_path: release_notes.md
           files: |
             staging/*
+
+  # Post-publish smoke: re-fetch the published release and assert the
+  # checksum manifest is present and lists every desktop installer, so a
+  # broken release surfaces here rather than in a user's failed auto-update.
+  verify-release:
+    name: verify published release
+    needs: [release]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check manifest + installer assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="$RELEASE_VERSION"
+          tmp=$(mktemp -d)
+          gh release download "$tag" -R "$GITHUB_REPOSITORY" \
+              -p 'SHA256SUMS*' -D "$tmp"
+          if [ ! -f "$tmp/SHA256SUMS" ]; then
+            echo "::error::SHA256SUMS missing from release $tag"
+            exit 1
+          fi
+          for asset in \
+              bxp-desktop-windows-x86_64.exe \
+              bxp-desktop-macos-arm64.dmg \
+              bxp-desktop-linux-x86_64.AppImage; do
+            pat="  ${asset//./\\.}\$"
+            if ! grep -qE "$pat" "$tmp/SHA256SUMS"; then
+              echo "::error::$asset has no line in SHA256SUMS"
+              exit 1
+            fi
+          done
+          # Signature is expected once MINISIGN_KEY is configured, but the
+          # signing step skips gracefully without it — so warn, don't fail.
+          if [ ! -f "$tmp/SHA256SUMS.minisig" ]; then
+            echo "::warning::SHA256SUMS.minisig missing — release is unsigned"
+          fi
+          echo "release $tag: SHA256SUMS present, all desktop installers listed"

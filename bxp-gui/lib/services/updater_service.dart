@@ -1,12 +1,14 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'app_runtime.dart';
+import 'bxp_process_client.dart';
 import 'dev_trace.dart';
 
 // Pure-Dart cross-platform auto-updater.
@@ -31,6 +33,18 @@ class UpdaterService extends ChangeNotifier {
   static const String repoSlug = 'zaxified/bxp';
   static const Duration _initialDelay = Duration(seconds: 5);
   static const Duration _periodicInterval = Duration(hours: 6);
+
+  // Trust anchor for the minisign verification of `SHA256SUMS`. This is the
+  // base64 payload from the maintainer's `minisign.pub` (algorithm + key id +
+  // Ed25519 public key); the matching private key signs `SHA256SUMS` in CI on
+  // every release (see .github/workflows/release.yml). A public key is not
+  // secret — it is published precisely so downloads can be verified.
+  //
+  // Used by [_verifySignature]: the signature over the downloaded SHA256SUMS
+  // is verified against this key (native Ed25519 + Blake2b in bxp-gui-bridge)
+  // before the checksum compare in [downloadAndInstall]. Key id: 19BACF0C4D45D3F.
+  static const String minisignPublicKey =
+      'RWQ/XdTE8KybAf5uOrE8bvl8P6VOQCOafNCmFYwW7cKd40xMjCGk+arQ';
 
   String? _currentVersion;
   Timer? _periodicTimer;
@@ -108,6 +122,7 @@ class UpdaterService extends ChangeNotifier {
       final assets = (json['assets'] as List?) ?? const [];
       final assetUrl = _pickAssetUrl(assets);
       final checksumUrl = _pickChecksumUrl(assets);
+      final minisigUrl = _pickMinisigUrl(assets);
       _available = UpdateInfo(
         version: latest,
         tagName: tag,
@@ -116,6 +131,7 @@ class UpdaterService extends ChangeNotifier {
         assetUrl: assetUrl,
         assetName: assetUrl == null ? null : Uri.parse(assetUrl).pathSegments.last,
         checksumUrl: checksumUrl,
+        minisigUrl: minisigUrl,
       );
     } catch (e) {
       _lastError = '$e';
@@ -191,6 +207,20 @@ class UpdaterService extends ChangeNotifier {
     return null;
   }
 
+  /// Return the `browser_download_url` of the `SHA256SUMS.minisig` asset (the
+  /// minisign signature over `SHA256SUMS`), or null when the release doesn't
+  /// publish one. A null result is treated as fail-closed by the installer —
+  /// authenticity can't be established, so the update is refused.
+  String? _pickMinisigUrl(List assets) {
+    for (final a in assets) {
+      final name = (a as Map)['name']?.toString() ?? '';
+      if (name == 'SHA256SUMS.minisig') {
+        return a['browser_download_url']?.toString();
+      }
+    }
+    return null;
+  }
+
   RegExp? _platformAssetPattern() {
     if (Platform.isWindows) {
       return RegExp(r'^bxp-desktop-windows-x86_64\.exe$');
@@ -238,15 +268,26 @@ class UpdaterService extends ChangeNotifier {
 
     try {
       final tmpDir = await getTemporaryDirectory();
+      // `assetName` comes from the GitHub API; `p.basename` strips any path
+      // components so a crafted name (e.g. "../../x") can't escape the temp
+      // dir when joined. (Belt-and-braces — `_pickAssetUrl`'s strict
+      // per-platform regex already rejects such names.)
       final assetPath = p.join(
         tmpDir.path,
-        info.assetName ?? 'bxp-desktop-update',
+        p.basename(info.assetName ?? 'bxp-desktop-update'),
       );
       await _downloadFile(info.assetUrl!, assetPath, onProgress);
 
       // Fail-closed: every verification failure refuses the install and
       // surfaces a specific message. The release page link in the dialog
       // is the user's escape hatch when the release itself is broken.
+      //
+      // Order matters: fetch SHA256SUMS once, verify the minisign signature
+      // over those exact bytes (authenticity), THEN match the installer's
+      // hash against the now-trusted manifest (integrity). Verifying the
+      // signature first means a tampered manifest never reaches the hash
+      // compare; using the same bytes for both closes the swap window
+      // between the two steps.
       if (info.checksumUrl == null) {
         devTrace('updater.checksum.missing', {'asset': info.assetName ?? ''});
         _lastError = 'Release is missing SHA256SUMS — refusing to install. '
@@ -254,16 +295,41 @@ class UpdaterService extends ChangeNotifier {
         notifyListeners();
         return false;
       }
-      final result = await _verifyChecksum(assetPath, info);
-      if (result != _ChecksumResult.ok) {
-        _lastError = switch (result) {
-          _ChecksumResult.fetchFailed =>
-            'Could not fetch SHA256SUMS — refusing to install.',
-          _ChecksumResult.assetNotListed =>
+      final sumsBytes = await _fetchBytes(info.checksumUrl!);
+      if (sumsBytes == null) {
+        _lastError = 'Could not fetch SHA256SUMS — refusing to install.';
+        notifyListeners();
+        return false;
+      }
+      final sigError = await _verifySignature(sumsBytes, info);
+      if (sigError != null) {
+        _lastError = sigError;
+        notifyListeners();
+        return false;
+      }
+      // Read the installer ONCE and hash those exact bytes. The Linux install
+      // then writes the same bytes rather than re-reading from /tmp, so there
+      // is no swap window between the hash check and the write (TOCTOU). Win/
+      // macOS dispatch by path (the OS installer re-opens the file itself).
+      final Uint8List installerBytes;
+      try {
+        installerBytes = await File(assetPath).readAsBytes();
+      } catch (e) {
+        devTrace('updater.installer.read-error', {'error': '$e'});
+        _lastError =
+            'Could not read the downloaded installer — refusing to install.';
+        notifyListeners();
+        return false;
+      }
+      final outcome =
+          checksumOutcome(utf8.decode(sumsBytes), info.assetName, installerBytes);
+      if (outcome != ChecksumOutcome.ok) {
+        _lastError = switch (outcome) {
+          ChecksumOutcome.assetNotListed =>
             'Asset is not listed in SHA256SUMS — refusing to install.',
-          _ChecksumResult.mismatch =>
+          ChecksumOutcome.mismatch =>
             'Checksum mismatch — refusing to install.',
-          _ChecksumResult.ok => '',
+          ChecksumOutcome.ok => '',
         };
         notifyListeners();
         return false;
@@ -277,7 +343,7 @@ class UpdaterService extends ChangeNotifier {
         return await _installMacOS(assetPath);
       }
       if (Platform.isLinux) {
-        return await _installLinuxAppImage(assetPath);
+        return await _installLinuxAppImage(installerBytes);
       }
       _lastError = 'Unsupported platform: ${Platform.operatingSystem}';
       notifyListeners();
@@ -337,37 +403,86 @@ class UpdaterService extends ChangeNotifier {
     }
   }
 
-  /// Download the SHA256SUMS file, locate the line for [info.assetName], and
-  /// compare its hash against the locally-downloaded file at [filePath].
-  ///
-  /// Fail-closed: every non-`ok` result refuses the install. The caller maps
-  /// each variant to a user-visible message.
-  ///
-  /// SHA256SUMS format is the standard `sha256sum` output:
-  ///   `<64-hex-chars>  <filename>`  (two spaces as separator)
-  Future<_ChecksumResult> _verifyChecksum(
-    String filePath,
-    UpdateInfo info,
-  ) async {
+  /// GET [url] and return the full response body as bytes, or null on any
+  /// non-200 / network error. Used for the small SHA256SUMS + .minisig
+  /// assets (a few KB each), which are fetched once and reused so the
+  /// signature and the checksum compare see identical bytes.
+  Future<Uint8List?> _fetchBytes(String url) async {
     final client = HttpClient();
-    String body;
     try {
-      final req = await client.getUrl(Uri.parse(info.checksumUrl!));
+      final req = await client.getUrl(Uri.parse(url));
       req.headers.set(HttpHeaders.userAgentHeader, 'bxp-gui-updater');
       final res = await req.close();
       if (res.statusCode != 200) {
-        devTrace('updater.checksum.fetch', {'status': res.statusCode});
-        return _ChecksumResult.fetchFailed;
+        devTrace('updater.fetch.status', {'url': url, 'status': res.statusCode});
+        return null;
       }
-      body = await res.transform(utf8.decoder).join();
+      final builder = BytesBuilder(copy: false);
+      await for (final chunk in res) {
+        builder.add(chunk);
+      }
+      return builder.toBytes();
     } catch (e) {
-      devTrace('updater.checksum.fetch-error', {'error': '$e'});
-      return _ChecksumResult.fetchFailed;
+      devTrace('updater.fetch.error', {'url': url, 'error': '$e'});
+      return null;
     } finally {
       client.close(force: true);
     }
+  }
+
+  /// Verify the minisign signature over [sumsBytes] (the SHA256SUMS file)
+  /// against the embedded [minisignPublicKey] and the release's
+  /// `SHA256SUMS.minisig`. Returns null when authentic; otherwise a
+  /// user-facing refusal message. Fail-closed: a missing signature asset, an
+  /// un-fetchable signature, an unavailable verifier, or a bad signature all
+  /// refuse. The actual Ed25519 + Blake2b check runs in native code via the
+  /// bridge (no new Dart crypto dependency).
+  Future<String?> _verifySignature(Uint8List sumsBytes, UpdateInfo info) async {
+    if (info.minisigUrl == null) {
+      devTrace('updater.minisig.missing', {'asset': info.assetName ?? ''});
+      return 'Release is missing a signature (SHA256SUMS.minisig) — refusing '
+          'to install. Please update manually from the release page.';
+    }
+    final sigBytes = await _fetchBytes(info.minisigUrl!);
+    if (sigBytes == null) {
+      return 'Could not fetch the release signature — refusing to install.';
+    }
+    final code = BxpProcessClient.verifyMinisign(
+      sumsBytes,
+      sigBytes,
+      minisignPublicKey,
+    );
+    if (code == null) {
+      // Bridge unavailable — can't establish authenticity, so refuse. In
+      // practice the bridge is mandatory (fatal at startup), so this is a
+      // defensive belt-and-braces branch.
+      devTrace('updater.minisig.no-bridge', {});
+      return 'Signature verifier unavailable — refusing to install.';
+    }
+    if (code != 0) {
+      devTrace('updater.minisig.invalid', {'code': code});
+      return 'Release signature is invalid — refusing to install.';
+    }
+    return null;
+  }
+
+  /// Locate the line for [assetName] in [sumsText] (the already-fetched,
+  /// signature-verified SHA256SUMS) and compare its hash against
+  /// [installerBytes] (the bytes read once by the caller). Pure: no network,
+  /// no file I/O — the SUMS bytes were fetched + authenticated by the caller
+  /// and the installer bytes are the same ones the install step uses, so this
+  /// closes the verify→use swap window.
+  ///
+  /// SHA256SUMS format is the standard `sha256sum` output:
+  ///   `<64-hex-chars>  <filename>`  (two spaces as separator)
+  @visibleForTesting
+  static ChecksumOutcome checksumOutcome(
+    String sumsText,
+    String? assetName,
+    Uint8List installerBytes,
+  ) {
     String? expected;
-    for (final line in body.split('\n')) {
+    for (final line in sumsText.split('\n')) {
       final t = line.trim();
       if (t.isEmpty) continue;
       // Format: "<hex>  <filename>" (two spaces, sha256sum-style).
@@ -378,26 +493,22 @@ class UpdaterService extends ChangeNotifier {
       if (idx < 0) continue;
       final hex = t.substring(0, idx).trim();
       final name = t.substring(idx).trim();
-      if (name == info.assetName) {
+      if (name == assetName) {
         expected = hex.toLowerCase();
         break;
       }
     }
     if (expected == null) {
-      devTrace('updater.checksum.no-line', {'asset': info.assetName ?? ''});
-      return _ChecksumResult.assetNotListed;
+      devTrace('updater.checksum.no-line', {'asset': assetName ?? ''});
+      return ChecksumOutcome.assetNotListed;
     }
-    // Read the local file in full — installers are 50–200 MB but this is
-    // a background operation. Streaming SHA-256 would save memory but adds
-    // complexity for a one-time operation.
-    final bytes = await File(filePath).readAsBytes();
-    final actual = sha256.convert(bytes).toString().toLowerCase();
+    final actual = sha256.convert(installerBytes).toString().toLowerCase();
     if (expected != actual) {
       devTrace('updater.checksum.mismatch',
           {'expected': expected, 'actual': actual});
-      return _ChecksumResult.mismatch;
+      return ChecksumOutcome.mismatch;
     }
-    return _ChecksumResult.ok;
+    return ChecksumOutcome.ok;
   }
 
   Future<bool> _installWindows(String assetPath) async {
@@ -412,39 +523,75 @@ class UpdaterService extends ChangeNotifier {
 
   Future<bool> _installMacOS(String dmgPath) async {
     // Mount the DMG, find the .app inside, copy to ~/Applications/, unmount,
-    // open the new copy via `open -n`. Bash is the simplest tool for this
-    // chain; we keep it readable rather than re-implementing each step in
-    // Dart's Process.run.
-    final script = '''
-set -e
-MNT=\$(hdiutil attach -nobrowse -noautoopen "$dmgPath" | tail -n1 | awk '{print \$3}')
-APP=\$(ls -d "\$MNT"/*.app | head -n1)
-DEST="\$HOME/Applications"
-mkdir -p "\$DEST"
-rm -rf "\$DEST/\$(basename "\$APP")"
-cp -R "\$APP" "\$DEST/"
-hdiutil detach "\$MNT" -quiet
-open -n "\$DEST/\$(basename "\$APP")"
-''';
-    final result = await Process.run('bash', ['-c', script]);
-    if (result.exitCode != 0) {
-      _lastError = 'macOS install failed: ${result.stderr}';
+    // open the new copy. Each step runs via Process.run with an argument
+    // array (NO shell) so an attacker-influenced path can't inject commands —
+    // `dmgPath` and the discovered `.app` path are passed as literal argv
+    // entries, never interpolated into a `bash -c` string.
+    String? mountPoint;
+    try {
+      final attach = await Process.run('hdiutil',
+          ['attach', '-nobrowse', '-noautoopen', dmgPath]);
+      if (attach.exitCode != 0) {
+        _lastError = 'macOS install failed (mount): ${attach.stderr}';
+        return false;
+      }
+      // hdiutil prints tab-separated columns; the mount point is the last
+      // one (`/Volumes/...`). Scan for it rather than assuming a fixed column.
+      for (final line in (attach.stdout as String).split('\n')) {
+        final idx = line.indexOf('/Volumes/');
+        if (idx >= 0) mountPoint = line.substring(idx).trimRight();
+      }
+      if (mountPoint == null) {
+        _lastError = 'macOS install failed: no mount point in hdiutil output';
+        return false;
+      }
+
+      // Find the single .app bundle inside the mounted volume.
+      final appEntry = Directory(mountPoint)
+          .listSync()
+          .firstWhere((e) => e.path.endsWith('.app'),
+              orElse: () => throw const FileSystemException('no .app in DMG'));
+      final appName = p.basename(appEntry.path);
+      final destDir = p.join(
+          Platform.environment['HOME'] ?? '', 'Applications');
+      final destApp = p.join(destDir, appName);
+
+      await Directory(destDir).create(recursive: true);
+      final existing = Directory(destApp);
+      if (existing.existsSync()) existing.deleteSync(recursive: true);
+
+      final copy = await Process.run('cp', ['-R', appEntry.path, destDir]);
+      if (copy.exitCode != 0) {
+        _lastError = 'macOS install failed (copy): ${copy.stderr}';
+        return false;
+      }
+      await Process.run('open', ['-n', destApp]);
+      return true;
+    } catch (e) {
+      _lastError = 'macOS install failed: $e';
       return false;
+    } finally {
+      // Always try to unmount, even on a mid-way failure.
+      if (mountPoint != null) {
+        await Process.run('hdiutil', ['detach', mountPoint, '-quiet']);
+      }
     }
-    return true;
   }
 
-  Future<bool> _installLinuxAppImage(String newAppImagePath) async {
-    // Atomic-replace the running AppImage. APPIMAGE env var points at the
-    // currently mounted AppImage's filesystem path on disk.
+  /// Atomic-replace the running AppImage with [newBytes] (the installer bytes
+  /// already read + checksum-verified by the caller). Writing the verified
+  /// bytes directly — rather than re-reading the `/tmp` file — closes the
+  /// TOCTOU window where a local process could swap the file between the hash
+  /// check and the write.
+  Future<bool> _installLinuxAppImage(Uint8List newBytes) async {
+    // APPIMAGE env var points at the currently mounted AppImage's path on disk.
     final current = Platform.environment['APPIMAGE'];
     if (current == null) {
       _lastError = 'APPIMAGE env var missing — cannot self-update';
       return false;
     }
-    final bytes = await File(newAppImagePath).readAsBytes();
     final tmp = File('$current.new');
-    await tmp.writeAsBytes(bytes, flush: true);
+    await tmp.writeAsBytes(newBytes, flush: true);
     await Process.run('chmod', ['+x', tmp.path]);
     await tmp.rename(current);
     // Re-exec — detached so the old process can exit cleanly.
@@ -491,7 +638,11 @@ open -n "\$DEST/\$(basename "\$APP")"
   }
 }
 
-enum _ChecksumResult { ok, fetchFailed, assetNotListed, mismatch }
+/// Result of matching a downloaded installer against the (already
+/// signature-verified) SHA256SUMS manifest. `ok` means install may proceed;
+/// any other value refuses. Public + `@visibleForTesting` on the producing
+/// function so the checksum logic can be unit-tested without network/FFI.
+enum ChecksumOutcome { ok, assetNotListed, mismatch }
 
 class UpdateInfo {
   final String version;     // stripped of "v" prefix
@@ -501,6 +652,7 @@ class UpdateInfo {
   final String? assetUrl;   // platform installer download (null on Linux non-AppImage)
   final String? assetName;  // file name of assetUrl
   final String? checksumUrl;// SHA256SUMS asset URL (null if not published)
+  final String? minisigUrl; // SHA256SUMS.minisig asset URL (null if unsigned)
 
   const UpdateInfo({
     required this.version,
@@ -510,5 +662,6 @@ class UpdateInfo {
     required this.assetUrl,
     required this.assetName,
     required this.checksumUrl,
+    required this.minisigUrl,
   });
 }

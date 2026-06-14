@@ -67,6 +67,7 @@ All exports use the `.c` calling convention.
 | `bridge_eval_expr(...)`      | In-proc: parse + evaluate one expression, return result/error |
 | `bridge_eval_expr_trace(..)` | In-proc: same with per-call NDJSON trace + terminal sentinel   |
 | `bridge_inspect(...)`        | In-proc: stateless inspect ops (`docs` / `config` / `list_templates` / `fetch_template` / `eval_batch`) — JSON request envelope → result JSON in out buffer |
+| `bridge_verify_minisign(...)`| In-proc: verify a minisign signature (`.minisig`) over a file (release `SHA256SUMS`) against a base64 public key — Ed25519 + Blake2b-512, zero-alloc; returns `0` authentic / non-zero refuse |
 
 The Dart-side shim that calls these lives in
 [`../bxp-gui/lib/services/bridge_client.dart`](../bxp-gui/lib/services/bridge_client.dart).

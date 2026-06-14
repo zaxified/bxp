@@ -9,47 +9,57 @@ to this file.
 
 ## v0.3.0
 
-### Auto-updater security audit & hardening
+### Windows self-update fails silently (UAC elevation)
 
-Shipped in v0.2.4: `_verifyChecksum` is fail-closed — missing
-`SHA256SUMS`, fetch failure, asset not listed in SUMS, and hash mismatch
-all refuse the install with a specific message. Release page link in
-the dialog remains as the user's escape hatch.
+Reproduced manually post-release: the update dialog shows the correct
+changelog, but clicking **Update** re-enables the button after a moment
+and no install runs (`downloadAndInstall` returns `false`). The download
+and checksum steps pass — the failure is in the install dispatch.
 
-Remaining hardening for v0.3.0 — treat as one cohesive audit pass:
+Root cause (analysed from Linux, confirmation pending on a real Windows
+box): the NSIS installer declares `RequestExecutionLevel admin` and
+installs into `$PROGRAMFILES64`
+([bxp-gui/installer/bxp-desktop.nsi](../bxp-gui/installer/bxp-desktop.nsi)),
+so its PE manifest is `requireAdministrator`. `_installWindows`
+([bxp-gui/lib/services/updater_service.dart](../bxp-gui/lib/services/updater_service.dart))
+launches it with Dart's `Process.start`, which calls `CreateProcess` —
+and `CreateProcess` cannot trigger UAC elevation. A non-elevated GUI
+spawning an elevation-requiring exe gets `ERROR_ELEVATION_REQUIRED` (740),
+`Process.start` throws, the outer `catch` sets `lastError` and returns
+`false` → button unlocks, nothing happens. (The cryptic `ProcessException`
+*is* surfaced in red in the dialog but is easy to miss.)
 
-- **Sign `SHA256SUMS`** (biggest gap). Checksum-only verification fails
-  if a release is compromised wholesale (leaked PAT, account takeover):
-  attacker uploads matching installer + matching SUMS. Add minisign /
-  cosign signature (`SHA256SUMS.sig`) + embed public key in the binary;
-  verify signature before trusting the SUMS contents. Trade-off: key
-  storage + rotation policy on the release side.
-- **Release-time tests so a broken release fails loudly.** Post-release
-  smoke job in `.github/workflows/release.yml` that fetches
-  `releases/latest`, asserts `SHA256SUMS` exists, and asserts every
-  installer asset (`bxp-desktop-{windows-x86_64.exe, macos-arm64.dmg,
-linux-x86_64.AppImage}`) has a matching line. Local gate inside
-  `scripts/release-03-checksums.sh` to re-verify hashes + count lines
-  before upload. Dart unit test for `UpdaterService` covering all four
-  `_ChecksumResult` variants.
-- **Shell injection surface in macOS installer dispatch.**
-  `_installMacOS` uses `bash -c` with `$dmgPath` interpolated; today
-  the asset-name regex blocks anything weird, but defensively switch
-  to `Process.run('hdiutil', [...])` with argument arrays, or validate
-  `assetName` against `[A-Za-z0-9._-]+` before use.
-- **Path-traversal hardening on `assetName`.** `info.assetName` comes
-  from the GitHub API and is joined into `tmpDir`; wrap with
-  `p.basename(...)` so a malformed asset name can't escape the temp
-  directory.
-- **TOCTOU window on the AppImage path.** `_installLinuxAppImage`
-  re-reads the verified file with `readAsBytes` after the hash check,
-  reopening a swap window in `/tmp`. Either reuse the bytes already
-  read during verification or stream both the hash and the write from
-  one `RandomAccessFile`.
+**Preferred fix — per-user install (mirrors the Linux AppImage model).**
+Switch the installer to a per-user install so no elevation is needed at
+all (what VS Code's User Installer / Chrome do):
 
-Track as a single "auto-update hardening" workstream — these layer on
-each other (e.g. signed SUMS removes the need for parts of the CI
-test, path validation removes part of the shell-injection concern).
+- `RequestExecutionLevel admin` → `user`.
+- `InstallDir "$PROGRAMFILES64\bxp-gui"` → `"$LOCALAPPDATA\Programs\bxp-gui"`.
+- Uninstall registry writes `HKLM` → `HKCU`.
+
+Then the existing `Process.start(setup.exe, ['/S'])` works unchanged, and
+— unlike a `ShellExecuteEx`/`runas` fix — there is **no UAC prompt per
+auto-update** (which couldn't be auto-approved anyway). Conceptually this
+unifies Windows with the Linux AppImage path (user-owned file, no root).
+
+Two coupled items to resolve in the same Windows pass:
+
+- **Migration / breaking change for existing installs.** Users with the
+  current admin Program Files install would get a *second* copy under
+  `%LOCALAPPDATA%` (the old one lingers). Either ignore (user base ~0
+  today) or have the installer detect + clean the old location.
+- **Race: overwriting the running `bxp-gui.exe`.** Independent of install
+  location — the silent install (`File /r`) overwrites `bxp-gui.exe` while
+  the app is still running (it exits only ~500 ms later, see
+  `_onUpdate` in
+  [bxp-gui/lib/ui/components/update_dialog.dart](../bxp-gui/lib/ui/components/update_dialog.dart)).
+  A running exe can't be replaced on Windows. Needs the app to exit
+  *before* the installer overwrites, or a stage-and-swap-on-relaunch
+  scheme.
+
+Must be implemented + tested on real Windows (UAC behaviour, running-exe
+overwrite, relaunch) — not verifiable from Linux. Hand-off candidate for
+win-claude-code.
 
 ## Later (no specific version)
 

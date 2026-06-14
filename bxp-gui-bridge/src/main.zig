@@ -1108,6 +1108,206 @@ export fn bridge_inspect(
     return @intCast(result.len);
 }
 
+// ── Minisign signature verification ─────────────────────────────────────
+//
+// Verifies a minisign signature over a file (the release `SHA256SUMS`)
+// against the maintainer's embedded public key, so the GUI updater can
+// confirm the checksum manifest is authentic before trusting it. Pure
+// std.crypto (Ed25519 + Blake2b-512), zero allocation, no new dependency.
+//
+// Binary layouts (minisign, jedisct1):
+//   public key  (base64) : algo[2]="Ed" ++ key_id[8] ++ ed25519_pk[32]   (42 B)
+//   signature line (b64) : algo[2] ++ key_id[8] ++ ed25519_sig[64]        (74 B)
+//                          algo "ED" = prehashed (Blake2b-512 of the file),
+//                          algo "Ed" = legacy (signature over file bytes).
+//   global sig line (b64): ed25519_sig[64] over (sig64 ++ trusted_comment) (64 B)
+//
+// `.minisig` text layout (4 lines):
+//   untrusted comment: ...
+//   <base64 signature>
+//   trusted comment: <text>
+//   <base64 global signature>
+
+/// Verify-result codes returned by `bridge_verify_minisign`. Zero means
+/// authentic; any non-zero value means refuse the install. Distinct positive
+/// codes let the Dart side surface a specific reason.
+const MinisignResult = enum(i32) {
+    ok = 0,
+    bad_pubkey = 1,
+    bad_sig_file = 2,
+    key_mismatch = 3,
+    verify_failed = 4,
+};
+
+/// Nth (0-based) '\n'-delimited line of `text`, trailing '\r' trimmed.
+fn nthLine(text: []const u8, n: usize) ?[]const u8 {
+    var it = std.mem.splitScalar(u8, text, '\n');
+    var i: usize = 0;
+    while (it.next()) |line| : (i += 1) {
+        if (i == n) return std.mem.trimRight(u8, line, "\r");
+    }
+    return null;
+}
+
+/// Standard-base64-decode `src_in` and require exactly `N` decoded bytes.
+/// Returns null on any malformation or length mismatch.
+fn b64DecodeExact(comptime N: usize, src_in: []const u8) ?[N]u8 {
+    const src = std.mem.trim(u8, src_in, " \t\r\n");
+    const dec = std.base64.standard.Decoder;
+    const n = dec.calcSizeForSlice(src) catch return null;
+    if (n != N) return null;
+    var out: [N]u8 = undefined;
+    dec.decode(&out, src) catch return null;
+    return out;
+}
+
+/// Verify a minisign signature (`sig_*`, the `.minisig` file text) over the
+/// file bytes (`file_*`, the release `SHA256SUMS`) against the base64 public
+/// key (`pubkey_*`, the key part of `minisign.pub`). Returns a `MinisignResult`
+/// code — `0` is authentic, non-zero refuses. No allocation, thread-safe.
+export fn bridge_verify_minisign(
+    file_ptr: [*]const u8,
+    file_len: u32,
+    sig_ptr: [*]const u8,
+    sig_len: u32,
+    pubkey_ptr: [*]const u8,
+    pubkey_len: u32,
+) callconv(.c) i32 {
+    const Ed25519 = std.crypto.sign.Ed25519;
+    const Blake2b512 = std.crypto.hash.blake2.Blake2b512;
+
+    if (file_len == 0 or sig_len == 0 or pubkey_len == 0)
+        return @intFromEnum(MinisignResult.bad_sig_file);
+
+    const file = file_ptr[0..file_len];
+    const sig_text = sig_ptr[0..sig_len];
+    const pubkey_b64 = pubkey_ptr[0..pubkey_len];
+
+    // Public key: "Ed" ++ key_id[8] ++ ed25519_pk[32].
+    const pk_raw = b64DecodeExact(42, pubkey_b64) orelse
+        return @intFromEnum(MinisignResult.bad_pubkey);
+    if (!std.mem.eql(u8, pk_raw[0..2], "Ed"))
+        return @intFromEnum(MinisignResult.bad_pubkey);
+    const pk_key_id = pk_raw[2..10];
+    const pub_key = Ed25519.PublicKey.fromBytes(pk_raw[10..42].*) catch
+        return @intFromEnum(MinisignResult.bad_pubkey);
+
+    // Signature file: line 1 = signature, line 2 = trusted comment,
+    // line 3 = global signature.
+    const sig_line = nthLine(sig_text, 1) orelse
+        return @intFromEnum(MinisignResult.bad_sig_file);
+    const tc_line = nthLine(sig_text, 2) orelse
+        return @intFromEnum(MinisignResult.bad_sig_file);
+    const global_line = nthLine(sig_text, 3) orelse
+        return @intFromEnum(MinisignResult.bad_sig_file);
+
+    const sig_raw = b64DecodeExact(74, sig_line) orelse
+        return @intFromEnum(MinisignResult.bad_sig_file);
+    const algo = sig_raw[0..2];
+    const sig_key_id = sig_raw[2..10];
+    const sig64 = sig_raw[10..74];
+
+    // The signature must come from our key.
+    if (!std.mem.eql(u8, sig_key_id, pk_key_id))
+        return @intFromEnum(MinisignResult.key_mismatch);
+
+    // Main signature: prehashed ("ED") signs Blake2b-512(file); legacy
+    // ("Ed") signs the file bytes directly.
+    const signature = Ed25519.Signature.fromBytes(sig64.*);
+    if (std.mem.eql(u8, algo, "ED")) {
+        var hash: [Blake2b512.digest_length]u8 = undefined;
+        Blake2b512.hash(file, &hash, .{});
+        signature.verify(&hash, pub_key) catch
+            return @intFromEnum(MinisignResult.verify_failed);
+    } else if (std.mem.eql(u8, algo, "Ed")) {
+        signature.verify(file, pub_key) catch
+            return @intFromEnum(MinisignResult.verify_failed);
+    } else {
+        return @intFromEnum(MinisignResult.bad_sig_file);
+    }
+
+    // Global signature binds the trusted comment: ed25519(sig64 ++ tc).
+    const tc_prefix = "trusted comment: ";
+    if (!std.mem.startsWith(u8, tc_line, tc_prefix))
+        return @intFromEnum(MinisignResult.bad_sig_file);
+    const trusted_comment = tc_line[tc_prefix.len..];
+    const global_raw = b64DecodeExact(64, global_line) orelse
+        return @intFromEnum(MinisignResult.bad_sig_file);
+
+    var gbuf: [64 + 2048]u8 = undefined;
+    if (trusted_comment.len > gbuf.len - 64)
+        return @intFromEnum(MinisignResult.bad_sig_file);
+    @memcpy(gbuf[0..64], sig64);
+    @memcpy(gbuf[64 .. 64 + trusted_comment.len], trusted_comment);
+    const global_msg = gbuf[0 .. 64 + trusted_comment.len];
+    const global_sig = Ed25519.Signature.fromBytes(global_raw);
+    global_sig.verify(global_msg, pub_key) catch
+        return @intFromEnum(MinisignResult.verify_failed);
+
+    return @intFromEnum(MinisignResult.ok);
+}
+
+// ── Minisign verification tests ──────────────────────────────────────────
+//
+// Vectors generated with minisign 0.11 (`minisign -G -W` + `-S`), the same
+// prehashed ("ED" / Blake2b-512) shape `scripts/release-02-desktop.sh`
+// produces. The key here is a throwaway test key, NOT the release key.
+
+const ms_test_pubkey = "RWQEcu0vt68SdjtYvqFgob3VvMjsOOgNp4I4XXVoz63OSJHAus5CqDVe";
+const ms_test_file = "abc123  bxp-desktop-linux-x86_64.AppImage\n";
+const ms_test_sig =
+    "untrusted comment: signature from minisign secret key\n" ++
+    "RUQEcu0vt68Sdpoe4VOmFICkvQaGYDo7PoaSoTidwMK6CoT2pyDdPjtOn1xgmYJfXayf336GWzvgf4Yh+LtL+XypPsX0vUSF0wY=\n" ++
+    "trusted comment: timestamp:1781452539\tfile:SHA256SUMS\thashed\n" ++
+    "bgwWEjryrROXcZzXj13Mm0Oqhw6N+iGJSoTvgVFyZbGaihcEDdTiBIf8zMpLWOmNgxKPkAdzEIB7nurDCRZsAA==\n";
+
+fn callVerify(file: []const u8, sig: []const u8, pubkey: []const u8) i32 {
+    return bridge_verify_minisign(
+        file.ptr,
+        @intCast(file.len),
+        sig.ptr,
+        @intCast(sig.len),
+        pubkey.ptr,
+        @intCast(pubkey.len),
+    );
+}
+
+test "bridge_verify_minisign accepts a valid prehashed signature" {
+    try testing.expectEqual(
+        @intFromEnum(MinisignResult.ok),
+        callVerify(ms_test_file, ms_test_sig, ms_test_pubkey),
+    );
+}
+
+test "bridge_verify_minisign rejects a tampered file" {
+    try testing.expectEqual(
+        @intFromEnum(MinisignResult.verify_failed),
+        callVerify("abc123  bxp-desktop-linux-x86_64.AppImageX\n", ms_test_sig, ms_test_pubkey),
+    );
+}
+
+test "bridge_verify_minisign rejects a different public key" {
+    // Same length / format, different key → key_id won't match.
+    const other = "RWThisIsADifferentKeyAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+    const r = callVerify(ms_test_file, ms_test_sig, other);
+    try testing.expect(r != @intFromEnum(MinisignResult.ok));
+}
+
+test "bridge_verify_minisign rejects malformed inputs" {
+    try testing.expectEqual(
+        @intFromEnum(MinisignResult.bad_sig_file),
+        callVerify("", ms_test_sig, ms_test_pubkey),
+    );
+    try testing.expectEqual(
+        @intFromEnum(MinisignResult.bad_pubkey),
+        callVerify(ms_test_file, ms_test_sig, "not-base64!!!"),
+    );
+    try testing.expectEqual(
+        @intFromEnum(MinisignResult.bad_sig_file),
+        callVerify(ms_test_file, "only one line\n", ms_test_pubkey),
+    );
+}
+
 // ── Tests ───────────────────────────────────────────────────────────────
 //
 // Exercise the exported FFI surface end-to-end. Tests spawn a small helper

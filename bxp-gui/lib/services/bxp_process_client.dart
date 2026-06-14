@@ -390,6 +390,23 @@ class BxpProcessClient {
     }
   }
 
+  /// Verify a minisign signature over [fileBytes] (the downloaded
+  /// `SHA256SUMS`) using [sigBytes] (its `.minisig`) against [pubkeyBase64]
+  /// (the public key embedded in the app), via the native bridge's
+  /// `bridge_verify_minisign`. Returns the bridge result code — `0` means
+  /// authentic, non-zero means refuse (1 bad pubkey, 2 bad sig file,
+  /// 3 key-id mismatch, 4 verification failed). Returns null when the bridge
+  /// is unavailable, leaving the fail-open/closed decision to the caller.
+  static int? verifyMinisign(
+    Uint8List fileBytes,
+    Uint8List sigBytes,
+    String pubkeyBase64,
+  ) {
+    final bridge = _bridge();
+    if (bridge == null) return null;
+    return bridge.verifyMinisign(fileBytes, sigBytes, pubkeyBase64);
+  }
+
   /// Diagnostic detail captured on the most recent [getDocs] failure.
   /// Surfaced in `trace_store._fatalStartupError` so the user-facing
   /// "the bridge docs catalog failed" screen can name the actual failure mode

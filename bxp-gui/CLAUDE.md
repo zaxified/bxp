@@ -192,7 +192,17 @@ is mounted by `_UpdaterListener` in `main.dart` so it can fire from any
 route.
 
 On accept, the matching native installer is downloaded to the system
-temp dir, verified against `SHA256SUMS` published with the release, and
+temp dir, then verified in two fail-closed steps before install:
+**authenticity** — the `SHA256SUMS.minisig` minisign signature over
+`SHA256SUMS` is checked against the public key embedded in
+`UpdaterService.minisignPublicKey` (native Ed25519 + Blake2b-512 via
+`bridge_verify_minisign`, no Dart crypto dep); then **integrity** — the
+installer's SHA-256 is matched against the now-trusted `SHA256SUMS`. Both
+use the same fetched bytes, closing the verify→use swap window. A missing
+or invalid signature, a missing/mismatched checksum, or an unavailable
+verifier all refuse the install. The signing side is automated in CI (see
+[`../.github/workflows/release.yml`](../.github/workflows/release.yml));
+the maintainer's single minisign key is reused across repos. Then
 dispatched to a platform-native install:
 
 - Windows: `setup.exe /S` (NSIS silent) + `exit(0)`; post-install
