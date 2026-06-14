@@ -1608,99 +1608,121 @@ pub fn validateFilesystem(
     alloc: std.mem.Allocator,
     diag: ?*Diagnostics,
 ) !void {
-    if (diag == null) return;
+    const sink = diag orelse return;
 
     var it = cfg.brokers.iterator();
     while (it.next()) |entry| {
-        const id = entry.key_ptr.*;
-        const broker = entry.value_ptr.*;
-        var dir = std.fs.cwd().openDir(broker.data_dir, .{ .iterate = true }) catch |err| {
-            if (err == error.FileNotFound) {
-                try emitTemplateDiag(alloc, diag, .@"error", "fs.dir_not_found",
-                    id, "data_dir",
-                    "data_dir does not exist: '{s}'", .{broker.data_dir});
-            } else {
-                try emitTemplateDiag(alloc, diag, .warning, "fs.dir_unreadable",
-                    id, "data_dir",
-                    "data_dir cannot be opened ({s}): '{s}'", .{ @errorName(err), broker.data_dir });
-            }
-            continue;
-        };
-        defer dir.close();
+        try validateFilesystemEntry(
+            alloc,
+            sink,
+            entry.key_ptr.*,
+            entry.value_ptr.data_dir,
+            entry.value_ptr.file_pattern_in,
+            if (entry.value_ptr.xlsx_sheet) |s| s.name else null,
+        );
+    }
+}
 
-        // Scan for files matching file_pattern_in. Mirrors
-        // pipeline.zig's runtime suffix-match — one matched file is
-        // enough to confirm the template has work to do; we stop
-        // counting after the first hit. Iteration errors break the
-        // loop (rare on Linux) and fall through to the
-        // `fs.no_input_files` warning below.
-        // Accept `.sym_link` as well as `.file`: the runtime loop
-        // (pipeline.zig) opens symlinked CSVs transparently, so a
-        // data_dir holding only symlinks (or hardlinks — those report
-        // as `.file`) has real work to do and must not warn here.
-        var matched: u32 = 0;
-        var dir_it = dir.iterate();
-        while (dir_it.next() catch null) |dir_entry| {
-            if (dir_entry.kind != .file and dir_entry.kind != .sym_link) continue;
-            if (std.mem.endsWith(u8, dir_entry.name, broker.file_pattern_in)) {
-                matched = 1;
-                break;
-            }
-        }
-        if (matched == 0) {
-            try emitTemplateDiag(alloc, diag, .warning, "fs.no_input_files",
+/// Per-broker filesystem check, factored out of [validateFilesystem] so both
+/// the synchronous iterator above AND the detached timeout worker share one
+/// body. Takes the broker's resolved inputs by value-slice rather than a
+/// `*const Broker`: the worker must NOT retain any pointer into the caller's
+/// (arena-backed) config, which can be freed while a detached worker is still
+/// blocked in a slow `openDir`/`iterate` — see [validateFilesystemWithTimeout].
+fn validateFilesystemEntry(
+    alloc: std.mem.Allocator,
+    diag: *Diagnostics,
+    id: []const u8,
+    data_dir: []const u8,
+    file_pattern_in: []const u8,
+    xlsx_sheet_name: ?[]const u8,
+) !void {
+    var dir = std.fs.cwd().openDir(data_dir, .{ .iterate = true }) catch |err| {
+        if (err == error.FileNotFound) {
+            try emitTemplateDiag(alloc, diag, .@"error", "fs.dir_not_found",
                 id, "data_dir",
-                "data_dir '{s}' contains no files matching '{s}'",
-                .{ broker.data_dir, broker.file_pattern_in });
+                "data_dir does not exist: '{s}'", .{data_dir});
+        } else {
+            try emitTemplateDiag(alloc, diag, .warning, "fs.dir_unreadable",
+                id, "data_dir",
+                "data_dir cannot be opened ({s}): '{s}'", .{ @errorName(err), data_dir });
         }
+        return;
+    };
+    defer dir.close();
 
-        // xlsx sheet-name existence: a template with an `xlsx_sheet` names a
-        // worksheet matched by prefix inside the workbook; a typo silently
-        // produces no rows (the extractor skips an unmatched sheet). Verify the
-        // named sheet exists in at least one .xlsx in the data_dir. Cheap —
-        // `listSheets` parses only the workbook part, never the worksheet data
-        // or shared strings. A fresh dir handle is opened because the scan above
-        // already consumed this directory's iterator.
-        if (broker.xlsx_sheet) |sheet| {
-            var xdir = std.fs.cwd().openDir(broker.data_dir, .{ .iterate = true }) catch continue;
-            defer xdir.close();
-            var xlsx_seen = false; // at least one readable .xlsx was parsed
-            var sheet_found = false;
-            var xit = xdir.iterate();
-            while (!sheet_found) {
-                const dir_entry = (xit.next() catch break) orelse break;
-                if (dir_entry.kind != .file and dir_entry.kind != .sym_link) continue;
-                if (!std.mem.endsWith(u8, dir_entry.name, ".xlsx")) continue;
-                const xfile = xdir.openFile(dir_entry.name, .{}) catch continue;
-                defer xfile.close();
-                // A malformed / UTF-16 workbook surfaces at extraction time; for
-                // this existence check just skip files we can't read.
-                var names = xlsx.listSheets(alloc, xfile) catch continue;
-                defer {
-                    var nit = names.iterator();
-                    while (nit.next()) |e| {
-                        alloc.free(e.key_ptr.*);
-                        alloc.free(e.value_ptr.*);
-                    }
-                    names.deinit();
+    // Scan for files matching file_pattern_in. Mirrors
+    // pipeline.zig's runtime suffix-match — one matched file is
+    // enough to confirm the template has work to do; we stop
+    // counting after the first hit. Iteration errors break the
+    // loop (rare on Linux) and fall through to the
+    // `fs.no_input_files` warning below.
+    // Accept `.sym_link` as well as `.file`: the runtime loop
+    // (pipeline.zig) opens symlinked CSVs transparently, so a
+    // data_dir holding only symlinks (or hardlinks — those report
+    // as `.file`) has real work to do and must not warn here.
+    var matched: u32 = 0;
+    var dir_it = dir.iterate();
+    while (dir_it.next() catch null) |dir_entry| {
+        if (dir_entry.kind != .file and dir_entry.kind != .sym_link) continue;
+        if (std.mem.endsWith(u8, dir_entry.name, file_pattern_in)) {
+            matched = 1;
+            break;
+        }
+    }
+    if (matched == 0) {
+        try emitTemplateDiag(alloc, diag, .warning, "fs.no_input_files",
+            id, "data_dir",
+            "data_dir '{s}' contains no files matching '{s}'",
+            .{ data_dir, file_pattern_in });
+    }
+
+    // xlsx sheet-name existence: a template with an `xlsx_sheet` names a
+    // worksheet matched by prefix inside the workbook; a typo silently
+    // produces no rows (the extractor skips an unmatched sheet). Verify the
+    // named sheet exists in at least one .xlsx in the data_dir. Cheap —
+    // `listSheets` parses only the workbook part, never the worksheet data
+    // or shared strings. A fresh dir handle is opened because the scan above
+    // already consumed this directory's iterator.
+    if (xlsx_sheet_name) |sheet_name| {
+        var xdir = std.fs.cwd().openDir(data_dir, .{ .iterate = true }) catch return;
+        defer xdir.close();
+        var xlsx_seen = false; // at least one readable .xlsx was parsed
+        var sheet_found = false;
+        var xit = xdir.iterate();
+        while (!sheet_found) {
+            const dir_entry = (xit.next() catch break) orelse break;
+            if (dir_entry.kind != .file and dir_entry.kind != .sym_link) continue;
+            if (!std.mem.endsWith(u8, dir_entry.name, ".xlsx")) continue;
+            const xfile = xdir.openFile(dir_entry.name, .{}) catch continue;
+            defer xfile.close();
+            // A malformed / UTF-16 workbook surfaces at extraction time; for
+            // this existence check just skip files we can't read.
+            var names = xlsx.listSheets(alloc, xfile) catch continue;
+            defer {
+                var nit = names.iterator();
+                while (nit.next()) |e| {
+                    alloc.free(e.key_ptr.*);
+                    alloc.free(e.value_ptr.*);
                 }
-                xlsx_seen = true;
-                // Prefix match mirrors the extractor (xlsx.zig): a workbook sheet
-                // "CASH OPERATION 28022026" matches config name "CASH OPERATION".
-                var kit = names.keyIterator();
-                while (kit.next()) |k| {
-                    if (std.mem.startsWith(u8, k.*, sheet.name)) {
-                        sheet_found = true;
-                        break;
-                    }
+                names.deinit();
+            }
+            xlsx_seen = true;
+            // Prefix match mirrors the extractor (xlsx.zig): a workbook sheet
+            // "CASH OPERATION 28022026" matches config name "CASH OPERATION".
+            var kit = names.keyIterator();
+            while (kit.next()) |k| {
+                if (std.mem.startsWith(u8, k.*, sheet_name)) {
+                    sheet_found = true;
+                    break;
                 }
             }
-            if (xlsx_seen and !sheet_found) {
-                try emitTemplateDiag(alloc, diag, .warning, "fs.xlsx_sheet_not_found",
-                    id, "xlsx_sheet",
-                    "no sheet in any .xlsx in data_dir '{s}' has a name starting with xlsx_sheet.name '{s}'",
-                    .{ broker.data_dir, sheet.name });
-            }
+        }
+        if (xlsx_seen and !sheet_found) {
+            try emitTemplateDiag(alloc, diag, .warning, "fs.xlsx_sheet_not_found",
+                id, "xlsx_sheet",
+                "no sheet in any .xlsx in data_dir '{s}' has a name starting with xlsx_sheet.name '{s}'",
+                .{ data_dir, sheet_name });
         }
     }
 }
@@ -1715,7 +1737,10 @@ pub fn validateFilesystem(
 /// real-world benefit. Worker uses `std.heap.page_allocator` so
 /// allocations don't dangle when the caller returns first; on
 /// successful completion main copies diagnostics into the caller's
-/// allocator and frees the page-allocated context.
+/// allocator and frees the page-allocated context. The worker's INPUTS
+/// are likewise snapshotted into page memory before spawn — it never
+/// reads through the caller's (arena-backed) `cfg`, which may be freed
+/// while a detached worker is still blocked in a slow syscall.
 ///
 /// `deadline_ms == 0` short-circuits to a no-op (FS check disabled).
 pub fn validateFilesystemWithTimeout(
@@ -1728,16 +1753,50 @@ pub fn validateFilesystemWithTimeout(
     if (deadline_ms == 0) return;
 
     const page = std.heap.page_allocator;
+
+    // Snapshot the inputs the worker needs into page-allocated memory BEFORE
+    // spawning. The caller's `cfg` (and the slices it points at) lives in a
+    // short-lived arena — in the GUI, the per-request bridge arena freed by
+    // `defer arena.deinit()` the moment this function returns. On timeout the
+    // worker is detached and keeps running (blocked in a slow openDir/iterate);
+    // if it read through `cfg` it would dereference freed arena memory in the
+    // long-lived process. The snapshot is owned by the worker via `ctx`: leaked
+    // with `ctx` on the timeout path, freed alongside it on completion.
+    var entries: std.ArrayList(FsCheckEntry) = .empty;
+    errdefer {
+        freeFsCheckEntries(page, entries.items);
+        entries.deinit(page);
+    }
+    var snap_it = cfg.brokers.iterator();
+    while (snap_it.next()) |entry| {
+        try entries.append(page, .{
+            .id = try page.dupe(u8, entry.key_ptr.*),
+            .data_dir = try page.dupe(u8, entry.value_ptr.data_dir),
+            .file_pattern_in = try page.dupe(u8, entry.value_ptr.file_pattern_in),
+            .xlsx_sheet_name = if (entry.value_ptr.xlsx_sheet) |s|
+                try page.dupe(u8, s.name)
+            else
+                null,
+        });
+    }
+    const entries_slice = try entries.toOwnedSlice(page);
+    errdefer {
+        freeFsCheckEntries(page, entries_slice);
+        page.free(entries_slice);
+    }
+
     const ctx = try page.create(FsCheckCtx);
     ctx.* = .{
-        .cfg = cfg,
+        .entries = entries_slice,
         .diag_buffer = .init(page),
         .done = .{},
     };
 
     const thread = std.Thread.spawn(.{}, fsCheckWorker, .{ctx}) catch |err| {
-        // Spawn failure: leak nothing — clean ctx, fall back to sync.
+        // Spawn failure: leak nothing — clean ctx + snapshot, fall back to sync.
         ctx.diag_buffer.deinit();
+        freeFsCheckEntries(page, ctx.entries);
+        page.free(ctx.entries);
         page.destroy(ctx);
         if (err == error.OutOfMemory) return err;
         // Other spawn errors (system thread limit, etc.): degrade to
@@ -1772,14 +1831,38 @@ pub fn validateFilesystemWithTimeout(
         });
     }
     ctx.diag_buffer.deinit();
+    freeFsCheckEntries(page, ctx.entries);
+    page.free(ctx.entries);
     page.destroy(ctx);
 }
 
+/// One broker's filesystem-check inputs, deep-copied into the worker's
+/// page allocator so they outlive the caller's arena — see the snapshot
+/// rationale in [validateFilesystemWithTimeout].
+const FsCheckEntry = struct {
+    id: []const u8,
+    data_dir: []const u8,
+    file_pattern_in: []const u8,
+    xlsx_sheet_name: ?[]const u8,
+};
+
+/// Free a snapshot built by [validateFilesystemWithTimeout]. The slice
+/// itself is freed separately by the caller.
+fn freeFsCheckEntries(alloc: std.mem.Allocator, entries: []const FsCheckEntry) void {
+    for (entries) |e| {
+        alloc.free(e.id);
+        alloc.free(e.data_dir);
+        alloc.free(e.file_pattern_in);
+        if (e.xlsx_sheet_name) |n| alloc.free(n);
+    }
+}
+
 /// Heap-allocated worker context that survives both threads. Lives in
-/// `std.heap.page_allocator` so the worker can keep using it after
-/// the main thread has detached and moved on.
+/// `std.heap.page_allocator` so the worker can keep using it (and the
+/// `entries` snapshot it owns) after the main thread has detached and
+/// moved on.
 const FsCheckCtx = struct {
-    cfg: *const Config,
+    entries: []const FsCheckEntry,
     diag_buffer: Diagnostics,
     done: std.Thread.ResetEvent,
 };
@@ -1789,9 +1872,20 @@ fn fsCheckWorker(ctx: *FsCheckCtx) void {
     // main side cares about "did the worker get this far in time", not
     // about specific failure modes. Diagnostic emission errors
     // (OutOfMemory) are silently dropped here; the partial diagnostics
-    // already in diag_buffer still get copied out by main.
+    // already in diag_buffer still get copied out by main. Iterating the
+    // page-allocated snapshot (never the caller's `cfg`) is what keeps a
+    // detached worker safe after the caller's arena is gone.
     defer ctx.done.set();
-    validateFilesystem(ctx.cfg, std.heap.page_allocator, &ctx.diag_buffer) catch {};
+    for (ctx.entries) |e| {
+        validateFilesystemEntry(
+            std.heap.page_allocator,
+            &ctx.diag_buffer,
+            e.id,
+            e.data_dir,
+            e.file_pattern_in,
+            e.xlsx_sheet_name,
+        ) catch {};
+    }
 }
 
 /// Root-level diagnostic (empty path). Sibling of [emitTemplateDiag]
