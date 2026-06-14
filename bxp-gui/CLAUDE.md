@@ -275,6 +275,22 @@ free and parity is definitional.
   loopback bind is the baseline protection. A persisted
   `bxp-gui.mcpOriginAllowlist` (editable in the inspector) tightens this
   when the user binds to a network interface.
+  - **Deliberately permissive (audit 2026-06-14, kept by decision).** A
+    default-deny-browser-origins policy would block CSRF from a drive-by web
+    page, but it would also break the primary supported client — webview-based
+    agents send the page's `Origin`, so denying unknown origins denies them.
+    Native MCP agents send no `Origin` and are unaffected either way. The
+    permissive default therefore stays; the residual CSRF exposure is bounded
+    by: (1) loopback-only default bind, (2) additive/edit tools only mutate
+    in-memory state (nothing persists without a confirm-gated `save`), and
+    (3) destructive tools are dialog-gated unless `autoApprove` is on. The one
+    sharp edge is **permissive origin + persisted auto-approve = fully
+    unauthenticated local-web control** — surfaced by the red
+    `devel-auto-approve-mode` chip. Users who bind to a network interface
+    should set an `Origin` allowlist. The unbounded-body half of the audit
+    finding *was* fixed (8 MB request cap → 413); only the origin default is
+    intentionally left permissive. See the `_originAllowed` doc comment in
+    [lib/services/gui_mcp_server.dart](lib/services/gui_mcp_server.dart).
 - **Tools** — `get_state`, `open_config`, `reload`, `edit_node`,
   `insert_node`, `rename_key`, `move_node`, `delete_node`, `set_template`,
   `dry_run`, `full_run`, `get_trace`, `get_row_detail`, `save`, `exit`.

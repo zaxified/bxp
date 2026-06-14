@@ -772,12 +772,33 @@ class TraceStore extends ChangeNotifier {
     if (selectedExprText != text) return;
     final err = res.error;
     exprValidationError = err;
-    exprValidationOffset = err == null ? null : res.offset;
-    exprValidationLength = err == null ? null : res.length;
+    // The bridge reports err_offset/err_len as UTF-8 BYTE offsets; the
+    // underline painter (expr_highlight buildTextSpan) slices the Dart string
+    // with these as UTF-16 code-unit indices. They coincide for ASCII but
+    // drift on non-ASCII text before the span — convert here so the wavy
+    // underline stays aligned (the DartValidator path above already emits
+    // UTF-16 units from a Dart tokenizer).
+    final span = err == null ? null : _byteSpanToUtf16(text, res.offset, res.length);
+    exprValidationOffset = span?.$1;
+    exprValidationLength = span?.$2;
     exprValidationState = err == null
         ? ExprValidationState.ok
         : ExprValidationState.error;
     notifyListeners();
+  }
+
+  /// Convert a UTF-8 byte `offset`/`len` span (as the bridge reports for an
+  /// expression error) into UTF-16 code-unit indices over [text] — the unit
+  /// the Dart string is sliced in when painting the error underline.
+  /// `allowMalformed` so a stray byte can never throw on this UI path.
+  static (int, int)? _byteSpanToUtf16(String text, int? offset, int? len) {
+    if (offset == null || len == null) return null;
+    final bytes = utf8.encode(text);
+    if (offset < 0 || offset > bytes.length) return null;
+    final end = (offset + len) > bytes.length ? bytes.length : (offset + len);
+    final before = utf8.decode(bytes.sublist(0, offset), allowMalformed: true);
+    final inside = utf8.decode(bytes.sublist(offset, end), allowMalformed: true);
+    return (before.length, inside.length);
   }
 
   /// Snapshot of "did this file contain `$err_*` at load time?" Drives the
@@ -3169,6 +3190,17 @@ class TraceStore extends ChangeNotifier {
   /// matters under hot-restart and in tests, where a half-disposed
   /// instance with live timers / value notifiers would log
   /// `setState/notifyListeners called after dispose`.
+  // Swallow any notify after dispose — async tails (_runDetailLoad,
+  // _streamRunBtrace) can resolve their `await`s after the store is torn
+  // down (hot-restart, test teardown, app-exit-mid-run). Overriding here
+  // guards all sites at once instead of sprinkling `if (!_disposed)` checks,
+  // making the `_disposed` field comment's promise actually hold.
+  @override
+  void notifyListeners() {
+    if (_disposed) return;
+    super.notifyListeners();
+  }
+
   @override
   void dispose() {
     _disposed = true;

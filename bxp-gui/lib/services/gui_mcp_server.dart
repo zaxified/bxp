@@ -7,6 +7,11 @@ import 'package:mcp_dart/mcp_dart.dart';
 
 import 'dev_trace.dart';
 
+/// Thrown when an incoming HTTP request body exceeds the accumulation cap
+/// (see `GuiMcpServer._kMaxRequestBodyBytes`). Surfaced to the caller as a
+/// `413 Request Entity Too Large` instead of an unbounded read.
+class _RequestBodyTooLarge implements Exception {}
+
 /// The slice of live-GUI state + actions the MCP tools operate on.
 ///
 /// Kept as a narrow interface (rather than a direct dependency on the
@@ -381,6 +386,17 @@ class GuiMcpServer extends ChangeNotifier {
   /// an allowlist (typically after binding to a network interface), a
   /// present `Origin` must be on it; a missing `Origin` (native MCP agents)
   /// is always allowed.
+  ///
+  /// SECURITY TRADEOFF: with the permissive default, a malicious web page the
+  /// user visits can `fetch()` this endpoint and execute the additive/edit
+  /// tools server-side (CORS blocks the page from *reading* the reply, not the
+  /// action). Destructive tools stay confirm-gated — UNLESS `autoApprove` is
+  /// persisted on, in which case permissive-origin + auto-approve = fully
+  /// unauthenticated local-web control (the red status chip is the only
+  /// signal). To lock this down, set an `Origin` allowlist (or bind loopback
+  /// only and keep auto-approve off). Defaulting to deny-browser-origins would
+  /// break webview agents that send an `Origin`, so the safe default is left
+  /// to the user's configuration.
   bool _originAllowed(HttpRequest req) {
     if (_originAllowlist.isEmpty) return true;
     final origin = req.headers.value('origin');
@@ -417,7 +433,18 @@ class GuiMcpServer extends ChangeNotifier {
   }
 
   Future<void> _handlePost(HttpRequest req) async {
-    final body = jsonDecode(utf8.decode(await _collectBytes(req)));
+    final List<int> raw;
+    try {
+      raw = await _collectBytes(req);
+    } on _RequestBodyTooLarge {
+      // Bound the accumulation before any session/initialize work — an
+      // unauthenticated POST (permissive-origin default) must not be able to
+      // stream a multi-GB body into memory. MCP requests are tiny.
+      req.response.statusCode = HttpStatus.requestEntityTooLarge;
+      await req.response.close();
+      return;
+    }
+    final body = jsonDecode(utf8.decode(raw));
     final sid = req.headers.value('mcp-session-id');
 
     if (sid != null && _transports.containsKey(sid)) {
@@ -462,13 +489,29 @@ class GuiMcpServer extends ChangeNotifier {
   static bool _isInitialize(dynamic body) =>
       body is Map<String, dynamic> && body['method'] == 'initialize';
 
+  /// Upper bound on an accumulated request body. MCP JSON-RPC requests are
+  /// kilobytes at most; this caps a hostile/runaway POST well below OOM range.
+  static const int _kMaxRequestBodyBytes = 8 * 1024 * 1024;
+
   static Future<List<int>> _collectBytes(HttpRequest req) {
     final out = <int>[];
     final done = Completer<List<int>>();
-    req.listen(
-      out.addAll,
-      onDone: () => done.complete(out),
-      onError: done.completeError,
+    late final StreamSubscription<List<int>> sub;
+    sub = req.listen(
+      (chunk) {
+        if (out.length + chunk.length > _kMaxRequestBodyBytes) {
+          sub.cancel();
+          if (!done.isCompleted) done.completeError(_RequestBodyTooLarge());
+          return;
+        }
+        out.addAll(chunk);
+      },
+      onDone: () {
+        if (!done.isCompleted) done.complete(out);
+      },
+      onError: (Object e, StackTrace st) {
+        if (!done.isCompleted) done.completeError(e, st);
+      },
       cancelOnError: true,
     );
     return done.future;
