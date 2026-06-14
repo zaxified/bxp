@@ -742,7 +742,9 @@ fn resolveCellValue(
     if (date_styles.contains(cell_style)) {
         const serial = std.fmt.parseFloat(f64, raw) catch return alloc.dupe(u8, raw);
         var dt_buf: [19]u8 = undefined;
-        const dt = excelSerialToDatetime(serial, &dt_buf);
+        // An unrepresentable serial (non-finite / out of Excel's date range)
+        // falls back to the raw token, like a parse failure above.
+        const dt = excelSerialToDatetime(serial, &dt_buf) orelse return alloc.dupe(u8, raw);
         return alloc.dupe(u8, dt);
     }
 
@@ -794,6 +796,13 @@ fn writeCsvField(out: *std.Io.Writer, value: []const u8) !void {
 // Cell reference helpers
 // ---------------------------------------------------------------------------
 
+/// Hard cap on column count, matching Excel's own maximum of 16384 columns
+/// (the last column is "XFD"). A cell reference beyond this is invalid xlsx.
+/// Capping the resolved index here bounds the gap-fill padding loop in
+/// `parseSheet`, so a crafted reference like `<c r="ZZZZZ1">` (~12M) can't
+/// drive millions of empty-string allocations or overflow the accumulator.
+const MAX_SHEET_COLS: u32 = 16384;
+
 /// Converts a cell reference like "A1" or "BC23" to a 0-based column index.
 ///
 /// Excel column letters use a bijective base-26 encoding: A=1, Z=26, AA=27.
@@ -802,13 +811,20 @@ fn writeCsvField(out: *std.Io.Writer, value: []const u8) !void {
 /// `col - 1` converts to 0-based for use as a slice index.
 /// The numeric row part of the reference (e.g. "23" in "BC23") is skipped
 /// because isAlphabetic returns false at the first digit character.
+///
+/// The reference is attacker-controlled (untrusted workbook): saturating
+/// arithmetic avoids a u32 overflow on an absurdly long run of letters, and the
+/// result is clamped to [MAX_SHEET_COLS] so a hostile reference can't blow up
+/// the padding loop in `parseSheet`.
 fn colRefToIndex(ref: []const u8) u32 {
     var col: u32 = 0;
     for (ref) |c| {
         if (!std.ascii.isAlphabetic(c)) break;
-        col = col * 26 + (std.ascii.toUpper(c) - 'A' + 1);
+        col = col *| 26 +| (std.ascii.toUpper(c) - 'A' + 1);
+        if (col > MAX_SHEET_COLS) break;
     }
-    return if (col > 0) col - 1 else 0;
+    const idx = if (col > 0) col - 1 else 0;
+    return @min(idx, MAX_SHEET_COLS - 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -826,8 +842,22 @@ fn colRefToIndex(ref: []const u8) u32 {
 /// We split floor(serial) for the date and (serial - floor) for the time so
 /// that floating-point rounding of large serials doesn't bleed into the time
 /// component.
-fn excelSerialToDatetime(serial: f64, buf: *[19]u8) []u8 {
+fn excelSerialToDatetime(serial: f64, buf: *[19]u8) ?[]u8 {
     const EXCEL_UNIX_EPOCH: f64 = 25569.0;
+    // The serial comes straight from a date-styled `<v>` in an untrusted
+    // workbook, so a non-finite (`nan`/`inf`) or wildly out-of-range value
+    // (`1e308`, a hugely negative serial) can reach here. Each would make the
+    // `@intFromFloat`/`@intCast` below illegal behaviour (UB in ReleaseSmall,
+    // panic in safe builds). Excel's own date range is serial 0 (1899-12-30)
+    // .. 2958465 (9999-12-31); outside that — or non-finite — we can't form a
+    // valid date, so return null and let the caller fall back to the raw token.
+    const SERIAL_MIN: f64 = 0.0;
+    const SERIAL_MAX: f64 = 2958465.0;
+    if (!std.math.isFinite(serial) or serial < SERIAL_MIN or serial > SERIAL_MAX) return null;
+
+    // With serial in [0, 2958465] every cast below is provably in range:
+    // serial-25569 ∈ [-25569, 2932896] (fits i64), frac ∈ [0,1) so frac*86400
+    // ∈ [0,86400) (fits u32), and ymd.y ∈ [1899, 9999] (non-negative → u32).
     const unix_days: i64 = @intFromFloat(@floor(serial - EXCEL_UNIX_EPOCH));
     const frac: f64 = serial - @floor(serial);
     const total_secs: u32 = @intFromFloat(@floor(frac * 86400.0));
@@ -836,7 +866,6 @@ fn excelSerialToDatetime(serial: f64, buf: *[19]u8) []u8 {
     const ss: u32 = total_secs % 60;
 
     const ymd = unixDayToYMD(unix_days);
-    // Cast year to u32: safe for all dates in our range (post-1900).
     const y: u32 = @intCast(ymd.y);
     return std.fmt.bufPrint(buf, "{d:0>4}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2}", .{
         y, @as(u32, ymd.m), @as(u32, ymd.d), hh, mm, ss,
@@ -1186,7 +1215,13 @@ fn decodeEntities(src: []const u8, out: *std.ArrayList(u8), alloc: Allocator) !v
             else
                 std.fmt.parseInt(u21, entity[1..], 10) catch 0xFFFD;
             var utf8_buf: [4]u8 = undefined;
-            const len = std.unicode.utf8Encode(cp, &utf8_buf) catch 1;
+            // A surrogate half (e.g. &#xD800;) or out-of-range code point makes
+            // utf8Encode fail. The previous `catch 1` left `len = 1` while
+            // utf8_buf stayed undefined, copying one uninitialized byte into the
+            // cell text. Emit U+FFFD instead — it always encodes (3 bytes), so
+            // the fallback is total.
+            const len = std.unicode.utf8Encode(cp, &utf8_buf) catch
+                (std.unicode.utf8Encode(0xFFFD, &utf8_buf) catch unreachable);
             try out.appendSlice(alloc, utf8_buf[0..len]);
         } else {
             // Unknown entity — pass through unchanged.
@@ -1265,11 +1300,35 @@ test "normalizeNumber: trailing-zero strip + decimal-core scientific expansion" 
 test "excelSerialToDatetime: epoch anchor + fractional time" {
     var buf: [19]u8 = undefined;
     // Serial 25569 is the documented Unix-epoch anchor.
-    try testing.expectEqualStrings("1970-01-01 00:00:00", excelSerialToDatetime(25569.0, &buf));
+    try testing.expectEqualStrings("1970-01-01 00:00:00", excelSerialToDatetime(25569.0, &buf).?);
     // 0.5 of a day → noon; the date part stays put.
-    try testing.expectEqualStrings("1970-01-01 12:00:00", excelSerialToDatetime(25569.5, &buf));
+    try testing.expectEqualStrings("1970-01-01 12:00:00", excelSerialToDatetime(25569.5, &buf).?);
     // 0.75 → 18:00.
-    try testing.expectEqualStrings("1970-01-01 18:00:00", excelSerialToDatetime(25569.75, &buf));
+    try testing.expectEqualStrings("1970-01-01 18:00:00", excelSerialToDatetime(25569.75, &buf).?);
+}
+
+test "excelSerialToDatetime: hostile / out-of-range serials return null (no UB)" {
+    var buf: [19]u8 = undefined;
+    // Non-finite and out-of-range serials from a crafted/corrupt workbook must
+    // not reach the @intFromFloat/@intCast casts — they signal "unrepresentable".
+    try testing.expect(excelSerialToDatetime(std.math.nan(f64), &buf) == null);
+    try testing.expect(excelSerialToDatetime(std.math.inf(f64), &buf) == null);
+    try testing.expect(excelSerialToDatetime(-std.math.inf(f64), &buf) == null);
+    try testing.expect(excelSerialToDatetime(1e308, &buf) == null);
+    try testing.expect(excelSerialToDatetime(-1.0, &buf) == null);
+    try testing.expect(excelSerialToDatetime(2958466.0, &buf) == null);
+    // Boundaries stay representable.
+    try testing.expect(excelSerialToDatetime(0.0, &buf) != null);
+    try testing.expect(excelSerialToDatetime(2958465.0, &buf) != null);
+}
+
+test "colRefToIndex: normal refs + hostile overflow clamps to column cap" {
+    try testing.expectEqual(@as(u32, 0), colRefToIndex("A1"));
+    try testing.expectEqual(@as(u32, 26), colRefToIndex("AA1")); // AA = col 27 → index 26
+    try testing.expectEqual(@as(u32, MAX_SHEET_COLS - 1), colRefToIndex("XFD1")); // Excel's last column
+    // A crafted, absurdly long reference must neither overflow u32 nor exceed
+    // the column cap (which would blow up the padding loop in parseSheet).
+    try testing.expectEqual(@as(u32, MAX_SHEET_COLS - 1), colRefToIndex("ZZZZZZZZZZ1"));
 }
 
 test "unixDayToYMD: Hinnant civil-from-days anchors" {
