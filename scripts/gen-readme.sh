@@ -46,7 +46,7 @@ def generate(variant):
     keep = "CLI-ONLY" if variant == "console" else "GUI-ONLY"
     kept = []
     skipping = False
-    with open(SRC) as f:
+    with open(SRC, encoding="utf-8") as f:
         for line in f:
             s = line.strip()
             if s == f"<!-- {drop}:START -->":
@@ -82,7 +82,7 @@ rc = 0
 for variant, path in OUT.items():
     fresh = generate(variant)
     if check:
-        current = open(path).read() if os.path.exists(path) else ""
+        current = open(path, encoding="utf-8").read() if os.path.exists(path) else ""
         if current != fresh:
             rc = 1
             print(f"DRIFT: {os.path.relpath(path, mono)} is out of sync with "
@@ -93,7 +93,7 @@ for variant, path in OUT.items():
                 fromfile=f"{variant} (committed)", tofile=f"{variant} (generated)")
             sys.stdout.writelines(list(diff)[:40])
     else:
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf-8", newline="\n") as f:
             f.write(fresh)
         print(f"  wrote {os.path.relpath(path, mono)} ({fresh.count(chr(10))} lines)")
 
