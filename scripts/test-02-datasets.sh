@@ -23,7 +23,28 @@ DATASETS="$MONO_ROOT/datasets"
 _run_dataset() {
     local template="$1"
     local sample_json="$2"
-    "$BXP" --config "$sample_json" > /dev/null
+    # Enforce the phase contract directly: a dataset must run clean
+    # (exit 0, no warnings). bxp-cli exits 2 on warnings / 1 on error, so
+    # both halves are checked — the exit code AND empty stderr. Without
+    # this guard the run sits mid-function and `step`'s `|| rc=$?` wrapper
+    # disables `set -e`, so a warning-but-identical-output fixture would
+    # pass green (the "fixture rot" the header rejects).
+    local stderr_file rc
+    stderr_file="$(mktemp)"
+    "$BXP" --config "$sample_json" > /dev/null 2> "$stderr_file" || {
+        rc=$?
+        echo "exit $rc (warnings/error)"
+        cat "$stderr_file"
+        rm -f "$stderr_file"
+        return 1
+    }
+    if [[ -s "$stderr_file" ]]; then
+        echo "non-empty stderr (warnings):"
+        cat "$stderr_file"
+        rm -f "$stderr_file"
+        return 1
+    fi
+    rm -f "$stderr_file"
     for expected in "$DATASETS/$template/"*.expected; do
         [[ -f "$expected" ]] || continue
         local csvx="${expected%.expected}.csvx"
