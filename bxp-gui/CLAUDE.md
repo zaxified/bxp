@@ -257,8 +257,9 @@ free and parity is definitional.
   endpoint without a discovery file; a bind clash is surfaced in `lastError`
   (non-fatal — unlike the bridge, the GUI is fully usable without it).
 - **`GET /health`** — unauthenticated probe returning `{name, version,
-  config_path, config_loaded, dirty, agent_connected}`; the handshake an
-  agent uses to confirm it reached the right server before MCP `initialize`.
+  config_path, config_loaded, dirty, agent_connected, auto_approve}`; the
+  handshake an agent uses to confirm it reached the right server before MCP
+  `initialize`.
 - **Origin policy** — permissive by default (empty allowlist accepts every
   Origin, so webview-based agents that send an `Origin` keep working);
   loopback bind is the baseline protection. A persisted
@@ -280,6 +281,15 @@ free and parity is definitional.
   `TraceStore.ensureDetailLoaded` and is projected to JSON in the
   `_TraceStoreMcpHost` adapter. Every call appends one `AgentActivityEntry`
   and reveals its target node in the tree.
+- **`BXP_GUI_MCP_AUTO_APPROVE`** (dev/testing) — when this env var is set
+  (non-empty) the `AgentConfirmFn` dialogs are auto-approved without
+  prompting, so an agent can drive the live GUI headlessly (a semantic
+  alternative to Playwright — every tool is a real `TraceStore` action, so
+  parity is definitional). Default off → an interactive user always sees the
+  dialog. The state is surfaced as `auto_approve` in `/health` + `get_state`
+  so a driving agent (and a watching user) can see the gate is off. The
+  project `.mcp.json` registers the server at `127.0.0.1:7717` (the default
+  port) so the tools are reachable whenever the GUI is running.
 
 Tested over real HTTP in
 [test/gui_mcp_server_test.dart](test/gui_mcp_server_test.dart) against a

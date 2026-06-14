@@ -167,11 +167,17 @@ class AgentActivityEntry {
 /// transports keyed by `mcp-session-id`, mirroring the mcp_dart streamable
 /// HTTP server example.
 class GuiMcpServer extends ChangeNotifier {
-  GuiMcpServer(this._host, {required AgentConfirmFn confirm})
+  GuiMcpServer(this._host, {required AgentConfirmFn confirm, this.autoApprove = false})
       : _confirm = confirm;
 
   final GuiMcpHost _host;
   final AgentConfirmFn _confirm;
+
+  /// True when destructive-action confirmation dialogs are being auto-approved
+  /// (the `BXP_GUI_MCP_AUTO_APPROVE` env path in main.dart). Surfaced in
+  /// `/health` + `get_state` so a driving agent can see the gate is off
+  /// (and a watching user knows actions won't prompt).
+  final bool autoApprove;
 
   /// Path the MCP endpoint is served from.
   static const String mcpPath = '/mcp';
@@ -377,6 +383,7 @@ class GuiMcpServer extends ChangeNotifier {
       'loaded_with_errors': _host.configLoadHadErrors,
       'dirty': _host.isDirty,
       'agent_connected': agentConnected,
+      'auto_approve': autoApprove,
     });
     req.response
       ..statusCode = HttpStatus.ok
@@ -1080,6 +1087,7 @@ class GuiMcpServer extends ChangeNotifier {
       'runMode': _host.runModeName,
       'lastExitCode': _host.lastExitCode,
       'activeTemplate': _host.activeTemplate,
+      'autoApprove': autoApprove,
       'diagnostics': diag.isEmpty ? const <String>[] : diag.split('\n'),
     };
   }

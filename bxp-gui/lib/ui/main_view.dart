@@ -3,6 +3,7 @@ import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../services/dev_trace.dart';
+import '../services/gui_mcp_server.dart';
 import '../services/schema_gate.dart';
 import '../store/trace_store.dart';
 import 'debug_panes.dart';
@@ -282,6 +283,12 @@ class _StatusBarState extends State<_StatusBar> {
     final model = store.traceModel;
     final t = context.bxpTheme;
 
+    // Dev/testing banner: the gui-mcp's confirmation dialogs are being
+    // auto-approved (BXP_GUI_MCP_AUTO_APPROVE). Surfaced as a red-framed chip
+    // so a watching user always sees the safety gate is off. Constant for the
+    // app's lifetime, so a plain read (no rebuild dependency) is enough.
+    final autoApprove = context.read<GuiMcpServer>().autoApprove;
+
     final bg = t.panelBg;
     final borderColor = t.borderColor;
 
@@ -545,6 +552,21 @@ class _StatusBarState extends State<_StatusBar> {
               // something failed; the clickable `stderr (NB)` badge below
               // surfaces the actual diagnostic on click.
               const Spacer(),
+              if (autoApprove)
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  decoration: BoxDecoration(
+                    border: Border.all(color: t.errorBorder),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(
+                    'devel-auto-approve-mode',
+                    style: BxpText.body(context,
+                        color: t.errorText, size: BxpSize.xs),
+                    maxLines: 1,
+                  ),
+                ),
             ],
           ),
         ),

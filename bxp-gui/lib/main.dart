@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'services/debug_binding.dart';
 import 'services/debug_settings.dart';
 import 'services/desktop_integration_service.dart';
+import 'services/dev_trace.dart';
 import 'services/diagnostic_log.dart';
 import 'services/gui_mcp_server.dart';
 import 'services/prefs_service.dart';
@@ -41,7 +42,19 @@ final GlobalKey<NavigatorState> bxpNavigatorKey = GlobalKey<NavigatorState>();
 /// from the HTTP request handler (no widget context of its own), so it pushes
 /// the dialog through the navigator key. Returns `false` (treated as a
 /// rejection, never a hang) when there is no live navigator context.
+/// When this env var is set (non-empty), the gui-mcp's destructive-action
+/// confirmation dialogs (`save` / `full_run` / `delete_node` / `exit`) are
+/// auto-approved without prompting. For agent-driven development / headless
+/// GUI testing only — default off, so an interactive user always sees the
+/// dialog. The user still watches the live app; this only removes the
+/// per-action click from the agent's loop.
+const String kAgentAutoApproveEnv = 'BXP_GUI_MCP_AUTO_APPROVE';
+
 Future<bool> _agentConfirm(String title, String detail) async {
+  if ((Platform.environment[kAgentAutoApproveEnv] ?? '').isNotEmpty) {
+    devTrace('gui_mcp.auto_approved', {'title': title});
+    return true;
+  }
   final ctx = bxpNavigatorKey.currentContext;
   if (ctx == null) return false;
   final approved = await showDialog<bool>(
@@ -273,8 +286,12 @@ void main() {
 
     final traceStore = TraceStore();
     final updaterService = UpdaterService();
-    final guiMcpServer =
-        GuiMcpServer(_TraceStoreMcpHost(traceStore), confirm: _agentConfirm);
+    final guiMcpServer = GuiMcpServer(
+      _TraceStoreMcpHost(traceStore),
+      confirm: _agentConfirm,
+      autoApprove:
+          (Platform.environment[kAgentAutoApproveEnv] ?? '').isNotEmpty,
+    );
     _installOverflowGuard(traceStore);
     _installDiagnosticErrorHooks();
     // Fire-and-forget — the periodic check runs even before the user
