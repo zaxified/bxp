@@ -1470,6 +1470,16 @@ const WorkerSlice = struct {
     }
 
     /// Typed view of `field_buf` as a `[][]const u8` slice for splitFields.
+    ///
+    /// Sized at exactly `MAX_COLUMNS` slots: `csv.splitFields` stops at the
+    /// buffer bound and silently drops any further fields. This is an
+    /// intentional asymmetry with the header path — `parseCsvHeader` sizes its
+    /// scratch at `MAX_COLUMNS + 1` precisely to detect and WARN on an
+    /// over-wide header — whereas a body row wider than `MAX_COLUMNS`
+    /// truncates without a diagnostic (data-lenient: columns past the capped
+    /// header aren't name-addressable anyway, so the header warning already
+    /// flags that file). If `MAX_COLUMNS` ever changes, keep these two paths'
+    /// over-width handling in sync.
     inline fn fieldBufSlice(self: *WorkerSlice) [][]const u8 {
         const ptr: [*][]const u8 = @ptrCast(@alignCast(self.field_buf.ptr));
         return ptr[0..MAX_COLUMNS];
