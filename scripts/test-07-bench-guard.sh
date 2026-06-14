@@ -49,6 +49,7 @@ source "$SCRIPT_DIR/test-lib.sh"
 GEN="$SCRIPT_DIR/bench/gen.py"
 XLSX_GEN="$SCRIPT_DIR/bench/gen-xlsx.py"
 XLSX_CFG="$SCRIPT_DIR/bench/xlsx-bench.json"
+XLSX_FANOUT_CFG="$SCRIPT_DIR/bench/xlsx-fanout-bench.json"
 WORK="$SCRIPT_DIR/bench/work/guard"
 BUILD_PREFIX="$WORK/build"
 BXP="$BUILD_PREFIX/bin/bxp-cli"
@@ -56,6 +57,8 @@ BXP="$BUILD_PREFIX/bin/bxp-cli"
 SMALL_ROWS="${GUARD_SMALL_ROWS:-25000}"
 LARGE_ROWS="${GUARD_LARGE_ROWS:-250000}"
 XLSX_ROWS="${GUARD_XLSX_ROWS:-500000}"
+FANOUT_SHEETS=8  # fixed: xlsx-fanout-bench.json declares 8 templates (DATA1..DATA8)
+FANOUT_ROWS="${GUARD_FANOUT_ROWS:-300000}"
 WIDE_COLS="${GUARD_WIDE_COLS:-900}"
 WIDE_ROWS="${GUARD_WIDE_ROWS:-20000}"
 RSS_MB="${GUARD_RSS_MB:-64}"
@@ -221,6 +224,31 @@ _run_wide_point() {
     awk -v ms="$wall_ms" -v r="$rss_kb" 'BEGIN{printf "%.2f %s", ms/1000, r}'
 }
 
+# Like _run_xlsx_point but multi-sheet: an 8-sheet workbook converted with the
+# fan-out config (one template per sheet). The xlsx pre-pass extracts the sheets
+# in parallel; this guards that the fan-out holds RSS flat in its width. A
+# regression that hands the worker a non-reclaiming arena re-accumulates a whole
+# sheet's cells per worker and trips the ceiling on a multi-core host. Echoes
+# "wall_s rss_kb".
+_run_fanout_point() {
+    local rows="$1" sheets="$2"
+    local dir="$WORK/xlsx-fanout-s${sheets}-n${rows}"
+    mkdir -p "$dir"
+    if [[ ! -f "$dir/bench.xlsx" ]]; then
+        python3 "$XLSX_GEN" "$dir/bench.xlsx" --rows "$rows" --sheets "$sheets" \
+            --vocab 5000 --symbols 200 --tmp "$dir/parts" >/dev/null 2>&1 || return 1
+    fi
+    cp "$XLSX_FANOUT_CFG" "$dir/bxp-cli.json"
+    rm -f "$dir"/*_data*.csv "$dir"/*_data*.csvx 2>/dev/null
+    local metrics
+    metrics=$( cd "$dir" && BXP_METRICS=1 "$BXP" --config bxp-cli.json --quiet 2>&1 >/dev/null ) || return 1
+    local wall_ms rss_kb
+    wall_ms=$(printf '%s\n' "$metrics" | sed -n 's/.*wall_ms=\([0-9][0-9]*\).*/\1/p')
+    rss_kb=$(printf '%s\n' "$metrics" | sed -n 's/.*peak_rss_kb=\([0-9][0-9]*\).*/\1/p')
+    [[ -n "$wall_ms" && -n "$rss_kb" ]] || return 1
+    awk -v ms="$wall_ms" -v r="$rss_kb" 'BEGIN{printf "%.2f %s", ms/1000, r}'
+}
+
 small_out=$(_run_point "$SMALL_ROWS") || _fail "guard" 0 "small-N run failed (N=$SMALL_ROWS)"
 large_out=$(_run_point "$LARGE_ROWS") || _fail "guard" 0 "large-N run failed (N=$LARGE_ROWS)"
 
@@ -297,6 +325,23 @@ if (( wide_rss > rss_ceil_kb )); then
         "cols=${WIDE_COLS} rows=${WIDE_ROWS}: ${wide_rss_mb} MB"
 fi
 
+# --- 6. Assert multi-sheet xlsx fan-out RSS ceiling --------------------------
+# The xlsx pre-pass extracts a workbook's sheets in parallel (fan-out across the
+# worker pool). RSS must stay flat in the fan-out width: the worker uses the
+# pipeline's reclaiming allocator, so `parseSheet` frees each row's cells as the
+# sheet streams. A regression to a non-reclaiming arena would accumulate a whole
+# sheet's cells per worker and, on a multi-core host, blow the ceiling. RSS-only
+# (flat-RSS invariant; most sensitive on 6+ core hosts where the fan-out is
+# widest — on a 2-core runner only two sheets extract at once).
+fanout_out=$(_run_fanout_point "$FANOUT_ROWS" "$FANOUT_SHEETS") || _fail "guard xlsx fan-out" 0 "fan-out run failed (sheets=$FANOUT_SHEETS rows=$FANOUT_ROWS)"
+read -r fanout_wall fanout_rss <<<"$fanout_out"
+fanout_rss_mb=$(awk -v k="$fanout_rss" 'BEGIN{printf "%.1f", k/1024}')
+if (( fanout_rss > rss_ceil_kb )); then
+    _fail "guard xlsx fan-out rss" "$fanout_wall" \
+        "RSS ceiling ${RSS_MB} MB exceeded on ${FANOUT_SHEETS}-sheet fan-out — worker may be accumulating cells (non-reclaiming allocator)" \
+        "sheets=${FANOUT_SHEETS} rows=${FANOUT_ROWS}: ${fanout_rss_mb} MB"
+fi
+
 # One column-aligned OK line per check, each with its own real time — the
 # build (when it ran), each measured run (bxp-cli's self-reported wall, with
 # that point's peak RSS + the ceiling), and the scaling verdict. Cramming all
@@ -308,10 +353,12 @@ small_wall_1=$(awk -v w="$small_wall" 'BEGIN{printf "%.1f", w}')
 large_wall_1=$(awk -v w="$large_wall" 'BEGIN{printf "%.1f", w}')
 xlsx_wall_1=$(awk -v w="$xlsx_wall" 'BEGIN{printf "%.1f", w}')
 wide_wall_1=$(awk -v w="$wide_wall" 'BEGIN{printf "%.1f", w}')
+fanout_wall_1=$(awk -v w="$fanout_wall" 'BEGIN{printf "%.1f", w}')
 (( built )) && _emit "guard build (ReleaseFast)" OK "$build_dur"
 _emit "guard run N=${SMALL_ROWS} rss=${small_rss_mb}MB (<=${RSS_MB})" OK "$small_wall_1"
 _emit "guard run N=${LARGE_ROWS} rss=${large_rss_mb}MB (<=${RSS_MB})" OK "$large_wall_1"
 _emit "guard scaling ${wall_ratio}x (<=${ratio_limit}x, ${row_ratio}x rows)" OK "$chk_dur"
 _emit "guard xlsx N=${XLSX_ROWS} rss=${xlsx_rss_mb}MB (<=${RSS_MB})" OK "$xlsx_wall_1"
 _emit "guard wide cols=${WIDE_COLS} rss=${wide_rss_mb}MB (<=${RSS_MB})" OK "$wide_wall_1"
+_emit "guard xlsx fan-out ${FANOUT_SHEETS}sh rss=${fanout_rss_mb}MB (<=${RSS_MB})" OK "$fanout_wall_1"
 exit 0

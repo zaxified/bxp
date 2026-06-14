@@ -1,0 +1,51 @@
+{
+  // Multi-sheet fan-out bench config (paired with gen-xlsx.py --sheets 8).
+  // One template per sheet DATA1..DATA8 — they share a data_dir, so the xlsx
+  // pre-pass parses the workbook-global parts once and extracts the eight
+  // sheets in parallel. Guards the flat-RSS invariant of that fan-out: a
+  // regression that accumulates a whole sheet's cells per worker (e.g. handing
+  // the worker a non-reclaiming arena) trips the RSS ceiling on a multi-core
+  // host. Each sheet → <stem>_dataK.csv, then the normal main pass converts it.
+  conversion_templates: {
+    s1: { data_dir: ".", xlsx_sheet: { name: "DATA1", header_row: 1, output_suffix: "_data1.csv" },
+      file_pattern_in: "_data1.csv", file_pattern_out: "_data1.csvx", csv_text_quote_in: "none",
+      input_schema: { $date: "[Date]", $ticker: "[Symbol]", $quantity: "[Volume]", $unitprice: "[Sale value] / [Volume]", $currency: "'USD'", $amount: "[Sale value]" },
+      row_rules: [ { when: "[Type] = 'BUY'", rows: [ { $action: "'BUY'" } ] }, { when: "[Type] = 'SELL'", rows: [ { $action: "'SELL'" } ] } ],
+      output_schema: { date: "$date", symbol: "$ticker", quantity: "$quantity", activityType: "$action", unitPrice: "$unitprice", currency: "$currency", amount: "$amount" } },
+    s2: { data_dir: ".", xlsx_sheet: { name: "DATA2", header_row: 1, output_suffix: "_data2.csv" },
+      file_pattern_in: "_data2.csv", file_pattern_out: "_data2.csvx", csv_text_quote_in: "none",
+      input_schema: { $date: "[Date]", $ticker: "[Symbol]", $quantity: "[Volume]", $unitprice: "[Sale value] / [Volume]", $currency: "'USD'", $amount: "[Sale value]" },
+      row_rules: [ { when: "[Type] = 'BUY'", rows: [ { $action: "'BUY'" } ] }, { when: "[Type] = 'SELL'", rows: [ { $action: "'SELL'" } ] } ],
+      output_schema: { date: "$date", symbol: "$ticker", quantity: "$quantity", activityType: "$action", unitPrice: "$unitprice", currency: "$currency", amount: "$amount" } },
+    s3: { data_dir: ".", xlsx_sheet: { name: "DATA3", header_row: 1, output_suffix: "_data3.csv" },
+      file_pattern_in: "_data3.csv", file_pattern_out: "_data3.csvx", csv_text_quote_in: "none",
+      input_schema: { $date: "[Date]", $ticker: "[Symbol]", $quantity: "[Volume]", $unitprice: "[Sale value] / [Volume]", $currency: "'USD'", $amount: "[Sale value]" },
+      row_rules: [ { when: "[Type] = 'BUY'", rows: [ { $action: "'BUY'" } ] }, { when: "[Type] = 'SELL'", rows: [ { $action: "'SELL'" } ] } ],
+      output_schema: { date: "$date", symbol: "$ticker", quantity: "$quantity", activityType: "$action", unitPrice: "$unitprice", currency: "$currency", amount: "$amount" } },
+    s4: { data_dir: ".", xlsx_sheet: { name: "DATA4", header_row: 1, output_suffix: "_data4.csv" },
+      file_pattern_in: "_data4.csv", file_pattern_out: "_data4.csvx", csv_text_quote_in: "none",
+      input_schema: { $date: "[Date]", $ticker: "[Symbol]", $quantity: "[Volume]", $unitprice: "[Sale value] / [Volume]", $currency: "'USD'", $amount: "[Sale value]" },
+      row_rules: [ { when: "[Type] = 'BUY'", rows: [ { $action: "'BUY'" } ] }, { when: "[Type] = 'SELL'", rows: [ { $action: "'SELL'" } ] } ],
+      output_schema: { date: "$date", symbol: "$ticker", quantity: "$quantity", activityType: "$action", unitPrice: "$unitprice", currency: "$currency", amount: "$amount" } },
+    s5: { data_dir: ".", xlsx_sheet: { name: "DATA5", header_row: 1, output_suffix: "_data5.csv" },
+      file_pattern_in: "_data5.csv", file_pattern_out: "_data5.csvx", csv_text_quote_in: "none",
+      input_schema: { $date: "[Date]", $ticker: "[Symbol]", $quantity: "[Volume]", $unitprice: "[Sale value] / [Volume]", $currency: "'USD'", $amount: "[Sale value]" },
+      row_rules: [ { when: "[Type] = 'BUY'", rows: [ { $action: "'BUY'" } ] }, { when: "[Type] = 'SELL'", rows: [ { $action: "'SELL'" } ] } ],
+      output_schema: { date: "$date", symbol: "$ticker", quantity: "$quantity", activityType: "$action", unitPrice: "$unitprice", currency: "$currency", amount: "$amount" } },
+    s6: { data_dir: ".", xlsx_sheet: { name: "DATA6", header_row: 1, output_suffix: "_data6.csv" },
+      file_pattern_in: "_data6.csv", file_pattern_out: "_data6.csvx", csv_text_quote_in: "none",
+      input_schema: { $date: "[Date]", $ticker: "[Symbol]", $quantity: "[Volume]", $unitprice: "[Sale value] / [Volume]", $currency: "'USD'", $amount: "[Sale value]" },
+      row_rules: [ { when: "[Type] = 'BUY'", rows: [ { $action: "'BUY'" } ] }, { when: "[Type] = 'SELL'", rows: [ { $action: "'SELL'" } ] } ],
+      output_schema: { date: "$date", symbol: "$ticker", quantity: "$quantity", activityType: "$action", unitPrice: "$unitprice", currency: "$currency", amount: "$amount" } },
+    s7: { data_dir: ".", xlsx_sheet: { name: "DATA7", header_row: 1, output_suffix: "_data7.csv" },
+      file_pattern_in: "_data7.csv", file_pattern_out: "_data7.csvx", csv_text_quote_in: "none",
+      input_schema: { $date: "[Date]", $ticker: "[Symbol]", $quantity: "[Volume]", $unitprice: "[Sale value] / [Volume]", $currency: "'USD'", $amount: "[Sale value]" },
+      row_rules: [ { when: "[Type] = 'BUY'", rows: [ { $action: "'BUY'" } ] }, { when: "[Type] = 'SELL'", rows: [ { $action: "'SELL'" } ] } ],
+      output_schema: { date: "$date", symbol: "$ticker", quantity: "$quantity", activityType: "$action", unitPrice: "$unitprice", currency: "$currency", amount: "$amount" } },
+    s8: { data_dir: ".", xlsx_sheet: { name: "DATA8", header_row: 1, output_suffix: "_data8.csv" },
+      file_pattern_in: "_data8.csv", file_pattern_out: "_data8.csvx", csv_text_quote_in: "none",
+      input_schema: { $date: "[Date]", $ticker: "[Symbol]", $quantity: "[Volume]", $unitprice: "[Sale value] / [Volume]", $currency: "'USD'", $amount: "[Sale value]" },
+      row_rules: [ { when: "[Type] = 'BUY'", rows: [ { $action: "'BUY'" } ] }, { when: "[Type] = 'SELL'", rows: [ { $action: "'SELL'" } ] } ],
+      output_schema: { date: "$date", symbol: "$ticker", quantity: "$quantity", activityType: "$action", unitPrice: "$unitprice", currency: "$currency", amount: "$amount" } }
+  }
+}

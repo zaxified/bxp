@@ -99,74 +99,118 @@ def gen_sheet(path, rows, type_idx, sym_idx, date_idx):
         w(b"</sheetData></worksheet>")
 
 
-CONTENT_TYPES = (
-    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-    '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
-    '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
-    '<Default Extension="xml" ContentType="application/xml"/>'
-    '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
-    '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
-    '<Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>'
-    "</Types>"
-)
 ROOT_RELS = (
     '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
     '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
     '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>'
     "</Relationships>"
 )
-WORKBOOK = (
-    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-    f'<workbook xmlns="{NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
-    '<sheets><sheet name="DATA" sheetId="1" r:id="rId1"/></sheets>'
-    "</workbook>"
-)
-WORKBOOK_RELS = (
-    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
-    '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>'
-    '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>'
-    "</Relationships>"
-)
+
+
+def sheet_name(k, n):
+    # One sheet keeps the historical name "DATA" (xlsx-bench.json references it);
+    # multi-sheet workbooks get "DATA1".."DATAN" for the fan-out config.
+    return "DATA" if n == 1 else f"DATA{k}"
+
+
+def content_types(n):
+    parts = [
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">',
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>',
+        '<Default Extension="xml" ContentType="application/xml"/>',
+        '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>',
+        '<Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>',
+    ]
+    for k in range(1, n + 1):
+        parts.append(
+            f'<Override PartName="/xl/worksheets/sheet{k}.xml" '
+            'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+        )
+    parts.append("</Types>")
+    return "".join(parts)
+
+
+def workbook(n):
+    sheets = "".join(
+        f'<sheet name="{sheet_name(k, n)}" sheetId="{k}" r:id="rId{k}"/>'
+        for k in range(1, n + 1)
+    )
+    return (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        f'<workbook xmlns="{NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+        f"<sheets>{sheets}</sheets></workbook>"
+    )
+
+
+def workbook_rels(n):
+    # Worksheets rId1..rIdN, then sharedStrings rId{N+1}.
+    parts = [
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">',
+    ]
+    for k in range(1, n + 1):
+        parts.append(
+            f'<Relationship Id="rId{k}" '
+            'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" '
+            f'Target="worksheets/sheet{k}.xml"/>'
+        )
+    parts.append(
+        f'<Relationship Id="rId{n + 1}" '
+        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" '
+        'Target="sharedStrings.xml"/>'
+    )
+    parts.append("</Relationships>")
+    return "".join(parts)
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("out")
     ap.add_argument("--rows", type=int, default=100_000)
+    ap.add_argument("--sheets", type=int, default=1,
+                    help="number of worksheets, all sharing one sharedStrings table")
     ap.add_argument("--vocab", type=int, default=5000)
     ap.add_argument("--symbols", type=int, default=200)
     ap.add_argument("--tmp", default="/tmp/xlsx-bench-parts")
     args = ap.parse_args()
+    n = args.sheets
 
     import os
 
     os.makedirs(args.tmp, exist_ok=True)
     ss_path = os.path.join(args.tmp, "sharedStrings.xml")
-    sheet_path = os.path.join(args.tmp, "sheet1.xml")
 
     strings, type_idx, sym_idx, date_idx = build_vocabulary(args.vocab, args.symbols)
     gen_shared_strings(ss_path, strings)
-    gen_sheet(sheet_path, args.rows, type_idx, sym_idx, date_idx)
-
     ss_sz = os.path.getsize(ss_path)
-    sheet_sz = os.path.getsize(sheet_path)
+
+    # All sheets are identical in shape; the shared-strings table is parsed once
+    # and the per-sheet worksheet stream is what the fan-out parallelises.
+    sheet_paths = []
+    for k in range(1, n + 1):
+        sp = os.path.join(args.tmp, f"sheet{k}.xml")
+        gen_sheet(sp, args.rows, type_idx, sym_idx, date_idx)
+        sheet_paths.append(sp)
+    sheet_sz = os.path.getsize(sheet_paths[0])
 
     with zipfile.ZipFile(args.out, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as z:
-        z.writestr("[Content_Types].xml", CONTENT_TYPES)
+        z.writestr("[Content_Types].xml", content_types(n))
         z.writestr("_rels/.rels", ROOT_RELS)
-        z.writestr("xl/workbook.xml", WORKBOOK)
-        z.writestr("xl/_rels/workbook.xml.rels", WORKBOOK_RELS)
+        z.writestr("xl/workbook.xml", workbook(n))
+        z.writestr("xl/_rels/workbook.xml.rels", workbook_rels(n))
         z.write(ss_path, "xl/sharedStrings.xml")
-        z.write(sheet_path, "xl/worksheets/sheet1.xml")
+        for k, sp in enumerate(sheet_paths, start=1):
+            z.write(sp, f"xl/worksheets/sheet{k}.xml")
 
     out_sz = os.path.getsize(args.out)
     os.remove(ss_path)
-    os.remove(sheet_path)
+    for sp in sheet_paths:
+        os.remove(sp)
     print(
-        f"{args.out}: rows={args.rows} vocab={len(strings)} "
+        f"{args.out}: sheets={n} rows/sheet={args.rows} vocab={len(strings)} "
         f"| sharedStrings={ss_sz/1e6:.1f}MB sheet={sheet_sz/1e6:.1f}MB "
-        f"uncompressed_total={(ss_sz+sheet_sz)/1e6:.1f}MB "
+        f"uncompressed_total={(ss_sz+sheet_sz*n)/1e6:.1f}MB "
         f"| zip_on_disk={out_sz/1e6:.1f}MB",
         file=sys.stderr,
     )
