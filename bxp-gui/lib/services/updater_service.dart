@@ -46,6 +46,35 @@ class UpdaterService extends ChangeNotifier {
   static const String minisignPublicKey =
       'RWQ/XdTE8KybAf5uOrE8bvl8P6VOQCOafNCmFYwW7cKd40xMjCGk+arQ';
 
+  // ── Test seams (compile-time gated) ──────────────────────────────────────
+  // Enabled ONLY in test builds via `--dart-define=BXP_UPDATE_TEST=true`. The
+  // shipped release build omits the define, so `_testMode` is const-false and
+  // both resolvers below compile to the production constant — the GitHub URL
+  // and the trust key cannot be overridden at runtime in a shipped binary.
+  // When on, they let the local update-test harness redirect the release fetch
+  // and swap in a throwaway signing key (see DEV/update-test/).
+  static const bool _testMode = bool.fromEnvironment('BXP_UPDATE_TEST');
+
+  /// Release-metadata endpoint. Every download URL (installer / SHA256SUMS /
+  /// .minisig) is read from the JSON this returns, so redirecting this single
+  /// request points the whole download+verify chain at the test server.
+  String get _releaseApiUrl {
+    if (_testMode) {
+      final o = Platform.environment['BXP_UPDATE_API'];
+      if (o != null && o.isNotEmpty) return o;
+    }
+    return 'https://api.github.com/repos/$repoSlug/releases/latest';
+  }
+
+  /// Minisign trust anchor used to verify the downloaded SHA256SUMS.
+  String get _trustKey {
+    if (_testMode) {
+      final o = Platform.environment['BXP_UPDATE_PUBKEY'];
+      if (o != null && o.isNotEmpty) return o;
+    }
+    return minisignPublicKey;
+  }
+
   String? _currentVersion;
   Timer? _periodicTimer;
   bool _initialized = false;
@@ -71,6 +100,7 @@ class UpdaterService extends ChangeNotifier {
   Future<void> initialize() async {
     if (_initialized) return;
     _initialized = true;
+    _cleanupStaleUpdateArtifacts();
     try {
       final info = await PackageInfo.fromPlatform();
       _currentVersion = info.version;
@@ -149,9 +179,7 @@ class UpdaterService extends ChangeNotifier {
   /// Agent header is required by GitHub's API ToS; without it requests may be
   /// rate-limited at a lower threshold.
   Future<Map<String, dynamic>> _fetchLatestRelease() async {
-    final uri = Uri.parse(
-      'https://api.github.com/repos/$repoSlug/releases/latest',
-    );
+    final uri = Uri.parse(_releaseApiUrl);
     final client = HttpClient();
     try {
       final req = await client.getUrl(uri);
@@ -450,7 +478,7 @@ class UpdaterService extends ChangeNotifier {
     final code = BxpProcessClient.verifyMinisign(
       sumsBytes,
       sigBytes,
-      minisignPublicKey,
+      _trustKey,
     );
     if (code == null) {
       // Bridge unavailable — can't establish authenticity, so refuse. In
@@ -512,13 +540,51 @@ class UpdaterService extends ChangeNotifier {
   }
 
   Future<bool> _installWindows(String assetPath) async {
-    // NSIS silent install; the post-install hook re-launches the app.
-    await Process.start(
-      assetPath,
-      ['/S'],
-      mode: ProcessStartMode.detached,
-    );
-    return true;
+    // NSIS silent install; the post-install hook re-launches the app. The
+    // installer is per-user (RequestExecutionLevel user → no UAC elevation) and
+    // self-heals a same-directory overwrite by renaming the running binaries
+    // aside (see bxp-desktop.nsi), so the spawn itself is the only failure point
+    // left — surface it honestly instead of unconditionally returning true.
+    try {
+      await Process.start(
+        assetPath,
+        ['/S'],
+        mode: ProcessStartMode.detached,
+      );
+      return true;
+    } catch (e) {
+      _lastError = 'Could not start the Windows installer: $e';
+      return false;
+    }
+  }
+
+  /// Best-effort removal of the `*.old` binaries the NSIS installer renames
+  /// aside during a same-directory self-update (see bxp-desktop.nsi). They are
+  /// locked while the previous process runs; by the time this fresh process
+  /// starts they are free, so we delete them here rather than wait for the
+  /// installer's `/REBOOTOK` fallback (which would otherwise leave a ~20 MB
+  /// `flutter_windows.dll.old` until the next reboot). Windows-only, non-fatal.
+  void _cleanupStaleUpdateArtifacts() {
+    if (!Platform.isWindows) return;
+    try {
+      final dir = File(Platform.resolvedExecutable).parent.path;
+      for (final name in const [
+        'bxp-gui.exe.old',
+        'flutter_windows.dll.old',
+        'bxp-gui-bridge.dll.old',
+      ]) {
+        final f = File(p.join(dir, name));
+        if (f.existsSync()) {
+          try {
+            f.deleteSync();
+          } catch (_) {
+            // Still locked (rare) — the installer's /REBOOTOK covers it.
+          }
+        }
+      }
+    } catch (_) {
+      // Never let update-artifact cleanup break startup.
+    }
   }
 
   Future<bool> _installMacOS(String dmgPath) async {

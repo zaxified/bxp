@@ -9,57 +9,22 @@ to this file.
 
 ## v0.3.0
 
-### Windows self-update fails silently (UAC elevation)
+### gui-mcp `/health` reports a hardcoded version
 
-Reproduced manually post-release: the update dialog shows the correct
-changelog, but clicking **Update** re-enables the button after a moment
-and no install runs (`downloadAndInstall` returns `false`). The download
-and checksum steps pass — the failure is in the install dispatch.
+`GuiMcpServer._version`
+([bxp-gui/lib/services/gui_mcp_server.dart](../bxp-gui/lib/services/gui_mcp_server.dart))
+is a hardcoded string used in both `GET /health` and the MCP `initialize`
+handshake, so it drifts from the real app version (`PackageInfo`) every
+release — it has to be hand-bumped or it lies. Surfaced during the
+self-update test: `/health` reported `0.2.4` while the running app was the
+test build's version. No functional impact (the auto-updater compares
+`PackageInfo`, not this), but `/health` + the MCP handshake should report
+the true version — read `PackageInfo` (or a build-generated constant)
+instead of a literal.
 
-Root cause (analysed from Linux, confirmation pending on a real Windows
-box): the NSIS installer declares `RequestExecutionLevel admin` and
-installs into `$PROGRAMFILES64`
-([bxp-gui/installer/bxp-desktop.nsi](../bxp-gui/installer/bxp-desktop.nsi)),
-so its PE manifest is `requireAdministrator`. `_installWindows`
-([bxp-gui/lib/services/updater_service.dart](../bxp-gui/lib/services/updater_service.dart))
-launches it with Dart's `Process.start`, which calls `CreateProcess` —
-and `CreateProcess` cannot trigger UAC elevation. A non-elevated GUI
-spawning an elevation-requiring exe gets `ERROR_ELEVATION_REQUIRED` (740),
-`Process.start` throws, the outer `catch` sets `lastError` and returns
-`false` → button unlocks, nothing happens. (The cryptic `ProcessException`
-*is* surfaced in red in the dialog but is easy to miss.)
-
-**Preferred fix — per-user install (mirrors the Linux AppImage model).**
-Switch the installer to a per-user install so no elevation is needed at
-all (what VS Code's User Installer / Chrome do):
-
-- `RequestExecutionLevel admin` → `user`.
-- `InstallDir "$PROGRAMFILES64\bxp-gui"` → `"$LOCALAPPDATA\Programs\bxp-gui"`.
-- Uninstall registry writes `HKLM` → `HKCU`.
-
-Then the existing `Process.start(setup.exe, ['/S'])` works unchanged, and
-— unlike a `ShellExecuteEx`/`runas` fix — there is **no UAC prompt per
-auto-update** (which couldn't be auto-approved anyway). Conceptually this
-unifies Windows with the Linux AppImage path (user-owned file, no root).
-
-Two coupled items to resolve in the same Windows pass:
-
-- **Migration / breaking change for existing installs.** Users with the
-  current admin Program Files install would get a *second* copy under
-  `%LOCALAPPDATA%` (the old one lingers). Either ignore (user base ~0
-  today) or have the installer detect + clean the old location.
-- **Race: overwriting the running `bxp-gui.exe`.** Independent of install
-  location — the silent install (`File /r`) overwrites `bxp-gui.exe` while
-  the app is still running (it exits only ~500 ms later, see
-  `_onUpdate` in
-  [bxp-gui/lib/ui/components/update_dialog.dart](../bxp-gui/lib/ui/components/update_dialog.dart)).
-  A running exe can't be replaced on Windows. Needs the app to exit
-  *before* the installer overwrites, or a stage-and-swap-on-relaunch
-  scheme.
-
-Must be implemented + tested on real Windows (UAC behaviour, running-exe
-overwrite, relaunch) — not verifiable from Linux. Hand-off candidate for
-win-claude-code.
+(The Windows self-update UAC + running-exe-overwrite bug was fixed: per-user
+install + rename-swap self-heal in `bxp-desktop.nsi` + `updater_service.dart`,
+validated end-to-end on real Windows. Ships in the next release.)
 
 ## Later (no specific version)
 
