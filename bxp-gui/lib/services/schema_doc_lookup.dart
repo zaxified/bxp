@@ -1,5 +1,5 @@
-/// Pure helper for looking up a `the bridge docs catalog` config-schema entry
-/// by path. Shared by `TraceStore.findSchemaDoc`, `DartValidator`'s
+/// Pure helper for looking up a config-schema entry from the bridge docs
+/// catalog by path. Shared by `TraceStore.findSchemaDoc`, `DartValidator`'s
 /// internal walker, and json_tree's `_SchemaTooltipKey`.
 ///
 /// Schema entries are JSON objects with a `'key'` field holding a

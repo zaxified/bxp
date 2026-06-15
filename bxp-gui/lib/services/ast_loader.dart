@@ -1,6 +1,7 @@
 /// Phase 5a: Load a JSON5 config file via the Dart AST library.
 ///
-/// Replaces `the bridge config validation` as the primary loader. The AST stays the
+/// Replaces the former `bxp-fmt --config` round-trip as the primary loader.
+/// The AST stays the
 /// single source of truth for the file contents; the bridge is invoked
 /// separately as a background validator that contributes only `$err_*`
 /// markers (see `_validateConfigNow` / `loadConfig` for the merge step).

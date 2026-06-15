@@ -1,4 +1,4 @@
-/// Phase 3 + 4: native Dart validator that consumes the `the bridge docs catalog`
+/// Phase 3 + 4: native Dart validator that consumes the bridge docs catalog
 /// catalog and emits per-edit diagnostics WITHOUT a subprocess
 /// round-trip. Tree-level checks live next to expression-level checks
 /// because both share the AST + token walker plumbing.
@@ -41,7 +41,7 @@ class DartDiagnostic {
 
   /// Stable code (e.g. `dart.field.NonEmpty`, `dart.expr.UnknownFunction`).
   /// Always prefixed with `dart.` so consumers can route by source. The
-  /// the bridge side uses bare `expr.*` / `field.*` codes; combining the two
+  /// bridge side uses bare `expr.*` / `field.*` codes; combining the two
   /// in one bucket therefore stays unambiguous.
   final String code;
   final String message;

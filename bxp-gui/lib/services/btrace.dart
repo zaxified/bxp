@@ -88,7 +88,8 @@ class FileEnd extends Frame {
 
 class OutputRow extends Frame {
   /// File byte offset of the source record (CSV / JSON / xlsx-intermediate-CSV).
-  /// Use with `the bridge --row-offset=N` for drill-down.
+  /// Drill-down re-fetches this record by offset and re-evaluates it via the
+  /// bridge's `eval_batch`.
   final int sourceLocator;
 
   /// Running output-row counter inside the file (0-based, includes earlier

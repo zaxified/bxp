@@ -34,6 +34,10 @@
 ///   PRICE_CURRENCY(f)         — extract currency code from a price string
 ///   REMAP(s, 'name'|k,v,...)  — whole-value lookup through a `maps` entry / inline pairs
 ///   LOOKUP([name,] key, field) — retrieve a value stored by a pre_pass table
+///
+/// The list above is an illustrative sample, not the full set (~70 builtins).
+/// The authoritative, complete catalog is the per-builtin `FnDoc` declarations
+/// further down this file — search for the `── <NAME> ──` section headers.
 const std = @import("std");
 const datefmt = @import("datefmt.zig");
 const unicode = @import("unicode.zig");

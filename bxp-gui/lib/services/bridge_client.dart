@@ -453,8 +453,8 @@ class BridgeClient {
     }
   }
 
-  /// In-process counterpart to `the bridge expr trace TEXT --row-headers
-  /// HEADERS_JSON --row-fields FIELDS_JSON`. Returns the raw NDJSON payload — per-fn
+  /// In-process counterpart to the bridge's `eval_expr_trace` (text + row
+  /// headers/fields). Returns the raw NDJSON payload — per-fn
   /// call lines plus a final `{"t":"final"|"error",...}` sentinel — for
   /// the caller to parse. Sub-ms latency, safe from the main isolate.
   ///
