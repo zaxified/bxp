@@ -832,7 +832,7 @@ class TraceStore extends ChangeNotifier {
   /// message text (e.g. the bridge's `$err_1` and Dart's `$dart_1` both
   /// say `unknown config key 'data_dir2' — did you mean 'data_dir'?`
   /// because the wording is intentionally aligned), drop the
-  /// duplicate from the second map. Bxp-fmt's keys come first since
+  /// duplicate from the second map. The bridge's keys come first since
   /// they reflect the saved file's authoritative state.
   static Map<String, String> _mergeMaps(
       Map<String, String>? a, Map<String, String>? b) {
