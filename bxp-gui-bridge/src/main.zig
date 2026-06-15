@@ -1042,8 +1042,8 @@ fn objStr(obj: std.json.ObjectMap, key: []const u8) ?[]const u8 {
 /// In-process inspect dispatcher — serves the stateless inspect operations the
 /// GUI used to spawn (`--docs`, `--config`, `--list-templates`,
 /// `--fetch-template`, `--expr-batch`) directly from bxp-core/inspect, so the
-/// GUI no longer spawns bxp-fmt for them. Output is the same JSON the matching
-/// the former bxp-fmt stdout produced; the bridge runs in the GUI process, so relative
+/// GUI no longer spawns bxp-fmt for them. Output is the same JSON the former
+/// bxp-fmt stdout produced; the bridge runs in the GUI process, so relative
 /// `data_dir` paths in the config's FS check resolve against the same CWD the
 /// spawned bxp-fmt used (no behaviour change).
 ///

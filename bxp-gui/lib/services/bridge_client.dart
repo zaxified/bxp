@@ -145,7 +145,7 @@ typedef _BridgeEvalExprTraceDart = int Function(
 // bridge_inspect(request_ptr, request_len, out_buf, out_size) -> int32_t
 //   In-process dispatcher for the stateless the bridge ops the GUI used to spawn
 //   (docs / config / list_templates / fetch_template / eval_batch). The result
-//   JSON (same bytes the matching the bridge stdout produced) is written to out_buf.
+//   JSON (the same bytes the former bxp-fmt stdout produced) is written to out_buf.
 //     >0 = bytes_written of result JSON in out_buf
 //     -1 OOM, -2 BUF_TOO_SMALL, -3 INVALID_INPUT
 typedef _BridgeInspectNative = Int32 Function(
@@ -525,7 +525,7 @@ class BridgeClient {
   /// to spawn — `--docs`, `--config`, `--list-templates`, `--fetch-template`,
   /// `--expr-batch` — served from bxp-core/inspect via `bridge_inspect`.
   /// `requestJson` is the op envelope (see the Zig export). Returns the result
-  /// JSON (the same bytes the matching the bridge stdout produced), or null on any
+  /// JSON (the same bytes the former bxp-fmt stdout produced), or null on any
   /// bridge-level failure / overflow so the caller can fall back to the
   /// subprocess. Synchronous FFI; callers run it on a discrete load/save/click
   /// action, not per-keystroke.
