@@ -1458,7 +1458,7 @@ class TraceStore extends ChangeNotifier {
           final bxpFatal = bxpTree['error'] as String?;
           if (bxpFatal != null) {
             // the bridge couldn't even parse — but AST did. Surface the
-            // the bridge error so the user knows about the deeper failure;
+            // bridge error so the user knows about the deeper failure;
             // the editor stays openable since AST has a tree.
             configError = bxpFatal;
             _clearValidationDiagnostics();
