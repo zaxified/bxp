@@ -7,22 +7,31 @@ lands on master. `CHANGELOG.md` is generated independently from `git log`
 at release time by `scripts/release-changelog.sh` and is not coupled
 to this file.
 
-## v0.3.0
+## v0.3.0 — Zig 0.16 migration
 
-### gui-mcp `/health` reported a hardcoded version — FIXED
+Migrate the Zig toolchain from the pinned 0.15.2 to 0.16 across all Zig
+packages (bxp-cli, bxp-mcp, bxp-core, bxp-gui-bridge). The change is
+pervasive but mechanical — the 0.16 I/O overhaul threads an `io` parameter
+through `std.fs` / buffered writers / timers (~100–150 LOC; full checklist in
+the `project_zig16_migration` assessment). It touches *every* Zig package, so
+it earns its own release boundary (clean to bisect if anything regresses)
+rather than being mixed with feature work.
 
-~~`GuiMcpServer._version` was a hardcoded string used in both `GET /health`
-and the MCP `initialize` handshake, drifting from the real app version every
-release.~~ Fixed: `GuiMcpServer` now caches the version from `PackageInfo`
-(awaited in `start()` before the socket binds, so both `/health` and the
-handshake — which can only fire after the server listens — read the resolved
-value), falling back to `'unknown'` only if the platform channel fails. A
-`gui_mcp_server_test.dart` case seeds `PackageInfo.setMockInitialValues` and
-asserts `/health` reports it.
+This is an **enabler milestone**, not migration for its own sake — it unblocks
+two things 0.15.2 blocks today:
 
-(The Windows self-update UAC + running-exe-overwrite bug was fixed: per-user
-install + rename-swap self-heal in `bxp-desktop.nsi` + `updater_service.dart`,
-validated end-to-end on real Windows. Ships in the next release.)
+- **Regex builtins** (`REGEX_MATCH` / `REGEX_EXTRACT` — see _Expression
+  builtins (regex)_ below). The only mature native-Zig regex
+  (`zig-utils/zig-regex` v0.2.0) requires Zig 0.16+.
+- **Dropping the `bxp-gui-bridge` Debug→ReleaseSafe workaround.** 0.16
+  replaced the LLVM Debug backend with a self-hosted x86 backend on
+  Linux/macOS, which should eliminate the Debug-codegen crash that forced the
+  bridge off Debug builds. Verify post-migration whether the rewrite in
+  `bxp-gui-bridge/build.zig` can be removed.
+
+The `uucode` dep is **not** a blocker — its master branch already supports
+0.16; migration just repoints the pin from the `zig-0.15` back-port branch to
+master (+ new hash).
 
 ## Later (no specific version)
 
@@ -282,28 +291,35 @@ fixed before release instead, not parked here).
   `scripts/test-02-datasets.sh` covers it from CI. Reconsider on request
   from a contributor maintaining > 3 templates.
 
-### Tooling
+### Shared core libraries — extraction (triggered, not scheduled)
 
-- Zig 0.16 migration. Currently pinned to 0.15.2; 0.16 shipped
-  2026-04-15 with breaking I/O API changes (~100–150 LOC affected).
-  Assessment in `project_zig16_migration` memory. Bundle this with
-  `REGEX_MATCH` / `REGEX_EXTRACT` below — the only mature native-Zig
-  regex (zig-utils/zig-regex v0.2.0, 2026-05-18) requires Zig 0.16+.
-  Note: the `uucode` dep is **not** a blocker — its master branch already
-  supports 0.16; we deliberately pin the `zig-0.15` back-port branch for
-  now, so migration just repoints the pin to master (+ new hash).
+Several modules carry no bxp-specific logic and are reuse candidates, but
+extraction to standalone repos is **maintenance overhead with no payoff until
+a real second consumer exists** (a two-repo publish→bump-pin dance replaces
+today's one-commit path/monorepo dep). Two tracks with different triggers:
 
-### bxp-api — HTTP adapter over the shared `inspect` core
-
-The stateless `inspect` core (`bxp-core/src/inspect.zig`) already backs two
-shipped adapters — `bxp-mcp` (MCP/stdio) and `bxp-gui-bridge` (FFI). A
-third, **bxp-api**, would put the same core behind an HTTP/port transport
-for a remote/web front-end. Needs concurrency (thread pool / event loop)
-that stdio doesn't. Build only when a real web/remote case appears.
+- **Transport core (http / rest / api / mcp) — AXP-driven.** This is the
+  track with a concrete second consumer. AXP (`~/workspace/axp`, also Zig)
+  needs an agent-control API/MCP layer, and bxp's `bxp-mcp` +
+  `bxp-gui-bridge` + the would-be `bxp-api` adapter all wrap the same
+  stateless `inspect` core behind different transports. Plan: develop the
+  transport/MCP/HTTP core **AXP-first** as a standalone library, and have bxp
+  consume it from the shared repo. This supersedes the standalone `bxp-api`
+  idea and the `project_mcp_api_lib_direction` brainstorm. Trigger: when AXP's
+  API layer takes shape.
+- **General-purpose cores — public-oriented, deferred.** `datefmt`,
+  `decimal`, `encoding` (Zig) and `json5_ast` (Dart) are clean, general
+  libraries that could be published for their own sake (e.g. a standalone Zig
+  fixed-point decimal). No concrete consumer today — extract only when a
+  second consumer materialises (`json5_ast` already documents the
+  `git subtree split` recipe + its "second Dart consumer" gate). Until then
+  the open-source-visibility upside doesn't beat the two-repo version-pinning
+  tax.
 
 The `inspect` core is stateless (no `pre_pass`/`LOOKUP`), so full template
 simulation stays CLI territory — hence `bxp_simulate` spawns `bxp-cli`
-rather than running in-core.
+rather than running in-core. The AXP-driven transport core inherits the same
+stateless boundary.
 
 ### Expression builtins (regex)
 
@@ -321,8 +337,8 @@ rather than running in-core.
     memory (can't use Zig allocators) and Windows packaging pain.
   - libpcre bindings — +external dep ~700 KB, cross-platform build setup.
 
-  Decision: bundle with the Zig 0.16 migration above, then adopt
-  zig-utils/zig-regex. v0.2.4 ships the other 9 builtins; the remaining
+  Decision: gated on the Zig 0.16 migration (v0.3.0 milestone above), then
+  adopt zig-utils/zig-regex. v0.2.4 ships the other 9 builtins; the remaining
   ~10 % of real-world need (regex) waits.
 
   Scope (decided 2026-06-13): regex is an **extraction-only sibling**, scoped
