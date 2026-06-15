@@ -103,7 +103,7 @@ class _ExprPanelState extends State<ExprPanel> {
   /// Newlines in the editor are a typing aid (the user can press Enter
   /// to split a long expression across visual lines while editing).
   /// They are stripped before validation and before commit so neither
-  /// `the bridge expr validator validate` nor the persisted config sees them — both
+  /// the bridge's expr validation nor the persisted config sees them — both
   /// would reject a literal newline mid-token.
   String _strip(String s) => s.replaceAll(RegExp(r'[\r\n]+'), ' ');
 
