@@ -16,3 +16,14 @@ datasets/**/*.json5   text eol=lf
 # dataset fixtures above. Keep it LF on every platform so the planned
 # CI-hardening flutter/test.sh run is green on the Windows runner too.
 scripts/test-06-expr-corpus.txt text eol=lf
+
+# Flutter regenerates these plugin registrants on every `flutter pub get`
+# / build with LF on every host. Without an explicit eol they fall under
+# the Windows default core.autocrlf=true, which flags a permanent phantom
+# CRLF diff (the file is committed LF, but git wants to convert it to CRLF
+# on the next touch), so they show as modified on every Windows checkout
+# even though nothing changed. Pin them to LF so the working tree matches
+# the committed blob and the churn stops.
+**/generated_plugin_registrant.cc   text eol=lf
+**/generated_plugin_registrant.h    text eol=lf
+**/GeneratedPluginRegistrant.swift  text eol=lf
