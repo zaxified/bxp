@@ -161,7 +161,6 @@
 - changed recomendation mermaid
 - docs+release: ship bxp-fmt in console archive, fix agent self-test docs, reconcile readmes
 
-
 All notable changes to BXP. New entries are prepended at the top by
 `scripts/release-changelog.sh`; pre-existing release tags (v0.1.0,
 v0.1.1) are hand-stubbed since they pre-date the automation.

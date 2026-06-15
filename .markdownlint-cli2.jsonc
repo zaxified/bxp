@@ -24,6 +24,8 @@
     "MD033": {
       "allowed_elements": ["details", "summary"],
     },
+    "MD038": false,
+    "MD049": false,
   },
   "ignores": [
     "**/node_modules/**",
@@ -32,6 +34,7 @@
     "**/.zig-cache/**",
     "**/zig-cache/**",
     "**/zig-out/**",
+    "**/zig-pkg/**",
     "**/DEV/**",
     "**/ephemeral/**",
     "scripts/bench/work/**",

@@ -18,7 +18,7 @@ group by country; (3) a **missing observation is the literal `:`** (often
 (4) present values carry a **space-separated quality-flag suffix** —
 `83118501 b` (break in series), `68277210 p` (provisional), `445891011 bep`
 (several flags at once) — so `value * 1` throws and `cut`-based pipelines keep
-the ` b` glued to the number.
+the `b` glued to the number.
 
 **Edge cases sourced from.**
 

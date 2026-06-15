@@ -8,8 +8,8 @@ consistent table.
 
 **Synthetic / teaching example.** The data here is **constructed**, not sourced.
 `trades_2022_legacy.csv` (Date/Ticker/Amount, ISO dates, plain numbers) and
-`trades_2024_current.csv` (trade_date/symbol/value, `DD.MM.YYYY`, `"1 250,50"`).
-The _problem class_ — exports that quietly change shape between versions — is
+`trades_2024_current.csv` (trade*date/symbol/value, `DD.MM.YYYY`, `"1 250,50"`).
+The \_problem class* — exports that quietly change shape between versions — is
 universal; the rows are not.
 
 **Why interesting.** Long-lived data is never one schema. A bank renames a
