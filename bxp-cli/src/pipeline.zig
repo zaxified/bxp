@@ -597,7 +597,7 @@ fn evalAllVars(
     const keys = schema.keys();
     const values = schema.values();
     for (keys, values, 0..) |key, value, i| {
-        // bod 2: the winning rule overwrites this var in every output row, so its
+        // opt 2: the winning rule overwrites this var in every output row, so its
         // base value is dead work — skip it. The override supplies the value.
         if (skip) |sk| {
             if (sk.contains(key)) continue;
@@ -830,7 +830,7 @@ const ChunkReader = struct {
     /// (at the start of `nextChunk`). Public so callers can compute the
     /// absolute file offset of any byte returned: slice_byte_in_chunk +
     /// `chunk_start_in_file`. Used by `--trace=bin` to emit a per-record
-    /// `source_locator` for sub-ms drill-down in fmt.
+    /// `source_locator` for sub-ms drill-down in the GUI (via the bridge).
     chunk_start_in_file: u64,
 
     pub fn init(alloc: std.mem.Allocator, file: std.fs.File) !ChunkReader {
@@ -1024,13 +1024,13 @@ const RowEvalConst = struct {
     /// evaluated without error at file-start. `evalAllVars` reuses these instead
     /// of re-evaluating per row. `null` on the pre_pass path (no input_schema eval).
     folded_vars: ?*const std.StringHashMap([]const u8) = null,
-    /// bod 1: when true, `evalAndEmitRow` evaluates `$date` first and drops
+    /// opt 1: when true, `evalAndEmitRow` evaluates `$date` first and drops
     /// out-of-range rows before input_schema/row_rules. Decided once per file:
     /// requires an active date filter, a declared `$date`, and no rule that
     /// overwrites `$date` (so pre-override `$date` == the value the late filter
     /// would compare). `false` on the pre_pass path.
     date_fast_path: bool = false,
-    /// bod 2: per-rule skip-sets, indexed by `row_rules` position. Each set holds
+    /// opt 2: per-rule skip-sets, indexed by `row_rules` position. Each set holds
     /// the input_schema var names the rule overwrites in EVERY output row
     /// (intersection across `rule.rows`). When that rule wins, `evalAllVars`
     /// skips those vars' base eval — the override supplies them. Empty on the
@@ -1114,7 +1114,7 @@ fn evalAndEmitRow(
         .record_num = record_num,
     };
 
-    // bod 1: date-prefilter. When the filter is active and `$date` is declared
+    // opt 1: date-prefilter. When the filter is active and `$date` is declared
     // and never overwritten by a rule (rec.date_fast_path, decided once per
     // file), evaluate `$date` FIRST and drop out-of-range rows before the much
     // costlier input_schema + row_rules evaluation. The drop emits the same
@@ -1136,7 +1136,7 @@ fn evalAndEmitRow(
 
     const rules = bc.row_rules orelse &.{};
 
-    // bod 2: find the winning rule FIRST. `when` references only CSV columns
+    // opt 2: find the winning rule FIRST. `when` references only CSV columns
     // (never $vars), so rule selection is independent of input_schema — which
     // lets `evalAllVars` then skip computing the input_schema vars the winning
     // rule overwrites in every output row.
@@ -2662,7 +2662,7 @@ pub fn processBroker(
             }
         }
 
-        // bod 1: enable the early date-prefilter only when the filter is active,
+        // opt 1: enable the early date-prefilter only when the filter is active,
         // `$date` is declared, and no row_rules override rewrites `$date` — so the
         // pre-override value the early check sees equals the post-override value
         // the late (in-override-loop) filter would otherwise compare against.
@@ -2678,7 +2678,7 @@ pub fn processBroker(
             break :blk true;
         };
 
-        // bod 2: per-rule skip-sets — input_schema vars overwritten by EVERY
+        // opt 2: per-rule skip-sets — input_schema vars overwritten by EVERY
         // row of the rule (intersection across rule.rows). When the rule wins,
         // evalAllVars skips their base eval. Computed once per file into
         // file_alloc; indexed by row_rules position.
