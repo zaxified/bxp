@@ -11,10 +11,15 @@
 //! This bridge is a runtime-loaded shared library (DynamicLibrary.open
 //! from dart:ffi). It reads pipes from native code, so the drain happens
 //! synchronously without depending on the Dart event loop being ready —
-//! no spawn-vs-attach race, no Flutter UI competition. Single exported
-//! function `bridge_run` takes a JSON request, spawns the requested
-//! child, captures stdout/stderr/exit, and writes a JSON response into
-//! a caller-provided buffer.
+//! no spawn-vs-attach race, no Flutter UI competition. `bridge_run` (the
+//! original export) takes a JSON request, spawns the requested child,
+//! captures stdout/stderr/exit, and writes a JSON response into a
+//! caller-provided buffer. The v0.3.0 flip grew the surface to ~11 exports:
+//! a streaming proxy (`bridge_run_streaming` + `bridge_cancel`/`bridge_ack`)
+//! and in-process families (`bridge_eval_expr`/`_trace`, `bridge_inspect`,
+//! `bridge_verify_minisign`) that serve bxp-core/inspect directly, so the GUI
+//! no longer spawns anything for stateless ops. See the C-ABI table in
+//! `bxp-gui-bridge/CLAUDE.md`.
 
 const std = @import("std");
 const builtin = @import("builtin");
