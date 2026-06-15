@@ -2165,8 +2165,8 @@ pub fn processBroker(
         // exit code to 2 and surfaces in the summary, instead of silently
         // producing useless output with exit 0.
         //
-        // Date-filtered rows do NOT contribute: the `date_fast_path` (above,
-        // L1042) evaluates only `$date` and `return`s on an out-of-range row
+        // Date-filtered rows do NOT contribute: the `date_fast_path` opt (in
+        // `evalAndEmitRow`) evaluates only `$date` and `return`s on an out-of-range row
         // before `evalAllVars` runs, so a broken non-`$date` expr on a row
         // that is excluded from the output never counts an error. This is
         // intentional — a row that produces no output line should not drag the
