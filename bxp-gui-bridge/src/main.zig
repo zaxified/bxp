@@ -629,22 +629,40 @@ fn streamingStderrLoop(ctx: *StreamingCtx) void {
     }
 }
 
-/// Wait thread: blocks on child.wait(), then joins both reader threads to
-/// guarantee any in-flight callbacks have drained, calls on_exit, and frees
-/// the streaming context. Must run detached because bridge_run_streaming
-/// returns to Dart immediately after spawn.
+/// Wait thread: joins both reader threads (guaranteeing any in-flight
+/// callbacks have drained AND that the readers — not child.wait() — own the
+/// pipe fds), then reaps the child, calls on_exit, and frees the streaming
+/// context. Must run detached because bridge_run_streaming returns to Dart
+/// immediately after spawn.
 fn streamingWaitLoop(ctx: *StreamingCtx) void {
-    // ECHILD-tolerant (see waitTolerant): the Dart VM's ExitCodeHandler may
-    // reap our child first, so a panicking std waitpid is not safe here. The
-    // resulting `.Unknown` → exit_code -1 is harmless: the GUI reads the run's
-    // real exit code from bxp-cli's BXTB `done` frame, not from this value.
-    const term = waitTolerant(&ctx.child);
-
-    // Reader threads exit on pipe EOF (the child's exit closed the write
-    // ends). Joining is the synchronisation point that guarantees no callback
-    // fires after on_exit.
+    // Join the reader threads FIRST, before reaping. They exit on pipe EOF,
+    // which the child's own exit produces (it closes its write ends as it
+    // terminates, independently of the parent reaping the zombie) — so we
+    // don't need to wait() first to make them finish. Joining before wait()
+    // is also the *required* ordering: each reader takes ownership of its pipe
+    // (sets `ctx.child.stdout` / `stderr` to null and closes its own copy)
+    // only while it runs. `waitTolerant` pre-sets `child.term`, so the
+    // subsequent `child.wait()` takes the early-return branch that calls
+    // `cleanupStreams()` — which closes + nulls `child.stdout`/`stderr`. If
+    // that runs concurrently with a reader it races for the same fd: it either
+    // nulls the pipe out from under a reader that hasn't read yet (→ 0 bytes
+    // delivered) or double-closes the fd (→ EBADF, which `std.posix.close`
+    // treats as `unreachable` → panic in the reader thread, aborting the whole
+    // process). Both reproduce under CPU load. Joining first guarantees both
+    // readers have already nulled their pipes, so cleanupStreams is a no-op.
+    //
+    // Joining is also the synchronisation point that guarantees no stream
+    // callback fires after on_exit.
     ctx.stdout_thread.join();
     ctx.stderr_thread.join();
+
+    // Now reap. ECHILD-tolerant (see waitTolerant): the Dart VM's
+    // ExitCodeHandler may reap our child first, so a panicking std waitpid is
+    // not safe here. The resulting `.Unknown` → exit_code -1 is harmless: the
+    // GUI reads the run's real exit code from bxp-cli's BXTB `done` frame, not
+    // from this value. The pipes are already null (readers closed them), so
+    // child.wait()'s internal cleanupStreams() is a no-op — no double close.
+    const term = waitTolerant(&ctx.child);
 
     const exit_code: i32 = switch (term) {
         .Exited => |c| @intCast(c),
