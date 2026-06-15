@@ -13,7 +13,7 @@ official CSV ships in exactly the shape analysis tools least want: each maturity
 is its own column, so before you can sort the curve, plot it, or compute a
 spread you must (1) **melt** the 13 maturity columns to long form, and (2) turn
 the text maturity labels into a **numeric tenor** — because `"10 Yr"` sorts
-*before* `"2 Yr"` alphabetically, scrambling the curve. Both steps are normally
+_before_ `"2 Yr"` alphabetically, scrambling the curve. Both steps are normally
 a `pandas.melt` + a hand-written label→months dict; bxp does them declaratively
 in the template, with one daily row fanning out to 13 tidy rows.
 
@@ -40,7 +40,7 @@ bxp-cli --config full.json  # ~499 business days → ~6.5k tidy date-tenor rows
 ```
 
 `fetch-full.sh` deliberately limits itself to 2023-2024: both years carry the
-full 13-maturity schema. Older Treasury files have a *different* column set (the
+full 13-maturity schema. Older Treasury files have a _different_ column set (the
 `2 Mo` tenor began 2018, `4 Mo` only in Oct 2022), so concatenating them under
 one header would misalign columns.
 
@@ -52,7 +52,7 @@ one header would misalign columns.
 - **Unpivot via multi-row `row_rules`.** Each entry in `rows: [ … ]` emits one
   row, pulling a different maturity column (`[2 Yr]`) and stamping both the
   tenor label and its **length in months** as literals. 13 entries → 13
-  date-tenor rows per business day. (Inside an override you reference *fields*
+  date-tenor rows per business day. (Inside an override you reference _fields_
   with `[..]`, not other `$variables`.)
 
 **Run it.**
@@ -71,6 +71,6 @@ bxp-cli --config ./sample.json --template treasury_curve_to_long
 2024-12-31,30 Yr,360,4.78
 ```
 
-Sorted by `tenor_months` that *is* the yield curve — it drops straight into a
+Sorted by `tenor_months` that _is_ the yield curve — it drops straight into a
 `GROUP BY date` time series or an `ORDER BY tenor_months` curve plot, with no
 melt step and no label→months dictionary in Python.

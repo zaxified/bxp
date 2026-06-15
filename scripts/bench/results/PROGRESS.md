@@ -6,23 +6,23 @@ numbers are noisier — but the trend across S05 → S13 is the meaningful arc).
 
 ## Session legend
 
-| #   | When       | What                             |
-| --- | ---------- | -------------------------------- |
-| S01 | 17/05-1652 | M0: bench harness landed         |
-| S02 | 17/05-1945 | post-refactor (verify-output)    |
-| S03 | 17/05-2109 | ChunkReader right-size buffer    |
-| S04 | 17/05-2252 | sort+parallel+atomic input cache |
-| S05 | 17/05-2307 | M9: row_buf fix (RowIterator)    |
-| S06 | 18/05-1644 | pre fast-path baseline (HEAD~4)  |
-| S07 | 18/05-1714 | Phase A — row_start Safe fields  |
-| S08 | 18/05-1718 | comptime monomorph splitFields   |
-| S09 | 18/05-1722 | Phase A+B+C                      |
-| S10 | 18/05-1729 | rule_match refactor              |
-| S11 | 18/05-2344 | M12: --trace=bin opt-in via env  |
-| S12 | 22/05-0100 | schema-v3: detail emit gated off |
-| S13 | 24/05-0245 | NDJSON rip: --trace = BIN only   |
-| S14 | 24/05-1958 | per-block parallel CSV pipeline  |
-| S15 | 24/05-2110 | sunrise vendor: DATE_CONVERT FBA |
+| #   | When       | What                                   |
+| --- | ---------- | -------------------------------------- |
+| S01 | 17/05-1652 | M0: bench harness landed               |
+| S02 | 17/05-1945 | post-refactor (verify-output)          |
+| S03 | 17/05-2109 | ChunkReader right-size buffer          |
+| S04 | 17/05-2252 | sort+parallel+atomic input cache       |
+| S05 | 17/05-2307 | M9: row_buf fix (RowIterator)          |
+| S06 | 18/05-1644 | pre fast-path baseline (HEAD~4)        |
+| S07 | 18/05-1714 | Phase A — row_start Safe fields        |
+| S08 | 18/05-1718 | comptime monomorph splitFields         |
+| S09 | 18/05-1722 | Phase A+B+C                            |
+| S10 | 18/05-1729 | rule_match refactor                    |
+| S11 | 18/05-2344 | M12: --trace=bin opt-in via env        |
+| S12 | 22/05-0100 | schema-v3: detail emit gated off       |
+| S13 | 24/05-0245 | NDJSON rip: --trace = BIN only         |
+| S14 | 24/05-1958 | per-block parallel CSV pipeline        |
+| S15 | 24/05-2110 | sunrise vendor: DATE_CONVERT FBA       |
 | S16 | 02/06-0643 | sunrise removed → in-house datefmt.zig |
 
 ## Wall time (seconds)
@@ -180,11 +180,11 @@ vendor patch). The 3expr workload's parser-heavy expression is a per-row
 
 Results (`results-20260602-064320.csv`, BENCH_PARALLEL=1, ReleaseFast):
 
-| sweep point          |  S15 |  S16 |
-| -------------------- | ---: | ---: |
-| S1 2M rows (DATE_CONVERT-heavy) | 6.52 | 6.75 |
-| Total wall (25 pts)  | 45.2 | 46.3 |
-| Peak RSS             | ~25 MB | ~25 MB |
+| sweep point                     |    S15 |    S16 |
+| ------------------------------- | -----: | -----: |
+| S1 2M rows (DATE_CONVERT-heavy) |   6.52 |   6.75 |
+| Total wall (25 pts)             |   45.2 |   46.3 |
+| Peak RSS                        | ~25 MB | ~25 MB |
 
 Flat within run-to-run noise (~2.5%): the in-house tokenizer matches the
 vendored+patched sunrise on the hot path, as expected. **This is the new
@@ -207,33 +207,33 @@ would miss. Compare W-runs to W-runs, never W to S.
 - Mode: `BENCH_PARALLEL=1 BENCH_LOW_DISK=1` (space-constrained host),
   `BXP_BENCH_SINK=file` (MSYS default — see note). All 25/25 points clean.
 
-| sweep point                                    |  wall_s | rss_mb |
-| ---------------------------------------------- | ------: | -----: |
-| `S1 n=   5000 c=  16 w=  20 3expr       t=off` |    0.02 |    9.0 |
-| `S1 n=  25000 c=  16 w=  20 3expr       t=off` |    0.07 |   21.6 |
-| `S1 n= 100000 c=  16 w=  20 3expr       t=off` |    0.27 |   29.2 |
-| `S1 n= 500000 c=  16 w=  20 3expr       t=off` |    1.18 |   29.3 |
-| `S1 n=2000000 c=  16 w=  20 3expr       t=off` |    4.72 |   30.4 |
-| `S2 n=   5000 c=  16 w=  20 3expr       t=on`  |    0.03 |    9.1 |
-| `S2 n=  25000 c=  16 w=  20 3expr       t=on`  |    0.15 |   23.1 |
-| `S2 n= 100000 c=  16 w=  20 3expr       t=on`  |    0.28 |   30.4 |
-| `S2 n= 500000 c=  16 w=  20 3expr       t=on`  |    1.06 |   30.7 |
-| `S3 n= 100000 c=   4 w=  20 3expr       t=off` |    0.18 |   21.3 |
-| `S3 n= 100000 c=  16 w=  20 3expr       t=off` |    0.28 |   29.4 |
-| `S3 n= 100000 c=  64 w=  20 3expr       t=off` |    0.73 |   28.0 |
-| `S3 n= 100000 c= 256 w=  20 3expr       t=off` |    2.78 |   29.1 |
-| `S3 n= 100000 c=1024 w=  20 3expr       t=off` |   12.42 |   31.6 |
-| `S4 n= 100000 c=   4 w=  20 3expr       t=on`  |    0.15 |   24.2 |
-| `S4 n= 100000 c=  16 w=  20 3expr       t=on`  |    0.25 |   30.6 |
-| `S4 n= 100000 c=  64 w=  20 3expr       t=on`  |    0.76 |   29.1 |
-| `S4 n= 100000 c= 256 w=  20 3expr       t=on`  |    2.64 |   29.1 |
-| `S5 n=  25000 c=  16 w=  10 3expr       t=off` |    0.07 |   16.0 |
-| `S5 n=  25000 c=  16 w= 100 3expr       t=off` |    0.13 |   28.7 |
-| `S5 n=  25000 c=  16 w=1000 3expr       t=off` |    0.93 |   27.4 |
-| `S6 n= 100000 c=  16 w=  20 passthrough t=off` |    0.21 |   28.5 |
-| `S6 n= 100000 c=  16 w=  20 3expr       t=off` |    0.30 |   29.5 |
-| `S6 n= 100000 c=  16 w=  20 passthrough t=on`  |    0.16 |   30.4 |
-| `S6 n= 100000 c=  16 w=  20 3expr       t=on`  |    0.26 |   29.9 |
+| sweep point                                    | wall_s | rss_mb |
+| ---------------------------------------------- | -----: | -----: |
+| `S1 n=   5000 c=  16 w=  20 3expr       t=off` |   0.02 |    9.0 |
+| `S1 n=  25000 c=  16 w=  20 3expr       t=off` |   0.07 |   21.6 |
+| `S1 n= 100000 c=  16 w=  20 3expr       t=off` |   0.27 |   29.2 |
+| `S1 n= 500000 c=  16 w=  20 3expr       t=off` |   1.18 |   29.3 |
+| `S1 n=2000000 c=  16 w=  20 3expr       t=off` |   4.72 |   30.4 |
+| `S2 n=   5000 c=  16 w=  20 3expr       t=on`  |   0.03 |    9.1 |
+| `S2 n=  25000 c=  16 w=  20 3expr       t=on`  |   0.15 |   23.1 |
+| `S2 n= 100000 c=  16 w=  20 3expr       t=on`  |   0.28 |   30.4 |
+| `S2 n= 500000 c=  16 w=  20 3expr       t=on`  |   1.06 |   30.7 |
+| `S3 n= 100000 c=   4 w=  20 3expr       t=off` |   0.18 |   21.3 |
+| `S3 n= 100000 c=  16 w=  20 3expr       t=off` |   0.28 |   29.4 |
+| `S3 n= 100000 c=  64 w=  20 3expr       t=off` |   0.73 |   28.0 |
+| `S3 n= 100000 c= 256 w=  20 3expr       t=off` |   2.78 |   29.1 |
+| `S3 n= 100000 c=1024 w=  20 3expr       t=off` |  12.42 |   31.6 |
+| `S4 n= 100000 c=   4 w=  20 3expr       t=on`  |   0.15 |   24.2 |
+| `S4 n= 100000 c=  16 w=  20 3expr       t=on`  |   0.25 |   30.6 |
+| `S4 n= 100000 c=  64 w=  20 3expr       t=on`  |   0.76 |   29.1 |
+| `S4 n= 100000 c= 256 w=  20 3expr       t=on`  |   2.64 |   29.1 |
+| `S5 n=  25000 c=  16 w=  10 3expr       t=off` |   0.07 |   16.0 |
+| `S5 n=  25000 c=  16 w= 100 3expr       t=off` |   0.13 |   28.7 |
+| `S5 n=  25000 c=  16 w=1000 3expr       t=off` |   0.93 |   27.4 |
+| `S6 n= 100000 c=  16 w=  20 passthrough t=off` |   0.21 |   28.5 |
+| `S6 n= 100000 c=  16 w=  20 3expr       t=off` |   0.30 |   29.5 |
+| `S6 n= 100000 c=  16 w=  20 passthrough t=on`  |   0.16 |   30.4 |
+| `S6 n= 100000 c=  16 w=  20 3expr       t=on`  |   0.26 |   29.9 |
 
 - **Total wall (25 pts): 30.0 s. Peak RSS: 31.6 MB** (S3 c=1024).
 - RSS profile mirrors Linux (~9–31 MB, flat in row count) — the streaming
@@ -254,9 +254,9 @@ the whole ~2 GB cached matrix — required on this 8 GB / tight-disk box.
 ### Note — why `BXP_BENCH_SINK=file` on Windows
 
 bxp-cli's `--trace` is **correct** on Windows (verified: byte-identical to a file
-and through a *native* Windows pipe). But the bench's Linux `--trace | wc -lc`
+and through a _native_ Windows pipe). But the bench's Linux `--trace | wc -lc`
 construction fails on **Git Bash / MSYS**: a native-PE process writing a large
-binary stream into an MSYS *emulated* pipe truncates after ~177 bytes and the
+binary stream into an MSYS _emulated_ pipe truncates after ~177 bytes and the
 stdout write then errors (exit 1). The `file` sink (redirect to a scratch
 `.bxtb`, `wc -lc` it, delete) sidesteps the emulated pipe and yields numbers
 identical to the Linux pipe path. It is auto-selected on MSYS (`uname -s`); pass

@@ -7,13 +7,13 @@ CSV batch and a new JSON batch of the same kind of data — into one unified tab
 
 **Synthetic / teaching example.** The data here is **constructed**, not sourced.
 `legacy.csv` (US dates `MM/DD/YYYY`, US-grouped amounts `"1,250.50"`) and
-`modern.in.json` (different key names, ISO dates). The *problem class* — a feed
+`modern.in.json` (different key names, ISO dates). The _problem class_ — a feed
 that migrated from CSV to JSON while the old files still matter — is universal;
 the rows are not.
 
-**Why interesting.** A template reads **one input format** (CSV *or* JSON), so a
+**Why interesting.** A template reads **one input format** (CSV _or_ JSON), so a
 mixed-format pile can't be done in a single pass. The fix is one pass per format
-into the *same* `output_schema`, then a fan-in pass to stack the normalised
+into the _same_ `output_schema`, then a fan-in pass to stack the normalised
 results — bridging formats without leaving bxp or hand-writing a merge script.
 
 **Problem class documented in.** (sources for the problem class — not for the data)

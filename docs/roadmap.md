@@ -13,7 +13,7 @@ Migrate the Zig toolchain from the pinned 0.15.2 to 0.16 across all Zig
 packages (bxp-cli, bxp-mcp, bxp-core, bxp-gui-bridge). The change is
 pervasive but mechanical — the 0.16 I/O overhaul threads an `io` parameter
 through `std.fs` / buffered writers / timers (~100–150 LOC; full checklist in
-the `project_zig16_migration` assessment). It touches *every* Zig package, so
+the `project_zig16_migration` assessment). It touches _every_ Zig package, so
 it earns its own release boundary (clean to bisect if anything regresses)
 rather than being mixed with feature work.
 
@@ -94,7 +94,7 @@ Remaining:
   `flutter test` (widget/unit) but not a launched-app integration smoke.
 - Pin `subosito/flutter-action` to an explicit Flutter version. CI's
   `channel: stable` floats ahead of local SDKs, so a newer `flutter
-  analyze` can surface fresh `info` lints that fail CI while passing
+analyze` can surface fresh `info` lints that fail CI while passing
   locally (hit 2026-06-07: `use_null_aware_elements` on stable 3.44.1 vs
   local 3.41.9). A pin makes CI reproducible; bump deliberately.
 

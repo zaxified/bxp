@@ -7,8 +7,8 @@
 decimal fraction.
 
 **Synthetic / teaching example.** The data here is **constructed**, not sourced
-— `sample.csv` is hand-written rows covering each rate notation. The *problem
-class* is real; the rows are not.
+— `sample.csv` is hand-written rows covering each rate notation. The _problem
+class_ is real; the rows are not.
 
 **Why interesting.** Finance writes the same rate two ways — `2.5%` and `25 bps`
 are identical — and stores them as text with their unit glued on. Any

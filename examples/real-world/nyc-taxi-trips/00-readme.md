@@ -30,13 +30,13 @@ bxp-cli --config full.json  # processes all ~84M trips
 
 Measured on the reference machine (ReleaseFast, 8 cores):
 
-| metric            | value                                       |
-| ----------------- | ------------------------------------------- |
-| input / output    | 84,399,019 rows (1:1) / 7.7 GB → 6.5 GB     |
-| wall time         | ~285 s (two `DATE_CONVERT` calls per row)   |
-| peak RSS          | ~23 MB (flat — does not grow with 84M rows) |
-| `no_passengers`   | **1,772,399 rows (2.1%)** — physically impossible, paid fare with `passenger_count = 0` |
-| `refund`          | **169,241 rows** — negative-fare reversals posted as trips |
+| metric          | value                                                                                   |
+| --------------- | --------------------------------------------------------------------------------------- |
+| input / output  | 84,399,019 rows (1:1) / 7.7 GB → 6.5 GB                                                 |
+| wall time       | ~285 s (two `DATE_CONVERT` calls per row)                                               |
+| peak RSS        | ~23 MB (flat — does not grow with 84M rows)                                             |
+| `no_passengers` | **1,772,399 rows (2.1%)** — physically impossible, paid fare with `passenger_count = 0` |
+| `refund`        | **169,241 rows** — negative-fare reversals posted as trips                              |
 
 Constant ~23 MB while streaming 84 million rows and emitting 6.5 GB is the
 headline: the data-quality flag isolates ~1.94M anomalous rows that no spot

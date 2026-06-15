@@ -41,16 +41,16 @@ bxp-cli --config full.json  # processes the whole register
 
 Measured on the reference machine (ReleaseFast, 8 cores):
 
-| metric                  | value                                       |
-| ----------------------- | ------------------------------------------- |
-| input / output          | 1,197,482 rows (1:1) / 194 MB → 121 MB      |
-| wall time               | ~4.2 s                                      |
-| peak RSS                | ~19 MB (flat)                               |
-| `issued`                | 1,117,686                                   |
-| `cancelled_during_term` | 78,329                                      |
-| `revoked`               | 1,453                                       |
-| `revocation_appealed`   | 13                                          |
-| `applied = <not-on-file>` | **918,458 (76%)**                         |
+| metric                    | value                                  |
+| ------------------------- | -------------------------------------- |
+| input / output            | 1,197,482 rows (1:1) / 194 MB → 121 MB |
+| wall time                 | ~4.2 s                                 |
+| peak RSS                  | ~19 MB (flat)                          |
+| `issued`                  | 1,117,686                              |
+| `cancelled_during_term`   | 78,329                                 |
+| `revoked`                 | 1,453                                  |
+| `revocation_appealed`     | 13                                     |
+| `applied = <not-on-file>` | **918,458 (76%)**                      |
 
 Two things the full run surfaces that the slice can't:
 

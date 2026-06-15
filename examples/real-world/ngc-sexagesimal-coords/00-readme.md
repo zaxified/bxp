@@ -39,7 +39,7 @@ bxp-cli --config full.json  # converts every object's RA/Dec → decimal degrees
 **The trick** (see `sample.json`):
 
 - **RA → degrees:** `(SPLIT_PART([RA],':',1) + SPLIT_PART([RA],':',2)/60 +
-  SPLIT_PART([RA],':',3)/3600) * 15` — split on `:`, sum to hours, ×15.
+SPLIT_PART([RA],':',3)/3600) * 15` — split on `:`, sum to hours, ×15.
 - **Dec → degrees:** capture the sign once with `STARTS_WITH('-')`, then apply
   it to the magnitude `ABS(deg) + min/60 + sec/3600` so the sign covers the
   whole value, not just the degrees field.

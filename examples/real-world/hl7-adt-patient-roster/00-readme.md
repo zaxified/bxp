@@ -22,7 +22,7 @@ dedicated HL7 library; bxp does it as a row filter plus a few field splits.
   [HL7 v2 standard](https://www.hl7.org/implement/standards/product_brief.cfm?product_id=185).
 - Real names carry sub-components: `EVERYMAN&&&&Aniston^ADAM^…` (the family field
   itself has `&`-subcomponents).
-- Birth dates appear as bare `YYYYMMDD` *and* as full timestamps
+- Birth dates appear as bare `YYYYMMDD` _and_ as full timestamps
   (`198808181126+0215`); some patients are born **before 1970**.
 
 **Data source.** Real published HL7 v2 sample messages from
@@ -46,10 +46,10 @@ bxp-cli --config full.json  # one roster row per PID segment (~60)
   `PID` segments; `MSH`/`EVN`/`PV1`/`OBX`/… produce nothing.
 - **Name components:** `SPLIT_PART([6], '^', N)` for family/given, then a second
   `SPLIT_PART(…, '&', 1)` to peel the surname out of its sub-components.
-- **Birth date — string slice.** This is a pure `YYYYMMDD`→ISO *reformat*, so
+- **Birth date — string slice.** This is a pure `YYYYMMDD`→ISO _reformat_, so
   `LEFT([8],4) & '-' & SUBSTR([8],5,2) & '-' & SUBSTR([8],7,2)` does the job
   directly — no format tokens to get right, no date validation. `DATE_CONVERT([8],
-  'YYYYMMDD', 'YYYY-MM-DD')` works equally well here (including the 1924 birth
+'YYYYMMDD', 'YYYY-MM-DD')` works equally well here (including the 1924 birth
   date — `DATE_CONVERT` is a pure parse→format reshuffle with no lower-year
   limit); string slicing is shown as the leaner idiom for a fixed-width layout.
 

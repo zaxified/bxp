@@ -9,7 +9,7 @@
 **Synthetic / teaching example.** The data here is **constructed**, not sourced
 — `sample.csv` is hand-written rows engineered to cover the common currency
 notations (leading symbol, trailing ISO code, comma thousands, empty). The
-*problem class* is real; the rows are not. (Mixed-currency price columns live in
+_problem class_ is real; the rows are not. (Mixed-currency price columns live in
 private marketplace/ERP exports with no public dataset.)
 
 **Why interesting.** Prices arrive glued to their currency in a dozen

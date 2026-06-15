@@ -8,14 +8,14 @@
 
 **Synthetic / teaching example.** The data here is **constructed**, not sourced.
 `joined_input.csv` is the two tables already stacked into one file with a `_type`
-marker (`customer` rows + `order` rows). The *problem class* — facts keyed to a
+marker (`customer` rows + `order` rows). The _problem class_ — facts keyed to a
 separate lookup table — is universal; the rows are not.
 
 **Why interesting.** bxp reads **one file per pass**, so a cross-file join needs
 the two sources brought together first. Once they share a file with a row-type
 marker, a keyed join is just a `pre_pass` over the dimension rows plus a `LOOKUP`
 on the fact rows — no database, no `JOIN` SQL. This generalises the single-file
-`real-world/gtfs-stops-selfjoin` (a *self*-join) to **two distinct sources**.
+`real-world/gtfs-stops-selfjoin` (a _self_-join) to **two distinct sources**.
 
 **Problem class documented in.** (sources for the problem class — not for the data)
 
@@ -26,7 +26,7 @@ on the fact rows — no database, no `JOIN` SQL. This generalises the single-fil
 **The trick** (see inline comments in `sample.json`):
 
 1. **Stack the two files with a `_type` marker.** Here it ships ready-made; to
-   produce it from two separate files *inside bxp*, see
+   produce it from two separate files _inside bxp_, see
    [../multi-stage-etl](../multi-stage-etl/00-readme.md), which builds the same
    shape with `combined_output`.
 2. **`pre_pass` over `_type = 'customer'`** — index `name`/`city` by

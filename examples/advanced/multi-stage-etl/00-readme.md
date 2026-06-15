@@ -9,14 +9,14 @@ DST-aware Europe/Prague timestamp.
 
 **Synthetic / teaching example.** The data here is **constructed**, not sourced
 — `orders.csv` (US `MM/DD/YYYY`), `products.csv` (EU `DD.MM.YYYY`),
-`categories.in.json` (long `YYYYMMDD`). The *problem class* — snowflake
+`categories.in.json` (long `YYYYMMDD`). The _problem class_ — snowflake
 relationships, format drift across sources, and timezone correctness — is
 universal; the rows are not.
 
 **Why interesting.** Two limits force the chaining: bxp reads **one file per
 pass**, and runs **one pre_pass per pass**. The second hop's key
 (`category_id`) does not exist on an order until the first hop has run, so it
-*cannot* be a single lookup — you combine, join, combine again, join again.
+_cannot_ be a single lookup — you combine, join, combine again, join again.
 On top of that, the author knows each source's date convention up front, and the
 output target is Prague local time with a correct **summer/winter offset** — which
 the engine has no built-in timezone for, yet it's still computable.
@@ -68,8 +68,32 @@ timezone that flips with the season — one clean JSON dataset. Note `order_ts`:
 
 ```json
 [
-{"order_id":"1001","product_id":"P-9","category_id":"C-3","category_name":"Electronics","order_ts":"2024-01-15T00:00:00+01:00","product_added":"2023-01-02","category_created":"2020-01-15"},
-{"order_id":"1002","product_id":"P-7","category_id":"C-1","category_name":"Books","order_ts":"2024-07-20T00:00:00+02:00","product_added":"2023-06-15","category_created":"2019-12-20"},
-{"order_id":"1003","product_id":"P-9","category_id":"C-3","category_name":"Electronics","order_ts":"2024-11-02T00:00:00+01:00","product_added":"2023-01-02","category_created":"2020-01-15"}
+  {
+    "order_id": "1001",
+    "product_id": "P-9",
+    "category_id": "C-3",
+    "category_name": "Electronics",
+    "order_ts": "2024-01-15T00:00:00+01:00",
+    "product_added": "2023-01-02",
+    "category_created": "2020-01-15"
+  },
+  {
+    "order_id": "1002",
+    "product_id": "P-7",
+    "category_id": "C-1",
+    "category_name": "Books",
+    "order_ts": "2024-07-20T00:00:00+02:00",
+    "product_added": "2023-06-15",
+    "category_created": "2019-12-20"
+  },
+  {
+    "order_id": "1003",
+    "product_id": "P-9",
+    "category_id": "C-3",
+    "category_name": "Electronics",
+    "order_ts": "2024-11-02T00:00:00+01:00",
+    "product_added": "2023-01-02",
+    "category_created": "2020-01-15"
+  }
 ]
 ```

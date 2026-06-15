@@ -44,7 +44,7 @@ is a [roadmap item](../../../docs/roadmap.md).
   output row, pulling a different date column (`[12/31/20]`) and stamping the
   matching ISO date as a literal. Three entries → three country-date rows per
   input country. (Date columns are named with slashes; `[1/22/20]` works as a
-  field reference. Inside an override you reference *fields* with `[..]`, not
+  field reference. Inside an override you reference _fields_ with `[..]`, not
   `$variables`.)
 
 **Run it.**
@@ -64,6 +64,6 @@ Afghanistan,2021-12-31,158084
 
 That long shape drops straight into a `GROUP BY date` or a time-series plot —
 no melt step, no Python. To add more snapshots, add more `rows` entries; to
-unpivot *every* day you would loop the columns, which is the natural feature
+unpivot _every_ day you would loop the columns, which is the natural feature
 boundary (and the reason day-per-column files want this reshape in the first
 place).

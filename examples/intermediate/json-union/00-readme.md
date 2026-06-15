@@ -8,7 +8,7 @@ an empty cell.
 
 **Synthetic / teaching example.** The data here is **constructed**, not sourced
 — two CRM dumps (`crm_alpha.in.json` with `vat`+`email`, `crm_beta.in.json` with
-`phone`). The *problem class* — JSON omits empty keys, so two dumps of "the same
+`phone`). The _problem class_ — JSON omits empty keys, so two dumps of "the same
 thing" are structurally different — is universal; the rows are not.
 
 **Why interesting.** Unlike CSV, JSON has no fixed column list: every object only

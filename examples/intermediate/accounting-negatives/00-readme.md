@@ -8,7 +8,7 @@ comma-grouped, into a clean signed-decimal column.
 
 **Synthetic / teaching example.** The data here is **constructed**, not sourced
 — `sample.csv` is hand-written rows engineered to plant one of each amount
-shape. The *failure mode* is real and documented; the rows are not. (Accounting
+shape. The _failure mode_ is real and documented; the rows are not. (Accounting
 negatives ride in private bank/ledger exports, which have no public dataset —
 so this lives in the teaching tier, not `examples/real-world/`.)
 
@@ -40,7 +40,7 @@ IF(STARTS_WITH(TRIM([Amount]), '('),
 - `* 1` coerces the cleaned text to a number.
 - `0 - (...)` applies the sign the parentheses stood for.
 - The else branch just drops commas — handling plain positives (`"1,234.56"`)
-  and rows that are *already* signed (`-100.00`) alike.
+  and rows that are _already_ signed (`-100.00`) alike.
 
 **Run it.**
 

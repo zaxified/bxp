@@ -3,7 +3,7 @@
 [← all examples](../../README.md)
 
 **What.** Enrich every NYC-subway platform row with its parent **station name**
-— a value that lives on a *different row of the same file* — using bxp's
+— a value that lives on a _different row of the same file_ — using bxp's
 `pre_pass` + `LOOKUP`. A self-join, no second file.
 
 **Why interesting.** GTFS `stops.txt` is hierarchical inside one flat CSV: a
@@ -19,7 +19,7 @@ can `LOOKUP` back into it.
 
 - [GTFS reference — `stops.txt` / `parent_station`](https://gtfs.org/documentation/schedule/reference/#stopstxt)
   defines the `location_type` / `parent_station` hierarchy
-- platform rows reference a `stop_id` that may appear *before or after* them in
+- platform rows reference a `stop_id` that may appear _before or after_ them in
   the file — a single forward scan (`pre_pass`) handles either order
 
 **Data source.** [MTA — NYC subway GTFS feed](https://www.mta.info/developers)

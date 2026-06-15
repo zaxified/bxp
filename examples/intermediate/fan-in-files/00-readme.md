@@ -8,7 +8,7 @@ repeated header rows.
 
 **Synthetic / teaching example.** The data here is **constructed**, not sourced
 — three daily files (`2024-01-01.csv` … `2024-01-03.csv`) with identical columns
-and continental numbers (`"1 250,50"`). The *problem class* — periodic exports
+and continental numbers (`"1 250,50"`). The _problem class_ — periodic exports
 you have to glue back together — is universal; the rows are not.
 
 **Why interesting.** Almost every operational system emits one file per period

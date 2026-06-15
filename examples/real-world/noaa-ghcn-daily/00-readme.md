@@ -28,14 +28,14 @@ bxp-cli --config full.json  # processes the full history
 
 Measured on the reference machine (ReleaseFast, 8 cores):
 
-| metric        | value                                       |
-| ------------- | ------------------------------------------- |
-| input         | 57,486 rows × **124 columns** / 17 MB       |
-| date span     | 1869-01-01 → 2026-05-23 (157 years)         |
-| wall time     | ~0.25 s                                     |
-| peak RSS      | ~15 MB (flat — does not grow with the file) |
-| `ok`          | 55,918 rows                                 |
-| `partial`     | 1,566 rows (TMAX or TMIN missing)           |
+| metric            | value                                         |
+| ----------------- | --------------------------------------------- |
+| input             | 57,486 rows × **124 columns** / 17 MB         |
+| date span         | 1869-01-01 → 2026-05-23 (157 years)           |
+| wall time         | ~0.25 s                                       |
+| peak RSS          | ~15 MB (flat — does not grow with the file)   |
+| `ok`              | 55,918 rows                                   |
+| `partial`         | 1,566 rows (TMAX or TMIN missing)             |
 | `tmax_below_tmin` | **2 rows** — 1894-10-05 (15.6 < 16.1 °C) etc. |
 
 The consistency flag earns its keep here: two instrument-fault days hidden in

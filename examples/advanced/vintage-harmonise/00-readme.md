@@ -9,13 +9,13 @@ consistent table.
 **Synthetic / teaching example.** The data here is **constructed**, not sourced.
 `trades_2022_legacy.csv` (Date/Ticker/Amount, ISO dates, plain numbers) and
 `trades_2024_current.csv` (trade_date/symbol/value, `DD.MM.YYYY`, `"1 250,50"`).
-The *problem class* — exports that quietly change shape between versions — is
+The _problem class_ — exports that quietly change shape between versions — is
 universal; the rows are not.
 
 **Why interesting.** Long-lived data is never one schema. A bank renames a
 column, switches `MM/DD` to `DD.MM`, starts grouping thousands — and every old
 file is now incompatible with every new one. Analysts keep a pile of
-one-off cleanup scripts per era. One template, written against *both* layouts,
+one-off cleanup scripts per era. One template, written against _both_ layouts,
 collapses the whole archive into a single normalised table.
 
 **Problem class documented in.** (sources for the problem class — not for the data)
@@ -26,7 +26,7 @@ collapses the whole archive into a single normalised table.
 
 **The trick** (see inline comments in `sample.json`):
 
-A column absent from a file reads as `""`, so one template can target *every*
+A column absent from a file reads as `""`, so one template can target _every_
 vintage's column name and pick whichever is present:
 
 - date — `IF(LEN([Date]) > 0, [Date], DATE_CONVERT([trade_date], 'DD.MM.YYYY', …))`

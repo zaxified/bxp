@@ -8,7 +8,7 @@
 
 **Synthetic / teaching example.** The data here is **constructed**, not sourced
 — `sample.csv` plants one of each boolean spelling plus a blank and a junk
-value. The *problem class* is real and universal; the rows are not.
+value. The _problem class_ is real and universal; the rows are not.
 
 **Why interesting.** "Boolean" is the least standardised column type in
 practice: every system invents its own truthy/falsy spelling, and a join or
@@ -30,7 +30,7 @@ traps, both solved by guarding blanks with `LEN(TRIM([x])) = 0` **first**:
 1. **Blank vs `'0'`.** bxp coerces an empty cell to `0` and the literal `'0'`
    to `0`, so a blank would wrongly match the `'0'` in the falsy list and become
    `false`. Guarding blanks up front keeps them empty.
-2. **The guard itself.** `TRIM([x]) = ''` *also* coerces (`"0"`→0 == `""`→0), so
+2. **The guard itself.** `TRIM([x]) = ''` _also_ coerces (`"0"`→0 == `""`→0), so
    it would wrongly treat a real `"0"` as blank. `LEN(TRIM([x])) = 0` compares
    **length** — no coercion — so `"0"` (length 1) survives to be read as `false`.
 

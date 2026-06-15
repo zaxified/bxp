@@ -7,11 +7,11 @@
 
 **Synthetic / teaching example.** The data here is **constructed**, not sourced
 — `sample.csv` is hand-written rows planting the common null markers across a
-few columns. The *problem class* is real and universal; the rows are not.
+few columns. The _problem class_ is real and universal; the rows are not.
 
 **Why interesting.** When data passes through several systems, "missing" gets
 written a dozen incompatible ways. Imported verbatim, the literal text `"N/A"`
-is *not* empty: it inflates `COUNT`s, breaks joins on the column, sorts as a
+is _not_ empty: it inflates `COUNT`s, breaks joins on the column, sorts as a
 real value, and clutters dropdowns. Normalising all of them to one empty cell
 up front is the first step of almost every cleanup.
 

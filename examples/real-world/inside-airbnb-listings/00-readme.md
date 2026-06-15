@@ -28,15 +28,15 @@ bxp-cli --config full.json  # processes every NYC listing
 
 Measured on the reference machine (ReleaseFast, 8 cores):
 
-| metric          | value                                  |
-| --------------- | -------------------------------------- |
-| input / output  | 36,445 rows (1:1, no column shift)     |
-| wall time       | ~0.12 s                                |
-| peak RSS        | ~14 MB                                 |
-| `unlicensed`    | 31,453 rows (**86%**)                  |
-| `exempt`        | 2,688 rows                             |
-| `registered`    | 2,304 rows                             |
-| price redacted  | 36,445 rows (**100%** — endpoint strips every price) |
+| metric         | value                                                |
+| -------------- | ---------------------------------------------------- |
+| input / output | 36,445 rows (1:1, no column shift)                   |
+| wall time      | ~0.12 s                                              |
+| peak RSS       | ~14 MB                                               |
+| `unlicensed`   | 31,453 rows (**86%**)                                |
+| `exempt`       | 2,688 rows                                           |
+| `registered`   | 2,304 rows                                           |
+| price redacted | 36,445 rows (**100%** — endpoint strips every price) |
 
 The 84% `unlicensed` rate in the 300-row slice holds at 86% across the full
 36k listings — Local Law 18's enforcement gap is not a sampling artifact. The

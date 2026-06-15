@@ -8,7 +8,7 @@ separate `unit` column.
 
 **Synthetic / teaching example.** The data here is **constructed**, not sourced
 — `sample.csv` is hand-written rows covering a few unit shapes plus a blank. The
-*problem class* is real; the rows are not.
+_problem class_ is real; the rows are not.
 
 **Why interesting.** Quantities routinely ship as `"<number> <unit>"` in one
 cell (ingredient lists, lab readings, product specs). You can't `SUM` weights or
@@ -18,7 +18,7 @@ calculation.
 
 **Problem class documented in.** (sources for the problem class — not for the data)
 
-- Tidy-data guidance (e.g. [Wickham, *Tidy Data*](https://vita.had.co.nz/papers/tidy-data.pdf))
+- Tidy-data guidance (e.g. [Wickham, _Tidy Data_](https://vita.had.co.nz/papers/tidy-data.pdf))
   calls a value-plus-unit-in-one-cell a classic "one column, two variables"
   problem to be split before analysis.
 

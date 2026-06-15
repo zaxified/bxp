@@ -8,7 +8,7 @@
 is **constructed**, not sourced — `sample.csv` is hand-written rows (fictional
 companies) engineered to plant one of each failure mode below. CRM exports are
 private customer data with no public dataset, so this lives in the teaching tier
-rather than real-world. The *failure modes* it exercises are real and
+rather than real-world. The _failure modes_ it exercises are real and
 documented; the rows are not.
 
 **Why interesting.** Real CRM migrations take 2–8 weeks because picklist mismatches, mixed date formats and trailing whitespace fail _silently_ — the import succeeds row by row, then Salesforce rejects half of them after the fact.

@@ -11,7 +11,7 @@ empty.
 **Synthetic / teaching example (advanced).** The data here is **constructed**,
 not sourced — `sample.csv` is hand-written rows that pack one of every mess into
 each column. Each idiom is taught in isolation in the basic/intermediate tier;
-this is the capstone that combines them. The *problem classes* are real; the
+this is the capstone that combines them. The _problem classes_ are real; the
 rows are not.
 
 **Why interesting.** Real exports rarely have just one problem — a single CSV

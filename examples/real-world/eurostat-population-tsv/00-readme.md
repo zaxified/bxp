@@ -30,7 +30,7 @@ the ` b` glued to the number.
   shape of every Eurostat bulk TSV.
 
 **A bxp quirk this example documents.** Eurostat's year headers are **bare
-integers** (`2021`, `2022`). bxp reads `[2023]` as its `[N]` *positional* field
+integers** (`2021`, `2022`). bxp reads `[2023]` as its `[N]` _positional_ field
 reference — "the 2023rd column" — so a purely-numeric header is **unreachable
 by name**. The fix is to address the file positionally: `[1]` is the packed
 dimension column, and the year columns by their position (`[2]`/`[3]`/`[4]` in

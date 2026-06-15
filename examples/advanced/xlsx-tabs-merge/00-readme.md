@@ -6,8 +6,8 @@
 February / March) into a single long table with a `month` column.
 
 **Synthetic / teaching example.** The data here is **constructed**, not sourced —
-`sales_q1.xlsx` has three same-shape sheets (`region`, `units`). The *problem
-class* — reports split across monthly/topic tabs — is universal; the rows are not.
+`sales_q1.xlsx` has three same-shape sheets (`region`, `units`). The _problem
+class_ — reports split across monthly/topic tabs — is universal; the rows are not.
 
 **Why interesting.** "A tab per month" is how most business workbooks grow, and
 it makes the data un-analysable: you can't filter or chart across tabs without
