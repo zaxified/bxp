@@ -25,6 +25,16 @@
 #                     (default off — every run begins with a fresh build to
 #                     prevent stale or accidental Debug binaries from
 #                     skewing numbers)
+#   BENCH_LOW_DISK    set to 1 to bypass the shared input cache: generate each
+#                     point's input directly into its run dir and delete it
+#                     right after measurement. Peak disk = one input+output at a
+#                     time (~one large CSV) instead of the whole cached matrix
+#                     (~2 GB). Trades disk for CPU (shared inputs are regenerated
+#                     per use). Use on space-constrained hosts (e.g. Windows).
+#   BXP_BENCH_SINK    trace stream sink: wc (pipe+count, Linux default) | file
+#                     (redirect to scratch .bxtb + count, MSYS default — the
+#                     MSYS pipe truncates binary streams) | devnull (drop, sets
+#                     trace_events/trace_bytes to 0).
 #
 # Sweep points are dispatched in ascending order of predicted duration so a
 # total-time cap (set externally via `timeout`) cuts only the longest tail
@@ -48,6 +58,20 @@ WORK="${BENCH_WORK:-$SCRIPT_DIR/work}"
 RESULTS_DIR="$SCRIPT_DIR/results"
 TIMEOUT_SEC="${BENCH_TIMEOUT:-120}"
 PARALLEL="${BENCH_PARALLEL:-1}"
+LOW_DISK="${BENCH_LOW_DISK:-0}"
+
+# Trace sink default is platform-aware. On Linux/macOS the trace stream is piped
+# through `wc -lc` (counted, never touches disk). On Git Bash / MSYS (Windows)
+# that pipe is unusable: a native-PE bxp-cli writing a large binary stream into
+# an MSYS emulated pipe truncates after ~177 bytes and bxp-cli's stdout write
+# then fails (exit 1). A file redirect and a *native* Windows pipe both deliver
+# the full stream, so on MSYS we default to the `file` sink (redirect to a
+# scratch .bxtb, `wc -lc` it, delete) — identical numbers, no broken pipe.
+# Override with BXP_BENCH_SINK=wc|file|devnull.
+case "$(uname -s 2>/dev/null)" in
+  MINGW*|MSYS*|CYGWIN*) DEFAULT_SINK=file ;;
+  *)                    DEFAULT_SINK=wc   ;;
+esac
 
 # Always (re)build ReleaseFast unless explicitly skipped — protects against
 # a stale Debug binary lingering from interactive dev (a Debug build is
@@ -99,7 +123,12 @@ ensure_cache() {
   local tmp_dir="${cache_dir}.partial"
   mkdir -p "$cache_dir"
   (
-    flock 200
+    # flock serialises concurrent generators (BENCH_PARALLEL>1) so a large CSV
+    # is built exactly once. It is absent on Git Bash / MSYS (Windows); skip it
+    # there — serial runs (the Windows default) never race, and a parallel run
+    # on a host without flock falls back to the atomic .partial→cache_dir move
+    # below as its only guard.
+    if command -v flock >/dev/null 2>&1; then flock 200; fi
     if [ ! -f "$cache_dir/input.in.csv" ] || [ ! -f "$cache_dir/bxp-cli.json" ]; then
       # Generate to a sidecar .partial dir, then atomically move into
       # cache_dir. If killed mid-gen, no partial file ever appears in
@@ -129,16 +158,29 @@ run_one() {
         "$run_dir"/bxp-cli.json \
         "$run_dir"/input.out.csv \
         "$run_dir"/time.txt \
+        "$run_dir"/trace.bxtb \
         "$run_dir"/trace.stats 2>/dev/null
   mkdir -p "$run_dir"
 
-  local cache_dir
-  cache_dir=$(ensure_cache "$n" "$c" "$w" "$expr")
-  # Symlink input + config from cache so bxp-cli sees them in run_dir
-  # (`data_dir: "."` in the config resolves to the config's parent dir,
-  # i.e. the run_dir, so each run gets a clean output namespace).
-  ln -sf "$cache_dir/input.in.csv" "$run_dir/input.in.csv"
-  ln -sf "$cache_dir/bxp-cli.json" "$run_dir/bxp-cli.json"
+  if [ "$LOW_DISK" = "1" ]; then
+    # Low-disk: generate the input straight into the run dir (no shared cache),
+    # so peak disk is one input+output at a time. The whole run_dir — input,
+    # config and output — is deleted after measurement, so the matrix never
+    # holds more than the current point's CSV on disk. Shared inputs are
+    # regenerated per use (CPU for disk); gen.py is deterministic so numbers
+    # are unaffected.
+    local gen_args=( --rows "$n" --cols "$c" --cell-width "$w" --out-dir "$run_dir" )
+    [ "$expr" = "passthrough" ] && gen_args+=( --passthrough-only )
+    python3 "$GEN" "${gen_args[@]}" >/dev/null 2>&1
+  else
+    local cache_dir
+    cache_dir=$(ensure_cache "$n" "$c" "$w" "$expr")
+    # Symlink input + config from cache so bxp-cli sees them in run_dir
+    # (`data_dir: "."` in the config resolves to the config's parent dir,
+    # i.e. the run_dir, so each run gets a clean output namespace).
+    ln -sf "$cache_dir/input.in.csv" "$run_dir/input.in.csv"
+    ln -sf "$cache_dir/bxp-cli.json" "$run_dir/bxp-cli.json"
+  fi
 
   local cli_args=( --config "$run_dir/bxp-cli.json" )
   if [ "$trace" = "on" ]; then
@@ -150,13 +192,12 @@ run_one() {
   local trace_stats="$run_dir/trace.stats"
   local rc=0
 
-  # Experimental knobs (bench-only):
-  #   BXP_BENCH_SINK=devnull   — drop trace stream to /dev/null instead of
-  #                              piping through `wc -lc`. Lets a matrix
-  #                              measure encoding + write cost without the
-  #                              wc count overhead. trace_events / trace_bytes
-  #                              become 0 in this mode.
-  local sink_mode="${BXP_BENCH_SINK:-wc}"
+  # Trace sink (see BXP_BENCH_SINK doc in the env-overrides header):
+  #   wc       — pipe trace through `wc -lc` (never hits disk; Linux/macOS default)
+  #   file     — redirect trace to a scratch .bxtb, `wc -lc` it, delete (MSYS
+  #              default — the MSYS emulated pipe truncates the binary stream)
+  #   devnull  — drop the trace stream; trace_events / trace_bytes become 0
+  local sink_mode="${BXP_BENCH_SINK:-$DEFAULT_SINK}"
 
   # bxp-cli self-reports `bxp-metrics wall_ms=<N> peak_rss_kb=<N>` on stderr
   # when BXP_METRICS is set — portable across Linux/macOS/Windows (no GNU
@@ -165,6 +206,14 @@ run_one() {
   if [ "$trace" = "on" ]; then
     if [ "$sink_mode" = "devnull" ]; then
       BXP_METRICS=1 timeout "$TIMEOUT_SEC" "$BXP_CLI" "${cli_args[@]}" >/dev/null 2>"$time_file" || rc=$?
+    elif [ "$sink_mode" = "file" ]; then
+      # Redirect the binary trace to a scratch file (no pipe), then count it.
+      # Same two numbers as `wc -lc` on the pipe, but survives the MSYS pipe
+      # truncation on Git Bash. The .bxtb is deleted immediately after counting.
+      local trace_tmp="$run_dir/trace.bxtb"
+      BXP_METRICS=1 timeout "$TIMEOUT_SEC" "$BXP_CLI" "${cli_args[@]}" >"$trace_tmp" 2>"$time_file" || rc=$?
+      [ -s "$trace_tmp" ] && wc -lc < "$trace_tmp" > "$trace_stats"
+      rm -f "$trace_tmp"
     else
       BXP_METRICS=1 timeout "$TIMEOUT_SEC" "$BXP_CLI" "${cli_args[@]}" 2>"$time_file" \
         | wc -lc > "$trace_stats"
@@ -209,13 +258,14 @@ run_one() {
 
   rm -f "$run_dir"/input.in.csv \
         "$run_dir"/bxp-cli.json \
-        "$run_dir"/input.out.csv \
+        "$run_dir"/*.out.csv \
         "$run_dir"/time.txt \
+        "$run_dir"/trace.bxtb \
         "$run_dir"/trace.stats 2>/dev/null
   rmdir "$run_dir" 2>/dev/null
 }
 export -f run_one
-export BXP_CLI GEN LINES_DIR TIMEOUT_SEC WORK
+export BXP_CLI GEN LINES_DIR TIMEOUT_SEC WORK LOW_DISK DEFAULT_SINK
 
 # --- Job table (matrix order + heuristic predicted duration) -----------------
 #

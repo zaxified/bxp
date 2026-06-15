@@ -190,3 +190,76 @@ Flat within run-to-run noise (~2.5%): the in-house tokenizer matches the
 vendored+patched sunrise on the hot path, as expected. **This is the new
 post-sunrise baseline.** The pending-revert overhead (tracking an upstream PR,
 re-vendoring on merge) is gone for good.
+
+## Windows baseline (W-arc) — separate machine, intra-Windows reference
+
+The S01–S16 arc above is a single **Linux** machine; its absolute seconds are
+NOT comparable to Windows (different CPU/FS/OS scheduler). This W-arc is a
+standalone **Windows** reference captured so future Windows runs can be diffed
+against a known-good point — it catches a Windows-specific regression that the
+Linux arc and `test-07-bench-guard.sh` (machine-independent invariants only)
+would miss. Compare W-runs to W-runs, never W to S.
+
+**W01 — `results-20260615-101532.csv`, 2026-06-15**
+
+- Host: Intel i7-7920HQ @ 3.10 GHz, 4C/4T, 8 GB RAM, Windows 10 Pro 19045
+- Toolchain: Zig 0.15.2, bxp-cli ReleaseFast (1.5 MB)
+- Mode: `BENCH_PARALLEL=1 BENCH_LOW_DISK=1` (space-constrained host),
+  `BXP_BENCH_SINK=file` (MSYS default — see note). All 25/25 points clean.
+
+| sweep point                                    |  wall_s | rss_mb |
+| ---------------------------------------------- | ------: | -----: |
+| `S1 n=   5000 c=  16 w=  20 3expr       t=off` |    0.02 |    9.0 |
+| `S1 n=  25000 c=  16 w=  20 3expr       t=off` |    0.07 |   21.6 |
+| `S1 n= 100000 c=  16 w=  20 3expr       t=off` |    0.27 |   29.2 |
+| `S1 n= 500000 c=  16 w=  20 3expr       t=off` |    1.18 |   29.3 |
+| `S1 n=2000000 c=  16 w=  20 3expr       t=off` |    4.72 |   30.4 |
+| `S2 n=   5000 c=  16 w=  20 3expr       t=on`  |    0.03 |    9.1 |
+| `S2 n=  25000 c=  16 w=  20 3expr       t=on`  |    0.15 |   23.1 |
+| `S2 n= 100000 c=  16 w=  20 3expr       t=on`  |    0.28 |   30.4 |
+| `S2 n= 500000 c=  16 w=  20 3expr       t=on`  |    1.06 |   30.7 |
+| `S3 n= 100000 c=   4 w=  20 3expr       t=off` |    0.18 |   21.3 |
+| `S3 n= 100000 c=  16 w=  20 3expr       t=off` |    0.28 |   29.4 |
+| `S3 n= 100000 c=  64 w=  20 3expr       t=off` |    0.73 |   28.0 |
+| `S3 n= 100000 c= 256 w=  20 3expr       t=off` |    2.78 |   29.1 |
+| `S3 n= 100000 c=1024 w=  20 3expr       t=off` |   12.42 |   31.6 |
+| `S4 n= 100000 c=   4 w=  20 3expr       t=on`  |    0.15 |   24.2 |
+| `S4 n= 100000 c=  16 w=  20 3expr       t=on`  |    0.25 |   30.6 |
+| `S4 n= 100000 c=  64 w=  20 3expr       t=on`  |    0.76 |   29.1 |
+| `S4 n= 100000 c= 256 w=  20 3expr       t=on`  |    2.64 |   29.1 |
+| `S5 n=  25000 c=  16 w=  10 3expr       t=off` |    0.07 |   16.0 |
+| `S5 n=  25000 c=  16 w= 100 3expr       t=off` |    0.13 |   28.7 |
+| `S5 n=  25000 c=  16 w=1000 3expr       t=off` |    0.93 |   27.4 |
+| `S6 n= 100000 c=  16 w=  20 passthrough t=off` |    0.21 |   28.5 |
+| `S6 n= 100000 c=  16 w=  20 3expr       t=off` |    0.30 |   29.5 |
+| `S6 n= 100000 c=  16 w=  20 passthrough t=on`  |    0.16 |   30.4 |
+| `S6 n= 100000 c=  16 w=  20 3expr       t=on`  |    0.26 |   29.9 |
+
+- **Total wall (25 pts): 30.0 s. Peak RSS: 31.6 MB** (S3 c=1024).
+- RSS profile mirrors Linux (~9–31 MB, flat in row count) — the streaming
+  pipeline + per-worker scratch behaves identically on Windows.
+
+### Reproduce a W-run
+
+```bash
+# From repo root, on Windows Git Bash:
+BENCH_LOW_DISK=1 BXP_BENCH_SINK=file bash scripts/bench/bench.sh
+# (BENCH_SKIP_BUILD=1 to reuse an existing ReleaseFast bxp-cli)
+```
+
+`BENCH_LOW_DISK=1` bypasses the shared input cache (generate→measure→delete per
+point) so peak disk is one CSV at a time (~640 MB for the 2M point) instead of
+the whole ~2 GB cached matrix — required on this 8 GB / tight-disk box.
+
+### Note — why `BXP_BENCH_SINK=file` on Windows
+
+bxp-cli's `--trace` is **correct** on Windows (verified: byte-identical to a file
+and through a *native* Windows pipe). But the bench's Linux `--trace | wc -lc`
+construction fails on **Git Bash / MSYS**: a native-PE process writing a large
+binary stream into an MSYS *emulated* pipe truncates after ~177 bytes and the
+stdout write then errors (exit 1). The `file` sink (redirect to a scratch
+`.bxtb`, `wc -lc` it, delete) sidesteps the emulated pipe and yields numbers
+identical to the Linux pipe path. It is auto-selected on MSYS (`uname -s`); pass
+`BXP_BENCH_SINK=wc` to force the pipe, `=devnull` to drop counts. This is a
+harness/shell artifact, **not** a bxp-cli or GUI bug (the GUI streams trace over
+FFI, never a shell pipe).
