@@ -135,7 +135,7 @@ Expression evaluator for `input_schema` and `row_rules` in bxp-cli.json.
 - `DATE_CONVERT()` date/time parsing and formatting is handled in-process by
   `datefmt.zig` (file-relative `@import`) — no external dependency. Pre-1970
   dates are fully supported (pure parse → format reshuffle, no epoch round-trip).
-- Unit tests inline (144 test cases).
+- Unit tests inline (150 test cases).
 
 **Built-in functions:** IF, CASE, IFERROR, ABS, DATE_CONVERT, PRICE_VALUE,
 PRICE_CURRENCY, REMAP, LOOKUP, SPLIT_PART, CONTAINS, REPLACE, TRIM, ROUND,

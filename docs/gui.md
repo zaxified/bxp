@@ -31,10 +31,12 @@ bxp-gui replaced an earlier Electrobun + React + CodeMirror 6 frontend
 - **Cross-platform single binary.** Flutter desktop compiles to a
   self-contained executable with no webview runtime dependency. The same
   Dart source builds on Linux, macOS, and Windows from one codebase.
-- **Subprocess streaming fits naturally.** `Process.start()` returns a stdout
-  `Stream<List<int>>` that maps directly onto the BXTB frame reader (and the
-  NDJSON line splitter used by `--expr-trace`). No IPC bridge or marshaling
-  layer — the stream is the protocol.
+- **Subprocess streaming fits naturally.** A subprocess stdout
+  `Stream<List<int>>` maps directly onto the BXTB frame reader (and the NDJSON
+  line splitter for expr-trace). The native `bxp-gui-bridge` does the actual
+  spawn + pipe drain — Dart's own `Process.start` truncates large stdout on
+  Windows (dart-lang/sdk#1727) — then feeds the bytes into that same Dart stream
+  model, so the stream stays the protocol.
 - **Hot reload.** Flutter hot-reloads UI and state-logic changes in ~1 s
   without losing app state. Zig backend changes still require a process
   restart, but Dart-only iterations are immediate.
@@ -186,9 +188,8 @@ Three layers, top-down:
 │  services/   Pure Dart, no Flutter imports    │
 │  Subprocess wrappers, AST loader, prefs, ...  │
 └───────────────────────────────────────────────┘
-        ↕  Two transport paths (see "Subprocess wiring" below)
-        │      Process.start / Process.run      (Linux / macOS default)
-        │      bxp-gui-bridge.{dll,so,dylib}    (Win mandatory; eval cross-plat)
+        ↕  Single backend: bxp-gui-bridge (see "Subprocess wiring" below)
+        │      bxp-gui-bridge.{dll,so,dylib}    (all platforms since v0.3.0)
         ↓
   bxp-cli  (conversions via --trace BXTB frame stream, proxied by the bridge)
   bxp-core (inspect.zig + expr.zig linked directly into the bridge — in-process
@@ -215,7 +216,7 @@ bxp-gui/
 │   │   ├── bridge_client.dart                # Dart FFI shim for bxp-gui-bridge (DLL on Win,
 │   │   │                                     # .so/.dylib on Linux/macOS for bridge_eval_expr)
 │   │   ├── btrace.dart                       # Dart-side BXTB binary-trace parser (mirrors btrace.zig)
-│   │   ├── bxp_process_client.dart           # Subprocess wrapper — bridge on Win, Process.start elsewhere
+│   │   ├── bxp_process_client.dart           # Backend client — all calls via bxp-gui-bridge (no Process.start)
 │   │   ├── csv_row_fetcher.dart              # Random-access source/output row fetch by byte offset
 │   │   ├── dart_validator.dart               # Dart-side per-edit expression validator
 │   │   ├── debug_binding.dart                # WidgetsFlutterBinding hook for diagnostic capture
@@ -282,10 +283,11 @@ bxp-gui/
 
 ## Subprocess wiring
 
-`BxpProcessClient` is the single entry point for all binary calls. Under the
-hood there are two transports — out-of-process (`dart:io` Process.start) and
-in-process FFI (`bxp-gui-bridge.{dll,so,dylib}`). `BxpProcessClient` picks
-between them per call based on host OS and what the call needs.
+`BxpProcessClient` is the single entry point for all binary calls. Since the
+v0.3.0 proxy flip every call goes through the in-process FFI bridge
+(`bxp-gui-bridge.{dll,so,dylib}`) on every platform — there is no `dart:io`
+`Process.start` path. The bridge offers two call shapes: in-process inspect /
+eval, and a native-code `bxp-cli` subprocess proxy (both detailed below).
 
 ### Transport paths
 
@@ -293,13 +295,13 @@ Since the v0.3.0 proxy flip the bridge is the **single backend on every
 platform** — there is no `Process.start` path. All five entry points are
 `bridge_*` calls:
 
-| Transport                   | Used for                                                                              |
-| --------------------------- | ------------------------------------------------------------------------------------- |
-| `bridge_inspect`            | Stateless ops in-process: config validation, docs, list/fetch templates, eval-batch   |
-| `bridge_eval_expr`          | expr editor live validation per keystroke (in-process) — avoids a ~50 ms spawn cost   |
-| `bridge_eval_expr_trace`    | ExprPlayground per-call NDJSON (in-process), plus per-token trace stream               |
-| `bridge_run_streaming`      | `bxp-cli --trace` dry-run / full-run — native pipe drain sidesteps dart-lang/sdk#1727  |
-| `bridge_run`                | one-shot `bxp-cli --version` — same pipe-truncation workaround                         |
+| Transport                | Used for                                                                              |
+| ------------------------ | ------------------------------------------------------------------------------------- |
+| `bridge_inspect`         | Stateless ops in-process: config validation, docs, list/fetch templates, eval-batch   |
+| `bridge_eval_expr`       | expr editor live validation per keystroke (in-process) — avoids a ~50 ms spawn cost   |
+| `bridge_eval_expr_trace` | ExprPlayground per-call NDJSON (in-process), plus per-token trace stream              |
+| `bridge_run_streaming`   | `bxp-cli --trace` dry-run / full-run — native pipe drain sidesteps dart-lang/sdk#1727 |
+| `bridge_run`             | one-shot `bxp-cli --version` — same pipe-truncation workaround                        |
 
 The bridge is implemented as a Zig shared library that links the
 `bxp-core/inspect` + `expr` modules directly (in-proc paths) and spawns the
@@ -332,15 +334,15 @@ Resolved in this order:
 
 ### Client methods
 
-| Method                  | Binary                                    | Notes                                                   |
-| ----------------------- | ----------------------------------------- | ------------------------------------------------------- |
-| `validateConfig(path)`  | `bridge_inspect {config}`                 | Returns annotated JSON with `$err_*`/`$warn_*` siblings |
-| `getDocs()`             | `bridge_inspect {docs}`                   | Cached at startup; drives FnDoc tooltips + SchemaGate   |
-| `listTemplates(path)`   | `bridge_inspect {list_templates}`         | Template id array                                       |
-| `validateExpr(text)`    | `bridge_eval_expr`                        | Returns `{error, offset, length}` on failure            |
-| `traceExpr(text, …)`    | `bridge_eval_expr_trace`                  | NDJSON stream of per-call values                        |
-| `runDryRun(path, tmpl)` | `bxp-cli --trace`                         | BXTB frame stream → in-store reader                     |
-| `getVersion(name)`      | `bridge_run` → `bxp-cli --version`        | Writes to stdout                                        |
+| Method                  | Binary                             | Notes                                                   |
+| ----------------------- | ---------------------------------- | ------------------------------------------------------- |
+| `validateConfig(path)`  | `bridge_inspect {config}`          | Returns annotated JSON with `$err_*`/`$warn_*` siblings |
+| `getDocs()`             | `bridge_inspect {docs}`            | Cached at startup; drives FnDoc tooltips + SchemaGate   |
+| `listTemplates(path)`   | `bridge_inspect {list_templates}`  | Template id array                                       |
+| `validateExpr(text)`    | `bridge_eval_expr`                 | Returns `{error, offset, length}` on failure            |
+| `traceExpr(text, …)`    | `bridge_eval_expr_trace`           | NDJSON stream of per-call values                        |
+| `runDryRun(path, tmpl)` | `bxp-cli --trace`                  | BXTB frame stream → in-store reader                     |
+| `getVersion(name)`      | `bridge_run` → `bxp-cli --version` | Writes to stdout                                        |
 
 ### Linux dev-tree gotcha
 

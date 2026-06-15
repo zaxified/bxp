@@ -37,15 +37,15 @@ flowchart LR
 "One core, thin adapters": none of the adapters owns the stateless logic — it
 lives in `inspect`. The transport follows from **who** calls and **from where**:
 stdio = a local agent that spawns the server (private pipe, 1:1, zero config); a
-port would be bxp-api's job (remote/shared/web). The boundary rule is *the core
-must not know who is calling it*.
+port would be bxp-api's job (remote/shared/web). The boundary rule is _the core
+must not know who is calling it_.
 
 ## Two execution models
 
-| Model | Tools | Cost | How |
-| ----- | ----- | ---- | --- |
-| **In-process** | every tool except `bxp_simulate` | microseconds | a tool call is a direct `inspect` function call — no spawn, no filesystem |
-| **Spawn** | `bxp_simulate` | a real run | spawns the **co-located `bxp-cli`** (`sim.zig`); a full conversion needs `processBroker`, the worker pool, and real file I/O |
+| Model          | Tools                            | Cost         | How                                                                                                                          |
+| -------------- | -------------------------------- | ------------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| **In-process** | every tool except `bxp_simulate` | microseconds | a tool call is a direct `inspect` function call — no spawn, no filesystem                                                    |
+| **Spawn**      | `bxp_simulate`                   | a real run   | spawns the **co-located `bxp-cli`** (`sim.zig`); a full conversion needs `processBroker`, the worker pool, and real file I/O |
 
 The "no spawn" rule is about µs-latency stateless calls. A full run is inherently
 heavyweight, so the spawn cost is noise. `bxp-mcp` locates `bxp-cli` **next to
@@ -59,16 +59,17 @@ All stateless tools share the `bxp-core/inspect` core with the GUI bridge (same
 `inspect` core). The tools take config / expression **text** (not a file path) —
 the agent passes the config it is authoring.
 
-| Tool | `inspect` call | Returns |
-| ---- | -------------- | ------- |
-| `bxp_validate` | `annotateRaw(config, "<config>", 0)` | annotated JSON with `$err_`/`$warn_`/`$info_` diagnostics (`check_fs = 0`, no filesystem) |
-| `bxp_eval` | `evalExpr(expr, headers?, fields?)` | `{ok:true,value}` or `{ok:false,error,detail,off,len}` |
-| `bxp_eval_batch` | `evalBatch(request)` | `{results:[…]}` — the call `arguments` object *is* the request |
-| `bxp_eval_trace` | `evalTrace(expr, …, out)` | NDJSON: one line per function call, then a `final` / `error` sentinel |
-| `bxp_docs` | `docsJson()` | full language/schema JSON (functions, keywords, operators, tokens, config_schema) |
-| `bxp_list_templates` | `listTemplates(config)` | `{templates:[…]}` (no semantic validation) |
-| `bxp_fetch_template` | `fetchTemplate(config, id)` | the raw template JSON, or `{"$err_1":…}` for a bad id |
-| `bxp_simulate` | spawns `bxp-cli` | full end-to-end run report (see below) |
+| Tool                 | `inspect` call                       | Returns                                                                                                                                                                  |
+| -------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `bxp_validate`       | `annotateRaw(config, "<config>", 0)` | annotated JSON with `$err_`/`$warn_`/`$info_` diagnostics (`check_fs = 0`, no filesystem)                                                                                |
+| `bxp_validate_expr`  | `validateExprJson(expr)`             | authoring-time verdict for one expression: runtime eval + the static FnArgDoc lint (e.g. a literal `SPLIT_PART(…, 0)`); `{ok:true}` or `{ok:false,error,detail,off,len}` |
+| `bxp_eval`           | `evalExpr(expr, headers?, fields?)`  | `{ok:true,value}` or `{ok:false,error,detail,off,len}`                                                                                                                   |
+| `bxp_eval_batch`     | `evalBatch(request)`                 | `{results:[…]}` — the call `arguments` object _is_ the request                                                                                                           |
+| `bxp_eval_trace`     | `evalTrace(expr, …, out)`            | NDJSON: one line per function call, then a `final` / `error` sentinel                                                                                                    |
+| `bxp_docs`           | `docsJson()`                         | full language/schema JSON (functions, keywords, operators, tokens, config_schema)                                                                                        |
+| `bxp_list_templates` | `listTemplates(config)`              | `{templates:[…]}` (no semantic validation)                                                                                                                               |
+| `bxp_fetch_template` | `fetchTemplate(config, id)`          | the raw template JSON, or `{"$err_1":…}` for a bad id                                                                                                                    |
+| `bxp_simulate`       | spawns `bxp-cli`                     | full end-to-end run report (see below)                                                                                                                                   |
 
 Agent workflow hint (also in the server's `initialize` instructions): call
 `bxp_docs` first to learn the language, `bxp_eval_trace` to debug an expression,
@@ -136,7 +137,7 @@ per-call `tool_buf` — routes through a separate **per-request arena** reset wi
 `retain_capacity` after each response. Memory reaches a steady state sized to the
 largest single request instead of growing one request's allocations per call.
 
-> **Aliasing lesson.** The tool-output buffer must be a *fresh* per-request
+> **Aliasing lesson.** The tool-output buffer must be a _fresh_ per-request
 > `tool_buf` on the request arena, not a persistent retained-capacity field: a
 > retained buffer keeps pointers into arena memory that the next request's JSON
 > parse reuses, so a later call could alias its own output over the live request.

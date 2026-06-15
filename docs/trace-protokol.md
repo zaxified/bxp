@@ -230,35 +230,39 @@ These are the JSON output shapes of the stateless inspection core
 and evaluation, expr-trace, template list/fetch, and the docs catalog. The
 shapes are transport-agnostic — they reach callers through the **bxp-mcp** tools
 (the agent surface, mapped per subsection below) and the **bxp-gui-bridge** FFI
-(in-process for the Dart GUI). The bash snippets below are illustrative of each
-shape; the now-removed `bxp-fmt` CLI emitted the same bytes on stdout/stderr.
+(in-process for the Dart GUI). The snippets below show each shape via its bxp-mcp
+`tools/call` `arguments` object; the bridge produces the identical bytes
+in-process through the mapped `bridge_*` op. (A removed `bxp-fmt` CLI once
+emitted the same shapes on stdout/stderr with `--flag` argv — the shape names
+below keep that flag as a label.)
 
-Each subsection notes the bxp-mcp tool that produces the shape today:
+Each shape's canonical name, the bxp-mcp tool that produces it, and the bridge op:
 
-| Shape (below)     | bxp-mcp tool         | bridge op                  |
-| ----------------- | -------------------- | -------------------------- |
-| `--expr`          | `bxp_validate_expr`  | `bridge_eval_expr`         |
-| `--expr-trace`    | `bxp_eval_trace`     | `bridge_eval_expr_trace`   |
-| `--config`        | `bxp_validate`       | `bridge_inspect {config}`  |
-| `--list-templates`| `bxp_list_templates` | `bridge_inspect {list_templates}` |
-| `--fetch-template`| `bxp_fetch_template` | `bridge_inspect {fetch_template}` |
-| `--docs`          | `bxp_docs`           | `bridge_inspect {docs}`    |
+| Shape (below)      | bxp-mcp tool         | bridge op                         |
+| ------------------ | -------------------- | --------------------------------- |
+| `--expr`           | `bxp_validate_expr`  | `bridge_eval_expr`                |
+| `--expr-trace`     | `bxp_eval_trace`     | `bridge_eval_expr_trace`          |
+| `--config`         | `bxp_validate`       | `bridge_inspect {config}`         |
+| `--list-templates` | `bxp_list_templates` | `bridge_inspect {list_templates}` |
+| `--fetch-template` | `bxp_fetch_template` | `bridge_inspect {fetch_template}` |
+| `--docs`           | `bxp_docs`           | `bridge_inspect {docs}`           |
 
 ### --expr
 
 Validates a single expression against an empty row context (no column refs, no
 lookups). Used by bxp-gui's ExprPanel for live per-edit validation.
 
-```bash
-bxp-fmt --expr 'ABS(-1)'
+```jsonc
+// bxp_validate_expr arguments
+{ "expr": "ABS(-1)" }
 ```
 
-**Success:** stdout empty, exit 0.
+**Success:** `{ "ok": true }`.
 
-**Error:** JSON object on **stderr**, exit 1:
+**Error:** `ok:false` with the diagnostic fields inline:
 
 ```jsonc
-{ "error": "NotANumber", "detail": "(pos 4)", "off": 0, "len": 7 }
+{ "ok": false, "error": "NotANumber", "detail": "(pos 4)", "off": 0, "len": 7 }
 ```
 
 | Field    | Type     | Notes                                                                                                    |
@@ -268,23 +272,26 @@ bxp-fmt --expr 'ABS(-1)'
 | `off`    | `u32`    | Byte offset of the offending token in the expression source. Present only when the parser pinned a span. |
 | `len`    | `u32`    | Byte length of the offending token. Present only when `off` is present.                                  |
 
-Column references (`[ColumnName]`) always fail in `--expr` mode because there
-is no row context; use `--expr-trace --row-headers/--row-fields` for reference
-resolution.
+Column references (`[ColumnName]`) always fail in the `--expr` shape because
+there is no row context; use the `--expr-trace` shape with `headers` / `fields`
+for reference resolution.
 
 ### --expr-trace
 
 Evaluates an expression with per-function-call trace output and optional fake
 row context. Used by bxp-gui's expression playground (Variables panel).
 
-```bash
-bxp-fmt --expr-trace 'ABS([Price])' \
-  --row-headers '["Date","Price"]' \
-  --row-fields  '["2026-04-01","150.00"]'
+```jsonc
+// bxp_eval_trace arguments
+{
+  "expr": "ABS([Price])",
+  "headers": ["Date", "Price"],
+  "fields": ["2026-04-01", "150.00"],
+}
 ```
 
-One NDJSON line per builtin call emitted to **stdout** (emitted before the
-sentinel — partial trace survives a mid-expression error):
+One NDJSON line per builtin call (emitted before the sentinel — partial trace
+survives a mid-expression error):
 
 ```jsonc
 { "fn": "ABS", "src_start": 4, "src_end": 15, "value": "150" }
@@ -299,21 +306,21 @@ sentinel — partial trace survives a mid-expression error):
 
 **Sentinel lines** — always the last line on their respective stream:
 
-| Outcome | Stream | Shape                                                                            |
-| ------- | ------ | -------------------------------------------------------------------------------- |
-| Success | stdout | `{"t": "final", "value": "150"}`                                                 |
-| Error   | stderr | `{"t": "error", "error": "NotANumber", "detail": "(pos 4)", "off": 0, "len": 7}` |
+| Outcome | Sentinel (last NDJSON line)                                                      |
+| ------- | -------------------------------------------------------------------------------- |
+| Success | `{"t": "final", "value": "150"}`                                                 |
+| Error   | `{"t": "error", "error": "NotANumber", "detail": "(pos 4)", "off": 0, "len": 7}` |
 
 The error sentinel carries the same optional `off`/`len` fields as `--expr`.
 
-**Row context flags** — both required together or omitted together:
+**Row context arguments** — both required together or omitted together:
 
-| Flag            | Type                   | Notes                                                             |
-| --------------- | ---------------------- | ----------------------------------------------------------------- |
-| `--row-headers` | JSON array of `string` | Column names matching the CSV header row.                         |
-| `--row-fields`  | JSON array of `string` | Field values for the current row; same length as `--row-headers`. |
+| Argument  | Type                   | Notes                                                       |
+| --------- | ---------------------- | ----------------------------------------------------------- |
+| `headers` | JSON array of `string` | Column names matching the CSV header row.                   |
+| `fields`  | JSON array of `string` | Field values for the current row; same length as `headers`. |
 
-Mismatched lengths → exit 2 (usage error).
+Mismatched lengths are rejected as an argument error.
 
 ### --config
 
@@ -321,16 +328,17 @@ Validates a config file and emits it back as **annotated JSON** — standard JSO
 with reserved `$`-prefixed sibling keys that carry preserved comments and
 diagnostics. Used by bxp-gui's `loadConfig()` and the VALIDATE button.
 
-```bash
-bxp-fmt --config bxp-cli.json [--check-fs=N]
+```jsonc
+// bxp_validate arguments
+{ "config": "<bxp-cli.json text>" }
 ```
 
-`--check-fs=N` runs the filesystem existence check (data directories, input
-file patterns) with an `N`-second timeout per template. Omitted or `0` skips
-the check.
+The GUI's `bridge_inspect {config}` call passes a `check_fs` deadline (seconds)
+that runs the filesystem existence check (data directories, input file patterns)
+per template; `0` — the `bxp_validate` agent default — skips it.
 
-**Output:** annotated JSON to **stdout**, exit 0 on success or exit 1 when any
-`$err_*` is present.
+**Output:** annotated JSON; the call is flagged as an error when any `$err_*` is
+present.
 
 #### Annotated JSON keys
 
@@ -364,13 +372,13 @@ variant), so `$comm_<N>` / `$err_<N>` keys never reach the conversion pipeline.
 
 #### --list-templates modifier
 
-```bash
-bxp-fmt --config bxp-cli.json --list-templates
+```jsonc
+// bxp_list_templates arguments
+{ "config": "<bxp-cli.json text>" }
 ```
 
-Emits a JSON array of template ids to **stdout**, exit 0. No semantic
-validation — reports whatever keys appear under `conversion_templates`, even if
-a template body is malformed.
+Returns a JSON array of template ids. No semantic validation — reports whatever
+keys appear under `conversion_templates`, even if a template body is malformed.
 
 ```jsonc
 ["xtb2_cash", "revolut_stocks", "anycoin"]
@@ -378,19 +386,21 @@ a template body is malformed.
 
 #### --fetch-template modifier
 
-```bash
-bxp-fmt --config bxp-cli.json --fetch-template xtb2_cash
+```jsonc
+// bxp_fetch_template arguments
+{ "config": "<bxp-cli.json text>", "id": "xtb2_cash" }
 ```
 
-Emits the raw JSON5 block for one template as a JSON string to **stdout**, exit 0. Exit 1 if the template id is not found.
+Returns the raw JSON5 block for one template as a JSON string, or an error when the template id is not found.
 
 ### --docs
 
-Emits the full language + schema documentation catalog as pretty-printed JSON
-to **stdout**, exit 0. Single source of truth consumed by bxp-gui at startup.
+Returns the full language + schema documentation catalog as JSON. Single source
+of truth consumed by bxp-gui at startup.
 
-```bash
-bxp-fmt --docs
+```jsonc
+// bxp_docs — no arguments
+{}
 ```
 
 #### Top-level structure
@@ -486,17 +496,17 @@ logic). Each entry describes one config tree path.
 
 ## Producer / Consumer
 
-| Binary     | Role                                 | Source file                                                                                                        |
-| ---------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------ |
-| `bxp-cli`  | Produces `--trace` BXTB frame stream | [`bxp-cli/src/pipeline.zig`](../bxp-cli/src/pipeline.zig) — `Output.binEmit*()`                                    |
-| `bxp-core` | BXTB writer / reader                 | [`bxp-core/src/btrace.zig`](../bxp-core/src/btrace.zig)                                                            |
-| `bxp-core` | All stateless inspect outputs        | [`bxp-core/src/inspect.zig`](../bxp-core/src/inspect.zig)                                                          |
-| `bxp-mcp`  | MCP wrappers over inspect            | [`bxp-mcp/src/tools.zig`](../bxp-mcp/src/tools.zig)                                                                |
-| `bxp-gui-bridge` | FFI wrappers over inspect      | [`bxp-gui-bridge/src/main.zig`](../bxp-gui-bridge/src/main.zig)                                                    |
-| `bxp-core` | Per-call trace in `--expr-trace`     | [`bxp-core/src/expr.zig`](../bxp-core/src/expr.zig) — `emitCallTrace()`                                            |
-| `bxp-core` | `--docs` catalog                     | [`bxp-core/src/docs.zig`](../bxp-core/src/docs.zig) — `writeDocs()`                                                |
-| `bxp-gui`  | Consumes `--trace`                   | [`bxp-gui/lib/store/trace_store.dart`](../bxp-gui/lib/store/trace_store.dart) — `_streamRunBtrace`                 |
-| `bxp-gui`  | Consumes `--expr-trace`              | [`bxp-gui/lib/services/bxp_process_client.dart`](../bxp-gui/lib/services/bxp_process_client.dart) — `traceExpr()`  |
-| `bxp-gui`  | Consumes `--config`                  | [`bxp-gui/lib/services/bxp_process_client.dart`](../bxp-gui/lib/services/bxp_process_client.dart) — `loadConfig()` |
-| `bxp-gui`  | Consumes `--docs`                    | [`bxp-gui/lib/store/trace_store.dart`](../bxp-gui/lib/store/trace_store.dart) — `loadDocs()`                       |
-| `bxp-gui`  | Event model                          | [`bxp-gui/lib/store/trace_model.dart`](../bxp-gui/lib/store/trace_model.dart)                                      |
+| Binary           | Role                                 | Source file                                                                                                        |
+| ---------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------ |
+| `bxp-cli`        | Produces `--trace` BXTB frame stream | [`bxp-cli/src/pipeline.zig`](../bxp-cli/src/pipeline.zig) — `Output.binEmit*()`                                    |
+| `bxp-core`       | BXTB writer / reader                 | [`bxp-core/src/btrace.zig`](../bxp-core/src/btrace.zig)                                                            |
+| `bxp-core`       | All stateless inspect outputs        | [`bxp-core/src/inspect.zig`](../bxp-core/src/inspect.zig)                                                          |
+| `bxp-mcp`        | MCP wrappers over inspect            | [`bxp-mcp/src/tools.zig`](../bxp-mcp/src/tools.zig)                                                                |
+| `bxp-gui-bridge` | FFI wrappers over inspect            | [`bxp-gui-bridge/src/main.zig`](../bxp-gui-bridge/src/main.zig)                                                    |
+| `bxp-core`       | Per-call trace in `--expr-trace`     | [`bxp-core/src/expr.zig`](../bxp-core/src/expr.zig) — `emitCallTrace()`                                            |
+| `bxp-core`       | `--docs` catalog                     | [`bxp-core/src/docs.zig`](../bxp-core/src/docs.zig) — `writeDocs()`                                                |
+| `bxp-gui`        | Consumes `--trace`                   | [`bxp-gui/lib/store/trace_store.dart`](../bxp-gui/lib/store/trace_store.dart) — `_streamRunBtrace`                 |
+| `bxp-gui`        | Consumes `--expr-trace`              | [`bxp-gui/lib/services/bxp_process_client.dart`](../bxp-gui/lib/services/bxp_process_client.dart) — `traceExpr()`  |
+| `bxp-gui`        | Consumes `--config`                  | [`bxp-gui/lib/services/bxp_process_client.dart`](../bxp-gui/lib/services/bxp_process_client.dart) — `loadConfig()` |
+| `bxp-gui`        | Consumes `--docs`                    | [`bxp-gui/lib/store/trace_store.dart`](../bxp-gui/lib/store/trace_store.dart) — `loadDocs()`                       |
+| `bxp-gui`        | Event model                          | [`bxp-gui/lib/store/trace_model.dart`](../bxp-gui/lib/store/trace_model.dart)                                      |

@@ -278,8 +278,9 @@ Delete the file to reset everything to defaults.
 
 The app polls `github.com/zaxified/bxp` for new releases 5 seconds
 after launch and every 6 hours thereafter. When a newer version is
-available a dialog offers a one-click update that downloads,
-SHA256-verifies, and dispatches to the platform-native installer:
+available a dialog offers a one-click update that downloads, verifies
+(minisign signature over `SHA256SUMS`, then the asset's SHA-256 checksum),
+and dispatches to the platform-native installer:
 
 - **Windows** — silent NSIS reinstall, GUI relaunches automatically.
 - **macOS** — DMG mount, copy to `/Applications/`, relaunch.

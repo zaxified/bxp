@@ -50,9 +50,10 @@ graph TD
         Dart JSON5 AST library"]
     end
 
-    subgraph BRIDGE["bxp-gui-bridge — Zig FFI shared library"]
-        BRUN["bridge_run<br/>bridge_run_streaming<br/>subprocess proxy"]
-        BEVAL["bridge_eval_expr<br/>bridge_eval_expr_trace<br/>in-proc expr"]
+    subgraph BRIDGE["bxp-gui-bridge — Zig FFI shared library (single GUI backend, all platforms)"]
+        BRUN["bridge_run<br/>bridge_run_streaming<br/>bxp-cli subprocess proxy"]
+        BEVAL["bridge_eval_expr<br/>bridge_eval_expr_trace<br/>bridge_inspect<br/>in-proc inspect / eval"]
+        BSIG["bridge_verify_minisign<br/>release signature check"]
     end
 
     subgraph CLI["bxp-cli (binary)"]
@@ -62,13 +63,18 @@ graph TD
         processBroker()"]
     end
 
-    subgraph FMT["Config validation (bridge / inspect)"]
-        FMTMAIN["main.zig
-        --config / --expr / --docs
-        --expr-trace / --list-templates"]
+    AGENT["AI agent
+    (MCP host)"]
+
+    subgraph MCP["bxp-mcp — MCP server (JSON-RPC / stdio adapter)"]
+        MCPSRV["server.zig + tools.zig
+        stateless tools + bxp_simulate"]
     end
 
     subgraph Core["bxp-core (library)"]
+        INSPECT["inspect.zig
+        stateless core
+        validate · eval · docs · templates"]
         CSV["csv.zig
         RFC 4180 parser"]
         XLSX["xlsx.zig
@@ -88,7 +94,7 @@ graph TD
         JSON5["json5.zig
         JSON5 preprocessor"]
         DOCS["docs.zig
-        --docs aggregator"]
+        docs catalog aggregator"]
         DIAG["diagnostics.zig
         validation collector"]
     end
@@ -107,35 +113,40 @@ graph TD
     PIPE -->|--trace BXTB frames| BTRACE
     PIPE -->|write| OUT[".csvx output files"]
 
-    FMTMAIN --> CFG2
-    FMTMAIN --> EXPR
-    FMTMAIN --> DOCS
-    FMTMAIN --> DIAG
-    FMTMAIN --> JSON5
+    INSPECT --> CFG2
+    INSPECT --> EXPR
+    INSPECT --> DOCS
+    INSPECT --> DIAG
+    INSPECT --> JSON5
 
     DOCS -.re-exports.-> EXPR
     DOCS -.re-exports.-> CFG2
 
-    SVCS -->|Process.start --trace| CLI
-    SVCS -->|Process.run| FMT
     SVCS -->|dart:ffi| BRIDGE
     BRUN -->|spawns| CLI
-    BRUN -->|spawns| FMT
-    BEVAL -.links.-> EXPR
+    BEVAL -.links.-> INSPECT
     STORE --> SVCS
     STORE --> TB
     STORE --> AST_LIB
+
+    AGENT -->|JSON-RPC / stdio| MCPSRV
+    MCPSRV -.links.-> INSPECT
+    MCPSRV -->|bxp_simulate spawns| CLI
 ```
 
-`bxp-gui-bridge` is the FFI shim the GUI loads via `dart:ffi` at startup. Two
-roles in one shared library: (1) on **Windows** it wraps every `bxp-cli` /
-`bxp-cli` runs through the bridge to sidestep dart-lang/sdk#1727 (~8 KB stdout cutoff that
-kills `--docs` and `--trace`) — this path is mandatory; probe failure at
-startup is fatal. (2) on **all platforms** it links `bxp-core/expr` directly
-so the editor's live validation and the ExprPlayground avoid the ~50 ms
-subprocess spawn cost per keystroke. The subprocess proxy paths
-(`bridge_run`/`bridge_run_streaming`) also compile on Linux/macOS but stay
-dormant behind a `BXP_FORCE_BRIDGE_PROXY=1` smoke gate until v0.3.0.
+`bxp-gui-bridge` is the FFI shim the GUI loads via `dart:ffi` at startup. Since
+the v0.3.0 proxy flip (2026-06-09) it is the GUI's **single backend on every
+platform** — there is no `bxp-fmt` spawn and no `Process.start` route. Three
+roles in one shared library: (1) the **subprocess proxy**
+(`bridge_run` / `bridge_run_streaming`) wraps the `bxp-cli` runs the GUI needs
+(dry-run / full-run `--trace=bin`, `--version`) from native code, sidestepping
+dart-lang/sdk#1727 (~8 KB stdout cutoff that kills `--trace`); (2) the **in-proc
+inspect / eval** family (`bridge_eval_expr` / `bridge_eval_expr_trace` /
+`bridge_inspect`) links `bxp-core/inspect` directly, so the editor's live
+validation, the ExprPlayground, and the docs / config / template ops avoid the
+~50 ms subprocess spawn cost; (3) `bridge_verify_minisign` checks the release
+`SHA256SUMS` signature for the auto-updater. Library probe failure at startup is
+**fatal** on all platforms — a missing library means a broken install.
 
 For the **per-call transport matrix** (which GUI calls use which transport on
 each OS, plus the two-cause "why" behind the split), see
@@ -149,7 +160,7 @@ each `config.zig` struct's `fields[]` table into the docs catalog JSON.
 Adding a new built-in or config field updates the docs automatically.
 
 the config validator (`inspect.annotateRaw`) also calls `json5.preprocessAnnotated` directly to
-emit `$comm_*` / `$err_*` siblings — that's the source of the FMT → JSON5
+emit `$comm_*` / `$err_*` siblings — that's the source of the `INSPECT → JSON5`
 arrow that bypasses the normal config loader.
 
 ---
@@ -440,8 +451,8 @@ Tradeoff for our workload (per-row eval over 100k–10M rows):
 The value of `expr.zig` is **not** the parser (~600 LOC, recursive
 descent). It's the **integration**: per-row arena pattern, trace stream
 hooks, `FnDoc` autocomplete in `bxp-gui`, `error_detail` diagnostics
-returned through `Context`, byte-exact reproducibility across the 117/117
-corpus and 8 dataset regression tests. All of that would have to be
+returned through `Context`, byte-exact reproducibility across the cross-runner
+expression corpus and the dataset regression suite. All of that would have to be
 rebuilt around any hosted engine while paying the perf and footprint cost.
 
 ### When to revisit
@@ -516,8 +527,8 @@ tree to find typos and dead references. Three top-level entry points in
 | Function                       | What it returns                                | Used by                                               |
 | ------------------------------ | ---------------------------------------------- | ----------------------------------------------------- |
 | `staticReferences(src, alloc)` | Set of every `[X]` and `$var` referenced       | `validateUnknownKeysCollect`, `validateUnusedCollect` |
-| `staticCheckCalls(src, …)`     | Per-call FnArg arity + signature errors        | config validation (added in Phase G6)                |
-| `staticCheckSplitPart(src, …)` | Token-scan for `SPLIT_PART(_, _, ≤0)` literals | config validation                                    |
+| `staticCheckCalls(src, …)`     | Per-call FnArg arity + signature errors        | config validation (added in Phase G6)                 |
+| `staticCheckSplitPart(src, …)` | Token-scan for `SPLIT_PART(_, _, ≤0)` literals | config validation                                     |
 
 These share the parser front-end with `eval()` — same recursive descent, no
 duplicated grammar — but emit `Diagnostic` records into a `*Diagnostics` sink
@@ -618,24 +629,21 @@ Key invariants:
 - **No fallback FnDocs.** The docs catalog is the single source for the
   language catalog. If the binary is missing at startup, the app shows a fatal
   error gate; there are no hardcoded fallback catalogs.
-- **Two transport paths.** `BxpProcessClient` picks per call between
-  `dart:io` (`Process.start` / `Process.run`) and FFI through
-  `bxp-gui-bridge.{dll,so,dylib}`. The protocol on the wire is identical (same
-  CLI args, same stdout payload — BXTB frames for `--trace`, NDJSON for
-  `--expr-trace`, JSON for `--config` / `--docs`); only the transport differs.
-  - **Out-of-process** (`Process.start`/`Process.run`) is the default on
-    Linux/macOS for every subcommand.
-  - **In-process expression eval** (`bridge_eval_expr` / `bridge_eval_expr_trace`)
-    runs on **all platforms** for the expr editor's live validation and the
-    ExprPlayground — avoids the ~50 ms subprocess spawn cost per keystroke.
-  - **Subprocess proxy via bridge** (`bridge_run` / `bridge_run_streaming` +
-    `bridge_cancel` + `bridge_ack` for backpressure) is **mandatory on Windows**
-    to sidestep a `dart:io` pipe-truncation bug (dart-lang/sdk#1727) that kills
-    `--docs` (~30 KB) and `--trace` (megabytes). On Win the DLL is the only
-    path; probe failure at startup is fatal. On Linux/macOS these same
-    functions compile and work but stay behind a `BXP_FORCE_BRIDGE_PROXY=1`
-    pre-release smoke gate. Default-flip is on the v0.3.0 roadmap
-    ([`roadmap.md`](roadmap.md#flip-bridge-proxy-to-default-on-linuxmacos)).
+- **One backend, two call shapes.** Since the v0.3.0 proxy flip
+  `BxpProcessClient` routes **every** backend call through
+  `bxp-gui-bridge.{dll,so,dylib}` on all platforms — there is no `Process.start`
+  path. The bridge offers two call shapes:
+  - **In-process inspect / eval** (`bridge_eval_expr` / `bridge_eval_expr_trace`
+    for the expr editor's live validation + ExprPlayground; `bridge_inspect` for
+    docs / config / template / eval-batch ops) links `bxp-core/inspect` directly
+    and runs synchronously on the main isolate — no spawn, avoiding the ~50 ms
+    per-keystroke subprocess cost.
+  - **Subprocess proxy** (`bridge_run` / `bridge_run_streaming` +
+    `bridge_cancel` + `bridge_ack` for backpressure) wraps the `bxp-cli` runs
+    (dry-run / full-run `--trace=bin`, `--version`), draining pipes in native
+    Zig code to sidestep a `dart:io` pipe-truncation bug (dart-lang/sdk#1727)
+    that kills `--trace` (megabytes) on Windows. Library probe failure at
+    startup is **fatal** on every platform — there is no subprocess fallback.
 
 ---
 
@@ -661,7 +669,7 @@ sequenceDiagram
     UI->>TS: runDryRun() / runFullRun()
     TS->>TS: write draft config to tmp file
     TS->>BPC: runWithBtrace (configPath, template?)
-    BPC->>CLI: Process.start(--trace --config ...)
+    BPC->>CLI: bridge_run_streaming(--trace=bin --config ...)
     CLI-->>BPC: BXTB magic + file_start frame
     BPC-->>TS: stdout byte chunk
     TS->>TS: BtraceReader.feed(bytes), notifyListeners() [stream started]
@@ -744,7 +752,7 @@ sequenceDiagram
     else AST parsed OK
         TS->>TS: _astRoot = root
         TS->>BPC: loadConfig(path, checkFsSeconds?)
-        BPC->>FMT: Process.run(--config <path> [--check-fs=N])
+        BPC->>FMT: bridge_inspect {op:config, check_fs:N}
         FMT-->>BPC: annotated JSON ($comm/$err/$warn/$info siblings)
         BPC-->>TS: jsonOutput
         TS->>TS: extractDiagnostics(bxpTree)\n→ path-keyed buckets
@@ -984,22 +992,22 @@ sequenceDiagram
 
     Note over UI,FMT: Live validation (per edit, debounced)
     UI->>TS: setExprDraft(path, src)
-    TS->>BPC: validateExpr(src) [--expr]
-    BPC->>FMT: Process.run(--expr 'src')
-    FMT-->>BPC: stderr {error, detail, off, len} or exit 0
+    TS->>BPC: validateExpr(src)
+    BPC->>FMT: bridge_eval_expr(src)
+    FMT-->>BPC: {ok} or {ok:false, error, detail, off, len}
     BPC-->>TS: ExprValidation result
     TS-->>UI: exprValidationOffset/Length → underline token in editor
 
     Note over UI,FMT: Playground run (Variables panel)
     UI->>TS: traceExpr(src, headers, fields)
-    TS->>BPC: traceExpr() [--expr-trace + --row-headers + --row-fields]
-    BPC->>FMT: Process.start(--expr-trace ...)
-    loop per-call NDJSON line (stdout)
+    TS->>BPC: traceExpr(src, headers, fields)
+    BPC->>FMT: bridge_eval_expr_trace(src, headers, fields)
+    loop per-call NDJSON line
         FMT-->>BPC: {"fn":"ABS","src_start":0,"src_end":14,"value":"150"}
         BPC-->>TS: ExprCallTrace record
         TS-->>UI: exprCallTrace list [ValueNotifier]
     end
-    FMT-->>BPC: {"t":"final","value":"150"} stdout or {"t":"error",...} stderr
+    FMT-->>BPC: {"t":"final","value":"150"} or {"t":"error",...}
     BPC-->>TS: final value or error
     TS-->>UI: exprFinalValue / exprTraceError
 ```
@@ -1030,14 +1038,19 @@ sequenceDiagram
         UPD-->>DLG: notifyListeners() [UpdateInfo available]
         DLG->>UPD: user clicks Install
         UPD->>FS: download asset → tmp dir
-        UPD->>GH: GET SHA256SUMS
-        UPD->>UPD: verify SHA256 of asset
-        alt hash matches
-            UPD->>OS: platform-specific install
-            Note right of OS: Windows: setup.exe /S → exit(0)\nmacOS: hdiutil mount → cp -R → open -n\nLinux AppImage: atomic-replace + exec()\nLinux .deb / tarball: open release page
-            OS-->>UPD: success / failure
-        else hash mismatch
-            UPD-->>DLG: error: corrupted download
+        UPD->>GH: GET SHA256SUMS + SHA256SUMS.minisig
+        UPD->>UPD: verify minisign signature over SHA256SUMS\n(bridge_verify_minisign, fail-closed)
+        alt signature authentic
+            UPD->>UPD: verify asset SHA-256 against the now-trusted SHA256SUMS
+            alt hash matches
+                UPD->>OS: platform-specific install
+                Note right of OS: Windows: setup.exe /S → exit(0)\nmacOS: hdiutil mount → cp -R → open -n\nLinux AppImage: atomic-replace + exec()\nLinux .deb / tarball: open release page
+                OS-->>UPD: success / failure
+            else hash mismatch
+                UPD-->>DLG: error: checksum mismatch — refuse install
+            end
+        else signature missing / invalid / verifier unavailable
+            UPD-->>DLG: error: bad release signature — refuse install
         end
     else current is latest
         UPD->>UPD: schedule next tick (6 h)
@@ -1046,6 +1059,15 @@ sequenceDiagram
 
 Notes:
 
+- **Two-step fail-closed verification before any install.** First **authenticity**
+  — the `SHA256SUMS.minisig` minisign signature over `SHA256SUMS` is checked
+  against the public key embedded in `UpdaterService.minisignPublicKey` (native
+  Ed25519 + Blake2b-512 via `bridge_verify_minisign`, no Dart crypto dep); then
+  **integrity** — the asset's SHA-256 is matched against the now-trusted
+  `SHA256SUMS`. Both compares see the same fetched bytes (no verify→use swap
+  window). A missing/invalid signature, a missing/mismatched checksum, or an
+  unavailable verifier all refuse the install. Signing is automated in CI
+  (`release.yml`).
 - **Initial poll fires 5 s after launch.** Avoids slowing app startup; a 6 h
   recurring tick handles long-running sessions.
 - **macOS DMGs target ARM only.** Intel Macs get `assetUrl == null` and the
