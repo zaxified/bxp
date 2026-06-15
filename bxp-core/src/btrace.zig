@@ -2,8 +2,9 @@
 //!
 //! Frames carry only metadata (per-output-row pointers into source CSV,
 //! error list, pre_pass dump, aggregate stats). Per-row drill-down (vars,
-//! rules, output cell values) is recomputed on demand by `bxp-cli
-//! --expr-batch` from the source CSV row plus the current config.
+//! rules, output cell values) is recomputed on demand by the GUI via the
+//! bridge (`bridge_inspect` → `inspect.evalBatch`) from the source CSV row
+//! (seeked by its `source_locator` byte offset) plus the current config.
 //!
 //! Layout:
 //!

@@ -240,7 +240,7 @@ export fn bridge_run(
     }
     // Suppress the briefly-visible cmd.exe window that Windows pops up
     // when a GUI parent (bxp-gui.exe) spawns a console-subsystem child
-    // (bxp-fmt.exe). On non-Windows the field is a no-op. Maps to the
+    // (bxp-cli.exe). On non-Windows the field is a no-op. Maps to the
     // CREATE_NO_WINDOW flag in CreateProcessW.
     child.create_no_window = true;
 

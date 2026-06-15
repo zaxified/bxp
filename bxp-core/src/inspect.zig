@@ -22,7 +22,9 @@ const json5_mod = @import("json5");
 const docs_mod = @import("docs");
 const diagnostics_mod = @import("diagnostics");
 
-const CONFIG_MAX_FILE_SIZE = 1024 * 1024; // 1 MB
+// Single source of truth lives in config.zig; alias it here so the read cap can
+// never drift between the loader and this path.
+const CONFIG_MAX_FILE_SIZE = config_mod.CONFIG_MAX_FILE_SIZE;
 
 // ── docs ─────────────────────────────────────────────────────────────────────
 
@@ -581,21 +583,22 @@ fn batchErr(msg: []const u8) BatchResult {
 
 /// Evaluate N expressions against one row in a single call. `request` is the
 /// already-parsed batch object `{headers, fields, exprs, maps?, lookups?,
-/// single_prepass_name?}`. Both adapters share this core: bxp-fmt's
-/// `--expr-batch` parses stdin into a Value and hands it here; the MCP
-/// `bxp_eval_batch` tool passes the call arguments straight through.
+/// single_prepass_name?}`. Both live callers share this core: the MCP
+/// `bxp_eval_batch` tool and the bridge's `bridge_inspect {op:eval_batch}`
+/// hand the already-parsed request straight through. (The removed bxp-fmt
+/// `--expr-batch` parsed the same object from stdin.)
 ///
 /// Ragged headers/fields are tolerated (mirrors the runtime engine: field
 /// access is by header→index, and missing indices return ""). A well-formed
 /// request always returns exit 0 even if individual exprs fail — the per-result
 /// `ok` flag carries the per-expr outcome; only a malformed request is an error.
 pub fn evalBatch(a: std.mem.Allocator, request: std.json.Value) !BatchResult {
-    if (request != .object) return batchErr("--expr-batch stdin must be a JSON object");
+    if (request != .object) return batchErr("eval_batch request must be a JSON object");
     const obj = request.object;
 
-    const headers_v = obj.get("headers") orelse return batchErr("missing 'headers' in --expr-batch request");
-    const fields_v = obj.get("fields") orelse return batchErr("missing 'fields' in --expr-batch request");
-    const exprs_v = obj.get("exprs") orelse return batchErr("missing 'exprs' in --expr-batch request");
+    const headers_v = obj.get("headers") orelse return batchErr("missing 'headers' in eval_batch request");
+    const fields_v = obj.get("fields") orelse return batchErr("missing 'fields' in eval_batch request");
+    const exprs_v = obj.get("exprs") orelse return batchErr("missing 'exprs' in eval_batch request");
     if (headers_v != .array or fields_v != .array or exprs_v != .array)
         return batchErr("headers/fields/exprs must be JSON arrays");
 

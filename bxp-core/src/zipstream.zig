@@ -6,8 +6,8 @@
 //! O(one decompression window) regardless of archive or entry size.
 //!
 //! Shared primitive: `xlsx.zig` parses a workbook's XML parts through it, and
-//! the planned zipped-CSV pre-pass will stream each `.csv` member out the same
-//! way — neither consumer needs to touch ZIP internals.
+//! bxp-cli's parallel `zipPrePass` streams each zipped `.csv` member out the
+//! same way — neither consumer needs to touch ZIP internals.
 //!
 //! Reads the LOCAL file header directly for its own filename/extra lengths to
 //! locate the compressed data, so the central-vs-local `version_needed`
@@ -183,8 +183,8 @@ const testing = std.testing;
 // STORE-method zips by hand (no compressor) to exercise the central-directory
 // walk, name handling and the streaming read path. The deflate path + the real
 // XTB central-vs-local version_needed mismatch are covered end-to-end, on real
-// workbooks, by the `xtb*` datasets in test-02 once xlsx.zig consumes this
-// module — same split the former `extractZipToMemory` test used.
+// workbooks, by the `xtb*` datasets in test-02 (xlsx.zig consumes this module) —
+// same split the former `extractZipToMemory` test used.
 
 /// One member for the store-only test-zip builder.
 const TestMember = struct { name: []const u8, data: []const u8 };

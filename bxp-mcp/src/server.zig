@@ -12,6 +12,7 @@
 const std = @import("std");
 const tools = @import("tools.zig");
 const Progress = @import("progress.zig").Progress;
+const build_options = @import("build_options");
 
 /// Latest MCP protocol revision we advertise. Older revisions we also accept
 /// (and echo back) are listed in `SUPPORTED_VERSIONS`.
@@ -23,11 +24,17 @@ pub const PROTOCOL_VERSION = "2025-11-25";
 /// (`PROTOCOL_VERSION`).
 const SUPPORTED_VERSIONS = [_][]const u8{ "2025-11-25", "2025-06-18" };
 
-// The initialize result with the negotiated protocol version spliced between
-// the prefix and suffix (so a client asking for 2025-06-18 gets it back).
+// The initialize result, assembled from three constant fragments around two
+// runtime splices: the negotiated protocol version (so a client asking for
+// 2025-06-18 gets it back) and `serverInfo.version`. The latter is the manifest
+// version from `build_options.version` (single source — same value `--version`
+// prints), NOT a hardcoded literal that would silently drift each release.
 const INITIALIZE_PREFIX = "{\"protocolVersion\":\"";
+const INITIALIZE_MID =
+    \\","capabilities":{"tools":{"listChanged":false}},"serverInfo":{"name":"bxp-mcp","title":"bxp-mcp","version":"
+;
 const INITIALIZE_SUFFIX =
-    \\","capabilities":{"tools":{"listChanged":false}},"serverInfo":{"name":"bxp-mcp","title":"bxp-mcp","version":"0.0.1"},"instructions":"bxp-mcp: validate bxp-cli configs (bxp_validate), evaluate one (bxp_eval) or many (bxp_eval_batch) bxp expressions, trace one expression's per-call evaluation (bxp_eval_trace), list/fetch conversion templates (bxp_list_templates, bxp_fetch_template), run a full conversion end-to-end against sample CSV (bxp_simulate), and fetch the bxp language docs (bxp_docs). Call bxp_docs first to learn the expression/config language; use bxp_eval_trace to debug an expression and bxp_simulate to verify a finished config for real."}
+    \\"},"instructions":"bxp-mcp: validate bxp-cli configs (bxp_validate), evaluate one (bxp_eval) or many (bxp_eval_batch) bxp expressions, trace one expression's per-call evaluation (bxp_eval_trace), list/fetch conversion templates (bxp_list_templates, bxp_fetch_template), run a full conversion end-to-end against sample CSV (bxp_simulate), and fetch the bxp language docs (bxp_docs). Call bxp_docs first to learn the expression/config language; use bxp_eval_trace to debug an expression and bxp_simulate to verify a finished config for real."}
 ;
 
 /// Pick the protocol version to answer with: the client's requested one if we
@@ -163,8 +170,8 @@ fn handleInitialize(s: *Session, id: ?std.json.Value, params_opt: ?std.json.Valu
         }
     }
     const version = negotiateVersion(requested);
-    const result = std.fmt.allocPrint(s.reqAlloc(), "{s}{s}{s}", .{
-        INITIALIZE_PREFIX, version, INITIALIZE_SUFFIX,
+    const result = std.fmt.allocPrint(s.reqAlloc(), "{s}{s}{s}{s}{s}", .{
+        INITIALIZE_PREFIX, version, INITIALIZE_MID, build_options.version, INITIALIZE_SUFFIX,
     }) catch {
         writeError(s, id, -32603, "Internal error");
         return;

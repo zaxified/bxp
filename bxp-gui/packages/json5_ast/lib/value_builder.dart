@@ -16,6 +16,8 @@ import 'ast.dart';
 /// structures that would otherwise stack-overflow.
 JsonAstNode astFromValue(Object? v) => _astFromValue(v, 0);
 
+// Mirror of `parser._kMaxDepth` — keep the two in sync so the ingest (parse)
+// and mutation (astFromValue) sides reject the same pathological nesting.
 const int _kMaxDepth = 64;
 
 JsonAstNode _astFromValue(Object? v, int depth) {

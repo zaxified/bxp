@@ -87,8 +87,8 @@ pub const SectionStats = struct {
 ///            for the frame protocol.
 ///
 /// The NDJSON `--trace` / `--trace=json` mode was removed in v0.3.0;
-/// per-row drill-down detail is recomputed on demand by `bxp-cli
-/// --expr-batch` from the BXTB metadata + the source CSV.
+/// per-row drill-down detail is recomputed on demand by the GUI via the
+/// bridge (`inspect.evalBatch`) from the BXTB metadata + the source CSV.
 pub const TraceMode = enum(u2) { off, bin };
 
 /// Execution resources shared across one CLI invocation. Currently
