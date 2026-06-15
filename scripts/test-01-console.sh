@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Console-side build + unit tests (bxp-core, bxp-cli, json5_ast).
-# Dataset regression lives in test-02-datasets.sh; desktop tests in
-# test-03-desktop.sh. The stateless inspect surface that bxp-fmt used to
+# Dataset regression lives in test-07-datasets.sh; desktop tests in
+# test-04-desktop.sh. The stateless inspect surface that bxp-fmt used to
 # expose (config annotation, expr validation, expr-batch, docs, templates)
 # now lives in bxp-core/inspect.zig — its unit tests run in the bxp-core
 # phase below, and the agent-facing smoke of the same core runs in
-# test-05-mcp.sh (bxp_validate / bxp_validate_expr / bxp_eval_batch).
+# test-02-mcp.sh (bxp_validate / bxp_validate_expr / bxp_eval_batch).
 #
 # Usage (from any directory):
 #   bash scripts/test-01-console.sh   — this phase alone
@@ -29,10 +29,21 @@ _json5_ast_tests() {
     (cd "$d" && dart test)
 }
 
+# Build mode: ReleaseSafe across the ENTIRE suite — one optimize mode for the
+# whole gate. Rationale: mixing modes widens the error surface (the optimizer
+# and safety config differ per mode, so a mode-specific codegen bug can hide in
+# the gaps — we already have one: the bridge SEGVs in Debug, hence its forced
+# ReleaseSafe). A test gate should minimise that surface, so every phase builds
+# the same way the bridge is forced to: ReleaseSafe. It keeps every runtime
+# safety check (overflow / bounds / null / @intCast / unreachable → panic →
+# test FAIL), so a passing test still proves UB-freedom. Cost: test binaries
+# are slower to compile cold (cached after); accepted for the consistency.
+# Release archives are the single deliberate exception (ReleaseSmall, for size —
+# explicit -Doptimize override in release-01).
 section "Console"
-step "$(_lab bxp-core   'unit tests')"  _zig_in "$MONO_ROOT/bxp-core" build test
-step "$(_lab bxp-cli    'build')"       _zig_in "$MONO_ROOT/bxp-cli"  build
-step "$(_lab bxp-cli    'unit tests')"  _zig_in "$MONO_ROOT/bxp-cli"  build test
+step "$(_lab bxp-core   'unit tests')"  _zig_in "$MONO_ROOT/bxp-core" build test -Doptimize=ReleaseSafe
+step "$(_lab bxp-cli    'build')"       _zig_in "$MONO_ROOT/bxp-cli"  build      -Doptimize=ReleaseSafe
+step "$(_lab bxp-cli    'unit tests')"  _zig_in "$MONO_ROOT/bxp-cli"  build test -Doptimize=ReleaseSafe
 step "$(_lab json5_ast  'unit tests')"  _json5_ast_tests
 # Drift guard: the two shipped readmes are generated from resources/readme.src.md
 # (scripts/gen-readme.sh). Fail if a committed variant is out of sync with a

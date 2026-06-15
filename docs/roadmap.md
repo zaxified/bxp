@@ -288,7 +288,7 @@ fixed before release instead, not parked here).
 
 - **In-app diff actual vs expected `.csvx`.** Regression workflow without
   external `diff` tool — useful during template iteration; once stable,
-  `scripts/test-02-datasets.sh` covers it from CI. Reconsider on request
+  `scripts/test-07-datasets.sh` covers it from CI. Reconsider on request
   from a contributor maintaining > 3 templates.
 
 ### Shared core libraries — extraction (triggered, not scheduled)

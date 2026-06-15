@@ -18,9 +18,10 @@ export BXP_TEST_T0="$(_now)"
 # regression in the corpus phase) without killing legitimately slow
 # phases like Flutter desktop tests. Lookup falls back to no timeout.
 declare -A PHASE_BUDGET=(
+    # Recycles the Console phase's ReleaseSafe bxp-cli (cache hit), then runs a
+    # handful of synthetic-input points; a cold standalone build pushes it up.
+    [test-05-bench-guard.sh]=180
     [test-06-expr-corpus.sh]=60
-    # Cold ReleaseFast build (~50s) + two timed runs; warm zig cache ~1s.
-    [test-07-bench-guard.sh]=180
 )
 
 shopt -s nullglob

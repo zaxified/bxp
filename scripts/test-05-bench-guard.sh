@@ -20,10 +20,13 @@
 #      pushes this far past the row ratio. The RATIO is machine-independent
 #      even though the absolute seconds are not, so this gate does not flake.
 #
-# Build mode: test.sh's other phases build Debug (`zig build`, default
-# optimize). A Debug binary is 10-50x slower and its RSS profile differs, so
-# this phase builds its OWN ReleaseFast binary into a gitignored work prefix
-# and measures that — never the Debug artifact from test-01.
+# Build mode: ReleaseSafe — the single mode the whole `scripts/test.sh` suite
+# uses, so the perf guard recycles the bxp-cli binary the Console phase already
+# built (same package + cache → a no-op rebuild here, just the measured runs).
+# This gate checks an RSS ceiling + a scaling RATIO (not absolute wall), so it
+# does not need the fastest binary; ReleaseSafe is plenty. (The shipped archive
+# is ReleaseSmall, built only by release-01; the guard measures the test-mode
+# binary, which catches the same O(N)/O(n^2) regressions.)
 #
 # Env overrides:
 #   GUARD_SMALL_ROWS   small-N row count   (default 25000)
@@ -37,7 +40,7 @@
 #   GUARD_SKIP_BUILD   set to 1 to reuse an existing guard binary
 #
 # Usage (from any directory):
-#   bash scripts/test-07-bench-guard.sh   — this phase alone
+#   bash scripts/test-05-bench-guard.sh   — this phase alone
 #   bash scripts/test.sh                  — wrapper runs every phase
 
 set -u
@@ -51,8 +54,11 @@ XLSX_GEN="$SCRIPT_DIR/bench/gen-xlsx.py"
 XLSX_CFG="$SCRIPT_DIR/bench/xlsx-bench.json"
 XLSX_FANOUT_CFG="$SCRIPT_DIR/bench/xlsx-fanout-bench.json"
 WORK="$SCRIPT_DIR/bench/work/guard"
-BUILD_PREFIX="$WORK/build"
-BXP="$BUILD_PREFIX/bin/bxp-cli"
+# Recycle the shared bxp-cli build: same package zig-out + cache as the Console
+# phase (test-01), both ReleaseSafe, so the build below is a cache hit when the
+# suite ran first — no second compilation, just the measured runs. The whole
+# suite is one mode, so there's no Debug binary here to thrash.
+BXP="$MONO_ROOT/bxp-cli/zig-out/bin/bxp-cli"
 
 SMALL_ROWS="${GUARD_SMALL_ROWS:-25000}"
 LARGE_ROWS="${GUARD_LARGE_ROWS:-250000}"
@@ -126,12 +132,14 @@ if ! command -v python3 >/dev/null 2>&1; then
     _skip "guard" "python3 not available on this host — generator (bench/gen.py) needs it"
 fi
 
-# --- 1. Build ReleaseFast into the gitignored guard prefix -------------------
+# --- 1. Build ReleaseSafe into the shared bxp-cli zig-out --------------------
+# Same package + mode as the Console phase, so this is a cache hit when the
+# suite ran first (no second compile). GUARD_SKIP_BUILD=1 reuses it outright.
 built=0
+mkdir -p "$WORK"
 if [[ "${GUARD_SKIP_BUILD:-0}" != "1" || ! -x "$BXP" ]]; then
-    mkdir -p "$BUILD_PREFIX"
-    if ! ( cd "$MONO_ROOT/bxp-cli" && zig build -Doptimize=ReleaseFast -p "$BUILD_PREFIX" ) 2>"$WORK/build.log"; then
-        _fail "guard" 0 "ReleaseFast build failed (see $WORK/build.log)"
+    if ! ( cd "$MONO_ROOT/bxp-cli" && zig build -Doptimize=ReleaseSafe ) 2>"$WORK/build.log"; then
+        _fail "guard" 0 "ReleaseSafe build failed (see $WORK/build.log)"
     fi
     built=1
 fi
@@ -141,13 +149,14 @@ if [[ ! -x "$BXP" ]]; then
     _fail "guard" 0 "guard binary missing after build: $BXP"
 fi
 
-# Debug-build sanity: a ReleaseFast bxp-cli is ~5 MB; Debug is 20+ MB. A Debug
-# binary here would silently invalidate the scaling check. `wc -c` is portable
-# (GNU `stat -c` / BSD `stat -f` differ across Linux/macOS).
+# Optimized-build sanity: a ReleaseSafe bxp-cli is ~6 MB. A fat debug-info
+# build (20+ MB) would signal an unoptimized binary that invalidates the
+# scaling check. `wc -c` is portable (GNU `stat -c` / BSD `stat -f` differ
+# across Linux/macOS).
 bin_bytes=$(wc -c < "$BXP" | tr -d '[:space:]')
 if (( bin_bytes > 10485760 )); then
     bin_mb=$(awk -v b="$bin_bytes" 'BEGIN{printf "%.1f", b/1048576}')
-    _fail "guard" 0 "guard binary too large (${bin_mb} MB > 10 MB) — not ReleaseFast?"
+    _fail "guard" 0 "guard binary too large (${bin_mb} MB > 10 MB) — not optimized?"
 fi
 
 # Run one (rows) → echoes "wall_s rss_kb" or aborts the phase on a bad exit.
@@ -202,8 +211,8 @@ _run_xlsx_point() {
 
 # Like _run_point but wide: many columns, modest rows, full passthrough (every
 # source column routed to output via --passthrough-only) so the wide-column
-# field/output path is actually exercised. test-07's other points fix COLS=16
-# and vary rows; this one fixes rows and widens to guard the per-row buffer +
+# field/output path is actually exercised. This guard's other points fix
+# COLS=16 and vary rows; this one fixes rows and widens to guard the per-row buffer +
 # output streaming against a return to O(cols)-buffered RSS. Echoes
 # "wall_s rss_kb". (The DEV PlutoGrid fixture was GUI-render stress — not
 # headless-runnable; this is the CLI-side wide-column guard.)
@@ -354,7 +363,7 @@ large_wall_1=$(awk -v w="$large_wall" 'BEGIN{printf "%.1f", w}')
 xlsx_wall_1=$(awk -v w="$xlsx_wall" 'BEGIN{printf "%.1f", w}')
 wide_wall_1=$(awk -v w="$wide_wall" 'BEGIN{printf "%.1f", w}')
 fanout_wall_1=$(awk -v w="$fanout_wall" 'BEGIN{printf "%.1f", w}')
-(( built )) && _emit "guard build (ReleaseFast)" OK "$build_dur"
+(( built )) && _emit "guard build (ReleaseSafe)" OK "$build_dur"
 _emit "guard run N=${SMALL_ROWS} rss=${small_rss_mb}MB (<=${RSS_MB})" OK "$small_wall_1"
 _emit "guard run N=${LARGE_ROWS} rss=${large_rss_mb}MB (<=${RSS_MB})" OK "$large_wall_1"
 _emit "guard scaling ${wall_ratio}x (<=${ratio_limit}x, ${row_ratio}x rows)" OK "$chk_dur"

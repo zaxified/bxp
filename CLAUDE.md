@@ -85,17 +85,21 @@ bxp/
 │                         # intermediate / advanced + real-world). Docs/demo
 │                         # material, NOT a test gate — see examples/CLAUDE.md.
 ├── scripts/
-│   ├── test.sh           # Wrapper — runs every test-NN-*.sh in numeric order
+│   ├── test.sh           # Wrapper — runs every test-NN-*.sh in numeric order.
+│   │                     # Whole suite is ONE optimize mode (ReleaseSafe) to
+│   │                     # minimise the codegen/safety error surface; ship is the
+│   │                     # only exception (ReleaseSmall, release-01).
 │   ├── test-lib.sh       # Shared section/step/summary helpers (sourced)
 │   ├── test-01-console.sh    # bxp-core unit (incl. inspect) + bxp-cli build + readme src-sync + json5_ast unit
-│   ├── test-02-datasets.sh   # bxp-cli regression vs datasets/*/*.expected
-│   ├── test-03-desktop.sh    # flutter analyze + flutter test + json5_ast dart test
-│   ├── test-04-bridge.sh     # bxp-gui-bridge build + unit tests
-│   ├── test-05-mcp.sh        # bxp-mcp build + unit tests + JSON-RPC smoke (incl. bxp_simulate)
+│   ├── test-02-mcp.sh        # bxp-mcp build + unit tests + JSON-RPC smoke (incl. bxp_simulate)
+│   ├── test-03-bridge.sh     # bxp-gui-bridge build + unit tests
+│   ├── test-04-desktop.sh    # flutter analyze + flutter test + json5_ast dart test (builds bridge .so)
+│   ├── test-05-bench-guard.sh    # coarse perf gate: recycles Console's ReleaseSafe
+│   │                             # bxp-cli (cache hit), RSS ceiling + wall scaling-ratio
+│   │                             # (catches O(N) RSS + O(n^2) regressions; no absolute
+│   │                             # wall thresholds)
 │   ├── test-06-expr-corpus.sh    # cross-runner expression corpus regression gate
-│   ├── test-07-bench-guard.sh    # coarse perf gate: own ReleaseFast build, RSS
-│   │                             # ceiling + wall scaling-ratio (catches O(N) RSS
-│   │                             # + O(n^2) regressions; no absolute wall thresholds)
+│   ├── test-07-datasets.sh   # bxp-cli regression vs datasets/*/*.expected
 │   ├── release.sh            # Wrapper — runs release-01-console.sh + release-02-desktop.sh
 │   ├── release-01-console.sh    # Cross-compile bxp-cli + bxp-mcp, package bxp-console-* archives
 │   ├── release-02-desktop.sh    # Host-OS-specific Flutter desktop bundle → .AppImage / .deb

@@ -8,7 +8,7 @@
 # tweak), do not loosen the test.
 #
 # Usage (from any directory):
-#   bash scripts/test-02-datasets.sh   — this phase alone
+#   bash scripts/test-07-datasets.sh   — this phase alone
 #   bash scripts/test.sh               — wrapper runs every phase
 
 set -euo pipefail

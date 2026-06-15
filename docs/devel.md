@@ -163,10 +163,12 @@ bxp/                            # monorepo root (git root)
 │   ├── test.sh                 # wrapper: runs every test-NN-*.sh in numeric order
 │   ├── test-lib.sh             # shared section/step/summary helpers (sourced)
 │   ├── test-01-console.sh      # bxp-core unit (incl. inspect) + bxp-cli build + readme src-sync + json5_ast unit
-│   ├── test-02-datasets.sh     # bxp-cli regression vs datasets/*/*.expected
-│   ├── test-03-desktop.sh      # flutter analyze + flutter test + json5_ast dart test
-│   ├── test-04-bridge.sh       # bxp-gui-bridge build + unit tests
+│   ├── test-02-mcp.sh          # bxp-mcp build + unit tests + JSON-RPC smoke (incl. bxp_simulate)
+│   ├── test-03-bridge.sh       # bxp-gui-bridge build + unit tests
+│   ├── test-04-desktop.sh      # flutter analyze + flutter test + json5_ast dart test (builds bridge .so)
+│   ├── test-05-bench-guard.sh  # coarse perf gate: recycles Console's ReleaseSafe bxp-cli
 │   ├── test-06-expr-corpus.sh  # cross-runner expression corpus regression gate
+│   ├── test-07-datasets.sh     # bxp-cli regression vs datasets/*/*.expected
 │   ├── release.sh              # wrapper: release-01-console.sh + release-02-desktop.sh
 │   ├── release-01-console.sh   # cross-compile bxp-cli → bxp-console-* archives
 │   ├── release-02-desktop.sh   # Flutter bundle → AppImage / .deb / .exe / .dmg
@@ -214,10 +216,15 @@ bash scripts/test.sh
 The test script auto-discovers `test-NN-*.sh` siblings and runs them in numeric order:
 
 1. `test-01-console.sh` — Zig unit tests (incl. `inspect`) + `bxp-cli` build + readme src-sync + `json5_ast` Dart tests.
-2. `test-02-datasets.sh` — runs `bxp-cli` against every `datasets/<id>/sample.json` and diffs against `sample.expected`.
-3. `test-03-desktop.sh` — `flutter analyze` + `flutter test` for `bxp-gui`.
-4. `test-04-bridge.sh` — Zig unit tests for the FFI bridge.
-5. `test-06-expr-corpus.sh` — expression corpus regression gate (see below).
+2. `test-02-mcp.sh` — `bxp-mcp` build + unit tests + JSON-RPC smoke (incl. `bxp_simulate`).
+3. `test-03-bridge.sh` — Zig unit tests for the FFI bridge.
+4. `test-04-desktop.sh` — `flutter analyze` + `flutter test` for `bxp-gui` (builds the bridge `.so`).
+5. `test-05-bench-guard.sh` — coarse perf-regression gate (see below).
+6. `test-06-expr-corpus.sh` — expression corpus regression gate (see below).
+7. `test-07-datasets.sh` — runs `bxp-cli` against every `datasets/<id>/sample.json` and diffs against `sample.expected`.
+
+All phases build one optimize mode (ReleaseSafe) to minimise the codegen/safety
+error surface; the shipped archives (release-01) are the only ReleaseSmall build.
 
 Individual unit tests only:
 
@@ -811,29 +818,39 @@ shim, so a stale `.so`/`.dll` against a new GUI silently misbehaves.
 ./scripts/test.sh
 ```
 
-`test.sh` runs six sub-scripts in numeric order:
+`test.sh` runs seven sub-scripts in numeric order. Every phase builds the same
+optimize mode (**ReleaseSafe**) — one codegen + safety config across the whole
+gate keeps the error surface small (a mode-specific bug, like the bridge's
+Debug-only SEGV, can't slip through a gap the tests never exercise). The shipped
+archives (`release-01`) are the only ReleaseSmall build.
 
 **`test-01-console.sh`** — Zig / CLI build + unit:
 
 1. `zig build test` in `bxp-core` (unit tests for `csv.zig`, `expr.zig`, `json5.zig`, `docs.zig`, `diagnostics.zig`).
-2. Builds `bxp-cli` and `bxp-mcp`.
-3. Runs `bxp-mcp` JSON-RPC smoke tests for the stateless tools (`bxp_validate`, `bxp_validate_expr`, `bxp_eval_batch`, …) plus `bxp_simulate`.
-4. `dart test` inside `bxp-gui/packages/json5_ast/`.
+2. Builds `bxp-cli` + runs its unit tests.
+3. `dart test` inside `bxp-gui/packages/json5_ast/` + readme src-sync drift guard.
 
-**`test-02-datasets.sh`** — bxp-cli regression: iterates every `datasets/<id>/`
-directory and diffs output against `sample.expected`.
+**`test-02-mcp.sh`** — `bxp-mcp` build + unit tests + JSON-RPC smoke for the
+stateless tools (`bxp_validate`, `bxp_validate_expr`, `bxp_eval_batch`, …) plus
+a full `bxp_simulate` run.
 
-**`test-03-desktop.sh`** — Flutter / Dart side:
+**`test-03-bridge.sh`** — `bxp-gui-bridge` build + unit tests (FFI surface).
+
+**`test-04-desktop.sh`** — Flutter / Dart side:
 
 1. Builds `bxp-gui-bridge` shared library (needed for `expr_corpus_bridge_test.dart`).
 2. `flutter analyze` — static analysis of `bxp-gui/`.
 3. `flutter test` — widget + service tests in `bxp-gui/test/`.
 4. `dart test` inside `bxp-gui/packages/json5_ast/` — json5_ast unit + round-trip tests.
 
-**`test-04-bridge.sh`** — `bxp-gui-bridge` build + unit tests.
+**`test-05-bench-guard.sh`** — coarse perf-regression gate; recycles the Console
+phase's ReleaseSafe `bxp-cli` and asserts an RSS ceiling + a scaling ratio.
 
 **`test-06-expr-corpus.sh`** — expression corpus regression gate (TAB-separated
 `expr<TAB>ok|err<TAB>...` cases).
+
+**`test-07-datasets.sh`** — bxp-cli regression: iterates every `datasets/<id>/`
+directory and diffs output against `sample.expected`.
 
 > Docs formatting is **not** a test phase. `scripts/check-formatting.sh`
 > (`prettier --write` + `markdownlint` + mermaid parse) is a standalone
@@ -947,13 +964,14 @@ what unlocks streaming, parallelism, and parse-once below.
   (columns: `wall_s`, RSS, output bytes, trace event count/bytes). It rebuilds
   `ReleaseFast` first; knobs: `BENCH_WORK`, `BENCH_TIMEOUT`, `BENCH_PARALLEL`,
   `BENCH_SKIP_BUILD`. Dev-only — **not** part of `test.sh`.
-- **`scripts/test-07-bench-guard.sh`** — the coarse CI perf gate (runs in
-  `test.sh`). Asserts only two **machine-independent** invariants so it can't
-  flake on absolute seconds: an **RSS ceiling** (`GUARD_RSS_MB`, default 64 MB
-  — catches any regression back to `O(N)` buffering) and a **scaling ratio**
+- **`scripts/test-05-bench-guard.sh`** — the coarse perf gate, a `test.sh`
+  phase. Asserts only two **machine-independent** invariants so it can't flake
+  on absolute seconds: an **RSS ceiling** (`GUARD_RSS_MB`, default 64 MB —
+  catches any regression back to `O(N)` buffering) and a **scaling ratio**
   (`wall(large N) / wall(small N)` must stay near the row ratio — catches an
-  accidental `O(n²)` path). Builds its own `ReleaseFast` binary into a
-  gitignored work prefix.
+  accidental `O(n²)` path). Recycles the Console phase's `ReleaseSafe` bxp-cli
+  (same package cache → no second build, just the measured runs); the whole
+  suite is one mode, so the guard measures the same codegen the tests do.
 - **`scripts/bench/verify-output.sh`** — correctness, not speed: runs bxp-cli
   over `datasets/` + `examples/real-world/` into a dir for a before/after
   `diff -r` (use around any optimization to prove output stays byte-identical).

@@ -14,12 +14,13 @@ wrappers ignore them.
 | ----------------------------------------------------- | ------------------------------------------------ |
 | Run the full test suite                               | `bash scripts/test.sh`                           |
 | Console tests only (faster)                           | `bash scripts/test-01-console.sh`                |
-| Dataset regression only                               | `bash scripts/test-02-datasets.sh`               |
-| Desktop tests only                                    | `bash scripts/test-03-desktop.sh`                |
-| Bridge tests only                                     | `bash scripts/test-04-bridge.sh`                 |
-| Docs format-fix + lint (pre-release only)             | `bash scripts/check-formatting.sh`               |
+| MCP tests only                                        | `bash scripts/test-02-mcp.sh`                    |
+| Bridge tests only                                     | `bash scripts/test-03-bridge.sh`                 |
+| Desktop tests only                                    | `bash scripts/test-04-desktop.sh`                |
+| Perf regression guard only                            | `bash scripts/test-05-bench-guard.sh`            |
 | Expression corpus only                                | `bash scripts/test-06-expr-corpus.sh`            |
-| Perf regression guard only                            | `bash scripts/test-07-bench-guard.sh`            |
+| Dataset regression only                               | `bash scripts/test-07-datasets.sh`               |
+| Docs format-fix + lint (pre-release only)             | `bash scripts/check-formatting.sh`               |
 | Full benchmark matrix (dev only, not in `test.sh`)    | `bash scripts/bench/bench.sh`                    |
 | Local smoke build (no publish)                        | `bash scripts/release.sh`                        |
 | Console build only                                    | `bash scripts/release-01-console.sh`             |
@@ -55,11 +56,15 @@ bash scripts/release-tag.sh
 test.sh                       wrapper — runs every test-NN-*.sh in order
 test-lib.sh                   shared section/step/summary helpers (sourced)
 test-01-console.sh            bxp-core unit (incl. inspect) + bxp-cli build + readme src-sync + json5_ast unit
-test-02-datasets.sh           bxp-cli regression vs datasets/*/*.expected
-test-03-desktop.sh            flutter analyze + flutter test + json5_ast dart test
-test-04-bridge.sh             bxp-gui-bridge unit tests (FFI surface)
+test-02-mcp.sh                bxp-mcp build + unit tests + JSON-RPC smoke (incl. bxp_simulate)
+test-03-bridge.sh             bxp-gui-bridge unit tests (FFI surface)
+test-04-desktop.sh            flutter analyze + flutter test + json5_ast dart test (builds bridge .so)
+test-05-bench-guard.sh        coarse perf gate — recycles Console's ReleaseSafe bxp-cli, RSS ceiling + wall scaling ratio
 test-06-expr-corpus.sh        bxp_validate_expr corpus regression gate (via bxp-mcp)
-test-07-bench-guard.sh        coarse perf gate — own ReleaseFast build, RSS ceiling + wall scaling ratio
+test-07-datasets.sh           bxp-cli regression vs datasets/*/*.expected
+
+All test phases build ReleaseSafe (one optimize mode for the whole suite → small
+codegen/safety error surface); release archives are the only ReleaseSmall builds.
 
 release.sh                    wrapper — runs every release-NN-*.sh in order
 release-01-console.sh         cross-compile bxp-cli for 3 platforms via Zig
@@ -71,7 +76,7 @@ release-tag.sh                standalone — semver tag (v<build.zig.zon version
 check-formatting.sh           standalone — prettier --write + markdownlint + mermaid (pre-release docs; NOT auto-run by test.sh)
 
 bench/bench.sh                dev-only — full stress-test matrix (S1–S6); writes results/results-<ts>.csv
-bench/gen.py                  synthetic CSV + config generator (shared by bench.sh and test-07)
+bench/gen.py                  synthetic CSV + config generator (shared by bench.sh and test-05-bench-guard.sh)
 bench/verify-output.sh        dev-only — run bxp-cli over all inputs into <dir> for before/after `diff -r`
 ```
 
@@ -92,7 +97,7 @@ run locally on all three hosts, with a few caveats:
   (no enforcement). `brew install coreutils` if you want the bound back.
   `release-03-checksums.sh` handles `sha256sum` vs BSD `shasum` itself.
 - **python3** — `test-01-console.sh` / `test-06-expr-corpus.sh` (JSON
-  validation) and `test-07-bench-guard.sh` / `bench/bench.sh` (the
+  validation) and `test-05-bench-guard.sh` / `bench/bench.sh` (the
   `bench/gen.py` synthetic-input generator) shell out to `python3`.
   Pre-installed on all three GH runners; on Windows local dev (Git Bash)
   you may need to add Python to PATH explicitly. The bench phases measure

@@ -991,7 +991,7 @@ fn evalPrepassRow(
 // inside the eval body. After `WaitGroup.wait()` the main thread drains
 // the per-worker buffers in worker-index order so the resulting output is
 // byte-identical to the single-threaded baseline (the dataset regression
-// gate in `scripts/test-02-datasets.sh` catches any divergence for free).
+// gate in `scripts/test-07-datasets.sh` catches any divergence for free).
 //
 // The same fork-join model handles pre_pass: workers populate per-worker
 // `partial_lookup` maps; drain merges them into the shared `lookup_table`

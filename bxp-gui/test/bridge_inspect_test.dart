@@ -6,7 +6,7 @@
 // in-process inspect path the GUI relies on. Dart-side so the FFI boundary +
 // BridgeClient marshalling are exercised, not just the Zig core. (The byte
 // shape originates in bxp-core/inspect; bxp-mcp wraps the same core and is
-// smoke-tested separately in scripts/test-05-mcp.sh.)
+// smoke-tested separately in scripts/test-02-mcp.sh.)
 
 import 'dart:convert';
 import 'dart:io';

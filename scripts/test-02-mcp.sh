@@ -8,7 +8,7 @@
 # suite (which never touches bxp-mcp).
 #
 # Usage (from any directory):
-#   bash scripts/test-05-mcp.sh    — this phase alone
+#   bash scripts/test-02-mcp.sh    — this phase alone
 #   bash scripts/test.sh           — wrapper runs every phase
 
 set -euo pipefail
@@ -28,7 +28,7 @@ _smoke_bxp_mcp() {
     # bxp_simulate spawns the co-located bxp-cli, so replicate the shipped
     # bundle layout (bxp-mcp + bxp-cli side by side) in a temp dir. The other
     # tools are in-process and don't need it, but one staging covers them all.
-    [ -x "$MONO_ROOT/bxp-cli/zig-out/bin/bxp-cli" ] || _zig_in "$MONO_ROOT/bxp-cli" build
+    [ -x "$MONO_ROOT/bxp-cli/zig-out/bin/bxp-cli" ] || _zig_in "$MONO_ROOT/bxp-cli" build -Doptimize=ReleaseSafe
 
     local stage reqs resp
     stage=$(mktemp -d)
@@ -177,6 +177,6 @@ PY
 }
 
 section "MCP"
-step "$(_lab bxp-mcp 'build')"       _zig_in "$MONO_ROOT/bxp-mcp" build
-step "$(_lab bxp-mcp 'unit tests')"  _zig_in "$MONO_ROOT/bxp-mcp" build test
+step "$(_lab bxp-mcp 'build')"       _zig_in "$MONO_ROOT/bxp-mcp" build      -Doptimize=ReleaseSafe
+step "$(_lab bxp-mcp 'unit tests')"  _zig_in "$MONO_ROOT/bxp-mcp" build test -Doptimize=ReleaseSafe
 step "$(_lab bxp-mcp 'smoke')"       _smoke_bxp_mcp

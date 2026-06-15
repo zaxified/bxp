@@ -12,7 +12,7 @@ It is the place a new user (or a prospective evaluator) goes to see "what is
 this tool actually for, on real data".
 
 Regression coverage lives in [`../datasets/`](../datasets/) (gated by
-`scripts/test-02-datasets.sh`). `examples/` is **not** in any `test-NN-*.sh`
+`scripts/test-07-datasets.sh`). `examples/` is **not** in any `test-NN-*.sh`
 phase — its `.expected` files are hand-verified goldens, exercised manually and
 by `scripts/bench/verify-output.sh` (which runs `bxp-cli` over every
 `real-world/` subdir for output capture), not by `scripts/test.sh`.

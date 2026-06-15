@@ -247,7 +247,7 @@ test "validatePath: backslash separator counts as traversal on Windows builds" {
 
 /// Peak resident-set size of the current process, in kilobytes. Backs the
 /// opt-in `BXP_METRICS` self-measurement line so the perf-guard suite
-/// (`scripts/test-07-bench-guard.sh`) and the bench harness measure wall +
+/// (`scripts/test-05-bench-guard.sh`) and the bench harness measure wall +
 /// peak RSS on every platform without GNU `/usr/bin/time` — which is absent
 /// on Windows (Git Bash) and BSD-incompatible on macOS (`-f` is rejected).
 /// The process always owns a valid self-handle, so no child-handle plumbing

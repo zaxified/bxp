@@ -28,10 +28,10 @@ BXP_MCP="$MONO_ROOT/bxp-mcp/zig-out/bin/bxp-mcp"
 CORPUS="$SCRIPT_DIR/test-06-expr-corpus.txt"
 
 # Build bxp-mcp on demand for standalone runs. Under scripts/test.sh the MCP
-# phase (test-05) already built it earlier in numeric order, so this is a no-op
-# there.
+# phase (test-02) already built it earlier in numeric order, so this is a no-op
+# there. ReleaseSafe to match the rest of the suite (single optimize mode).
 if [[ ! -x "$BXP_MCP" ]]; then
-    (cd "$MONO_ROOT/bxp-mcp" && zig build) || {
+    (cd "$MONO_ROOT/bxp-mcp" && zig build -Doptimize=ReleaseSafe) || {
         echo "ERROR: bxp-mcp build failed. Run: cd bxp-mcp && zig build" >&2
         exit 2
     }

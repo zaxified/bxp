@@ -5,7 +5,7 @@
 # side don't need the SDK).
 #
 # Usage (from any directory):
-#   bash scripts/test-03-desktop.sh   — this phase alone
+#   bash scripts/test-04-desktop.sh   — this phase alone
 #   bash scripts/test.sh              — wrapper runs every phase
 
 set -euo pipefail
@@ -15,7 +15,7 @@ MONO_ROOT="$(dirname "$SCRIPT_DIR")"
 source "$SCRIPT_DIR/test-lib.sh"
 
 if ! command -v flutter >/dev/null 2>&1; then
-    echo "test-03-desktop.sh: flutter SDK not found — skipping"
+    echo "test-04-desktop.sh: flutter SDK not found — skipping"
     exit 0
 fi
 

@@ -163,7 +163,7 @@ flutter test
 dart test packages/json5_ast/
 
 # Full desktop suite: flutter analyze + flutter test + dart test
-bash scripts/test-03-desktop.sh
+bash scripts/test-04-desktop.sh
 ```
 
 `flutter analyze` enforces sound null-safety and catches common issues. Run it

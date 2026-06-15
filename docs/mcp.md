@@ -210,7 +210,7 @@ printf '%s\n' \
   | ./zig-out/bin/bxp-mcp
 ```
 
-The full smoke gate is `scripts/test-05-mcp.sh`: build + unit tests + a JSON-RPC
+The full smoke gate is `scripts/test-02-mcp.sh`: build + unit tests + a JSON-RPC
 round-trip that drives one tool from each family and a complete `bxp_simulate`
 run (verifying the co-located `bxp-cli` spawn and byte-identical output against a
 dataset's `.expected`).

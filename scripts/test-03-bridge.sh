@@ -6,7 +6,7 @@
 # surfaces here instead of inside `flutter test`.
 #
 # Usage (from any directory):
-#   bash scripts/test-04-bridge.sh    — this phase alone
+#   bash scripts/test-03-bridge.sh    — this phase alone
 #   bash scripts/test.sh              — wrapper runs every phase
 #
 # ── Linux/macOS pre-release proxy smoke ─────────────────────────────────
