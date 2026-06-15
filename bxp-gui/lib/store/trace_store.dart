@@ -20,8 +20,9 @@ import '../services/schema_doc_lookup.dart';
 import 'trace_model.dart';
 import '../ui/theme/bxp_text_scheme.dart';
 
-/// Per-severity diagnostic buckets produced by walking a `the bridge
-/// --config` annotated tree. Outer key: encoded parent path. Inner map:
+/// Per-severity diagnostic buckets produced by walking the bridge's
+/// config-validation annotated tree (`bridge_inspect {op:config}`). Outer
+/// key: encoded parent path. Inner map:
 /// `$err_<N>` / `$warn_<N>` / `$info_<N>` → message.
 typedef _DiagnosticBuckets = ({
   Map<String, Map<String, String>> errors,
@@ -2399,7 +2400,7 @@ class TraceStore extends ChangeNotifier {
   }
 
   /// Manual deep-validation pass triggered by the VALIDATE toolbar button
-  /// (or Ctrl+V). Runs `the bridge config validation <path> --check-fs=2`, refreshes
+  /// (or Ctrl+V). Re-runs the bridge's config validation (check_fs=2), refreshes
   /// the path-keyed `$err_*`/`$warn_*`/`$info_*` maps, and re-uses the
   /// adaptive `[fs.timeout]` flag so a slow mount only pays the deadline
   /// once per session. When the user has unsaved edits the current draft
@@ -3025,7 +3026,7 @@ class TraceStore extends ChangeNotifier {
   }
 
   /// Rich template metadata (data_dir / file_pattern_in / description)
-  /// pulled from `the bridge config validation <path> --list-templates` after each
+  /// pulled from the bridge's `list_templates` op (over the config path) after each
   /// successful config load. Empty when the lookup hasn't run yet or the
   /// CLI call failed — callers fall back to [availableTemplates] for IDs.
   List<TemplateInfo> _templateInfos = const [];
@@ -4119,7 +4120,7 @@ class _BtraceIngestCtx {
     return result;
   }
 
-  /// Lazy template-config fetch. `the bridge config validation X --fetch-template Y`
+  /// Lazy template-config fetch. The bridge's `fetch_template` op (config X, id Y)
   /// is ~30 ms per spawn on Linux; one cached fetch per template id keeps
   /// the live stream from stuttering on multi-file templates.
   Future<void> ensureTemplate(String templateId) async {

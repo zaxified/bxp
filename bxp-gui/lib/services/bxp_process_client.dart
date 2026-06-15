@@ -424,7 +424,7 @@ class BxpProcessClient {
       s.length <= n ? s : '${s.substring(0, n)}... (+${s.length - n} more)';
 
   /// Fetch one template's raw JSON block via
-  /// `the bridge config validation <path> --fetch-template <id>`. Returns the parsed
+  /// the bridge's `fetch_template` op (config path + template id). Returns the parsed
   /// JSON object (input_schema, row_rules, maps, …) or null on any
   /// failure (binary missing, exit non-zero, malformed JSON). Used by the
   /// btrace browser to drive `evalBatch` with the template's input_schema
@@ -455,8 +455,8 @@ class BxpProcessClient {
     }
   }
 
-  /// Enumerates conversion templates declared in a config via
-  /// `the bridge config validation <path> --list-templates`. Returns an empty list when
+  /// Enumerates conversion templates declared in a config via the bridge's
+  /// `list_templates` op (over the config path). Returns an empty list when
   /// the binary is missing or the call fails — the caller falls back to its
   /// own enumeration of `configJson['conversion_templates']` keys, so a
   /// failure here only loses the metadata (data_dir / file_pattern_in /
