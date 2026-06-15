@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mcp_dart/mcp_dart.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 
 import 'package:bxp_gui/services/gui_mcp_server.dart';
 
@@ -182,6 +183,19 @@ Map<String, dynamic> _decode(CallToolResult result) {
 }
 
 void main() {
+  // Seed PackageInfo so the server reports a known version instead of falling
+  // back to 'unknown' (the plugin channel is absent in unit tests). This sets
+  // a static cache directly — no widget binding, which would install Flutter's
+  // HttpOverrides and break the real-HTTP server the tests bind. Locks in that
+  // /health + the MCP handshake read the real app version, not a literal.
+  PackageInfo.setMockInitialValues(
+    appName: 'bxp-gui',
+    packageName: 'app.bxp.gui',
+    version: '9.9.9',
+    buildNumber: '0',
+    buildSignature: '',
+  );
+
   late _FakeHost host;
   late GuiMcpServer server;
   late bool allowSave;
@@ -606,6 +620,8 @@ void main() {
         as Map<String, dynamic>;
     hc.close();
     expect(body['name'], 'bxp-gui');
+    // Reported from PackageInfo (mocked above), not a hand-bumped literal.
+    expect(body['version'], '9.9.9');
     expect(body['config_path'], '/cfg/live.json');
     expect(body['config_loaded'], true);
     expect(body.containsKey('agent_connected'), isTrue);

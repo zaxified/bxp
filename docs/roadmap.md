@@ -9,18 +9,16 @@ to this file.
 
 ## v0.3.0
 
-### gui-mcp `/health` reports a hardcoded version
+### gui-mcp `/health` reported a hardcoded version — FIXED
 
-`GuiMcpServer._version`
-([bxp-gui/lib/services/gui_mcp_server.dart](../bxp-gui/lib/services/gui_mcp_server.dart))
-is a hardcoded string used in both `GET /health` and the MCP `initialize`
-handshake, so it drifts from the real app version (`PackageInfo`) every
-release — it has to be hand-bumped or it lies. Surfaced during the
-self-update test: `/health` reported `0.2.4` while the running app was the
-test build's version. No functional impact (the auto-updater compares
-`PackageInfo`, not this), but `/health` + the MCP handshake should report
-the true version — read `PackageInfo` (or a build-generated constant)
-instead of a literal.
+~~`GuiMcpServer._version` was a hardcoded string used in both `GET /health`
+and the MCP `initialize` handshake, drifting from the real app version every
+release.~~ Fixed: `GuiMcpServer` now caches the version from `PackageInfo`
+(awaited in `start()` before the socket binds, so both `/health` and the
+handshake — which can only fire after the server listens — read the resolved
+value), falling back to `'unknown'` only if the platform channel fails. A
+`gui_mcp_server_test.dart` case seeds `PackageInfo.setMockInitialValues` and
+asserts `/health` reports it.
 
 (The Windows self-update UAC + running-exe-overwrite bug was fixed: per-user
 install + rename-swap self-heal in `bxp-desktop.nsi` + `updater_service.dart`,

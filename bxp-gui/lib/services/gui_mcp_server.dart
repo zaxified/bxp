@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:mcp_dart/mcp_dart.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 
 import 'dev_trace.dart';
 
@@ -208,7 +209,26 @@ class GuiMcpServer extends ChangeNotifier {
   static const int _activityCap = 200;
 
   /// Reported in the MCP `Implementation` handshake and the `/health` probe.
-  static const String _version = '0.2.4';
+  /// Cached from [PackageInfo] in [start] so it tracks the real app version
+  /// (pubspec → Runner resource) instead of drifting from a hand-bumped
+  /// literal every release. Stays `'unknown'` only if the platform channel
+  /// fails before the first bind — better to report unknown than to lie.
+  String _version = 'unknown';
+  bool _versionLoaded = false;
+
+  /// Populate [_version] from [PackageInfo] once. Awaited in [start] before
+  /// the socket binds, so both `/health` and the MCP handshake (which can
+  /// only fire after the server is listening) read the resolved value.
+  Future<void> _ensureVersionLoaded() async {
+    if (_versionLoaded) return;
+    try {
+      final info = await PackageInfo.fromPlatform();
+      if (info.version.isNotEmpty) _version = info.version;
+    } catch (e) {
+      devTrace('mcp.version.error', {'error': '$e'});
+    }
+    _versionLoaded = true;
+  }
 
   /// Default loopback host the control server binds to.
   static const String kDefaultMcpHost = '127.0.0.1';
@@ -273,6 +293,7 @@ class GuiMcpServer extends ChangeNotifier {
     if (port != null) _bindPort = port;
     if (originAllowlist != null) _originAllowlist = List.of(originAllowlist);
     _lastError = null;
+    await _ensureVersionLoaded();
     try {
       final http = await HttpServer.bind(_resolveBindAddress(_bindHost), _bindPort);
       _http = http;
@@ -521,7 +542,7 @@ class GuiMcpServer extends ChangeNotifier {
 
   McpServer _buildServer() {
     final server = McpServer(
-      const Implementation(name: 'bxp-gui', version: _version),
+      Implementation(name: 'bxp-gui', version: _version),
     );
 
     // get_state — read-only "see the screen" tool. The single biggest
