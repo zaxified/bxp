@@ -6,10 +6,11 @@
 # docs review (see memory `feedback_pre_release_review_order`, Krok 3).
 #
 # Three steps, in order:
-#   1. prettier --write  — AUTO-FIXES formatting across owned .md/.json/.jsonc
-#      /.yml/.yaml (notably realigns markdown tables). Ignores from
-#      `.prettierignore`. This is the fixer, not a check — run it, commit the
-#      result; nothing to hand-fix.
+#   1. prettier --write  — AUTO-FIXES markdown formatting (.md only; notably
+#      realigns tables). Scoped to `**/*.md` on purpose: a wider glob also
+#      rewrites example/bench data JSON + workflow YAML, which is unwanted
+#      churn. Ignores from `.prettierignore`. This is the fixer, not a check —
+#      run it, commit the result; nothing to hand-fix.
 #   2. markdownlint-cli2 — verifies markdown semantics (`.markdownlint-cli2.jsonc`).
 #   3. mermaid check     — parses every mermaid fence (renders aren't visible to
 #      a reviewer; a syntax slip ships a blank graph to GitHub).
@@ -38,7 +39,7 @@ if ! command -v bunx >/dev/null 2>&1; then
 fi
 
 _prettier_fix() {
-    bunx prettier --write "**/*.{md,json,jsonc,yml,yaml}"
+    bunx prettier --write "**/*.md"
 }
 
 _markdownlint_check() {
