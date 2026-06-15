@@ -299,8 +299,8 @@ class TraceStore extends ChangeNotifier {
 
   /// Set true on the first `[fs.timeout]` warning observed in
   /// `_validationWarnings`. Adaptive degradation: subsequent
-  /// loadConfig / saveConfig spawns drop the `--check-fs=N` flag so a
-  /// pathological NFS/SMB mount only pays the deadline once per app
+  /// loadConfig / saveConfig validation runs drop the FS check (check_fs=0)
+  /// so a pathological NFS/SMB mount only pays the deadline once per app
   /// session. Resets on app restart only — there's no UI toggle.
   bool _fsCheckSlow = false;
   bool get fsCheckSlow => _fsCheckSlow;
