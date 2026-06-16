@@ -84,11 +84,11 @@ Claude loads these automatically and reads project conventions.
 
 ### Skills to use
 
-Install Zig skills from <https://github.com/rudedogg/zig-skills>
+Install the `zig` API-reference skill from <https://github.com/nzrsky/zig-skills> (targets Zig 0.16.0).
 
 | Skill        | When to use                                                     |
 | ------------ | --------------------------------------------------------------- |
-| `/zig`       | Before writing any new Zig code - loads Zig 0.15.2 API patterns |
+| `/zig`       | Before writing any new Zig code - loads Zig 0.16.0 API patterns |
 | `/zig-build` | Compile the project and get structured error analysis           |
 | `/zig-check` | Fast syntax/type check without full build                       |
 | `/zig-test`  | Run the test suite and analyze failures                         |
