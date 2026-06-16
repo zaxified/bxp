@@ -3665,10 +3665,10 @@ test "ChunkReader: residual + chunk_start_in_file bookkeeping" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const body = "a,1\nb,2\nc,3\n";
-    try tmp.dir.writeFile(.{ .sub_path = "in.csv", .data = body });
-    var f = try tmp.dir.openFile("in.csv", .{});
-    defer f.close();
-    var cr = try ChunkReader.init(std.testing.allocator, f);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "in.csv", .data = body });
+    var f = try tmp.dir.openFile(std.testing.io, "in.csv", .{});
+    defer f.close(std.testing.io);
+    var cr = try ChunkReader.init(std.testing.io, std.testing.allocator, f);
     defer cr.deinit();
     // File is far below CHUNK_SIZE, so the whole body comes back as one chunk
     // ending on its final '\n'; offset starts at 0.
