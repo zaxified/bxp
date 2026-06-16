@@ -339,11 +339,16 @@ pub fn evalExpr(
     var detail: []const u8 = "";
     var err_offset: u32 = 0;
     var err_len: u32 = 0;
+    // Real io so the time/entropy builtins (NOW / RAND) work; default `.failing`
+    // would make RAND error and NOW return 1970. Synchronous + short-lived.
+    var threaded = std.Io.Threaded.init(a, .{});
+    defer threaded.deinit();
     const ctx = expr_mod.Context{
         .fields = fields_list.items,
         .col_index = &col_index,
         .lookup_table = null,
         .alloc = a,
+        .io = threaded.io(),
         .error_detail = &detail,
         .error_offset = &err_offset,
         .error_len = &err_len,
@@ -418,11 +423,15 @@ pub fn evalTrace(
     var detail: []const u8 = "";
     var err_offset: u32 = 0;
     var err_len: u32 = 0;
+    // Real io so NOW / RAND work (default `.failing` errors RAND, 1970s NOW).
+    var threaded = std.Io.Threaded.init(a, .{});
+    defer threaded.deinit();
     const ctx = expr_mod.Context{
         .fields = fields_list.items,
         .col_index = &col_index,
         .lookup_table = null,
         .alloc = a,
+        .io = threaded.io(),
         .error_detail = &detail,
         .error_offset = &err_offset,
         .error_len = &err_len,
@@ -500,11 +509,16 @@ pub fn validateExpr(a: std.mem.Allocator, src: []const u8) !?ExprError {
     var detail: []const u8 = "";
     var err_offset: u32 = 0;
     var err_len: u32 = 0;
+    // Real io so NOW / RAND validate as runnable (default `.failing` would flag
+    // a valid RAND(n) as an error).
+    var threaded = std.Io.Threaded.init(a, .{});
+    defer threaded.deinit();
     const ctx = expr_mod.Context{
         .fields = &.{},
         .col_index = &col_index,
         .lookup_table = null,
         .alloc = a,
+        .io = threaded.io(),
         .error_detail = &detail,
         .error_offset = &err_offset,
         .error_len = &err_len,
@@ -672,6 +686,12 @@ pub fn evalBatch(a: std.mem.Allocator, request: std.json.Value) !BatchResult {
         }
     }
 
+    // Real io (shared across all exprs in the batch) so NOW / RAND work;
+    // default `.failing` errors RAND and returns 1970 for NOW.
+    var threaded = std.Io.Threaded.init(a, .{});
+    defer threaded.deinit();
+    const batch_io = threaded.io();
+
     var aw: std.Io.Writer.Allocating = .init(a);
     errdefer aw.deinit();
     var jw: std.json.Stringify = .{ .writer = &aw.writer, .options = .{} };
@@ -704,6 +724,7 @@ pub fn evalBatch(a: std.mem.Allocator, request: std.json.Value) !BatchResult {
             .lookup_table = if (have_lookups) &lookups else null,
             .single_prepass_name = single_prepass_name,
             .alloc = a,
+            .io = batch_io,
             .error_detail = &detail,
             .error_offset = &err_off,
             .error_len = &err_len,
