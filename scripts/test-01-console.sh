@@ -33,8 +33,9 @@ _json5_ast_tests() {
 # whole gate. Rationale: mixing modes widens the error surface (the optimizer
 # and safety config differ per mode, so a mode-specific codegen bug can hide in
 # the gaps — the 0.15.2 Debug-mode bridge SEGV was exactly such a gap). A test
-# gate should minimise that surface, so EVERY phase passes -Doptimize=ReleaseSafe
-# explicitly — including the bridge phases (test-03 / test-04). Until Zig 0.16
+# gate should minimise that surface, so EVERY phase passes
+# `-Doptimize=ReleaseSafe -Dcpu=baseline` explicitly — including the bridge
+# phases (test-03 / test-04). Until Zig 0.16
 # the bridge's build.zig force-rewrote Debug→ReleaseSafe, so its phases came out
 # ReleaseSafe even without the flag; 0.16 dropped that override (build.zig now
 # honours -Doptimize), so the flag must be passed there too or the .dll reverts
@@ -43,12 +44,20 @@ _json5_ast_tests() {
 # safety check (overflow / bounds / null / @intCast / unreachable → panic →
 # test FAIL), so a passing test still proves UB-freedom. Cost: test binaries
 # are slower to compile cold (cached after); accepted for the consistency.
+#
+# CPU: -Dcpu=baseline pins a fixed, host-CPU-independent target. zig build
+# otherwise defaults to the *native* CPU, whose feature set is baked into the
+# build-cache key. GitHub's runners are heterogeneous hardware, so a native
+# build keys the cache to whatever CPU that run happened to land on — the next
+# run lands on a different CPU and misses the whole cache, recompiling the gate
+# from scratch every time. baseline makes the key stable across runners so the
+# restored .zig-cache actually hits. (Measured: native v2→v3 = full recompile.)
 # Release archives are the single deliberate exception (ReleaseSmall, for size —
 # explicit -Doptimize override in release-01).
 section "Console"
-step "$(_lab bxp-core   'unit tests')"  _zig_in "$MONO_ROOT/bxp-core" build test -Doptimize=ReleaseSafe
-step "$(_lab bxp-cli    'build')"       _zig_in "$MONO_ROOT/bxp-cli"  build      -Doptimize=ReleaseSafe
-step "$(_lab bxp-cli    'unit tests')"  _zig_in "$MONO_ROOT/bxp-cli"  build test -Doptimize=ReleaseSafe
+step "$(_lab bxp-core   'unit tests')"  _zig_in "$MONO_ROOT/bxp-core" build test -Doptimize=ReleaseSafe -Dcpu=baseline
+step "$(_lab bxp-cli    'build')"       _zig_in "$MONO_ROOT/bxp-cli"  build      -Doptimize=ReleaseSafe -Dcpu=baseline
+step "$(_lab bxp-cli    'unit tests')"  _zig_in "$MONO_ROOT/bxp-cli"  build test -Doptimize=ReleaseSafe -Dcpu=baseline
 step "$(_lab json5_ast  'unit tests')"  _json5_ast_tests
 # Drift guard: the two shipped readmes are generated from resources/readme.src.md
 # (scripts/gen-readme.sh). Fail if a committed variant is out of sync with a

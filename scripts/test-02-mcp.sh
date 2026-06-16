@@ -28,7 +28,7 @@ _smoke_bxp_mcp() {
     # bxp_simulate spawns the co-located bxp-cli, so replicate the shipped
     # bundle layout (bxp-mcp + bxp-cli side by side) in a temp dir. The other
     # tools are in-process and don't need it, but one staging covers them all.
-    [ -x "$MONO_ROOT/bxp-cli/zig-out/bin/bxp-cli" ] || _zig_in "$MONO_ROOT/bxp-cli" build -Doptimize=ReleaseSafe
+    [ -x "$MONO_ROOT/bxp-cli/zig-out/bin/bxp-cli" ] || _zig_in "$MONO_ROOT/bxp-cli" build -Doptimize=ReleaseSafe -Dcpu=baseline
 
     local stage reqs resp
     stage=$(mktemp -d)
@@ -177,6 +177,6 @@ PY
 }
 
 section "MCP"
-step "$(_lab bxp-mcp 'build')"       _zig_in "$MONO_ROOT/bxp-mcp" build      -Doptimize=ReleaseSafe
-step "$(_lab bxp-mcp 'unit tests')"  _zig_in "$MONO_ROOT/bxp-mcp" build test -Doptimize=ReleaseSafe
+step "$(_lab bxp-mcp 'build')"       _zig_in "$MONO_ROOT/bxp-mcp" build      -Doptimize=ReleaseSafe -Dcpu=baseline
+step "$(_lab bxp-mcp 'unit tests')"  _zig_in "$MONO_ROOT/bxp-mcp" build test -Doptimize=ReleaseSafe -Dcpu=baseline
 step "$(_lab bxp-mcp 'smoke')"       _smoke_bxp_mcp

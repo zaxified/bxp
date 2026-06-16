@@ -138,7 +138,7 @@ fi
 built=0
 mkdir -p "$WORK"
 if [[ "${GUARD_SKIP_BUILD:-0}" != "1" || ! -x "$BXP" ]]; then
-    if ! ( cd "$MONO_ROOT/bxp-cli" && zig build -Doptimize=ReleaseSafe ) 2>"$WORK/build.log"; then
+    if ! ( cd "$MONO_ROOT/bxp-cli" && zig build -Doptimize=ReleaseSafe -Dcpu=baseline ) 2>"$WORK/build.log"; then
         _fail "guard" 0 "ReleaseSafe build failed (see $WORK/build.log)"
     fi
     built=1

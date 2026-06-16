@@ -31,7 +31,7 @@ CORPUS="$SCRIPT_DIR/test-06-expr-corpus.txt"
 # phase (test-02) already built it earlier in numeric order, so this is a no-op
 # there. ReleaseSafe to match the rest of the suite (single optimize mode).
 if [[ ! -x "$BXP_MCP" ]]; then
-    (cd "$MONO_ROOT/bxp-mcp" && zig build -Doptimize=ReleaseSafe) || {
+    (cd "$MONO_ROOT/bxp-mcp" && zig build -Doptimize=ReleaseSafe -Dcpu=baseline) || {
         echo "ERROR: bxp-mcp build failed. Run: cd bxp-mcp && zig build" >&2
         exit 2
     }
