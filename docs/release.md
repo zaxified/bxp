@@ -15,7 +15,7 @@ the GitHub Actions matrix and waits for it to finish (~10 min).
 ```bash
 # 1. Bump every manifest in lockstep + generate the CHANGELOG entry
 #    + commit as "release: prepare X.Y.Z (YYYY.MM.DD)".
-bash scripts/release-changelog.sh patch        # or `minor` / `major` / `0.3.0`
+bash scripts/release-changelog.sh patch        # or `minor` / `major` / `X.Y.Z`
 
 # 2. Push the bump commit so the tag points at a public ref.
 git push origin master
@@ -42,8 +42,8 @@ between pushing master and pushing the tag. GH Actions matrix runs
 windows-latest only, so a regression that breaks Win MSVC compile or
 NSIS-install behaviour surfaces _after_ the release is half-published.
 
-On a Windows host with Git Bash + Zig 0.15.2 + Flutter (Windows desktop
-support) + Visual Studio with C++ desktop workload + NSIS on PATH:
+On a Windows host with Git Bash + Zig (the `build.zig.zon` version) + Flutter
+(Windows desktop support) + Visual Studio with C++ desktop workload + NSIS on PATH:
 
 ```bash
 git pull origin master
@@ -77,7 +77,7 @@ releases — the GH Actions matrix is sufficient for those.
 | `desktop-linux`   | ubuntu-22.04   | `bxp-desktop-<ver>-linux-x86_64.{tar.gz, AppImage, deb}`                            |
 | `desktop-windows` | windows-latest | `bxp-desktop-<ver>-windows-x86_64-setup.exe`                                        |
 | `desktop-macos`   | macos-latest   | `bxp-desktop-<ver>-macos-aarch64.dmg`                                               |
-| `release`         | ubuntu-latest  | aggregates above + `SHA256SUMS`, publishes Release                                  |
+| `release`         | ubuntu-latest  | aggregates above + `SHA256SUMS` + minisign `SHA256SUMS.minisig`, publishes Release  |
 
 `bxp-console` archives are GUI-free (small, no Flutter deps) but ship
 both `bxp-cli` and `bxp-mcp` — the latter so a console user (or an AI
@@ -100,11 +100,11 @@ Run before tagging to catch obvious breakage:
 bash scripts/test.sh
 
 # Build the host platform's desktop bundle locally (no upload).
-bash scripts/release-02-desktop.sh v0.2.2-rc1
+bash scripts/release-02-desktop.sh vX.Y.Z-rc1
 ls releases/desktop/
 
 # Build all three console archives (cross-compiled via Zig).
-bash scripts/release-01-console.sh v0.2.2-rc1
+bash scripts/release-01-console.sh vX.Y.Z-rc1
 ls releases/console/
 ```
 
@@ -113,13 +113,13 @@ platforms are exercised by GH Actions runners. Use `workflow_dispatch`
 to test the Windows / macOS branches without cutting a real tag:
 
 ```bash
-gh workflow run release.yml -f version=v0.2.2-rc-test
+gh workflow run release.yml -f version=vX.Y.Z-rc-test
 ```
 
 ## Verifying a published release
 
 1. Open `https://github.com/zaxified/bxp/releases/tag/vX.Y.Z`.
-2. Confirm 8 artifacts + `SHA256SUMS` are listed.
+2. Confirm 8 artifacts + `SHA256SUMS` + `SHA256SUMS.minisig` are listed.
 3. Download a desktop installer for your host, run it, and verify the
    GUI launches. The startup screen should show the version in
    SettingsInspector (Ctrl+Shift+S).
@@ -147,7 +147,35 @@ gh workflow run release.yml -f version=v0.2.2-rc-test
   - macOS: `open -n` in `_installMacOS` of `updater_service.dart`.
   - Linux AppImage: re-`exec()` of the new file in `_installLinuxAppImage`.
 
-## What's NOT signed
+## Signing and supply-chain integrity
+
+Every real tag release ships a **minisign-signed checksum manifest**, and the
+in-app updater **fails closed** without it:
+
+- `release-03-checksums.sh` writes `SHA256SUMS` over the staged artifacts, then
+  re-verifies it with `--check` before anything is signed — a truncated or
+  corrupt artifact fails the release loudly instead of shipping.
+- The `release` job signs `SHA256SUMS` with minisign (the maintainer's single
+  key, held in the gated `MINISIGN_KEY` secret) to produce `SHA256SUMS.minisig`.
+  The key is reachable only from `v*` tag runs.
+- **A tag release with no signing key refuses to publish** — an unsigned release
+  would be rejected by every fail-closed client, so the workflow errors out
+  instead of shipping one. (A `workflow_dispatch` test run skips signing, as it
+  is not a real release.)
+
+On the client, `UpdaterService` verifies `SHA256SUMS.minisig` against an embedded
+public key **before** trusting the manifest, then matches the downloaded
+installer's hash against it — two fail-closed steps over the same bytes. A forged
+installer plus a matching `SHA256SUMS` cannot produce a valid signature without
+the private key. See [`gui.md`](gui.md#auto-updater-and-security) for the client
+side.
+
+## What's NOT signed (OS code signing)
+
+Distinct from the minisign integrity layer above: the **binaries themselves**
+carry no OS-level code-signing certificate, so the platform's first-launch
+warning still appears. This is independent of update integrity — the updater's
+minisign check still protects every download.
 
 - macOS `.app` is **ad-hoc signed** only; Gatekeeper warns on first
   launch (right-click → Open works). Apple Developer ID notarisation

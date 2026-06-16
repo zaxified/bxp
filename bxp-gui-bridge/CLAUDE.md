@@ -126,11 +126,16 @@ verify the corpus, then drop the rewrite.
   gate. Both the subprocess proxy (`bridge_run` / `bridge_run_streaming` for
   `bxp-cli`) and the in-proc families (`bridge_eval_expr*` / `bridge_inspect`)
   are live on every host.
-- **Tracked:** the Windows `bridge_inspect` smoke leg is now load-bearing —
-  verify it on a Win runner (Linux is live-verified, and the same DLL is
-  already mandatory there for the proxy + eval families). `bxp-fmt` has been
-  deleted; the console archive ships `bxp-mcp` as the agent-facing surface and
-  `scripts/test.sh` drives `inspect` via bxp-mcp / the bridge.
+- **Windows bridge path verified (pre-release sweep).** The in-proc
+  `bridge_inspect` family is load-bearing on Windows (no `bxp-fmt` fallback) and
+  was exercised on real Windows hardware in the pre-release win-smoke + bridge
+  test pass — alongside the always-live Linux verification and the proxy + eval
+  families that are already mandatory on every host. Caveat:
+  `bxp-gui/tool/win_bridge_smoke.dart` is **obsolete** — its large-payload
+  scenarios proxied the now-deleted `bxp-fmt` through `bridge_run`; repoint them
+  at `bxp-cli` before reusing that harness. `bxp-fmt` itself is gone; the console
+  archive ships `bxp-mcp` as the agent-facing surface and `scripts/test.sh`
+  drives `inspect` via bxp-mcp / the bridge.
 
 ## Coding conventions
 

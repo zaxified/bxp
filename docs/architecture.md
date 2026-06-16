@@ -48,6 +48,9 @@ graph TD
         BxpProcessClient"]
         AST_LIB["packages/json5_ast/
         Dart JSON5 AST library"]
+        GUIMCP["gui-mcp (GuiMcpServer)
+        embedded MCP server
+        drives the live TraceStore"]
     end
 
     subgraph BRIDGE["bxp-gui-bridge — Zig FFI shared library (single GUI backend, all platforms)"]
@@ -130,13 +133,15 @@ graph TD
     STORE --> AST_LIB
 
     AGENT -->|JSON-RPC / stdio| MCPSRV
+    AGENT -->|MCP / localhost HTTP| GUIMCP
+    GUIMCP -->|TraceStore actions| STORE
     MCPSRV -.links.-> INSPECT
     MCPSRV -->|bxp_simulate spawns| CLI
 ```
 
-`bxp-gui-bridge` is the FFI shim the GUI loads via `dart:ffi` at startup. Since
-the v0.3.0 proxy flip (2026-06-09) it is the GUI's **single backend on every
-platform** — there is no `bxp-fmt` spawn and no `Process.start` route. Three
+`bxp-gui-bridge` is the FFI shim the GUI loads via `dart:ffi` at startup. It is
+the GUI's **single backend on every platform** — there is no `bxp-fmt` spawn and
+no `Process.start` route. Three
 roles in one shared library: (1) the **subprocess proxy**
 (`bridge_run` / `bridge_run_streaming`) wraps the `bxp-cli` runs the GUI needs
 (dry-run / full-run `--trace=bin`, `--version`) from native code, sidestepping
@@ -527,7 +532,7 @@ tree to find typos and dead references. Three top-level entry points in
 | Function                       | What it returns                                | Used by                                               |
 | ------------------------------ | ---------------------------------------------- | ----------------------------------------------------- |
 | `staticReferences(src, alloc)` | Set of every `[X]` and `$var` referenced       | `validateUnknownKeysCollect`, `validateUnusedCollect` |
-| `staticCheckCalls(src, …)`     | Per-call FnArg arity + signature errors        | config validation (added in Phase G6)                 |
+| `staticCheckCalls(src, …)`     | Per-call FnArg arity + signature errors        | config validation                                     |
 | `staticCheckSplitPart(src, …)` | Token-scan for `SPLIT_PART(_, _, ≤0)` literals | config validation                                     |
 
 These share the parser front-end with `eval()` — same recursive descent, no
@@ -629,8 +634,8 @@ Key invariants:
 - **No fallback FnDocs.** The docs catalog is the single source for the
   language catalog. If the binary is missing at startup, the app shows a fatal
   error gate; there are no hardcoded fallback catalogs.
-- **One backend, two call shapes.** Since the v0.3.0 proxy flip
-  `BxpProcessClient` routes **every** backend call through
+- **One backend, two call shapes.** `BxpProcessClient` routes **every** backend
+  call through
   `bxp-gui-bridge.{dll,so,dylib}` on all platforms — there is no `Process.start`
   path. The bridge offers two call shapes:
   - **In-process inspect / eval** (`bridge_eval_expr` / `bridge_eval_expr_trace`
@@ -882,6 +887,24 @@ Full detail — tool catalog, wire protocol, the `bxp_simulate` workspace + BXTB
 fold, build/test — lives in [`mcp.md`](mcp.md) and
 [`bxp-mcp/CLAUDE.md`](../bxp-mcp/CLAUDE.md).
 
+### Two agent-control surfaces
+
+The bird's-eye view shows **two** ways an agent reaches BXP, and they are not the
+same server:
+
+- **`bxp-mcp`** (the `MCPSRV` node) — a standalone Zig binary, **stateless** tools
+  over **stdio**, wrapping the `inspect` core. An agent uses it to author and
+  verify a config with no GUI running.
+- **gui-mcp** (`GuiMcpServer`, the `GUIMCP` node) — an MCP server embedded
+  **inside the running Flutter app**, **stateful** tools over **localhost HTTP**,
+  wrapping the live `TraceStore`. An agent uses it to drive the live GUI (open /
+  edit / dry-run / read trace); every tool is the same action the UI dispatches,
+  so parity is definitional.
+
+Different binary, transport, and state model; they share only the MCP protocol.
+See [`mcp.md`](mcp.md) (bxp-mcp) and [`gui.md`](gui.md#agent-control-gui-mcp)
+(gui-mcp).
+
 ---
 
 ## Config Editing and AST
@@ -980,7 +1003,7 @@ Expressions are validated live (per keystroke, debounced ~300 ms) via
 the bridge expr validator. When the user switches to the **Variables** panel, the
 playground calls the bridge's expr-trace with the current row context and streams
 per-call results into the Variables table. Token-level error spans (byte
-`off`/`len` from Phase G1) are used to underline the offending token directly
+`off`/`len`) are used to underline the offending token directly
 in the expr editor.
 
 ```mermaid

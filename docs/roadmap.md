@@ -9,7 +9,7 @@ to this file.
 
 ## v0.3.0 — Zig 0.16 migration
 
-Migrate the Zig toolchain from the pinned 0.15.2 to 0.16 across all Zig
+Migrate the Zig toolchain to 0.16 across all Zig
 packages (bxp-cli, bxp-mcp, bxp-core, bxp-gui-bridge). The change is
 pervasive but mechanical — the 0.16 I/O overhaul threads an `io` parameter
 through `std.fs` / buffered writers / timers (~100–150 LOC; full checklist in
@@ -22,7 +22,7 @@ two things 0.15.2 blocks today:
 
 - **Regex builtins** (`REGEX_MATCH` / `REGEX_EXTRACT` — see _Expression
   builtins (regex)_ below). The only mature native-Zig regex
-  (`zig-utils/zig-regex` v0.2.0) requires Zig 0.16+.
+  (`zig-utils/zig-regex`) requires Zig 0.16+.
 - **Dropping the `bxp-gui-bridge` Debug→ReleaseSafe workaround.** 0.16
   replaced the LLVM Debug backend with a self-hosted x86 backend on
   Linux/macOS, which should eliminate the Debug-codegen crash that forced the
@@ -82,7 +82,7 @@ backlog was otherwise exhausted:
 
 ### CI hardening
 
-The CI matrix (`.github/workflows/ci.yml`, shipped v0.2.4) runs
+The CI matrix (`.github/workflows/ci.yml`) runs
 `scripts/test.sh` on every pull request and master push across
 `ubuntu-latest` / `macos-latest` / `windows-latest`. `test.sh` is fully
 cross-platform — including the perf bench, which self-measures wall + peak
@@ -95,8 +95,8 @@ Remaining:
 - Pin `subosito/flutter-action` to an explicit Flutter version. CI's
   `channel: stable` floats ahead of local SDKs, so a newer `flutter
 analyze` can surface fresh `info` lints that fail CI while passing
-  locally (hit 2026-06-07: `use_null_aware_elements` on stable 3.44.1 vs
-  local 3.41.9). A pin makes CI reproducible; bump deliberately.
+  locally (e.g. `use_null_aware_elements` appeared on CI's stable channel
+  before local SDKs caught up). A pin makes CI reproducible; bump deliberately.
 
 ### Distribution polish
 
@@ -185,7 +185,7 @@ fixed before release instead, not parked here).
 
   **TZ-help builtins — consider on a concrete use-case.** DST-aware offsets
   are now expressible without a dependency: `NTH_DOW(year, month, weekday, n)`
-  shipped 2026-06-02 (the `datefmt` calendar primitive — last Sunday of March
+  is the `datefmt` calendar primitive (last Sunday of March
   is `NTH_DOW(y, 3, 7, -1)`), so the EU Prague window in
   `examples/advanced/multi-stage-etl` reads cleanly. `datefmt` itself still has
   no timezone awareness. Two upgrades, both **deferred until a real multi-zone
@@ -324,12 +324,12 @@ stateless boundary.
 ### Expression builtins (regex)
 
 - `REGEX_MATCH(s, pattern)` and `REGEX_EXTRACT(s, pattern)` — deferred
-  from v0.2.4 (2026-05-26 decision). Real use: Lime.co dividend ticker
+  pending the Zig 0.16 migration. Real use: Lime.co dividend ticker
   extraction (`"Qualified Dividend APPLE INC 100"` → `"APPLE INC"`),
   generic user-defined patterns in templates. Surveyed regex options
-  for Zig 0.15.2:
+  for the current pinned toolchain:
   - `tiehuis/zig-regex` — no capture groups, no UTF-8 → blocks `REGEX_EXTRACT`.
-  - `zig-utils/zig-regex v0.2.0` — full feature set incl. named groups
+  - `zig-utils/zig-regex` — full feature set incl. named groups
     and lookaround, **requires Zig 0.16+**.
   - `alexnask/ctregex.zig` — patterns must be comptime-known, useless
     for runtime template strings.
@@ -337,8 +337,8 @@ stateless boundary.
     memory (can't use Zig allocators) and Windows packaging pain.
   - libpcre bindings — +external dep ~700 KB, cross-platform build setup.
 
-  Decision: gated on the Zig 0.16 migration (v0.3.0 milestone above), then
-  adopt zig-utils/zig-regex. v0.2.4 ships the other 9 builtins; the remaining
+  Decision: gated on the Zig 0.16 migration (v0.3.0 milestone above), then adopt
+  zig-utils/zig-regex. The non-regex builtins already ship; the remaining
   ~10 % of real-world need (regex) waits.
 
   Scope (decided 2026-06-13): regex is an **extraction-only sibling**, scoped

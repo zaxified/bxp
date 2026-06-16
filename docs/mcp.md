@@ -7,6 +7,17 @@ tools over JSON-RPC 2.0 on stdio.
 For the deepest reference — exact JSON shapes, every design rationale — read
 [`bxp-mcp/CLAUDE.md`](../bxp-mcp/CLAUDE.md). This page is the fast map.
 
+> **Two MCP servers — don't confuse them.** BXP ships two unrelated MCP servers.
+> **This page is `bxp-mcp`**: a standalone Zig binary, **stateless** tools over
+> **stdio**, wrapping the `bxp-core/inspect` core — an agent uses it to **author
+> and verify a config offline** (no GUI). The other is **gui-mcp**
+> (`GuiMcpServer`), embedded **inside the running Flutter app**: **stateful** tools
+> over **localhost HTTP**, wrapping the live `TraceStore` — an agent uses it to
+> **drive the live GUI**. Different binary, transport, state model, and lifecycle
+> (gui-mcp exists only while the GUI is running); they share only the MCP protocol
+> itself. gui-mcp lives in `bxp-gui` — see [`gui.md`](gui.md) and
+> [`bxp-gui/CLAUDE.md`](../bxp-gui/CLAUDE.md) ("Agent control").
+
 ## What it is, and why
 
 An AI agent (Claude Code, or any MCP host) spawns `bxp-mcp` as a child process
@@ -102,10 +113,11 @@ Methods handled: `initialize`, `tools/list`, `tools/call`, `ping`,
 
 ### Protocol version negotiation
 
-`PROTOCOL_VERSION = 2025-11-25` (latest advertised). `initialize` echoes the
-client's requested `protocolVersion` when it is in `SUPPORTED_VERSIONS`
-(`2025-11-25`, `2025-06-18`), otherwise answers with the latest. The tool
-surface is identical across supported revisions.
+The server advertises the latest MCP protocol revision it knows
+(`PROTOCOL_VERSION`) and, on `initialize`, echoes the client's requested
+`protocolVersion` when it is one of the supported revisions
+(`SUPPORTED_VERSIONS`), otherwise answers with the latest. Both constants live
+in `server.zig`. The tool surface is identical across supported revisions.
 
 ## Source layout
 

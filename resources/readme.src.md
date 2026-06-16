@@ -65,8 +65,8 @@ chmod +x bxp-desktop-linux-x86_64.AppImage
 
 The AppImage lives in `~/.local/bin/` (typically on `PATH`). User
 preferences auto-save to `~/.local/share/bxp-gui/bxp-gui.json` on first
-edit. The Linux AppImage is the only Linux distribution channel; `.deb`
-and plain tarballs were retired in v0.2.3 to keep one update path. On
+edit. The Linux AppImage is the only Linux distribution channel — one
+update path. On
 first launch the AppImage offers to write
 `~/.local/share/applications/bxp-gui.desktop` plus `hicolor` icons so
 the app shows up in the system menu — no `sudo` needed, reversible from
@@ -77,9 +77,9 @@ the Settings drawer.
 Download
 [`bxp-desktop-windows-x86_64.exe`](https://github.com/zaxified/bxp/releases/latest/download/bxp-desktop-windows-x86_64.exe)
 and run the NSIS installer. SmartScreen may warn — "More info" → "Run
-anyway". The app installs to `C:\Program Files\bxp-gui\` with a Start
-menu entry and desktop shortcut. User preferences live at
-`%APPDATA%\bxp-gui\bxp-gui.json`.
+anyway". It installs **per-user — no administrator rights required** — to
+`%LOCALAPPDATA%\Programs\bxp-gui`, with a Start menu entry and desktop
+shortcut. User preferences live at `%APPDATA%\bxp-gui\bxp-gui.json`.
 
 ### macOS (Apple Silicon)
 
@@ -130,6 +130,8 @@ runnable from a terminal for scripting or batch use.
 | `xtb1_cash_to_wealthfolio` | XTB — cash operations (old) |
 | `xtb2_closed_to_wealthfolio` | XTB — closed positions (new) |
 | `xtb2_cash_to_wealthfolio` | XTB — cash operations (new) |
+| `revolutx_to_brychtapp` | Revolut X (crypto) → brycht.app (tracker) |
+| `anycoin_to_brychtapp` | Anycoin (crypto) → brycht.app (tracker) |
 | `trading212_to_brychtapp` | Trading 212 → brycht.app (tracker) |
 | `xtb2_cash_to_brychtapp` | XTB — cash operations (new) → brycht.app (tracker) |
 | `xtb2_closed_to_brychtapp` | XTB — closed positions (new) → brycht.app (tracker) |
@@ -279,8 +281,9 @@ Delete the file to reset everything to defaults.
 The app polls `github.com/zaxified/bxp` for new releases 5 seconds
 after launch and every 6 hours thereafter. When a newer version is
 available a dialog offers a one-click update that downloads, verifies
-(minisign signature over `SHA256SUMS`, then the asset's SHA-256 checksum),
-and dispatches to the platform-native installer:
+(minisign signature over `SHA256SUMS`, then the asset's SHA-256 checksum —
+**fail-closed: any mismatch refuses the install**), and dispatches to the
+platform-native installer:
 
 - **Windows** — silent NSIS reinstall, GUI relaunches automatically.
 - **macOS** — DMG mount, copy to `/Applications/`, relaunch.

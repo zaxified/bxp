@@ -24,7 +24,9 @@ bxp/
 ├── bxp-core/             # Internal Zig library (shared modules)
 │   ├── src/
 │   │   ├── csv.zig         # RFC 4180 CSV parser + splitFields + LineIterator
-│   │   ├── xlsx.zig        # .xlsx → CSV converter (ZIP+XML)
+│   │   ├── xlsx.zig        # .xlsx → CSV converter (streaming ZIP+XML via zipstream)
+│   │   ├── zipstream.zig   # Streaming ZIP reader (central-dir walk + per-entry
+│   │   │                   # inflate); shared by xlsx ingest + bxp-cli zipPrePass
 │   │   ├── expr.zig        # Expression evaluator + per-builtin FnDoc catalog
 │   │   ├── config.zig      # JSON5 config loader + per-struct FieldDoc tables
 │   │   ├── json.zig        # JSON array-of-objects → CSV rows
@@ -118,6 +120,7 @@ bxp/
 │   ├── architecture.md       # System architecture + module diagrams
 │   ├── devel.md              # Developer setup, build, debug guide
 │   ├── gui.md                # bxp-gui user-facing guide
+│   ├── mcp.md                # bxp-mcp MCP server guide
 │   ├── release.md            # Release operator walkthrough
 │   ├── roadmap.md            # Long-term backlog mirrored to memory
 │   ├── trace-protokol.md     # Subprocess protocol reference: binary BXTB --trace stream

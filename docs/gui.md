@@ -16,6 +16,8 @@ pair. Runs on Linux, macOS, and Windows.
 - [Architecture overview](#architecture-overview)
 - [Source layout](#source-layout)
 - [Subprocess wiring](#subprocess-wiring)
+- [Agent control (gui-mcp)](#agent-control-gui-mcp)
+- [Auto-updater and security](#auto-updater-and-security)
 - [json5_ast library](#json5_ast-library)
 - [State management](#state-management)
 - [Key patterns](#key-patterns)
@@ -26,7 +28,7 @@ pair. Runs on Linux, macOS, and Windows.
 ## Why Flutter / Dart
 
 bxp-gui replaced an earlier Electrobun + React + CodeMirror 6 frontend
-(bxp-ui, shipped as v0.1.0). The switch to Flutter was driven by:
+(bxp-ui). The switch to Flutter was driven by:
 
 - **Cross-platform single binary.** Flutter desktop compiles to a
   self-contained executable with no webview runtime dependency. The same
@@ -62,7 +64,7 @@ and decoupled from the Zig internals.
 | ----------- | ------- | --------------------------------------------------------------------------------------------------------------------------------- |
 | Flutter SDK | ≥ 3.x   | See `bxp-gui/pubspec.yaml` `environment.flutter` for the minimum. Install from [flutter.dev](https://flutter.dev) or via `fvm`.   |
 | Dart SDK    | bundled | Ships with Flutter; no separate install.                                                                                          |
-| Zig         | 0.15.2  | To build bxp-cli, bxp-mcp, and the bxp-gui-bridge library. See [devel.md](devel.md) for the pinned version.                       |
+| Zig         | see `build.zig.zon` | To build bxp-cli, bxp-mcp, and the bxp-gui-bridge library — `minimum_zig_version` is the source of truth; see [devel.md](devel.md).  |
 | VS Code     | any     | + [Flutter extension](https://marketplace.visualstudio.com/items?itemName=Dart-Code.flutter). IntelliJ / Android Studio work too. |
 
 ### First run
@@ -189,7 +191,7 @@ Three layers, top-down:
 │  Subprocess wrappers, AST loader, prefs, ...  │
 └───────────────────────────────────────────────┘
         ↕  Single backend: bxp-gui-bridge (see "Subprocess wiring" below)
-        │      bxp-gui-bridge.{dll,so,dylib}    (all platforms since v0.3.0)
+        │      bxp-gui-bridge.{dll,so,dylib}    (single backend, all platforms)
         ↓
   bxp-cli  (conversions via --trace BXTB frame stream, proxied by the bridge)
   bxp-core (inspect.zig + expr.zig linked directly into the bridge — in-process
@@ -283,17 +285,16 @@ bxp-gui/
 
 ## Subprocess wiring
 
-`BxpProcessClient` is the single entry point for all binary calls. Since the
-v0.3.0 proxy flip every call goes through the in-process FFI bridge
-(`bxp-gui-bridge.{dll,so,dylib}`) on every platform — there is no `dart:io`
-`Process.start` path. The bridge offers two call shapes: in-process inspect /
-eval, and a native-code `bxp-cli` subprocess proxy (both detailed below).
+`BxpProcessClient` is the single entry point for all binary calls. Every call
+goes through the in-process FFI bridge (`bxp-gui-bridge.{dll,so,dylib}`) on every
+platform — there is no `dart:io` `Process.start` path. The bridge offers two call
+shapes: in-process inspect / eval, and a native-code `bxp-cli` subprocess proxy
+(both detailed below).
 
 ### Transport paths
 
-Since the v0.3.0 proxy flip the bridge is the **single backend on every
-platform** — there is no `Process.start` path. All five entry points are
-`bridge_*` calls:
+The bridge is the **single backend on every platform** — there is no
+`Process.start` path. All five entry points are `bridge_*` calls:
 
 | Transport                | Used for                                                                              |
 | ------------------------ | ------------------------------------------------------------------------------------- |
@@ -308,13 +309,17 @@ The bridge is implemented as a Zig shared library that links the
 `bxp-cli` subprocess (proxy paths). For the **two-cause rationale** behind the in-proc / proxy split see
 [`devel.md`'s "Why the bridge exists"](devel.md#why-the-bridge-exists)
 section. The C-ABI surface and Debug→ReleaseSafe rewrite landmine live in
-[`bxp-gui-bridge/CLAUDE.md`](../bxp-gui-bridge/CLAUDE.md).
+[`bxp-gui-bridge/CLAUDE.md`](../bxp-gui-bridge/CLAUDE.md). The proxy path's pipe
+drain is hardened against several subprocess-reaping hazards — the Dart VM's own
+child reaper closing fds mid-read, an inherited `SIGCHLD=SIG_IGN`, and `ECHILD`
+on `wait` — by joining the stream readers before reaping; see that file for the
+ordering.
 
 **Mandatory on every platform.** Library probe failure at startup is fatal
 (synthetic error surfaced through the normal startup gate, which also parses
 the docs catalog). There is no subprocess fallback — Windows can't use
-`Process.start` (dart-lang/sdk#1727) and the v0.3.0 flip deleted the
-Linux/macOS `Process.start` route too.
+`Process.start` (dart-lang/sdk#1727) and the Linux/macOS `Process.start` route
+was removed when the bridge became the single backend.
 
 **Reloading bridge changes.** `dlopen` mmaps the file at process start, so
 editing a `.so`/`.dylib` and `mcp__dart__hot_reload` does NOT pick it up. After
@@ -353,6 +358,89 @@ build or rely on the dev-tree fallback (option 3 above) which reads directly fro
 
 ---
 
+## Agent control (gui-mcp)
+
+`GuiMcpServer` ([lib/services/gui_mcp_server.dart](../bxp-gui/lib/services/gui_mcp_server.dart))
+embeds an MCP server **inside the running Flutter process** so a local agent can
+drive the live GUI — open a config, edit nodes, run a dry-run, read the trace. It
+is **not** `bxp-mcp`: that one is a separate Zig binary with stateless tools over
+stdio (see [`mcp.md`](mcp.md)). gui-mcp is **stateful** — every tool is a thin
+wrapper over the same `TraceStore` actions the UI uses, so an agent edit repaints
+the UI for free and parity with manual use is definitional.
+
+**Transport.** localhost StreamableHTTP, default `127.0.0.1:7717`
+(`kDefaultMcpHost` / `kDefaultMcpPort`); host / port resolve as pref → env
+(`BXP_GUI_MCP_HOST` / `BXP_GUI_MCP_PORT`) → default and are editable live in the
+settings inspector. A fixed default lets an agent reach a known endpoint with no
+discovery file. Unlike the bridge, the server is **non-fatal**: a bind clash
+surfaces in `lastError` and the GUI stays fully usable without it.
+
+**Tools.** `get_state`, `open_config`, `reload`, `edit_node`, `insert_node`,
+`rename_key`, `move_node`, `delete_node`, `set_template`, `dry_run`, `full_run`,
+`get_trace`, `get_row_detail`, `save`, `exit`. `GET /health` is an
+unauthenticated handshake (`{name, version, config_path, dirty, agent_connected,
+auto_approve}`) so an agent can confirm it reached the right server before MCP
+`initialize`.
+
+**Security model.** The defaults are bounded for a local-only tool:
+
+- **Loopback bind** (`127.0.0.1`) is the baseline — no network exposure.
+- **Request-body cap** — `_kMaxRequestBodyBytes` (8 MB); a larger body gets a
+  `413` instead of an unbounded read.
+- **Confirm-gating** — destructive / side-effecting tools (`save`, `full_run`,
+  `delete_node`, `exit`) prompt through an `AgentConfirmFn` dialog; additive
+  edits are blocked outright when the config loaded with errors.
+- **Origin policy** — permissive by default (an empty allowlist accepts every
+  `Origin`, so webview agents that send one keep working); the loopback bind is
+  the protection. A persisted `bxp-gui.mcpOriginAllowlist` tightens it when the
+  user binds to a network interface.
+- **Auto-approve** is **off by default**, and when on it is *visible*: a red
+  `devel-auto-approve-mode` status-bar chip plus `auto_approve` in `/health` and
+  `get_state`, so neither the driving agent nor a watching user can miss that the
+  confirm gate is bypassed.
+
+**Headless self-debug.** Turning on *settings inspector → Agent control →
+Auto-approve* (persisted as `bxp-gui.mcpAutoApprove`) lets an agent drive the GUI
+without manual clicks — a semantic alternative to Playwright, since every tool is
+a real `TraceStore` action. The persisted toggle (not the
+`BXP_GUI_MCP_AUTO_APPROVE` env seed) is what survives across `launch_app` runs.
+Full cycle and threat-model rationale live in
+[`bxp-gui/CLAUDE.md`](../bxp-gui/CLAUDE.md) ("Agent control" + "Known non-issues").
+
+---
+
+## Auto-updater and security
+
+`UpdaterService` ([lib/services/updater_service.dart](../bxp-gui/lib/services/updater_service.dart))
+polls the GitHub releases API shortly after launch and periodically thereafter; a
+newer tag surfaces an update prompt
+([update_dialog.dart](../bxp-gui/lib/ui/components/update_dialog.dart)). The part
+that matters is what happens **before** an installer is allowed to run — two
+fail-closed checks over the *same* downloaded bytes:
+
+1. **Authenticity** — the `SHA256SUMS.minisig` minisign signature over
+   `SHA256SUMS` is verified against the public key embedded in
+   `UpdaterService.minisignPublicKey`. The crypto (Ed25519 + Blake2b-512) runs
+   natively through `bridge_verify_minisign`, so there is no Dart crypto
+   dependency.
+2. **Integrity** — only then is the installer's SHA-256 matched against the
+   now-trusted `SHA256SUMS`.
+
+A missing or invalid signature, a missing / mismatched checksum, or an
+unavailable verifier **all refuse the install**. Hashing and installing use the
+same fetched bytes, which closes the verify→use swap window (the Linux AppImage
+path writes the already-hashed bytes straight to `$APPIMAGE.new`). Signing is
+automated in CI ([release.yml](../.github/workflows/release.yml)).
+
+Per-platform install dispatch: Windows `setup.exe /S` (silent NSIS, **per-user
+install — no administrator elevation**, with a rename-swap self-heal so an update
+can replace the running executable); macOS `hdiutil` mount → `cp -R` → `open`;
+Linux AppImage atomic in-place replace + re-`exec`; `.deb` / tarball open the
+release page (in-place self-update is AppImage-only). `kDebugMode` skips the
+auto-check during dev runs.
+
+---
+
 ## json5_ast library
 
 A standalone Dart package (`packages/json5_ast/`) that parses JSON5 to a
@@ -366,6 +454,14 @@ edit the user's `bxp-cli.json` without reformatting comments or key order.
 > shortcuts so future extraction stays cheap. See
 > [`bxp-gui/packages/json5_ast/CLAUDE.md`](../bxp-gui/packages/json5_ast/CLAUDE.md)
 > for the extraction recipe.
+
+### Parser depth guard
+
+`parse` is recursive-descent, so a deeply nested config could blow the Dart
+stack. `parser.dart` caps value nesting at `_kMaxDepth` (64) and bails with a
+caught parse error instead of an uncatchable `StackOverflowError` — the loader
+shows a clean diagnostic rather than crashing. `value_builder.dart` mirrors the
+same limit on the build side.
 
 ### Mutation model
 
@@ -448,6 +544,17 @@ The docs catalog is loaded at startup (from the bridge) and drives FnDoc tooltip
 `SchemaGate` insert-position logic, autocomplete, and the
 `_AddChildDialog` insert scaffolds. Do not reintroduce hardcoded fallback
 catalogs — the startup gate fails fatally if the binary is missing.
+
+### Wide-CSV render cap
+
+The trace grid is a **debug viewer, not a spreadsheet**. The CLI accepts up to
+`MAX_COLUMNS` (16384) columns, but the GUI renders at most `kMaxDisplayCols`
+(200) ([store/trace_store.dart](../bxp-gui/lib/store/trace_store.dart)); files
+wider than `kWideColLimit` (64) data columns also skip the per-column filter
+pass. Both caps exist because PlutoGrid cost scales with column count — laying
+out 16k+ columns on every rebuild would stall the UI for no debugging benefit
+(you read a handful of columns at a time). Drill-down still resolves every
+column; only the grid render is capped.
 
 ---
 

@@ -27,7 +27,7 @@ bridge) and by `scripts/test.sh`.
 Invoked as `bxp-cli --trace [--config ...] [--template ...]`. Writes a binary
 **BXTB** frame stream to **stdout**; everything else goes to **stderr**.
 `--trace=bin` is an explicit alias; any other `--trace=<x>` argument is a usage
-error (the legacy `--trace=json` NDJSON path was removed in v0.3.0).
+error (there is no NDJSON `--trace=json` path).
 
 The optional `--trace-file <path>` flag mirrors the same byte stream to a file
 on disk, so a run can simultaneously drive a downstream consumer on stdout
@@ -194,10 +194,9 @@ When the GUI needs that detail (user clicks one row in the drill-down panel),
 it:
 
 1. Seeks the source CSV to `source_locator` and reads one record.
-2. Calls the bridge's `eval_batch` op (in-process; the same shape the former
-   `bxp-fmt --expr-batch` produced) with the row fields + the current config's
-   `input_schema` and `row_rules` to recompute variable values, rule matches,
-   and output cells.
+2. Calls the bridge's `eval_batch` op (in-process) with the row fields + the
+   current config's `input_schema` and `row_rules` to recompute variable values,
+   rule matches, and output cells.
 
 This shifts the per-row eval cost from the trace producer to on-demand
 consumption. Effects:
@@ -232,9 +231,9 @@ shapes are transport-agnostic — they reach callers through the **bxp-mcp** too
 (the agent surface, mapped per subsection below) and the **bxp-gui-bridge** FFI
 (in-process for the Dart GUI). The snippets below show each shape via its bxp-mcp
 `tools/call` `arguments` object; the bridge produces the identical bytes
-in-process through the mapped `bridge_*` op. (A removed `bxp-fmt` CLI once
-emitted the same shapes on stdout/stderr with `--flag` argv — the shape names
-below keep that flag as a label.)
+in-process through the mapped `bridge_*` op. The `--name` labels below (e.g.
+`--expr`, `--config`) are shorthand shape names, **not** CLI flags — each shape is
+produced by the bxp-mcp tool and the bridge op shown in the table below.
 
 Each shape's canonical name, the bxp-mcp tool that produces it, and the bridge op:
 
@@ -356,7 +355,7 @@ is absent (e.g. a missing required field).
 
 `off`, `len`, and `suggest` are omitted when the diagnostic has no source span
 or did-you-mean hint. `off`/`len` are byte offsets into the expression source
-string of the offending token (from Phase G1).
+string of the offending token.
 
 `placement` values for `$comm_<N>`:
 

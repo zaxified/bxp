@@ -41,6 +41,8 @@ The console package ships two binaries that work together:
 | `xtb1_cash_to_wealthfolio` | XTB — cash operations (old) |
 | `xtb2_closed_to_wealthfolio` | XTB — closed positions (new) |
 | `xtb2_cash_to_wealthfolio` | XTB — cash operations (new) |
+| `revolutx_to_brychtapp` | Revolut X (crypto) → brycht.app (tracker) |
+| `anycoin_to_brychtapp` | Anycoin (crypto) → brycht.app (tracker) |
 | `trading212_to_brychtapp` | Trading 212 → brycht.app (tracker) |
 | `xtb2_cash_to_brychtapp` | XTB — cash operations (new) → brycht.app (tracker) |
 | `xtb2_closed_to_brychtapp` | XTB — closed positions (new) → brycht.app (tracker) |

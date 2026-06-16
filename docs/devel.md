@@ -52,15 +52,14 @@ Install these extensions for a productive experience:
 | **Mermaid preview** | `bierner.markdown-mermaid`                             | Renders Mermaid diagrams in Markdown preview (useful for `architecture.md`) |
 | **Mermaid syntax**  | `bpruitt-goddard.mermaid-markdown-syntax-highlighting` | Syntax highlighting for Mermaid diagrams (useful for `architecture.md`)     |
 
-**ZLS (Zig Language Server)** and **Zig language** is bundled with the `ziglang.vscode-zig` extension in recent versions - it provides completions, go-to-definition and inline error diagnostics out of the box.
+**ZLS (Zig Language Server)** and **Zig language** are bundled with the `ziglang.vscode-zig` extension - it provides completions, go-to-definition and inline error diagnostics out of the box.
 
 ---
 
 ### Verify Zig language version
 
-| Tool | Version    | Notes                                                                 |
-| ---- | ---------- | --------------------------------------------------------------------- |
-| Zig  | **0.15.2** | Exact version - `build.zig.zon` sets `minimum_zig_version = "0.15.0"` |
+The required Zig version is pinned in `build.zig.zon` (`minimum_zig_version`) —
+install that toolchain; ZLS bundled with the Zig extension matches it.
 
 `bxp-core` has a **single external (fetch) dependency** — `uucode` (MIT), the
 Unicode case-mapping tables behind `UPPER`/`LOWER`, pinned in
@@ -71,8 +70,7 @@ build; CI runners have network.
 In VS Code terminal:
 
 ```bash
-zig version
-# expected: 0.15.2
+zig version   # must satisfy build.zig.zon's minimum_zig_version
 ```
 
 ---
@@ -149,9 +147,11 @@ bxp/                            # monorepo root (git root)
 │       ├── sample.json         # bxp-cli config for this dataset
 │       └── sample.expected     # expected .csvx output (regression baseline)
 ├── docs/
+│   ├── README.md               # docs index + reading order
 │   ├── devel.md                # this file
 │   ├── architecture.md         # bird's-eye view + data-flow diagrams
 │   ├── gui.md                  # bxp-gui developer guide
+│   ├── mcp.md                  # bxp-mcp MCP server guide
 │   ├── release.md              # release process walkthrough
 │   ├── roadmap.md              # forward-looking milestones
 │   └── trace-protokol.md       # bxp-cli --trace BXTB + stateless inspect output formats
@@ -245,6 +245,11 @@ The corpus doubles as living documentation for the BXP expression language — r
 
 `scripts/test.sh` enforces a 60-second per-phase budget on the corpus phase via the `timeout` command, so a parser infinite-loop regression is caught quickly.
 
+The same corpus is also walked through the GUI bridge (`bridge_eval_expr`) by
+`bxp-gui/test/expr_corpus_bridge_test.dart` (run in `test-04`), so every case is
+checked **cross-runner**: the MCP transport (`test-06`) and the in-process bridge
+must agree on it.
+
 ---
 
 ## Part 2 - Architecture and Internals
@@ -284,8 +289,7 @@ Consequences of this design:
 
 `bxp-core` is a **local path dependency** (`../bxp-core`) and pulls one external
 fetch dependency of its own: `uucode` (Unicode case-mapping tables, pinned in
-`build.zig.zon`). The date core lives in-house at `bxp-core/src/datefmt.zig`,
-replacing the former `sunrise` URL dependency.
+`build.zig.zon`). The date core lives in-house at `bxp-core/src/datefmt.zig`.
 `bxp-gui` ships `bxp-cli`, `bxp-mcp`, and `bxp-gui-bridge.{dll,so,dylib}`
 inside the Flutter bundle.
 
@@ -311,8 +315,8 @@ shared library, but each role solves a different problem.
 
 ### Per-call routing
 
-Since the v0.3.0 proxy flip every backend call goes through the bridge — there
-is no `Process.start` path and no subprocess fallback on any platform:
+Every backend call goes through the bridge — there is no `Process.start` path
+and no subprocess fallback on any platform:
 
 | GUI call                               | Bridge entry point                                 |
 | -------------------------------------- | -------------------------------------------------- |
@@ -342,13 +346,16 @@ of each `bridge_*` entry point.
 | Module        | File              | Responsibility                                                                                                                                                                                                                                                                                                                      |
 | ------------- | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `csv`         | `csv.zig`         | RFC 4180 parser. `LineIterator` yields records from an in-memory chunk; `splitFields()` unquotes fields. Spaces preserved — trimmed outside csv.zig at access time in `expr.Context`.                                                                                                                                               |
-| `xlsx`        | `xlsx.zig`        | Converts `.xlsx` to intermediate `.csv`. Reads ZIP+XML, handles shared strings, formula results, dates (via `styles.xml` numFmtId). Max file size 10 MB.                                                                                                                                                                            |
+| `xlsx`        | `xlsx.zig`        | Converts `.xlsx` to intermediate `.csv`. Reads ZIP+XML, handles shared strings, formula results, dates (via `styles.xml` numFmtId). Worksheets are streamed (no whole-file size cap); only the shared-strings table is capped (`XLSX_SHARED_STRINGS_CAP`, 1 GiB).                                                                                                                                                                            |
+| `zipstream`   | `zipstream.zig`   | Streaming ZIP reader — central-directory walk + per-entry inflate. Shared primitive behind xlsx ingest and bxp-cli's parallel `zipPrePass`; consumer memory is O(one inflate window). Store + deflate only. |
 | `expr`        | `expr.zig`        | Expression evaluator. Recursive-descent parser → evaluator. Per-row `Context` holds field values, ticker map, lookup table. `eval()` returns `Value` (string/decimal/bool — decimal is fixed-point i128, see `decimal.zig`); `evalString()` coerces to string. Each built-in has a co-located `FnDoc` entry consumed by `docs.zig`. |
-| `datefmt`     | `datefmt.zig`     | In-house date core (parse / format / civil arithmetic), file-relative `@import` by `expr.zig` — replaced the former `sunrise` dependency. Pre-1970 dates supported (pure parse → format, no epoch round-trip).                                                                                                                      |
+| `datefmt`     | `datefmt.zig`     | In-house date core (parse / format / civil arithmetic), file-relative `@import` by `expr.zig`. Pre-1970 dates supported (pure parse → format, no epoch round-trip).                                                                                                                      |
 | `decimal`     | `decimal.zig`     | Fixed-point `i128` at scale 1e12 (12 fractional digits) numeric core: exact `+ −`, half-away-from-zero `× ÷` / `ROUND`. The named module behind `Value.decimal`; shared by the csv / json / xlsx input paths so an identical numeric string parses identically everywhere.                                                          |
+| `unicode`     | `unicode.zig`     | UTF-8 case mapping + diacritic stripping behind `UPPER` / `LOWER` / `UNACCENT`, over `uucode` tables. File-relative `@import` by `expr.zig`. |
+| `encoding`    | `encoding.zig`    | Layer-0 single-byte code page ↔ UTF-8 transcode (Win-1250/1252, Latin-1/2/9) behind `csv_*_encoding`. In-house 256-entry tables, no `uucode`. |
 | `config`      | `config.zig`      | Reads `bxp-cli.json` via `json5.zig` preprocessor then `std.json`. Returns `Config` owning all heap memory. `BrokerConfig.validate()` checks semantic constraints. Each struct has a co-located `FieldDoc` table consumed by `docs.zig`.                                                                                            |
 | `json`        | `json.zig`        | Reads a JSON array-of-objects into a flat row representation. Builds a union of all keys across all objects; fills missing keys with empty string.                                                                                                                                                                                  |
-| `btrace`      | `btrace.zig`      | Binary BXTB trace `Writer` / `Reader` for `bxp-cli --trace`. Carries metadata only (per-row source byte offsets, errors, pre_pass dump, stats); per-row drill-down is recomputed on demand by the GUI via the bridge. The sole trace format since the v0.3.0 NDJSON removal.                                                        |
+| `btrace`      | `btrace.zig`      | Binary BXTB trace `Writer` / `Reader` for `bxp-cli --trace`. Carries metadata only (per-row source byte offsets, errors, pre_pass dump, stats); per-row drill-down is recomputed on demand by the GUI via the bridge. The sole `bxp-cli --trace` format — NDJSON is no longer emitted there (the per-expr `evalTrace` stream is the only remaining NDJSON, see the inspect table below).                                                        |
 | `json5`       | `json5.zig`       | Single-pass tokenizer that converts JSON5 → standard JSON. Strips comments, converts unquoted keys, removes trailing commas, normalizes single-quoted strings.                                                                                                                                                                      |
 | `docs`        | `docs.zig`        | Aggregates `expr.zig` FnDoc catalog and `config.zig` FieldDoc tables into the docs catalog JSON. Single source of truth consumed by bxp-gui at startup.                                                                                                                                                                             |
 | `diagnostics` | `diagnostics.zig` | Structured validation collector. `Severity` (.error / .warning / .info), `Diagnostic` (path, position, code, message, suggest), `Diagnostics` (ArrayList collector). Used by the config validator's deep validation; bxp-cli passes a null sink.                                                                                    |
@@ -505,6 +512,25 @@ Two arena allocators are used during processing:
 | `line_alloc` (ArenaAllocator) | Reset after each row        | Per-row expression evaluation scratch space   |
 
 The root GPA (`std.heap.DebugAllocator`) catches leaks in debug builds.
+
+---
+
+### Limits and key constants
+
+Hard limits are small named constants in the source — change them there, not in
+config. Current values and where they live:
+
+| Limit                     | Value  | Constant                  | Defined in                 |
+| ------------------------- | ------ | ------------------------- | -------------------------- |
+| Config file size          | 1 MiB  | `CONFIG_MAX_FILE_SIZE`    | `bxp-core/src/config.zig`  |
+| XLSX shared-strings table | 1 GiB  | `XLSX_SHARED_STRINGS_CAP` | `bxp-core/src/xlsx.zig`    |
+| CSV read chunk            | 10 MiB | `CHUNK_SIZE`              | `bxp-cli/src/pipeline.zig` |
+| Columns per row           | 16384  | `MAX_COLUMNS`             | `bxp-cli/src/pipeline.zig` |
+
+CSV and XLSX inputs are **streamed**, so there is no whole-file size limit — a
+multi-GB CSV converts at flat RSS. The only file-size cap is on the config file
+(`bxp-cli.json`) itself. A row wider than `MAX_COLUMNS` is truncated with a
+warning rather than rejected.
 
 ---
 
@@ -756,7 +782,7 @@ const BridgeFfiError = enum(i32) {
 Note there is **no `eval_error` code**. Evaluation-level failures (syntax error,
 unknown function, divide-by-zero) are _not_ a negative code — they return
 `bytes_written > 0` with a structured JSON payload (rule 4). This was a
-deliberate Phase-1 decision: keep negative codes for "your call is broken" and
+deliberate decision: keep negative codes for "your call is broken" and
 let payloads carry "the expression is broken, show the user." Any new export
 follows the same split.
 
@@ -861,7 +887,7 @@ Individual sub-suites:
 ```bash
 cd bxp-core && zig build test           # Zig unit tests only
 bash scripts/test-01-console.sh        # console side only (no Flutter dep)
-bash scripts/test-03-desktop.sh        # Flutter side only
+bash scripts/test-04-desktop.sh        # Flutter side only
 ```
 
 **Adding a regression test:**
@@ -886,7 +912,7 @@ Two release channels, distinct archives:
 
 ```bash
 # 1. Bump manifests + CHANGELOG (commits "release: prepare X.Y.Z (YYYY.MM.DD)")
-bash scripts/release-changelog.sh patch   # or minor / major / 0.3.0
+bash scripts/release-changelog.sh patch   # or minor / major / X.Y.Z
 
 # 2. Push the bump commit so the tag points at a public ref
 git push origin master
@@ -895,8 +921,8 @@ git push origin master
 bash scripts/release-tag.sh
 
 # Or build locally without tagging:
-bash scripts/release-01-console.sh v0.3.0-rc1   # console archives
-bash scripts/release-02-desktop.sh v0.3.0-rc1   # host-OS desktop bundle
+bash scripts/release-01-console.sh vX.Y.Z-rc1   # console archives
+bash scripts/release-02-desktop.sh vX.Y.Z-rc1   # host-OS desktop bundle
 ```
 
 The GitHub Actions pipeline fans out across ubuntu / windows / macos runners so
@@ -918,12 +944,12 @@ what unlocks streaming, parallelism, and parse-once below.
   `CHUNK_SIZE = 10 MiB` blocks (`ChunkReader`) and resets a per-chunk arena
   between blocks; JSON streams through `std.json.Reader` in a two-pass design.
   Peak RSS is `O(longest row + pre_pass table)`, **not** `O(file size)` — a
-  pre-2026-05-17 pipeline grew RSS `O(N)` (~10 GB on 2M rows); the streaming
-  rewrite holds it to a small constant (~24 MB across the bench matrix).
+  non-streaming design would grow RSS `O(N)` (~10 GB on 2M rows); streaming
+  holds it to a small constant (~24 MB across the bench matrix).
 - **Per-block parallel evaluation.** Rows within a chunk are independent, so
   they fan out across a `std.Thread.Pool` and re-stitch in source order — see
   [architecture.md → Parallel Evaluation](architecture.md#parallel-evaluation-per-block-fork-join).
-- **Parse-once expression eval (Phase 3B).** `input_schema` and `row_rules`
+- **Parse-once expression eval.** `input_schema` and `row_rules`
   expressions are tokenized/parsed **once per file** into `compiled_schema` /
   `compiled_rules` `Node` arrays (`pipeline.zig`), then evaluated per row
   without re-parsing.
@@ -1029,8 +1055,7 @@ automatically by Claude Code, but you can read them directly any time.
 | ---------------- | --------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
 | Monorepo         | [`CLAUDE.md`](../CLAUDE.md)                                                       | Top-level layout + package dep graph + cross-cutting conventions                         |
 | `bxp-cli`        | [`bxp-cli/CLAUDE.md`](../bxp-cli/CLAUDE.md)                                       | Full config reference, expression syntax, broker list, exit codes, output stream routing |
-| `bxp-mcp`        | [`bxp-mcp/CLAUDE.md`](../bxp-mcp/CLAUDE.md)                                       | MCP tool catalog, annotated JSON shape (`$comm_*`/`$err_*`/…), wire protocol             |
-| `bxp-mcp`        | [`bxp-mcp/CLAUDE.md`](../bxp-mcp/CLAUDE.md)                                       | MCP server: adapter model, tool catalog, in-proc vs spawn, wire protocol, bxp_simulate   |
+| `bxp-mcp`        | [`bxp-mcp/CLAUDE.md`](../bxp-mcp/CLAUDE.md)                                       | MCP server: adapter model, tool catalog, annotated JSON shape (`$comm_*`/`$err_*`/…), in-proc vs spawn, wire protocol, bxp_simulate |
 | `bxp-core`       | [`bxp-core/CLAUDE.md`](../bxp-core/CLAUDE.md)                                     | Per-module API surface, build details, "known non-issues" rationale                      |
 | `bxp-gui`        | [`bxp-gui/CLAUDE.md`](../bxp-gui/CLAUDE.md)                                       | Flutter app structure, services/store/ui split, MCP debug workflow                       |
 | `bxp-gui-bridge` | [`bxp-gui-bridge/CLAUDE.md`](../bxp-gui-bridge/CLAUDE.md)                         | C-ABI surface, Debug→ReleaseSafe rewrite rationale, Win-mandatory / cross-platform roles |
