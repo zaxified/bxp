@@ -340,7 +340,7 @@ pub const BrokerConfig = struct {
     /// declaration order so `var_eval` trace events emit in the same
     /// order as the user wrote them — the bxp-gui row-transform
     /// `variables` table relies on this for deterministic display.
-    input_schema: std.StringArrayHashMap([]const u8),
+    input_schema: std.StringArrayHashMapUnmanaged([]const u8),
     /// When non-empty, only CSV files whose name ends with this exact suffix are
     /// processed. This is a literal suffix match, NOT a glob — "*" is not special.
     /// Example: "_3.csv" processes only files like "account_..._3.csv".
@@ -375,7 +375,7 @@ pub const BrokerConfig = struct {
     /// declaration order so `prepass_set` trace events, validation error
     /// emit order, and any other iteration over `pre_passes.iterator()`
     /// is deterministic per-run.
-    pre_passes: std.StringArrayHashMap(PrePass),
+    pre_passes: std.StringArrayHashMapUnmanaged(PrePass),
     /// Ordered list of row routing rules.  First matching rule wins.
     /// Empty rows = silent skip; no match + row_rules_debug_missing = debug output.
     /// Null when no "row_rules" key is present (all rows silently skipped).
@@ -1462,7 +1462,7 @@ pub const ValidationError = struct {
 /// Top-level configuration loaded from bxp-cli.json.
 pub const Config = struct {
     /// Map from user-defined template key (e.g. "revolutx_to_wealthfolio") to its configuration.
-    brokers: std.StringArrayHashMap(BrokerConfig),
+    brokers: std.StringArrayHashMapUnmanaged(BrokerConfig),
     _alloc: std.mem.Allocator,
 
     /// Releases all heap memory owned by this Config.  Call once when done.
@@ -2430,7 +2430,7 @@ fn diagDuplicateKey(
                         var cur: u64 = 1;
                         while (line_iter.next()) |line_content| : (cur += 1) {
                             if (cur == ln) {
-                                const trimmed = std.mem.trimRight(u8, line_content, "\r");
+                                const trimmed = std.mem.trimEnd(u8, line_content, "\r");
                                 std.debug.print("#   {s}\n#   ", .{trimmed});
                                 var c: u64 = 1;
                                 while (c < caret_col) : (c += 1) std.debug.print(" ", .{});
@@ -2513,7 +2513,7 @@ fn diagJsonError(
             var cur: u64 = 1;
             while (line_iter.next()) |line_content| : (cur += 1) {
                 if (cur == ln) {
-                    const trimmed = std.mem.trimRight(u8, line_content, "\r");
+                    const trimmed = std.mem.trimEnd(u8, line_content, "\r");
                     std.debug.print("#   {s}\n#   ", .{trimmed});
                     var c: u64 = 1;
                     while (c < col) : (c += 1) std.debug.print(" ", .{});
@@ -2609,7 +2609,7 @@ pub fn load(alloc: std.mem.Allocator, config_path: []const u8) !Config {
     const file = std.fs.cwd().openFile(config_path, .{}) catch |err| {
         if (err == error.FileNotFound) {
             return Config{
-                .brokers = std.StringArrayHashMap(BrokerConfig).init(alloc),
+                .brokers = .empty,
                 ._alloc = alloc,
             };
         }
@@ -2776,11 +2776,11 @@ fn parseFileTypeField(
 /// non-string entries are skipped, matching the historical ticker_map loader.
 /// Keys/values are duped into `alloc` (owned by the resulting Config).
 fn dupeNamedMap(alloc: std.mem.Allocator, src: std.json.ObjectMap) !expr.NamedMap {
-    var m = expr.NamedMap.init(alloc);
+    var m: expr.NamedMap = .empty;
     var it = src.iterator();
     while (it.next()) |e| {
         if (e.value_ptr.* == .string) {
-            try m.put(try alloc.dupe(u8, e.key_ptr.*), try alloc.dupe(u8, e.value_ptr.string));
+            try m.put(alloc, try alloc.dupe(u8, e.key_ptr.*), try alloc.dupe(u8, e.value_ptr.string));
         }
     }
     return m;
@@ -2814,7 +2814,7 @@ pub fn loadFromBytes(
     diag: ?*Diagnostics,
 ) !Config {
     var config = Config{
-        .brokers = std.StringArrayHashMap(BrokerConfig).init(alloc),
+        .brokers = .empty,
         ._alloc = alloc,
     };
 

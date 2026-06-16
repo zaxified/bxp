@@ -553,9 +553,9 @@ pub fn format(alloc: std.mem.Allocator, parts: DateParts, fmt: []const u8) ![]u8
         else => return error.InvalidFormatString,
     };
 
-    var out: std.ArrayList(u8) = .empty;
-    errdefer out.deinit(alloc);
-    const w = out.writer(alloc);
+    var aw: std.Io.Writer.Allocating = .init(alloc);
+    errdefer aw.deinit();
+    const w = &aw.writer;
 
     // Weekday is only needed for E*/e tokens; compute lazily-ish (cheap anyway).
     const dow = isoWeekday(ymdToEpochDay(parts.year, parts.month, parts.day));
@@ -595,7 +595,7 @@ pub fn format(alloc: std.mem.Allocator, parts: DateParts, fmt: []const u8) ![]u8
             .literal => |lit| try w.writeAll(lit),
         }
     }
-    return out.toOwnedSlice(alloc);
+    return aw.toOwnedSlice();
 }
 
 // ---------------------------------------------------------------------------

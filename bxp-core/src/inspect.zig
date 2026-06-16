@@ -123,8 +123,8 @@ pub fn annotateRaw(a: std.mem.Allocator, raw: []const u8, path_label: []const u8
 /// Build `{"$err_1":{"message":"<msg>"}}`... actually `{"$err_1":"<msg>"}` as a
 /// standalone JSON document. Used by annotateRaw's fail paths.
 fn formatRootErr(a: std.mem.Allocator, msg: []const u8) ![]u8 {
-    var root: std.json.Value = .{ .object = .init(a) };
-    try root.object.put("$err_1", .{ .string = msg });
+    var root: std.json.Value = .{ .object = .empty };
+    try root.object.put(a, "$err_1", .{ .string = msg });
     return valueToJsonString(a, root);
 }
 
@@ -625,11 +625,11 @@ pub fn evalBatch(a: std.mem.Allocator, request: std.json.Value) !BatchResult {
         var m_it = mv.object.iterator();
         while (m_it.next()) |m_entry| {
             if (m_entry.value_ptr.* != .object) return batchErr("maps entries must be JSON objects");
-            var nm = expr_mod.NamedMap.init(a);
+            var nm: expr_mod.NamedMap = .empty;
             var it = m_entry.value_ptr.object.iterator();
             while (it.next()) |e| {
                 if (e.value_ptr.* != .string) return batchErr("map values must be strings");
-                try nm.put(try a.dupe(u8, e.key_ptr.*), try a.dupe(u8, e.value_ptr.string));
+                try nm.put(a, try a.dupe(u8, e.key_ptr.*), try a.dupe(u8, e.value_ptr.string));
             }
             try maps.put(try a.dupe(u8, m_entry.key_ptr.*), nm);
         }

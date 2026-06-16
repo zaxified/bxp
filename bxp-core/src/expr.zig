@@ -111,7 +111,7 @@ pub const Value = union(enum) {
 /// A single named map: ordered `key→value` pairs. `StringArrayHashMap`
 /// preserves insertion (JSON) order — `REPLACE` applies pairs first-match-wins
 /// in order — while still giving O(1) `get` for `REMAP`'s whole-value lookup.
-pub const NamedMap = std.StringArrayHashMap([]const u8);
+pub const NamedMap = std.StringArrayHashMapUnmanaged([]const u8);
 /// Registry of named maps (the `maps` config block; global + template-local
 /// already merged into one per-template view).
 pub const MapRegistry = std.StringHashMap(NamedMap);
@@ -5309,9 +5309,9 @@ test "eval: REMAP named + inline whole-value lookup" {
     defer arena.deinit();
     const a = arena.allocator();
     var h = TestHelper.init(a);
-    var syms = NamedMap.init(a);
-    try syms.put("VOW.DE", "VOW.DE.XETRA");
-    try syms.put("BTC", "BTC-USD");
+    var syms: NamedMap = .empty;
+    try syms.put(a, "VOW.DE", "VOW.DE.XETRA");
+    try syms.put(a, "BTC", "BTC-USD");
     try h.maps.put("syms", syms);
     const ctx = h.ctx(&.{}, a);
     // Named: exact whole-value hit.
@@ -5333,9 +5333,9 @@ test "eval: REPLACE named map applies ordered substring pairs" {
     defer arena.deinit();
     const a = arena.allocator();
     var h = TestHelper.init(a);
-    var num = NamedMap.init(a);
-    try num.put(" ", ""); // ordered: strip spaces first,
-    try num.put(",", "."); // then comma → dot
+    var num: NamedMap = .empty;
+    try num.put(a, " ", ""); // ordered: strip spaces first,
+    try num.put(a, ",", "."); // then comma → dot
     try h.maps.put("num", num);
     const ctx = h.ctx(&.{}, a);
     try testing.expectEqualStrings("1234.56", try evalString("REPLACE('1 234,56', 'num')", &ctx));
