@@ -44,5 +44,5 @@ _zig_in() {
 }
 
 section "Bridge"
-step "$(_lab bridge 'build')"      _zig_in "$MONO_ROOT/bxp-gui-bridge" build
-step "$(_lab bridge 'unit tests')" _zig_in "$MONO_ROOT/bxp-gui-bridge" build test
+step "$(_lab bridge 'build')"      _zig_in "$MONO_ROOT/bxp-gui-bridge" build      -Doptimize=ReleaseSafe
+step "$(_lab bridge 'unit tests')" _zig_in "$MONO_ROOT/bxp-gui-bridge" build test -Doptimize=ReleaseSafe

@@ -32,9 +32,14 @@ _json5_ast_tests() {
 # Build mode: ReleaseSafe across the ENTIRE suite — one optimize mode for the
 # whole gate. Rationale: mixing modes widens the error surface (the optimizer
 # and safety config differ per mode, so a mode-specific codegen bug can hide in
-# the gaps — we already have one: the bridge SEGVs in Debug, hence its forced
-# ReleaseSafe). A test gate should minimise that surface, so every phase builds
-# the same way the bridge is forced to: ReleaseSafe. It keeps every runtime
+# the gaps — the 0.15.2 Debug-mode bridge SEGV was exactly such a gap). A test
+# gate should minimise that surface, so EVERY phase passes -Doptimize=ReleaseSafe
+# explicitly — including the bridge phases (test-03 / test-04). Until Zig 0.16
+# the bridge's build.zig force-rewrote Debug→ReleaseSafe, so its phases came out
+# ReleaseSafe even without the flag; 0.16 dropped that override (build.zig now
+# honours -Doptimize), so the flag must be passed there too or the .dll reverts
+# to Debug — a cache miss against this phase's ReleaseSafe core AND an untested
+# Debug bridge under the Dart FFI tests. It keeps every runtime
 # safety check (overflow / bounds / null / @intCast / unreachable → panic →
 # test FAIL), so a passing test still proves UB-freedom. Cost: test binaries
 # are slower to compile cold (cached after); accepted for the consistency.

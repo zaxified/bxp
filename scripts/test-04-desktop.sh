@@ -41,7 +41,7 @@ section "Desktop"
 # parity gate). Build it here so test-03 is self-contained even when the
 # bridge phase (test-04) hasn't run yet — fresh checkouts otherwise hit a
 # missing-library failure on the first `bash scripts/test.sh`.
-step "$(_lab bridge     'build')"       _zig_in "$MONO_ROOT/bxp-gui-bridge" build
+step "$(_lab bridge     'build')"       _zig_in "$MONO_ROOT/bxp-gui-bridge" build -Doptimize=ReleaseSafe
 step "$(_lab flutter    'analyze')"     _flutter_in analyze
 step "$(_lab flutter    'test')"        _flutter_in test
 step "$(_lab json5_ast  'dart test')"   _dart_in "$GUI_ROOT/packages/json5_ast" test
