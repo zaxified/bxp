@@ -60,12 +60,12 @@ and decoupled from the Zig internals.
 
 ### Prerequisites
 
-| Tool        | Version | Notes                                                                                                                             |
-| ----------- | ------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| Flutter SDK | ≥ 3.x   | See `bxp-gui/pubspec.yaml` `environment.flutter` for the minimum. Install from [flutter.dev](https://flutter.dev) or via `fvm`.   |
-| Dart SDK    | bundled | Ships with Flutter; no separate install.                                                                                          |
-| Zig         | see `build.zig.zon` | To build bxp-cli, bxp-mcp, and the bxp-gui-bridge library — `minimum_zig_version` is the source of truth; see [devel.md](devel.md).  |
-| VS Code     | any     | + [Flutter extension](https://marketplace.visualstudio.com/items?itemName=Dart-Code.flutter). IntelliJ / Android Studio work too. |
+| Tool        | Version             | Notes                                                                                                                               |
+| ----------- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| Flutter SDK | ≥ 3.x               | See `bxp-gui/pubspec.yaml` `environment.flutter` for the minimum. Install from [flutter.dev](https://flutter.dev) or via `fvm`.     |
+| Dart SDK    | bundled             | Ships with Flutter; no separate install.                                                                                            |
+| Zig         | see `build.zig.zon` | To build bxp-cli, bxp-mcp, and the bxp-gui-bridge library — `minimum_zig_version` is the source of truth; see [devel.md](devel.md). |
+| VS Code     | any                 | + [Flutter extension](https://marketplace.visualstudio.com/items?itemName=Dart-Code.flutter). IntelliJ / Android Studio work too.   |
 
 ### First run
 
@@ -396,13 +396,13 @@ auto_approve}`) so an agent can confirm it reached the right server before MCP
   `Origin`, so webview agents that send one keep working); the loopback bind is
   the protection. A persisted `bxp-gui.mcpOriginAllowlist` tightens it when the
   user binds to a network interface.
-- **Auto-approve** is **off by default**, and when on it is *visible*: a red
+- **Auto-approve** is **off by default**, and when on it is _visible_: a red
   `devel-auto-approve-mode` status-bar chip plus `auto_approve` in `/health` and
   `get_state`, so neither the driving agent nor a watching user can miss that the
   confirm gate is bypassed.
 
-**Headless self-debug.** Turning on *settings inspector → Agent control →
-Auto-approve* (persisted as `bxp-gui.mcpAutoApprove`) lets an agent drive the GUI
+**Headless self-debug.** Turning on _settings inspector → Agent control →
+Auto-approve_ (persisted as `bxp-gui.mcpAutoApprove`) lets an agent drive the GUI
 without manual clicks — a semantic alternative to Playwright, since every tool is
 a real `TraceStore` action. The persisted toggle (not the
 `BXP_GUI_MCP_AUTO_APPROVE` env seed) is what survives across `launch_app` runs.
@@ -418,7 +418,7 @@ polls the GitHub releases API shortly after launch and periodically thereafter; 
 newer tag surfaces an update prompt
 ([update_dialog.dart](../bxp-gui/lib/ui/components/update_dialog.dart)). The part
 that matters is what happens **before** an installer is allowed to run — two
-fail-closed checks over the *same* downloaded bytes:
+fail-closed checks over the _same_ downloaded bytes:
 
 1. **Authenticity** — the `SHA256SUMS.minisig` minisign signature over
    `SHA256SUMS` is verified against the public key embedded in
