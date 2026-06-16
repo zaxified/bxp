@@ -366,7 +366,7 @@ of each `bridge_*` entry point.
 
 **`main.zig`** - entry point:
 
-1. Parses `--config`, `--template`, `--data`, `--debug`, `--quiet`, `--fresh`, `--version` flags.
+1. Parses run flags: `--config`, `--template`, `--data`, `--dry-run`, `--debug` (+ `=json`), `--quiet`, `--fresh`, `--trace` (+ `--trace-file`), `--check-fs`, `--version`, `--help`.
 2. Validates file paths (rejects shell metacharacters, limits `../` depth).
 3. Loads and validates all templates in config (`config.validate()`).
 4. Calls `pipeline.xlsxPrePass()` for any templates that reference `.xlsx` files.
@@ -608,13 +608,17 @@ the `""`.
 
 ### Debugging workflow
 
-**bxp-cli verbosity flags** — composable, all on the same binary:
+**bxp-cli run + debug flags** — composable, all on the same binary (value-taking
+flags accept `--name value` or `--name=value`):
 
 | Flag           | What it does                                                                                    |
 | -------------- | ----------------------------------------------------------------------------------------------- |
 | `--debug`      | Prints unmatched rows when `row_rules_debug_missing: true`                                      |
+| `--debug=json` | Emits ONE machine-readable JSON run summary on stdout (per-template + overall counts + captured warnings/errors) instead of human output — for CI / agents. Conflicts with `--trace` / `--quiet` / `--debug` |
 | `--quiet`      | Suppresses per-template summaries (exit code still reflects result)                             |
+| `--dry-run`    | Runs the full pipeline in memory but writes no output files (preview / validation); independent of `--trace` |
 | `--trace`      | Emits BXTB frame stream on stdout (consumed by `bxp-gui`'s dry-run debugger). Implies `--quiet` |
+| `--trace-file=<path>` | Mirrors the full BXTB trace to a file, independent of `--trace` (sidecar for offline drill-down) |
 | `--check-fs=N` | Adds filesystem-existence checks (templates' `data_dir`, etc.) with N-second timeout            |
 
 **Inspecting an expression in isolation** (via the `bxp-mcp` server — one
@@ -985,8 +989,10 @@ what unlocks streaming, parallelism, and parse-once below.
 
 - **`scripts/bench/bench.sh`** — the stress-test matrix. Sweeps rows / columns
   / cell-width / expr-count / trace on/off (`S1`–`S6`); `gen.py` emits a
-  synthetic `input.in.csv` + `bxp-cli.json` per point; each run is measured
-  under `/usr/bin/time -f '%e %M'`. Output → `scripts/bench/results/results-<UTC>.csv`
+  synthetic `input.in.csv` + `bxp-cli.json` per point; each run self-measures
+  wall + peak RSS via bxp-cli's `BXP_METRICS` env var (opt-in; emits one
+  `bxp-metrics wall_ms=… peak_rss_kb=…` line to stderr), so the matrix runs
+  cross-platform without GNU `/usr/bin/time`. Output → `scripts/bench/results/results-<UTC>.csv`
   (columns: `wall_s`, RSS, output bytes, trace event count/bytes). It rebuilds
   `ReleaseFast` first; knobs: `BENCH_WORK`, `BENCH_TIMEOUT`, `BENCH_PARALLEL`,
   `BENCH_SKIP_BUILD`. Dev-only — **not** part of `test.sh`.

@@ -1,5 +1,7 @@
 # bxp-mcp — MCP server
 
+> [← docs/](README.md)
+
 Developer orientation for **bxp-mcp**, the Model Context Protocol server that
 exposes bxp's stateless surface (plus one full-run tool) as agent-callable
 tools over JSON-RPC 2.0 on stdio.

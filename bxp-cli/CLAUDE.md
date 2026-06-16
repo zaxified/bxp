@@ -59,6 +59,16 @@ zig build
 # combined roll-up is always rebuilt in full so it reflects every input
 # (a skipped input is still iterated into the combined sink).
 ./zig-out/bin/bxp-cli --fresh
+
+# Run the full pipeline in memory but write no output files (preview /
+# validation). Independent of --trace.
+./zig-out/bin/bxp-cli --dry-run
+
+# Emit the binary BXTB trace stream on stdout (GUI dry-run debugger; forces
+# --quiet, conflicts with --debug). --trace-file <path> additionally mirrors a
+# full trace to a file, independent of --trace. Value-flags accept
+# `--name value` or `--name=value`.
+./zig-out/bin/bxp-cli --trace
 ```
 
 Exit codes: `0` = success, `1` = error, `2` = warnings.

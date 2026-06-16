@@ -61,6 +61,7 @@ from the current directory and processes every template in it.
 | `--debug=json` | — | Emit one machine-readable JSON run summary on stdout (per-template + overall `files`/`rows_in`/`rows_out`/`warnings`/`errors`/`time_ms`, plus captured warning/error lines) instead of the human stdout + stderr output. For scripting / CI. Conflicts with `--trace` / `--quiet` / `--debug`. |
 | `--quiet` | — | Suppress per-template summaries. Exit code still reflects success / warnings / failure. |
 | `--fresh` | — | Skip files whose output already exists. Useful when re-running on a folder where some `.csvx` files are already produced. |
+| `--dry-run` | — | Run the full pipeline in memory but write no output files — a preview / validation run that still reports counts and warnings. Independent of `--trace`. |
 | `--check-fs=N` | seconds (0–60) | Run extra filesystem-existence checks (verifies `data_dir`, etc.). `N` is the deadline in seconds — `0` skips entirely (default). |
 | `--version` | — | Print the binary version to stdout and exit. |
 | `--help` | — | Print the built-in help to stdout and exit. |

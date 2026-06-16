@@ -28,115 +28,64 @@
 
 BXP is a single-binary ETL tool. All broker logic lives in a JSON5 config file -
 the binary is a generic engine. The diagram below shows the high-level relationship
-between components.
+between components. It is a high-level topology (who talks to whom); the
+individual `bxp-core` modules and their internal dependencies are detailed in
+the [bxp-core modules table](devel.md#bxp-core-modules) and the
+[Expression Evaluator — Call Stack](#expression-evaluator---call-stack) diagram
+below.
 
 ```mermaid
 graph TD
-    subgraph User["User / CI"]
-        CFG["bxp-cli.json
-        (JSON5 templates)"]
-        DATA["Input files
-        (.csv / .xlsx / .json)"]
+    subgraph Actors["User / CI · AI agent"]
+        CFG["bxp-cli.json<br/>(JSON5 templates)"]
+        DATA["Input files<br/>(.csv / .xlsx / .json)"]
+        AGENT["AI agent<br/>(MCP host)"]
     end
 
-    subgraph GUI["bxp-gui (Flutter app)"]
-        STORE["TraceStore
-        (ChangeNotifier)"]
-        TB["TraceBuilder
-        folds --trace events"]
-        SVCS["services/
-        BxpProcessClient"]
-        AST_LIB["packages/json5_ast/
-        Dart JSON5 AST library"]
-        GUIMCP["gui-mcp (GuiMcpServer)
-        embedded MCP server
-        drives the live TraceStore"]
+    subgraph GUI["bxp-gui (Flutter desktop)"]
+        GUIMCP["gui-mcp (GuiMcpServer)<br/>drives the live store"]
+        STORE["TraceStore + UI<br/>services / store / ui"]
     end
 
-    subgraph BRIDGE["bxp-gui-bridge — Zig FFI shared library (single GUI backend, all platforms)"]
-        BRUN["bridge_run<br/>bridge_run_streaming<br/>bxp-cli subprocess proxy"]
-        BEVAL["bridge_eval_expr<br/>bridge_eval_expr_trace<br/>bridge_inspect<br/>in-proc inspect / eval"]
-        BSIG["bridge_verify_minisign<br/>release signature check"]
+    subgraph MCP["bxp-mcp (JSON-RPC / stdio)"]
+        MCPSRV["server + tools<br/>stateless tools + bxp_simulate"]
     end
 
-    subgraph CLI["bxp-cli (binary)"]
-        MAIN["main.zig
-        arg parsing · dispatch"]
-        PIPE["pipeline.zig
-        processBroker()"]
+    subgraph BRIDGE["bxp-gui-bridge (Zig FFI — single GUI backend)"]
+        BEVAL["bridge_eval_* / bridge_inspect<br/>in-proc inspect / eval"]
+        BRUN["bridge_run(_streaming)<br/>bxp-cli subprocess proxy"]
+        BSIG["bridge_verify_minisign"]
     end
 
-    AGENT["AI agent
-    (MCP host)"]
-
-    subgraph MCP["bxp-mcp — MCP server (JSON-RPC / stdio adapter)"]
-        MCPSRV["server.zig + tools.zig
-        stateless tools + bxp_simulate"]
+    subgraph CLI["bxp-cli (engine binary)"]
+        MAIN["main.zig — args / dispatch"]
+        PIPE["pipeline.zig — processBroker()"]
     end
 
     subgraph Core["bxp-core (library)"]
-        INSPECT["inspect.zig
-        stateless core
-        validate · eval · docs · templates"]
-        CSV["csv.zig
-        RFC 4180 parser"]
-        XLSX["xlsx.zig
-        ZIP+XML → CSV"]
-        EXPR["expr.zig
-        expression evaluator"]
-        DATEFMT["datefmt.zig
-        date parse/format core"]
-        DECIMAL["decimal.zig
-        fixed-point i128 numeric core"]
-        BTRACE["btrace.zig
-        binary BXTB trace I/O"]
-        CFG2["config.zig
-        config loader"]
-        JSON["json.zig
-        JSON array → rows"]
-        JSON5["json5.zig
-        JSON5 preprocessor"]
-        DOCS["docs.zig
-        docs catalog aggregator"]
-        DIAG["diagnostics.zig
-        validation collector"]
+        INSPECT["inspect.zig<br/>stateless facade<br/>validate · eval · docs · templates"]
+        ENGINE["engine modules<br/>csv · xlsx · json · json5 · expr<br/>datefmt · decimal · btrace · config · docs · diagnostics"]
     end
 
-    CFG -->|read| MAIN
-    DATA -->|read| PIPE
-    MAIN --> CFG2
-    MAIN --> PIPE
-    PIPE --> CSV
-    PIPE --> XLSX
-    PIPE --> EXPR
-    PIPE --> JSON
-    CFG2 --> JSON5
-    EXPR --> DATEFMT
-    EXPR --> DECIMAL
-    PIPE -->|--trace BXTB frames| BTRACE
-    PIPE -->|write| OUT[".csvx output files"]
-
-    INSPECT --> CFG2
-    INSPECT --> EXPR
-    INSPECT --> DOCS
-    INSPECT --> DIAG
-    INSPECT --> JSON5
-
-    DOCS -.re-exports.-> EXPR
-    DOCS -.re-exports.-> CFG2
-
-    SVCS -->|dart:ffi| BRIDGE
-    BRUN -->|spawns| CLI
-    BEVAL -.links.-> INSPECT
-    STORE --> SVCS
-    STORE --> TB
-    STORE --> AST_LIB
+    OUT[".csvx output"]
 
     AGENT -->|JSON-RPC / stdio| MCPSRV
     AGENT -->|MCP / localhost HTTP| GUIMCP
-    GUIMCP -->|TraceStore actions| STORE
+    CFG -->|read| MAIN
+    DATA -->|read| PIPE
+
+    GUIMCP --> STORE
+    STORE -->|dart:ffi| BRIDGE
+    BEVAL -.links.-> INSPECT
+    BRUN -->|spawns| CLI
+
     MCPSRV -.links.-> INSPECT
     MCPSRV -->|bxp_simulate spawns| CLI
+
+    MAIN --> PIPE
+    PIPE -->|parse · evaluate| ENGINE
+    PIPE -->|write| OUT
+    INSPECT --> ENGINE
 ```
 
 `bxp-gui-bridge` is the FFI shim the GUI loads via `dart:ffi` at startup. It is
@@ -159,14 +108,15 @@ each OS, plus the two-cause "why" behind the split), see
 section. The bridge's C-ABI surface and Debug→ReleaseSafe build rationale live
 in [`bxp-gui-bridge/CLAUDE.md`](../bxp-gui-bridge/CLAUDE.md).
 
-`docs.zig` is an aggregator — it owns no schema of its own. The dotted arrows
-indicate that it re-exports `expr.builtins` (the `FnDoc` catalog) and flattens
-each `config.zig` struct's `fields[]` table into the docs catalog JSON.
-Adding a new built-in or config field updates the docs automatically.
-
-the config validator (`inspect.annotateRaw`) also calls `json5.preprocessAnnotated` directly to
-emit `$comm_*` / `$err_*` siblings — that's the source of the `INSPECT → JSON5`
-arrow that bypasses the normal config loader.
+The **engine modules** node groups two faces of `bxp-core`: the conversion
+engine (`csv` / `xlsx` / `json` / `json5` / `expr` / `datefmt` / `decimal` /
+`btrace`, driven by `bxp-cli`'s pipeline) and the support modules behind the
+`inspect` facade. `docs.zig` aggregates the language/schema catalog —
+re-exporting `expr.builtins` (the `FnDoc` catalog) and flattening each
+`config.zig` struct's `fields[]` table — so adding a built-in or config field
+updates the docs automatically. Config validation (`inspect.annotateRaw`) runs
+`json5.preprocessAnnotated` to emit the `$comm_*` / `$err_*` siblings the GUI
+renders.
 
 ---
 

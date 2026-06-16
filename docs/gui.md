@@ -331,6 +331,8 @@ Resolved in this order:
 
 1. **Env override** — `$BXP_CLI_PATH`. If set and non-empty,
    used absolutely (missing file → fatal error, no fallthrough).
+   (`$BXP_EXAMPLES_PATH` is the analogous override for locating the bundled
+   `bxp-cli.examples.json` template catalog.)
 2. **Bundle sibling** — `<name>` next to the Flutter executable inside the app
    bundle.
 3. **Dev-tree fallback** — walks up from the exe dir until it finds a `bxp-gui/`
