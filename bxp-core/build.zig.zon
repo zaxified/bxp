@@ -4,14 +4,14 @@
     .version = "0.2.5",
     // uucode (MIT) supplies the Unicode case-mapping / decomposition tables
     // behind UPPER/LOWER (full Unicode incl. ß→SS) and the upcoming `unaccent`.
-    // Pinned to the `zig-0.15` back-port branch (its main line requires Zig
-    // 0.16); revisit the pin on the Zig 0.16 migration. Field-selected in
+    // Pinned to uucode main (Zig 0.16+); the former `zig-0.15` back-port
+    // branch carried the 0.15.x line. Field-selected in
     // build.zig so only the tables we use compile in. Date parsing/formatting
     // still lives in the in-house src/datefmt.zig (no dep).
     .dependencies = .{
         .uucode = .{
-            .url = "https://github.com/jacobsandlund/uucode/archive/5dd92981eb5d9d65ae046201f4b4395569ed2790.tar.gz",
-            .hash = "uucode-0.2.0-ZZjBPui3VAC_VVwydn3Tbi0Z03zbn4J8o0-_2SZWkmAS",
+            .url = "https://github.com/jacobsandlund/uucode/archive/2826a37a4562284fdacd8fa029d49509cc9bffcd.tar.gz",
+            .hash = "uucode-0.2.0-ZZjBPlK5VADj7fdoq7G8LIHzD5o6FSkcBXXrRWr4jnrA",
         },
     },
     .minimum_zig_version = "0.15.0",
