@@ -32,6 +32,18 @@ push, then tag.
 
 Both scripts accept `--dry-run` to preview without mutating anything.
 
+**Get the code green on master _before_ step 1.** The release should ride
+code that CI has already passed: push your feature work, let `ci.yml` go
+green, run `scripts/test.sh` locally, _then_ bump + tag. The CI workflow
+deliberately **skips** the `release: prepare X.Y.Z` commit (it changes only
+the six manifest version strings + `CHANGELOG.md` — no code to test), so the
+master push in step 2 does not re-run the full three-OS suite. The `v*` tag
+in step 3 then triggers the release build matrix. Net: one CI fan-out per
+release instead of two. (This is why the skip lives as a job-level `if:`
+guard in `ci.yml`, not a `[skip ci]` commit marker — the tag points at the
+release-prep commit, so a commit-message marker would suppress `release.yml`
+too.)
+
 ### Optional: Windows pre-shipping smoke (between step 2 and step 3)
 
 When the release contains **substantial `bxp-gui` changes** — Flutter

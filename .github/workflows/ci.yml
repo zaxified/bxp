@@ -10,6 +10,15 @@ name: ci
 # pinned eol=lf in .gitattributes; the bench guard SKIPs gracefully on hosts
 # without GNU time). macOS likewise SKIPs the bench guard (BSD time has no
 # `-f`); the perf invariants run on the Linux leg.
+#
+# The "release: prepare X.Y.Z" commit (emitted by scripts/release-changelog.sh)
+# is skipped here: it only bumps the six manifest version strings + CHANGELOG.md,
+# so it changes no code the test suite could exercise, and the v* tag pushed
+# right after it triggers the full release build anyway. Re-testing it would
+# double the CI fan-out for one release. This relies on the release procedure
+# pushing code to master (and letting CI go green) BEFORE cutting the release —
+# see docs/release.md. We cannot use a `[skip ci]` commit marker for this: the
+# tag points at the same commit, and the marker would skip release.yml too.
 
 on:
   pull_request:
@@ -32,6 +41,9 @@ env:
 jobs:
   test:
     name: test (${{ matrix.os }})
+    # Skip the redundant run on the version-only "release: prepare" commit
+    # (see header). PRs / workflow_dispatch have no head_commit → always run.
+    if: "${{ !startsWith(github.event.head_commit.message, 'release: prepare ') }}"
     strategy:
       # Keep all three legs running so one platform's failure doesn't mask
       # another's — no per-OS phase carve-outs, every leg runs the same
