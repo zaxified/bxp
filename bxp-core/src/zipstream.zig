@@ -50,9 +50,9 @@ pub const Entry = struct {
 /// not close it); owns the reader buffer, the entry list and the entries' name
 /// storage. Initialise in place — see the lifetime contract above.
 pub const Archive = struct {
-    file: std.fs.File,
+    file: std.Io.File,
     reader_buf: []u8,
-    file_reader: std.fs.File.Reader,
+    file_reader: std.Io.File.Reader,
     entries: std.ArrayList(Entry),
     name_arena: std.heap.ArenaAllocator,
     alloc: Allocator,
@@ -60,7 +60,7 @@ pub const Archive = struct {
     /// Walks the central directory and records every entry (name + location +
     /// sizes). Does not read any entry's data. The `file` must outlive the
     /// archive; it is not closed by `deinit`.
-    pub fn init(self: *Archive, alloc: Allocator, file: std.fs.File) !void {
+    pub fn init(self: *Archive, io: std.Io, alloc: Allocator, file: std.Io.File) !void {
         self.* = .{
             .file = file,
             .reader_buf = try alloc.alloc(u8, READER_BUF_SIZE),
@@ -75,11 +75,11 @@ pub const Archive = struct {
             alloc.free(self.reader_buf);
         }
 
-        self.file_reader = file.reader(self.reader_buf);
+        self.file_reader = file.reader(io, self.reader_buf);
         const name_alloc = self.name_arena.allocator();
 
         var iter = try std.zip.Iterator.init(&self.file_reader);
-        var name_buf: [std.fs.max_path_bytes]u8 = undefined;
+        var name_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
         while (try iter.next()) |e| {
             switch (e.compression_method) {
                 .store, .deflate => {},
@@ -280,7 +280,7 @@ test "Archive: enumerates members, skips dir entries, find + findSuffix" {
     defer f.close();
 
     var archive: Archive = undefined;
-    try archive.init(a, f);
+    try archive.init(testing.io, a, f);
     defer archive.deinit();
 
     // The trailing-slash directory entry is skipped.
@@ -305,7 +305,7 @@ test "EntryReader: streams a stored entry, then a second one (shared cursor)" {
     defer f.close();
 
     var archive: Archive = undefined;
-    try archive.init(a, f);
+    try archive.init(testing.io, a, f);
     defer archive.deinit();
 
     var window: [std.compress.flate.max_window_len]u8 = undefined;
