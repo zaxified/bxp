@@ -1,5 +1,130 @@
 # Changelog
 
+## 2026.06.16 — bxp-cli 0.2.5, bxp-mcp 0.2.5, bxp-gui 0.2.5
+
+### Features
+
+- feat(expr): full-Unicode UPPER/LOWER via uucode
+- feat(expr): add UNACCENT builtin (Latin diacritic stripping)
+- feat(encoding): Layer 0 CSV input/output encoding + xlsx UTF-16 guard
+- feat(mcp): bxp-mcp MCP server + shared inspect core (dedup fmt)
+- feat(mcp): batch/template/simulate tools + per-request arena + bundling
+- feat(mcp): bxp_eval_trace + share expr-trace core in inspect (#2)
+- feat(gui): in-proc bridge_inspect — GUI stops spawning bxp-fmt (B)
+- feat(gui): BXP_FORCE_BRIDGE — disable bxp-fmt fallback to test the bridge
+- feat(mcp): protocol depth — structuredContent, outputSchema, 2025-11-25, bxp_simulate BXTB trace + progress
+- feat(gui): single bridge backend — drop Process.start + bxp-fmt fallback
+- feat(core): inspect is the single stateless core — rehome fmt tests + add validateExprJson
+- feat(mcp): add bxp_validate_expr tool — agent parity with bridge_eval_expr
+- feat(fmt)!: delete the bxp-fmt module
+- feat(gui): surface bxp-mcp path + version in the runtime inspector
+- feat(gui): embedded MCP server for agent-controlled GUI (Phase 1)
+- feat(gui): GUI-MCP Phase 2 — open/reload/run/delete/exit tools
+- feat(gui): GUI-MCP get_trace tool — expose btrace run summary
+- feat(gui): make GUI-MCP agent actions visible (panel + reveal)
+- feat(gui): GUI-MCP reachability + structural/template/drill-down tools
+- feat(cli): --debug=json summary, FileTooBig caps, audit follow-ups
+- feat(expr): 11 new builtins — CASE/IFERROR, context, string/math
+- feat(cli): zip_input pre-pass — unpack zipped-CSV exports before the main loop
+- feat(expr): REMAP builtin + unified `maps` registry, retire TICKER/ticker_map
+- feat(xlsx): parallel multi-sheet extraction fan-out
+- feat(check-fs): validate xlsx_sheet.name exists in the workbook
+- feat(gui-mcp): headless auto-approve for agent-driven GUI testing
+- feat(gui-mcp): persist auto-approve as a bxp-gui.json pref + inspector toggle
+- feat(gui): resolve global maps in drill-down + fix drill-down RAF race; warn on duplicate CSV headers
+- feat(wide-csv): raise CLI MAX_COLUMNS to 16384 + cap GUI render at 200 cols
+- feat(updater): minisign signature verification + release hardening
+
+### Fixes
+
+- fix(release): backtick `@tokens` in changelog so they don't ping GitHub users
+- fix(mcp): audit follow-ups — isError, per-tool structuredContent, record counts; add docs/mcp.md
+- fix(bridge): survive inherited SIGCHLD=SIG_IGN in bridge_run
+- fix(bridge): ECHILD-tolerant streaming wait (survive Dart VM child reaper)
+- fix(gui): kill startup crash — lazy version probes + tolerant getVersion
+- perf(expr): O(1) builtin dispatch, single-join parseCat, inline args
+- perf(xlsx): in-memory ZIP extraction for files within 100 MB
+- perf(xlsx): stream ingest via zipstream — flat memory, no size caps
+- perf(cli): parallelise zip_input unpack via work-stealing
+- fix(config): snapshot FS-check worker inputs to fix detached-worker UAF
+- fix(expr): bound parser recursion depth to prevent stack-overflow SIGSEGV
+- fix(config): range-guard xlsx_sheet.header_row before i64->u32 cast
+- fix(cli): clamp worker count to MAX_WORKERS_LIMIT instead of aborting
+- fix(mcp): reject path-traversal file_pattern_in before staging sim input
+- fix(xlsx): harden cell-value path against hostile/corrupt workbooks
+- fix(json5): bound parser recursion depth to prevent StackOverflowError
+- fix(mcp): index newline offsets once for O(log n) trace line lookup
+- fix(gui): cap gui-mcp request body, guard notify-after-dispose, align underline offsets
+- fix(ci): SHA-pin third-party actions + hard-fail unsigned release on tag push
+- fix(ci): force UTF-8 in gen-readme.sh for cp1252 Windows runners
+- fix(ci): enable Python UTF-8 Mode harness-wide for cp1252 Windows runners
+- fix(gui): per-user Windows installer + rename-swap self-heal for self-update
+- fix(gui): report real PackageInfo version in gui-mcp /health + handshake
+- fix(cq): single-source versions/caps + correct stale post-v0.3.0 comments
+- fix(cq): repair botched fmt→bridge comment scars + expr builtin-list pointer
+- fix(cq): clear botched-rename 'the matching the bridge stdout' comment scars
+- fix(cq): English-only pipeline comments + stale 'drill-down in fmt'
+- fix(cq): bridge header still claimed 'single exported function bridge_run'
+- fix(cq): clear remaining bridge flag-attribution comment scars (wrapped)
+- fix(cq): correct stale 'spawns drop --check-fs flag' in trace_store
+- fix(cq): last stale 'Bxp-fmt's keys' ref in trace_store _mergeMaps
+- fix(cq): wrapped doubled-'the' before 'bridge error' in loadConfig
+- fix(cq): garbled 'expr validator validate' doubled-verb in expr_panel
+- fix(cq): drop stale hardcoded line number in pipeline comment
+- fix(bridge): join stream readers before reaping to end fd race
+- fix(scripts): scope check-formatting prettier to **/*.md only
+
+### Internal
+
+- docs(roadmap): purge items shipped in v0.2.4 (CI matrix, cross-platform bench, updater fail-closed)
+- chore(lint): exempt all CLAUDE.md files from markdownlint + prettier
+- chore(gitignore): ignore codedb.snapshot (local code-intel cache)
+- test(mcp): add test-05-mcp phase (build + unit tests + JSON-RPC smoke)
+- refactor(bridge): share expr eval/trace core with inspect (dedup A)
+- docs: correct stale 'bridge shipped only on Windows' note
+- chore: pin Zig 0.15.2 + gitignore 0.16's project-local zig-pkg
+- docs(roadmap): reconcile MCP/adapters section with shipped reality
+- docs(roadmap): mark v0.3.0 bridge flip done + purge shipped items
+- docs(bridge): drop stale bxp-fmt references — inspect core is the shared backend
+- docs(cli): update drill-down comment — recomputed via bxp-cli, not bxp-fmt
+- refactor(gui): drop bxp-fmt from the GUI entirely — bridge is the single backend
+- build(scripts): rewire test oracle + release to MCP; add readme generator
+- docs(resources): single-source the console + desktop readmes
+- docs: rewrite developer + user docs off bxp-fmt onto inspect/mcp/bridge
+- docs(root): drop bxp-fmt from repo map, CI, and lint config
+- test: align bench-guard output with the shared step/summary column
+- docs(roadmap): drop shipped + obsolete backlog entries
+- docs(roadmap): note Spice-derived parallelism follow-ups under bxp-cli
+- docs(roadmap): mark agent-controllable GUI (GUI-MCP) shipped
+- docs(gui-mcp): document the agent workflow; prune shipped roadmap entry
+- docs(roadmap): consolidate expr-builtin sections, drop shipped, English
+- docs(examples): simplify expressions with CASE + ISEMPTY
+- test(datasets): synthetic zip_input regression fixture
+- docs(examples): RÚIAN address-points real-world example
+- docs: document zip_input + parallel unpack, prune shipped roadmap
+- test(bench): wire .xlsx + wide-column RSS points into the bench guard
+- test(bench): xlsx multi-sheet fan-out RSS guard
+- test(datasets): enforce the exit-0/no-warnings contract per fixture
+- docs(cli): document intentional header/body over-width asymmetry
+- chore(audit): close 2026-06-14 sweep — relocate residual notes, retire DEV reports
+- test(gui): Windows bridge-streaming + GUI-MCP drive harnesses
+- build(git): pin Flutter generated plugin registrants to eol=lf
+- test(bench): Windows baseline (W01) + disk-safe low-disk & MSYS file-sink modes
+- docs(roadmap): retire shipped v0.3.0 entries, add Zig 0.16 + extraction milestones
+- test: unify test.sh on one optimize mode (ReleaseSafe) + reorder phases
+- docs: refresh docs/ for the v0.3.0 bridge flip + recent features
+- style: prettier-format remaining markdown (pre-release pass)
+- docs(readme): position BXP as a professional product + fix Win install path
+- docs: deep-audit pass over docs/, resources/, and CLAUDE.md
+- chore(gui): drop superseded win_bridge_smoke harness
+- docs: complete CLI flag / ENV coverage + flatten architecture bird's-eye
+
+### Other
+
+- md lint and prettier colision repairs
+- prettier-check
+
+
 ## 2026.06.07 — bxp-cli 0.2.4, bxp-fmt 0.2.4, bxp-gui 0.2.4
 
 ### Fixes
