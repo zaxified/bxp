@@ -68,7 +68,8 @@ _run_dataset() {
     actual_bin="$(mktemp)"
     "$BXP" --trace --config "$sample_json" > "$actual_bin"
     local size
-    size=$(stat -c '%s' "$actual_bin")
+    # `wc -c` is portable (GNU `stat -c` / BSD `stat -f` differ across Linux/macOS).
+    size=$(wc -c < "$actual_bin" | tr -d '[:space:]')
     if [[ "$size" -lt 4 ]]; then
         echo "bin trace too small ($size bytes)"
         rm -f "$actual_bin"
