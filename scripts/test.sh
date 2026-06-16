@@ -14,24 +14,41 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/test-lib.sh"
 export BXP_TEST_T0="$(_now)"
 
-# Per-phase wall-clock budgets. Catches hangs (e.g. parser infinite-loop
-# regression in the corpus phase) without killing legitimately slow
-# phases like Flutter desktop tests. Lookup falls back to no timeout.
-declare -A PHASE_BUDGET=(
-    # Recycles the Console phase's ReleaseSafe bxp-cli (cache hit), then runs a
-    # handful of synthetic-input points; a cold standalone build pushes it up.
-    [test-05-bench-guard.sh]=180
-    [test-06-expr-corpus.sh]=60
-)
+# Per-phase wall-clock budgets (seconds). Catches hangs (e.g. a parser
+# infinite-loop regression in the corpus phase) without killing legitimately
+# slow phases like the Flutter desktop tests. Unbudgeted phases get no timeout.
+#
+# A plain `case` function, NOT a `declare -A` associative array: macOS ships
+# bash 3.2 (no associative arrays), where `declare -A` evaluates the `.sh` key
+# as arithmetic, errors, and the whole gate silently no-ops to a false green
+# ("All passed 0.0s", zero phases run). bash 3.2 portability is mandatory here.
+phase_budget() {
+    case "$1" in
+        # Recycles the Console phase's ReleaseSafe bxp-cli (cache hit), then runs
+        # a handful of synthetic-input points; a cold standalone build pushes up.
+        test-05-bench-guard.sh) echo 180 ;;
+        test-06-expr-corpus.sh) echo 60 ;;
+        *)                      echo "" ;;
+    esac
+}
 
 shopt -s nullglob
+ran=0
 for phase in "$SCRIPT_DIR"/test-[0-9][0-9]-*.sh; do
-    budget="${PHASE_BUDGET[$(basename "$phase")]:-}"
+    ran=$((ran + 1))
+    budget="$(phase_budget "$(basename "$phase")")"
     if [[ -n "$budget" ]] && command -v timeout >/dev/null 2>&1; then
         timeout "$budget" bash "$phase" "$@"
     else
         bash "$phase" "$@"
     fi
 done
+
+# Guard against a silent no-op (the bash 3.2 / empty-glob class of failure):
+# if the gate matched zero phases, fail loudly instead of a vacuous success.
+if [[ "$ran" -eq 0 ]]; then
+    echo "test.sh: no test-NN-*.sh phases matched in $SCRIPT_DIR — refusing to pass" >&2
+    exit 1
+fi
 
 summary
