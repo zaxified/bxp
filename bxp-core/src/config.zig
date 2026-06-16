@@ -2958,8 +2958,8 @@ pub fn loadFromBytes(
                             // to /home/user/revolut regardless of the process's cwd. Allocate
                             // the joined path BEFORE freeing the old default — if join OOMs,
                             // the errdefer above must still see a valid pointer in `data_dir`.
-                            const cfg_dir = std.fs.path.dirname(config_path) orelse ".";
-                            const new_data_dir = try std.fs.path.join(alloc, &.{ cfg_dir, v.string });
+                            const cfg_dir = std.Io.Dir.path.dirname(config_path) orelse ".";
+                            const new_data_dir = try std.Io.Dir.path.join(alloc, &.{ cfg_dir, v.string });
                             alloc.free(data_dir);
                             data_dir = new_data_dir;
                         }

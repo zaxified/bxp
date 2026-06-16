@@ -2382,7 +2382,7 @@ pub fn processBroker(
         // (mirrors the CSV chunk reader's deferral). See the warning
         // emission at file_end further down.
 
-        const full_path = try std.fs.path.join(file_alloc, &.{ dir_path, filename });
+        const full_path = try std.Io.Dir.path.join(file_alloc, &.{ dir_path, filename });
         out.binEmitFileStart(
             if (json_streaming) .json else .csv,
             bid,
@@ -3234,7 +3234,7 @@ pub fn xlsxPrePass(
 /// Allocated from `alloc`.
 fn zipEntryOutputName(alloc: std.mem.Allocator, entry_name: []const u8, zi: config_mod.ZipInput) ![]u8 {
     return switch (zi.dir_mode) {
-        .basename => try alloc.dupe(u8, std.fs.path.basename(entry_name)),
+        .basename => try alloc.dupe(u8, std.Io.Dir.path.basename(entry_name)),
         .keep_path => try std.mem.replaceOwned(u8, alloc, entry_name, "/", zi.path_separator),
     };
 }

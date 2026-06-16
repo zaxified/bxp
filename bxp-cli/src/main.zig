@@ -82,7 +82,7 @@ fn usageErr(prog: []const u8) void {
 /// Rejected characters: $ | ; & > < ` ( ) \n \r \0
 /// Reason: prevent CSV formula injection and path traversal attacks on downstream tools.
 ///
-/// The `..` traversal counter consults `std.fs.path.isSep` so the check
+/// The `..` traversal counter consults `std.Io.Dir.path.isSep` so the check
 /// is platform-aware: on Windows both `/` and `\` are recognised path
 /// separators, so `..\foo\..` is counted the same as `../foo/..`.
 /// On POSIX only `/` is a separator (the standard behaviour).
@@ -96,14 +96,14 @@ fn validatePath(path: []const u8) error{InvalidPath}!void {
     var count: usize = 0;
     var i: usize = 0;
     while (i + 3 <= path.len) : (i += 1) {
-        if (path[i] == '.' and path[i + 1] == '.' and std.fs.path.isSep(path[i + 2])) {
+        if (path[i] == '.' and path[i + 1] == '.' and std.Io.Dir.path.isSep(path[i + 2])) {
             count += 1;
             if (count > 1) return error.InvalidPath;
         }
     }
     // Also catch trailing ".." (path ends with "<sep>.." or is exactly "..").
     const ends_with_dotdot = std.mem.eql(u8, path, "..") or
-        (path.len >= 3 and std.fs.path.isSep(path[path.len - 3]) and
+        (path.len >= 3 and std.Io.Dir.path.isSep(path[path.len - 3]) and
             path[path.len - 2] == '.' and path[path.len - 1] == '.');
     if (ends_with_dotdot) {
         if (count + 1 > 1) return error.InvalidPath;
@@ -233,7 +233,7 @@ test "matchValueArg: empty equals value returns empty slice" {
 }
 
 test "validatePath: backslash separator counts as traversal on Windows builds" {
-    // On Windows `std.fs.path.isSep('\\')` is true, so `..\..` should
+    // On Windows `std.Io.Dir.path.isSep('\\')` is true, so `..\..` should
     // reject. On POSIX `\\` is just a regular byte, `..\..` collapses
     // to a single token and one `..` is allowed.
     if (@import("builtin").os.tag == .windows) {

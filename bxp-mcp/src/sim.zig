@@ -88,17 +88,17 @@ fn run(
         return errJson(a, "cannot resolve own executable directory", "");
     const exe_dir = exe_dir_buf[0..exe_dir_n];
     const cli_name = if (builtin.os.tag == .windows) "bxp-cli.exe" else "bxp-cli";
-    const cli_path = try std.fs.path.join(a, &.{ exe_dir, cli_name });
+    const cli_path = try std.Io.Dir.path.join(a, &.{ exe_dir, cli_name });
     std.Io.Dir.cwd().access(io, cli_path, .{}) catch
         return errJson(a, "bxp-cli binary not found next to bxp-mcp", cli_path);
 
     // 3. Stable, reused scratch workspace (no per-call temp litter).
     const uid = try sanitize(a, workspace_id orelse template);
     const tmp_base = tmpDir(env);
-    const workspace = try std.fs.path.join(a, &.{ tmp_base, "bxp-mcp-sim", uid });
-    const data_dir = try std.fs.path.join(a, &.{ workspace, "data" });
-    const config_path = try std.fs.path.join(a, &.{ workspace, "config.json" });
-    const trace_path = try std.fs.path.join(a, &.{ workspace, "trace.bxtb" });
+    const workspace = try std.Io.Dir.path.join(a, &.{ tmp_base, "bxp-mcp-sim", uid });
+    const data_dir = try std.Io.Dir.path.join(a, &.{ workspace, "data" });
+    const config_path = try std.Io.Dir.path.join(a, &.{ workspace, "config.json" });
+    const trace_path = try std.Io.Dir.path.join(a, &.{ workspace, "trace.bxtb" });
 
     // Fresh contents each run, stable path: wipe then recreate. Left in place
     // afterwards so the agent (or user) can inspect the run's files.
@@ -109,7 +109,7 @@ fn run(
     // 4. Stage config (verbatim) + the input CSV, named so its suffix matches
     //    file_pattern_in (".csv" → input.csv, "_cash.csv" → input_cash.csv).
     const input_name = try std.fmt.allocPrint(a, "input{s}", .{tio.file_pattern_in});
-    const input_path = try std.fs.path.join(a, &.{ data_dir, input_name });
+    const input_path = try std.Io.Dir.path.join(a, &.{ data_dir, input_name });
     std.Io.Dir.cwd().writeFile(io, .{ .sub_path = config_path, .data = config_text }) catch
         return errJson(a, "cannot write scratch config", config_path);
     std.Io.Dir.cwd().writeFile(io, .{ .sub_path = input_path, .data = csv_text }) catch
