@@ -97,6 +97,22 @@ jobs:
           flutter-version: 3.44.2
           channel: stable
           cache: true
+          # `desktop` epoch + the trim step below keep this cache to the desktop
+          # subset (no android/ios engine, ~0.8 GB vs ~1.6 GB/OS) so it fits the
+          # repo's 10 GB cache budget alongside the Zig caches.
+          cache-key: "flutter-desktop-:os:-:channel:-:version:"
+      - name: Trim Flutter SDK to the desktop subset
+        # bxp-gui targets linux/macos/windows (+web) only — no android/ios. The
+        # default precache pulls ~0.8 GB of android engine artifacts per OS that
+        # `flutter analyze` / `flutter test` never touch. Drop them so the cached
+        # SDK stays small; the cache-key above isolates it from the fat caches.
+        run: |
+          flutter config --no-enable-android --no-enable-ios
+          eng="$FLUTTER_ROOT/bin/cache/artifacts/engine"
+          if [ -n "$FLUTTER_ROOT" ] && [ -d "$eng" ]; then
+            find "$eng" -maxdepth 1 -type d -name 'android-*' -exec rm -rf {} + 2>/dev/null || true
+          fi
+          du -sh "$FLUTTER_ROOT" 2>/dev/null || true
       # A fresh checkout has no .dart_tool. The flutter phases imply a pub
       # get, but json5_ast's standalone `dart test` does not, so resolve
       # both explicitly to keep the run deterministic.
