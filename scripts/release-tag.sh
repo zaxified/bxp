@@ -49,6 +49,24 @@ TAG="v$VERSION"
 
 # ─── Sanity checks ──────────────────────────────────────────────────
 
+# HEAD must be the "release: prepare X.Y.Z" commit emitted by
+# release-changelog.sh. This is the same commit ci.yml's `if:` guard skips
+# (so the master push doesn't double the CI fan-out), and the tag is cut from
+# it — so refuse to tag anything else. Catches "tagged without running
+# release-changelog.sh first": a code commit at HEAD would otherwise get a
+# tag (and ship) while ci.yml still runs its full suite on it.
+HEAD_MSG=$(git -C "$MONO_ROOT" log -1 --pretty=%s)
+case "$HEAD_MSG" in
+    "release: prepare "*) ;;
+    *)
+        echo "error: HEAD is not a 'release: prepare' commit:" >&2
+        echo "       $HEAD_MSG" >&2
+        echo "       run release-changelog.sh first (it bumps versions +" >&2
+        echo "       CHANGELOG and commits as 'release: prepare X.Y.Z')." >&2
+        exit 1
+        ;;
+esac
+
 if git -C "$MONO_ROOT" rev-parse "$TAG" >/dev/null 2>&1; then
     echo "error: tag $TAG already exists locally" >&2
     echo "       did you forget to run release-changelog.sh first?" >&2
