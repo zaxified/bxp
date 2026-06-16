@@ -67,6 +67,8 @@ jobs:
           version: 0.16.0
       - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:
+          # Pinned for reproducible release builds (matches CI). Bump deliberately.
+          flutter-version: 3.44.2
           channel: stable
       - name: Install Linux desktop deps
         run: |
@@ -95,6 +97,8 @@ jobs:
           version: 0.16.0
       - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:
+          # Pinned for reproducible release builds (matches CI). Bump deliberately.
+          flutter-version: 3.44.2
           channel: stable
       - name: Install NSIS
         run: |
@@ -118,6 +122,8 @@ jobs:
           version: 0.16.0
       - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:
+          # Pinned for reproducible release builds (matches CI). Bump deliberately.
+          flutter-version: 3.44.2
           channel: stable
       - name: Install create-dmg
         run: brew install create-dmg

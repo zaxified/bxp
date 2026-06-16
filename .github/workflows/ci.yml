@@ -89,7 +89,14 @@ jobs:
             zig-${{ runner.os }}-base-
       - uses: subosito/flutter-action@v2
         with:
+          # Pinned (not floating `channel: stable`) so CI is reproducible: the
+          # stable channel drifts ahead of local SDKs and surfaces fresh `info`
+          # lints that fail CI while passing locally. Bump deliberately. `cache`
+          # persists the SDK across runs (~60 s/run); the pin keeps that key
+          # stable. (roadmap → CI hardening)
+          flutter-version: 3.44.2
           channel: stable
+          cache: true
       # A fresh checkout has no .dart_tool. The flutter phases imply a pub
       # get, but json5_ast's standalone `dart test` does not, so resolve
       # both explicitly to keep the run deterministic.
