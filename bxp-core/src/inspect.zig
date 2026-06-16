@@ -137,10 +137,19 @@ fn valueToJsonString(a: std.mem.Allocator, value: std.json.Value) ![]u8 {
 }
 
 /// Read file into arena-allocated buffer, capped at CONFIG_MAX_FILE_SIZE.
+/// Synchronous + short-lived, so a local `Threaded` io is created and torn down
+/// here — the public `*FromFile` entry points stay io-free (no ripple into the
+/// bxp-mcp / bxp-gui-bridge adapters that call them).
 fn readFileCapped(a: std.mem.Allocator, path: []const u8) ![]u8 {
-    const file = try std.fs.cwd().openFile(path, .{});
-    defer file.close();
-    return file.readToEndAlloc(a, CONFIG_MAX_FILE_SIZE);
+    var threaded = std.Io.Threaded.init(a, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    const file = try std.Io.Dir.cwd().openFile(io, path, .{});
+    defer file.close(io);
+    var read_buf: [4096]u8 = undefined;
+    var fr = file.reader(io, &read_buf);
+    return fr.interface.allocRemaining(a, .limited(CONFIG_MAX_FILE_SIZE));
 }
 
 // ── diagnostic tree injection (moved verbatim from bxp-fmt) ───────────────────

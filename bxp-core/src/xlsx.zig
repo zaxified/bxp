@@ -103,9 +103,9 @@ pub const Workbook = struct {
     /// shared-strings and styles parts. A self-contained archive + windows
     /// are opened and freed inside; the returned structures own their memory
     /// (`alloc`) and outlive the file handle.
-    pub fn init(alloc: Allocator, xlsx_file: std.fs.File) !Workbook {
+    pub fn init(io: std.Io, alloc: Allocator, xlsx_file: std.Io.File) !Workbook {
         var archive: zipstream.Archive = undefined;
-        try archive.init(alloc, xlsx_file);
+        try archive.init(io, alloc, xlsx_file);
         defer archive.deinit();
 
         const zip_window = try alloc.alloc(u8, ZIP_WINDOW_SIZE);
@@ -151,9 +151,9 @@ pub const Workbook = struct {
 /// worksheet streams are never touched), so it suits the `--check-fs`
 /// sheet-name validation. Caller owns the returned map: free each key + value,
 /// then `deinit()` — the same pattern as `Workbook.sheet_paths`.
-pub fn listSheets(alloc: Allocator, xlsx_file: std.fs.File) !std.StringHashMap([]const u8) {
+pub fn listSheets(io: std.Io, alloc: Allocator, xlsx_file: std.Io.File) !std.StringHashMap([]const u8) {
     var archive: zipstream.Archive = undefined;
-    try archive.init(alloc, xlsx_file);
+    try archive.init(io, alloc, xlsx_file);
     defer archive.deinit();
 
     const zip_window = try alloc.alloc(u8, ZIP_WINDOW_SIZE);
@@ -170,11 +170,12 @@ pub fn listSheets(alloc: Allocator, xlsx_file: std.fs.File) !std.StringHashMap([
 /// name is not found (prefix match) is silently skipped (no output), matching
 /// the historical behaviour. `wb` is read-only.
 fn extractSheetWithCtx(
+    io: std.Io,
     alloc: Allocator,
     ctx: *PartCtx,
     wb: *const Workbook,
     spec: SheetSpec,
-    out_dir: std.fs.Dir,
+    out_dir: std.Io.Dir,
     out_basename: []const u8,
 ) !void {
     // Prefix match: "OPEN POSITION" matches "OPEN POSITION 28022026".
@@ -192,11 +193,11 @@ fn extractSheetWithCtx(
     const xml_path = try std.fmt.allocPrint(alloc, "xl/{s}", .{rel_path});
     defer alloc.free(xml_path);
 
-    const out_file = try out_dir.createFile(csv_name, .{});
-    defer out_file.close();
+    const out_file = try out_dir.createFile(io, csv_name, .{});
+    defer out_file.close(io);
 
     var out_buf: [CSV_OUT_BUF_SIZE]u8 = undefined;
-    var out_fw = out_file.writer(&out_buf);
+    var out_fw = out_file.writer(io, &out_buf);
 
     try parseSheet(
         alloc,
@@ -216,15 +217,16 @@ fn extractSheetWithCtx(
 /// as each call is given its own `xlsx_file` handle; `wb` is shared read-only.
 /// This is the unit of the bxp-cli sheet fan-out (mirrors `zipPrePass`).
 pub fn extractSheet(
+    io: std.Io,
     alloc: Allocator,
-    xlsx_file: std.fs.File,
+    xlsx_file: std.Io.File,
     wb: *const Workbook,
     spec: SheetSpec,
-    out_dir: std.fs.Dir,
+    out_dir: std.Io.Dir,
     out_basename: []const u8,
 ) !void {
     var archive: zipstream.Archive = undefined;
-    try archive.init(alloc, xlsx_file);
+    try archive.init(io, alloc, xlsx_file);
     defer archive.deinit();
 
     const zip_window = try alloc.alloc(u8, ZIP_WINDOW_SIZE);
@@ -233,7 +235,7 @@ pub fn extractSheet(
     defer alloc.free(xml_window);
 
     var ctx: PartCtx = .{ .archive = &archive, .zip_window = zip_window, .xml_window = xml_window };
-    try extractSheetWithCtx(alloc, &ctx, wb, spec, out_dir, out_basename);
+    try extractSheetWithCtx(io, alloc, &ctx, wb, spec, out_dir, out_basename);
 }
 
 /// Converts selected sheets from an xlsx file to CSV files in out_dir.
@@ -245,19 +247,20 @@ pub fn extractSheet(
 /// `extractSheet` instead; this entry point keeps the simple single-threaded
 /// path for direct callers and tests.
 pub fn xlsxToCsv(
+    io: std.Io,
     alloc: Allocator,
-    xlsx_file: std.fs.File,
+    xlsx_file: std.Io.File,
     sheets: []const SheetSpec,
-    out_dir: std.fs.Dir,
+    out_dir: std.Io.Dir,
     out_basename: []const u8,
 ) !void {
-    var wb = try Workbook.init(alloc, xlsx_file);
+    var wb = try Workbook.init(io, alloc, xlsx_file);
     defer wb.deinit(alloc);
 
     // A second archive drives the sheet streaming (the one in `Workbook.init`
     // is already closed). The two windows are reused across all sheets.
     var archive: zipstream.Archive = undefined;
-    try archive.init(alloc, xlsx_file);
+    try archive.init(io, alloc, xlsx_file);
     defer archive.deinit();
 
     const zip_window = try alloc.alloc(u8, ZIP_WINDOW_SIZE);
@@ -267,7 +270,7 @@ pub fn xlsxToCsv(
 
     var ctx: PartCtx = .{ .archive = &archive, .zip_window = zip_window, .xml_window = xml_window };
     for (sheets) |spec| {
-        try extractSheetWithCtx(alloc, &ctx, &wb, spec, out_dir, out_basename);
+        try extractSheetWithCtx(io, alloc, &ctx, &wb, spec, out_dir, out_basename);
     }
 }
 
@@ -1041,7 +1044,7 @@ const XmlTok = struct {
                 self.pos += 2;
                 const start = self.pos;
                 while ((try self.ensure(self.pos)) and self.buf[self.pos] != '>') self.pos += 1;
-                const name = std.mem.trimRight(u8, self.buf[start..self.pos], " \t\r\n");
+                const name = std.mem.trimEnd(u8, self.buf[start..self.pos], " \t\r\n");
                 if (self.pos < self.end) self.pos += 1; // consume '>'
                 return .{ .close = name };
             }
@@ -1071,7 +1074,7 @@ const XmlTok = struct {
                 }
                 self.pos += 1;
             }
-            const attrs = std.mem.trimRight(u8, self.buf[attrs_start..self.pos], " \t\r\n");
+            const attrs = std.mem.trimEnd(u8, self.buf[attrs_start..self.pos], " \t\r\n");
 
             var self_close = false;
             if ((try self.ensure(self.pos)) and self.buf[self.pos] == '/') {

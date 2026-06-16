@@ -14,7 +14,17 @@ const std = @import("std");
 const server = @import("server.zig");
 const build_options = @import("build_options");
 
-pub fn main() void {
+/// Write a short message to stdout (Zig 0.16: stdout access goes through `Io`).
+fn writeStdout(io: std.Io, msg: []const u8) void {
+    var buf: [256]u8 = undefined;
+    var fw = std.Io.File.stdout().writer(io, &buf);
+    fw.interface.writeAll(msg) catch {};
+    fw.interface.flush() catch {};
+}
+
+pub fn main(init: std.process.Init) void {
+    const io = init.io;
+
     // Base arena over page_allocator: one mmap up front, bump allocation after.
     // Holds only startup (argv) + the server's persistent reused buffers. Each
     // request's transient allocations go through a separate per-request arena
@@ -22,9 +32,11 @@ pub fn main() void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
 
-    var args = std.process.argsWithAllocator(arena.allocator()) catch {
+    // Zig 0.16: `std.process.argsWithAllocator` is gone; iterate `Init`'s args.
+    var args = std.process.Args.Iterator.initAllocator(init.minimal.args, init.gpa) catch {
         std.process.exit(1);
     };
+    defer args.deinit();
     _ = args.skip();
     if (args.next()) |arg| {
         if (std.mem.eql(u8, arg, "--version")) {
@@ -34,7 +46,7 @@ pub fn main() void {
             // block reading stdin as an MCP server until the caller times out.
             var buf: [64]u8 = undefined;
             const line = std.fmt.bufPrint(&buf, "bxp-mcp {s}\n", .{build_options.version}) catch "bxp-mcp\n";
-            _ = std.fs.File.stdout().write(line) catch 0;
+            writeStdout(io, line);
             return;
         }
         if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
@@ -47,10 +59,10 @@ pub fn main() void {
                 \\Register with an MCP client via "command": "bxp-mcp".
                 \\
             ;
-            _ = std.fs.File.stdout().write(msg) catch 0;
+            writeStdout(io, msg);
             return;
         }
     }
 
-    server.run(arena.allocator());
+    server.run(io, init.environ_map, arena.allocator());
 }

@@ -71,7 +71,7 @@ pub fn parse(name: []const u8) ?Tool {
 /// MCP `isError:true`. A domain result the tool produced on purpose —
 /// `{"ok":false,...}` from an expression error or an orchestration report — is
 /// *not* a failure (`false`): it is a valid answer the agent should read.
-pub fn dispatch(alloc: std.mem.Allocator, tool: Tool, args: std.json.Value, prog: ?Progress, out: *std.ArrayList(u8)) bool {
+pub fn dispatch(io: std.Io, env: *const std.process.Environ.Map, alloc: std.mem.Allocator, tool: Tool, args: std.json.Value, prog: ?Progress, out: *std.ArrayList(u8)) bool {
     return switch (tool) {
         .bxp_validate => validate(alloc, args, out),
         .bxp_validate_expr => validateExpr(alloc, args, out),
@@ -81,7 +81,7 @@ pub fn dispatch(alloc: std.mem.Allocator, tool: Tool, args: std.json.Value, prog
         .bxp_docs => docs(alloc, out),
         .bxp_list_templates => listTemplates(alloc, args, out),
         .bxp_fetch_template => fetchTemplate(alloc, args, out),
-        .bxp_simulate => simulate(alloc, args, prog, out),
+        .bxp_simulate => simulate(io, env, alloc, args, prog, out),
     };
 }
 
@@ -176,7 +176,7 @@ fn fetchTemplate(alloc: std.mem.Allocator, args: std.json.Value, out: *std.Array
     return false;
 }
 
-fn simulate(alloc: std.mem.Allocator, args: std.json.Value, prog: ?Progress, out: *std.ArrayList(u8)) bool {
+fn simulate(io: std.Io, env: *const std.process.Environ.Map, alloc: std.mem.Allocator, args: std.json.Value, prog: ?Progress, out: *std.ArrayList(u8)) bool {
     const config = strField(args, "config") orelse return appendErr(alloc, out, "missing 'config'");
     const template = strField(args, "template") orelse return appendErr(alloc, out, "missing 'template'");
     const csv_text = strField(args, "csv") orelse return appendErr(alloc, out, "missing 'csv'");
@@ -184,7 +184,7 @@ fn simulate(alloc: std.mem.Allocator, args: std.json.Value, prog: ?Progress, out
     // sim.simulate handles its own logical failures as {"ok":false,...} JSON (a
     // domain result, isError:false); only OOM/unexpected surfaces here as a
     // genuine tool failure.
-    sim.simulate(alloc, config, template, csv_text, workspace, prog, out) catch |err|
+    sim.simulate(io, env, alloc, config, template, csv_text, workspace, prog, out) catch |err|
         return appendErr(alloc, out, @errorName(err));
     return false;
 }

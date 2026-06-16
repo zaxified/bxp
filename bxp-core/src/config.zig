@@ -1604,6 +1604,7 @@ pub fn validateCrossTemplate(
 /// wraps it in a worker thread + deadline for environments with slow
 /// network mounts.
 pub fn validateFilesystem(
+    io: std.Io,
     cfg: *const Config,
     alloc: std.mem.Allocator,
     diag: ?*Diagnostics,
@@ -1613,6 +1614,7 @@ pub fn validateFilesystem(
     var it = cfg.brokers.iterator();
     while (it.next()) |entry| {
         try validateFilesystemEntry(
+            io,
             alloc,
             sink,
             entry.key_ptr.*,
@@ -1630,6 +1632,7 @@ pub fn validateFilesystem(
 /// (arena-backed) config, which can be freed while a detached worker is still
 /// blocked in a slow `openDir`/`iterate` — see [validateFilesystemWithTimeout].
 fn validateFilesystemEntry(
+    io: std.Io,
     alloc: std.mem.Allocator,
     diag: *Diagnostics,
     id: []const u8,
@@ -1637,7 +1640,7 @@ fn validateFilesystemEntry(
     file_pattern_in: []const u8,
     xlsx_sheet_name: ?[]const u8,
 ) !void {
-    var dir = std.fs.cwd().openDir(data_dir, .{ .iterate = true }) catch |err| {
+    var dir = std.Io.Dir.cwd().openDir(io, data_dir, .{ .iterate = true }) catch |err| {
         if (err == error.FileNotFound) {
             try emitTemplateDiag(alloc, diag, .@"error", "fs.dir_not_found",
                 id, "data_dir",
@@ -1649,7 +1652,7 @@ fn validateFilesystemEntry(
         }
         return;
     };
-    defer dir.close();
+    defer dir.close(io);
 
     // Scan for files matching file_pattern_in. Mirrors
     // pipeline.zig's runtime suffix-match — one matched file is
@@ -1663,7 +1666,7 @@ fn validateFilesystemEntry(
     // as `.file`) has real work to do and must not warn here.
     var matched: u32 = 0;
     var dir_it = dir.iterate();
-    while (dir_it.next() catch null) |dir_entry| {
+    while (dir_it.next(io) catch null) |dir_entry| {
         if (dir_entry.kind != .file and dir_entry.kind != .sym_link) continue;
         if (std.mem.endsWith(u8, dir_entry.name, file_pattern_in)) {
             matched = 1;
@@ -1685,20 +1688,20 @@ fn validateFilesystemEntry(
     // or shared strings. A fresh dir handle is opened because the scan above
     // already consumed this directory's iterator.
     if (xlsx_sheet_name) |sheet_name| {
-        var xdir = std.fs.cwd().openDir(data_dir, .{ .iterate = true }) catch return;
-        defer xdir.close();
+        var xdir = std.Io.Dir.cwd().openDir(io, data_dir, .{ .iterate = true }) catch return;
+        defer xdir.close(io);
         var xlsx_seen = false; // at least one readable .xlsx was parsed
         var sheet_found = false;
         var xit = xdir.iterate();
         while (!sheet_found) {
-            const dir_entry = (xit.next() catch break) orelse break;
+            const dir_entry = (xit.next(io) catch break) orelse break;
             if (dir_entry.kind != .file and dir_entry.kind != .sym_link) continue;
             if (!std.mem.endsWith(u8, dir_entry.name, ".xlsx")) continue;
-            const xfile = xdir.openFile(dir_entry.name, .{}) catch continue;
-            defer xfile.close();
+            const xfile = xdir.openFile(io, dir_entry.name, .{}) catch continue;
+            defer xfile.close(io);
             // A malformed / UTF-16 workbook surfaces at extraction time; for
             // this existence check just skip files we can't read.
-            var names = xlsx.listSheets(alloc, xfile) catch continue;
+            var names = xlsx.listSheets(io, alloc, xfile) catch continue;
             defer {
                 var nit = names.iterator();
                 while (nit.next()) |e| {
@@ -1789,33 +1792,57 @@ pub fn validateFilesystemWithTimeout(
     ctx.* = .{
         .entries = entries_slice,
         .diag_buffer = .init(page),
-        .done = .{},
+        .threaded = std.Io.Threaded.init(page, .{}),
+        .io = undefined,
+        .done = .unset,
     };
+    // Self-referential: `io` captures `&ctx.threaded` (stable, page-allocated).
+    ctx.io = ctx.threaded.io();
 
     const thread = std.Thread.spawn(.{}, fsCheckWorker, .{ctx}) catch |err| {
         // Spawn failure: leak nothing — clean ctx + snapshot, fall back to sync.
-        ctx.diag_buffer.deinit();
-        freeFsCheckEntries(page, ctx.entries);
-        page.free(ctx.entries);
-        page.destroy(ctx);
+        // The cleanup is deferred so `ctx.io` (backed by `ctx.threaded`) stays
+        // valid for the synchronous fallback call below.
+        defer {
+            ctx.threaded.deinit();
+            ctx.diag_buffer.deinit();
+            freeFsCheckEntries(page, ctx.entries);
+            page.free(ctx.entries);
+            page.destroy(ctx);
+        }
         if (err == error.OutOfMemory) return err;
         // Other spawn errors (system thread limit, etc.): degrade to
         // sync call so the user still gets the validation result.
-        return validateFilesystem(cfg, alloc, sink);
+        return validateFilesystem(ctx.io, cfg, alloc, sink);
     };
 
-    ctx.done.timedWait(deadline_ms * std.time.ns_per_ms) catch {
-        // Timeout. Detach the worker (it will continue to completion in
-        // the background and exit when its syscall returns; OS reaps
-        // the thread on process exit). The ctx and its page-allocated
-        // diagnostics leak intentionally — the inspect core / bxp-cli are
-        // short-lived processes, the cost is negligible.
-        thread.detach();
-        try emitGlobalDiag(alloc, sink, .warning, "fs.timeout",
-            "[fs.timeout] filesystem check exceeded {d}ms — data_dir existence not verified",
-            .{deadline_ms});
-        return;
-    };
+    // Deadline-loop on a monotonic (`.awake`) clock. `std.Io.Event.waitTimeout`
+    // returns `error.Timeout` on a *spurious* wakeup as well as a real one, so
+    // we re-check against an absolute deadline instead of trusting a single
+    // wait. Only a wakeup past the deadline counts as a real timeout.
+    const deadline = std.Io.Clock.Timestamp.fromNow(ctx.io, .{
+        .raw = std.Io.Duration.fromMilliseconds(@intCast(deadline_ms)),
+        .clock = .awake,
+    });
+    const timeout: std.Io.Timeout = .{ .deadline = deadline };
+    while (!ctx.done.isSet()) {
+        ctx.done.waitTimeout(ctx.io, timeout) catch {};
+        if (ctx.done.isSet()) break;
+        const now = std.Io.Clock.Timestamp.now(ctx.io, .awake);
+        if (deadline.compare(.lte, now)) {
+            // Timeout. Detach the worker (it will continue to completion in
+            // the background and exit when its syscall returns; OS reaps
+            // the thread on process exit). The ctx — including its `threaded`
+            // io and page-allocated diagnostics — leaks intentionally so the
+            // detached worker's late `done.set(io)` stays valid. The inspect
+            // core / bxp-cli are short-lived processes, the cost is negligible.
+            thread.detach();
+            try emitGlobalDiag(alloc, sink, .warning, "fs.timeout",
+                "[fs.timeout] filesystem check exceeded {d}ms — data_dir existence not verified",
+                .{deadline_ms});
+            return;
+        }
+    }
 
     // Worker finished within deadline. Join, copy diagnostics into the
     // caller's allocator (page-allocated originals are about to be
@@ -1830,6 +1857,7 @@ pub fn validateFilesystemWithTimeout(
             .suggest = if (item.suggest) |s| try alloc.dupe(u8, s) else null,
         });
     }
+    ctx.threaded.deinit();
     ctx.diag_buffer.deinit();
     freeFsCheckEntries(page, ctx.entries);
     page.free(ctx.entries);
@@ -1864,7 +1892,15 @@ fn freeFsCheckEntries(alloc: std.mem.Allocator, entries: []const FsCheckEntry) v
 const FsCheckCtx = struct {
     entries: []const FsCheckEntry,
     diag_buffer: Diagnostics,
-    done: std.Thread.ResetEvent,
+    // A process-lifetime-style `Io` carried inside the ctx so the worker's
+    // completion signal (`done`) outlives the caller on the timeout path:
+    // `threaded` lives in page memory (stable address) and is leaked with the
+    // ctx when the worker is detached, so a late `done.set(io)` from the
+    // detached worker never dereferences freed memory. `io` captures
+    // `&threaded`, so the ctx must never move after init (page-allocated).
+    threaded: std.Io.Threaded,
+    io: std.Io,
+    done: std.Io.Event,
 };
 
 fn fsCheckWorker(ctx: *FsCheckCtx) void {
@@ -1875,9 +1911,10 @@ fn fsCheckWorker(ctx: *FsCheckCtx) void {
     // already in diag_buffer still get copied out by main. Iterating the
     // page-allocated snapshot (never the caller's `cfg`) is what keeps a
     // detached worker safe after the caller's arena is gone.
-    defer ctx.done.set();
+    defer ctx.done.set(ctx.io);
     for (ctx.entries) |e| {
         validateFilesystemEntry(
+            ctx.io,
             std.heap.page_allocator,
             &ctx.diag_buffer,
             e.id,
@@ -2606,7 +2643,14 @@ fn parsePrePassBlock(alloc: std.mem.Allocator, ppobj: std.json.ObjectMap) !PrePa
 /// bxp-cli calls this signature; the structured diagnostic sink stays
 /// null and the historical fail-fast / stderr behavior is preserved.
 pub fn load(alloc: std.mem.Allocator, config_path: []const u8) !Config {
-    const file = std.fs.cwd().openFile(config_path, .{}) catch |err| {
+    // Synchronous, short-lived: a local `Threaded` io is created and torn
+    // down within this call, so the public signature stays io-free (no ripple
+    // into the inspect / bridge / mcp adapters that call config.load).
+    var threaded = std.Io.Threaded.init(alloc, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    const file = std.Io.Dir.cwd().openFile(io, config_path, .{}) catch |err| {
         if (err == error.FileNotFound) {
             return Config{
                 .brokers = .empty,
@@ -2615,9 +2659,11 @@ pub fn load(alloc: std.mem.Allocator, config_path: []const u8) !Config {
         }
         return err;
     };
-    defer file.close();
+    defer file.close(io);
 
-    const raw = try file.readToEndAlloc(alloc, CONFIG_MAX_FILE_SIZE);
+    var read_buf: [4096]u8 = undefined;
+    var fr = file.reader(io, &read_buf);
+    const raw = try fr.interface.allocRemaining(alloc, .limited(CONFIG_MAX_FILE_SIZE));
     defer alloc.free(raw);
     return loadFromBytes(alloc, raw, config_path, null);
 }

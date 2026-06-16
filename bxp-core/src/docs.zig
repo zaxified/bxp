@@ -540,7 +540,7 @@ test "BrokerConfig defaults match FieldDoc.default" {
     });
     // Resolve realpath so config.load can read it (it expects a
     // filesystem-visible path, not a tmpDir-relative one).
-    const real_path = try tmp.dir.realpathAlloc(alloc, path);
+    const real_path = try tmp.dir.realPathFileAlloc(std.testing.io, path, alloc);
     defer alloc.free(real_path);
 
     var loaded = try config_mod.load(alloc, real_path);

@@ -277,7 +277,7 @@ test "Archive: enumerates members, skips dir entries, find + findSuffix" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
     var f = try openZip(&tmp, zip);
-    defer f.close();
+    defer f.close(testing.io);
 
     var archive: Archive = undefined;
     try archive.init(testing.io, a, f);
@@ -302,7 +302,7 @@ test "EntryReader: streams a stored entry, then a second one (shared cursor)" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
     var f = try openZip(&tmp, zip);
-    defer f.close();
+    defer f.close(testing.io);
 
     var archive: Archive = undefined;
     try archive.init(testing.io, a, f);

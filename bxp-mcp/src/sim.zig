@@ -39,6 +39,8 @@ const OutputFile = struct { name: []const u8, content: []const u8, read_error: ?
 /// `{"ok":false,"error":...}` JSON, not Zig errors — only OOM/unexpected
 /// propagates to the caller.
 pub fn simulate(
+    io: std.Io,
+    env: *const std.process.Environ.Map,
     a: std.mem.Allocator,
     config_text: []const u8,
     template: []const u8,
@@ -47,11 +49,13 @@ pub fn simulate(
     prog: ?Progress,
     out: *std.ArrayList(u8),
 ) !void {
-    const json = try run(a, config_text, template, csv_text, workspace_id, prog);
+    const json = try run(io, env, a, config_text, template, csv_text, workspace_id, prog);
     try out.appendSlice(a, json);
 }
 
 fn run(
+    io: std.Io,
+    env: *const std.process.Environ.Map,
     a: std.mem.Allocator,
     config_text: []const u8,
     template: []const u8,
@@ -61,11 +65,11 @@ fn run(
 ) ![]u8 {
     progress.report(prog, 1, 4, "validating template");
     // 1. Introspect the template's input shape and reject what we can't stage.
-    const io = try inspect.templateIo(a, config_text, template);
-    if (!io.found) return errJson(a, "template not found in config", template);
-    if (io.has_xlsx_sheet) return errJson(a, "xlsx-input templates cannot be simulated from inline CSV", template);
-    if (!io.csv_input) return errJson(a, "only CSV-input templates can be simulated (file_type_in must be csv)", template);
-    if (io.file_pattern_in.len == 0) return errJson(a, "template is missing required file_pattern_in", template);
+    const tio = try inspect.templateIo(a, config_text, template);
+    if (!tio.found) return errJson(a, "template not found in config", template);
+    if (tio.has_xlsx_sheet) return errJson(a, "xlsx-input templates cannot be simulated from inline CSV", template);
+    if (!tio.csv_input) return errJson(a, "only CSV-input templates can be simulated (file_type_in must be csv)", template);
+    if (tio.file_pattern_in.len == 0) return errJson(a, "template is missing required file_pattern_in", template);
     // file_pattern_in is folded into the staged input filename (input<suffix>)
     // and comes back raw from the config (templateIo does not sanitize it). A
     // value containing a path separator or ".." would let path.join + the
@@ -74,22 +78,23 @@ fn run(
     // sandbox boundary the workspace-id sanitizer enforces. A legitimate
     // pattern is a pure filename suffix (".csv", "_cash.csv"), so reject any
     // path-shape input here, before staging.
-    if (std.mem.indexOfAny(u8, io.file_pattern_in, "/\\") != null or
-        std.mem.indexOf(u8, io.file_pattern_in, "..") != null)
-        return errJson(a, "file_pattern_in must be a plain filename suffix (no path separators or '..')", io.file_pattern_in);
+    if (std.mem.indexOfAny(u8, tio.file_pattern_in, "/\\") != null or
+        std.mem.indexOf(u8, tio.file_pattern_in, "..") != null)
+        return errJson(a, "file_pattern_in must be a plain filename suffix (no path separators or '..')", tio.file_pattern_in);
 
     // 2. Locate the co-located bxp-cli (shared bxp-gui bundle).
-    var exe_dir_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const exe_dir = std.fs.selfExeDirPath(&exe_dir_buf) catch
+    var exe_dir_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const exe_dir_n = std.process.executableDirPath(io, &exe_dir_buf) catch
         return errJson(a, "cannot resolve own executable directory", "");
+    const exe_dir = exe_dir_buf[0..exe_dir_n];
     const cli_name = if (builtin.os.tag == .windows) "bxp-cli.exe" else "bxp-cli";
     const cli_path = try std.fs.path.join(a, &.{ exe_dir, cli_name });
-    std.fs.cwd().access(cli_path, .{}) catch
+    std.Io.Dir.cwd().access(io, cli_path, .{}) catch
         return errJson(a, "bxp-cli binary not found next to bxp-mcp", cli_path);
 
     // 3. Stable, reused scratch workspace (no per-call temp litter).
     const uid = try sanitize(a, workspace_id orelse template);
-    const tmp_base = tmpDir(a);
+    const tmp_base = tmpDir(env);
     const workspace = try std.fs.path.join(a, &.{ tmp_base, "bxp-mcp-sim", uid });
     const data_dir = try std.fs.path.join(a, &.{ workspace, "data" });
     const config_path = try std.fs.path.join(a, &.{ workspace, "config.json" });
@@ -97,17 +102,17 @@ fn run(
 
     // Fresh contents each run, stable path: wipe then recreate. Left in place
     // afterwards so the agent (or user) can inspect the run's files.
-    std.fs.cwd().deleteTree(workspace) catch {};
-    std.fs.cwd().makePath(data_dir) catch
+    std.Io.Dir.cwd().deleteTree(io, workspace) catch {};
+    std.Io.Dir.cwd().createDirPath(io, data_dir) catch
         return errJson(a, "cannot create scratch workspace", workspace);
 
     // 4. Stage config (verbatim) + the input CSV, named so its suffix matches
     //    file_pattern_in (".csv" → input.csv, "_cash.csv" → input_cash.csv).
-    const input_name = try std.fmt.allocPrint(a, "input{s}", .{io.file_pattern_in});
+    const input_name = try std.fmt.allocPrint(a, "input{s}", .{tio.file_pattern_in});
     const input_path = try std.fs.path.join(a, &.{ data_dir, input_name });
-    std.fs.cwd().writeFile(.{ .sub_path = config_path, .data = config_text }) catch
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = config_path, .data = config_text }) catch
         return errJson(a, "cannot write scratch config", config_path);
-    std.fs.cwd().writeFile(.{ .sub_path = input_path, .data = csv_text }) catch
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = input_path, .data = csv_text }) catch
         return errJson(a, "cannot write scratch input", input_path);
 
     progress.report(prog, 2, 4, "staging workspace");
@@ -116,15 +121,15 @@ fn run(
     //    data_dir; --trace-file writes a sidecar BXTB stream (full per-row
     //    detail, independent of stdout) we read back below for the trace report.
     progress.report(prog, 3, 4, "running conversion");
-    const result = std.process.Child.run(.{
-        .allocator = a,
+    const result = std.process.run(a, io, .{
         .argv = &.{ cli_path, "--config", config_path, "--template", template, "--data", data_dir, "--trace-file", trace_path },
-        .max_output_bytes = MAX_OUTPUT_BYTES,
+        .stdout_limit = .limited(MAX_OUTPUT_BYTES),
+        .stderr_limit = .limited(MAX_OUTPUT_BYTES),
     }) catch |err|
         return errJson(a, "bxp-cli spawn failed", @errorName(err));
 
     const exit_code: i32 = switch (result.term) {
-        .Exited => |c| @intCast(c),
+        .exited => |c| @intCast(c),
         else => -1,
     };
 
@@ -132,23 +137,23 @@ fn run(
 
     // Read back the BXTB sidecar (best-effort: a missing/empty file just means
     // an empty trace section, never a simulation failure).
-    const trace_bytes = std.fs.cwd().readFileAlloc(a, trace_path, MAX_TRACE_BYTES) catch &.{};
+    const trace_bytes = std.Io.Dir.cwd().readFileAlloc(io, trace_path, a, .limited(MAX_TRACE_BYTES)) catch &.{};
 
     // 6. Read produced output(s): every file in data_dir that isn't the input.
     //    (combined_output can add a second file; report all.)
     var outputs: std.ArrayList(OutputFile) = .empty;
     {
-        var d = std.fs.cwd().openDir(data_dir, .{ .iterate = true }) catch
+        var d = std.Io.Dir.cwd().openDir(io, data_dir, .{ .iterate = true }) catch
             return errJson(a, "cannot reopen scratch data dir", data_dir);
-        defer d.close();
+        defer d.close(io);
         var it = d.iterate();
-        while (it.next() catch null) |entry| {
+        while (it.next(io) catch null) |entry| {
             if (entry.kind != .file) continue;
             if (std.mem.eql(u8, entry.name, input_name)) continue;
             const name = try a.dupe(u8, entry.name);
             // A read failure (too large, IO error) is reported as a marked
             // output entry, never silently skipped.
-            const content = d.readFileAlloc(a, entry.name, MAX_FILE_BYTES) catch |err| {
+            const content = d.readFileAlloc(io, entry.name, a, .limited(MAX_FILE_BYTES)) catch |err| {
                 try outputs.append(a, .{ .name = name, .content = "", .read_error = @errorName(err) });
                 continue;
             };
@@ -529,13 +534,13 @@ fn sanitize(a: std.mem.Allocator, s: []const u8) ![]u8 {
 }
 
 /// Best-effort temp base: honor TMPDIR/TMP/TEMP, else "/tmp". Returned slice is
-/// arena-owned (env reads) or a static literal.
-fn tmpDir(a: std.mem.Allocator) []const u8 {
+/// borrowed from the process environ map (process-lifetime) or a static literal.
+fn tmpDir(env: *const std.process.Environ.Map) []const u8 {
     const keys = [_][]const u8{ "TMPDIR", "TMP", "TEMP" };
     for (keys) |k| {
-        if (std.process.getEnvVarOwned(a, k)) |v| {
+        if (env.get(k)) |v| {
             if (v.len > 0) return v;
-        } else |_| {}
+        }
     }
     return "/tmp";
 }

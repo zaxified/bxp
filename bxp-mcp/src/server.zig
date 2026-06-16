@@ -60,7 +60,12 @@ const Session = struct {
     /// the process arena. `retain_capacity` keeps the backing pages so the
     /// arena reaches a steady state sized to the largest single request.
     req_arena: std.heap.ArenaAllocator,
-    stdout: std.fs.File,
+    /// Io for stdio access (Zig 0.16 — `std.fs.File` writes go through `Io`).
+    io: std.Io,
+    /// Process environment map (Zig 0.16 — env access needs an `Environ.Map`
+    /// instance; only `bxp_simulate`'s tmpDir consults it).
+    env: *const std.process.Environ.Map,
+    stdout: std.Io.File,
     line_buf: std.ArrayList(u8) = .empty,
     out_buf: std.ArrayList(u8) = .empty,
 
@@ -76,16 +81,18 @@ const Session = struct {
     }
 };
 
-pub fn run(alloc: std.mem.Allocator) void {
+pub fn run(io: std.Io, env: *const std.process.Environ.Map, alloc: std.mem.Allocator) void {
     var session: Session = .{
         .alloc = alloc,
         .req_arena = std.heap.ArenaAllocator.init(alloc),
-        .stdout = std.fs.File.stdout(),
+        .io = io,
+        .env = env,
+        .stdout = std.Io.File.stdout(),
     };
     defer session.deinit();
 
     var read_buf: [64 * 1024]u8 = undefined;
-    var stdin_reader = std.fs.File.stdin().reader(&read_buf);
+    var stdin_reader = std.Io.File.stdin().reader(io, &read_buf);
     const reader = &stdin_reader.interface;
 
     while (readLine(alloc, reader, &session.line_buf)) |line| {
@@ -212,7 +219,7 @@ fn handleCall(s: *Session, id: ?std.json.Value, params_opt: ?std.json.Value) voi
         const token = meta.object.get("progressToken") orelse break :blk null;
         if (token != .string and token != .integer) break :blk null;
         const token_json = std.json.Stringify.valueAlloc(s.reqAlloc(), token, .{}) catch break :blk null;
-        break :blk Progress{ .stdout = s.stdout, .token_json = token_json };
+        break :blk Progress{ .io = s.io, .stdout = s.stdout, .token_json = token_json };
     };
 
     // A fresh per-request buffer on the request arena — NOT a persistent
@@ -221,7 +228,7 @@ fn handleCall(s: *Session, id: ?std.json.Value, params_opt: ?std.json.Value) voi
     // could alias its own output over the live request (observed corrupting a
     // second bxp_simulate's report). The arena reset reclaims this each turn.
     var tool_buf: std.ArrayList(u8) = .empty;
-    const is_error = tools.dispatch(s.reqAlloc(), tool, args, prog, &tool_buf);
+    const is_error = tools.dispatch(s.io, s.env, s.reqAlloc(), tool, args, prog, &tool_buf);
     writeToolResult(s, id, tool_buf.items, tools.allowsStructured(tool), is_error);
 }
 
@@ -236,7 +243,7 @@ fn writeResultRaw(s: *Session, id: ?std.json.Value, result: []const u8) void {
     buf.appendSlice(alloc, ",\"result\":") catch return;
     appendStrippingNewlines(alloc, buf, result);
     buf.appendSlice(alloc, "}\n") catch return;
-    _ = s.stdout.write(buf.items) catch 0;
+    s.stdout.writeStreamingAll(s.io, buf.items) catch {};
 }
 
 fn writeToolResult(s: *Session, id: ?std.json.Value, text: []const u8, allow_structured: bool, is_error: bool) void {
@@ -260,7 +267,7 @@ fn writeToolResult(s: *Session, id: ?std.json.Value, text: []const u8, allow_str
     // isError:true marks a tool failure (missing arg, unexpected error) so the
     // agent notices; a domain `{"ok":false}` answer keeps isError:false.
     buf.appendSlice(alloc, if (is_error) ",\"isError\":true}}\n" else ",\"isError\":false}}\n") catch return;
-    _ = s.stdout.write(buf.items) catch 0;
+    s.stdout.writeStreamingAll(s.io, buf.items) catch {};
 }
 
 fn isWs(c: u8) bool {
@@ -326,7 +333,7 @@ fn writeError(s: *Session, id: ?std.json.Value, code: i32, msg: []const u8) void
     buf.appendSlice(alloc, ",\"message\":") catch return;
     appendJsonString(s, buf, msg);
     buf.appendSlice(alloc, "}}\n") catch return;
-    _ = s.stdout.write(buf.items) catch 0;
+    s.stdout.writeStreamingAll(s.io, buf.items) catch {};
 }
 
 /// Append the request id verbatim (re-serialized from its parsed Value, so an

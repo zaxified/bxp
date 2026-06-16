@@ -62,9 +62,9 @@ const USAGE_TEMPLATE =
 ;
 
 /// Print the help text to stdout. Used for `--help`.
-fn printHelp(prog: []const u8) void {
+fn printHelp(io: std.Io, prog: []const u8) void {
     var buf: [4096]u8 = undefined;
-    var fw = std.fs.File.stdout().writer(&buf);
+    var fw = std.Io.File.stdout().writer(io, &buf);
     const w = &fw.interface;
     w.print(USAGE_TEMPLATE, .{ prog, prog, prog }) catch {};
     w.flush() catch {};
@@ -264,12 +264,38 @@ fn peakRssKb() u64 {
     return if (builtin.os.tag == .macos) maxrss / 1024 else maxrss;
 }
 
-pub fn main() !void {
+/// Collect process args into a freshly-allocated `[][:0]u8`. Zig 0.16 removed
+/// `std.process.argsAlloc`; the runtime now hands `main` a `process.Args` that
+/// we iterate. Each arg is duped (mutable, sentinel-terminated) into `dest` so
+/// the existing slice-based parser keeps working unchanged. `gpa` backs the
+/// iterator's transient buffers (Windows/WASI); caller frees the result.
+fn collectArgs(
+    raw: std.process.Args,
+    gpa: std.mem.Allocator,
+    dest: std.mem.Allocator,
+) ![][:0]u8 {
+    var it = try std.process.Args.Iterator.initAllocator(raw, gpa);
+    defer it.deinit();
+    var list: std.ArrayList([:0]u8) = .empty;
+    errdefer {
+        for (list.items) |a| dest.free(a);
+        list.deinit(dest);
+    }
+    while (it.next()) |a| try list.append(dest, try dest.dupeZ(u8, a));
+    return list.toOwnedSlice(dest);
+}
+
+pub fn main(init: std.process.Init) !void {
+    // Io instance from the runtime entry point — the single handle for all
+    // filesystem + timing access (Zig 0.16; `std.fs`/`std.time` no longer have
+    // io-free entry points). Threaded into `pipeline.Runtime` below.
+    const io = init.io;
+
     // Opt-in self-measurement: when `BXP_METRICS` is set, emit one
     // `bxp-metrics wall_ms=<N> peak_rss_kb=<N>` line to stderr just before
     // exit. Started first so the wall covers the whole process. See
     // `peakRssKb` for why this lives in the binary rather than a wrapper.
-    var proc_timer = std.time.Timer.start() catch null;
+    const proc_start = std.Io.Clock.Timestamp.now(io, .awake);
 
     // Allocator pick: `DebugAllocator` in Debug builds for leak tracking +
     // double-free detection; `smp_allocator` in ReleaseFast / ReleaseSafe
@@ -286,21 +312,20 @@ pub fn main() !void {
         else => std.heap.smp_allocator,
     };
 
-    // Resolve the `BXP_METRICS` opt-in now that an allocator exists. Any
-    // non-empty value enables the trailing metrics line; absence disables it.
+    // Resolve the `BXP_METRICS` opt-in. Any non-empty value enables the
+    // trailing metrics line; absence disables it. Read from the runtime's
+    // pre-built environ map (Zig 0.16 dropped `std.process.getEnvVarOwned`).
     const metrics_enabled = blk: {
-        const v = std.process.getEnvVarOwned(alloc, "BXP_METRICS") catch break :blk false;
-        defer alloc.free(v);
+        const v = init.environ_map.get("BXP_METRICS") orelse break :blk false;
         break :blk v.len > 0;
     };
 
-    // Worker thread pool shared across every `processBroker` call in this
-    // invocation. The per-block parallel pipeline forks `max_workers`
-    // worker tasks via `pool.spawnWg` and joins on a `WaitGroup` after
-    // each block. Persistent (not per-block spawn/join) so fork overhead
-    // is enqueue-cost, not OS thread creation. `getCpuCount` returns the
-    // number of logical CPUs available to the process (respects cpuset
-    // affinity on Linux), which is the natural worker count.
+    // Per-block worker fan-out count. The parallel pipeline dispatches up to
+    // `max_workers` tasks per block via `std.Io.Group.async` and joins on
+    // `Group.await`. The worker threads themselves live in the runtime `io`'s
+    // own persistent pool (Zig 0.16 — `std.Thread.Pool`/`WaitGroup` were
+    // removed in favour of the `Io` async model), so fork cost is enqueue-cost,
+    // not OS thread creation. `getCpuCount` respects cpuset affinity on Linux.
     const ncpu = std.Thread.getCpuCount() catch 1;
     // Clamp to the pipeline's per-block worker ceiling. Above it, any block
     // with more records than the limit would otherwise hit
@@ -308,23 +333,25 @@ pub fn main() !void {
     // today on >256-logical-CPU hosts, e.g. dual-socket EPYC). The cap only
     // governs parallel fan-out, so the output is serial-equivalent regardless.
     const max_workers = @min(ncpu, pipeline.MAX_WORKERS_LIMIT);
-    var pool: std.Thread.Pool = undefined;
-    try pool.init(.{ .allocator = alloc, .n_jobs = max_workers });
-    defer pool.deinit();
     const runtime = pipeline.Runtime{
-        .pool = &pool,
         .max_workers = max_workers,
+        .io = io,
     };
 
     // Buffered stdout writer. 4 KB is enough for --version / --help; the
     // pipeline uses its own per-file OUT_FILE_BUF_SIZE buffer for bulk output.
     var stdout_buf: [4096]u8 = undefined;
-    var stdout_fw = std.fs.File.stdout().writer(&stdout_buf);
+    var stdout_fw = std.Io.File.stdout().writer(io, &stdout_buf);
     const stdout = &stdout_fw.interface;
 
-    // Allocate args early so --debug/--quiet can be detected before any error occurs.
-    const args = try std.process.argsAlloc(alloc);
-    defer std.process.argsFree(alloc, args);
+    // Collect args into a `[][:0]u8` from the runtime's arg iterator (Zig 0.16
+    // removed `std.process.argsAlloc`). Duped into `alloc` so the rest of the
+    // parser keeps its mutable-slice contract; freed at scope end.
+    const args = try collectArgs(init.minimal.args, init.gpa, alloc);
+    defer {
+        for (args) |a| alloc.free(a);
+        alloc.free(args);
+    }
 
     // First pass: scan for flags that need to be known before `run()` is
     // called. --version and --help short-circuit immediately; the rest are
@@ -351,7 +378,7 @@ pub fn main() !void {
             return;
         }
         if (std.mem.eql(u8, arg, "--help")) {
-            printHelp(args[0]);
+            printHelp(io, args[0]);
             return;
         }
         if (std.mem.eql(u8, arg, "--debug")) { debug = true; continue; }
@@ -462,8 +489,8 @@ pub fn main() !void {
     // The file writer is kept alive for the whole run via a defer-close
     // here; flush happens in `closeTraceFile` after `run()` returns.
     var trace_file_buf: [65536]u8 = undefined;
-    var trace_file_handle: ?std.fs.File = null;
-    var trace_file_fw_storage: std.fs.File.Writer = undefined;
+    var trace_file_handle: ?std.Io.File = null;
+    var trace_file_fw_storage: std.Io.File.Writer = undefined;
     var trace_file_btw_storage: btrace.Writer = undefined;
     var trace_file_btw_init_ok = false;
     if (trace_file_path) |path| {
@@ -471,15 +498,15 @@ pub fn main() !void {
             std.debug.print("error: --trace-file path rejected: '{s}'\n", .{path});
             std.process.exit(1);
         };
-        const f = std.fs.cwd().createFile(path, .{}) catch |err| {
+        const f = std.Io.Dir.cwd().createFile(io, path, .{}) catch |err| {
             std.debug.print("error: --trace-file create failed: {s} ({s})\n", .{ @errorName(err), path });
             std.process.exit(1);
         };
         trace_file_handle = f;
-        trace_file_fw_storage = f.writer(&trace_file_buf);
+        trace_file_fw_storage = f.writer(io, &trace_file_buf);
         trace_file_btw_storage = btrace.Writer.init(&trace_file_fw_storage.interface) catch |err| {
             std.debug.print("error: --trace-file init failed: {s}\n", .{@errorName(err)});
-            f.close();
+            f.close(io);
             std.process.exit(1);
         };
         trace_file_btw_init_ok = true;
@@ -525,7 +552,7 @@ pub fn main() !void {
             emitDebugJson(stdout, &[_]TmplJsonEntry{}, .{ .has_fatal = true }, msg_sink.items, true);
         }
         out.binEmitDone(1);
-        closeTraceFile(&trace_file_fw_storage, trace_file_handle);
+        closeTraceFile(io, &trace_file_fw_storage, trace_file_handle);
         std.process.exit(1);
     };
 
@@ -537,21 +564,20 @@ pub fn main() !void {
     // return 2 as documented.
     const exit_code: u8 = if (stats.has_fatal) 1 else if (stats.warnings > 0) 2 else 0;
     out.binEmitDone(@intCast(exit_code));
-    closeTraceFile(&trace_file_fw_storage, trace_file_handle);
+    closeTraceFile(io, &trace_file_fw_storage, trace_file_handle);
 
     // Opt-in self-measurement line on stderr (kept off stdout so it never
     // pollutes data/trace output). Parsed by the perf-guard + bench scripts.
     if (metrics_enabled) {
-        if (proc_timer) |*t| {
-            const wall_ms = t.read() / std.time.ns_per_ms;
-            var mbuf: [128]u8 = undefined;
-            var mfw = std.fs.File.stderr().writer(&mbuf);
-            mfw.interface.print(
-                "bxp-metrics wall_ms={d} peak_rss_kb={d}\n",
-                .{ wall_ms, peakRssKb() },
-            ) catch {};
-            mfw.interface.flush() catch {};
-        }
+        const wall_ns = proc_start.untilNow(io).raw.nanoseconds;
+        const wall_ms: u64 = if (wall_ns > 0) @intCast(@divTrunc(wall_ns, std.time.ns_per_ms)) else 0;
+        var mbuf: [128]u8 = undefined;
+        var mfw = std.Io.File.stderr().writer(io, &mbuf);
+        mfw.interface.print(
+            "bxp-metrics wall_ms={d} peak_rss_kb={d}\n",
+            .{ wall_ms, peakRssKb() },
+        ) catch {};
+        mfw.interface.flush() catch {};
     }
 
     if (exit_code != 0) std.process.exit(exit_code);
@@ -563,10 +589,10 @@ pub fn main() !void {
 /// Errors are swallowed — by the time this runs the bin frames are written;
 /// a flush failure here just means we lose the trailing buffered bytes,
 /// not the run itself.
-fn closeTraceFile(fw: *std.fs.File.Writer, handle: ?std.fs.File) void {
+fn closeTraceFile(io: std.Io, fw: *std.Io.File.Writer, handle: ?std.Io.File) void {
     if (handle) |f| {
         fw.interface.flush() catch {};
-        f.close();
+        f.close(io);
     }
 }
 
@@ -639,7 +665,7 @@ fn emitDebugJson(
 /// Returns overall SectionStats; exit code is determined by the caller.
 fn run(args: [][:0]u8, out: Output, fresh: bool, check_fs_seconds: u8, runtime: pipeline.Runtime, alloc: std.mem.Allocator) !SectionStats {
     var overall = SectionStats{};
-    var timer = try std.time.Timer.start();
+    var timer = pipeline.Timer.begin(runtime.io);
 
     // Per-template entries for the `--debug=json` summary (empty otherwise).
     var json_templates = std.array_list.Managed(TmplJsonEntry).init(alloc);
@@ -675,7 +701,7 @@ fn run(args: [][:0]u8, out: Output, fresh: bool, check_fs_seconds: u8, runtime: 
     };
 
     // Check config file exists before attempting to load.
-    std.fs.cwd().access(config_path, .{}) catch {
+    std.Io.Dir.cwd().access(runtime.io, config_path, .{}) catch {
         if (config_explicit) {
             out.fatal("error: configuration file not found: {s}\n", .{config_path});
         } else {
@@ -698,7 +724,7 @@ fn run(args: [][:0]u8, out: Output, fresh: bool, check_fs_seconds: u8, runtime: 
         // initial `readToEndAlloc`, BEFORE any diagnostic is produced, so it
         // would otherwise be a silent fatal — name the cap and the actual size.
         if (err == error.FileTooBig) {
-            const on_disk: u64 = if (std.fs.cwd().statFile(config_path)) |st| st.size else |_| 0;
+            const on_disk: u64 = if (std.Io.Dir.cwd().statFile(runtime.io, config_path, .{})) |st| st.size else |_| 0;
             out.fatal("fatal error: config '{s}' is {d} bytes, exceeding the {d} MB limit (CONFIG_MAX_FILE_SIZE)\n", .{ config_path, on_disk, config_mod.CONFIG_MAX_FILE_SIZE / (1024 * 1024) });
         }
         out.writer.flush() catch {};
@@ -720,10 +746,12 @@ fn run(args: [][:0]u8, out: Output, fresh: bool, check_fs_seconds: u8, runtime: 
     // surgery on `config_mod.load`'s signature; cost is negligible
     // (< 1 MB file, once per startup).
     {
-        const file = std.fs.cwd().openFile(config_path, .{}) catch null;
+        const file = std.Io.Dir.cwd().openFile(runtime.io, config_path, .{}) catch null;
         if (file) |f| {
-            defer f.close();
-            const raw = f.readToEndAlloc(alloc, 1 << 20) catch null;
+            defer f.close(runtime.io);
+            var rd_buf: [4096]u8 = undefined;
+            var fr = f.reader(runtime.io, &rd_buf);
+            const raw = fr.interface.allocRemaining(alloc, .limited(1 << 20)) catch null;
             if (raw) |bytes| {
                 defer alloc.free(bytes);
                 var keys_arena = std.heap.ArenaAllocator.init(alloc);
@@ -908,7 +936,7 @@ fn run(args: [][:0]u8, out: Output, fresh: bool, check_fs_seconds: u8, runtime: 
             .no_match => {},
         }
         switch (matchValueArg(args, &i, "--config")) {
-            .value => |_| continue,
+            .value => continue,
             .missing_value => {
                 usageErr(args[0]);
                 overall.has_fatal = true;
@@ -917,7 +945,7 @@ fn run(args: [][:0]u8, out: Output, fresh: bool, check_fs_seconds: u8, runtime: 
             .no_match => {},
         }
         switch (matchValueArg(args, &i, "--trace-file")) {
-            .value => |_| continue,
+            .value => continue,
             .missing_value => {
                 usageErr(args[0]);
                 overall.has_fatal = true;
@@ -926,7 +954,7 @@ fn run(args: [][:0]u8, out: Output, fresh: bool, check_fs_seconds: u8, runtime: 
             .no_match => {},
         }
         switch (matchValueArg(args, &i, "--check-fs")) {
-            .value => |_| continue,
+            .value => continue,
             .missing_value => {
                 usageErr(args[0]);
                 overall.has_fatal = true;

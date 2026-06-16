@@ -3,24 +3,12 @@ const zon = @import("build.zig.zon");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
-    // Force-upgrade Debug to ReleaseSafe. Zig 0.15.2 Debug-mode codegen
-    // produces broken register allocation for `mem.Allocator.remap` and
-    // `json.Scanner.next` on x86-64 — both surface as a NULL deref at
-    // offset 0x30 when the bridge's reader thread and `bridge_eval_expr_trace`
-    // run under realistic streaming load (137 K rows from `bxp-cli --trace`
-    // against DEV/bxp-cli.json). The bug does not reproduce in ReleaseSafe
-    // (same runtime safety checks: overflow, bounds, null-deref asserts;
-    // different codegen path). Release builds from
-    // `scripts/release-02-desktop.sh` already use `-Doptimize=ReleaseSmall`,
-    // so production artefacts have never tripped this; only the dev flow
-    // (`flutter run` → CMake hook copies whatever is in `zig-out/lib`) was
-    // affected. `-Doptimize=ReleaseSmall|ReleaseFast` still selects those
-    // modes; only Debug is rewritten to ReleaseSafe.
-    const requested_optimize = b.standardOptimizeOption(.{});
-    const optimize: std.builtin.OptimizeMode = switch (requested_optimize) {
-        .Debug => .ReleaseSafe,
-        else => requested_optimize,
-    };
+    // Zig 0.16 retired the Debug→ReleaseSafe rewrite this build used to carry:
+    // the 0.15.2 Debug-mode x86-64 codegen bug (broken regalloc for
+    // `mem.Allocator.remap` / `json.Scanner.next`, NULL deref at offset 0x30
+    // under streaming load) was a backend defect, and 0.16's self-hosted x86
+    // backend does not reproduce it. Debug now builds as Debug again.
+    const optimize = b.standardOptimizeOption(.{});
 
     const options = b.addOptions();
     options.addOption([]const u8, "version", zon.version);
@@ -46,13 +34,13 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/main.zig"),
             .target = target,
             .optimize = optimize,
+            .link_libc = true,
             .imports = &.{
                 .{ .name = "build_options", .module = options.createModule() },
                 .{ .name = "inspect", .module = inspect_mod },
             },
         }),
     });
-    lib.linkLibC();
 
     b.installArtifact(lib);
 
@@ -81,6 +69,7 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/main.zig"),
             .target = target,
             .optimize = optimize,
+            .link_libc = true,
             .imports = &.{
                 .{ .name = "build_options", .module = options.createModule() },
                 .{ .name = "test_options", .module = test_options.createModule() },
@@ -88,7 +77,6 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
-    tests.linkLibC();
     tests.step.dependOn(&helper.step);
     const run_tests = b.addRunArtifact(tests);
     const test_step = b.step("test", "Run bridge unit tests");

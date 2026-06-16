@@ -97,8 +97,33 @@ pub const TraceMode = enum(u2) { off, bin };
 /// (= `std.Thread.getCpuCount()` typically). main.zig owns the pool's
 /// lifetime via `init` + `deinit`; we just borrow the pointer.
 pub const Runtime = struct {
-    pool: *std.Thread.Pool,
     max_workers: usize,
+    /// Io instance for filesystem access + timing, threaded from `main`'s
+    /// `std.process.Init`. The single carrier for `std.Io.Dir`/`File` ops and
+    /// `std.Io.Clock` timing across the pipeline (Zig 0.16 — `std.fs`/`std.time`
+    /// no longer offer io-free entry points).
+    io: std.Io,
+};
+
+/// Monotonic wall-clock timer. Zig 0.16 removed `std.time.Timer` (and the
+/// io-free `clock_gettime`); timing now goes through `Io`. This thin shim keeps
+/// the `timer.read()` call sites in the section functions unchanged — only the
+/// construction switches from `std.time.Timer.start()` to `Timer.begin(io)`.
+/// `pub` so main.zig's `run()` shares the same shim.
+pub const Timer = struct {
+    io: std.Io,
+    start: std.Io.Clock.Timestamp,
+
+    pub fn begin(io: std.Io) Timer {
+        return .{ .io = io, .start = std.Io.Clock.Timestamp.now(io, .awake) };
+    }
+
+    /// Nanoseconds elapsed since `begin`. Monotonic, so never negative; clamps
+    /// to 0 defensively.
+    pub fn read(self: Timer) u64 {
+        const ns = self.start.untilNow(self.io).raw.nanoseconds;
+        return if (ns > 0) @intCast(ns) else 0;
+    }
 };
 
 /// Output wrapper that suppresses all writes when --quiet or --trace is active.
@@ -148,7 +173,7 @@ pub const Output = struct {
     fn captureMsg(self: Output, comptime fmt: []const u8, args: anytype) void {
         const sink = self.msg_sink orelse return;
         const s = std.fmt.allocPrint(self.msg_alloc, fmt, args) catch return;
-        sink.append(std.mem.trimRight(u8, s, "\n")) catch {};
+        sink.append(std.mem.trimEnd(u8, s, "\n")) catch {};
     }
 
     /// Print an informational line. Suppressed in --quiet, --trace, or
@@ -578,7 +603,7 @@ fn writeJsonString(out: *Writer, s: []const u8) !void {
 /// In debug mode, every error is printed before being suppressed.
 /// Saves and restores ctx.error_detail so the caller's detail buffer is unaffected.
 fn evalAllVars(
-    schema: std.StringArrayHashMap([]const u8),
+    schema: std.StringArrayHashMapUnmanaged([]const u8),
     ctx: *expr_mod.Context,
     out: Output,
     error_count: *u32,
@@ -814,7 +839,8 @@ fn findLastBoundary(bytes: []const u8) ?usize {
 /// Owns a backing `buffer` that holds residual bytes between calls.
 /// The slice returned by `nextChunk` is valid only until the next call.
 const ChunkReader = struct {
-    file: std.fs.File,
+    io: std.Io,
+    file: std.Io.File,
     buffer: std.array_list.Managed(u8),
     /// Number of bytes returned by the previous nextChunk() call. Those
     /// bytes are discarded from the front of `buffer` at the start of the
@@ -833,9 +859,10 @@ const ChunkReader = struct {
     /// `source_locator` for sub-ms drill-down in the GUI (via the bridge).
     chunk_start_in_file: u64,
 
-    pub fn init(alloc: std.mem.Allocator, file: std.fs.File) !ChunkReader {
-        const stat = try file.stat();
+    pub fn init(io: std.Io, alloc: std.mem.Allocator, file: std.Io.File) !ChunkReader {
+        const stat = try file.stat(io);
         return .{
+            .io = io,
             .file = file,
             .buffer = std.array_list.Managed(u8).init(alloc),
             .last_emit_len = 0,
@@ -897,7 +924,11 @@ const ChunkReader = struct {
             try self.buffer.ensureUnusedCapacity(want_cap);
             const dest = self.buffer.unusedCapacitySlice();
             const want = @min(dest.len, want_cap);
-            const n = try self.file.read(dest[0..want]);
+            // Positional read at the running file offset (`bytes_read`). Zig
+            // 0.16 has no stateful `File.read`; positional reads are also why
+            // the pre_pass→main "rewind" needs no seek — a fresh ChunkReader
+            // starts at offset 0.
+            const n = try self.file.readPositionalAll(self.io, dest[0..want], self.bytes_read);
             self.buffer.items.len += n;
             self.bytes_read += n;
             if (n == 0) self.eof = true;
@@ -1656,13 +1687,13 @@ fn processBlockParallel(
         w.base_row_idx = block_base + boundaries[i];
     }
 
-    var wg: std.Thread.WaitGroup = .{};
+    var g: std.Io.Group = .init;
     if (is_prepass) {
-        for (workers[0..K]) |*w| runtime.pool.spawnWg(&wg, workerPrePass, .{ w, rec });
+        for (workers[0..K]) |*w| g.async(runtime.io, workerPrePass, .{ w, rec });
     } else {
-        for (workers[0..K]) |*w| runtime.pool.spawnWg(&wg, workerMainPass, .{ w, rec });
+        for (workers[0..K]) |*w| g.async(runtime.io, workerMainPass, .{ w, rec });
     }
-    wg.wait();
+    g.await(runtime.io) catch {};
 
     // Surface the first worker error encountered. Workers cannot
     // propagate errors through `spawnWg` so they stash them in
@@ -1709,13 +1740,13 @@ fn processBlockParallelJson(
         w.base_row_idx = block_base + boundaries[i];
     }
 
-    var wg: std.Thread.WaitGroup = .{};
+    var g: std.Io.Group = .init;
     if (is_prepass) {
-        for (workers[0..K]) |*w| runtime.pool.spawnWg(&wg, workerJsonPrePass, .{ w, rec });
+        for (workers[0..K]) |*w| g.async(runtime.io, workerJsonPrePass, .{ w, rec });
     } else {
-        for (workers[0..K]) |*w| runtime.pool.spawnWg(&wg, workerJsonMainPass, .{ w, rec });
+        for (workers[0..K]) |*w| g.async(runtime.io, workerJsonMainPass, .{ w, rec });
     }
-    wg.wait();
+    g.await(runtime.io) catch {};
 
     for (workers[0..K]) |*w| {
         if (w.error_value) |err| return err;
@@ -1993,7 +2024,7 @@ pub fn processBroker(
     alloc: std.mem.Allocator,
 ) !SectionStats {
     var stats = SectionStats{};
-    var timer = try std.time.Timer.start();
+    var timer = Timer.begin(runtime.io);
 
     out_in.info("\n=== template: {s} ===\n", .{bid});
 
@@ -2032,7 +2063,7 @@ pub fn processBroker(
     }
 
     // Open the data directory; print a clean message if it doesn't exist.
-    var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch |err| {
+    var dir = std.Io.Dir.cwd().openDir(runtime.io, dir_path, .{ .iterate = true }) catch |err| {
         if (err == error.FileNotFound) {
             out.fatal("error: directory not found: '{s}'\n", .{dir_path});
             stats.has_fatal = true;
@@ -2041,7 +2072,7 @@ pub fn processBroker(
         }
         return err;
     };
-    defer dir.close();
+    defer dir.close(runtime.io);
 
     // Collect all matching filenames into a sorted list before opening any
     // output files. This avoids re-entrancy issues with the directory
@@ -2057,7 +2088,7 @@ pub fn processBroker(
     }
     {
         var it = dir.iterate();
-        while (try it.next()) |entry| {
+        while (try it.next(runtime.io)) |entry| {
             if (entry.kind != .file and entry.kind != .sym_link) continue;
             if (!std.mem.endsWith(u8, entry.name, csv_suffix)) continue;
             try names.append(try alloc.dupe(u8, entry.name));
@@ -2086,9 +2117,9 @@ pub fn processBroker(
     const combined = bc.combined_output;
     var combined_out_name_owned: ?[]u8 = null;
     defer if (combined_out_name_owned) |s| alloc.free(s);
-    var combined_out_file: std.fs.File = undefined;
+    var combined_out_file: std.Io.File = undefined;
     var combined_out_file_buf: [OUT_FILE_BUF_SIZE]u8 = undefined;
-    var combined_out_fw: std.fs.File.Writer = undefined;
+    var combined_out_fw: std.Io.File.Writer = undefined;
     // Initialise to a Discarding writer up-front so a stray flush at
     // teardown is harmless even if no real combined sink was ever opened.
     // The `combined_file_opened` flag still gates the meaningful flush
@@ -2097,7 +2128,7 @@ pub fn processBroker(
     var combined_fout: *std.Io.Writer = &combined_discarding.writer;
     var combined_json_first_row: bool = true;
     var combined_file_opened = false;
-    defer if (combined_file_opened and !out.dry_run) combined_out_file.close();
+    defer if (combined_file_opened and !out.dry_run) combined_out_file.close(runtime.io);
 
     if (combined) {
         // Filename convention: `1-{template_id}-combined{file_pattern_out}`.
@@ -2125,9 +2156,9 @@ pub fn processBroker(
             // non-fresh path; race protection on the combined sink is not
             // meaningful since its contents are deterministic from the
             // full input set.)
-            combined_out_file = try dir.createFile(combined_out_name, .{});
+            combined_out_file = try dir.createFile(runtime.io, combined_out_name, .{});
             combined_file_opened = true;
-            combined_out_fw = combined_out_file.writer(&combined_out_file_buf);
+            combined_out_fw = combined_out_file.writer(runtime.io, &combined_out_file_buf);
             combined_fout = &combined_out_fw.interface;
         }
 
@@ -2235,8 +2266,8 @@ pub fn processBroker(
         // file size). JSON still does a single whole-file load — JSON
         // exports are small in the bxp use cases and there's no
         // streaming JSON parser yet.
-        var in_file = try dir.openFile(filename, .{});
-        defer in_file.close();
+        var in_file = try dir.openFile(runtime.io, filename, .{});
+        defer in_file.close(runtime.io);
 
         // Header structures persist across all chunks (live in file_alloc).
         var col_index = std.StringHashMap(usize).init(file_alloc);
@@ -2288,8 +2319,7 @@ pub fn processBroker(
             // The legacy whole-file `utf8ValidateSlice` warning is
             // therefore redundant.
             var pass0_buf: [json_mod.READ_BUF_SIZE]u8 = undefined;
-            try in_file.seekTo(0);
-            var pass0_freader = in_file.reader(&pass0_buf);
+            var pass0_freader = in_file.reader(runtime.io, &pass0_buf);
             try json_mod.scanColNames(file_alloc, &pass0_freader.interface, &col_names);
             for (col_names.items, 0..) |name, idx| try col_index.put(name, idx);
             json_streaming = true;
@@ -2300,7 +2330,7 @@ pub fn processBroker(
             // where body records begin. The same `first_chunk` view is
             // reused both by the pre_pass block loop (when configured)
             // and by the main-pass block loop below.
-            chunk_reader = try ChunkReader.init(file_alloc, in_file);
+            chunk_reader = try ChunkReader.init(runtime.io, file_alloc, in_file);
             chunk_reader_inited = true;
             first_chunk = (try chunk_reader.nextChunk()) orelse "";
             if (first_chunk.len > 0) {
@@ -2380,9 +2410,8 @@ pub fn processBroker(
                     w.setDebug(out.debug);
                     w.setBtraceEnabled(trace_on);
                 }
-                try in_file.seekTo(0);
                 var prepass_buf: [json_mod.READ_BUF_SIZE]u8 = undefined;
-                var prepass_freader = in_file.reader(&prepass_buf);
+                var prepass_freader = in_file.reader(runtime.io, &prepass_buf);
                 var rr: json_mod.RecordReader = undefined;
                 rr.init(file_alloc, &prepass_freader.interface, &col_index);
                 defer rr.deinit();
@@ -2484,14 +2513,13 @@ pub fn processBroker(
                         pending.clearRetainingCapacity();
                     }
                 }
-                // Rewind file for main pass. `ChunkReader` can't seek
-                // backwards, so we deinit + re-init it after the file
-                // cursor moves to 0. `skipBomAndHeader` skips the same
-                // bytes that `parseCsvHeader` consumed during the
+                // Rewind file for main pass. A fresh `ChunkReader` reads
+                // positionally from offset 0 (no OS file-cursor seek needed),
+                // so we just deinit + re-init it. `skipBomAndHeader` skips the
+                // same bytes that `parseCsvHeader` consumed during the
                 // pre-pass header parse.
-                try in_file.seekTo(0);
                 chunk_reader.deinit();
-                chunk_reader = try ChunkReader.init(file_alloc, in_file);
+                chunk_reader = try ChunkReader.init(runtime.io, file_alloc, in_file);
                 first_chunk = (try chunk_reader.nextChunk()) orelse "";
                 first_chunk_body_start = skipBomAndHeader(first_chunk, bc.csv_text_quote_in, bc.csv_header_line);
             }
@@ -2528,7 +2556,7 @@ pub fn processBroker(
         // files would be skipped, so check via access() — no file is created.
         if (fresh and out.dry_run) {
             const exists = blk: {
-                dir.access(out_name, .{}) catch |e| {
+                dir.access(runtime.io, out_name, .{}) catch |e| {
                     if (e == error.FileNotFound) break :blk false;
                     return e;
                 };
@@ -2551,9 +2579,9 @@ pub fn processBroker(
         // so timing and row counts in the trace events are representative
         // of a real run. The write buffer is reused as scratch space for
         // the Discarding sink — it's never flushed to disk.
-        var out_file: std.fs.File = undefined;
+        var out_file: std.Io.File = undefined;
         var out_file_buf: [OUT_FILE_BUF_SIZE]u8 = undefined;
-        var out_fw: std.fs.File.Writer = undefined;
+        var out_fw: std.Io.File.Writer = undefined;
         var discarding: std.Io.Writer.Discarding = undefined;
         var per_file_opened = false;
         const fout: *std.Io.Writer = blk_sink: {
@@ -2562,7 +2590,7 @@ pub fn processBroker(
                 break :blk_sink &discarding.writer;
             }
             if (fresh) {
-                if (dir.createFile(out_name, .{ .exclusive = true })) |f| {
+                if (dir.createFile(runtime.io, out_name, .{ .exclusive = true })) |f| {
                     out_file = f;
                 } else |e| switch (e) {
                     error.PathAlreadyExists => {
@@ -2584,13 +2612,13 @@ pub fn processBroker(
                     else => return e,
                 }
             } else {
-                out_file = try dir.createFile(out_name, .{});
+                out_file = try dir.createFile(runtime.io, out_name, .{});
             }
             per_file_opened = true;
-            out_fw = out_file.writer(&out_file_buf);
+            out_fw = out_file.writer(runtime.io, &out_file_buf);
             break :blk_sink &out_fw.interface;
         };
-        defer if (per_file_opened) out_file.close();
+        defer if (per_file_opened) out_file.close(runtime.io);
         const delim_out = &[_]u8{bc.csv_delimiter_out};
         // Per-file header — always emitted at the start of the per-file
         // sink. Combined-mode header was written once above the loop.
@@ -2771,9 +2799,8 @@ pub fn processBroker(
                 w.setDebug(out.debug);
                 w.setBtraceEnabled(trace_on);
             }
-            try in_file.seekTo(0);
             var main_buf: [json_mod.READ_BUF_SIZE]u8 = undefined;
-            var main_freader = in_file.reader(&main_buf);
+            var main_freader = in_file.reader(runtime.io, &main_buf);
             var rr: json_mod.RecordReader = undefined;
             rr.init(file_alloc, &main_freader.interface, &col_index);
             defer rr.deinit();
@@ -2953,9 +2980,10 @@ const XlsxErrAction = enum { skip_file, fatal };
 /// is recoverable (warn + skip the file); everything else is fatal. The caller
 /// owns the fatal tail (`time_ns` + summary + `return error.Fatal`).
 fn classifyXlsxErr(
+    io: std.Io,
     err: anyerror,
     xlsx_name: []const u8,
-    xlsx_file: std.fs.File,
+    xlsx_file: std.Io.File,
     stats: *SectionStats,
     out: Output,
 ) XlsxErrAction {
@@ -2968,7 +2996,7 @@ fn classifyXlsxErr(
         // The worksheet itself is streamed, so size is unbounded; the only
         // resident structure is the shared-strings table, capped defensively
         // against a zip-bomb (XLSX_SHARED_STRINGS_CAP).
-        const on_disk: u64 = if (xlsx_file.stat()) |st| st.size else |_| 0;
+        const on_disk: u64 = if (xlsx_file.stat(io)) |st| st.size else |_| 0;
         out.fatal("fatal error: xlsx '{s}' ({d} bytes on disk) has a shared-strings table exceeding the {d} MB safety limit (XLSX_SHARED_STRINGS_CAP)\n", .{ xlsx_name, on_disk, xlsx_mod.XLSX_SHARED_STRINGS_CAP / (1024 * 1024) });
         stats.has_fatal = true;
         return .fatal;
@@ -2983,7 +3011,8 @@ fn classifyXlsxErr(
 /// cursor (per-sheet sizes can be very uneven, so this load-balances) and
 /// stash the first error; the main thread re-raises it after the barrier.
 const XlsxFanCtx = struct {
-    dir: std.fs.Dir,
+    io: std.Io,
+    dir: std.Io.Dir,
     xlsx_name: []const u8,
     wb: *const xlsx_mod.Workbook,
     specs: []const xlsx_mod.SheetSpec,
@@ -2991,13 +3020,15 @@ const XlsxFanCtx = struct {
     alloc: std.mem.Allocator,
     next: std.atomic.Value(usize) = .init(0),
     failed: std.atomic.Value(bool) = .init(false),
-    err_mutex: std.Thread.Mutex = .{},
+    // First-writer claim via CAS (Zig 0.16 removed `std.Thread.Mutex`; this
+    // io-free guard suffices for the rare first-error record path).
+    err_claimed: std.atomic.Value(bool) = .init(false),
     first_err: ?anyerror = null,
 
     fn record(self: *XlsxFanCtx, err: anyerror) void {
-        self.err_mutex.lock();
-        defer self.err_mutex.unlock();
-        if (self.first_err == null) self.first_err = err;
+        if (self.err_claimed.cmpxchgStrong(false, true, .acq_rel, .monotonic) == null) {
+            self.first_err = err;
+        }
         self.failed.store(true, .monotonic);
     }
 };
@@ -3014,13 +3045,13 @@ const XlsxFanCtx = struct {
 /// an arena turns into a no-op, accumulating every row's cells (~a whole
 /// sheet's worth, ~10 MB on a 400k-row sheet) until the arena is reset.
 fn xlsxExtractWorker(ctx: *XlsxFanCtx) void {
-    const file = ctx.dir.openFile(ctx.xlsx_name, .{}) catch |err| return ctx.record(err);
-    defer file.close();
+    const file = ctx.dir.openFile(ctx.io, ctx.xlsx_name, .{}) catch |err| return ctx.record(err);
+    defer file.close(ctx.io);
 
     while (!ctx.failed.load(.monotonic)) {
         const i = ctx.next.fetchAdd(1, .monotonic);
         if (i >= ctx.specs.len) break;
-        xlsx_mod.extractSheet(ctx.alloc, file, ctx.wb, ctx.specs[i], ctx.dir, ctx.stem) catch |err| return ctx.record(err);
+        xlsx_mod.extractSheet(ctx.io, ctx.alloc, file, ctx.wb, ctx.specs[i], ctx.dir, ctx.stem) catch |err| return ctx.record(err);
     }
 }
 
@@ -3042,13 +3073,13 @@ pub fn xlsxPrePass(
     runtime: Runtime,
 ) !SectionStats {
     var xlsx_stats = SectionStats{};
-    var timer = try std.time.Timer.start();
+    var timer = Timer.begin(runtime.io);
 
-    var dir_specs = std.StringArrayHashMap(std.array_list.Managed(xlsx_mod.SheetSpec)).init(alloc);
+    var dir_specs: std.StringArrayHashMapUnmanaged(std.array_list.Managed(xlsx_mod.SheetSpec)) = .empty;
     defer {
         var ds_it = dir_specs.iterator();
         while (ds_it.next()) |e| e.value_ptr.deinit();
-        dir_specs.deinit();
+        dir_specs.deinit(alloc);
     }
 
     // Collect SheetSpecs per data_dir across all active templates.
@@ -3064,7 +3095,7 @@ pub fn xlsxPrePass(
             break :blk dir_path_arg orelse bc.data_dir;
         } else bc.data_dir;
 
-        const gop = try dir_specs.getOrPut(dir_path);
+        const gop = try dir_specs.getOrPut(alloc, dir_path);
         if (!gop.found_existing) {
             gop.value_ptr.* = std.array_list.Managed(xlsx_mod.SheetSpec).init(alloc);
         }
@@ -3084,7 +3115,7 @@ pub fn xlsxPrePass(
         const dir_path = e.key_ptr.*;
         const specs = e.value_ptr.items;
 
-        var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch |err| {
+        var dir = std.Io.Dir.cwd().openDir(runtime.io, dir_path, .{ .iterate = true }) catch |err| {
             if (err == error.FileNotFound) {
                 out.fatal("error: directory not found: '{s}'\n", .{dir_path});
                 xlsx_stats.has_fatal = true;
@@ -3092,7 +3123,7 @@ pub fn xlsxPrePass(
             }
             return err;
         };
-        defer dir.close();
+        defer dir.close(runtime.io);
 
         var xlsx_names = std.array_list.Managed([]u8).init(alloc);
         defer {
@@ -3101,7 +3132,7 @@ pub fn xlsxPrePass(
         }
         {
             var fit = dir.iterate();
-            while (try fit.next()) |entry| {
+            while (try fit.next(runtime.io)) |entry| {
                 if (entry.kind != .file and entry.kind != .sym_link) continue;
                 if (!std.mem.endsWith(u8, entry.name, ".xlsx")) continue;
                 try xlsx_names.append(try alloc.dupe(u8, entry.name));
@@ -3129,7 +3160,7 @@ pub fn xlsxPrePass(
                 for (specs) |spec| {
                     const csvx_name = try std.mem.concat(alloc, u8, &.{ stem, spec.output_suffix, "x" });
                     defer alloc.free(csvx_name);
-                    dir.access(csvx_name, .{}) catch {
+                    dir.access(runtime.io, csvx_name, .{}) catch {
                         all_exist = false;
                         break;
                     };
@@ -3140,15 +3171,15 @@ pub fn xlsxPrePass(
                 }
             }
 
-            const xlsx_file = try dir.openFile(xlsx_name, .{});
-            defer xlsx_file.close();
+            const xlsx_file = try dir.openFile(runtime.io, xlsx_name, .{});
+            defer xlsx_file.close(runtime.io);
 
             out.info("converting '{s}'\n", .{xlsx_name});
 
             // Shared setup (serial): parse the workbook-global parts once
             // (sheet name→path map, shared-strings table, date styles).
-            var wb = xlsx_mod.Workbook.init(alloc, xlsx_file) catch |err| {
-                switch (classifyXlsxErr(err, xlsx_name, xlsx_file, &xlsx_stats, out)) {
+            var wb = xlsx_mod.Workbook.init(runtime.io, alloc, xlsx_file) catch |err| {
+                switch (classifyXlsxErr(runtime.io, err, xlsx_name, xlsx_file, &xlsx_stats, out)) {
                     .skip_file => continue,
                     .fatal => {
                         xlsx_stats.time_ns = timer.read();
@@ -3166,6 +3197,7 @@ pub fn xlsxPrePass(
             // loop was the xlsx ingest cap.
             if (specs.len > 0) {
                 var fan = XlsxFanCtx{
+                    .io = runtime.io,
                     .dir = dir,
                     .xlsx_name = xlsx_name,
                     .wb = &wb,
@@ -3174,11 +3206,11 @@ pub fn xlsxPrePass(
                     .alloc = alloc,
                 };
                 const k = @min(runtime.max_workers, specs.len);
-                var wg: std.Thread.WaitGroup = .{};
-                for (0..k) |_| runtime.pool.spawnWg(&wg, xlsxExtractWorker, .{&fan});
-                wg.wait();
+                var g: std.Io.Group = .init;
+                for (0..k) |_| g.async(runtime.io, xlsxExtractWorker, .{&fan});
+                g.await(runtime.io) catch {};
                 if (fan.first_err) |err| {
-                    switch (classifyXlsxErr(err, xlsx_name, xlsx_file, &xlsx_stats, out)) {
+                    switch (classifyXlsxErr(runtime.io, err, xlsx_name, xlsx_file, &xlsx_stats, out)) {
                         .skip_file => continue,
                         .fatal => {
                             xlsx_stats.time_ns = timer.read();
@@ -3222,19 +3254,19 @@ const ZipJob = struct {
 /// re-raises it after the WaitGroup barrier — workers can't propagate errors
 /// through `spawnWg`, the same constraint the main pipeline's blocks have.
 const ZipUnpackCtx = struct {
-    dir: std.fs.Dir,
+    io: std.Io,
+    dir: std.Io.Dir,
     zip_name: []const u8,
     jobs: []const ZipJob,
     next: std.atomic.Value(usize) = .init(0),
     failed: std.atomic.Value(bool) = .init(false),
-    err_mutex: std.Thread.Mutex = .{},
+    // First-writer claim via CAS (Zig 0.16 removed `std.Thread.Mutex`).
+    err_claimed: std.atomic.Value(bool) = .init(false),
     first_err: ?anyerror = null,
     first_err_name: []const u8 = "",
 
     fn record(self: *ZipUnpackCtx, err: anyerror, name: []const u8) void {
-        self.err_mutex.lock();
-        defer self.err_mutex.unlock();
-        if (self.first_err == null) {
+        if (self.err_claimed.cmpxchgStrong(false, true, .acq_rel, .monotonic) == null) {
             self.first_err = err;
             self.first_err_name = name;
         }
@@ -3245,18 +3277,19 @@ const ZipUnpackCtx = struct {
 /// Inflate one archive member to a flat file in `dir`. Pure per-entry work with
 /// no shared state — the parallel unpack worker calls this once per job.
 fn unpackOneEntry(
+    io: std.Io,
     archive: *zipstream.Archive,
     member: *const zipstream.Entry,
     out_name: []const u8,
-    dir: std.fs.Dir,
+    dir: std.Io.Dir,
     window: []u8,
     wbuf: []u8,
 ) !void {
     var er: zipstream.EntryReader = undefined;
     try er.init(archive, member, window);
-    const dest = try dir.createFile(out_name, .{});
-    defer dest.close();
-    var fw = dest.writer(wbuf);
+    const dest = try dir.createFile(io, out_name, .{});
+    defer dest.close(io);
+    var fw = dest.writer(io, wbuf);
     _ = try er.reader().streamRemaining(&fw.interface);
     try fw.interface.flush();
 }
@@ -3272,11 +3305,11 @@ fn zipUnpackWorker(ctx: *ZipUnpackCtx) void {
     defer arena.deinit();
     const wa = arena.allocator();
 
-    const file = ctx.dir.openFile(ctx.zip_name, .{}) catch |err| return ctx.record(err, ctx.zip_name);
-    defer file.close();
+    const file = ctx.dir.openFile(ctx.io, ctx.zip_name, .{}) catch |err| return ctx.record(err, ctx.zip_name);
+    defer file.close(ctx.io);
 
     var archive: zipstream.Archive = undefined;
-    archive.init(wa, file) catch |err| return ctx.record(err, ctx.zip_name);
+    archive.init(ctx.io, wa, file) catch |err| return ctx.record(err, ctx.zip_name);
     defer archive.deinit();
 
     const window = wa.alloc(u8, std.compress.flate.max_window_len) catch |err| return ctx.record(err, ctx.zip_name);
@@ -3286,7 +3319,7 @@ fn zipUnpackWorker(ctx: *ZipUnpackCtx) void {
         const i = ctx.next.fetchAdd(1, .monotonic);
         if (i >= ctx.jobs.len) break;
         const job = ctx.jobs[i];
-        unpackOneEntry(&archive, &archive.entries.items[job.entry_idx], job.out_name, ctx.dir, window, &wbuf) catch |err| {
+        unpackOneEntry(ctx.io, &archive, &archive.entries.items[job.entry_idx], job.out_name, ctx.dir, window, &wbuf) catch |err| {
             ctx.record(err, job.out_name);
             return;
         };
@@ -3315,12 +3348,12 @@ pub fn zipPrePass(
     runtime: Runtime,
 ) !SectionStats {
     var stats = SectionStats{};
-    var timer = try std.time.Timer.start();
+    var timer = Timer.begin(runtime.io);
 
     // data_dir -> ZipInput (first active template wins; a shared dir is
     // unpacked once). Mirrors xlsxPrePass's per-dir dedupe.
-    var dir_specs = std.StringArrayHashMap(config_mod.ZipInput).init(alloc);
-    defer dir_specs.deinit();
+    var dir_specs: std.StringArrayHashMapUnmanaged(config_mod.ZipInput) = .empty;
+    defer dir_specs.deinit(alloc);
 
     var bc_it = cfg.brokers.iterator();
     while (bc_it.next()) |entry| {
@@ -3330,7 +3363,7 @@ pub fn zipPrePass(
             if (!std.mem.eql(u8, tid, entry.key_ptr.*)) continue;
             break :blk dir_path_arg orelse bc.data_dir;
         } else bc.data_dir;
-        const gop = try dir_specs.getOrPut(dir_path);
+        const gop = try dir_specs.getOrPut(alloc, dir_path);
         if (!gop.found_existing) gop.value_ptr.* = zi;
     }
 
@@ -3343,7 +3376,7 @@ pub fn zipPrePass(
         const dir_path = e.key_ptr.*;
         const zi = e.value_ptr.*;
 
-        var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch |err| {
+        var dir = std.Io.Dir.cwd().openDir(runtime.io, dir_path, .{ .iterate = true }) catch |err| {
             if (err == error.FileNotFound) {
                 out.fatal("error: directory not found: '{s}'\n", .{dir_path});
                 stats.has_fatal = true;
@@ -3351,7 +3384,7 @@ pub fn zipPrePass(
             }
             return err;
         };
-        defer dir.close();
+        defer dir.close(runtime.io);
 
         // Collect + sort the *.zip files so extraction order is deterministic.
         var zip_names = std.array_list.Managed([]u8).init(alloc);
@@ -3361,7 +3394,7 @@ pub fn zipPrePass(
         }
         {
             var fit = dir.iterate();
-            while (try fit.next()) |de| {
+            while (try fit.next(runtime.io)) |de| {
                 if (de.kind != .file and de.kind != .sym_link) continue;
                 if (!std.mem.endsWith(u8, de.name, ".zip")) continue;
                 try zip_names.append(try alloc.dupe(u8, de.name));
@@ -3374,17 +3407,17 @@ pub fn zipPrePass(
         }.lessThan);
 
         for (zip_names.items) |zip_name| {
-            const zip_file = dir.openFile(zip_name, .{}) catch |err| {
+            const zip_file = dir.openFile(runtime.io, zip_name, .{}) catch |err| {
                 out.fatal("fatal error: cannot open zip '{s}': {s}\n", .{ zip_name, @errorName(err) });
                 stats.has_fatal = true;
                 stats.time_ns = timer.read();
                 out.summary(stats);
                 return error.Fatal;
             };
-            defer zip_file.close();
+            defer zip_file.close(runtime.io);
 
             var archive: zipstream.Archive = undefined;
-            archive.init(alloc, zip_file) catch |err| {
+            archive.init(runtime.io, alloc, zip_file) catch |err| {
                 if (err == zipstream.Error.UnsupportedCompressionMethod) {
                     out.warning("warning: skipping '{s}': uses an unsupported compression method (only store + deflate are read)\n", .{zip_name});
                     stats.warnings += 1;
@@ -3439,7 +3472,7 @@ pub fn zipPrePass(
 
                 // --fresh: skip members whose intermediate CSV already exists.
                 if (fresh) {
-                    if (dir.access(out_name, .{})) |_| {
+                    if (dir.access(runtime.io, out_name, .{})) |_| {
                         continue;
                     } else |_| {}
                 }
@@ -3455,13 +3488,14 @@ pub fn zipPrePass(
             if (jobs.items.len > 0) {
                 const k = @min(runtime.max_workers, jobs.items.len);
                 var ctx = ZipUnpackCtx{
+                    .io = runtime.io,
                     .dir = dir,
                     .zip_name = zip_name,
                     .jobs = jobs.items,
                 };
-                var wg: std.Thread.WaitGroup = .{};
-                for (0..k) |_| runtime.pool.spawnWg(&wg, zipUnpackWorker, .{&ctx});
-                wg.wait();
+                var g: std.Io.Group = .init;
+                for (0..k) |_| g.async(runtime.io, zipUnpackWorker, .{&ctx});
+                g.await(runtime.io) catch {};
                 if (ctx.first_err) |err| {
                     out.fatal("fatal error: zip '{s}': failed unpacking '{s}': {s}\n", .{ zip_name, ctx.first_err_name, @errorName(err) });
                     stats.has_fatal = true;

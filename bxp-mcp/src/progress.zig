@@ -14,8 +14,10 @@
 const std = @import("std");
 
 pub const Progress = struct {
+    /// Io for stdout access (Zig 0.16 — `std.fs.File` writes go through `Io`).
+    io: std.Io,
     /// The server's stdout — same handle the JSON-RPC responses use.
-    stdout: std.fs.File,
+    stdout: std.Io.File,
     /// The client's progressToken, already serialized to JSON text (a quoted
     /// string like `"abc"` or a bare number like `42`), embedded verbatim.
     token_json: []const u8,
@@ -31,7 +33,7 @@ pub const Progress = struct {
             "{{\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{{\"progressToken\":{s},\"progress\":{d},\"total\":{d},\"message\":\"{s}\"}}}}\n",
             .{ self.token_json, progress, total, message },
         ) catch return;
-        _ = self.stdout.write(line) catch {};
+        self.stdout.writeStreamingAll(self.io, line) catch {};
     }
 };
 
