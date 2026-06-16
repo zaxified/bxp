@@ -25,9 +25,9 @@ two things 0.15.2 blocks today:
   (`zig-utils/zig-regex`) requires Zig 0.16+.
 - **Dropping the `bxp-gui-bridge` Debug→ReleaseSafe workaround.** 0.16
   replaced the LLVM Debug backend with a self-hosted x86 backend on
-  Linux/macOS, which should eliminate the Debug-codegen crash that forced the
-  bridge off Debug builds. Verify post-migration whether the rewrite in
-  `bxp-gui-bridge/build.zig` can be removed.
+  Linux/macOS, which eliminated the Debug-codegen crash that forced the
+  bridge off Debug builds — the `bxp-gui-bridge/build.zig` rewrite is gone and
+  the bridge tracks `standardOptimizeOption` like every other package.
 
 The `uucode` dep is **not** a blocker — its master branch already supports
 0.16; migration just repoints the pin from the `zig-0.15` back-port branch to

@@ -136,8 +136,8 @@ bxp/                            # monorepo root (git root)
 │   ├── packages/json5_ast/     # standalone Dart JSON5 AST library (path dep)
 │   ├── linux/, macos/, windows/ # per-platform Flutter shells
 │   └── pubspec.yaml
-├── bxp-gui-bridge/             # Zig FFI shared library — Win subprocess proxy
-│   ├── src/main.zig            # + cross-platform in-proc expr evaluator
+├── bxp-gui-bridge/             # Zig FFI shared library — single GUI backend (all platforms)
+│   ├── src/main.zig            # in-proc inspect/eval + bxp-cli run proxy
 │   ├── test/test_helper.zig    # bridge_run / bridge_run_streaming /
 │   ├── build.zig               # bridge_eval_expr* C-ABI surface
 │   └── build.zig.zon           # depends on bxp-core (path dep)
