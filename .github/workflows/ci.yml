@@ -80,9 +80,13 @@ jobs:
           path: ${{ github.workspace }}/.zig-cache
           # Source hash keys the exact-match entry; restore-keys fall back to the
           # newest prior cache so Zig recompiles only what changed (incremental).
-          key: zig-${{ runner.os }}-${{ hashFiles('bxp-core/**/*.zig', 'bxp-cli/**/*.zig', 'bxp-mcp/**/*.zig', 'bxp-gui-bridge/**/*.zig', '**/build.zig.zon') }}
+          # The `base` token is a cache epoch tied to the gate's build flags
+          # (-Dcpu=baseline): the Zig cache key embeds the CPU, so a cache built
+          # under different flags can never hit. Bump the token (base2, …) if the
+          # gate's optimize/cpu/target ever changes, to discard the stale caches.
+          key: zig-${{ runner.os }}-base-${{ hashFiles('bxp-core/**/*.zig', 'bxp-cli/**/*.zig', 'bxp-mcp/**/*.zig', 'bxp-gui-bridge/**/*.zig', '**/build.zig.zon') }}
           restore-keys: |
-            zig-${{ runner.os }}-
+            zig-${{ runner.os }}-base-
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
