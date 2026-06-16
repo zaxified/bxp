@@ -252,10 +252,33 @@ test "validatePath: backslash separator counts as traversal on Windows builds" {
 /// on Windows (Git Bash) and BSD-incompatible on macOS (`-f` is rejected).
 /// The process always owns a valid self-handle, so no child-handle plumbing
 /// is needed.
+// Zig 0.16 dropped the `std.os.windows.GetProcessMemoryInfo` wrapper, so the
+// psapi entry point + its counter struct are declared locally for the
+// Windows peak-RSS path below (BXP_METRICS opt-in only).
+const PROCESS_MEMORY_COUNTERS = extern struct {
+    cb: std.os.windows.DWORD,
+    PageFaultCount: std.os.windows.DWORD,
+    PeakWorkingSetSize: usize,
+    WorkingSetSize: usize,
+    QuotaPeakPagedPoolUsage: usize,
+    QuotaPagedPoolUsage: usize,
+    QuotaPeakNonPagedPoolUsage: usize,
+    QuotaNonPagedPoolUsage: usize,
+    PagefileUsage: usize,
+    PeakPagefileUsage: usize,
+};
+extern "psapi" fn GetProcessMemoryInfo(
+    process: std.os.windows.HANDLE,
+    counters: *PROCESS_MEMORY_COUNTERS,
+    cb: std.os.windows.DWORD,
+) callconv(.winapi) std.os.windows.BOOL;
+
 fn peakRssKb() u64 {
     if (builtin.os.tag == .windows) {
-        const vmc = std.os.windows.GetProcessMemoryInfo(std.os.windows.GetCurrentProcess()) catch return 0;
-        return @intCast(vmc.PeakWorkingSetSize / 1024);
+        var pmc: PROCESS_MEMORY_COUNTERS = undefined;
+        pmc.cb = @sizeOf(PROCESS_MEMORY_COUNTERS);
+        if (!GetProcessMemoryInfo(std.os.windows.GetCurrentProcess(), &pmc, pmc.cb).toBool()) return 0;
+        return @intCast(pmc.PeakWorkingSetSize / 1024);
     }
     const ru = std.posix.getrusage(std.posix.rusage.SELF);
     const maxrss: u64 = if (ru.maxrss > 0) @intCast(ru.maxrss) else 0;
