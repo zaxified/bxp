@@ -1498,7 +1498,7 @@ pub const Config = struct {
                     self._alloc.free(te.key_ptr.*);
                     self._alloc.free(te.value_ptr.*);
                 }
-                nm.deinit();
+                nm.deinit(self._alloc);
             }
             maps.deinit();
 
@@ -1509,7 +1509,7 @@ pub const Config = struct {
                 self._alloc.free(e.key_ptr.*);
                 self._alloc.free(e.value_ptr.*);
             }
-            is.deinit();
+            is.deinit(self._alloc);
 
             // Free output_schema header and variable name strings.
             var os = entry.value_ptr.output_schema;
@@ -1533,7 +1533,7 @@ pub const Config = struct {
                 }
                 pp_entry.value_ptr.values.deinit();
             }
-            pps.deinit();
+            pps.deinit(self._alloc);
 
             // Free row_rules: each rule's when string, each row override map, and the slices.
             if (entry.value_ptr.row_rules) |rules| {
@@ -1552,7 +1552,7 @@ pub const Config = struct {
                 self._alloc.free(rules);
             }
         }
-        self.brokers.deinit();
+        self.brokers.deinit(self._alloc);
     }
 
 };
@@ -2883,10 +2883,10 @@ pub fn loadFromBytes(
                         try maps.put(try alloc.dupe(u8, g.key_ptr.*), try dupeNamedMap(alloc, g.value_ptr.*));
                     }
                 }
-                var input_schema = std.StringArrayHashMap([]const u8).init(alloc);
+                var input_schema: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
                 var date_filter_from_filename: bool = false;
                 var combined_output: bool = false;
-                var pre_passes = std.StringArrayHashMap(PrePass).init(alloc);
+                var pre_passes: std.StringArrayHashMapUnmanaged(PrePass) = .empty;
                 var row_rules: ?[]RowRule = null;
                 var row_rules_debug_missing: bool = false;
                 var output_schema: ?std.array_list.Managed(OutputColumn) = null;
@@ -3182,7 +3182,7 @@ pub fn loadFromBytes(
                                     alloc.free(oe.key_ptr.*);
                                     alloc.free(oe.value_ptr.*);
                                 }
-                                old.deinit();
+                                old.deinit(alloc);
                                 existing.value_ptr.* = new_map;
                             } else {
                                 try maps.put(try alloc.dupe(u8, lm.key_ptr.*), new_map);
@@ -3197,6 +3197,7 @@ pub fn loadFromBytes(
                             while (is_it.next()) |e| {
                                 if (e.value_ptr.* == .string) {
                                     try input_schema.put(
+                                        alloc,
                                         try alloc.dupe(u8, e.key_ptr.*),
                                         try alloc.dupe(u8, e.value_ptr.string),
                                     );
@@ -3303,7 +3304,7 @@ pub fn loadFromBytes(
                             const is_legacy_form = ppobj.get("when") != null;
                             if (is_legacy_form) {
                                 const block = try parsePrePassBlock(alloc, ppobj);
-                                try pre_passes.put(try alloc.dupe(u8, "_default"), block);
+                                try pre_passes.put(alloc, try alloc.dupe(u8, "_default"), block);
                             } else {
                                 var pp_it = ppobj.iterator();
                                 while (pp_it.next()) |pe| {
@@ -3320,7 +3321,7 @@ pub fn loadFromBytes(
                                     }
                                     if (pe.value_ptr.* != .object) continue;
                                     const block = try parsePrePassBlock(alloc, pe.value_ptr.object);
-                                    try pre_passes.put(try alloc.dupe(u8, name), block);
+                                    try pre_passes.put(alloc, try alloc.dupe(u8, name), block);
                                 }
                             }
                         }
@@ -3373,6 +3374,7 @@ pub fn loadFromBytes(
 
                 // Store the completed broker entry under its ID key.
                 try config.brokers.put(
+                    alloc,
                     try alloc.dupe(u8, b_entry.key_ptr.*),
                     BrokerConfig{
                         .data_dir                  = data_dir,

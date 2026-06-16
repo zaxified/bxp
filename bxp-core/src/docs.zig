@@ -525,23 +525,19 @@ test "BrokerConfig defaults match FieldDoc.default" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const path = "minimal.json";
-    {
-        var f = try tmp.dir.createFile(path, .{});
-        defer f.close();
-        try f.writeAll(
-            \\{
-            \\  "conversion_templates": {
-            \\    "t": {
-            \\      "data_dir": ".",
-            \\      "file_pattern_in": ".csv",
-            \\      "file_pattern_out": ".csv",
-            \\      "input_schema": { "$a": "1" },
-            \\      "output_schema": { "col": "$a" }
-            \\    }
-            \\  }
-            \\}
-        );
-    }
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = path, .data =
+        \\{
+        \\  "conversion_templates": {
+        \\    "t": {
+        \\      "data_dir": ".",
+        \\      "file_pattern_in": ".csv",
+        \\      "file_pattern_out": ".csv",
+        \\      "input_schema": { "$a": "1" },
+        \\      "output_schema": { "col": "$a" }
+        \\    }
+        \\  }
+        \\}
+    });
     // Resolve realpath so config.load can read it (it expects a
     // filesystem-visible path, not a tmpDir-relative one).
     const real_path = try tmp.dir.realpathAlloc(alloc, path);

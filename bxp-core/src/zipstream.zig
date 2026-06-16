@@ -260,9 +260,9 @@ fn buildStoreZip(a: Allocator, members: []const TestMember) ![]u8 {
     return buf.toOwnedSlice(a);
 }
 
-fn openZip(tmp: *std.testing.TmpDir, bytes: []const u8) !std.fs.File {
-    try tmp.dir.writeFile(.{ .sub_path = "t.zip", .data = bytes });
-    return tmp.dir.openFile("t.zip", .{});
+fn openZip(tmp: *std.testing.TmpDir, bytes: []const u8) !std.Io.File {
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "t.zip", .data = bytes });
+    return tmp.dir.openFile(testing.io, "t.zip", .{});
 }
 
 test "Archive: enumerates members, skips dir entries, find + findSuffix" {

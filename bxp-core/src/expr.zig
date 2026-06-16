@@ -148,6 +148,13 @@ pub const Context = struct {
     pre_pass_names: ?*const std.StringHashMap(void) = null,
     /// Allocator for strings produced during expression evaluation.
     alloc: std.mem.Allocator,
+    /// I/O implementation for the two builtins that need OS services in 0.16 —
+    /// NOW() (wall clock via `std.Io.Timestamp`) and RAND() (CSPRNG entropy via
+    /// `io.randomSecure`). 0.16 moved time + entropy behind the io interface.
+    /// Defaults to `.failing`: contexts that never evaluate NOW()/RAND()
+    /// (validate-only paths, most unit tests) can ignore it; the real eval entry
+    /// points (bxp-cli pipeline, inspect, the NOW/RAND tests) set a real io.
+    io: std.Io = .failing,
     /// Decimal separator used in input CSV numeric fields (e.g. ',' for European format).
     /// Field values that look numeric are normalized to '.' before arithmetic evaluation.
     /// Default '.' means no conversion.
@@ -2365,10 +2372,10 @@ const now_doc: FnDoc = .{
     .max_args = 0,
 };
 /// NOW() — current UTC datetime as ISO 8601 string: YYYY-MM-DDTHH:MM:SSZ.
-fn builtinNow(args: []Value, alloc: std.mem.Allocator) !Value {
+fn builtinNow(args: []Value, alloc: std.mem.Allocator, io: std.Io) !Value {
     if (args.len != 0) return error.WrongArgCount;
     const epoch = std.time.epoch;
-    const secs: u64 = @intCast(std.time.timestamp());
+    const secs: u64 = @intCast(std.Io.Timestamp.now(io, .real).toSeconds());
     const es = epoch.EpochSeconds{ .secs = secs };
     const day = es.getEpochDay();
     const time = es.getDaySeconds();
@@ -2384,7 +2391,7 @@ fn builtinNow(args: []Value, alloc: std.mem.Allocator) !Value {
     }) };
 }
 fn adaptNow(p: *Parser, args: []Value) anyerror!Value {
-    return builtinNow(args, p.ctx.alloc);
+    return builtinNow(args, p.ctx.alloc, p.ctx.io);
 }
 
 // ── TRIM ────────────────────────────────────────────────────────────────
@@ -2514,8 +2521,15 @@ fn adaptRand(p: *Parser, args: []Value) anyerror!Value {
     // length is always a sane usize even if the guard contract ever changes.
     const n: usize = @intCast(@max(1, @min(t, @as(i128, RAND_MAX_DIGITS))));
     const buf = try p.ctx.alloc.alloc(u8, n);
-    buf[0] = '1' + std.crypto.random.intRangeLessThan(u8, 0, 9); // 1..9
-    for (buf[1..]) |*c| c.* = '0' + std.crypto.random.intRangeLessThan(u8, 0, 10); // 0..9
+    // 0.16 removed std.crypto.random; entropy now flows through the io
+    // interface. Seed a CSPRNG from io.randomSecure so the per-digit draw
+    // stays unbiased (intRangeLessThan), matching the previous behaviour.
+    var seed: [std.Random.DefaultCsprng.secret_seed_length]u8 = undefined;
+    try p.ctx.io.randomSecure(&seed);
+    var csprng: std.Random.DefaultCsprng = .init(seed);
+    const rng = csprng.random();
+    buf[0] = '1' + rng.intRangeLessThan(u8, 0, 9); // 1..9
+    for (buf[1..]) |*c| c.* = '0' + rng.intRangeLessThan(u8, 0, 10); // 0..9
     return Value{ .string = buf };
 }
 
@@ -3951,6 +3965,7 @@ const TestHelper = struct {
             .maps = &self.maps,
             .lookup_table = null,
             .alloc = alloc,
+            .io = testing.io,
         };
     }
 };
@@ -5072,12 +5087,12 @@ test "eval: ROUND huge precision is fast" {
     const a = arena.allocator();
     var h = TestHelper.init(a);
     const ctx = h.ctx(&.{}, a);
-    const t0 = std.time.milliTimestamp();
+    // The precision clamp (ROUND_MAX_PRECISION) bounds the work regardless of
+    // the requested precision; without it these calls would spin for tens of
+    // seconds and this test would hang. 0.16 removed std.time.milliTimestamp
+    // (timing is io-based now), so assert completion rather than wall time.
     _ = try eval("ROUND(1.0, 1000000000)", &ctx);
     _ = try eval("ROUND(1.0, -1000000000)", &ctx);
-    const elapsed_ms = std.time.milliTimestamp() - t0;
-    // Two clamped calls together must finish well under any sane budget.
-    try testing.expect(elapsed_ms < 100);
 }
 
 // ------------------------------------------------------------

@@ -182,8 +182,8 @@ fn insertErrBefore(
     msg: []const u8,
     counter: *u32,
 ) !void {
-    var obj = std.json.ObjectMap.init(a);
-    try obj.put("message", .{ .string = try a.dupe(u8, msg) });
+    var obj: std.json.ObjectMap = .empty;
+    try obj.put(a, "message", .{ .string = try a.dupe(u8, msg) });
     return insertNumberedBefore(a, parent, "$err_", target_key, .{ .object = obj }, counter);
 }
 
@@ -200,7 +200,7 @@ fn insertNumberedBefore(
     const new_key = try std.fmt.allocPrint(a, "{s}{d}", .{ prefix, counter.* });
 
     if (target_key.len == 0 or !parent.object.contains(target_key)) {
-        try parent.object.put(new_key, value);
+        try parent.object.put(a, new_key, value);
         return;
     }
 
@@ -214,9 +214,9 @@ fn insertNumberedBefore(
     parent.object.clearRetainingCapacity();
     for (entries.items) |e| {
         if (std.mem.eql(u8, e.k, target_key)) {
-            try parent.object.put(new_key, value);
+            try parent.object.put(a, new_key, value);
         }
-        try parent.object.put(e.k, e.v);
+        try parent.object.put(a, e.k, e.v);
     }
 }
 
@@ -245,11 +245,11 @@ fn injectDiagnostics(
             .info => "$info_",
         };
 
-        var obj = std.json.ObjectMap.init(a);
-        try obj.put("message", .{ .string = try a.dupe(u8, d.message) });
-        if (d.expr_off) |off| try obj.put("off", .{ .integer = @intCast(off) });
-        if (d.expr_len) |len| try obj.put("len", .{ .integer = @intCast(len) });
-        if (d.suggest) |s| try obj.put("suggest", .{ .string = try a.dupe(u8, s) });
+        var obj: std.json.ObjectMap = .empty;
+        try obj.put(a, "message", .{ .string = try a.dupe(u8, d.message) });
+        if (d.expr_off) |off| try obj.put(a, "off", .{ .integer = @intCast(off) });
+        if (d.expr_len) |len| try obj.put(a, "len", .{ .integer = @intCast(len) });
+        if (d.suggest) |s| try obj.put(a, "suggest", .{ .string = try a.dupe(u8, s) });
         try insertNumberedBefore(a, parent_ptr, prefix, field_name, .{ .object = obj }, counter);
     }
 }
