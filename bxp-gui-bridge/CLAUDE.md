@@ -130,12 +130,13 @@ verify the corpus, then drop the rewrite.
   `bridge_inspect` family is load-bearing on Windows (no `bxp-fmt` fallback) and
   was exercised on real Windows hardware in the pre-release win-smoke + bridge
   test pass — alongside the always-live Linux verification and the proxy + eval
-  families that are already mandatory on every host. Caveat:
-  `bxp-gui/tool/win_bridge_smoke.dart` is **obsolete** — its large-payload
-  scenarios proxied the now-deleted `bxp-fmt` through `bridge_run`; repoint them
-  at `bxp-cli` before reusing that harness. `bxp-fmt` itself is gone; the console
-  archive ships `bxp-mcp` as the agent-facing surface and `scripts/test.sh`
-  drives `inspect` via bxp-mcp / the bridge.
+  families that are already mandatory on every host. The live Windows transport
+  probe is `bxp-gui/tool/win_bridge_stream_probe.dart` (large `bxp-cli` BXTB
+  stream byte-identical + cancel mid-stream); in-proc `bridge_inspect` /
+  expr-corpus are covered cross-platform by `flutter test`
+  (`bridge_inspect_test.dart` / `expr_corpus_bridge_test.dart`). `bxp-fmt` is
+  gone; the console archive ships `bxp-mcp` as the agent-facing surface and
+  `scripts/test.sh` drives `inspect` via bxp-mcp / the bridge.
 
 ## Coding conventions
 
