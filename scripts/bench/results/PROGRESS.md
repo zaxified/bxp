@@ -24,6 +24,7 @@ numbers are noisier — but the trend across S05 → S13 is the meaningful arc).
 | S14 | 24/05-1958 | per-block parallel CSV pipeline        |
 | S15 | 24/05-2110 | sunrise vendor: DATE_CONVERT FBA       |
 | S16 | 02/06-0643 | sunrise removed → in-house datefmt.zig |
+| S17 | 16/06-1603 | Zig 0.16 migration (new baseline)      |
 
 ## Wall time (seconds)
 
@@ -190,6 +191,54 @@ Flat within run-to-run noise (~2.5%): the in-house tokenizer matches the
 vendored+patched sunrise on the hot path, as expected. **This is the new
 post-sunrise baseline.** The pending-revert overhead (tracking an upstream PR,
 re-vendoring on merge) is gone for good.
+
+## S17 — Zig 0.16 baseline (new post-migration reference)
+
+Full bench after the Zig 0.15.2 → 0.16.0 migration (every package + the Flutter
+GUI green; `test.sh` + `release.sh` pass). Compared against the most recent
+**0.15.2** run on the **same Linux machine** (`results-20260614-193738.csv`,
+total 26.05 s) — NOT against S16 (46.3 s), which predates later expression-engine
+work and is no longer the live 0.15.2 point.
+
+`results-20260616-160353.csv`, BENCH_PARALLEL=1, ReleaseFast, Zig 0.16.0.
+
+| sweep point                                    | wall_s | rss_mb |
+| ---------------------------------------------- | -----: | -----: |
+| `S1 n=   5000 c=  16 w=  20 3expr       t=off` |   0.01 |    6.8 |
+| `S1 n=  25000 c=  16 w=  20 3expr       t=off` |   0.06 |   18.9 |
+| `S1 n= 100000 c=  16 w=  20 3expr       t=off` |   0.26 |   26.1 |
+| `S1 n= 500000 c=  16 w=  20 3expr       t=off` |   1.00 |   26.4 |
+| `S1 n=2000000 c=  16 w=  20 3expr       t=off` |   4.05 |   26.2 |
+| `S2 n=   5000 c=  16 w=  20 3expr       t=on`  |   0.01 |    6.9 |
+| `S2 n=  25000 c=  16 w=  20 3expr       t=on`  |   0.06 |   19.9 |
+| `S2 n= 100000 c=  16 w=  20 3expr       t=on`  |   0.20 |   27.5 |
+| `S2 n= 500000 c=  16 w=  20 3expr       t=on`  |   0.99 |   27.5 |
+| `S3 n= 100000 c=   4 w=  20 3expr       t=off` |   0.13 |   18.4 |
+| `S3 n= 100000 c=  16 w=  20 3expr       t=off` |   0.23 |   26.2 |
+| `S3 n= 100000 c=  64 w=  20 3expr       t=off` |   0.62 |   24.2 |
+| `S3 n= 100000 c= 256 w=  20 3expr       t=off` |   2.00 |   24.5 |
+| `S3 n= 100000 c=1024 w=  20 3expr       t=off` |   8.38 |   26.6 |
+| `S4 n= 100000 c=   4 w=  20 3expr       t=on`  |   0.15 |   21.2 |
+| `S4 n= 100000 c=  16 w=  20 3expr       t=on`  |   0.20 |   27.5 |
+| `S4 n= 100000 c=  64 w=  20 3expr       t=on`  |   0.54 |   24.6 |
+| `S4 n= 100000 c= 256 w=  20 3expr       t=on`  |   2.00 |   24.6 |
+| `S5 n=  25000 c=  16 w=  10 3expr       t=off` |   0.05 |   13.0 |
+| `S5 n=  25000 c=  16 w= 100 3expr       t=off` |   0.12 |   24.0 |
+| `S5 n=  25000 c=  16 w=1000 3expr       t=off` |   0.61 |   23.6 |
+| `S6 n= 100000 c=  16 w=  20 passthrough t=off` |   0.12 |   24.5 |
+| `S6 n= 100000 c=  16 w=  20 3expr       t=off` |   0.21 |   26.1 |
+| `S6 n= 100000 c=  16 w=  20 passthrough t=on`  |   0.14 |   25.6 |
+| `S6 n= 100000 c=  16 w=  20 3expr       t=on`  |   0.22 |   27.5 |
+
+- **Total wall (25 pts): 22.36 s** vs 0.15.2 26.05 s = **−14.2 %** (median per-point
+  −16 %). Biggest absolute win: S3 c=1024 10.13 → 8.38 s (−17 %).
+- **Peak RSS: 27.5 MB** (S2/S4 c=16 + trace) vs ~26 MB on 0.15.2 — a roughly
+  constant **+2 MB** (~+9 %) offset from the new allocator/io baseline; every
+  point stays far under the `test-05-bench-guard.sh` 64 MB ceiling.
+- Net: the migration is a **perf win** (new self-hosted x86 backend + 0.16
+  ReleaseFast codegen) at a small constant RSS cost. **This is the new 0.16
+  baseline** — diff future 0.16 Linux runs against this point, and the S01–S16
+  arc against it only as a cross-toolchain trend (different compiler).
 
 ## Windows baseline (W-arc) — separate machine, intra-Windows reference
 
