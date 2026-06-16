@@ -924,6 +924,14 @@ export fn bridge_ack(handle: i64) i32 {
     return 0;
 }
 
+// Zig 0.16 dropped `std.os.windows.kernel32.TerminateProcess`, so the
+// kernel32 entry point is declared locally for the Windows cancel path below
+// (mirrors the self-declared psapi GetProcessMemoryInfo in bxp-cli/main.zig).
+extern "kernel32" fn TerminateProcess(
+    hProcess: std.os.windows.HANDLE,
+    uExitCode: std.os.windows.UINT,
+) callconv(.winapi) std.os.windows.BOOL;
+
 /// Deliver a "please exit now" signal without waiting on the child.
 /// std.process.Child.kill() on POSIX combines kill + waitpid, which
 /// would race with streamingWaitLoop's own waitpid call → ECHILD. We
@@ -931,7 +939,7 @@ export fn bridge_ack(handle: i64) i32 {
 fn sendKillSignal(child: *std.process.Child) void {
     const pid = child.id orelse return;
     if (builtin.os.tag == .windows) {
-        _ = std.os.windows.kernel32.TerminateProcess(pid, 1);
+        _ = TerminateProcess(pid, 1);
     } else {
         std.posix.kill(pid, std.posix.SIG.TERM) catch {};
     }
