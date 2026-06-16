@@ -35,6 +35,47 @@ const inspect = @import("inspect");
 /// can surface "output was clipped" instead of failing the whole call.
 const max_output_bytes: usize = 64 * 1024 * 1024;
 
+// ── Bridge-owned Io (Zig 0.16) ────────────────────────────────────────────
+//
+// This is a C-ABI shared library with no `std.process.Init`, but Zig 0.16
+// routes all filesystem, subprocess and sync-primitive access through an `Io`
+// instance. We create ONE process-lifetime `Threaded` io, lazily on first use,
+// and reuse it everywhere (process spawn/wait, pipe reads, Io.Mutex/Semaphore).
+// Backed by the libc allocator (the library links libc); never deinitialised —
+// it lives for the whole host-process lifetime, like the streams table.
+var g_threaded: std.Io.Threaded = undefined;
+var g_io: std.Io = undefined;
+// Spin-based once (Zig 0.16 removed `std.once`). A late caller blocks in the
+// `.running` state until init publishes `.done`, so `g_io` is never read before
+// it is fully constructed. In practice the first `bridgeIo()` runs on the Dart
+// main isolate before any bridge thread exists, so contention is theoretical.
+const OnceState = enum(u8) { idle, running, done };
+var g_io_state = std.atomic.Value(u8).init(@intFromEnum(OnceState.idle));
+
+/// The bridge's shared `Io`. Idempotent + threadsafe; the returned value
+/// captures `&g_threaded`, which is a stable global.
+fn bridgeIo() std.Io {
+    while (true) {
+        switch (@as(OnceState, @enumFromInt(g_io_state.load(.acquire)))) {
+            .done => return g_io,
+            .idle => {
+                if (g_io_state.cmpxchgStrong(
+                    @intFromEnum(OnceState.idle),
+                    @intFromEnum(OnceState.running),
+                    .acq_rel,
+                    .acquire,
+                ) == null) {
+                    g_threaded = std.Io.Threaded.init(std.heap.c_allocator, .{});
+                    g_io = g_threaded.io();
+                    g_io_state.store(@intFromEnum(OnceState.done), .release);
+                    return g_io;
+                }
+            },
+            .running => std.atomic.spinLoopHint(),
+        }
+    }
+}
+
 /// Ensure SIGCHLD is reapable before we spawn children we wait on.
 ///
 /// When the host process inherits `SIGCHLD = SIG_IGN` (some shells and CI
@@ -61,20 +102,27 @@ fn restoreChildReaping() void {
     }
 }
 
-var child_reaping_once = std.once(restoreChildReaping);
+// One-shot guard for `restoreChildReaping` (Zig 0.16 removed `std.once`).
+// Non-blocking: the only caller runs it right before spawn on the (serialized)
+// Dart main isolate, and `restoreChildReaping` is idempotent regardless.
+var reaping_guard = std.atomic.Value(bool).init(false);
+
+fn ensureChildReaping() void {
+    if (!reaping_guard.swap(true, .acq_rel)) restoreChildReaping();
+}
 
 /// Decode a raw `waitpid` status word into a `Child.Term` (mirrors std's
 /// private `statusToTerm`).
 fn statusToTerm(status: u32) std.process.Child.Term {
     const W = std.posix.W;
     return if (W.IFEXITED(status))
-        .{ .Exited = W.EXITSTATUS(status) }
+        .{ .exited = W.EXITSTATUS(status) }
     else if (W.IFSIGNALED(status))
-        .{ .Signal = W.TERMSIG(status) }
+        .{ .signal = W.TERMSIG(status) }
     else if (W.IFSTOPPED(status))
-        .{ .Stopped = W.STOPSIG(status) }
+        .{ .stopped = W.STOPSIG(status) }
     else
-        .{ .Unknown = status };
+        .{ .unknown = status };
 }
 
 /// Reap [pid], tolerating ECHILD. The Dart VM runs an `ExitCodeHandler`
@@ -92,22 +140,43 @@ fn reapTolerantPosix(pid: std.process.Child.Id) std.process.Child.Term {
         const rc = std.c.waitpid(pid, &status, 0);
         if (rc == -1) {
             if (std.posix.errno(rc) == .INTR) continue;
-            return .{ .Unknown = 0 };
+            return .{ .unknown = 0 };
         }
         return statusToTerm(@bitCast(status));
     }
 }
 
-/// `Child.wait()` that survives the child being reaped by another in-process
-/// waiter (see [reapTolerantPosix]). On POSIX we reap first and pre-set
-/// `child.term`, so the subsequent `child.wait()` only closes the streams and
-/// returns that term — it never calls the panicking `waitpid` path. Windows
-/// has no `wait4(-1)` reaper, so we defer to std directly.
+/// `Child.wait` that survives the child being reaped by another in-process
+/// waiter (see [reapTolerantPosix]). Zig 0.16's `Child.wait(io)` treats ECHILD
+/// as an unrecoverable "double-free" bug, which the Dart-VM `wait4(-1)` reaper
+/// race would trip. On POSIX we therefore reap the pid ourselves (ECHILD →
+/// `.unknown`) and close the child's still-open pipe ends manually instead of
+/// calling `child.wait(io)` (which would double-reap). Windows has no
+/// `wait4(-1)` reaper, so we defer to std directly.
 fn waitTolerant(child: *std.process.Child) std.process.Child.Term {
-    if (builtin.os.tag != .windows and child.term == null) {
-        child.term = reapTolerantPosix(child.id);
+    const io = bridgeIo();
+    if (builtin.os.tag == .windows) {
+        return child.wait(io) catch .{ .unknown = 0 };
     }
-    return child.wait() catch .{ .Unknown = 0 };
+    const term: std.process.Child.Term = if (child.id) |pid|
+        reapTolerantPosix(pid)
+    else
+        .{ .unknown = 0 };
+    // The new Child no longer auto-closes its stream handles (the old
+    // child.wait did); close the read/write ends we own so fds don't leak.
+    if (child.stdin) |f| {
+        f.close(io);
+        child.stdin = null;
+    }
+    if (child.stdout) |f| {
+        f.close(io);
+        child.stdout = null;
+    }
+    if (child.stderr) |f| {
+        f.close(io);
+        child.stderr = null;
+    }
+    return term;
 }
 
 test "restoreChildReaping flips SIG_IGN to SIG_DFL but leaves others alone" {
@@ -236,21 +305,24 @@ export fn bridge_run(
     }
 
     const has_stdin = stdin_len > 0;
-    var child = std.process.Child.init(argv.items, a);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
-    child.stdin_behavior = if (has_stdin) .Pipe else .Close;
-    if (req.cwd) |cwd| {
-        if (cwd.len > 0) child.cwd = cwd;
-    }
-    // Suppress the briefly-visible cmd.exe window that Windows pops up
-    // when a GUI parent (bxp-gui.exe) spawns a console-subsystem child
-    // (bxp-cli.exe). On non-Windows the field is a no-op. Maps to the
-    // CREATE_NO_WINDOW flag in CreateProcessW.
-    child.create_no_window = true;
+    const io = bridgeIo();
+    // Suppress the briefly-visible cmd.exe window that Windows pops up when a
+    // GUI parent (bxp-gui.exe) spawns a console-subsystem child (bxp-cli.exe);
+    // `create_no_window` maps to CREATE_NO_WINDOW and is a no-op elsewhere.
+    const cwd_opt: std.process.Child.Cwd = if (req.cwd) |cwd|
+        (if (cwd.len > 0) .{ .path = cwd } else .inherit)
+    else
+        .inherit;
 
-    child_reaping_once.call();
-    child.spawn() catch |err| {
+    ensureChildReaping();
+    var child = std.process.spawn(io, .{
+        .argv = argv.items,
+        .stdin = if (has_stdin) .pipe else .close,
+        .stdout = .pipe,
+        .stderr = .pipe,
+        .cwd = cwd_opt,
+        .create_no_window = true,
+    }) catch |err| {
         return writeErr(out_buf, "spawn failed: {s}", .{@errorName(err)});
     };
 
@@ -280,8 +352,8 @@ export fn bridge_run(
             stdin_writer_err = err;
             // Spawn failure — close stdin manually so the child unblocks
             // its read() and exits. Drainers + wait still run normally.
-            if (child.stdin) |*stdin_pipe| {
-                stdin_pipe.close();
+            if (child.stdin) |stdin_pipe| {
+                stdin_pipe.close(io);
                 child.stdin = null;
             }
             break :blk null;
@@ -289,15 +361,9 @@ export fn bridge_run(
     }
     collectOutputCapped(&child, a, &stdout_buf, &stderr_buf, max_output_bytes, &truncated_flag) catch |err| {
         if (stdin_writer_thread) |t| t.join();
-        // Best-effort kill — record the kill failure into the same error
-        // response so a debug session sees both halves of the story
-        // ("collect failed because X; child also wouldn't die because Y")
-        // instead of silently losing the kill diagnostic.
-        if (child.kill()) |_| {
-            return writeErr(out_buf, "collect failed: {s}", .{@errorName(err)});
-        } else |kerr| {
-            return writeErr(out_buf, "collect failed: {s}; kill: {s}", .{ @errorName(err), @errorName(kerr) });
-        }
+        // Best-effort kill (void in 0.16; ignores OS errors internally).
+        child.kill(io);
+        return writeErr(out_buf, "collect failed: {s}", .{@errorName(err)});
     };
     if (stdin_writer_thread) |t| t.join();
     if (stdin_writer_err) |werr| {
@@ -308,14 +374,14 @@ export fn bridge_run(
         return writeErr(out_buf, "stdin write failed: {s}", .{@errorName(werr)});
     }
 
-    const term = child.wait() catch |err| {
-        return writeErr(out_buf, "wait failed: {s}", .{@errorName(err)});
-    };
+    // `waitTolerant` reaps (ECHILD-safe vs the Dart-VM reaper) and closes the
+    // child's still-open pipe ends — see its doc comment.
+    const term = waitTolerant(&child);
 
     const exit_code: i32 = switch (term) {
-        .Exited => |c| @intCast(c),
-        .Signal => |s| -@as(i32, @intCast(s)),
-        .Stopped, .Unknown => -1,
+        .exited => |c| @intCast(c),
+        .signal => |s| -@as(i32, @intCast(@intFromEnum(s))),
+        .stopped, .unknown => -1,
     };
 
     const resp: Response = .{
@@ -366,7 +432,7 @@ fn writeErr(out_buf: []u8, comptime fmt: []const u8, args: anytype) i32 {
 // either stream had to discard at least one byte.
 
 const DrainerArgs = struct {
-    file: std.fs.File,
+    file: std.Io.File,
     buf: *std.ArrayList(u8),
     alloc: std.mem.Allocator,
     cap: usize,
@@ -374,9 +440,10 @@ const DrainerArgs = struct {
 };
 
 fn drainerLoop(args: DrainerArgs) void {
+    const io = bridgeIo();
     var read_buf: [8192]u8 = undefined;
     while (true) {
-        const n = args.file.read(&read_buf) catch return;
+        const n = args.file.readStreaming(io, &.{read_buf[0..]}) catch return;
         if (n == 0) return;
         const have = args.buf.items.len;
         if (have >= args.cap) {
@@ -402,21 +469,13 @@ fn stdinWriterLoop(
     data: []const u8,
     out_err: *?anyerror,
 ) void {
+    const io = bridgeIo();
     var stdin = child.stdin orelse return;
     child.stdin = null;
-    defer stdin.close();
-    var remaining: usize = 0;
-    while (remaining < data.len) {
-        const n = stdin.write(data[remaining..]) catch |err| {
-            out_err.* = err;
-            return;
-        };
-        if (n == 0) {
-            out_err.* = error.UnexpectedEof;
-            return;
-        }
-        remaining += n;
-    }
+    defer stdin.close(io);
+    stdin.writeStreamingAll(io, data) catch |err| {
+        out_err.* = err;
+    };
 }
 
 fn collectOutputCapped(
@@ -525,7 +584,7 @@ const StreamingCtx = struct {
     /// Bound on un-acked stdout batches in flight to Dart. Reader thread
     /// `wait`s a permit before dispatch; Dart `bridge_ack` posts one after
     /// it has processed the batch. See `default_queue_permits` for sizing.
-    queue_sema: std.Thread.Semaphore = .{ .permits = default_queue_permits },
+    queue_sema: std.Io.Semaphore = .{ .permits = default_queue_permits },
 };
 
 // ── Active-stream registry (cancellation lookup) ────────────────────────
@@ -541,13 +600,14 @@ const StreamingCtx = struct {
 // is destroyed. The mutex serialises lookups against the remove, so cancel
 // is always safe to call concurrently with natural stream completion.
 
-var streams_mutex: std.Thread.Mutex = .{};
+var streams_mutex: std.Io.Mutex = .init;
 var streams_table: std.AutoHashMapUnmanaged(i64, *StreamingCtx) = .empty;
 var next_stream_handle: i64 = 1;
 
 fn registerStream(ctx: *StreamingCtx) !i64 {
-    streams_mutex.lock();
-    defer streams_mutex.unlock();
+    const io = bridgeIo();
+    streams_mutex.lockUncancelable(io);
+    defer streams_mutex.unlock(io);
     const h = next_stream_handle;
     next_stream_handle += 1;
     try streams_table.put(std.heap.c_allocator, h, ctx);
@@ -556,8 +616,9 @@ fn registerStream(ctx: *StreamingCtx) !i64 {
 }
 
 fn unregisterStream(handle: i64) void {
-    streams_mutex.lock();
-    defer streams_mutex.unlock();
+    const io = bridgeIo();
+    streams_mutex.lockUncancelable(io);
+    defer streams_mutex.unlock(io);
     _ = streams_table.remove(handle);
 }
 
@@ -574,16 +635,17 @@ fn unregisterStream(handle: i64) void {
 /// open by us after the stream is drained.
 fn streamingStdoutLoop(ctx: *StreamingCtx) void {
     const a = std.heap.c_allocator;
+    const io = bridgeIo();
     var stdout = ctx.child.stdout orelse return;
     ctx.child.stdout = null;
-    defer stdout.close();
+    defer stdout.close(io);
 
     var read_buf: [8192]u8 = undefined;
     while (true) {
-        const n = stdout.read(&read_buf) catch break;
+        const n = stdout.readStreaming(io, &.{read_buf[0..]}) catch break;
         if (n == 0) break;
         const chunk_copy = a.dupe(u8, read_buf[0..n]) catch return;
-        ctx.queue_sema.wait();
+        ctx.queue_sema.waitUncancelable(io);
         dispatchOrFree(ctx, ctx.on_stdout_batch, chunk_copy, a);
     }
 }
@@ -616,13 +678,14 @@ fn dispatchOrFree(
 /// handle on exit (same rationale as stdout reader).
 fn streamingStderrLoop(ctx: *StreamingCtx) void {
     const a = std.heap.c_allocator;
+    const io = bridgeIo();
     var stderr = ctx.child.stderr orelse return;
     ctx.child.stderr = null;
-    defer stderr.close();
+    defer stderr.close(io);
 
     var read_buf: [8192]u8 = undefined;
     while (true) {
-        const n = stderr.read(&read_buf) catch break;
+        const n = stderr.readStreaming(io, &.{read_buf[0..]}) catch break;
         if (n == 0) break;
         const chunk_copy = a.dupe(u8, read_buf[0..n]) catch return;
         dispatchOrFree(ctx, ctx.on_stderr_chunk, chunk_copy, a);
@@ -641,15 +704,14 @@ fn streamingWaitLoop(ctx: *StreamingCtx) void {
     // don't need to wait() first to make them finish. Joining before wait()
     // is also the *required* ordering: each reader takes ownership of its pipe
     // (sets `ctx.child.stdout` / `stderr` to null and closes its own copy)
-    // only while it runs. `waitTolerant` pre-sets `child.term`, so the
-    // subsequent `child.wait()` takes the early-return branch that calls
-    // `cleanupStreams()` — which closes + nulls `child.stdout`/`stderr`. If
-    // that runs concurrently with a reader it races for the same fd: it either
-    // nulls the pipe out from under a reader that hasn't read yet (→ 0 bytes
-    // delivered) or double-closes the fd (→ EBADF, which `std.posix.close`
-    // treats as `unreachable` → panic in the reader thread, aborting the whole
-    // process). Both reproduce under CPU load. Joining first guarantees both
-    // readers have already nulled their pipes, so cleanupStreams is a no-op.
+    // only while it runs. `waitTolerant` closes + nulls any still-open
+    // `child.stdout`/`stderr` itself (Zig 0.16). If that ran concurrently with
+    // a reader it would race for the same fd: it either nulls the pipe out from
+    // under a reader that hasn't read yet (→ 0 bytes delivered) or double-closes
+    // the fd (→ EBADF panic in the reader thread, aborting the process). Both
+    // reproduce under CPU load. Joining first guarantees both readers have
+    // already nulled + closed their pipes, so waitTolerant's close loop is a
+    // no-op on stdout/stderr.
     //
     // Joining is also the synchronisation point that guarantees no stream
     // callback fires after on_exit.
@@ -665,9 +727,9 @@ fn streamingWaitLoop(ctx: *StreamingCtx) void {
     const term = waitTolerant(&ctx.child);
 
     const exit_code: i32 = switch (term) {
-        .Exited => |c| @intCast(c),
-        .Signal => |s| -@as(i32, @intCast(s)),
-        .Stopped, .Unknown => -1,
+        .exited => |c| @intCast(c),
+        .signal => |s| -@as(i32, @intCast(@intFromEnum(s))),
+        .stopped, .unknown => -1,
     };
 
     // Snapshot the callback before tearing down the context — Dart's handler
@@ -722,14 +784,11 @@ export fn bridge_run_streaming(
         argv.append(a, arg) catch return -1;
     }
 
-    ctx.child = std.process.Child.init(argv.items, a);
-    ctx.child.stdout_behavior = .Pipe;
-    ctx.child.stderr_behavior = .Pipe;
-    ctx.child.stdin_behavior = .Close;
-    if (req.cwd) |cwd_str| {
-        if (cwd_str.len > 0) ctx.child.cwd = cwd_str;
-    }
-    ctx.child.create_no_window = true;
+    const io = bridgeIo();
+    const cwd_opt: std.process.Child.Cwd = if (req.cwd) |cwd_str|
+        (if (cwd_str.len > 0) .{ .path = cwd_str } else .inherit)
+    else
+        .inherit;
 
     ctx.on_stdout_batch = on_stdout_batch;
     ctx.on_stderr_chunk = on_stderr_chunk;
@@ -761,11 +820,18 @@ export fn bridge_run_streaming(
         // unblocks at most that many waiters; extra posts just inflate
         // permits harmlessly because the ctx is about to be destroyed.
         var i: usize = 0;
-        while (i < default_queue_permits) : (i += 1) ctx.queue_sema.post();
+        while (i < default_queue_permits) : (i += 1) ctx.queue_sema.post(io);
     };
 
-    child_reaping_once.call();
-    ctx.child.spawn() catch return -1;
+    ensureChildReaping();
+    ctx.child = std.process.spawn(io, .{
+        .argv = argv.items,
+        .stdin = .close,
+        .stdout = .pipe,
+        .stderr = .pipe,
+        .cwd = cwd_opt,
+        .create_no_window = true,
+    }) catch return -1;
     // Single combined rollback for child + reader threads: kill the
     // child FIRST (so any spawned reader threads' read() calls return
     // EOF and exit their loops), THEN join the readers. The previous
@@ -788,8 +854,8 @@ export fn bridge_run_streaming(
         // this rollback path must raise the flag itself.
         ctx.shutting_down.store(true, .release);
         var wake: usize = 0;
-        while (wake < default_queue_permits) : (wake += 1) ctx.queue_sema.post();
-        _ = ctx.child.kill() catch {};
+        while (wake < default_queue_permits) : (wake += 1) ctx.queue_sema.post(io);
+        ctx.child.kill(io);
         if (stdout_spawned) ctx.stdout_thread.join();
         if (stderr_spawned) ctx.stderr_thread.join();
     };
@@ -828,8 +894,9 @@ export fn bridge_run_streaming(
 /// the handle is unknown (already exited, or never valid). Idempotent:
 /// calling cancel after the stream has exited is a safe no-op.
 export fn bridge_cancel(handle: i64) i32 {
-    streams_mutex.lock();
-    defer streams_mutex.unlock();
+    const io = bridgeIo();
+    streams_mutex.lockUncancelable(io);
+    defer streams_mutex.unlock(io);
     const ctx = streams_table.get(handle) orelse return -1;
     // Wake any reader thread blocked on queue_sema before sending the
     // kill signal — if the reader is mid-wait, the child's eventual EOF
@@ -837,7 +904,7 @@ export fn bridge_cancel(handle: i64) i32 {
     // Posting `default_queue_permits` covers the worst case (all permits
     // exhausted by un-acked batches).
     var i: usize = 0;
-    while (i < default_queue_permits) : (i += 1) ctx.queue_sema.post();
+    while (i < default_queue_permits) : (i += 1) ctx.queue_sema.post(io);
     sendKillSignal(&ctx.child);
     return 0;
 }
@@ -849,10 +916,11 @@ export fn bridge_cancel(handle: i64) i32 {
 /// exited, or never valid). Idempotent in the sense that extra acks
 /// just inflate the permit count harmlessly.
 export fn bridge_ack(handle: i64) i32 {
-    streams_mutex.lock();
-    defer streams_mutex.unlock();
+    const io = bridgeIo();
+    streams_mutex.lockUncancelable(io);
+    defer streams_mutex.unlock(io);
     const ctx = streams_table.get(handle) orelse return -1;
-    ctx.queue_sema.post();
+    ctx.queue_sema.post(io);
     return 0;
 }
 
@@ -861,10 +929,11 @@ export fn bridge_ack(handle: i64) i32 {
 /// would race with streamingWaitLoop's own waitpid call → ECHILD. We
 /// only signal here and let the wait thread reap.
 fn sendKillSignal(child: *std.process.Child) void {
+    const pid = child.id orelse return;
     if (builtin.os.tag == .windows) {
-        _ = std.os.windows.kernel32.TerminateProcess(child.id, 1);
+        _ = std.os.windows.kernel32.TerminateProcess(pid, 1);
     } else {
-        std.posix.kill(child.id, std.posix.SIG.TERM) catch {};
+        std.posix.kill(pid, std.posix.SIG.TERM) catch {};
     }
 }
 
@@ -1167,7 +1236,7 @@ fn nthLine(text: []const u8, n: usize) ?[]const u8 {
     var it = std.mem.splitScalar(u8, text, '\n');
     var i: usize = 0;
     while (it.next()) |line| : (i += 1) {
-        if (i == n) return std.mem.trimRight(u8, line, "\r");
+        if (i == n) return std.mem.trimEnd(u8, line, "\r");
     }
     return null;
 }
@@ -1547,8 +1616,9 @@ test "bridge_run honours cwd" {
     // Pick a directory we know exists: the CWD of the test process. The
     // helper's `pwd` subcommand prints whatever its own CWD is, so we
     // round-trip the test's own CWD through the bridge → should match.
-    var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const cwd = try std.process.getCwd(&cwd_buf);
+    var cwd_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const cwd_n = try std.process.currentPath(bridgeIo(), &cwd_buf);
+    const cwd = cwd_buf[0..cwd_n];
 
     var buf: [4096]u8 = undefined;
     const req = try buildHelperRequestWithCwdZ(&.{"pwd"}, cwd);
@@ -1668,11 +1738,12 @@ test "collectOutputCapped truncates and keeps prefix at unit level" {
     try argv.append(a, helper_path);
     try argv.append(a, "stdout-bytes");
     try argv.append(a, "4096");
-    var child = std.process.Child.init(argv.items, a);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
-    child.stdin_behavior = .Close;
-    try child.spawn();
+    var child = try std.process.spawn(bridgeIo(), .{
+        .argv = argv.items,
+        .stdin = .close,
+        .stdout = .pipe,
+        .stderr = .pipe,
+    });
 
     var stdout_buf: std.ArrayList(u8) = .empty;
     var stderr_buf: std.ArrayList(u8) = .empty;
@@ -1680,7 +1751,7 @@ test "collectOutputCapped truncates and keeps prefix at unit level" {
     defer stderr_buf.deinit(a);
     var trunc = std.atomic.Value(bool).init(false);
     try collectOutputCapped(&child, a, &stdout_buf, &stderr_buf, 128, &trunc);
-    _ = try child.wait();
+    _ = waitTolerant(&child);
 
     try testing.expectEqual(@as(usize, 128), stdout_buf.items.len);
     try testing.expectEqual(true, trunc.load(.acquire));
@@ -1694,22 +1765,24 @@ test "waitTolerant survives a child reaped by another waiter (no ECHILD panic)" 
     try argv.append(a, helper_path);
     try argv.append(a, "stdout-bytes");
     try argv.append(a, "0");
-    var child = std.process.Child.init(argv.items, a);
-    child.stdout_behavior = .Ignore;
-    child.stderr_behavior = .Ignore;
-    child.stdin_behavior = .Close;
-    try child.spawn();
+    var child = try std.process.spawn(bridgeIo(), .{
+        .argv = argv.items,
+        .stdin = .close,
+        .stdout = .ignore,
+        .stderr = .ignore,
+    });
 
     // Simulate the Dart VM's wait4(-1) ExitCodeHandler winning the race:
-    // reap the child ourselves first, leaving child.term unset. A naive
-    // child.wait() would now hit ECHILD → unreachable → panic.
-    const reaped = std.c.waitpid(child.id, null, 0);
-    try testing.expect(reaped == child.id);
+    // reap the child ourselves first. A naive child.wait(io) would now hit
+    // ECHILD → errnoBug → panic.
+    const pid = child.id.?;
+    const reaped = std.c.waitpid(pid, null, 0);
+    try testing.expect(reaped == pid);
 
-    // Must not panic; the status is gone so it reports .Unknown.
+    // Must not panic; the status is gone so it reports .unknown.
     const term = waitTolerant(&child);
     switch (term) {
-        .Unknown => {},
+        .unknown => {},
         else => return error.TestExpectedUnknownTerm,
     }
 }
@@ -1726,60 +1799,77 @@ test "bridge_version returns build version string" {
 // `stream_test.reset()` before each run and `stream_test.waitForExit()` to
 // block until on_exit fires.
 
+/// Test-only sleep (Zig 0.16 removed `std.Thread.sleep`); blocks the calling
+/// thread for `ms` milliseconds via the bridge io's monotonic clock.
+fn testSleepMs(ms: u64) void {
+    const dur: std.Io.Clock.Duration = .{
+        .raw = std.Io.Duration.fromMilliseconds(@intCast(ms)),
+        .clock = .awake,
+    };
+    dur.sleep(bridgeIo()) catch {};
+}
+
 const stream_test = struct {
     var stdout_total: usize = 0;
     var stderr_total: usize = 0;
     var batch_count: usize = 0;
-    var exit_called: bool = false;
     var exit_code: i32 = 0;
-    var mutex: std.Thread.Mutex = .{};
-    var cond: std.Thread.Condition = .{};
+    var mutex: std.Io.Mutex = .init;
+    // Zig 0.16's Io.Condition has no timed wait, so the exit signal uses an
+    // Io.Event (which does — `waitTimeout`). The mutex still guards the counters.
+    var exit_event: std.Io.Event = .unset;
 
     fn reset() void {
-        mutex.lock();
-        defer mutex.unlock();
+        const io = bridgeIo();
+        mutex.lockUncancelable(io);
+        defer mutex.unlock(io);
         stdout_total = 0;
         stderr_total = 0;
         batch_count = 0;
-        exit_called = false;
         exit_code = 0;
+        exit_event.reset();
     }
 
     fn waitForExit(timeout_ns: u64) bool {
-        mutex.lock();
-        defer mutex.unlock();
-        const start = std.time.nanoTimestamp();
-        while (!exit_called) {
-            const elapsed: i128 = std.time.nanoTimestamp() - start;
-            if (elapsed >= @as(i128, timeout_ns)) return false;
-            const remaining: u64 = @intCast(@as(i128, timeout_ns) - elapsed);
-            cond.timedWait(&mutex, remaining) catch return false;
+        const io = bridgeIo();
+        const deadline = std.Io.Clock.Timestamp.fromNow(io, .{
+            .raw = std.Io.Duration.fromNanoseconds(@intCast(timeout_ns)),
+            .clock = .awake,
+        });
+        const timeout: std.Io.Timeout = .{ .deadline = deadline };
+        while (!exit_event.isSet()) {
+            exit_event.waitTimeout(io, timeout) catch {};
+            if (exit_event.isSet()) return true;
+            const now = std.Io.Clock.Timestamp.now(io, .awake);
+            if (deadline.compare(.lte, now)) return false;
         }
         return true;
     }
 };
 
 fn streamTestOnStdout(data: [*]const u8, len: u32) callconv(.c) void {
-    stream_test.mutex.lock();
+    const io = bridgeIo();
+    stream_test.mutex.lockUncancelable(io);
     stream_test.stdout_total += len;
     stream_test.batch_count += 1;
-    stream_test.mutex.unlock();
+    stream_test.mutex.unlock(io);
     bridge_free(@constCast(data), len);
 }
 
 fn streamTestOnStderr(data: [*]const u8, len: u32) callconv(.c) void {
-    stream_test.mutex.lock();
+    const io = bridgeIo();
+    stream_test.mutex.lockUncancelable(io);
     stream_test.stderr_total += len;
-    stream_test.mutex.unlock();
+    stream_test.mutex.unlock(io);
     bridge_free(@constCast(data), len);
 }
 
 fn streamTestOnExit(code: i32) callconv(.c) void {
-    stream_test.mutex.lock();
-    stream_test.exit_called = true;
+    const io = bridgeIo();
+    stream_test.mutex.lockUncancelable(io);
     stream_test.exit_code = code;
-    stream_test.cond.signal();
-    stream_test.mutex.unlock();
+    stream_test.mutex.unlock(io);
+    stream_test.exit_event.set(io);
 }
 
 test "bridge_run_streaming captures stdout and fires on_exit" {
@@ -1815,7 +1905,7 @@ test "bridge_run_streaming pre-spawn validation rejects empty exe" {
     const req: [*:0]const u8 = "{\"exe\":\"\"}";
     const rc = bridge_run_streaming(req, streamTestOnStdout, streamTestOnStderr, streamTestOnExit);
     try testing.expect(rc < 0);
-    try testing.expectEqual(false, stream_test.exit_called);
+    try testing.expectEqual(false, stream_test.exit_event.isSet());
 }
 
 test "bridge_run_streaming malformed JSON returns negative" {
@@ -1823,7 +1913,7 @@ test "bridge_run_streaming malformed JSON returns negative" {
     const req: [*:0]const u8 = "{not json";
     const rc = bridge_run_streaming(req, streamTestOnStdout, streamTestOnStderr, streamTestOnExit);
     try testing.expect(rc < 0);
-    try testing.expectEqual(false, stream_test.exit_called);
+    try testing.expectEqual(false, stream_test.exit_event.isSet());
 }
 
 test "bridge_cancel kills running stream" {
@@ -1834,7 +1924,7 @@ test "bridge_cancel kills running stream" {
     try testing.expect(handle > 0);
 
     // Give the wait thread a moment to enter wait().
-    std.Thread.sleep(100 * std.time.ns_per_ms);
+    testSleepMs(100);
 
     const rc = bridge_cancel(handle);
     try testing.expectEqual(@as(i32, 0), rc);

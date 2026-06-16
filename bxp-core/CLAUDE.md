@@ -349,20 +349,19 @@ Module exports in `build.zig`: `csv`, `json`, `json5`, `xlsx`, `zipstream`, `btr
 ### External dependency: uucode
 
 `bxp-core/build.zig.zon` pins one external (fetch) dependency: **uucode**
-(MIT), the Unicode case-mapping / decomposition table library, on its
-`zig-0.15` back-port branch (uucode's main line requires Zig 0.16 — revisit the
-pin on the Zig 0.16 migration). `build.zig` requests only the `uppercase_mapping`
-/ `lowercase_mapping` fields, so just those tables are generated + compiled in
-(field selection keeps the binary small; the ReleaseSmall `bxp-cli` stays ~0.4 MB).
-uucode is imported into the `expr` module and consumed by `unicode.zig`. Its own
-table generator runs internally in Debug + LLVM, sidestepping the Zig 0.15.2
-x86-backend codegen bug — our Debug `zig build test` is unaffected. `datefmt.zig`
-and `decimal.zig` remain in-house with no dependency.
+(MIT), the Unicode case-mapping / decomposition table library, on its `main`
+line (which requires Zig 0.16 — the former `zig-0.15` back-port branch was
+dropped at the Zig 0.16 migration). `build.zig` requests only the
+`uppercase_mapping` / `lowercase_mapping` fields, so just those tables are
+generated + compiled in (field selection keeps the binary small; the
+ReleaseSmall `bxp-cli` stays ~0.4 MB). uucode is imported into the `expr`
+module and consumed by `unicode.zig`. `datefmt.zig` and `decimal.zig` remain
+in-house with no dependency.
 
 ## Coding conventions
 
 - All code comments and documentation in English.
-- Zig 0.15.2 API.
+- Zig 0.16.0 API.
 - `processBroker()` in pipeline.zig (~930 lines) and `loadFromBytes()` in
   config.zig (~480 lines) are large, deliberately linear pipelines. Splitting
   them is pure reorganisation (no behaviour change), so weigh it against

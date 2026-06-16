@@ -187,7 +187,7 @@ bxp-core/inspect link, and the bridge proxies `bxp-cli` runs. The former
 `bxp-core` is a local path dependency (`../bxp-core`) with a **single external
 dependency**: `uucode` (MIT), the field-selected Unicode case-mapping /
 decomposition tables behind `UPPER`/`LOWER` (and the upcoming `unaccent`),
-pinned to its `zig-0.15` branch in `bxp-core/build.zig.zon`. The date core
+pinned to its `main` line in `bxp-core/build.zig.zon`. The date core
 (`datefmt.zig`) and numeric core (`decimal.zig`) remain fully in-house — the
 former `sunrise` datetime dependency was replaced by `datefmt.zig`.
 bxp-gui ships `bxp-cli` + the `bxp-gui-bridge` library inside the Flutter
@@ -210,7 +210,7 @@ services/prefs_service.dart`.
 ## Coding conventions
 
 - All code comments and documentation in English
-- Zig 0.15.2 API — use zig skill before writing new code
+- Zig 0.16.0 API — use zig skill before writing new code
 - User-facing error messages use `std.process.exit(1)` (no Zig stack trace)
 
 ## Detailed documentation

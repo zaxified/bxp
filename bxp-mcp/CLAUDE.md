@@ -139,7 +139,7 @@ Register with an MCP client (e.g. Claude Code, `~/.claude.json`):
 ## Coding conventions
 
 - All code comments and documentation in English.
-- Zig 0.15.2 API — use the zig skill before writing new code.
+- Zig 0.16.0 API — use the zig skill before writing new code.
 - Pure `std`, zero external dependencies (only the `bxp-core` path dep).
 
 ## Status & forward work

@@ -26,32 +26,39 @@
 
 const std = @import("std");
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
+    const io = init.io;
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const a = arena.allocator();
 
-    const argv = try std.process.argsAlloc(a);
+    // Zig 0.16 retired std.process.argsAlloc; collect from Init's iterator.
+    var arg_it = try std.process.Args.Iterator.initAllocator(init.minimal.args, init.gpa);
+    defer arg_it.deinit();
+    var argv_list: std.ArrayList([:0]const u8) = .empty;
+    while (arg_it.next()) |arg| try argv_list.append(a, try a.dupeZ(u8, arg));
+    const argv = argv_list.items;
+
     if (argv.len < 2) {
-        try writeStderrLn("test_helper: missing subcommand", .{});
+        try writeStderrLn(io, "test_helper: missing subcommand", .{});
         std.process.exit(2);
     }
 
     const cmd = argv[1];
 
     if (std.mem.eql(u8, cmd, "exit")) {
-        if (argv.len != 3) return badArgs("exit needs <N>");
-        const code = std.fmt.parseInt(u8, argv[2], 10) catch return badArgs("exit code must be u8");
+        if (argv.len != 3) return badArgs(io, "exit needs <N>");
+        const code = std.fmt.parseInt(u8, argv[2], 10) catch return badArgs(io, "exit code must be u8");
         std.process.exit(code);
     }
 
     if (std.mem.eql(u8, cmd, "echo")) {
-        try writeStdoutJoined(argv[2..]);
+        try writeStdoutJoined(io, argv[2..]);
         return;
     }
 
     if (std.mem.eql(u8, cmd, "stderr")) {
-        try writeStderrJoined(argv[2..]);
+        try writeStderrJoined(io, argv[2..]);
         return;
     }
 
@@ -62,72 +69,73 @@ pub fn main() !void {
         // independent buffered writers across two streams just before
         // `main()` returns previously surfaced a flake where one of the
         // two messages occasionally never reached the bridge reader. With
-        // direct File.writeAll the bytes hit the kernel pipe synchronously
+        // direct writeStreamingAll the bytes hit the kernel pipe synchronously
         // and the parent test passes without the 3× retry crutch.
-        try std.fs.File.stdout().writeAll("to-stdout\n");
-        try std.fs.File.stderr().writeAll("to-stderr\n");
+        try std.Io.File.stdout().writeStreamingAll(io, "to-stdout\n");
+        try std.Io.File.stderr().writeStreamingAll(io, "to-stderr\n");
         return;
     }
 
     if (std.mem.eql(u8, cmd, "sleep")) {
-        if (argv.len != 3) return badArgs("sleep needs <seconds>");
-        const seconds = std.fmt.parseInt(u32, argv[2], 10) catch return badArgs("sleep seconds must be u32");
-        std.Thread.sleep(@as(u64, seconds) * std.time.ns_per_s);
+        if (argv.len != 3) return badArgs(io, "sleep needs <seconds>");
+        const seconds = std.fmt.parseInt(u32, argv[2], 10) catch return badArgs(io, "sleep seconds must be u32");
+        const dur: std.Io.Clock.Duration = .{ .raw = std.Io.Duration.fromSeconds(seconds), .clock = .awake };
+        dur.sleep(io) catch {};
         return;
     }
 
     if (std.mem.eql(u8, cmd, "stdout-bytes")) {
-        if (argv.len != 3) return badArgs("stdout-bytes needs <N>");
-        const n = std.fmt.parseInt(usize, argv[2], 10) catch return badArgs("stdout-bytes count must be usize");
-        try writeStdoutFill(n, 'a');
+        if (argv.len != 3) return badArgs(io, "stdout-bytes needs <N>");
+        const n = std.fmt.parseInt(usize, argv[2], 10) catch return badArgs(io, "stdout-bytes count must be usize");
+        try writeStdoutFill(io, n, 'a');
         return;
     }
 
     if (std.mem.eql(u8, cmd, "pwd")) {
-        const cwd = try std.process.getCwdAlloc(a);
-        try writeStdoutLn("{s}", .{cwd});
+        const cwd = try std.process.currentPathAlloc(io, a);
+        try writeStdoutLn(io, "{s}", .{cwd});
         return;
     }
 
     if (std.mem.eql(u8, cmd, "stdin-echo")) {
-        try copyStdinToStdout();
+        try copyStdinToStdout(io);
         return;
     }
 
     if (std.mem.eql(u8, cmd, "stdout-binary")) {
-        if (argv.len != 3) return badArgs("stdout-binary needs <N>");
-        const n = std.fmt.parseInt(usize, argv[2], 10) catch return badArgs("stdout-binary count must be usize");
-        try writeStdoutCyclingBytes(n);
+        if (argv.len != 3) return badArgs(io, "stdout-binary needs <N>");
+        const n = std.fmt.parseInt(usize, argv[2], 10) catch return badArgs(io, "stdout-binary count must be usize");
+        try writeStdoutCyclingBytes(io, n);
         return;
     }
 
-    try writeStderrLn("test_helper: unknown subcommand '{s}'", .{cmd});
+    try writeStderrLn(io, "test_helper: unknown subcommand '{s}'", .{cmd});
     std.process.exit(2);
 }
 
 // ── thin wrappers around stdout/stderr writers ─────────────────────────
-// Zig 0.15 exposes std.fs.File.stdout() / .stderr() and a buffered writer
-// pattern. Each helper function builds a small stack buffer, writes, and
-// flushes — tiny outputs (< 8 KB) so a single 1 KB buffer is plenty for
-// all subcommands except `stdout-bytes` (which has its own loop).
+// Zig 0.16 routes stdout/stderr access through Io: std.Io.File.stdout() /
+// .stderr() + the buffered writer pattern. Each helper builds a small stack
+// buffer, writes, and flushes — tiny outputs (< 8 KB) so a single 1 KB buffer
+// is plenty for all subcommands except `stdout-bytes` (which has its own loop).
 
-fn writeStdoutLn(comptime fmt: []const u8, args: anytype) !void {
+fn writeStdoutLn(io: std.Io, comptime fmt: []const u8, args: anytype) !void {
     var buf: [1024]u8 = undefined;
-    var w = std.fs.File.stdout().writer(&buf);
+    var w = std.Io.File.stdout().writer(io, &buf);
     try w.interface.print(fmt ++ "\n", args);
     try w.interface.flush();
 }
 
-fn writeStderrLn(comptime fmt: []const u8, args: anytype) !void {
+fn writeStderrLn(io: std.Io, comptime fmt: []const u8, args: anytype) !void {
     var buf: [1024]u8 = undefined;
-    var w = std.fs.File.stderr().writer(&buf);
+    var w = std.Io.File.stderr().writer(io, &buf);
     try w.interface.print(fmt ++ "\n", args);
     try w.interface.flush();
 }
 
-fn writeStdoutJoined(parts: []const []const u8) !void {
+fn writeStdoutJoined(io: std.Io, parts: []const [:0]const u8) !void {
     var buf: [4096]u8 = undefined;
-    var w = std.fs.File.stdout().writer(&buf);
+    var w = std.Io.File.stdout().writer(io, &buf);
     for (parts, 0..) |p, i| {
         if (i > 0) try w.interface.writeAll(" ");
         try w.interface.writeAll(p);
@@ -136,9 +144,9 @@ fn writeStdoutJoined(parts: []const []const u8) !void {
     try w.interface.flush();
 }
 
-fn writeStderrJoined(parts: []const []const u8) !void {
+fn writeStderrJoined(io: std.Io, parts: []const [:0]const u8) !void {
     var buf: [4096]u8 = undefined;
-    var w = std.fs.File.stderr().writer(&buf);
+    var w = std.Io.File.stderr().writer(io, &buf);
     for (parts, 0..) |p, i| {
         if (i > 0) try w.interface.writeAll(" ");
         try w.interface.writeAll(p);
@@ -147,16 +155,18 @@ fn writeStderrJoined(parts: []const []const u8) !void {
     try w.interface.flush();
 }
 
-fn writeStdoutFill(count: usize, byte: u8) !void {
+fn writeStdoutFill(io: std.Io, count: usize, byte: u8) !void {
     var buf: [8192]u8 = undefined;
     @memset(&buf, byte);
-    var w = std.fs.File.stdout().writer(&.{});
+    var fbuf: [8192]u8 = undefined;
+    var w = std.Io.File.stdout().writer(io, &fbuf);
     var remaining = count;
     while (remaining > 0) {
         const take = @min(remaining, buf.len);
         try w.interface.writeAll(buf[0..take]);
         remaining -= take;
     }
+    try w.interface.flush();
 }
 
 /// Read stdin to EOF and write everything received back to stdout
@@ -164,15 +174,20 @@ fn writeStdoutFill(count: usize, byte: u8) !void {
 /// a payload to the child's stdin, the child echoes it to stdout, and the
 /// bridge captures stdout. Round-trip equality proves the writer thread
 /// and pipe wiring work end-to-end.
-fn copyStdinToStdout() !void {
+fn copyStdinToStdout(io: std.Io) !void {
     var read_buf: [8192]u8 = undefined;
-    var stdin = std.fs.File.stdin();
-    var w = std.fs.File.stdout().writer(&.{});
+    const stdin = std.Io.File.stdin();
+    var wbuf: [8192]u8 = undefined;
+    var w = std.Io.File.stdout().writer(io, &wbuf);
     while (true) {
-        const n = try stdin.read(&read_buf);
+        const n = stdin.readStreaming(io, &.{read_buf[0..]}) catch |err| switch (err) {
+            error.EndOfStream => break,
+            else => return err,
+        };
         if (n == 0) break;
         try w.interface.writeAll(read_buf[0..n]);
     }
+    try w.interface.flush();
 }
 
 /// Write N bytes whose values cycle through 0x00..0xFF (i.e. byte i has
@@ -180,9 +195,10 @@ fn copyStdinToStdout() !void {
 /// safe) streaming: no newlines, full byte range, deterministic content so the test can
 /// assert chunk-stream equality against a generated reference. Caller
 /// picks N to span multiple read() chunks (>16 KB recommended).
-fn writeStdoutCyclingBytes(count: usize) !void {
+fn writeStdoutCyclingBytes(io: std.Io, count: usize) !void {
     var buf: [8192]u8 = undefined;
-    var w = std.fs.File.stdout().writer(&.{});
+    var wbuf: [8192]u8 = undefined;
+    var w = std.Io.File.stdout().writer(io, &wbuf);
     var emitted: usize = 0;
     while (emitted < count) {
         const take = @min(buf.len, count - emitted);
@@ -193,9 +209,10 @@ fn writeStdoutCyclingBytes(count: usize) !void {
         try w.interface.writeAll(buf[0..take]);
         emitted += take;
     }
+    try w.interface.flush();
 }
 
-fn badArgs(comptime msg: []const u8) noreturn {
-    writeStderrLn("test_helper: " ++ msg, .{}) catch {};
+fn badArgs(io: std.Io, comptime msg: []const u8) noreturn {
+    writeStderrLn(io, "test_helper: " ++ msg, .{}) catch {};
     std.process.exit(2);
 }

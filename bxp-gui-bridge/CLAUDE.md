@@ -48,7 +48,9 @@ bxp-gui-bridge/
                        fully controlled by argv switches so the test
                        suite is identical across Linux / macOS / Windows
                        (no reliance on `/bin/echo`, `/bin/sleep`, …).
-  build.zig          ← Debug → ReleaseSafe rewrite (see below).
+  build.zig          ← links libc; passes the optimize mode through verbatim
+                       (the old Debug → ReleaseSafe rewrite was dropped on Zig
+                       0.16 — see below).
   build.zig.zon      ← depends on bxp-core (path dep ../bxp-core).
 ```
 
@@ -95,25 +97,17 @@ The library is consumed by bxp-gui in three places:
    at process start). Run `zig build` then `stop_app` + `launch_app`
    to pick up bridge changes.
 
-## Why Debug → ReleaseSafe
+## Former Debug → ReleaseSafe rewrite (removed on Zig 0.16)
 
-Zig 0.15.2 Debug-mode codegen produces broken register allocation for
-`mem.Allocator.remap` and `json.Scanner.next` on x86-64. Both surface
-as a NULL deref at offset `0x30` when the bridge's reader thread and
-`bridge_eval_expr_trace` run under realistic streaming load (137 K rows
-from `bxp-cli --trace` against `DEV/bxp-cli.json`).
-
-`build.zig` rewrites `.Debug` → `.ReleaseSafe` and leaves the explicit
-`ReleaseSafe` / `ReleaseSmall` / `ReleaseFast` selections untouched.
-ReleaseSafe keeps every runtime safety check (overflow, bounds,
-null-deref asserts) — only the codegen path differs.
-
-**Do not** revert to Debug to chase a debugger session: the bug
-reproduces only under streaming load, which means a debugger run that
-hits a breakpoint early will appear to "work" and you'll re-introduce
-the SEGV silently. Bump to Zig 0.16.x first
-([[feedback_zig_0_15_2_debug_codegen_bug]] / [[project_zig16_migration]]),
-verify the corpus, then drop the rewrite.
+`build.zig` used to force `.Debug` → `.ReleaseSafe` because Zig 0.15.2's
+Debug-mode x86-64 codegen produced broken register allocation for
+`mem.Allocator.remap` / `json.Scanner.next` — a NULL deref at offset `0x30`
+under realistic streaming load (137 K rows from `bxp-cli --trace`). That was a
+backend defect; Zig 0.16's self-hosted x86 backend does not reproduce it, so
+the rewrite is gone and Debug builds as Debug again. If a 0x30-class SEGV ever
+resurfaces under streaming load, suspect a backend regression first — don't
+silently reinstate the rewrite without reproducing under load (a debugger run
+that breaks early will appear to "work").
 
 ## Platform notes
 
@@ -141,7 +135,7 @@ verify the corpus, then drop the rewrite.
 ## Coding conventions
 
 - All code comments and documentation in English.
-- Zig 0.15.2 API — use the `zig` skill before writing new code.
+- Zig 0.16.0 API — use the `zig` skill before writing new code.
 - Tests use the `test_helper.zig` re-exec pattern — never call out to
   real OS binaries; the suite must be identical on every host
   ([[feedback_test_helper_subprocess]]).
