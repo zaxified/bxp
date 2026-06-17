@@ -72,7 +72,7 @@
 - fix(cq): garbled 'expr validator validate' doubled-verb in expr_panel
 - fix(cq): drop stale hardcoded line number in pipeline comment
 - fix(bridge): join stream readers before reaping to end fd race
-- fix(scripts): scope check-formatting prettier to **/*.md only
+- fix(scripts): scope check-formatting prettier to _*.md_ only
 
 ### Internal
 
@@ -123,7 +123,6 @@
 
 - md lint and prettier colision repairs
 - prettier-check
-
 
 ## 2026.06.07 — bxp-cli 0.2.4, bxp-fmt 0.2.4, bxp-gui 0.2.4
 

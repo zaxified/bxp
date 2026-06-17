@@ -10,28 +10,7 @@ to this file.
 ## v0.3.0 — Zig 0.16 migration
 
 Migrate the Zig toolchain to 0.16 across all Zig
-packages (bxp-cli, bxp-mcp, bxp-core, bxp-gui-bridge). The change is
-pervasive but mechanical — the 0.16 I/O overhaul threads an `io` parameter
-through `std.fs` / buffered writers / timers (~100–150 LOC; full checklist in
-the `project_zig16_migration` assessment). It touches _every_ Zig package, so
-it earns its own release boundary (clean to bisect if anything regresses)
-rather than being mixed with feature work.
-
-This is an **enabler milestone**, not migration for its own sake — it unblocks
-two things 0.15.2 blocks today:
-
-- **Regex builtins** (`REGEX_MATCH` / `REGEX_EXTRACT` — see _Expression
-  builtins (regex)_ below). The only mature native-Zig regex
-  (`zig-utils/zig-regex`) requires Zig 0.16+.
-- **Dropping the `bxp-gui-bridge` Debug→ReleaseSafe workaround.** 0.16
-  replaced the LLVM Debug backend with a self-hosted x86 backend on
-  Linux/macOS, which eliminated the Debug-codegen crash that forced the
-  bridge off Debug builds — the `bxp-gui-bridge/build.zig` rewrite is gone and
-  the bridge tracks `standardOptimizeOption` like every other package.
-
-The `uucode` dep is **not** a blocker — its master branch already supports
-0.16; migration just repoints the pin from the `zig-0.15` back-port branch to
-master (+ new hash).
+packages (bxp-cli, bxp-mcp, bxp-core, bxp-gui-bridge).
 
 ## Later (no specific version)
 
@@ -127,13 +106,12 @@ to pre-process the file" or "skip the affected rows".
 
 - **Description-based ticker extraction.** Lime.co's dividend rows have
   empty `Symbol` and the ticker is embedded in `Description`
-  (`"Qualified Dividend APPLE INC 100"`). Today there's no clean way
-  to extract the ticker. Two design options: (a) document a named
-  `maps` entry keyed by company name (`"APPLE INC": "AAPL"`) used via
-  `REMAP` — works with the existing engine, just needs a readme tip; (b) add a
-  `REGEX_EXTRACT(s, pattern)` built-in (deferred to Zig 0.16
-  migration — see "Expression builtins (regex)" under Tooling). (a)
-  is cheap and unblocks today; (b) is a real feature later.
+  (`"Qualified Dividend APPLE INC 100"`). `REGEX_EXTRACT(s, pattern)` now
+  isolates it (e.g. an uppercase-run class), the generic solution. The cheaper
+  alternative for a fixed company set is still a named `maps` entry keyed by
+  company name (`"APPLE INC": "AAPL"`) applied via `REMAP`. Remaining work is
+  docs-only: a readme tip / example showing both. (Pure docs — pick up with the
+  next examples pass.)
 
 ### Real-world data quirks (problem-first)
 
@@ -183,18 +161,6 @@ fixed before release instead, not parked here).
     tzdata + a parser in the static binary. Only if real historical multi-zone
     conversion appears. Excel offers neither (no TZ/DST concept at all), so
     these would put bxp ahead of the spreadsheet baseline, not just at parity.
-
-- **Bracket-protected fields (web-server access logs).** Apache/nginx
-  combined-log format is space-delimited but wraps the timestamp in
-  `[10/Oct/2000:13:55:36 -0700]` — a group containing the delimiter. bxp-cli
-  honours `"`-quoting but not `[...]`, so a space-delimited parse splits
-  inside the bracket and shifts every subsequent column (reproduced
-  2026-05-31). Web-server logs are one of the most common raw ETL inputs.
-  Options: a `bracket_group: true` (treat `[...]` like a quote that protects
-  the delimiter), a general `group_open`/`group_close` pair, or an explicit
-  "logs are out of scope — pre-process with a log parser" note. Decide vs
-  the CSV-tool scope. (The _date_ inside the bracket already parses fine via
-  `DATE_CONVERT(..., 'DD/MMM/YYYY:hh:mm:ss', ...)`.)
 
 ### bxp-gui
 
@@ -303,35 +269,7 @@ simulation stays CLI territory — hence `bxp_simulate` spawns `bxp-cli`
 rather than running in-core. The AXP-driven transport core inherits the same
 stateless boundary.
 
-### Expression builtins (regex)
-
-- `REGEX_MATCH(s, pattern)` and `REGEX_EXTRACT(s, pattern)` — deferred
-  pending the Zig 0.16 migration. Real use: Lime.co dividend ticker
-  extraction (`"Qualified Dividend APPLE INC 100"` → `"APPLE INC"`),
-  generic user-defined patterns in templates. Surveyed regex options
-  for the current pinned toolchain:
-  - `tiehuis/zig-regex` — no capture groups, no UTF-8 → blocks `REGEX_EXTRACT`.
-  - `zig-utils/zig-regex` — full feature set incl. named groups
-    and lookaround, **requires Zig 0.16+**.
-  - `alexnask/ctregex.zig` — patterns must be comptime-known, useless
-    for runtime template strings.
-  - POSIX `regex.h` via `std.c` — works on Linux/macOS but libc-managed
-    memory (can't use Zig allocators) and Windows packaging pain.
-  - libpcre bindings — +external dep ~700 KB, cross-platform build setup.
-
-  Decision: gated on the Zig 0.16 migration (v0.3.0 milestone above), then adopt
-  zig-utils/zig-regex. The non-regex builtins already ship; the remaining
-  ~10 % of real-world need (regex) waits.
-
-  Scope (decided 2026-06-13): regex is an **extraction-only sibling**, scoped
-  to what `REMAP`/`REPLACE` can't do (pull a substring by pattern). It is
-  **not** a superset that replaces them — the three form a cost hierarchy (O(1)
-  hash lookup < literal substring scan < regex engine) and a template should pay
-  only for the cheapest tool that does the job. So regex stays a single-pattern
-  builtin, not a named-map feature (see the `REPLACE` named-map note under
-  _Real-world broker CSV quirks_).
-
-### Expression builtins (non-regex)
+### Expression builtins
 
 **Secondary / niche — on hold indefinitely.** No concrete use-case; add only
 when a real one appears. All fit the existing `FnDoc` + `ArgKind` pattern
@@ -350,9 +288,6 @@ unless noted:
   call** — both need floating point, which conflicts with the deliberately
   float-free decimal core; revisit only with an integer-exponent-only `POWER`
   or an explicit float-approximation mode.
-
-Regex builtins (`REGEX_MATCH` / `REGEX_EXTRACT`) are tracked separately above —
-they need the Zig 0.16 migration + a new dependency.
 
 ### Encoding — more single-byte code pages
 

@@ -138,7 +138,8 @@ Expression evaluator for `input_schema` and `row_rules` in bxp-cli.json.
 - Unit tests inline (150 test cases).
 
 **Built-in functions:** IF, CASE, IFERROR, ABS, DATE_CONVERT, PRICE_VALUE,
-PRICE_CURRENCY, REMAP, LOOKUP, SPLIT_PART, CONTAINS, REPLACE, TRIM, ROUND,
+PRICE_CURRENCY, REMAP, LOOKUP, SPLIT_PART, CONTAINS, REGEX_MATCH,
+REGEX_EXTRACT, REPLACE, TRIM, ROUND,
 FLOOR, CEILING, MOD, NOW, RAND, FILENAME, RECORD_NUM, SHEET_NAME, COALESCE,
 FIELDS, UPPER, LOWER, UNACCENT, LEFT, RIGHT, SUBSTR, LPAD, RPAD, POSITION,
 PROPER, STARTS_WITH, ENDS_WITH, NULLIF, IN, ISEMPTY, LEN, GREATEST, LEAST,
@@ -146,6 +147,11 @@ DATEADD, DATEDIFF, WORKDAY, YEAR, MONTH, DAY, WEEKDAY, EOMONTH, NTH_DOW.
 IF/CASE/IFERROR are lazy (parse their own arg lists; only the selected /
 non-erroring branch is evaluated). FILENAME/RECORD_NUM/SHEET_NAME read the
 per-file/row `Context` and are excluded from constant-folding (`isRowInvariant`).
+REGEX_MATCH/REGEX_EXTRACT compile a regex literal per call through the Pike-VM
+engine (`quangd/regex.zig` fetch dep, linear-time/ReDoS-safe) in Unicode-scalar mode;
+`\d`/`\w`/`\s` stay ASCII, so accented runs use an explicit class like
+`[A-ZÁ-Ž]`. A bad pattern is a loud, pattern-attributed template error
+(`error.BadRegexPattern`); a non-matching row is the lenient "" / false case.
 
 **Doc catalog** (`pub const builtins`, `keywords`, `operators`, `tokens`): each
 builtin sits next to its `FnDoc` declaration (search for `── <NAME> ──`
@@ -343,20 +349,30 @@ cd bxp-core && zig build test
 
 Module exports in `build.zig`: `csv`, `json`, `json5`, `xlsx`, `zipstream`, `btrace`, `decimal`, `encoding`, `expr`, `config`, `docs`, `diagnostics`, `inspect`.
 `xlsx` imports the named `decimal` and `zipstream` modules; `zipstream` has no bxp-core dependencies (std only).
-`expr` imports `datefmt.zig` and `unicode.zig` (both file-relative, not named modules) plus the named `decimal`, `uucode`, `encoding` modules; `config` imports `json5` (as `"json5.zig"` — internal import name), `diagnostics`, `expr`, `encoding`. `encoding` is a named module (not a file-relative @import) because it is shared by both `expr` and `config` — a file-relative @import from two modules would compile the file into each, a duplicate-symbol error (same reason `decimal` is named).
+`expr` imports `datefmt.zig` and `unicode.zig` (both file-relative, not named modules) plus the named `decimal`, `uucode`, `encoding`, `regex` modules (`regex` is the Pike-VM engine behind REGEX_MATCH/REGEX_EXTRACT — a fetch dep, see _External dependencies_ below); `config` imports `json5` (as `"json5.zig"` — internal import name), `diagnostics`, `expr`, `encoding`. `encoding` is a named module (not a file-relative @import) because it is shared by both `expr` and `config` — a file-relative @import from two modules would compile the file into each, a duplicate-symbol error (same reason `decimal` is named).
 `docs` imports `config`, `expr`, `json5`; `diagnostics` has no bxp-core dependencies.
 
-### External dependency: uucode
+### External dependencies
 
-`bxp-core/build.zig.zon` pins one external (fetch) dependency: **uucode**
-(MIT), the Unicode case-mapping / decomposition table library, on its `main`
-line (which requires Zig 0.16 — the former `zig-0.15` back-port branch was
-dropped at the Zig 0.16 migration). `build.zig` requests only the
-`uppercase_mapping` / `lowercase_mapping` fields, so just those tables are
-generated + compiled in (field selection keeps the binary small; the
-ReleaseSmall `bxp-cli` stays ~0.4 MB). uucode is imported into the `expr`
-module and consumed by `unicode.zig`. `datefmt.zig` and `decimal.zig` remain
-in-house with no dependency.
+`bxp-core/build.zig.zon` pins two external (fetch) dependencies, both
+content-addressed by hash and re-audited on any pin bump:
+
+- **uucode** (MIT) — the Unicode case-mapping / decomposition table library,
+  on its `main` line (which requires Zig 0.16 — the former `zig-0.15` back-port
+  branch was dropped at the Zig 0.16 migration). `build.zig` requests only the
+  `uppercase_mapping` / `lowercase_mapping` fields, so just those tables are
+  generated + compiled in (field selection keeps the static binary small).
+  Imported into the `expr` module and consumed by `unicode.zig`.
+- **regex** (`quangd/regex.zig`, Apache-2.0 OR MIT) — the Pike-VM
+  regular-expression engine behind `expr.zig`'s `REGEX_MATCH` / `REGEX_EXTRACT`
+  builtins. Pinned to an exact commit. Chosen by a 2026-06-17 security +
+  capability audit for its zero transitive deps, OS-surface-free source (no
+  `std.os`/`posix`/`net`/`process`/`fs`/`@cImport` anywhere), and guaranteed
+  linear-time (ReDoS-proof) matching. The package exposes its engine as the
+  module named `regex`; `build.zig` wires it into the `expr` module. Adds ~56 KB
+  to the ReleaseSmall `bxp-cli` (engine + Unicode-scalar case-fold tables).
+
+`datefmt.zig` and `decimal.zig` remain in-house with no dependency.
 
 ## Coding conventions
 

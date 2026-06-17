@@ -12,7 +12,7 @@ Open an issue at <https://github.com/zaxified/bxp/issues>.
 For bugs, please include:
 
 - The binary version (`bxp-cli --version`, or
-  `Help → About` in `bxp-gui`).
+  `RuntimeInfo ctrl-shift-s → Versions` in `bxp-gui`).
 - A minimal config snippet plus a short input sample that reproduces
   the problem.
 - Expected vs. actual output, and the exit code.

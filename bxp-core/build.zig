@@ -83,6 +83,15 @@ pub fn build(b: *std.Build) void {
         },
     });
 
+    // regex engine (quangd/regex.zig) behind expr.zig's REGEX_MATCH /
+    // REGEX_EXTRACT builtins — a pinned fetch dependency (zero transitive deps,
+    // Pike-VM linear-time; security-audited 2026-06-17, see build.zig.zon). The
+    // upstream package exposes its engine as the module named "regex".
+    const regex_mod = b.dependency("regex", .{
+        .target = target,
+        .optimize = optimize,
+    }).module("regex");
+
     // expr.zig pulls in its date core via a file-relative @import("datefmt.zig"),
     // and the shared decimal numeric core via the named "decimal" module.
     const expr_mod = b.addModule("expr", .{
@@ -91,6 +100,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "decimal", .module = decimal_mod },
             .{ .name = "uucode", .module = uucode_mod },
             .{ .name = "encoding", .module = encoding_mod },
+            .{ .name = "regex", .module = regex_mod },
         },
     });
 
@@ -175,6 +185,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "decimal", .module = decimal_mod },
                 .{ .name = "uucode", .module = uucode_mod },
                 .{ .name = "encoding", .module = encoding_mod },
+                .{ .name = "regex", .module = regex_mod },
             },
         }),
     });

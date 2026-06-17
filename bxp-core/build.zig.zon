@@ -13,6 +13,16 @@
             .url = "https://github.com/jacobsandlund/uucode/archive/2826a37a4562284fdacd8fa029d49509cc9bffcd.tar.gz",
             .hash = "uucode-0.2.0-ZZjBPlK5VADj7fdoq7G8LIHzD5o6FSkcBXXrRWr4jnrA",
         },
+        // quangd/regex.zig (Apache-2.0 OR MIT) — the Pike-VM regular-expression
+        // engine behind expr.zig's REGEX_MATCH / REGEX_EXTRACT. Pinned to an exact
+        // commit (content-addressed by hash); chosen by the 2026-06-17 security +
+        // capability audit for its zero transitive deps, OS-surface-free source,
+        // and guaranteed linear-time (ReDoS-proof) matching. Re-audit the diff on
+        // any pin bump.
+        .regex = .{
+            .url = "https://github.com/quangd42/regex.zig/archive/a22a2e68bcc5aa55310f12128de38e26bfa2cece.tar.gz",
+            .hash = "regex-0.1.0-V8KKSWICBACgjPoyQLIoPwMnQjKzCpEOjUMEzkf3ebOD",
+        },
     },
     .minimum_zig_version = "0.16.0",
     .paths = .{"."},
