@@ -80,33 +80,6 @@ backlog was otherwise exhausted:
   (`file_type_out: json`), the basic-tier mirror of `squirrel-census-json`. Low
   priority: JSON _output_ is already shown by `advanced/multi-stage-etl`.
 
-### CI hardening
-
-The CI matrix (`.github/workflows/ci.yml`) runs
-`scripts/test.sh` on every pull request and master push across
-`ubuntu-latest` / `macos-latest` / `windows-latest`. `test.sh` is fully
-cross-platform — including the perf bench, which self-measures wall + peak
-RSS via bxp-cli's `BXP_METRICS` env var instead of GNU `/usr/bin/time`.
-The Zig build cache is persisted across runs (a shared `.zig-cache` via
-`actions/cache`), keyed by the gate's build flags. The gate pins
-`-Dcpu=baseline` so the cache key is host-CPU-independent — without it the
-default `native` CPU bakes the runner's CPU features into the key, and on
-GitHub's heterogeneous hardware every run misses the restored cache and
-recompiles the whole gate. `subosito/flutter-action` is pinned to an explicit
-Flutter version (the floating `stable` channel drifts ahead of local SDKs and
-surfaces fresh `info` lints that fail CI while passing locally) and the cached
-SDK is trimmed to the desktop subset (no android/ios engine) to fit the repo's
-single 10 GB cache budget. Remaining:
-
-- **Windows CI build-cache reliability.** Linux and macOS warm runs hit the
-  Zig cache reliably (~2–3 min); Windows still recompiles intermittently even
-  on a "cache hit" — a Windows-specific Zig cache quirk
-  ([ziglang/zig#16523](https://github.com/ziglang/zig/issues/16523)). Since the
-  overall CI wall is the slowest leg, this is the bottleneck to crack next.
-- Flutter `integration_test` smoke run inside CI (Xvfb on Linux runners,
-  headless setup on Mac / Win). The current legs run `flutter analyze` +
-  `flutter test` (widget/unit) but not a launched-app integration smoke.
-
 ### Distribution polish
 
 - Apple Developer ID notarisation for macOS `.app` (~$99/year).
