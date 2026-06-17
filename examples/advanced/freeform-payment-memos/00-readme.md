@@ -4,13 +4,13 @@
 
 **What.** Pull the structured tokens a downstream ledger needs — an invoice
 number, an order reference, a has-any-reference flag — out of **free-text**
-payment memos, where each token sits at a *variable* position inside an
+payment memos, where each token sits at a _variable_ position inside an
 otherwise human-written sentence. Done with `REGEX_EXTRACT` / `REGEX_MATCH`,
 which match by **shape, anywhere** in the string.
 
 **Synthetic / teaching example (advanced).** The data is **constructed**, not
 sourced — `sample.csv` is hand-written memos that pack a moving-target token
-into a sentence. The *problem class* — bank / PSP / ERP exports whose only
+into a sentence. The _problem class_ — bank / PSP / ERP exports whose only
 machine-readable handle is a free-text "reference" or "memo" field — is
 universal; the rows are not.
 
@@ -19,7 +19,7 @@ universal; the rows are not.
 `CONTAINS` only tests presence; `IN` / `REMAP` only match whole values. When the
 invoice number can appear as `"Payment for INV-2024-0042 thank you"` in one row
 and `"Refund INV-2023-0911 order #88 processed"` in the next, only a pattern
-match pinned to the token's *shape* reaches it. The example also teaches the
+match pinned to the token's _shape_ reaches it. The example also teaches the
 flip side: the `Tags` column is cleanly `a|b|c`-delimited, so its first tag is a
 plain `SPLIT_PART` — reaching for regex there would be paying the engine for a
 job a delimiter split already does.
@@ -32,7 +32,7 @@ job a delimiter split already does.
 2. **Different anchor** — `REGEX_EXTRACT([Memo], '#([0-9]+)')` pulls the order
    number that follows a `#`, wherever it lands.
 3. **Alternation gate** — `REGEX_MATCH([Memo], 'INV-[0-9]{4}|#[0-9]+')` answers
-   "does this memo carry *any* structured reference" in a single pass; `CONTAINS`
+   "does this memo carry _any_ structured reference" in a single pass; `CONTAINS`
    would need two calls and would still accept a bare `INV-` with no digits.
 4. **Cost-hierarchy contrast** — `SPLIT_PART([Tags], '|', 1)` for the
    already-delimited tag. No regex on purpose.
@@ -70,15 +70,15 @@ ladder, so it is worth knowing the price. On this same workload — but scaled t
 literal-only template that produces **byte-identical output** by leaning on the
 stable `INV-` / `#` anchors (`CONTAINS` + nested `SPLIT_PART`):
 
-| Template (1M rows)                          | Wall   | Peak RSS | Throughput   |
-| ------------------------------------------- | ------ | -------- | ------------ |
-| regex (2× `REGEX_EXTRACT` + `REGEX_MATCH`)  | ~2.4 s | ~23 MB   | ~415k rows/s |
-| cheap (`CONTAINS` + `SPLIT_PART`)           | ~1.3 s | ~23 MB   | ~790k rows/s |
+| Template (1M rows)                         | Wall   | Peak RSS | Throughput   |
+| ------------------------------------------ | ------ | -------- | ------------ |
+| regex (2× `REGEX_EXTRACT` + `REGEX_MATCH`) | ~2.4 s | ~23 MB   | ~415k rows/s |
+| cheap (`CONTAINS` + `SPLIT_PART`)          | ~1.3 s | ~23 MB   | ~790k rows/s |
 
 So the regex path costs roughly **1.9× the wall time** here — about **+1 µs per
 row** for the three pattern ops — while **peak RSS is flat** (the Pike-VM engine
 is window/arena-bounded, with no per-row growth). The takeaway matches the cost
-ladder above: regex is cheap enough to use freely when you *need* shape
+ladder above: regex is cheap enough to use freely when you _need_ shape
 matching, and still worth skipping when a delimiter split or a literal
 `CONTAINS` already answers the question.
 

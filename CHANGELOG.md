@@ -67,7 +67,7 @@
 - fix(cq): bridge header still claimed 'single exported function bridge_run'
 - fix(cq): clear remaining bridge flag-attribution comment scars (wrapped)
 - fix(cq): correct stale 'spawns drop --check-fs flag' in trace_store
-- fix(cq): last stale 'Bxp-fmt's keys' ref in trace_store _mergeMaps
+- fix(cq): last stale 'Bxp-fmt's keys' ref in trace_store \_mergeMaps
 - fix(cq): wrapped doubled-'the' before 'bridge error' in loadConfig
 - fix(cq): garbled 'expr validator validate' doubled-verb in expr_panel
 - fix(cq): drop stale hardcoded line number in pipeline comment
