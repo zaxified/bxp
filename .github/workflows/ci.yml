@@ -91,16 +91,12 @@ jobs:
         with:
           # Pinned (not floating `channel: stable`) so CI is reproducible: the
           # stable channel drifts ahead of local SDKs and surfaces fresh `info`
-          # lints that fail CI while passing locally. Bump deliberately.
+          # lints that fail CI while passing locally. Bump deliberately. `cache`
+          # persists the SDK across runs (~60 s/run); the pin keeps that key
+          # stable. (roadmap → CI hardening)
           flutter-version: 3.44.2
           channel: stable
-          # Cache the SDK on Linux/macOS (saves ~37-51 s/run) but NOT on Windows:
-          # there the restore pulls ~1 GB of small files at 70-120 MB/s and is no
-          # faster than a fresh download (~87 s either way), while that extra
-          # concurrent restore competes with the Zig build-cache restore on the
-          # same runner. Skipping it leaves the Zig cache dir as Windows' only big
-          # restore. (roadmap → CI hardening)
-          cache: ${{ runner.os != 'Windows' }}
+          cache: true
           # `desktop` epoch + the trim step below keep this cache to the desktop
           # subset (no android/ios engine, ~0.8 GB vs ~1.6 GB/OS) so it fits the
           # repo's 10 GB cache budget alongside the Zig caches.
