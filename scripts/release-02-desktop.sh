@@ -191,11 +191,17 @@ build_windows() {
         echo "    install NSIS and ensure 'makensis' is on PATH (e.g. C:\\Program Files (x86)\\NSIS\\Bin)" >&2
         exit 1
     fi
+    # Ship the dark theme (-DDARK + the -dark branding bitmaps). The bitmap
+    # paths are resolved relative to the .nsi (installer/); both bitmap sets are
+    # committed. See the dark-theme block in bxp-desktop.nsi for what it does.
     makensis \
         -DAPPVERSION="$VERSION_BARE" \
         -DVERSIONTAG="$VERSION" \
         -DSTAGEDIR="$appdir" \
         -DOUTDIR="$OUTDIR" \
+        -DDARK \
+        -DHEADER_BITMAP=header-dark.bmp \
+        -DWELCOME_BITMAP=welcome-dark.bmp \
         "$GUI_ROOT/installer/bxp-desktop.nsi" >/dev/null
     echo "  → $OUTDIR/bxp-desktop-windows-x86_64.exe"
 
