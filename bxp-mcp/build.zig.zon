@@ -1,7 +1,7 @@
 .{
     .name = .bxp_mcp,
     .fingerprint = 0x5252e30e33fee868,
-    .version = "0.2.5",
+    .version = "0.3.0",
     .dependencies = .{
         .bxp_core = .{
             .path = "../bxp-core",

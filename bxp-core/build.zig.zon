@@ -1,7 +1,7 @@
 .{
     .name = .bxp_core,
     .fingerprint = 0xd3c3e96b8303f761,
-    .version = "0.2.5",
+    .version = "0.3.0",
     // uucode (MIT) supplies the Unicode case-mapping / decomposition tables
     // behind UPPER/LOWER (full Unicode incl. ß→SS) and the upcoming `unaccent`.
     // Pinned to uucode main (Zig 0.16+); the former `zig-0.15` back-port

@@ -1,5 +1,55 @@
 # Changelog
 
+## 2026.06.17 — bxp-cli 0.3.0, bxp-mcp 0.3.0, bxp-gui 0.3.0
+
+### Features
+
+- feat(core): Zig 0.16 — bxp-gui-bridge migrated; all 4 Zig packages green
+- feat(expr): add REGEX_MATCH / REGEX_EXTRACT builtins
+- feat(installer): ship a dark theme for the Windows NSIS installer
+
+### Fixes
+
+- fix(core): Zig 0.16 — give inspect eval Contexts a real Io (NOW/RAND)
+- fix(cli): Zig 0.16 — self-declare psapi GetProcessMemoryInfo (Win peak RSS)
+- fix(gui-bridge): Zig 0.16 — self-declare kernel32 TerminateProcess (Win cancel path)
+- fix(test): Zig 0.16 — build bridge phases in ReleaseSafe (test-03/04)
+- fix(test): make test.sh bash 3.2 compatible (macOS false-green)
+- fix(test): portable trace-size check in test-07 (macOS BSD stat)
+
+### Internal
+
+- ci: skip the full test matrix on the release-prep commit
+- docs(devel): point zig skill to nzrsky/zig-skills (Zig 0.16.0)
+- build(core): flip uucode pin to main (Zig 0.16)
+- test(gui): cross-platform bridge streaming-load probe (Zig 0.16 verification)
+- test(cli): Zig 0.16 — io-thread the ChunkReader inline test
+- docs: Zig 0.16 pre-release sweep — bridge layout + migration status
+- refactor: Zig 0.16 — deprecated std.fs.path -> std.Io.Dir.path
+- ci: persist a shared Zig build cache across runs
+- ci: pin -Dcpu=baseline across the test gate (CPU-stable build cache)
+- ci: bump Zig cache epoch to `base` for the baseline-CPU gate
+- ci: pin Flutter 3.44.2 + cache the SDK (roadmap CI hardening)
+- ci: trim the cached Flutter SDK to the desktop subset
+- docs: record CI build-cache work + Windows reliability backlog item
+- ci: skip the Flutter SDK cache on Windows
+- docs(roadmap): drop the CI hardening section
+- test(expr): add REGEX_MATCH / REGEX_EXTRACT corpus cases
+- docs(examples): add freeform-payment-memos regex example
+- docs: document REGEX_MATCH / REGEX_EXTRACT across docs + readme
+- docs(cli): Zig 0.16 — refresh stale concurrency comments + CLAUDE.md notes
+
+### Other
+
+- release(scripts): refuse to tag a non 'release: prepare' HEAD
+- wip(core): Zig 0.16 — containers unmanaged, Writergate, mem.trimEnd
+- wip(core): Zig 0.16 — container ripple done + NOW/RAND io-based
+- wip(core): Zig 0.16 — zipstream io threading; 318 tests pass, 2 errors left
+- wip(core): Zig 0.16 — bxp-core/cli/mcp green + runtime-verified; bridge build.zig
+- bench: record Zig 0.16 full-bench as the new S17 baseline
+- lint: fix typos in documentation
+
+
 ## 2026.06.16 — bxp-cli 0.2.5, bxp-mcp 0.2.5, bxp-gui 0.2.5
 
 ### Features

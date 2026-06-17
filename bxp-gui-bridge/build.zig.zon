@@ -1,7 +1,7 @@
 .{
     .name = .bxp_gui_bridge,
     .fingerprint = 0xd87f20dd69ca32b5,
-    .version = "0.2.5",
+    .version = "0.3.0",
     .dependencies = .{
         .bxp_core = .{ .path = "../bxp-core" },
     },
