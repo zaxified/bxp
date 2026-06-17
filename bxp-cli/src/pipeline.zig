@@ -91,11 +91,11 @@ pub const SectionStats = struct {
 /// bridge (`inspect.evalBatch`) from the BXTB metadata + the source CSV.
 pub const TraceMode = enum(u2) { off, bin };
 
-/// Execution resources shared across one CLI invocation. Currently
-/// carries the worker thread pool used by `processBroker` for
-/// per-block parallel evaluation; `max_workers` is the dispatch ceiling
-/// (= `std.Thread.getCpuCount()` typically). main.zig owns the pool's
-/// lifetime via `init` + `deinit`; we just borrow the pointer.
+/// Execution resources shared across one CLI invocation. `max_workers` is the
+/// per-block parallel-evaluation fan-out ceiling (= `std.Thread.getCpuCount()`
+/// typically, clamped by `MAX_WORKERS_LIMIT`); the worker tasks run via
+/// `std.Io.Group.async` over `io`'s own pool (Zig 0.16 retired the explicit
+/// `std.Thread.Pool`/`WaitGroup`), so there is no separate pool object to own.
 pub const Runtime = struct {
     max_workers: usize,
     /// Io instance for filesystem access + timing, threaded from `main`'s
@@ -1019,8 +1019,8 @@ fn evalPrepassRow(
 // over a contiguous slice of records each. Workers parse fields, evaluate
 // `input_schema` + `row_rules`, and emit output bytes + btrace frames into
 // per-worker `std.Io.Writer.Allocating` buffers — no shared mutable state
-// inside the eval body. After `WaitGroup.wait()` the main thread drains
-// the per-worker buffers in worker-index order so the resulting output is
+// inside the eval body. After the `std.Io.Group.await` barrier the main thread
+// drains the per-worker buffers in worker-index order so the resulting output is
 // byte-identical to the single-threaded baseline (the dataset regression
 // gate in `scripts/test-07-datasets.sh` catches any divergence for free).
 //
@@ -1327,7 +1327,7 @@ fn evalAndEmitRow(
 /// One pre-parsed JSON record handed to a worker for evaluation. Field
 /// slices are allocated by the producer thread (the serial Scanner-based
 /// `RecordReader`) into a caller-owned block arena that stays live
-/// through the parallel block's WaitGroup barrier.
+/// through the parallel block's `std.Io.Group.await` barrier.
 pub const ParsedJsonRecord = struct {
     fields: [][]const u8,
     byte_offset: u64,
@@ -1352,7 +1352,7 @@ const WorkerSlice = struct {
     /// parsing in the reader thread is much simpler and the eval step
     /// (where 3-expr templates spend the bulk of CPU) still parallelises.
     /// Pre-parsed records' field slices live in the caller-owned block
-    /// arena and stay valid through the WaitGroup barrier.
+    /// arena and stay valid through the `std.Io.Group.await` barrier.
     json_records: []const ParsedJsonRecord = &.{},
     base_row_idx: u64 = 0,
 
@@ -1386,10 +1386,10 @@ const WorkerSlice = struct {
 
     // === Pre_pass state ===
     /// Populated by `workerPrePass`; drained into the shared
-    /// `lookup_table` after the WaitGroup barrier.
+    /// `lookup_table` after the `std.Io.Group.await` barrier.
     partial_lookup: std.StringHashMap([]const u8),
 
-    // === Error state (workers can't propagate errors through spawnWg) ===
+    // === Error state (Io.Group async tasks can't propagate errors out) ===
     error_value: ?anyerror = null,
 
     /// Initialise `self` in its final storage location. Cannot return by
@@ -1649,8 +1649,8 @@ fn patchBtraceOutputIdx(bytes: []u8, slice_base: u64) void {
 /// Per-block parallel orchestrator. Splits the input `lines` slice into
 /// K contiguous row slices (K = min(`runtime.max_workers`, `lines.len`)),
 /// assigns each to a `WorkerSlice` from the caller-owned pool, forks K
-/// workers via `pool.spawnWg`, and waits on the WaitGroup barrier. The
-/// caller drains per-worker buffers in worker-index order via
+/// worker tasks via `std.Io.Group.async`, and waits on the `Group.await`
+/// barrier. The caller drains per-worker buffers in worker-index order via
 /// `drainBlockMain` or `drainBlockPrePass`.
 ///
 /// Row-count split (not byte-count): each worker gets `lines.len / K`
@@ -1696,7 +1696,7 @@ fn processBlockParallel(
     g.await(runtime.io) catch {};
 
     // Surface the first worker error encountered. Workers cannot
-    // propagate errors through `spawnWg` so they stash them in
+    // propagate errors out through `std.Io.Group.async` so they stash them in
     // `error_value`; we re-raise here so the file loop's main-thread
     // error path handles it the same way as the serial path would.
     for (workers[0..K]) |*w| {
@@ -3059,8 +3059,9 @@ fn xlsxExtractWorker(ctx: *XlsxFanCtx) void {
 ///
 /// Groups SheetSpecs by data_dir so each xlsx file is extracted only once,
 /// even when multiple templates share the same directory. Within a file the
-/// sheets are extracted in parallel (fan-out across `runtime.pool`, mirroring
-/// `zipPrePass`); the shared workbook parts are parsed once up front.
+/// sheets are extracted in parallel (fan-out via `std.Io.Group.async` over
+/// `runtime.io`, mirroring `zipPrePass`); the shared workbook parts are parsed
+/// once up front.
 /// Prints its own section header and summary when any xlsx files were found.
 /// Returns accumulated SectionStats for this pre-pass.
 pub fn xlsxPrePass(
@@ -3251,8 +3252,9 @@ const ZipJob = struct {
 /// Shared state for the parallel unpack of ONE zip. Workers steal jobs off the
 /// `next` atomic cursor (so the wildly uneven per-member sizes load-balance
 /// automatically) and stash the first error they hit; the main thread
-/// re-raises it after the WaitGroup barrier — workers can't propagate errors
-/// through `spawnWg`, the same constraint the main pipeline's blocks have.
+/// re-raises it after the `std.Io.Group.await` barrier — workers can't propagate
+/// errors out through `Io.Group.async`, the same constraint the main pipeline's
+/// blocks have.
 const ZipUnpackCtx = struct {
     io: std.Io,
     dir: std.Io.Dir,

@@ -423,7 +423,7 @@ still go to stderr in trace mode so a stderr badge can surface them in the GUI.
 - User-facing error messages use `std.process.exit(1)` (no Zig stack trace).
 - `BXP_METRICS` env var (opt-in, dev/bench): when set to any non-empty
   value, bxp-cli emits one `bxp-metrics wall_ms=<N> peak_rss_kb=<N>` line to
-  **stderr** just before exit (wall via `std.time.Timer`, peak RSS via
+  **stderr** just before exit (wall via `std.Io.Clock.Timestamp`, peak RSS via
   `getrusage(RUSAGE_SELF)` on POSIX / `GetProcessMemoryInfo` on Windows).
   Lets `scripts/test-05-bench-guard.sh` + `scripts/bench/bench.sh` measure
   perf cross-platform without GNU `/usr/bin/time`. Off by default; never on
@@ -486,13 +486,15 @@ error.Fatal;` recurs ~10× and looks like pure duplication, but it sits
   function CLAUDE.md keeps deliberately linear. Considered and declined in the
   2026-06-05 audit.
 
-- **Thread pool is spawned before the `--version` / `--help` short-circuit.**
-  `pool.init(.{ .n_jobs = ncpu })` runs before the arg scan that handles the
-  two info flags, so `bxp-cli --version` spins up `ncpu` OS threads just to
-  print one line (torn down via `defer pool.deinit()`). Harmless but a
-  measurable startup cost on a high-core host for the two most common no-op
-  invocations. Could move the pool init after the short-circuit scan, or
-  lazy-init on first `processBroker`. Flagged in the 2026-06-14 audit.
+- **(Resolved by the Zig 0.16 migration) `--version` / `--help` no longer pay a
+  thread-pool startup cost.** The 2026-06-14 audit flagged that the old
+  `pool.init(.{ .n_jobs = ncpu })` ran before the info-flag short-circuit, so
+  `bxp-cli --version` spun up `ncpu` OS threads to print one line. The 0.16
+  migration retired the explicit `std.Thread.Pool` for the `std.Io.Group` async
+  model: `main()` now only calls `std.Thread.getCpuCount()` (spawns nothing) and
+  stores `max_workers` in `Runtime`; worker tasks come from `io`'s pool lazily on
+  the first `processBlockParallel`. The startup cost is gone — kept here so the
+  old finding isn't re-raised.
 
 - **`--data` / `--config` value-flags swallow a following flag token.**
   `matchValueArg`'s space form returns the next token verbatim with no
