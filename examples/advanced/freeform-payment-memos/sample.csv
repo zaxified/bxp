@@ -1,0 +1,7 @@
+TxnId,Memo,Tags
+T001,Payment for INV-2024-0042 thank you,priority|cleared|eu
+T002,SEPA credit ref order #12345 from ACME,normal|cleared|eu
+T003,Card settlement no reference here,normal|pending|us
+T004,Monthly wire transfer to supplier,priority|pending|eu
+T005,Refund INV-2023-0911 order #88 processed,low|cleared|us
+T006,Misc cash adjustment,low|cleared|eu

@@ -1,0 +1,7 @@
+txn_id,invoice,order_ref,has_ref,priority
+T001,2024-0042,,true,priority
+T002,,12345,true,normal
+T003,,,false,normal
+T004,,,false,priority
+T005,2023-0911,88,true,low
+T006,,,false,low

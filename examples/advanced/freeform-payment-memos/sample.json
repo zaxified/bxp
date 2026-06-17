@@ -1,0 +1,55 @@
+{
+  // Teaching example (advanced) — synthetic data. Pull structured tokens out of
+  // FREE-TEXT payment memos, where the token a downstream system needs (an
+  // invoice number, an order reference) sits at a *variable* position inside an
+  // otherwise human-written sentence. This is the one job the cheaper string
+  // tools cannot express: SPLIT_PART needs a stable delimiter+position, CONTAINS
+  // only tests presence, IN/REMAP only match whole values. REGEX_EXTRACT /
+  // REGEX_MATCH match by *shape*, anywhere in the string.
+  //
+  // The deliberate contrast: the `Tags` column IS cleanly delimited ("a|b|c"),
+  // so its first tag is pulled with SPLIT_PART — NOT regex. Reach for the regex
+  // engine only when a cheaper tool cannot do the job (IN/REMAP < CONTAINS/
+  // REPLACE < regex); paying for it on already-delimited data is waste.
+  conversion_templates: {
+    freeform_payment_memos: {
+      data_dir:           ".",
+      file_pattern_in:    ".csv",
+      file_pattern_out:   ".csvx",
+
+      input_schema: {
+        $txn_id:  "[TxnId]",
+
+        // 1 — capture group: pull the invoice number out of the memo wherever
+        // it sits. The group (...) returns just the inner YYYY-NNNN, dropping
+        // the "INV-" literal. No match → "".
+        $invoice: "REGEX_EXTRACT([Memo], 'INV-([0-9]{4}-[0-9]{4})')",
+
+        // 2 — capture group with a different anchor: the order ref follows a
+        // '#'. Position varies row to row, so SPLIT_PART cannot reach it.
+        $order:   "REGEX_EXTRACT([Memo], '#([0-9]+)')",
+
+        // 3 — alternation gate: "does this memo carry ANY structured reference"
+        // — either an INV-YYYY code OR a #NNNN order — answered in one pass.
+        // CONTAINS would need two calls and still match a bare "INV-" with no
+        // digits; the pattern requires the digits.
+        $has_ref: "REGEX_MATCH([Memo], 'INV-[0-9]{4}|#[0-9]+')",
+
+        // 4 — the cheap-tool contrast: Tags is "a|b|c", cleanly delimited, so
+        // the first tag is a plain SPLIT_PART. No regex — that would be paying
+        // the engine for a job a delimiter split already does.
+        $priority: "SPLIT_PART([Tags], '|', 1)"
+      },
+
+      row_rules: [ { when: "1 = 1", rows: [ {} ] } ],
+
+      output_schema: {
+        txn_id:    "$txn_id",
+        invoice:   "$invoice",
+        order_ref: "$order",
+        has_ref:   "$has_ref",
+        priority:  "$priority"
+      }
+    }
+  }
+}
