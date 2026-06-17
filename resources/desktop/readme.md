@@ -535,6 +535,8 @@ reserved.
 | `REPLACE(s, old, new, ...)` | string | Replace every `old` with `new` (substring, UTF-8 safe). Variadic `REPLACE(s, o1, n1, o2, n2, ...)` applies the pairs in one left-to-right pass (first match per position wins, output not re-scanned) instead of nesting; empty `old` matches nothing |
 | `SPLIT_PART(s, delim, n)` | string | Split `s` by `delim`, return 1-based nth part; `""` if out of range |
 | `CONTAINS(s, sub)` | bool | `true` when `sub` is found inside `s` |
+| `REGEX_MATCH(s, pattern)` | bool | `true` when regex `pattern` matches anywhere in `s`. Linear-time engine (anchors, classes, quantifiers, groups, alternation; no backreferences/lookaround). Unicode-scalar, but `\d`/`\w`/`\s` stay ASCII — match accented letters with an explicit class like `[A-ZÁ-Ž]`. Use only when a literal `CONTAINS`/`IN` won't do |
+| `REGEX_EXTRACT(s, pattern)` | string | First part of `s` matched by regex `pattern` (the first capture group `(...)` if present, else the whole match), or `""` if no match. Pulls a ticker/code/token a literal `REPLACE`/`SPLIT_PART` can't isolate |
 | `PRICE_VALUE(s)` | string | Strip currency symbol/code: `"24.00 CZK"` → `"24.00"`, `"$100"` → `"100"` |
 | `PRICE_CURRENCY(s)` | string | Extract ISO currency: `"24.00 CZK"` → `"CZK"`, `"$100"` → `"USD"` |
 | `REMAP(s, 'name' \| k, v, ...)` | string | Whole-value lookup: if `s` exactly equals a map key, return its value, else `s` unchanged. Named form resolves a `maps` entry; inline `REMAP(s, k1,v1, ...)` gives pairs directly |

@@ -104,15 +104,6 @@ to pre-process the file" or "skip the affected rows".
   `WITHDRAWAL`/`DEPOSIT` mapping for currency conversion is too lossy.
   Pure docs change.
 
-- **Description-based ticker extraction.** Lime.co's dividend rows have
-  empty `Symbol` and the ticker is embedded in `Description`
-  (`"Qualified Dividend APPLE INC 100"`). `REGEX_EXTRACT(s, pattern)` now
-  isolates it (e.g. an uppercase-run class), the generic solution. The cheaper
-  alternative for a fixed company set is still a named `maps` entry keyed by
-  company name (`"APPLE INC": "AAPL"`) applied via `REMAP`. Remaining work is
-  docs-only: a readme tip / example showing both. (Pure docs — pick up with the
-  next examples pass.)
-
 ### Real-world data quirks (problem-first)
 
 Surfaced by the problem-first examples initiative: start from a real,

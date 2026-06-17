@@ -372,10 +372,22 @@ The DSL is intentionally **SQL/Excel-flavored**:
 Built-ins map onto recognisable SQL/Excel functions wherever possible:
 `COALESCE`, `NULLIF`, `IN`, `SUBSTR`, `LEFT`/`RIGHT`, `UPPER`/`LOWER`,
 `TRIM`, `ROUND`, `FLOOR`/`CEILING`, `REPLACE`, `SPLIT_PART` (PostgreSQL),
+`REGEX_MATCH`/`REGEX_EXTRACT` (PostgreSQL `~` / `regexp_match`),
 `STARTS_WITH`/`ENDS_WITH` (PostgreSQL `starts_with`/`ends_with`),
 `CONTAINS` (SQL Server), `LOOKUP` (Excel). Domain extensions (`DATE_CONVERT`,
 `PRICE_VALUE`, `PRICE_CURRENCY`, `REMAP`) follow the same `UPPER_CASE`
 shape.
+
+The string-matching builtins form a deliberate **cost ladder** — `IN`/`REMAP`
+(hash lookup) < `CONTAINS`/`REPLACE` (literal scan) < `REGEX_MATCH`/`REGEX_EXTRACT`
+(the Pike-VM pattern engine, a linear-time / ReDoS-safe fetch dependency
+`quangd/regex.zig`). Regex is the only builtin backed by an external engine and
+the most expensive rung: on 1M synthetic rows it measured **~1.9× the wall time**
+of a literal-only equivalent producing byte-identical output, at **flat peak
+RSS** (the engine is window/arena-bounded — no per-row growth). Reach for it only
+when a pattern the cheaper tools cannot phrase is genuinely needed; see
+[`examples/advanced/freeform-payment-memos`](../examples/advanced/freeform-payment-memos/00-readme.md)
+for the worked tradeoff and the full measurement table.
 
 The target persona is an Excel-comfortable analyst (broker statement
 authoring, CRM migration mapping), not a Python/JS programmer. A Lua-style

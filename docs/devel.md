@@ -61,11 +61,13 @@ Install these extensions for a productive experience:
 The required Zig version is pinned in `build.zig.zon` (`minimum_zig_version`) —
 install that toolchain; ZLS bundled with the Zig extension matches it.
 
-`bxp-core` has a **single external (fetch) dependency** — `uucode` (MIT), the
-Unicode case-mapping tables behind `UPPER`/`LOWER`, pinned in
+`bxp-core` has **two external (fetch) dependencies** — `uucode` (MIT), the
+Unicode case-mapping tables behind `UPPER`/`LOWER`, and `regex`
+(`quangd/regex.zig`, Apache-2.0 OR MIT), the Pike-VM engine behind
+`REGEX_MATCH`/`REGEX_EXTRACT` (linear-time, ReDoS-safe). Both are pinned in
 `bxp-core/build.zig.zon`. The date and numeric cores stay in-house
-(`bxp-core/src/datefmt.zig`, `decimal.zig`). The fetch is cached after the first
-build; CI runners have network.
+(`bxp-core/src/datefmt.zig`, `decimal.zig`). The fetches are cached after the
+first build; CI runners have network.
 
 In VS Code terminal:
 
@@ -126,7 +128,7 @@ bxp/                            # monorepo root (git root)
 │   │   ├── docs.zig            # --docs aggregator: re-exports expr + config catalogs
 │   │   └── diagnostics.zig     # structured validation collector (Severity, Diagnostic)
 │   ├── build.zig               # exports named Zig modules
-│   └── build.zig.zon           # one fetch dep: uucode (Unicode tables)
+│   └── build.zig.zon           # two fetch deps: uucode (tables) + regex (Pike-VM)
 ├── bxp-gui/                    # Flutter desktop app (Linux / macOS / Windows)
 │   ├── lib/
 │   │   ├── main.dart           # Flutter entry; window + theme + provider wiring
@@ -276,8 +278,8 @@ Consequences of this design:
 ### Package dependency graph
 
 ```text
-  bxp-cli         ── path dep ──►  bxp-core   ── fetch dep ──►  uucode
-  (binary)                         (library)                    (Unicode tables)
+  bxp-cli         ── path dep ──►  bxp-core   ── fetch dep ──►  uucode (Unicode tables)
+  (binary)                         (library)                    regex  (Pike-VM engine)
   bxp-mcp         ── path dep ──►  bxp-core           (wraps inspect.zig; spawns bxp-cli
   (binary)                                             for bxp_simulate)
   bxp-gui-bridge  ── path dep ──►  bxp-core           (links inspect.zig + expr.zig directly)
@@ -287,9 +289,11 @@ Consequences of this design:
   (Flutter)                              in-proc inspect + proxied bxp-cli runs)
 ```
 
-`bxp-core` is a **local path dependency** (`../bxp-core`) and pulls one external
-fetch dependency of its own: `uucode` (Unicode case-mapping tables, pinned in
-`build.zig.zon`). The date core lives in-house at `bxp-core/src/datefmt.zig`.
+`bxp-core` is a **local path dependency** (`../bxp-core`) and pulls two external
+fetch dependencies of its own: `uucode` (Unicode case-mapping tables) and
+`regex` (`quangd/regex.zig`, the Pike-VM engine behind `REGEX_MATCH`/
+`REGEX_EXTRACT`), both pinned in `build.zig.zon`. The date core lives in-house at
+`bxp-core/src/datefmt.zig`.
 `bxp-gui` ships `bxp-cli`, `bxp-mcp`, and `bxp-gui-bridge.{dll,so,dylib}`
 inside the Flutter bundle.
 
