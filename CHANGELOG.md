@@ -49,7 +49,6 @@
 - bench: record Zig 0.16 full-bench as the new S17 baseline
 - lint: fix typos in documentation
 
-
 ## 2026.06.16 — bxp-cli 0.2.5, bxp-mcp 0.2.5, bxp-gui 0.2.5
 
 ### Features

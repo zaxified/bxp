@@ -2,17 +2,10 @@
 
 > [← docs/](README.md)
 
-Backlog. Hand-maintained — entries get crossed out / deleted as work
-lands on master. `CHANGELOG.md` is generated independently from `git log`
-at release time by `scripts/release-changelog.sh` and is not coupled
-to this file.
+Hand-maintained backlog — entries get crossed out / deleted as work
+lands on master. `CHANGELOG.md` is generated independently.
 
-## v0.3.0 — Zig 0.16 migration
-
-Migrate the Zig toolchain to 0.16 across all Zig
-packages (bxp-cli, bxp-mcp, bxp-core, bxp-gui-bridge).
-
-## Later (no specific version)
+## Planned features - not version specific
 
 ### External template JSON files
 
@@ -44,7 +37,7 @@ Open design questions to resolve before implementation:
 - `--list-templates` / `--fetch-template` semantics when the same name
   exists in bundle + user dir.
 
-### Future example candidates (low priority)
+### New example candidates
 
 Carried over from the (now-deleted) `*-todo` scratch when the example
 backlog was otherwise exhausted:
@@ -71,11 +64,11 @@ backlog was otherwise exhausted:
 ### bxp-cli
 
 - **`data_dir` multi-dir / array (`data_dir: [...]` or a `*` glob segment).**
-  Audit 2026-06-13, deferred. Brokers that export into dated
-  subdirectories (`exports/2026-06/`) need config edits per month today.
-  Accepting an array of dirs (process all listed) or a `*` glob path segment
-  would close that recurring operator chore. Demand-driven — only if a real
-  workflow asks; examples/ currently show flat dirs.
+  Audit 2026-06-13, deferred. Brokers that export into dated subdirectories
+  (`exports/2026-06/`) need config edits per month today. Accepting an array
+  of dirs (process all listed) or a `*` glob path segment would close that
+  recurring operator chore. Demand-driven — only if a real workflow asks;
+  examples/ currently show flat dirs.
 
 ### Real-world broker CSV quirks
 
@@ -92,9 +85,7 @@ to pre-process the file" or "skip the affected rows".
   Options: (a) add `csv_split_on_blank_line: true` flag — parser
   splits the file at empty-line boundaries and processes each block
   separately, or (b) treat blank line as end-of-stream and process
-  only the first block (cheaper, less complete). Touches
-  `csv.zig` + `config.zig` + `pipeline.zig`. Decide on (a) vs (b)
-  based on the user's actual file.
+  only the first block (cheaper, less complete).
 
 - **Wealthfolio target spec vocabulary expansion (remaining).** The
   readme now documents `TRANSFER_IN`, `TRANSFER_OUT`, and `SPLIT`
@@ -135,12 +126,11 @@ fixed before release instead, not parked here).
   Date-only sibling problems (DST gaps, leap seconds) are out of scope.
 
   **TZ-help builtins — consider on a concrete use-case.** DST-aware offsets
-  are now expressible without a dependency: `NTH_DOW(year, month, weekday, n)`
-  is the `datefmt` calendar primitive (last Sunday of March
-  is `NTH_DOW(y, 3, 7, -1)`), so the EU Prague window in
+  are now expressible without a dependency:
+  `NTH_DOW(year, month, weekday, n)` is the `datefmt` calendar primitive
+  (last Sunday of March is `NTH_DOW(y, 3, 7, -1)`), so the EU Prague window in
   `examples/advanced/multi-stage-etl` reads cleanly. `datefmt` itself still has
-  no timezone awareness. Two upgrades, both **deferred until a real multi-zone
-  use-case** justifies the maintenance cost:
+  no timezone awareness, two possible candidates:
   - `TZ_OFFSET(date, zone)` — returns `+01:00`/`+02:00` for a curated zone set
     (Europe/{London,Prague,…}, America/{New_York,…}, Asia/{Tokyo,…}), computing
     DST internally via `NTH_DOW`. One call replaces the hand-rolled `DATEDIFF`
@@ -230,35 +220,15 @@ fixed before release instead, not parked here).
   `scripts/test-07-datasets.sh` covers it from CI. Reconsider on request
   from a contributor maintaining > 3 templates.
 
-### Shared core libraries — extraction (triggered, not scheduled)
+### Shared core libraries — future extraction
 
-Several modules carry no bxp-specific logic and are reuse candidates, but
-extraction to standalone repos is **maintenance overhead with no payoff until
-a real second consumer exists** (a two-repo publish→bump-pin dance replaces
-today's one-commit path/monorepo dep). Two tracks with different triggers:
+Two tracks with different triggers:
 
-- **Transport core (http / rest / api / mcp) — AXP-driven.** This is the
-  track with a concrete second consumer. AXP (`~/workspace/axp`, also Zig)
-  needs an agent-control API/MCP layer, and bxp's `bxp-mcp` +
-  `bxp-gui-bridge` + the would-be `bxp-api` adapter all wrap the same
-  stateless `inspect` core behind different transports. Plan: develop the
-  transport/MCP/HTTP core **AXP-first** as a standalone library, and have bxp
-  consume it from the shared repo. This supersedes the standalone `bxp-api`
-  idea and the `project_mcp_api_lib_direction` brainstorm. Trigger: when AXP's
-  API layer takes shape.
-- **General-purpose cores — public-oriented, deferred.** `datefmt`,
-  `decimal`, `encoding` (Zig) and `json5_ast` (Dart) are clean, general
-  libraries that could be published for their own sake (e.g. a standalone Zig
-  fixed-point decimal). No concrete consumer today — extract only when a
-  second consumer materialises (`json5_ast` already documents the
-  `git subtree split` recipe + its "second Dart consumer" gate). Until then
-  the open-source-visibility upside doesn't beat the two-repo version-pinning
-  tax.
+- **Transport core**
+  `http`, `rest`, `api`, `mcp`
 
-The `inspect` core is stateless (no `pre_pass`/`LOOKUP`), so full template
-simulation stays CLI territory — hence `bxp_simulate` spawns `bxp-cli`
-rather than running in-core. The AXP-driven transport core inherits the same
-stateless boundary.
+- **General-purpose cores**
+  `datefmt`, `decimal`, `encoding` (Zig) and `json5_ast` (Dart)
 
 ### Expression builtins
 
@@ -270,15 +240,11 @@ unless noted:
 - Calendar / clock components: `QUARTER(d)`, `WEEKNUM(d)`, `DATE_TRUNC(unit, d)`,
   `HOUR(d)` / `MINUTE(d)` / `SECOND(d)`. The time extractors need a canonical
   ISO-datetime input decision first (bxp's date model is date-only today).
-  These are plain calendar/clock accessors — **distinct from** the timezone
-  work under _Real-world data quirks → Timezone-aware datetimes_
-  (`TZ_OFFSET` / `TZ_CONVERT` / `IS_DST`), which carries the DST/zone logic.
 - Validation: `IS_NUMERIC(x)`, `IS_DATE(x)`.
 - Math: `SIGN(x)`, `TRUNC(x)`, `MROUND(x, m)` are exact on the fixed-point
-  decimal core. `POWER(base, exp)` and `SQRT(x)` are **blocked on a design
-  call** — both need floating point, which conflicts with the deliberately
-  float-free decimal core; revisit only with an integer-exponent-only `POWER`
-  or an explicit float-approximation mode.
+  decimal core. `POWER(base, exp)` and `SQRT(x)` are **blocked on a design call**,
+  both need floating point, which conflicts with the deliberately float-free
+  decimal core; revisit only with an integer-exponent-only `POWER` or an explicit float-approximation mode.
 
 ### Encoding — more single-byte code pages
 
@@ -289,47 +255,35 @@ export actually demands one.
 
 ## Not planned
 
-Features that surface repeatedly in audits and reverse-simulations but
-are deliberately **out of scope** — documented here so the same
-discussion doesn't keep restarting. Reopen only if the rationale changes.
+Features that surface repeatedly in audits and reverse-simulations but are
+deliberately **out of scope** — documented here so the same discussion
+doesn't keep restarting. Reopen only if the rationale changes.
 
 - **Multiline quoted fields (`csv_multiline_quotes: true`).** `csv.LineIterator`
   deliberately uses lazy-quotes semantics — a newline always ends the record
-  (design decision 2026-06-04, validated on IMDb 12.5M rows). This is
-  intentionally NOT RFC 4180 §2.6. An opt-in RFC mode would require
-  quote-aware chunk splitting in the parallel pipeline or a serial fallback;
-  no real broker file with embedded newlines has ever been confirmed.
+  (design decision, validated on IMDb 12.5M rows). This is intentionally
+  NOT RFC 4180 §2.6. An opt-in RFC mode would require quote-aware chunk
+  splitting in the parallel pipeline or a serial fallback; no real broker
+  file with embedded newlines has ever been confirmed.
 - **Aggregation across rows (SUM / COUNT / GROUP BY).** Conflicts with
   bxp's row-by-row engine philosophy — every output row is a pure
   function of one input row plus the pre-pass lookup table, no global
   state. Adding aggregation would require fundamental engine redesign.
-  Workaround: post-process the `.csvx` output in the destination tracker
-  (Wealthfolio / brycht.app) or with a one-line `awk` / spreadsheet.
-- **Multi-file input correlation (`LOOKUP` across files within one
-  template).** Same row-engine constraint as aggregation: each input
-  file is a self-contained unit. Workaround: concatenate the files
-  before running bxp-cli, or split the template into two and feed the
-  outputs to a third tool.
-- **Routing to multiple output files based on `$action`.** One template
+- **Multi-file input correlation** (`LOOKUP` across files within one
+  template). Same row-engine constraint as aggregation: each input
+  file is a self-contained unit.
+  Workaround: concatenate the files before running bxp-cli.
+- **Routing to multiple output files** One template
   produces one output stream (plus optional `combined_output`).
   Workaround: define two templates with different `row_rules` filters
   pointing at the same `data_dir`.
 - **Output row deduplication (`dedup_output: bool`).** The re-import
   scenario it would solve — overlapping date ranges across successive
-  broker exports producing duplicate `.csvx` rows — is a workflow
-  problem solved upstream: discipline the export date ranges (every
-  broker UI offers a "from / to" picker), wipe `data_dir` before
-  re-import, or rely on the destination tracker's own dedup. Adding
-  it inside BXP would require cross-run persistent state (a hash file
-  next to each `data_dir`), which clashes with the stateless engine
-  contract — every run today is reproducible from inputs alone. No
-  user has reported the duplicate-row problem in practice.
+  broker exports producing duplicate `.csvx` rows.
+  Workaround: use `date_filter_from_filename:true` in template.
 - **Space / NBSP thousands grouping (`csv_thousands_separator_in`).**
   Space- or NBSP-grouped European numbers (`1 234 567,89`) are not
   auto-normalised: `parseGroupedNumber` disambiguates dot/comma grouping
   (because `csv_decimal_separator_in` declares the decimal char), but a
-  space/NBSP thousands separator stays raw. Decided (user, 2026-06-04) **not**
-  to add a `csv_thousands_separator_in` config for it — the user strips it
-  themselves with `REPLACE(REPLACE([X], ' ', ''), ',', '.')` (and the 2-byte
-  NBSP variant). Note: dot-grouped EU (`1.234.567,89`) **is** handled
-  automatically — only the space/NBSP case is out of scope here.
+  space/NBSP thousands separator stays raw.
+  Workarounf: strips it with `REPLACE(REPLACE([X], ' ', ''), ',', '.')`
