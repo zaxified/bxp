@@ -86,10 +86,15 @@ releases — the GH Actions matrix is sufficient for those.
 | job               | runner         | output                                                                              |
 | ----------------- | -------------- | ----------------------------------------------------------------------------------- |
 | `console`         | ubuntu-latest  | `bxp-console-<ver>-{linux-x86_64.tar.gz, windows-x86_64.zip, macos-aarch64.tar.gz}` |
-| `desktop-linux`   | ubuntu-22.04   | `bxp-desktop-<ver>-linux-x86_64.{tar.gz, AppImage, deb}`                            |
-| `desktop-windows` | windows-latest | `bxp-desktop-<ver>-windows-x86_64-setup.exe`                                        |
-| `desktop-macos`   | macos-latest   | `bxp-desktop-<ver>-macos-aarch64.dmg`                                               |
+| `desktop-linux`   | ubuntu-22.04   | `bxp-desktop-linux-x86_64.AppImage`                                                 |
+| `desktop-windows` | windows-latest | `bxp-desktop-windows-x86_64.exe`                                                    |
+| `desktop-macos`   | macos-latest   | `bxp-desktop-macos-arm64.dmg`                                                       |
 | `release`         | ubuntu-latest  | aggregates above + `SHA256SUMS` + minisign `SHA256SUMS.minisig`, publishes Release  |
+
+The three desktop installers carry no version string in their filename
+(only the `bxp-console` archives and the git tag do); the in-app inspector
+reports the running version. Each platform ships exactly one desktop format
+— AppImage on Linux, `.exe` on Windows, `.dmg` on macOS.
 
 `bxp-console` archives are GUI-free (small, no Flutter deps) but ship
 both `bxp-cli` and `bxp-mcp` — the latter so a console user (or an AI
@@ -131,7 +136,8 @@ gh workflow run release.yml -f version=vX.Y.Z-rc-test
 ## Verifying a published release
 
 1. Open `https://github.com/zaxified/bxp/releases/tag/vX.Y.Z`.
-2. Confirm 8 artifacts + `SHA256SUMS` + `SHA256SUMS.minisig` are listed.
+2. Confirm 6 build artifacts (3 console + 3 desktop) + `SHA256SUMS` +
+   `SHA256SUMS.minisig` are listed (8 files total).
 3. Download a desktop installer for your host, run it, and verify the
    GUI launches. The startup screen should show the version in
    SettingsInspector (Ctrl+Shift+S).

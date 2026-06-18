@@ -158,7 +158,9 @@ Two channels, distinct archives:
 
 - **bxp-console** — `bxp-console-<ver>-<platform>.{tar.gz,zip}` — bxp-cli +
   bxp-mcp (co-located so bxp-mcp's `bxp_simulate` can spawn bxp-cli).
-- **bxp-desktop** — `bxp-desktop-<ver>-<platform>.{tar.gz,AppImage,deb,exe,dmg}` — Flutter GUI + bundled bxp-cli + bxp-mcp + bxp-gui-bridge.
+- **bxp-desktop** — `bxp-desktop-<platform>.{AppImage,exe,dmg}` (one format
+  per platform — AppImage/Linux, exe/Windows, dmg/macOS — and no version in the
+  filename) — Flutter GUI + bundled bxp-cli + bxp-mcp + bxp-gui-bridge.
 
 Cut a release by pushing a `v*` tag; `.github/workflows/release.yml`
 fans out to ubuntu / windows / macos runners, each producing its native

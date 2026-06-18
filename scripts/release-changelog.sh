@@ -212,7 +212,12 @@ fi
 TMP=$(mktemp)
 {
     head -n 1 "$CHANGELOG"
-    cat "$NEW_ENTRY"
+    # Strip the trailing blank line the entry builder leaves (the final
+    # `echo ""` after the last category). Without this it collides with the
+    # existing changelog's blank line 2 below, producing a double blank at
+    # the new/old entry junction (markdownlint MD012). `$(...)` drops all
+    # trailing newlines; printf restores exactly one.
+    printf '%s\n' "$(cat "$NEW_ENTRY")"
     tail -n +2 "$CHANGELOG"
 } > "$TMP"
 mv "$TMP" "$CHANGELOG"
