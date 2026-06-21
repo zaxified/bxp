@@ -5,6 +5,34 @@
 Hand-maintained backlog — entries get crossed out / deleted as work
 lands on master. `CHANGELOG.md` is generated independently.
 
+## Milestones
+
+### v0.3.1
+
+Auto manual page (resources/readme.md) - fnDoc
+
+`LOOKUP` across templates within one bxp-cli run cycle
+
+Output row deduplication in combined output files
+`combined_output_dedup: bool    // (default:false)`
+
+Timezone-aware datetimes
+Full timezone implementation - historical rules correct `TZ_OFFSET(date, zone)` /  `TZ_CONVERT(ts, from_zone, to_zone)` / `IS_DST`
+Calendar and clock components: `QUARTER(d)`, `WEEKNUM(d)`, `DATE_TRUNC(unit, d)`, `HOUR(d)` / `MINUTE(d)` / `SECOND(d)`
+
+### v0.4.0
+
+GUI Config/Create - Import wizard from sample CSV
+GUI updater progress bar
+
+### v0.5.0
+
+Full agentic automation - AI support for all steps in workflow
+
+### v1.0.1
+
+Shared core libraries extraction
+
 ## Planned features - not version specific
 
 ### External template JSON files
@@ -248,7 +276,7 @@ unless noted:
 
 ### Encoding — more single-byte code pages
 
-`encoding.zig` covers Win-1250/1252, ISO-8859-1/2/15 today. The 256-entry
+`encoding.zig` covers Win-1250/1252 and ISO-8859-1/2/15 today. The 256-entry
 override-table pattern makes each new code page ~mechanical (Win-1251
 Cyrillic, ISO-8859-5, …). Marginal cost is low; no work until a broker
 export actually demands one.
@@ -269,17 +297,13 @@ doesn't keep restarting. Reopen only if the rationale changes.
   bxp's row-by-row engine philosophy — every output row is a pure
   function of one input row plus the pre-pass lookup table, no global
   state. Adding aggregation would require fundamental engine redesign.
-- **Multi-file input correlation** (`LOOKUP` across files within one
-  template). Same row-engine constraint as aggregation: each input
-  file is a self-contained unit.
-  Workaround: concatenate the files before running bxp-cli.
 - **Routing to multiple output files** One template
   produces one output stream (plus optional `combined_output`).
   Workaround: define two templates with different `row_rules` filters
   pointing at the same `data_dir`.
-- **Output row deduplication (`dedup_output: bool`).** The re-import
-  scenario it would solve — overlapping date ranges across successive
-  broker exports producing duplicate `.csvx` rows.
+- **Output row deduplication across output files** The re-import scenario
+  it would solve — overlapping date ranges across successive broker exports
+  producing duplicate `.csvx` rows.
   Workaround: use `date_filter_from_filename:true` in template.
 - **Space / NBSP thousands grouping (`csv_thousands_separator_in`).**
   Space- or NBSP-grouped European numbers (`1 234 567,89`) are not
