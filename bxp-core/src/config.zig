@@ -211,6 +211,17 @@ pub const OutputColumn = struct {
 };
 
 /// Input/output file format for a conversion template.
+/// Comptime helper: an enum's `@tagName`s as a `FieldDoc.enum_values` list, so
+/// the GUI dropdown options derive from the enum itself and can't drift from it.
+/// Use for enums whose tag name IS the user-facing value (FileType, ZipDirMode);
+/// Encoding needs `canonicalName()` (utf8 → "utf-8"), so it derives separately.
+fn enumTagNames(comptime T: type) [@typeInfo(T).@"enum".fields.len][]const u8 {
+    const flds = @typeInfo(T).@"enum".fields;
+    var arr: [flds.len][]const u8 = undefined;
+    for (flds, 0..) |f, i| arr[i] = f.name;
+    return arr;
+}
+
 pub const FileType = enum {
     /// Delimited text (CSV/TSV).  Default.
     csv,
@@ -288,7 +299,7 @@ pub const ZipInput = struct {
     /// '/' replacement used when `dir_mode == .keep_path`. Default "_".
     path_separator: []const u8,
 
-    const dir_mode_values = [_][]const u8{ "basename", "keep_path" };
+    const dir_mode_values = enumTagNames(ZipDirMode);
 
     /// Schema docs for this struct's fields. Bound at
     /// `conversion_templates.*.zip_input` by `bxp-core/src/docs.zig`.
@@ -434,15 +445,21 @@ pub const BrokerConfig = struct {
     // Enum-value tables for FieldDoc.enum_values below. File-scope only —
     // sole consumers are the FieldDoc entries in this struct's `fields`
     // table, so the `pub` qualifier was incidental.
-    const file_type_values = [_][]const u8{ "csv", "json" };
+    const file_type_values = enumTagNames(FileType);
+    // Free-choice strings, not enum-backed (the quote char / delimiter / decimal
+    // separator are stored as a u8, parsed from these spellings), so they stay
+    // hand-listed — there is no source enum to derive them from.
     const csv_quote_values = [_][]const u8{ "none", "single", "double" };
     const csv_delimiter_values = [_][]const u8{ ",", ";", "\t", "|" };
     const csv_decimal_values = [_][]const u8{ ".", "," };
-    // Order/spelling must match encoding.Encoding.canonicalName — these are the
-    // GUI dropdown options and the strings parseEncodingField accepts.
-    const csv_encoding_values = [_][]const u8{
-        "utf-8",        "windows-1250", "windows-1252",
-        "iso-8859-1",   "iso-8859-2",   "iso-8859-15",
+    // Derived from encoding.Encoding via canonicalName() (utf8 → "utf-8"), so the
+    // GUI dropdown options can't drift from the enum the parser accepts — adding
+    // a code page to the enum surfaces it here automatically.
+    const csv_encoding_values = blk: {
+        const flds = @typeInfo(encoding.Encoding).@"enum".fields;
+        var arr: [flds.len][]const u8 = undefined;
+        for (flds, 0..) |f, i| arr[i] = @field(encoding.Encoding, f.name).canonicalName();
+        break :blk arr;
     };
 
     /// Schema docs for this struct's fields. Bound at
