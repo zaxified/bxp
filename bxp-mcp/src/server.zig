@@ -155,7 +155,11 @@ fn handleLine(s: *Session, line: []u8) void {
     } else if (eql(method, "initialize")) {
         handleInitialize(s, id, obj.get("params"));
     } else if (eql(method, "tools/list")) {
-        writeResultRaw(s, id, tools.tools_list);
+        const list = tools.buildToolsList(s.reqAlloc()) catch {
+            writeError(s, id, -32603, "failed to build tools/list");
+            return;
+        };
+        writeResultRaw(s, id, list);
     } else if (eql(method, "ping")) {
         writeResultRaw(s, id, "{}");
     } else if (eql(method, "tools/call")) {

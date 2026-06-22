@@ -24,20 +24,506 @@ pub const Tool = enum {
     bxp_simulate,
 };
 
-/// Tool catalog as a JSON-RPC `tools/list` result.
-pub const tools_list =
-    \\{"tools":[
-    \\{"name":"bxp_validate","description":"Validate a bxp-cli config (JSON5). Returns annotated JSON with $err_/$warn/$info diagnostics inserted before each offending key.","inputSchema":{"type":"object","properties":{"config":{"type":"string","description":"The full bxp-cli config text (JSON5)."}},"required":["config"]}},
-    \\{"name":"bxp_validate_expr","description":"Validate one bxp expression the way the GUI config editor does at authoring time: syntax, semantics, AND static lint findings the lenient runtime silently swallows (e.g. a literal SPLIT_PART index of 0 — 1-based, so 0 always yields \"\" — or a DATE_CONVERT format with an unbracketed non-vocab letter). Returns {ok:true} when the expression is sound, or {ok:false,error,detail,off,len} for the first finding (off/len pin the offending token span). Use this when AUTHORING a config to catch mistakes before a run; use bxp_eval to see what an expression COMPUTES against a row. Mirrors the GUI's bridge_eval_expr.","inputSchema":{"type":"object","properties":{"expr":{"type":"string","description":"The expression text, e.g. SPLIT_PART([Sym], '/', 1)."}},"required":["expr"]}},
-    \\{"name":"bxp_eval","description":"Evaluate one bxp expression against an optional row context. Returns {ok,value} or {ok:false,error,detail,off,len}. This is the lenient runtime path (what a real bxp-cli run computes); for authoring-time validation that flags literal mistakes, use bxp_validate_expr.","inputSchema":{"type":"object","properties":{"expr":{"type":"string","description":"The expression text, e.g. UPPER('hi') or [Price]*[Qty]."},"headers":{"type":"string","description":"Optional JSON array of column header names, e.g. [\"Price\",\"Qty\"]."},"fields":{"type":"string","description":"Optional JSON array of row field values (parallel to headers)."}},"required":["expr"]}},
-    \\{"name":"bxp_eval_batch","description":"Evaluate many bxp expressions against one row in a single call. Returns {results:[{ok,value}|{ok:false,error,detail,off,len}, ...]} aligned to the input order. A well-formed request always succeeds; per-expr failures are carried by each result's ok flag.","inputSchema":{"type":"object","properties":{"headers":{"type":"array","items":{"type":"string"},"description":"Column header names."},"fields":{"type":"array","items":{"type":"string"},"description":"Row field values (parallel to headers; ragged rows tolerated)."},"exprs":{"type":"array","items":{"type":"string"},"description":"Expressions to evaluate against the row."},"maps":{"type":"object","description":"Optional named key-value maps { name: { key: value } } resolved by REMAP (whole-value) / REPLACE (substring)."},"lookups":{"type":"object","description":"Optional flat pre_pass lookup blob for LOOKUP() (NUL-separated name/key/field keys)."},"single_prepass_name":{"type":"string","description":"Optional implicit pre_pass name enabling 2-arg LOOKUP(key, field)."}},"required":["headers","fields","exprs"]}},
-    \\{"name":"bxp_eval_trace","description":"Evaluate one bxp expression with a per-call execution trace. Returns NDJSON (one JSON object per line): one {\"fn\",\"src_start\",\"src_end\",\"value\"} line per function call as the engine evaluates inside-out, then a terminal line — {\"t\":\"final\",\"value\":\"...\"} on success or {\"t\":\"error\",\"error\",\"detail\",\"off\",\"len\"} on failure. Use to debug HOW a complex expression computes its result, beyond bxp_eval's final value.","inputSchema":{"type":"object","properties":{"expr":{"type":"string","description":"The expression text."},"headers":{"type":"string","description":"Optional JSON array of column header names, e.g. [\"Price\",\"Qty\"]."},"fields":{"type":"string","description":"Optional JSON array of row field values (parallel to headers)."}},"required":["expr"]}},
-    \\{"name":"bxp_docs","description":"Return the full bxp language/schema documentation as JSON (functions, keywords, operators, tokens, config_schema).","inputSchema":{"type":"object","properties":{},"required":[]}},
-    \\{"name":"bxp_list_templates","description":"List every conversion template declared in a bxp-cli config (JSON5). Returns {templates:[{id,data_dir,file_pattern_in,file_pattern_out,file_type_in,file_type_out,description}, ...]}; no semantic validation, so broken templates still appear with an error field.","inputSchema":{"type":"object","properties":{"config":{"type":"string","description":"The full bxp-cli config text (JSON5)."}},"required":["config"]}},
-    \\{"name":"bxp_fetch_template","description":"Fetch one conversion template's raw JSON by id from a bxp-cli config (JSON5). Returns the template object, or {\"$err_1\":\"...\"} if the id is absent.","inputSchema":{"type":"object","properties":{"config":{"type":"string","description":"The full bxp-cli config text (JSON5)."},"id":{"type":"string","description":"The template id to fetch."}},"required":["config","id"]}},
-    \\{"name":"bxp_simulate","description":"Run a full conversion end-to-end: stage the config (JSON5) + input CSV in a scratch workspace, run the chosen template through bxp-cli, and return the produced output, a record-count diff, bxp-cli's summary + diagnostics, and a per-row `trace` (BXTB sidecar): for each input row whether it was written, filtered (with reason: rule_skip / no_rule_match), or errored — each carrying the 1-based input-line number. Verifies a config for real (pre_pass/LOOKUP/row_rules) — what bxp_eval/bxp_validate cannot. CSV-input templates only. ok=true means the run happened; consult exit_code/status/diagnostics (0=ok, 2=warnings, 1=error).","inputSchema":{"type":"object","properties":{"config":{"type":"string","description":"The full bxp-cli config text (JSON5)."},"template":{"type":"string","description":"The conversion template id to run."},"csv":{"type":"string","description":"The input CSV content (becomes the single input file for the run)."},"workspace":{"type":"string","description":"Optional scratch-workspace id (defaults to the template id). Reused across calls, so repeated runs don't litter temp with new dirs."}},"required":["config","template","csv"]},"outputSchema":{"type":"object","properties":{"ok":{"type":"boolean"},"template":{"type":"string"},"exit_code":{"type":"integer"},"status":{"type":"string","enum":["ok","warnings","error"]},"input":{"type":"object","properties":{"records":{"type":"integer","description":"Data rows in the input CSV (header excluded), so it lines up with trace.source_rows."},"csv":{"type":"string"}}},"output_records":{"type":"integer","description":"Total data rows across all output files (each file's header excluded), comparable to trace.written_rows."},"outputs":{"type":"array","items":{"type":"object","properties":{"file":{"type":"string"},"records":{"type":"integer"},"csv":{"type":"string"},"error":{"type":"string","description":"Present instead of csv/records when the output file could not be read back (e.g. exceeds the 16 MB cap)."}}}},"summary":{"type":"string"},"diagnostics":{"type":"string"},"trace":{"type":"object","properties":{"available":{"type":"boolean"},"source_rows":{"type":"integer"},"written_rows":{"type":"integer"},"errors":{"type":"integer"},"warnings":{"type":"integer"},"filtered":{"type":"object","properties":{"count":{"type":"integer"},"sample":{"type":"array","items":{"type":"object","properties":{"input_row":{"type":"integer"},"source_offset":{"type":"integer"},"reason":{"type":"string"}}}}}},"row_errors":{"type":"object","properties":{"count":{"type":"integer"},"sample":{"type":"array","items":{"type":"object","properties":{"input_row":{"type":"integer"},"source_offset":{"type":"integer"},"variable":{"type":"string"},"kind":{"type":"string"},"detail":{"type":"string"},"origin":{"type":"string"}}}}}},"output_rows":{"type":"object","properties":{"count":{"type":"integer"},"sample":{"type":"array","items":{"type":"object","properties":{"input_row":{"type":"integer"},"source_offset":{"type":"integer"},"output_idx":{"type":"integer"},"rule":{"type":"integer"},"action":{"type":"string"}}}}}},"prepass_entries":{"type":"integer"}}},"workspace":{"type":"string"},"error":{"type":"string"},"detail":{"type":"string"}}}}
-    \\]}
-;
+/// One documented MCP tool. Co-located catalog (the tools module) — the same
+/// grouped-array pattern as expr.zig's `operators`/`keywords`/`tokens`. The
+/// `tools/list` JSON-RPC result is assembled from this catalog by `buildToolsList`
+/// (the JSON serializer), so the wire shape can never drift from the per-tool
+/// name/description/schema. `input_schema` / `output_schema` are JSON-Schema
+/// object literals (pretty-printed for readability — the serializer re-emits them
+/// compact); `output_schema` is "" for tools that declare none.
+pub const ToolDoc = struct {
+    name: []const u8,
+    description: []const u8,
+    input_schema: []const u8,
+    output_schema: []const u8 = "",
+};
+
+pub const tool_docs = [_]ToolDoc{
+    .{
+        .name = "bxp_validate",
+        .description = "Validate a bxp-cli config (JSON5). Returns annotated JSON with " ++
+            "$err_/$warn/$info diagnostics inserted before each offending key.",
+        .input_schema =
+        \\{
+        \\  "type": "object",
+        \\  "properties": {
+        \\    "config": {
+        \\      "type": "string",
+        \\      "description": "The full bxp-cli config text (JSON5)."
+        \\    }
+        \\  },
+        \\  "required": [
+        \\    "config"
+        \\  ]
+        \\}
+        ,
+    },
+    .{
+        .name = "bxp_validate_expr",
+        .description = "Validate one bxp expression the way the GUI config editor does at authoring " ++
+            "time: syntax, semantics, AND static lint findings the lenient runtime silently " ++
+            "swallows (e.g. a literal SPLIT_PART index of 0 — 1-based, so 0 always yields \"\" " ++
+            "— or a DATE_CONVERT format with an unbracketed non-vocab letter). Returns " ++
+            "{ok:true} when the expression is sound, or {ok:false,error,detail,off,len} for " ++
+            "the first finding (off/len pin the offending token span). Use this when " ++
+            "AUTHORING a config to catch mistakes before a run; use bxp_eval to see what an " ++
+            "expression COMPUTES against a row. Mirrors the GUI's bridge_eval_expr.",
+        .input_schema =
+        \\{
+        \\  "type": "object",
+        \\  "properties": {
+        \\    "expr": {
+        \\      "type": "string",
+        \\      "description": "The expression text, e.g. SPLIT_PART([Sym], '/', 1)."
+        \\    }
+        \\  },
+        \\  "required": [
+        \\    "expr"
+        \\  ]
+        \\}
+        ,
+    },
+    .{
+        .name = "bxp_eval",
+        .description = "Evaluate one bxp expression against an optional row context. Returns {ok,value} " ++
+            "or {ok:false,error,detail,off,len}. This is the lenient runtime path (what a " ++
+            "real bxp-cli run computes); for authoring-time validation that flags literal " ++
+            "mistakes, use bxp_validate_expr.",
+        .input_schema =
+        \\{
+        \\  "type": "object",
+        \\  "properties": {
+        \\    "expr": {
+        \\      "type": "string",
+        \\      "description": "The expression text, e.g. UPPER('hi') or [Price]*[Qty]."
+        \\    },
+        \\    "headers": {
+        \\      "type": "string",
+        \\      "description": "Optional JSON array of column header names, e.g. [\"Price\",\"Qty\"]."
+        \\    },
+        \\    "fields": {
+        \\      "type": "string",
+        \\      "description": "Optional JSON array of row field values (parallel to headers)."
+        \\    }
+        \\  },
+        \\  "required": [
+        \\    "expr"
+        \\  ]
+        \\}
+        ,
+    },
+    .{
+        .name = "bxp_eval_batch",
+        .description = "Evaluate many bxp expressions against one row in a single call. Returns " ++
+            "{results:[{ok,value}|{ok:false,error,detail,off,len}, ...]} aligned to the " ++
+            "input order. A well-formed request always succeeds; per-expr failures are " ++
+            "carried by each result's ok flag.",
+        .input_schema =
+        \\{
+        \\  "type": "object",
+        \\  "properties": {
+        \\    "headers": {
+        \\      "type": "array",
+        \\      "items": {
+        \\        "type": "string"
+        \\      },
+        \\      "description": "Column header names."
+        \\    },
+        \\    "fields": {
+        \\      "type": "array",
+        \\      "items": {
+        \\        "type": "string"
+        \\      },
+        \\      "description": "Row field values (parallel to headers; ragged rows tolerated)."
+        \\    },
+        \\    "exprs": {
+        \\      "type": "array",
+        \\      "items": {
+        \\        "type": "string"
+        \\      },
+        \\      "description": "Expressions to evaluate against the row."
+        \\    },
+        \\    "maps": {
+        \\      "type": "object",
+        \\      "description": "Optional named key-value maps { name: { key: value } } resolved by REMAP (whole-value) / REPLACE (substring)."
+        \\    },
+        \\    "lookups": {
+        \\      "type": "object",
+        \\      "description": "Optional flat pre_pass lookup blob for LOOKUP() (NUL-separated name/key/field keys)."
+        \\    },
+        \\    "single_prepass_name": {
+        \\      "type": "string",
+        \\      "description": "Optional implicit pre_pass name enabling 2-arg LOOKUP(key, field)."
+        \\    }
+        \\  },
+        \\  "required": [
+        \\    "headers",
+        \\    "fields",
+        \\    "exprs"
+        \\  ]
+        \\}
+        ,
+    },
+    .{
+        .name = "bxp_eval_trace",
+        .description = "Evaluate one bxp expression with a per-call execution trace. Returns NDJSON " ++
+            "(one JSON object per line): one {\"fn\",\"src_start\",\"src_end\",\"value\"} line per " ++
+            "function call as the engine evaluates inside-out, then a terminal line — " ++
+            "{\"t\":\"final\",\"value\":\"...\"} on success or " ++
+            "{\"t\":\"error\",\"error\",\"detail\",\"off\",\"len\"} on failure. Use to debug HOW a " ++
+            "complex expression computes its result, beyond bxp_eval's final value.",
+        .input_schema =
+        \\{
+        \\  "type": "object",
+        \\  "properties": {
+        \\    "expr": {
+        \\      "type": "string",
+        \\      "description": "The expression text."
+        \\    },
+        \\    "headers": {
+        \\      "type": "string",
+        \\      "description": "Optional JSON array of column header names, e.g. [\"Price\",\"Qty\"]."
+        \\    },
+        \\    "fields": {
+        \\      "type": "string",
+        \\      "description": "Optional JSON array of row field values (parallel to headers)."
+        \\    }
+        \\  },
+        \\  "required": [
+        \\    "expr"
+        \\  ]
+        \\}
+        ,
+    },
+    .{
+        .name = "bxp_docs",
+        .description = "Return the full bxp language/schema documentation as JSON (functions, keywords, " ++
+            "operators, tokens, config_schema).",
+        .input_schema =
+        \\{
+        \\  "type": "object",
+        \\  "properties": {},
+        \\  "required": []
+        \\}
+        ,
+    },
+    .{
+        .name = "bxp_list_templates",
+        .description = "List every conversion template declared in a bxp-cli config (JSON5). Returns " ++
+            "{templates:[{id,data_dir,file_pattern_in,file_pattern_out,file_type_in,file_type_out,description}, " ++
+            "...]}; no semantic validation, so broken templates still appear with an error " ++
+            "field.",
+        .input_schema =
+        \\{
+        \\  "type": "object",
+        \\  "properties": {
+        \\    "config": {
+        \\      "type": "string",
+        \\      "description": "The full bxp-cli config text (JSON5)."
+        \\    }
+        \\  },
+        \\  "required": [
+        \\    "config"
+        \\  ]
+        \\}
+        ,
+    },
+    .{
+        .name = "bxp_fetch_template",
+        .description = "Fetch one conversion template's raw JSON by id from a bxp-cli config (JSON5). " ++
+            "Returns the template object, or {\"$err_1\":\"...\"} if the id is absent.",
+        .input_schema =
+        \\{
+        \\  "type": "object",
+        \\  "properties": {
+        \\    "config": {
+        \\      "type": "string",
+        \\      "description": "The full bxp-cli config text (JSON5)."
+        \\    },
+        \\    "id": {
+        \\      "type": "string",
+        \\      "description": "The template id to fetch."
+        \\    }
+        \\  },
+        \\  "required": [
+        \\    "config",
+        \\    "id"
+        \\  ]
+        \\}
+        ,
+    },
+    .{
+        .name = "bxp_simulate",
+        .description = "Run a full conversion end-to-end: stage the config (JSON5) + input CSV in a " ++
+            "scratch workspace, run the chosen template through bxp-cli, and return the " ++
+            "produced output, a record-count diff, bxp-cli's summary + diagnostics, and a " ++
+            "per-row `trace` (BXTB sidecar): for each input row whether it was written, " ++
+            "filtered (with reason: rule_skip / no_rule_match), or errored — each carrying " ++
+            "the 1-based input-line number. Verifies a config for real " ++
+            "(pre_pass/LOOKUP/row_rules) — what bxp_eval/bxp_validate cannot. CSV-input " ++
+            "templates only. ok=true means the run happened; consult " ++
+            "exit_code/status/diagnostics (0=ok, 2=warnings, 1=error).",
+        .input_schema =
+        \\{
+        \\  "type": "object",
+        \\  "properties": {
+        \\    "config": {
+        \\      "type": "string",
+        \\      "description": "The full bxp-cli config text (JSON5)."
+        \\    },
+        \\    "template": {
+        \\      "type": "string",
+        \\      "description": "The conversion template id to run."
+        \\    },
+        \\    "csv": {
+        \\      "type": "string",
+        \\      "description": "The input CSV content (becomes the single input file for the run)."
+        \\    },
+        \\    "workspace": {
+        \\      "type": "string",
+        \\      "description": "Optional scratch-workspace id (defaults to the template id). Reused across calls, so repeated runs don't litter temp with new dirs."
+        \\    }
+        \\  },
+        \\  "required": [
+        \\    "config",
+        \\    "template",
+        \\    "csv"
+        \\  ]
+        \\}
+        ,
+        .output_schema =
+        \\{
+        \\  "type": "object",
+        \\  "properties": {
+        \\    "ok": {
+        \\      "type": "boolean"
+        \\    },
+        \\    "template": {
+        \\      "type": "string"
+        \\    },
+        \\    "exit_code": {
+        \\      "type": "integer"
+        \\    },
+        \\    "status": {
+        \\      "type": "string",
+        \\      "enum": [
+        \\        "ok",
+        \\        "warnings",
+        \\        "error"
+        \\      ]
+        \\    },
+        \\    "input": {
+        \\      "type": "object",
+        \\      "properties": {
+        \\        "records": {
+        \\          "type": "integer",
+        \\          "description": "Data rows in the input CSV (header excluded), so it lines up with trace.source_rows."
+        \\        },
+        \\        "csv": {
+        \\          "type": "string"
+        \\        }
+        \\      }
+        \\    },
+        \\    "output_records": {
+        \\      "type": "integer",
+        \\      "description": "Total data rows across all output files (each file's header excluded), comparable to trace.written_rows."
+        \\    },
+        \\    "outputs": {
+        \\      "type": "array",
+        \\      "items": {
+        \\        "type": "object",
+        \\        "properties": {
+        \\          "file": {
+        \\            "type": "string"
+        \\          },
+        \\          "records": {
+        \\            "type": "integer"
+        \\          },
+        \\          "csv": {
+        \\            "type": "string"
+        \\          },
+        \\          "error": {
+        \\            "type": "string",
+        \\            "description": "Present instead of csv/records when the output file could not be read back (e.g. exceeds the 16 MB cap)."
+        \\          }
+        \\        }
+        \\      }
+        \\    },
+        \\    "summary": {
+        \\      "type": "string"
+        \\    },
+        \\    "diagnostics": {
+        \\      "type": "string"
+        \\    },
+        \\    "trace": {
+        \\      "type": "object",
+        \\      "properties": {
+        \\        "available": {
+        \\          "type": "boolean"
+        \\        },
+        \\        "source_rows": {
+        \\          "type": "integer"
+        \\        },
+        \\        "written_rows": {
+        \\          "type": "integer"
+        \\        },
+        \\        "errors": {
+        \\          "type": "integer"
+        \\        },
+        \\        "warnings": {
+        \\          "type": "integer"
+        \\        },
+        \\        "filtered": {
+        \\          "type": "object",
+        \\          "properties": {
+        \\            "count": {
+        \\              "type": "integer"
+        \\            },
+        \\            "sample": {
+        \\              "type": "array",
+        \\              "items": {
+        \\                "type": "object",
+        \\                "properties": {
+        \\                  "input_row": {
+        \\                    "type": "integer"
+        \\                  },
+        \\                  "source_offset": {
+        \\                    "type": "integer"
+        \\                  },
+        \\                  "reason": {
+        \\                    "type": "string"
+        \\                  }
+        \\                }
+        \\              }
+        \\            }
+        \\          }
+        \\        },
+        \\        "row_errors": {
+        \\          "type": "object",
+        \\          "properties": {
+        \\            "count": {
+        \\              "type": "integer"
+        \\            },
+        \\            "sample": {
+        \\              "type": "array",
+        \\              "items": {
+        \\                "type": "object",
+        \\                "properties": {
+        \\                  "input_row": {
+        \\                    "type": "integer"
+        \\                  },
+        \\                  "source_offset": {
+        \\                    "type": "integer"
+        \\                  },
+        \\                  "variable": {
+        \\                    "type": "string"
+        \\                  },
+        \\                  "kind": {
+        \\                    "type": "string"
+        \\                  },
+        \\                  "detail": {
+        \\                    "type": "string"
+        \\                  },
+        \\                  "origin": {
+        \\                    "type": "string"
+        \\                  }
+        \\                }
+        \\              }
+        \\            }
+        \\          }
+        \\        },
+        \\        "output_rows": {
+        \\          "type": "object",
+        \\          "properties": {
+        \\            "count": {
+        \\              "type": "integer"
+        \\            },
+        \\            "sample": {
+        \\              "type": "array",
+        \\              "items": {
+        \\                "type": "object",
+        \\                "properties": {
+        \\                  "input_row": {
+        \\                    "type": "integer"
+        \\                  },
+        \\                  "source_offset": {
+        \\                    "type": "integer"
+        \\                  },
+        \\                  "output_idx": {
+        \\                    "type": "integer"
+        \\                  },
+        \\                  "rule": {
+        \\                    "type": "integer"
+        \\                  },
+        \\                  "action": {
+        \\                    "type": "string"
+        \\                  }
+        \\                }
+        \\              }
+        \\            }
+        \\          }
+        \\        },
+        \\        "prepass_entries": {
+        \\          "type": "integer"
+        \\        }
+        \\      }
+        \\    },
+        \\    "workspace": {
+        \\      "type": "string"
+        \\    },
+        \\    "error": {
+        \\      "type": "string"
+        \\    },
+        \\    "detail": {
+        \\      "type": "string"
+        \\    }
+        \\  }
+        \\}
+        ,
+    },
+};
+
+/// Assemble the JSON-RPC `tools/list` result from the `tool_docs` catalog via
+/// the JSON serializer — the same `std.json.Stringify` path `docs.zig` uses, so
+/// the serializer handles all string escaping; no hand-rolled quoting, no
+/// comptime. `tools/list` is a once-per-session call, so building it on demand
+/// is free. The `input_schema` / `output_schema` literals are parsed to a
+/// `Value` and re-emitted, so they flow through the same serializer (single
+/// source: the catalog above).
+pub fn buildToolsList(a: std.mem.Allocator) ![]u8 {
+    var aw: std.Io.Writer.Allocating = .init(a);
+    errdefer aw.deinit();
+    var jw: std.json.Stringify = .{ .writer = &aw.writer, .options = .{} };
+    try jw.beginObject();
+    try jw.objectField("tools");
+    try jw.beginArray();
+    for (tool_docs) |t| {
+        try jw.beginObject();
+        try jw.objectField("name");
+        try jw.write(t.name);
+        try jw.objectField("description");
+        try jw.write(t.description);
+        try jw.objectField("inputSchema");
+        try writeRawJson(a, &jw, t.input_schema);
+        if (t.output_schema.len != 0) {
+            try jw.objectField("outputSchema");
+            try writeRawJson(a, &jw, t.output_schema);
+        }
+        try jw.endObject();
+    }
+    try jw.endArray();
+    try jw.endObject();
+    return aw.toOwnedSlice();
+}
+
+/// Emit a raw JSON-Schema literal through the serializer: parse it to a `Value`
+/// and `write` it, so it is validated and re-serialized in the same stream
+/// (keeping `jw`'s object/array state consistent).
+fn writeRawJson(a: std.mem.Allocator, jw: *std.json.Stringify, raw: []const u8) !void {
+    var p = try std.json.parseFromSlice(std.json.Value, a, raw, .{});
+    defer p.deinit();
+    try jw.write(p.value);
+}
 
 /// Whether a tool's textual result is a single top-level JSON object eligible
 /// for MCP `structuredContent`. `bxp_eval_trace` streams NDJSON (many lines, or

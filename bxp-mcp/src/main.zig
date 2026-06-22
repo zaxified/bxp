@@ -12,6 +12,7 @@
 
 const std = @import("std");
 const server = @import("server.zig");
+const tools = @import("tools.zig");
 const build_options = @import("build_options");
 
 /// Write a short message to stdout (Zig 0.16: stdout access goes through `Io`).
@@ -50,16 +51,22 @@ pub fn main(init: std.process.Init) void {
             return;
         }
         if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
-            const msg =
+            // The tool list is NOT hand-written — it renders from the
+            // `tools.tool_docs` catalog (the same single source behind
+            // `tools/list`), so --help can't drift from the actual tool set.
+            var buf: [2048]u8 = undefined;
+            var w = std.Io.Writer.fixed(&buf);
+            w.writeAll(
                 \\bxp-mcp — MCP server (JSON-RPC 2.0 over stdio)
                 \\
-                \\Speaks MCP on stdin/stdout. Tools: bxp_validate,
-                \\bxp_validate_expr, bxp_eval, bxp_eval_batch, bxp_eval_trace,
-                \\bxp_docs, bxp_list_templates, bxp_fetch_template, bxp_simulate.
-                \\Register with an MCP client via "command": "bxp-mcp".
+                \\Speaks MCP on stdin/stdout. Register with an MCP client via
+                \\"command": "bxp-mcp". Send tools/list for the full schemas.
                 \\
-            ;
-            writeStdout(io, msg);
+                \\Tools:
+                \\
+            ) catch {};
+            for (tools.tool_docs) |t| w.print("  {s}\n", .{t.name}) catch {};
+            writeStdout(io, w.buffered());
             return;
         }
     }
