@@ -2,6 +2,65 @@ import 'dart:convert';
 import 'dart:io';
 import 'dev_trace.dart';
 
+/// One persisted user preference, catalogued. Co-located with [PrefsService];
+/// the single source for every pref's on-disk [key] + a human [description].
+/// Call sites read/write through `Prefs.<name>.key` instead of a bare string
+/// literal (the key lived in two files before — `main.dart` + the settings
+/// inspector), and the settings inspector renders [Prefs.all] the same way it
+/// renders the `ShortcutDoc` catalogue.
+///
+/// Deliberately no `defaultValue` field: the mcp host/port defaults already
+/// have a single home in `GuiMcpServer.kDefaultMcpHost/kDefaultMcpPort` and the
+/// rest are trivial inline fallbacks (`?? []`, `getBool` → false), so carrying
+/// defaults here would duplicate them. This mirrors `ShortcutDoc`, which is
+/// likewise key/label only.
+class PrefDoc {
+  /// On-disk JSON key (the `_data` map key written to `bxp-gui.json`).
+  final String key;
+
+  /// Human-facing description — the settings-inspector row label.
+  final String description;
+
+  const PrefDoc(this.key, this.description);
+}
+
+/// The catalogue of every persisted preference — the single source for pref
+/// key names and their descriptions. Named entries so call sites reference
+/// e.g. `Prefs.zoom.key`; [all] drives the settings inspector's display.
+abstract final class Prefs {
+  static const theme =
+      PrefDoc('bxp-ui.theme', 'Active UI theme preset name.');
+  static const zoom =
+      PrefDoc('bxp-gui.zoom', 'UI zoom factor, in integer percent.');
+  static const recent =
+      PrefDoc('bxp-ui.recent', 'Recently opened config files (most-recent first).');
+  static const customPlaces =
+      PrefDoc('bxp-gui.customPlaces', 'User-pinned directories in the open dialog.');
+  static const mcpEnabled =
+      PrefDoc('bxp-gui.mcp-enabled', 'Whether the embedded gui-mcp server starts (default on).');
+  static const mcpHost =
+      PrefDoc('bxp-gui.mcpHost', 'gui-mcp bind host.');
+  static const mcpPort =
+      PrefDoc('bxp-gui.mcpPort', 'gui-mcp bind port.');
+  static const mcpAutoApprove = PrefDoc('bxp-gui.mcpAutoApprove',
+      'Auto-approve destructive agent actions (skip the confirm dialog).');
+  static const mcpOriginAllowlist = PrefDoc('bxp-gui.mcpOriginAllowlist',
+      'Allowed Origins for gui-mcp (empty = permissive).');
+
+  /// Every pref in display order — the settings inspector renders this list.
+  static const List<PrefDoc> all = [
+    theme,
+    zoom,
+    recent,
+    customPlaces,
+    mcpEnabled,
+    mcpHost,
+    mcpPort,
+    mcpAutoApprove,
+    mcpOriginAllowlist,
+  ];
+}
+
 /// User-prefs persistence backed by a visible JSON file at a canonical OS
 /// path.
 ///

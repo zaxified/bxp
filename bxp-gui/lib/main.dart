@@ -859,13 +859,13 @@ class _AgentServerListenerState extends State<_AgentServerListener> {
     final store = _store;
     if (store == null || !store.initialized) return;
     _started = true;
-    if (store.prefs.getString('bxp-gui.mcp-enabled') == 'false') return;
+    if (store.prefs.getString(Prefs.mcpEnabled.key) == 'false') return;
     // Resolve bind config: persisted prefs → env override → built-in default.
     final prefs = store.prefs;
-    final host = prefs.getString('bxp-gui.mcpHost') ??
+    final host = prefs.getString(Prefs.mcpHost.key) ??
         Platform.environment['BXP_GUI_MCP_HOST'] ??
         GuiMcpServer.kDefaultMcpHost;
-    final port = prefs.getDouble('bxp-gui.mcpPort')?.toInt() ??
+    final port = prefs.getDouble(Prefs.mcpPort.key)?.toInt() ??
         int.tryParse(Platform.environment['BXP_GUI_MCP_PORT'] ?? '') ??
         GuiMcpServer.kDefaultMcpPort;
     final allowlist = _readOriginAllowlist(prefs);
@@ -873,14 +873,14 @@ class _AgentServerListenerState extends State<_AgentServerListener> {
     // (env wins when either is set) now that prefs have loaded.
     final server = context.read<GuiMcpServer>();
     server.autoApprove = server.autoApprove ||
-        prefs.getBool('bxp-gui.mcpAutoApprove');
+        prefs.getBool(Prefs.mcpAutoApprove.key);
     unawaited(
         server.start(host: host, port: port, originAllowlist: allowlist));
   }
 
   List<String> _readOriginAllowlist(PrefsService prefs) {
     try {
-      return prefs.getStringList('bxp-gui.mcpOriginAllowlist') ?? const [];
+      return prefs.getStringList(Prefs.mcpOriginAllowlist.key) ?? const [];
     } catch (_) {
       return const [];
     }

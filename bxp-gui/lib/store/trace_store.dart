@@ -1147,7 +1147,7 @@ class TraceStore extends ChangeNotifier {
     // the app or leave it in a half-loaded state. On any single read
     // failure we silently keep the field's default value.
     try {
-      final stored = _prefs.getString('bxp-ui.theme');
+      final stored = _prefs.getString(Prefs.theme.key);
       if (stored != null && stored.isNotEmpty) _themePresetName = stored;
     } catch (_) {}
     try {
@@ -1157,7 +1157,7 @@ class TraceStore extends ChangeNotifier {
       // writes back as int next time we save. `getDouble` accepts both
       // ints and doubles in the JSON, so this also works for already-
       // migrated values.
-      final z = _prefs.getDouble('bxp-gui.zoom');
+      final z = _prefs.getDouble(Prefs.zoom.key);
       if (z != null && z.isFinite) {
         // Legacy values < 5 are fractional (e.g. 0.8); ≥ 5 are int
         // percent (e.g. 80). The cutoff sits well outside both ranges
@@ -1168,10 +1168,10 @@ class TraceStore extends ChangeNotifier {
       }
     } catch (_) {}
     try {
-      _recentFiles = _prefs.getStringList('bxp-ui.recent') ?? [];
+      _recentFiles = _prefs.getStringList(Prefs.recent.key) ?? [];
     } catch (_) {}
     try {
-      _customPlaces = _prefs.getStringList('bxp-gui.customPlaces') ?? [];
+      _customPlaces = _prefs.getStringList(Prefs.customPlaces.key) ?? [];
     } catch (_) {}
     notifyListeners();
 
@@ -1286,7 +1286,7 @@ class TraceStore extends ChangeNotifier {
       _recentFiles = _recentFiles.sublist(0, _recentMax);
     }
     if (_disposed) return;
-    await _prefs.setStringList('bxp-ui.recent', _recentFiles);
+    await _prefs.setStringList(Prefs.recent.key, _recentFiles);
     if (_disposed) return;
     notifyListeners();
   }
@@ -1299,14 +1299,14 @@ class TraceStore extends ChangeNotifier {
   Future<void> addCustomPlace(String path) async {
     if (path.isEmpty || _customPlaces.contains(path)) return;
     _customPlaces.add(path);
-    await _prefs.setStringList('bxp-gui.customPlaces', _customPlaces);
+    await _prefs.setStringList(Prefs.customPlaces.key, _customPlaces);
     if (_disposed) return;
     notifyListeners();
   }
 
   Future<void> removeCustomPlace(String path) async {
     if (!_customPlaces.remove(path)) return;
-    await _prefs.setStringList('bxp-gui.customPlaces', _customPlaces);
+    await _prefs.setStringList(Prefs.customPlaces.key, _customPlaces);
     if (_disposed) return;
     notifyListeners();
   }
@@ -1315,7 +1315,7 @@ class TraceStore extends ChangeNotifier {
   /// [cycleTheme] for the 5-preset rotation used by the new TopBar.
   void toggleTheme() async {
     _themePresetName = _themePresetName == 'slate' ? 'zinc' : 'slate';
-    await _prefs.setString('bxp-ui.theme', _themePresetName);
+    await _prefs.setString(Prefs.theme.key, _themePresetName);
     if (_disposed) return;
     notifyListeners();
   }
@@ -1327,7 +1327,7 @@ class TraceStore extends ChangeNotifier {
     if (_themePresetName == name) return;
     devTrace('action.theme.set', {'name': name});
     _themePresetName = name;
-    await _prefs.setString('bxp-ui.theme', _themePresetName);
+    await _prefs.setString(Prefs.theme.key, _themePresetName);
     if (_disposed) return;
     notifyListeners();
   }
@@ -1346,7 +1346,7 @@ class TraceStore extends ChangeNotifier {
       // Write as int so the file contains a clean "80", not "80.0".
       // The reader in `_init` accepts both shapes (legacy `0.8` double
       // and modern `80` int) and migrates on read.
-      await _prefs.setInt('bxp-gui.zoom', _zoomPercent);
+      await _prefs.setInt(Prefs.zoom.key, _zoomPercent);
     } catch (_) {
       // Persistence is best-effort. The user has already seen the zoom
       // change; failing the write would only silently corrupt their next

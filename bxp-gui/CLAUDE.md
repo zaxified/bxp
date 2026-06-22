@@ -168,8 +168,11 @@ builds before packaging.
 ## User preferences
 
 `PrefsService` ([lib/services/prefs_service.dart](lib/services/prefs_service.dart))
-persists 5 keys (`bxp-ui.theme`, `bxp-ui.textScheme`, `bxp-gui.zoom`,
-`bxp-ui.recent`, `bxp-gui.customPlaces`) to a single visible JSON file:
+persists user state to a single visible JSON file. Every persisted key is
+catalogued once in the `Prefs` table (same file) — theme, zoom, recent files,
+custom places, and the gui-mcp server settings; call sites reference
+`Prefs.<name>.key` rather than a string literal, and the settings inspector
+renders the catalogue. File location:
 
 - Linux: `~/.local/share/bxp-gui/bxp-gui.json`
 - macOS: `~/Library/Application Support/bxp-gui/bxp-gui.json`

@@ -11,6 +11,7 @@ import '../services/debug_settings.dart';
 import '../services/desktop_integration_service.dart';
 import '../services/diagnostic_log.dart';
 import '../services/gui_mcp_server.dart';
+import '../services/prefs_service.dart';
 import '../store/trace_store.dart';
 import 'components/integrate_dialog.dart';
 import 'layout_defaults.dart';
@@ -238,6 +239,11 @@ class _Body extends StatelessWidget {
       ('Keyboard shortcuts', [
         for (final s in shortcutCatalog()) (s.action, s.keys),
       ]),
+      // Rendered from the single Prefs catalog (prefs_service.dart) — the same
+      // source the read/write call sites use, so this list never drifts.
+      ('Preferences', [
+        for (final p in Prefs.all) (p.key, p.description),
+      ]),
     ];
 
     // Per-section Tables — each computes its own `IntrinsicColumnWidth` for
@@ -462,11 +468,14 @@ class _AgentSection extends StatefulWidget {
 }
 
 class _AgentSectionState extends State<_AgentSection> {
-  static const String _prefKey = 'bxp-gui.mcp-enabled';
-  static const String _hostKey = 'bxp-gui.mcpHost';
-  static const String _portKey = 'bxp-gui.mcpPort';
-  static const String _allowlistKey = 'bxp-gui.mcpOriginAllowlist';
-  static const String _autoApproveKey = 'bxp-gui.mcpAutoApprove';
+  // Key aliases sourced from the Prefs catalogue (prefs_service.dart) — the
+  // single source for these strings. `final`, not `const`: a field read off a
+  // const object isn't a const expression in Dart.
+  static final String _prefKey = Prefs.mcpEnabled.key;
+  static final String _hostKey = Prefs.mcpHost.key;
+  static final String _portKey = Prefs.mcpPort.key;
+  static final String _allowlistKey = Prefs.mcpOriginAllowlist.key;
+  static final String _autoApproveKey = Prefs.mcpAutoApprove.key;
   bool _busy = false;
 
   final _hostCtl = TextEditingController();
