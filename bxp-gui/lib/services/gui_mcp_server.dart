@@ -158,6 +158,40 @@ class AgentActivityEntry {
   });
 }
 
+/// One gui-mcp tool, catalogued. The 15 tools live as a browsable
+/// `List<GuiToolDoc>` (name + arg schema + annotations + handler) instead of
+/// 15 inline `registerTool` calls — the same "catalogue, don't inline" shape
+/// as `FnDoc` / `FieldDoc` / `ShortcutDoc`. [GuiMcpServer._buildServer]
+/// registers each entry in a loop, so nothing hand-maintains a parallel list.
+///
+/// Built per server instance rather than as a `const`: every [callback] closes
+/// over instance state (`_host`, `_record`, the `_json` / `_error` / confirm
+/// helpers), so the catalogue cannot be static.
+class GuiToolDoc {
+  /// MCP tool id — the wire name an agent calls (and the `tools/list` name).
+  final String name;
+
+  /// Agent-facing description surfaced in `tools/list`.
+  final String description;
+
+  /// JSON-Schema for the tool's arguments object.
+  final JsonObject inputSchema;
+
+  /// Behaviour hints (title, read-only / open-world) shown in `tools/list`.
+  final ToolAnnotations annotations;
+
+  /// Handler invoked on a `tools/call`.
+  final ToolFunction callback;
+
+  const GuiToolDoc(
+    this.name, {
+    required this.description,
+    required this.inputSchema,
+    required this.annotations,
+    required this.callback,
+  });
+}
+
 /// Embedded MCP server that exposes **stateful control of the running GUI**
 /// to an agent over localhost StreamableHTTP.
 ///
@@ -544,11 +578,29 @@ class GuiMcpServer extends ChangeNotifier {
     final server = McpServer(
       Implementation(name: 'bxp-gui', version: _version),
     );
+    for (final tool in _toolCatalog()) {
+      server.registerTool(
+        tool.name,
+        description: tool.description,
+        inputSchema: tool.inputSchema,
+        annotations: tool.annotations,
+        callback: tool.callback,
+      );
+    }
+    return server;
+  }
+
+  /// The gui-mcp tool catalogue — one [GuiToolDoc] per agent-callable tool, in
+  /// `tools/list` order. Built per-instance because each callback closes over
+  /// this server's `_host` / `_record` / state helpers; [_buildServer]
+  /// registers every entry in a loop, so there is no parallel hand-kept list.
+  List<GuiToolDoc> _toolCatalog() {
+    final tools = <GuiToolDoc>[];
 
     // get_state — read-only "see the screen" tool. The single biggest
     // value: the agent reads the live config/run/diagnostic state without
     // any screenshot.
-    server.registerTool(
+    tools.add(GuiToolDoc(
       'get_state',
       description:
           'Read the live GUI state: loaded config path, unsaved-changes '
@@ -567,11 +619,11 @@ class GuiMcpServer extends ChangeNotifier {
             'ok');
         return _json(state);
       },
-    );
+    ));
 
     // edit_node — mutate a scalar leaf through the SAME action the UI uses.
     // Live + undoable; the tree repaints because editConfigNode notifies.
-    server.registerTool(
+    tools.add(GuiToolDoc(
       'edit_node',
       description:
           'Edit a scalar leaf in the loaded config. `path` is the list of '
@@ -618,12 +670,12 @@ class GuiMcpServer extends ChangeNotifier {
           'errorsAtPath': errs,
         });
       },
-    );
+    ));
 
     // save — critical action: writes to disk. Gated by a user confirm
     // dialog. The tool BLOCKS until the user clicks; cancel/no-UI returns a
     // {rejected} result rather than hanging.
-    server.registerTool(
+    tools.add(GuiToolDoc(
       'save',
       description:
           'Save the edited config back to disk (atomic + validated). Asks '
@@ -655,10 +707,10 @@ class GuiMcpServer extends ChangeNotifier {
           'error': ?err,
         });
       },
-    );
+    ));
 
     // open_config — load a config file from disk (replaces the current one).
-    server.registerTool(
+    tools.add(GuiToolDoc(
       'open_config',
       description:
           'Load a config file from disk into the editor, replacing the '
@@ -690,10 +742,10 @@ class GuiMcpServer extends ChangeNotifier {
           'error': ?err,
         });
       },
-    );
+    ));
 
     // reload — re-read the active config from disk (drops unsaved edits).
-    server.registerTool(
+    tools.add(GuiToolDoc(
       'reload',
       description:
           'Reload the active config from disk, discarding unsaved edits. '
@@ -715,10 +767,10 @@ class GuiMcpServer extends ChangeNotifier {
           'error': ?err,
         });
       },
-    );
+    ));
 
     // dry_run — run bxp-cli without writing output files.
-    server.registerTool(
+    tools.add(GuiToolDoc(
       'dry_run',
       description:
           'Run the conversion in dry-run mode (no output files written). '
@@ -734,10 +786,10 @@ class GuiMcpServer extends ChangeNotifier {
         await _host.runDryRun();
         return _runResult('dry_run');
       },
-    );
+    ));
 
     // full_run — critical: writes output files. Confirmed.
-    server.registerTool(
+    tools.add(GuiToolDoc(
       'full_run',
       description:
           'Run the full conversion, writing output files to the configured '
@@ -762,10 +814,10 @@ class GuiMcpServer extends ChangeNotifier {
         await _host.runFullRun();
         return _runResult('full_run');
       },
-    );
+    ));
 
     // delete_node — critical: removes a config entry. Confirmed.
-    server.registerTool(
+    tools.add(GuiToolDoc(
       'delete_node',
       description:
           'Delete the config entry at `path` (the same action as the tree '
@@ -819,11 +871,11 @@ class GuiMcpServer extends ChangeNotifier {
                 'schema-required key, or the path did not resolve.',
         });
       },
-    );
+    ));
 
     // insert_node — add a child to a container via the SAME action the UI
     // uses. Additive (not destructive), so no confirm — like edit_node.
-    server.registerTool(
+    tools.add(GuiToolDoc(
       'insert_node',
       description:
           'Insert a new entry into a container in the loaded config. `path` '
@@ -893,10 +945,10 @@ class GuiMcpServer extends ChangeNotifier {
                 'schema-rejected.',
         });
       },
-    );
+    ));
 
     // rename_key — rename an object key via the SAME action the UI uses.
-    server.registerTool(
+    tools.add(GuiToolDoc(
       'rename_key',
       description:
           'Rename the object key at `path` to `new_key` (the same action as '
@@ -949,10 +1001,10 @@ class GuiMcpServer extends ChangeNotifier {
                 'not resolve.',
         });
       },
-    );
+    ));
 
     // move_node — reorder an entry among its siblings (non-destructive).
-    server.registerTool(
+    tools.add(GuiToolDoc(
       'move_node',
       description:
           'Reorder the entry at `path` among its siblings by `delta` '
@@ -1008,10 +1060,10 @@ class GuiMcpServer extends ChangeNotifier {
                 'or the path did not resolve.',
         });
       },
-    );
+    ));
 
     // set_template — choose which template dry/full runs target.
-    server.registerTool(
+    tools.add(GuiToolDoc(
       'set_template',
       description:
           'Set the active conversion template that dry_run / full_run '
@@ -1045,10 +1097,10 @@ class GuiMcpServer extends ChangeNotifier {
           'availableTemplates': available,
         });
       },
-    );
+    ));
 
     // get_row_detail — drill into one input row of the most recent run.
-    server.registerTool(
+    tools.add(GuiToolDoc(
       'get_row_detail',
       description:
           'Drill into one input row of the most recent run: its source '
@@ -1091,10 +1143,10 @@ class GuiMcpServer extends ChangeNotifier {
             detail['found'] == true ? 'ok' : 'error');
         return _json(detail);
       },
-    );
+    ));
 
     // get_trace — read-only summary of the most recent run's btrace data.
-    server.registerTool(
+    tools.add(GuiToolDoc(
       'get_trace',
       description:
           'Summarise the most recent dry/full run captured via btrace: '
@@ -1116,11 +1168,11 @@ class GuiMcpServer extends ChangeNotifier {
         );
         return _json({'trace': summary});
       },
-    );
+    ));
 
     // exit — critical: quits the app. Confirmed. The response is returned
     // before the process is torn down so the agent gets a clean reply.
-    server.registerTool(
+    tools.add(GuiToolDoc(
       'exit',
       description: 'Quit the bxp-gui application. Asks the user to confirm.',
       inputSchema: JsonSchema.object(properties: const {}, required: const []),
@@ -1140,9 +1192,9 @@ class GuiMcpServer extends ChangeNotifier {
             Future.delayed(const Duration(milliseconds: 250), _host.exitApp));
         return _json({'exiting': true});
       },
-    );
+    ));
 
-    return server;
+    return tools;
   }
 
   /// Shared shape for the dry/full run tools: status + exit code + error.
