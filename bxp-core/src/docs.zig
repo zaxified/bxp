@@ -34,6 +34,8 @@ const functions = blk: {
 const keywords = expr.keywords;
 const operators = expr.operators;
 const tokens = expr.tokens;
+const date_tokens = expr.date_tokens;
+const precedence = expr.precedence;
 
 // ── Schema-tree bindings ─────────────────────────────────────────────────────
 //
@@ -267,6 +269,36 @@ pub fn writeDocs(alloc: std.mem.Allocator, writer: *std.Io.Writer) !void {
         try jw.write(tok.syntax);
         try jw.objectField("description");
         try jw.write(tok.description);
+        try jw.endObject();
+    }
+    try jw.endArray();
+
+    // date_tokens: the DATE_CONVERT format vocabulary (token / meaning / example).
+    try jw.objectField("date_tokens");
+    try jw.beginArray();
+    for (date_tokens) |t| {
+        try jw.beginObject();
+        try jw.objectField("token");
+        try jw.write(t.token);
+        try jw.objectField("meaning");
+        try jw.write(t.meaning);
+        try jw.objectField("example");
+        try jw.write(t.example);
+        try jw.endObject();
+    }
+    try jw.endArray();
+
+    // precedence: operator-precedence levels, highest (level 1) to lowest.
+    try jw.objectField("precedence");
+    try jw.beginArray();
+    for (precedence) |p| {
+        try jw.beginObject();
+        try jw.objectField("level");
+        try jw.write(p.level);
+        try jw.objectField("operators");
+        try jw.write(p.operators);
+        try jw.objectField("description");
+        try jw.write(p.description);
         try jw.endObject();
     }
     try jw.endArray();

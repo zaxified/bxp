@@ -26,6 +26,42 @@
 
 const std = @import("std");
 
+/// One DATE_CONVERT format token. Co-located with the parse/format vocabulary
+/// it documents (see the module header + `parse`/`format`). Consumed by
+/// `docs.zig` (→ the MCP `bxp_docs` tool and the GUI docs panel); a single
+/// source for the token reference so it can't drift from the parser.
+pub const DateTokenDoc = struct {
+    token: []const u8,
+    meaning: []const u8,
+    example: []const u8,
+};
+
+pub const date_tokens = [_]DateTokenDoc{
+    .{ .token = "YYYY", .meaning = "4-digit year", .example = "2026" },
+    .{ .token = "YY", .meaning = "2-digit year (00–69 → 2000s, 70–99 → 1900s)", .example = "26" },
+    .{ .token = "MM", .meaning = "2-digit month (01–12)", .example = "03" },
+    .{ .token = "M", .meaning = "1–2 digit month", .example = "3" },
+    .{ .token = "MMMM", .meaning = "Full month name", .example = "March" },
+    .{ .token = "MMM", .meaning = "3-char month abbreviation", .example = "Mar" },
+    .{ .token = "DD", .meaning = "2-digit day (01–31)", .example = "07" },
+    .{ .token = "D", .meaning = "1–2 digit day", .example = "7" },
+    .{ .token = "hh", .meaning = "2-digit hour, 24h (00–23)", .example = "14" },
+    .{ .token = "h", .meaning = "1–2 digit hour, 24h", .example = "14" },
+    .{ .token = "ii", .meaning = "2-digit hour, 12h (01–12)", .example = "02" },
+    .{ .token = "i", .meaning = "1–2 digit hour, 12h", .example = "2" },
+    .{ .token = "mm", .meaning = "2-digit minute", .example = "05" },
+    .{ .token = "m", .meaning = "1–2 digit minute", .example = "5" },
+    .{ .token = "ss", .meaning = "2-digit second", .example = "09" },
+    .{ .token = "s", .meaning = "1–2 digit second", .example = "9" },
+    .{ .token = "A", .meaning = "AM/PM uppercase", .example = "PM" },
+    .{ .token = "a", .meaning = "am/pm lowercase", .example = "pm" },
+    .{ .token = "EEEE", .meaning = "Full day name", .example = "Monday" },
+    .{ .token = "EEE/EE/E", .meaning = "Short day name", .example = "Mon" },
+    .{ .token = "e", .meaning = "Day of week as number (1 = Mon … 7 = Sun)", .example = "1" },
+    .{ .token = "[text]", .meaning = "Literal text (escaped inside format string)", .example = "[T] → T" },
+    .{ .token = "[*]", .meaning = "Wildcard — skip until the next token", .example = "skips Z, timezone suffix" },
+};
+
 pub const ParseError = error{
     InvalidFormat,
     InvalidDate,

@@ -3699,6 +3699,35 @@ fn canonicaliseNumericString(s: []const u8, alloc: std.mem.Allocator) ![]const u
 
 pub const keywords = [_]KeywordDoc{ and_kw_doc, or_kw_doc, not_kw_doc };
 
+// DATE_CONVERT format-token catalog — re-exported live from datefmt.zig, where
+// it sits next to the parse/format vocabulary it documents (same pattern as the
+// FnDoc/OperatorDoc catalogs). `docs.zig` flattens it into the docs JSON.
+pub const DateTokenDoc = datefmt.DateTokenDoc;
+pub const date_tokens = datefmt.date_tokens;
+
+/// One operator-precedence level. Co-located with the parser's recursive-descent
+/// chain (parseOr → parseAnd → parseNot → parseCompare → parseAdd → parseConcat
+/// → parseMul → parseUnary); it documents that ordering for the docs JSON. The
+/// canonical source is the module-header precedence table at the top of this
+/// file — keep both in lockstep with the parser. `level` 1 = highest (binds
+/// tightest), ascending = looser.
+pub const PrecedenceDoc = struct {
+    level: u8,
+    operators: []const u8,
+    description: []const u8,
+};
+
+pub const precedence = [_]PrecedenceDoc{
+    .{ .level = 1, .operators = "unary -", .description = "Numeric negation (binds tightest)." },
+    .{ .level = 2, .operators = "* /", .description = "Numeric multiply / divide." },
+    .{ .level = 3, .operators = "&", .description = "String concatenation." },
+    .{ .level = 4, .operators = "+ -", .description = "Numeric add / subtract." },
+    .{ .level = 5, .operators = "= != < > <= >=", .description = "Comparison (string equality only for = and !=)." },
+    .{ .level = 6, .operators = "NOT", .description = "Boolean negation (looser than comparison, tighter than AND)." },
+    .{ .level = 7, .operators = "AND", .description = "Boolean conjunction." },
+    .{ .level = 8, .operators = "OR", .description = "Boolean disjunction (binds loosest)." },
+};
+
 // Operator order chosen to match how the parser groups them visually — concat
 // + comparisons + additive + multiplicative — so a reader scanning the GUI's
 // docs panel sees roughly the same precedence flow as the parser code.
