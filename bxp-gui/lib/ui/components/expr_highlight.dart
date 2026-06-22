@@ -20,7 +20,11 @@ import '../theme/bxp_text.dart';
 class _LiveSets {
   final Set<String> functions;
   final Set<String> keywords;
-  const _LiveSets(this.functions, this.keywords);
+
+  /// Operator tokens from the catalog, sorted longest-first so a 2-char
+  /// operator (`<=` `>=` `!=`) matches before its 1-char prefix.
+  final List<String> operators;
+  const _LiveSets(this.functions, this.keywords, this.operators);
 }
 
 _LiveSets _liveSets(BuildContext context) {
@@ -33,13 +37,22 @@ _LiveSets _liveSets(BuildContext context) {
       .map((f) => (f['name']?.toString() ?? '').toUpperCase())
       .where((s) => s.isNotEmpty)
       .toSet();
-  final keywords = {
-    'TRUE', 'FALSE', 'NULL',
-    ...store.docKeywords
-        .map((k) => (k['name']?.toString() ?? '').toUpperCase())
-        .where((s) => s.isNotEmpty),
-  };
-  return _LiveSets(functions, keywords);
+  // Keywords come purely from the catalog (AND / OR / NOT). bxp-cli has no
+  // TRUE / FALSE / NULL literals — booleans only arise from comparisons — so
+  // they are deliberately NOT highlighted as keywords here (they tokenize as
+  // plain identifiers, exactly as the engine treats them).
+  final keywords = store.docKeywords
+      .map((k) => (k['name']?.toString() ?? '').toUpperCase())
+      .where((s) => s.isNotEmpty)
+      .toSet();
+  // Operator tokens from the same catalog (OperatorDoc.token), longest-first
+  // so `<=` `>=` `!=` win over their 1-char prefixes during tokenization.
+  final operators = store.docOperators
+      .map((o) => o['token']?.toString() ?? '')
+      .where((s) => s.isNotEmpty)
+      .toList()
+    ..sort((a, b) => b.length.compareTo(a.length));
+  return _LiveSets(functions, keywords, operators);
 }
 
 enum _Tok {
@@ -61,6 +74,16 @@ class _Span {
   const _Span(this.kind, this.text);
 }
 
+/// Longest-match an operator token from the catalog at the start of [rest].
+/// [operators] is pre-sorted longest-first (see [_LiveSets.operators]) so
+/// `<=` wins over `<`. Returns null when no catalog operator starts here.
+String? _matchOperator(String rest, List<String> operators) {
+  for (final op in operators) {
+    if (rest.startsWith(op)) return op;
+  }
+  return null;
+}
+
 List<_Span> _tokenize(String src, _LiveSets sets) {
   final out = <_Span>[];
   int i = 0;
@@ -77,8 +100,6 @@ List<_Span> _tokenize(String src, _LiveSets sets) {
   final tripleQuote = RegExp(r"^'''");
   final str = RegExp(r"^'([^'\\]|\\.)*'");
   final num = RegExp(r'^\d+(\.\d+)?');
-  final op2 = RegExp(r'^(<=|>=|!=)');
-  final op1 = RegExp(r'^[=<>+\-*/&]');
   final punct = RegExp(r'^[(),]');
   final id = RegExp(r'^[A-Za-z_][A-Za-z0-9_]*');
 
@@ -115,14 +136,10 @@ List<_Span> _tokenize(String src, _LiveSets sets) {
       i += m.group(0)!.length;
       continue;
     }
-    if ((m = op2.firstMatch(rest)) != null) {
-      out.add(_Span(_Tok.op, m!.group(0)!));
-      i += m.group(0)!.length;
-      continue;
-    }
-    if ((m = op1.firstMatch(rest)) != null) {
-      out.add(_Span(_Tok.op, m!.group(0)!));
-      i += m.group(0)!.length;
+    final op = _matchOperator(rest, sets.operators);
+    if (op != null) {
+      out.add(_Span(_Tok.op, op));
+      i += op.length;
       continue;
     }
     if ((m = punct.firstMatch(rest)) != null) {
