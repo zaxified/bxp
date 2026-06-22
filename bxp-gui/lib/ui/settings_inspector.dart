@@ -233,22 +233,11 @@ class _Body extends StatelessWidget {
       ('Theme', [
         ('preset', store.themePresetName),
       ]),
-      ('Keyboard shortcuts', () {
-        final mod = commandModifierLabel;
-        return [
-          ('Save', '$mod+S'),
-          ('Reload from disk', '$mod+R'),
-          ('Undo / Redo', '$mod+Z / $mod+Y'),
-          ('Discard unsaved changes', '$mod+T'),
-          ('Validate', '$mod+E'),
-          ('Move focused node', '$mod+Shift+↑/↓'),
-          ('Delete focused node', '$mod+Shift+Del'),
-          ('Add child to focused node', '$mod+Shift+Insert'),
-          ('Rename map key (focused row)', 'double-click on the key chip'),
-          ('Open settings inspector', '$mod+Shift+S'),
-          ('Open theme inspector', '$mod+Shift+T'),
-        ];
-      }()),
+      // Rendered from the single ShortcutDoc catalog (platform_shortcuts.dart),
+      // co-located with the command-modifier helper — no hand-list here.
+      ('Keyboard shortcuts', [
+        for (final s in shortcutCatalog()) (s.action, s.keys),
+      ]),
     ];
 
     // Per-section Tables — each computes its own `IntrinsicColumnWidth` for
