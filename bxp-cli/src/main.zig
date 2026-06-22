@@ -16,13 +16,14 @@ const Output = pipeline.Output;
 
 const DEFAULT_CONFIG_PATH: []const u8 = "bxp-cli.json";
 
-/// Help text body. The two stream variants below pick which file
-/// descriptor it lands on:
-///   * `printHelp` — `--help` requested explicitly: stdout, so callers
-///     piping `bxp-cli --help | grep` work without `2>&1`.
-///   * `usageErr`  — argument-validation failures: stderr, alongside
-///     the error message they accompany.
-const USAGE_TEMPLATE =
+/// `--help` / usage text. The per-flag rows and exit codes are NOT written out
+/// by hand — they render from the `flags` / `exit_codes` catalogs below, each
+/// co-located with the code it documents (the parser, the exit sites), so the
+/// help can never drift from them. Two stream variants pick the descriptor:
+///   * `printHelp` — `--help` requested explicitly: stdout, so callers piping
+///     `bxp-cli --help | grep` work without `2>&1`.
+///   * `usageErr`  — argument-validation failures: stderr, alongside the error.
+const USAGE_HEAD =
     \\Broker eXchange Parser (BXP)
     \\
     \\  CLI tool to convert fiscal CSV exports from your favorite brokers to your favorite portfolio trackers.
@@ -34,46 +35,90 @@ const USAGE_TEMPLATE =
     \\  {s} --template <id> --data <path>      override templates's data_dir
     \\
     \\Options:
-    \\  --config <path>    load custom config instead of default bxp-cli.json
-    \\  --template <id>    choose single template
-    \\  --data <path>      override templates's data_dir (requires --template)
-    \\  --fresh            skip files whose output already exists (atomic O_EXCL)
-    \\  --dry-run          run the pipeline in memory without writing output files
-    \\  --trace            emit the binary BXTB trace stream on stdout (forces --quiet; conflicts with --debug)
-    \\  --trace-file <path> write a full binary trace (every row, every event) to <path>;
-    \\                     independent of --trace; useful for offline GUI drill-down
-    \\  --debug            suppresses informational stdout summaries; prints unmatched rows as JSON when row_rules_debug_missing is set
-    \\  --debug=json       emit ONE machine-readable JSON run summary on stdout (per-template + overall counts,
-    \\                     captured warnings/errors) instead of human stdout+stderr output; conflicts with --trace/--quiet/--debug
-    \\  --quiet            suppress informational stdout (errors still go to stderr)
-    \\  --check-fs <n>     opt-in: validate data_dir + input-file existence before any processing,
-    \\                     with N-second total timeout (e.g. --check-fs 5). Default off.
+    \\
+;
+
+const USAGE_NOTE =
     \\
     \\Value-taking options accept either `--name value` or `--name=value`.
     \\
-    \\  --version          print version and exit
-    \\  --help             print this help and exit
-    \\
-    \\Exit codes:
-    \\  0 - success
-    \\  1 - error
-    \\  2 - warnings
-    \\
 ;
+
+/// One documented CLI flag. Lives next to the argument parser (see `run`); the
+/// `--help` / usage renderer is its consumer. `arg` is the value placeholder
+/// (`""` = a boolean flag that takes no value).
+const FlagDoc = struct {
+    flag: []const u8,
+    arg: []const u8 = "",
+    description: []const u8,
+};
+
+const flags = [_]FlagDoc{
+    .{ .flag = "--config", .arg = "<path>", .description = "load custom config instead of default bxp-cli.json" },
+    .{ .flag = "--template", .arg = "<id>", .description = "choose single template" },
+    .{ .flag = "--data", .arg = "<path>", .description = "override templates's data_dir (requires --template)" },
+    .{ .flag = "--fresh", .description = "skip files whose output already exists (atomic O_EXCL)" },
+    .{ .flag = "--dry-run", .description = "run the pipeline in memory without writing output files" },
+    .{ .flag = "--trace", .description = "emit the binary BXTB trace stream on stdout (forces --quiet; conflicts with --debug)" },
+    .{ .flag = "--trace-file", .arg = "<path>", .description = "write a full binary trace (every row, every event) to <path>; independent of --trace; useful for offline GUI drill-down" },
+    .{ .flag = "--debug", .description = "suppresses informational stdout summaries; prints unmatched rows as JSON when row_rules_debug_missing is set" },
+    .{ .flag = "--debug=json", .description = "emit ONE machine-readable JSON run summary on stdout (per-template + overall counts, captured warnings/errors) instead of human stdout+stderr output; conflicts with --trace/--quiet/--debug" },
+    .{ .flag = "--quiet", .description = "suppress informational stdout (errors still go to stderr)" },
+    .{ .flag = "--check-fs", .arg = "<n>", .description = "opt-in: validate data_dir + input-file existence before any processing, with N-second total timeout (e.g. --check-fs 5). Default off." },
+    .{ .flag = "--version", .description = "print version and exit" },
+    .{ .flag = "--help", .description = "print this help and exit" },
+};
+
+/// One documented process exit code. Lives next to the exit-code precedence
+/// logic in `run`; the `--help` / usage renderer is its consumer.
+const ExitCodeDoc = struct {
+    code: u8,
+    meaning: []const u8,
+};
+
+const exit_codes = [_]ExitCodeDoc{
+    .{ .code = 0, .meaning = "success" },
+    .{ .code = 1, .meaning = "error" },
+    .{ .code = 2, .meaning = "warnings" },
+};
+
+/// Render the full usage text — fixed head, then the `flags` rows, then the
+/// `exit_codes` rows — into `w`. The single renderer behind both stream variants.
+fn writeUsage(w: *std.Io.Writer, prog: []const u8) void {
+    const SPACES = " " ** 24;
+    w.print(USAGE_HEAD, .{ prog, prog, prog }) catch return;
+    for (flags) |f| {
+        var label_buf: [48]u8 = undefined;
+        const label = if (f.arg.len > 0)
+            std.fmt.bufPrint(&label_buf, "{s} {s}", .{ f.flag, f.arg }) catch f.flag
+        else
+            f.flag;
+        const fill = if (label.len < 21) 21 - label.len else 1;
+        w.print("  {s}{s}{s}\n", .{ label, SPACES[0..fill], f.description }) catch return;
+    }
+    w.writeAll(USAGE_NOTE) catch return;
+    w.writeAll("\nExit codes:\n") catch return;
+    for (exit_codes) |e| {
+        w.print("  {d} - {s}\n", .{ e.code, e.meaning }) catch return;
+    }
+}
 
 /// Print the help text to stdout. Used for `--help`.
 fn printHelp(io: std.Io, prog: []const u8) void {
     var buf: [4096]u8 = undefined;
     var fw = std.Io.File.stdout().writer(io, &buf);
     const w = &fw.interface;
-    w.print(USAGE_TEMPLATE, .{ prog, prog, prog }) catch {};
+    writeUsage(w, prog);
     w.flush() catch {};
 }
 
 /// Print the help text to stderr. Used after an argument-validation
 /// failure where we want the help to accompany the error message.
 fn usageErr(prog: []const u8) void {
-    std.debug.print(USAGE_TEMPLATE, .{ prog, prog, prog });
+    var buf: [4096]u8 = undefined;
+    var w = std.Io.Writer.fixed(&buf);
+    writeUsage(&w, prog);
+    std.debug.print("{s}", .{w.buffered()});
 }
 
 /// Rejects paths that contain dangerous shell metacharacters or more than one ".." component.
