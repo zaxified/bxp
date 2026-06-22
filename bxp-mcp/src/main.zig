@@ -15,6 +15,20 @@ const server = @import("server.zig");
 const tools = @import("tools.zig");
 const build_options = @import("build_options");
 
+/// One documented CLI flag — same shape as bxp-cli's `FlagDoc`, so a single
+/// walker can render either binary's flags uniformly. Co-located with the arg
+/// parsing in `main` below; `arg` is the value placeholder ("" = takes no value).
+const FlagDoc = struct {
+    flag: []const u8,
+    arg: []const u8 = "",
+    description: []const u8,
+};
+
+const flags = [_]FlagDoc{
+    .{ .flag = "--version", .description = "print version and exit" },
+    .{ .flag = "--help", .description = "print this help and exit (also -h)" },
+};
+
 /// Write a short message to stdout (Zig 0.16: stdout access goes through `Io`).
 fn writeStdout(io: std.Io, msg: []const u8) void {
     var buf: [256]u8 = undefined;
@@ -51,9 +65,10 @@ pub fn main(init: std.process.Init) void {
             return;
         }
         if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
-            // The tool list is NOT hand-written — it renders from the
-            // `tools.tool_docs` catalog (the same single source behind
-            // `tools/list`), so --help can't drift from the actual tool set.
+            // Both lists render from catalogs (no hand-written prose): Options
+            // from `flags`, Tools from `tools.tool_docs` (the same source behind
+            // `tools/list`), so --help can't drift from either.
+            const SPACES = " " ** 24;
             var buf: [2048]u8 = undefined;
             var w = std.Io.Writer.fixed(&buf);
             w.writeAll(
@@ -62,9 +77,19 @@ pub fn main(init: std.process.Init) void {
                 \\Speaks MCP on stdin/stdout. Register with an MCP client via
                 \\"command": "bxp-mcp". Send tools/list for the full schemas.
                 \\
-                \\Tools:
+                \\Options:
                 \\
             ) catch {};
+            for (flags) |f| {
+                var lbuf: [48]u8 = undefined;
+                const label = if (f.arg.len > 0)
+                    std.fmt.bufPrint(&lbuf, "{s} {s}", .{ f.flag, f.arg }) catch f.flag
+                else
+                    f.flag;
+                const fill = if (label.len < 13) 13 - label.len else 1;
+                w.print("  {s}{s}{s}\n", .{ label, SPACES[0..fill], f.description }) catch {};
+            }
+            w.writeAll("\nTools:\n") catch {};
             for (tools.tool_docs) |t| w.print("  {s}\n", .{t.name}) catch {};
             writeStdout(io, w.buffered());
             return;
