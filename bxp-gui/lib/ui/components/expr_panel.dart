@@ -371,6 +371,25 @@ class _DocsPanel extends StatelessWidget {
           ),
         )
         .toList();
+    // PRECEDENCE: operator-binding levels, highest first (the catalog is already
+    // ordered by level). DATE TOKENS: the DATE_CONVERT format vocabulary, meaning
+    // + example folded into one description cell so it reuses the _OpRow widget.
+    final precs = store.docPrecedence
+        .map(
+          (p) => (
+            p['operators']?.toString() ?? '',
+            p['description']?.toString() ?? '',
+          ),
+        )
+        .toList();
+    final dtoks = store.docDateTokens
+        .map(
+          (d) => (
+            d['token']?.toString() ?? '',
+            '${d['meaning']?.toString() ?? ''}  ·  e.g. ${d['example']?.toString() ?? ''}',
+          ),
+        )
+        .toList();
 
     return Row(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -410,9 +429,17 @@ class _DocsPanel extends StatelessWidget {
                 const SizedBox(height: 8),
                 for (final o in ops) _OpRow(o.$1, o.$2),
                 const SizedBox(height: 16),
+                const _SectionLabel('PRECEDENCE'),
+                const SizedBox(height: 8),
+                _RefTable(precs, t.codeOperator),
+                const SizedBox(height: 16),
                 const _SectionLabel('SYNTAX'),
                 const SizedBox(height: 8),
                 for (final s in syntax) _SyntaxDoc(s.$1, s.$2, s.$3),
+                const SizedBox(height: 16),
+                const _SectionLabel('DATE TOKENS'),
+                const SizedBox(height: 8),
+                _RefTable(dtoks, t.codeOperator),
                 const SizedBox(height: 16),
                 const _SectionLabel('STATUS BAR'),
                 const SizedBox(height: 8),
@@ -652,6 +679,52 @@ class _KeyDoc extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Two-column reference table whose LEFT column sizes to its widest cell
+/// (`IntrinsicColumnWidth`), so every row's right column lines up — used for
+/// sections whose left token varies in width (PRECEDENCE, DATE TOKENS), where
+/// the fixed-width `_OpRow` would misalign.
+class _RefTable extends StatelessWidget {
+  final List<(String, String)> rows;
+  final Color leftColor;
+  const _RefTable(this.rows, this.leftColor);
+  @override
+  Widget build(BuildContext context) {
+    return Table(
+      columnWidths: const {
+        0: IntrinsicColumnWidth(),
+        1: FlexColumnWidth(),
+      },
+      defaultVerticalAlignment: TableCellVerticalAlignment.top,
+      children: [
+        for (final r in rows)
+          TableRow(
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(right: 10, bottom: 5),
+                child: Text(
+                  r.$1,
+                  style: BxpText.body(
+                    context,
+                    color: leftColor,
+                    size: BxpSize.sm,
+                    weight: BxpWeight.bold,
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.only(bottom: 5),
+                child: Text(
+                  r.$2,
+                  style: BxpText.muted(context, size: BxpSize.xs),
+                ),
+              ),
+            ],
+          ),
+      ],
     );
   }
 }

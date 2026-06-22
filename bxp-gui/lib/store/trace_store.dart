@@ -1256,6 +1256,12 @@ class TraceStore extends ChangeNotifier {
   List<Map<String, dynamic>> get docTokens =>
       ((docs?['tokens'] as List?) ?? const [])
           .cast<Map<String, dynamic>>();
+  List<Map<String, dynamic>> get docDateTokens =>
+      ((docs?['date_tokens'] as List?) ?? const [])
+          .cast<Map<String, dynamic>>();
+  List<Map<String, dynamic>> get docPrecedence =>
+      ((docs?['precedence'] as List?) ?? const [])
+          .cast<Map<String, dynamic>>();
   List<Map<String, dynamic>> get docConfigSchema =>
       ((docs?['config_schema'] as List?) ?? const [])
           .cast<Map<String, dynamic>>();
