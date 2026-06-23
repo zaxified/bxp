@@ -47,40 +47,14 @@ const USAGE_NOTE =
 /// One documented CLI flag. Lives next to the argument parser (see `run`); the
 /// `--help` / usage renderer is its consumer. `arg` is the value placeholder
 /// (`""` = a boolean flag that takes no value).
-const FlagDoc = struct {
-    flag: []const u8,
-    arg: []const u8 = "",
-    description: []const u8,
-};
-
-const flags = [_]FlagDoc{
-    .{ .flag = "--config", .arg = "<path>", .description = "load custom config instead of default bxp-cli.json" },
-    .{ .flag = "--template", .arg = "<id>", .description = "choose single template" },
-    .{ .flag = "--data", .arg = "<path>", .description = "override templates's data_dir (requires --template)" },
-    .{ .flag = "--fresh", .description = "skip files whose output already exists (atomic O_EXCL)" },
-    .{ .flag = "--dry-run", .description = "run the pipeline in memory without writing output files" },
-    .{ .flag = "--trace", .description = "emit the binary BXTB trace stream on stdout (forces --quiet; conflicts with --debug)" },
-    .{ .flag = "--trace-file", .arg = "<path>", .description = "write a full binary trace (every row, every event) to <path>; independent of --trace; useful for offline GUI drill-down" },
-    .{ .flag = "--debug", .description = "suppresses informational stdout summaries; prints unmatched rows as JSON when row_rules_debug_missing is set" },
-    .{ .flag = "--debug=json", .description = "emit ONE machine-readable JSON run summary on stdout (per-template + overall counts, captured warnings/errors) instead of human stdout+stderr output; conflicts with --trace/--quiet/--debug" },
-    .{ .flag = "--quiet", .description = "suppress informational stdout (errors still go to stderr)" },
-    .{ .flag = "--check-fs", .arg = "<n>", .description = "opt-in: validate data_dir + input-file existence before any processing, with N-second total timeout (e.g. --check-fs 5). Default off." },
-    .{ .flag = "--version", .description = "print version and exit" },
-    .{ .flag = "--help", .description = "print this help and exit" },
-};
-
-/// One documented process exit code. Lives next to the exit-code precedence
-/// logic in `run`; the `--help` / usage renderer is its consumer.
-const ExitCodeDoc = struct {
-    code: u8,
-    meaning: []const u8,
-};
-
-const exit_codes = [_]ExitCodeDoc{
-    .{ .code = 0, .meaning = "success" },
-    .{ .code = 1, .meaning = "error" },
-    .{ .code = 2, .meaning = "warnings" },
-};
+// The flag table and exit-code catalog live in `cli_docs.zig` so the docs-md
+// generator can import them without pulling in the whole CLI. Aliased here so
+// the usage renderer below keeps referencing `flags` / `exit_codes` unchanged.
+const cli_docs = @import("cli_docs.zig");
+const FlagDoc = cli_docs.FlagDoc;
+const flags = cli_docs.flags;
+const ExitCodeDoc = cli_docs.ExitCodeDoc;
+const exit_codes = cli_docs.exit_codes;
 
 /// Render the full usage text — fixed head, then the `flags` rows, then the
 /// `exit_codes` rows — into `w`. The single renderer behind both stream variants.

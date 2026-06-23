@@ -1,0 +1,109 @@
+site_name: BXP — Broker eXchange Parser
+site_description: Convert broker export statements into portfolio-tracker CSV via declarative JSON5 templates.
+site_url: https://zaxified.github.io/bxp/
+repo_url: https://github.com/zaxified/bxp
+repo_name: zaxified/bxp
+docs_dir: docs
+site_dir: site
+edit_uri: edit/master/docs/
+
+theme:
+  name: material
+  features:
+    - navigation.tabs        # top-level parts as tabs (Guide | Reference | …)
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.indexes     # a section landing page = index.md
+    - navigation.instant     # SPA-like nav — you don't lose your place
+    - navigation.top
+    - navigation.footer
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - toc.follow
+    - toc.integrate
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+      slugify: !!python/object/apply:pymdownx.slugs.slugify
+        kwds:
+          case: lower
+  - abbr                      # glossary terms → hover tooltips (no navigation)
+  - pymdownx.snippets:
+      auto_append:
+        - includes/abbreviations.md
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid       # render ```mermaid fenced blocks
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+
+not_in_nav: |
+  /includes/
+
+plugins:
+  - search
+
+nav:
+  - Home: index.md
+  - Getting Started:
+      - getting-started/install.md
+      - getting-started/first-conversion.md
+      - getting-started/built-in-templates.md
+  - Guide:
+      - guide/templates.md
+      - guide/expressions.md
+      - guide/dates.md
+      - guide/numbers-and-encoding.md
+      - guide/cross-row-joins.md
+      - guide/row-routing.md
+      - guide/targets.md
+      - guide/running.md
+  - Reference:
+      - reference/expr-functions.md
+      - reference/config-schema.md
+      - reference/date-tokens.md
+      - reference/cli-flags.md
+      - reference/mcp-tools.md
+      - reference/gui-agent-tools.md
+      - reference/gui-shortcuts.md
+      - reference/gui-prefs.md
+      - reference/exit-codes.md
+  - AI Workflow:
+      - ai/authoring-a-broker.md
+      - ai/gui-mcp.md
+      - ai/handoff.md
+  - GUI:
+      - gui/features.md
+      - gui/preferences.md
+      - gui/updates.md
+      - gui/troubleshooting.md
+  - Developer:
+      - dev/setup.md
+      - dev/architecture.md
+      - dev/gui.md
+      - dev/mcp.md
+      - dev/trace-protocol.md
+      - dev/release.md
+      - dev/roadmap.md

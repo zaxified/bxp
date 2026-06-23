@@ -59,7 +59,3 @@ step "$(_lab bxp-core   'unit tests')"  _zig_in "$MONO_ROOT/bxp-core" build test
 step "$(_lab bxp-cli    'build')"       _zig_in "$MONO_ROOT/bxp-cli"  build      -Doptimize=ReleaseSafe -Dcpu=baseline
 step "$(_lab bxp-cli    'unit tests')"  _zig_in "$MONO_ROOT/bxp-cli"  build test -Doptimize=ReleaseSafe -Dcpu=baseline
 step "$(_lab json5_ast  'unit tests')"  _json5_ast_tests
-# Drift guard: the two shipped readmes are generated from resources/readme.src.md
-# (scripts/gen-readme.sh). Fail if a committed variant is out of sync with a
-# fresh generation — i.e. someone edited a generated readme instead of the source.
-step "$(_lab readmes    'src sync')"    bash "$SCRIPT_DIR/gen-readme.sh" --check

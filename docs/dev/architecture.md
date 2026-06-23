@@ -1,6 +1,6 @@
 # BXP - Architecture
 
-> [← docs/](README.md)
+> [← docs/](../index.md)
 
 - [Bird's-eye View](#birds-eye-view)
 - bxp-cli
@@ -30,7 +30,7 @@ BXP is a single-binary ETL tool. All broker logic lives in a JSON5 config file -
 the binary is a generic engine. The diagram below shows the high-level relationship
 between components. It is a high-level topology (who talks to whom); the
 individual `bxp-core` modules and their internal dependencies are detailed in
-the [bxp-core modules table](devel.md#bxp-core-modules) and the
+the [bxp-core modules table](setup.md#bxp-core-modules) and the
 [Expression Evaluator — Call Stack](#expression-evaluator---call-stack) diagram
 below.
 
@@ -104,9 +104,9 @@ validation, the ExprPlayground, and the docs / config / template ops avoid the
 
 For the **per-call transport matrix** (which GUI calls use which transport on
 each OS, plus the two-cause "why" behind the split), see
-[`devel.md`'s "Why the bridge exists" + "Per-call routing"](devel.md#why-the-bridge-exists)
+[`devel.md`'s "Why the bridge exists" + "Per-call routing"](setup.md#why-the-bridge-exists)
 section. The bridge's C-ABI surface and Debug→ReleaseSafe build rationale live
-in [`bxp-gui-bridge/CLAUDE.md`](../bxp-gui-bridge/CLAUDE.md).
+in [`bxp-gui-bridge/CLAUDE.md`](https://github.com/zaxified/bxp/blob/master/bxp-gui-bridge/CLAUDE.md).
 
 The **engine modules** node groups two faces of `bxp-core`: the conversion
 engine (`csv` / `xlsx` / `json` / `json5` / `expr` / `datefmt` / `decimal` /
@@ -279,11 +279,11 @@ one:
 
 The BXTB trace stream itself stays single-stream — the `chunk_id` frame field
 is reserved for a future multi-stream dispatch but is always `0` today
-(see [trace-protokol.md](trace-protokol.md)).
+(see [trace-protokol.md](trace-protocol.md)).
 
 For the broader runtime cost model (what else speeds up / slows down a run)
 and the benchmark harness, see
-[devel.md → Performance model](devel.md#performance-model).
+[devel.md → Performance model](setup.md#performance-model).
 
 ---
 
@@ -386,7 +386,7 @@ the most expensive rung: on 1M synthetic rows it measured **~1.9× the wall time
 of a literal-only equivalent producing byte-identical output, at **flat peak
 RSS** (the engine is window/arena-bounded — no per-row growth). Reach for it only
 when a pattern the cheaper tools cannot phrase is genuinely needed; see
-[`examples/advanced/freeform-payment-memos`](../examples/advanced/freeform-payment-memos/00-readme.md)
+[`examples/advanced/freeform-payment-memos`](https://github.com/zaxified/bxp/blob/master/examples/advanced/freeform-payment-memos/00-readme.md)
 for the worked tradeoff and the full measurement table.
 
 The target persona is an Excel-comfortable analyst (broker statement
@@ -847,7 +847,7 @@ Key boundaries a developer should keep straight:
 
 Full detail — tool catalog, wire protocol, the `bxp_simulate` workspace + BXTB
 fold, build/test — lives in [`mcp.md`](mcp.md) and
-[`bxp-mcp/CLAUDE.md`](../bxp-mcp/CLAUDE.md).
+[`bxp-mcp/CLAUDE.md`](https://github.com/zaxified/bxp/blob/master/bxp-mcp/CLAUDE.md).
 
 ### Two agent-control surfaces
 

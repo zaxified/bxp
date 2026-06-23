@@ -590,6 +590,13 @@ class GuiMcpServer extends ChangeNotifier {
     return server;
   }
 
+  /// Public accessor for the tool catalogue, used by the docs generator
+  /// (tools/dart-doc-gen) to render the gui-agent-tools reference page from the
+  /// SAME catalogue `tools/list` serves. The generator only reads each entry's
+  /// `name` / `description`; the callbacks are constructed but never invoked, so
+  /// a stub host suffices.
+  List<GuiToolDoc> toolCatalogForDocs() => _toolCatalog();
+
   /// The gui-mcp tool catalogue — one [GuiToolDoc] per agent-callable tool, in
   /// `tools/list` order. Built per-instance because each callback closes over
   /// this server's `_host` / `_record` / state helpers; [_buildServer]

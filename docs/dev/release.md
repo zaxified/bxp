@@ -1,6 +1,6 @@
 # Cutting a release
 
-> [← docs/](README.md)
+> [← docs/](../index.md)
 
 Release artifacts are produced by `.github/workflows/release.yml` on
 every `v*` tag push. The pipeline fans out across three host runners

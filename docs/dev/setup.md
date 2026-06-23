@@ -1,6 +1,6 @@
 # BXP - Developer Guide
 
-> [← docs/](README.md)
+> [← docs/](../index.md)
 
 ---
 
@@ -338,9 +338,9 @@ spawn, draining its pipes in native Zig code. Library probe failure at startup i
 fatal on every platform.
 
 Implementation: routing decisions live in
-[`bxp-gui/lib/services/bxp_process_client.dart`](../bxp-gui/lib/services/bxp_process_client.dart)
+[`bxp-gui/lib/services/bxp_process_client.dart`](https://github.com/zaxified/bxp/blob/master/bxp-gui/lib/services/bxp_process_client.dart)
 (`_runOneShot`, `_runCliTraceViaBridge`, `traceExpr`). See
-[`bxp-gui-bridge/CLAUDE.md`](../bxp-gui-bridge/CLAUDE.md) for the C-ABI surface
+[`bxp-gui-bridge/CLAUDE.md`](https://github.com/zaxified/bxp/blob/master/bxp-gui-bridge/CLAUDE.md) for the C-ABI surface
 of each `bridge_*` entry point.
 
 ---
@@ -390,7 +390,7 @@ of each `bridge_*` entry point.
 - `Output` - thin wrapper around stdout that respects `--quiet` and `--debug` flags.
 - `SectionStats` - accumulates warning/error counts and elapsed time across templates.
 
-Deeper detail: [`bxp-cli/CLAUDE.md`](../bxp-cli/CLAUDE.md).
+Deeper detail: [`bxp-cli/CLAUDE.md`](https://github.com/zaxified/bxp/blob/master/bxp-cli/CLAUDE.md).
 
 ---
 
@@ -418,8 +418,8 @@ Adding an op: write the pure function in `inspect.zig`, then expose it from each
 adapter (a `bxp-mcp` tool in `bxp-mcp/src/tools.zig` + a `bridge_*` entry in
 `bxp-gui-bridge/src/main.zig`). No business logic lives in the adapters.
 
-Deeper detail: [`bxp-mcp/CLAUDE.md`](../bxp-mcp/CLAUDE.md),
-[`bxp-gui-bridge/CLAUDE.md`](../bxp-gui-bridge/CLAUDE.md).
+Deeper detail: [`bxp-mcp/CLAUDE.md`](https://github.com/zaxified/bxp/blob/master/bxp-mcp/CLAUDE.md),
+[`bxp-gui-bridge/CLAUDE.md`](https://github.com/zaxified/bxp/blob/master/bxp-gui-bridge/CLAUDE.md).
 
 ---
 
@@ -578,7 +578,7 @@ BXTB frame stream); fatal errors also stderr.
 > bytes `B`, `X`, `T`, `B` are written verbatim as the file-format magic at
 > the start of every `--trace` stream so `bxp-gui` and offline tools can
 > reject anything that does not begin with them. Defined in
-> [`bxp-core/src/btrace.zig`](../bxp-core/src/btrace.zig) as
+> [`bxp-core/src/btrace.zig`](https://github.com/zaxified/bxp/blob/master/bxp-core/src/btrace.zig) as
 > `FRAME_MAGIC = 0x42545842` (little-endian).
 
 **4. Template-strict, data-lenient (expr engine).** Two audiences get two
@@ -679,7 +679,7 @@ No code changes required — adding a broker is purely configuration work. The
 full config schema, expression reference, and field-by-field walkthrough live
 in the user-facing guide:
 
-→ [`resources/console/readme.md`](../resources/console/readme.md)
+→ [`resources/console/readme.md`](https://github.com/zaxified/bxp/blob/master/resources/console/readme.md)
 
 That document is what gets shipped inside `bxp-console` archives, so it
 double-serves new contributors and end users. The short skeleton:
@@ -831,13 +831,13 @@ stream identical to `inspect.evalTrace` output, where success/failure is read
 from the `t` field of the last line.
 
 **Worked reference — the shipped `bridge_eval_expr`:** see
-[`bxp-gui-bridge/src/main.zig`](../bxp-gui-bridge/src/main.zig) (`bridge_eval_expr`,
+[`bxp-gui-bridge/src/main.zig`](https://github.com/zaxified/bxp/blob/master/bxp-gui-bridge/src/main.zig) (`bridge_eval_expr`,
 `writeExprErrorJson`, `writeStaticErrorJson`). Note it does two things beyond a
 bare `expr.eval`: it runs `expr.staticCheckCalls` after a clean eval to catch
 literal-only mistakes the runtime skips (e.g. `SPLIT_PART(..., 0)`), mirroring
 `BrokerConfig.validate()` so editor-time and Save-time diagnostics agree. The
 Dart side lives in
-[`bxp-gui/lib/services/bridge_client.dart`](../bxp-gui/lib/services/bridge_client.dart).
+[`bxp-gui/lib/services/bridge_client.dart`](https://github.com/zaxified/bxp/blob/master/bxp-gui/lib/services/bridge_client.dart).
 
 Any ABI change (signature, new error code) must bump both the bridge export and
 its Dart shim in the **same commit** — there is no auto-versioned compatibility
@@ -1063,10 +1063,10 @@ automatically by Claude Code, but you can read them directly any time.
 
 | Module           | File                                                                              | What's in it                                                                                                                        |
 | ---------------- | --------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| Monorepo         | [`CLAUDE.md`](../CLAUDE.md)                                                       | Top-level layout + package dep graph + cross-cutting conventions                                                                    |
-| `bxp-cli`        | [`bxp-cli/CLAUDE.md`](../bxp-cli/CLAUDE.md)                                       | Full config reference, expression syntax, broker list, exit codes, output stream routing                                            |
-| `bxp-mcp`        | [`bxp-mcp/CLAUDE.md`](../bxp-mcp/CLAUDE.md)                                       | MCP server: adapter model, tool catalog, annotated JSON shape (`$comm_*`/`$err_*`/…), in-proc vs spawn, wire protocol, bxp_simulate |
-| `bxp-core`       | [`bxp-core/CLAUDE.md`](../bxp-core/CLAUDE.md)                                     | Per-module API surface, build details, "known non-issues" rationale                                                                 |
-| `bxp-gui`        | [`bxp-gui/CLAUDE.md`](../bxp-gui/CLAUDE.md)                                       | Flutter app structure, services/store/ui split, MCP debug workflow                                                                  |
-| `bxp-gui-bridge` | [`bxp-gui-bridge/CLAUDE.md`](../bxp-gui-bridge/CLAUDE.md)                         | C-ABI surface, Debug→ReleaseSafe rewrite rationale, Win-mandatory / cross-platform roles                                            |
-| `json5_ast`      | [`bxp-gui/packages/json5_ast/CLAUDE.md`](../bxp-gui/packages/json5_ast/CLAUDE.md) | Standalone-library-candidate status, comment ownership, future extraction recipe                                                    |
+| Monorepo         | [`CLAUDE.md`](https://github.com/zaxified/bxp/blob/master/CLAUDE.md)                                                       | Top-level layout + package dep graph + cross-cutting conventions                                                                    |
+| `bxp-cli`        | [`bxp-cli/CLAUDE.md`](https://github.com/zaxified/bxp/blob/master/bxp-cli/CLAUDE.md)                                       | Full config reference, expression syntax, broker list, exit codes, output stream routing                                            |
+| `bxp-mcp`        | [`bxp-mcp/CLAUDE.md`](https://github.com/zaxified/bxp/blob/master/bxp-mcp/CLAUDE.md)                                       | MCP server: adapter model, tool catalog, annotated JSON shape (`$comm_*`/`$err_*`/…), in-proc vs spawn, wire protocol, bxp_simulate |
+| `bxp-core`       | [`bxp-core/CLAUDE.md`](https://github.com/zaxified/bxp/blob/master/bxp-core/CLAUDE.md)                                     | Per-module API surface, build details, "known non-issues" rationale                                                                 |
+| `bxp-gui`        | [`bxp-gui/CLAUDE.md`](https://github.com/zaxified/bxp/blob/master/bxp-gui/CLAUDE.md)                                       | Flutter app structure, services/store/ui split, MCP debug workflow                                                                  |
+| `bxp-gui-bridge` | [`bxp-gui-bridge/CLAUDE.md`](https://github.com/zaxified/bxp/blob/master/bxp-gui-bridge/CLAUDE.md)                         | C-ABI surface, Debug→ReleaseSafe rewrite rationale, Win-mandatory / cross-platform roles                                            |
+| `json5_ast`      | [`bxp-gui/packages/json5_ast/CLAUDE.md`](https://github.com/zaxified/bxp/blob/master/bxp-gui/packages/json5_ast/CLAUDE.md) | Standalone-library-candidate status, comment ownership, future extraction recipe                                                    |

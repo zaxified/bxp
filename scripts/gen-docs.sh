@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+# Generate the MkDocs documentation site and (default) serve it locally.
+#
+# The reference pages under docs/reference/ are GENERATED from the in-code
+# `*Doc` catalogs by the central tool tools/zig-doc-gen (one binary that imports
+# every Zig catalog + the shared docs.writeTable renderer). The narrative pages
+# under docs/guide/, docs/getting-started/, etc. are hand-authored.
+#
+# Usage (from any directory):
+#   bash scripts/gen-docs.sh           — regenerate reference pages, build the
+#                                        site into site/, then `mkdocs serve`
+#   bash scripts/gen-docs.sh --build   — regenerate + build site/, no serve
+#   bash scripts/gen-docs.sh --check   — verify committed reference pages match a
+#                                        fresh generation + every reference page
+#                                        is in the nav; exit 1 + diff on drift
+#
+# NOTE: docs/reference/gui-agent-tools.md is hand-authored — the Dart GuiToolDoc
+# catalog is built with live handler closures, not static data, so it is not (yet)
+# machine-generated. It is excluded from the --check drift guard below.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MONO_ROOT="$(dirname "$SCRIPT_DIR")"
+REF_DIR="$MONO_ROOT/docs/reference"
+VENV="$MONO_ROOT/.venv-docs"
+MKDOCS="$VENV/bin/mkdocs"
+
+# The Zig-catalog reference pages the central generator owns (gui-agent-tools.md
+# is hand-authored — see the note above).
+GENERATED_PAGES=(
+  expr-functions.md
+  date-tokens.md
+  config-schema.md
+  cli-flags.md
+  exit-codes.md
+  mcp-tools.md
+  gui-agent-tools.md
+  gui-shortcuts.md
+  gui-prefs.md
+)
+
+mode="serve"
+case "${1:-}" in
+  --build) mode="build" ;;
+  --check) mode="check" ;;
+  "") mode="serve" ;;
+  *) echo "unknown argument: $1" >&2; exit 2 ;;
+esac
+
+run_zig_gen() {
+  local out="$1"
+  ( cd "$MONO_ROOT/tools/zig-doc-gen" && zig build run -- "$out" )
+}
+
+# The Dart catalog (GuiToolDoc) can't be read by the Zig tool (language boundary)
+# and can't run under plain `dart run` (importing bxp_gui links dart:ui), so its
+# generator runs as a `flutter test`. Slower (engine startup) but reliable.
+run_dart_gen() {
+  local out="$1"
+  ( cd "$MONO_ROOT/tools/dart-doc-gen" \
+      && flutter pub get >/dev/null \
+      && BXP_DOCS_OUT="$out" flutter test test/gen_docs_test.dart >/dev/null )
+}
+
+if [[ "$mode" == "check" ]]; then
+  rc=0
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' EXIT
+  run_zig_gen "$tmp" >/dev/null
+  run_dart_gen "$tmp"
+
+  for page in "${GENERATED_PAGES[@]}"; do
+    if ! diff -q "$REF_DIR/$page" "$tmp/$page" >/dev/null 2>&1; then
+      rc=1
+      echo "DRIFT: docs/reference/$page is out of sync with its catalog — run: bash scripts/gen-docs.sh --build"
+      diff "$REF_DIR/$page" "$tmp/$page" | head -40 || true
+    fi
+  done
+
+  # nav coverage: every reference page must be listed in mkdocs.yml.
+  for f in "$REF_DIR"/*.md; do
+    name="reference/$(basename "$f")"
+    if ! grep -qF "$name" "$MONO_ROOT/mkdocs.yml"; then
+      rc=1
+      echo "NAV: $name exists but is not listed in mkdocs.yml nav:"
+    fi
+  done
+
+  [[ $rc -eq 0 ]] && echo "gen-docs --check: reference pages + nav in sync"
+  exit $rc
+fi
+
+# serve / build: regenerate in place, then build the site.
+run_zig_gen "$REF_DIR"
+run_dart_gen "$REF_DIR"
+
+if [[ ! -x "$MKDOCS" ]]; then
+  echo "mkdocs not found at $MKDOCS" >&2
+  echo "create the docs venv first:" >&2
+  echo "  python3 -m venv $VENV && $VENV/bin/pip install mkdocs-material" >&2
+  exit 1
+fi
+
+( cd "$MONO_ROOT" && "$MKDOCS" build --strict )
+
+if [[ "$mode" == "serve" ]]; then
+  echo "serving docs at http://127.0.0.1:8000 (Ctrl+C to stop)"
+  ( cd "$MONO_ROOT" && "$MKDOCS" serve )
+fi

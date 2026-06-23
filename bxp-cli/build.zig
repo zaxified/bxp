@@ -55,6 +55,11 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run Broker eXchange Parser");
     run_step.dependOn(&run_cmd.step);
 
+    // The flag / exit-code catalog (src/cli_docs.zig) is exported as a module so
+    // the central docs generator (tools/zig-doc-gen) can render it. Pure data, no
+    // deps — the consumer pays nothing it doesn't reference.
+    _ = b.addModule("cli_docs", .{ .root_source_file = b.path("src/cli_docs.zig") });
+
     // Inline tests live in src/main.zig (validatePath, matchValueArg) and
     // src/pipeline.zig (writeSafeValue). main.zig is the test root; it
     // @imports pipeline.zig, so the latter's tests are discovered too.

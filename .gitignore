@@ -1,6 +1,15 @@
 # Private data — never commit
 DEV/
 
+# Pre-restructure docs snapshot — local backup only
+docs-old/
+
+# MkDocs build output
+site/
+
+# Local docs toolchain virtualenv (build-time only)
+.venv-docs/
+
 # Binary release artifacts → GitHub Releases
 releases/
 *.tar.gz

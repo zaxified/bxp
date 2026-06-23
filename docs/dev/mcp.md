@@ -1,13 +1,13 @@
 # bxp-mcp — MCP server
 
-> [← docs/](README.md)
+> [← docs/](../index.md)
 
 Developer orientation for **bxp-mcp**, the Model Context Protocol server that
 exposes bxp's stateless surface (plus one full-run tool) as agent-callable
 tools over JSON-RPC 2.0 on stdio.
 
 For the deepest reference — exact JSON shapes, every design rationale — read
-[`bxp-mcp/CLAUDE.md`](../bxp-mcp/CLAUDE.md). This page is the fast map.
+[`bxp-mcp/CLAUDE.md`](https://github.com/zaxified/bxp/blob/master/bxp-mcp/CLAUDE.md). This page is the fast map.
 
 > **Two MCP servers — don't confuse them.** BXP ships two unrelated MCP servers.
 > **This page is `bxp-mcp`**: a standalone Zig binary, **stateless** tools over
@@ -18,7 +18,7 @@ For the deepest reference — exact JSON shapes, every design rationale — read
 > **drive the live GUI**. Different binary, transport, state model, and lifecycle
 > (gui-mcp exists only while the GUI is running); they share only the MCP protocol
 > itself. gui-mcp lives in `bxp-gui` — see [`gui.md`](gui.md) and
-> [`bxp-gui/CLAUDE.md`](../bxp-gui/CLAUDE.md) ("Agent control").
+> [`bxp-gui/CLAUDE.md`](https://github.com/zaxified/bxp/blob/master/bxp-gui/CLAUDE.md) ("Agent control").
 
 ## What it is, and why
 
@@ -207,7 +207,7 @@ plus a capped (`MAX_TRACE_SAMPLE = 200`) sample for `filtered` (reason:
 `rule_skip` / `no_rule_match`), `row_errors`, and `output_rows` — each row
 carrying the **1-based input line** resolved from its `source_locator` byte
 offset. For the underlying BXTB frame format see
-[`trace-protokol.md`](trace-protokol.md).
+[`trace-protokol.md`](trace-protocol.md).
 
 ## Build, run, test
 

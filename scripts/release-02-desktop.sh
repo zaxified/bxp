@@ -27,10 +27,6 @@ VERSION_BARE="${VERSION#v}"
 
 mkdir -p "$OUTDIR"
 
-# Regenerate the shipped readmes from the single source before packaging, so the
-# bundled readme.md is never stale relative to resources/readme.src.md.
-bash "$SCRIPT_DIR/gen-readme.sh"
-
 # ─── Shared helpers ─────────────────────────────────────────────────────
 
 build_companions() {

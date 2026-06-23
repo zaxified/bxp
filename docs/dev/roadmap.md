@@ -1,6 +1,6 @@
 # Roadmap
 
-> [← docs/](README.md)
+> [← docs/](../index.md)
 
 Hand-maintained backlog — entries get crossed out / deleted as work
 lands on master. `CHANGELOG.md` is generated independently.
@@ -9,7 +9,7 @@ lands on master. `CHANGELOG.md` is generated independently.
 
 ### v0.3.1
 
-Auto manual page (resources/readme.md) - fnDoc
+Auto manual page (resources/readme.md) - AutoDoc
 
 `LOOKUP` across templates within one bxp-cli run cycle
 
@@ -20,18 +20,27 @@ Timezone-aware datetimes
 Full timezone implementation - historical rules correct `TZ_OFFSET(date, zone)` /  `TZ_CONVERT(ts, from_zone, to_zone)` / `IS_DST`
 Calendar and clock components: `QUARTER(d)`, `WEEKNUM(d)`, `DATE_TRUNC(unit, d)`, `HOUR(d)` / `MINUTE(d)` / `SECOND(d)`
 
+### v0.3.2
+
+Start shared core lib extraction
+
+### v0.3.3
+
+Transformation visualiser
+
 ### v0.4.0
 
 GUI Config/Create - Import wizard from sample CSV
 GUI updater progress bar
+GUI input file viewer simple viewer
 
 ### v0.5.0
 
 Full agentic automation - AI support for all steps in workflow
 
-### v1.0.1
+### v1.0.0
 
-Shared core libraries extraction
+End Shared core libraries extraction
 
 ## Planned features - not version specific
 
@@ -174,7 +183,7 @@ fixed before release instead, not parked here).
 ### bxp-gui
 
 - **User-supplied themes from JSON files on disk.** Every field on
-  `BxpTheme` ([bxp-gui/lib/ui/theme/bxp_theme.dart](../bxp-gui/lib/ui/theme/bxp_theme.dart))
+  `BxpTheme` ([bxp-gui/lib/ui/theme/bxp_theme.dart](https://github.com/zaxified/bxp/blob/master/bxp-gui/lib/ui/theme/bxp_theme.dart))
   is either a `Color`, `Brightness`, enum-like preset id, or label string.
   Adding `BxpTheme.fromJson(Map<String,dynamic>)` factory + `toJson()` helper
   would unlock: (1) drop `~/.config/bxp-gui/themes/myname.json` and have it

@@ -1,6 +1,6 @@
 # BXP - GUI Developer Guide
 
-> [← docs/](README.md)
+> [← docs/](../index.md)
 
 Flutter desktop app (`bxp-gui`) that provides a visual config editor, dry-run
 debugger, and expression playground on top of the `bxp-cli` conversion
@@ -64,7 +64,7 @@ and decoupled from the Zig internals.
 | ----------- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
 | Flutter SDK | ≥ 3.x               | See `bxp-gui/pubspec.yaml` `environment.flutter` for the minimum. Install from [flutter.dev](https://flutter.dev) or via `fvm`.     |
 | Dart SDK    | bundled             | Ships with Flutter; no separate install.                                                                                            |
-| Zig         | see `build.zig.zon` | To build bxp-cli, bxp-mcp, and the bxp-gui-bridge library — `minimum_zig_version` is the source of truth; see [devel.md](devel.md). |
+| Zig         | see `build.zig.zon` | To build bxp-cli, bxp-mcp, and the bxp-gui-bridge library — `minimum_zig_version` is the source of truth; see [devel.md](setup.md). |
 | VS Code     | any                 | + [Flutter extension](https://marketplace.visualstudio.com/items?itemName=Dart-Code.flutter). IntelliJ / Android Studio work too.   |
 
 ### First run
@@ -307,9 +307,9 @@ The bridge is the **single backend on every platform** — there is no
 The bridge is implemented as a Zig shared library that links the
 `bxp-core/inspect` + `expr` modules directly (in-proc paths) and spawns the
 `bxp-cli` subprocess (proxy paths). For the **two-cause rationale** behind the in-proc / proxy split see
-[`devel.md`'s "Why the bridge exists"](devel.md#why-the-bridge-exists)
+[`devel.md`'s "Why the bridge exists"](setup.md#why-the-bridge-exists)
 section. The C-ABI surface and Debug→ReleaseSafe rewrite landmine live in
-[`bxp-gui-bridge/CLAUDE.md`](../bxp-gui-bridge/CLAUDE.md). The proxy path's pipe
+[`bxp-gui-bridge/CLAUDE.md`](https://github.com/zaxified/bxp/blob/master/bxp-gui-bridge/CLAUDE.md). The proxy path's pipe
 drain is hardened against several subprocess-reaping hazards — the Dart VM's own
 child reaper closing fds mid-read, an inherited `SIGCHLD=SIG_IGN`, and `ECHILD`
 on `wait` — by joining the stream readers before reaping; see that file for the
@@ -362,7 +362,7 @@ build or rely on the dev-tree fallback (option 3 above) which reads directly fro
 
 ## Agent control (gui-mcp)
 
-`GuiMcpServer` ([lib/services/gui_mcp_server.dart](../bxp-gui/lib/services/gui_mcp_server.dart))
+`GuiMcpServer` ([lib/services/gui_mcp_server.dart](https://github.com/zaxified/bxp/blob/master/bxp-gui/lib/services/gui_mcp_server.dart))
 embeds an MCP server **inside the running Flutter process** so a local agent can
 drive the live GUI — open a config, edit nodes, run a dry-run, read the trace. It
 is **not** `bxp-mcp`: that one is a separate Zig binary with stateless tools over
@@ -407,16 +407,16 @@ without manual clicks — a semantic alternative to Playwright, since every tool
 a real `TraceStore` action. The persisted toggle (not the
 `BXP_GUI_MCP_AUTO_APPROVE` env seed) is what survives across `launch_app` runs.
 Full cycle and threat-model rationale live in
-[`bxp-gui/CLAUDE.md`](../bxp-gui/CLAUDE.md) ("Agent control" + "Known non-issues").
+[`bxp-gui/CLAUDE.md`](https://github.com/zaxified/bxp/blob/master/bxp-gui/CLAUDE.md) ("Agent control" + "Known non-issues").
 
 ---
 
 ## Auto-updater and security
 
-`UpdaterService` ([lib/services/updater_service.dart](../bxp-gui/lib/services/updater_service.dart))
+`UpdaterService` ([lib/services/updater_service.dart](https://github.com/zaxified/bxp/blob/master/bxp-gui/lib/services/updater_service.dart))
 polls the GitHub releases API shortly after launch and periodically thereafter; a
 newer tag surfaces an update prompt
-([update_dialog.dart](../bxp-gui/lib/ui/components/update_dialog.dart)). The part
+([update_dialog.dart](https://github.com/zaxified/bxp/blob/master/bxp-gui/lib/ui/components/update_dialog.dart)). The part
 that matters is what happens **before** an installer is allowed to run — two
 fail-closed checks over the _same_ downloaded bytes:
 
@@ -432,7 +432,7 @@ A missing or invalid signature, a missing / mismatched checksum, or an
 unavailable verifier **all refuse the install**. Hashing and installing use the
 same fetched bytes, which closes the verify→use swap window (the Linux AppImage
 path writes the already-hashed bytes straight to `$APPIMAGE.new`). Signing is
-automated in CI ([release.yml](../.github/workflows/release.yml)).
+automated in CI ([release.yml](https://github.com/zaxified/bxp/blob/master/.github/workflows/release.yml)).
 
 Per-platform install dispatch: Windows `setup.exe /S` (silent NSIS, **per-user
 install — no administrator elevation**, with a rename-swap self-heal so an update
@@ -454,7 +454,7 @@ edit the user's `bxp-cli.json` without reformatting comments or key order.
 > inside the monorepo only because no second Dart consumer exists yet. When
 > contributing here, prefer full JSON5 spec compliance over bxp-convenience
 > shortcuts so future extraction stays cheap. See
-> [`bxp-gui/packages/json5_ast/CLAUDE.md`](../bxp-gui/packages/json5_ast/CLAUDE.md)
+> [`bxp-gui/packages/json5_ast/CLAUDE.md`](https://github.com/zaxified/bxp/blob/master/bxp-gui/packages/json5_ast/CLAUDE.md)
 > for the extraction recipe.
 
 ### Parser depth guard
@@ -551,7 +551,7 @@ catalogs — the startup gate fails fatally if the binary is missing.
 
 The trace grid is a **debug viewer, not a spreadsheet**. The CLI accepts up to
 `MAX_COLUMNS` (16384) columns, but the GUI renders at most `kMaxDisplayCols`
-(200) ([store/trace_store.dart](../bxp-gui/lib/store/trace_store.dart)); files
+(200) ([store/trace_store.dart](https://github.com/zaxified/bxp/blob/master/bxp-gui/lib/store/trace_store.dart)); files
 wider than `kWideColLimit` (64) data columns also skip the per-column filter
 pass. Both caps exist because PlutoGrid cost scales with column count — laying
 out 16k+ columns on every rebuild would stall the UI for no debugging benefit
@@ -583,9 +583,9 @@ This guide covers structure, dev workflow, and the patterns a new contributor
 needs to ship a first change. Internal-API contracts and design-decision
 rationales live in:
 
-- [`bxp-gui/CLAUDE.md`](../bxp-gui/CLAUDE.md) — Flutter side: services /
+- [`bxp-gui/CLAUDE.md`](https://github.com/zaxified/bxp/blob/master/bxp-gui/CLAUDE.md) — Flutter side: services /
   store / ui split, BxpProcessClient binary resolution, prefs path policy,
   auto-updater install paths, MCP debug workflow, conventions enforced.
-- [`bxp-gui/packages/json5_ast/CLAUDE.md`](../bxp-gui/packages/json5_ast/CLAUDE.md) —
+- [`bxp-gui/packages/json5_ast/CLAUDE.md`](https://github.com/zaxified/bxp/blob/master/bxp-gui/packages/json5_ast/CLAUDE.md) —
   json5_ast public API, comment-ownership rules, round-trip / idempotent
   canonicalisation contract, future extraction recipe.

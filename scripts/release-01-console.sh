@@ -32,10 +32,6 @@ VERSION=${1:-$(git -C "$MONO_ROOT" describe --tags --abbrev=0 2>/dev/null || ech
 echo "Building bxp-console ${VERSION}"
 mkdir -p "$OUTDIR"
 
-# Regenerate the shipped readmes from the single source before packaging, so the
-# archived readme.md is never stale relative to resources/readme.src.md.
-bash "$SCRIPT_DIR/gen-readme.sh"
-
 build() {
     local target=$1   # zig target triple
     local name=$2     # output filename suffix

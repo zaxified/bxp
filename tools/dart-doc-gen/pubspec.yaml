@@ -1,0 +1,29 @@
+name: dart_doc_gen
+description: >
+  Build-time generator for bxp-gui's reference Markdown (the Dart GuiToolDoc
+  catalog → gui-agent-tools.md). The Dart counterpart to tools/zig-doc-gen;
+  it lives separately only because Dart can't import the Zig catalogs and the
+  Zig tool can't import this one (language boundary). Never shipped.
+publish_to: none
+version: 0.0.0
+
+environment:
+  sdk: ^3.11.5
+
+# bxp_gui transitively pulls in Flutter (GuiMcpServer is a ChangeNotifier whose
+# library links dart:ui), so the generator can't run under plain `dart run` — it
+# runs under `flutter test`, which provides the engine. The binary is throwaway.
+dependencies:
+  flutter:
+    sdk: flutter
+  bxp_gui:
+    path: ../../bxp-gui
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+# Silences a pub warning: bxp_gui sets uses-material-design, so this consumer
+# must mirror it. The generator renders no UI, but the link-time check still runs.
+flutter:
+  uses-material-design: true

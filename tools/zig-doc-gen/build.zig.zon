@@ -1,0 +1,12 @@
+.{
+    .name = .zig_doc_gen,
+    .version = "0.0.0",
+    .fingerprint = 0xda43502eed16141b,
+    .dependencies = .{
+        .bxp_core = .{ .path = "../../bxp-core" },
+        .bxp_cli = .{ .path = "../../bxp-cli" },
+        .bxp_mcp = .{ .path = "../../bxp-mcp" },
+    },
+    .minimum_zig_version = "0.16.0",
+    .paths = .{"."},
+}

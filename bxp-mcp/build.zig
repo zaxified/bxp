@@ -33,6 +33,15 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run the bxp-mcp server");
     run_step.dependOn(&run_cmd.step);
 
+    // Export the tool catalog (tools.zig) as a module so tools/zig-doc-gen can
+    // render mcp-tools.md from `tool_docs`. The generator references only the
+    // catalog data; the handlers (which call inspect/sim) stay unreferenced and
+    // are never compiled into it.
+    _ = b.addModule("tools", .{
+        .root_source_file = b.path("src/tools.zig"),
+        .imports = &.{.{ .name = "inspect", .module = core_dep.module("inspect") }},
+    });
+
     // Unit tests over the same source tree (picks up inline tests in
     // sim.zig/tools.zig reachable from main.zig).
     const exe_tests = b.addTest(.{
