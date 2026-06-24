@@ -28,7 +28,7 @@ it automatically with no client-side changes.
 Click any expression cell — a panel opens on the right with:
 
 - A live editor with syntax highlighting and per-keystroke validation.
-- Autocomplete (++ctrl+space++) for built-in functions, `$variables`, and
+- Autocomplete (ctrl+space) for built-in functions, `$variables`, and
   `[ColumnName]` references that exist in the loaded template.
 - Token-level error underlines: a typo'd `[Quanity]` (instead of
   `[Quantity]`) gets a red underline on exactly the wrong token, with a
@@ -45,7 +45,7 @@ Clicking it opens a dialog showing only the keys that are valid here
 (driven by `FieldDoc` schema metadata), with default values and inserted
 templates pre-filled. No need to remember which fields go where.
 
-## Settings inspector (++ctrl+shift+s++)
+## Settings inspector (ctrl+shift+s)
 
 A drawer slides in from the right with the GUI's complete internal state:
 
@@ -69,7 +69,7 @@ a zombie subprocess blocking the UI.
 ## Filesystem checks (slow paths)
 
 By default config validation skips filesystem checks (existence of
-`data_dir`, of input files) so loading is snappy. Triggering ++ctrl+e++
+`data_dir`, of input files) so loading is snappy. Triggering ctrl+e
 (Validate) re-runs validation with a `check-fs` deadline of 2 seconds to
 add these checks. If a check times out, the GUI flips into a degraded mode
 for the rest of the session: subsequent reloads omit the flag too. This

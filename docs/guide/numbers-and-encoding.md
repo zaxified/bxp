@@ -33,10 +33,10 @@ By default BXP reads and writes UTF-8. For legacy non-UTF-8 exports
 `csv_output_encoding` on the template. Field values and header names are
 transcoded to UTF-8 on read and back on write.
 
-| Setting | Default | Values |
-| --- | --- | --- |
-| `csv_input_encoding` | `"utf-8"` | `"utf-8"`, `"windows-1250"`, `"windows-1252"`, `"iso-8859-1"`, `"iso-8859-2"`, `"iso-8859-15"` |
-| `csv_output_encoding` | `"utf-8"` | same values; characters with no equivalent become `?` |
+| Setting               | Default   | Values                                                                                         |
+| --------------------- | --------- | ---------------------------------------------------------------------------------------------- |
+| `csv_input_encoding`  | `"utf-8"` | `"utf-8"`, `"windows-1250"`, `"windows-1252"`, `"iso-8859-1"`, `"iso-8859-2"`, `"iso-8859-15"` |
+| `csv_output_encoding` | `"utf-8"` | same values; characters with no equivalent become `?`                                          |
 
 Encoding applies to **CSV only** — JSON (always UTF-8 by RFC 8259) and
 xlsx (XML-in-ZIP, always UTF-8 in practice) never reach the transcoder.

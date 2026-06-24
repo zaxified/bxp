@@ -40,21 +40,21 @@ theme:
   # freely — each `scheme` name just has to match a block in that file (the two
   # built-ins need no CSS). The choice is remembered in the browser.
   palette:
-    - scheme: default
-      toggle:
-        icon: material/brightness-7
-        name: "Theme: Light (click to cycle)"
-    - scheme: slate
-      toggle:
-        icon: material/brightness-4
-        name: "Theme: Dark (click to cycle)"
+#    - scheme: default
+#      toggle:
+#        icon: material/brightness-7
+#        name: "Theme: Light (click to cycle)"
+#    - scheme: slate
+#      toggle:
+#        icon: material/brightness-4
+#        name: "Theme: Dark (click to cycle)"
     - scheme: vscode-dark
       toggle:
-        icon: material/microsoft-visual-studio-code
+        icon: material/brightness-4
         name: "Theme: VS Code Dark (click to cycle)"
     - scheme: vscode-light
       toggle:
-        icon: material/code-braces
+        icon: material/brightness-7
         name: "Theme: VS Code Light (click to cycle)"
 
 markdown_extensions:

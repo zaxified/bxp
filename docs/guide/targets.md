@@ -17,36 +17,36 @@ All three numeric variables are always positive; direction (buy vs sell,
 deposit vs withdrawal) is encoded in `$action`, not in the sign of the
 amount.
 
-| Variable | Convention |
-| --- | --- |
-| `$amount` | Always positive — wrap raw broker values in `ABS()` if your broker reports signed values. |
-| `$quantity` | Always positive — `ABS()` if needed. |
-| `$fee` | Always positive (a cost). `ABS()` if needed. |
+| Variable    | Convention                                                                                |
+| ----------- | ----------------------------------------------------------------------------------------- |
+| `$amount`   | Always positive — wrap raw broker values in `ABS()` if your broker reports signed values. |
+| `$quantity` | Always positive — `ABS()` if needed.                                                      |
+| `$fee`      | Always positive (a cost). `ABS()` if needed.                                              |
 
 ### Activity-type vocabulary
 
 `$action` is set inside `row_rules`. Eight values cover every event the
 built-in templates emit:
 
-| Action | When |
-| --- | --- |
-| `'BUY'` | Buy / acquisition |
-| `'SELL'` | Sell / disposal |
-| `'DEPOSIT'` | Cash deposit into the account |
-| `'WITHDRAWAL'` | Cash withdrawal |
-| `'DIVIDEND'` | Dividend received |
-| `'TAX'` | Tax withheld |
-| `'INTEREST'` | Interest paid (e.g. on cash balance) |
-| `'FEE'` | Fee charged (e.g. monthly account fee, ADR fee) |
+| Action         | When                                            |
+| -------------- | ----------------------------------------------- |
+| `'BUY'`        | Buy / acquisition                               |
+| `'SELL'`       | Sell / disposal                                 |
+| `'DEPOSIT'`    | Cash deposit into the account                   |
+| `'WITHDRAWAL'` | Cash withdrawal                                 |
+| `'DIVIDEND'`   | Dividend received                               |
+| `'TAX'`        | Tax withheld                                    |
+| `'INTEREST'`   | Interest paid (e.g. on cash balance)            |
+| `'FEE'`        | Fee charged (e.g. monthly account fee, ADR fee) |
 
 Three additional values handle portfolio bookkeeping events that
 Wealthfolio also imports:
 
-| Action | When |
-| --- | --- |
-| `'TRANSFER_IN'` | Stock moved into the account from elsewhere (zero-cost arrival) |
-| `'TRANSFER_OUT'` | Stock moved out of the account to elsewhere |
-| `'SPLIT'` | Stock split — `$amount` carries the split ratio (e.g. `2` for 2-for-1) |
+| Action           | When                                                                   |
+| ---------------- | ---------------------------------------------------------------------- |
+| `'TRANSFER_IN'`  | Stock moved into the account from elsewhere (zero-cost arrival)        |
+| `'TRANSFER_OUT'` | Stock moved out of the account to elsewhere                            |
+| `'SPLIT'`        | Stock split — `$amount` carries the split ratio (e.g. `2` for 2-for-1) |
 
 If your broker emits an event that doesn't fit any of these, prefer
 `'INTEREST'` for income-like cash, `'FEE'` for cost-like cash, and skip
@@ -74,8 +74,8 @@ that matches your broker, do not invent a third:
 
 ### Output columns
 
-| Required | Optional |
-| --- | --- |
+| Required                                                                               | Optional                                                    |
+| -------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
 | `date`, `symbol`, `quantity`, `activityType`, `unitPrice`, `currency`, `fee`, `amount` | `account`, `fxRate`, `subtype`, `instrumentType`, `comment` |
 
 `$date` should be `YYYY-MM-DD hh:mm:ss`. Brokers that report date-only
@@ -85,21 +85,21 @@ injection.
 
 The default Wealthfolio column mapping:
 
-| Column | Value | Notes |
-| --- | --- | --- |
-| `date` | `$date` | `YYYY-MM-DD hh:mm:ss` |
-| `symbol` | `$ticker` | Yahoo Finance ticker |
-| `quantity` | `$quantity` | Number of units |
-| `activityType` | `$action` | `BUY`, `SELL`, `DEPOSIT`, `DIVIDEND`, … |
-| `unitPrice` | `$unitprice` | Price per unit |
-| `currency` | `$currency` | ISO currency code |
-| `fee` | `$fee` | Blank if not reported |
-| `amount` | `$amount` | Total value |
-| `account` | `$account` | Optional |
-| `fxRate` | `$fxRate` | Optional |
-| `subtype` | `$subtype` | Optional |
-| `instrumentType` | `$instrumentType` | Optional |
-| `comment` | `$comment` | Optional |
+| Column           | Value             | Notes                                   |
+| ---------------- | ----------------- | --------------------------------------- |
+| `date`           | `$date`           | `YYYY-MM-DD hh:mm:ss`                   |
+| `symbol`         | `$ticker`         | Yahoo Finance ticker                    |
+| `quantity`       | `$quantity`       | Number of units                         |
+| `activityType`   | `$action`         | `BUY`, `SELL`, `DEPOSIT`, `DIVIDEND`, … |
+| `unitPrice`      | `$unitprice`      | Price per unit                          |
+| `currency`       | `$currency`       | ISO currency code                       |
+| `fee`            | `$fee`            | Blank if not reported                   |
+| `amount`         | `$amount`         | Total value                             |
+| `account`        | `$account`        | Optional                                |
+| `fxRate`         | `$fxRate`         | Optional                                |
+| `subtype`        | `$subtype`        | Optional                                |
+| `instrumentType` | `$instrumentType` | Optional                                |
+| `comment`        | `$comment`        | Optional                                |
 
 ## brycht.app
 

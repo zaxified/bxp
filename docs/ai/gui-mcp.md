@@ -12,7 +12,7 @@ tools](../reference/gui-agent-tools.md).
 
 - **Endpoint** — `http://127.0.0.1:7717/mcp` (StreamableHTTP). The host and
   port are editable under **Settings inspector → Agent control**
-  (++ctrl+shift+s++), where you can also see the live listening address and a
+  (ctrl+shift+s), where you can also see the live listening address and a
   log of what the agent did.
 - **Connecting** — the agent launches BXP Desktop, polls `GET /health` until it
   returns `200`, then runs the MCP `initialize` handshake and calls
@@ -29,10 +29,10 @@ If you're stuck navigating bxp-gui — finding a feature, understanding an
 error message, choosing between dry-run and full-run — paste the docs into
 your assistant and ask:
 
-> *"I use BXP Desktop. Please read the BXP docs. I'm trying to `<describe
-> what you want to accomplish>`. The GUI is showing `<paste any error chip
-> text or describe the screen>`. Which features should I use, and what
-> keyboard shortcuts apply?"*
+> _"I use BXP Desktop. Please read the BXP docs. I'm trying to `<describe
+what you want to accomplish>`. The GUI is showing `<paste any error chip
+text or describe the screen>`. Which features should I use, and what
+> keyboard shortcuts apply?"_
 
 The assistant has the keyboard shortcut table, advanced feature
 descriptions, exit-code semantics, and bundled binary reference — enough
@@ -45,10 +45,10 @@ Open the expression in the playground (right-rail panel). Click
 NDJSON trace lines (Settings inspector → trace section) and the
 expression text into your assistant:
 
-> *"This BXP expression `<paste expression>` should produce `<expected>`
+> _"This BXP expression `<paste expression>` should produce `<expected>`
 > for input row `<paste row from variables panel>` but instead produces
 > `<actual>`. The per-call trace looks like `<paste NDJSON lines>`.
-> What's wrong with the expression?"*
+> What's wrong with the expression?"_
 
 The trace makes the AI's job almost mechanical — every nested function
 call's input and output is visible.

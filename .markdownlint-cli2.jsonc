@@ -21,15 +21,17 @@
     // that power GitHub-style collapsible sections (`<details>` /
     // `<summary>`). README.md uses these for spoilered "show all
     // conversion templates" blocks; the alternative would lose that UX.
-    "MD033": {
-      "allowed_elements": ["details", "summary"],
-    },
+    //"MD033": {
+    //  "allowed_elements": ["details", "summary"],
+    //},
+    "MD033": false,
     "MD038": false,
     "MD049": false,
   },
   "ignores": [
     "**/node_modules/**",
     "**/build/**",
+    "**/.venv-docs/**",
     "**/.dart_tool/**",
     "**/.zig-cache/**",
     "**/zig-cache/**",

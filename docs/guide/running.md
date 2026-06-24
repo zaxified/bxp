@@ -32,11 +32,11 @@ See [CLI flags](../reference/cli-flags.md) for `--config`, `--debug`,
 
 ## Exit codes
 
-| Binary | Code | Meaning |
-| --- | --- | --- |
-| bxp-cli | `0` | Success — all matched rows converted, no warnings. |
-| bxp-cli | `1` | Fatal error — config invalid, file missing, expression failure. |
-| bxp-cli | `2` | Completed with warnings — output written but at least one warning emitted (typo'd field, no input rows, …). |
+| Binary  | Code | Meaning                                                                                                     |
+| ------- | ---- | ----------------------------------------------------------------------------------------------------------- |
+| bxp-cli | `0`  | Success — all matched rows converted, no warnings.                                                          |
+| bxp-cli | `1`  | Fatal error — config invalid, file missing, expression failure.                                             |
+| bxp-cli | `2`  | Completed with warnings — output written but at least one warning emitted (typo'd field, no input rows, …). |
 
 `bxp-mcp` exits `0` in normal operation; per-tool outcomes ride on the
 JSON-RPC response (the `isError` flag / a domain `{"ok":false}`), not the

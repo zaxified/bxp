@@ -15,12 +15,14 @@ field-by-field table lives in [Config schema](../reference/config-schema.md).
     // optional; named, reusable key→value tables
     // map_name → { key: value, ... }
     // referenced from expressions by name: REMAP([Symbol], 'anycoin')
-    anycoin:  { "BTC": "BTC-EUR" },
-    revolutx: { "BTC": "BTC-USD" },
+    anycoin: { BTC: "BTC-EUR" },
+    revolutx: { BTC: "BTC-USD" },
   },
   conversion_templates: {
     // required; map of template_id → template config (see skeleton below)
-    mybroker_to_wealthfolio: { /* ... */ },
+    mybroker_to_wealthfolio: {
+      /* ... */
+    },
   },
 }
 ```
@@ -136,21 +138,21 @@ mybroker_to_wealthfolio: {
 Output `$variable`s that bxp-cli's Wealthfolio templates set. The first
 eight map 1:1 to Wealthfolio's import columns; the rest are optional.
 
-| Variable | Meaning |
-| --- | --- |
-| `$date` | Transaction datetime, format `YYYY-MM-DD hh:mm:ss` |
-| `$ticker` | Yahoo Finance ticker (after `REMAP()` mapping) |
-| `$quantity` | Number of units |
-| `$unitprice` | Price per unit |
-| `$currency` | Currency code (`USD`, `EUR`, `CZK`, …) |
-| `$fee` | Fee amount (empty if broker does not report one) |
-| `$amount` | Total transaction value |
-| `$action` | Activity type — **set only in `row_rules`**, never in `input_schema` |
-| `$account` | Account tag (optional) |
-| `$fxRate` | FX rate (optional) |
-| `$subtype` | Wealthfolio subtype (optional) |
-| `$instrumentType` | e.g. `'Cryptocurrency'` (optional) |
-| `$comment` | Free-form comment (optional) |
+| Variable          | Meaning                                                              |
+| ----------------- | -------------------------------------------------------------------- |
+| `$date`           | Transaction datetime, format `YYYY-MM-DD hh:mm:ss`                   |
+| `$ticker`         | Yahoo Finance ticker (after `REMAP()` mapping)                       |
+| `$quantity`       | Number of units                                                      |
+| `$unitprice`      | Price per unit                                                       |
+| `$currency`       | Currency code (`USD`, `EUR`, `CZK`, …)                               |
+| `$fee`            | Fee amount (empty if broker does not report one)                     |
+| `$amount`         | Total transaction value                                              |
+| `$action`         | Activity type — **set only in `row_rules`**, never in `input_schema` |
+| `$account`        | Account tag (optional)                                               |
+| `$fxRate`         | FX rate (optional)                                                   |
+| `$subtype`        | Wealthfolio subtype (optional)                                       |
+| `$instrumentType` | e.g. `'Cryptocurrency'` (optional)                                   |
+| `$comment`        | Free-form comment (optional)                                         |
 
 An empty `""` expression omits the variable from output. The activity-type
 vocabulary and sign conventions are described in [Target

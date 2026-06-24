@@ -16,14 +16,14 @@ unary -    →    * /    →    & (concat)    →    + -    →    = != < > <= >
 
 ## Column and literal syntax
 
-| Syntax | Description |
-| --- | --- |
+| Syntax         | Description                                                    |
+| -------------- | -------------------------------------------------------------- |
 | `[ColumnName]` | Raw CSV field by header name (leading/trailing spaces trimmed) |
-| `[n]` | Raw CSV field by 1-based column index |
-| `'text'` | String literal |
-| `123`, `-0.5` | Numeric literal |
-| `&` | String concatenation (`'$CASH-' & [Currency]`) |
-| `$variable` | Reference to a variable set earlier in `input_schema` |
+| `[n]`          | Raw CSV field by 1-based column index                          |
+| `'text'`       | String literal                                                 |
+| `123`, `-0.5`  | Numeric literal                                                |
+| `&`            | String concatenation (`'$CASH-' & [Currency]`)                 |
+| `$variable`    | Reference to a variable set earlier in `input_schema`          |
 
 Column header names may contain spaces, parentheses, currency symbols,
 and other punctuation — `[Price ($)]`, `[Run Date]`, and
@@ -36,7 +36,7 @@ Function names are case-insensitive.
 ## Function semantics — common gotchas
 
 - **`CONTAINS(s, sub)` is a substring match, not a prefix match.** It
-  returns `true` whenever `sub` appears *anywhere* inside `s`, which
+  returns `true` whenever `sub` appears _anywhere_ inside `s`, which
   means `CONTAINS('Sell to Buy', 'Buy')` is `true`. Brokers with
   prefix-based action codes (Schwab `MKT BUY` / `LMT BUY`, IBKR
   multi-word actions) need an exact or word-boundary check: prefer

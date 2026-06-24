@@ -13,7 +13,7 @@ examples.json the AI should refuse to guess.
 Paste this into your assistant, attach both files, then drop in 5 rows of
 your broker's raw CSV:
 
-> *"I use BXP. Please read the **Guide** and **Target specs** sections of
+> _"I use BXP. Please read the **Guide** and **Target specs** sections of
 > the docs and the comments in `bxp-cli.examples.json`. Here is a sample
 > of my broker's export: `<paste 5 rows including the header>`. Add a new
 > entry under `conversion_templates` in my `bxp-cli.json` that converts
@@ -22,7 +22,7 @@ your broker's raw CSV:
 > against the sample rows — via the bxp-mcp tools if available, else
 > `bxp-cli --debug`) before returning, return JSON5 with `//` comments
 > explaining non-obvious decisions, and end your reply with a 'Things to
-> check in bxp-gui' list for anything you couldn't fully verify."*
+> check in bxp-gui' list for anything you couldn't fully verify."_
 
 After the AI proposes a template, paste it into the GUI's tree editor (or
 directly into your `bxp-cli.json`) and run a dry-run. The GUI's inline
@@ -70,7 +70,7 @@ strictly:
 10. **Empty values.** Set a `$variable` to `""` to leave that output
     column blank. Drop a column from `output_schema` to remove it.
 11. **Enable debug during development.** Set `row_rules_debug_missing:
-    true` and run with `--debug` (CLI) or `dry-run` (GUI) so unmatched
+true` and run with `--debug` (CLI) or `dry-run` (GUI) so unmatched
     rows surface.
 12. **Self-test before returning.** See below — predict each sample row's
     outcome, then verify with the bxp-mcp tools (`bxp_validate`,
@@ -92,7 +92,7 @@ The self-test surface depends on what you have wired:
 - **With the bxp-mcp server** (agent path): `bxp_validate`,
   `bxp_validate_expr` / `bxp_eval` / `bxp_eval_trace` / `bxp_eval_batch`,
   and `bxp_simulate` (a full end-to-end run). Each takes config /
-  expression *text* as arguments, so you never touch the filesystem.
+  expression _text_ as arguments, so you never touch the filesystem.
 - **With only `bxp-cli`** (no MCP): `bxp-cli --debug` and a real run.
 
 **1. Schema + JSON5 syntax check.** Call `bxp_validate` with the config
@@ -113,9 +113,11 @@ should produce (0 / 1 / N).
   row at once.
 
   ```json
-  {"expr":"DATE_CONVERT([Time], 'YYYY-MM-DD hh:mm:ss', 'YYYY-MM-DD')",
-   "headers":["Action","Time","Ticker"],
-   "fields":["Market buy","2024-04-25 07:00:35","RIO"]}
+  {
+    "expr": "DATE_CONVERT([Time], 'YYYY-MM-DD hh:mm:ss', 'YYYY-MM-DD')",
+    "headers": ["Action", "Time", "Ticker"],
+    "fields": ["Market buy", "2024-04-25 07:00:35", "RIO"]
+  }
   ```
 
 - **Step B — run it end-to-end.** With MCP, call `bxp_simulate` with the
@@ -148,13 +150,13 @@ emits.
 
 **4. If a prediction fails, diagnose by category.**
 
-| Symptom | Likely cause |
-| --- | --- |
-| `$date` empty or wrong | Date token mismatch (`MM` vs `mm`, missing `[*]` for timezone, etc.) |
-| `[ColumnName]` resolves to empty | Column name typo / case mismatch / extra whitespace in source header |
-| `$amount` differs by sign | Missed `ABS()` — see [Target specs](../guide/targets.md) |
-| `--debug` lists unmatched rows | Missing or wrong `row_rules` `when` condition |
-| `$ticker` empty for cash event | Non-trade row pattern not applied — see [Target specs](../guide/targets.md#non-trade-row-patterns) |
+| Symptom                          | Likely cause                                                                                       |
+| -------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `$date` empty or wrong           | Date token mismatch (`MM` vs `mm`, missing `[*]` for timezone, etc.)                               |
+| `[ColumnName]` resolves to empty | Column name typo / case mismatch / extra whitespace in source header                               |
+| `$amount` differs by sign        | Missed `ABS()` — see [Target specs](../guide/targets.md)                                           |
+| `--debug` lists unmatched rows   | Missing or wrong `row_rules` `when` condition                                                      |
+| `$ticker` empty for cash event   | Non-trade row pattern not applied — see [Target specs](../guide/targets.md#non-trade-row-patterns) |
 
 Only return the template once every prediction matches and `--debug`
 output is empty.

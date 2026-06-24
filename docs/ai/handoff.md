@@ -42,6 +42,6 @@ Each instruction must be:
   wrong"; ask for specific cell values, exit codes, or `.csvx` rows.
 
 If everything is verifiably correct (every sample row predicted exactly,
-no Wealthfolio-import gotchas you're aware of), say so explicitly: *"This
+no Wealthfolio-import gotchas you're aware of), say so explicitly: _"This
 template should be complete. Run a dry-run and import the `.csvx` into
-Wealthfolio; nothing else needs your attention."*
+Wealthfolio; nothing else needs your attention."_
