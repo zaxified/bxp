@@ -6,12 +6,12 @@ Keys persisted in the bxp-gui preferences file (see the GUI guide for the file p
 
 | Key | Description |
 | --- | --- |
-| `bxp-ui.theme` | Active UI theme preset name. |
-| `bxp-gui.zoom` | UI zoom factor, in integer percent. |
-| `bxp-ui.recent` | Recently opened config files (most-recent first). |
-| `bxp-gui.customPlaces` | User-pinned directories in the open dialog. |
-| `bxp-gui.mcp-enabled` | Whether the embedded gui-mcp server starts (default on). |
-| `bxp-gui.mcpHost` | gui-mcp bind host. |
-| `bxp-gui.mcpPort` | gui-mcp bind port. |
-| `bxp-gui.mcpAutoApprove` | Auto-approve destructive agent actions (skip the confirm dialog). |
-| `bxp-gui.mcpOriginAllowlist` | Allowed Origins for gui-mcp (empty = permissive). |
+| <code class="hl-key">bxp-ui.theme</code> | Active UI theme preset name. |
+| <code class="hl-key">bxp-gui.zoom</code> | UI zoom factor, in integer percent. |
+| <code class="hl-key">bxp-ui.recent</code> | Recently opened config files (most-recent first). |
+| <code class="hl-key">bxp-gui.customPlaces</code> | User-pinned directories in the open dialog. |
+| <code class="hl-key">bxp-gui.mcp-enabled</code> | Whether the embedded gui-mcp server starts (default on). |
+| <code class="hl-key">bxp-gui.mcpHost</code> | gui-mcp bind host. |
+| <code class="hl-key">bxp-gui.mcpPort</code> | gui-mcp bind port. |
+| <code class="hl-key">bxp-gui.mcpAutoApprove</code> | Auto-approve destructive agent actions (skip the confirm dialog). |
+| <code class="hl-key">bxp-gui.mcpOriginAllowlist</code> | Allowed Origins for gui-mcp (empty = permissive). |

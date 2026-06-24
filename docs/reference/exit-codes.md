@@ -6,6 +6,6 @@
 
 | Code | Meaning |
 | --- | --- |
-| `0` | success |
-| `1` | error |
-| `2` | warnings |
+| <code class="hl-num">0</code> | success |
+| <code class="hl-num">1</code> | error |
+| <code class="hl-num">2</code> | warnings |

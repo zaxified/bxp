@@ -59,8 +59,8 @@ pub fn main(init: std.process.Init) !void {
             \\
         );
         try docs.writeTable(w, &cli_docs.flags, &.{
-            .{ .head = "Flag", .field = "flag", .code = true },
-            .{ .head = "Argument", .field = "arg", .code = true },
+            .{ .head = "Flag", .field = "flag", .hl = "hl-fn" },
+            .{ .head = "Argument", .field = "arg", .hl = "hl-type" },
             .{ .head = "Description", .field = "description" },
         });
         try w.flush();
@@ -81,7 +81,7 @@ pub fn main(init: std.process.Init) !void {
             \\
         );
         try docs.writeTable(w, &cli_docs.exit_codes, &.{
-            .{ .head = "Code", .field = "code", .code = true },
+            .{ .head = "Code", .field = "code", .hl = "hl-num" },
             .{ .head = "Meaning", .field = "meaning" },
         });
         try w.flush();
@@ -104,7 +104,7 @@ pub fn main(init: std.process.Init) !void {
             \\
         );
         try docs.writeTable(w, &mcp_tools.tool_docs, &.{
-            .{ .head = "Tool", .field = "name", .code = true },
+            .{ .head = "Tool", .field = "name", .hl = "hl-fn" },
             .{ .head = "Description", .field = "description" },
         });
         try w.flush();

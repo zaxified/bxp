@@ -30,6 +30,17 @@ class _StubHost implements GuiMcpHost {
 
 String _cell(String s) => s.replaceAll('|', r'\|').replaceAll('\n', ' ');
 
+// HTML-escape a value for a raw inline `<code>` cell (guards the table pipe and
+// HTML metacharacters), then wrap it in a coloured code span. The class is bound
+// by the stylesheet to the active theme's --md-code-hl-* token colour, matching
+// the Zig-generated reference pages.
+String _htmlEsc(String s) => s
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('|', '&#124;');
+String _code(String s, String cls) => '<code class="$cls">${_htmlEsc(s)}</code>';
+
 void _writePage(
   String dir,
   String file,
@@ -69,7 +80,7 @@ void main() {
       'GuiToolDoc',
       'Agent-callable tools the running bxp-gui exposes over localhost StreamableHTTP.',
       ['Tool', 'What it does'],
-      [for (final t in server.toolCatalogForDocs()) ['`${t.name}`', t.description]],
+      [for (final t in server.toolCatalogForDocs()) [_code(t.name, 'hl-fn'), t.description]],
     );
 
     // gui-shortcuts — shortcutCatalog() is a plain platform-aware function.
@@ -80,7 +91,7 @@ void main() {
       'ShortcutDoc',
       'BXP Desktop keyboard shortcuts (modifier shown for this platform).',
       ['Action', 'Shortcut'],
-      [for (final s in shortcutCatalog()) [s.action, '`${s.keys}`']],
+      [for (final s in shortcutCatalog()) [s.action, _code(s.keys, 'hl-type')]],
     );
 
     // gui-prefs — Prefs.all is a static const catalog.
@@ -91,7 +102,7 @@ void main() {
       'PrefDoc',
       'Keys persisted in the bxp-gui preferences file (see the GUI guide for the file path).',
       ['Key', 'Description'],
-      [for (final p in Prefs.all) ['`${p.key}`', p.description]],
+      [for (final p in Prefs.all) [_code(p.key, 'hl-key'), p.description]],
     );
   });
 }

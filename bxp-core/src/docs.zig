@@ -31,6 +31,74 @@ const functions = blk: {
     for (expr.builtins, 0..) |b, i| arr[i] = b.doc;
     break :blk arr;
 };
+
+// ── Function categories (Markdown reference grouping) ────────────────────────
+//
+// Editorial grouping of the builtins for the `expr-functions.md` reference page
+// only — the JSON docs catalog and the GUI still see the flat `functions` list
+// above in its original order. The name→category map lives here in the doc
+// pipeline (not on each FnDoc) because it is a presentation concern; a comptime
+// guard below turns any miscategorised/new builtin into a BUILD error, so the
+// map can never silently drift out of sync with `expr.builtins`.
+const FnCategory = enum { logic, text, regex, lookup, number, date, source };
+
+const FnGroup = struct { cat: FnCategory, title: []const u8, intro: []const u8 };
+const fn_groups = [_]FnGroup{
+    .{ .cat = .logic, .title = "Logic & conditionals", .intro = "Branch, fall back to the first non-empty value, and test membership." },
+    .{ .cat = .text, .title = "Text", .intro = "Trim, case-fold, slice, pad, search, and measure strings." },
+    .{ .cat = .regex, .title = "Pattern matching", .intro = "Linear-time (ReDoS-safe) regular-expression match and extract." },
+    .{ .cat = .lookup, .title = "Lookup & mapping", .intro = "Whole-value remap, substring replace, and `pre_pass` table lookups." },
+    .{ .cat = .number, .title = "Numbers & money", .intro = "Exact fixed-point arithmetic, rounding, min/max, and price parsing." },
+    .{ .cat = .date, .title = "Dates & time", .intro = "Reformat, shift, diff, and decompose dates — business-day aware." },
+    .{ .cat = .source, .title = "Row & source context", .intro = "Values drawn from the current row's position and its source file." },
+};
+
+fn fnCategory(name: []const u8) ?FnCategory {
+    const map = .{
+        // logic & conditionals
+        .{ "IF", .logic },        .{ "CASE", .logic },     .{ "IFERROR", .logic },
+        .{ "COALESCE", .logic },  .{ "NULLIF", .logic },   .{ "IN", .logic },
+        .{ "ISEMPTY", .logic },
+        // text
+        .{ "TRIM", .text },       .{ "UPPER", .text },     .{ "LOWER", .text },
+        .{ "UNACCENT", .text },   .{ "PROPER", .text },    .{ "LEFT", .text },
+        .{ "RIGHT", .text },      .{ "SUBSTR", .text },    .{ "LPAD", .text },
+        .{ "RPAD", .text },       .{ "POSITION", .text },  .{ "LEN", .text },
+        .{ "CONTAINS", .text },   .{ "STARTS_WITH", .text }, .{ "ENDS_WITH", .text },
+        .{ "SPLIT_PART", .text },
+        // pattern matching
+        .{ "REGEX_MATCH", .regex }, .{ "REGEX_EXTRACT", .regex },
+        // lookup & mapping
+        .{ "REMAP", .lookup },    .{ "REPLACE", .lookup }, .{ "LOOKUP", .lookup },
+        // numbers & money
+        .{ "ABS", .number },      .{ "ROUND", .number },   .{ "FLOOR", .number },
+        .{ "CEILING", .number },  .{ "MOD", .number },     .{ "GREATEST", .number },
+        .{ "LEAST", .number },    .{ "RAND", .number },    .{ "PRICE_VALUE", .number },
+        .{ "PRICE_CURRENCY", .number },
+        // dates & time
+        .{ "DATE_CONVERT", .date }, .{ "NOW", .date },     .{ "DATEADD", .date },
+        .{ "DATEDIFF", .date },   .{ "WORKDAY", .date },   .{ "YEAR", .date },
+        .{ "MONTH", .date },      .{ "DAY", .date },       .{ "WEEKDAY", .date },
+        .{ "EOMONTH", .date },    .{ "NTH_DOW", .date },
+        // row & source context
+        .{ "FIELDS", .source },   .{ "FILENAME", .source }, .{ "RECORD_NUM", .source },
+        .{ "SHEET_NAME", .source },
+    };
+    inline for (map) |e| if (std.mem.eql(u8, name, e[0])) return e[1];
+    return null;
+}
+
+// Drift guard: every builtin must be categorised, exactly once is enforced by
+// construction (a name can only appear once in the map). A new builtin with no
+// category entry fails the build here instead of vanishing from the docs.
+comptime {
+    @setEvalBranchQuota(10_000); // 53 builtins × 53 map probes exceeds the 1000 default
+    for (expr.builtins) |b| {
+        if (fnCategory(b.name) == null)
+            @compileError("docs.zig: uncategorised builtin '" ++ b.name ++ "' — add it to fnCategory()");
+    }
+}
+
 const keywords = expr.keywords;
 const operators = expr.operators;
 const tokens = expr.tokens;
@@ -387,8 +455,15 @@ fn writeSchemaEntry(alloc: std.mem.Allocator, jw: *std.json.Stringify, full_key:
 // not in the catalog — generation emits one flat table.
 
 /// One column: the header text + the struct field it reads. `code = true` wraps
-/// the cell in backticks (for signatures / tokens / keys).
-pub const Col = struct { head: []const u8, field: []const u8, code: bool = false };
+/// the cell in backticks (for signatures / tokens / keys). `hl` instead emits a
+/// coloured inline-HTML `<code class="…">` (e.g. "hl-fn", "hl-type", "hl-num")
+/// the stylesheet binds to the active theme's --md-code-hl-* token colour.
+pub const Col = struct {
+    head: []const u8,
+    field: []const u8,
+    code: bool = false,
+    hl: ?[]const u8 = null,
+};
 
 pub fn writeEscaped(w: *std.Io.Writer, s: []const u8) !void {
     // Escape the two characters that would break a Markdown table cell.
@@ -415,6 +490,22 @@ pub fn writeCell(w: *std.Io.Writer, value: anytype) !void {
     }
 }
 
+/// Like `writeCell` but HTML-escapes string values — for cells emitted inside a
+/// raw `<code>` (the coloured `hl` columns), not a Markdown backtick span.
+fn writeCellHtml(w: *std.Io.Writer, value: anytype) !void {
+    switch (@typeInfo(@TypeOf(value))) {
+        .optional => if (value) |v| try writeCellHtml(w, v) else try w.writeAll("—"),
+        .bool => try w.writeAll(if (value) "yes" else "no"),
+        .int, .comptime_int => try w.print("{d}", .{value}),
+        .@"enum" => try w.writeAll(@tagName(value)),
+        .pointer => |p| if (p.size == .slice and p.child == u8)
+            try writeHtmlEscaped(w, value)
+        else
+            @compileError("writeCellHtml: unsupported pointer " ++ @typeName(@TypeOf(value))),
+        else => @compileError("writeCellHtml: unsupported type " ++ @typeName(@TypeOf(value))),
+    }
+}
+
 /// Generic Markdown table over a slice of structs: header from `cols`, one row
 /// per element. Written once, reused by every catalog.
 pub fn writeTable(w: *std.Io.Writer, rows: anytype, comptime cols: []const Col) !void {
@@ -426,12 +517,22 @@ pub fn writeTable(w: *std.Io.Writer, rows: anytype, comptime cols: []const Col) 
         inline for (cols) |c| {
             try w.writeAll("| ");
             const v = @field(row, c.field);
-            // Wrap in backticks only when `code` AND the value isn't an empty
-            // string — an empty `arg` shouldn't render as a stray `` `` ``.
-            const wrap = c.code and isNonEmptyStr(v);
-            if (wrap) try w.writeByte('`');
-            try writeCell(w, v);
-            if (wrap) try w.writeByte('`');
+            if (c.hl) |cls| {
+                // Coloured code cell (skip the wrapper for an empty value so it
+                // doesn't render as a stray empty chip).
+                if (isNonEmptyStr(v)) {
+                    try w.print("<code class=\"{s}\">", .{cls});
+                    try writeCellHtml(w, v);
+                    try w.writeAll("</code>");
+                } else try writeCellHtml(w, v);
+            } else {
+                // Wrap in backticks only when `code` AND the value isn't an empty
+                // string — an empty `arg` shouldn't render as a stray `` `` ``.
+                const wrap = c.code and isNonEmptyStr(v);
+                if (wrap) try w.writeByte('`');
+                try writeCell(w, v);
+                if (wrap) try w.writeByte('`');
+            }
             try w.writeByte(' ');
         }
         try w.writeAll("|\n");
@@ -445,21 +546,128 @@ fn isNonEmptyStr(v: anytype) bool {
     return true; // non-string code cells (e.g. an exit code int) always wrap
 }
 
+// ── Semantic colouring for the reference tables ──────────────────────────────
+//
+// Plain Markdown backtick spans render monochrome (Pygments only tokenises
+// fenced blocks, not inline code in tables). To make the generated reference
+// read like syntax-highlighted code, the emitters below wrap function names,
+// types, string/number literals, keys and booleans in raw-HTML `<span>`s with a
+// semantic class. The stylesheet binds each class to the active theme's
+// `--md-code-hl-*` token colour, so the colouring follows whichever palette
+// (Light / Dark / VS Code) is selected — no per-theme work here.
+
+/// Inline-HTML escape for a value placed inside a raw `<code>` in a Markdown
+/// table cell: guards the table pipe AND the HTML metacharacters, flattening
+/// newlines. (Backtick spans don't need this; raw HTML does.)
+fn writeHtmlEscaped(w: *std.Io.Writer, s: []const u8) !void {
+    for (s) |c| switch (c) {
+        '|' => try w.writeAll("&#124;"),
+        '<' => try w.writeAll("&lt;"),
+        '>' => try w.writeAll("&gt;"),
+        '&' => try w.writeAll("&amp;"),
+        '\n' => try w.writeByte(' '),
+        else => try w.writeByte(c),
+    };
+}
+
+fn isIdentByte(c: u8) bool {
+    return (c >= 'A' and c <= 'Z') or (c >= 'a' and c <= 'z') or
+        (c >= '0' and c <= '9') or c == '_';
+}
+
+/// Render a bxp signature / expression as a coloured inline-HTML `<code>` span:
+/// a leading function name (identifier directly before `(`), single-quoted
+/// string literals and bare numeric runs each get a semantic class. `extra` is
+/// an optional extra class on the `<code>` element (e.g. the muted example).
+fn writeExprCode(w: *std.Io.Writer, s: []const u8, extra: []const u8) !void {
+    if (extra.len > 0) try w.print("<code class=\"{s}\">", .{extra}) else try w.writeAll("<code>");
+
+    var i: usize = 0;
+    // Leading function name: identifier (not starting with a digit) before `(`.
+    if (s.len > 0 and isIdentByte(s[0]) and !(s[0] >= '0' and s[0] <= '9')) {
+        var j: usize = 0;
+        while (j < s.len and isIdentByte(s[j])) : (j += 1) {}
+        if (j < s.len and s[j] == '(') {
+            try w.writeAll("<span class=\"hl-fn\">");
+            try writeHtmlEscaped(w, s[0..j]);
+            try w.writeAll("</span>");
+            i = j;
+        }
+    }
+    while (i < s.len) {
+        const c = s[i];
+        if (c == '\'') { // single-quoted string literal, through the closing quote
+            var j = i + 1;
+            while (j < s.len and s[j] != '\'') : (j += 1) {}
+            const end = if (j < s.len) j + 1 else s.len;
+            try w.writeAll("<span class=\"hl-str\">");
+            try writeHtmlEscaped(w, s[i..end]);
+            try w.writeAll("</span>");
+            i = end;
+        } else if (c >= '0' and c <= '9') { // bare numeric run
+            var j = i;
+            while (j < s.len and ((s[j] >= '0' and s[j] <= '9') or s[j] == '.')) : (j += 1) {}
+            try w.writeAll("<span class=\"hl-num\">");
+            try writeHtmlEscaped(w, s[i..j]);
+            try w.writeAll("</span>");
+            i = j;
+        } else {
+            try writeHtmlEscaped(w, s[i .. i + 1]);
+            i += 1;
+        }
+    }
+    try w.writeAll("</code>");
+}
+
+/// A single-token coloured `<code class="<cls>">value</code>` cell.
+fn writeTagged(w: *std.Io.Writer, cls: []const u8, value: []const u8) !void {
+    try w.print("<code class=\"{s}\">", .{cls});
+    try writeHtmlEscaped(w, value);
+    try w.writeAll("</code>");
+}
+
 pub fn writeFunctionsMd(w: *std.Io.Writer) !void {
     try w.writeAll(
         \\# Expression functions
         \\
         \\<!-- GENERATED by `zig build docs-md` from the FnDoc catalog in expr.zig. Do not edit. -->
         \\
-        \\All function names are case-insensitive.
-        \\
+        \\All function names are case-insensitive. Functions are grouped by purpose
+        \\below; each table sorts on a header click and filters as you type.
         \\
     );
-    try writeTable(w, &functions, &.{
-        .{ .head = "Function", .field = "signature", .code = true },
-        .{ .head = "Description", .field = "description" },
-        .{ .head = "Example", .field = "example", .code = true },
-    });
+    // One section + table per category, in `fn_groups` order. Rows come from the
+    // flat `functions` list filtered by `fnCategory`, so per-function metadata
+    // stays single-sourced in expr.zig's FnDoc catalog.
+    inline for (fn_groups) |g| {
+        try w.print(
+            \\
+            \\## {s}
+            \\
+            \\{s}
+            \\
+            \\| Function | Description |
+            \\| --- | --- |
+            \\
+        , .{ g.title, g.intro });
+        for (functions) |f| {
+            const cat = fnCategory(f.name) orelse continue;
+            if (cat != g.cat) continue;
+            // Column 1: signature, with the runnable example stacked on a
+            // second line (attr_list `.fn-eg` class → CSS renders it smaller /
+            // muted). Both are Markdown code spans, so no HTML escaping is
+            // needed — `writeEscaped` only guards the table-cell `|`.
+            try w.writeAll("| ");
+            try writeExprCode(w, f.signature, "");
+            if (f.example.len > 0) {
+                try w.writeAll("<br>");
+                try writeExprCode(w, f.example, "fn-eg");
+            }
+            try w.writeAll(" | ");
+            try writeEscaped(w, f.description);
+            try w.writeAll(" |\n");
+        }
+    }
 }
 
 pub fn writeDateTokensMd(w: *std.Io.Writer) !void {
@@ -473,7 +681,7 @@ pub fn writeDateTokensMd(w: *std.Io.Writer) !void {
         \\
     );
     try writeTable(w, date_tokens, &.{
-        .{ .head = "Token", .field = "token", .code = true },
+        .{ .head = "Token", .field = "token", .hl = "hl-type" },
         .{ .head = "Meaning", .field = "meaning" },
         .{ .head = "Example", .field = "example" },
     });
@@ -505,18 +713,17 @@ pub fn writeConfigSchemaMd(alloc: std.mem.Allocator, w: *std.Io.Writer) !void {
 }
 
 fn writeSchemaRow(w: *std.Io.Writer, full_key: []const u8, f: FieldDoc) !void {
-    try w.writeAll("| `");
-    try writeEscaped(w, full_key);
-    try w.writeAll("` | ");
-    try writeCell(w, f.type_name);
+    try w.writeAll("| ");
+    try writeTagged(w, "hl-key", full_key); // dotted key — name/JSON-key colour
     try w.writeAll(" | ");
-    try writeCell(w, f.required);
+    try writeTagged(w, "hl-type", f.type_name);
     try w.writeAll(" | ");
-    if (f.default) |d| {
-        try w.writeByte('`');
-        try writeEscaped(w, d);
-        try w.writeByte('`');
-    } else try w.writeAll("—");
+    if (f.required)
+        try w.writeAll("<span class=\"hl-yes\">yes</span>")
+    else
+        try w.writeAll("<span class=\"hl-no\">no</span>");
+    try w.writeAll(" | ");
+    if (f.default) |d| try writeExprCode(w, d, "") else try w.writeAll("—");
     try w.writeAll(" | ");
     try writeCell(w, f.description);
     try w.writeAll(" |\n");
