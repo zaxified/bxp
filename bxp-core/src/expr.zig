@@ -1611,8 +1611,19 @@ pub const FnArgDoc = struct {
     kind: ArgKind = .expr,
 };
 
+/// Editorial grouping of the builtins, used by the docs pipeline to split the
+/// `expr-functions.md` reference into sections. Lives here (not in docs.zig)
+/// because the category is a stable property of each function — it belongs next
+/// to the builtin it classifies, single-sourced on its `FnDoc`. The section
+/// titles + intros (pure presentation) stay in docs.zig's `fn_groups`.
+pub const FnCategory = enum { logic, text, regex, lookup, number, date, source };
+
 pub const FnDoc = struct {
     name: []const u8,
+    /// Reference-page grouping (see `FnCategory`). No default: every builtin
+    /// must classify itself, so a new builtin is a compile error here until it
+    /// declares a category — the drift guard that used to live in docs.zig.
+    category: FnCategory,
     signature: []const u8,
     description: []const u8,
     /// Runnable one-line example shown (and click-to-insert) in the
@@ -1728,6 +1739,7 @@ fn isDataError(err: anyerror) bool {
 /// the table loop and parses its own arg list via Parser; no adapter exists.
 const if_doc: FnDoc = .{
     .name = "IF",
+    .category = .logic,
     .signature = "IF(cond, yes, no)",
     .example = "IF(1 < 0, 'yes', 'no')",
     .description = "Short-circuit conditional. Returns `yes` if `cond` is truthy, else `no`.",
@@ -1744,6 +1756,7 @@ const if_doc: FnDoc = .{
 /// parses its own arg list via `Parser.evalCase`; no adapter exists.
 const case_doc: FnDoc = .{
     .name = "CASE",
+    .category = .logic,
     .signature = "CASE(expr, m1, r1, …, default)",
     .example = "CASE('B', 'B', 'BUY', 'S', 'SELL', '?')",
     .description = "Multi-branch mapping. Compares `expr` against each `m`/`r` pair in order and returns the first matching `r`; returns the trailing `default` when nothing matches (or \"\" if no default is given). Equality matches the `=` operator (numeric when both sides parse as numbers, else byte-exact string). Only the selected result is evaluated. Collapses nested `IF(IF(IF(…)))` chains.",
@@ -1759,6 +1772,7 @@ const case_doc: FnDoc = .{
 /// IFERROR — lazy. Matched by name; parses its own args via `Parser.evalIferror`.
 const iferror_doc: FnDoc = .{
     .name = "IFERROR",
+    .category = .logic,
     .signature = "IFERROR(expr, fallback)",
     .example = "IFERROR(YEAR('not-a-date'), '')",
     .description = "Return `expr`'s value, or `fallback` if evaluating `expr` raises a data error (not-a-number, bad date, numeric overflow). `fallback` is evaluated only on error. Template errors — unknown function, wrong argument count, syntax — are NOT caught: IFERROR guards against messy data, not template mistakes.",
@@ -1900,6 +1914,7 @@ const ROUND_MAX_PRECISION: i32 = 30;
 // ── ABS ─────────────────────────────────────────────────────────────────
 const abs_doc: FnDoc = .{
     .name = "ABS",
+    .category = .number,
     .signature = "ABS(f)",
     .example = "ABS(-12.5)",
     .description = "Absolute numeric value.",
@@ -1920,6 +1935,7 @@ fn adaptAbs(_: *Parser, args: []Value) anyerror!Value {
 // ── FIELDS ──────────────────────────────────────────────────────────────
 const fields_doc: FnDoc = .{
     .name = "FIELDS",
+    .category = .source,
     .signature = "FIELDS(n)",
     .example = "FIELDS(2)",
     .description = "Field value by 1-based column index. n must be a positive integer — use this when the column header is unknown or unstable; use the [ColumnName] syntax to look up by header name.",
@@ -1960,6 +1976,7 @@ fn stripCurrencySymbol(s: []const u8) ?struct { rest: []const u8, iso: []const u
 // ── PRICE_VALUE ─────────────────────────────────────────────────────────
 const price_value_doc: FnDoc = .{
     .name = "PRICE_VALUE",
+    .category = .number,
     .signature = "PRICE_VALUE(f)",
     .example = "PRICE_VALUE('$1,234.56')",
     .description = "Strip currency symbol or code from a price string, return the numeric part (e.g. \"$88744.27\" → \"88744.27\", \"€24.00\" → \"24.00\", \"24.00 CZK\" → \"24.00\").",
@@ -1990,6 +2007,7 @@ fn adaptPriceValue(_: *Parser, args: []Value) anyerror!Value {
 // ── PRICE_CURRENCY ──────────────────────────────────────────────────────
 const price_currency_doc: FnDoc = .{
     .name = "PRICE_CURRENCY",
+    .category = .number,
     .signature = "PRICE_CURRENCY(f)",
     .example = "PRICE_CURRENCY('$1,234.56')",
     .description = "Extract currency code from a price string (e.g. \"EUR\", \"USD\").",
@@ -2022,6 +2040,7 @@ fn adaptPriceCurrency(_: *Parser, args: []Value) anyerror!Value {
 // ── REMAP ───────────────────────────────────────────────────────────────
 const remap_doc: FnDoc = .{
     .name = "REMAP",
+    .category = .lookup,
     .signature = "REMAP(s, 'name' | k, v, ...)",
     .example = "REMAP('VOW.DE', 'VOW.DE', 'VOW.DE.XETRA')",
     .description = "Whole-value lookup: if `s` exactly equals a map key, return that key's value, else return `s` unchanged. Named form REMAP(s, 'mapname') resolves a `maps` registry entry; inline form REMAP(s, k1,v1, k2,v2, ...) gives the pairs directly. The whole-value sibling of REPLACE (which matches substrings) — use it to remap broker symbols, codes or enum values.",
@@ -2078,6 +2097,7 @@ fn adaptRemap(p: *Parser, args: []Value) anyerror!Value {
 // ── LOOKUP ──────────────────────────────────────────────────────────────
 const lookup_doc: FnDoc = .{
     .name = "LOOKUP",
+    .category = .lookup,
     .signature = "LOOKUP([name,] key, field)",
     .example = "LOOKUP('AAPL', 'name')",
     .description = "Retrieve a value stored by a pre_pass table. 3-arg form `LOOKUP(name, key, field)` selects the named pre_pass block. 2-arg form `LOOKUP(key, field)` works only when exactly one pre_pass block is defined.",
@@ -2157,6 +2177,7 @@ fn adaptLookup(p: *Parser, args: []Value) anyerror!Value {
 // ── SPLIT_PART ──────────────────────────────────────────────────────────
 const split_part_doc: FnDoc = .{
     .name = "SPLIT_PART",
+    .category = .text,
     .signature = "SPLIT_PART(s, delim, n)",
     .example = "SPLIT_PART('AAPL.US', '.', 1)",
     .description = "Return the n-th part of `s` split by `delim` (1-based index). Returns \"\" when n exceeds the part count, when `delim` is empty, or when `n` ≤ 0. When `delim` is not found, n=1 returns the whole string and n>1 returns \"\".",
@@ -2206,6 +2227,7 @@ fn adaptSplitPart(_: *Parser, args: []Value) anyerror!Value {
 // ── CONTAINS ────────────────────────────────────────────────────────────
 const contains_doc: FnDoc = .{
     .name = "CONTAINS",
+    .category = .text,
     .signature = "CONTAINS(haystack, needle)",
     .example = "CONTAINS('Apple Inc', 'Inc')",
     .description = "Returns \"true\" if `haystack` contains `needle`, else \"false\".",
@@ -2265,6 +2287,7 @@ fn compileRegex(p: *Parser, pattern: []const u8) anyerror!Regex {
 
 const regex_match_doc: FnDoc = .{
     .name = "REGEX_MATCH",
+    .category = .regex,
     .signature = "REGEX_MATCH(s, pattern)",
     .example = "REGEX_MATCH('AAPL US Equity', '[A-Z]+')",
     .description = "Returns \"true\" if regular-expression `pattern` matches anywhere in `s`, else \"false\". `pattern` is a regex literal: anchors `^ $`, classes `[...]`, quantifiers `* + ? {m,n}`, groups, and alternation `|` — linear-time (no backreferences or lookaround). Unicode-scalar mode is on, so `.` and class ranges span whole code points, but `\\d`/`\\w`/`\\s` stay ASCII — match accented letters with an explicit class like `[A-ZÁ-Ž]`. Pay for the cheapest tool that does the job: CONTAINS for a literal substring, IN/REMAP for whole-value sets, regex only for a real pattern.",
@@ -2292,6 +2315,7 @@ fn builtinRegexMatch(p: *Parser, args: []Value) anyerror!Value {
 
 const regex_extract_doc: FnDoc = .{
     .name = "REGEX_EXTRACT",
+    .category = .regex,
     .signature = "REGEX_EXTRACT(s, pattern)",
     .example = "REGEX_EXTRACT('Qualified Dividend AAPL 100', '[A-Z]{2,}')",
     .description = "Returns the first part of `s` that regular-expression `pattern` matches, or \"\" if there is no match. When `pattern` has a capture group `(...)`, the first group's text is returned; otherwise the whole match is returned. `pattern` is a regex literal (same syntax + Unicode notes as REGEX_MATCH): linear-time, no backreferences or lookaround, and accented letters need an explicit class like `[A-ZÁ-Ž]` (not `\\w`). Use it to pull a ticker, code, or token a literal REPLACE/SPLIT_PART cannot isolate.",
@@ -2331,6 +2355,7 @@ fn builtinRegexExtract(p: *Parser, args: []Value) anyerror!Value {
 // ── REPLACE ─────────────────────────────────────────────────────────────
 const replace_doc: FnDoc = .{
     .name = "REPLACE",
+    .category = .lookup,
     .signature = "REPLACE(s, 'name' | from, to, ...)",
     .example = "REPLACE('1 234,56', ' ', '', ',', '.')",
     .description = "Replace substrings in `s`. Named form REPLACE(s, 'mapname') applies a `maps` registry entry's pairs. Inline single-pair REPLACE(s, from, to) replaces every occurrence of `from` with `to` (case-sensitive byte match, so multi-byte UTF-8 needles work — this is substring replace, not char-by-char). Inline variadic REPLACE(s, from1, to1, from2, to2, ...) applies the pairs in one left-to-right pass: at each position the first pair (in declared order) whose `from` matches wins and the emitted `to` is not re-scanned, so one pass replaces several tokens at once without nesting. An empty `from` matches nothing. Whole-value sibling: REMAP.",
@@ -2463,6 +2488,7 @@ fn resolveNamedMap(ctx: *const Context, name: []const u8) !?*const NamedMap {
 // ── NOW ─────────────────────────────────────────────────────────────────
 const now_doc: FnDoc = .{
     .name = "NOW",
+    .category = .date,
     .signature = "NOW()",
     .example = "NOW()",
     .description = "Current UTC datetime as ISO 8601 string (YYYY-MM-DDTHH:MM:SSZ).",
@@ -2496,6 +2522,7 @@ fn adaptNow(p: *Parser, args: []Value) anyerror!Value {
 // ── TRIM ────────────────────────────────────────────────────────────────
 const trim_doc: FnDoc = .{
     .name = "TRIM",
+    .category = .text,
     .signature = "TRIM(f)",
     .example = "TRIM('  hello  ')",
     .description = "Strip leading and trailing whitespace from a string.",
@@ -2518,6 +2545,7 @@ fn adaptTrim(_: *Parser, args: []Value) anyerror!Value {
 // ── ROUND ───────────────────────────────────────────────────────────────
 const round_doc: FnDoc = .{
     .name = "ROUND",
+    .category = .number,
     .signature = "ROUND(f, n)",
     .example = "ROUND(3.14159, 2)",
     .description = "Round `f` to `n` decimal places (half away from zero, like Excel: `ROUND(2.5,0)=3`). `n=0` rounds to the nearest integer; `n<0` rounds to tens/hundreds/etc. (`n=-2` → nearest 100); `n>=12` is a no-op (12 is the fixed-point scale). `n` is clamped to ±30.",
@@ -2551,6 +2579,7 @@ fn adaptRound(p: *Parser, args: []Value) anyerror!Value {
 // ── FLOOR ───────────────────────────────────────────────────────────────
 const floor_doc: FnDoc = .{
     .name = "FLOOR",
+    .category = .number,
     .signature = "FLOOR(f)",
     .example = "FLOOR(3.7)",
     .description = "Round `f` down to nearest integer.",
@@ -2569,6 +2598,7 @@ fn adaptFloor(_: *Parser, args: []Value) anyerror!Value {
 // ── CEILING ─────────────────────────────────────────────────────────────
 const ceiling_doc: FnDoc = .{
     .name = "CEILING",
+    .category = .number,
     .signature = "CEILING(f)",
     .example = "CEILING(3.2)",
     .description = "Round `f` up to nearest integer.",
@@ -2591,6 +2621,7 @@ fn adaptCeiling(_: *Parser, args: []Value) anyerror!Value {
 const RAND_MAX_DIGITS: i64 = 65;
 const rand_doc: FnDoc = .{
     .name = "RAND",
+    .category = .number,
     .signature = "RAND(n)",
     .example = "RAND(8)",
     .description = "A string of exactly `n` random digits (each position 0–9, except the first which is 1–9 so a leading zero can't be dropped by a downstream numeric import). Use it for synthetic IDs; `n` is clamped to [1, 65]. Cryptographically seeded — not for security tokens.",
@@ -2635,6 +2666,7 @@ fn adaptRand(p: *Parser, args: []Value) anyerror!Value {
 // ── COALESCE ────────────────────────────────────────────────────────────
 const coalesce_doc: FnDoc = .{
     .name = "COALESCE",
+    .category = .logic,
     .signature = "COALESCE(a, b, ...)",
     .example = "COALESCE('', 'fallback')",
     .description = "First non-empty argument (empty = whitespace-only string). Returns last argument verbatim as fallback.",
@@ -2671,6 +2703,7 @@ fn adaptCoalesce(_: *Parser, args: []Value) anyerror!Value {
 // ── DATE_CONVERT ────────────────────────────────────────────────────────
 const date_convert_doc: FnDoc = .{
     .name = "DATE_CONVERT",
+    .category = .date,
     .signature = "DATE_CONVERT(f, from, to)",
     .example = "DATE_CONVERT('31.12.2024', 'DD.MM.YYYY', 'YYYY-MM-DD')",
     .description = "Reformat a date/time string. Format tokens: YYYY (year), MM/M (month), MMM/MMMM (month name), DD/D (day), hh/h (hour), mm/m (minute), ss/s (second), [literal] (literal characters), [*] (wildcard).",
@@ -2816,6 +2849,7 @@ fn normalizeMonthAbbrev(s: []const u8, alloc: std.mem.Allocator) ![]const u8 {
 // ── LEFT ────────────────────────────────────────────────────────────────
 const left_doc: FnDoc = .{
     .name = "LEFT",
+    .category = .text,
     .signature = "LEFT(s, n)",
     .example = "LEFT('AAPL.US', 4)",
     .description = "Return the first `n` bytes of `s`. `n` is clamped to `[0, len(s)]`; negative `n` returns \"\".",
@@ -2843,6 +2877,7 @@ fn adaptLeft(_: *Parser, args: []Value) anyerror!Value {
 // ── RIGHT ───────────────────────────────────────────────────────────────
 const right_doc: FnDoc = .{
     .name = "RIGHT",
+    .category = .text,
     .signature = "RIGHT(s, n)",
     .example = "RIGHT('AAPL.US', 2)",
     .description = "Return the last `n` bytes of `s`. `n` is clamped to `[0, len(s)]`; negative `n` returns \"\".",
@@ -2870,6 +2905,7 @@ fn adaptRight(_: *Parser, args: []Value) anyerror!Value {
 // ── SUBSTR ──────────────────────────────────────────────────────────────
 const substr_doc: FnDoc = .{
     .name = "SUBSTR",
+    .category = .text,
     .signature = "SUBSTR(s, start, length)",
     .example = "SUBSTR('AAPL.US', 1, 4)",
     .description = "Return `length` bytes from `s` starting at 1-based position `start`. Returns \"\" when `start` is non-positive / past end of `s`, or when `length` is negative. `length` is clamped to the bytes remaining from `start`.",
@@ -2903,6 +2939,7 @@ fn adaptSubstr(_: *Parser, args: []Value) anyerror!Value {
 // ── UPPER ───────────────────────────────────────────────────────────────
 const upper_doc: FnDoc = .{
     .name = "UPPER",
+    .category = .text,
     .signature = "UPPER(s)",
     .example = "UPPER('aapl')",
     .description = "Full-Unicode upper-case conversion: works across Latin, Greek, Cyrillic, etc. (café → CAFÉ, ß → SS); unicameral scripts (CJK, Arabic, Hebrew) pass through unchanged. Invalid UTF-8 bytes pass through verbatim.",
@@ -2924,6 +2961,7 @@ fn adaptUpper(p: *Parser, args: []Value) anyerror!Value {
 // ── LOWER ───────────────────────────────────────────────────────────────
 const lower_doc: FnDoc = .{
     .name = "LOWER",
+    .category = .text,
     .signature = "LOWER(s)",
     .example = "LOWER('AAPL')",
     .description = "Full-Unicode lower-case conversion: works across Latin, Greek, Cyrillic, etc. (CAFÉ → café, Я → я); unicameral scripts (CJK, Arabic, Hebrew) pass through unchanged. Invalid UTF-8 bytes pass through verbatim.",
@@ -2945,6 +2983,7 @@ fn adaptLower(p: *Parser, args: []Value) anyerror!Value {
 // ── UNACCENT ────────────────────────────────────────────────────────────
 const unaccent_doc: FnDoc = .{
     .name = "UNACCENT",
+    .category = .text,
     .signature = "UNACCENT(s)",
     .example = "UNACCENT('Café Crème')",
     .description = "Strip diacritics from Latin text (café → cafe, ÀÉÎ → AEI, ß → ss, ø → o). Latin-scope like Postgres unaccent: non-Latin letters keep their base script (Greek Ά → Α, not A) and CJK/Arabic pass through unchanged; ligatures are NOT folded. Invalid UTF-8 bytes pass through verbatim.",
@@ -2966,6 +3005,7 @@ fn adaptUnaccent(p: *Parser, args: []Value) anyerror!Value {
 // ── STARTS_WITH ─────────────────────────────────────────────────────────
 const starts_with_doc: FnDoc = .{
     .name = "STARTS_WITH",
+    .category = .text,
     .signature = "STARTS_WITH(s, prefix)",
     .example = "STARTS_WITH('US123', 'US')",
     .description = "Return \"true\" when `s` begins with `prefix` (case-sensitive byte match), else \"false\". An empty `prefix` always matches.",
@@ -2994,6 +3034,7 @@ fn adaptStartsWith(_: *Parser, args: []Value) anyerror!Value {
 // ── ENDS_WITH ───────────────────────────────────────────────────────────
 const ends_with_doc: FnDoc = .{
     .name = "ENDS_WITH",
+    .category = .text,
     .signature = "ENDS_WITH(s, suffix)",
     .example = "ENDS_WITH('AAPL.PR', '.PR')",
     .description = "Return \"true\" when `s` ends with `suffix` (case-sensitive byte match), else \"false\". An empty `suffix` always matches.",
@@ -3022,6 +3063,7 @@ fn adaptEndsWith(_: *Parser, args: []Value) anyerror!Value {
 // ── NULLIF ──────────────────────────────────────────────────────────────
 const nullif_doc: FnDoc = .{
     .name = "NULLIF",
+    .category = .logic,
     .signature = "NULLIF(value, sentinel)",
     .example = "NULLIF('N/A', 'N/A')",
     .description = "Return `\"\"` when `value` equals `sentinel`, otherwise return `value`. Equality is numeric when both sides parse as numbers, otherwise byte-exact string compare — mirrors the `=` operator. Typical use: collapse sentinel values such as `\"-9999\"`, `\"\\N\"`, `\"N/A\"` to empty.",
@@ -3055,6 +3097,7 @@ fn adaptNullif(p: *Parser, args: []Value) anyerror!Value {
 // ── IN ──────────────────────────────────────────────────────────────────
 const in_doc: FnDoc = .{
     .name = "IN",
+    .category = .logic,
     .signature = "IN(value, v1, v2, ...)",
     .example = "IN('BUY', 'BUY', 'SELL')",
     .description = "Return \"true\" when `value` equals any of `v1, v2, …`. Equality is numeric when both sides parse as numbers, otherwise byte-exact string compare — mirrors the `=` operator. Variadic 2+ args.",
@@ -3134,6 +3177,7 @@ fn parseDateArg(p: *Parser, s: []const u8) !i64 {
 // ── DATEADD ─────────────────────────────────────────────────────────────
 const dateadd_doc: FnDoc = .{
     .name = "DATEADD",
+    .category = .date,
     .signature = "DATEADD(d, n)",
     .example = "DATEADD('2024-01-31', 7)",
     .description = "Add `n` calendar days to date `d` (YYYY-MM-DD). Negative `n` subtracts. Returns YYYY-MM-DD. For business-day arithmetic (skipping weekends) use WORKDAY().",
@@ -3162,6 +3206,7 @@ fn adaptDateAdd(p: *Parser, args: []Value) anyerror!Value {
 // ── DATEDIFF ────────────────────────────────────────────────────────────
 const datediff_doc: FnDoc = .{
     .name = "DATEDIFF",
+    .category = .date,
     .signature = "DATEDIFF(d1, d2)",
     .example = "DATEDIFF('2024-01-01', '2024-12-31')",
     .description = "Calendar days from `d2` to `d1`: positive when `d1` is later. Both arguments are YYYY-MM-DD strings.",
@@ -3187,6 +3232,7 @@ fn adaptDateDiff(p: *Parser, args: []Value) anyerror!Value {
 // ── WORKDAY ─────────────────────────────────────────────────────────────
 const workday_doc: FnDoc = .{
     .name = "WORKDAY",
+    .category = .date,
     .signature = "WORKDAY(d, n)",
     .example = "WORKDAY('2024-01-01', 10)",
     .description = "Add `n` business days to date `d` (YYYY-MM-DD), skipping Saturdays and Sundays. Negative `n` subtracts. Correct for T+2 settlement math; does NOT account for exchange holidays.",
@@ -3220,6 +3266,7 @@ fn adaptWorkday(p: *Parser, args: []Value) anyerror!Value {
 // ── YEAR ────────────────────────────────────────────────────────────────
 const year_doc: FnDoc = .{
     .name = "YEAR",
+    .category = .date,
     .signature = "YEAR(d)",
     .example = "YEAR('2024-03-15')",
     .description = "Year component of date `d` (YYYY-MM-DD) as a number.",
@@ -3243,6 +3290,7 @@ fn adaptYear(p: *Parser, args: []Value) anyerror!Value {
 // ── MONTH ───────────────────────────────────────────────────────────────
 const month_doc: FnDoc = .{
     .name = "MONTH",
+    .category = .date,
     .signature = "MONTH(d)",
     .example = "MONTH('2024-03-15')",
     .description = "Month component of date `d` (YYYY-MM-DD) as a number, 1-12.",
@@ -3266,6 +3314,7 @@ fn adaptMonth(p: *Parser, args: []Value) anyerror!Value {
 // ── DAY ─────────────────────────────────────────────────────────────────
 const day_doc: FnDoc = .{
     .name = "DAY",
+    .category = .date,
     .signature = "DAY(d)",
     .example = "DAY('2024-03-15')",
     .description = "Day-of-month component of date `d` (YYYY-MM-DD) as a number, 1-31.",
@@ -3289,6 +3338,7 @@ fn adaptDay(p: *Parser, args: []Value) anyerror!Value {
 // ── WEEKDAY ─────────────────────────────────────────────────────────────
 const weekday_doc: FnDoc = .{
     .name = "WEEKDAY",
+    .category = .date,
     .signature = "WEEKDAY(d)",
     .example = "WEEKDAY('2024-03-15')",
     .description = "ISO day-of-week for date `d` (YYYY-MM-DD): Monday=1 … Sunday=7. Useful for weekend-trade detection: `WEEKDAY([Date]) > 5`.",
@@ -3309,6 +3359,7 @@ fn adaptWeekday(p: *Parser, args: []Value) anyerror!Value {
 // ── EOMONTH ─────────────────────────────────────────────────────────────
 const eomonth_doc: FnDoc = .{
     .name = "EOMONTH",
+    .category = .date,
     .signature = "EOMONTH(d)",
     .example = "EOMONTH('2024-02-10')",
     .description = "Last calendar day of the month containing date `d` (YYYY-MM-DD), as YYYY-MM-DD. Useful for snapping coupon/dividend dates and month-end reporting.",
@@ -3340,6 +3391,7 @@ fn adaptEomonth(p: *Parser, args: []Value) anyerror!Value {
 // ── NTH_DOW ─────────────────────────────────────────────────────────────
 const nth_dow_doc: FnDoc = .{
     .name = "NTH_DOW",
+    .category = .date,
     .signature = "NTH_DOW(year, month, weekday, n)",
     .example = "NTH_DOW(2024, 3, 7, -1)",
     .description = "Date (YYYY-MM-DD) of the `n`-th `weekday` (ISO Mon=1 … Sun=7) in `year`/`month`. Positive `n` counts from the start (1 = first); negative counts from the end (-1 = last). Returns \"\" when the occurrence doesn't exist or an argument is out of range. Handy for DST boundaries — EU summer time is `NTH_DOW(YEAR(d), 3, 7, -1)` (last Sunday of March) to `NTH_DOW(YEAR(d), 10, 7, -1)` (last Sunday of October).",
@@ -3367,6 +3419,7 @@ fn adaptNthDow(p: *Parser, args: []Value) anyerror!Value {
 // ── LEN ─────────────────────────────────────────────────────────────────
 const len_doc: FnDoc = .{
     .name = "LEN",
+    .category = .text,
     .signature = "LEN(s)",
     .example = "LEN('hello')",
     .description = "Byte length of `s` (UTF-8 byte count, not codepoint or grapheme count). Empty string → 0.",
@@ -3388,6 +3441,7 @@ fn adaptLen(_: *Parser, args: []Value) anyerror!Value {
 // ── GREATEST ────────────────────────────────────────────────────────────
 const greatest_doc: FnDoc = .{
     .name = "GREATEST",
+    .category = .number,
     .signature = "GREATEST(a, b, ...)",
     .example = "GREATEST(3, 7, 5)",
     .description = "Largest numeric value among arguments. Per-row maximum (not aggregation across rows). Arguments are coerced to numbers; empty string coerces to 0, non-numeric strings raise an error.",
@@ -3421,6 +3475,7 @@ fn adaptGreatest(p: *Parser, args: []Value) anyerror!Value {
 // ── LEAST ───────────────────────────────────────────────────────────────
 const least_doc: FnDoc = .{
     .name = "LEAST",
+    .category = .number,
     .signature = "LEAST(a, b, ...)",
     .example = "LEAST(3, 7, 5)",
     .description = "Smallest numeric value among arguments. Per-row minimum (not aggregation across rows). Arguments are coerced to numbers; empty string coerces to 0, non-numeric strings raise an error.",
@@ -3763,6 +3818,7 @@ pub const tokens = [_]TokenDoc{
 // ── FILENAME ────────────────────────────────────────────────────────────
 const filename_doc: FnDoc = .{
     .name = "FILENAME",
+    .category = .source,
     .signature = "FILENAME()",
     .example = "FILENAME()",
     .description = "Input file stem — the file name with its directory and the matched `file_pattern_in` suffix removed (the same stem used for output naming). Broker exports often encode account/broker/period in the name, so e.g. `SPLIT_PART(FILENAME(), '_', 3)` extracts a field from it. Empty during stateless evaluation (no source file).",
@@ -3777,6 +3833,7 @@ fn adaptFilename(p: *Parser, args: []Value) anyerror!Value {
 // ── RECORD_NUM ──────────────────────────────────────────────────────────
 const record_num_doc: FnDoc = .{
     .name = "RECORD_NUM",
+    .category = .source,
     .signature = "RECORD_NUM()",
     .example = "RECORD_NUM()",
     .description = "1-based input record number of the current row within the file (the first data row is 1). Use it for synthetic IDs, dedup keys, or skip-first-N logic. 0 during stateless evaluation and inside the pre_pass scan.",
@@ -3791,6 +3848,7 @@ fn adaptRecordNum(p: *Parser, args: []Value) anyerror!Value {
 // ── SHEET_NAME ──────────────────────────────────────────────────────────
 const sheet_name_doc: FnDoc = .{
     .name = "SHEET_NAME",
+    .category = .source,
     .signature = "SHEET_NAME()",
     .example = "SHEET_NAME()",
     .description = "For xlsx-derived input, the configured `xlsx_sheet.name` the row came from; \"\" for native CSV/JSON input and during stateless evaluation.",
@@ -3809,6 +3867,7 @@ fn adaptSheetName(p: *Parser, args: []Value) anyerror!Value {
 const PAD_MAX_LEN: usize = 65535;
 const lpad_doc: FnDoc = .{
     .name = "LPAD",
+    .category = .text,
     .signature = "LPAD(s, len, pad)",
     .example = "LPAD('42', 5, '0')",
     .description = "Left-pad `s` with the `pad` string (repeated, then clipped) until it is `len` bytes long. If `s` is already `len` or longer it is truncated to the first `len` bytes; an empty `pad` returns `s` unchanged. `len` is clamped to [0, 65535]. Byte-based (UTF-8 byte count).",
@@ -3850,6 +3909,7 @@ fn adaptLpad(p: *Parser, args: []Value) anyerror!Value {
 // ── RPAD ────────────────────────────────────────────────────────────────
 const rpad_doc: FnDoc = .{
     .name = "RPAD",
+    .category = .text,
     .signature = "RPAD(s, len, pad)",
     .example = "RPAD('42', 5, ' ')",
     .description = "Right-pad `s` with the `pad` string (repeated, then clipped) until it is `len` bytes long. If `s` is already `len` or longer it is truncated to the first `len` bytes; an empty `pad` returns `s` unchanged. `len` is clamped to [0, 65535]. Byte-based (UTF-8 byte count).",
@@ -3868,6 +3928,7 @@ fn adaptRpad(p: *Parser, args: []Value) anyerror!Value {
 // ── POSITION ────────────────────────────────────────────────────────────
 const position_doc: FnDoc = .{
     .name = "POSITION",
+    .category = .text,
     .signature = "POSITION(needle, haystack)",
     .example = "POSITION('Inc', 'Apple Inc')",
     .description = "1-based byte position of the first occurrence of `needle` inside `haystack`, or 0 when not found. An empty `needle` returns 1. Byte-based (UTF-8 byte offset), case-sensitive.",
@@ -3897,6 +3958,7 @@ fn adaptPosition(_: *Parser, args: []Value) anyerror!Value {
 // ── PROPER ──────────────────────────────────────────────────────────────
 const proper_doc: FnDoc = .{
     .name = "PROPER",
+    .category = .text,
     .signature = "PROPER(s)",
     .example = "PROPER('apple inc')",
     .description = "Title-case `s`: upper-case the first letter of every word and lower-case the rest (`apple inc` → `Apple Inc`, `o'brien` → `O'Brien`). Words break on any non-letter (spaces, digits, punctuation), like Excel PROPER. Full-Unicode via the same case tables as UPPER/LOWER; invalid UTF-8 passes through.",
@@ -3941,6 +4003,7 @@ fn adaptProper(p: *Parser, args: []Value) anyerror!Value {
 // ── MOD ─────────────────────────────────────────────────────────────────
 const mod_doc: FnDoc = .{
     .name = "MOD",
+    .category = .number,
     .signature = "MOD(a, b)",
     .example = "MOD(7, 3)",
     .description = "Remainder of `a` divided by `b`, with the sign of the dividend `a` (truncated division, like SQL/C `%`: `MOD(-7, 3) = -1`). `MOD(a, 0)` returns \"\" (mirrors the `/` operator's silent divide-by-zero). Exact over the fixed-point decimal core.",
@@ -3975,6 +4038,7 @@ fn adaptMod(p: *Parser, args: []Value) anyerror!Value {
 // ── ISEMPTY ─────────────────────────────────────────────────────────────
 const isempty_doc: FnDoc = .{
     .name = "ISEMPTY",
+    .category = .logic,
     .signature = "ISEMPTY(x)",
     .example = "ISEMPTY('  ')",
     .description = "Return \"true\" when `x` is empty or whitespace-only, else \"false\". The safe emptiness test: a bare `x = ''` wrongly matches `'0'` (which coerces to empty in numeric context), whereas ISEMPTY checks the trimmed string length.",

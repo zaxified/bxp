@@ -36,11 +36,12 @@ const functions = blk: {
 //
 // Editorial grouping of the builtins for the `expr-functions.md` reference page
 // only — the JSON docs catalog and the GUI still see the flat `functions` list
-// above in its original order. The name→category map lives here in the doc
-// pipeline (not on each FnDoc) because it is a presentation concern; a comptime
-// guard below turns any miscategorised/new builtin into a BUILD error, so the
-// map can never silently drift out of sync with `expr.builtins`.
-const FnCategory = enum { logic, text, regex, lookup, number, date, source };
+// above in its original order. The category itself lives on each `FnDoc`
+// (`expr.FnCategory`, single-sourced next to the builtin it classifies); only
+// the per-section title + intro prose — pure presentation — lives here. A new
+// builtin can't drift out of sync: `FnDoc.category` has no default, so an
+// uncategorised builtin is a compile error at the `FnDoc` literal.
+const FnCategory = expr.FnCategory;
 
 const FnGroup = struct { cat: FnCategory, title: []const u8, intro: []const u8 };
 const fn_groups = [_]FnGroup{
@@ -52,52 +53,6 @@ const fn_groups = [_]FnGroup{
     .{ .cat = .date, .title = "Dates & time", .intro = "Reformat, shift, diff, and decompose dates — business-day aware." },
     .{ .cat = .source, .title = "Row & source context", .intro = "Values drawn from the current row's position and its source file." },
 };
-
-fn fnCategory(name: []const u8) ?FnCategory {
-    const map = .{
-        // logic & conditionals
-        .{ "IF", .logic },        .{ "CASE", .logic },     .{ "IFERROR", .logic },
-        .{ "COALESCE", .logic },  .{ "NULLIF", .logic },   .{ "IN", .logic },
-        .{ "ISEMPTY", .logic },
-        // text
-        .{ "TRIM", .text },       .{ "UPPER", .text },     .{ "LOWER", .text },
-        .{ "UNACCENT", .text },   .{ "PROPER", .text },    .{ "LEFT", .text },
-        .{ "RIGHT", .text },      .{ "SUBSTR", .text },    .{ "LPAD", .text },
-        .{ "RPAD", .text },       .{ "POSITION", .text },  .{ "LEN", .text },
-        .{ "CONTAINS", .text },   .{ "STARTS_WITH", .text }, .{ "ENDS_WITH", .text },
-        .{ "SPLIT_PART", .text },
-        // pattern matching
-        .{ "REGEX_MATCH", .regex }, .{ "REGEX_EXTRACT", .regex },
-        // lookup & mapping
-        .{ "REMAP", .lookup },    .{ "REPLACE", .lookup }, .{ "LOOKUP", .lookup },
-        // numbers & money
-        .{ "ABS", .number },      .{ "ROUND", .number },   .{ "FLOOR", .number },
-        .{ "CEILING", .number },  .{ "MOD", .number },     .{ "GREATEST", .number },
-        .{ "LEAST", .number },    .{ "RAND", .number },    .{ "PRICE_VALUE", .number },
-        .{ "PRICE_CURRENCY", .number },
-        // dates & time
-        .{ "DATE_CONVERT", .date }, .{ "NOW", .date },     .{ "DATEADD", .date },
-        .{ "DATEDIFF", .date },   .{ "WORKDAY", .date },   .{ "YEAR", .date },
-        .{ "MONTH", .date },      .{ "DAY", .date },       .{ "WEEKDAY", .date },
-        .{ "EOMONTH", .date },    .{ "NTH_DOW", .date },
-        // row & source context
-        .{ "FIELDS", .source },   .{ "FILENAME", .source }, .{ "RECORD_NUM", .source },
-        .{ "SHEET_NAME", .source },
-    };
-    inline for (map) |e| if (std.mem.eql(u8, name, e[0])) return e[1];
-    return null;
-}
-
-// Drift guard: every builtin must be categorised, exactly once is enforced by
-// construction (a name can only appear once in the map). A new builtin with no
-// category entry fails the build here instead of vanishing from the docs.
-comptime {
-    @setEvalBranchQuota(10_000); // 53 builtins × 53 map probes exceeds the 1000 default
-    for (expr.builtins) |b| {
-        if (fnCategory(b.name) == null)
-            @compileError("docs.zig: uncategorised builtin '" ++ b.name ++ "' — add it to fnCategory()");
-    }
-}
 
 const keywords = expr.keywords;
 const operators = expr.operators;
@@ -637,8 +592,9 @@ pub fn writeFunctionsMd(w: *std.Io.Writer) !void {
         \\
     );
     // One section + table per category, in `fn_groups` order. Rows come from the
-    // flat `functions` list filtered by `fnCategory`, so per-function metadata
-    // stays single-sourced in expr.zig's FnDoc catalog.
+    // flat `functions` list filtered by each entry's `FnDoc.category`, so every
+    // per-function attribute (category included) stays single-sourced in
+    // expr.zig's FnDoc catalog.
     inline for (fn_groups) |g| {
         try w.print(
             \\
@@ -651,8 +607,7 @@ pub fn writeFunctionsMd(w: *std.Io.Writer) !void {
             \\
         , .{ g.title, g.intro });
         for (functions) |f| {
-            const cat = fnCategory(f.name) orelse continue;
-            if (cat != g.cat) continue;
+            if (f.category != g.cat) continue;
             // Column 1: signature, with the runnable example stacked on a
             // second line (attr_list `.fn-eg` class → CSS renders it smaller /
             // muted). Both are Markdown code spans, so no HTML escaping is
