@@ -26,7 +26,6 @@ theme:
     - navigation.instant.progress  # top progress bar on slow loads
     - navigation.tracking    # URL anchor follows the scrolled-to heading
     - navigation.top         # back-to-top button
-    - navigation.footer      # prev/next links in the footer
     - toc.integrate          # fold the page TOC into the left nav (no right column)
     - search.suggest
     - search.highlight
@@ -113,16 +112,6 @@ nav:
       - guide/row-routing.md
       - guide/targets.md
       - guide/running.md
-  - Reference:
-      - reference/expr-functions.md
-      - reference/config-schema.md
-      - reference/date-tokens.md
-      - reference/cli-flags.md
-      - reference/mcp-tools.md
-      - reference/gui-agent-tools.md
-      - reference/gui-shortcuts.md
-      - reference/gui-prefs.md
-      - reference/exit-codes.md
   - AI Workflow:
       - ai/authoring-a-broker.md
       - ai/gui-mcp.md
@@ -133,10 +122,41 @@ nav:
       - gui/updates.md
       - gui/troubleshooting.md
   - Developer:
-      - dev/setup.md
-      - dev/architecture.md
-      - dev/gui.md
+      - dev/build.md
+      - dev/testing.md
+      - dev/debugging.md
+      - Internals:
+          - dev/internals/index.md
+          - dev/internals/modules.md
+          - dev/internals/implementation.md
+          - dev/internals/howto.md
+          - dev/internals/performance.md
+      - Architecture:
+          - dev/architecture/index.md
+          - dev/architecture/pipeline.md
+          - dev/architecture/gui.md
+          - dev/architecture/data-structures.md
+      - GUI internals:
+          - dev/gui/index.md
+          - dev/gui/setup.md
+          - dev/gui/architecture.md
+          - dev/gui/subprocess.md
+          - dev/gui/agent.md
+          - dev/gui/patterns.md
       - dev/mcp.md
-      - dev/trace-protocol.md
+      - Trace protocol:
+          - dev/trace-protocol/index.md
+          - dev/trace-protocol/bxtb.md
+          - dev/trace-protocol/inspect.md
       - dev/release.md
       - dev/roadmap.md
+  - Reference:
+      - reference/expr-functions.md
+      - reference/config-schema.md
+      - reference/date-tokens.md
+      - reference/cli-flags.md
+      - reference/mcp-tools.md
+      - reference/gui-agent-tools.md
+      - reference/gui-shortcuts.md
+      - reference/gui-prefs.md
+      - reference/exit-codes.md

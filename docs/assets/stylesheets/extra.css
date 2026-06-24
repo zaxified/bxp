@@ -100,6 +100,9 @@ html {
 .md-typeset table:not([class]) th[aria-sort="ascending"]::after  { content: " ▲"; opacity: .55; }
 .md-typeset table:not([class]) th[aria-sort="descending"]::after { content: " ▼"; opacity: .55; }
 
+/* Hide the Material footer entirely (copyright + generator notice). */
+.md-footer { display: none; }
+
 /* ── Type-to-filter box injected above wide tables ───────────────────── */
 .table-filter {
   display: flex;

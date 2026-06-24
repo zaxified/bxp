@@ -1,6 +1,4 @@
-# Cutting a release
-
-> [← docs/](../index.md)
+# Release
 
 Release artifacts are produced by `.github/workflows/release.yml` on
 every `v*` tag push. The pipeline fans out across three host runners
@@ -185,7 +183,7 @@ On the client, `UpdaterService` verifies `SHA256SUMS.minisig` against an embedde
 public key **before** trusting the manifest, then matches the downloaded
 installer's hash against it — two fail-closed steps over the same bytes. A forged
 installer plus a matching `SHA256SUMS` cannot produce a valid signature without
-the private key. See [`gui.md`](gui.md#auto-updater-and-security) for the client
+the private key. See [`gui/agent.md`](gui/agent.md#auto-updater-and-security) for the client
 side.
 
 ## What's NOT signed (OS code signing)

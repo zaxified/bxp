@@ -1,7 +1,5 @@
 # Roadmap
 
-> [← docs/](../index.md)
-
 Hand-maintained backlog — entries get crossed out / deleted as work
 lands on master. `CHANGELOG.md` is generated independently.
 

@@ -1,6 +1,4 @@
-# bxp-mcp — MCP server
-
-> [← docs/](../index.md)
+# MCP server
 
 Developer orientation for **bxp-mcp**, the Model Context Protocol server that
 exposes bxp's stateless surface (plus one full-run tool) as agent-callable
@@ -17,7 +15,7 @@ For the deepest reference — exact JSON shapes, every design rationale — read
 > over **localhost HTTP**, wrapping the live `TraceStore` — an agent uses it to
 > **drive the live GUI**. Different binary, transport, state model, and lifecycle
 > (gui-mcp exists only while the GUI is running); they share only the MCP protocol
-> itself. gui-mcp lives in `bxp-gui` — see [`gui.md`](gui.md) and
+> itself. gui-mcp lives in `bxp-gui` — see [`gui/index.md`](gui/index.md) and
 > [`bxp-gui/CLAUDE.md`](https://github.com/zaxified/bxp/blob/master/bxp-gui/CLAUDE.md) ("Agent control").
 
 ## What it is, and why
@@ -207,7 +205,7 @@ plus a capped (`MAX_TRACE_SAMPLE = 200`) sample for `filtered` (reason:
 `rule_skip` / `no_rule_match`), `row_errors`, and `output_rows` — each row
 carrying the **1-based input line** resolved from its `source_locator` byte
 offset. For the underlying BXTB frame format see
-[`trace-protokol.md`](trace-protocol.md).
+[`trace-protocol.md`](trace-protocol.md).
 
 ## Build, run, test
 
