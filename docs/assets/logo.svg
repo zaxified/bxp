@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <title>bxp — sand · stroke 80</title>
+  <defs>
+    <linearGradient id="grad" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#2A2420"></stop>
+      <stop offset="1" stop-color="#2A2420" stop-opacity="0.55"></stop>
+    </linearGradient>
+    <clipPath id="clip"><path d="M 0 230.4 C 0 103.68, 103.68 0, 230.4 0 L 793.6 0 C 920.3199999999999 0, 1024 103.68, 1024 230.4 L 1024 793.6 C 1024 920.3199999999999, 920.3199999999999 1024, 793.6 1024 L 230.4 1024 C 103.68 1024, 0 920.3199999999999, 0 793.6 Z"></path></clipPath>
+  </defs>
+  <path d="M 0 230.4 C 0 103.68, 103.68 0, 230.4 0 L 793.6 0 C 920.3199999999999 0, 1024 103.68, 1024 230.4 L 1024 793.6 C 1024 920.3199999999999, 920.3199999999999 1024, 793.6 1024 L 230.4 1024 C 103.68 1024, 0 920.3199999999999, 0 793.6 Z" fill="#E8DFCD"></path>
+  <g clip-path="url(#clip)" transform="scale(1.024)">
+    <path d="M 340 545 A 170 170 0 1 0 340.01 545 C 400 365, 600 635, 660 455 A 170 170 0 1 0 659.99 455 M 350 555 C 320 680, 680 320, 650 445" fill="none" stroke="url(#grad)" stroke-width="80" stroke-linecap="round" stroke-linejoin="round"></path>
+  </g>
+</svg>

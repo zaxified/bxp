@@ -7,6 +7,9 @@ docs-old/
 # MkDocs build output
 site/
 
+# MkDocs Material plugin cache (social cards / git dates) — build-time only
+.cache/
+
 # Local docs toolchain virtualenv (build-time only)
 .venv-docs/
 

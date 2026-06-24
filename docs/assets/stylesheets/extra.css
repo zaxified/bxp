@@ -1,0 +1,133 @@
+/* BXP docs — brand palette + reference-table ergonomics.
+   Loaded after Material's stylesheet (extra_css), so these scheme-scoped
+   custom properties override the default indigo theme. */
+
+/* Always reserve the vertical scrollbar gutter. Without this, navigating from a
+   page tall enough to scroll to a short one removes the scrollbar, the content
+   box widens by the scrollbar width, and the whole page visibly jumps sideways
+   on every such navigation. Reserving the gutter keeps the width constant. */
+html {
+  scrollbar-gutter: stable;
+}
+
+/* Colour palettes live in palettes.css and are switched from the header palette
+   toggle (see mkdocs.yml `theme.palette`): the native `default`/`slate` schemes
+   plus a few complete, coordinated community palettes (Gruvbox / Nord /
+   Catppuccin). Only structural / layout rules live here. */
+
+/* Material renders h1 in a muted tone; lift the page title to full contrast in
+   every scheme so it never washes out. */
+.md-typeset h1 {
+  color: var(--md-default-fg-color);
+  font-weight: 700;
+}
+
+/* ── Wider, left-aligned content on big screens ──────────────────────────
+   Material centres the content column at ~61rem, leaving big side gutters on
+   wide monitors. Drop the cap and pin the page to the left so the freed space
+   becomes usable content width (helps the wide reference tables most). Only
+   above Material's own desktop breakpoint — narrow/tablet keep the responsive
+   default. Revert = delete this block. */
+@media screen and (min-width: 76.25em) {
+  /* Inset EVERY .md-grid (the header tab row AND the content area share this
+     class) so the tabs and the left sidebar keep one common left edge —
+     applying the margin to only the content made the two visibly jump apart. */
+  .md-grid {
+    max-width: none;
+    margin-left: 1.6rem;
+    margin-right: 2.4rem;
+  }
+
+  /* Stop the sticky left nav from drifting on the first scroll. Material puts a
+     1.5rem top margin on .md-main__inner (the row holding BOTH sidebar and
+     content); that margin sits ABOVE the sidebar's sticky anchor (top: header
+     height), so on scroll the sidebar first travels down through the margin
+     before it sticks — a visible jump between the 1st and 2nd scroll step.
+     Zero the shared row margin so the sidebar starts already at its sticky
+     point (never moves), and re-add the identical breathing space on the
+     content column only, so the article spacing is unchanged. */
+  .md-main__inner {
+    margin-top: 0;
+  }
+  .md-content {
+    margin-top: 1.5rem;
+  }
+
+  /* Kill the residual ~1px shimmer of the sticky nav text on scroll. The
+     sidebar geometry is pixel-stable, so the flicker is sub-pixel re-rasterising
+     of the text as the page composites underneath (worst on fractional display
+     scaling). Promoting the scroll wrap to its own GPU layer makes the browser
+     rasterise the nav once and just composite it — no per-frame repaint. Scoped
+     to the inner wrap (not the sticky element itself) so stickiness is untouched. */
+  .md-sidebar--primary .md-sidebar__scrollwrap {
+    transform: translateZ(0);
+    backface-visibility: hidden;
+  }
+}
+
+/* ── Reference-table polish ──────────────────────────────────────────── */
+/* Keep the signature / dotted key (the first code span) on one line; a long
+   stacked example below it is free to wrap. */
+.md-typeset table:not([class]) td:first-child > code:first-child {
+  white-space: nowrap;
+}
+/* Runnable example, stacked under the signature in the Function column —
+   smaller than the signature so it reads as secondary, but NOT opacity-muted
+   (that would wash out the token colours below). */
+.md-typeset .fn-eg {
+  display: inline-block;
+  margin-top: .35rem;
+  font-size: .8em;
+}
+
+/* ── Semantic token colours for generated reference tables ───────────────
+   The catalog generator (bxp-core/src/docs.zig) wraps function names, types,
+   string/number literals, keys and booleans in these classes; binding each to
+   the active theme's --md-code-hl-* token colour makes every reference table
+   read like syntax-highlighted code in Light, Dark and the VS Code palettes. */
+.md-typeset .hl-fn   { color: var(--md-code-hl-function-color); }
+.md-typeset .hl-str  { color: var(--md-code-hl-string-color); }
+.md-typeset .hl-num  { color: var(--md-code-hl-number-color); }
+.md-typeset .hl-type { color: var(--md-code-hl-keyword-color); white-space: nowrap; }
+.md-typeset .hl-key  { color: var(--md-code-hl-name-color); }
+.md-typeset .hl-yes  { color: var(--md-code-hl-keyword-color); font-weight: 600; }
+.md-typeset .hl-no   { color: var(--md-code-hl-comment-color); }
+/* Sortable headers (wired up by tables.js + tablesort). */
+.md-typeset table:not([class]) th {
+  cursor: pointer;
+  user-select: none;
+}
+.md-typeset table:not([class]) th[aria-sort="ascending"]::after  { content: " ▲"; opacity: .55; }
+.md-typeset table:not([class]) th[aria-sort="descending"]::after { content: " ▼"; opacity: .55; }
+
+/* ── Type-to-filter box injected above wide tables ───────────────────── */
+.table-filter {
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  margin: .8rem 0 .2rem;
+  /* Match the .md-typeset__table wrapper's horizontal padding so the filter box
+     lines up with the table cells below it (the table is indented 0.8rem inside
+     its scroll wrapper; without this the box overhangs to the left). */
+  padding-left: .8rem;
+}
+.table-filter input {
+  flex: 1 1 auto;
+  max-width: 24rem;
+  padding: .4rem .65rem;
+  border: 1px solid var(--md-default-fg-color--lighter);
+  border-radius: .2rem;
+  background: var(--md-default-bg-color);
+  color: var(--md-default-fg-color);
+  font-size: .72rem;
+}
+.table-filter input:focus {
+  outline: none;
+  border-color: var(--md-accent-fg-color);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--md-accent-fg-color) 30%, transparent);
+}
+.table-filter__count {
+  font-size: .68rem;
+  color: var(--md-default-fg-color--light);
+  white-space: nowrap;
+}

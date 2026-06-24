@@ -1,0 +1,123 @@
+/* Extra colour palettes for the header palette toggle (mkdocs.yml
+   `theme.palette`). `default` (light) and `slate` (dark) are Material's own
+   built-in schemes and need nothing here.
+
+   IMPORTANT — a custom scheme must define the FULL Material variable set (41
+   vars), not just text + code. Material derives tables, admonitions, hovers,
+   borders, the footer and shadows from these; any left unset fall back to the
+   light `:root` values and render broken on a dark background. The block below
+   therefore mirrors Material's complete `slate` scheme and only swaps the
+   palette-specific colours.
+
+   To add another theme: copy the whole block, rename the selector, then change
+   the base greys, the `--md-code-hl-*` syntax colours and the accent. */
+
+/* ── VS Code Dark+ ──────────────────────────────────────────────────────── */
+[data-md-color-scheme="vscode-dark"] {
+  --md-hue: 220; /* drives the hue-based structural greys below */
+
+  /* base text + background (VS Code editor greys) */
+  --md-default-fg-color:           #d4d4d4;
+  --md-default-fg-color--light:    #d4d4d4b3;
+  --md-default-fg-color--lighter:  #d4d4d480;
+  --md-default-fg-color--lightest: #d4d4d433;
+  --md-default-bg-color:           #1e1e1e;
+  --md-default-bg-color--light:    #1e1e1e8a;
+  --md-default-bg-color--lighter:  #1e1e1e42;
+  --md-default-bg-color--lightest: #1e1e1e12;
+
+  /* code surface */
+  --md-code-fg-color:              #d4d4d4;
+  --md-code-bg-color:              #252526;
+  --md-code-bg-color--light:       #252526e6;
+  --md-code-bg-color--lighter:     #2525268a;
+
+  /* syntax highlighting — VS Code Dark+ token colours */
+  --md-code-hl-color:              #264f7866;
+  --md-code-hl-color--light:       #264f781a;
+  --md-code-hl-number-color:       #b5cea8;
+  --md-code-hl-special-color:      #d16969;
+  --md-code-hl-function-color:     #dcdcaa;
+  --md-code-hl-constant-color:     #4fc1ff;
+  --md-code-hl-keyword-color:      #569cd6;
+  --md-code-hl-string-color:       #ce9178;
+  --md-code-hl-name-color:         #9cdcfe;
+  --md-code-hl-operator-color:     #d4d4d4;
+  --md-code-hl-punctuation-color:  #d4d4d4;
+  --md-code-hl-comment-color:      #6a9955;
+  --md-code-hl-generic-color:      #d4d4d4;
+  --md-code-hl-variable-color:     #9cdcfe;
+
+  /* chrome (header, links, accent) */
+  --md-primary-fg-color:           #252526;
+  --md-primary-fg-color--light:    #333333;
+  --md-primary-fg-color--dark:     #1b1b1c;
+  --md-primary-bg-color:           #d4d4d4;
+  --md-accent-fg-color:            #569cd6;
+  --md-typeset-a-color:            #4daafc;
+
+  /* structural — same shape as slate, derived from --md-hue */
+  --md-typeset-color:              var(--md-default-fg-color);
+  --md-typeset-kbd-color:          hsla(var(--md-hue), 15%, 90%, 0.12);
+  --md-typeset-kbd-accent-color:   hsla(var(--md-hue), 15%, 90%, 0.2);
+  --md-typeset-kbd-border-color:   hsla(var(--md-hue), 15%, 14%, 1);
+  --md-typeset-mark-color:         #4287ff4d;
+  --md-typeset-table-color:        hsla(var(--md-hue), 15%, 95%, 0.12);
+  --md-typeset-table-color--light: hsla(var(--md-hue), 15%, 95%, 0.035);
+  --md-admonition-fg-color:        var(--md-default-fg-color);
+  --md-admonition-bg-color:        var(--md-default-bg-color);
+  --md-footer-bg-color:            #181818;
+  --md-footer-bg-color--dark:      #101010;
+  --md-shadow-z1: 0 0.2rem 0.5rem #0000000d, 0 0 0.05rem #0000001a;
+  --md-shadow-z2: 0 0.2rem 0.5rem #00000040, 0 0 0.05rem #00000040;
+  --md-shadow-z3: 0 0.2rem 0.5rem #0006, 0 0 0.05rem #00000059;
+  color-scheme: dark;
+}
+
+/* ── VS Code Light+ ─────────────────────────────────────────────────────────
+   A light scheme inherits Material's complete light `:root` defaults, so only
+   the palette-specific colours need overriding (no full 41-var copy needed). */
+[data-md-color-scheme="vscode-light"] {
+  --md-default-fg-color:           #1f1f1f;
+  --md-default-fg-color--light:    #1f1f1fb3;
+  --md-default-fg-color--lighter:  #1f1f1f73;
+  --md-default-fg-color--lightest: #1f1f1f1f;
+  --md-default-bg-color:           #ffffff;
+
+  --md-code-fg-color:              #1f1f1f;
+  --md-code-bg-color:              #f3f3f3;
+
+  /* syntax highlighting — VS Code Light+ token colours */
+  --md-code-hl-color:              #add6ff80;
+  --md-code-hl-color--light:       #add6ff40;
+  --md-code-hl-number-color:       #098658;
+  --md-code-hl-special-color:      #cd3131;
+  --md-code-hl-function-color:     #795e26;
+  --md-code-hl-constant-color:     #0070c1;
+  --md-code-hl-keyword-color:      #0000ff;
+  --md-code-hl-string-color:       #a31515;
+  --md-code-hl-name-color:         #001080;
+  --md-code-hl-operator-color:     #000000;
+  --md-code-hl-punctuation-color:  #000000;
+  --md-code-hl-comment-color:      #008000;
+  --md-code-hl-generic-color:      #1f1f1f;
+  --md-code-hl-variable-color:     #001080;
+
+  --md-primary-fg-color:           #005fb8; /* VS Code blue — keeps the sand logo legible */
+  --md-primary-fg-color--light:    #0a6cc9;
+  --md-primary-fg-color--dark:     #004a92;
+  --md-primary-bg-color:           #ffffff;
+  --md-accent-fg-color:            #005fb8;
+  --md-typeset-a-color:            #005fb8;
+  color-scheme: light;
+}
+
+/* ── Per-token tuning: JSON keys (.nt) and shell variables (.nv) ─────────────
+   Material maps the JSON-key token (.nt) to the keyword colour by default, so
+   keys read the same as keywords. VS Code colours object keys and shell
+   variables distinctly — replicate that for the two VS Code schemes. Add more
+   `.highlight .<class>` rules here to recolour any other token. */
+[data-md-color-scheme="vscode-dark"] .highlight .nt,
+[data-md-color-scheme="vscode-dark"] .highlight .nv { color: #9cdcfe; }
+[data-md-color-scheme="vscode-light"] .highlight .nt { color: #0451a5; }
+[data-md-color-scheme="vscode-light"] .highlight .nv { color: #0070c1; }

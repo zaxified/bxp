@@ -9,30 +9,53 @@ edit_uri: edit/master/docs/
 
 theme:
   name: material
+  logo: assets/logo.svg
+  favicon: assets/favicon.png
+  icon:
+    repo: fontawesome/brands/github
   features:
     - navigation.tabs        # top-level parts as tabs (Guide | Reference | …)
-    - navigation.tabs.sticky
+    - navigation.tabs.sticky # keep the tab row pinned so the header stays a
+                             # constant 96px — a fixed height gives the sticky
+                             # left sidebar a stable anchor, so it scrolls 1:1
+                             # instead of jerking as a collapsing header would.
     - navigation.sections
     - navigation.indexes     # a section landing page = index.md
     - navigation.instant     # SPA-like nav — you don't lose your place
-    - navigation.top
-    - navigation.footer
+    - navigation.instant.prefetch  # fetch the link target on hover
+    - navigation.instant.progress  # top progress bar on slow loads
+    - navigation.tracking    # URL anchor follows the scrolled-to heading
+    - navigation.top         # back-to-top button
+    - navigation.footer      # prev/next links in the footer
+    - toc.integrate          # fold the page TOC into the left nav (no right column)
     - search.suggest
     - search.highlight
+    - search.share           # shareable deep link to a search query
     - content.code.copy
-    - toc.follow
-    - toc.integrate
+    - content.code.annotate  # numbered annotations inside code samples
+    - content.tabs.link      # linked content tabs sync across the page
+  # Click the header palette icon to cycle through these complete themes. The
+  # first two are Material's own light/dark; the rest are coordinated community
+  # palettes defined in docs/assets/stylesheets/palettes.css. Add/remove entries
+  # freely — each `scheme` name just has to match a block in that file (the two
+  # built-ins need no CSS). The choice is remembered in the browser.
   palette:
-    - media: "(prefers-color-scheme: light)"
-      scheme: default
+    - scheme: default
       toggle:
-        icon: material/weather-night
-        name: Switch to dark mode
-    - media: "(prefers-color-scheme: dark)"
-      scheme: slate
+        icon: material/brightness-7
+        name: "Theme: Light (click to cycle)"
+    - scheme: slate
       toggle:
-        icon: material/weather-sunny
-        name: Switch to light mode
+        icon: material/brightness-4
+        name: "Theme: Dark (click to cycle)"
+    - scheme: vscode-dark
+      toggle:
+        icon: material/microsoft-visual-studio-code
+        name: "Theme: VS Code Dark (click to cycle)"
+    - scheme: vscode-light
+      toggle:
+        icon: material/code-braces
+        name: "Theme: VS Code Light (click to cycle)"
 
 markdown_extensions:
   - admonition
@@ -64,6 +87,16 @@ not_in_nav: |
 
 plugins:
   - search
+  - glightbox            # click-to-zoom for screenshots / the demo GIF
+  - social               # auto-generated Open Graph preview cards
+
+extra_css:
+  - assets/stylesheets/palettes.css
+  - assets/stylesheets/extra.css
+
+extra_javascript:
+  - assets/javascripts/tablesort.min.js
+  - assets/javascripts/tables.js
 
 nav:
   - Home: index.md
