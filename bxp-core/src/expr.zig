@@ -846,27 +846,34 @@ pub fn isRowInvariant(src: []const u8, alloc: std.mem.Allocator) bool {
     if (refs.lookups.count() != 0) return false;
     if (refs.has_two_arg_lookup or refs.has_computed_lookup_name) return false;
 
-    // Reject the nondeterministic / context builtins and the positional field
-    // accessor FIELDS(n). None carries a `[Name]` field_ref token for
-    // `staticReferences` to catch, so they must be rejected here or they would
-    // be wrongly folded to a single value. NOW/RAND are nondeterministic;
-    // RECORD_NUM varies per row; FILENAME/SHEET_NAME are per-file constants
-    // that vary BETWEEN files (folding once per template would freeze the
-    // first file's value — see the evalFieldRef fast-path lesson). Token-level
-    // check (not a substring scan) so a literal like 'KNOW' isn't taken for NOW.
+    // Reject any builtin flagged `row_varying` in the catalog: the
+    // nondeterministic ones (NOW/RAND) and the per-row / per-file context
+    // readers (FIELDS/RECORD_NUM/FILENAME/SHEET_NAME). None carries a `[Name]`
+    // field_ref token for `staticReferences` to catch, so they must be rejected
+    // here or they would be wrongly folded to a single value (folding a
+    // per-file value once per template would freeze the first file's value —
+    // see the evalFieldRef fast-path lesson). The reject set is the FnDoc
+    // catalog (`row_varying`), so a new impure builtin can't drift out of sync.
+    // Token-level check (not a substring scan) so a literal like 'KNOW' isn't
+    // taken for NOW.
     var tok = Tokenizer.init(src);
     while (true) {
         const t = tok.next() catch return false;
         if (t.kind == .eof) break;
         if (t.kind != .ident) continue;
-        if (std.ascii.eqlIgnoreCase(t.text, "NOW")) return false;
-        if (std.ascii.eqlIgnoreCase(t.text, "RAND")) return false;
-        if (std.ascii.eqlIgnoreCase(t.text, "FIELDS")) return false;
-        if (std.ascii.eqlIgnoreCase(t.text, "RECORD_NUM")) return false;
-        if (std.ascii.eqlIgnoreCase(t.text, "FILENAME")) return false;
-        if (std.ascii.eqlIgnoreCase(t.text, "SHEET_NAME")) return false;
+        if (isRowVaryingBuiltin(t.text)) return false;
     }
     return true;
+}
+
+/// True if `name` is a builtin the catalog flags `row_varying` — read live from
+/// `builtins`, so the constant-folding reject set and the FnDoc catalog can
+/// never diverge (replaces the former hand-maintained name list).
+fn isRowVaryingBuiltin(name: []const u8) bool {
+    inline for (builtins) |b| {
+        if (b.doc.row_varying and std.ascii.eqlIgnoreCase(name, b.name)) return true;
+    }
+    return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -1624,6 +1631,15 @@ pub const FnDoc = struct {
     /// must classify itself, so a new builtin is a compile error here until it
     /// declares a category — the drift guard that used to live in docs.zig.
     category: FnCategory,
+    /// True when a call to this builtin makes the containing expression
+    /// non-row-invariant, excluding it from constant folding: nondeterministic
+    /// (NOW/RAND) or reads per-row / per-file source context
+    /// (FIELDS/RECORD_NUM/FILENAME/SHEET_NAME). No default: every builtin must
+    /// state its folding behaviour, so a new impure builtin cannot be silently
+    /// constant-folded (the old hand-maintained reject list in `isRowInvariant`).
+    /// LOOKUP is NOT flagged here — its non-invariance is detected structurally
+    /// via its table reference in `staticReferences`, not this token scan.
+    row_varying: bool,
     signature: []const u8,
     description: []const u8,
     /// Runnable one-line example shown (and click-to-insert) in the
@@ -1740,6 +1756,7 @@ fn isDataError(err: anyerror) bool {
 const if_doc: FnDoc = .{
     .name = "IF",
     .category = .logic,
+    .row_varying = false,
     .signature = "IF(cond, yes, no)",
     .example = "IF(1 < 0, 'yes', 'no')",
     .description = "Short-circuit conditional. Returns `yes` if `cond` is truthy, else `no`.",
@@ -1757,6 +1774,7 @@ const if_doc: FnDoc = .{
 const case_doc: FnDoc = .{
     .name = "CASE",
     .category = .logic,
+    .row_varying = false,
     .signature = "CASE(expr, m1, r1, …, default)",
     .example = "CASE('B', 'B', 'BUY', 'S', 'SELL', '?')",
     .description = "Multi-branch mapping. Compares `expr` against each `m`/`r` pair in order and returns the first matching `r`; returns the trailing `default` when nothing matches (or \"\" if no default is given). Equality matches the `=` operator (numeric when both sides parse as numbers, else byte-exact string). Only the selected result is evaluated. Collapses nested `IF(IF(IF(…)))` chains.",
@@ -1773,6 +1791,7 @@ const case_doc: FnDoc = .{
 const iferror_doc: FnDoc = .{
     .name = "IFERROR",
     .category = .logic,
+    .row_varying = false,
     .signature = "IFERROR(expr, fallback)",
     .example = "IFERROR(YEAR('not-a-date'), '')",
     .description = "Return `expr`'s value, or `fallback` if evaluating `expr` raises a data error (not-a-number, bad date, numeric overflow). `fallback` is evaluated only on error. Template errors — unknown function, wrong argument count, syntax — are NOT caught: IFERROR guards against messy data, not template mistakes.",
@@ -1915,6 +1934,7 @@ const ROUND_MAX_PRECISION: i32 = 30;
 const abs_doc: FnDoc = .{
     .name = "ABS",
     .category = .number,
+    .row_varying = false,
     .signature = "ABS(f)",
     .example = "ABS(-12.5)",
     .description = "Absolute numeric value.",
@@ -1936,6 +1956,7 @@ fn adaptAbs(_: *Parser, args: []Value) anyerror!Value {
 const fields_doc: FnDoc = .{
     .name = "FIELDS",
     .category = .source,
+    .row_varying = true,
     .signature = "FIELDS(n)",
     .example = "FIELDS(2)",
     .description = "Field value by 1-based column index. n must be a positive integer — use this when the column header is unknown or unstable; use the [ColumnName] syntax to look up by header name.",
@@ -1977,6 +1998,7 @@ fn stripCurrencySymbol(s: []const u8) ?struct { rest: []const u8, iso: []const u
 const price_value_doc: FnDoc = .{
     .name = "PRICE_VALUE",
     .category = .number,
+    .row_varying = false,
     .signature = "PRICE_VALUE(f)",
     .example = "PRICE_VALUE('$1,234.56')",
     .description = "Strip currency symbol or code from a price string, return the numeric part (e.g. \"$88744.27\" → \"88744.27\", \"€24.00\" → \"24.00\", \"24.00 CZK\" → \"24.00\").",
@@ -2008,6 +2030,7 @@ fn adaptPriceValue(_: *Parser, args: []Value) anyerror!Value {
 const price_currency_doc: FnDoc = .{
     .name = "PRICE_CURRENCY",
     .category = .number,
+    .row_varying = false,
     .signature = "PRICE_CURRENCY(f)",
     .example = "PRICE_CURRENCY('$1,234.56')",
     .description = "Extract currency code from a price string (e.g. \"EUR\", \"USD\").",
@@ -2041,6 +2064,7 @@ fn adaptPriceCurrency(_: *Parser, args: []Value) anyerror!Value {
 const remap_doc: FnDoc = .{
     .name = "REMAP",
     .category = .lookup,
+    .row_varying = false,
     .signature = "REMAP(s, 'name' | k, v, ...)",
     .example = "REMAP('VOW.DE', 'VOW.DE', 'VOW.DE.XETRA')",
     .description = "Whole-value lookup: if `s` exactly equals a map key, return that key's value, else return `s` unchanged. Named form REMAP(s, 'mapname') resolves a `maps` registry entry; inline form REMAP(s, k1,v1, k2,v2, ...) gives the pairs directly. The whole-value sibling of REPLACE (which matches substrings) — use it to remap broker symbols, codes or enum values.",
@@ -2098,6 +2122,7 @@ fn adaptRemap(p: *Parser, args: []Value) anyerror!Value {
 const lookup_doc: FnDoc = .{
     .name = "LOOKUP",
     .category = .lookup,
+    .row_varying = false,
     .signature = "LOOKUP([name,] key, field)",
     .example = "LOOKUP('AAPL', 'name')",
     .description = "Retrieve a value stored by a pre_pass table. 3-arg form `LOOKUP(name, key, field)` selects the named pre_pass block. 2-arg form `LOOKUP(key, field)` works only when exactly one pre_pass block is defined.",
@@ -2178,6 +2203,7 @@ fn adaptLookup(p: *Parser, args: []Value) anyerror!Value {
 const split_part_doc: FnDoc = .{
     .name = "SPLIT_PART",
     .category = .text,
+    .row_varying = false,
     .signature = "SPLIT_PART(s, delim, n)",
     .example = "SPLIT_PART('AAPL.US', '.', 1)",
     .description = "Return the n-th part of `s` split by `delim` (1-based index). Returns \"\" when n exceeds the part count, when `delim` is empty, or when `n` ≤ 0. When `delim` is not found, n=1 returns the whole string and n>1 returns \"\".",
@@ -2228,6 +2254,7 @@ fn adaptSplitPart(_: *Parser, args: []Value) anyerror!Value {
 const contains_doc: FnDoc = .{
     .name = "CONTAINS",
     .category = .text,
+    .row_varying = false,
     .signature = "CONTAINS(haystack, needle)",
     .example = "CONTAINS('Apple Inc', 'Inc')",
     .description = "Returns \"true\" if `haystack` contains `needle`, else \"false\".",
@@ -2288,6 +2315,7 @@ fn compileRegex(p: *Parser, pattern: []const u8) anyerror!Regex {
 const regex_match_doc: FnDoc = .{
     .name = "REGEX_MATCH",
     .category = .regex,
+    .row_varying = false,
     .signature = "REGEX_MATCH(s, pattern)",
     .example = "REGEX_MATCH('AAPL US Equity', '[A-Z]+')",
     .description = "Returns \"true\" if regular-expression `pattern` matches anywhere in `s`, else \"false\". `pattern` is a regex literal: anchors `^ $`, classes `[...]`, quantifiers `* + ? {m,n}`, groups, and alternation `|` — linear-time (no backreferences or lookaround). Unicode-scalar mode is on, so `.` and class ranges span whole code points, but `\\d`/`\\w`/`\\s` stay ASCII — match accented letters with an explicit class like `[A-ZÁ-Ž]`. Pay for the cheapest tool that does the job: CONTAINS for a literal substring, IN/REMAP for whole-value sets, regex only for a real pattern.",
@@ -2316,6 +2344,7 @@ fn builtinRegexMatch(p: *Parser, args: []Value) anyerror!Value {
 const regex_extract_doc: FnDoc = .{
     .name = "REGEX_EXTRACT",
     .category = .regex,
+    .row_varying = false,
     .signature = "REGEX_EXTRACT(s, pattern)",
     .example = "REGEX_EXTRACT('Qualified Dividend AAPL 100', '[A-Z]{2,}')",
     .description = "Returns the first part of `s` that regular-expression `pattern` matches, or \"\" if there is no match. When `pattern` has a capture group `(...)`, the first group's text is returned; otherwise the whole match is returned. `pattern` is a regex literal (same syntax + Unicode notes as REGEX_MATCH): linear-time, no backreferences or lookaround, and accented letters need an explicit class like `[A-ZÁ-Ž]` (not `\\w`). Use it to pull a ticker, code, or token a literal REPLACE/SPLIT_PART cannot isolate.",
@@ -2356,6 +2385,7 @@ fn builtinRegexExtract(p: *Parser, args: []Value) anyerror!Value {
 const replace_doc: FnDoc = .{
     .name = "REPLACE",
     .category = .lookup,
+    .row_varying = false,
     .signature = "REPLACE(s, 'name' | from, to, ...)",
     .example = "REPLACE('1 234,56', ' ', '', ',', '.')",
     .description = "Replace substrings in `s`. Named form REPLACE(s, 'mapname') applies a `maps` registry entry's pairs. Inline single-pair REPLACE(s, from, to) replaces every occurrence of `from` with `to` (case-sensitive byte match, so multi-byte UTF-8 needles work — this is substring replace, not char-by-char). Inline variadic REPLACE(s, from1, to1, from2, to2, ...) applies the pairs in one left-to-right pass: at each position the first pair (in declared order) whose `from` matches wins and the emitted `to` is not re-scanned, so one pass replaces several tokens at once without nesting. An empty `from` matches nothing. Whole-value sibling: REMAP.",
@@ -2489,6 +2519,7 @@ fn resolveNamedMap(ctx: *const Context, name: []const u8) !?*const NamedMap {
 const now_doc: FnDoc = .{
     .name = "NOW",
     .category = .date,
+    .row_varying = true,
     .signature = "NOW()",
     .example = "NOW()",
     .description = "Current UTC datetime as ISO 8601 string (YYYY-MM-DDTHH:MM:SSZ).",
@@ -2523,6 +2554,7 @@ fn adaptNow(p: *Parser, args: []Value) anyerror!Value {
 const trim_doc: FnDoc = .{
     .name = "TRIM",
     .category = .text,
+    .row_varying = false,
     .signature = "TRIM(f)",
     .example = "TRIM('  hello  ')",
     .description = "Strip leading and trailing whitespace from a string.",
@@ -2546,6 +2578,7 @@ fn adaptTrim(_: *Parser, args: []Value) anyerror!Value {
 const round_doc: FnDoc = .{
     .name = "ROUND",
     .category = .number,
+    .row_varying = false,
     .signature = "ROUND(f, n)",
     .example = "ROUND(3.14159, 2)",
     .description = "Round `f` to `n` decimal places (half away from zero, like Excel: `ROUND(2.5,0)=3`). `n=0` rounds to the nearest integer; `n<0` rounds to tens/hundreds/etc. (`n=-2` → nearest 100); `n>=12` is a no-op (12 is the fixed-point scale). `n` is clamped to ±30.",
@@ -2580,6 +2613,7 @@ fn adaptRound(p: *Parser, args: []Value) anyerror!Value {
 const floor_doc: FnDoc = .{
     .name = "FLOOR",
     .category = .number,
+    .row_varying = false,
     .signature = "FLOOR(f)",
     .example = "FLOOR(3.7)",
     .description = "Round `f` down to nearest integer.",
@@ -2599,6 +2633,7 @@ fn adaptFloor(_: *Parser, args: []Value) anyerror!Value {
 const ceiling_doc: FnDoc = .{
     .name = "CEILING",
     .category = .number,
+    .row_varying = false,
     .signature = "CEILING(f)",
     .example = "CEILING(3.2)",
     .description = "Round `f` up to nearest integer.",
@@ -2622,6 +2657,7 @@ const RAND_MAX_DIGITS: i64 = 65;
 const rand_doc: FnDoc = .{
     .name = "RAND",
     .category = .number,
+    .row_varying = true,
     .signature = "RAND(n)",
     .example = "RAND(8)",
     .description = "A string of exactly `n` random digits (each position 0–9, except the first which is 1–9 so a leading zero can't be dropped by a downstream numeric import). Use it for synthetic IDs; `n` is clamped to [1, 65]. Cryptographically seeded — not for security tokens.",
@@ -2667,6 +2703,7 @@ fn adaptRand(p: *Parser, args: []Value) anyerror!Value {
 const coalesce_doc: FnDoc = .{
     .name = "COALESCE",
     .category = .logic,
+    .row_varying = false,
     .signature = "COALESCE(a, b, ...)",
     .example = "COALESCE('', 'fallback')",
     .description = "First non-empty argument (empty = whitespace-only string). Returns last argument verbatim as fallback.",
@@ -2704,6 +2741,7 @@ fn adaptCoalesce(_: *Parser, args: []Value) anyerror!Value {
 const date_convert_doc: FnDoc = .{
     .name = "DATE_CONVERT",
     .category = .date,
+    .row_varying = false,
     .signature = "DATE_CONVERT(f, from, to)",
     .example = "DATE_CONVERT('31.12.2024', 'DD.MM.YYYY', 'YYYY-MM-DD')",
     .description = "Reformat a date/time string. Format tokens: YYYY (year), MM/M (month), MMM/MMMM (month name), DD/D (day), hh/h (hour), mm/m (minute), ss/s (second), [literal] (literal characters), [*] (wildcard).",
@@ -2850,6 +2888,7 @@ fn normalizeMonthAbbrev(s: []const u8, alloc: std.mem.Allocator) ![]const u8 {
 const left_doc: FnDoc = .{
     .name = "LEFT",
     .category = .text,
+    .row_varying = false,
     .signature = "LEFT(s, n)",
     .example = "LEFT('AAPL.US', 4)",
     .description = "Return the first `n` bytes of `s`. `n` is clamped to `[0, len(s)]`; negative `n` returns \"\".",
@@ -2878,6 +2917,7 @@ fn adaptLeft(_: *Parser, args: []Value) anyerror!Value {
 const right_doc: FnDoc = .{
     .name = "RIGHT",
     .category = .text,
+    .row_varying = false,
     .signature = "RIGHT(s, n)",
     .example = "RIGHT('AAPL.US', 2)",
     .description = "Return the last `n` bytes of `s`. `n` is clamped to `[0, len(s)]`; negative `n` returns \"\".",
@@ -2906,6 +2946,7 @@ fn adaptRight(_: *Parser, args: []Value) anyerror!Value {
 const substr_doc: FnDoc = .{
     .name = "SUBSTR",
     .category = .text,
+    .row_varying = false,
     .signature = "SUBSTR(s, start, length)",
     .example = "SUBSTR('AAPL.US', 1, 4)",
     .description = "Return `length` bytes from `s` starting at 1-based position `start`. Returns \"\" when `start` is non-positive / past end of `s`, or when `length` is negative. `length` is clamped to the bytes remaining from `start`.",
@@ -2940,6 +2981,7 @@ fn adaptSubstr(_: *Parser, args: []Value) anyerror!Value {
 const upper_doc: FnDoc = .{
     .name = "UPPER",
     .category = .text,
+    .row_varying = false,
     .signature = "UPPER(s)",
     .example = "UPPER('aapl')",
     .description = "Full-Unicode upper-case conversion: works across Latin, Greek, Cyrillic, etc. (café → CAFÉ, ß → SS); unicameral scripts (CJK, Arabic, Hebrew) pass through unchanged. Invalid UTF-8 bytes pass through verbatim.",
@@ -2962,6 +3004,7 @@ fn adaptUpper(p: *Parser, args: []Value) anyerror!Value {
 const lower_doc: FnDoc = .{
     .name = "LOWER",
     .category = .text,
+    .row_varying = false,
     .signature = "LOWER(s)",
     .example = "LOWER('AAPL')",
     .description = "Full-Unicode lower-case conversion: works across Latin, Greek, Cyrillic, etc. (CAFÉ → café, Я → я); unicameral scripts (CJK, Arabic, Hebrew) pass through unchanged. Invalid UTF-8 bytes pass through verbatim.",
@@ -2984,6 +3027,7 @@ fn adaptLower(p: *Parser, args: []Value) anyerror!Value {
 const unaccent_doc: FnDoc = .{
     .name = "UNACCENT",
     .category = .text,
+    .row_varying = false,
     .signature = "UNACCENT(s)",
     .example = "UNACCENT('Café Crème')",
     .description = "Strip diacritics from Latin text (café → cafe, ÀÉÎ → AEI, ß → ss, ø → o). Latin-scope like Postgres unaccent: non-Latin letters keep their base script (Greek Ά → Α, not A) and CJK/Arabic pass through unchanged; ligatures are NOT folded. Invalid UTF-8 bytes pass through verbatim.",
@@ -3006,6 +3050,7 @@ fn adaptUnaccent(p: *Parser, args: []Value) anyerror!Value {
 const starts_with_doc: FnDoc = .{
     .name = "STARTS_WITH",
     .category = .text,
+    .row_varying = false,
     .signature = "STARTS_WITH(s, prefix)",
     .example = "STARTS_WITH('US123', 'US')",
     .description = "Return \"true\" when `s` begins with `prefix` (case-sensitive byte match), else \"false\". An empty `prefix` always matches.",
@@ -3035,6 +3080,7 @@ fn adaptStartsWith(_: *Parser, args: []Value) anyerror!Value {
 const ends_with_doc: FnDoc = .{
     .name = "ENDS_WITH",
     .category = .text,
+    .row_varying = false,
     .signature = "ENDS_WITH(s, suffix)",
     .example = "ENDS_WITH('AAPL.PR', '.PR')",
     .description = "Return \"true\" when `s` ends with `suffix` (case-sensitive byte match), else \"false\". An empty `suffix` always matches.",
@@ -3064,6 +3110,7 @@ fn adaptEndsWith(_: *Parser, args: []Value) anyerror!Value {
 const nullif_doc: FnDoc = .{
     .name = "NULLIF",
     .category = .logic,
+    .row_varying = false,
     .signature = "NULLIF(value, sentinel)",
     .example = "NULLIF('N/A', 'N/A')",
     .description = "Return `\"\"` when `value` equals `sentinel`, otherwise return `value`. Equality is numeric when both sides parse as numbers, otherwise byte-exact string compare — mirrors the `=` operator. Typical use: collapse sentinel values such as `\"-9999\"`, `\"\\N\"`, `\"N/A\"` to empty.",
@@ -3098,6 +3145,7 @@ fn adaptNullif(p: *Parser, args: []Value) anyerror!Value {
 const in_doc: FnDoc = .{
     .name = "IN",
     .category = .logic,
+    .row_varying = false,
     .signature = "IN(value, v1, v2, ...)",
     .example = "IN('BUY', 'BUY', 'SELL')",
     .description = "Return \"true\" when `value` equals any of `v1, v2, …`. Equality is numeric when both sides parse as numbers, otherwise byte-exact string compare — mirrors the `=` operator. Variadic 2+ args.",
@@ -3178,6 +3226,7 @@ fn parseDateArg(p: *Parser, s: []const u8) !i64 {
 const dateadd_doc: FnDoc = .{
     .name = "DATEADD",
     .category = .date,
+    .row_varying = false,
     .signature = "DATEADD(d, n)",
     .example = "DATEADD('2024-01-31', 7)",
     .description = "Add `n` calendar days to date `d` (YYYY-MM-DD). Negative `n` subtracts. Returns YYYY-MM-DD. For business-day arithmetic (skipping weekends) use WORKDAY().",
@@ -3207,6 +3256,7 @@ fn adaptDateAdd(p: *Parser, args: []Value) anyerror!Value {
 const datediff_doc: FnDoc = .{
     .name = "DATEDIFF",
     .category = .date,
+    .row_varying = false,
     .signature = "DATEDIFF(d1, d2)",
     .example = "DATEDIFF('2024-01-01', '2024-12-31')",
     .description = "Calendar days from `d2` to `d1`: positive when `d1` is later. Both arguments are YYYY-MM-DD strings.",
@@ -3233,6 +3283,7 @@ fn adaptDateDiff(p: *Parser, args: []Value) anyerror!Value {
 const workday_doc: FnDoc = .{
     .name = "WORKDAY",
     .category = .date,
+    .row_varying = false,
     .signature = "WORKDAY(d, n)",
     .example = "WORKDAY('2024-01-01', 10)",
     .description = "Add `n` business days to date `d` (YYYY-MM-DD), skipping Saturdays and Sundays. Negative `n` subtracts. Correct for T+2 settlement math; does NOT account for exchange holidays.",
@@ -3267,6 +3318,7 @@ fn adaptWorkday(p: *Parser, args: []Value) anyerror!Value {
 const year_doc: FnDoc = .{
     .name = "YEAR",
     .category = .date,
+    .row_varying = false,
     .signature = "YEAR(d)",
     .example = "YEAR('2024-03-15')",
     .description = "Year component of date `d` (YYYY-MM-DD) as a number.",
@@ -3291,6 +3343,7 @@ fn adaptYear(p: *Parser, args: []Value) anyerror!Value {
 const month_doc: FnDoc = .{
     .name = "MONTH",
     .category = .date,
+    .row_varying = false,
     .signature = "MONTH(d)",
     .example = "MONTH('2024-03-15')",
     .description = "Month component of date `d` (YYYY-MM-DD) as a number, 1-12.",
@@ -3315,6 +3368,7 @@ fn adaptMonth(p: *Parser, args: []Value) anyerror!Value {
 const day_doc: FnDoc = .{
     .name = "DAY",
     .category = .date,
+    .row_varying = false,
     .signature = "DAY(d)",
     .example = "DAY('2024-03-15')",
     .description = "Day-of-month component of date `d` (YYYY-MM-DD) as a number, 1-31.",
@@ -3339,6 +3393,7 @@ fn adaptDay(p: *Parser, args: []Value) anyerror!Value {
 const weekday_doc: FnDoc = .{
     .name = "WEEKDAY",
     .category = .date,
+    .row_varying = false,
     .signature = "WEEKDAY(d)",
     .example = "WEEKDAY('2024-03-15')",
     .description = "ISO day-of-week for date `d` (YYYY-MM-DD): Monday=1 … Sunday=7. Useful for weekend-trade detection: `WEEKDAY([Date]) > 5`.",
@@ -3360,6 +3415,7 @@ fn adaptWeekday(p: *Parser, args: []Value) anyerror!Value {
 const eomonth_doc: FnDoc = .{
     .name = "EOMONTH",
     .category = .date,
+    .row_varying = false,
     .signature = "EOMONTH(d)",
     .example = "EOMONTH('2024-02-10')",
     .description = "Last calendar day of the month containing date `d` (YYYY-MM-DD), as YYYY-MM-DD. Useful for snapping coupon/dividend dates and month-end reporting.",
@@ -3392,6 +3448,7 @@ fn adaptEomonth(p: *Parser, args: []Value) anyerror!Value {
 const nth_dow_doc: FnDoc = .{
     .name = "NTH_DOW",
     .category = .date,
+    .row_varying = false,
     .signature = "NTH_DOW(year, month, weekday, n)",
     .example = "NTH_DOW(2024, 3, 7, -1)",
     .description = "Date (YYYY-MM-DD) of the `n`-th `weekday` (ISO Mon=1 … Sun=7) in `year`/`month`. Positive `n` counts from the start (1 = first); negative counts from the end (-1 = last). Returns \"\" when the occurrence doesn't exist or an argument is out of range. Handy for DST boundaries — EU summer time is `NTH_DOW(YEAR(d), 3, 7, -1)` (last Sunday of March) to `NTH_DOW(YEAR(d), 10, 7, -1)` (last Sunday of October).",
@@ -3420,6 +3477,7 @@ fn adaptNthDow(p: *Parser, args: []Value) anyerror!Value {
 const len_doc: FnDoc = .{
     .name = "LEN",
     .category = .text,
+    .row_varying = false,
     .signature = "LEN(s)",
     .example = "LEN('hello')",
     .description = "Byte length of `s` (UTF-8 byte count, not codepoint or grapheme count). Empty string → 0.",
@@ -3442,6 +3500,7 @@ fn adaptLen(_: *Parser, args: []Value) anyerror!Value {
 const greatest_doc: FnDoc = .{
     .name = "GREATEST",
     .category = .number,
+    .row_varying = false,
     .signature = "GREATEST(a, b, ...)",
     .example = "GREATEST(3, 7, 5)",
     .description = "Largest numeric value among arguments. Per-row maximum (not aggregation across rows). Arguments are coerced to numbers; empty string coerces to 0, non-numeric strings raise an error.",
@@ -3476,6 +3535,7 @@ fn adaptGreatest(p: *Parser, args: []Value) anyerror!Value {
 const least_doc: FnDoc = .{
     .name = "LEAST",
     .category = .number,
+    .row_varying = false,
     .signature = "LEAST(a, b, ...)",
     .example = "LEAST(3, 7, 5)",
     .description = "Smallest numeric value among arguments. Per-row minimum (not aggregation across rows). Arguments are coerced to numbers; empty string coerces to 0, non-numeric strings raise an error.",
@@ -3819,6 +3879,7 @@ pub const tokens = [_]TokenDoc{
 const filename_doc: FnDoc = .{
     .name = "FILENAME",
     .category = .source,
+    .row_varying = true,
     .signature = "FILENAME()",
     .example = "FILENAME()",
     .description = "Input file stem — the file name with its directory and the matched `file_pattern_in` suffix removed (the same stem used for output naming). Broker exports often encode account/broker/period in the name, so e.g. `SPLIT_PART(FILENAME(), '_', 3)` extracts a field from it. Empty during stateless evaluation (no source file).",
@@ -3834,6 +3895,7 @@ fn adaptFilename(p: *Parser, args: []Value) anyerror!Value {
 const record_num_doc: FnDoc = .{
     .name = "RECORD_NUM",
     .category = .source,
+    .row_varying = true,
     .signature = "RECORD_NUM()",
     .example = "RECORD_NUM()",
     .description = "1-based input record number of the current row within the file (the first data row is 1). Use it for synthetic IDs, dedup keys, or skip-first-N logic. 0 during stateless evaluation and inside the pre_pass scan.",
@@ -3849,6 +3911,7 @@ fn adaptRecordNum(p: *Parser, args: []Value) anyerror!Value {
 const sheet_name_doc: FnDoc = .{
     .name = "SHEET_NAME",
     .category = .source,
+    .row_varying = true,
     .signature = "SHEET_NAME()",
     .example = "SHEET_NAME()",
     .description = "For xlsx-derived input, the configured `xlsx_sheet.name` the row came from; \"\" for native CSV/JSON input and during stateless evaluation.",
@@ -3868,6 +3931,7 @@ const PAD_MAX_LEN: usize = 65535;
 const lpad_doc: FnDoc = .{
     .name = "LPAD",
     .category = .text,
+    .row_varying = false,
     .signature = "LPAD(s, len, pad)",
     .example = "LPAD('42', 5, '0')",
     .description = "Left-pad `s` with the `pad` string (repeated, then clipped) until it is `len` bytes long. If `s` is already `len` or longer it is truncated to the first `len` bytes; an empty `pad` returns `s` unchanged. `len` is clamped to [0, 65535]. Byte-based (UTF-8 byte count).",
@@ -3910,6 +3974,7 @@ fn adaptLpad(p: *Parser, args: []Value) anyerror!Value {
 const rpad_doc: FnDoc = .{
     .name = "RPAD",
     .category = .text,
+    .row_varying = false,
     .signature = "RPAD(s, len, pad)",
     .example = "RPAD('42', 5, ' ')",
     .description = "Right-pad `s` with the `pad` string (repeated, then clipped) until it is `len` bytes long. If `s` is already `len` or longer it is truncated to the first `len` bytes; an empty `pad` returns `s` unchanged. `len` is clamped to [0, 65535]. Byte-based (UTF-8 byte count).",
@@ -3929,6 +3994,7 @@ fn adaptRpad(p: *Parser, args: []Value) anyerror!Value {
 const position_doc: FnDoc = .{
     .name = "POSITION",
     .category = .text,
+    .row_varying = false,
     .signature = "POSITION(needle, haystack)",
     .example = "POSITION('Inc', 'Apple Inc')",
     .description = "1-based byte position of the first occurrence of `needle` inside `haystack`, or 0 when not found. An empty `needle` returns 1. Byte-based (UTF-8 byte offset), case-sensitive.",
@@ -3959,6 +4025,7 @@ fn adaptPosition(_: *Parser, args: []Value) anyerror!Value {
 const proper_doc: FnDoc = .{
     .name = "PROPER",
     .category = .text,
+    .row_varying = false,
     .signature = "PROPER(s)",
     .example = "PROPER('apple inc')",
     .description = "Title-case `s`: upper-case the first letter of every word and lower-case the rest (`apple inc` → `Apple Inc`, `o'brien` → `O'Brien`). Words break on any non-letter (spaces, digits, punctuation), like Excel PROPER. Full-Unicode via the same case tables as UPPER/LOWER; invalid UTF-8 passes through.",
@@ -4004,6 +4071,7 @@ fn adaptProper(p: *Parser, args: []Value) anyerror!Value {
 const mod_doc: FnDoc = .{
     .name = "MOD",
     .category = .number,
+    .row_varying = false,
     .signature = "MOD(a, b)",
     .example = "MOD(7, 3)",
     .description = "Remainder of `a` divided by `b`, with the sign of the dividend `a` (truncated division, like SQL/C `%`: `MOD(-7, 3) = -1`). `MOD(a, 0)` returns \"\" (mirrors the `/` operator's silent divide-by-zero). Exact over the fixed-point decimal core.",
@@ -4039,6 +4107,7 @@ fn adaptMod(p: *Parser, args: []Value) anyerror!Value {
 const isempty_doc: FnDoc = .{
     .name = "ISEMPTY",
     .category = .logic,
+    .row_varying = false,
     .signature = "ISEMPTY(x)",
     .example = "ISEMPTY('  ')",
     .description = "Return \"true\" when `x` is empty or whitespace-only, else \"false\". The safe emptiness test: a bare `x = ''` wrongly matches `'0'` (which coerces to empty in numeric context), whereas ISEMPTY checks the trimmed string length.",
@@ -4842,6 +4911,24 @@ test "isRowInvariant: numeric bracket [4] counts as a field ref (never folded)" 
     try testing.expect(isRowInvariant("'xT212'", a));
     try testing.expect(!isRowInvariant("FIELDS(4)", a));
     try testing.expect(!isRowInvariant("[Valeur]", a));
+}
+
+test "isRowInvariant: every row_varying builtin blocks folding (catalog-driven)" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // The reject set is the FnDoc catalog's `row_varying` flag. Assert that
+    // every flagged builtin actually blocks folding — locks the catalog→scan
+    // linkage so the old hand-list can't quietly creep back, and so a newly
+    // flagged impure builtin is covered automatically. (The reverse direction —
+    // unflagged builtins fold — is not asserted here because LOOKUP is a
+    // deliberate exception: unflagged, yet blocked structurally via its table
+    // reference, not this token scan.)
+    inline for (builtins) |b| {
+        if (!b.doc.row_varying) continue;
+        const call = b.name ++ "()"; // bare ident is enough for the token scan
+        try testing.expect(!isRowInvariant(call, a));
+    }
 }
 
 test "eval: unknown column name returns empty string" {
