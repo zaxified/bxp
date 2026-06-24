@@ -4,8 +4,8 @@
 
 `bxp-cli` process exit codes.
 
-| Code                          | Meaning  |
-| ----------------------------- | -------- |
-| <code class="hl-num">0</code> | success  |
-| <code class="hl-num">1</code> | error    |
+| Code | Meaning |
+| --- | --- |
+| <code class="hl-num">0</code> | success |
+| <code class="hl-num">1</code> | error |
 | <code class="hl-num">2</code> | warnings |

@@ -4,28 +4,28 @@
 
 Both the `from` and `to` arguments of `DATE_CONVERT` use the same token set.
 
-| Token                                 | Meaning                                     | Example                  |
-| ------------------------------------- | ------------------------------------------- | ------------------------ |
-| <code class="hl-type">YYYY</code>     | 4-digit year                                | 2026                     |
-| <code class="hl-type">YY</code>       | 2-digit year (00–69 → 2000s, 70–99 → 1900s) | 26                       |
-| <code class="hl-type">MM</code>       | 2-digit month (01–12)                       | 03                       |
-| <code class="hl-type">M</code>        | 1–2 digit month                             | 3                        |
-| <code class="hl-type">MMMM</code>     | Full month name                             | March                    |
-| <code class="hl-type">MMM</code>      | 3-char month abbreviation                   | Mar                      |
-| <code class="hl-type">DD</code>       | 2-digit day (01–31)                         | 07                       |
-| <code class="hl-type">D</code>        | 1–2 digit day                               | 7                        |
-| <code class="hl-type">hh</code>       | 2-digit hour, 24h (00–23)                   | 14                       |
-| <code class="hl-type">h</code>        | 1–2 digit hour, 24h                         | 14                       |
-| <code class="hl-type">ii</code>       | 2-digit hour, 12h (01–12)                   | 02                       |
-| <code class="hl-type">i</code>        | 1–2 digit hour, 12h                         | 2                        |
-| <code class="hl-type">mm</code>       | 2-digit minute                              | 05                       |
-| <code class="hl-type">m</code>        | 1–2 digit minute                            | 5                        |
-| <code class="hl-type">ss</code>       | 2-digit second                              | 09                       |
-| <code class="hl-type">s</code>        | 1–2 digit second                            | 9                        |
-| <code class="hl-type">A</code>        | AM/PM uppercase                             | PM                       |
-| <code class="hl-type">a</code>        | am/pm lowercase                             | pm                       |
-| <code class="hl-type">EEEE</code>     | Full day name                               | Monday                   |
-| <code class="hl-type">EEE/EE/E</code> | Short day name                              | Mon                      |
-| <code class="hl-type">e</code>        | Day of week as number (1 = Mon … 7 = Sun)   | 1                        |
-| <code class="hl-type">[text]</code>   | Literal text (escaped inside format string) | [T] → T                  |
-| <code class="hl-type">[*]</code>      | Wildcard — skip until the next token        | skips Z, timezone suffix |
+| Token | Meaning | Example |
+| --- | --- | --- |
+| <code class="hl-type">YYYY</code> | 4-digit year | 2026 |
+| <code class="hl-type">YY</code> | 2-digit year (00–69 → 2000s, 70–99 → 1900s) | 26 |
+| <code class="hl-type">MM</code> | 2-digit month (01–12) | 03 |
+| <code class="hl-type">M</code> | 1–2 digit month | 3 |
+| <code class="hl-type">MMMM</code> | Full month name | March |
+| <code class="hl-type">MMM</code> | 3-char month abbreviation | Mar |
+| <code class="hl-type">DD</code> | 2-digit day (01–31) | 07 |
+| <code class="hl-type">D</code> | 1–2 digit day | 7 |
+| <code class="hl-type">hh</code> | 2-digit hour, 24h (00–23) | 14 |
+| <code class="hl-type">h</code> | 1–2 digit hour, 24h | 14 |
+| <code class="hl-type">ii</code> | 2-digit hour, 12h (01–12) | 02 |
+| <code class="hl-type">i</code> | 1–2 digit hour, 12h | 2 |
+| <code class="hl-type">mm</code> | 2-digit minute | 05 |
+| <code class="hl-type">m</code> | 1–2 digit minute | 5 |
+| <code class="hl-type">ss</code> | 2-digit second | 09 |
+| <code class="hl-type">s</code> | 1–2 digit second | 9 |
+| <code class="hl-type">A</code> | AM/PM uppercase | PM |
+| <code class="hl-type">a</code> | am/pm lowercase | pm |
+| <code class="hl-type">EEEE</code> | Full day name | Monday |
+| <code class="hl-type">EEE/EE/E</code> | Short day name | Mon |
+| <code class="hl-type">e</code> | Day of week as number (1 = Mon … 7 = Sun) | 1 |
+| <code class="hl-type">[text]</code> | Literal text (escaped inside format string) | [T] → T |
+| <code class="hl-type">[*]</code> | Wildcard — skip until the next token | skips Z, timezone suffix |

@@ -20,8 +20,8 @@ app or from a terminal. Pick the entry point that fits you.
    `*_to_wealthfolio`, brycht.app for `*_to_brychtapp`).
 
 ```bash
-./bxp-cli --help                                  # print usage
-./bxp-cli                                          # process all templates from bxp-cli.json
+./bxp-cli --help                                    # print usage
+./bxp-cli                                           # process all templates from bxp-cli.json
 ./bxp-cli --template <id>                           # process a single template
 ./bxp-cli --template <id> --data ./my-data/         # override data_dir for that template
 ```

@@ -14,6 +14,8 @@ bxp-gui/linux/flutter/
 bxp-gui/macos/Flutter/
 bxp-gui/windows/flutter/
 bxp-gui/.dart_tool/
+docs/reference/
+docs/includes/
 
 # Scratch — not shipped.
 DEV/

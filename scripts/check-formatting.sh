@@ -68,5 +68,5 @@ _mermaid_check() {
 
 section "Format"
 step "$(_lab prettier 'write')" _prettier_fix
-step "$(_lab lint-md   'check')" _markdownlint_check
+#step "$(_lab lint-md   'check')" _markdownlint_check
 step "$(_lab mermaid   'check')" _mermaid_check

@@ -4,16 +4,16 @@
 
 BXP Desktop keyboard shortcuts (modifier shown for this platform).
 
-| Action                       | Shortcut                                                  |
-| ---------------------------- | --------------------------------------------------------- |
-| Save                         | <code class="hl-type">Ctrl+S</code>                       |
-| Reload from disk             | <code class="hl-type">Ctrl+R</code>                       |
-| Undo / Redo                  | <code class="hl-type">Ctrl+Z / Ctrl+Y</code>              |
-| Discard unsaved changes      | <code class="hl-type">Ctrl+T</code>                       |
-| Validate                     | <code class="hl-type">Ctrl+E</code>                       |
-| Move focused node            | <code class="hl-type">Ctrl+Shift+↑/↓</code>               |
-| Delete focused node          | <code class="hl-type">Ctrl+Shift+Del</code>               |
-| Add child to focused node    | <code class="hl-type">Ctrl+Shift+Insert</code>            |
+| Action | Shortcut |
+| --- | --- |
+| Save | <code class="hl-type">Ctrl+S</code> |
+| Reload from disk | <code class="hl-type">Ctrl+R</code> |
+| Undo / Redo | <code class="hl-type">Ctrl+Z / Ctrl+Y</code> |
+| Discard unsaved changes | <code class="hl-type">Ctrl+T</code> |
+| Validate | <code class="hl-type">Ctrl+E</code> |
+| Move focused node | <code class="hl-type">Ctrl+Shift+↑/↓</code> |
+| Delete focused node | <code class="hl-type">Ctrl+Shift+Del</code> |
+| Add child to focused node | <code class="hl-type">Ctrl+Shift+Insert</code> |
 | Rename map key (focused row) | <code class="hl-type">double-click on the key chip</code> |
-| Open settings inspector      | <code class="hl-type">Ctrl+Shift+S</code>                 |
-| Open theme inspector         | <code class="hl-type">Ctrl+Shift+T</code>                 |
+| Open settings inspector | <code class="hl-type">Ctrl+Shift+S</code> |
+| Open theme inspector | <code class="hl-type">Ctrl+Shift+T</code> |
