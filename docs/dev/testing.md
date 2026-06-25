@@ -42,9 +42,11 @@ phase's ReleaseSafe `bxp-cli` and asserts an RSS ceiling + a scaling ratio.
 **`test-07-datasets.sh`** — bxp-cli regression: iterates every `datasets/<id>/`
 directory and diffs output against `sample.expected`.
 
-> Docs formatting is **not** a test phase. `scripts/check-formatting.sh`
-> (`prettier --write` + `markdownlint` + mermaid parse) is a standalone
-> pre-release step — `test.sh` does not run it.
+> Docs formatting is **not** a test phase, and it is hand-maintained:
+> prettier and markdownlint were dropped because they reflow / mis-lint
+> MkDocs-specific syntax and break the rendered pages.
+> `scripts/check-formatting.sh` (a mermaid-fence parse) is the one
+> standalone pre-release docs check — `test.sh` does not run it.
 
 Individual sub-suites:
 

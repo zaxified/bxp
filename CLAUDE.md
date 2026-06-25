@@ -109,9 +109,11 @@ bxp/
 │   ├── gen-readme.sh            # Generate resources/{console,desktop}/readme.md from the
 │   │                            # single source resources/readme.src.md (GUI-ONLY/CLI-ONLY
 │   │                            # block markers); `--check` drift guard wired into test-01
-│   └── check-formatting.sh      # prettier --write + markdownlint + mermaid; PRE-RELEASE
-│                                # docs fix/lint — deliberately NOT a test-NN phase
-│                                # (test.sh does not auto-run it)
+│   └── check-formatting.sh      # mermaid-fence syntax check; PRE-RELEASE docs
+│                                # step — deliberately NOT a test-NN phase
+│                                # (test.sh does not auto-run it). Markdown
+│                                # formatting is hand-maintained (prettier +
+│                                # markdownlint dropped — broke MkDocs syntax)
 ├── docs/                 # Developer + user documentation
 │   ├── README.md             # Index / table of contents
 │   ├── architecture.md       # System architecture + module diagrams

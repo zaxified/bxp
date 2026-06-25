@@ -153,7 +153,7 @@ bxp/                            # monorepo root (git root)
 │   ├── release-03-checksums.sh # emit SHA256SUMS for all release artifacts
 │   ├── release-changelog.sh    # bump versions + generate CHANGELOG.md entry + commit
 │   ├── release-tag.sh          # read version from manifest + tag + push
-│   └── check-formatting.sh     # prettier --write + markdownlint + mermaid (pre-release; not auto-run)
+│   └── check-formatting.sh     # mermaid-fence syntax check (pre-release; not auto-run)
 └── README.md                   # project overview
 ```
 

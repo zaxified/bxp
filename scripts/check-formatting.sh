@@ -1,19 +1,18 @@
 #!/usr/bin/env bash
-# Documentation formatting fix + lint — PRE-RELEASE ONLY.
+# Documentation mermaid check — PRE-RELEASE ONLY.
 #
 # Deliberately NOT named `test-NN-*.sh`, so `scripts/test.sh` does not auto-run
-# it: formatting is not a routine correctness gate. It belongs to the pre-release
-# docs review (see memory `feedback_pre_release_review_order`, Krok 3).
+# it: it belongs to the pre-release docs review (see memory
+# `feedback_pre_release_review_order`, Krok 3).
 #
-# Three steps, in order:
-#   1. prettier --write  — AUTO-FIXES markdown formatting (.md only; notably
-#      realigns tables). Scoped to `**/*.md` on purpose: a wider glob also
-#      rewrites example/bench data JSON + workflow YAML, which is unwanted
-#      churn. Ignores from `.prettierignore`. This is the fixer, not a check —
-#      run it, commit the result; nothing to hand-fix.
-#   2. markdownlint-cli2 — verifies markdown semantics (`.markdownlint-cli2.jsonc`).
-#   3. mermaid check     — parses every mermaid fence (renders aren't visible to
-#      a reviewer; a syntax slip ships a blank graph to GitHub).
+# Markdown formatting is hand-maintained. prettier and markdownlint were
+# dropped: both reflow / mis-lint MkDocs-specific syntax (pymdownx `!!!`
+# admonitions, Material `grid cards` — whose 4-space content indent marks
+# block membership) and silently break the rendered docs. The one mechanical
+# check left is mermaid:
+#
+#   mermaid check — parses every mermaid fence (renders aren't visible to a
+#   reviewer; a syntax slip ships a blank graph to GitHub).
 #
 # Usage (from any directory):
 #   bash scripts/check-formatting.sh
@@ -26,25 +25,15 @@ source "$SCRIPT_DIR/test-lib.sh"
 
 cd "$MONO_ROOT"
 
-# bunx is the entry point — it resolves `prettier` / `markdownlint-cli2`
-# through Bun's package cache, no global install required. If bun is
-# missing, skip the phase loudly so a contributor on a stripped-down
-# machine doesn't get a hard failure on what's really a lint suite.
-if ! command -v bunx >/dev/null 2>&1; then
+# bun runs the mermaid parser. If bun is missing, skip loudly so a contributor
+# on a stripped-down machine doesn't get a hard failure on a docs-only check.
+if ! command -v bun >/dev/null 2>&1; then
     echo
-    printf 'Format suite '; printf '─%.0s' {1..48}; echo
-    echo "  bun       missing — install bun to enable format/lint checks"
+    printf 'Docs check '; printf '─%.0s' {1..48}; echo
+    echo "  bun       missing — install bun to enable the mermaid check"
     echo "  https://bun.sh/docs/installation"
     exit 0
 fi
-
-_prettier_fix() {
-    bunx prettier --write "**/*.md"
-}
-
-_markdownlint_check() {
-    bunx markdownlint-cli2 "**/*.md"
-}
 
 _mermaid_check() {
     local dir="$SCRIPT_DIR/mermaid-check"
@@ -66,7 +55,5 @@ _mermaid_check() {
     bun "$dir/check.mjs" $files
 }
 
-section "Format"
-step "$(_lab prettier 'write')" _prettier_fix
-#step "$(_lab lint-md   'check')" _markdownlint_check
+section "Docs"
 step "$(_lab mermaid   'check')" _mermaid_check

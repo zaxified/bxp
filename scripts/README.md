@@ -20,7 +20,7 @@ wrappers ignore them.
 | Perf regression guard only                            | `bash scripts/test-05-bench-guard.sh`            |
 | Expression corpus only                                | `bash scripts/test-06-expr-corpus.sh`            |
 | Dataset regression only                               | `bash scripts/test-07-datasets.sh`               |
-| Docs format-fix + lint (pre-release only)             | `bash scripts/check-formatting.sh`               |
+| Docs mermaid check (pre-release only)                 | `bash scripts/check-formatting.sh`               |
 | Full benchmark matrix (dev only, not in `test.sh`)    | `bash scripts/bench/bench.sh`                    |
 | Local smoke build (no publish)                        | `bash scripts/release.sh`                        |
 | Console build only                                    | `bash scripts/release-01-console.sh`             |
@@ -73,7 +73,7 @@ release-03-checksums.sh       generate SHA256SUMS over release artifacts
 
 release-changelog.sh          standalone — bump versions + prepend CHANGELOG.md
 release-tag.sh                standalone — semver tag (v<build.zig.zon version>) + push (triggers CI)
-check-formatting.sh           standalone — prettier --write + markdownlint + mermaid (pre-release docs; NOT auto-run by test.sh)
+check-formatting.sh           standalone — mermaid-fence syntax check (pre-release docs; NOT auto-run by test.sh)
 
 bench/bench.sh                dev-only — full stress-test matrix (S1–S6); writes results/results-<ts>.csv
 bench/gen.py                  synthetic CSV + config generator (shared by bench.sh and test-05-bench-guard.sh)
