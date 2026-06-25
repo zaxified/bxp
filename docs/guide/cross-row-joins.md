@@ -30,9 +30,32 @@ only through `LOOKUP()`.
 
 A template may declare several named `pre_pass` blocks; each block name
 becomes part of the `LOOKUP` namespace, so different blocks cannot
-collide. The single-block form shown above is the legacy shape and is
-still accepted. See [Config schema](../reference/config-schema.md) for
-both forms.
+collide. Wrap each block under its own name and reach into it with the
+**3-argument** `LOOKUP('block_name', key, 'field')`:
+
+```json5
+pre_pass: {
+  fills: {                                   // block name = first LOOKUP arg
+    when:   "[Type] = 'trade fill'",
+    key:    "[Order ID]",
+    values: { qty: "[Amount]" },             // read as LOOKUP('fills', ..., 'qty')
+  },
+  fx: {
+    when:   "[Type] = 'fx rate'",
+    key:    "[Order ID]",
+    values: { rate: "[Rate]" },              // read as LOOKUP('fx', ..., 'rate')
+  },
+},
+
+input_schema: {
+  $quantity: "LOOKUP('fills', [Order ID], 'qty')",
+  $fxRate:   "LOOKUP('fx', [Order ID], 'rate')",
+},
+```
+
+The single-block form shown above is the legacy shape — it uses the
+2-argument `LOOKUP(key, 'field')` and is still accepted. See
+[Config schema](../reference/config-schema.md) for both forms.
 
 Reach for `pre_pass` **only** for genuine cross-row joins (paired
 transaction legs, fee refunds, order/fill pairs). If a row's data is

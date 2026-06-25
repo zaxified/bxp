@@ -160,13 +160,13 @@ to pre-process the file" or "skip the affected rows".
   separately, or (b) treat blank line as end-of-stream and process
   only the first block (cheaper, less complete).
 
-- **Wealthfolio target spec vocabulary expansion (remaining).** The
-  readme now documents `TRANSFER_IN`, `TRANSFER_OUT`, and `SPLIT`
-  alongside the eight standard actions. Real Wealthfolio also accepts
-  `CONVERSION_IN`, `CONVERSION_OUT`, and `ADJUSTMENT` — confirm against
-  the import contract and add to the readme if the existing
-  `WITHDRAWAL`/`DEPOSIT` mapping for currency conversion is too lossy.
-  Pure docs change.
+- **Wealthfolio target spec vocabulary expansion — done.** The guide now
+  documents `TRANSFER_IN`, `TRANSFER_OUT`, `SPLIT`, plus `CREDIT`,
+  `ADJUSTMENT`, and `UNKNOWN` alongside the eight standard actions
+  (`guide/targets.md`). `CONVERSION_IN` / `CONVERSION_OUT` were dropped:
+  Wealthfolio v3 removed them and DB-migrated them to
+  `TRANSFER_IN` / `TRANSFER_OUT`, so currency conversion stays on the
+  `TRANSFER` (or `WITHDRAWAL`/`DEPOSIT`) mapping.
 
 ### Real-world data quirks (problem-first)
 

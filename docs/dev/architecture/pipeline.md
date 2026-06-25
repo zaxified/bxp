@@ -87,8 +87,8 @@ A single input row can produce **0, 1, or N output rows** depending on
 - `rows: [{...}]` — one-to-one (the typical buy/sell/deposit case).
 - `rows: [{...}, {...}, ...]` — multi-row expansion. Used when a single
   source event represents multiple Wealthfolio activities — e.g. a Trading
-  212 dividend with adjustment may emit separate `DIVIDEND` and
-  `DIV_TAX` rows from one input line.
+  212 dividend with withholding tax may emit separate `DIVIDEND` and
+  `TAX` rows from one input line.
 
 The `--debug` flag prints rows that match no rule when
 `row_rules_debug_missing: true` is set on the template — useful when

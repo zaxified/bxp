@@ -20,7 +20,9 @@ broker](../ai/authoring-a-broker.md).
 | `xtb2_cash_to_brychtapp`     | XTB — cash operations (new) → brycht.app (tracker)  |
 | `xtb2_closed_to_brychtapp`   | XTB — closed positions (new) → brycht.app (tracker) |
 
-The shipping templates live in `bxp-cli.examples.json` (in the console
-archive and in the GitHub repository). Each carries inline JSON5 comments
+The shipping templates live in `bxp-cli.examples.json` — next to the
+`bxp-cli` binary in the console archive, and at
+[`resources/console/bxp-cli.examples.json`](https://github.com/zaxified/bxp/blob/master/resources/console/bxp-cli.examples.json)
+in the GitHub repository. Each carries inline JSON5 comments
 documenting what every `$variable` represents and how the broker's source
 actions map — they are the canonical reference for new templates.

@@ -55,8 +55,9 @@ JSON.
   specs.
 - Looking up a function or flag? Jump to the
   [Reference](reference/expr-functions.md).
-- Using an AI assistant? See [Authoring a broker with an
-  AI](ai/authoring-a-broker.md).
+- Using an AI assistant? The **AI workflows** section covers
+  [authoring a broker with an AI](ai/authoring-a-broker.md), the
+  [live GUI MCP](ai/gui-mcp.md), and [agent handoff](ai/handoff.md).
 
 ## Contributing
 

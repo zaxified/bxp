@@ -59,6 +59,11 @@ mybroker_to_wealthfolio: {
   csv_decimal_separator_out: ".",
   csv_text_quote_out:        "none",
 
+  // default 1; 1-based line holding the CSV header. 0 = headerless input
+  // (no header row; reach columns by position with FIELDS(n)); N>1 skips
+  // N-1 preamble lines before the header (broker exports with a text banner).
+  // csv_header_line:           1,
+
   // default false; when true rows whose $date is outside the date range encoded
   // in the filename (YYYY-MM-DD_YYYY-MM-DD) are silently skipped. Requires $date.
   date_filter_from_filename: false,
@@ -73,6 +78,13 @@ mybroker_to_wealthfolio: {
 
   // optional; xlsx sheet extraction — omit for plain CSV input
   // xlsx_sheet: { name: "CLOSED POSITION", header_row: 13, output_suffix: "_closed" },
+
+  // optional; unpack every *.zip in data_dir into flat intermediate CSVs
+  // before processing (zip → (xlsx) → csv → csvx), e.g. a "zip of one CSV
+  // per region" export. entry_pattern picks members by suffix; dir_mode
+  // "basename" (default) flattens paths, "keep_path" joins them with
+  // path_separator. Runs in parallel. See examples/real-world/ruian-address-points.
+  // zip_input: { entry_pattern: ".csv", dir_mode: "basename", path_separator: "_" },
 
   // optional; first-pass lookup table for cross-row joins (e.g. paired trade rows)
   // pre_pass: {

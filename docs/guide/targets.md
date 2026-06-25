@@ -48,6 +48,21 @@ Wealthfolio also imports:
 | `'TRANSFER_OUT'` | Stock moved out of the account to elsewhere                            |
 | `'SPLIT'`        | Stock split — `$amount` carries the split ratio (e.g. `2` for 2-for-1) |
 
+Wealthfolio also accepts three more activity types that none of the
+built-in templates currently emit, but which a new broker template may
+need:
+
+| Action         | When                                                                       |
+| -------------- | -------------------------------------------------------------------------- |
+| `'CREDIT'`     | Capital added without a trade — sign-up bonus, cashback, rebate, refund    |
+| `'ADJUSTMENT'` | Catch-all bookkeeping correction (e.g. option expiry) — cash and/or holdings move as needed |
+| `'UNKNOWN'`    | Fallback for an event you can't classify; flagged for re-review in Wealthfolio |
+
+For currency conversions use `'TRANSFER_IN'` / `'TRANSFER_OUT'` (or a
+`'WITHDRAWAL'` + `'DEPOSIT'` pair): Wealthfolio's older `CONVERSION_IN` /
+`CONVERSION_OUT` types were removed and migrated to `TRANSFER_IN` /
+`TRANSFER_OUT`, so do not emit them.
+
 If your broker emits an event that doesn't fit any of these, prefer
 `'INTEREST'` for income-like cash, `'FEE'` for cost-like cash, and skip
 the row (`rows: []`) if you can't classify it cleanly.
@@ -105,10 +120,27 @@ The default Wealthfolio column mapping:
 
 The shipping brycht.app templates (`trading212_to_brychtapp`,
 `xtb2_cash_to_brychtapp`, `xtb2_closed_to_brychtapp`) target a different
-column set than Wealthfolio: `date, type, ticker, quantity, price,
-currency, fees, notes` (8 columns) instead of Wealthfolio's 13. Templates
-default to `combined_output: true` so the tracker imports a single merged
-file per template.
+column set than Wealthfolio. The tracker imports by header name, so the
+column order may vary between templates; the fields are:
+
+| Column     | Holds                                                       |
+| ---------- | ----------------------------------------------------------- |
+| `date`     | Trade date (`YYYY-MM-DD`)                                    |
+| `type`     | Activity type — `$type`, set in `row_rules` (see below)     |
+| `ticker`   | Instrument symbol                                            |
+| `isin`     | ISIN, when the broker provides one (optional)               |
+| `quantity` | Share count — **unsigned**; `type` carries the direction    |
+| `price`    | Price per share — unsigned                                   |
+| `currency` | Price currency (e.g. `GBp` for pence)                       |
+| `fees`     | Fee amount (may be empty)                                    |
+| `notes`    | Free-text comment (may be empty)                            |
+
+Activity type lives in `$type` (not Wealthfolio's `$action`), and the
+shipping templates only emit `'BUY'` and `'SELL'` — brycht.app is a
+buy-side tracker, so cash events (deposits, dividends, interest) are not
+mapped. Quantity and price are unsigned; `type` encodes buy-vs-sell.
+Templates default to `combined_output: true` so the tracker imports a
+single merged file per template.
 
 brycht.app does not publish a separate machine-readable spec — treat the
 existing brycht.app entries in `bxp-cli.examples.json` as the canonical

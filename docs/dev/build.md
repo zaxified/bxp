@@ -40,13 +40,14 @@ zig version   # must satisfy build.zig.zon's minimum_zig_version
 ## Claude Code setup
 
 BXP development in Zig works seamlessly with [Claude Code](https://claude.ai/code).
-The monorepo ships seven `CLAUDE.md` files — root, `bxp-cli/`, `bxp-core/`,
-`bxp-mcp/`, `bxp-gui/`, `bxp-gui-bridge/`, and `bxp-gui/packages/json5_ast/` —
-Claude loads these automatically and reads project conventions.
+The monorepo ships eight `CLAUDE.md` files — root, `bxp-cli/`, `bxp-core/`,
+`bxp-mcp/`, `bxp-gui/`, `bxp-gui-bridge/`, `bxp-gui/packages/json5_ast/`, and
+`docs/examples/` — Claude loads these automatically and reads project conventions.
 
 ### Skills to use
 
-Install the `zig` API-reference skill from <https://github.com/nzrsky/zig-skills> (targets Zig 0.16.0).
+The `zig` API-reference skill (targets Zig 0.16.0) ships with this repo's Claude
+Code setup; see the root `CLAUDE.md` for the skill conventions.
 
 | Skill        | When to use                                                     |
 | ------------ | --------------------------------------------------------------- |
@@ -113,7 +114,12 @@ bxp/                            # monorepo root (git root)
 │   ├── dev/build.md            # this file — setup + build + test entry point
 │   ├── dev/testing.md          # test phases, corpus, regression fixture guide
 │   ├── dev/debugging.md        # debug flags, expression inspection, live GUI debug
-│   ├── dev/internals.md        # design philosophy, module contracts, extensibility
+│   ├── dev/internals/          # design philosophy, module contracts, extensibility
+│   │   ├── index.md            #   overview + reading order
+│   │   ├── howto.md            #   extension recipes
+│   │   ├── implementation.md   #   internal contracts
+│   │   ├── modules.md          #   bxp-core module reference
+│   │   └── performance.md      #   perf model + benchmarks
 │   ├── dev/architecture/       # bird's-eye view + data-flow diagrams
 │   │   ├── index.md            #   topology overview
 │   │   ├── pipeline.md         #   CLI execution + expression evaluator
@@ -123,7 +129,10 @@ bxp/                            # monorepo root (git root)
 │   ├── dev/mcp.md              # bxp-mcp MCP server guide
 │   ├── dev/release.md          # release process walkthrough
 │   ├── dev/roadmap.md          # forward-looking milestones
-│   └── dev/trace-protocol.md  # bxp-cli --trace BXTB + inspect output formats
+│   └── dev/trace-protocol/     # bxp-cli --trace BXTB + inspect output formats
+│       ├── index.md            #   overview
+│       ├── bxtb.md             #   binary BXTB frame stream
+│       └── inspect.md          #   inspect output formats
 ├── resources/
 │   ├── console/                # bxp-cli sample config + readme (bundled in console archives)
 │   ├── desktop/                # bxp-gui.desktop template + readme (bundled in desktop archives)

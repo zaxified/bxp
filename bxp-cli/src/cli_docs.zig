@@ -19,7 +19,7 @@ pub const flags = [_]FlagDoc{
     .{ .flag = "--dry-run", .description = "run the pipeline in memory without writing output files" },
     .{ .flag = "--trace", .description = "emit the binary BXTB trace stream on stdout (forces --quiet; conflicts with --debug)" },
     .{ .flag = "--trace-file", .arg = "<path>", .description = "write a full binary trace (every row, every event) to <path>; independent of --trace; useful for offline GUI drill-down" },
-    .{ .flag = "--debug", .description = "suppresses informational stdout summaries; prints unmatched rows as JSON when row_rules_debug_missing is set" },
+    .{ .flag = "--debug", .description = "prints rows that match no rule as JSON on stdout when row_rules_debug_missing is set (conflicts with --quiet and --trace)" },
     .{ .flag = "--debug=json", .description = "emit ONE machine-readable JSON run summary on stdout (per-template + overall counts, captured warnings/errors) instead of human stdout+stderr output; conflicts with --trace/--quiet/--debug" },
     .{ .flag = "--quiet", .description = "suppress informational stdout (errors still go to stderr)" },
     .{ .flag = "--check-fs", .arg = "<n>", .description = "opt-in: validate data_dir + input-file existence before any processing, with N-second total timeout (e.g. --check-fs 5). Default off." },

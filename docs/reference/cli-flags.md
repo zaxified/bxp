@@ -13,7 +13,7 @@ All flags are optional. Without arguments, bxp-cli reads `bxp-cli.json` from the
 | <code class="hl-fn">--dry-run</code> |  | run the pipeline in memory without writing output files |
 | <code class="hl-fn">--trace</code> |  | emit the binary BXTB trace stream on stdout (forces --quiet; conflicts with --debug) |
 | <code class="hl-fn">--trace-file</code> | <code class="hl-type">&lt;path&gt;</code> | write a full binary trace (every row, every event) to <path>; independent of --trace; useful for offline GUI drill-down |
-| <code class="hl-fn">--debug</code> |  | suppresses informational stdout summaries; prints unmatched rows as JSON when row_rules_debug_missing is set |
+| <code class="hl-fn">--debug</code> |  | prints rows that match no rule as JSON on stdout when row_rules_debug_missing is set (conflicts with --quiet and --trace) |
 | <code class="hl-fn">--debug=json</code> |  | emit ONE machine-readable JSON run summary on stdout (per-template + overall counts, captured warnings/errors) instead of human stdout+stderr output; conflicts with --trace/--quiet/--debug |
 | <code class="hl-fn">--quiet</code> |  | suppress informational stdout (errors still go to stderr) |
 | <code class="hl-fn">--check-fs</code> | <code class="hl-type">&lt;n&gt;</code> | opt-in: validate data_dir + input-file existence before any processing, with N-second total timeout (e.g. --check-fs 5). Default off. |

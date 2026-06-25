@@ -16,7 +16,11 @@ tools](../reference/gui-agent-tools.md).
   log of what the agent did.
 - **Connecting** — the agent launches BXP Desktop, polls `GET /health` until it
   returns `200`, then runs the MCP `initialize` handshake and calls
-  `open_config` with the path it wrote.
+  `open_config` with the path it wrote. `GET /health` (and `GET /`) is the
+  bare liveness probe the embedded server answers as soon as its loopback
+  socket binds — it returns `200` only once the app is ready to accept the
+  MCP handshake, so the agent uses it to wait out startup instead of racing
+  the first `initialize`.
 - **Safety** — the server binds loopback only. Critical actions (`save`,
   `full_run`, `delete_node`, `exit`) pop a confirmation dialog you must accept.
 
