@@ -134,3 +134,18 @@ html {
   color: var(--md-default-fg-color--light);
   white-space: nowrap;
 }
+
+/* Call-to-action buttons (e.g. "View on GitHub") readable in BOTH schemes. The
+   stock .md-button borrows --md-primary-fg-color, which is near-invisible in the
+   dark VS Code palette (#252526 text/border on the #1e1e1e page). Drive it from
+   the accent colour instead, and fill on hover. */
+.md-typeset .md-button {
+  color: var(--md-accent-fg-color);
+  border-color: var(--md-accent-fg-color);
+}
+.md-typeset .md-button:focus,
+.md-typeset .md-button:hover {
+  color: var(--md-primary-bg-color);
+  background-color: var(--md-accent-fg-color);
+  border-color: var(--md-accent-fg-color);
+}

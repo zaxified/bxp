@@ -6,7 +6,7 @@ BXP is a single-binary ETL tool. All broker logic lives in a JSON5 config file -
 the binary is a generic engine. The diagram below shows the high-level relationship
 between components. It is a high-level topology (who talks to whom); the
 individual `bxp-core` modules and their internal dependencies are detailed in
-the [bxp-core modules table](../internals.md#bxp-core-modules) and the
+the [bxp-core modules table](../internals/modules.md#bxp-core-modules) and the
 [Expression Evaluator — Call Stack](pipeline.md#expression-evaluator---call-stack) diagram.
 
 ```mermaid
@@ -79,7 +79,7 @@ validation, the ExprPlayground, and the docs / config / template ops avoid the
 
 For the **per-call transport matrix** (which GUI calls use which transport on
 each OS, plus the two-cause "why" behind the split), see
-[`internals.md`'s "Why the bridge exists" + "Per-call routing"](../internals.md#why-the-bridge-exists)
+[`internals`'s "Why the bridge exists" + "Per-call routing"](../internals/index.md#why-the-bridge-exists)
 section. The bridge's C-ABI surface and Debug→ReleaseSafe build rationale live
 in [`bxp-gui-bridge/CLAUDE.md`](https://github.com/zaxified/bxp/blob/master/bxp-gui-bridge/CLAUDE.md).
 

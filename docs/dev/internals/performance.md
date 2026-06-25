@@ -71,7 +71,7 @@ what unlocks streaming, parallelism, and parse-once below.
   (same package cache → no second build, just the measured runs); the whole
   suite is one mode, so the guard measures the same codegen the tests do.
 - **`scripts/bench/verify-output.sh`** — correctness, not speed: runs bxp-cli
-  over `datasets/` + `examples/real-world/` into a dir for a before/after
+  over `datasets/` + `docs/examples/real-world/` into a dir for a before/after
   `diff -r` (use around any optimization to prove output stays byte-identical).
 
 ---

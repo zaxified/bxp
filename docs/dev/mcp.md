@@ -205,7 +205,7 @@ plus a capped (`MAX_TRACE_SAMPLE = 200`) sample for `filtered` (reason:
 `rule_skip` / `no_rule_match`), `row_errors`, and `output_rows` — each row
 carrying the **1-based input line** resolved from its `source_locator` byte
 offset. For the underlying BXTB frame format see
-[`trace-protocol.md`](trace-protocol.md).
+[`trace-protocol`](trace-protocol/index.md).
 
 ## Build, run, test
 

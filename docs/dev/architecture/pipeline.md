@@ -159,11 +159,11 @@ one:
 
 The BXTB trace stream itself stays single-stream — the `chunk_id` frame field
 is reserved for a future multi-stream dispatch but is always `0` today
-(see [trace-protocol.md](../trace-protocol.md)).
+(see [trace-protocol](../trace-protocol/index.md)).
 
 For the broader runtime cost model (what else speeds up / slows down a run)
 and the benchmark harness, see
-[internals.md → Performance model](../internals.md#performance-model).
+[internals → Performance model](../internals/performance.md#performance-model).
 
 ---
 
@@ -266,7 +266,7 @@ the most expensive rung: on 1M synthetic rows it measured **~1.9× the wall time
 of a literal-only equivalent producing byte-identical output, at **flat peak
 RSS** (the engine is window/arena-bounded — no per-row growth). Reach for it only
 when a pattern the cheaper tools cannot phrase is genuinely needed; see
-[`examples/advanced/freeform-payment-memos`](https://github.com/zaxified/bxp/blob/master/examples/advanced/freeform-payment-memos/00-readme.md)
+[`docs/examples/advanced/freeform-payment-memos`](../../examples/advanced/freeform-payment-memos/index.md)
 for the worked tradeoff and the full measurement table.
 
 The target persona is an Excel-comfortable analyst (broker statement

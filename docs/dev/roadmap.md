@@ -87,6 +87,44 @@ backlog was otherwise exhausted:
   (`file_type_out: json`), the basic-tier mirror of `squirrel-census-json`. Low
   priority: JSON _output_ is already shown by `advanced/multi-stage-etl`.
 
+### Interactive in-browser examples (wasm)
+
+Run the documented examples *live* on the GitHub Pages docs site — the
+reader edits an expression / a sample and sees the result recomputed in
+their own browser, with nothing to download (no bxp-cli, no bxp-gui).
+`bxp-core` is pure-computation Zig, so it compiles to a `wasm32` target
+and becomes a fourth consumer of the same engine alongside bxp-mcp and
+bxp-gui-bridge — not a reimplementation. WASM is only a compile target; the
+sole genuine browser-sandbox limits are no threads (parallel `zipPrePass`
+degrades to a serial scan — GitHub Pages can't set the COOP/COEP headers
+`SharedArrayBuffer` needs) and no disk/subprocess (irrelevant here — inputs
+are in-memory textbox strings). Two tiers:
+
+- **A — Scratchpad demo (per-row playground).** Embeds the existing
+  `inspect.evalBatch` (`bxp-core/src/inspect.zig`) behind a thin `wasm32`
+  export: `headers + fields (one row) + exprs → output cells`, the same
+  surface MCP's `bxp_eval_batch` and the bridge already drive. The reader
+  types a formula, sees one row recompute live. Scope: a wasm export wrapper
+  + ~30 lines of JS glue + an mkdocs snippet that turns a fenced block into
+  the widget; the `.wasm` ships as a docs asset. Limit (an `evalBatch` API
+  trait, *not* a wasm one): single-row eval — cross-row `LOOKUP` needs a
+  pre-built lookups blob, so pre_pass demos either omit it or precompute the
+  table.
+
+- **B — Full-bxp demo (`sample.csv` → `final.csv`).** Runs a complete example
+  transform end-to-end, bit-identical to the CLI: full config, multi-pass,
+  pre_pass / cross-row `LOOKUP`, encoding transcode, date + decimal cores.
+  The reader edits the config/formula and the whole `final.csv` re-renders.
+  This needs the pure transform core lifted out of `bxp-cli/src/pipeline.zig`
+  (today entangled with file I/O + threads) into `bxp-core` so it can be
+  driven from in-memory strings — the same extraction the shared-core-lib
+  track wants anyway. Bigger, but full fidelity.
+
+Open questions: mkdocs integration (raw HTML/JS snippet vs a small plugin
+generating the widget from a fenced ` ```bxp-eval ` block); whether B's
+in-browser output can double as a docs-correctness gate (examples run
+against the real engine instead of frozen expected text).
+
 ### Distribution polish
 
 - Apple Developer ID notarisation for macOS `.app` (~$99/year).
@@ -103,7 +141,7 @@ backlog was otherwise exhausted:
   (`exports/2026-06/`) need config edits per month today. Accepting an array
   of dirs (process all listed) or a `*` glob path segment would close that
   recurring operator chore. Demand-driven — only if a real workflow asks;
-  examples/ currently show flat dirs.
+  docs/examples/ currently show flat dirs.
 
 ### Real-world broker CSV quirks
 
@@ -164,7 +202,7 @@ fixed before release instead, not parked here).
   are now expressible without a dependency:
   `NTH_DOW(year, month, weekday, n)` is the `datefmt` calendar primitive
   (last Sunday of March is `NTH_DOW(y, 3, 7, -1)`), so the EU Prague window in
-  `examples/advanced/multi-stage-etl` reads cleanly. `datefmt` itself still has
+  `docs/examples/advanced/multi-stage-etl` reads cleanly. `datefmt` itself still has
   no timezone awareness, two possible candidates:
   - `TZ_OFFSET(date, zone)` — returns `+01:00`/`+02:00` for a curated zone set
     (Europe/{London,Prague,…}, America/{New_York,…}, Asia/{Tokyo,…}), computing

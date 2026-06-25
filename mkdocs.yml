@@ -58,6 +58,7 @@ theme:
 
 markdown_extensions:
   - admonition
+  - pymdownx.details        # `???`/`???+` collapsible admonitions (pairs with admonition)
   - attr_list
   - md_in_html
   - tables
@@ -68,11 +69,17 @@ markdown_extensions:
           case: lower
   - abbr                      # glossary terms → hover tooltips (no navigation)
   - pymdownx.snippets:
+      base_path:
+        - docs            # resolve --8<-- includes against docs/ (examples data, includes)
+      check_paths: true   # fail the build on a missing snippet instead of silently empty
       auto_append:
         - includes/abbreviations.md
   - pymdownx.highlight:
       anchor_linenums: true
   - pymdownx.inlinehilite
+  - pymdownx.emoji:        # :material-*: / :octicons-*: inline icons (GitHub mark, etc.)
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
   - pymdownx.superfences:
       custom_fences:
         - name: mermaid       # render ```mermaid fenced blocks
@@ -83,6 +90,20 @@ markdown_extensions:
 
 not_in_nav: |
   /includes/
+
+# Example dirs are migrated whole (config + inputs + goldens) so each page stays
+# runnable from disk and browsable on GitHub. Keep the engine output / golden /
+# fetch artefacts OUT of the published site — only the prose + sample inputs ship.
+exclude_docs: |
+  examples/**/*.csvx
+  examples/**/*.expected
+  examples/**/*.sh
+  examples/**/.gitkeep
+  examples/**/1-*
+  examples/**/full/
+  examples/**/*.zip
+  examples/**/*.xlsx
+  examples/CLAUDE.md
 
 plugins:
   - search
@@ -116,6 +137,47 @@ nav:
       - ai/authoring-a-broker.md
       - ai/gui-mcp.md
       - ai/handoff.md
+  - Examples:
+      - examples/index.md
+      - Real-world:
+          - examples/real-world/index.md
+          - examples/real-world/chicago-business-licenses/index.md
+          - examples/real-world/covid-wide-to-long/index.md
+          - examples/real-world/eurostat-population-tsv/index.md
+          - examples/real-world/french-dvf-realestate/index.md
+          - examples/real-world/gtfs-stops-selfjoin/index.md
+          - examples/real-world/hl7-adt-patient-roster/index.md
+          - examples/real-world/imdb-title-basics/index.md
+          - examples/real-world/inside-airbnb-listings/index.md
+          - examples/real-world/ngc-sexagesimal-coords/index.md
+          - examples/real-world/noaa-ghcn-daily/index.md
+          - examples/real-world/nyc-taxi-trips/index.md
+          - examples/real-world/ruian-address-points/index.md
+          - examples/real-world/squirrel-census-json/index.md
+          - examples/real-world/treasury-yield-curve/index.md
+      - Basic:
+          - examples/basic/index.md
+          - examples/basic/null-variants/index.md
+          - examples/basic/space-thousands/index.md
+          - examples/basic/units-in-cell/index.md
+      - Intermediate:
+          - examples/intermediate/index.md
+          - examples/intermediate/accounting-negatives/index.md
+          - examples/intermediate/boolean-variants/index.md
+          - examples/intermediate/fan-in-files/index.md
+          - examples/intermediate/hubspot-to-salesforce/index.md
+          - examples/intermediate/json-union/index.md
+          - examples/intermediate/percent-to-fraction/index.md
+          - examples/intermediate/price-currency-split/index.md
+      - Advanced:
+          - examples/advanced/index.md
+          - examples/advanced/freeform-payment-memos/index.md
+          - examples/advanced/messy-financial-export/index.md
+          - examples/advanced/mixed-format-bridge/index.md
+          - examples/advanced/multi-stage-etl/index.md
+          - examples/advanced/two-file-join/index.md
+          - examples/advanced/vintage-harmonise/index.md
+          - examples/advanced/xlsx-tabs-merge/index.md
   - GUI:
       - gui/features.md
       - gui/preferences.md

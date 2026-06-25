@@ -2,7 +2,7 @@
 #
 # One-off output verification for the chunking refactor.
 #
-# Runs bxp-cli over every available input set (datasets/, examples/real-world/,
+# Runs bxp-cli over every available input set (datasets/, docs/examples/real-world/,
 # and optional gitignored DEV/) and copies every produced output file into
 # <destdir>/<source>/<relative-path>, so two runs (before and after the refactor)
 # can be compared with:  diff -r <pre-dir> <post-dir>
@@ -62,13 +62,13 @@ for d in "$REPO_ROOT"/datasets/*/; do
   run_and_capture "datasets/$name" "$d" "--config sample.json" ".csvx"
 done
 
-# 2. examples/real-world/ — each subdir has its own sample.json
-echo "=== examples/real-world/ ==="
-for d in "$REPO_ROOT"/examples/real-world/*/; do
+# 2. docs/examples/real-world/ — each subdir has its own sample.json
+echo "=== docs/examples/real-world/ ==="
+for d in "$REPO_ROOT"/docs/examples/real-world/*/; do
   [ -f "$d/sample.json" ] || continue
   name=$(basename "$d")
   echo "  $name"
-  run_and_capture "examples/real-world/$name" "$d" "--config sample.json" ".csvx"
+  run_and_capture "docs/examples/real-world/$name" "$d" "--config sample.json" ".csvx"
 done
 
 # 3. DEV/ — shared config, gitignored private data (skip if absent)
