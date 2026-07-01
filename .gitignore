@@ -49,6 +49,7 @@ scripts/bench/results/results-*.csv
 !scripts/bench/results/results-20260604-005730.csv
 !scripts/bench/results/results-20260604-071536.csv
 !scripts/bench/results/results-20260615-101532.csv
+!scripts/bench/results/results-20260701-123102.csv
 
 # Full real-world datasets fetched on demand by docs/examples/*/fetch-full.sh
 # (hundreds of MB — never committed; the small sample.* slices are enough
