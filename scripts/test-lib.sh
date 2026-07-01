@@ -5,10 +5,10 @@
 # Without it, Python on Windows defaults to the locale ANSI code page (cp1252
 # on the GitHub windows-latest runner), so any inline helper that reads a
 # UTF-8 file with a bare open() — corpus walks (test-06), MCP fixtures
-# (test-05), the readme generator (test-01) — dies with UnicodeDecodeError on
-# the first non-ASCII byte. UTF-8 Mode makes open()/stdio default to UTF-8
-# regardless of locale; this is the documented fix for CI (PEP 540). Exported,
-# so child shells (e.g. the gen-readme.sh subprocess) inherit it too.
+# (test-05) — dies with UnicodeDecodeError on the first non-ASCII byte.
+# UTF-8 Mode makes open()/stdio default to UTF-8 regardless of locale; this
+# is the documented fix for CI (PEP 540). Exported, so child shells (any
+# python helper subprocess) inherit it too.
 export PYTHONUTF8=1
 
 # Sub-second timing via bash 5+ EPOCHREALTIME; fall back to whole seconds.

@@ -18,7 +18,7 @@ archives (`release-01`) are the only ReleaseSmall build.
 
 1. `zig build test` in `bxp-core` (unit tests for `csv.zig`, `expr.zig`, `json5.zig`, `docs.zig`, `diagnostics.zig`).
 2. Builds `bxp-cli` + runs its unit tests.
-3. `dart test` inside `bxp-gui/packages/json5_ast/` + readme src-sync drift guard.
+3. `dart test` inside `bxp-gui/packages/json5_ast/`.
 
 **`test-02-mcp.sh`** — `bxp-mcp` build + unit tests + JSON-RPC smoke for the
 stateless tools (`bxp_validate`, `bxp_validate_expr`, `bxp_eval_batch`, …) plus

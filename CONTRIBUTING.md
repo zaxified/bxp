@@ -52,7 +52,7 @@ If your broker is not in the built-in `conversion_templates` list, the
 workflow is:
 
 1. Draft a template with the AI workflow described in
-   [`resources/console/readme.md`](resources/console/readme.md)
+   [`resources/readme.md`](resources/readme.md)
    ("Need a broker that isn't listed?" section).
 2. Verify it with the bxp-mcp tools (`bxp_validate` + `bxp_simulate`) or
    `bxp-cli --debug` (runtime check).
@@ -75,9 +75,8 @@ For build / test commands, repo layout, and architecture see
 
 ## Documentation
 
-Fixes to [`docs/`](docs/) and the user-facing readmes in
-[`resources/console/`](resources/console/readme.md) /
-[`resources/desktop/`](resources/desktop/readme.md) are welcome as
+Fixes to [`docs/`](docs/) and the user-facing readme in
+[`resources/readme.md`](resources/readme.md) are welcome as
 small PRs. If a section is unclear or wrong, file an issue or open the
 PR directly.
 

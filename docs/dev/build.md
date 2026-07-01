@@ -140,7 +140,7 @@ bxp/                            # monorepo root (git root)
 ├── scripts/
 │   ├── test.sh                 # wrapper: runs every test-NN-*.sh in numeric order
 │   ├── test-lib.sh             # shared section/step/summary helpers (sourced)
-│   ├── test-01-console.sh      # bxp-core unit (incl. inspect) + bxp-cli build + readme src-sync + json5_ast unit
+│   ├── test-01-console.sh      # bxp-core unit (incl. inspect) + bxp-cli build + json5_ast unit
 │   ├── test-02-mcp.sh          # bxp-mcp build + unit tests + JSON-RPC smoke (incl. bxp_simulate)
 │   ├── test-03-bridge.sh       # bxp-gui-bridge build + unit tests
 │   ├── test-04-desktop.sh      # flutter analyze + flutter test + json5_ast dart test (builds bridge .so)

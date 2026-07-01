@@ -175,8 +175,7 @@ Subsequent launches go through Spotlight / Launchpad / Dock.
 
 | For                                | Read                                                         |
 | ---------------------------------- | ------------------------------------------------------------ |
-| Using `bxp-cli` from a terminal    | [`resources/console/readme.md`](resources/console/readme.md) |
-| Using `bxp-gui` (desktop)          | [`resources/desktop/readme.md`](resources/desktop/readme.md) |
+| Using `bxp-cli` (terminal) or `bxp-gui` (desktop) | [`resources/readme.md`](resources/readme.md)  |
 | Developer / architecture / roadmap | [`docs/`](docs/README.md)                                    |
 | Contributing                       | [`CONTRIBUTING.md`](CONTRIBUTING.md)                         |
 | Release history                    | [`CHANGELOG.md`](CHANGELOG.md)                               |

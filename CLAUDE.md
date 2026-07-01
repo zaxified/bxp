@@ -73,11 +73,11 @@ bxp/
 │   ├── build.zig
 │   └── build.zig.zon
 ├── resources/
-│   ├── readme.src.md     # SINGLE source for both shipped readmes; GUI-ONLY/CLI-ONLY
-│   │                     # block markers generate console + desktop variants via
-│   │                     # scripts/gen-readme.sh (do not edit the generated copies)
-│   ├── console/          # bxp-cli sample config + generated console readme.md (console archives)
-│   ├── desktop/          # bxp-gui.desktop template + generated desktop readme.md (desktop archives)
+│   ├── readme.md         # SINGLE hand-maintained readme shipped verbatim in BOTH
+│   │                     # console + desktop archives; desktop-only sections carry a
+│   │                     # *(desktop only)* heading annotation (no more block-marker gen)
+│   ├── console/          # bxp-cli sample config (bxp-cli.examples.json) — console archives
+│   ├── desktop/          # bxp-gui.desktop launcher template — desktop archives
 │   └── icons/            # 4 SVG variants + build-icons.sh — single source for app icons.
 │                         #   sand-80 = primary (rendered into bxp-gui/{linux,macos,windows}/...
 │                         #   for compile-time embed); all 4 PNGs ship in archive's icons/
@@ -89,7 +89,7 @@ bxp/
 │   │                     # minimise the codegen/safety error surface; ship is the
 │   │                     # only exception (ReleaseSmall, release-01).
 │   ├── test-lib.sh       # Shared section/step/summary helpers (sourced)
-│   ├── test-01-console.sh    # bxp-core unit (incl. inspect) + bxp-cli build + readme src-sync + json5_ast unit
+│   ├── test-01-console.sh    # bxp-core unit (incl. inspect) + bxp-cli build + json5_ast unit
 │   ├── test-02-mcp.sh        # bxp-mcp build + unit tests + JSON-RPC smoke (incl. bxp_simulate)
 │   ├── test-03-bridge.sh     # bxp-gui-bridge build + unit tests
 │   ├── test-04-desktop.sh    # flutter analyze + flutter test + json5_ast dart test (builds bridge .so)
@@ -106,9 +106,6 @@ bxp/
 │   ├── release-03-checksums.sh  # Emit SHA256SUMS for every release artifact
 │   ├── release-changelog.sh     # Extract per-tag section from CHANGELOG.md for release notes
 │   ├── release-tag.sh           # Push a vX.Y.Z tag and trigger the release workflow
-│   ├── gen-readme.sh            # Generate resources/{console,desktop}/readme.md from the
-│   │                            # single source resources/readme.src.md (GUI-ONLY/CLI-ONLY
-│   │                            # block markers); `--check` drift guard wired into test-01
 │   └── check-formatting.sh      # mermaid-fence syntax check; PRE-RELEASE docs
 │                                # step — deliberately NOT a test-NN phase
 │                                # (test.sh does not auto-run it). Markdown

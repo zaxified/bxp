@@ -6,7 +6,7 @@ No code changes required — adding a broker is purely configuration work. The
 full config schema, expression reference, and field-by-field walkthrough live
 in the user-facing guide:
 
-→ [`resources/console/readme.md`](https://github.com/zaxified/bxp/blob/master/resources/console/readme.md)
+→ [`resources/readme.md`](https://github.com/zaxified/bxp/blob/master/resources/readme.md)
 
 That document is what gets shipped inside `bxp-console` archives, so it
 double-serves new contributors and end users. The short skeleton:
