@@ -24,6 +24,7 @@ Both the `from` and `to` arguments of `DATE_CONVERT` use the same token set.
 | <code class="hl-type">s</code> | 1–2 digit second | 9 |
 | <code class="hl-type">A</code> | AM/PM uppercase | PM |
 | <code class="hl-type">a</code> | am/pm lowercase | pm |
+| <code class="hl-type">ZZ</code> | UTC offset ±HH:MM (parses a literal Z as +00:00) | +02:00 |
 | <code class="hl-type">EEEE</code> | Full day name | Monday |
 | <code class="hl-type">EEE/EE/E</code> | Short day name | Mon |
 | <code class="hl-type">e</code> | Day of week as number (1 = Mon … 7 = Sun) | 1 |

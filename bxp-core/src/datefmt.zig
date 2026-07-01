@@ -55,6 +55,7 @@ pub const date_tokens = [_]DateTokenDoc{
     .{ .token = "s", .meaning = "1–2 digit second", .example = "9" },
     .{ .token = "A", .meaning = "AM/PM uppercase", .example = "PM" },
     .{ .token = "a", .meaning = "am/pm lowercase", .example = "pm" },
+    .{ .token = "ZZ", .meaning = "UTC offset ±HH:MM (parses a literal Z as +00:00)", .example = "+02:00" },
     .{ .token = "EEEE", .meaning = "Full day name", .example = "Monday" },
     .{ .token = "EEE/EE/E", .meaning = "Short day name", .example = "Mon" },
     .{ .token = "e", .meaning = "Day of week as number (1 = Mon … 7 = Sun)", .example = "1" },
@@ -80,6 +81,10 @@ pub const DateParts = struct {
     hour: u32 = 0,
     minute: u32 = 0,
     second: u32 = 0,
+    /// UTC offset in minutes carried by a `ZZ` token (`+02:00` → 120, `Z` → 0);
+    /// null when the format has no offset token. Only the parse→format reshuffle
+    /// and the TZ builtins read it; calendar arithmetic ignores it.
+    off_min: ?i32 = null,
 };
 
 // ---------------------------------------------------------------------------
@@ -116,6 +121,25 @@ pub fn epochDayToYmd(epoch_day: i64) DateParts {
 /// ISO weekday: Monday=1 … Sunday=7. 1970-01-01 (epoch day 0) was Thursday=4.
 pub fn isoWeekday(epoch_day: i64) u32 {
     return @intCast(@mod(epoch_day + 3, 7) + 1);
+}
+
+/// Unix seconds for a UTC wall-clock `DateParts` (offset field ignored — the
+/// caller decides whether the parts are UTC or a zone-local pseudo-instant).
+/// Pre-1970 safe via the civil core.
+pub fn partsToUnix(p: DateParts) i64 {
+    const days = ymdToEpochDay(p.year, p.month, p.day);
+    return days * 86400 + @as(i64, p.hour) * 3600 + @as(i64, p.minute) * 60 + @as(i64, p.second);
+}
+
+/// Inverse of `partsToUnix`: UTC wall-clock `DateParts` for a Unix instant.
+pub fn unixToParts(unix: i64) DateParts {
+    const day = @divFloor(unix, 86400);
+    const rem: u32 = @intCast(unix - day * 86400); // [0, 86399]
+    var r = epochDayToYmd(day);
+    r.hour = rem / 3600;
+    r.minute = (rem % 3600) / 60;
+    r.second = rem % 60;
+    return r;
 }
 
 pub fn isLeapYear(year: i32) bool {
@@ -206,6 +230,7 @@ const Token = union(enum) {
     second_short, // s
     ampm_upper, // A
     ampm_lower, // a
+    tz_offset, // ZZ — UTC offset ±HH:MM (or a literal Z = +00:00)
     wildcard, // [*]
     literal: []const u8, // [text] or any unrecognised run
 };
@@ -238,6 +263,7 @@ const token_table = [_]struct { lit: []const u8, tok: Token }{
     .{ .lit = "hh", .tok = .hour_24_full },
     .{ .lit = "mm", .tok = .minute_full },
     .{ .lit = "ss", .tok = .second_full },
+    .{ .lit = "ZZ", .tok = .tz_offset },
     .{ .lit = "YY", .tok = .year_short },
     .{ .lit = "EE", .tok = .day_name_short },
     .{ .lit = "M", .tok = .month_short },
@@ -400,6 +426,14 @@ fn skipUntilNextToken(s: []const u8, pos: usize, next: Token) ParseError!usize {
             }
             return ParseError.InvalidFormat;
         },
+        .tz_offset => {
+            var i = pos;
+            while (i < s.len) : (i += 1) {
+                const c = s[i];
+                if (c == '+' or c == '-' or c == 'Z' or c == 'z') return i;
+            }
+            return ParseError.InvalidFormat;
+        },
         .wildcard => return ParseError.InvalidFormat, // wildcard cannot follow wildcard
     }
 }
@@ -422,6 +456,7 @@ const Builder = struct {
     minute: u32 = 0,
     second: u32 = 0,
     is_pm: ?bool = null,
+    off_min: ?i32 = null,
 };
 
 fn parseUint(comptime T: type, s: []const u8, err: ParseError) ParseError!T {
@@ -538,6 +573,29 @@ pub fn parse(input: []const u8, fmt: []const u8) ParseError!DateParts {
                 } else return ParseError.InvalidTime;
                 p += 2;
             },
+            .tz_offset => {
+                // Either a literal Z/z (= +00:00) or a signed ±HH[:]MM offset.
+                if (input[p] == 'Z' or input[p] == 'z') {
+                    b.off_min = 0;
+                    p += 1;
+                } else {
+                    const sign: i32 = switch (input[p]) {
+                        '+' => 1,
+                        '-' => -1,
+                        else => return ParseError.InvalidTime,
+                    };
+                    p += 1;
+                    if (p + 2 > input.len) return ParseError.InvalidTime;
+                    const oh = try parseUint(i32, input[p .. p + 2], ParseError.InvalidTime);
+                    p += 2;
+                    if (p < input.len and input[p] == ':') p += 1; // optional colon
+                    if (p + 2 > input.len) return ParseError.InvalidTime;
+                    const om = try parseUint(i32, input[p .. p + 2], ParseError.InvalidTime);
+                    p += 2;
+                    if (oh > 23 or om > 59) return ParseError.InvalidTime;
+                    b.off_min = sign * (oh * 60 + om);
+                }
+            },
             .wildcard => {
                 if (idx + 1 < tk.n) {
                     p = try skipUntilNextToken(input, p, tk.toks[idx + 1]);
@@ -569,6 +627,7 @@ pub fn parse(input: []const u8, fmt: []const u8) ParseError!DateParts {
         .hour = b.hour,
         .minute = b.minute,
         .second = b.second,
+        .off_min = b.off_min,
     };
     if (!validate(result)) {
         if (result.hour > 23 or result.minute > 59 or result.second > 59) return ParseError.InvalidTime;
@@ -627,6 +686,12 @@ pub fn format(alloc: std.mem.Allocator, parts: DateParts, fmt: []const u8) ![]u8
             .second_short => try w.print("{d}", .{parts.second}),
             .ampm_upper => try w.writeAll(if (parts.hour < 12) "AM" else "PM"),
             .ampm_lower => try w.writeAll(if (parts.hour < 12) "am" else "pm"),
+            .tz_offset => {
+                const om = parts.off_min orelse 0;
+                const sign: u8 = if (om < 0) '-' else '+';
+                const mag: u32 = @intCast(if (om < 0) -om else om);
+                try w.print("{c}{d:0>2}:{d:0>2}", .{ sign, mag / 60, mag % 60 });
+            },
             .wildcard => {}, // nothing to emit on the format side
             .literal => |lit| try w.writeAll(lit),
         }
@@ -969,4 +1034,37 @@ test "format/formatIsoDate reject negative years instead of @intCast UB" {
     const s = try formatIsoDate(a, zero);
     defer a.free(s);
     try testing.expectEqualStrings("0000-01-01", s);
+}
+
+test "ZZ offset token: parse (Z / ±HH:MM / ±HHMM) and format" {
+    try testing.expectEqual(@as(?i32, 120), (try parse("2024-03-15T14:23:01+02:00", "YYYY-MM-DD[T]hh:mm:ssZZ")).off_min);
+    try testing.expectEqual(@as(?i32, 0), (try parse("2024-03-15T14:23:01Z", "YYYY-MM-DD[T]hh:mm:ssZZ")).off_min);
+    try testing.expectEqual(@as(?i32, -300), (try parse("2024-03-15 14:23:01-0500", "YYYY-MM-DD hh:mm:ssZZ")).off_min);
+    // A format with no ZZ token leaves off_min null.
+    try testing.expectEqual(@as(?i32, null), (try parse("2024-03-15", "YYYY-MM-DD")).off_min);
+    // Format emits ±HH:MM (and +00:00 when the offset is absent).
+    const a = testing.allocator;
+    const s1 = try format(a, .{ .year = 2024, .month = 3, .day = 15, .off_min = 120 }, "ZZ");
+    defer a.free(s1);
+    try testing.expectEqualStrings("+02:00", s1);
+    const s2 = try format(a, .{ .year = 2024, .month = 3, .day = 15, .off_min = -330 }, "ZZ");
+    defer a.free(s2);
+    try testing.expectEqualStrings("-05:30", s2);
+}
+
+test "partsToUnix / unixToParts round-trip across the epoch" {
+    const u = partsToUnix(.{ .year = 2024, .month = 7, .day = 15, .hour = 12, .minute = 30, .second = 45 });
+    const b = unixToParts(u);
+    try testing.expectEqual(@as(i32, 2024), b.year);
+    try testing.expectEqual(@as(u32, 7), b.month);
+    try testing.expectEqual(@as(u32, 15), b.day);
+    try testing.expectEqual(@as(u32, 12), b.hour);
+    try testing.expectEqual(@as(u32, 30), b.minute);
+    try testing.expectEqual(@as(u32, 45), b.second);
+    try testing.expectEqual(@as(i64, 0), partsToUnix(.{ .year = 1970, .month = 1, .day = 1 }));
+    // One second before the epoch is 1969-12-31 23:59:59.
+    const pre = unixToParts(-1);
+    try testing.expectEqual(@as(i32, 1969), pre.year);
+    try testing.expectEqual(@as(u32, 23), pre.hour);
+    try testing.expectEqual(@as(u32, 59), pre.second);
 }

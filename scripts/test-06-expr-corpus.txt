@@ -99,6 +99,16 @@ expr	ok	EOMONTH([Date])
 expr	ok	NTH_DOW(2024, 3, 7, -1)
 expr	ok	NTH_DOW(YEAR([Date]), 10, 7, -1)
 expr	err	NTH_DOW(2024, 3, 7)	WrongArgCount
+# Timezone cluster — offset token normalisation + IANA-backed zone conversion.
+expr	ok	TO_UTC([Time], 'YYYY-MM-DD[T]hh:mm:ssZZ')
+expr	ok	TO_UTC('2024-03-15T14:23:01+02:00', 'YYYY-MM-DD[T]hh:mm:ssZZ')
+expr	ok	TZ_OFFSET([Date], 'Europe/Prague')
+expr	ok	TZ_CONVERT([Time], 'America/New_York', 'UTC')
+expr	ok	TZ_CONVERT([Time], 'UTC', '+02:00')
+expr	ok	IS_DST([Date], 'Europe/Prague')
+expr	ok	[Time] & TZ_OFFSET([Time], 'Europe/Prague')
+expr	err	TZ_CONVERT([Time], 'UTC')	WrongArgCount
+expr	err	IS_DST([Date])	WrongArgCount
 # Compose: parse foreign-format date then add business days.
 expr	ok	WORKDAY(DATE_CONVERT([Trade], 'DD.MM.YYYY', 'YYYY-MM-DD'), 2)
 expr	ok	YEAR([Date]) = 2024 AND MONTH([Date]) = 12

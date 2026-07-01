@@ -199,6 +199,18 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    // tz.zig resolves IANA offsets over the generated tz_data.zig; both are
+    // plain file-relative imports (also pulled into expr's module), so the test
+    // root needs no named-module wiring.
+    const tz_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/tz.zig"),
+            .target = target,
+            .optimize = optimize,
+            .strip = false,
+        }),
+    });
+
     const unicode_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/unicode.zig"),
@@ -332,6 +344,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(btrace_tests).step);
     test_step.dependOn(&b.addRunArtifact(expr_tests).step);
     test_step.dependOn(&b.addRunArtifact(datefmt_tests).step);
+    test_step.dependOn(&b.addRunArtifact(tz_tests).step);
     test_step.dependOn(&b.addRunArtifact(unicode_tests).step);
     test_step.dependOn(&b.addRunArtifact(decimal_tests).step);
     test_step.dependOn(&b.addRunArtifact(encoding_tests).step);

@@ -320,6 +320,19 @@ malformed one raises an error. Pre-1970 dates are fully supported.
 | `EOMONTH(d)`                       | Last calendar day of `d`'s month, as `YYYY-MM-DD` (month-end snapping)                                                                                                                                                  |
 | `NTH_DOW(year, month, weekday, n)` | Date of the `n`-th `weekday` (ISO Mon=1 … Sun=7) in `year`/`month`; negative `n` counts from month end (`-1` = last). `""` when it doesn't exist. EU DST = `NTH_DOW(YEAR(d), 3, 7, -1)` … `NTH_DOW(YEAR(d), 10, 7, -1)` |
 
+### Timezone functions
+
+DST-aware, backed by a bundled IANA tzdata snapshot (`bxp-core/src/tz.zig` over
+the generated `tz_data.zig`). Zone ids are IANA names or fixed offsets; unknown
+zone → `""` / `false`.
+
+| Syntax | Description |
+| --- | --- |
+| `TO_UTC(ts, from)` | Normalise an offset-bearing timestamp to UTC. `from` includes the `ZZ` offset token (or a literal `Z`); the parsed offset is subtracted → `YYYY-MM-DD hh:mm:ss`. No tzdata needed. `TO_UTC('...T14:23:01+02:00', 'YYYY-MM-DD[T]hh:mm:ssZZ')` → `... 12:23:01` |
+| `TZ_OFFSET(datetime, zone)` | DST-aware UTC offset `±HH:MM` of IANA `zone` at local wall-clock `datetime` (`YYYY-MM-DD[ hh:mm:ss]`) |
+| `TZ_CONVERT(ts, from_zone, to_zone)` | Convert wall-clock `ts` between zones (IANA id, fixed offset, or `UTC`) → `YYYY-MM-DD hh:mm:ss` |
+| `IS_DST(datetime, zone)` | `true` when DST is in effect in IANA `zone` at local `datetime`, else `false` |
+
 Type coercions: empty string → `0` in numeric context; any non-empty string → `true` in boolean context.
 
 ### Numeric model — fixed-point decimal
@@ -375,6 +388,7 @@ the former `sunrise` dependency).
 | `s`            | 1–2 digit second                                    | `9`                   |
 | `A`            | AM/PM uppercase                                     | `PM`                  |
 | `a`            | am/pm lowercase                                     | `pm`                  |
+| `ZZ`           | UTC offset `±HH:MM` (literal `Z` → `+00:00`)         | `+02:00`              |
 | `EEEE`         | Full day name                                       | `Monday`              |
 | `EEE`/`EE`/`E` | Short day name                                      | `Mon`                 |
 | `e`            | Day of week as number (1=Mon … 7=Sun)               | `1`                   |

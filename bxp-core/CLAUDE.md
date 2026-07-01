@@ -18,7 +18,8 @@ Consumed by bxp-cli (conversion engine) and the stateless-inspect adapters
 | `xlsx`        | `xlsx.zig`        | `xlsxToCsv()`, `SheetSpec` — streams every XML part via `zipstream`       |
 | `zipstream`   | `zipstream.zig`   | `Archive`, `EntryReader` — streaming ZIP central-dir walk + per-entry inflate (named module; shared by `xlsx` ingest + bxp-cli's parallel `zipPrePass`) |
 | `expr`        | `expr.zig`        | `eval()`, `evalString()`, `Context`, `Value`, `FnDoc` catalog             |
-| `datefmt`     | `datefmt.zig`     | `parse()`, `format()`, civil/arithmetic helpers — date core (file-rel @import by `expr.zig`, not a named module) |
+| `datefmt`     | `datefmt.zig`     | `parse()`, `format()`, civil/arithmetic helpers, `partsToUnix`/`unixToParts` seconds-epoch, `ZZ` offset token — date core (file-rel @import by `expr.zig`, not a named module) |
+| `tz`          | `tz.zig`          | `find()`, `offsetAt()` — IANA UTC-offset lookup (binary search + POSIX-footer fallback) over the generated `tz_data.zig`; file-rel @import by `expr.zig`. `tz_data.zig` is built by `tools/tz-gen` from a pinned tzdata release (the committed file IS the pin) |
 | `decimal`     | `decimal.zig`     | `Decimal` fixed-point i128 @ 1e12 — numeric core (named `"decimal"` module, shared by every input path) |
 | `unicode`     | `unicode.zig`     | `toUpperStr()`, `toLowerStr()`, `unaccentStr()` — UTF-8 case mapping + diacritic stripping over `uucode` tables (file-rel @import by `expr.zig`, not a named module) |
 | `encoding`    | `encoding.zig`    | `Encoding`, `decodeToUtf8()`, `encodeFromUtf8()` — Layer 0 single-byte code page ↔ UTF-8 (named module; shared by `expr` + `config`; no `uucode` dep) |
@@ -143,9 +144,14 @@ REGEX_EXTRACT, REPLACE, TRIM, ROUND,
 FLOOR, CEILING, MOD, NOW, RAND, FILENAME, RECORD_NUM, SHEET_NAME, COALESCE,
 FIELDS, UPPER, LOWER, UNACCENT, LEFT, RIGHT, SUBSTR, LPAD, RPAD, POSITION,
 PROPER, STARTS_WITH, ENDS_WITH, NULLIF, IN, ISEMPTY, LEN, GREATEST, LEAST,
-DATEADD, DATEDIFF, WORKDAY, YEAR, MONTH, DAY, WEEKDAY, EOMONTH, NTH_DOW.
+DATEADD, DATEDIFF, WORKDAY, YEAR, MONTH, DAY, WEEKDAY, EOMONTH, NTH_DOW,
+TO_UTC, TZ_OFFSET, TZ_CONVERT, IS_DST.
 IF/CASE/IFERROR are lazy (parse their own arg lists; only the selected /
-non-erroring branch is evaluated). FILENAME/RECORD_NUM/SHEET_NAME read the
+non-erroring branch is evaluated).
+TO_UTC/TZ_OFFSET/TZ_CONVERT/IS_DST resolve IANA offsets via `tz.zig` over the
+generated `tz_data.zig` (built by `tools/tz-gen` from a pinned tzdata release);
+the `ZZ` datefmt token carries the parse/format offset. See the datefmt/tz note
+under _Module overview_. FILENAME/RECORD_NUM/SHEET_NAME read the
 per-file/row `Context` and are excluded from constant-folding (`isRowInvariant`).
 REGEX_MATCH/REGEX_EXTRACT compile a regex literal per call through the Pike-VM
 engine (`quangd/regex.zig` fetch dep, linear-time/ReDoS-safe) in Unicode-scalar mode;

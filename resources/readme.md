@@ -577,6 +577,23 @@ reserved.
 | `EOMONTH(d)` | string | Last calendar day of `d`'s month (month-end snapping) |
 | `NTH_DOW(year, month, weekday, n)` | string | Date of the `n`-th `weekday` (Mon=1 … Sun=7) in `year`/`month`; negative `n` counts from month end (`-1` = last); `""` if it doesn't exist. EU DST = `NTH_DOW(YEAR(d), 3, 7, -1)` … `NTH_DOW(YEAR(d), 10, 7, -1)` |
 
+**Timezone functions** — full DST-aware IANA support, backed by a bundled
+snapshot of the tz database (no network, no system dependency). Zone ids are
+IANA names (`Europe/Prague`, `America/New_York`, `UTC`) or, where a function
+accepts a zone, a fixed offset (`+02:00`). An unknown zone yields `""` (or
+`false`). Within the one-hour DST-transition window the wall-clock input is
+read as local time, so a result can be off by the offset.
+
+| Function | Returns | Description |
+| --- | --- | --- |
+| `TO_UTC(ts, from)` | string | Normalise an offset-bearing timestamp to UTC. `from` is a date format containing the `ZZ` offset token (or a literal `Z`); the parsed offset is subtracted → `YYYY-MM-DD hh:mm:ss` in UTC. Needs no zone database — the offset is in the string. `TO_UTC('2024-03-15T14:23:01+02:00', 'YYYY-MM-DD[T]hh:mm:ssZZ')` → `2024-03-15 12:23:01` |
+| `TZ_OFFSET(datetime, zone)` | string | DST-aware UTC offset (`+HH:MM`/`-HH:MM`) of IANA `zone` at local wall-clock `datetime`. Concatenate onto a naive local timestamp to make it ISO-8601 tz-aware: `[Date] & 'T' & [Time] & TZ_OFFSET([Date] & ' ' & [Time], 'Europe/Prague')` |
+| `TZ_CONVERT(ts, from_zone, to_zone)` | string | Convert wall-clock `ts` from `from_zone` to `to_zone` → `YYYY-MM-DD hh:mm:ss`. `TZ_CONVERT('2024-07-15 12:00:00', 'America/New_York', 'Europe/Prague')` → `2024-07-15 18:00:00` |
+| `IS_DST(datetime, zone)` | bool | `true` when daylight-saving time is in effect in IANA `zone` at local `datetime`, else `false` |
+
+Datetime arguments to `TZ_OFFSET` / `TZ_CONVERT` / `IS_DST` are `YYYY-MM-DD`
+with an optional ` hh:mm:ss` (or `T`-separated) time.
+
 #### Function semantics — common gotchas
 
 - **`CONTAINS(s, sub)` is a substring match, not a prefix match.** It
@@ -672,6 +689,7 @@ set. Any characters that are not tokens are matched literally.
 | `s` | 1–2 digit second | `9` |
 | `A` | AM/PM uppercase | `PM` |
 | `a` | am/pm lowercase | `pm` |
+| `ZZ` | UTC offset `±HH:MM` (parses a literal `Z` as `+00:00`) | `+02:00` |
 | `EEEE` | Full day name | `Monday` |
 | `EEE`/`EE`/`E` | Short day name | `Mon` |
 | `e` | Day of week as number (1 = Mon … 7 = Sun) | `1` |

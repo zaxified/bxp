@@ -40,6 +40,7 @@
 /// further down this file — search for the `── <NAME> ──` section headers.
 const std = @import("std");
 const datefmt = @import("datefmt.zig");
+const tz = @import("tz.zig");
 const unicode = @import("unicode.zig");
 const encoding = @import("encoding");
 const Decimal = @import("decimal").Decimal;
@@ -4127,6 +4128,172 @@ fn adaptIsEmpty(_: *Parser, args: []Value) anyerror!Value {
     return builtinIsEmpty(args);
 }
 
+// ── TO_UTC / TZ_OFFSET / TZ_CONVERT / IS_DST ────────────────────────────
+// Timezone builtins over the in-house tz.zig / tz_data.zig IANA tables.
+// Canonical output shape for the converting builtins.
+const TZ_CANON_DT = "YYYY-MM-DD hh:mm:ss";
+
+/// Parse a datetime arg for the zone builtins: canonical `YYYY-MM-DD hh:mm:ss`,
+/// the `T`-separated ISO variant, or a bare `YYYY-MM-DD`. Null on failure.
+fn parseTzDatetime(input: []const u8) ?datefmt.DateParts {
+    if (input.len == 0) return null;
+    if (datefmt.parse(input, "YYYY-MM-DD hh:mm:ss")) |p| return p else |_| {}
+    if (datefmt.parse(input, "YYYY-MM-DDThh:mm:ss")) |p| return p else |_| {}
+    if (datefmt.parse(input, "YYYY-MM-DD")) |p| return p else |_| {}
+    return null;
+}
+
+/// Resolve a zone arg — an IANA id or a fixed `±HH:MM` / `Z` / `UTC` offset —
+/// to its UTC offset in seconds at `unix`. Null when unrecognised.
+fn tzZoneOffsetSec(zone: []const u8, unix: i64) ?i32 {
+    if (tz.find(zone)) |z| return tz.offsetAt(z, unix).off;
+    const p = datefmt.parse(zone, "ZZ") catch return null; // fixed offset literal
+    return (p.off_min orelse 0) * 60;
+}
+
+fn formatOffsetHHMM(alloc: std.mem.Allocator, off_sec: i32) ![]u8 {
+    const sign: u8 = if (off_sec < 0) '-' else '+';
+    const mag: u32 = @intCast(if (off_sec < 0) -off_sec else off_sec);
+    const total_min = mag / 60;
+    return std.fmt.allocPrint(alloc, "{c}{d:0>2}:{d:0>2}", .{ sign, total_min / 60, total_min % 60 });
+}
+
+const to_utc_doc: FnDoc = .{
+    .name = "TO_UTC",
+    .category = .date,
+    .row_varying = false,
+    .signature = "TO_UTC(ts, from)",
+    .example = "TO_UTC('2024-03-15T14:23:01+02:00', 'YYYY-MM-DD[T]hh:mm:ssZZ')",
+    .description = "Normalise an offset-bearing timestamp to UTC. `from` is a datefmt format including the `ZZ` offset token (`+HH:MM`/`-HH:MM`) or a literal `Z`; the parsed offset is subtracted, yielding `YYYY-MM-DD hh:mm:ss` in UTC. Needs no timezone database — the offset is read from the string itself.",
+    .args = &.{
+        .{ .name = "ts", .kind = .string },
+        .{ .name = "from", .kind = .date_format },
+    },
+    .min_args = 2,
+    .max_args = 2,
+};
+fn builtinToUtc(args: []Value, alloc: std.mem.Allocator) !Value {
+    const input = switch (args[0]) {
+        .string => |v| v,
+        else => return error.StringExpected,
+    };
+    const from = switch (args[1]) {
+        .string => |v| v,
+        else => return error.StringExpected,
+    };
+    if (input.len == 0) return Value{ .string = "" };
+    const parts = datefmt.parse(input, from) catch return Value{ .string = "" };
+    const off_sec: i64 = @as(i64, parts.off_min orelse 0) * 60;
+    const utc = datefmt.unixToParts(datefmt.partsToUnix(parts) - off_sec);
+    return Value{ .string = try datefmt.format(alloc, utc, TZ_CANON_DT) };
+}
+fn adaptToUtc(p: *Parser, args: []Value) anyerror!Value {
+    return builtinToUtc(args, p.ctx.alloc);
+}
+
+const tz_offset_doc: FnDoc = .{
+    .name = "TZ_OFFSET",
+    .category = .date,
+    .row_varying = false,
+    .signature = "TZ_OFFSET(datetime, zone)",
+    .example = "TZ_OFFSET('2024-07-15 12:00:00', 'Europe/Prague')",
+    .description = "UTC offset (`+HH:MM`/`-HH:MM`) of IANA `zone` at local wall-clock `datetime` (`YYYY-MM-DD[ hh:mm:ss]`), DST-aware. Append it to a naive local timestamp to make it ISO-8601 tz-aware. Unknown zone → \"\". Within the one-hour DST-transition window the input is read as local time, so the result can be off by the offset.",
+    .args = &.{
+        .{ .name = "datetime", .kind = .string },
+        .{ .name = "zone", .kind = .string },
+    },
+    .min_args = 2,
+    .max_args = 2,
+};
+fn builtinTzOffset(args: []Value, alloc: std.mem.Allocator) !Value {
+    const dt = switch (args[0]) {
+        .string => |v| v,
+        else => return error.StringExpected,
+    };
+    const zone = switch (args[1]) {
+        .string => |v| v,
+        else => return error.StringExpected,
+    };
+    const parts = parseTzDatetime(dt) orelse return Value{ .string = "" };
+    const z = tz.find(zone) orelse return Value{ .string = "" };
+    const off = tz.offsetAt(z, datefmt.partsToUnix(parts)).off;
+    return Value{ .string = try formatOffsetHHMM(alloc, off) };
+}
+fn adaptTzOffset(p: *Parser, args: []Value) anyerror!Value {
+    return builtinTzOffset(args, p.ctx.alloc);
+}
+
+const tz_convert_doc: FnDoc = .{
+    .name = "TZ_CONVERT",
+    .category = .date,
+    .row_varying = false,
+    .signature = "TZ_CONVERT(ts, from_zone, to_zone)",
+    .example = "TZ_CONVERT('2024-07-15 12:00:00', 'America/New_York', 'Europe/Prague')",
+    .description = "Convert wall-clock `ts` (`YYYY-MM-DD[ hh:mm:ss]`) from `from_zone` to `to_zone`, returning `YYYY-MM-DD hh:mm:ss`. Each zone is an IANA id (`Europe/Prague`), a fixed offset (`+02:00`), or `UTC`. Full DST-aware IANA conversion via the bundled tzdata. Unknown zone → \"\".",
+    .args = &.{
+        .{ .name = "ts", .kind = .string },
+        .{ .name = "from_zone", .kind = .string },
+        .{ .name = "to_zone", .kind = .string },
+    },
+    .min_args = 3,
+    .max_args = 3,
+};
+fn builtinTzConvert(args: []Value, alloc: std.mem.Allocator) !Value {
+    const dt = switch (args[0]) {
+        .string => |v| v,
+        else => return error.StringExpected,
+    };
+    const from_zone = switch (args[1]) {
+        .string => |v| v,
+        else => return error.StringExpected,
+    };
+    const to_zone = switch (args[2]) {
+        .string => |v| v,
+        else => return error.StringExpected,
+    };
+    const parts = parseTzDatetime(dt) orelse return Value{ .string = "" };
+    const local_pseudo = datefmt.partsToUnix(parts);
+    const from_off = tzZoneOffsetSec(from_zone, local_pseudo) orelse return Value{ .string = "" };
+    const true_unix = local_pseudo - @as(i64, from_off);
+    const to_off = tzZoneOffsetSec(to_zone, true_unix) orelse return Value{ .string = "" };
+    const target = datefmt.unixToParts(true_unix + @as(i64, to_off));
+    return Value{ .string = try datefmt.format(alloc, target, TZ_CANON_DT) };
+}
+fn adaptTzConvert(p: *Parser, args: []Value) anyerror!Value {
+    return builtinTzConvert(args, p.ctx.alloc);
+}
+
+const is_dst_doc: FnDoc = .{
+    .name = "IS_DST",
+    .category = .date,
+    .row_varying = false,
+    .signature = "IS_DST(datetime, zone)",
+    .example = "IS_DST('2024-07-15 12:00:00', 'Europe/Prague')",
+    .description = "\"true\" when daylight-saving time is in effect in IANA `zone` at local wall-clock `datetime` (`YYYY-MM-DD[ hh:mm:ss]`), else \"false\". An unknown or fixed-offset zone → \"false\".",
+    .args = &.{
+        .{ .name = "datetime", .kind = .string },
+        .{ .name = "zone", .kind = .string },
+    },
+    .min_args = 2,
+    .max_args = 2,
+};
+fn builtinIsDst(args: []Value) !Value {
+    const dt = switch (args[0]) {
+        .string => |v| v,
+        else => return Value{ .boolean = false },
+    };
+    const zone = switch (args[1]) {
+        .string => |v| v,
+        else => return Value{ .boolean = false },
+    };
+    const parts = parseTzDatetime(dt) orelse return Value{ .boolean = false };
+    const z = tz.find(zone) orelse return Value{ .boolean = false };
+    return Value{ .boolean = tz.offsetAt(z, datefmt.partsToUnix(parts)).dst };
+}
+fn adaptIsDst(_: *Parser, args: []Value) anyerror!Value {
+    return builtinIsDst(args);
+}
+
 pub const builtins = [_]FnEntry{
     .{ .name = "IF",             .lazy = true, .doc = if_doc },
     .{ .name = "CASE",           .lazy = true, .doc = case_doc },
@@ -4140,6 +4307,10 @@ pub const builtins = [_]FnEntry{
     .{ .name = "RAND",           .doc = rand_doc,           .impl = adaptRand },
     .{ .name = "COALESCE",       .doc = coalesce_doc,       .impl = adaptCoalesce },
     .{ .name = "DATE_CONVERT",   .doc = date_convert_doc,   .impl = adaptDateConvert },
+    .{ .name = "TO_UTC",         .doc = to_utc_doc,         .impl = adaptToUtc },
+    .{ .name = "TZ_OFFSET",      .doc = tz_offset_doc,      .impl = adaptTzOffset },
+    .{ .name = "TZ_CONVERT",     .doc = tz_convert_doc,     .impl = adaptTzConvert },
+    .{ .name = "IS_DST",         .doc = is_dst_doc,         .impl = adaptIsDst },
     .{ .name = "PRICE_VALUE",    .doc = price_value_doc,    .impl = adaptPriceValue },
     .{ .name = "PRICE_CURRENCY", .doc = price_currency_doc, .impl = adaptPriceCurrency },
     .{ .name = "REMAP",          .doc = remap_doc,          .impl = adaptRemap },
@@ -4376,6 +4547,32 @@ test "eval: addition and subtraction" {
     const ctx = h.ctx(&.{}, a);
     try testing.expectEqualStrings("7", try evalString("3 + 4", &ctx));
     try testing.expectEqualStrings("1", try evalString("3 - 2", &ctx));
+}
+
+test "eval: TZ builtins (TO_UTC / TZ_OFFSET / TZ_CONVERT / IS_DST)" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+
+    // TO_UTC subtracts the parsed offset; a literal Z is a no-op.
+    try testing.expectEqualStrings("2024-03-15 12:23:01", try evalString("TO_UTC('2024-03-15T14:23:01+02:00', 'YYYY-MM-DD[T]hh:mm:ssZZ')", &ctx));
+    try testing.expectEqualStrings("2024-03-15 14:23:01", try evalString("TO_UTC('2024-03-15T14:23:01Z', 'YYYY-MM-DD[T]hh:mm:ssZZ')", &ctx));
+
+    // TZ_OFFSET is DST-aware and handles half-hour zones.
+    try testing.expectEqualStrings("+02:00", try evalString("TZ_OFFSET('2024-07-15 12:00:00', 'Europe/Prague')", &ctx));
+    try testing.expectEqualStrings("+01:00", try evalString("TZ_OFFSET('2024-01-15 12:00:00', 'Europe/Prague')", &ctx));
+    try testing.expectEqualStrings("+05:30", try evalString("TZ_OFFSET('2024-07-15 12:00:00', 'Asia/Kolkata')", &ctx));
+
+    // TZ_CONVERT: NY 12:00 EDT → Prague 18:00 CEST; UTC → fixed offset.
+    try testing.expectEqualStrings("2024-07-15 18:00:00", try evalString("TZ_CONVERT('2024-07-15 12:00:00', 'America/New_York', 'Europe/Prague')", &ctx));
+    try testing.expectEqualStrings("2024-07-15 14:00:00", try evalString("TZ_CONVERT('2024-07-15 12:00:00', 'UTC', '+02:00')", &ctx));
+
+    // IS_DST + unknown-zone leniency.
+    try testing.expectEqualStrings("true", try evalString("IS_DST('2024-07-15 12:00:00', 'Europe/Prague')", &ctx));
+    try testing.expectEqualStrings("false", try evalString("IS_DST('2024-01-15 12:00:00', 'Europe/Prague')", &ctx));
+    try testing.expectEqualStrings("", try evalString("TZ_OFFSET('2024-07-15 12:00:00', 'Bogus/Zone')", &ctx));
 }
 
 test "eval: deeply nested expression errors instead of overflowing the stack" {
