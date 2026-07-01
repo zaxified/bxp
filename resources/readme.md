@@ -614,6 +614,39 @@ SPLIT_PART([Comment], ' @ ', 2)                                → second part a
 [Commission ($)] + [Fees ($)]                                  → sum two raw numeric columns
 ```
 
+#### Extracting a ticker from a free-text description
+
+Some brokers leave the `Symbol` column empty and only name the
+instrument inside a free-text field — a dividend row might read
+`Description: "Qualified Dividend APPLE INC 100"` with no ticker column
+at all. Two composable tools cover this without a new builtin:
+
+1. **`REGEX_EXTRACT`** isolates the company-name token. The company name
+   is a run of ALL-CAPS words, so a pattern matching one-or-more upper-case
+   words skips the Title-case prefix (`Qualified Dividend`) and the trailing
+   count on its own:
+   `REGEX_EXTRACT([Description], '[A-Z]{2,}(?: [A-Z]{2,})*')` → `APPLE INC`
+   (also `TESLA` → `TESLA`, `BERKSHIRE HATHAWAY INC` → the full name). The
+   group is **non-capturing** `(?:…)` on purpose — a capturing `(…)` would
+   make `REGEX_EXTRACT` return only its last word, not the whole match.
+2. **`REMAP`** maps that name to a Yahoo ticker via a named `maps` entry
+   keyed on the company name — maps can key on *anything*, not just an
+   existing symbol:
+
+   ```json5
+   maps: { company_names: { "APPLE INC": "AAPL", "TESLA INC": "TSLA" } },
+   ```
+
+Combined into one `$ticker` expression:
+
+```text
+REMAP(REGEX_EXTRACT([Description], '[A-Z]{2,}(?: [A-Z]{2,})*'), 'company_names')
+```
+
+If the field is *only* the company name (no surrounding words), skip the
+regex and `REMAP([Description], 'company_names')` directly — `REMAP` is a
+whole-value match, so the field must equal a key exactly.
+
 ### Date format tokens
 
 Both the `from` and `to` arguments of `DATE_CONVERT` use the same token
