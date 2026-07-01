@@ -92,13 +92,13 @@
         $product_id:    "[product_id]",
         // Build the DST-aware Europe/Prague timestamp HERE, where order_date is
         // already ISO (converted in PASS 2) and present as a field — so the final
-        // join pass stays free of date math. CEST (+02:00) from the last Sunday
-        // of March to the last Sunday of October, else CET (+01:00). NTH_DOW(y, m,
-        // 7, -1) gives the last Sunday of a month directly; the in-window test
-        // uses DATEDIFF (numeric) because string >= is unsupported on dates.
-        // Empty-guarded so category rows (no order_date) and startup validation
-        // stay safe.
-        $order_ts:      "IF(LEN([order_date]) = 0, '', [order_date] & 'T00:00:00' & IF(DATEDIFF([order_date], NTH_DOW(YEAR([order_date]), 3, 7, -1)) >= 0 AND DATEDIFF([order_date], NTH_DOW(YEAR([order_date]), 10, 7, -1)) < 0, '+02:00', '+01:00'))",
+        // join pass stays free of date math. TZ_OFFSET resolves the correct
+        // CET (+01:00) / CEST (+02:00) offset from the bundled IANA tz database,
+        // DST and all. Empty-guarded so category rows (no order_date) and startup
+        // validation stay safe. (Before the timezone builtins existed you'd
+        // derive this by hand from NTH_DOW — see the basic timezone-functions
+        // example; TZ_OFFSET gives the identical result in one call.)
+        $order_ts:      "IF(LEN([order_date]) = 0, '', [order_date] & 'T00:00:00' & TZ_OFFSET([order_date], 'Europe/Prague'))",
         $category_id:   "[category_id]",
         $product_added: "[product_added]",
         $category_name: "[category_name]",

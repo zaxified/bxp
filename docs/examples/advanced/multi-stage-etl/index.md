@@ -39,7 +39,7 @@ flowchart TD
 
 - Snowflake-schema multi-hop joins are standard dimensional modelling (Kimball).
 - EU DST: clocks switch on the **last Sunday of March / October** (Directive
-  2000/84/EC) — the rule the `$order_ts` expression encodes.
+  2000/84/EC) — the rule `TZ_OFFSET` applies for `Europe/Prague`.
 
 ## The trick
 
@@ -60,31 +60,38 @@ Each date is normalised in the pass where its source format is known
 PASS 4), and the timestamp is derived once `order_date` is ISO — so the final
 join pass stays clean.
 
-### Computing the Prague offset with no timezone support
+### The Prague offset — one call with `TZ_OFFSET`
 
-PASS 3 builds the offset purely from date builtins. CEST (`+02:00`) holds from
-the last Sunday of March to the last Sunday of October, else CET (`+01:00`).
-`NTH_DOW(YEAR([order_date]), 3, 7, -1)` returns the last Sunday of March directly
-(ISO weekday `7` = Sunday, occurrence `-1` = last); the same for October bounds
-the window. The in-window test uses `DATEDIFF` (numeric) because `>=` is
-unsupported on date strings.
+PASS 3 tags the ISO order date with its DST-aware Europe/Prague offset — CET
+(`+01:00`) in winter, CEST (`+02:00`) in summer. `TZ_OFFSET` reads the correct
+offset from the bundled IANA tz database, so daylight-saving time is handled with
+no hand-rolled calendar math:
 
 ```js
-IF(LEN([order_date]) = 0, '',                                      // (1)!
-   [order_date] & 'T00:00:00' &
-   IF(DATEDIFF([order_date], NTH_DOW(YEAR([order_date]), 3, 7, -1)) >= 0   // (2)!
-      AND DATEDIFF([order_date], NTH_DOW(YEAR([order_date]), 10, 7, -1)) < 0,
-      '+02:00', '+01:00'))                                         // (3)!
+IF(LEN([order_date]) = 0, '',                                          // (1)!
+   [order_date] & 'T00:00:00' & TZ_OFFSET([order_date], 'Europe/Prague'))  // (2)!
 ```
 
 1. Empty-guard — category rows (no `order_date`) and startup validation stay safe.
-2. Last Sunday of March; the second `DATEDIFF` checks the last Sunday of October.
-3. Inside the window → summer offset, otherwise winter.
+2. DST-aware `±HH:MM` offset for the date — `+01:00` in January, `+02:00` in July.
 
-!!! warning "Caveat"
-    The offset is computed at **date** granularity, so the exact switch hour on
-    the transition day is not modelled — fine for date-stamped data. A
-    first-class `TZ_OFFSET`/zone feature is on the [roadmap](../../../dev/roadmap.md).
+??? note "Under the hood — deriving the offset by hand"
+    Before the timezone builtins existed you'd compute the same offset from
+    calendar primitives. EU clocks switch on the **last Sunday of March /
+    October** (Directive 2000/84/EC); `NTH_DOW(YEAR([order_date]), 3, 7, -1)`
+    returns the last Sunday of March directly (ISO weekday `7`, occurrence `-1` =
+    last), and a `DATEDIFF` in-window test picks the summer or winter offset:
+
+    ```js
+    IF(DATEDIFF([order_date], NTH_DOW(YEAR([order_date]), 3, 7, -1)) >= 0
+       AND DATEDIFF([order_date], NTH_DOW(YEAR([order_date]), 10, 7, -1)) < 0,
+       '+02:00', '+01:00')
+    ```
+
+    `TZ_OFFSET([order_date], 'Europe/Prague')` gives the identical result in one
+    call. The dedicated
+    [timezone-functions example](../../basic/timezone-functions/index.md) walks
+    through all four TZ builtins (`TO_UTC` / `TZ_OFFSET` / `IS_DST` / `TZ_CONVERT`).
 
 ## Final result
 

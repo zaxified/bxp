@@ -82,6 +82,10 @@ Synthetic, minimal inputs that isolate one engine feature at a time.
 
     Parse the continental-European number format — space-grouped thousands with a **comma** decimal, `"1 234 567,89"` = `1234567.89` — into a clean numeric value.
 
+-   **[Timezone Functions — normalise to UTC, convert between zones](basic/timezone-functions/index.md)**
+
+    Turn messy per-broker timestamps into clean UTC and derive zone facts with the four timezone builtins — `TO_UTC`, `TZ_OFFSET`, `IS_DST`, and `TZ_CONVERT` — all DST-aware, no external service.
+
 -   **[Units-in-Cell → Number + Unit](basic/units-in-cell/index.md)**
 
     Split a measurement column that glues a number to its unit — `5.0 kg`, `250 g`, `1.5 L`, `12 pcs` — into a clean numeric `amount` and a separate `unit` column.

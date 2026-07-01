@@ -210,6 +210,15 @@ fixed before release instead, not parked here).
   `TZ_OFFSET`/`TZ_CONVERT` can be off by the offset there; a `Jn`/`n` POSIX rule
   (rare) falls back to the last explicit transition.
 
+  **Follow-up — shrink the tz_data tables (deferred, try later).** The committed
+  `tz_data.zig` adds ~347 KB to the ReleaseSmall binary (bxp-cli 862 KB → 1209 KB,
+  +40 %) because each `Transition` stores an `i64` absolute Unix `ts` (16 B/entry
+  after alignment). Most transitions are < 68 years apart, so storing `ts` as an
+  `i32` delta from a per-zone epoch (or a varint) would roughly halve the tables.
+  Would touch `tools/tz-gen` (emit deltas) + `tz.zig` (reconstruct absolute ts in
+  the binary search). Pure size win, no behaviour change — measure the actual
+  saving against the added decode cost before committing.
+
 ### bxp-gui
 
 - **User-supplied themes from JSON files on disk.** Every field on

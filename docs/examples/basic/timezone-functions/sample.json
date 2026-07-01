@@ -1,0 +1,46 @@
+{
+  // Teaching example — synthetic data. Broker and exchange exports hand you
+  // timestamps in inconsistent shapes: some already carry a UTC offset, others
+  // are naive local times you can only interpret with a zone id. BXP's four
+  // timezone builtins normalise all of it — full IANA data is bundled, so DST
+  // is handled and nothing hits the network.
+  conversion_templates: {
+    timezone_functions: {
+      data_dir:          ".",
+      file_pattern_in:   ".csv",
+      file_pattern_out:  ".csvx",
+
+      input_schema: {
+        $trade: "[label]",
+
+        // TO_UTC — the raw_iso field already carries its offset (+01:00 /
+        // +02:00 / -05:00 / +09:00). Parse it with a format ending in the ZZ
+        // offset token; the offset is subtracted to give UTC. No zone database
+        // needed here — the answer is in the string itself.
+        $utc: "TO_UTC([raw_iso], 'YYYY-MM-DD[T]hh:mm:ssZZ')",
+
+        // TZ_OFFSET — DST-aware offset of the account's zone at the naive local
+        // time. Prague is +01:00 in January, +02:00 in July, automatically.
+        $offset: "TZ_OFFSET([local_time], [zone])",
+
+        // IS_DST — was daylight-saving time in effect at that local time?
+        $dst: "IS_DST([local_time], [zone])",
+
+        // TZ_CONVERT — move the naive local time into another zone (full IANA,
+        // DST-aware). Here: what time was it in New York?
+        $nyc: "TZ_CONVERT([local_time], [zone], 'America/New_York')"
+      },
+
+      // Pass every row straight through — no routing needed for this demo.
+      row_rules: [ { when: "1 = 1", rows: [ {} ] } ],
+
+      output_schema: {
+        trade:  "$trade",
+        utc:    "$utc",
+        offset: "$offset",
+        dst:    "$dst",
+        nyc:    "$nyc"
+      }
+    }
+  }
+}

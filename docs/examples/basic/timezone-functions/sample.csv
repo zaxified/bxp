@@ -1,0 +1,5 @@
+label,raw_iso,local_time,zone
+CET-winter,2024-01-15T14:30:00+01:00,2024-01-15 14:30:00,Europe/Prague
+CEST-summer,2024-07-15T14:30:00+02:00,2024-07-15 14:30:00,Europe/Prague
+EST-newyork,2024-01-15T09:00:00-05:00,2024-01-15 09:00:00,America/New_York
+JST-tokyo,2024-07-15T23:45:00+09:00,2024-07-15 23:45:00,Asia/Tokyo

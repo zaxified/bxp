@@ -159,6 +159,7 @@ nav:
           - examples/basic/index.md
           - examples/basic/null-variants/index.md
           - examples/basic/space-thousands/index.md
+          - examples/basic/timezone-functions/index.md
           - examples/basic/units-in-cell/index.md
       - Intermediate:
           - examples/intermediate/index.md
