@@ -299,10 +299,10 @@ bxp → zig-libs):
 
 | Module        | API    | Tests   | Notes                                        |
 | ------------- | ------ | ------- | -------------------------------------------- |
-| `diagnostics` | 3 → 4  | 1 → 4   | Smallest remaining, but barely exercised by real data — will need a targeted gate |
-| `zipstream`   | 4 → 10 | 2 → 20  | Largest divergence; the xlsx path does exercise it on live data |
+| `diagnostics` | 3 → 4  | 1 → 4   | The last one. Smallest, but barely exercised by real data — will need a targeted gate |
 
-`tz` (the pilot), `datefmt`, `encoding`, `json5` and `decimal` have migrated.
+`tz` (the pilot), `datefmt`, `encoding`, `json5`, `decimal` and `zipstream`
+have migrated.
 The first three turned out to be strict subsets of their upstream descendants
 once compared line by line — the shared code was byte-identical and the
 divergence was extra coverage plus entry points bxp does not call.
@@ -320,6 +320,26 @@ one `null` and `@intCast`-panicked on the overflow, so a template like
 `[big] / 0.000000000001` aborted the process with a core dump. Dropping the
 allocating `toString` also made the binary ~2 KB smaller.
 
+**`zipstream` was the widest change of the six** — same reading behaviour for
+a well-formed archive (live data: 163/163 outputs byte-identical, and it is the
+xlsx path, so nine workbooks go through it), but upstream closed two real gaps.
+A hostile central-directory `filename_len` overflowed `std.zip.Iterator.next`'s
+u16 arithmetic and aborted the process, reachable straight through
+`Archive.init`; it is now pre-validated and rejected as
+`ZipBadCentralDirectory`. And entries had no CRC-32 check, so a stored member
+whose bytes were altered with its checksum left intact converted with `exit 0`
+and produced silently wrong output — demonstrated against the pre-migration
+binary, now reported as a corrupt member. That closes the CRC item the
+2026-06-14 audit had recorded as an accepted non-issue.
+
+Two upstream defaults are deliberately NOT adopted. `EntryReader.init`'s 1 GiB
+decompression-bomb cap would put a size limit on input bxp is designed to
+stream (a zipped multi-GB CSV, a large worksheet) without protecting anything —
+neither path holds the entry in RAM — so both call sites use `initMax` with the
+maximum and bxp's caps stay on the resident structures. And `isSafeEntryName`
+is not called: `zipPrePass` already derives a flat output name and rejects
+anything containing a separator, which is the narrower guard.
+
 **`json5` was not a subset either.** It is the counter-example worth remembering: the local
 copy was an older, buggier line, and upstream's fuzzer + the json5/json5-tests
 conformance corpus had already fixed four things it still carried — two live
@@ -331,9 +351,15 @@ empty container — both must-reject cases in that corpus). Migrating it was
 therefore a deliberate **behaviour change**, gated on all 63 configs in the
 repo plus the real working config producing byte-identical annotated output.
 Assume nothing from the modules that came before: "strict subset" is a
-finding per module, not a pattern. Three shapes have turned up so far —
+finding per module, not a pattern. Three shapes have turned up —
 strict subset (`tz`, `datefmt`, `encoding`), same API but fixed behaviour
-(`json5`), and same behaviour but changed API (`decimal`).
+(`json5`, `zipstream`), and same behaviour but changed API (`decimal`).
+
+A migration is also the moment to decide which upstream defaults to take.
+`zipstream` arrived with a 1 GiB entry cap and a zip-slip predicate; bxp
+declined both, for reasons written down at the call sites. Inheriting a
+hardened module does not mean inheriting its policy — check each default
+against what this repo already guarantees.
 
 The three remaining figures indicate that a fork exists, not what it contains
 — audit each before migrating it.
@@ -366,8 +392,9 @@ Method all three migrations used, worth repeating:
 A module consumed by a downstream package needs one extra step: `dependency().
 module()` does not register the module in this package's table, so
 `core_dep.module("<name>")` in bxp-cli/bxp-mcp will panic with "unable to find
-module". Re-export it with `b.modules.put(b.graph.arena, b.dupe(name), mod)`.
-Only `json5` needed this so far.
+module". `bxp-core/build.zig`'s `reexport` helper does it; `json5` and
+`zipstream` both need it. Check `rg 'core_dep\.module' bxp-*/build.zig` before
+migrating.
 
 Taking a module and its dependencies from a **single `b.dependency` handle**
 is what makes them one compilation. `tz` imports `datefmt`, so while the

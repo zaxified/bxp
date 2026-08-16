@@ -59,7 +59,14 @@ const PartCtx = struct {
     /// open at a time.
     fn open(self: *PartCtx, path: []const u8) !?XmlTok {
         const entry = self.archive.find(path) orelse return null;
-        try self.entry_reader.init(self.archive, entry, self.zip_window);
+        // `initMax` rather than `init`: the upstream default caps one entry's
+        // decompressed output at 1 GiB, which would put a size limit on the
+        // worksheet XML this streams. bxp deliberately has no such limit here —
+        // the worksheet never lands in RAM (memory is O(inflate window + token
+        // window)), so a large workbook is a time cost, not a memory one. The
+        // caps that do exist sit on the resident structures instead
+        // (`XLSX_SHARED_STRINGS_CAP`).
+        try self.entry_reader.initMax(self.archive, entry, self.zip_window, std.math.maxInt(u64));
         return XmlTok.init(self.entry_reader.reader(), self.xml_window);
     }
 
@@ -1269,7 +1276,7 @@ test "hasUtf16Bom: detects LE/BE BOM, ignores UTF-8 and short input" {
 }
 
 // The ZIP central-directory walk + store/deflate read path is unit-tested in
-// zipstream.zig; the real XTB version_needed mismatch is covered end-to-end on
+// the zipstream module; the real XTB version_needed mismatch is covered end-to-end on
 // real workbooks by the xtb* datasets (test-02).
 
 test "colRefToIndex: bijective base-26, row digits ignored, case-insensitive" {

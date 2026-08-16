@@ -26,8 +26,8 @@ Unicode case-mapping tables behind `UPPER`/`LOWER`; `regex`
 (`quangd/regex.zig`, Apache-2.0 OR MIT), the Pike-VM engine behind
 `REGEX_MATCH`/`REGEX_EXTRACT` (linear-time, ReDoS-safe); and `zig_libs` (MIT),
 supplying the `datefmt` date core, the `tz` IANA offset lookup, the
-`encoding` code-page transcoder, the `json5` preprocessor and the `decimal`
-fixed-point numeric core. All are pinned in `bxp-core/build.zig.zon`. The
+`encoding` code-page transcoder, the `json5` preprocessor, the `decimal`
+fixed-point numeric core and the `zipstream` ZIP reader. All are pinned in `bxp-core/build.zig.zon`. The
 fetches are cached after the first build; CI runners have network.
 
 In VS Code terminal:
@@ -90,7 +90,7 @@ bxp/                            # monorepo root (git root)
 │   ├── build.zig               # exports named Zig modules
 │   └── build.zig.zon           # fetch deps: uucode (tables), regex (Pike-VM),
 │                               #             zig-libs (datefmt · tz · encoding ·
-│                               #                       json5 · decimal)
+│                               #                       json5 · decimal · zipstream)
 ├── bxp-gui/                    # Flutter desktop app (Linux / macOS / Windows)
 │   ├── lib/
 │   │   ├── main.dart           # Flutter entry; window + theme + provider wiring

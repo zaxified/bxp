@@ -16,7 +16,7 @@ Consumed by bxp-cli (conversion engine) and the stateless-inspect adapters
 | ------------- | ----------------- | ------------------------------------------------------------------------- |
 | `csv`         | `csv.zig`         | `splitFields()`, `LineIterator`                                           |
 | `xlsx`        | `xlsx.zig`        | `xlsxToCsv()`, `SheetSpec` — streams every XML part via `zipstream`       |
-| `zipstream`   | `zipstream.zig`   | `Archive`, `EntryReader` — streaming ZIP central-dir walk + per-entry inflate (named module; shared by `xlsx` ingest + bxp-cli's parallel `zipPrePass`) |
+| `zipstream`   | _(zig-libs dep)_  | `Archive`, `EntryReader` — streaming ZIP central-dir walk + per-entry inflate (named module; shared by `xlsx` ingest + bxp-cli's parallel `zipPrePass`). **No longer in this tree**: consumed from the pinned `zig_libs` fetch dep, which adds CRC-32 verification, a decompression-bomb cap, a zip-slip predicate, central-directory pre-validation and zip64 reading |
 | `expr`        | `expr.zig`        | `eval()`, `evalString()`, `Context`, `Value`, `FnDoc` catalog             |
 | `datefmt`     | _(zig-libs dep)_  | `parse()`, `format()`, civil/arithmetic helpers, `partsToUnix`/`unixToParts` seconds-epoch, `ZZ` offset token — the date core. **No longer in this tree**: consumed from the pinned `zig_libs` fetch dep as the named `datefmt` module (wired into `expr` in `build.zig`). The former local `datefmt.zig` was a strict subset of the upstream module — identical civil core, parser, formatter and token table, plus coverage and an `xsd:dateTime` entry point bxp does not call |
 | `tz`          | _(zig-libs dep)_  | `find()`, `offsetAt()` — IANA UTC-offset lookup. **No longer in this tree**: consumed from the pinned `zig_libs` fetch dep as the named `tz` module (wired into `expr` in `build.zig`). The offset tables compile in, so there is still no runtime dependency. The former local `tz.zig` was a strict subset of the upstream module; its generator moved to `scripts/tz-gen/` in that repo |
@@ -85,11 +85,11 @@ Converts `.xlsx` files (ZIP + XML) to intermediate CSV files.
 - Inline unit tests cover the pure helpers (`colRefToIndex`, `normalizeNumber`,
   `excelSerialToDatetime`, `unixDayToYMD`, `decodeEntities`, `isDateFormatCode`,
   `isBuiltinDateFmt`, `getAttr`, `stripNs`, `writeCsvField`, `hasUtf16Bom`). The
-  ZIP central-dir walk + store/deflate read is unit-tested in `zipstream.zig`;
+  ZIP central-dir walk + store/deflate read is unit-tested upstream in `zipstream`;
   end-to-end streaming (real deflate + XTB version mismatch) is gated
   byte-identical by the `xtb*` datasets (test-02).
 
-### zipstream.zig
+### zipstream _(zig-libs dep)_
 
 Streaming ZIP-archive reader — the shared primitive behind xlsx ingest and
 bxp-cli's `zipPrePass` (the zipped-CSV unpacker). Walks the central directory
@@ -101,14 +101,27 @@ regardless of archive/entry size.
   self-pointer); walks the central directory recording every entry (name +
   location + sizes). Borrows the file (does not close it). `find` / `findSuffix`
   locate an entry by exact name / suffix.
-- `EntryReader.init(self, archive, entry, window)` — in-place; seeks to the
-  entry's compressed data (reads the **local** header directly, so the
-  central-vs-local `version_needed` mismatch some writers emit is irrelevant) and
-  sets up streaming inflate (deflate) or a limited reader (store). `reader()`
-  returns the decompressed-byte `*std.Io.Reader`. One archive drives one file
+- `EntryReader.initMax(self, archive, entry, window, max_output)` — in-place;
+  seeks to the entry's compressed data (reads the **local** header directly, so
+  the central-vs-local `version_needed` mismatch some writers emit is
+  irrelevant) and sets up streaming inflate (deflate) or a limited reader
+  (store). `reader()` returns the decompressed-byte `*std.Io.Reader`, which
+  verifies the entry's CRC-32 at end-of-stream. One archive drives one file
   cursor — finish one `EntryReader` before opening the next. (This single-cursor
   contract is why bxp-cli's parallel `zipPrePass` opens one `Archive` per worker:
   concurrent `EntryReader`s would race the shared cursor.)
+- **Both bxp call sites use `initMax`, not `init`, deliberately.** `init`
+  applies a 1 GiB `default_max_output` decompression-bomb cap; bxp passes
+  `maxInt(u64)` instead, because a zipped broker CSV or a large worksheet can
+  legitimately exceed that and neither path holds the entry in RAM (memory is
+  O(inflate window)). bxp's size caps sit on the resident structures instead —
+  see `XLSX_SHARED_STRINGS_CAP`. Revisit only if bxp ever unpacks an archive it
+  did not get from the user.
+- `isSafeEntryName(name)` — upstream's zip-slip predicate. bxp does **not** call
+  it: `zipPrePass` derives its own flat output name (`zip_input.dir_mode`) and
+  then rejects anything containing a separator, so its guard is strictly
+  narrower than the predicate. Kept in mind if a future path ever writes member
+  names through unchanged.
 - Store + Deflate only; anything else is `error.UnsupportedCompressionMethod`.
 - Both `Archive` and `EntryReader` carry internal self-pointers — init in place,
   never move after init.
@@ -446,7 +459,7 @@ content-addressed by hash and re-audited on any pin bump:
   module named `regex`; `build.zig` wires it into the `expr` module. Adds ~56 KB
   to the ReleaseSmall `bxp-cli` (engine + Unicode-scalar case-fold tables).
 - **zig_libs** (MIT, `zaxified/zig-libs`) — the module collection supplying
-  four modules that used to live in `src/`:
+  six modules that used to live in `src/`:
 
   - `tz` — IANA UTC-offset lookup behind `TO_UTC` / `TZ_OFFSET` /
     `TZ_CONVERT` / `IS_DST`.
@@ -461,6 +474,8 @@ content-addressed by hash and re-audited on any pin bump:
     build panics with "unable to find module 'json5'".
   - `decimal` — the fixed-point numeric core behind `Value.decimal` and the
     csv / json / xlsx number canonicalisation.
+  - `zipstream` — the streaming ZIP reader behind xlsx ingest and
+    `zipPrePass`. Re-exported like `json5` (bxp-cli asks for it by name).
 
   Pinned to the commit behind a dated release tag (upstream tags
   `YYYY-MM-DD`, no semver). `build.zig` takes all three off **one shared
@@ -478,8 +493,8 @@ content-addressed by hash and re-audited on any pin bump:
   **Treated as a foreign upstream** — read-only, pinned, never edited from
   this repo. Zig's package manager offers no floating "latest" mode: the
   `hash` field is mandatory and content-addressed, so any upstream movement
-  must land as an explicit `zig fetch --save` edit to `build.zig.zon`. These
-  four are the first of several bxp-core modules migrating this way; the
+  must land as an explicit `zig fetch --save` edit to `build.zig.zon`. Only
+  `diagnostics` is still local; the
   remaining candidates and their measured divergence are tabulated in
   `docs/dev/roadmap.md` → "Shared core libraries — consume zig-libs".
 
@@ -558,11 +573,15 @@ residual 🔵 design observations. Greppable in-code marker: `AUDIT-OK`.
   warning already flags any file wider than that (see the documented
   header/body asymmetry at `pipeline.zig fieldBufSlice`). A `MAX_COLUMNS`
   change must keep the two paths in sync.
-- **`zipstream.zig` deflate path has no CRC32 / uncompressed_size check.** A
-  corrupt/truncated entry yields whatever bytes inflate produced, silently —
-  a data-integrity gap, not a memory-safety one (the consumer reads to EOF and
-  stops; no zip-bomb exposure, that is window-bounded separately). Acceptable
-  for the xlsx use case (the workbook is the user's own export).
+- ~~**`zipstream` deflate path has no CRC32 / uncompressed_size check.**~~
+  **Resolved 2026-08-16** by the zig-libs migration: `EntryReader` now
+  accumulates a CRC-32 over every decompressed byte and checks it at
+  end-of-stream. Before that, a stored entry whose content had been altered
+  while its checksum was left intact converted with `exit 0` and produced
+  silently wrong output — demonstrated against the pre-migration binary.
+  `zipPrePass` translates the mismatch into `error.ZipEntryCorrupt` (via
+  `EntryReader.crcMismatch()`, since the Reader vtable can only surface a
+  generic `ReadFailed`) and reports it as a corrupt member.
 - **`inspect.zig formatRootErr` shape ≠ injected-diagnostic shape.** Root
   errors emit `{"$err_1":"<msg>"}` (bare string); injected diagnostics emit
   `{"$err_N":{message,off?,len?,suggest?}}` (object). The in-code doc comment

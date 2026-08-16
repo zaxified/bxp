@@ -3288,11 +3288,26 @@ fn unpackOneEntry(
     wbuf: []u8,
 ) !void {
     var er: zipstream.EntryReader = undefined;
-    try er.init(archive, member, window);
+    // `initMax` rather than `init`: the upstream default caps one entry's
+    // decompressed output at 1 GiB. A zipped broker/dataset CSV can legitimately
+    // exceed that, and the unpack streams straight to disk through one inflate
+    // window, so the cap would reject valid input without protecting anything
+    // this pass owns. Passing the maximum keeps the pre-migration contract.
+    try er.initMax(archive, member, window, std.math.maxInt(u64));
     const dest = try dir.createFile(io, out_name, .{});
     defer dest.close(io);
     var fw = dest.writer(io, wbuf);
-    _ = try er.reader().streamRemaining(&fw.interface);
+    _ = er.reader().streamRemaining(&fw.interface) catch |err| {
+        // `std.Io.Reader`'s vtable has a fixed error set, so a CRC-32 mismatch
+        // at end-of-stream can only surface as the generic `ReadFailed`.
+        // `crcMismatch()` is zipstream's out-of-band way to tell "this member's
+        // bytes do not match the checksum the archive itself declares" apart
+        // from an ordinary I/O failure — worth distinguishing, because the two
+        // ask the user for completely different things (re-download a
+        // corrupted archive vs. check the disk).
+        if (er.crcMismatch()) return error.ZipEntryCorrupt;
+        return err;
+    };
     try fw.interface.flush();
 }
 
@@ -3499,7 +3514,14 @@ pub fn zipPrePass(
                 for (0..k) |_| g.async(runtime.io, zipUnpackWorker, .{&ctx});
                 g.await(runtime.io) catch {};
                 if (ctx.first_err) |err| {
-                    out.fatal("fatal error: zip '{s}': failed unpacking '{s}': {s}\n", .{ zip_name, ctx.first_err_name, @errorName(err) });
+                    if (err == error.ZipEntryCorrupt) {
+                        out.fatal(
+                            "fatal error: zip '{s}': member '{s}' is corrupt — its content does not match the CRC-32 the archive declares\n",
+                            .{ zip_name, ctx.first_err_name },
+                        );
+                    } else {
+                        out.fatal("fatal error: zip '{s}': failed unpacking '{s}': {s}\n", .{ zip_name, ctx.first_err_name, @errorName(err) });
+                    }
                     stats.has_fatal = true;
                     stats.time_ns = timer.read();
                     out.summary(stats);

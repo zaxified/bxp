@@ -45,14 +45,7 @@ pub fn build(b: *std.Build) void {
     // deviations are must-reject cases in that corpus. See the migration note
     // in docs/dev/roadmap.md.
     const json5_mod = zig_libs.module("json5");
-    // Unlike the other zig-libs modules, this one is requested by a DOWNSTREAM
-    // package (`core_dep.module("json5")` in bxp-cli/build.zig). `dependency().
-    // module()` returns a module owned by zig-libs and does NOT register it in
-    // this package's table the way `addModule` would, so re-export it under the
-    // name bxp-core has always published. Mirrors `std.Build.addModule`'s own
-    // second line; without it the downstream build panics with "unable to find
-    // module 'json5'".
-    b.modules.put(b.graph.arena, b.dupe("json5"), json5_mod) catch @panic("OOM");
+    reexport(b, "json5", json5_mod);
 
     // Structured diagnostic sink consumed by the inspect core's deep validation
     // pass. config/expr/json5 modules accept an optional pointer to it
@@ -98,13 +91,18 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/btrace.zig"),
     });
 
-    // zipstream.zig is the streaming ZIP-entry reader (central-dir walk +
-    // per-entry inflate). A named module so both xlsx.zig (XML parts) and the
-    // future bxp-cli zipped-CSV pre-pass can consume it without duplicating the
-    // file into two modules.
-    const zipstream_mod = b.addModule("zipstream", .{
-        .root_source_file = b.path("src/zipstream.zig"),
-    });
+    // Streaming ZIP-entry reader (central-dir walk + per-entry inflate) behind
+    // xlsx.zig's XML parts and bxp-cli's zipped-CSV pre-pass. Consumed from
+    // zig-libs, which added what the local copy lacked: CRC-32 verification at
+    // end-of-stream (the gap the 2026-06-14 audit recorded as a known
+    // non-issue), a decompression-bomb output cap, a zip-slip name predicate,
+    // and a pre-validation walk of the central directory that stops a hostile
+    // `filename_len` from overflowing `std.zip.Iterator.next`'s u16 arithmetic
+    // — reachable straight through `Archive.init` and a live process abort
+    // before this migration. Also gains zip64 reading and an ArchiveWriter that
+    // bxp does not use. See docs/dev/roadmap.md.
+    const zipstream_mod = zig_libs.module("zipstream");
+    reexport(b, "zipstream", zipstream_mod);
 
     const xlsx_mod = b.addModule("xlsx", .{
         .root_source_file = b.path("src/xlsx.zig"),
@@ -274,15 +272,6 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
-    const zipstream_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/zipstream.zig"),
-            .target = target,
-            .optimize = optimize,
-            .strip = false,
-        }),
-    });
-
     const xlsx_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/xlsx.zig"),
@@ -354,9 +343,20 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(expr_tests).step);
     test_step.dependOn(&b.addRunArtifact(unicode_tests).step);
     test_step.dependOn(&b.addRunArtifact(diagnostics_tests).step);
-    test_step.dependOn(&b.addRunArtifact(zipstream_tests).step);
     test_step.dependOn(&b.addRunArtifact(xlsx_tests).step);
     test_step.dependOn(&b.addRunArtifact(config_tests).step);
     test_step.dependOn(&b.addRunArtifact(docs_tests).step);
     test_step.dependOn(&b.addRunArtifact(inspect_tests).step);
+}
+
+/// Publish a module obtained from a dependency under bxp-core's own namespace.
+///
+/// `dependency().module()` returns a module OWNED by that dependency; unlike
+/// `b.addModule` it does not add an entry to this package's module table. Any
+/// module a downstream package asks for by name — `core_dep.module("json5")`
+/// and `core_dep.module("zipstream")` in bxp-cli/build.zig — therefore has to
+/// be re-published here, or the downstream build panics with "unable to find
+/// module '<name>'". This is `std.Build.addModule`'s own second line.
+fn reexport(b: *std.Build, name: []const u8, mod: *std.Build.Module) void {
+    b.modules.put(b.graph.arena, b.dupe(name), mod) catch @panic("OOM");
 }

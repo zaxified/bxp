@@ -21,7 +21,7 @@ Consequences of this design:
   bxp-cli         ── path dep ──►  bxp-core   ── fetch dep ──►  uucode   (Unicode tables)
   (binary)                         (library)                    regex    (Pike-VM engine)
                                                                 zig-libs (datefmt · tz · encoding
-                                                                          json5 · decimal)
+                                                                          json5 · decimal · zipstream)
   bxp-mcp         ── path dep ──►  bxp-core           (wraps inspect.zig; spawns bxp-cli
   (binary)                                             for bxp_simulate)
   bxp-gui-bridge  ── path dep ──►  bxp-core           (links inspect.zig + expr.zig directly)
@@ -34,8 +34,8 @@ Consequences of this design:
 `bxp-core` is a **local path dependency** (`../bxp-core`) and pulls three
 external fetch dependencies of its own: `uucode` (Unicode case-mapping tables),
 `regex` (`quangd/regex.zig`, the Pike-VM engine behind `REGEX_MATCH`/
-`REGEX_EXTRACT`), and `zig_libs` (`datefmt`, `tz`, `encoding`, `json5` and
-`decimal`), all pinned in `build.zig.zon`.
+`REGEX_EXTRACT`), and `zig_libs` (`datefmt`, `tz`, `encoding`, `json5`,
+`decimal` and `zipstream`), all pinned in `build.zig.zon`.
 `bxp-gui` ships `bxp-cli`, `bxp-mcp`, and `bxp-gui-bridge.{dll,so,dylib}`
 inside the Flutter bundle.
 
