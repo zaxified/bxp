@@ -80,9 +80,10 @@ fn bridgeIo() std.Io {
 
 // ── Child reaping ───────────────────────────────────────────────────────
 //
-// Both helpers below come from the zig-libs `procrun` module, which is where
-// this bridge's own versions were extracted to. They exist because the bridge
-// spawns children inside a host process that reaps children behind its back:
+// The reap-race tolerance comes from the zig-libs `procrun` module, which is
+// where this bridge's own version was extracted to. It exists because the
+// bridge spawns children inside a host process that reaps children behind its
+// back:
 //
 //   * The Dart VM runs an `ExitCodeHandler` thread parked in `wait4(-1)`,
 //     which reaps ANY child of the process — usually the bridge's `bxp-cli`
@@ -92,26 +93,24 @@ fn bridgeIo() std.Io {
 //
 // Either way the bridge's wait sees ECHILD, and `std.process.Child.wait`
 // treats that as an unrecoverable double-free bug and panics — a racy SIGABRT
-// at GUI startup. `procrun.ensureChildReaping` flips ONLY `SIG_IGN` → `SIG_DFL`
-// (a real handler the host installed is left alone), and
-// `procrun.waitTolerant` reaps through a path that maps ECHILD to
-// `.unknown` — the child IS gone, its status is just unreadable. That
+// at GUI startup. `procrun.waitTolerant` reaps through a path that maps ECHILD
+// to `.unknown` — the child IS gone, its status is just unreadable. That
 // `.unknown` is harmless here: the GUI reads the run's real exit code from
 // bxp-cli's BXTB `done` frame, not from this value.
+//
+// Neither that function nor `procrun.ensureChildReaping` (which flips ONLY
+// `SIG_IGN` → `SIG_DFL`, leaving a real host handler alone) is called from
+// this file: `procrun.run` and `procrun.spawnStreaming` — the two spawn paths
+// the bridge actually uses — invoke both internally. The thin wrapper below
+// survives as the entry point of the out-of-band-reap integration test near
+// the end of this file.
 //
 // Taking the module also picks up three things the local copies lacked: the
 // reap goes through `std.posix.system.wait4`/`waitpid` (raw syscalls on Linux)
 // instead of `std.c.waitpid`, there is a fallback for platforms without
 // `wait4`, and `waitTolerant` NULLS `child.id` after reaping — so a
-// `bridge_cancel` arriving after the wait thread finished is a no-op instead
-// of signalling a pid the kernel may since have recycled (see
-// `sendKillSignal`, which reads exactly that field).
-//
-// Only the reap core is taken. procrun's own runner (capped 3-thread drain,
-// streaming handles, backpressure) is NOT used: the bridge's streaming path
-// dispatches into Dart ports and owns its own thread/ack machinery.
-
-const ensureChildReaping = procrun.ensureChildReaping;
+// `bridge_cancel` arriving after the wait thread finished signals nothing
+// instead of a pid the kernel may since have recycled.
 
 fn waitTolerant(child: *std.process.Child) std.process.Child.Term {
     return procrun.waitTolerant(bridgeIo(), child);
@@ -419,12 +418,21 @@ const StreamingCtx = struct {
 
 fn onStdoutTrampoline(cctx: ?*anyopaque, chunk: []const u8) void {
     const ctx: *StreamingCtx = @ptrCast(@alignCast(cctx.?));
-    dispatchCopy(ctx, ctx.on_stdout_batch, chunk);
+    // `procrun` consumes a backpressure permit BEFORE calling us, and the ack
+    // that returns it is Dart's — which only happens for a batch Dart actually
+    // received. A dropped chunk must therefore return its own permit here, or
+    // `default_queue_permits` drops park the stdout reader forever, fill the
+    // pipe and stall the child with no on_exit ever firing. Teardown is the
+    // exception: the run is being abandoned, and the reader is woken by the
+    // kill rather than by permits.
+    if (!dispatchCopy(ctx, ctx.on_stdout_batch, chunk) and
+        !ctx.shutting_down.load(.acquire)) ctx.proc.ack();
 }
 
 fn onStderrTrampoline(cctx: ?*anyopaque, chunk: []const u8) void {
     const ctx: *StreamingCtx = @ptrCast(@alignCast(cctx.?));
-    dispatchCopy(ctx, ctx.on_stderr_chunk, chunk);
+    // No ack: stderr is delivered unthrottled, so no permit was taken for it.
+    _ = dispatchCopy(ctx, ctx.on_stderr_chunk, chunk);
 }
 
 /// Copy `chunk` onto the C heap and hand it to `cb_opt`, OR drop it when the
@@ -433,17 +441,22 @@ fn onStderrTrampoline(cctx: ?*anyopaque, chunk: []const u8) void {
 /// forever, because the trampoline that would have called `bridge_free` is
 /// gone (dart-lang/sdk: "Resources passed to the callback must be valid until
 /// the call completes" — a closed listener never completes the call).
-fn dispatchCopy(ctx: *StreamingCtx, cb_opt: StreamCallback, chunk: []const u8) void {
-    if (ctx.shutting_down.load(.acquire)) return;
-    const cb = cb_opt orelse return;
+///
+/// Returns whether the chunk was handed over. The caller uses that to settle
+/// backpressure (see `onStdoutTrampoline`); doing it here instead would put
+/// `ctx.proc` on a path the unit tests drive with an otherwise `undefined` ctx.
+fn dispatchCopy(ctx: *StreamingCtx, cb_opt: StreamCallback, chunk: []const u8) bool {
+    if (ctx.shutting_down.load(.acquire)) return false;
+    const cb = cb_opt orelse return false;
     const a = std.heap.c_allocator;
-    const copy = a.dupe(u8, chunk) catch return;
+    const copy = a.dupe(u8, chunk) catch return false;
     // Re-check after the copy: teardown may have started while we allocated.
     if (ctx.shutting_down.load(.acquire)) {
         a.free(copy);
-        return;
+        return false;
     }
     cb(copy.ptr, @intCast(copy.len));
+    return true;
 }
 
 // ── Active-stream registry (cancellation lookup) ────────────────────────
@@ -481,6 +494,25 @@ fn unregisterStream(handle: i64) void {
     _ = streams_table.remove(handle);
 }
 
+/// Evict the handle from the registry while the module's context is still
+/// alive. `procrun` fires this from inside `Handle.wait`, after the readers
+/// have joined and the child is reaped but BEFORE it destroys the `StreamCtx`
+/// that `bridge_cancel` / `bridge_ack` reach through `ctx.proc`. Doing the
+/// eviction after `wait` returns — as this file did while it still owned the
+/// child struct — leaves a window in which a cancel or a trailing ack resolves
+/// the handle and then dereferences freed memory (and can signal a recycled
+/// pid). Taking `streams_mutex` here closes it: a cancel/ack already inside the
+/// lock completes against a live context, and every later lookup misses.
+///
+/// Dart is deliberately NOT notified from here — `streamingWaitLoop` fires
+/// `on_exit` only after tearing this file's context down, so nothing reaches
+/// Dart between the reap and the teardown.
+fn onProcExitTrampoline(cctx: ?*anyopaque, term: procrun.Term) void {
+    _ = term;
+    const ctx: *StreamingCtx = @ptrCast(@alignCast(cctx.?));
+    unregisterStream(ctx.handle);
+}
+
 /// Wait thread: drives `procrun.Handle.wait`, which joins both reader threads
 /// (guaranteeing in-flight callbacks have drained AND that the readers — not
 /// the reap — own the pipe fds), then reaps ECHILD-tolerantly. Only after that
@@ -495,11 +527,12 @@ fn unregisterStream(handle: i64) void {
 /// ordering was pinned down. `procrun.Handle.wait` joins `t_out`/`t_err`
 /// before calling `waitTolerant`, so the property is preserved by contract.
 ///
-/// No `on_exit` is registered with `procrun` deliberately: the module fires it
-/// from inside `wait`, while its own context is still alive, but Dart must not
-/// be told the stream is over until this file has unregistered the handle and
-/// freed its context. Taking the `Term` as `wait`'s return value keeps that
-/// ordering — nothing fires at Dart between the reap and the teardown.
+/// The `on_exit` registered with `procrun` does registry eviction ONLY (see
+/// `onProcExitTrampoline`): the module fires it while its own context is still
+/// alive, which is the only safe point to invalidate the handle. Dart must not
+/// be told the stream is over until this file has also freed its context, so
+/// the Dart-facing notification stays here, driven by `wait`'s return value —
+/// nothing fires at Dart between the reap and the teardown.
 fn streamingWaitLoop(ctx: *StreamingCtx) void {
     const term = ctx.proc.wait();
 
@@ -514,13 +547,9 @@ fn streamingWaitLoop(ctx: *StreamingCtx) void {
 
     // Snapshot what we need before tearing down the context.
     const exit_cb = ctx.on_exit;
-    const handle = ctx.handle;
 
-    // Remove from the active-streams table BEFORE freeing ctx. Any in-flight
-    // bridge_cancel(handle) holding the mutex either sees the entry (signalling
-    // an already-exited child is harmless) or does not (no-op return); either
-    // way the lookup never returns a freed pointer.
-    unregisterStream(handle);
+    // The handle left the registry inside `wait` (onProcExitTrampoline), so no
+    // cancel/ack can still be resolving it here and this teardown is unracey.
     ctx.arena.deinit();
     std.heap.c_allocator.destroy(ctx);
 
@@ -592,7 +621,9 @@ export fn bridge_run_streaming(
         .ctx = ctx,
         .on_stdout = onStdoutTrampoline,
         .on_stderr = onStderrTrampoline,
-        // on_exit deliberately unset — see streamingWaitLoop.
+        // Registry eviction only — Dart is still notified from
+        // `streamingWaitLoop`, after teardown. See onProcExitTrampoline.
+        .on_exit = onProcExitTrampoline,
     }) catch return -1;
 
     // Rollback for the post-spawn window (registry OOM, wait-thread spawn
@@ -658,27 +689,6 @@ export fn bridge_ack(handle: i64) i32 {
     const ctx = streams_table.get(handle) orelse return -1;
     ctx.proc.ack();
     return 0;
-}
-
-// Zig 0.16 dropped `std.os.windows.kernel32.TerminateProcess`, so the
-// kernel32 entry point is declared locally for the Windows cancel path below
-// (mirrors the self-declared psapi GetProcessMemoryInfo in bxp-cli/main.zig).
-extern "kernel32" fn TerminateProcess(
-    hProcess: std.os.windows.HANDLE,
-    uExitCode: std.os.windows.UINT,
-) callconv(.winapi) std.os.windows.BOOL;
-
-/// Deliver a "please exit now" signal without waiting on the child.
-/// std.process.Child.kill() on POSIX combines kill + waitpid, which
-/// would race with streamingWaitLoop's own waitpid call → ECHILD. We
-/// only signal here and let the wait thread reap.
-fn sendKillSignal(child: *std.process.Child) void {
-    const pid = child.id orelse return;
-    if (builtin.os.tag == .windows) {
-        _ = TerminateProcess(pid, 1);
-    } else {
-        std.posix.kill(pid, std.posix.SIG.TERM) catch {};
-    }
 }
 
 /// Release a buffer previously handed to Dart by a streaming callback.
@@ -1649,7 +1659,7 @@ test "dispatchCopy drops the chunk when shutting_down is set" {
         }
     }.cb;
 
-    dispatchCopy(&ctx, ctx.on_stdout_batch, "should not be dispatched");
+    try testing.expect(!dispatchCopy(&ctx, ctx.on_stdout_batch, "should not be dispatched"));
 }
 
 test "dispatchCopy drops the chunk when no callback is registered" {
@@ -1659,7 +1669,7 @@ test "dispatchCopy drops the chunk when no callback is registered" {
     ctx.shutting_down = std.atomic.Value(bool).init(false);
     ctx.on_stdout_batch = null;
 
-    dispatchCopy(&ctx, ctx.on_stdout_batch, "should not be dispatched");
+    try testing.expect(!dispatchCopy(&ctx, ctx.on_stdout_batch, "should not be dispatched"));
 }
 
 test "bridge_free is a no-op when len is zero" {

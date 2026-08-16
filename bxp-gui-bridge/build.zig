@@ -29,9 +29,10 @@ pub fn build(b: *std.Build) void {
     // `zig_libs` fetch dep here — bxp-core owns the single pin, so the bridge
     // cannot end up on a different upstream commit than the rest of the tree.
     const minisign_mod = bxp_core.module("minisign");
-    // procrun: the reap-race-tolerant wait (`waitTolerant` / `ensureChildReaping`)
-    // this file's spawn paths need to survive the Dart VM's `wait4(-1)` reaper.
-    // Same route and same reason as `minisign` — bxp-core holds the one pin.
+    // procrun: the process runner behind both spawn paths (`run` one-shot,
+    // `spawnStreaming` + `Handle` for the streaming one). Its reap-race-tolerant
+    // wait is what lets the bridge's children survive the Dart VM's `wait4(-1)`
+    // reaper. Same route and same reason as `minisign` — bxp-core holds the one pin.
     const procrun_mod = bxp_core.module("procrun");
 
     // Shared library: bxp-gui-bridge.dll on Windows, libbxp-gui-bridge.so
