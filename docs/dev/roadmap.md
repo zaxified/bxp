@@ -321,38 +321,37 @@ alarms: a stored reference ages, so on any suspected regression re-run the
 baseline commit in the same session and compare that pair. Comparing a fresh
 run against a weeks-old stored number cannot separate code from machine.
 
-Refresh the real-world example figures in the same pass. Re-measured
-2026-08-16 (ReleaseFast, 8 cores, but under load), every one of them beats
-what its `index.md` claims, and peak RSS sits a consistent 2–3 MB higher —
-which is the constant offset S17 recorded for the Zig 0.16 allocator, so those
-figures predate that migration:
+### `fetch-full.sh` for the RÚIAN example
 
-| example | documented | measured | doc RSS | measured RSS |
-| ------- | ---------: | -------: | ------: | -----------: |
-| `inside-airbnb-listings` | 0.12 s | 0.07 s | 14 MB | 16.7 MB |
-| `noaa-ghcn-daily` | 0.25 s | 0.16 s | 15 MB | 18.2 MB |
-| `chicago-business-licenses` | 4.2 s | 3.28 s | 19 MB | 21.9 MB |
-| `french-dvf-realestate` | 9.1 s | 5.31 s | 18 MB | 21.5 MB |
-| `imdb-title-basics` | 24.5 s | 19.10 s | 26 MB | 29.4 MB |
+`docs/examples/real-world/ruian-address-points` is the only real-world example
+without one, so its full-scale claim is the only one a reader cannot reproduce
+by running a script. The portal is form-driven, but the published exports sit
+at a stable path:
 
-`ruian-address-points` is the exception that confirms the reading: the root
-README quotes it at "about 10 seconds at ~28 MB" for the **shipped release
-build**, and a ReleaseSmall run measured 9.82 s / 29.9 MB — still accurate.
-The five figures above are all ReleaseFast, which is where the drift is; the
-same RÚIAN run under ReleaseFast takes 6.85 s. So the stale numbers are the
-ReleaseFast ones (pre-Zig-0.16), not the README's. Whoever refreshes them
-should keep each figure's build mode explicit, since ReleaseSmall costs ~40 %
-here. RÚIAN needs no `fetch-full.sh` beyond a direct URL —
-`https://vdp.cuzk.gov.cz/vymenny_format/csv/<YYYYMMDD>_OB_ADR_csv.zip`, dated
-to a month end — which is worth adding so the example is reproducible like
-the others.
+```text
+https://vdp.cuzk.gov.cz/vymenny_format/csv/<YYYYMMDD>_OB_ADR_csv.zip
+```
 
-Output row counts are unchanged (imdb 12,533,197 and chicago 1,197,482 match
-exactly). `french-dvf-realestate` says 3,499,932 rows but the current upstream
-file carries 3,499,931 and the conversion is 1:1 — correct the doc, not the
-code. Two examples were not re-measured: `nyc-taxi-trips` (7.7 GB download)
-and `ruian-address-points` (no `fetch-full.sh`, and its figure came from a
-different machine and a ReleaseSmall build, so it is not comparable anyway).
+dated to a month end (`20260731` resolves; `20260801` 404s). The script should
+discover the most recent available date rather than hard-coding one, drop the
+archive in `./full/` like its siblings, and ship the matching `full.json`
+(`sample.json` with `data_dir` repointed). Verified 2026-08-16: 61 MB archive,
+6 258 members, 338 MB unpacked, 3 020 222 combined rows in 9.82 s at 29.9 MB
+peak RSS on the shipped ReleaseSmall build — which matches the README's
+"about 10 seconds at ~28 MB" as written.
+
+### Cover the examples tree in the test suite
+
+`scripts/test-07-datasets.sh` gates the 10 fixtures under `datasets/`, but the
+32 `*.expected` files under `docs/examples/` are gated by nothing. They carry
+edge cases the datasets do not — JSON-emitting templates, multi-hop pre_pass
+chains, self-joins, wide-to-long unpivots, sexagesimal coordinates, HL7
+segments — so a regression there currently reaches a release unnoticed. A
+`test-08-examples.sh` would need two things `test-07` does not: outputs are
+`*.csvx` **or** `*.json` (`file_type_out: json`), and committed output
+artifacts must not be seeded into the work dir as inputs (multi-stage-etl's
+`1-final.json` would otherwise be picked up by a later template's `data_dir`).
+All 32 verified green by hand on 2026-08-16.
 
 ### Encoding — more single-byte code pages
 
