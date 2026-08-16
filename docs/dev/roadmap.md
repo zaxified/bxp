@@ -300,17 +300,14 @@ fixed before release instead, not parked here).
 
 ### Shared core libraries — consume zig-libs
 
-The seven forked `bxp-core` modules have migrated. A 2026-08-16 sweep of the
-remaining 226 upstream modules found more overlap — the extraction went below
-file level, so pieces of bxp live upstream as modules even where no local file
-ever matched them by name. None of these promises a speed-up: where they
-overlap our code they are the same algorithms, verified rather than assumed.
-
-- **`numparse`** — is our `parseGroupedNumber` from `expr.zig`, extracted.
-  Diffed 2026-08-16: identical character for character apart from parameter
-  renames and `pub`. It already returns the same zig-libs `decimal` we now
-  consume. Removes ~40 lines and gains 4 upstream tests. Lowest-risk item on
-  this list by a wide margin.
+The seven forked `bxp-core` modules have migrated, then three more pieces that
+were never files of their own: `numparse` (a function inside `expr.zig`),
+`minisign` (the bridge's hand-rolled `.minisig` parser, replaced by the module
+that implements the whole format against known-answer vectors from the real
+`minisign` binary) and `procrun`'s reap core (the bridge's
+`ensureChildReaping` / `waitTolerant`). What is left below is still open. None
+of it promises a speed-up: where these overlap our code they are the same
+algorithms, verified rather than assumed.
 
 - **`csvstream`** — the largest overlap left, and the most delicate. Carries
   `LineIterator` / `splitFields` / `LineSlice` (our `bxp-core/src/csv.zig`)
@@ -322,29 +319,20 @@ overlap our code they are the same algorithms, verified rather than assumed.
   all. If upstream is strict RFC 4180 here, this is a policy decision like
   `zipstream`'s output cap, not a drop-in.
 
-- **`minisign`** — rank this higher than its 81 lines suggest. The
-  `.minisig` text `bridge_verify_minisign` parses is **fetched over the
-  network** by the auto-updater, so it is a hand-written parser over
-  attacker-reachable input with no fuzz harness — the exact profile that hid a
-  crash in both `json5` and `zipstream`. Audited 2026-08-16 and no gap found
-  (the global signature over the trusted comment *is* verified, and the crypto
-  is `std.crypto` Ed25519 + Blake2b, not hand-rolled), but "no gap found by
-  reading" is what we believed about those two as well. Upstream implements the
-  whole format with tests; bxp needs only `verifyFile` / `verifyTrustedComment`
-  and the linker drops the signing and key-generation half.
-
-- **`procrun`** — subprocess runner whose stated contract is a
-  "reap-race-tolerant wait, deadlock-free capped stdio capture": exactly the
-  SIGCHLD/ECHILD race `bxp-gui-bridge` fixes by hand (`28a5234`, surviving the
-  Dart VM's child reaper). Worth folding in the next time the bridge's spawn
-  path is opened.
-
 - **Transport core** — `http`, `rest`, `api`, `mcp`. The concrete piece is
   `bxp-mcp/src/server.zig` (384 lines: JSON-RPC 2.0 framing over stdio plus the
   MCP handshake), which the `mcp` module covers. `tools.zig` and `sim.zig`
   (1 270 lines) are bxp-specific and stay — they would need reseating on the
   upstream transport's API, which is what makes this a larger job than the
   items above rather than a swap.
+
+- **`procrun`'s runner half** — only the reap core was taken. The capped
+  3-thread stdio drain, the streaming handle with cancel/kill escalation and
+  the backpressure ack are still the bridge's own, because that machinery
+  dispatches into Dart ports rather than into caller buffers. Reseating
+  `bridge_run_streaming` on `procrun.spawnStreaming` would be a rewrite of the
+  bridge's threading model, not a swap — worth revisiting only if that model
+  needs work for its own reasons.
 
 - **Dart side** — `json5_ast` has no zig-libs equivalent (different language);
   still waits for a second Dart consumer.

@@ -37,10 +37,11 @@ bxp/
 │   │                       # eval-batch/eval-trace/docs/templates introspection);
 │   │                       # one source for bxp-mcp + bxp-gui-bridge
 │   │                       # (`datefmt`, `tz`, `encoding`, `json5`, `decimal`,
-│   │                       # `zipstream` and `diagnostics` are NOT here — the
-│   │                       # whole primitive layer comes from zig-libs)
+│   │                       # `zipstream`, `diagnostics` and `numparse` are NOT
+│   │                       # here — the whole primitive layer comes from
+│   │                       # zig-libs)
 │   ├── build.zig         # exports each file as a named Zig module
-│   └── build.zig.zon     # fetch deps: uucode, regex, zig-libs (7 modules —
+│   └── build.zig.zon     # fetch deps: uucode, regex, zig-libs (8 modules —
 │                         #             the whole primitive layer)
 ├── bxp-gui/              # Flutter desktop app (replaces bxp-ui; talks to bxp-gui-bridge via FFI, which proxies bxp-cli)
 │   ├── lib/              # Dart source (services/, store/, ui/)
@@ -179,7 +180,9 @@ that file. See `docs/dev/release.md` for the operator walkthrough.
 ```text
 bxp-cli         --[path dep]--> bxp-core   --[fetch dep]--> uucode (Unicode tables)
 bxp-mcp         --[path dep]--> bxp-core    --[subprocess]-> bxp-cli (bxp_simulate only)
-bxp-gui-bridge  --[path dep]--> bxp-core    (bridge_inspect / bridge_eval_* in-proc)
+bxp-gui-bridge  --[path dep]--> bxp-core    (bridge_inspect / bridge_eval_* in-proc;
+                                             also takes zig-libs `minisign` + `procrun`
+                                             through bxp-core's module table — one pin)
 bxp-gui         --[FFI]------> bxp-gui-bridge --[subprocess]-> bxp-cli (dry-run/version)
 ```
 
@@ -206,13 +209,19 @@ bxp-core/inspect link, and the bridge proxies `bxp-cli` runs. The former
   JSON5 → JSON preprocessor behind config loading), `decimal` (the
   fixed-point numeric core behind every computed value), `zipstream`
   (the streaming ZIP reader behind xlsx ingest and the zipped-CSV
-  pre-pass) and `diagnostics` (the structured validation-finding
-  collector). Treated as a
+  pre-pass), `diagnostics` (the structured validation-finding
+  collector), `numparse` (the grouped-number parser behind numeric
+  coercion — the first piece taken from *below* file level, extracted out of
+  `expr.zig` rather than out of a file of its own), `minisign` (the
+  signature format behind the GUI updater's authenticity check) and `procrun`
+  (the reap-race-tolerant child wait behind the bridge's `bxp-cli` spawns).
+  bxp-core imports neither of the last two — they are re-exported so
+  `bxp-gui-bridge` shares the same pin. Treated as a
   foreign upstream: read-only, pinned to the commit behind a release tag,
   never edited from this repo. The offset tables are compiled into the `tz`
   module, so there is still **no runtime dependency** — the pinned tzdata
   snapshot ships inside the binary exactly as the former in-tree copy did.
-  All seven modules were lifted out of bxp-core and hardened upstream; see
+  All of them were lifted out of bxp-core and hardened upstream; see
   `docs/dev/roadmap.md` → "Shared core libraries — consume zig-libs" for the
   remaining candidates.
 
@@ -220,8 +229,9 @@ The `tools/tz-gen`
 generator that emitted the offset tables (the only place `std.Tz` was used)
 moved to `scripts/tz-gen/` in zig-libs alongside the module it feeds, so the
 table and the tool that derives it now live together; nothing tz-related is
-left in this repo. `datefmt`, `encoding`, `json5`, `decimal` and `zipstream`
-followed `tz` upstream the same way. Three of them were not merely stale
+left in this repo. `datefmt`, `encoding`, `json5`, `decimal`, `zipstream` and
+`diagnostics` followed `tz` upstream the same way, and `numparse` after them —
+that one as a function lifted out of `expr.zig`, not a file. Three of them were not merely stale
 copies: upstream had already fixed two crashes and two JSON5-spec deviations
 `json5` still carried, a missing division-overflow guard that made `decimal`
 abort the process, and — in `zipstream` — a central-directory overflow that

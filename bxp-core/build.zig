@@ -70,6 +70,32 @@ pub fn build(b: *std.Build) void {
     // `@intCast`-panicked on the overflow. See docs/dev/roadmap.md.
     const decimal_mod = zig_libs.module("decimal");
 
+    // Grouped-number parser (`1,234.56` / `1.234,56`) behind expr.zig's numeric
+    // coercion, its GREATEST/LEAST diagnostics and the `decimal_sep_in` locale
+    // normalisation. Consumed from zig-libs: this one was extracted BELOW file
+    // level — the upstream module is expr.zig's own `parseGroupedNumber`, and
+    // the diff against the local copy was byte-identical code (only parameter
+    // renames, `pub`, and reworded comments), plus two upstream reject-case
+    // tests. It returns the same `decimal` this handle supplies, so the
+    // optional-vs-error contract at the call sites is unchanged.
+    const numparse_mod = zig_libs.module("numparse");
+
+    // Minisign signature format (Ed25519 + Blake2b-512 over the
+    // `untrusted comment:` / base64 framing) behind the GUI updater's
+    // `bridge_verify_minisign`. bxp-core does not use it — it is re-published
+    // here purely so `bxp-gui-bridge` can ask for it by name off the SAME
+    // pinned zig-libs commit this package resolves. A second `zig_libs` entry
+    // in the bridge's own build.zig.zon would be a second pin to bump in
+    // lockstep on every upstream move; one pin, re-exported, cannot drift.
+    reexport(b, "minisign", zig_libs.module("minisign"));
+
+    // Subprocess runner whose reap-race-tolerant wait is what
+    // `bxp-gui-bridge` needs around its `bxp-cli` spawns (the Dart VM's
+    // `wait4(-1)` reaper would otherwise trip std's ECHILD panic). Re-exported
+    // for the bridge for the same single-pin reason as `minisign`; bxp-core
+    // does not use it either.
+    reexport(b, "procrun", zig_libs.module("procrun"));
+
     // Layer 0 single-byte code page ↔ UTF-8 transcoder, consumed from zig-libs
     // for the same reason as tz/datefmt: the local src/encoding.zig was lifted
     // into that repo and hardened there (normative WHATWG/Unicode.org index
@@ -150,6 +176,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/expr.zig"),
         .imports = &.{
             .{ .name = "decimal", .module = decimal_mod },
+            .{ .name = "numparse", .module = numparse_mod },
             .{ .name = "uucode", .module = uucode_mod },
             .{ .name = "encoding", .module = encoding_mod },
             .{ .name = "regex", .module = regex_mod },
@@ -236,6 +263,7 @@ pub fn build(b: *std.Build) void {
             .strip = false,
             .imports = &.{
                 .{ .name = "decimal", .module = decimal_mod },
+                .{ .name = "numparse", .module = numparse_mod },
                 .{ .name = "uucode", .module = uucode_mod },
                 .{ .name = "encoding", .module = encoding_mod },
                 .{ .name = "regex", .module = regex_mod },
@@ -348,9 +376,14 @@ pub fn build(b: *std.Build) void {
 /// `dependency().module()` returns a module OWNED by that dependency; unlike
 /// `b.addModule` it does not add an entry to this package's module table. Any
 /// module a downstream package asks for by name — `core_dep.module("json5")`
-/// and `core_dep.module("zipstream")` in bxp-cli/build.zig — therefore has to
-/// be re-published here, or the downstream build panics with "unable to find
-/// module '<name>'". This is `std.Build.addModule`'s own second line.
+/// and `core_dep.module("zipstream")` in bxp-cli/build.zig,
+/// `core_dep.module("minisign")` in bxp-gui-bridge/build.zig — therefore has
+/// to be re-published here, or the downstream build panics with "unable to
+/// find module '<name>'". This is `std.Build.addModule`'s own second line.
+///
+/// `minisign` is the one re-export bxp-core itself never imports: it is
+/// published only so the bridge shares this package's single zig-libs pin
+/// instead of carrying a second one of its own.
 fn reexport(b: *std.Build, name: []const u8, mod: *std.Build.Module) void {
     b.modules.put(b.graph.arena, b.dupe(name), mod) catch @panic("OOM");
 }

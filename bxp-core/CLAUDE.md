@@ -21,6 +21,7 @@ Consumed by bxp-cli (conversion engine) and the stateless-inspect adapters
 | `datefmt`     | _(zig-libs dep)_  | `parse()`, `format()`, civil/arithmetic helpers, `partsToUnix`/`unixToParts` seconds-epoch, `ZZ` offset token — the date core. **No longer in this tree**: consumed from the pinned `zig_libs` fetch dep as the named `datefmt` module (wired into `expr` in `build.zig`). The former local `datefmt.zig` was a strict subset of the upstream module — identical civil core, parser, formatter and token table, plus coverage and an `xsd:dateTime` entry point bxp does not call |
 | `tz`          | _(zig-libs dep)_  | `find()`, `offsetAt()` — IANA UTC-offset lookup. **No longer in this tree**: consumed from the pinned `zig_libs` fetch dep as the named `tz` module (wired into `expr` in `build.zig`). The offset tables compile in, so there is still no runtime dependency. The former local `tz.zig` was a strict subset of the upstream module; its generator moved to `scripts/tz-gen/` in that repo |
 | `decimal`     | _(zig-libs dep)_  | `Decimal` fixed-point i128 @ 1e12 — numeric core (named `"decimal"` module, shared by every input path). **No longer in this tree**: consumed from the pinned `zig_libs` fetch dep. Same arithmetic, different API — fallible ops return `Error!Decimal` not `?Decimal`, and `toString` writes into a caller buffer instead of allocating |
+| `numparse`    | _(zig-libs dep)_  | `parseGroupedNumber()` — grouped-number parsing (`1,234.56` / `1.234,56`) into a `Decimal`, or null. **No longer in this tree**: `expr.zig` aliases the named module. Extracted below file level (it was never its own file here), and the code is byte-identical to the local original |
 | `unicode`     | `unicode.zig`     | `toUpperStr()`, `toLowerStr()`, `unaccentStr()` — UTF-8 case mapping + diacritic stripping over `uucode` tables (file-rel @import by `expr.zig`, not a named module) |
 | `encoding`    | _(zig-libs dep)_  | `Encoding`, `decodeToUtf8()`, `encodeFromUtf8()` — Layer 0 single-byte code page ↔ UTF-8 (named module shared by `expr` + `config`; no `uucode` dep). **No longer in this tree**: consumed from the pinned `zig_libs` fetch dep. The former local copy was a strict subset — the five 256-entry tables and both transcode entry points were byte-identical |
 | `config`      | `config.zig`      | `Config`, `BrokerConfig`, `load()`, `validate()`, `FieldDoc`              |
@@ -395,6 +396,7 @@ The **API** did change, and the call sites in `expr.zig` / `json.zig` /
 - `parseGroupedNumber` deliberately keeps its `?Decimal` contract
   (`catch null` internally): its callers treat "not a number" as a fallback
   condition, not an error to propagate, so the optional stops at that boundary.
+  That function has since moved out of `expr.zig` too — see `numparse` below.
 
 The typed error set also fixed a live crash. `div` previously returned plain
 `null` for a zero divisor and `@intCast`-panicked on overflow — the caller
@@ -405,6 +407,39 @@ blank-cell behaviour for blank divisors, the second is a loud
 `NumberOverflow` exactly like `*` already was. Upstream also added overflow
 guards to `floor`, `ceil` and `parse`; those are forward cover — probing
 confirmed they are not reachable through the expression surface today.
+
+### numparse _(zig-libs dep)_
+
+`parseGroupedNumber(s, thousands_sep, decimal_sep) ?Decimal` — the
+thousands-grouped number parser behind three `expr.zig` call sites:
+`Value.toNumber`'s fallback after a plain `Decimal.parse` fails,
+`stringIsNumeric` (which argument GREATEST/LEAST blames), and
+`normalizeFieldDecimalSep`'s European grouped shape. **No longer in this tree**
+— `expr.zig` aliases the named module (`const parseGroupedNumber =
+@import("numparse").parseGroupedNumber;`).
+
+This is the first migration where the extraction went **below file level**: the
+function never had a file of its own here, so no local file was deleted — only
+the definition and its two tests. The diff against the local original was
+byte-identical code; every hunk was a comment, a parameter rename
+(`thousands`/`decimal` → `thousands_sep`/`decimal_sep`, avoiding a collision
+with the `decimal` dependency's name) or `pub`. Upstream adds two reject-case
+tests (more than 3 leading digits; a trailing decimal separator with no digits
+after it).
+
+Grammar and contract are unchanged and still load-bearing here: at least one
+thousands group is required (so plain `"123"` / `"1.5"` stay `Decimal.parse`'s
+job and this is only ever the fallback), the structural validation is strict
+(1–3 leading digits, exact 3-digit groups, no trailing junk — what keeps
+`"2025,06,01"` and American input read under European separators from parsing
+as numbers), and the return stays `?Decimal` rather than an error union.
+
+The bxp-side gate was a 50-row × 8-column fixture run under **both** separator
+conventions (100 rows, 800 cells) against the pre-migration binary: valid
+American and European grouped forms, the reject shapes above, i128-boundary
+and over-length inputs, high-precision coordinates, `nan`/`inf`, and
+double-separator junk. Byte-identical, including all 318 per-cell expression
+errors. `.text` and `.rodata` came out byte-identical too.
 
 ### diagnostics _(zig-libs dep)_
 
@@ -441,7 +476,7 @@ cd bxp-core && zig build test
 
 Module exports in `build.zig`: `csv`, `json`, `json5`, `xlsx`, `zipstream`, `btrace`, `decimal`, `encoding`, `expr`, `config`, `docs`, `diagnostics`, `inspect`.
 `xlsx` imports the named `decimal` and `zipstream` modules; `zipstream` has no bxp-core dependencies (std only).
-`expr` imports `unicode.zig` (file-relative, not a named module) plus the named `decimal`, `uucode`, `encoding`, `regex`, `tz`, `datefmt` modules (`regex` is the Pike-VM engine behind REGEX_MATCH/REGEX_EXTRACT; `tz`, `datefmt` and `encoding` come from zig-libs — all fetch deps, see _External dependencies_ below); `config` imports `json5`, `diagnostics`, `expr`, `encoding`. `encoding` being a named module matters for the same reason `decimal` is one: it is shared by both `expr` and `config`, and a file-relative @import from two modules would compile the file into each — a duplicate-symbol error.
+`expr` imports `unicode.zig` (file-relative, not a named module) plus the named `decimal`, `numparse`, `uucode`, `encoding`, `regex`, `tz`, `datefmt` modules (`regex` is the Pike-VM engine behind REGEX_MATCH/REGEX_EXTRACT; `tz`, `datefmt`, `encoding` and `numparse` come from zig-libs — all fetch deps, see _External dependencies_ below); `config` imports `json5`, `diagnostics`, `expr`, `encoding`. `encoding` being a named module matters for the same reason `decimal` is one: it is shared by both `expr` and `config`, and a file-relative @import from two modules would compile the file into each — a duplicate-symbol error.
 `docs` imports `config`, `expr`, `json5`; `diagnostics` has no bxp-core dependencies.
 
 ### External dependencies
@@ -464,7 +499,8 @@ content-addressed by hash and re-audited on any pin bump:
   module named `regex`; `build.zig` wires it into the `expr` module. Adds ~56 KB
   to the ReleaseSmall `bxp-cli` (engine + Unicode-scalar case-fold tables).
 - **zig_libs** (MIT, `zaxified/zig-libs`) — the module collection supplying
-  **all seven** modules that used to live in `src/`:
+  the **seven** modules that used to live in `src/`, plus `numparse`, which
+  used to be a function inside `expr.zig`:
 
   - `tz` — IANA UTC-offset lookup behind `TO_UTC` / `TZ_OFFSET` /
     `TZ_CONVERT` / `IS_DST`.
@@ -484,9 +520,22 @@ content-addressed by hash and re-audited on any pin bump:
   - `diagnostics` — the structured validation-finding collector behind the
     inspect core's deep validation pass. Also re-exported (bxp-cli asks for
     it by name).
+  - `numparse` — the grouped-number parser (`1,234.56` / `1.234,56`) behind
+    `expr.zig`'s numeric coercion fallback. The one extracted from below file
+    level: it was never its own file here, only a function.
+  - `minisign` — the signature format behind the GUI updater's
+    `bridge_verify_minisign`.
+  - `procrun` — the reap-race-tolerant `waitTolerant` / `ensureChildReaping`
+    behind the bridge's `bxp-cli` spawns.
+
+  The last two are the modules bxp-core does **not** import: they are
+  re-exported (like `json5` / `zipstream`) purely so
+  `bxp-gui-bridge/build.zig` can take them off this package's single pin
+  instead of adding a second `zig_libs` entry of its own that would have to be
+  bumped in lockstep.
 
   Pinned to the commit behind a dated release tag (upstream tags
-  `YYYY-MM-DD`, no semver). `build.zig` takes all three off **one shared
+  `YYYY-MM-DD`, no semver). `build.zig` takes all of them off **one shared
   `b.dependency` handle** — that is what makes them one compilation rather
   than several; `tz` imports `datefmt` internally, so while the local copy
   existed the binary carried two separate date cores. The 600-zone offset
@@ -501,17 +550,19 @@ content-addressed by hash and re-audited on any pin bump:
   **Treated as a foreign upstream** — read-only, pinned, never edited from
   this repo. Zig's package manager offers no floating "latest" mode: the
   `hash` field is mandatory and content-addressed, so any upstream movement
-  must land as an explicit `zig fetch --save` edit to `build.zig.zon`. The
-  migration is complete — nothing in `src/` is a zig-libs candidate any more;
-  the
-  remaining candidates and their measured divergence are tabulated in
-  `docs/dev/roadmap.md` → "Shared core libraries — consume zig-libs".
+  must land as an explicit `zig fetch --save` edit to `build.zig.zon`. No
+  whole file in `src/` is a zig-libs candidate any more; what the 2026-08-16
+  sweep found is overlap *below* file level (`numparse` was the first of
+  those), and the remaining candidates with their measured divergence are
+  tabulated in `docs/dev/roadmap.md` → "Shared core libraries — consume
+  zig-libs".
 
 The split is now clean. What remains in `src/` is bxp's own domain layer —
 `csv`, `json`, `xlsx`, `btrace`, `expr`, `config`, `docs`, `unicode`,
 `inspect` — and every general-purpose primitive underneath it (`datefmt`,
-`tz`, `encoding`, `json5`, `decimal`, `zipstream`, `diagnostics`) comes from
-zig-libs. Anything new that is not bxp-specific belongs upstream, not here.
+`tz`, `encoding`, `json5`, `decimal`, `zipstream`, `diagnostics`, `numparse`)
+comes from zig-libs. Anything new that is not bxp-specific belongs upstream,
+not here.
 
 ## Coding conventions
 

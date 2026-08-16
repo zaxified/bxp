@@ -23,6 +23,16 @@ pub fn build(b: *std.Build) void {
     // one implementation instead of hand-rolling their own. (inspect pulls in
     // expr transitively, so the bridge no longer imports expr directly.)
     const inspect_mod = bxp_core.module("inspect");
+    // minisign: the signature format behind `bridge_verify_minisign` (the
+    // updater's authenticity check on the release SHA256SUMS). Comes from
+    // zig-libs, but through bxp-core's module table rather than a second
+    // `zig_libs` fetch dep here — bxp-core owns the single pin, so the bridge
+    // cannot end up on a different upstream commit than the rest of the tree.
+    const minisign_mod = bxp_core.module("minisign");
+    // procrun: the reap-race-tolerant wait (`waitTolerant` / `ensureChildReaping`)
+    // this file's spawn paths need to survive the Dart VM's `wait4(-1)` reaper.
+    // Same route and same reason as `minisign` — bxp-core holds the one pin.
+    const procrun_mod = bxp_core.module("procrun");
 
     // Shared library: bxp-gui-bridge.dll on Windows, libbxp-gui-bridge.so
     // on Linux, libbxp-gui-bridge.dylib on macOS. Loaded at runtime by
@@ -38,6 +48,8 @@ pub fn build(b: *std.Build) void {
             .imports = &.{
                 .{ .name = "build_options", .module = options.createModule() },
                 .{ .name = "inspect", .module = inspect_mod },
+                .{ .name = "minisign", .module = minisign_mod },
+                .{ .name = "procrun", .module = procrun_mod },
             },
         }),
     });
@@ -74,6 +86,8 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "build_options", .module = options.createModule() },
                 .{ .name = "test_options", .module = test_options.createModule() },
                 .{ .name = "inspect", .module = inspect_mod },
+                .{ .name = "minisign", .module = minisign_mod },
+                .{ .name = "procrun", .module = procrun_mod },
             },
         }),
     });

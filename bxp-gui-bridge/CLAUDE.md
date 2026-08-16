@@ -50,8 +50,12 @@ bxp-gui-bridge/
                        (no reliance on `/bin/echo`, `/bin/sleep`, …).
   build.zig          ← links libc; passes the optimize mode through verbatim
                        (the old Debug → ReleaseSafe rewrite was dropped on Zig
-                       0.16 — see below).
-  build.zig.zon      ← depends on bxp-core (path dep ../bxp-core).
+                       0.16 — see below). Imports three modules from bxp-core:
+                       `inspect` (its own) plus `minisign` and `procrun`
+                       (re-exported from zig-libs, so the bridge shares
+                       bxp-core's single pin).
+  build.zig.zon      ← depends on bxp-core (path dep ../bxp-core). No fetch
+                       deps of its own — zig-libs comes through bxp-core.
 ```
 
 ## Public C-ABI
@@ -69,7 +73,7 @@ All exports use the `.c` calling convention.
 | `bridge_eval_expr(...)`      | In-proc: parse + evaluate one expression, return result/error |
 | `bridge_eval_expr_trace(..)` | In-proc: same with per-call NDJSON trace + terminal sentinel   |
 | `bridge_inspect(...)`        | In-proc: stateless inspect ops (`docs` / `config` / `list_templates` / `fetch_template` / `eval_batch`) — JSON request envelope → result JSON in out buffer |
-| `bridge_verify_minisign(...)`| In-proc: verify a minisign signature (`.minisig`) over a file (release `SHA256SUMS`) against a base64 public key — Ed25519 + Blake2b-512, zero-alloc; returns `0` authentic / non-zero refuse |
+| `bridge_verify_minisign(...)`| In-proc: verify a minisign signature (`.minisig`) over a file (release `SHA256SUMS`) against a base64 public key — Ed25519 + Blake2b-512 via the zig-libs `minisign` module, no heap alloc; returns `0` authentic / non-zero refuse |
 
 The Dart-side shim that calls these lives in
 [`../bxp-gui/lib/services/bridge_client.dart`](../bxp-gui/lib/services/bridge_client.dart).
@@ -142,9 +146,11 @@ that breaks early will appear to "work").
 
 ## Known non-issues (audit-acknowledged)
 
-Residual 🔵 notes from the 2026-06-14 audit (the 🟡 `bridge_run` one-shot
-ECHILD-intolerance is dead code — the only caller reroutes through
-`bridge_run_streaming`). No 🔴/🟠.
+Residual 🔵 notes from the 2026-06-14 audit. No 🔴/🟠. (The 🟡 `bridge_run`
+one-shot ECHILD-intolerance was noted as moot because the only caller reroutes
+through `bridge_run_streaming`; it is moot for a second reason now — both paths
+reap through the same `waitTolerant`, which since the `procrun` migration is
+the upstream reap core.)
 
 - **`streamingStderrLoop` has no backpressure bound.** It dispatches every
   stderr chunk without the `queue_sema.wait()` gate that bounds stdout —
@@ -154,10 +160,14 @@ ECHILD-intolerance is dead code — the only caller reroutes through
 - **`bridge_verify_minisign` accepts legacy `"Ed"` alongside prehashed
   `"ED"`.** Not a downgrade vulnerability — both are full Ed25519 over the
   content, forging either needs the private key; CI emits prehashed `"ED"`
-  only. Could tighten to prehashed-only to shrink the accepted surface, but no
-  security impact today.
-- **`trusted_comment` is capped at 2048 B** (`gbuf: [64 + 2048]u8`,
-  length-checked before the memcpy → `bad_sig_file` if longer, no overflow). A
-  legitimately long trusted comment would false-reject; the release pipeline
-  controls the comment (short `timestamp:… file:… hashed`), so no practical
-  impact.
+  only. Now inherited from the `minisign` module (which implements the whole
+  format), so tightening to prehashed-only would be a check in this wrapper
+  after `parseSignatureFile`, not an upstream change. No security impact today.
+- **`trusted_comment` is capped at 2048 B** — the scratch
+  `FixedBufferAllocator` (`minisign_scratch_len = 64 + 2048`) the
+  trusted-comment layer allocates its concatenation from; a longer comment
+  fails the allocation and is refused as `bad_sig_file`, exactly as the former
+  hand-rolled length check did. Upstream itself caps neither comment (it
+  documents capping as the caller's job). A legitimately long trusted comment
+  would false-reject; the release pipeline controls the comment (short
+  `timestamp:… file:… hashed`), so no practical impact.

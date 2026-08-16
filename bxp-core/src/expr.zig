@@ -1843,68 +1843,25 @@ fn isNonFiniteToken(s: []const u8) bool {
         std.ascii.eqlIgnoreCase(body, "infinity");
 }
 
-/// Parses a number in thousands-grouped format, generalised over both
-/// American (`thousands=','`, `decimal='.'`) and European (`thousands='.'`,
-/// `decimal=','`) conventions. Accepts:
-///   `[-]?d{1,3}(<thousands>d{3})+(<decimal>d+)?`
-/// Requires at least one thousands group — plain numbers without grouping
-/// (`"123"`, `"1,5"`, `"1.5"`) are the caller's `Decimal.parse` responsibility.
-/// Returns null if `s` does not match the pattern for the given separators.
+/// Parses a number in thousands-grouped format, generalised over both American
+/// (`thousands=','`, `decimal='.'`) and European (`thousands='.'`,
+/// `decimal=','`) conventions — `[-]?d{1,3}(<thousands>d{3})+(<decimal>d+)?`,
+/// null when `s` does not match for the given separator pair.
 ///
-/// The strict structural validation (1–3 leading digits, exactly 3 digits
-/// per group, no trailing non-numeric characters) is intentional. It
-/// prevents false positives on strings like `"2025,06,01"` (date
-/// components) or American thousands input misread as a European number.
-///
-/// Examples:
-///   parseGroupedNumber("1,234.56", ',', '.') → 1234.56  (American)
-///   parseGroupedNumber("1.234,56", '.', ',') → 1234.56  (European)
-///   parseGroupedNumber("-1.234.567,89", '.', ',') → -1234567.89
-fn parseGroupedNumber(s: []const u8, thousands: u8, decimal: u8) ?Decimal {
-    var i: usize = 0;
-    if (i < s.len and s[i] == '-') i += 1;
-    // 1–3 leading digits before the first thousands group
-    const leading_start = i;
-    while (i < s.len and std.ascii.isDigit(s[i])) i += 1;
-    const leading = i - leading_start;
-    if (leading == 0 or leading > 3) return null;
-    // At least one '<thousands>ddd' group required
-    var groups: usize = 0;
-    while (i < s.len and s[i] == thousands) {
-        if (s.len < i + 4) return null;
-        if (!std.ascii.isDigit(s[i + 1]) or
-            !std.ascii.isDigit(s[i + 2]) or
-            !std.ascii.isDigit(s[i + 3])) return null;
-        i += 4;
-        groups += 1;
-        // A digit immediately after the group means >3 digits between separators → invalid
-        if (i < s.len and std.ascii.isDigit(s[i])) return null;
-    }
-    if (groups == 0) return null;
-    // Optional decimal part
-    if (i < s.len) {
-        if (s[i] != decimal) return null;
-        i += 1;
-        if (i >= s.len or !std.ascii.isDigit(s[i])) return null;
-        while (i < s.len and std.ascii.isDigit(s[i])) i += 1;
-    }
-    if (i != s.len) return null;
-    // Strip thousands and rewrite the decimal char to '.' into a stack
-    // buffer, then re-parse with the fixed-point decimal parser. The 40-byte
-    // buffer covers any value the fixed-point range can hold (≈27 integer
-    // digits + dot + 12 fractional), far beyond what 3+N*4 digits can express.
-    var buf: [40]u8 = undefined;
-    var bi: usize = 0;
-    for (s) |c| {
-        if (c == thousands) continue;
-        if (bi >= buf.len) return null;
-        buf[bi] = if (c == decimal) '.' else c;
-        bi += 1;
-    }
-    // Keep the optional contract: callers here treat "not a number" as a
-    // fallback condition, not an error to propagate.
-    return Decimal.parse(buf[0..bi]) catch null;
-}
+/// The implementation lives in the zig-libs `numparse` module; it was
+/// extracted from this file, so the code is the same scan, and it returns the
+/// same `decimal` core wired in above. Three properties the call sites here
+/// depend on, all upstream-documented:
+///   * At least one thousands group is REQUIRED, so plain numbers ("123",
+///     "1,5", "1.5") stay `Decimal.parse`'s job and this is only ever the
+///     fallback.
+///   * The strict structure (1–3 leading digits, exact 3-digit groups, no
+///     trailing junk) is what keeps "2025,06,01" and American input read
+///     under European separators from parsing as numbers.
+///   * The `?Decimal` contract is deliberate: callers treat "not a number" as
+///     a fallback condition, not an error to propagate, so the optional stops
+///     at this boundary (see the `decimal` note in bxp-core/CLAUDE.md).
+const parseGroupedNumber = @import("numparse").parseGroupedNumber;
 
 // ---------------------------------------------------------------------------
 // Built-in function implementations
@@ -5246,23 +5203,13 @@ test "eval: decimal_sep_in=',' arithmetic on EU thousands group" {
     try testing.expectEqualStrings("2469", try evalString("[V] * 2", &ctx));
 }
 
-test "parseGroupedNumber: American format" {
-    try testing.expectEqual((try Decimal.parse("1234.56")).raw, parseGroupedNumber("1,234.56", ',', '.').?.raw);
-    try testing.expectEqual((try Decimal.parse("-1234567")).raw, parseGroupedNumber("-1,234,567", ',', '.').?.raw);
-    try testing.expectEqual((try Decimal.parse("1000")).raw, parseGroupedNumber("1,000", ',', '.').?.raw);
-    try testing.expect(parseGroupedNumber("123", ',', '.') == null);
-    try testing.expect(parseGroupedNumber("1,5", ',', '.') == null);
-    try testing.expect(parseGroupedNumber("1,2345", ',', '.') == null);
-}
-
-test "parseGroupedNumber: European format" {
-    try testing.expectEqual((try Decimal.parse("1234.56")).raw, parseGroupedNumber("1.234,56", '.', ',').?.raw);
-    try testing.expectEqual((try Decimal.parse("-1234567.89")).raw, parseGroupedNumber("-1.234.567,89", '.', ',').?.raw);
-    try testing.expectEqual((try Decimal.parse("1234")).raw, parseGroupedNumber("1.234", '.', ',').?.raw);
-    try testing.expect(parseGroupedNumber("1.5", '.', ',') == null);
-    try testing.expect(parseGroupedNumber("1.234.5", '.', ',') == null);
-    try testing.expect(parseGroupedNumber("1,234.56", '.', ',') == null);
-}
+// The `parseGroupedNumber` unit tests moved upstream with the function: the
+// zig-libs `numparse` module carries both of them verbatim plus two more
+// reject cases (>3 leading digits, trailing decimal separator with no digits).
+// What stays bxp's job is the expr-level behaviour built on it — the numeric
+// coercion fallback, GREATEST/LEAST attribution and `decimal_sep_in`
+// normalisation — covered by the tests around this one and by the
+// cross-runner corpus (scripts/test-06-expr-corpus.sh).
 
 // ------------------------------------------------------------
 // evalString normalization

@@ -25,6 +25,8 @@ const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
 const inspect = @import("inspect");
+const minisign = @import("minisign");
+const procrun = @import("procrun");
 
 /// Hard cap on captured bytes per stream (stdout, stderr) per call.
 /// 64 MB per stream covers every realistic `bridge_run` payload —
@@ -76,135 +78,52 @@ fn bridgeIo() std.Io {
     }
 }
 
-/// Ensure SIGCHLD is reapable before we spawn children we wait on.
-///
-/// When the host process inherits `SIGCHLD = SIG_IGN` (some shells and CI
-/// harnesses ignore it), the kernel auto-reaps exited children, so a later
-/// `waitpid` returns ECHILD — which `std.process.Child.wait` treats as
-/// `unreachable` and panics (observed as a `bridge_run` crash when bxp-gui
-/// is launched from such an environment). We flip ONLY `SIG_IGN` → `SIG_DFL`:
-/// a real handler the host (e.g. the Dart VM) may have installed is left
-/// untouched, since a handler without `SA_NOCLDWAIT` still leaves children
-/// reapable by `waitpid`. No-op on Windows. Run once via [child_reaping_once].
-fn restoreChildReaping() void {
-    if (builtin.os.tag != .windows) {
-        const posix = std.posix;
-        var current: posix.Sigaction = undefined;
-        posix.sigaction(posix.SIG.CHLD, null, &current);
-        if (current.handler.handler == posix.SIG.IGN) {
-            const act: posix.Sigaction = .{
-                .handler = .{ .handler = posix.SIG.DFL },
-                .mask = posix.sigemptyset(),
-                .flags = 0,
-            };
-            posix.sigaction(posix.SIG.CHLD, &act, null);
-        }
-    }
-}
+// ── Child reaping ───────────────────────────────────────────────────────
+//
+// Both helpers below come from the zig-libs `procrun` module, which is where
+// this bridge's own versions were extracted to. They exist because the bridge
+// spawns children inside a host process that reaps children behind its back:
+//
+//   * The Dart VM runs an `ExitCodeHandler` thread parked in `wait4(-1)`,
+//     which reaps ANY child of the process — usually the bridge's `bxp-cli`
+//     before the bridge's own wait runs.
+//   * A host that inherited `SIGCHLD = SIG_IGN` (some shells, CI harnesses)
+//     has the kernel auto-reap every child.
+//
+// Either way the bridge's wait sees ECHILD, and `std.process.Child.wait`
+// treats that as an unrecoverable double-free bug and panics — a racy SIGABRT
+// at GUI startup. `procrun.ensureChildReaping` flips ONLY `SIG_IGN` → `SIG_DFL`
+// (a real handler the host installed is left alone), and
+// `procrun.waitTolerant` reaps through a path that maps ECHILD to
+// `.unknown` — the child IS gone, its status is just unreadable. That
+// `.unknown` is harmless here: the GUI reads the run's real exit code from
+// bxp-cli's BXTB `done` frame, not from this value.
+//
+// Taking the module also picks up three things the local copies lacked: the
+// reap goes through `std.posix.system.wait4`/`waitpid` (raw syscalls on Linux)
+// instead of `std.c.waitpid`, there is a fallback for platforms without
+// `wait4`, and `waitTolerant` NULLS `child.id` after reaping — so a
+// `bridge_cancel` arriving after the wait thread finished is a no-op instead
+// of signalling a pid the kernel may since have recycled (see
+// `sendKillSignal`, which reads exactly that field).
+//
+// Only the reap core is taken. procrun's own runner (capped 3-thread drain,
+// streaming handles, backpressure) is NOT used: the bridge's streaming path
+// dispatches into Dart ports and owns its own thread/ack machinery.
 
-// One-shot guard for `restoreChildReaping` (Zig 0.16 removed `std.once`).
-// Non-blocking: the only caller runs it right before spawn on the (serialized)
-// Dart main isolate, and `restoreChildReaping` is idempotent regardless.
-var reaping_guard = std.atomic.Value(bool).init(false);
+const ensureChildReaping = procrun.ensureChildReaping;
 
-fn ensureChildReaping() void {
-    if (!reaping_guard.swap(true, .acq_rel)) restoreChildReaping();
-}
-
-/// Decode a raw `waitpid` status word into a `Child.Term` (mirrors std's
-/// private `statusToTerm`).
-fn statusToTerm(status: u32) std.process.Child.Term {
-    const W = std.posix.W;
-    return if (W.IFEXITED(status))
-        .{ .exited = W.EXITSTATUS(status) }
-    else if (W.IFSIGNALED(status))
-        .{ .signal = W.TERMSIG(status) }
-    else if (W.IFSTOPPED(status))
-        .{ .stopped = W.STOPSIG(status) }
-    else
-        .{ .unknown = status };
-}
-
-/// Reap [pid], tolerating ECHILD. The Dart VM runs an `ExitCodeHandler`
-/// thread that calls `wait4(-1)` (reaps ANY child of the process, for
-/// dart:io Process bookkeeping); it is usually parked in that call and so
-/// reaps the bridge's bxp-cli child before the bridge's own `waitpid` runs.
-/// std's `posix.waitpid` then hits `unreachable` on the resulting ECHILD and
-/// panics (a hard SIGABRT at GUI startup, racy). Here we own the wait via
-/// libc and treat ECHILD as `.Unknown` — the child IS gone, we just can't
-/// read its status. Callers that need the real exit code read it from the
-/// data stream instead (bxp-cli's BXTB `done` frame carries it).
-fn reapTolerantPosix(pid: std.process.Child.Id) std.process.Child.Term {
-    while (true) {
-        var status: c_int = 0;
-        const rc = std.c.waitpid(pid, &status, 0);
-        if (rc == -1) {
-            if (std.posix.errno(rc) == .INTR) continue;
-            return .{ .unknown = 0 };
-        }
-        return statusToTerm(@bitCast(status));
-    }
-}
-
-/// `Child.wait` that survives the child being reaped by another in-process
-/// waiter (see [reapTolerantPosix]). Zig 0.16's `Child.wait(io)` treats ECHILD
-/// as an unrecoverable "double-free" bug, which the Dart-VM `wait4(-1)` reaper
-/// race would trip. On POSIX we therefore reap the pid ourselves (ECHILD →
-/// `.unknown`) and close the child's still-open pipe ends manually instead of
-/// calling `child.wait(io)` (which would double-reap). Windows has no
-/// `wait4(-1)` reaper, so we defer to std directly.
 fn waitTolerant(child: *std.process.Child) std.process.Child.Term {
-    const io = bridgeIo();
-    if (builtin.os.tag == .windows) {
-        return child.wait(io) catch .{ .unknown = 0 };
-    }
-    const term: std.process.Child.Term = if (child.id) |pid|
-        reapTolerantPosix(pid)
-    else
-        .{ .unknown = 0 };
-    // The new Child no longer auto-closes its stream handles (the old
-    // child.wait did); close the read/write ends we own so fds don't leak.
-    if (child.stdin) |f| {
-        f.close(io);
-        child.stdin = null;
-    }
-    if (child.stdout) |f| {
-        f.close(io);
-        child.stdout = null;
-    }
-    if (child.stderr) |f| {
-        f.close(io);
-        child.stderr = null;
-    }
-    return term;
+    return procrun.waitTolerant(bridgeIo(), child);
 }
 
-test "restoreChildReaping flips SIG_IGN to SIG_DFL but leaves others alone" {
-    if (builtin.os.tag == .windows) return error.SkipZigTest;
-    const posix = std.posix;
-    // Save + restore the process-global disposition around the test.
-    var saved: posix.Sigaction = undefined;
-    posix.sigaction(posix.SIG.CHLD, null, &saved);
-    defer posix.sigaction(posix.SIG.CHLD, &saved, null);
-
-    // Inherited SIG_IGN is the crash trigger — restoreChildReaping must
-    // flip it back to SIG_DFL so child.wait()'s waitpid won't see ECHILD.
-    const ign: posix.Sigaction = .{
-        .handler = .{ .handler = posix.SIG.IGN },
-        .mask = posix.sigemptyset(),
-        .flags = 0,
-    };
-    posix.sigaction(posix.SIG.CHLD, &ign, null);
-    restoreChildReaping();
-    var after: posix.Sigaction = undefined;
-    posix.sigaction(posix.SIG.CHLD, null, &after);
-    try std.testing.expect(after.handler.handler == posix.SIG.DFL);
-
-    // A non-IGN disposition must be left untouched (idempotent, no clobber).
-    restoreChildReaping();
-    posix.sigaction(posix.SIG.CHLD, null, &after);
-    try std.testing.expect(after.handler.handler == posix.SIG.DFL);
-}
+// The SIGCHLD-disposition test that used to sit here moved upstream with the
+// function ("ensureChildReaping: idempotent and leaves a real disposition
+// alone" in procrun). It cannot be written against the module's public API
+// anyway: the `SIG_IGN` → `SIG_DFL` flip is behind a one-shot guard, so a
+// second call from a test is a no-op by design. What this file still tests is
+// the integration — see the `waitTolerant` out-of-band-reap test near the end,
+// which drives a real spawned child through the bridge's own wait path.
 
 /// Request shape: which executable to run with which arguments.
 /// Caller (Dart) is responsible for resolving the absolute path to
@@ -1212,21 +1131,25 @@ export fn bridge_inspect(
 //
 // Verifies a minisign signature over a file (the release `SHA256SUMS`)
 // against the maintainer's embedded public key, so the GUI updater can
-// confirm the checksum manifest is authentic before trusting it. Pure
-// std.crypto (Ed25519 + Blake2b-512), zero allocation, no new dependency.
+// confirm the checksum manifest is authentic before trusting it.
 //
-// Binary layouts (minisign, jedisct1):
-//   public key  (base64) : algo[2]="Ed" ++ key_id[8] ++ ed25519_pk[32]   (42 B)
-//   signature line (b64) : algo[2] ++ key_id[8] ++ ed25519_sig[64]        (74 B)
-//                          algo "ED" = prehashed (Blake2b-512 of the file),
-//                          algo "Ed" = legacy (signature over file bytes).
-//   global sig line (b64): ed25519_sig[64] over (sig64 ++ trusted_comment) (64 B)
+// The format parsing and the Ed25519 / Blake2b-512 verification both live in
+// the zig-libs `minisign` module (see bxp-core/build.zig for why the module
+// comes through bxp-core rather than a second pin here). This file used to
+// carry an 81-line hand-rolled parser instead — which mattered because the
+// `.minisig` text it reads is FETCHED OVER THE NETWORK by the updater, so it
+// is attacker-reachable input. Upstream verifies the same two layers with
+// known-answer vectors generated by the real `minisign` 0.12 binary, a fuzz
+// harness over `parseSignatureFile`, and the reference's own printable-comment
+// guard; the local copy had four tests and none of that. Nothing here
+// allocates on the heap: the one scratch buffer the trusted-comment layer
+// needs is a stack `FixedBufferAllocator`.
 //
-// `.minisig` text layout (4 lines):
-//   untrusted comment: ...
-//   <base64 signature>
-//   trusted comment: <text>
-//   <base64 global signature>
+// What this wrapper still owns is the C-ABI contract with Dart: the
+// `MinisignResult` codes below, and the mapping from upstream's typed errors
+// onto them. That mapping is the reason `verifyMessage` is called separately
+// rather than through `minisign.verifyFile` — a key-id mismatch has to stay
+// distinguishable from a bad signature (`key_mismatch` vs `verify_failed`).
 
 /// Verify-result codes returned by `bridge_verify_minisign`. Zero means
 /// authentic; any non-zero value means refuse the install. Distinct positive
@@ -1239,32 +1162,18 @@ const MinisignResult = enum(i32) {
     verify_failed = 4,
 };
 
-/// Nth (0-based) '\n'-delimited line of `text`, trailing '\r' trimmed.
-fn nthLine(text: []const u8, n: usize) ?[]const u8 {
-    var it = std.mem.splitScalar(u8, text, '\n');
-    var i: usize = 0;
-    while (it.next()) |line| : (i += 1) {
-        if (i == n) return std.mem.trimEnd(u8, line, "\r");
-    }
-    return null;
-}
-
-/// Standard-base64-decode `src_in` and require exactly `N` decoded bytes.
-/// Returns null on any malformation or length mismatch.
-fn b64DecodeExact(comptime N: usize, src_in: []const u8) ?[N]u8 {
-    const src = std.mem.trim(u8, src_in, " \t\r\n");
-    const dec = std.base64.standard.Decoder;
-    const n = dec.calcSizeForSlice(src) catch return null;
-    if (n != N) return null;
-    var out: [N]u8 = undefined;
-    dec.decode(&out, src) catch return null;
-    return out;
-}
+/// Scratch space for the trusted-comment layer: upstream concatenates
+/// `signature(64) ++ trusted_comment` and signs/verifies that in one call, so
+/// it takes an allocator. A stack `FixedBufferAllocator` over this buffer
+/// keeps the entry point heap-free, and its size IS the trusted-comment cap —
+/// a longer comment fails the allocation and is refused as `bad_sig_file`,
+/// which is exactly what the previous hand-rolled length check did.
+const minisign_scratch_len = 64 + 2048;
 
 /// Verify a minisign signature (`sig_*`, the `.minisig` file text) over the
 /// file bytes (`file_*`, the release `SHA256SUMS`) against the base64 public
 /// key (`pubkey_*`, the key part of `minisign.pub`). Returns a `MinisignResult`
-/// code — `0` is authentic, non-zero refuses. No allocation, thread-safe.
+/// code — `0` is authentic, non-zero refuses. No heap allocation, thread-safe.
 export fn bridge_verify_minisign(
     file_ptr: [*]const u8,
     file_len: u32,
@@ -1273,9 +1182,6 @@ export fn bridge_verify_minisign(
     pubkey_ptr: [*]const u8,
     pubkey_len: u32,
 ) callconv(.c) i32 {
-    const Ed25519 = std.crypto.sign.Ed25519;
-    const Blake2b512 = std.crypto.hash.blake2.Blake2b512;
-
     if (file_len == 0 or sig_len == 0 or pubkey_len == 0)
         return @intFromEnum(MinisignResult.bad_sig_file);
 
@@ -1283,66 +1189,42 @@ export fn bridge_verify_minisign(
     const sig_text = sig_ptr[0..sig_len];
     const pubkey_b64 = pubkey_ptr[0..pubkey_len];
 
-    // Public key: "Ed" ++ key_id[8] ++ ed25519_pk[32].
-    const pk_raw = b64DecodeExact(42, pubkey_b64) orelse
-        return @intFromEnum(MinisignResult.bad_pubkey);
-    if (!std.mem.eql(u8, pk_raw[0..2], "Ed"))
-        return @intFromEnum(MinisignResult.bad_pubkey);
-    const pk_key_id = pk_raw[2..10];
-    const pub_key = Ed25519.PublicKey.fromBytes(pk_raw[10..42].*) catch
+    // The GUI embeds the bare base64 key struct, not a two-line `.pub` file.
+    const pub_key = minisign.parsePublicKeyBase64(pubkey_b64) catch
         return @intFromEnum(MinisignResult.bad_pubkey);
 
-    // Signature file: line 1 = signature, line 2 = trusted comment,
-    // line 3 = global signature.
-    const sig_line = nthLine(sig_text, 1) orelse
-        return @intFromEnum(MinisignResult.bad_sig_file);
-    const tc_line = nthLine(sig_text, 2) orelse
-        return @intFromEnum(MinisignResult.bad_sig_file);
-    const global_line = nthLine(sig_text, 3) orelse
+    // Parsing validates the whole 4-line framing before any crypto runs:
+    // both comment prefixes, exact base64 lengths, a known algorithm tag, and
+    // the reference's printable-comment rule on the trusted comment.
+    const parsed = minisign.parseSignatureFile(sig_text) catch
         return @intFromEnum(MinisignResult.bad_sig_file);
 
-    const sig_raw = b64DecodeExact(74, sig_line) orelse
-        return @intFromEnum(MinisignResult.bad_sig_file);
-    const algo = sig_raw[0..2];
-    const sig_key_id = sig_raw[2..10];
-    const sig64 = sig_raw[10..74];
+    // Layer 1 — the file itself. Prehashed ("ED") signs Blake2b-512(file),
+    // legacy ("Ed") the bytes; upstream picks by tag. A key-id mismatch is
+    // reported as its own code, so the GUI can say "not our key" rather than
+    // "bad signature".
+    minisign.verifyMessage(pub_key, file, parsed.signature) catch |err|
+        return @intFromEnum(switch (err) {
+            error.KeyIdMismatch => MinisignResult.key_mismatch,
+            error.UnsupportedAlgorithm => MinisignResult.bad_sig_file,
+            else => MinisignResult.verify_failed,
+        });
 
-    // The signature must come from our key.
-    if (!std.mem.eql(u8, sig_key_id, pk_key_id))
-        return @intFromEnum(MinisignResult.key_mismatch);
-
-    // Main signature: prehashed ("ED") signs Blake2b-512(file); legacy
-    // ("Ed") signs the file bytes directly.
-    const signature = Ed25519.Signature.fromBytes(sig64.*);
-    if (std.mem.eql(u8, algo, "ED")) {
-        var hash: [Blake2b512.digest_length]u8 = undefined;
-        Blake2b512.hash(file, &hash, .{});
-        signature.verify(&hash, pub_key) catch
-            return @intFromEnum(MinisignResult.verify_failed);
-    } else if (std.mem.eql(u8, algo, "Ed")) {
-        signature.verify(file, pub_key) catch
-            return @intFromEnum(MinisignResult.verify_failed);
-    } else {
-        return @intFromEnum(MinisignResult.bad_sig_file);
-    }
-
-    // Global signature binds the trusted comment: ed25519(sig64 ++ tc).
-    const tc_prefix = "trusted comment: ";
-    if (!std.mem.startsWith(u8, tc_line, tc_prefix))
-        return @intFromEnum(MinisignResult.bad_sig_file);
-    const trusted_comment = tc_line[tc_prefix.len..];
-    const global_raw = b64DecodeExact(64, global_line) orelse
-        return @intFromEnum(MinisignResult.bad_sig_file);
-
-    var gbuf: [64 + 2048]u8 = undefined;
-    if (trusted_comment.len > gbuf.len - 64)
-        return @intFromEnum(MinisignResult.bad_sig_file);
-    @memcpy(gbuf[0..64], sig64);
-    @memcpy(gbuf[64 .. 64 + trusted_comment.len], trusted_comment);
-    const global_msg = gbuf[0 .. 64 + trusted_comment.len];
-    const global_sig = Ed25519.Signature.fromBytes(global_raw);
-    global_sig.verify(global_msg, pub_key) catch
-        return @intFromEnum(MinisignResult.verify_failed);
+    // Layer 2 — the global signature binding the trusted comment.
+    var scratch: [minisign_scratch_len]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&scratch);
+    minisign.verifyTrustedComment(
+        fba.allocator(),
+        pub_key,
+        parsed.signature,
+        parsed.trusted_comment,
+        parsed.global_signature,
+    ) catch |err| return @intFromEnum(switch (err) {
+        // Comment longer than the scratch cap — refuse it as a malformed
+        // signature file, the pre-module behaviour for the same input.
+        error.OutOfMemory => MinisignResult.bad_sig_file,
+        else => MinisignResult.verify_failed,
+    });
 
     return @intFromEnum(MinisignResult.ok);
 }
