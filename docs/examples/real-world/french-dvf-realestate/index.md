@@ -48,10 +48,10 @@ Measured on the reference machine (ReleaseFast, 8 cores):
 
 | metric    | value                                       |
 | --------- | ------------------------------------------- |
-| input     | 3,499,932 rows / 446 MB (pipe-delimited)    |
-| output    | 3,499,932 rows / 213 MB (1:1)               |
-| wall time | ~9.1 s                                      |
-| peak RSS  | ~18 MB (flat — does not grow with the file) |
+| input     | 3,499,931 rows / 446 MB (pipe-delimited)    |
+| output    | 3,499,931 rows / 213 MB (1:1)               |
+| wall time | ~4.9 s                                      |
+| peak RSS  | ~22 MB (flat — does not grow with the file) |
 
 ## The tricks
 

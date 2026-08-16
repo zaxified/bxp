@@ -36,8 +36,8 @@ Measured on the reference machine (ReleaseFast, 8 cores):
 | --------- | --------------------------------------- |
 | input     | 12,533,197 rows / 1.1 GB TSV            |
 | output    | 12,533,197 rows / 1.1 GB CSV (1:1)      |
-| wall time | ~24.5 s                                 |
-| peak RSS  | ~26 MB (flat — does not grow with rows) |
+| wall time | ~21.4 s                                 |
+| peak RSS  | ~29 MB (flat — does not grow with rows) |
 
 The 1:1 row count: `csv_text_quote_in:"none"` declares the TSV unquoted, so a
 stray `"` in a title is plain data. Even with default `"` quoting left on,

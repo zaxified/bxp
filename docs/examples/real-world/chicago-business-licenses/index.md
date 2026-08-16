@@ -49,8 +49,8 @@ Measured on the reference machine (ReleaseFast, 8 cores):
 | metric                    | value                                  |
 | ------------------------- | -------------------------------------- |
 | input / output            | 1,197,482 rows (1:1) / 194 MB → 121 MB |
-| wall time                 | ~4.2 s                                 |
-| peak RSS                  | ~19 MB (flat)                          |
+| wall time                 | ~3.1 s                                 |
+| peak RSS                  | ~22 MB (flat)                          |
 | `issued`                  | 1,117,686                              |
 | `cancelled_during_term`   | 78,329                                 |
 | `revoked`                 | 1,453                                  |

@@ -35,18 +35,34 @@ Measured on the reference machine (ReleaseFast, 8 cores):
 
 | metric         | value                                                |
 | -------------- | ---------------------------------------------------- |
-| input / output | 36,445 rows (1:1, no column shift)                   |
-| wall time      | ~0.12 s                                              |
-| peak RSS       | ~14 MB                                               |
-| `unlicensed`   | 31,453 rows (**86%**)                                |
-| `exempt`       | 2,688 rows                                           |
-| `registered`   | 2,304 rows                                           |
-| price redacted | 36,445 rows (**100%** — endpoint strips every price) |
+| input          | 36,445 listings (RFC-4180 records), no column shift  |
+| output         | 36,616 rows — 154 listings split, see below          |
+| wall time      | ~0.07 s                                              |
+| peak RSS       | ~17 MB                                               |
+| `unlicensed`   | 31,645 rows (**86%**)                                |
+| `exempt`       | 2,686 rows                                           |
+| `registered`   | 2,285 rows                                           |
+| price redacted | 36,616 rows (**100%** — endpoint strips every price) |
+
+!!! note "Why the two row counts differ"
+
+    Both numbers are right, they just count different things. **36,445** is what
+    a strict RFC-4180 parser sees: it treats a newline inside a quoted field as
+    part of the value and keeps reading. **36,616** is what bxp emits, because
+    a newline **always** ends a record here — lazy-quote semantics, a deliberate
+    design decision, not a parsing bug (see *Not planned* in the
+    [roadmap](../../dev/roadmap.md)). 154 listings on this scrape carry a
+    newline inside their quoted description — most span two lines, a few up to
+    six — so they arrive as 171 extra rows, and the run says so: `308 row(s)
+    had an unbalanced quote — treated as literal text`. If you need those
+    descriptions rejoined, strip the newlines before the conversion; if you
+    only care about the licence fields, the split rows are harmless.
 
 The 84% `unlicensed` rate in the 300-row slice holds at 86% across the full
 36k listings — Local Law 18's enforcement gap is not a sampling artifact. The
 quoted-comma names (e.g. `Perfect for Your Parents, With Garden & Patio`)
-stay intact in a single field, exactly as TRICK 0 promises.
+stay intact in a single field, exactly as TRICK 0 promises — commas are handled
+by the quoting rules; only newlines break a record.
 
 ## The tricks
 
