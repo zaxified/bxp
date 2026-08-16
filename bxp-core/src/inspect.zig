@@ -58,9 +58,18 @@ pub fn annotateConfigFromFile(a: std.mem.Allocator, path: []const u8, check_fs_s
     return annotateRaw(a, raw, path, check_fs_seconds);
 }
 
-/// Pure annotation pipeline — takes JSON5 source bytes, preserves comments as
-/// `$comm_<N>` siblings, injects `$err_<N>`/`$warn_<N>`/`$info_<N>` markers for
-/// syntax and semantic errors, returns the serialized JSON + exit code.
+/// Pure annotation pipeline — takes JSON5 source bytes, injects
+/// `$err_<N>`/`$warn_<N>`/`$info_<N>` markers for syntax and semantic errors,
+/// returns the serialized JSON + exit code.
+///
+/// Comments are NOT preserved: `preprocessAnnotated` strips them exactly like
+/// the plain `preprocess` does, so no `$comm_<N>` sibling is ever emitted (the
+/// json5 module has a test asserting that, and the pre-migration local copy
+/// carried the same assertion). What the annotated variant adds over the plain
+/// one is the source-offset bookkeeping the `$err_`/`$warn_`/`$info_` markers
+/// are placed by. `config.isAnnotationKey` still matches the `$comm_` prefix
+/// defensively, so a stray one from any future emitter would be filtered rather
+/// than mistaken for a config key.
 ///
 /// Never reads files. Never writes to stdout/stderr. Never calls exit.
 /// `path_label` is used only in diagnostic messages — pass `"<inline>"` or any
@@ -74,7 +83,24 @@ pub fn annotateRaw(a: std.mem.Allocator, raw: []const u8, path_label: []const u8
     var value = std.json.parseFromSliceLeaky(std.json.Value, a, ann.out, .{
         .duplicate_field_behavior = .use_last,
     }) catch |err| {
-        return .{ .json = try formatRootErr(a, @errorName(err)), .exit_code = 1 };
+        // No annotated document can be built from bytes that do not parse — but
+        // the position is not lost. `config.loadFromBytes` runs its own scanner
+        // over the same source and reports the offending line/col, which is what
+        // `bxp-cli` prints as a caret for the identical file. Returning the bare
+        // root error here would hand the GUI and MCP clients a positionless
+        // `SyntaxError` instead, and the stricter upstream `json5` (which no
+        // longer elides `[,]` / `{,}` / a dangling comma) put that class of
+        // config back within reach of an ordinary hand edit.
+        var pdiag: diagnostics_mod.Diagnostics = .init(a);
+        var root: std.json.Value = .{ .object = .empty };
+        if (config_mod.loadFromBytes(a, raw, path_label, &pdiag)) |_| {} else |_| {}
+        // Keep the raw error name only when the loader produced nothing better,
+        // so the caller is never handed a silent, error-free document.
+        if (pdiag.items.items.len == 0) {
+            try insertErrBefore(a, &root, "", @errorName(err), &counter);
+        }
+        try injectDiagnostics(a, &root, pdiag.items.items, &counter);
+        return .{ .json = try valueToJsonString(a, root), .exit_code = 1 };
     };
 
     var diag: diagnostics_mod.Diagnostics = .init(a);
@@ -269,6 +295,14 @@ fn injectDiagnostics(
         try obj.put(a, "message", .{ .string = try a.dupe(u8, d.message) });
         if (d.expr_off) |off| try obj.put(a, "off", .{ .integer = @intCast(off) });
         if (d.expr_len) |len| try obj.put(a, "len", .{ .integer = @intCast(len) });
+        // Source position, present on the diagnostics the config loader's own
+        // scanner produces (JSON5 syntax + duplicate keys). `off`/`len` locate a
+        // token INSIDE an expression; these locate a line in the file, so a
+        // syntax error that has no place in the config tree can still be pointed
+        // at. Additive to the marker object — a consumer that only reads
+        // `message` is unaffected.
+        if (d.line) |ln| try obj.put(a, "line", .{ .integer = @intCast(ln) });
+        if (d.col) |c| try obj.put(a, "col", .{ .integer = @intCast(c) });
         if (d.suggest) |s| try obj.put(a, "suggest", .{ .string = try a.dupe(u8, s) });
         try insertNumberedBefore(a, parent_ptr, prefix, field_name, .{ .object = obj }, counter);
     }

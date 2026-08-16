@@ -128,28 +128,55 @@ every sibling key is unique. Each finding is inserted immediately before the
 offending key in its parent object; appended at the end when the offending key
 is absent (e.g. a missing required field).
 
-| Key prefix  | Shape                                                                          | Meaning                  |
-| ----------- | ------------------------------------------------------------------------------ | ------------------------ |
-| `$comm_<N>` | `{ "text": "...", "placement": "leading"\|"trailing"\|"block"\|"standalone" }` | Preserved JSON5 comment. |
-| `$err_<N>`  | `{ "message": "...", "off"?: N, "len"?: N, "suggest"?: "..." }`                | Validation error.        |
-| `$warn_<N>` | same shape as `$err_<N>`                                                       | Non-fatal warning.       |
-| `$info_<N>` | same shape as `$err_<N>`                                                       | Informational finding.   |
+| Key prefix  | Shape                                                                                 | Meaning                |
+| ----------- | ------------------------------------------------------------------------------------- | ---------------------- |
+| `$err_<N>`  | `{ "message": "...", "off"?: N, "len"?: N, "line"?: N, "col"?: N, "suggest"?: "..." }` | Validation error.      |
+| `$warn_<N>` | same shape as `$err_<N>`                                                              | Non-fatal warning.     |
+| `$info_<N>` | same shape as `$err_<N>`                                                              | Informational finding. |
 
-`off`, `len`, and `suggest` are omitted when the diagnostic has no source span
-or did-you-mean hint. `off`/`len` are byte offsets into the expression source
-string of the offending token.
+`message` is the only key always present; every other key is omitted when the
+diagnostic does not carry it. The two optional pairs locate different things:
 
-`placement` values for `$comm_<N>`:
+- `off` / `len` — byte offsets into the **expression source string** of the
+  offending token (what the GUI's ExprPanel highlights).
+- `line` / `col` — 1-based **position in the config file**, carried by the
+  diagnostics the config loader's own scanner produces: JSON5 syntax errors and
+  duplicate keys. These let a finding that has no place in the config tree still
+  be pointed at a source line.
 
-| Value        | Meaning                                                  |
-| ------------ | -------------------------------------------------------- |
-| `leading`    | Comment on its own line immediately before the next key. |
-| `trailing`   | Inline comment on the same line as the preceding value.  |
-| `block`      | `/* ... */` block comment.                               |
-| `standalone` | Block comment at the end of an object (before `}`).      |
+`suggest` is the did-you-mean hint, separate from the prose in `message`.
+
+A JSON5 syntax error therefore arrives positioned rather than as a bare error
+name — the loader is re-run over the same bytes to recover the position even
+when nothing parseable can be built:
+
+```jsonc
+// config with `data_dir: [1,,]` on line 4
+{
+  "$err_1": {
+    "message": "unexpected character — check for missing quotes, commas, or brackets",
+    "line": 4,
+    "col": 22
+  }
+}
+```
+
+`$err_<N>` may also appear with a bare **string** value instead of an object —
+`inspect.formatRootErr` still emits that older form for a root error. A strict
+consumer must branch on the value type.
+
+**Comments are not carried.** `json5.preprocessAnnotated` strips them exactly as
+the plain `preprocess` does — what "annotated" buys is the source-offset
+bookkeeping the markers above are positioned by, not comment retention. No
+`$comm_<N>` key is ever emitted; the `json5` module has a test asserting it.
+`config.isAnnotationKey` nonetheless matches the `$comm_` prefix defensively, so
+a stray one would be filtered rather than read as a config key. The GUI keeps
+comments by parsing the same file itself with `packages/json5_ast`, which is
+what makes its CST-preserving Save possible; the annotated JSON is a diagnostics
+channel, not a round-trip format.
 
 The runtime config loader (`bxp-cli`) uses `json5.preprocess` (non-annotated
-variant), so `$comm_<N>` / `$err_<N>` keys never reach the conversion pipeline.
+variant), so `$err_<N>` keys never reach the conversion pipeline.
 
 ### --list-templates
 

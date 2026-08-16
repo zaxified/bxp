@@ -2366,6 +2366,51 @@ fn jsonErrorDesc(err: anyerror) []const u8 {
     };
 }
 
+/// Print a human-readable diagnostic to stderr — but ONLY when the caller
+/// passed no structured diagnostics sink.
+///
+/// `sink == null` is the bxp-cli path (`load()` passes null): stderr IS the
+/// user interface there, so the `# file:line:col …` lines and the caret
+/// snippets below are what the user actually reads. A non-null sink means an
+/// in-process caller — `inspect.zig` (and through it bxp-mcp and
+/// bxp-gui-bridge) plus the unit tests. Every print site in this file is
+/// paired with a structured `Diagnostic` carrying the same content, so on
+/// those paths the human text is pure duplication, and their stderr is
+/// somebody else's log: the agent host's for an MCP server, the GUI's console
+/// for the bridge, the test runner's for `zig build test`. `inspect.zig`
+/// documents its pipeline as never writing to stdout/stderr — this gate is
+/// what makes that true.
+///
+/// Never changes control flow: suppressing the text leaves the surrounding
+/// `return` / `return error` exactly as it was.
+fn printHuman(sink: ?*Diagnostics, comptime fmt: []const u8, args: anytype) void {
+    if (sink != null) return;
+    std.debug.print(fmt, args);
+}
+
+/// Print the offending source line from `raw` plus a caret under column `col`
+/// — the human half of a positioned diagnostic, shared by `diagDuplicateKey`
+/// and `diagJsonError`.
+///
+/// Gated as a WHOLE by `printHuman`'s rule (see it): with a sink present the
+/// line scan does not even run, so there is no per-character `printHuman` call
+/// in the caret loop.
+fn printHumanCaret(sink: ?*Diagnostics, raw: []const u8, ln: u64, col: u64) void {
+    if (sink != null) return;
+    var line_iter = std.mem.splitScalar(u8, raw, '\n');
+    var cur: u64 = 1;
+    while (line_iter.next()) |line_content| : (cur += 1) {
+        if (cur == ln) {
+            const trimmed = std.mem.trimEnd(u8, line_content, "\r");
+            std.debug.print("#   {s}\n#   ", .{trimmed});
+            var c: u64 = 1;
+            while (c < col) : (c += 1) std.debug.print(" ", .{});
+            std.debug.print("^\n", .{});
+            break;
+        }
+    }
+}
+
 /// Scans preprocessed JSON `content` to find the first duplicate object key.
 /// Tracks object/array nesting to distinguish keys from values.
 /// On success, prints a diagnostic with file, line, key name and source snippet.
@@ -2461,7 +2506,7 @@ fn diagDuplicateKey(
                                 "duplicate key '{s}' — remove or rename the repeated key",
                                 .{s},
                             ) catch {
-                                std.debug.print(
+                                printHuman(diag,
                                     "# {s}:{d}:{d}: JSON error (line {d}, pos {d}) — duplicate key '{s}' — remove or rename the repeated key\n",
                                     .{ config_path, ln, caret_col, ln, caret_col, s },
                                 );
@@ -2476,22 +2521,11 @@ fn diagDuplicateKey(
                                 .message = msg,
                             }) catch {};
                         }
-                        std.debug.print(
+                        printHuman(diag,
                             "# {s}:{d}:{d}: JSON error (line {d}, pos {d}) — duplicate key '{s}' — remove or rename the repeated key\n",
                             .{ config_path, ln, caret_col, ln, caret_col, s },
                         );
-                        var line_iter = std.mem.splitScalar(u8, raw, '\n');
-                        var cur: u64 = 1;
-                        while (line_iter.next()) |line_content| : (cur += 1) {
-                            if (cur == ln) {
-                                const trimmed = std.mem.trimEnd(u8, line_content, "\r");
-                                std.debug.print("#   {s}\n#   ", .{trimmed});
-                                var c: u64 = 1;
-                                while (c < caret_col) : (c += 1) std.debug.print(" ", .{});
-                                std.debug.print("^\n", .{});
-                                break;
-                            }
-                        }
+                        printHumanCaret(diag, raw, ln, caret_col);
                         return true;
                     }
                     const key_copy = alloc.dupe(u8, s) catch continue;
@@ -2535,7 +2569,7 @@ fn diagJsonError(
     err: anyerror,
     out_diag: ?*Diagnostics,
 ) void {
-    std.debug.print("---\n", .{});
+    printHuman(out_diag, "---\n", .{});
     var scanner = std.json.Scanner.initCompleteInput(alloc, content);
     defer scanner.deinit();
     var scan_diag: std.json.Diagnostics = .{};
@@ -2561,20 +2595,9 @@ fn diagJsonError(
                     }) catch {};
                 }
             }
-            std.debug.print("# {s}:{d}:{d}: JSON error (line {d}, pos {d}) — {s}\n", .{ config_path, ln, col, ln, col, jsonErrorDesc(scan_err) });
+            printHuman(out_diag, "# {s}:{d}:{d}: JSON error (line {d}, pos {d}) — {s}\n", .{ config_path, ln, col, ln, col, jsonErrorDesc(scan_err) });
             // Show the original source line (line numbers match content for typical JSON5)
-            var line_iter = std.mem.splitScalar(u8, raw, '\n');
-            var cur: u64 = 1;
-            while (line_iter.next()) |line_content| : (cur += 1) {
-                if (cur == ln) {
-                    const trimmed = std.mem.trimEnd(u8, line_content, "\r");
-                    std.debug.print("#   {s}\n#   ", .{trimmed});
-                    var c: u64 = 1;
-                    while (c < col) : (c += 1) std.debug.print(" ", .{});
-                    std.debug.print("^\n", .{});
-                    break;
-                }
-            }
+            printHumanCaret(out_diag, raw, ln, col);
             break;
         };
         if (tok == .end_of_document) break;
@@ -2594,7 +2617,7 @@ fn diagJsonError(
                         .message = m,
                     }) catch {};
                 }
-                std.debug.print("# {s}: JSON error — {s}\n", .{ config_path, jsonErrorDesc(err) });
+                printHuman(out_diag, "# {s}: JSON error — {s}\n", .{ config_path, jsonErrorDesc(err) });
             }
         } else {
             if (out_diag) |d| {
@@ -2606,7 +2629,7 @@ fn diagJsonError(
                     .message = m,
                 }) catch {};
             }
-            std.debug.print("# {s}: JSON error — {s}\n", .{ config_path, jsonErrorDesc(err) });
+            printHuman(out_diag, "# {s}: JSON error — {s}\n", .{ config_path, jsonErrorDesc(err) });
         }
     }
 }
@@ -2688,7 +2711,7 @@ pub fn load(alloc: std.mem.Allocator, config_path: []const u8) !Config {
 /// Emit a per-template diagnostic to the bag if non-null. The path is
 /// always rooted at `conversion_templates.<id>.<field_suffix>`. The
 /// message is built with `std.fmt.allocPrint` from the format string +
-/// args, mirroring the existing `std.debug.print` text so bxp-cli's
+/// args, mirroring the paired `printHuman` text so bxp-cli's
 /// stderr stays untouched and the inspect core's `$err_*` annotation gets the
 /// same human-readable wording.
 fn emitTemplateDiag(
@@ -2856,11 +2879,11 @@ fn dupeNamedMap(alloc: std.mem.Allocator, src: std.json.ObjectMap) !expr.NamedMa
 /// file (it already has the raw bytes for `preprocessAnnotated`) and so
 /// inline tests can exercise the loader without touching disk.
 ///
-/// `diag` is an optional structured diagnostic sink. When non-null,
-/// future phases will append path-aware errors / warnings into it
-/// alongside the existing `std.debug.print` + `return error` behavior.
-/// bxp-cli passes null so its load path is unchanged bit by bit; only
-/// the inspect core's deep-validation pass passes a non-null sink today.
+/// `diag` is an optional structured diagnostic sink. When non-null, path-aware
+/// errors / warnings are appended into it and the human stderr text is
+/// suppressed — see `printHuman`. bxp-cli passes null so its load path is
+/// unchanged bit by bit; the inspect core's deep-validation pass (and the unit
+/// tests) pass a non-null sink.
 ///
 /// REFACTOR NOTE (2026-06-13 audit): this is a long (~480-line) linear parse
 /// loop. A future cleanup could split it into per-section parsers
@@ -3010,7 +3033,7 @@ pub fn loadFromBytes(
                             try emitTemplateDiag(alloc, diag, .@"error", "config.wrong_type",
                                 b_entry.key_ptr.*, "xlsx_sheet",
                                 "xlsx_sheet must be an object, got {s}", .{@tagName(xs_val)});
-                            std.debug.print(
+                            printHuman(diag,
                                 "---\n# {s}: config error: template '{s}': xlsx_sheet must be an object, got {s}\n",
                                 .{ config_path, b_entry.key_ptr.*, @tagName(xs_val) },
                             );
@@ -3023,7 +3046,7 @@ pub fn loadFromBytes(
                                 try emitTemplateDiag(alloc, diag, .@"error", "config.wrong_type",
                                     b_entry.key_ptr.*, "xlsx_sheet.name",
                                     "xlsx_sheet.name must be a string, got {s}", .{@tagName(v)});
-                                std.debug.print(
+                                printHuman(diag,
                                     "---\n# {s}: config error: template '{s}': xlsx_sheet.name must be a string, got {s}\n",
                                     .{ config_path, b_entry.key_ptr.*, @tagName(v) },
                                 );
@@ -3033,7 +3056,7 @@ pub fn loadFromBytes(
                             try emitTemplateDiag(alloc, diag, .@"error", "config.missing_field",
                                 b_entry.key_ptr.*, "xlsx_sheet",
                                 "xlsx_sheet missing required key 'name'", .{});
-                            std.debug.print(
+                            printHuman(diag,
                                 "---\n# {s}: config error: template '{s}': xlsx_sheet missing required key 'name'\n",
                                 .{ config_path, b_entry.key_ptr.* },
                             );
@@ -3051,7 +3074,7 @@ pub fn loadFromBytes(
                                     try emitTemplateDiag(alloc, diag, .@"error", "config.invalid_value",
                                         b_entry.key_ptr.*, "xlsx_sheet.header_row",
                                         "xlsx_sheet.header_row must be between 0 and {d}, got {d}", .{ std.math.maxInt(u32), n });
-                                    std.debug.print(
+                                    printHuman(diag,
                                         "---\n# {s}: config error: template '{s}': xlsx_sheet.header_row out of range, got {d}\n",
                                         .{ config_path, b_entry.key_ptr.*, n });
                                     return error.InvalidConfig;
@@ -3062,7 +3085,7 @@ pub fn loadFromBytes(
                                 try emitTemplateDiag(alloc, diag, .@"error", "config.wrong_type",
                                     b_entry.key_ptr.*, "xlsx_sheet.header_row",
                                     "xlsx_sheet.header_row must be a number, got {s}", .{@tagName(v)});
-                                std.debug.print(
+                                printHuman(diag,
                                     "---\n# {s}: config error: template '{s}': xlsx_sheet.header_row must be a number, got {s}\n",
                                     .{ config_path, b_entry.key_ptr.*, @tagName(v) },
                                 );
@@ -3072,7 +3095,7 @@ pub fn loadFromBytes(
                             try emitTemplateDiag(alloc, diag, .@"error", "config.missing_field",
                                 b_entry.key_ptr.*, "xlsx_sheet",
                                 "xlsx_sheet missing required key 'header_row'", .{});
-                            std.debug.print(
+                            printHuman(diag,
                                 "---\n# {s}: config error: template '{s}': xlsx_sheet missing required key 'header_row'\n",
                                 .{ config_path, b_entry.key_ptr.* },
                             );
@@ -3084,7 +3107,7 @@ pub fn loadFromBytes(
                                 try emitTemplateDiag(alloc, diag, .@"error", "config.wrong_type",
                                     b_entry.key_ptr.*, "xlsx_sheet.output_suffix",
                                     "xlsx_sheet.output_suffix must be a string, got {s}", .{@tagName(v)});
-                                std.debug.print(
+                                printHuman(diag,
                                     "---\n# {s}: config error: template '{s}': xlsx_sheet.output_suffix must be a string, got {s}\n",
                                     .{ config_path, b_entry.key_ptr.*, @tagName(v) },
                                 );
@@ -3094,7 +3117,7 @@ pub fn loadFromBytes(
                             try emitTemplateDiag(alloc, diag, .@"error", "config.missing_field",
                                 b_entry.key_ptr.*, "xlsx_sheet",
                                 "xlsx_sheet missing required key 'output_suffix'", .{});
-                            std.debug.print(
+                            printHuman(diag,
                                 "---\n# {s}: config error: template '{s}': xlsx_sheet missing required key 'output_suffix'\n",
                                 .{ config_path, b_entry.key_ptr.* },
                             );
@@ -3121,7 +3144,7 @@ pub fn loadFromBytes(
                             try emitTemplateDiag(alloc, diag, .@"error", "config.wrong_type",
                                 b_entry.key_ptr.*, "zip_input",
                                 "zip_input must be an object, got {s}", .{@tagName(zi_val)});
-                            std.debug.print(
+                            printHuman(diag,
                                 "---\n# {s}: config error: template '{s}': zip_input must be an object, got {s}\n",
                                 .{ config_path, b_entry.key_ptr.*, @tagName(zi_val) },
                             );
@@ -3134,7 +3157,7 @@ pub fn loadFromBytes(
                                 try emitTemplateDiag(alloc, diag, .@"error", "config.wrong_type",
                                     b_entry.key_ptr.*, "zip_input.entry_pattern",
                                     "zip_input.entry_pattern must be a string, got {s}", .{@tagName(v)});
-                                std.debug.print(
+                                printHuman(diag,
                                     "---\n# {s}: config error: template '{s}': zip_input.entry_pattern must be a string, got {s}\n",
                                     .{ config_path, b_entry.key_ptr.*, @tagName(v) },
                                 );
@@ -3151,7 +3174,7 @@ pub fn loadFromBytes(
                                 try emitTemplateDiag(alloc, diag, .@"error", "config.invalid_value",
                                     b_entry.key_ptr.*, "zip_input.dir_mode",
                                     "zip_input.dir_mode must be \"basename\" or \"keep_path\", got \"{s}\"", .{s});
-                                std.debug.print(
+                                printHuman(diag,
                                     "---\n# {s}: config error: template '{s}': zip_input.dir_mode must be \"basename\" or \"keep_path\", got \"{s}\"\n",
                                     .{ config_path, b_entry.key_ptr.*, s },
                                 );
@@ -3161,7 +3184,7 @@ pub fn loadFromBytes(
                                 try emitTemplateDiag(alloc, diag, .@"error", "config.wrong_type",
                                     b_entry.key_ptr.*, "zip_input.dir_mode",
                                     "zip_input.dir_mode must be a string, got {s}", .{@tagName(v)});
-                                std.debug.print(
+                                printHuman(diag,
                                     "---\n# {s}: config error: template '{s}': zip_input.dir_mode must be a string, got {s}\n",
                                     .{ config_path, b_entry.key_ptr.*, @tagName(v) },
                                 );
@@ -3174,7 +3197,7 @@ pub fn loadFromBytes(
                                 try emitTemplateDiag(alloc, diag, .@"error", "config.wrong_type",
                                     b_entry.key_ptr.*, "zip_input.path_separator",
                                     "zip_input.path_separator must be a string, got {s}", .{@tagName(v)});
-                                std.debug.print(
+                                printHuman(diag,
                                     "---\n# {s}: config error: template '{s}': zip_input.path_separator must be a string, got {s}\n",
                                     .{ config_path, b_entry.key_ptr.*, @tagName(v) },
                                 );
@@ -3216,7 +3239,7 @@ pub fn loadFromBytes(
                             try emitTemplateDiag(alloc, diag, .@"error", "config.wrong_type",
                                 b_entry.key_ptr.*, "maps",
                                 "maps must be an object {{ map_name: {{ key: value }} }}, got {s}", .{@tagName(maps_val)});
-                            std.debug.print(
+                            printHuman(diag,
                                 "error: template '{s}': maps must be an object, got {s}\n",
                                 .{ b_entry.key_ptr.*, @tagName(maps_val) },
                             );
@@ -3228,7 +3251,7 @@ pub fn loadFromBytes(
                                 try emitTemplateDiag(alloc, diag, .@"error", "config.wrong_type",
                                     b_entry.key_ptr.*, "maps",
                                     "maps.{s} must be an object {{ key: value }}, got {s}", .{ lm.key_ptr.*, @tagName(lm.value_ptr.*) });
-                                std.debug.print(
+                                printHuman(diag,
                                     "error: template '{s}': maps.{s} must be an object\n",
                                     .{ b_entry.key_ptr.*, lm.key_ptr.* },
                                 );
@@ -3376,7 +3399,7 @@ pub fn loadFromBytes(
                                         try emitTemplateDiag(alloc, diag, .@"error", "config.invalid_pre_pass_name",
                                             b_entry.key_ptr.*, "pre_pass",
                                             "pre_pass name must be non-empty and free of NUL bytes", .{});
-                                        std.debug.print(
+                                        printHuman(diag,
                                             "---\n# {s}: config error: template '{s}': pre_pass name must be non-empty and free of NUL bytes\n",
                                             .{ config_path, b_entry.key_ptr.* },
                                         );
@@ -3396,7 +3419,7 @@ pub fn loadFromBytes(
                                 try emitTemplateDiag(alloc, diag, .@"error", "config.invalid_value",
                                     b_entry.key_ptr.*, "csv_header_line",
                                     "csv_header_line must be between 0 and {d}, got {d}", .{ std.math.maxInt(u32), n });
-                                std.debug.print(
+                                printHuman(diag,
                                     "---\n# {s}: config error: template '{s}': csv_header_line out of range, got {d}\n",
                                     .{ config_path, b_entry.key_ptr.*, n });
                                 return error.InvalidConfig;
@@ -3407,7 +3430,7 @@ pub fn loadFromBytes(
                             try emitTemplateDiag(alloc, diag, .@"error", "config.wrong_type",
                                 b_entry.key_ptr.*, "csv_header_line",
                                 "csv_header_line must be a number, got {s}", .{@tagName(v)});
-                            std.debug.print(
+                            printHuman(diag,
                                 "---\n# {s}: config error: template '{s}': csv_header_line must be a number, got {s}\n",
                                 .{ config_path, b_entry.key_ptr.*, @tagName(v) });
                             return error.InvalidConfig;
@@ -3431,7 +3454,7 @@ pub fn loadFromBytes(
                     try emitTemplateDiag(alloc, diag, .@"error", "config.missing_field",
                         b_entry.key_ptr.*, "output_schema",
                         "output_schema is required", .{});
-                    std.debug.print("---\n# {s}: config error: template '{s}': output_schema is required\n", .{ config_path, b_entry.key_ptr.* });
+                    printHuman(diag, "---\n# {s}: config error: template '{s}': output_schema is required\n", .{ config_path, b_entry.key_ptr.* });
                     return error.MissingOutputSchema;
                 }
 
