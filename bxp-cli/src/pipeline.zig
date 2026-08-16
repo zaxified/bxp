@@ -3001,7 +3001,14 @@ fn classifyXlsxErr(
         stats.has_fatal = true;
         return .fatal;
     }
-    out.fatal("fatal error: xlsx conversion failed for '{s}': {s}\n", .{ xlsx_name, @errorName(err) });
+    if (err == error.XlsxEntryCorrupt) {
+        out.fatal(
+            "fatal error: xlsx '{s}' is corrupt — a part's content does not match the CRC-32 the workbook declares\n",
+            .{xlsx_name},
+        );
+    } else {
+        out.fatal("fatal error: xlsx conversion failed for '{s}': {s}\n", .{ xlsx_name, @errorName(err) });
+    }
     stats.has_fatal = true;
     return .fatal;
 }

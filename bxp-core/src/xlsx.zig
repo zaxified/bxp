@@ -55,6 +55,23 @@ const PartCtx = struct {
     /// Opens the named part for streaming and returns an `XmlTok` over its
     /// decompressed bytes, or null if the part is absent (optional parts like
     /// sharedStrings.xml / styles.xml may not exist). The returned tokenizer
+    /// Translate a failed part read whose real cause was a CRC-32 mismatch.
+    ///
+    /// `std.Io.Reader`'s vtable has a fixed error set, so zipstream can only
+    /// surface a checksum mismatch as the generic `ReadFailed` and reports the
+    /// actual reason out of band via `crcMismatch()`. Every entry point that
+    /// drives a part read funnels its result through here, so "this workbook's
+    /// bytes do not match the checksums it carries" never reaches the user as
+    /// a bare read failure — the two send them after completely different
+    /// things (re-download the file vs. check the disk). Mirrors what
+    /// bxp-cli's `zipPrePass` does for the zipped-CSV path.
+    fn mapCrc(self: *const PartCtx, result: anytype) !@typeInfo(@TypeOf(result)).error_union.payload {
+        return result catch |err| {
+            if (self.entry_reader.crcMismatch()) return error.XlsxEntryCorrupt;
+            return err;
+        };
+    }
+
     /// borrows `self.entry_reader` and the windows, so only one part may be
     /// open at a time.
     fn open(self: *PartCtx, path: []const u8) !?XmlTok {
@@ -122,7 +139,10 @@ pub const Workbook = struct {
 
         var ctx: PartCtx = .{ .archive = &archive, .zip_window = zip_window, .xml_window = xml_window };
 
-        var sheet_paths = try parseWorkbook(alloc, &ctx);
+        // Every part read below goes through `ctx.mapCrc` so a tampered
+        // workbook.xml / sharedStrings.xml / styles.xml is reported as corrupt
+        // rather than as a bare `ReadFailed` — see the helper's doc comment.
+        var sheet_paths = try ctx.mapCrc(parseWorkbook(alloc, &ctx));
         errdefer {
             var it = sheet_paths.iterator();
             while (it.next()) |e| {
@@ -131,12 +151,12 @@ pub const Workbook = struct {
             }
             sheet_paths.deinit();
         }
-        var shared_strings = try parseSharedStrings(alloc, &ctx);
+        var shared_strings = try ctx.mapCrc(parseSharedStrings(alloc, &ctx));
         errdefer {
             for (shared_strings.items) |s| alloc.free(s);
             shared_strings.deinit(alloc);
         }
-        const date_styles = try parseDateStyles(alloc, &ctx);
+        const date_styles = try ctx.mapCrc(parseDateStyles(alloc, &ctx));
         return .{ .sheet_paths = sheet_paths, .shared_strings = shared_strings, .date_styles = date_styles };
     }
 
@@ -242,7 +262,7 @@ pub fn extractSheet(
     defer alloc.free(xml_window);
 
     var ctx: PartCtx = .{ .archive = &archive, .zip_window = zip_window, .xml_window = xml_window };
-    try extractSheetWithCtx(io, alloc, &ctx, wb, spec, out_dir, out_basename);
+    try ctx.mapCrc(extractSheetWithCtx(io, alloc, &ctx, wb, spec, out_dir, out_basename));
 }
 
 /// Converts selected sheets from an xlsx file to CSV files in out_dir.
@@ -277,7 +297,7 @@ pub fn xlsxToCsv(
 
     var ctx: PartCtx = .{ .archive = &archive, .zip_window = zip_window, .xml_window = xml_window };
     for (sheets) |spec| {
-        try extractSheetWithCtx(io, alloc, &ctx, &wb, spec, out_dir, out_basename);
+        try ctx.mapCrc(extractSheetWithCtx(io, alloc, &ctx, &wb, spec, out_dir, out_basename));
     }
 }
 

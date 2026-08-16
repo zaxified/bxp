@@ -579,9 +579,20 @@ residual 🔵 design observations. Greppable in-code marker: `AUDIT-OK`.
   end-of-stream. Before that, a stored entry whose content had been altered
   while its checksum was left intact converted with `exit 0` and produced
   silently wrong output — demonstrated against the pre-migration binary.
-  `zipPrePass` translates the mismatch into `error.ZipEntryCorrupt` (via
-  `EntryReader.crcMismatch()`, since the Reader vtable can only surface a
-  generic `ReadFailed`) and reports it as a corrupt member.
+  Both ingest paths translate the mismatch rather than passing the generic
+  `ReadFailed` through (the Reader vtable has a fixed error set, so zipstream
+  reports the reason out of band via `EntryReader.crcMismatch()`):
+  `zipPrePass` → `error.ZipEntryCorrupt`, and `xlsx.zig`'s `PartCtx.mapCrc`
+  → `error.XlsxEntryCorrupt`, applied at all three entry points that drive a
+  part read (`Workbook.init`, `extractSheet`, `xlsxToCsv`) — `extractSheet` is
+  the one bxp-cli's sheet fan-out actually calls.
+
+  **This was not an XTB workaround.** XTB's known quirk is a different one —
+  `version_needed` 45 in local headers vs 20 in the central directory, which
+  `std.zip.extract` rejected outright until the streaming rewrite made it moot
+  (the local header is read directly). All 18 real XTB workbooks verify clean
+  against `zipfile.testzip()`, and the live run puts every one of them through
+  the CRC-verifying reader.
 - **`inspect.zig formatRootErr` shape ≠ injected-diagnostic shape.** Root
   errors emit `{"$err_1":"<msg>"}` (bare string); injected diagnostics emit
   `{"$err_N":{message,off?,len?,suggest?}}` (object). The in-code doc comment
