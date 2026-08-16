@@ -225,92 +225,67 @@ export fn bridge_run(
 
     const has_stdin = stdin_len > 0;
     const io = bridgeIo();
-    // Suppress the briefly-visible cmd.exe window that Windows pops up when a
-    // GUI parent (bxp-gui.exe) spawns a console-subsystem child (bxp-cli.exe);
-    // `create_no_window` maps to CREATE_NO_WINDOW and is a no-op elsewhere.
-    const cwd_opt: std.process.Child.Cwd = if (req.cwd) |cwd|
-        (if (cwd.len > 0) .{ .path = cwd } else .inherit)
-    else
-        .inherit;
 
-    ensureChildReaping();
-    var child = std.process.spawn(io, .{
+    // One-shot run through `procrun.run`. What this file used to hand-roll —
+    // a three-thread drain (stdin writer + one pump per output stream) with a
+    // per-stream cap that KEEPS the prefix and keeps reading past it, instead
+    // of std's `error.Std{out,err}StreamTooLong` which discards everything
+    // captured so far — is that module's documented contract, because it was
+    // extracted from here. The stdin writer thread matters for the same reason
+    // it did locally: a child that reads stdin while writing stdout deadlocks
+    // if either side is drained serially.
+    //
+    // `create_no_window` is applied by the module unconditionally, which is
+    // what suppresses the cmd.exe flash when a GUI parent (bxp-gui.exe) spawns
+    // a console-subsystem child on Windows.
+    var result = procrun.run(gpa, io, .{
         .argv = argv.items,
         .stdin = if (has_stdin) .pipe else .close,
         .stdout = .pipe,
         .stderr = .pipe,
-        .cwd = cwd_opt,
-        .create_no_window = true,
-    }) catch |err| {
-        return writeErr(out_buf, "spawn failed: {s}", .{@errorName(err)});
+        .cwd = if (req.cwd) |cwd| (if (cwd.len > 0) cwd else null) else null,
+        .max_output_bytes = max_output_bytes,
+    }, if (has_stdin) stdin_ptr[0..stdin_len] else "") catch |err| {
+        return writeErr(out_buf, "{s}: {s}", .{ runPhaseLabel(err), @errorName(err) });
     };
+    defer result.deinit(gpa);
 
-    // Manual two-thread drain instead of std.process.Child.collectOutput:
-    // the stdlib version returns error.StdoutStreamTooLong / StderrStreamTooLong
-    // on overflow and discards everything captured so far, leaving the
-    // caller with nothing useful. Our drainer keeps the prefix up to
-    // `max_output_bytes` and continues reading past the cap so the child
-    // can flush and exit cleanly; truncation is signalled via the
-    // `truncated` response field.
-    var stdout_buf = std.ArrayList(u8).empty;
-    var stderr_buf = std.ArrayList(u8).empty;
-    defer stdout_buf.deinit(a);
-    defer stderr_buf.deinit(a);
-
-    var truncated_flag = std.atomic.Value(bool).init(false);
-    // When stdin is in play, the writer thread runs concurrently with the
-    // drainers — without this a child reading stdin while writing stdout
-    // would deadlock once either side hits its pipe buffer. The writer
-    // closes the child's stdin pipe on completion so the child's
-    // `read(stdin)` sees EOF and proceeds to exit.
-    var stdin_writer_err: ?anyerror = null;
-    var stdin_writer_thread: ?std.Thread = null;
-    if (has_stdin) {
-        const stdin_slice = stdin_ptr[0..stdin_len];
-        stdin_writer_thread = std.Thread.spawn(.{}, stdinWriterLoop, .{ &child, stdin_slice, &stdin_writer_err }) catch |err| blk: {
-            stdin_writer_err = err;
-            // Spawn failure — close stdin manually so the child unblocks
-            // its read() and exits. Drainers + wait still run normally.
-            if (child.stdin) |stdin_pipe| {
-                stdin_pipe.close(io);
-                child.stdin = null;
-            }
-            break :blk null;
-        };
-    }
-    collectOutputCapped(&child, a, &stdout_buf, &stderr_buf, max_output_bytes, &truncated_flag) catch |err| {
-        if (stdin_writer_thread) |t| t.join();
-        // Best-effort kill (void in 0.16; ignores OS errors internally).
-        child.kill(io);
-        return writeErr(out_buf, "collect failed: {s}", .{@errorName(err)});
-    };
-    if (stdin_writer_thread) |t| t.join();
-    if (stdin_writer_err) |werr| {
-        // stdin write failed mid-stream (child closed its read end early,
-        // pipe broken, OOM). Surface so the Dart side can distinguish
-        // this from a child that simply exited non-zero. Drainers already
-        // captured whatever stdout/stderr the child managed to emit.
-        return writeErr(out_buf, "stdin write failed: {s}", .{@errorName(werr)});
-    }
-
-    // `waitTolerant` reaps (ECHILD-safe vs the Dart-VM reaper) and closes the
-    // child's still-open pipe ends — see its doc comment.
-    const term = waitTolerant(&child);
-
-    const exit_code: i32 = switch (term) {
+    const exit_code: i32 = switch (result.term) {
         .exited => |c| @intCast(c),
-        .signal => |s| -@as(i32, @intCast(@intFromEnum(s))),
+        .signal => |sig| -@as(i32, @intCast(@intFromEnum(sig))),
         .stopped, .unknown => -1,
     };
 
     const resp: Response = .{
         .exit_code = exit_code,
-        .stdout = stdout_buf.items,
-        .stderr = stderr_buf.items,
-        .truncated = truncated_flag.load(.acquire),
+        .stdout = result.stdout,
+        .stderr = result.stderr,
+        // One flag covers both streams on this ABI; either overflowing is
+        // "output was cut", which is all the Dart side renders.
+        .truncated = result.truncated_stdout or result.truncated_stderr,
     };
 
     return writeResponse(out_buf, resp);
+}
+
+/// Which phase of a one-shot run an error came from, so the `err` string keeps
+/// telling the Dart side whether the child was never launched, whether its
+/// stdin broke, or whether something else went wrong. `procrun.run` folds all
+/// three into one error union; the wording here is the one the hand-rolled
+/// version produced, kept because "spawn failed: FileNotFound" (the binary is
+/// missing) and "stdin write failed: BrokenPipe" (the child closed its read
+/// end early) send a reader to completely different places.
+fn runPhaseLabel(err: anyerror) []const u8 {
+    return switch (err) {
+        error.BrokenPipe => "stdin write failed",
+        error.FileNotFound,
+        error.AccessDenied,
+        error.NotDir,
+        error.InvalidExe,
+        error.NameTooLong,
+        => "spawn failed",
+        else => "run failed",
+    };
 }
 
 /// Stringify a successful Response into the caller's buffer.
@@ -342,89 +317,14 @@ fn writeErr(out_buf: []u8, comptime fmt: []const u8, args: anytype) i32 {
     return writeResponse(out_buf, resp);
 }
 
-// ── Capped two-thread drain ─────────────────────────────────────────────
+// ── One-shot capture ────────────────────────────────────────────────────
 //
-// Drains a child's stdout + stderr concurrently from native threads.
-// Each stream stores up to `cap` bytes; once a stream reaches the cap,
-// further reads are discarded but the loop keeps consuming so the child
-// doesn't block forever on its own WriteFile. `truncated` is set whenever
-// either stream had to discard at least one byte.
-
-const DrainerArgs = struct {
-    file: std.Io.File,
-    buf: *std.ArrayList(u8),
-    alloc: std.mem.Allocator,
-    cap: usize,
-    truncated: *std.atomic.Value(bool),
-};
-
-fn drainerLoop(args: DrainerArgs) void {
-    const io = bridgeIo();
-    var read_buf: [8192]u8 = undefined;
-    while (true) {
-        const n = args.file.readStreaming(io, &.{read_buf[0..]}) catch return;
-        if (n == 0) return;
-        const have = args.buf.items.len;
-        if (have >= args.cap) {
-            args.truncated.store(true, .release);
-            continue;
-        }
-        const space = args.cap - have;
-        const take = @min(n, space);
-        args.buf.appendSlice(args.alloc, read_buf[0..take]) catch return;
-        if (take < n) args.truncated.store(true, .release);
-    }
-}
-
-/// Pump `data` into the child's stdin pipe and close it. Runs on its own
-/// thread so a request body larger than the OS pipe buffer can't deadlock
-/// against a child holding its stdout flush until it has finished reading
-/// stdin (the `inspect.evalBatch` shape: write request, then read
-/// response). Stores the first error encountered in `out_err` for the
-/// caller to surface — there is no in-band channel back from a detached
-/// writer otherwise.
-fn stdinWriterLoop(
-    child: *std.process.Child,
-    data: []const u8,
-    out_err: *?anyerror,
-) void {
-    const io = bridgeIo();
-    var stdin = child.stdin orelse return;
-    child.stdin = null;
-    defer stdin.close(io);
-    stdin.writeStreamingAll(io, data) catch |err| {
-        out_err.* = err;
-    };
-}
-
-fn collectOutputCapped(
-    child: *std.process.Child,
-    alloc: std.mem.Allocator,
-    stdout_buf: *std.ArrayList(u8),
-    stderr_buf: *std.ArrayList(u8),
-    cap: usize,
-    truncated: *std.atomic.Value(bool),
-) !void {
-    const stdout = child.stdout orelse return error.NoStdoutPipe;
-    const stderr = child.stderr orelse return error.NoStderrPipe;
-
-    const stdout_thread = try std.Thread.spawn(.{}, drainerLoop, .{DrainerArgs{
-        .file = stdout,
-        .buf = stdout_buf,
-        .alloc = alloc,
-        .cap = cap,
-        .truncated = truncated,
-    }});
-    const stderr_thread = try std.Thread.spawn(.{}, drainerLoop, .{DrainerArgs{
-        .file = stderr,
-        .buf = stderr_buf,
-        .alloc = alloc,
-        .cap = cap,
-        .truncated = truncated,
-    }});
-    stdout_thread.join();
-    stderr_thread.join();
-}
+// The capped drain this section used to hold (a `DrainerArgs`/`drainerLoop`
+// pair plus `stdinWriterLoop` and `collectOutputCapped`) is now
+// `procrun.run`, which was extracted from it — see the call site in
+// `bridge_run`. Its unit test moved upstream too ("run: output past
+// max_output_bytes keeps prefix and reports truncation"); the bridge-side
+// check is the FFI probe, which drives `bridge_run` end to end.
 
 // ── Streaming variant ────────────────────────────────────────────────────
 //
@@ -492,19 +392,59 @@ const default_queue_permits: usize = 32;
 /// listener never completes the call).
 const StreamingCtx = struct {
     arena: std.heap.ArenaAllocator,
-    child: std.process.Child,
+    /// The live `procrun` child. Set once `spawnStreaming` returns; owns the
+    /// reader threads, the backpressure semaphore and the child itself.
+    /// `wait` (called from `streamingWaitLoop`) is what frees it.
+    proc: procrun.Handle,
     on_stdout_batch: StreamCallback,
     on_stderr_chunk: StreamCallback,
     on_exit: ExitCallback,
-    stdout_thread: std.Thread,
-    stderr_thread: std.Thread,
     handle: i64 = 0,
     shutting_down: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
-    /// Bound on un-acked stdout batches in flight to Dart. Reader thread
-    /// `wait`s a permit before dispatch; Dart `bridge_ack` posts one after
-    /// it has processed the batch. See `default_queue_permits` for sizing.
-    queue_sema: std.Io.Semaphore = .{ .permits = default_queue_permits },
 };
+
+// ── procrun → Dart trampolines ──────────────────────────────────────────
+//
+// `procrun` hands each chunk to its callback as a BORROWED slice, valid only
+// for the duration of the call. The FFI contract is the opposite: Dart gets a
+// raw pointer it owns until it calls `bridge_free`. So each trampoline copies
+// the chunk with the C allocator (malloc on both sides of the boundary) and
+// hands the copy over — which is also where the `shutting_down` guard belongs,
+// since the copy and the decision to dispatch it are now adjacent.
+//
+// Backpressure ordering differs slightly from the old hand-rolled loop, in the
+// safe direction: `procrun` waits for a permit BEFORE invoking the callback, so
+// the copy happens after the wait rather than before it. One fewer buffer can
+// be in flight; nothing else changes.
+
+fn onStdoutTrampoline(cctx: ?*anyopaque, chunk: []const u8) void {
+    const ctx: *StreamingCtx = @ptrCast(@alignCast(cctx.?));
+    dispatchCopy(ctx, ctx.on_stdout_batch, chunk);
+}
+
+fn onStderrTrampoline(cctx: ?*anyopaque, chunk: []const u8) void {
+    const ctx: *StreamingCtx = @ptrCast(@alignCast(cctx.?));
+    dispatchCopy(ctx, ctx.on_stderr_chunk, chunk);
+}
+
+/// Copy `chunk` onto the C heap and hand it to `cb_opt`, OR drop it when the
+/// stream is tearing down / no callback is registered. Dropping matters: a
+/// buffer handed to a closed Dart NativeCallable would sit in the port queue
+/// forever, because the trampoline that would have called `bridge_free` is
+/// gone (dart-lang/sdk: "Resources passed to the callback must be valid until
+/// the call completes" — a closed listener never completes the call).
+fn dispatchCopy(ctx: *StreamingCtx, cb_opt: StreamCallback, chunk: []const u8) void {
+    if (ctx.shutting_down.load(.acquire)) return;
+    const cb = cb_opt orelse return;
+    const a = std.heap.c_allocator;
+    const copy = a.dupe(u8, chunk) catch return;
+    // Re-check after the copy: teardown may have started while we allocated.
+    if (ctx.shutting_down.load(.acquire)) {
+        a.free(copy);
+        return;
+    }
+    cb(copy.ptr, @intCast(copy.len));
+}
 
 // ── Active-stream registry (cancellation lookup) ────────────────────────
 //
@@ -541,125 +481,45 @@ fn unregisterStream(handle: i64) void {
     _ = streams_table.remove(handle);
 }
 
-/// Stdout reader: drain pipe in 8 KB chunks, dispatch each read() result
-/// verbatim as a raw chunk. Used by the bxp-cli `--trace=bin` (BXTB) path
-/// where stdout is a binary frame stream with no line boundaries.
-///
-/// Backpressure: `queue_sema.wait()` blocks until Dart acks via `bridge_ack`,
-/// bounding the number of in-flight heap-allocated chunks. Cancel / rollback
-/// paths post enough permits to drain any waiter so we never block past
-/// the stream's natural lifetime.
-///
-/// Closes the pipe handle on exit so the child's write end isn't kept
-/// open by us after the stream is drained.
-fn streamingStdoutLoop(ctx: *StreamingCtx) void {
-    const a = std.heap.c_allocator;
-    const io = bridgeIo();
-    var stdout = ctx.child.stdout orelse return;
-    ctx.child.stdout = null;
-    defer stdout.close(io);
-
-    var read_buf: [8192]u8 = undefined;
-    while (true) {
-        const n = stdout.readStreaming(io, &.{read_buf[0..]}) catch break;
-        if (n == 0) break;
-        const chunk_copy = a.dupe(u8, read_buf[0..n]) catch return;
-        ctx.queue_sema.waitUncancelable(io);
-        dispatchOrFree(ctx, ctx.on_stdout_batch, chunk_copy, a);
-    }
-}
-
-/// Hand a freshly-allocated batch buffer to Dart via `cb`, OR — if the
-/// stream is shutting down (rollback path) or no callback is registered —
-/// free the buffer locally. Without this branch, a heap-allocated batch
-/// can sit in Dart's port queue forever after the listener closes,
-/// because the trampoline that would have invoked bridge_free is gone.
-fn dispatchOrFree(
-    ctx: *StreamingCtx,
-    cb_opt: StreamCallback,
-    buffer: []u8,
-    a: std.mem.Allocator,
-) void {
-    if (ctx.shutting_down.load(.acquire)) {
-        a.free(buffer);
-        return;
-    }
-    if (cb_opt) |cb| {
-        cb(buffer.ptr, @intCast(buffer.len));
-    } else {
-        a.free(buffer);
-    }
-}
-
-/// Stderr reader: pass through chunks as-is. bxp-cli's stderr is low-volume
-/// (occasional warnings, no per-row stream), so chunk-level callbacks won't
-/// flood the event loop the way a per-line stdout would. Closes the pipe
-/// handle on exit (same rationale as stdout reader).
-fn streamingStderrLoop(ctx: *StreamingCtx) void {
-    const a = std.heap.c_allocator;
-    const io = bridgeIo();
-    var stderr = ctx.child.stderr orelse return;
-    ctx.child.stderr = null;
-    defer stderr.close(io);
-
-    var read_buf: [8192]u8 = undefined;
-    while (true) {
-        const n = stderr.readStreaming(io, &.{read_buf[0..]}) catch break;
-        if (n == 0) break;
-        const chunk_copy = a.dupe(u8, read_buf[0..n]) catch return;
-        dispatchOrFree(ctx, ctx.on_stderr_chunk, chunk_copy, a);
-    }
-}
-
-/// Wait thread: joins both reader threads (guaranteeing any in-flight
-/// callbacks have drained AND that the readers — not child.wait() — own the
-/// pipe fds), then reaps the child, calls on_exit, and frees the streaming
-/// context. Must run detached because bridge_run_streaming returns to Dart
+/// Wait thread: drives `procrun.Handle.wait`, which joins both reader threads
+/// (guaranteeing in-flight callbacks have drained AND that the readers — not
+/// the reap — own the pipe fds), then reaps ECHILD-tolerantly. Only after that
+/// does this file unregister the handle, free its context and finally notify
+/// Dart. Must run detached because `bridge_run_streaming` returns to Dart
 /// immediately after spawn.
+///
+/// The join-before-reap ordering is the module's, not ours any more, but it is
+/// still the load-bearing part: a reap racing a live reader either nulls the
+/// pipe out from under it (0 bytes delivered) or double-closes the fd (EBADF
+/// panic, aborting the process). Both reproduced under CPU load before the
+/// ordering was pinned down. `procrun.Handle.wait` joins `t_out`/`t_err`
+/// before calling `waitTolerant`, so the property is preserved by contract.
+///
+/// No `on_exit` is registered with `procrun` deliberately: the module fires it
+/// from inside `wait`, while its own context is still alive, but Dart must not
+/// be told the stream is over until this file has unregistered the handle and
+/// freed its context. Taking the `Term` as `wait`'s return value keeps that
+/// ordering — nothing fires at Dart between the reap and the teardown.
 fn streamingWaitLoop(ctx: *StreamingCtx) void {
-    // Join the reader threads FIRST, before reaping. They exit on pipe EOF,
-    // which the child's own exit produces (it closes its write ends as it
-    // terminates, independently of the parent reaping the zombie) — so we
-    // don't need to wait() first to make them finish. Joining before wait()
-    // is also the *required* ordering: each reader takes ownership of its pipe
-    // (sets `ctx.child.stdout` / `stderr` to null and closes its own copy)
-    // only while it runs. `waitTolerant` closes + nulls any still-open
-    // `child.stdout`/`stderr` itself (Zig 0.16). If that ran concurrently with
-    // a reader it would race for the same fd: it either nulls the pipe out from
-    // under a reader that hasn't read yet (→ 0 bytes delivered) or double-closes
-    // the fd (→ EBADF panic in the reader thread, aborting the process). Both
-    // reproduce under CPU load. Joining first guarantees both readers have
-    // already nulled + closed their pipes, so waitTolerant's close loop is a
-    // no-op on stdout/stderr.
-    //
-    // Joining is also the synchronisation point that guarantees no stream
-    // callback fires after on_exit.
-    ctx.stdout_thread.join();
-    ctx.stderr_thread.join();
+    const term = ctx.proc.wait();
 
-    // Now reap. ECHILD-tolerant (see waitTolerant): the Dart VM's
-    // ExitCodeHandler may reap our child first, so a panicking std waitpid is
-    // not safe here. The resulting `.Unknown` → exit_code -1 is harmless: the
-    // GUI reads the run's real exit code from bxp-cli's BXTB `done` frame, not
-    // from this value. The pipes are already null (readers closed them), so
-    // child.wait()'s internal cleanupStreams() is a no-op — no double close.
-    const term = waitTolerant(&ctx.child);
-
+    // `.unknown` → -1 is harmless: the GUI reads a run's real exit code from
+    // bxp-cli's BXTB `done` frame, not from this value. It is what the Dart-VM
+    // reaper race produces when it wins (see the reaping section above).
     const exit_code: i32 = switch (term) {
         .exited => |c| @intCast(c),
         .signal => |s| -@as(i32, @intCast(@intFromEnum(s))),
         .stopped, .unknown => -1,
     };
 
-    // Snapshot the callback before tearing down the context — Dart's handler
-    // may not access ctx, but defensive: we read everything we need first.
+    // Snapshot what we need before tearing down the context.
     const exit_cb = ctx.on_exit;
     const handle = ctx.handle;
 
     // Remove from the active-streams table BEFORE freeing ctx. Any in-flight
-    // bridge_cancel(handle) call holding the mutex will either see the entry
-    // (kill is harmless if child already exited) or not see it (no-op return);
-    // either way the lookup never returns a freed pointer.
+    // bridge_cancel(handle) holding the mutex either sees the entry (signalling
+    // an already-exited child is harmless) or does not (no-op return); either
+    // way the lookup never returns a freed pointer.
     unregisterStream(handle);
     ctx.arena.deinit();
     std.heap.c_allocator.destroy(ctx);
@@ -704,91 +564,52 @@ export fn bridge_run_streaming(
     }
 
     const io = bridgeIo();
-    const cwd_opt: std.process.Child.Cwd = if (req.cwd) |cwd_str|
-        (if (cwd_str.len > 0) .{ .path = cwd_str } else .inherit)
-    else
-        .inherit;
 
     ctx.on_stdout_batch = on_stdout_batch;
     ctx.on_stderr_chunk = on_stderr_chunk;
     ctx.on_exit = on_exit;
     ctx.handle = 0;
+    // ctx came from `create` (not zeroed), so the field defaults have not run.
     ctx.shutting_down = std.atomic.Value(bool).init(false);
-    // Reset queue_sema permits — ctx was allocated via c_allocator.create
-    // (not zeroed), so the default struct initialiser hasn't run.
-    ctx.queue_sema = .{ .permits = default_queue_permits };
 
-    // Rollback signal: any failure between here and the final `started_ok = true`
-    // raises this flag. Reader threads check it before invoking a Dart callback
-    // — if set, they free the per-batch buffer locally instead of handing it
-    // across the FFI, where it would orphan in Dart's port queue after the
-    // listener closes.
+    // `procrun` owns the child, both reader threads and the backpressure
+    // semaphore from here on. Its own errdefer chain covers a failure DURING
+    // spawn (kill the child, wake any parked reader, join it) — the rollback
+    // this file still has to do is only for the window AFTER a successful
+    // spawn, below.
     //
-    // This defer is declared BEFORE child.spawn, so in LIFO order it runs
-    // AFTER the `child_ok` defer (kill child + join readers) below — i.e. too
-    // late to protect that join. The `child_ok` defer therefore raises the
-    // flag itself before joining; this block is the residual cover for the
-    // narrow pre-reader-spawn window (a `child.spawn` failure, where no reader
-    // threads exist yet so the raise is a harmless no-op).
-    var started_ok = false;
-    defer if (!started_ok) {
-        ctx.shutting_down.store(true, .release);
-        // Wake any reader thread blocked on queue_sema so it can observe
-        // the shutdown flag and self-free its pending batch instead of
-        // dispatching across a tearing-down FFI. Posting `default_queue_permits`
-        // unblocks at most that many waiters; extra posts just inflate
-        // permits harmlessly because the ctx is about to be destroyed.
-        var i: usize = 0;
-        while (i < default_queue_permits) : (i += 1) ctx.queue_sema.post(io);
-    };
-
-    ensureChildReaping();
-    ctx.child = std.process.spawn(io, .{
+    // `stream_permits` is passed explicitly rather than left to the module
+    // default so the bound stays a decision this file makes and documents,
+    // even though the two values currently agree.
+    ctx.proc = procrun.spawnStreaming(gpa, io, .{
         .argv = argv.items,
         .stdin = .close,
         .stdout = .pipe,
         .stderr = .pipe,
-        .cwd = cwd_opt,
-        .create_no_window = true,
+        .cwd = if (req.cwd) |cwd| (if (cwd.len > 0) cwd else null) else null,
+        .stream_permits = default_queue_permits,
+    }, .{
+        .ctx = ctx,
+        .on_stdout = onStdoutTrampoline,
+        .on_stderr = onStderrTrampoline,
+        // on_exit deliberately unset — see streamingWaitLoop.
     }) catch return -1;
-    // Single combined rollback for child + reader threads: kill the
-    // child FIRST (so any spawned reader threads' read() calls return
-    // EOF and exit their loops), THEN join the readers. The previous
-    // shape — separate child_ok / stdout_ok / stderr_ok defers — fired
-    // joins before kill in LIFO order on the rare `registerStream` OOM
-    // path, deadlocking on readers blocked in read() with a child still
-    // alive. `child_ok` flips true on the success path so the rollback
-    // is skipped after we've handed ownership to the wait thread.
-    var stdout_spawned = false;
-    var stderr_spawned = false;
-    var child_ok = false;
-    defer if (!child_ok) {
-        // Raise the shutdown flag and wake any blocked reader BEFORE killing
-        // the child and joining the reader threads. A reader that drains the
-        // last buffered bytes during the join must observe `shutting_down` and
-        // self-free its batch rather than hand it across the FFI, where it
-        // would orphan in Dart's port queue after the listener closes. The
-        // separate `started_ok` defer below ALSO raises the flag, but defers
-        // are LIFO so it runs AFTER this block — too late for this join. So
-        // this rollback path must raise the flag itself.
+
+    // Rollback for the post-spawn window (registry OOM, wait-thread spawn
+    // failure). Raise the teardown flag FIRST so a reader draining the last
+    // bytes drops its chunk instead of handing it to a Dart listener that is
+    // about to close, then kill and reap through `wait` — which also joins the
+    // readers and frees the module's state. No Dart callback fires: the flag
+    // silences the stream trampolines and no on_exit is registered.
+    var started_ok = false;
+    defer if (!started_ok) {
         ctx.shutting_down.store(true, .release);
-        var wake: usize = 0;
-        while (wake < default_queue_permits) : (wake += 1) ctx.queue_sema.post(io);
-        ctx.child.kill(io);
-        if (stdout_spawned) ctx.stdout_thread.join();
-        if (stderr_spawned) ctx.stderr_thread.join();
+        ctx.proc.kill();
+        _ = ctx.proc.wait();
     };
 
-    ctx.stdout_thread = std.Thread.spawn(.{}, streamingStdoutLoop, .{ctx}) catch return -1;
-    stdout_spawned = true;
-
-    ctx.stderr_thread = std.Thread.spawn(.{}, streamingStderrLoop, .{ctx}) catch return -1;
-    stderr_spawned = true;
-
-    // Register before launching the wait thread so cancel sees a complete
-    // ctx the moment we return to Dart. If registerStream fails (OOM in the
-    // hashmap), we fall back to the rollback defers — kill the child, join
-    // the readers — and return -1.
+    // Register before launching the wait thread so cancel sees a complete ctx
+    // the moment we return to Dart.
     const handle = registerStream(ctx) catch return -1;
     var registered_ok = false;
     defer if (!registered_ok) unregisterStream(handle);
@@ -796,10 +617,9 @@ export fn bridge_run_streaming(
     var wait_thread = std.Thread.spawn(.{}, streamingWaitLoop, .{ctx}) catch return -1;
     wait_thread.detach();
 
-    // All resources handed off to threads; cancel rollback defers.
+    // All resources handed off to the wait thread; cancel the rollback defers.
     ctx_ok = true;
     arena_ok = true;
-    child_ok = true;
     registered_ok = true;
     started_ok = true;
 
@@ -817,14 +637,11 @@ export fn bridge_cancel(handle: i64) i32 {
     streams_mutex.lockUncancelable(io);
     defer streams_mutex.unlock(io);
     const ctx = streams_table.get(handle) orelse return -1;
-    // Wake any reader thread blocked on queue_sema before sending the
-    // kill signal — if the reader is mid-wait, the child's eventual EOF
-    // would never reach it, and the stream would hang past cancellation.
-    // Posting `default_queue_permits` covers the worst case (all permits
-    // exhausted by un-acked batches).
-    var i: usize = 0;
-    while (i < default_queue_permits) : (i += 1) ctx.queue_sema.post(io);
-    sendKillSignal(&ctx.child);
+    // `cancel` signals the child AND wakes a reader parked on the backpressure
+    // semaphore. The wake is not optional: a reader blocked mid-wait would
+    // never see the child's EOF, so the stream would hang past cancellation.
+    // The module does both, which is why this no longer posts permits by hand.
+    ctx.proc.cancel();
     return 0;
 }
 
@@ -839,7 +656,7 @@ export fn bridge_ack(handle: i64) i32 {
     streams_mutex.lockUncancelable(io);
     defer streams_mutex.unlock(io);
     const ctx = streams_table.get(handle) orelse return -1;
-    ctx.queue_sema.post(io);
+    ctx.proc.ack();
     return 0;
 }
 
@@ -1615,37 +1432,11 @@ test "bridge_run truncated flag set when stdout exceeds cap" {
     try testing.expectEqual(true, parsed.value.truncated);
 }
 
-test "collectOutputCapped truncates and keeps prefix at unit level" {
-    // Same idea as the integration test above but at the unit level: cap=128
-    // with a 4 KB child output → expect exactly 128 captured bytes and
-    // truncated=true. Cheaper to run, exercises the drainer in isolation.
-    const a = testing.allocator;
-    const req = try buildHelperRequestZ(&.{ "stdout-bytes", "4096" });
-    defer testing.allocator.free(req);
-
-    var argv = std.ArrayList([]const u8).empty;
-    defer argv.deinit(a);
-    try argv.append(a, helper_path);
-    try argv.append(a, "stdout-bytes");
-    try argv.append(a, "4096");
-    var child = try std.process.spawn(bridgeIo(), .{
-        .argv = argv.items,
-        .stdin = .close,
-        .stdout = .pipe,
-        .stderr = .pipe,
-    });
-
-    var stdout_buf: std.ArrayList(u8) = .empty;
-    var stderr_buf: std.ArrayList(u8) = .empty;
-    defer stdout_buf.deinit(a);
-    defer stderr_buf.deinit(a);
-    var trunc = std.atomic.Value(bool).init(false);
-    try collectOutputCapped(&child, a, &stdout_buf, &stderr_buf, 128, &trunc);
-    _ = waitTolerant(&child);
-
-    try testing.expectEqual(@as(usize, 128), stdout_buf.items.len);
-    try testing.expectEqual(true, trunc.load(.acquire));
-}
+// The unit-level cap test that sat here drove `collectOutputCapped` directly;
+// that function is now `procrun.run`'s internals, and upstream tests the same
+// property ("run: output past max_output_bytes keeps prefix and reports
+// truncation"). The integration test above still covers it through the FFI,
+// which is the part this file owns.
 
 test "waitTolerant survives a child reaped by another waiter (no ECHILD panic)" {
     if (builtin.os.tag == .windows) return error.SkipZigTest;
@@ -1843,12 +1634,13 @@ test "bridge_cancel after natural exit is safe no-op" {
     try testing.expectEqual(@as(i32, -1), rc);
 }
 
-test "dispatchOrFree frees buffer when shutting_down is set" {
-    // Unit-test the rollback-path helper directly: when shutting_down=true,
-    // the buffer is freed locally and the (would-be) Dart callback is not
-    // invoked. This is the contract that prevents leaks in the rare
-    // wait_thread.spawn failure path inside bridge_run_streaming.
-    const a = testing.allocator;
+test "dispatchCopy drops the chunk when shutting_down is set" {
+    // Rollback-path contract: with shutting_down=true nothing is handed to the
+    // (would-be) Dart callback. Stronger than the old free-locally version it
+    // replaces — the chunk is borrowed from procrun's reader buffer, so the
+    // guard returns before allocating anything at all; there is no buffer that
+    // could be orphaned in Dart's port queue. This is what protects the rare
+    // post-spawn failure path inside bridge_run_streaming.
     var ctx: StreamingCtx = undefined;
     ctx.shutting_down = std.atomic.Value(bool).init(true);
     ctx.on_stdout_batch = struct {
@@ -1857,21 +1649,17 @@ test "dispatchOrFree frees buffer when shutting_down is set" {
         }
     }.cb;
 
-    const buf = try a.dupe(u8, "should be freed locally");
-    // If dispatchOrFree dispatches instead of freeing, leak-check on
-    // testing.allocator will fail at test exit (caught by the testing harness).
-    dispatchOrFree(&ctx, ctx.on_stdout_batch, buf, a);
+    dispatchCopy(&ctx, ctx.on_stdout_batch, "should not be dispatched");
 }
 
-test "dispatchOrFree frees buffer when callback is null" {
-    // Same contract for the "no callback registered" branch.
-    const a = testing.allocator;
+test "dispatchCopy drops the chunk when no callback is registered" {
+    // Same early return for the "no callback" branch: nothing allocated,
+    // nothing dispatched.
     var ctx: StreamingCtx = undefined;
     ctx.shutting_down = std.atomic.Value(bool).init(false);
     ctx.on_stdout_batch = null;
 
-    const buf = try a.dupe(u8, "should be freed locally");
-    dispatchOrFree(&ctx, ctx.on_stdout_batch, buf, a);
+    dispatchCopy(&ctx, ctx.on_stdout_batch, "should not be dispatched");
 }
 
 test "bridge_free is a no-op when len is zero" {

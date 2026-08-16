@@ -226,6 +226,23 @@ that justify it. Whichever wins, the `+`/`-` numeric carve-out must survive —
 re-introducing `'+420 555 0101` would be a regression of the fix that created
 it.
 
+### Cancelling a stream does not reach the child's grandchildren
+
+`bridge_cancel` signals the direct child. A grandchild the child forked
+inherits the stdout pipe, so the pipe stays open and `on_exit` does not fire
+until that grandchild exits. Measured 2026-08-16, unchanged by the `procrun`
+migration: cancelling `sh -c 'sleep 20'` takes the full 20 s, while
+`sh -c 'exec sleep 20'` cancels in 0.3 s.
+
+Not live today — the only thing the bridge spawns is `bxp-cli`, which forks
+nothing (its parallelism is threads). The fix is now one flag away:
+`procrun.Spec.new_process_group` puts the child in its own process group and
+`Handle.cancelGroup` signals `-pgid`, reaching the whole tree. It was
+deliberately NOT turned on with the migration, because it changes what a
+cancel kills, and inheriting an upstream default silently is the mistake the
+`zipstream` cap taught us to avoid. Decide it on its own merits if bxp-cli
+ever spawns anything, or if a user reports a hung cancel.
+
 ### Real-world broker CSV quirks
 
 Surfaced by readme-adequacy simulations against real broker formats
@@ -368,14 +385,6 @@ our code they are the same algorithms, verified rather than assumed.
   (1 270 lines) are bxp-specific and stay — they would need reseating on the
   upstream transport's API, which is what makes this a larger job than the
   items above rather than a swap.
-
-- **`procrun`'s runner half** — only the reap core was taken. The capped
-  3-thread stdio drain, the streaming handle with cancel/kill escalation and
-  the backpressure ack are still the bridge's own, because that machinery
-  dispatches into Dart ports rather than into caller buffers. Reseating
-  `bridge_run_streaming` on `procrun.spawnStreaming` would be a rewrite of the
-  bridge's threading model, not a swap — worth revisiting only if that model
-  needs work for its own reasons.
 
 - **Dart side** — `json5_ast` has no zig-libs equivalent (different language);
   still waits for a second Dart consumer.
