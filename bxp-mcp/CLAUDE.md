@@ -16,7 +16,7 @@ It is one of several adapters over a single shared core
 - **bxp-mcp** — MCP/stdio adapter (this package). _Shipped._
 - **bxp-gui-bridge** — FFI adapter for the Dart GUI (in-process). _Shipped._
 - **bxp-api** — HTTP/port adapter for remote/web callers. _Future direction,
-  folded into the AXP-driven transport core (see `docs/roadmap.md` → "Shared
+  folded into the AXP-driven transport core (see `docs/dev/roadmap.md` → "Shared
   core libraries"); not a committed bxp milestone._
 
 (A former **bxp-fmt** CLI adapter, argv → stdout, was removed once bxp-mcp and
@@ -162,12 +162,12 @@ archive now ships `bxp-mcp` in its place; tests drive `inspect` via bxp-mcp / th
 bridge).
 
 **Forward — bxp-api sibling.** An HTTP/port adapter over the same `inspect`,
-folded into the AXP-driven transport-core direction (see `docs/roadmap.md` →
+folded into the AXP-driven transport-core direction (see `docs/dev/roadmap.md` →
 "Shared core libraries"); needs concurrency (thread pool / event loop), which
 stdio does not. The separate GUI-side **gui-mcp** Dart MCP server for
 agent-controlled GUI ops (open-config / edit / dry-run / save / exit) is
 **shipped** — see [`../bxp-gui/CLAUDE.md`](../bxp-gui/CLAUDE.md) "Agent control"
-and [`../docs/mcp.md`](../docs/mcp.md) for how it differs from this stdio server.
+and [`../docs/dev/mcp.md`](../docs/dev/mcp.md) for how it differs from this stdio server.
 
 ## Known non-issues (audit-acknowledged)
 

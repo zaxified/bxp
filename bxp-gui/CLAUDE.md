@@ -495,4 +495,4 @@ resolution is fluid — only the size-change event triggers it.
 VirtualBox SVGA and bare-metal Windows are not affected. This is
 upstream Flutter / Win32 D3D11 behaviour, not patchable in the
 runner. User-facing note in
-[../docs/devel.md](../docs/devel.md#known-issues).
+[../docs/dev/gui/patterns.md](../docs/dev/gui/patterns.md#known-issues).
