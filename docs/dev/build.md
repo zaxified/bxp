@@ -21,13 +21,14 @@ Install these extensions for a productive experience:
 The required Zig version is pinned in `build.zig.zon` (`minimum_zig_version`) —
 install that toolchain; ZLS bundled with the Zig extension matches it.
 
-`bxp-core` has **two external (fetch) dependencies** — `uucode` (MIT), the
-Unicode case-mapping tables behind `UPPER`/`LOWER`, and `regex`
+`bxp-core` has **three external (fetch) dependencies** — `uucode` (MIT), the
+Unicode case-mapping tables behind `UPPER`/`LOWER`; `regex`
 (`quangd/regex.zig`, Apache-2.0 OR MIT), the Pike-VM engine behind
-`REGEX_MATCH`/`REGEX_EXTRACT` (linear-time, ReDoS-safe). Both are pinned in
-`bxp-core/build.zig.zon`. The date and numeric cores stay in-house
-(`bxp-core/src/datefmt.zig`, `decimal.zig`). The fetches are cached after the
-first build; CI runners have network.
+`REGEX_MATCH`/`REGEX_EXTRACT` (linear-time, ReDoS-safe); and `zig_libs` (MIT),
+supplying the `datefmt` date core and the `tz` IANA offset lookup. All are
+pinned in `bxp-core/build.zig.zon`. The numeric core stays in-house
+(`bxp-core/src/decimal.zig`). The fetches are cached after the first build;
+CI runners have network.
 
 In VS Code terminal:
 
@@ -81,7 +82,6 @@ bxp/                            # monorepo root (git root)
 │   │   ├── csv.zig             # RFC 4180 CSV parser
 │   │   ├── xlsx.zig            # .xlsx → CSV (ZIP+XML)
 │   │   ├── expr.zig            # expression evaluator + FnDoc catalog
-│   │   ├── datefmt.zig         # in-house date parse/format + civil arithmetic (DATE_CONVERT core)
 │   │   ├── unicode.zig         # UTF-8 case mapping (UPPER/LOWER) over uucode tables
 │   │   ├── config.zig          # JSON5 config loader + FieldDoc tables
 │   │   ├── json.zig            # JSON array-of-objects → row representation

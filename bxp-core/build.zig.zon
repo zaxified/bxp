@@ -6,8 +6,7 @@
     // behind UPPER/LOWER (full Unicode incl. ß→SS) and the upcoming `unaccent`.
     // Pinned to uucode main (Zig 0.16+); the former `zig-0.15` back-port
     // branch carried the 0.15.x line. Field-selected in
-    // build.zig so only the tables we use compile in. Date parsing/formatting
-    // still lives in the in-house src/datefmt.zig (no dep).
+    // build.zig so only the tables we use compile in.
     .dependencies = .{
         .uucode = .{
             .url = "https://github.com/jacobsandlund/uucode/archive/2826a37a4562284fdacd8fa029d49509cc9bffcd.tar.gz",
@@ -24,8 +23,11 @@
             .hash = "regex-0.1.0-V8KKSWICBACgjPoyQLIoPwMnQjKzCpEOjUMEzkf3ebOD",
         },
         // zig-libs (MIT) — the module collection that now carries the hardened
-        // descendants of several bxp-core modules. `tz` (IANA offset lookup) is
-        // the first one consumed from here instead of kept locally; see
+        // descendants of several bxp-core modules. `tz` (IANA offset lookup) and
+        // `datefmt` (the date core) are consumed from here instead of kept
+        // locally — both from ONE b.dependency handle in build.zig, so `tz`'s
+        // own datefmt import resolves to the same module rather than a second
+        // date core. See
         // docs/dev/roadmap.md → "Shared core libraries — consume zig-libs" for
         // the remaining candidates. Treated as a foreign upstream: read-only,
         // pinned to the exact commit behind a release tag (upstream tags by

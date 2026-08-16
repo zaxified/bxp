@@ -366,8 +366,8 @@ fractional digits), not binary floating point. Consequences:
 ## datefmt date format tokens
 
 Used in `DATE_CONVERT(f, from_fmt, to_fmt)`. Both `from_fmt` and `to_fmt` use the same token set.
-Implemented in `bxp-core/src/datefmt.zig` (the in-house date core that replaced
-the former `sunrise` dependency).
+Implemented by the `datefmt` date core, consumed from the pinned `zig_libs`
+fetch dependency (see `bxp-core/CLAUDE.md` → _External dependencies_).
 
 | Token          | Meaning                                             | Example               |
 | -------------- | --------------------------------------------------- | --------------------- |

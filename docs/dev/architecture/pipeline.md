@@ -349,7 +349,7 @@ graph TD
     SPLIT_PART, CONTAINS,
     TRIM, ROUND, FLOOR, CEILING,
     FIELDS"]
-    FUNC --> DATEFMT_CALL["datefmt.zig
+    FUNC --> DATEFMT_CALL["datefmt (zig-libs)
     (DATE_CONVERT + date builtins)"]
 
     FIELD -->|reads| CTX_FIELDS["Context.fields

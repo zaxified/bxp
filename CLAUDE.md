@@ -30,10 +30,8 @@ bxp/
 │   │   ├── expr.zig        # Expression evaluator + per-builtin FnDoc catalog
 │   │   ├── config.zig      # JSON5 config loader + per-struct FieldDoc tables
 │   │   ├── json.zig        # JSON array-of-objects → CSV rows
-│   │   ├── datefmt.zig     # In-house date core (parse/format/arith, seconds-epoch,
-│   │   │                   # ZZ offset token) — file-rel @import by expr.zig, replaced sunrise
-│   │                       # (TZ lookup is no longer local — the `tz` module now
-│   │                       # comes from the pinned zig-libs fetch dep)
+│   │                       # (Date/TZ are no longer local — the `datefmt` and `tz`
+│   │                       # modules both come from the pinned zig-libs fetch dep)
 │   │   ├── decimal.zig     # Fixed-point i128 @ 1e12 numeric core (named module)
 │   │   ├── unicode.zig     # UTF-8 case mapping (UPPER/LOWER) over uucode tables
 │   │   │                   # — file-rel @import by expr.zig; uucode is fetch dep
@@ -210,20 +208,23 @@ bxp-core/inspect link, and the bridge proxies `bxp-cli` runs. The former
 - `regex` (`quangd/regex.zig`) — the Pike-VM engine behind `REGEX_MATCH` /
   `REGEX_EXTRACT`, pinned to an exact commit.
 - `zig_libs` — the module collection supplying `tz` (IANA UTC-offset lookup
-  behind `TO_UTC` / `TZ_OFFSET` / `TZ_CONVERT` / `IS_DST`). Treated as a
+  behind `TO_UTC` / `TZ_OFFSET` / `TZ_CONVERT` / `IS_DST`) and `datefmt` (the
+  date core behind `DATE_CONVERT` and every calendar builtin). Treated as a
   foreign upstream: read-only, pinned to the commit behind a release tag,
-  never edited from this repo. The offset tables are compiled into the
+  never edited from this repo. The offset tables are compiled into the `tz`
   module, so there is still **no runtime dependency** — the pinned tzdata
   snapshot ships inside the binary exactly as the former in-tree copy did.
-  First of several bxp-core modules migrating this way; see
-  `docs/dev/roadmap.md` → "Shared core libraries — consume zig-libs".
+  Both modules were lifted out of bxp-core and hardened upstream; see
+  `docs/dev/roadmap.md` → "Shared core libraries — consume zig-libs" for the
+  remaining candidates.
 
-The date core (`datefmt.zig`) and numeric core (`decimal.zig`) remain
-in-house — the former `sunrise` datetime dependency was replaced by
-`datefmt.zig`. The `tools/tz-gen` generator that emitted the offset tables
-(the only place `std.Tz` was used) moved to `scripts/tz-gen/` in zig-libs
-alongside the module it feeds, so the table and the tool that derives it now
-live together; nothing tz-related is left in this repo.
+The numeric core (`decimal.zig`) remains in-house. The `tools/tz-gen`
+generator that emitted the offset tables (the only place `std.Tz` was used)
+moved to `scripts/tz-gen/` in zig-libs alongside the module it feeds, so the
+table and the tool that derives it now live together; nothing tz-related is
+left in this repo. `datefmt` followed `tz` upstream in the same way — taking
+both from one `b.dependency` handle collapses what used to be two separate
+date cores in the binary into one.
 bxp-gui ships `bxp-cli` + the `bxp-gui-bridge` library inside the Flutter
 bundle. It talks to the bridge over FFI (stateless validation / docs / expr
 eval in-process; `bxp-cli` conversions proxied through it) — there is no

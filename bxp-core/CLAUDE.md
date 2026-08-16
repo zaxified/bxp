@@ -18,7 +18,7 @@ Consumed by bxp-cli (conversion engine) and the stateless-inspect adapters
 | `xlsx`        | `xlsx.zig`        | `xlsxToCsv()`, `SheetSpec` — streams every XML part via `zipstream`       |
 | `zipstream`   | `zipstream.zig`   | `Archive`, `EntryReader` — streaming ZIP central-dir walk + per-entry inflate (named module; shared by `xlsx` ingest + bxp-cli's parallel `zipPrePass`) |
 | `expr`        | `expr.zig`        | `eval()`, `evalString()`, `Context`, `Value`, `FnDoc` catalog             |
-| `datefmt`     | `datefmt.zig`     | `parse()`, `format()`, civil/arithmetic helpers, `partsToUnix`/`unixToParts` seconds-epoch, `ZZ` offset token — date core (file-rel @import by `expr.zig`, not a named module) |
+| `datefmt`     | _(zig-libs dep)_  | `parse()`, `format()`, civil/arithmetic helpers, `partsToUnix`/`unixToParts` seconds-epoch, `ZZ` offset token — the date core. **No longer in this tree**: consumed from the pinned `zig_libs` fetch dep as the named `datefmt` module (wired into `expr` in `build.zig`). The former local `datefmt.zig` was a strict subset of the upstream module — identical civil core, parser, formatter and token table, plus coverage and an `xsd:dateTime` entry point bxp does not call |
 | `tz`          | _(zig-libs dep)_  | `find()`, `offsetAt()` — IANA UTC-offset lookup. **No longer in this tree**: consumed from the pinned `zig_libs` fetch dep as the named `tz` module (wired into `expr` in `build.zig`). The offset tables compile in, so there is still no runtime dependency. The former local `tz.zig` was a strict subset of the upstream module; its generator moved to `scripts/tz-gen/` in that repo |
 | `decimal`     | `decimal.zig`     | `Decimal` fixed-point i128 @ 1e12 — numeric core (named `"decimal"` module, shared by every input path) |
 | `unicode`     | `unicode.zig`     | `toUpperStr()`, `toLowerStr()`, `unaccentStr()` — UTF-8 case mapping + diacritic stripping over `uucode` tables (file-rel @import by `expr.zig`, not a named module) |
@@ -134,8 +134,9 @@ Expression evaluator for `input_schema` and `row_rules` in bxp-cli.json.
   the former `f80` + `{d:.8}` print cap, so `0.02 + 0.08` is exactly `0.10`.
   Passthrough strings (coords, long IDs) bypass the core to keep full precision.
 - `DATE_CONVERT()` date/time parsing and formatting is handled in-process by
-  `datefmt.zig` (file-relative `@import`) — no external dependency. Pre-1970
-  dates are fully supported (pure parse → format reshuffle, no epoch round-trip).
+  the zig-libs `datefmt` module (named import; the offset-table-free half of
+  the date/TZ pair — no runtime dependency either way). Pre-1970 dates are
+  fully supported (pure parse → format reshuffle, no epoch round-trip).
 - Unit tests inline (150 test cases).
 
 **Built-in functions:** IF, CASE, IFERROR, ABS, DATE_CONVERT, PRICE_VALUE,
@@ -349,13 +350,13 @@ Structured diagnostics collector for config/json5/expr validation.
 # Build all modules (no standalone binary):
 cd bxp-core && zig build
 
-# Run unit tests (csv, json, btrace, expr, datefmt, decimal, unicode, json5, diagnostics, zipstream, xlsx, config, docs, inspect):
+# Run unit tests (csv, json, btrace, expr, decimal, unicode, json5, diagnostics, zipstream, xlsx, config, docs, inspect):
 cd bxp-core && zig build test
 ```
 
 Module exports in `build.zig`: `csv`, `json`, `json5`, `xlsx`, `zipstream`, `btrace`, `decimal`, `encoding`, `expr`, `config`, `docs`, `diagnostics`, `inspect`.
 `xlsx` imports the named `decimal` and `zipstream` modules; `zipstream` has no bxp-core dependencies (std only).
-`expr` imports `datefmt.zig` and `unicode.zig` (both file-relative, not named modules) plus the named `decimal`, `uucode`, `encoding`, `regex` modules (`regex` is the Pike-VM engine behind REGEX_MATCH/REGEX_EXTRACT — a fetch dep, see _External dependencies_ below); `config` imports `json5` (as `"json5.zig"` — internal import name), `diagnostics`, `expr`, `encoding`. `encoding` is a named module (not a file-relative @import) because it is shared by both `expr` and `config` — a file-relative @import from two modules would compile the file into each, a duplicate-symbol error (same reason `decimal` is named).
+`expr` imports `unicode.zig` (file-relative, not a named module) plus the named `decimal`, `uucode`, `encoding`, `regex`, `tz`, `datefmt` modules (`regex` is the Pike-VM engine behind REGEX_MATCH/REGEX_EXTRACT; `tz` + `datefmt` are the zig-libs date/TZ pair — all fetch deps, see _External dependencies_ below); `config` imports `json5` (as `"json5.zig"` — internal import name), `diagnostics`, `expr`, `encoding`. `encoding` is a named module (not a file-relative @import) because it is shared by both `expr` and `config` — a file-relative @import from two modules would compile the file into each, a duplicate-symbol error (same reason `decimal` is named).
 `docs` imports `config`, `expr`, `json5`; `diagnostics` has no bxp-core dependencies.
 
 ### External dependencies
@@ -377,27 +378,29 @@ content-addressed by hash and re-audited on any pin bump:
   linear-time (ReDoS-proof) matching. The package exposes its engine as the
   module named `regex`; `build.zig` wires it into the `expr` module. Adds ~56 KB
   to the ReleaseSmall `bxp-cli` (engine + Unicode-scalar case-fold tables).
-- **zig_libs** (MIT, `zaxified/zig-libs`) — the module collection supplying
-  `tz`, the IANA UTC-offset lookup behind `TO_UTC` / `TZ_OFFSET` /
-  `TZ_CONVERT` / `IS_DST`. Pinned to the commit behind a dated release tag
-  (upstream tags `YYYY-MM-DD`, no semver). `build.zig` wires the `tz` module
-  into `expr`. The 600-zone offset tables are compiled into the module, so
-  this stays a build-time dependency only — no runtime tzdata lookup, exactly
-  as the former in-tree copy behaved. Adds ~8 KB to the ReleaseSafe `bxp-cli`
-  (the tables were already carried locally; the delta is the extra `Jn`/`n`
-  POSIX rule forms plus the parts of the upstream `datefmt` that `tz` calls).
+- **zig_libs** (MIT, `zaxified/zig-libs`) — the module collection supplying the
+  date/TZ pair: `tz`, the IANA UTC-offset lookup behind `TO_UTC` / `TZ_OFFSET` /
+  `TZ_CONVERT` / `IS_DST`, and `datefmt`, the date core behind `DATE_CONVERT`
+  and every calendar builtin. Pinned to the commit behind a dated release tag
+  (upstream tags `YYYY-MM-DD`, no semver). `build.zig` wires both modules into
+  `expr` **from a single `b.dependency` handle** — that is what makes them one
+  compilation rather than two; `tz` imports `datefmt` internally, so when the
+  local copy still existed the binary carried two separate date cores. The
+  600-zone offset tables are compiled into `tz`, so this stays a build-time
+  dependency only — no runtime tzdata lookup, exactly as the former in-tree
+  copies behaved. Net size effect on the ReleaseSafe `bxp-cli`: `tz` added
+  ~8 KB (the extra `Jn`/`n` POSIX rule forms), the `datefmt` migration gave
+  ~4 KB back (the duplicate core collapsed).
 
   **Treated as a foreign upstream** — read-only, pinned, never edited from
   this repo. Zig's package manager offers no floating "latest" mode: the
   `hash` field is mandatory and content-addressed, so any upstream movement
-  must land as an explicit `zig fetch --save` edit to `build.zig.zon`. `tz` is
-  the first of several bxp-core modules migrating this way; the remaining
-  candidates and their measured divergence are tabulated in
+  must land as an explicit `zig fetch --save` edit to `build.zig.zon`. `tz`
+  and `datefmt` are the first of several bxp-core modules migrating this way;
+  the remaining candidates and their measured divergence are tabulated in
   `docs/dev/roadmap.md` → "Shared core libraries — consume zig-libs".
 
-`datefmt.zig` and `decimal.zig` remain in-house with no dependency — note that
-`tz` pulls the upstream copy of `datefmt`, so both compile in until that module
-migrates too.
+`decimal.zig` remains in-house with no dependency.
 
 ## Coding conventions
 

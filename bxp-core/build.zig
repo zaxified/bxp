@@ -99,13 +99,24 @@ pub fn build(b: *std.Build) void {
     // audit, the Jn/n POSIX rule forms this copy never had), so the upstream
     // module is strictly ahead. The offset tables ship inside it, so there is
     // still no runtime dependency — the data is compiled in, same as before.
-    const tz_mod = b.dependency("zig_libs", .{
+    const zig_libs = b.dependency("zig_libs", .{
         .target = target,
         .optimize = optimize,
-    }).module("tz");
+    });
+    const tz_mod = zig_libs.module("tz");
 
-    // expr.zig pulls in its date core via a file-relative @import("datefmt.zig"),
-    // and the shared decimal numeric core via the named "decimal" module.
+    // Date core behind DATE_CONVERT and every calendar builtin (YEAR / DATEADD /
+    // WORKDAY / EOMONTH / …). Consumed from zig-libs for the same reason as `tz`:
+    // the local src/datefmt.zig was lifted into that repo and hardened there, and
+    // the upstream copy is a strict superset — identical civil core, parser,
+    // formatter and token table, plus extra coverage and an `xsd:dateTime` entry
+    // point bxp does not call. Taking it from the SAME `b.dependency` handle as
+    // `tz` is what collapses the two date cores that used to compile in (`tz`
+    // imports upstream `datefmt`; the local copy was a second, separate one).
+    const datefmt_mod = zig_libs.module("datefmt");
+
+    // expr.zig pulls its date core in as the named "datefmt" module and the
+    // shared decimal numeric core as the named "decimal" module.
     const expr_mod = b.addModule("expr", .{
         .root_source_file = b.path("src/expr.zig"),
         .imports = &.{
@@ -114,6 +125,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "encoding", .module = encoding_mod },
             .{ .name = "regex", .module = regex_mod },
             .{ .name = "tz", .module = tz_mod },
+            .{ .name = "datefmt", .module = datefmt_mod },
         },
     });
 
@@ -200,24 +212,17 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "encoding", .module = encoding_mod },
                 .{ .name = "regex", .module = regex_mod },
                 .{ .name = "tz", .module = tz_mod },
+                .{ .name = "datefmt", .module = datefmt_mod },
             },
         }),
     });
 
-    const datefmt_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/datefmt.zig"),
-            .target = target,
-            .optimize = optimize,
-            .strip = false,
-        }),
-    });
-
-    // No tz test root here any more: the IANA offset lookup now comes from the
-    // zig-libs `tz` module, which carries its own (larger) suite plus fuzz
-    // harnesses upstream. What bxp still owns is the expr-level behaviour of
-    // TO_UTC / TZ_OFFSET / TZ_CONVERT / IS_DST, covered by expr_tests and the
-    // cross-runner corpus (scripts/test-06-expr-corpus.sh).
+    // No tz or datefmt test root here any more: both now come from the zig-libs
+    // collection, each carrying its own (larger) suite plus fuzz harnesses
+    // upstream. What bxp still owns is the expr-level behaviour built on them —
+    // DATE_CONVERT, the calendar builtins, TO_UTC / TZ_OFFSET / TZ_CONVERT /
+    // IS_DST — covered by expr_tests and the cross-runner corpus
+    // (scripts/test-06-expr-corpus.sh).
 
     const unicode_tests = b.addTest(.{
         .root_module = b.createModule(.{
@@ -351,7 +356,6 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(json_tests).step);
     test_step.dependOn(&b.addRunArtifact(btrace_tests).step);
     test_step.dependOn(&b.addRunArtifact(expr_tests).step);
-    test_step.dependOn(&b.addRunArtifact(datefmt_tests).step);
     test_step.dependOn(&b.addRunArtifact(unicode_tests).step);
     test_step.dependOn(&b.addRunArtifact(decimal_tests).step);
     test_step.dependOn(&b.addRunArtifact(encoding_tests).step);

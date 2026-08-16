@@ -29,11 +29,12 @@ Consequences of this design:
   (Flutter)                              in-proc inspect + proxied bxp-cli runs)
 ```
 
-`bxp-core` is a **local path dependency** (`../bxp-core`) and pulls two external
-fetch dependencies of its own: `uucode` (Unicode case-mapping tables) and
+`bxp-core` is a **local path dependency** (`../bxp-core`) and pulls three
+external fetch dependencies of its own: `uucode` (Unicode case-mapping tables),
 `regex` (`quangd/regex.zig`, the Pike-VM engine behind `REGEX_MATCH`/
-`REGEX_EXTRACT`), both pinned in `build.zig.zon`. The date core lives in-house at
-`bxp-core/src/datefmt.zig`.
+`REGEX_EXTRACT`), and `zig_libs` (the date/TZ pair `datefmt` + `tz`), all
+pinned in `build.zig.zon`. The numeric core lives in-house at
+`bxp-core/src/decimal.zig`.
 `bxp-gui` ships `bxp-cli`, `bxp-mcp`, and `bxp-gui-bridge.{dll,so,dylib}`
 inside the Flutter bundle.
 

@@ -14,7 +14,7 @@
 /// / `SplitPartBadIndex` / `DateFormatBadToken`) are suppressed in
 /// `validateExpr` so the authoritative bridge response wins. The remaining
 /// drift risk is confined to the hand-ported *heuristics* — `_scanDateFormat`
-/// (mirrors `datefmt.zig::firstInvalidFormatChar`) and `_clusterOutlier`
+/// (mirrors `datefmt::firstInvalidFormatChar`) and `_clusterOutlier`
 /// (mirrors `staticCheckFieldClustering`) — which are editor hints only,
 /// never the correctness of the saved config. Keep them in step with their
 /// Zig originals when either side changes; a false hint is the worst outcome.
@@ -818,7 +818,7 @@ class DartValidator {
     return prev[m];
   }
 
-  /// Mirror of `bxp-core/src/datefmt.zig::firstInvalidFormatChar` (token
+  /// Mirror of the zig-libs `datefmt::firstInvalidFormatChar` (token
   /// vocabulary `Y M D E A / a e h i m s`). Returns the 0-based offset of the
   /// first out-of-vocabulary letter outside `[...]` brackets, or null when the
   /// string is clean.

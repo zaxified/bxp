@@ -39,7 +39,7 @@
 /// The authoritative, complete catalog is the per-builtin `FnDoc` declarations
 /// further down this file — search for the `── <NAME> ──` section headers.
 const std = @import("std");
-const datefmt = @import("datefmt.zig");
+const datefmt = @import("datefmt");
 const tz = @import("tz");
 const unicode = @import("unicode.zig");
 const encoding = @import("encoding");
@@ -2757,7 +2757,7 @@ const date_convert_doc: FnDoc = .{
 /// Parses the input string according to from_fmt, then formats the result
 /// according to to_fmt.  Both format strings use the datefmt token syntax:
 ///   YYYY  MM/M  MMM/MMMM  DD/D  hh/h  mm/m  ss/s  [literal]  [*]=wildcard
-/// See `datefmt.zig` for the full token list.
+/// See the `datefmt` module for the full token list.
 ///
 /// This is a pure field reshuffle (parse → DateParts → format); it never
 /// round-trips through an epoch timestamp, so any year — including pre-1970 —
@@ -3196,8 +3196,8 @@ fn adaptIn(p: *Parser, args: []Value) anyerror!Value {
 // Malformed non-empty input still surfaces InvalidDate with a clickable
 // diagnostic so typo'd templates fail loudly.
 //
-// The civil-date primitives live in `datefmt.zig` (the single date core that
-// replaced the sunrise dependency). Aliased here so the builtins below read
+// The civil-date primitives live in the `datefmt` module (the single date
+// core, consumed from zig-libs). Aliased here so the builtins below read
 // unchanged; `datefmt` implements Howard Hinnant's `days_from_civil` /
 // `civil_from_days` — branch-free O(1), exact across the i32 year range,
 // negative (pre-1970) dates included.
@@ -3815,7 +3815,7 @@ fn canonicaliseNumericString(s: []const u8, alloc: std.mem.Allocator) ![]const u
 
 pub const keywords = [_]KeywordDoc{ and_kw_doc, or_kw_doc, not_kw_doc };
 
-// DATE_CONVERT format-token catalog — re-exported live from datefmt.zig, where
+// DATE_CONVERT format-token catalog — re-exported live from `datefmt`, where
 // it sits next to the parse/format vocabulary it documents (same pattern as the
 // FnDoc/OperatorDoc catalogs). `docs.zig` flattens it into the docs JSON.
 pub const DateTokenDoc = datefmt.DateTokenDoc;

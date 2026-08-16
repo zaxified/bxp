@@ -11,8 +11,7 @@ Auto manual page (resources/readme.md) - AutoDoc
 
 `LOOKUP` across templates within one bxp-cli run cycle
 
-Output row deduplication in combined output files
-`combined_output_dedup: bool    // (default:false)`
+Output row deduplication in combined output files `combined_output_dedup: bool    // (default:false)`
 
 ### v0.3.2
 
@@ -300,21 +299,28 @@ bxp → zig-libs):
 
 | Module        | API    | Tests   | Notes                                        |
 | ------------- | ------ | ------- | -------------------------------------------- |
-| `tz`          | 3 → 7  | 6 → 12  | **Pilot.** Data tables byte-equal after whitespace normalisation; `find`/`offsetAt`/`posixOffset` identical. zig-libs adds the `Jn`/`n` POSIX rule forms (forward cover — no zone in current tzdata uses them) |
-| `datefmt`     | 30 → 32| 19 → 30 | Dependency root — `tz` imports it, so both copies compile in until this one migrates too |
 | `decimal`     | 1 → 4  | 12 → 34 |                                              |
 | `encoding`    | 3 → 4  | 12 → 17 |                                              |
 | `diagnostics` | 3 → 4  | 1 → 4   |                                              |
 | `json5`       | 3 → 4  | 20 → 27 |                                              |
 | `zipstream`   | 4 → 10 | 2 → 20  | Largest divergence                            |
 
-Only `tz` has been compared line by line; the other six figures indicate
-that a fork exists, not what it contains — audit each before migrating it.
+`tz` (the pilot) and `datefmt` have migrated. Both turned out to be strict
+subsets of their upstream descendants once compared line by line — the shared
+code was byte-identical and the divergence was extra coverage plus entry
+points bxp does not call. The five remaining figures indicate that a fork
+exists, not what it contains — audit each before migrating it.
 
-Ordering note: `tz` goes first as the pilot because it is the smallest
-self-contained surface, but it depends on `datefmt`, so until `datefmt`
-migrates as well the binary carries two date cores. Measure that cost on
-the pilot and let it inform whether `datefmt` follows immediately.
+Method that both migrations used, worth repeating: diff the whole module
+first and classify every hunk (comment / addition / behaviour change), then
+gate on a **live-data** before/after — a full run over the real broker
+exports in the working set, checksummed and diffed — on top of the normal
+suite. `datefmt` came out 163/163 output files byte-identical.
+
+Taking a module and its dependencies from a **single `b.dependency` handle**
+is what makes them one compilation. `tz` imports `datefmt`, so while the
+local `datefmt.zig` still existed the binary carried two date cores; the
+`datefmt` migration collapsed them and gave ~4 KB back.
 
 Still outstanding, unchanged by the above:
 
