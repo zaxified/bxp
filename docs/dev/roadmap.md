@@ -299,16 +299,30 @@ bxp → zig-libs):
 
 | Module        | API    | Tests   | Notes                                        |
 | ------------- | ------ | ------- | -------------------------------------------- |
-| `decimal`     | 1 → 4  | 12 → 34 | Upstream adds `big.zig`, `RoundingMode`, `sqrt`/`pow` — the largest behavioural surface of the four, so rounding is what the audit must focus on |
+| `decimal`     | 1 → 4  | 12 → 34 | Upstream adds `big.zig`, `RoundingMode`, `sqrt`/`pow` — the largest behavioural surface of the three, so rounding is what the audit must focus on |
 | `diagnostics` | 3 → 4  | 1 → 4   |                                              |
-| `json5`       | 3 → 4  | 20 → 27 |                                              |
 | `zipstream`   | 4 → 10 | 2 → 20  | Largest divergence                            |
 
-`tz` (the pilot), `datefmt` and `encoding` have migrated. All three turned out
-to be strict subsets of their upstream descendants once compared line by line
-— the shared code was byte-identical and the divergence was extra coverage
-plus entry points bxp does not call. The four remaining figures indicate that
-a fork exists, not what it contains — audit each before migrating it.
+`tz` (the pilot), `datefmt`, `encoding` and `json5` have migrated. The first
+three turned out to be strict subsets of their upstream descendants once
+compared line by line — the shared code was byte-identical and the divergence
+was extra coverage plus entry points bxp does not call.
+
+**`json5` was not.** It is the counter-example worth remembering: the local
+copy was an older, buggier line, and upstream's fuzzer + the json5/json5-tests
+conformance corpus had already fixed four things it still carried — two live
+crashes (`{a b` sliced out of bounds; `skipValue` could return `len + 1` on a
+trailing backslash in a string, so a typo'd config aborted the process with a
+core dump) and two spec deviations it silently accepted (an unterminated block
+comment stripped to EOF; a lone or leading comma elided into a valid-looking
+empty container — both must-reject cases in that corpus). Migrating it was
+therefore a deliberate **behaviour change**, gated on all 63 configs in the
+repo plus the real working config producing byte-identical annotated output.
+Assume nothing from the previous three: the "strict subset" result is a
+finding per module, not a pattern.
+
+The three remaining figures indicate that a fork exists, not what it contains
+— audit each before migrating it.
 
 Method all three migrations used, worth repeating:
 
@@ -329,6 +343,17 @@ Method all three migrations used, worth repeating:
    the apparent delta (~18 KB for `encoding`) purely through longer path
    strings in ReleaseSafe panic data; measured in place, `.text` and
    `.rodata` were byte-identical.
+5. If the diff shows behaviour changes rather than pure additions, verify each
+   one against the current binary before deciding, and check the whole repo
+   for inputs that would trip it. Both `json5` crashes were confirmed as live
+   SIGABRTs first; the two strictness changes were confirmed to match nothing
+   in any config that ships.
+
+A module consumed by a downstream package needs one extra step: `dependency().
+module()` does not register the module in this package's table, so
+`core_dep.module("<name>")` in bxp-cli/bxp-mcp will panic with "unable to find
+module". Re-export it with `b.modules.put(b.graph.arena, b.dupe(name), mod)`.
+Only `json5` needed this so far.
 
 Taking a module and its dependencies from a **single `b.dependency` handle**
 is what makes them one compilation. `tz` imports `datefmt`, so while the

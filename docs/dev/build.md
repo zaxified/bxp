@@ -25,8 +25,8 @@ install that toolchain; ZLS bundled with the Zig extension matches it.
 Unicode case-mapping tables behind `UPPER`/`LOWER`; `regex`
 (`quangd/regex.zig`, Apache-2.0 OR MIT), the Pike-VM engine behind
 `REGEX_MATCH`/`REGEX_EXTRACT` (linear-time, ReDoS-safe); and `zig_libs` (MIT),
-supplying the `datefmt` date core, the `tz` IANA offset lookup and the
-`encoding` code-page transcoder. All are
+supplying the `datefmt` date core, the `tz` IANA offset lookup, the
+`encoding` code-page transcoder and the `json5` preprocessor. All are
 pinned in `bxp-core/build.zig.zon`. The numeric core stays in-house
 (`bxp-core/src/decimal.zig`). The fetches are cached after the first build;
 CI runners have network.
@@ -86,12 +86,11 @@ bxp/                            # monorepo root (git root)
 │   │   ├── unicode.zig         # UTF-8 case mapping (UPPER/LOWER) over uucode tables
 │   │   ├── config.zig          # JSON5 config loader + FieldDoc tables
 │   │   ├── json.zig            # JSON array-of-objects → row representation
-│   │   ├── json5.zig           # JSON5 preprocessor (comments, unquoted keys, ...)
 │   │   ├── docs.zig            # --docs aggregator: re-exports expr + config catalogs
 │   │   └── diagnostics.zig     # structured validation collector (Severity, Diagnostic)
 │   ├── build.zig               # exports named Zig modules
 │   └── build.zig.zon           # fetch deps: uucode (tables), regex (Pike-VM),
-│                               #             zig-libs (datefmt · tz · encoding)
+│                               #             zig-libs (datefmt · tz · encoding · json5)
 ├── bxp-gui/                    # Flutter desktop app (Linux / macOS / Windows)
 │   ├── lib/
 │   │   ├── main.dart           # Flutter entry; window + theme + provider wiring

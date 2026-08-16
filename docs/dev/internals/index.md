@@ -20,7 +20,7 @@ Consequences of this design:
 ```text
   bxp-cli         ── path dep ──►  bxp-core   ── fetch dep ──►  uucode   (Unicode tables)
   (binary)                         (library)                    regex    (Pike-VM engine)
-                                                                zig-libs (datefmt · tz · encoding)
+                                                                zig-libs (datefmt · tz · encoding · json5)
   bxp-mcp         ── path dep ──►  bxp-core           (wraps inspect.zig; spawns bxp-cli
   (binary)                                             for bxp_simulate)
   bxp-gui-bridge  ── path dep ──►  bxp-core           (links inspect.zig + expr.zig directly)
@@ -33,7 +33,7 @@ Consequences of this design:
 `bxp-core` is a **local path dependency** (`../bxp-core`) and pulls three
 external fetch dependencies of its own: `uucode` (Unicode case-mapping tables),
 `regex` (`quangd/regex.zig`, the Pike-VM engine behind `REGEX_MATCH`/
-`REGEX_EXTRACT`), and `zig_libs` (`datefmt`, `tz` and `encoding`), all
+`REGEX_EXTRACT`), and `zig_libs` (`datefmt`, `tz`, `encoding` and `json5`), all
 pinned in `build.zig.zon`. The numeric core lives in-house at
 `bxp-core/src/decimal.zig`.
 `bxp-gui` ships `bxp-cli`, `bxp-mcp`, and `bxp-gui-bridge.{dll,so,dylib}`

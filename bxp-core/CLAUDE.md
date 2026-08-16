@@ -26,7 +26,7 @@ Consumed by bxp-cli (conversion engine) and the stateless-inspect adapters
 | `config`      | `config.zig`      | `Config`, `BrokerConfig`, `load()`, `validate()`, `FieldDoc`              |
 | `json`        | `json.zig`        | `scanColNames()` + `RecordReader` — streaming JSON array-of-objects input |
 | `btrace`      | `btrace.zig`      | Binary trace `Writer` / `Reader` for `--trace=bin`                        |
-| `json5`       | `json5.zig`       | `preprocess()` (internal; also exported for direct use)                   |
+| `json5`       | _(zig-libs dep)_  | `preprocess()` + `preprocessAnnotated()` — JSON5 → JSON. **No longer in this tree**: consumed from the pinned `zig_libs` fetch dep. Unlike the others this was NOT a strict subset — the local copy was an older line still carrying two crashes and two JSON5-spec deviations upstream had fixed |
 | `docs`        | `docs.zig`        | `writeDocs(alloc, writer)` — emits the language/schema docs JSON                   |
 | `diagnostics` | `diagnostics.zig` | `Diagnostics`, `Diagnostic`, `Severity` — structured validation collector |
 | `inspect`     | `inspect.zig`     | Shared stateless core: `annotateRaw()`, `validateExpr()`, `validateExprJson()`, `evalExpr()`, `evalTrace()`, `evalBatch()`, `docsJson()`, `listTemplates()`, `fetchTemplate()` — wrapped by bxp-mcp + bxp-gui-bridge |
@@ -237,7 +237,7 @@ JSON5 configuration loader.
 - `BrokerConfig.validate(id, writer)` — validates config consistency (e.g. `$date` required
   when `date_filter_from_filename=true`).
 - Config file size limit: `CONFIG_MAX_FILE_SIZE=1MB`.
-- Internally uses `json5.zig` to preprocess JSON5 → standard JSON before `std.json` parsing.
+- Internally uses the `json5` module to preprocess JSON5 → standard JSON before `std.json` parsing.
 - Inline unit tests (11) cover the pure did-you-mean / parsing helpers
   (`levenshteinIgnoreCase`, `closestBuiltin`, `closestKey`, `suffixOverlap`,
   `isAnnotationKey`, `extractQuotedName`, `jsonErrorDesc`) plus two
@@ -322,14 +322,38 @@ recomputed on demand by the GUI (via the bridge) seeking to a row's
 - Inline tests (14): per-frame roundtrip + adversarial UTF-8 + empty
   strings + forward-compat unknown-type skip + EOF returns null.
 
-### json5.zig
+### json5 _(zig-libs dep)_
 
-Preprocessor that converts JSON5 source to standard JSON.
+Preprocessor that converts JSON5 source to standard JSON. **No longer in this
+tree** — the named `json5` module comes from the pinned `zig_libs` fetch dep.
 
 - `preprocess(alloc, input)` — strips `//` and `/* */` comments, converts unquoted keys
   to quoted keys, removes trailing commas, converts single-quoted strings to double-quoted.
+- `preprocessAnnotated(alloc, input)` — the recovering variant behind
+  `inspect.annotateRaw`: same transform, but syntax errors become sibling
+  `$err_<N>` entries instead of aborting, so the GUI can render diagnostics
+  against a still-parseable document.
 - Implemented as a single-pass tokenizer — no external dependencies.
-- Unit tests inline (20 test cases).
+- Tests live upstream (27 + two fuzz harnesses + the json5/json5-tests
+  conformance corpus).
+- **This module is the one migration that changed behaviour** (2026-08-16).
+  The local copy was an older line; upstream's fuzzer and the conformance
+  corpus had already fixed four things it still carried:
+
+  | Input | local copy | upstream |
+  | ----- | ---------- | -------- |
+  | `{a b` (unquoted key, no `:` before EOF) | out-of-bounds slice → **panic** | `$err_trace` diagnostic |
+  | trailing `\` inside a string | `skipValue` returns `len + 1` → **OOB read** | clamped to `len` |
+  | `//` comment ended by a bare `\r` | swallows the rest of the file | `\r` terminates the comment |
+  | `/* …` with no `*/` | silently stripped to EOF (**accepted**) | bytes pass through → `std.json` rejects |
+  | `[,]`, `{,}`, `[1,,]` | comma elided → `[]` / `{}` (**accepted**) | left in place → rejected |
+
+  The last two are must-reject cases in the conformance corpus, so the local
+  copy was not merely lenient — it did not conform. The first two were live
+  crashes: a typo'd config aborted the process with a core dump.
+  Migration was gated on all 63 configs in the repo + the real working config
+  producing **byte-identical annotated output**, so the GUI contract is
+  unchanged for anything that was already valid.
 
 ### diagnostics.zig
 
@@ -361,7 +385,7 @@ cd bxp-core && zig build test
 
 Module exports in `build.zig`: `csv`, `json`, `json5`, `xlsx`, `zipstream`, `btrace`, `decimal`, `encoding`, `expr`, `config`, `docs`, `diagnostics`, `inspect`.
 `xlsx` imports the named `decimal` and `zipstream` modules; `zipstream` has no bxp-core dependencies (std only).
-`expr` imports `unicode.zig` (file-relative, not a named module) plus the named `decimal`, `uucode`, `encoding`, `regex`, `tz`, `datefmt` modules (`regex` is the Pike-VM engine behind REGEX_MATCH/REGEX_EXTRACT; `tz`, `datefmt` and `encoding` come from zig-libs — all fetch deps, see _External dependencies_ below); `config` imports `json5` (as `"json5.zig"` — internal import name), `diagnostics`, `expr`, `encoding`. `encoding` being a named module matters for the same reason `decimal` is one: it is shared by both `expr` and `config`, and a file-relative @import from two modules would compile the file into each — a duplicate-symbol error.
+`expr` imports `unicode.zig` (file-relative, not a named module) plus the named `decimal`, `uucode`, `encoding`, `regex`, `tz`, `datefmt` modules (`regex` is the Pike-VM engine behind REGEX_MATCH/REGEX_EXTRACT; `tz`, `datefmt` and `encoding` come from zig-libs — all fetch deps, see _External dependencies_ below); `config` imports `json5`, `diagnostics`, `expr`, `encoding`. `encoding` being a named module matters for the same reason `decimal` is one: it is shared by both `expr` and `config`, and a file-relative @import from two modules would compile the file into each — a duplicate-symbol error.
 `docs` imports `config`, `expr`, `json5`; `diagnostics` has no bxp-core dependencies.
 
 ### External dependencies
@@ -384,13 +408,19 @@ content-addressed by hash and re-audited on any pin bump:
   module named `regex`; `build.zig` wires it into the `expr` module. Adds ~56 KB
   to the ReleaseSmall `bxp-cli` (engine + Unicode-scalar case-fold tables).
 - **zig_libs** (MIT, `zaxified/zig-libs`) — the module collection supplying
-  three modules that used to live in `src/`:
+  four modules that used to live in `src/`:
 
   - `tz` — IANA UTC-offset lookup behind `TO_UTC` / `TZ_OFFSET` /
     `TZ_CONVERT` / `IS_DST`.
   - `datefmt` — the date core behind `DATE_CONVERT` and every calendar
     builtin.
   - `encoding` — single-byte code page ↔ UTF-8 behind `csv_*_encoding`.
+  - `json5` — the JSON5 → JSON preprocessor behind config loading and
+    `inspect.annotateRaw`. This one is also re-exported into bxp-core's own
+    module table (`b.modules.put`), because a downstream package asks for it
+    by name: `core_dep.module("json5")` in `bxp-cli/build.zig`.
+    `dependency().module()` alone does not register it, and the downstream
+    build panics with "unable to find module 'json5'".
 
   Pinned to the commit behind a dated release tag (upstream tags
   `YYYY-MM-DD`, no semver). `build.zig` takes all three off **one shared
@@ -401,15 +431,15 @@ content-addressed by hash and re-audited on any pin bump:
   no runtime tzdata lookup, exactly as the former in-tree copies behaved.
   Size effect on the ReleaseSafe `bxp-cli`: `tz` added ~8 KB (the extra
   `Jn`/`n` POSIX rule forms), `datefmt` gave ~4 KB back (the duplicate core
-  collapsed), `encoding` was neutral (`.text` and `.rodata` byte-identical —
-  measure in the SAME working tree, a `git worktree` build inflates the
-  apparent delta by ~18 KB of longer path strings in ReleaseSafe panic data).
+  collapsed), `encoding` and `json5` were neutral — measure in the SAME
+  working tree, a `git worktree` build inflates the apparent delta by ~18 KB
+  of longer path strings in ReleaseSafe panic data.
 
   **Treated as a foreign upstream** — read-only, pinned, never edited from
   this repo. Zig's package manager offers no floating "latest" mode: the
   `hash` field is mandatory and content-addressed, so any upstream movement
   must land as an explicit `zig fetch --save` edit to `build.zig.zon`. These
-  three are the first of several bxp-core modules migrating this way; the
+  four are the first of several bxp-core modules migrating this way; the
   remaining candidates and their measured divergence are tabulated in
   `docs/dev/roadmap.md` → "Shared core libraries — consume zig-libs".
 
@@ -512,6 +542,7 @@ residual 🔵 design observations. Greppable in-code marker: `AUDIT-OK`.
   holding only the last segment of a key with JSON escapes, so the dedup
   compares tails and the caret column mis-points. Config keys with escapes are
   exotic (field names, `$vars`, headers), so impact is negligible.
-- **`json5.zig preprocessAnnotated` recovery state machine** — `AUDIT-OK`
-  anchor in-file: most intricate state machine in bxp-core, gate edits with the
-  recovery unit tests + a fuzz pass. Not a bug today.
+- **`preprocessAnnotated` recovery state machine** — carries an `AUDIT-OK`
+  anchor in the upstream `json5` module: the most intricate state machine
+  either tree has, so gate edits with the recovery unit tests + a fuzz pass.
+  Now upstream's concern, not this repo's.

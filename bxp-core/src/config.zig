@@ -10,7 +10,7 @@
 ///   "file_pattern_in" restricts which CSV files a template processes (suffix match).
 
 const std = @import("std");
-const json5 = @import("json5.zig");
+const json5 = @import("json5");
 const diagnostics = @import("diagnostics");
 const expr = @import("expr");
 const xlsx = @import("xlsx");

@@ -64,7 +64,7 @@ Type coercions:
 
 ---
 
-## Configuration system (config.zig + json5.zig)
+## Configuration system (config.zig + the json5 module)
 
 Config loading sequence:
 
@@ -72,7 +72,7 @@ Config loading sequence:
 bxp-cli.json  →  json5.preprocess()  →  std.json.parseFromSlice()  →  Config struct
 ```
 
-`json5.zig` is a pure preprocessor - it only transforms text. The output is always
+`json5` is a pure preprocessor - it only transforms text. The output is always
 valid JSON consumed by the standard library parser. This means the full JSON5 feature
 set (comments, trailing commas, unquoted keys, single-quoted strings) is supported
 at zero cost: no custom JSON parser needed.
@@ -139,7 +139,7 @@ Severity   ∈ { .error, .warning, .info }
 Diagnostic = { path, off?, len?, severity, code, message, suggest? }
 ```
 
-`config.zig`, `json5.zig`, and `expr.zig` accept an optional `*Diagnostics`
+`config.zig`, `json5`, and `expr.zig` accept an optional `*Diagnostics`
 sink — `bxp-cli` passes `null` (fail-fast / stderr behaviour preserved),
 The config validator passes a real bag and renders findings as `$err_<N>` / `$warn_<N>` /
 `$info_<N>` siblings in the annotated JSON output. The GUI reads those keys

@@ -33,10 +33,26 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    // json5 is used internally by config — export it and wire it in.
-    const json5_mod = b.addModule("json5", .{
-        .root_source_file = b.path("src/json5.zig"),
-    });
+    // JSON5 -> JSON preprocessor (plain + source-location annotated), consumed
+    // from zig-libs. Unlike tz/datefmt/encoding this one was NOT a strict
+    // subset: the local copy was an older, buggier line. Upstream gained a
+    // fuzzer and the json5/json5-tests conformance corpus, which between them
+    // fixed two crashes the local copy still had (an unquoted key with no ':'
+    // before EOF sliced out of bounds; skipValue could return len+1 on a
+    // trailing backslash inside a string) and two spec deviations it silently
+    // accepted (an unterminated block comment was stripped to EOF; a lone /
+    // leading comma was elided into a valid-looking empty container). Both
+    // deviations are must-reject cases in that corpus. See the migration note
+    // in docs/dev/roadmap.md.
+    const json5_mod = zig_libs.module("json5");
+    // Unlike the other zig-libs modules, this one is requested by a DOWNSTREAM
+    // package (`core_dep.module("json5")` in bxp-cli/build.zig). `dependency().
+    // module()` returns a module owned by zig-libs and does NOT register it in
+    // this package's table the way `addModule` would, so re-export it under the
+    // name bxp-core has always published. Mirrors `std.Build.addModule`'s own
+    // second line; without it the downstream build panics with "unable to find
+    // module 'json5'".
+    b.modules.put(b.graph.arena, b.dupe("json5"), json5_mod) catch @panic("OOM");
 
     // Structured diagnostic sink consumed by the inspect core's deep validation
     // pass. config/expr/json5 modules accept an optional pointer to it
@@ -137,11 +153,10 @@ pub fn build(b: *std.Build) void {
         },
     });
 
-    // config.zig uses @import("json5.zig") — the import name must match.
     const config_mod = b.addModule("config", .{
         .root_source_file = b.path("src/config.zig"),
         .imports = &.{
-            .{ .name = "json5.zig", .module = json5_mod },
+            .{ .name = "json5", .module = json5_mod },
             .{ .name = "diagnostics", .module = diagnostics_mod },
             .{ .name = "expr", .module = expr_mod },
             .{ .name = "encoding", .module = encoding_mod },
@@ -256,15 +271,6 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
-    const json5_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/json5.zig"),
-            .target = target,
-            .optimize = optimize,
-            .strip = false,
-        }),
-    });
-
     const diagnostics_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/diagnostics.zig"),
@@ -296,8 +302,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
-    // config.zig uses @import("json5.zig") — the test module's import name
-    // must match the production module wiring above.
+    // The test module's import names must match the production wiring above.
     const config_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/config.zig"),
@@ -305,7 +310,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .strip = false,
             .imports = &.{
-                .{ .name = "json5.zig",   .module = json5_mod },
+                .{ .name = "json5",       .module = json5_mod },
                 .{ .name = "diagnostics", .module = diagnostics_mod },
                 .{ .name = "expr",        .module = expr_mod },
                 .{ .name = "encoding",    .module = encoding_mod },
@@ -355,7 +360,6 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(expr_tests).step);
     test_step.dependOn(&b.addRunArtifact(unicode_tests).step);
     test_step.dependOn(&b.addRunArtifact(decimal_tests).step);
-    test_step.dependOn(&b.addRunArtifact(json5_tests).step);
     test_step.dependOn(&b.addRunArtifact(diagnostics_tests).step);
     test_step.dependOn(&b.addRunArtifact(zipstream_tests).step);
     test_step.dependOn(&b.addRunArtifact(xlsx_tests).step);
