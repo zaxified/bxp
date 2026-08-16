@@ -302,6 +302,46 @@ unless noted:
   both need floating point, which conflicts with the deliberately float-free
   decimal core; revisit only with an integer-exponent-only `POWER` or an explicit float-approximation mode.
 
+### Re-take the Linux bench reference on a quiet machine
+
+The documented Linux reference is S17 (`results-20260616-160353.csv`,
+22.36 s total). A 2026-08-16 run measured 26.23 s — but re-running the
+*reference commit itself* on the same day gave 24.86 s, so most of the gap is
+the machine, not the code: those runs happened under a load average of ~1.8
+(browser + editor + language servers), whereas the reference was taken on an
+idle box. The Ubuntu 24.04 → 26.04 upgrade (2026-06-29) is not implicated —
+S17 predates it and the post-upgrade run matched it to within 0.03 s.
+
+Take a fresh reference **after a reboot, with nothing else running**, and
+record it as S18. Recording one now would bake ~11 % of ambient load into the
+baseline and cause a false *improvement* next time.
+
+While writing it up, add the protocol note that actually prevents false
+alarms: a stored reference ages, so on any suspected regression re-run the
+baseline commit in the same session and compare that pair. Comparing a fresh
+run against a weeks-old stored number cannot separate code from machine.
+
+Refresh the real-world example figures in the same pass. Re-measured
+2026-08-16 (ReleaseFast, 8 cores, but under load), every one of them beats
+what its `index.md` claims, and peak RSS sits a consistent 2–3 MB higher —
+which is the constant offset S17 recorded for the Zig 0.16 allocator, so those
+figures predate that migration:
+
+| example | documented | measured | doc RSS | measured RSS |
+| ------- | ---------: | -------: | ------: | -----------: |
+| `inside-airbnb-listings` | 0.12 s | 0.07 s | 14 MB | 16.7 MB |
+| `noaa-ghcn-daily` | 0.25 s | 0.16 s | 15 MB | 18.2 MB |
+| `chicago-business-licenses` | 4.2 s | 3.28 s | 19 MB | 21.9 MB |
+| `french-dvf-realestate` | 9.1 s | 5.31 s | 18 MB | 21.5 MB |
+| `imdb-title-basics` | 24.5 s | 19.10 s | 26 MB | 29.4 MB |
+
+Output row counts are unchanged (imdb 12,533,197 and chicago 1,197,482 match
+exactly). `french-dvf-realestate` says 3,499,932 rows but the current upstream
+file carries 3,499,931 and the conversion is 1:1 — correct the doc, not the
+code. Two examples were not re-measured: `nyc-taxi-trips` (7.7 GB download)
+and `ruian-address-points` (no `fetch-full.sh`, and its figure came from a
+different machine and a ReleaseSmall build, so it is not comparable anyway).
+
 ### Encoding — more single-byte code pages
 
 The `encoding` module covers Win-1250/1252 and ISO-8859-1/2/15 today. The
