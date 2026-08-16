@@ -154,6 +154,26 @@ against the real engine instead of frozen expected text).
   recurring operator chore. Demand-driven — only if a real workflow asks;
   docs/examples/ currently show flat dirs.
 
+### CSV formula-injection guard (`csvsafe`)
+
+We have none. `pipeline.zig`'s `writeSafeValue` does RFC 4180 quoting only, so
+a field whose first character is `=`, `+`, `-`, `@`, or a leading tab/CR is
+written through verbatim and evaluated as a *formula* when the output is opened
+in Excel / LibreOffice / Sheets — the DDE `cmd|'/c calc'!A1` class. zig-libs'
+`csvsafe` is precisely this guard and nothing else (`needsGuard` / `writeSafe`,
+prefixing a single apostrophe).
+
+Marginal for a broker export loaded straight into Wealthfolio, but bxp is
+documented as a general CSV ETL — `hubspot-to-salesforce`, the Chicago
+licences, RÚIAN — and those outputs do get opened in a spreadsheet.
+
+Must be an **opt-in config key**, not a silent default: the apostrophe changes
+the cell's value, which would corrupt an import into a tool that reads the CSV
+programmatically. Note `csvsafe` also takes a decimal separator
+(`needsGuardSep`), so a leading `-` on a negative number is not mistaken for a
+formula — that interacts with `csv_decimal_out` and needs checking against our
+accounting-negatives handling.
+
 ### Real-world broker CSV quirks
 
 Surfaced by readme-adequacy simulations against real broker formats
@@ -280,11 +300,63 @@ fixed before release instead, not parked here).
 
 ### Shared core libraries — consume zig-libs
 
-The seven forked `bxp-core` modules have migrated; what is left:
+The seven forked `bxp-core` modules have migrated. A 2026-08-16 sweep of the
+remaining 226 upstream modules found more overlap — the extraction went below
+file level, so pieces of bxp live upstream as modules even where no local file
+ever matched them by name. None of these promises a speed-up: where they
+overlap our code they are the same algorithms, verified rather than assumed.
 
-- **Transport core** — `http`, `rest`, `api`, `mcp`.
+- **`numparse`** — is our `parseGroupedNumber` from `expr.zig`, extracted.
+  Diffed 2026-08-16: identical character for character apart from parameter
+  renames and `pub`. It already returns the same zig-libs `decimal` we now
+  consume. Removes ~40 lines and gains 4 upstream tests. Lowest-risk item on
+  this list by a wide margin.
+
+- **`csvstream`** — the largest overlap left, and the most delicate. Carries
+  `LineIterator` / `splitFields` / `LineSlice` (our `bxp-core/src/csv.zig`)
+  **and** `ChunkReader` (bxp-cli's `pipeline.zig`, tuned in its own bench
+  session, S03). Two things must be audited before any swap, both load-bearing:
+  our parser deliberately uses lazy-quotes semantics — a newline always ends a
+  record, intentionally *not* RFC 4180 §2.6, validated on IMDb's 12.5M rows —
+  and the parallel chunked pipeline depends on that property to split chunks at
+  all. If upstream is strict RFC 4180 here, this is a policy decision like
+  `zipstream`'s output cap, not a drop-in.
+
+- **`minisign`** — rank this higher than its 81 lines suggest. The
+  `.minisig` text `bridge_verify_minisign` parses is **fetched over the
+  network** by the auto-updater, so it is a hand-written parser over
+  attacker-reachable input with no fuzz harness — the exact profile that hid a
+  crash in both `json5` and `zipstream`. Audited 2026-08-16 and no gap found
+  (the global signature over the trusted comment *is* verified, and the crypto
+  is `std.crypto` Ed25519 + Blake2b, not hand-rolled), but "no gap found by
+  reading" is what we believed about those two as well. Upstream implements the
+  whole format with tests; bxp needs only `verifyFile` / `verifyTrustedComment`
+  and the linker drops the signing and key-generation half.
+
+- **`procrun`** — subprocess runner whose stated contract is a
+  "reap-race-tolerant wait, deadlock-free capped stdio capture": exactly the
+  SIGCHLD/ECHILD race `bxp-gui-bridge` fixes by hand (`28a5234`, surviving the
+  Dart VM's child reaper). Worth folding in the next time the bridge's spawn
+  path is opened.
+
+- **Transport core** — `http`, `rest`, `api`, `mcp`. The concrete piece is
+  `bxp-mcp/src/server.zig` (384 lines: JSON-RPC 2.0 framing over stdio plus the
+  MCP handshake), which the `mcp` module covers. `tools.zig` and `sim.zig`
+  (1 270 lines) are bxp-specific and stay — they would need reseating on the
+  upstream transport's API, which is what makes this a larger job than the
+  items above rather than a swap.
+
 - **Dart side** — `json5_ast` has no zig-libs equivalent (different language);
   still waits for a second Dart consumer.
+
+Deliberately **not** adopted, recorded so the survey is not repeated:
+`xml` builds an infoset tree where our `XmlTok` is a windowed streaming
+tokenizer — taking it would forfeit the O(window) memory ceiling that is the
+whole point of the xlsx path. `dataset` / `tabular` / `jsonshape` / `finstats`
+are a materialised columnar stack, the opposite architecture to a row-streaming
+pipeline. `workerpool` / `lockfree` would replace a tuned, green work-stealing
+unpack with no measured problem to solve. `metrics` is a Prometheus registry
+against our two-number `BXP_METRICS`.
 
 ### Expression builtins
 
