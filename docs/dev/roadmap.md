@@ -280,76 +280,11 @@ fixed before release instead, not parked here).
 
 ### Shared core libraries — consume zig-libs
 
-**Done (2026-08-16).** All seven forked modules now come from
-[`zig-libs`](https://github.com/zaxified/zig-libs) as a pinned fetch
-dependency: `tz`, `datefmt`, `encoding`, `json5`, `decimal`, `zipstream`,
-`diagnostics`. `bxp-core/src/` keeps only bxp's own domain layer — `csv`,
-`json`, `xlsx`, `btrace`, `expr`, `config`, `docs`, `unicode`, `inspect`.
+The seven forked `bxp-core` modules have migrated; what is left:
 
-Kept here because the method generalises to the next dependency this repo
-takes on, and because the results argue against assuming any of it.
-
-**Three shapes turned up, and the shape is a finding per module — not a
-pattern.** Guessing from the previous module would have been wrong twice:
-
-| Shape | Modules | What the gate had to prove |
-| ----- | ------- | -------------------------- |
-| Strict subset | `tz`, `datefmt`, `encoding`, `diagnostics` | Shared code byte-identical; upstream adds only tests and entry points bxp never calls |
-| Same API, fixed behaviour | `json5`, `zipstream` | The local copy was the older, buggier line — output identical for valid input, and the newly-rejected input really is invalid |
-| Same behaviour, changed API | `decimal` | Every result identical across a wide value matrix, with call sites rewritten for the new signatures |
-
-**Four live crashes were fixed on the way**, each reproduced against the
-pre-migration binary *before* being claimed: `json5` aborted on `{a b` and on
-a trailing backslash inside a string; `decimal` aborted on a division whose
-result overflowed i128; `zipstream` aborted on a hostile central-directory
-`filename_len`. A fifth gap was silent rather than loud — `zipstream` had no
-CRC-32 check, so a stored member whose bytes were altered with its checksum
-left intact converted with `exit 0` and produced wrong output.
-
-Method, in the order that mattered:
-
-1. **Diff the whole module and classify every hunk** — comment, addition, or
-   behaviour change. Verify data tables explicitly rather than inferring
-   sameness from an absent diff hunk.
-2. **Check that the gate actually exercises the module.** It did not for
-   `encoding` (the real exports are pure ASCII and no template sets
-   `csv_*_encoding`) or for `diagnostics` (valid configs emit no findings at
-   all). Both needed a purpose-built fixture: the full byte/codepoint space
-   for one, deliberately-broken configs for the other.
-3. **Gate against a binary built from the previous commit**, not against
-   intuition. The live broker run (163 output files) stayed byte-identical
-   through all seven migrations; `decimal` added a 1766 x 23 operand matrix,
-   `json5` and `diagnostics` a 70-config annotated-output comparison.
-4. **Reproduce every claimed crash first.** Upstream's `floor`/`ceil`/`parse`
-   overflow guards looked like fixes but are forward cover — probing showed
-   they are unreachable through the expression surface, so they were not
-   claimed as such.
-5. **Measure size in the same working tree.** A `git worktree` build inflates
-   the apparent delta (~18 KB) purely through longer path strings in
-   ReleaseSafe panic data.
-
-Two lessons worth carrying forward:
-
-- **Inheriting a hardened module does not mean inheriting its policy.**
-  `zipstream` arrived with a 1 GiB decompression-bomb cap and a zip-slip
-  predicate. bxp declined both — the cap would reject input it is designed to
-  stream without protecting anything, and `zipPrePass`'s own flat-name guard is
-  narrower than the predicate. Each default was checked against what this repo
-  already guarantees, and the reasoning written at the call site.
-- **A module a downstream package names needs re-exporting.**
-  `dependency().module()` does not register it in this package's table, so
-  `core_dep.module("<name>")` panics with "unable to find module".
-  `bxp-core/build.zig`'s `reexport` helper does it; `json5`, `zipstream` and
-  `diagnostics` all need it.
-
-Still outstanding, unchanged by the above:
-
-- **Transport core**
-  `http`, `rest`, `api`, `mcp`
-
-- **Dart side**
-  `json5_ast` — no zig-libs equivalent (different language); still waits for
-  a second Dart consumer.
+- **Transport core** — `http`, `rest`, `api`, `mcp`.
+- **Dart side** — `json5_ast` has no zig-libs equivalent (different language);
+  still waits for a second Dart consumer.
 
 ### Expression builtins
 
