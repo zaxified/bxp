@@ -309,10 +309,10 @@ pattern the GUI uses.
 
 ```mermaid
 flowchart TD
-    AGENT([AI agent / MCP host]) -->|JSON-RPC line| LOOP[server.zig
-    stdin loop + per-request arena]
-    LOOP --> DISP[tools.zig dispatch
-    name → handler]
+    AGENT([AI agent / MCP host]) -->|JSON-RPC line| LOOP["mcp.Server.serveStdio
+    stdin loop + per-message arena"]
+    LOOP --> DISP[dispatch by name
+    → tools.zig handler]
 
     DISP -->|stateless| CORE[("inspect.zig<br/>validate / eval / eval-batch /<br/>eval-trace / docs / templates")]
     DISP -->|bxp_simulate| SIM[sim.zig
@@ -323,7 +323,7 @@ flowchart TD
     CLI --> READ[read outputs + parse BXTB
     fold per-row trace into report]
 
-    CORE --> RES["writeToolResult<br/>text + structuredContent? + isError"]
+    CORE --> RES["mcp tool result<br/>text + structuredContent? + isError"]
     READ --> RES
     RES -->|JSON-RPC line| AGENT
     SIM -. notifications/progress .-> AGENT

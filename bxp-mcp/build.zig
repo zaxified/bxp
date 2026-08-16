@@ -21,6 +21,7 @@ pub fn build(b: *std.Build) void {
             .imports = &.{
                 .{ .name = "inspect",       .module = core_dep.module("inspect") },
                 .{ .name = "btrace",        .module = core_dep.module("btrace") },
+                .{ .name = "mcp",           .module = core_dep.module("mcp") },
                 .{ .name = "build_options", .module = options.createModule() },
             },
         }),
@@ -35,11 +36,17 @@ pub fn build(b: *std.Build) void {
 
     // Export the tool catalog (tools.zig) as a module so tools/zig-doc-gen can
     // render mcp-tools.md from `tool_docs`. The generator references only the
-    // catalog data; the handlers (which call inspect/sim) stay unreferenced and
-    // are never compiled into it.
+    // catalog data; the handlers (which call inspect/sim/mcp) stay unreferenced
+    // and are never compiled into it. `mcp` is listed anyway — lazy analysis is
+    // what keeps the handlers out, and an import table that matches the file's
+    // actual @imports means a future eager reference fails to build here rather
+    // than in the docs generator.
     _ = b.addModule("tools", .{
         .root_source_file = b.path("src/tools.zig"),
-        .imports = &.{.{ .name = "inspect", .module = core_dep.module("inspect") }},
+        .imports = &.{
+            .{ .name = "inspect", .module = core_dep.module("inspect") },
+            .{ .name = "mcp",     .module = core_dep.module("mcp") },
+        },
     });
 
     // Unit tests over the same source tree (picks up inline tests in
@@ -52,6 +59,7 @@ pub fn build(b: *std.Build) void {
             .imports = &.{
                 .{ .name = "inspect",       .module = core_dep.module("inspect") },
                 .{ .name = "btrace",        .module = core_dep.module("btrace") },
+                .{ .name = "mcp",           .module = core_dep.module("mcp") },
                 .{ .name = "build_options", .module = options.createModule() },
             },
         }),

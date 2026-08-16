@@ -11,9 +11,22 @@
 //   "mcpServers": { "bxp": { "command": "/path/to/bxp-mcp", "args": [] } }
 
 const std = @import("std");
-const server = @import("server.zig");
+const mcp = @import("mcp");
 const tools = @import("tools.zig");
 const build_options = @import("build_options");
+
+/// `initialize.instructions` — the usage hint an agent host shows its model
+/// before any tool is called, so the ordering advice (docs first, trace to
+/// debug, simulate to verify) arrives with the tool list rather than being
+/// rediscovered. Plain text: the `mcp` module's serializer escapes it.
+const INSTRUCTIONS =
+    "bxp-mcp: validate bxp-cli configs (bxp_validate), evaluate one (bxp_eval) or many " ++
+    "(bxp_eval_batch) bxp expressions, trace one expression's per-call evaluation " ++
+    "(bxp_eval_trace), list/fetch conversion templates (bxp_list_templates, " ++
+    "bxp_fetch_template), run a full conversion end-to-end against sample CSV " ++
+    "(bxp_simulate), and fetch the bxp language docs (bxp_docs). Call bxp_docs first to " ++
+    "learn the expression/config language; use bxp_eval_trace to debug an expression and " ++
+    "bxp_simulate to verify a finished config for real.";
 
 /// One documented CLI flag — same shape as bxp-cli's `FlagDoc`, so a single
 /// walker can render either binary's flags uniformly. Co-located with the arg
@@ -41,9 +54,9 @@ pub fn main(init: std.process.Init) void {
     const io = init.io;
 
     // Base arena over page_allocator: one mmap up front, bump allocation after.
-    // Holds only startup (argv) + the server's persistent reused buffers. Each
-    // request's transient allocations go through a separate per-request arena
-    // that `server.run` resets after every request (see server.zig Session).
+    // Holds only startup (argv) + the server's registered tool table. Each
+    // request's transient allocations go through a separate per-message arena
+    // the `mcp` module owns and frees after every response.
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
 
@@ -96,5 +109,31 @@ pub fn main(init: std.process.Init) void {
         }
     }
 
-    server.run(io, init.environ_map, arena.allocator());
+    // The transport is the zig-libs `mcp` module (JSON-RPC framing, handshake,
+    // tools/list, dispatch, structuredContent, progress); this binary supplies
+    // the identity, the catalog and the app state. `serverInfo.version` is the
+    // manifest version `--version` prints — one source, so it cannot drift.
+    var app: tools.App = .{ .io = io, .env = init.environ_map };
+    var server = mcp.Server.init(arena.allocator(), .{
+        .name = "bxp-mcp",
+        .title = "bxp-mcp",
+        .version = build_options.version,
+        .instructions = INSTRUCTIONS,
+    });
+    defer server.deinit();
+
+    // Registration failure is a build-time bug (a duplicate tool name or OOM
+    // before the first request), not something a client can provoke — fail
+    // loudly rather than serving a half-populated catalog.
+    tools.register(&server, &app) catch |err| {
+        var buf: [128]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, "bxp-mcp: cannot register tools: {t}\n", .{err}) catch
+            "bxp-mcp: cannot register tools\n";
+        writeStdout(io, msg);
+        std.process.exit(1);
+    };
+
+    // Serves until stdin reaches EOF. A dying client is a session end, not an
+    // error; only OOM / a stdout write failure surface here.
+    server.serveStdio(io) catch {};
 }

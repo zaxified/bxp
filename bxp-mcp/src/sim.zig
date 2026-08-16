@@ -14,8 +14,17 @@ const std = @import("std");
 const builtin = @import("builtin");
 const inspect = @import("inspect");
 const btrace = @import("btrace");
-const progress = @import("progress.zig");
-const Progress = progress.Progress;
+const mcp = @import("mcp");
+
+/// Emit one lifecycle `notifications/progress`, if the caller opted in.
+///
+/// The reporter is the live `mcp.ToolCall`: the `mcp` module owns the
+/// transport writer and the progressToken, and `reportProgress` is already a
+/// no-op when the client sent no token. `null` is for the unit tests, which
+/// drive the orchestration without a call in flight.
+fn report(call: ?*mcp.ToolCall, done: u64, total: u64, message: []const u8) void {
+    if (call) |c| c.reportProgress(done, total, message);
+}
 
 /// Cap on captured bxp-cli stdout/stderr (the Child.run default is only 50 KB).
 const MAX_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
@@ -46,10 +55,10 @@ pub fn simulate(
     template: []const u8,
     csv_text: []const u8,
     workspace_id: ?[]const u8,
-    prog: ?Progress,
+    call: ?*mcp.ToolCall,
     out: *std.ArrayList(u8),
 ) !void {
-    const json = try run(io, env, a, config_text, template, csv_text, workspace_id, prog);
+    const json = try run(io, env, a, config_text, template, csv_text, workspace_id, call);
     try out.appendSlice(a, json);
 }
 
@@ -61,9 +70,9 @@ fn run(
     template: []const u8,
     csv_text: []const u8,
     workspace_id: ?[]const u8,
-    prog: ?Progress,
+    call: ?*mcp.ToolCall,
 ) ![]u8 {
-    progress.report(prog, 1, 4, "validating template");
+    report(call, 1, 4, "validating template");
     // 1. Introspect the template's input shape and reject what we can't stage.
     const tio = try inspect.templateIo(a, config_text, template);
     if (!tio.found) return errJson(a, "template not found in config", template);
@@ -115,12 +124,12 @@ fn run(
     std.Io.Dir.cwd().writeFile(io, .{ .sub_path = input_path, .data = csv_text }) catch
         return errJson(a, "cannot write scratch input", input_path);
 
-    progress.report(prog, 2, 4, "staging workspace");
+    report(call, 2, 4, "staging workspace");
 
     // 5. Spawn bxp-cli — the actual run. --data overrides the template's
     //    data_dir; --trace-file writes a sidecar BXTB stream (full per-row
     //    detail, independent of stdout) we read back below for the trace report.
-    progress.report(prog, 3, 4, "running conversion");
+    report(call, 3, 4, "running conversion");
     const result = std.process.run(a, io, .{
         .argv = &.{ cli_path, "--config", config_path, "--template", template, "--data", data_dir, "--trace-file", trace_path },
         .stdout_limit = .limited(MAX_OUTPUT_BYTES),
@@ -133,7 +142,7 @@ fn run(
         else => -1,
     };
 
-    progress.report(prog, 4, 4, "reading output and trace");
+    report(call, 4, 4, "reading output and trace");
 
     // Read back the BXTB sidecar (best-effort: a missing/empty file just means
     // an empty trace section, never a simulation failure).

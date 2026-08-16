@@ -96,6 +96,16 @@ pub fn build(b: *std.Build) void {
     // does not use it either.
     reexport(b, "procrun", zig_libs.module("procrun"));
 
+    // MCP server transport (JSON-RPC 2.0 + the handshake/tools dispatch over a
+    // reader/writer, with a built-in stdio transport) behind `bxp-mcp`. This
+    // one is a homecoming rather than an adoption: upstream's module IS this
+    // repo's former `bxp-mcp/src/server.zig`, extracted 2026-07-04 and hardened
+    // there (resources + prompts + sampling/elicitation, a 16 MiB line cap, 89
+    // tests). bxp-core does not import it — re-exported for the same single-pin
+    // reason as `minisign` and `procrun`, so bxp-mcp does not carry a second
+    // `zig_libs` entry of its own.
+    reexport(b, "mcp", zig_libs.module("mcp"));
+
     // Layer 0 single-byte code page ↔ UTF-8 transcoder, consumed from zig-libs
     // for the same reason as tz/datefmt: the local src/encoding.zig was lifted
     // into that repo and hardened there (normative WHATWG/Unicode.org index
@@ -383,9 +393,9 @@ pub fn build(b: *std.Build) void {
 /// to be re-published here, or the downstream build panics with "unable to
 /// find module '<name>'". This is `std.Build.addModule`'s own second line.
 ///
-/// `minisign` is the one re-export bxp-core itself never imports: it is
-/// published only so the bridge shares this package's single zig-libs pin
-/// instead of carrying a second one of its own.
+/// `minisign`, `procrun` and `mcp` are the re-exports bxp-core itself never
+/// imports: they are published only so `bxp-gui-bridge` / `bxp-mcp` share this
+/// package's single zig-libs pin instead of carrying a second one of their own.
 fn reexport(b: *std.Build, name: []const u8, mod: *std.Build.Module) void {
     b.modules.put(b.graph.arena, b.dupe(name), mod) catch @panic("OOM");
 }

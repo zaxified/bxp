@@ -70,31 +70,53 @@ the no-spawn, no-filesystem stance: the agent passes the config it is authoring.
 ```text
 bxp-mcp/
   src/
-    main.zig    ← entry: arena, --help, server.run()
-    server.zig  ← MCP stdio loop + JSON-RPC writers (pure std.json); per-request
-                  arena reset between calls
-    tools.zig   ← tool catalog + handlers → inspect calls (+ sim for bxp_simulate)
+    main.zig    ← entry: arena, --help, identity + INSTRUCTIONS,
+                  tools.register(), mcp.Server.serveStdio()
+    tools.zig   ← tool catalog + handlers → inspect calls (+ sim for bxp_simulate);
+                  `register` pairs each catalog row with its handler
     sim.zig     ← bxp_simulate orchestration: stage config+CSV in a scratch
                   workspace, spawn the co-located bxp-cli (+ --trace-file BXTB
                   sidecar parsed via btrace.Reader), read output, diff, trace
-    progress.zig ← server→client notifications/progress (opt-in via
-                  params._meta.progressToken); used by bxp_simulate phases
-  build.zig     ← path-deps ../bxp-core, imports the `inspect` + `btrace` modules
+  build.zig     ← path-deps ../bxp-core, imports `inspect` + `btrace` + `mcp`
   build.zig.zon
 ```
 
-The JSON-RPC layer is hand-written over `std.json` (parse incoming line →
-`std.json.Value`; serialize ids/strings via `std.json.Stringify`). No
-third-party code. (The `mcp-zig` project was studied as a protocol reference
-only — see the roadmap memory; nothing was vendored.)
+The JSON-RPC layer is the zig-libs **`mcp`** module (taken off bxp-core's single
+zig-libs pin — see `../bxp-core/build.zig`). It owns the framing, the handshake,
+`tools/list`, dispatch-by-name, `structuredContent` gating and progress; this
+package owns the catalog, the nine handlers and `bxp_simulate`'s orchestration.
+
+That module is not a third-party adoption but a **homecoming**: it *is* this
+package's former `server.zig`, extracted upstream on 2026-07-04
+(`mcp: … extracted from bxp-mcp`) and hardened there. Which is why the migration
+was near-free — `isSingleJsonObject`, the `tools/list` serializer and every
+JSON-RPC error string were already byte-identical to ours. What upstream added
+on top: resources + prompts + sampling/elicitation, a 16 MiB `max_line_len` cap,
+JSON-RPC §4 id validation, a JSON-escaped progress message, and 89 unit tests
+where the local transport had none.
+
+Handler shape is `fn(ctx: ?*anyopaque, call: *mcp.ToolCall) bool` — `call.arena`
+is the per-request arena, `call.strArg` reads an argument, `call.write` appends
+the result, `call.fail` marks a tool failure, `call.reportProgress` emits a
+progress notification. `ctx` is `tools.App` (the live `io` + `environ_map`);
+only `bxp_simulate` reads it, to spawn bxp-cli.
+
+`tool_docs` deliberately stays a plain `ToolDoc` table rather than becoming
+`mcp.Tool` directly: `tools/zig-doc-gen` compiles this file for the catalog
+alone, and handler pointers in the table would drag `sim` → `btrace` into the
+docs generator. `register` is the single place that pairs a row with a handler,
+and both halves of that pairing are compile-time checked (`tagFor` rejects a
+catalog name with no enum tag, `handlerFor`'s exhaustive switch rejects a tag
+with no handler).
 
 ## MCP wire protocol
 
 Newline-delimited JSON-RPC 2.0 over stdin/stdout — one JSON object per line.
-Protocol version `2025-11-25` (also accepts + echoes `2025-06-18`; see
-`negotiateVersion`). The client (agent host) spawns this process and pipes
-requests; the server reads stdin, writes one response line per request to
-stdout. stderr is free for logs.
+Protocol version `2025-11-25` (also accepts + echoes `2025-06-18`; see the
+`mcp` module's `negotiateVersion`). The client (agent host) spawns this process
+and pipes requests; the server reads stdin, writes one response line per
+request to stdout. stderr is free for logs. A single line is capped at
+`mcp.max_line_len` (16 MiB); an over-long line ends the session like EOF.
 
 - **request** (has `id`) → exactly one response line with the same `id`.
 - **notification** (no `id`, e.g. `notifications/initialized`) → no response.
@@ -108,11 +130,20 @@ stdout. stderr is free for logs.
   `bxp_eval_trace` is NDJSON by identity and stays text-only even when a
   function-free expression happens to emit a single sentinel line.
 - **server→client** `notifications/progress` are emitted mid-call for a
-  request that supplied `params._meta.progressToken` (see `progress.zig`).
+  request that supplied `params._meta.progressToken` (`call.reportProgress`;
+  `bxp_simulate` reports four lifecycle phases).
 
 Methods handled: `initialize`, `tools/list`, `tools/call`, `ping`,
 `notifications/initialized`. JSON-RPC 2.0 is the final/only version of JSON-RPC;
 MCP itself is what carries dated versions.
+
+Since the `mcp` migration the server also answers the other two MCP primitives
+— `resources/list`, `resources/read`, `resources/templates/list`,
+`prompts/list`, `prompts/get` — with empty catalogs (and `-32002` /
+`-32602` for a read/get against them), and `initialize` advertises the
+`resources` + `prompts` capabilities accordingly. bxp registers none of either
+today; the methods are served, they just have nothing in them. That is the one
+wire-visible change the migration made (see the differential gate below).
 
 ## Build and run
 
@@ -140,7 +171,10 @@ Register with an MCP client (e.g. Claude Code, `~/.claude.json`):
 
 - All code comments and documentation in English.
 - Zig 0.16.0 API — use the zig skill before writing new code.
-- Pure `std`, zero external dependencies (only the `bxp-core` path dep).
+- One dependency beyond the `bxp-core` path dep: the zig-libs `mcp` module,
+  taken through bxp-core's re-export so this package shares that single pin
+  rather than carrying a `zig_libs` entry of its own. `mcp` is itself pure
+  `std` with no deps, so the transitive surface stays at zero.
 
 ## Status & forward work
 
@@ -152,9 +186,28 @@ co-located `bxp-cli` (CSV-input templates only) and folds a per-row BXTB sidecar
 trace into a structured report with a record-count diff. Protocol depth is in:
 `structuredContent` (gated by tool identity), an `outputSchema` for
 `bxp_simulate`, protocol `2025-11-25` with version negotiation, and opt-in
-`notifications/progress`. The server uses a per-request arena (reset with
-`retain_capacity`) plus a fresh per-request `tool_buf` (an earlier persistent
-buffer aliased the next request's parse after reset — fixed).
+`notifications/progress`. Each message is handled on a per-message arena freed
+after the response is written.
+
+**Transport migrated to the zig-libs `mcp` module** (2026-08-16), retiring the
+local `server.zig` + `progress.zig` (427 lines). Gated by a differential probe:
+79 JSON-RPC lines — malformed input, batch arrays, notifications without `id`,
+non-scalar and null ids, unknown methods/tools, every argument-validation path,
+all nine tools, and `bxp_simulate` with a string / integer / malformed
+progressToken — replayed against the pre- and post-migration binaries. Result:
+**42/42 responses and all 8 progress notifications byte-identical**, except
+`initialize` now also advertising the `resources` + `prompts` capabilities the
+module serves (see the wire-protocol section).
+
+The standing gate is `scripts/test-02-mcp.sh`, extended in the same change with
+the wiring seams the probe had surfaced (the 100-series requests): every
+JSON-RPC error path this binary routes, an unknown tool answered by *our*
+catalog as `-32602`, a missing / non-string argument reaching the handler's own
+failure instead of being coerced, the empty resources + prompts catalogs that
+are our registration state, and — the one that matters on a long-lived stdio
+session — a real tool call still answering after a run of malformed lines. It
+deliberately does **not** re-test the framing for its own sake: that is the
+module's, and it has 89 tests upstream.
 
 The former **bxp-fmt** CLI adapter was the original third wrapper over `inspect`;
 it was removed once bxp-mcp + the GUI bridge covered every operation (the console
@@ -162,9 +215,10 @@ archive now ships `bxp-mcp` in its place; tests drive `inspect` via bxp-mcp / th
 bridge).
 
 **Forward — bxp-api sibling.** An HTTP/port adapter over the same `inspect`,
-folded into the AXP-driven transport-core direction (see `docs/dev/roadmap.md` →
-"Shared core libraries"); needs concurrency (thread pool / event loop), which
-stdio does not. The separate GUI-side **gui-mcp** Dart MCP server for
+not a committed milestone. It would mount the *same* `mcp.Server` this package
+already builds through the zig-libs `mcp-http` middleware, so the transport
+work is done; what it still needs is concurrency (thread pool / event loop),
+which stdio does not. The separate GUI-side **gui-mcp** Dart MCP server for
 agent-controlled GUI ops (open-config / edit / dry-run / save / exit) is
 **shipped** — see [`../bxp-gui/CLAUDE.md`](../bxp-gui/CLAUDE.md) "Agent control"
 and [`../docs/dev/mcp.md`](../docs/dev/mcp.md) for how it differs from this stdio server.
@@ -186,11 +240,16 @@ revisit them there.
   the user's own; the subsequent `deleteTree` only ever targets the sanitized
   `bxp-mcp-sim/<uid>` subtree, so a redirected temp base cannot widen the
   delete blast radius.
-- **`server.zig readLine` grows `line_buf` unboundedly** (no max-line cap), so
-  a multi-GB request line OOMs the server. Same "uncapped text entry point"
-  theme as `inspect.zig`; low risk on the trusted local pipe. A generous cap
-  (a few× the 1 MB config limit) + an oversize JSON-RPC error would bound it —
-  do this when the bxp-api sibling exposes the same reader to untrusted input.
+- ~~**`server.zig readLine` grows `line_buf` unboundedly**~~ — **resolved
+  2026-08-16** by the `mcp` migration: the module's `readLine` caps a line at
+  `mcp.max_line_len` (16 MiB), so a peer that never sends a `\n` can no longer
+  drive unbounded growth. The cap ends the session like EOF rather than
+  answering an oversize JSON-RPC error, which is the weaker half of the fix —
+  and it is a real ceiling on `bxp_simulate`, whose `csv` argument rides inline
+  in the request line. A >16 MiB sample CSV now drops the session instead of
+  converting. Revisit the shape (explicit `-32600`) if that ceiling is ever hit
+  in practice, or when the bxp-api sibling exposes the same reader to untrusted
+  input.
 - **`sim.zig` output capture is confined to `data_dir`.** A template whose
   output path escapes `--data` (absolute, or `..` in `file_pattern_out`) writes
   outside and is never read back → `output_records` 0 and a misleading

@@ -7,6 +7,15 @@
 # isolated so a broken server or simulate surfaces here, not in the desktop
 # suite (which never touches bxp-mcp).
 #
+# Division of responsibility since the transport became the external zig-libs
+# `mcp` module: that module owns the JSON-RPC framing and has its own 89 tests
+# upstream, so this script does NOT re-test the protocol for its own sake. What
+# it guards is **bxp's surface driven through that module** — our nine tools,
+# our catalog, our isError / structuredContent contract, our registration state
+# — plus the wiring seams where a mistake here would not show up upstream: that
+# our binary routes the error paths at all, and that a malformed line does not
+# take the session down with it.
+#
 # Usage (from any directory):
 #   bash scripts/test-02-mcp.sh    — this phase alone
 #   bash scripts/test.sh           — wrapper runs every phase
@@ -73,6 +82,38 @@ call(11, "bxp_eval", {})
 call(12, "bxp_eval_trace", {"expr":"1 + 2"})
 # A request-only method without an id is a stray notification — no response.
 print(json.dumps({"jsonrpc":"2.0","method":"tools/list"}))
+
+# ── wiring seams (100-series) ───────────────────────────────────────────────
+# Not a re-test of the mcp module's framing (89 tests upstream). These check
+# the seams that are ours: that this binary routes each error path, that our
+# catalog is the thing rejecting an unknown tool, that we registered no
+# resources/prompts, and — the one that matters most on a long-lived stdio
+# session — that garbage on the wire does not kill the server.
+print("{ this is not json")                                       # -32700
+print("[]")                                                       # -32600, batching unsupported
+print("")                                                         # blank line: ignored entirely
+print(json.dumps({"jsonrpc":"2.0","id":100}))                     # -32600 missing method
+print(json.dumps({"jsonrpc":"2.0","id":101,"method":"no/such"}))  # -32601
+print(json.dumps({"jsonrpc":"2.0","method":"no/such"}))           # same, id-less: silent
+# tools/call argument validation, all -32602.
+print(json.dumps({"jsonrpc":"2.0","id":102,"method":"tools/call"}))
+print(json.dumps({"jsonrpc":"2.0","id":103,"method":"tools/call","params":[]}))
+print(json.dumps({"jsonrpc":"2.0","id":104,"method":"tools/call","params":{}}))
+# An unknown tool name is OUR catalog answering, not the transport.
+call(105, "bxp_not_a_tool", {})
+# `arguments` absent entirely (not just empty) must reach the handler's own
+# missing-arg path, not fault before it.
+print(json.dumps({"jsonrpc":"2.0","id":106,"method":"tools/call",
+                  "params":{"name":"bxp_eval"}}))
+# A non-string argument is "missing" to strArg — the handler must say so
+# rather than coerce it.
+call(107, "bxp_eval", {"expr": 5})
+# We register no resources and no prompts; the module still serves both
+# methods, so the empty catalogs are our registration state showing through.
+print(json.dumps({"jsonrpc":"2.0","id":108,"method":"resources/list"}))
+print(json.dumps({"jsonrpc":"2.0","id":109,"method":"prompts/list"}))
+# The session survived all of the above: a real tool call still answers.
+call(110, "bxp_eval", {"expr":"UPPER('ok')"})
 PY
 
     "$stage/bxp-mcp" <"$reqs" >"$resp" || {
@@ -85,6 +126,7 @@ PY
 import json, os, sys
 by_id = {}
 progress_notes = []
+null_id = []          # responses carrying id:null — see the count assert below
 for ln in open(sys.argv[1]):
     ln = ln.strip()
     if ln:
@@ -92,10 +134,18 @@ for ln in open(sys.argv[1]):
         if o.get("method") == "notifications/progress":
             progress_notes.append(o["params"])
             continue
-        by_id[o.get("id")] = o
+        if o.get("id") is None:
+            null_id.append(o)
+            continue
+        by_id[o["id"]] = o
 
-# every request got exactly one id-keyed response; no stray null-id replies
-assert None not in by_id, "notification unexpectedly got a response"
+# Exactly two id:null responses are legal — the two malformed lines, which have
+# no id to echo. The count is also what proves no notification was answered: a
+# stray reply to `notifications/initialized` or an id-less `tools/list` would
+# land here as a third.
+assert len(null_id) == 2, [o.get("error") for o in null_id]
+assert null_id[0]["error"]["code"] == -32700, null_id[0]   # not JSON
+assert null_id[1]["error"]["code"] == -32600, null_id[1]   # batch array
 
 def tool_json(i):
     return json.loads(by_id[i]["result"]["content"][0]["text"])
@@ -170,6 +220,38 @@ assert "structuredContent" not in by_id[11]["result"], by_id[11]
 # (single sentinel line) — structuredContent is gated by tool identity, not shape.
 assert by_id[12]["result"].get("isError") is False, by_id[12]
 assert "structuredContent" not in by_id[12]["result"], "single-line eval_trace must stay text-only"
+
+# ── wiring seams (100-series) ───────────────────────────────────────────────
+def code(i):
+    assert "error" in by_id[i], (i, by_id[i])
+    return by_id[i]["error"]["code"]
+
+assert code(100) == -32600, by_id[100]          # missing method
+assert code(101) == -32601, by_id[101]          # unknown method
+assert code(102) == -32602, by_id[102]          # tools/call, no params
+assert code(103) == -32602, by_id[103]          # params not an object
+assert code(104) == -32602, by_id[104]          # no tool name
+# Unknown tool is -32602 (bad params on a valid method), NOT -32601: the method
+# exists, the name in it does not. Our catalog is what decides.
+assert code(105) == -32602, by_id[105]
+# (The id-less `no/such` twin must stay silent — covered by the null_id count
+# at the top, which is where a stray reply to any notification would surface.)
+
+# `arguments` absent, and a non-string argument, both reach the handler and come
+# back as its own tool failure — not a transport error, not a coerced value.
+for i in (106, 107):
+    assert "error" not in by_id[i], (i, by_id[i])
+    assert by_id[i]["result"]["isError"] is True, by_id[i]
+    assert by_id[i]["result"]["content"][0]["text"] == "error: missing 'expr'", by_id[i]
+
+# bxp registers no resources and no prompts: the module serves both methods,
+# the catalogs are empty because that is our registration state.
+assert by_id[108]["result"]["resources"] == [], by_id[108]
+assert by_id[109]["result"]["prompts"] == [], by_id[109]
+
+# The session survived every malformed line above — a long-lived stdio server
+# must not be killable by one bad request.
+assert tool_json(110) == {"ok": True, "value": "OK"}, tool_json(110)
 PY
 
     rm -f "$stage/bxp-mcp" "$stage/bxp-cli"; rmdir "$stage"; rm -f "$reqs" "$resp"

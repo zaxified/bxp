@@ -1,16 +1,28 @@
-// bxp-mcp — tool handlers (in-process, no spawn)
+// bxp-mcp — tool catalog + handlers (in-process, no spawn)
 //
 // Each tool calls the shared bxp-core `inspect` module directly — the same
 // stateless core the GUI's bxp-gui-bridge also calls. No subprocess: a tool
 // call is a function call, so latency is microseconds, not a process spawn.
 //
-// Handlers take the already-parsed `arguments` object (std.json.Value) and
-// write the tool's textual result into `out`.
+// Handlers have the zig-libs `mcp` module's shape: `fn(ctx, *mcp.ToolCall)
+// bool`. The transport (JSON-RPC framing, the handshake, tools/list, dispatch
+// by name, structuredContent, progress) belongs to that module; this file is
+// only the catalog and the nine handlers. `ctx` is the `App` below — the live
+// `io` + `environ_map` that `bxp_simulate` needs to spawn bxp-cli.
 
 const std = @import("std");
 const inspect = @import("inspect");
+const mcp = @import("mcp");
 const sim = @import("sim.zig");
-const Progress = @import("progress.zig").Progress;
+
+/// Application state threaded to every handler through the tool's `ctx`
+/// pointer. Only `bxp_simulate` reads it (spawning the co-located bxp-cli
+/// needs an `Io` and the environment for `tmpDir`), but every tool is
+/// registered with the same ctx so the handler signature stays uniform.
+pub const App = struct {
+    io: std.Io,
+    env: *const std.process.Environ.Map,
+};
 
 pub const Tool = enum {
     bxp_validate,
@@ -26,11 +38,17 @@ pub const Tool = enum {
 
 /// One documented MCP tool. Co-located catalog (the tools module) — the same
 /// grouped-array pattern as expr.zig's `operators`/`keywords`/`tokens`. The
-/// `tools/list` JSON-RPC result is assembled from this catalog by `buildToolsList`
-/// (the JSON serializer), so the wire shape can never drift from the per-tool
-/// name/description/schema. `input_schema` / `output_schema` are JSON-Schema
-/// object literals (pretty-printed for readability — the serializer re-emits them
-/// compact); `output_schema` is "" for tools that declare none.
+/// `tools/list` JSON-RPC result is assembled from this catalog by the `mcp`
+/// module's serializer (fed by `register` below), so the wire shape can never
+/// drift from the per-tool name/description/schema. `input_schema` /
+/// `output_schema` are JSON-Schema object literals (pretty-printed for
+/// readability — the serializer re-emits them compact); `output_schema` is ""
+/// for tools that declare none.
+///
+/// Deliberately NOT `mcp.Tool`: this stays a pure data table so
+/// `tools/zig-doc-gen` can compile the catalog without pulling the handlers
+/// (and through them `sim` → `btrace`) into the docs generator. `register`
+/// is the one place that pairs a catalog row with its handler.
 pub const ToolDoc = struct {
     name: []const u8,
     description: []const u8,
@@ -483,46 +501,28 @@ pub const tool_docs = [_]ToolDoc{
     },
 };
 
-/// Assemble the JSON-RPC `tools/list` result from the `tool_docs` catalog via
-/// the JSON serializer — the same `std.json.Stringify` path `docs.zig` uses, so
-/// the serializer handles all string escaping; no hand-rolled quoting, no
-/// comptime. `tools/list` is a once-per-session call, so building it on demand
-/// is free. The `input_schema` / `output_schema` literals are parsed to a
-/// `Value` and re-emitted, so they flow through the same serializer (single
-/// source: the catalog above).
-pub fn buildToolsList(a: std.mem.Allocator) ![]u8 {
-    var aw: std.Io.Writer.Allocating = .init(a);
-    errdefer aw.deinit();
-    var jw: std.json.Stringify = .{ .writer = &aw.writer, .options = .{} };
-    try jw.beginObject();
-    try jw.objectField("tools");
-    try jw.beginArray();
-    for (tool_docs) |t| {
-        try jw.beginObject();
-        try jw.objectField("name");
-        try jw.write(t.name);
-        try jw.objectField("description");
-        try jw.write(t.description);
-        try jw.objectField("inputSchema");
-        try writeRawJson(a, &jw, t.input_schema);
-        if (t.output_schema.len != 0) {
-            try jw.objectField("outputSchema");
-            try writeRawJson(a, &jw, t.output_schema);
-        }
-        try jw.endObject();
+/// Register every catalog entry on an `mcp.Server`, in catalog order — which
+/// is the order agents see in `tools/list`. The catalog carries the wire
+/// metadata, this function pairs each row with its handler and the shared
+/// `app` ctx.
+///
+/// `inline for` + a comptime name→enum lookup makes the pairing a compile-time
+/// invariant: a catalog row whose name has no `Tool` tag fails to build, and
+/// `handlerFor`'s exhaustive switch fails to build for a tag with no handler.
+/// Neither can be forgotten when a tenth tool is added.
+pub fn register(server: *mcp.Server, app: *App) !void {
+    inline for (tool_docs) |t| {
+        const tool = comptime tagFor(t.name);
+        try server.addTool(.{
+            .name = t.name,
+            .description = t.description,
+            .input_schema = t.input_schema,
+            .output_schema = t.output_schema,
+            .allow_structured = allowsStructured(tool),
+            .handler = handlerFor(tool),
+            .ctx = app,
+        });
     }
-    try jw.endArray();
-    try jw.endObject();
-    return aw.toOwnedSlice();
-}
-
-/// Emit a raw JSON-Schema literal through the serializer: parse it to a `Value`
-/// and `write` it, so it is validated and re-serialized in the same stream
-/// (keeping `jw`'s object/array state consistent).
-fn writeRawJson(a: std.mem.Allocator, jw: *std.json.Stringify, raw: []const u8) !void {
-    var p = try std.json.parseFromSlice(std.json.Value, a, raw, .{});
-    defer p.deinit();
-    try jw.write(p.value);
 }
 
 /// Whether a tool's textual result is a single top-level JSON object eligible
@@ -530,165 +530,151 @@ fn writeRawJson(a: std.mem.Allocator, jw: *std.json.Stringify, raw: []const u8) 
 /// a single sentinel line for a function-free expression) — its shape is a
 /// stream, not one object, so it stays text-only regardless of how few lines a
 /// trivial expression happens to produce. Deciding by tool identity (not by
-/// brace-scanning the output) keeps the contract stable.
+/// brace-scanning the output) keeps the contract stable. The `mcp` module
+/// applies its own structural re-check on top of this flag.
 pub fn allowsStructured(tool: Tool) bool {
     return tool != .bxp_eval_trace;
 }
 
-pub fn parse(name: []const u8) ?Tool {
-    if (std.mem.eql(u8, name, "bxp_validate")) return .bxp_validate;
-    if (std.mem.eql(u8, name, "bxp_validate_expr")) return .bxp_validate_expr;
-    if (std.mem.eql(u8, name, "bxp_eval")) return .bxp_eval;
-    if (std.mem.eql(u8, name, "bxp_eval_batch")) return .bxp_eval_batch;
-    if (std.mem.eql(u8, name, "bxp_eval_trace")) return .bxp_eval_trace;
-    if (std.mem.eql(u8, name, "bxp_docs")) return .bxp_docs;
-    if (std.mem.eql(u8, name, "bxp_list_templates")) return .bxp_list_templates;
-    if (std.mem.eql(u8, name, "bxp_fetch_template")) return .bxp_fetch_template;
-    if (std.mem.eql(u8, name, "bxp_simulate")) return .bxp_simulate;
-    return null;
+/// Comptime catalog-name → `Tool` tag. A hand-rolled walk over the enum's
+/// fields rather than `std.meta.stringToEnum`, which builds a comptime
+/// `StaticStringMap` (and its pdq sort blows the default eval-branch quota for
+/// what is a nine-entry lookup done once at startup).
+fn tagFor(comptime name: []const u8) Tool {
+    for (@typeInfo(Tool).@"enum".fields) |f| {
+        if (std.mem.eql(u8, f.name, name)) return @field(Tool, f.name);
+    }
+    @compileError("tool_docs entry '" ++ name ++ "' has no matching Tool enum tag");
 }
 
-/// Dispatch a tool call. `args` is the parsed `arguments` object (or .null).
-/// `prog` carries the request's progressToken (null when the client supplied
-/// none); only `bxp_simulate` reports progress today.
-///
-/// Returns `true` when the result is a tool *failure* (a missing required
-/// argument, an unexpected Zig error, a spawn/IO failure) so the caller can set
-/// MCP `isError:true`. A domain result the tool produced on purpose —
-/// `{"ok":false,...}` from an expression error or an orchestration report — is
-/// *not* a failure (`false`): it is a valid answer the agent should read.
-pub fn dispatch(io: std.Io, env: *const std.process.Environ.Map, alloc: std.mem.Allocator, tool: Tool, args: std.json.Value, prog: ?Progress, out: *std.ArrayList(u8)) bool {
+/// The handler for one tool. Exhaustive by design — see `register`.
+fn handlerFor(comptime tool: Tool) mcp.Handler {
     return switch (tool) {
-        .bxp_validate => validate(alloc, args, out),
-        .bxp_validate_expr => validateExpr(alloc, args, out),
-        .bxp_eval => eval(alloc, args, out),
-        .bxp_eval_batch => evalBatch(alloc, args, out),
-        .bxp_eval_trace => evalTrace(alloc, args, out),
-        .bxp_docs => docs(alloc, out),
-        .bxp_list_templates => listTemplates(alloc, args, out),
-        .bxp_fetch_template => fetchTemplate(alloc, args, out),
-        .bxp_simulate => simulate(io, env, alloc, args, prog, out),
+        .bxp_validate => &validate,
+        .bxp_validate_expr => &validateExpr,
+        .bxp_eval => &eval,
+        .bxp_eval_batch => &evalBatch,
+        .bxp_eval_trace => &evalTrace,
+        .bxp_docs => &docs,
+        .bxp_list_templates => &listTemplates,
+        .bxp_fetch_template => &fetchTemplate,
+        .bxp_simulate => &simulate,
     };
 }
 
 // ── tools ────────────────────────────────────────────────────────────────────
+//
+// Every handler returns `true` only for a tool *failure* (a missing required
+// argument, an unexpected Zig error, a spawn/IO failure) so the response is
+// marked `isError:true`. A domain result the tool produced on purpose —
+// `{"ok":false,...}` from an expression error or an orchestration report — is
+// *not* a failure (`false`): it is a valid answer the agent should read.
+// `call.fail` writes the message and returns `true` in one step.
+//
+// `call.arena` is the per-request arena: allocate freely, never store.
 
-fn validate(alloc: std.mem.Allocator, args: std.json.Value, out: *std.ArrayList(u8)) bool {
-    const config = strField(args, "config") orelse return appendErr(alloc, out, "missing 'config'");
+fn validate(_: ?*anyopaque, call: *mcp.ToolCall) bool {
+    const config = call.strArg("config") orelse return call.fail("missing 'config'");
     // check_fs = 0: pure structural/expression validation, no filesystem
     // syscalls (the agent is validating config text, not a deployed tree).
-    const result = inspect.annotateRaw(alloc, config, "<config>", 0) catch |err|
-        return appendErr(alloc, out, @errorName(err));
-    out.appendSlice(alloc, result.json) catch {};
+    const result = inspect.annotateRaw(call.arena, config, "<config>", 0) catch |err|
+        return call.fail(@errorName(err));
+    call.write(result.json);
     return false;
 }
 
-fn validateExpr(alloc: std.mem.Allocator, args: std.json.Value, out: *std.ArrayList(u8)) bool {
-    const expr = strField(args, "expr") orelse return appendErr(alloc, out, "missing 'expr'");
+fn validateExpr(_: ?*anyopaque, call: *mcp.ToolCall) bool {
+    const expr = call.strArg("expr") orelse return call.fail("missing 'expr'");
     // Authoring-time verdict (runtime eval + static FnArgDoc lint), serialized as
     // {ok:true} / {ok:false,error,…} by the shared core. A flagged expression is a
     // domain result the agent should read, not a tool failure — isError stays false.
-    const result = inspect.validateExprJson(alloc, expr) catch |err|
-        return appendErr(alloc, out, @errorName(err));
-    out.appendSlice(alloc, result) catch {};
+    const result = inspect.validateExprJson(call.arena, expr) catch |err|
+        return call.fail(@errorName(err));
+    call.write(result);
     return false;
 }
 
-fn eval(alloc: std.mem.Allocator, args: std.json.Value, out: *std.ArrayList(u8)) bool {
-    const expr = strField(args, "expr") orelse return appendErr(alloc, out, "missing 'expr'");
-    const headers = strField(args, "headers");
-    const fields = strField(args, "fields");
-    const result = inspect.evalExpr(alloc, expr, headers, fields) catch |err|
-        return appendErr(alloc, out, @errorName(err));
-    out.appendSlice(alloc, result) catch {};
+fn eval(_: ?*anyopaque, call: *mcp.ToolCall) bool {
+    const expr = call.strArg("expr") orelse return call.fail("missing 'expr'");
+    const headers = call.strArg("headers");
+    const fields = call.strArg("fields");
+    const result = inspect.evalExpr(call.arena, expr, headers, fields) catch |err|
+        return call.fail(@errorName(err));
+    call.write(result);
     return false;
 }
 
-fn docs(alloc: std.mem.Allocator, out: *std.ArrayList(u8)) bool {
-    const result = inspect.docsJson(alloc) catch |err|
-        return appendErr(alloc, out, @errorName(err));
-    out.appendSlice(alloc, result) catch {};
+fn docs(_: ?*anyopaque, call: *mcp.ToolCall) bool {
+    const result = inspect.docsJson(call.arena) catch |err|
+        return call.fail(@errorName(err));
+    call.write(result);
     return false;
 }
 
-fn evalBatch(alloc: std.mem.Allocator, args: std.json.Value, out: *std.ArrayList(u8)) bool {
+fn evalBatch(_: ?*anyopaque, call: *mcp.ToolCall) bool {
     // The call arguments object *is* the batch request {headers, fields, exprs,
     // ...} — pass it straight to the shared core (no stdin/serialize round-trip).
-    const result = inspect.evalBatch(alloc, args) catch |err|
-        return appendErr(alloc, out, @errorName(err));
-    if (result.error_message) |msg| return appendErr(alloc, out, msg);
-    out.appendSlice(alloc, result.json) catch {};
+    const result = inspect.evalBatch(call.arena, call.args) catch |err|
+        return call.fail(@errorName(err));
+    if (result.error_message) |msg| return call.fail(msg);
+    call.write(result.json);
     return false;
 }
 
-fn evalTrace(alloc: std.mem.Allocator, args: std.json.Value, out: *std.ArrayList(u8)) bool {
-    const expr = strField(args, "expr") orelse return appendErr(alloc, out, "missing 'expr'");
-    const headers = strField(args, "headers");
-    const fields = strField(args, "fields");
+fn evalTrace(_: ?*anyopaque, call: *mcp.ToolCall) bool {
+    const expr = call.strArg("expr") orelse return call.fail("missing 'expr'");
+    const headers = call.strArg("headers");
+    const fields = call.strArg("fields");
     // Collect the NDJSON stream (per-call traces + final sentinel) into a buffer
     // and append the error sentinel (if any) so the agent gets the whole trace
     // plus outcome in one blob — the MCP analogue of fmt's stdout+stderr split.
-    var aw: std.Io.Writer.Allocating = .init(alloc);
-    const result = inspect.evalTrace(alloc, expr, headers, fields, &aw.writer) catch |err|
-        return appendErr(alloc, out, @errorName(err));
-    const trace = aw.toOwnedSlice() catch return appendErr(alloc, out, "OutOfMemory");
-    out.appendSlice(alloc, trace) catch {};
+    var aw: std.Io.Writer.Allocating = .init(call.arena);
+    const result = inspect.evalTrace(call.arena, expr, headers, fields, &aw.writer) catch |err|
+        return call.fail(@errorName(err));
+    const trace = aw.toOwnedSlice() catch return call.fail("OutOfMemory");
+    call.write(trace);
     // An expression-error sentinel is a domain result the agent should read, not
     // a tool failure — the call succeeded in producing the trace.
     if (result.error_json) |ej| {
-        out.appendSlice(alloc, ej) catch {};
-        out.appendSlice(alloc, "\n") catch {};
+        call.write(ej);
+        call.write("\n");
     }
     return false;
 }
 
-fn listTemplates(alloc: std.mem.Allocator, args: std.json.Value, out: *std.ArrayList(u8)) bool {
-    const config = strField(args, "config") orelse return appendErr(alloc, out, "missing 'config'");
-    const result = inspect.listTemplates(alloc, config) catch |err|
-        return appendErr(alloc, out, @errorName(err));
-    out.appendSlice(alloc, result) catch {};
+fn listTemplates(_: ?*anyopaque, call: *mcp.ToolCall) bool {
+    const config = call.strArg("config") orelse return call.fail("missing 'config'");
+    const result = inspect.listTemplates(call.arena, config) catch |err|
+        return call.fail(@errorName(err));
+    call.write(result);
     return false;
 }
 
-fn fetchTemplate(alloc: std.mem.Allocator, args: std.json.Value, out: *std.ArrayList(u8)) bool {
-    const config = strField(args, "config") orelse return appendErr(alloc, out, "missing 'config'");
-    const id = strField(args, "id") orelse return appendErr(alloc, out, "missing 'id'");
+fn fetchTemplate(_: ?*anyopaque, call: *mcp.ToolCall) bool {
+    const config = call.strArg("config") orelse return call.fail("missing 'config'");
+    const id = call.strArg("id") orelse return call.fail("missing 'id'");
     // The result JSON is the template object on success, or {"$err_1":"..."} for
     // a missing id / unparseable config — both are useful agent-facing content
     // (a present-but-not-found id is a domain answer, not a tool failure).
-    const result = inspect.fetchTemplate(alloc, config, id) catch |err|
-        return appendErr(alloc, out, @errorName(err));
-    out.appendSlice(alloc, result.json) catch {};
+    const result = inspect.fetchTemplate(call.arena, config, id) catch |err|
+        return call.fail(@errorName(err));
+    call.write(result.json);
     return false;
 }
 
-fn simulate(io: std.Io, env: *const std.process.Environ.Map, alloc: std.mem.Allocator, args: std.json.Value, prog: ?Progress, out: *std.ArrayList(u8)) bool {
-    const config = strField(args, "config") orelse return appendErr(alloc, out, "missing 'config'");
-    const template = strField(args, "template") orelse return appendErr(alloc, out, "missing 'template'");
-    const csv_text = strField(args, "csv") orelse return appendErr(alloc, out, "missing 'csv'");
-    const workspace = strField(args, "workspace"); // optional
+fn simulate(ctx: ?*anyopaque, call: *mcp.ToolCall) bool {
+    // The one handler that reads the ctx: a full conversion is not a stateless
+    // inspect op, so it spawns the co-located bxp-cli and needs the live `io`
+    // + environment to do it.
+    const app: *App = @ptrCast(@alignCast(ctx.?));
+    const config = call.strArg("config") orelse return call.fail("missing 'config'");
+    const template = call.strArg("template") orelse return call.fail("missing 'template'");
+    const csv_text = call.strArg("csv") orelse return call.fail("missing 'csv'");
+    const workspace = call.strArg("workspace"); // optional
     // sim.simulate handles its own logical failures as {"ok":false,...} JSON (a
     // domain result, isError:false); only OOM/unexpected surfaces here as a
     // genuine tool failure.
-    sim.simulate(io, env, alloc, config, template, csv_text, workspace, prog, out) catch |err|
-        return appendErr(alloc, out, @errorName(err));
+    sim.simulate(app.io, app.env, call.arena, config, template, csv_text, workspace, call, call.out) catch |err|
+        return call.fail(@errorName(err));
     return false;
-}
-
-// ── helpers ──────────────────────────────────────────────────────────────────
-
-fn strField(v: std.json.Value, key: []const u8) ?[]const u8 {
-    if (v != .object) return null;
-    return switch (v.object.get(key) orelse return null) {
-        .string => |s| s,
-        else => null,
-    };
-}
-
-/// Write a tool-failure message and return `true` (the dispatch `isError` flag),
-/// so handlers can `return appendErr(...)` on every failure path.
-fn appendErr(alloc: std.mem.Allocator, out: *std.ArrayList(u8), msg: []const u8) bool {
-    out.appendSlice(alloc, "error: ") catch {};
-    out.appendSlice(alloc, msg) catch {};
-    return true;
 }

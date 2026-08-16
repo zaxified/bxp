@@ -15,9 +15,10 @@ bxp/
 ├── bxp-mcp/              # MCP server (JSON-RPC 2.0 over stdio): exposes bxp as
 │   │                     # agent-callable tools. Stateless tools call bxp-core
 │   │                     # inspect in-process; bxp_simulate spawns co-located bxp-cli.
-│   ├── src/main.zig      # entry: arena + --help + server.run()
-│   ├── src/server.zig    # MCP stdio loop + JSON-RPC writers (per-request arena)
-│   ├── src/tools.zig     # tool catalog + handlers
+│   │                     # Transport = zig-libs `mcp` (which IS this package's
+│   │                     # former server.zig, extracted upstream and hardened).
+│   ├── src/main.zig      # entry: arena + --help + register + mcp.serveStdio
+│   ├── src/tools.zig     # tool catalog + handlers + register()
 │   ├── src/sim.zig       # bxp_simulate orchestration (stage + spawn bxp-cli + diff)
 │   ├── build.zig
 │   └── build.zig.zon     # depends on bxp-core (path dep)
@@ -40,7 +41,7 @@ bxp/
 │   │                       # `csvstream` are NOT here — the whole primitive
 │   │                       # layer comes from zig-libs)
 │   ├── build.zig         # exports each file as a named Zig module
-│   └── build.zig.zon     # fetch deps: uucode, regex, zig-libs (11 modules —
+│   └── build.zig.zon     # fetch deps: uucode, regex, zig-libs (12 modules —
 │                         #             the whole primitive layer)
 ├── bxp-gui/              # Flutter desktop app (replaces bxp-ui; talks to bxp-gui-bridge via FFI, which proxies bxp-cli)
 │   ├── lib/              # Dart source (services/, store/, ui/)
@@ -179,6 +180,8 @@ that file. See `docs/dev/release.md` for the operator walkthrough.
 ```text
 bxp-cli         --[path dep]--> bxp-core   --[fetch dep]--> uucode (Unicode tables)
 bxp-mcp         --[path dep]--> bxp-core    --[subprocess]-> bxp-cli (bxp_simulate only)
+                                            (also takes zig-libs `mcp` — the JSON-RPC
+                                             transport — through bxp-core's module table)
 bxp-gui-bridge  --[path dep]--> bxp-core    (bridge_inspect / bridge_eval_* in-proc;
                                              also takes zig-libs `minisign` + `procrun`
                                              through bxp-core's module table — one pin)
@@ -214,17 +217,21 @@ bxp-core/inspect link, and the bridge proxies `bxp-cli` runs. The former
   `expr.zig` rather than out of a file of its own), `csvstream` (the CSV
   record model AND the `ChunkReader` that used to sit privately in bxp-cli —
   upstream holds one module for both halves), `minisign` (the
-  signature format behind the GUI updater's authenticity check) and `procrun`
-  (the reap-race-tolerant child wait behind the bridge's `bxp-cli` spawns).
-  bxp-core imports neither of the last two — they are re-exported so
-  `bxp-gui-bridge` shares the same pin. Treated as a
+  signature format behind the GUI updater's authenticity check), `procrun`
+  (the reap-race-tolerant child wait behind the bridge's `bxp-cli` spawns)
+  and `mcp` (the JSON-RPC 2.0 / MCP transport behind `bxp-mcp` — the one
+  module that came *back*: upstream's copy is this repo's former
+  `bxp-mcp/src/server.zig`, extracted there and hardened).
+  bxp-core imports none of the last three — they are re-exported so
+  `bxp-gui-bridge` and `bxp-mcp` share the same pin. Treated as a
   foreign upstream: read-only, pinned to the commit behind a release tag,
   never edited from this repo. The offset tables are compiled into the `tz`
   module, so there is still **no runtime dependency** — the pinned tzdata
   snapshot ships inside the binary exactly as the former in-tree copy did.
-  All of them were lifted out of bxp-core and hardened upstream; see
-  `docs/dev/roadmap.md` → "Shared core libraries — consume zig-libs" for the
-  remaining candidates.
+  All of them were lifted out of bxp-core and hardened upstream (`mcp` the
+  other way round first — see above). The per-module inventory and rationale
+  live in [`bxp-core/CLAUDE.md`](bxp-core/CLAUDE.md); finishing the extraction
+  is the `v1.0.0` milestone in `docs/dev/roadmap.md`.
 
 The `tools/tz-gen`
 generator that emitted the offset tables (the only place `std.Tz` was used)

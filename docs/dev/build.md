@@ -72,8 +72,8 @@ bxp/                            # monorepo root (git root)
 │   └── build.zig.zon           # depends on bxp-core (path dep)
 ├── bxp-mcp/                    # MCP server (JSON-RPC over stdio) for AI agents
 │   ├── src/
-│   │   ├── main.zig            # entry: arena + --help + server.run()
-│   │   ├── server.zig          # MCP stdio loop + JSON-RPC writers
+│   │   ├── main.zig            # entry: arena + --help + register + serveStdio
+│   │   │                       #   (transport = zig-libs `mcp` module)
 │   │   ├── tools.zig           # tool catalog → bxp-core/inspect calls
 │   │   └── sim.zig             # bxp_simulate: stage + spawn bxp-cli + diff
 │   ├── build.zig

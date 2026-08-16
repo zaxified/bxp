@@ -106,54 +106,66 @@ stderr is free for logs.
     is NDJSON by identity and stays text-only even when a function-free
     expression emits a single sentinel line.
 - **server → client** `notifications/progress` are emitted mid-call when the
-  request supplied `params._meta.progressToken` (see `progress.zig`).
+  request supplied `params._meta.progressToken` (`call.reportProgress`).
 
 Methods handled: `initialize`, `tools/list`, `tools/call`, `ping`,
-`notifications/initialized`.
+`notifications/initialized`, plus `resources/list`, `resources/read`,
+`resources/templates/list`, `prompts/list` and `prompts/get` — the latter five
+answered from empty catalogs, since bxp registers no resources or prompts.
 
 ### Protocol version negotiation
 
 The server advertises the latest MCP protocol revision it knows
-(`PROTOCOL_VERSION`) and, on `initialize`, echoes the client's requested
+(`mcp.protocol_version`) and, on `initialize`, echoes the client's requested
 `protocolVersion` when it is one of the supported revisions
-(`SUPPORTED_VERSIONS`), otherwise answers with the latest. Both constants live
-in `server.zig`. The tool surface is identical across supported revisions.
+(`mcp.supported_versions`), otherwise answers with the latest. The tool surface
+is identical across supported revisions.
 
 ## Source layout
 
 ```text
 bxp-mcp/
   src/
-    main.zig     entry: base arena, --help, server.run()
-    server.zig   MCP stdio loop + JSON-RPC writers (pure std.json);
-                 per-request arena reset between calls
-    tools.zig    tool catalog (tools/list JSON) + handlers -> inspect calls;
-                 dispatch() returns the isError flag; allowsStructured()
+    main.zig     entry: base arena, --help, server identity + INSTRUCTIONS,
+                 tools.register(), mcp.Server.serveStdio()
+    tools.zig    tool catalog (the tools/list source) + handlers -> inspect
+                 calls; register() pairs each row with its handler;
+                 allowsStructured()
     sim.zig      bxp_simulate: stage config+CSV, spawn bxp-cli, read output,
                  diff, fold the BXTB sidecar trace into the report
-    progress.zig server -> client notifications/progress
-  build.zig      path-deps ../bxp-core, imports the `inspect` + `btrace` modules
+  build.zig      path-deps ../bxp-core, imports `inspect` + `btrace` + `mcp`
   build.zig.zon
 ```
 
-The JSON-RPC layer is hand-written over `std.json` — no third-party code, only
-the `bxp-core` path dep.
+The JSON-RPC layer is the zig-libs **`mcp`** module — framing, handshake,
+`tools/list`, dispatch-by-name, `structuredContent` gating and progress. It is
+taken through bxp-core's re-export, so bxp-mcp shares that package's single
+zig-libs pin; the module itself is pure `std` with no dependencies of its own.
+
+That module is this package's **own former `server.zig`**, extracted upstream on
+2026-07-04 and hardened there — which is why the 2026-08-16 migration was
+near-free: `isSingleJsonObject`, the `tools/list` serializer and every JSON-RPC
+error string were already byte-identical. Upstream adds resources + prompts +
+sampling/elicitation, a 16 MiB line cap, JSON-RPC §4 id validation, a
+JSON-escaped progress message, and 89 unit tests the local transport never had.
 
 ## Memory model
 
 `main.zig` holds one **base arena** over the page allocator for startup (argv)
-and the server's persistent reused buffers (`line_buf` / `out_buf`, which retain
-capacity across requests). Every transient per-request allocation — the incoming
-JSON parse, `tools.dispatch`, the id/string serialization temps, and the
-per-call `tool_buf` — routes through a separate **per-request arena** reset with
-`retain_capacity` after each response. Memory reaches a steady state sized to the
-largest single request instead of growing one request's allocations per call.
+and the registered tool table. Every transient per-message allocation — the
+incoming JSON parse, the handler's work, the response serialization temps —
+routes through a **per-message arena** the `mcp` module creates and frees around
+each response. A handler reaches it as `call.arena`: allocate freely, never
+store past the call.
 
-> **Aliasing lesson.** The tool-output buffer must be a _fresh_ per-request
-> `tool_buf` on the request arena, not a persistent retained-capacity field: a
-> retained buffer keeps pointers into arena memory that the next request's JSON
-> parse reuses, so a later call could alias its own output over the live request.
-> See the matching note in `bxp-mcp/CLAUDE.md`.
+> **Aliasing lesson**, kept because it is why the tool-output buffer is shaped
+> the way it is. The local transport originally reused one retained-capacity
+> output buffer across requests on an arena reset with `retain_capacity` — which
+> keeps pointers into arena memory the next request's JSON parse reuses, so a
+> later call could alias its own output over the live request (observed
+> corrupting a second `bxp_simulate` report). The fix was a fresh per-request
+> buffer, and the `mcp` module has that shape structurally: `ToolCall.out` is
+> per-call and the whole arena is destroyed, not reset, between messages.
 
 ## bxp_simulate in depth
 

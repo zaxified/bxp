@@ -496,7 +496,7 @@ cd bxp-core && zig build
 cd bxp-core && zig build test
 ```
 
-Module exports in `build.zig`: `json`, `json5`, `csvstream`, `xlsx`, `zipstream`, `btrace`, `decimal`, `encoding`, `expr`, `config`, `docs`, `diagnostics`, `inspect`, `minisign`, `procrun` (the last five plus `csvstream` are zig-libs modules re-exported for downstream packages, not bxp-core sources).
+Module exports in `build.zig`: `json`, `json5`, `csvstream`, `xlsx`, `zipstream`, `btrace`, `decimal`, `encoding`, `expr`, `config`, `docs`, `diagnostics`, `inspect`, `minisign`, `procrun`, `mcp` (`json5`, `zipstream`, `decimal`, `encoding`, `diagnostics`, `csvstream`, `minisign`, `procrun` and `mcp` are zig-libs modules re-exported for downstream packages, not bxp-core sources).
 `xlsx` imports the named `decimal` and `zipstream` modules; `zipstream` has no bxp-core dependencies (std only).
 `expr` imports `unicode.zig` (file-relative, not a named module) plus the named `decimal`, `numparse`, `uucode`, `encoding`, `regex`, `tz`, `datefmt` modules (`regex` is the Pike-VM engine behind REGEX_MATCH/REGEX_EXTRACT; `tz`, `datefmt`, `encoding` and `numparse` come from zig-libs — all fetch deps, see _External dependencies_ below); `config` imports `json5`, `diagnostics`, `expr`, `encoding`. `encoding` being a named module matters for the same reason `decimal` is one: it is shared by both `expr` and `config`, and a file-relative @import from two modules would compile the file into each — a duplicate-symbol error.
 `docs` imports `config`, `expr`, `json5`; `diagnostics` has no bxp-core dependencies.
@@ -551,11 +551,16 @@ content-addressed by hash and re-audited on any pin bump:
     behind the bridge's `bxp-cli` spawns.
   - `csvstream` — the CSV record model + `ChunkReader` behind every CSV input
     path. Re-exported like `json5` / `zipstream` (bxp-cli asks for it by name).
+  - `mcp` — the MCP / JSON-RPC 2.0 server transport behind `bxp-mcp`. The one
+    module that travelled the other way first: upstream's copy is this repo's
+    former `bxp-mcp/src/server.zig`, extracted 2026-07-04 and hardened there,
+    then consumed back on 2026-08-16.
 
-  `minisign` and `procrun` are the modules bxp-core does **not** import at
-  all: they are re-exported purely so `bxp-gui-bridge/build.zig` can take them
-  off this package's single pin instead of adding a second `zig_libs` entry of
-  its own that would have to be bumped in lockstep.
+  `minisign`, `procrun` and `mcp` are the modules bxp-core does **not** import
+  at all: they are re-exported purely so `bxp-gui-bridge/build.zig` and
+  `bxp-mcp/build.zig` can take them off this package's single pin instead of
+  adding a second `zig_libs` entry of their own that would have to be bumped in
+  lockstep.
 
   Pinned to the commit behind a dated release tag (upstream tags
   `YYYY-MM-DD`, no semver). `build.zig` takes all of them off **one shared
@@ -573,9 +578,10 @@ content-addressed by hash and re-audited on any pin bump:
   **Treated as a foreign upstream** — read-only, pinned, never edited from
   this repo. Zig's package manager offers no floating "latest" mode: the
   `hash` field is mandatory and content-addressed, so any upstream movement
-  must land as an explicit `zig fetch --save` edit to `build.zig.zon`. The
-  remaining candidates and their measured divergence are tabulated in
-  `docs/dev/roadmap.md` → "Shared core libraries — consume zig-libs".
+  must land as an explicit `zig fetch --save` edit to `build.zig.zon`.
+  Finishing the extraction is the `v1.0.0` milestone in `docs/dev/roadmap.md`;
+  the modules taken so far, with their measured divergence, are the table
+  above plus the per-module sections in this file.
 
 The split is now clean. What remains in `src/` is bxp's own domain layer —
 `json`, `xlsx`, `btrace`, `expr`, `config`, `docs`, `unicode`, `inspect` — and
