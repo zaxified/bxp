@@ -379,12 +379,87 @@ from the real `minisign` binary), `procrun`'s reap core (the bridge's
 left below is still open. None of it promises a speed-up: where these overlap
 our code they are the same algorithms, verified rather than assumed.
 
-- **Transport core** — `http`, `rest`, `api`, `mcp`. The concrete piece is
-  `bxp-mcp/src/server.zig` (384 lines: JSON-RPC 2.0 framing over stdio plus the
-  MCP handshake), which the `mcp` module covers. `tools.zig` and `sim.zig`
-  (1 270 lines) are bxp-specific and stay — they would need reseating on the
-  upstream transport's API, which is what makes this a larger job than the
-  items above rather than a swap.
+#### Transport core — three candidates, one worth doing
+
+The original sweep listed this as "`http`, `rest`, `api`, `mcp`". Checked
+2026-08-16: **`rest` and `api` do not exist** as modules — the same
+invented-from-memory error the CSV-injection entry above carried. What exists
+is `mcp`, `mcp-http`, `http` and `router`. Each is a separate decision, so each
+gets its own example of what adopting it would actually look like here.
+
+The wiring shape is the same in every case and already established here: one
+`b.dependency` handle, modules taken off it, re-exported from `bxp-core` when a
+downstream package asks by name.
+
+**(a) `mcp` — replace `bxp-mcp/src/server.zig` + `progress.zig`.** The only
+candidate with a real payoff. Our 384-line hand-rolled server has **no unit
+tests** (`zig build test` covers only `sim.zig`'s pure helpers); upstream is
+5 557 lines with 89. The handler shapes are near 1:1, so the work is converting
+one enum dispatch into nine `addTool` registrations:
+
+```zig
+// today — tools.zig: one dispatch over an enum, out-param buffer
+pub fn dispatch(io, env, alloc, tool: Tool, args: std.json.Value,
+                prog: ?Progress, out: *std.ArrayList(u8)) bool { … }
+fn eval(alloc, args: std.json.Value, out: *std.ArrayList(u8)) bool {
+    const expr = strField(args, "expr") orelse return appendErr(alloc, out, "missing 'expr'");
+    …
+}
+
+// with the module — one handler per tool, state threaded through ctx
+fn evalHandler(ctx: ?*anyopaque, call: *mcp.ToolCall) bool {
+    const app: *App = @ptrCast(@alignCast(ctx.?));   // holds io + env
+    const expr = call.strArg("expr") orelse return call.fail("missing 'expr'");
+    call.write(try inspect.evalExpr(call.arena, expr, …));
+    return false;
+}
+try server.addTool(.{
+    .name = "bxp_eval", .description = "…",
+    .input_schema = …, .output_schema = …,   // replaces buildToolsList
+    .allow_structured = true,                // replaces allowsStructured(tool)
+    .handler = &evalHandler, .ctx = &app,
+});
+try server.serveStdio(io);                   // replaces server.zig's run loop
+```
+
+`call.arena` is our per-request arena, `call.write` our `out` buffer,
+`call.fail` our `appendErr`, `call.strArg` our `strField`, and
+`call.reportProgress` our whole `progress.zig`. It also closes a recorded
+non-issue: upstream caps a request line at `max_line_len` (16 MB, with a test),
+where `readLine` here grows unboundedly — the item `bxp-mcp/CLAUDE.md` parks
+until "the bxp-api sibling exposes the same reader to untrusted input".
+
+Two costs, both real: `bxp-mcp` today has **zero fetch dependencies** (a
+documented property), and rewriting nine handlers needs a gate — the same
+differential probe used for the bridge, replaying identical JSON-RPC lines
+(malformed input, notifications without `id`, unknown tool,
+`_meta.progressToken`, `bxp_simulate`) against both binaries and diffing the
+response lines.
+
+**(b) `mcp-http` — only as the `bxp-api` sibling, not as a migration.** It is a
+`router` middleware wrapping the *same* `mcp.Server` — one POST per JSON-RPC
+message, optional sessions:
+
+```zig
+// the bxp-api sketch: same Server object, HTTP instead of stdio
+try mcp_http.Transport.mount(&router, &server, .{ .endpoint = "/mcp", .sessions = null });
+```
+
+That is a new product surface (needs concurrency — a thread pool or event
+loop — which stdio does not), so it only becomes cheap **after** (a). Doing (a)
+first is what makes it a mount call rather than a second server.
+
+**(c) `http` — no consumer in bxp.** There is no Zig-side HTTP anywhere in this
+repo (verified by grep 2026-08-16: no `std.http`, no client). The only HTTP is
+`updater_service.dart`, on the Dart side, where a Zig module cannot help — so
+there is nothing here for the module to replace. Revisit only if `bxp-api`
+lands.
+
+Not applicable at all: **`grpc`** (deps `http` + `protobuf`) — zero gRPC or
+protobuf surface in the repo, Zig or Dart.
+
+Either way `tools.zig` + `sim.zig` (1 270 lines) stay bxp's own: they are the
+tool catalog and the `bxp-cli` orchestration, not transport.
 
 - **Dart side** — `json5_ast` has no zig-libs equivalent (different language);
   still waits for a second Dart consumer.
