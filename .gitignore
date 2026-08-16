@@ -53,5 +53,8 @@ scripts/bench/results/results-*.csv
 
 # Full real-world datasets fetched on demand by docs/examples/*/fetch-full.sh
 # (hundreds of MB — never committed; the small sample.* slices are enough
-# for the repo, the full pull is a local scale demonstration).
+# for the repo, the full pull is a local scale demonstration). Both forms are
+# ignored: a plain directory, and the symlink-into-tmp that the RÚIAN script
+# creates so its 6,258 unpacked members never land inside the workspace.
 docs/examples/real-world/*/full/
+docs/examples/real-world/*/full

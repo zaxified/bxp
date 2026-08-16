@@ -1,0 +1,59 @@
+{
+  // Scale-run config: identical template to sample.json, pointed at the full
+  // national RÚIAN export fetched by fetch-full.sh into ./full/ (6,258
+  // municipality CSVs in one ~63 MB archive, ~3.02M address rows). bxp reads
+  // the .zip directly — `zip_input` unpacks the members in parallel first, so
+  // there is no unzip step. Keep the schema in sync with sample.json.
+  //
+  // `full` is a SYMLINK that fetch-full.sh points at a temp staging dir: the
+  // 6,258 unpacked members and the combined output stay outside the source
+  // tree, where no editor or SCM watcher has to index them.
+  conversion_templates: {
+    ruian_adr: {
+      data_dir: "full",
+
+      zip_input: { entry_pattern: ".csv" },
+
+      file_pattern_in: ".csv",
+      file_pattern_out: ".csvx",
+      combined_output: true,
+
+      csv_delimiter_in: ";",
+      csv_input_encoding: "windows-1250",
+      csv_header_line: 1,
+
+      input_schema: {
+        $adm_code:    "[Kód ADM]",
+        $obec_code:   "[Kód obce]",
+        $obec:        "[Název obce]",
+        $cast_obce:   "[Název části obce]",
+        $ulice:       "[Název ulice]",
+        $cislo_dom:   "[Číslo domovní]",
+        $cislo_or:    "[Číslo orientační]",
+        $psc:         "[PSČ]",
+        $y:           "[Souřadnice Y]",
+        $x:           "[Souřadnice X]",
+        // Platí Od is an ISO datetime; keep the date, drop the time component.
+        $plati_od:    "DATE_CONVERT([Platí Od], 'YYYY-MM-DD[*]', 'YYYY-MM-DD')",
+      },
+
+      row_rules: [
+        { when: "1 = 1", rows: [ {} ] },
+      ],
+
+      output_schema: {
+        adm_code:           "$adm_code",
+        municipality_code:  "$obec_code",
+        municipality:       "$obec",
+        municipality_part:  "$cast_obce",
+        street:             "$ulice",
+        house_number:       "$cislo_dom",
+        orientation_number: "$cislo_or",
+        postcode:           "$psc",
+        coord_y:            "$y",
+        coord_x:            "$x",
+        valid_from:         "$plati_od",
+      },
+    },
+  },
+}

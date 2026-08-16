@@ -402,25 +402,6 @@ alarms: a stored reference ages, so on any suspected regression re-run the
 baseline commit in the same session and compare that pair. Comparing a fresh
 run against a weeks-old stored number cannot separate code from machine.
 
-### `fetch-full.sh` for the RÚIAN example
-
-`docs/examples/real-world/ruian-address-points` is the only real-world example
-without one, so its full-scale claim is the only one a reader cannot reproduce
-by running a script. The portal is form-driven, but the published exports sit
-at a stable path:
-
-```text
-https://vdp.cuzk.gov.cz/vymenny_format/csv/<YYYYMMDD>_OB_ADR_csv.zip
-```
-
-dated to a month end (`20260731` resolves; `20260801` 404s). The script should
-discover the most recent available date rather than hard-coding one, drop the
-archive in `./full/` like its siblings, and ship the matching `full.json`
-(`sample.json` with `data_dir` repointed). Verified 2026-08-16: 61 MB archive,
-6 258 members, 338 MB unpacked, 3 020 222 combined rows in 9.82 s at 29.9 MB
-peak RSS on the shipped ReleaseSmall build — which matches the README's
-"about 10 seconds at ~28 MB" as written.
-
 ### Cover the examples tree in the test suite
 
 `scripts/test-07-datasets.sh` gates the 10 fixtures under `datasets/`, but the

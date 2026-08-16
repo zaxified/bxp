@@ -85,17 +85,32 @@ adm_code,municipality_code,municipality,municipality_part,street,house_number,or
 
 **Scale (full national export).** The complete `*_OB_ADR_csv.zip` is **6 258
 municipalities = 354 MB of CSV** packed into a **63 MB** deflate archive →
-**3 017 760 address rows** in the combined output. On an 8-core desktop (shipped
-ReleaseSmall build) bxp converts it end-to-end from the single `.zip` — parallel
-unpack, Windows-1250 transcode, date trim, and combined roll-up — in **~10 s** at
-**flat ~28 MB RSS** (streaming inflate, one window per worker — no whole-archive
-or whole-file materialisation). The parallel unpack is where it pulls ahead of a
-serial `unzip`: measured on its own on a 4-core / 8-thread laptop (i7-7920HQ) the
-unpack step runs in **~0.50 s vs ~2.5 s single-threaded (~5×)** — 6 258
+**3 020 222 address rows** in the combined output (2026-07 export). On an
+8-core desktop (shipped ReleaseSmall build) bxp converts it end-to-end from the
+single `.zip` — parallel unpack, Windows-1250 transcode, date trim, and combined
+roll-up — in **~10 s** at **flat ~30 MB RSS** (streaming inflate, one window per
+worker — no whole-archive or whole-file materialisation). The parallel unpack is
+where it pulls ahead of a serial `unzip`: measured on its own on a 4-core /
+8-thread laptop (i7-7920HQ) the unpack step runs in **~0.50 s vs ~2.5 s
+single-threaded (~5×)** — 6 258
 independent members are embarrassingly parallel, and a
 work-stealing job queue load-balances the very uneven per-municipality sizes.
 The committed `sample.zip` is a 5-municipality slice so the example stays small;
 the full set is the public ČÚZK export linked above.
+
+Reproduce the scale run — the portal is form-driven, so `fetch-full.sh` probes
+the published month-end paths and takes the newest that resolves:
+
+```bash
+bash fetch-full.sh          # downloads <YYYYMMDD>_OB_ADR_csv.zip (~63 MB)
+bxp-cli --config full.json  # reads the archive directly, no unzip step
+```
+
+Unlike the single-file examples, this run explodes into 6 258 intermediate CSVs
+next to the combined output. The script therefore stages the payload in a temp
+dir (override with `BXP_RUIAN_WORK`) and leaves `./full` as a symlink to it, so
+`data_dir: "full"` keeps working while none of those files land inside the
+source tree — editors and SCM watchers have nothing new to index.
 
 ## Sample data
 

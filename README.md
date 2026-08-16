@@ -106,7 +106,7 @@ And a real archive, end to end: the Czech national address register
 (RÚIAN) ships as a 63 MB ZIP of 6,258 per-municipality Windows-1250 CSVs
 (354 MB unpacked). bxp converts the whole thing straight from the `.zip`
 in one run - parallel unpack, code-page transcode, date normalisation,
-and a combined roll-up of 3,017,760 rows - in about 10 seconds at ~28 MB
+and a combined roll-up of 3,020,222 rows - in about 10 seconds at ~30 MB
 RAM, no pre-unzip step. See
 [`docs/examples/real-world/ruian-address-points`](docs/examples/real-world/ruian-address-points/index.md).
 
