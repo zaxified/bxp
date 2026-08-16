@@ -299,23 +299,36 @@ bxp → zig-libs):
 
 | Module        | API    | Tests   | Notes                                        |
 | ------------- | ------ | ------- | -------------------------------------------- |
-| `decimal`     | 1 → 4  | 12 → 34 |                                              |
-| `encoding`    | 3 → 4  | 12 → 17 |                                              |
+| `decimal`     | 1 → 4  | 12 → 34 | Upstream adds `big.zig`, `RoundingMode`, `sqrt`/`pow` — the largest behavioural surface of the four, so rounding is what the audit must focus on |
 | `diagnostics` | 3 → 4  | 1 → 4   |                                              |
 | `json5`       | 3 → 4  | 20 → 27 |                                              |
 | `zipstream`   | 4 → 10 | 2 → 20  | Largest divergence                            |
 
-`tz` (the pilot) and `datefmt` have migrated. Both turned out to be strict
-subsets of their upstream descendants once compared line by line — the shared
-code was byte-identical and the divergence was extra coverage plus entry
-points bxp does not call. The five remaining figures indicate that a fork
-exists, not what it contains — audit each before migrating it.
+`tz` (the pilot), `datefmt` and `encoding` have migrated. All three turned out
+to be strict subsets of their upstream descendants once compared line by line
+— the shared code was byte-identical and the divergence was extra coverage
+plus entry points bxp does not call. The four remaining figures indicate that
+a fork exists, not what it contains — audit each before migrating it.
 
-Method that both migrations used, worth repeating: diff the whole module
-first and classify every hunk (comment / addition / behaviour change), then
-gate on a **live-data** before/after — a full run over the real broker
-exports in the working set, checksummed and diffed — on top of the normal
-suite. `datefmt` came out 163/163 output files byte-identical.
+Method all three migrations used, worth repeating:
+
+1. Diff the whole module and classify **every** hunk (comment / addition /
+   behaviour change). Verify data tables explicitly rather than inferring
+   sameness from the absence of a diff hunk.
+2. Gate on a **live-data** before/after — a full run over the real broker
+   exports in the working set, checksummed and diffed — on top of the normal
+   suite. `datefmt` and `encoding` each came out 163/163 output files
+   byte-identical.
+3. Check whether the live data actually exercises the module. It did not for
+   `encoding`: the real exports are pure ASCII and no template sets
+   `csv_*_encoding`, so the live run only proved the `.utf8` passthrough. The
+   real gate had to be built — 10 templates (5 decode + 5 encode) over the
+   full byte / codepoint space, run against a binary built from the previous
+   commit and byte-diffed. Everything matched.
+4. Measure size in the **same working tree**. A `git worktree` build inflates
+   the apparent delta (~18 KB for `encoding`) purely through longer path
+   strings in ReleaseSafe panic data; measured in place, `.text` and
+   `.rodata` were byte-identical.
 
 Taking a module and its dependencies from a **single `b.dependency` handle**
 is what makes them one compilation. `tz` imports `datefmt`, so while the
@@ -349,10 +362,14 @@ unless noted:
 
 ### Encoding — more single-byte code pages
 
-`encoding.zig` covers Win-1250/1252 and ISO-8859-1/2/15 today. The 256-entry
-override-table pattern makes each new code page ~mechanical (Win-1251
-Cyrillic, ISO-8859-5, …). Marginal cost is low; no work until a broker
-export actually demands one.
+The `encoding` module covers Win-1250/1252 and ISO-8859-1/2/15 today. The
+256-entry override-table pattern makes each new code page ~mechanical
+(Win-1251 Cyrillic, ISO-8859-5, …). Marginal cost is low; no work until a
+broker export actually demands one — and note the module now lives in
+zig-libs, so a new code page is an **upstream** change plus a pin bump here,
+not an edit in this repo. The bxp-side work would be limited to the
+`csv_encoding_values` dropdown, which is comptime-derived from the enum and
+therefore picks a new arm up for free.
 
 ## Not planned
 

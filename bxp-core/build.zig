@@ -23,6 +23,16 @@ pub fn build(b: *std.Build) void {
         }),
     }).module("uucode");
 
+    // zig-libs carries the hardened descendants of several modules that used to
+    // live in src/. Every module taken from it must come off THIS one handle:
+    // they import each other (`tz` imports `datefmt`), and a second
+    // `b.dependency` call would compile a second, separate copy of the shared
+    // ones. Foreign upstream — read-only, pinned in build.zig.zon.
+    const zig_libs = b.dependency("zig_libs", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
     // json5 is used internally by config — export it and wire it in.
     const json5_mod = b.addModule("json5", .{
         .root_source_file = b.path("src/json5.zig"),
@@ -44,13 +54,15 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/decimal.zig"),
     });
 
-    // encoding.zig is the Layer 0 single-byte code page ↔ UTF-8 transcoder.
-    // Shared by expr (per-field decode at read) and config (encoding key parse),
-    // so — like decimal — it must be a single named module rather than a
-    // file-relative @import from two modules (that would duplicate the file).
-    const encoding_mod = b.addModule("encoding", .{
-        .root_source_file = b.path("src/encoding.zig"),
-    });
+    // Layer 0 single-byte code page ↔ UTF-8 transcoder, consumed from zig-libs
+    // for the same reason as tz/datefmt: the local src/encoding.zig was lifted
+    // into that repo and hardened there (normative WHATWG/Unicode.org index
+    // vectors, a codec fuzz harness, three audit-found edge cases), and the
+    // upstream copy is a strict superset — the five 256-entry mapping tables
+    // and both transcode entry points are byte-identical. bxp keeps the CSV-edge
+    // policy that drives it: `csv_input_encoding` / `csv_output_encoding` in
+    // config.zig and the per-field decode in expr.zig.
+    const encoding_mod = zig_libs.module("encoding");
 
     _ = b.addModule("csv", .{
         .root_source_file = b.path("src/csv.zig"),
@@ -99,10 +111,6 @@ pub fn build(b: *std.Build) void {
     // audit, the Jn/n POSIX rule forms this copy never had), so the upstream
     // module is strictly ahead. The offset tables ship inside it, so there is
     // still no runtime dependency — the data is compiled in, same as before.
-    const zig_libs = b.dependency("zig_libs", .{
-        .target = target,
-        .optimize = optimize,
-    });
     const tz_mod = zig_libs.module("tz");
 
     // Date core behind DATE_CONVERT and every calendar builtin (YEAR / DATEADD /
@@ -248,17 +256,6 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
-    // encoding.zig is the single-byte code page transcoder, wired as the named
-    // "encoding" module above (shared by expr/config). Standalone test artifact.
-    const encoding_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/encoding.zig"),
-            .target = target,
-            .optimize = optimize,
-            .strip = false,
-        }),
-    });
-
     const json5_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/json5.zig"),
@@ -358,7 +355,6 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(expr_tests).step);
     test_step.dependOn(&b.addRunArtifact(unicode_tests).step);
     test_step.dependOn(&b.addRunArtifact(decimal_tests).step);
-    test_step.dependOn(&b.addRunArtifact(encoding_tests).step);
     test_step.dependOn(&b.addRunArtifact(json5_tests).step);
     test_step.dependOn(&b.addRunArtifact(diagnostics_tests).step);
     test_step.dependOn(&b.addRunArtifact(zipstream_tests).step);

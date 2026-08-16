@@ -30,15 +30,9 @@ bxp/
 │   │   ├── expr.zig        # Expression evaluator + per-builtin FnDoc catalog
 │   │   ├── config.zig      # JSON5 config loader + per-struct FieldDoc tables
 │   │   ├── json.zig        # JSON array-of-objects → CSV rows
-│   │                       # (Date/TZ are no longer local — the `datefmt` and `tz`
-│   │                       # modules both come from the pinned zig-libs fetch dep)
 │   │   ├── decimal.zig     # Fixed-point i128 @ 1e12 numeric core (named module)
 │   │   ├── unicode.zig     # UTF-8 case mapping (UPPER/LOWER) over uucode tables
 │   │   │                   # — file-rel @import by expr.zig; uucode is fetch dep
-│   │   ├── encoding.zig    # Layer 0: single-byte code page ↔ UTF-8 transcode
-│   │   │                   # (Win-1250/1252, Latin-1/2/9); in-house 256-entry
-│   │   │                   # tables, no uucode. Named module: expr (per-field
-│   │   │                   # decode) + config (csv_*_encoding parse)
 │   │   ├── btrace.zig      # Binary BXTB trace Writer/Reader for --trace
 │   │   ├── json5.zig       # JSON5 preprocessor (comments, unquoted keys, ...)
 │   │   ├── docs.zig        # Aggregator: re-exports expr catalog + flattens
@@ -48,8 +42,11 @@ bxp/
 │   │   └── inspect.zig     # Shared stateless core (validate/validate-expr/eval/
 │   │                       # eval-batch/eval-trace/docs/templates introspection);
 │   │                       # one source for bxp-mcp + bxp-gui-bridge
+│   │                       # (`datefmt`, `tz` and `encoding` are NOT here — those
+│   │                       # modules come from the pinned zig-libs fetch dep)
 │   ├── build.zig         # exports each file as a named Zig module
-│   └── build.zig.zon     # one fetch dep: uucode (Unicode tables); date/decimal/tz cores in-house
+│   └── build.zig.zon     # fetch deps: uucode, regex, zig-libs (datefmt/tz/encoding);
+│                         # decimal core in-house
 ├── bxp-gui/              # Flutter desktop app (replaces bxp-ui; talks to bxp-gui-bridge via FFI, which proxies bxp-cli)
 │   ├── lib/              # Dart source (services/, store/, ui/)
 │   ├── linux/, macos/, windows/, web/  # platform configs
@@ -208,13 +205,14 @@ bxp-core/inspect link, and the bridge proxies `bxp-cli` runs. The former
 - `regex` (`quangd/regex.zig`) — the Pike-VM engine behind `REGEX_MATCH` /
   `REGEX_EXTRACT`, pinned to an exact commit.
 - `zig_libs` — the module collection supplying `tz` (IANA UTC-offset lookup
-  behind `TO_UTC` / `TZ_OFFSET` / `TZ_CONVERT` / `IS_DST`) and `datefmt` (the
-  date core behind `DATE_CONVERT` and every calendar builtin). Treated as a
+  behind `TO_UTC` / `TZ_OFFSET` / `TZ_CONVERT` / `IS_DST`), `datefmt` (the
+  date core behind `DATE_CONVERT` and every calendar builtin) and `encoding`
+  (single-byte code page ↔ UTF-8 behind `csv_*_encoding`). Treated as a
   foreign upstream: read-only, pinned to the commit behind a release tag,
   never edited from this repo. The offset tables are compiled into the `tz`
   module, so there is still **no runtime dependency** — the pinned tzdata
   snapshot ships inside the binary exactly as the former in-tree copy did.
-  Both modules were lifted out of bxp-core and hardened upstream; see
+  All three modules were lifted out of bxp-core and hardened upstream; see
   `docs/dev/roadmap.md` → "Shared core libraries — consume zig-libs" for the
   remaining candidates.
 
@@ -222,9 +220,11 @@ The numeric core (`decimal.zig`) remains in-house. The `tools/tz-gen`
 generator that emitted the offset tables (the only place `std.Tz` was used)
 moved to `scripts/tz-gen/` in zig-libs alongside the module it feeds, so the
 table and the tool that derives it now live together; nothing tz-related is
-left in this repo. `datefmt` followed `tz` upstream in the same way — taking
-both from one `b.dependency` handle collapses what used to be two separate
-date cores in the binary into one.
+left in this repo. `datefmt` and `encoding` followed `tz` upstream the same
+way. Every module must be taken from **one shared `b.dependency` handle** —
+they import each other (`tz` imports `datefmt`), so a second handle would
+compile a second copy; doing it right is what collapsed the two date cores
+the binary used to carry into one.
 bxp-gui ships `bxp-cli` + the `bxp-gui-bridge` library inside the Flutter
 bundle. It talks to the bridge over FFI (stateless validation / docs / expr
 eval in-process; `bxp-cli` conversions proxied through it) — there is no

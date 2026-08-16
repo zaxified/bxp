@@ -22,7 +22,7 @@ Consumed by bxp-cli (conversion engine) and the stateless-inspect adapters
 | `tz`          | _(zig-libs dep)_  | `find()`, `offsetAt()` — IANA UTC-offset lookup. **No longer in this tree**: consumed from the pinned `zig_libs` fetch dep as the named `tz` module (wired into `expr` in `build.zig`). The offset tables compile in, so there is still no runtime dependency. The former local `tz.zig` was a strict subset of the upstream module; its generator moved to `scripts/tz-gen/` in that repo |
 | `decimal`     | `decimal.zig`     | `Decimal` fixed-point i128 @ 1e12 — numeric core (named `"decimal"` module, shared by every input path) |
 | `unicode`     | `unicode.zig`     | `toUpperStr()`, `toLowerStr()`, `unaccentStr()` — UTF-8 case mapping + diacritic stripping over `uucode` tables (file-rel @import by `expr.zig`, not a named module) |
-| `encoding`    | `encoding.zig`    | `Encoding`, `decodeToUtf8()`, `encodeFromUtf8()` — Layer 0 single-byte code page ↔ UTF-8 (named module; shared by `expr` + `config`; no `uucode` dep) |
+| `encoding`    | _(zig-libs dep)_  | `Encoding`, `decodeToUtf8()`, `encodeFromUtf8()` — Layer 0 single-byte code page ↔ UTF-8 (named module shared by `expr` + `config`; no `uucode` dep). **No longer in this tree**: consumed from the pinned `zig_libs` fetch dep. The former local copy was a strict subset — the five 256-entry tables and both transcode entry points were byte-identical |
 | `config`      | `config.zig`      | `Config`, `BrokerConfig`, `load()`, `validate()`, `FieldDoc`              |
 | `json`        | `json.zig`        | `scanColNames()` + `RecordReader` — streaming JSON array-of-objects input |
 | `btrace`      | `btrace.zig`      | Binary trace `Writer` / `Reader` for `--trace=bin`                        |
@@ -193,13 +193,16 @@ module.
   invalid-UTF-8); unaccent (Latin strip, hand-list letters, non-Latin
   base-script keep, empty + invalid-UTF-8 passthrough).
 
-### encoding.zig
+### encoding _(zig-libs dep)_
 
 Layer 0 of the Unicode subsystem: legacy single-byte code page ↔ UTF-8
 transcoding (the "iconv" job). No `uucode` dependency — just 256-entry mapping
-tables. Drives the per-template `csv_input_encoding` / `csv_output_encoding`
-config keys. **CSV only**: JSON (RFC 8259) and xlsx (XML-in-ZIP) are always
-UTF-8 and never reach here.
+tables. **No longer in this tree** — the named `encoding` module comes from the
+pinned `zig_libs` fetch dep; what bxp still owns is the *policy* that drives
+it: the per-template `csv_input_encoding` / `csv_output_encoding` config keys
+(config.zig) and the per-field decode / write-time encode call sites
+(expr.zig, pipeline.zig). **CSV only**: JSON (RFC 8259) and xlsx (XML-in-ZIP)
+are always UTF-8 and never reach here.
 
 - `Encoding` — enum: `utf8` (default), `windows_1250`, `windows_1252`,
   `iso_8859_1` (Latin-1), `iso_8859_2` (Latin-2), `iso_8859_15` (Latin-9).
@@ -217,9 +220,11 @@ UTF-8 and never reach here.
   fmt / GUI changes were needed.
 - Tables are an identity base (byte == codepoint = Latin-1 / C1) plus
   per-code-page overrides where the mapping differs.
-- Inline tests (12): parse aliases, ASCII passthrough, Latin-1/9 identity +
-  divergence, Win-1250/1252 specials, Czech letters (CP1250 + ISO-8859-2),
-  encode round-trips, unrepresentable → `?`, empty + invalid-UTF-8.
+- Tests live upstream (17 + a codec fuzz harness + exhaustive cross-checks of
+  all five high-tables against vendored normative WHATWG `index-*.txt` /
+  Unicode.org `8859-1.TXT` sources). The bxp-side gate is the CSV edge:
+  `datasets/ruian_zip_demo` (real Windows-1250 RÚIAN address data → UTF-8,
+  byte-diffed against `.expected` by test-07).
 
 ### config.zig
 
@@ -356,7 +361,7 @@ cd bxp-core && zig build test
 
 Module exports in `build.zig`: `csv`, `json`, `json5`, `xlsx`, `zipstream`, `btrace`, `decimal`, `encoding`, `expr`, `config`, `docs`, `diagnostics`, `inspect`.
 `xlsx` imports the named `decimal` and `zipstream` modules; `zipstream` has no bxp-core dependencies (std only).
-`expr` imports `unicode.zig` (file-relative, not a named module) plus the named `decimal`, `uucode`, `encoding`, `regex`, `tz`, `datefmt` modules (`regex` is the Pike-VM engine behind REGEX_MATCH/REGEX_EXTRACT; `tz` + `datefmt` are the zig-libs date/TZ pair — all fetch deps, see _External dependencies_ below); `config` imports `json5` (as `"json5.zig"` — internal import name), `diagnostics`, `expr`, `encoding`. `encoding` is a named module (not a file-relative @import) because it is shared by both `expr` and `config` — a file-relative @import from two modules would compile the file into each, a duplicate-symbol error (same reason `decimal` is named).
+`expr` imports `unicode.zig` (file-relative, not a named module) plus the named `decimal`, `uucode`, `encoding`, `regex`, `tz`, `datefmt` modules (`regex` is the Pike-VM engine behind REGEX_MATCH/REGEX_EXTRACT; `tz`, `datefmt` and `encoding` come from zig-libs — all fetch deps, see _External dependencies_ below); `config` imports `json5` (as `"json5.zig"` — internal import name), `diagnostics`, `expr`, `encoding`. `encoding` being a named module matters for the same reason `decimal` is one: it is shared by both `expr` and `config`, and a file-relative @import from two modules would compile the file into each — a duplicate-symbol error.
 `docs` imports `config`, `expr`, `json5`; `diagnostics` has no bxp-core dependencies.
 
 ### External dependencies
@@ -378,26 +383,34 @@ content-addressed by hash and re-audited on any pin bump:
   linear-time (ReDoS-proof) matching. The package exposes its engine as the
   module named `regex`; `build.zig` wires it into the `expr` module. Adds ~56 KB
   to the ReleaseSmall `bxp-cli` (engine + Unicode-scalar case-fold tables).
-- **zig_libs** (MIT, `zaxified/zig-libs`) — the module collection supplying the
-  date/TZ pair: `tz`, the IANA UTC-offset lookup behind `TO_UTC` / `TZ_OFFSET` /
-  `TZ_CONVERT` / `IS_DST`, and `datefmt`, the date core behind `DATE_CONVERT`
-  and every calendar builtin. Pinned to the commit behind a dated release tag
-  (upstream tags `YYYY-MM-DD`, no semver). `build.zig` wires both modules into
-  `expr` **from a single `b.dependency` handle** — that is what makes them one
-  compilation rather than two; `tz` imports `datefmt` internally, so when the
-  local copy still existed the binary carried two separate date cores. The
-  600-zone offset tables are compiled into `tz`, so this stays a build-time
-  dependency only — no runtime tzdata lookup, exactly as the former in-tree
-  copies behaved. Net size effect on the ReleaseSafe `bxp-cli`: `tz` added
-  ~8 KB (the extra `Jn`/`n` POSIX rule forms), the `datefmt` migration gave
-  ~4 KB back (the duplicate core collapsed).
+- **zig_libs** (MIT, `zaxified/zig-libs`) — the module collection supplying
+  three modules that used to live in `src/`:
+
+  - `tz` — IANA UTC-offset lookup behind `TO_UTC` / `TZ_OFFSET` /
+    `TZ_CONVERT` / `IS_DST`.
+  - `datefmt` — the date core behind `DATE_CONVERT` and every calendar
+    builtin.
+  - `encoding` — single-byte code page ↔ UTF-8 behind `csv_*_encoding`.
+
+  Pinned to the commit behind a dated release tag (upstream tags
+  `YYYY-MM-DD`, no semver). `build.zig` takes all three off **one shared
+  `b.dependency` handle** — that is what makes them one compilation rather
+  than several; `tz` imports `datefmt` internally, so while the local copy
+  existed the binary carried two separate date cores. The 600-zone offset
+  tables are compiled into `tz`, so this stays a build-time dependency only —
+  no runtime tzdata lookup, exactly as the former in-tree copies behaved.
+  Size effect on the ReleaseSafe `bxp-cli`: `tz` added ~8 KB (the extra
+  `Jn`/`n` POSIX rule forms), `datefmt` gave ~4 KB back (the duplicate core
+  collapsed), `encoding` was neutral (`.text` and `.rodata` byte-identical —
+  measure in the SAME working tree, a `git worktree` build inflates the
+  apparent delta by ~18 KB of longer path strings in ReleaseSafe panic data).
 
   **Treated as a foreign upstream** — read-only, pinned, never edited from
   this repo. Zig's package manager offers no floating "latest" mode: the
   `hash` field is mandatory and content-addressed, so any upstream movement
-  must land as an explicit `zig fetch --save` edit to `build.zig.zon`. `tz`
-  and `datefmt` are the first of several bxp-core modules migrating this way;
-  the remaining candidates and their measured divergence are tabulated in
+  must land as an explicit `zig fetch --save` edit to `build.zig.zon`. These
+  three are the first of several bxp-core modules migrating this way; the
+  remaining candidates and their measured divergence are tabulated in
   `docs/dev/roadmap.md` → "Shared core libraries — consume zig-libs".
 
 `decimal.zig` remains in-house with no dependency.
