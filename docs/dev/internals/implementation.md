@@ -41,7 +41,7 @@ Key types:
 ```c
 pub const Value = union(enum) {
     string: []const u8,
-    decimal: Decimal,   // fixed-point i128 @ 1e12 (decimal.zig), not f64/f80
+    decimal: Decimal,   // fixed-point i128 @ 1e12 (zig-libs), not f64/f80
     boolean: bool,
 };
 

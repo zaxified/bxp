@@ -32,7 +32,7 @@ what unlocks streaming, parallelism, and parse-once below.
   override supplies the value).
 - **Free passthrough.** A field copied straight to output never routes through
   the numeric core — it keeps full precision _and_ pays no parse cost. Only
-  genuinely _computed_ numbers go through `decimal.zig` (fixed-point `i128`,
+  genuinely _computed_ numbers go through the `decimal` module (fixed-point `i128`,
   exact, float-free).
 - **`memchr`-based scanning.** CSV record/field boundaries are found with
   `std.mem.indexOfScalar` / `lastIndexOfScalar` (lazy-quotes parser), 12–41 %

@@ -61,14 +61,17 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/diagnostics.zig"),
     });
 
-    // decimal.zig is the fixed-point numeric core shared by every input path
-    // that turns a numeric string into a value: expr.zig (expression eval),
-    // json.zig and xlsx.zig (input number canonicalisation). It must be a
-    // single named module — file-relative @import from more than one module
-    // would put the same file in multiple modules (compile error).
-    const decimal_mod = b.addModule("decimal", .{
-        .root_source_file = b.path("src/decimal.zig"),
-    });
+    // Fixed-point numeric core shared by every input path that turns a numeric
+    // string into a value: expr.zig (expression eval), json.zig and xlsx.zig
+    // (input number canonicalisation). Consumed from zig-libs. The arithmetic
+    // is identical — same i128 @ 1e12 representation, same half-away-from-zero
+    // rounding, same parse and format output — but the API is not: fallible
+    // operations return `Error!Decimal` instead of `?Decimal`, and `toString`
+    // writes into a caller buffer instead of allocating. That typed error set
+    // is what let the div-by-zero and div-overflow cases split apart at the
+    // call site in expr.zig; the local copy conflated them into one `null` and
+    // `@intCast`-panicked on the overflow. See docs/dev/roadmap.md.
+    const decimal_mod = zig_libs.module("decimal");
 
     // Layer 0 single-byte code page ↔ UTF-8 transcoder, consumed from zig-libs
     // for the same reason as tz/datefmt: the local src/encoding.zig was lifted
@@ -262,15 +265,6 @@ pub fn build(b: *std.Build) void {
     // decimal.zig is the fixed-point numeric core, wired as the named "decimal"
     // module above (shared by expr/json/xlsx). This is its standalone test
     // artifact — the file is both a module root and a test root, same as json5.
-    const decimal_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/decimal.zig"),
-            .target = target,
-            .optimize = optimize,
-            .strip = false,
-        }),
-    });
-
     const diagnostics_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/diagnostics.zig"),
@@ -359,7 +353,6 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(btrace_tests).step);
     test_step.dependOn(&b.addRunArtifact(expr_tests).step);
     test_step.dependOn(&b.addRunArtifact(unicode_tests).step);
-    test_step.dependOn(&b.addRunArtifact(decimal_tests).step);
     test_step.dependOn(&b.addRunArtifact(diagnostics_tests).step);
     test_step.dependOn(&b.addRunArtifact(zipstream_tests).step);
     test_step.dependOn(&b.addRunArtifact(xlsx_tests).step);

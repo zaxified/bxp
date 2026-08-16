@@ -4,7 +4,7 @@
 /// The evaluator is a single-pass recursive-descent parser that produces a Value
 /// (string, fixed-point decimal, or boolean) without building an intermediate AST.
 /// Numeric values use a fixed-point Decimal core (i128 @ scale 1e12) — see
-/// `decimal.zig` — so decimal money math is exact (`0.02 + 0.08 == 0.10`).
+/// the `decimal` module — so decimal money math is exact (`0.02 + 0.08 == 0.10`).
 ///
 /// Operator precedence (highest to lowest):
 ///   unary -
@@ -52,6 +52,16 @@ const Regex = @import("regex");
 /// the inspect core, bxp-mcp) can name the encoding type / helpers without a separate dependency.
 pub const Encoding = encoding.Encoding;
 
+/// `Decimal.fromInt` is fallible in the zig-libs numeric core (the local copy
+/// wrapped silently). Every caller below feeds a small integer — a year, a
+/// month, a string length, a record number — so the overflow arm is
+/// unreachable in practice, but it is mapped onto bxp's own error name rather
+/// than asserted: `unreachable` is undefined behaviour in the ReleaseSmall
+/// builds we ship, and this keeps user-facing error text unchanged.
+fn fromIntChecked(n: i128) !Decimal {
+    return Decimal.fromInt(n) catch error.NumberOverflow;
+}
+
 // ---------------------------------------------------------------------------
 // Value — the three types an expression can produce
 // ---------------------------------------------------------------------------
@@ -63,11 +73,14 @@ pub const Value = union(enum) {
 
     /// Returns the value as a string slice, allocated with alloc when needed.
     /// Decimals format their integer part, then up to 12 fractional digits
-    /// with trailing zeros trimmed (no float formatter — see decimal.zig).
+    /// with trailing zeros trimmed (no float formatter — see the `decimal` module).
     pub fn toString(self: Value, alloc: std.mem.Allocator) ![]const u8 {
         return switch (self) {
             .string => |s| s,
-            .decimal => |d| try d.toString(alloc),
+            .decimal => |d| blk: {
+                var num_buf: [Decimal.str_buf_len]u8 = undefined;
+                break :blk try alloc.dupe(u8, d.toString(&num_buf));
+            },
             .boolean => |b| if (b) "true" else "false",
         };
     }
@@ -89,9 +102,9 @@ pub const Value = union(enum) {
             // after the plain decimal parse fails, so they don't pay the
             // parseGroupedNumber overhead when the input is a plain decimal.
             .string => |s| if (s.len == 0 or isNonFiniteToken(s)) Decimal.zero else
-                Decimal.parse(s) orelse
-                parseGroupedNumber(s, ',', '.') orelse
-                return error.NotANumber,
+                Decimal.parse(s) catch
+                    (parseGroupedNumber(s, ',', '.') orelse
+                        return error.NotANumber),
             .boolean => |b| if (b) Decimal.one else Decimal.zero,
         };
     }
@@ -679,7 +692,7 @@ fn tryScanArg(
             // (e.g. `1e30`) is treated as a violation with bad_idx clamped to
             // a printable sentinel; otherwise the integer part is checked for
             // the "≤ 0" mistake.
-            const d = Decimal.parse(first.text) orelse {
+            const d = Decimal.parse(first.text) catch {
                 out.split_part = .{
                     .bad_idx = 0,
                     .off = first.offset,
@@ -986,8 +999,11 @@ const Parser = struct {
         value: Value,
     ) void {
         const w = self.ctx.trace_writer orelse return;
+        // Buffer lives in this frame: `toString` returns a slice INTO it, so a
+        // per-branch local would dangle the moment the switch expression ends.
+        var num_buf: [Decimal.str_buf_len]u8 = undefined;
         const value_str: []const u8 = switch (value) {
-            .decimal => |d| d.toString(self.ctx.alloc) catch return,
+            .decimal => |d| d.toString(&num_buf),
             .string => |s| s,
             .boolean => |b| if (b) "true" else "false",
         };
@@ -1132,7 +1148,7 @@ const Parser = struct {
                 return err;
             };
             const res = if (t.kind == .plus) l.add(r) else l.sub(r);
-            left = Value{ .decimal = res orelse return error.NumberOverflow };
+            left = Value{ .decimal = res catch return error.NumberOverflow };
         }
         return left;
     }
@@ -1184,11 +1200,17 @@ const Parser = struct {
                 // to detect zero-division can guard with IF([qty] != 0, ..., '').
                 if (l.div(r)) |q| {
                     left = Value{ .decimal = q };
-                } else {
-                    left = Value{ .string = "" };
+                } else |err| switch (err) {
+                    // Blank divisor / zero → blank cell, per the note above.
+                    error.DivisionByZero => left = Value{ .string = "" },
+                    // Overflow is a real numeric failure, not a blank field, so
+                    // it is loud like `*` is. The local Decimal returned plain
+                    // `null` here and the caller could not tell the two apart —
+                    // it `@intCast`-panicked on this path instead.
+                    error.Overflow => return error.NumberOverflow,
                 }
             } else {
-                left = Value{ .decimal = l.mul(r) orelse return error.NumberOverflow };
+                left = Value{ .decimal = l.mul(r) catch return error.NumberOverflow };
             }
         }
         return left;
@@ -1204,7 +1226,7 @@ const Parser = struct {
                 switch (v) { .string => |s| self.setNotANumber(s), else => {} }
                 return err;
             };
-            return Value{ .decimal = n.neg() orelse return error.NumberOverflow };
+            return Value{ .decimal = n.neg() catch return error.NumberOverflow };
         }
         return self.parsePrimary();
     }
@@ -1221,7 +1243,7 @@ const Parser = struct {
             } },
             // The lexer guarantees a syntactically valid number; parse can
             // still fail (null) on a literal that overflows the i128 range.
-            .number_lit => return Value{ .decimal = Decimal.parse(t.text) orelse return error.NumberOutOfRange },
+            .number_lit => return Value{ .decimal = Decimal.parse(t.text) catch return error.NumberOutOfRange },
             .field_ref => return self.evalFieldRef(t.text),
             .lparen => {
                 const v = try self.parseExpr();
@@ -1541,7 +1563,7 @@ const Parser = struct {
                     if (args[i].toNumber()) |n| {
                         const t = n.trunc(); // integer part toward zero
                         const clamped = @max(@min(t, @as(i128, r.max)), @as(i128, r.min));
-                        args[i] = .{ .decimal = Decimal.fromInt(clamped) };
+                        args[i] = .{ .decimal = try fromIntChecked(clamped) };
                     } else |_| {}
                 },
             }
@@ -1879,7 +1901,9 @@ fn parseGroupedNumber(s: []const u8, thousands: u8, decimal: u8) ?Decimal {
         buf[bi] = if (c == decimal) '.' else c;
         bi += 1;
     }
-    return Decimal.parse(buf[0..bi]);
+    // Keep the optional contract: callers here treat "not a number" as a
+    // fallback condition, not an error to propagate.
+    return Decimal.parse(buf[0..bi]) catch null;
 }
 
 // ---------------------------------------------------------------------------
@@ -1947,7 +1971,7 @@ const abs_doc: FnDoc = .{
 // `validateArgs`, so the impl receives a guaranteed-numeric arg and the
 // adapter no longer needs a NotANumber catch (plain signature forward).
 fn builtinAbs(args: []Value) !Value {
-    return Value{ .decimal = (try args[0].toNumber()).abs() orelse return error.NumberOverflow };
+    return Value{ .decimal = (try args[0].toNumber()).abs() catch return error.NumberOverflow };
 }
 fn adaptAbs(_: *Parser, args: []Value) anyerror!Value {
     return builtinAbs(args);
@@ -3274,7 +3298,7 @@ fn builtinDateDiff(p: *Parser, args: []Value) !Value {
     if (s1.len == 0 or s2.len == 0) return Value{ .string = "" };
     const d1 = try parseDateArg(p, s1);
     const d2 = try parseDateArg(p, s2);
-    return Value{ .decimal = Decimal.fromInt(d1 - d2) };
+    return Value{ .decimal = try fromIntChecked(d1 - d2) };
 }
 fn adaptDateDiff(p: *Parser, args: []Value) anyerror!Value {
     return builtinDateDiff(p, args);
@@ -3334,7 +3358,7 @@ fn builtinYear(p: *Parser, args: []Value) !Value {
         p.setDetail("invalid date '{s}': expected YYYY-MM-DD", .{s});
         return error.InvalidDate;
     };
-    return Value{ .decimal = Decimal.fromInt(parts.year) };
+    return Value{ .decimal = try fromIntChecked(parts.year) };
 }
 fn adaptYear(p: *Parser, args: []Value) anyerror!Value {
     return builtinYear(p, args);
@@ -3359,7 +3383,7 @@ fn builtinMonth(p: *Parser, args: []Value) !Value {
         p.setDetail("invalid date '{s}': expected YYYY-MM-DD", .{s});
         return error.InvalidDate;
     };
-    return Value{ .decimal = Decimal.fromInt(parts.month) };
+    return Value{ .decimal = try fromIntChecked(parts.month) };
 }
 fn adaptMonth(p: *Parser, args: []Value) anyerror!Value {
     return builtinMonth(p, args);
@@ -3384,7 +3408,7 @@ fn builtinDay(p: *Parser, args: []Value) !Value {
         p.setDetail("invalid date '{s}': expected YYYY-MM-DD", .{s});
         return error.InvalidDate;
     };
-    return Value{ .decimal = Decimal.fromInt(parts.day) };
+    return Value{ .decimal = try fromIntChecked(parts.day) };
 }
 fn adaptDay(p: *Parser, args: []Value) anyerror!Value {
     return builtinDay(p, args);
@@ -3406,7 +3430,7 @@ fn builtinWeekday(p: *Parser, args: []Value) !Value {
     const s = switch (args[0]) { .string => |v| v, else => return error.StringExpected };
     if (s.len == 0) return Value{ .string = "" };
     const ep = try parseDateArg(p, s);
-    return Value{ .decimal = Decimal.fromInt(isoWeekday(ep)) };
+    return Value{ .decimal = try fromIntChecked(isoWeekday(ep)) };
 }
 fn adaptWeekday(p: *Parser, args: []Value) anyerror!Value {
     return builtinWeekday(p, args);
@@ -3491,7 +3515,7 @@ fn builtinLen(args: []Value) !Value {
         .string => |v| v,
         else => return error.StringExpected,
     };
-    return Value{ .decimal = Decimal.fromInt(@intCast(s.len)) };
+    return Value{ .decimal = try fromIntChecked(@intCast(s.len)) };
 }
 fn adaptLen(_: *Parser, args: []Value) anyerror!Value {
     return builtinLen(args);
@@ -3570,7 +3594,8 @@ fn adaptLeast(p: *Parser, args: []Value) anyerror!Value {
 /// adapters to pinpoint the offending non-numeric argument for diagnostics.
 fn stringIsNumeric(s: []const u8) bool {
     if (s.len == 0 or isNonFiniteToken(s)) return true;
-    return Decimal.parse(s) != null or parseGroupedNumber(s, ',', '.') != null;
+    if (Decimal.parse(s)) |_| return true else |_| {}
+    return parseGroupedNumber(s, ',', '.') != null;
 }
 
 // ---------------------------------------------------------------------------
@@ -3788,10 +3813,11 @@ fn canonicaliseNumericString(s: []const u8, alloc: std.mem.Allocator) ![]const u
     if (isPrecisionSensitiveText(s)) return s;
     // Must parse as a fixed-point number to be treated as numeric at all
     // (e.g. "BUY", grouped "1,234.56", out-of-range "1e30" → verbatim).
-    const d = Decimal.parse(s) orelse return s;
+    const d = Decimal.parse(s) catch return s;
     // Scientific notation is the only form needing numeric expansion.
     if (std.mem.indexOfAny(u8, s, "eE")) |_| {
-        return d.toString(alloc);
+        var num_buf: [Decimal.str_buf_len]u8 = undefined;
+        return alloc.dupe(u8, d.toString(&num_buf));
     }
     // Plain decimal: trim trailing zeros (and a dangling '.') as a string op.
     if (std.mem.indexOfScalar(u8, s, '.')) |_| {
@@ -3905,7 +3931,7 @@ const record_num_doc: FnDoc = .{
 };
 fn adaptRecordNum(p: *Parser, args: []Value) anyerror!Value {
     if (args.len != 0) return error.WrongArgCount;
-    return Value{ .decimal = Decimal.fromInt(@intCast(p.ctx.record_num)) };
+    return Value{ .decimal = try fromIntChecked(@intCast(p.ctx.record_num)) };
 }
 
 // ── SHEET_NAME ──────────────────────────────────────────────────────────
@@ -4016,7 +4042,7 @@ fn builtinPosition(args: []Value) !Value {
         else => return error.StringExpected,
     };
     const idx = std.mem.indexOf(u8, haystack, needle) orelse return Value{ .decimal = Decimal.zero };
-    return Value{ .decimal = Decimal.fromInt(@intCast(idx + 1)) };
+    return Value{ .decimal = try fromIntChecked(@intCast(idx + 1)) };
 }
 fn adaptPosition(_: *Parser, args: []Value) anyerror!Value {
     return builtinPosition(args);
@@ -4411,11 +4437,11 @@ const TestHelper = struct {
 
 /// Test helper: build a Value.decimal from a literal numeric string.
 fn dec(s: []const u8) Value {
-    return Value{ .decimal = Decimal.parse(s).? };
+    return Value{ .decimal = Decimal.parse(s) catch unreachable };
 }
 /// Test helper: assert a toNumber() result equals the given literal.
 fn expectNum(want: []const u8, v: Value) !void {
-    try testing.expectEqual(Decimal.parse(want).?.raw, (try v.toNumber()).raw);
+    try testing.expectEqual((try Decimal.parse(want)).raw, (try v.toNumber()).raw);
 }
 
 test "Value.toString: integer-valued decimal has no decimal point" {
@@ -5221,18 +5247,18 @@ test "eval: decimal_sep_in=',' arithmetic on EU thousands group" {
 }
 
 test "parseGroupedNumber: American format" {
-    try testing.expectEqual(Decimal.parse("1234.56").?.raw, parseGroupedNumber("1,234.56", ',', '.').?.raw);
-    try testing.expectEqual(Decimal.parse("-1234567").?.raw, parseGroupedNumber("-1,234,567", ',', '.').?.raw);
-    try testing.expectEqual(Decimal.parse("1000").?.raw, parseGroupedNumber("1,000", ',', '.').?.raw);
+    try testing.expectEqual((try Decimal.parse("1234.56")).raw, parseGroupedNumber("1,234.56", ',', '.').?.raw);
+    try testing.expectEqual((try Decimal.parse("-1234567")).raw, parseGroupedNumber("-1,234,567", ',', '.').?.raw);
+    try testing.expectEqual((try Decimal.parse("1000")).raw, parseGroupedNumber("1,000", ',', '.').?.raw);
     try testing.expect(parseGroupedNumber("123", ',', '.') == null);
     try testing.expect(parseGroupedNumber("1,5", ',', '.') == null);
     try testing.expect(parseGroupedNumber("1,2345", ',', '.') == null);
 }
 
 test "parseGroupedNumber: European format" {
-    try testing.expectEqual(Decimal.parse("1234.56").?.raw, parseGroupedNumber("1.234,56", '.', ',').?.raw);
-    try testing.expectEqual(Decimal.parse("-1234567.89").?.raw, parseGroupedNumber("-1.234.567,89", '.', ',').?.raw);
-    try testing.expectEqual(Decimal.parse("1234").?.raw, parseGroupedNumber("1.234", '.', ',').?.raw);
+    try testing.expectEqual((try Decimal.parse("1234.56")).raw, parseGroupedNumber("1.234,56", '.', ',').?.raw);
+    try testing.expectEqual((try Decimal.parse("-1234567.89")).raw, parseGroupedNumber("-1.234.567,89", '.', ',').?.raw);
+    try testing.expectEqual((try Decimal.parse("1234")).raw, parseGroupedNumber("1.234", '.', ',').?.raw);
     try testing.expect(parseGroupedNumber("1.5", '.', ',') == null);
     try testing.expect(parseGroupedNumber("1.234.5", '.', ',') == null);
     try testing.expect(parseGroupedNumber("1,234.56", '.', ',') == null);

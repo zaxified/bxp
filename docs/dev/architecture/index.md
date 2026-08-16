@@ -86,9 +86,9 @@ in [`bxp-gui-bridge/CLAUDE.md`](https://github.com/zaxified/bxp/blob/master/bxp-
 The **engine modules** node groups two faces of `bxp-core`: the conversion
 engine (`csv` / `xlsx` / `json` / `json5` / `expr` / `datefmt` / `decimal` /
 `btrace`, driven by `bxp-cli`'s pipeline) and the support modules behind the
-`inspect` facade. `datefmt`, `tz`, `encoding` and `json5` are drawn here as
-engine modules because that is how the engine uses them, but they are no
-longer in this tree — all four come from the pinned `zig_libs` fetch
+`inspect` facade. `datefmt`, `tz`, `encoding`, `json5` and `decimal` are drawn
+here as engine modules because that is how the engine uses them, but they are
+no longer in this tree — all five come from the pinned `zig_libs` fetch
 dependency.
 
 `docs.zig` aggregates the language/schema catalog —

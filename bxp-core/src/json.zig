@@ -333,7 +333,13 @@ fn numberStringToOutput(row_alloc: std.mem.Allocator, num_str: []const u8) ![]co
     // through a float at read time). If the value overflows i128 or isn't
     // parseable, pass the source token through verbatim (passthrough resilience).
     if (std.mem.indexOfAny(u8, num_str, "eE") != null) {
-        if (Decimal.parse(num_str)) |d| return try d.toString(row_alloc);
+        if (Decimal.parse(num_str)) |d| {
+            // `toString` writes into the caller's buffer and returns a slice
+            // into it, so the result must be copied into the row allocator to
+            // outlive this frame.
+            var num_buf: [Decimal.str_buf_len]u8 = undefined;
+            return try row_alloc.dupe(u8, d.toString(&num_buf));
+        } else |_| {}
         return try row_alloc.dupe(u8, num_str);
     }
     // Plain decimal: trim trailing zeros (and a dangling '.') as a string op.

@@ -699,10 +699,15 @@ fn normalizeNumber(alloc: Allocator, raw: []const u8) ![]u8 {
     // use. Replaces the former f64 round-trip + `@abs(f) < 1e15` guard: Decimal
     // is exact across the full i128 range, and canonicalises fractional values
     // too ("1.5E-3" → "0.0015"), not only whole ones. Overflow / unparseable
-    // falls back to the raw token. `@constCast` is sound — toString returns a
+    // falls back to the raw token. `@constCast` is sound — the dupe below is a
     // freshly allocated, single-owner buffer that this function owns.
     if (std.mem.indexOfAny(u8, raw, "Ee")) |_| {
-        if (Decimal.parse(raw)) |d| return @constCast(try d.toString(alloc));
+        if (Decimal.parse(raw)) |d| {
+            // `toString` returns a slice into the stack buffer it was handed,
+            // so copy it out before returning.
+            var num_buf: [Decimal.str_buf_len]u8 = undefined;
+            return @constCast(try alloc.dupe(u8, d.toString(&num_buf)));
+        } else |_| {}
         return alloc.dupe(u8, raw);
     }
     // Decimal — strip trailing zeros.

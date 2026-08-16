@@ -299,16 +299,28 @@ bxp → zig-libs):
 
 | Module        | API    | Tests   | Notes                                        |
 | ------------- | ------ | ------- | -------------------------------------------- |
-| `decimal`     | 1 → 4  | 12 → 34 | Upstream adds `big.zig`, `RoundingMode`, `sqrt`/`pow` — the largest behavioural surface of the three, so rounding is what the audit must focus on |
-| `diagnostics` | 3 → 4  | 1 → 4   |                                              |
-| `zipstream`   | 4 → 10 | 2 → 20  | Largest divergence                            |
+| `diagnostics` | 3 → 4  | 1 → 4   | Smallest remaining, but barely exercised by real data — will need a targeted gate |
+| `zipstream`   | 4 → 10 | 2 → 20  | Largest divergence; the xlsx path does exercise it on live data |
 
-`tz` (the pilot), `datefmt`, `encoding` and `json5` have migrated. The first
-three turned out to be strict subsets of their upstream descendants once
-compared line by line — the shared code was byte-identical and the divergence
-was extra coverage plus entry points bxp does not call.
+`tz` (the pilot), `datefmt`, `encoding`, `json5` and `decimal` have migrated.
+The first three turned out to be strict subsets of their upstream descendants
+once compared line by line — the shared code was byte-identical and the
+divergence was extra coverage plus entry points bxp does not call.
 
-**`json5` was not.** It is the counter-example worth remembering: the local
+**`decimal` was a third shape again: same maths, different API.** Every
+arithmetic result is unchanged (verified on a 1766 × 23 operand matrix,
+40 618 cells, byte-identical against the pre-migration binary including all
+126 per-cell errors), but fallible operations return `Error!Decimal` instead
+of `?Decimal` and `toString` writes into a caller buffer instead of
+allocating — so the call sites in `expr.zig` / `json.zig` / `xlsx.zig` had to
+be rewritten. That was worth doing on its own terms: the typed error set is
+what let `div` separate a zero divisor (blank cell, the documented behaviour)
+from an overflow (loud `NumberOverflow`). The local copy conflated them into
+one `null` and `@intCast`-panicked on the overflow, so a template like
+`[big] / 0.000000000001` aborted the process with a core dump. Dropping the
+allocating `toString` also made the binary ~2 KB smaller.
+
+**`json5` was not a subset either.** It is the counter-example worth remembering: the local
 copy was an older, buggier line, and upstream's fuzzer + the json5/json5-tests
 conformance corpus had already fixed four things it still carried — two live
 crashes (`{a b` sliced out of bounds; `skipValue` could return `len + 1` on a
@@ -318,8 +330,10 @@ comment stripped to EOF; a lone or leading comma elided into a valid-looking
 empty container — both must-reject cases in that corpus). Migrating it was
 therefore a deliberate **behaviour change**, gated on all 63 configs in the
 repo plus the real working config producing byte-identical annotated output.
-Assume nothing from the previous three: the "strict subset" result is a
-finding per module, not a pattern.
+Assume nothing from the modules that came before: "strict subset" is a
+finding per module, not a pattern. Three shapes have turned up so far —
+strict subset (`tz`, `datefmt`, `encoding`), same API but fixed behaviour
+(`json5`), and same behaviour but changed API (`decimal`).
 
 The three remaining figures indicate that a fork exists, not what it contains
 — audit each before migrating it.

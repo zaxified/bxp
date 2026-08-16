@@ -20,7 +20,7 @@ Consumed by bxp-cli (conversion engine) and the stateless-inspect adapters
 | `expr`        | `expr.zig`        | `eval()`, `evalString()`, `Context`, `Value`, `FnDoc` catalog             |
 | `datefmt`     | _(zig-libs dep)_  | `parse()`, `format()`, civil/arithmetic helpers, `partsToUnix`/`unixToParts` seconds-epoch, `ZZ` offset token — the date core. **No longer in this tree**: consumed from the pinned `zig_libs` fetch dep as the named `datefmt` module (wired into `expr` in `build.zig`). The former local `datefmt.zig` was a strict subset of the upstream module — identical civil core, parser, formatter and token table, plus coverage and an `xsd:dateTime` entry point bxp does not call |
 | `tz`          | _(zig-libs dep)_  | `find()`, `offsetAt()` — IANA UTC-offset lookup. **No longer in this tree**: consumed from the pinned `zig_libs` fetch dep as the named `tz` module (wired into `expr` in `build.zig`). The offset tables compile in, so there is still no runtime dependency. The former local `tz.zig` was a strict subset of the upstream module; its generator moved to `scripts/tz-gen/` in that repo |
-| `decimal`     | `decimal.zig`     | `Decimal` fixed-point i128 @ 1e12 — numeric core (named `"decimal"` module, shared by every input path) |
+| `decimal`     | _(zig-libs dep)_  | `Decimal` fixed-point i128 @ 1e12 — numeric core (named `"decimal"` module, shared by every input path). **No longer in this tree**: consumed from the pinned `zig_libs` fetch dep. Same arithmetic, different API — fallible ops return `Error!Decimal` not `?Decimal`, and `toString` writes into a caller buffer instead of allocating |
 | `unicode`     | `unicode.zig`     | `toUpperStr()`, `toLowerStr()`, `unaccentStr()` — UTF-8 case mapping + diacritic stripping over `uucode` tables (file-rel @import by `expr.zig`, not a named module) |
 | `encoding`    | _(zig-libs dep)_  | `Encoding`, `decodeToUtf8()`, `encodeFromUtf8()` — Layer 0 single-byte code page ↔ UTF-8 (named module shared by `expr` + `config`; no `uucode` dep). **No longer in this tree**: consumed from the pinned `zig_libs` fetch dep. The former local copy was a strict subset — the five 256-entry tables and both transcode entry points were byte-identical |
 | `config`      | `config.zig`      | `Config`, `BrokerConfig`, `load()`, `validate()`, `FieldDoc`              |
@@ -129,7 +129,7 @@ Expression evaluator for `input_schema` and `row_rules` in bxp-cli.json.
   stateless eval). `input_encoding` (Layer 0) transcodes each accessed field
   value to UTF-8 in `field()`; `.utf8` (default) is a zero-alloc pass-through.
 - `Value` — union of `decimal: Decimal`, `string: []const u8`, `boolean: bool`.
-  `Decimal` (in `decimal.zig`) is a fixed-point `i128` at scale 1e12 (12
+  `Decimal` (the zig-libs `decimal` module) is a fixed-point `i128` at scale 1e12 (12
   fractional digits): exact `+ −`, half-away-from-zero `× ÷` and `ROUND`. Replaces
   the former `f80` + `{d:.8}` print cap, so `0.02 + 0.08` is exactly `0.10`.
   Passthrough strings (coords, long IDs) bypass the core to keep full precision.
@@ -294,7 +294,7 @@ whole-file slurp, no upper file-size limit.
   decimals canonicalise via a **string-only trailing-zero trim** (no `f64`
   round-trip), mirroring the CSV passthrough invariant — so a high-precision
   JSON decimal (e.g. a 15-digit coordinate) survives intact. Scientific
-  notation expands through the shared `decimal.zig` fixed-point core (exact
+  notation expands through the shared `decimal` fixed-point core (exact
   to i128, float-free) — the same numeric core the CSV path uses at field
   access, so JSON and CSV turn an identical numeric string into an identical
   value. Out-of-i128-range literals pass through verbatim.
@@ -354,6 +354,44 @@ tree** — the named `json5` module comes from the pinned `zig_libs` fetch dep.
   Migration was gated on all 63 configs in the repo + the real working config
   producing **byte-identical annotated output**, so the GUI contract is
   unchanged for anything that was already valid.
+
+### decimal _(zig-libs dep)_
+
+Fixed-point `i128` at scale 1e12 — the numeric core behind `Value.decimal` and
+the csv / json / xlsx number canonicalisation. **No longer in this tree.**
+
+The arithmetic is unchanged: same representation, same half-away-from-zero
+rounding on `×` `÷` `ROUND`, same parse acceptance and same formatted output.
+Verified on a 1766-row × 23-column operand matrix (40 618 cells, spanning
+1e-12 to the i128 ceiling, both signs, half-way values, scientific notation,
+grouped/European forms) against a pre-migration binary: byte-identical,
+including all 126 per-cell expression errors.
+
+The **API** did change, and the call sites in `expr.zig` / `json.zig` /
+`xlsx.zig` were rewritten for it:
+
+- Fallible operations return `Error!Decimal` (`add`/`sub`/`mul`/`neg`/`abs`/
+  `fromInt`), `DivError!Decimal` (`div`), `ParseError!Decimal` (`parse`) —
+  not `?Decimal`. bxp maps them back onto its own error names
+  (`NumberOverflow`, `NumberOutOfRange`, `NotANumber`) so user-facing messages
+  are unchanged; `fromIntChecked` in expr.zig is that adapter.
+- `toString` writes into a caller-provided `[Decimal.str_buf_len]u8` and
+  returns a slice into it, instead of allocating. Callers that need the result
+  to outlive the frame `dupe` it. This removed an allocation per numeric
+  output cell and is why the migration made the binary ~2 KB smaller.
+- `parseGroupedNumber` deliberately keeps its `?Decimal` contract
+  (`catch null` internally): its callers treat "not a number" as a fallback
+  condition, not an error to propagate, so the optional stops at that boundary.
+
+The typed error set also fixed a live crash. `div` previously returned plain
+`null` for a zero divisor and `@intCast`-panicked on overflow — the caller
+could not tell the two apart, so a template like `[big] / 0.000000000001`
+aborted the process with a core dump. `error.DivisionByZero` and
+`error.Overflow` now split at the call site: the first keeps the documented
+blank-cell behaviour for blank divisors, the second is a loud
+`NumberOverflow` exactly like `*` already was. Upstream also added overflow
+guards to `floor`, `ceil` and `parse`; those are forward cover — probing
+confirmed they are not reachable through the expression surface today.
 
 ### diagnostics.zig
 
@@ -421,6 +459,8 @@ content-addressed by hash and re-audited on any pin bump:
     by name: `core_dep.module("json5")` in `bxp-cli/build.zig`.
     `dependency().module()` alone does not register it, and the downstream
     build panics with "unable to find module 'json5'".
+  - `decimal` — the fixed-point numeric core behind `Value.decimal` and the
+    csv / json / xlsx number canonicalisation.
 
   Pinned to the commit behind a dated release tag (upstream tags
   `YYYY-MM-DD`, no semver). `build.zig` takes all three off **one shared
@@ -443,7 +483,10 @@ content-addressed by hash and re-audited on any pin bump:
   remaining candidates and their measured divergence are tabulated in
   `docs/dev/roadmap.md` → "Shared core libraries — consume zig-libs".
 
-`decimal.zig` remains in-house with no dependency.
+Nothing numeric or textual is left in-house: `csv`, `json`, `xlsx`,
+`zipstream`, `btrace`, `expr`, `config`, `docs`, `diagnostics`, `unicode` and
+`inspect` are bxp's own; the primitives underneath them (`datefmt`, `tz`,
+`encoding`, `json5`, `decimal`) all come from zig-libs.
 
 ## Coding conventions
 
@@ -466,7 +509,7 @@ the same observations. If the rationale stops applying, revisit.
 - **`xlsx.zig normalizeNumber` f64 sci-notation path — removed.** Up to
   2026-06-04 this expanded scientific notation through `f64` behind an
   `@abs(f) < 1e15` exactness guard. It now routes through the shared
-  `decimal.zig` fixed-point core (exact across the full i128 range,
+  `decimal` fixed-point core (exact across the full i128 range,
   float-free), the same numeric core json.zig and expr.zig use — so the
   xlsx, JSON and CSV input paths parse an identical numeric string into an
   identical value. The 1e15 guard is gone (Decimal is exact well past it),
