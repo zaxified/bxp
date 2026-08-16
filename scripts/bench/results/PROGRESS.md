@@ -25,6 +25,7 @@ numbers are noisier — but the trend across S05 → S13 is the meaningful arc).
 | S15 | 24/05-2110 | sunrise vendor: DATE_CONVERT FBA       |
 | S16 | 02/06-0643 | sunrise removed → in-house datefmt.zig |
 | S17 | 16/06-1603 | Zig 0.16 migration (new baseline)      |
+| S18 | 16/08-2030 | zig-libs migration (12 modules)        |
 
 ## Wall time (seconds)
 
@@ -239,6 +240,48 @@ work and is no longer the live 0.15.2 point.
   ReleaseFast codegen) at a small constant RSS cost. **This is the new 0.16
   baseline** — diff future 0.16 Linux runs against this point, and the S01–S16
   arc against it only as a cross-toolchain trend (different compiler).
+
+## S18 — zig-libs migration (verification run, S17 stays the reference)
+
+Full bench after the whole primitive layer moved out to the `zig-libs` fetch
+dependency (12 modules: `tz`, `datefmt`, `encoding`, `json5`, `decimal`,
+`zipstream`, `diagnostics`, `numparse`, `csvstream`, `minisign`, `procrun`,
+`mcp`). `results-20260816-203013.csv`, BENCH_PARALLEL=1, ReleaseFast, Zig 0.16.0.
+
+| metric                | S17     | S18     |
+| --------------------- | ------: | ------: |
+| Total wall (25 pts)   | 22.36 s | 28.06 s |
+| Peak RSS              | 27.5 MB | 27.9 MB |
+| `out_bytes` (all pts) |       — | identical to the byte |
+
+**The +25 % wall is machine-day variance, not the migration.** Interleaved A/B
+of the pre-migration commit (`7e2c650`) against HEAD, alternating PRE/POST per
+repetition on the same cached inputs, medians:
+
+| point       | PRE     | POST    |
+| ----------- | ------: | ------: |
+| S1 n=2M     |  4.30 s |  4.25 s |
+| S3 c=256    |  2.13 s |  2.20 s |
+| S3 c=1024   |  9.91 s | 10.30 s |
+
+Both binaries land far from S17's numbers on the same points today (S1 2M: 4.3 s
+vs S17's 4.05 s; S3 c=1024: ~10 s vs 8.38 s), and the arc itself is bimodal on
+this host — the pre-migration 22/06 run totalled 27.22 s while the 01/07 run
+totalled 22.33 s. Diff future runs against S17 **and** re-check any regression
+with an interleaved A/B before believing it; a single full-bench total on this
+machine carries roughly ±25 % of day-to-day spread, dominated by the c=1024
+point (2.1 GB of output per run).
+
+Two apparent trace deltas vs the S17 CSV (`trace_bytes` +23 B on every traced
+point, one extra newline on S4 c=256) are **environmental, not code**: a binary
+rebuilt from the S17-era commit (`9db1e03`) reproduces HEAD's exact counts today
+(5250 / 3102615), and PRE/POST trace streams are byte-identical.
+
+The one real, reproducible cost found: the ZIP unpack stage got **~23 % slower**
+(1.23 s → 1.51 s on the 6 258-member RÚIAN archive, 6 interleaved reps, no
+overlap between the two spreads) because upstream `zipstream` verifies each
+member's CRC-32 while the former in-tree copy did not. That is ~2 % of that
+workload's end-to-end run, bought for corrupted/tampered-member detection.
 
 ## Windows baseline (W-arc) — separate machine, intra-Windows reference
 
