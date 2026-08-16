@@ -314,15 +314,51 @@ fixed before release instead, not parked here).
   `scripts/test-07-datasets.sh` covers it from CI. Reconsider on request
   from a contributor maintaining > 3 templates.
 
-### Shared core libraries — future extraction
+### Shared core libraries — consume zig-libs
 
-Two tracks with different triggers:
+**The extraction already happened, in the other direction.**
+[`zig-libs`](https://github.com/zaxified/zig-libs) (226 modules, tagged
+`v0.1.0`) carries hardened descendants of seven bxp-core modules. They were
+lifted out of bxp and have since gained tests, fuzz harnesses and security
+audits that the bxp originals never got, so the two copies have forked and
+zig-libs is ahead on every one of them. The direction of travel is now
+inward: bxp consumes zig-libs as a pinned fetch dependency and deletes its
+local copy, module by module.
+
+Treat zig-libs as a **foreign upstream** — read-only, pinned by tag or
+commit, never edited from this repo. If a bxp copy turns out to carry
+something the zig-libs module lacks, add it on the bxp side rather than
+reaching into the dependency.
+
+Compatible modules, measured 2026-08-16 (`pub` API count / `test` count,
+bxp → zig-libs):
+
+| Module        | API    | Tests   | Notes                                        |
+| ------------- | ------ | ------- | -------------------------------------------- |
+| `tz`          | 3 → 7  | 6 → 12  | **Pilot.** Data tables byte-equal after whitespace normalisation; `find`/`offsetAt`/`posixOffset` identical. zig-libs adds the `Jn`/`n` POSIX rule forms (forward cover — no zone in current tzdata uses them) |
+| `datefmt`     | 30 → 32| 19 → 30 | Dependency root — `tz` imports it, so both copies compile in until this one migrates too |
+| `decimal`     | 1 → 4  | 12 → 34 |                                              |
+| `encoding`    | 3 → 4  | 12 → 17 |                                              |
+| `diagnostics` | 3 → 4  | 1 → 4   |                                              |
+| `json5`       | 3 → 4  | 20 → 27 |                                              |
+| `zipstream`   | 4 → 10 | 2 → 20  | Largest divergence                            |
+
+Only `tz` has been compared line by line; the other six figures indicate
+that a fork exists, not what it contains — audit each before migrating it.
+
+Ordering note: `tz` goes first as the pilot because it is the smallest
+self-contained surface, but it depends on `datefmt`, so until `datefmt`
+migrates as well the binary carries two date cores. Measure that cost on
+the pilot and let it inform whether `datefmt` follows immediately.
+
+Still outstanding, unchanged by the above:
 
 - **Transport core**
   `http`, `rest`, `api`, `mcp`
 
-- **General-purpose cores**
-  `datefmt`, `decimal`, `encoding` (Zig) and `json5_ast` (Dart)
+- **Dart side**
+  `json5_ast` — no zig-libs equivalent (different language); still waits for
+  a second Dart consumer.
 
 ### Expression builtins
 

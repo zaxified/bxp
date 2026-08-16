@@ -19,7 +19,7 @@ Consumed by bxp-cli (conversion engine) and the stateless-inspect adapters
 | `zipstream`   | `zipstream.zig`   | `Archive`, `EntryReader` — streaming ZIP central-dir walk + per-entry inflate (named module; shared by `xlsx` ingest + bxp-cli's parallel `zipPrePass`) |
 | `expr`        | `expr.zig`        | `eval()`, `evalString()`, `Context`, `Value`, `FnDoc` catalog             |
 | `datefmt`     | `datefmt.zig`     | `parse()`, `format()`, civil/arithmetic helpers, `partsToUnix`/`unixToParts` seconds-epoch, `ZZ` offset token — date core (file-rel @import by `expr.zig`, not a named module) |
-| `tz`          | `tz.zig`          | `find()`, `offsetAt()` — IANA UTC-offset lookup (binary search + POSIX-footer fallback) over the generated `tz_data.zig`; file-rel @import by `expr.zig`. `tz_data.zig` is built by `tools/tz-gen` from a pinned tzdata release (the committed file IS the pin) |
+| `tz`          | _(zig-libs dep)_  | `find()`, `offsetAt()` — IANA UTC-offset lookup. **No longer in this tree**: consumed from the pinned `zig_libs` fetch dep as the named `tz` module (wired into `expr` in `build.zig`). The offset tables compile in, so there is still no runtime dependency. The former local `tz.zig` was a strict subset of the upstream module; its generator moved to `scripts/tz-gen/` in that repo |
 | `decimal`     | `decimal.zig`     | `Decimal` fixed-point i128 @ 1e12 — numeric core (named `"decimal"` module, shared by every input path) |
 | `unicode`     | `unicode.zig`     | `toUpperStr()`, `toLowerStr()`, `unaccentStr()` — UTF-8 case mapping + diacritic stripping over `uucode` tables (file-rel @import by `expr.zig`, not a named module) |
 | `encoding`    | `encoding.zig`    | `Encoding`, `decodeToUtf8()`, `encodeFromUtf8()` — Layer 0 single-byte code page ↔ UTF-8 (named module; shared by `expr` + `config`; no `uucode` dep) |
@@ -148,9 +148,9 @@ DATEADD, DATEDIFF, WORKDAY, YEAR, MONTH, DAY, WEEKDAY, EOMONTH, NTH_DOW,
 TO_UTC, TZ_OFFSET, TZ_CONVERT, IS_DST.
 IF/CASE/IFERROR are lazy (parse their own arg lists; only the selected /
 non-erroring branch is evaluated).
-TO_UTC/TZ_OFFSET/TZ_CONVERT/IS_DST resolve IANA offsets via `tz.zig` over the
-generated `tz_data.zig` (built by `tools/tz-gen` from a pinned tzdata release);
-the `ZZ` datefmt token carries the parse/format offset. See the datefmt/tz note
+TO_UTC/TZ_OFFSET/TZ_CONVERT/IS_DST resolve IANA offsets via the zig-libs `tz`
+module (pinned fetch dep — see _External dependencies_ below); the `ZZ` datefmt
+token carries the parse/format offset. See the datefmt/tz note
 under _Module overview_. FILENAME/RECORD_NUM/SHEET_NAME read the
 per-file/row `Context` and are excluded from constant-folding (`isRowInvariant`).
 REGEX_MATCH/REGEX_EXTRACT compile a regex literal per call through the Pike-VM
@@ -360,7 +360,7 @@ Module exports in `build.zig`: `csv`, `json`, `json5`, `xlsx`, `zipstream`, `btr
 
 ### External dependencies
 
-`bxp-core/build.zig.zon` pins two external (fetch) dependencies, both
+`bxp-core/build.zig.zon` pins three external (fetch) dependencies, all
 content-addressed by hash and re-audited on any pin bump:
 
 - **uucode** (MIT) — the Unicode case-mapping / decomposition table library,
@@ -377,8 +377,27 @@ content-addressed by hash and re-audited on any pin bump:
   linear-time (ReDoS-proof) matching. The package exposes its engine as the
   module named `regex`; `build.zig` wires it into the `expr` module. Adds ~56 KB
   to the ReleaseSmall `bxp-cli` (engine + Unicode-scalar case-fold tables).
+- **zig_libs** (MIT, `zaxified/zig-libs`) — the module collection supplying
+  `tz`, the IANA UTC-offset lookup behind `TO_UTC` / `TZ_OFFSET` /
+  `TZ_CONVERT` / `IS_DST`. Pinned to the commit behind a dated release tag
+  (upstream tags `YYYY-MM-DD`, no semver). `build.zig` wires the `tz` module
+  into `expr`. The 600-zone offset tables are compiled into the module, so
+  this stays a build-time dependency only — no runtime tzdata lookup, exactly
+  as the former in-tree copy behaved. Adds ~8 KB to the ReleaseSafe `bxp-cli`
+  (the tables were already carried locally; the delta is the extra `Jn`/`n`
+  POSIX rule forms plus the parts of the upstream `datefmt` that `tz` calls).
 
-`datefmt.zig` and `decimal.zig` remain in-house with no dependency.
+  **Treated as a foreign upstream** — read-only, pinned, never edited from
+  this repo. Zig's package manager offers no floating "latest" mode: the
+  `hash` field is mandatory and content-addressed, so any upstream movement
+  must land as an explicit `zig fetch --save` edit to `build.zig.zon`. `tz` is
+  the first of several bxp-core modules migrating this way; the remaining
+  candidates and their measured divergence are tabulated in
+  `docs/dev/roadmap.md` → "Shared core libraries — consume zig-libs".
+
+`datefmt.zig` and `decimal.zig` remain in-house with no dependency — note that
+`tz` pulls the upstream copy of `datefmt`, so both compile in until that module
+migrates too.
 
 ## Coding conventions
 

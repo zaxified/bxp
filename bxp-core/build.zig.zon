@@ -23,6 +23,20 @@
             .url = "https://github.com/quangd42/regex.zig/archive/a22a2e68bcc5aa55310f12128de38e26bfa2cece.tar.gz",
             .hash = "regex-0.1.0-V8KKSWICBACgjPoyQLIoPwMnQjKzCpEOjUMEzkf3ebOD",
         },
+        // zig-libs (MIT) — the module collection that now carries the hardened
+        // descendants of several bxp-core modules. `tz` (IANA offset lookup) is
+        // the first one consumed from here instead of kept locally; see
+        // docs/dev/roadmap.md → "Shared core libraries — consume zig-libs" for
+        // the remaining candidates. Treated as a foreign upstream: read-only,
+        // pinned to the exact commit behind a release tag (upstream tags by
+        // date, `YYYY-MM-DD`), never edited from this repo. `zig fetch` cannot
+        // target a subdirectory (ziglang/zig#23012)
+        // so the whole collection is one package — only the modules actually
+        // imported get compiled in.
+        .zig_libs = .{
+            .url = "git+https://github.com/zaxified/zig-libs.git?ref=2026-08-15#84332afefbbc22f2e6254ee9412cd5e9f91f27fd",
+            .hash = "zig_libs-0.0.0-WiQ0Gkuq3gJ9oVeW_X5KH_WCwedy4T3uXFl5-DAcgr3J",
+        },
     },
     .minimum_zig_version = "0.16.0",
     .paths = .{"."},

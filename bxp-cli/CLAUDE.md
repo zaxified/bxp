@@ -322,8 +322,9 @@ malformed one raises an error. Pre-1970 dates are fully supported.
 
 ### Timezone functions
 
-DST-aware, backed by a bundled IANA tzdata snapshot (`bxp-core/src/tz.zig` over
-the generated `tz_data.zig`). Zone ids are IANA names or fixed offsets; unknown
+DST-aware, backed by a bundled IANA tzdata snapshot — the `tz` module from the
+pinned `zig_libs` fetch dep, whose offset tables compile into the binary (no
+runtime tzdata lookup). Zone ids are IANA names or fixed offsets; unknown
 zone → `""` / `false`.
 
 | Syntax | Description |

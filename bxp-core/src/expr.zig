@@ -40,7 +40,7 @@
 /// further down this file — search for the `── <NAME> ──` section headers.
 const std = @import("std");
 const datefmt = @import("datefmt.zig");
-const tz = @import("tz.zig");
+const tz = @import("tz");
 const unicode = @import("unicode.zig");
 const encoding = @import("encoding");
 const Decimal = @import("decimal").Decimal;
@@ -4129,7 +4129,8 @@ fn adaptIsEmpty(_: *Parser, args: []Value) anyerror!Value {
 }
 
 // ── TO_UTC / TZ_OFFSET / TZ_CONVERT / IS_DST ────────────────────────────
-// Timezone builtins over the in-house tz.zig / tz_data.zig IANA tables.
+// Timezone builtins over the zig-libs `tz` module's IANA offset tables
+// (pinned fetch dep — see build.zig.zon; the tables compile in, no runtime dep).
 // Canonical output shape for the converting builtins.
 const TZ_CANON_DT = "YYYY-MM-DD hh:mm:ss";
 
