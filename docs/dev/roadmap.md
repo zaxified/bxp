@@ -154,25 +154,77 @@ against the real engine instead of frozen expected text).
   recurring operator chore. Demand-driven — only if a real workflow asks;
   docs/examples/ currently show flat dirs.
 
-### CSV formula-injection guard (`csvsafe`)
+### CSV formula-injection guard — quoted-path gap
 
-We have none. `pipeline.zig`'s `writeSafeValue` does RFC 4180 quoting only, so
-a field whose first character is `=`, `+`, `-`, `@`, or a leading tab/CR is
-written through verbatim and evaluated as a *formula* when the output is opened
-in Excel / LibreOffice / Sheets — the DDE `cmd|'/c calc'!A1` class. zig-libs'
-`csvsafe` is precisely this guard and nothing else (`needsGuard` / `writeSafe`,
-prefixing a single apostrophe).
+**Correction (2026-08-16).** The zig-libs sweep recorded this as "we have no
+guard at all" and queued `csvsafe` to supply one. That was wrong: `writeSafeValue`
+in `pipeline.zig` has carried the guard since before v0.2 and it was refined in
+`30ee2ac` (2026-06-02). It prefixes a single apostrophe on a leading `=`, `@` or
+tab unconditionally, and on a leading `+`/`-` only when the next character is
+not a digit or the decimal separator — the carve-out that keeps `+420 555 0101`
+and `-12.34` intact. Adopting `csvsafe` would be a second guard over the first;
+do not.
 
-Marginal for a broker export loaded straight into Wealthfolio, but bxp is
-documented as a general CSV ETL — `hubspot-to-salesforce`, the Chicago
-licences, RÚIAN — and those outputs do get opened in a spreadsheet.
+What IS open is narrower: **the prefix only runs on the unquoted path.** When
+`csv_text_quote_out` is set and the value contains the output delimiter, the
+quote char, CR or LF, `writeSafeValue` takes the RFC 4180 quoting branch and
+returns before the prefix switch. Probed 2026-08-16 against the shipping
+binary, with `csv_text_quote_out: "double"`:
 
-Must be an **opt-in config key**, not a silent default: the apostrophe changes
-the cell's value, which would corrupt an import into a tool that reads the CSV
-programmatically. Note `csvsafe` also takes a decimal separator
-(`needsGuardSep`), so a leading `-` on a negative number is not mistaken for a
-formula — that interacts with `csv_decimal_out` and needs checking against our
-accounting-negatives handling.
+| Output value | Guarded? |
+| --- | --- |
+| `=cmd\|'/c calc'!A1` | yes — `'=cmd\|…` (no delimiter, so no quoting) |
+| `@SUM(A1)` | yes — `'@SUM(A1)` |
+| `@SUM(1,1)` | **no** — `"@SUM(1,1)"` (comma → quoted branch) |
+| `=HYPERLINK("http://evil","click")` | **no** — quoted, quotes doubled |
+
+CSV quoting is stripped by the spreadsheet before the cell is parsed, so a
+quoted `=…` still evaluates. The same early return applies to the pre-quoted
+passthrough branch (values from `'''` expressions).
+
+This is reachable in shipping configs — all four `xtb*` datasets and the
+real-world examples set `csv_text_quote_out: "double"` — but only for a cell
+that both starts with a formula character and contains a delimiter/quote. No
+record of the quoted path having been considered when the guard was written, so
+treat it as an oversight rather than a decision.
+
+**Task: survey the consumer impact before touching the code.** Closing the gap
+means writing an apostrophe into cells that do not have one today, and the
+apostrophe is part of the value for anything that is not a spreadsheet. That is
+exactly why the existing guard was kept conservative in `30ee2ac`, so the same
+caution applies here: the change is cheap, deciding whether it is safe is not.
+The survey has to answer, in this order:
+
+1. **How often does the trigger actually fire?** The gap needs a cell that both
+   starts with `=` / `@` / tab (or `+`/`-` followed by a non-digit) *and*
+   contains the output delimiter, the quote char, CR or LF. Measure rather than
+   guess: scan every output the repo can produce — `datasets/*`, every
+   `docs/examples/**` config, and a real-broker run — for cells matching that
+   shape. A zero count over the whole corpus would already downgrade this to a
+   documentation item.
+2. **What breaks downstream if the apostrophe appears?** The consumers are
+   Wealthfolio's `.csvx` importer, brycht.app, Ghostfolio, the GUI's own output
+   preview, and `datasets/*.expected` (a changed cell is a failing regression
+   test by construction — that one is a *measurement*, not a breakage). A
+   programmatic importer that reads the field verbatim would see `'=…` where it
+   used to see `=…`. Check the two shipping targets specifically; a portfolio
+   tracker importing a `comment` column is the realistic case.
+3. **Confirm the threat, do not inherit it.** Verify in current Excel,
+   LibreOffice Calc and Google Sheets that a *quoted* `=…` cell really does
+   evaluate — the claim above is derived from how CSV quoting is stripped
+   before cell parsing, not from a run. If a current spreadsheet already
+   refuses it, the gap is theoretical.
+4. **Check what comparable tools do.** Neither Go's `encoding/csv` nor Python's
+   `csv` writer guards at all; the guard is a bxp addition. Whether OWASP's
+   CSV-injection guidance distinguishes the quoted case is worth a look before
+   inventing a rule.
+
+Only then pick between (a) extending the prefix to the quoted branch and the
+pre-quoted passthrough, (b) making the whole guard an opt-in config key and
+extending it only there, or (c) recording the gap as accepted with the numbers
+that justify it. Whichever wins, the `+`/`-` numeric carve-out must survive —
+re-introducing `'+420 555 0101` would be a regression of the fix that created
+it.
 
 ### Real-world broker CSV quirks
 
