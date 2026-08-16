@@ -14,7 +14,7 @@ Consumed by bxp-cli (conversion engine) and the stateless-inspect adapters
 
 | Module        | File              | Public API                                                                |
 | ------------- | ----------------- | ------------------------------------------------------------------------- |
-| `csv`         | `csv.zig`         | `splitFields()`, `LineIterator`                                           |
+| `csvstream`   | _(zig-libs dep)_  | `splitFields()`, `LineIterator`, `LineSlice` + `ChunkReader` — the CSV record model and the record-aligned streaming reader. **No longer in this tree**: the record half was `csv.zig` here, the `ChunkReader` half was private to bxp-cli's `pipeline.zig`; upstream holds one module for both |
 | `xlsx`        | `xlsx.zig`        | `xlsxToCsv()`, `SheetSpec` — streams every XML part via `zipstream`       |
 | `zipstream`   | _(zig-libs dep)_  | `Archive`, `EntryReader` — streaming ZIP central-dir walk + per-entry inflate (named module; shared by `xlsx` ingest + bxp-cli's parallel `zipPrePass`). **No longer in this tree**: consumed from the pinned `zig_libs` fetch dep, which adds CRC-32 verification, a decompression-bomb cap, a zip-slip predicate, central-directory pre-validation and zip64 reading |
 | `expr`        | `expr.zig`        | `eval()`, `evalString()`, `Context`, `Value`, `FnDoc` catalog             |
@@ -34,22 +34,44 @@ Consumed by bxp-cli (conversion engine) and the stateless-inspect adapters
 
 ## Module details
 
-### csv.zig
+### csvstream _(zig-libs dep)_
 
-RFC 4180 CSV parser.
+RFC 4180 CSV parser + record-aligned streaming reader. **No longer in this
+tree** — and it is the migration that reunited two halves bxp had kept apart:
+the record model was `src/csv.zig` here, while the `ChunkReader` that feeds it
+was private to `bxp-cli/src/pipeline.zig`. Upstream holds one module for both,
+which is also where the invariant that ties them together is now documented.
 
-- `splitFields(record, buf, delim, quote_ch, alloc)` — splits one record into field strings,
-  up to `buf.len` fields. Unquotes quoted fields.
-- `LineIterator.init(bytes, quote, base_offset)` — quote-aware streaming
-  iterator over records held in a single in-memory chunk; `next()` yields
-  `LineSlice { bytes, byte_offset }` until the buffer is exhausted.
+- `splitFields(record, buf, delim, quote_ch, alloc)` — splits one record into
+  field strings, up to `buf.len` fields. Unquotes quoted fields.
+- `LineIterator.init(bytes, quote, base_offset)` — quote-aware iterator over
+  records held in a single in-memory chunk; `next()` yields
+  `LineSlice { bytes, byte_offset, unbalanced_quote }`.
+- `ChunkReader.init(io, alloc, file, chunk_size)` — file → record-aligned
+  chunks (each ending on its last `\n`), so peak memory is the chunk size, not
+  the file size. `chunk_start_in_file` is what makes a record's absolute offset
+  composable — that offset is the `--trace=bin` `source_locator` the GUI seeks
+  to for drill-down.
+- **The lazy-quotes rule is load-bearing and survived the move verbatim**: a
+  `\n` ALWAYS ends a record (deliberately not RFC 4180 §2.6), so a stray quote
+  is a one-line problem instead of swallowing the rest of the file — and every
+  `\n` is therefore a safe chunk boundary, which is what lets the pipeline
+  split blocks for parallel workers at all. The diff against the local copy was
+  byte-identical here.
+- One upstream guard is new: `max_record_len` → `error.RecordTooLong` on a
+  newline-free input past the chunk size. bxp-cli adopts it deliberately (see
+  the call-site note in `pipeline.zig`) and translates it into a diagnostic
+  naming the file and the classic-Mac-line-endings suspicion.
 - Spaces are preserved per RFC 4180. The bxp pipeline intentionally trims them
-  _outside_ csv.zig: field values at access time in `expr.Context.field`
-  (`expr.zig:161`), header names when building `col_index` in
-  `bxp-cli/src/pipeline.zig:1660`. Brokers frequently pad fields, so the rest
-  of the pipeline (date parsing, numeric conversion, comparisons) sees clean
-  values without csv.zig having to mutate the slices it returns.
-- Unit tests inline (22 test cases).
+  _outside_ the parser: field values at access time in `expr.Context.field`,
+  header names when building `col_index` in `bxp-cli/src/pipeline.zig`. Brokers
+  frequently pad fields, so the rest of the pipeline (date parsing, numeric
+  conversion, comparisons) sees clean values without the parser having to
+  mutate the slices it returns.
+- Tests live upstream: all 22 that were here verbatim, plus two fuzz harnesses,
+  five BOM cases, the streaming-layer suite and the `maxogden/csv-spectrum`
+  acid-test corpus. bxp's own gate is the datasets regression (test-07) and the
+  real-broker-data run.
 
 ### xlsx.zig
 
@@ -470,11 +492,11 @@ that implements it in `inspect.zig`.
 # Build all modules (no standalone binary):
 cd bxp-core && zig build
 
-# Run unit tests (csv, json, btrace, expr, decimal, unicode, json5, diagnostics, zipstream, xlsx, config, docs, inspect):
+# Run unit tests (json, btrace, expr, unicode, xlsx, config, docs, inspect):
 cd bxp-core && zig build test
 ```
 
-Module exports in `build.zig`: `csv`, `json`, `json5`, `xlsx`, `zipstream`, `btrace`, `decimal`, `encoding`, `expr`, `config`, `docs`, `diagnostics`, `inspect`.
+Module exports in `build.zig`: `json`, `json5`, `csvstream`, `xlsx`, `zipstream`, `btrace`, `decimal`, `encoding`, `expr`, `config`, `docs`, `diagnostics`, `inspect`, `minisign`, `procrun` (the last five plus `csvstream` are zig-libs modules re-exported for downstream packages, not bxp-core sources).
 `xlsx` imports the named `decimal` and `zipstream` modules; `zipstream` has no bxp-core dependencies (std only).
 `expr` imports `unicode.zig` (file-relative, not a named module) plus the named `decimal`, `numparse`, `uucode`, `encoding`, `regex`, `tz`, `datefmt` modules (`regex` is the Pike-VM engine behind REGEX_MATCH/REGEX_EXTRACT; `tz`, `datefmt`, `encoding` and `numparse` come from zig-libs — all fetch deps, see _External dependencies_ below); `config` imports `json5`, `diagnostics`, `expr`, `encoding`. `encoding` being a named module matters for the same reason `decimal` is one: it is shared by both `expr` and `config`, and a file-relative @import from two modules would compile the file into each — a duplicate-symbol error.
 `docs` imports `config`, `expr`, `json5`; `diagnostics` has no bxp-core dependencies.
@@ -527,12 +549,13 @@ content-addressed by hash and re-audited on any pin bump:
     `bridge_verify_minisign`.
   - `procrun` — the reap-race-tolerant `waitTolerant` / `ensureChildReaping`
     behind the bridge's `bxp-cli` spawns.
+  - `csvstream` — the CSV record model + `ChunkReader` behind every CSV input
+    path. Re-exported like `json5` / `zipstream` (bxp-cli asks for it by name).
 
-  The last two are the modules bxp-core does **not** import: they are
-  re-exported (like `json5` / `zipstream`) purely so
-  `bxp-gui-bridge/build.zig` can take them off this package's single pin
-  instead of adding a second `zig_libs` entry of its own that would have to be
-  bumped in lockstep.
+  `minisign` and `procrun` are the modules bxp-core does **not** import at
+  all: they are re-exported purely so `bxp-gui-bridge/build.zig` can take them
+  off this package's single pin instead of adding a second `zig_libs` entry of
+  its own that would have to be bumped in lockstep.
 
   Pinned to the commit behind a dated release tag (upstream tags
   `YYYY-MM-DD`, no semver). `build.zig` takes all of them off **one shared
@@ -550,17 +573,14 @@ content-addressed by hash and re-audited on any pin bump:
   **Treated as a foreign upstream** — read-only, pinned, never edited from
   this repo. Zig's package manager offers no floating "latest" mode: the
   `hash` field is mandatory and content-addressed, so any upstream movement
-  must land as an explicit `zig fetch --save` edit to `build.zig.zon`. No
-  whole file in `src/` is a zig-libs candidate any more; what the 2026-08-16
-  sweep found is overlap *below* file level (`numparse` was the first of
-  those), and the remaining candidates with their measured divergence are
-  tabulated in `docs/dev/roadmap.md` → "Shared core libraries — consume
-  zig-libs".
+  must land as an explicit `zig fetch --save` edit to `build.zig.zon`. The
+  remaining candidates and their measured divergence are tabulated in
+  `docs/dev/roadmap.md` → "Shared core libraries — consume zig-libs".
 
 The split is now clean. What remains in `src/` is bxp's own domain layer —
-`csv`, `json`, `xlsx`, `btrace`, `expr`, `config`, `docs`, `unicode`,
-`inspect` — and every general-purpose primitive underneath it (`datefmt`,
-`tz`, `encoding`, `json5`, `decimal`, `zipstream`, `diagnostics`, `numparse`)
+`json`, `xlsx`, `btrace`, `expr`, `config`, `docs`, `unicode`, `inspect` — and
+every general-purpose primitive underneath it (`datefmt`, `tz`, `encoding`,
+`json5`, `decimal`, `zipstream`, `diagnostics`, `numparse`, `csvstream`)
 comes from zig-libs. Anything new that is not bxp-specific belongs upstream,
 not here.
 

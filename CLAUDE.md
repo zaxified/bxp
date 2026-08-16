@@ -23,7 +23,6 @@ bxp/
 │   └── build.zig.zon     # depends on bxp-core (path dep)
 ├── bxp-core/             # Internal Zig library (shared modules)
 │   ├── src/
-│   │   ├── csv.zig         # RFC 4180 CSV parser + splitFields + LineIterator
 │   │   ├── xlsx.zig        # .xlsx → CSV converter (streaming ZIP+XML via zipstream)
 │   │   ├── expr.zig        # Expression evaluator + per-builtin FnDoc catalog
 │   │   ├── config.zig      # JSON5 config loader + per-struct FieldDoc tables
@@ -37,11 +36,11 @@ bxp/
 │   │                       # eval-batch/eval-trace/docs/templates introspection);
 │   │                       # one source for bxp-mcp + bxp-gui-bridge
 │   │                       # (`datefmt`, `tz`, `encoding`, `json5`, `decimal`,
-│   │                       # `zipstream`, `diagnostics` and `numparse` are NOT
-│   │                       # here — the whole primitive layer comes from
-│   │                       # zig-libs)
+│   │                       # `zipstream`, `diagnostics`, `numparse` and
+│   │                       # `csvstream` are NOT here — the whole primitive
+│   │                       # layer comes from zig-libs)
 │   ├── build.zig         # exports each file as a named Zig module
-│   └── build.zig.zon     # fetch deps: uucode, regex, zig-libs (8 modules —
+│   └── build.zig.zon     # fetch deps: uucode, regex, zig-libs (11 modules —
 │                         #             the whole primitive layer)
 ├── bxp-gui/              # Flutter desktop app (replaces bxp-ui; talks to bxp-gui-bridge via FFI, which proxies bxp-cli)
 │   ├── lib/              # Dart source (services/, store/, ui/)
@@ -212,7 +211,9 @@ bxp-core/inspect link, and the bridge proxies `bxp-cli` runs. The former
   pre-pass), `diagnostics` (the structured validation-finding
   collector), `numparse` (the grouped-number parser behind numeric
   coercion — the first piece taken from *below* file level, extracted out of
-  `expr.zig` rather than out of a file of its own), `minisign` (the
+  `expr.zig` rather than out of a file of its own), `csvstream` (the CSV
+  record model AND the `ChunkReader` that used to sit privately in bxp-cli —
+  upstream holds one module for both halves), `minisign` (the
   signature format behind the GUI updater's authenticity check) and `procrun`
   (the reap-race-tolerant child wait behind the bridge's `bxp-cli` spawns).
   bxp-core imports neither of the last two — they are re-exported so

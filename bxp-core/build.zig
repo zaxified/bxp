@@ -106,9 +106,15 @@ pub fn build(b: *std.Build) void {
     // config.zig and the per-field decode in expr.zig.
     const encoding_mod = zig_libs.module("encoding");
 
-    _ = b.addModule("csv", .{
-        .root_source_file = b.path("src/csv.zig"),
-    });
+    // CSV record model — `LineIterator` / `splitFields` / `LineSlice` (what
+    // src/csv.zig used to be) AND `ChunkReader` (what bxp-cli's pipeline.zig
+    // used to carry privately). Both were extracted upstream, so this is one
+    // module where bxp had two halves. The lazy-quotes rule the whole parallel
+    // pipeline rests on — a '\n' ALWAYS ends a record, deliberately not RFC
+    // 4180 §2.6 — went upstream with the code and is documented there as the
+    // reason every '\n' is a safe chunk boundary; the shared code diffs
+    // byte-identical. Re-exported because bxp-cli asks for it by name.
+    reexport(b, "csvstream", zig_libs.module("csvstream"));
 
     _ = b.addModule("json", .{
         .root_source_file = b.path("src/json.zig"),
@@ -225,14 +231,11 @@ pub fn build(b: *std.Build) void {
     // -------------------------------------------------------------------------
     // Unit tests
     // -------------------------------------------------------------------------
-    const csv_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/csv.zig"),
-            .target = target,
-            .optimize = optimize,
-            .strip = false,
-        }),
-    });
+    // No csv test root here any more: the parser moved to the zig-libs
+    // `csvstream` module, which carries all 22 of these tests verbatim plus
+    // two fuzz harnesses, the maxogden/csv-spectrum acid-test corpus and the
+    // streaming-layer suite. What bxp still owns is how the pipeline drives
+    // it — covered by the datasets gate (test-07) and the expression corpus.
 
     const json_tests = b.addTest(.{
         .root_module = b.createModule(.{
@@ -360,7 +363,6 @@ pub fn build(b: *std.Build) void {
     });
 
     const test_step = b.step("test", "Run bxp-core unit tests");
-    test_step.dependOn(&b.addRunArtifact(csv_tests).step);
     test_step.dependOn(&b.addRunArtifact(json_tests).step);
     test_step.dependOn(&b.addRunArtifact(btrace_tests).step);
     test_step.dependOn(&b.addRunArtifact(expr_tests).step);

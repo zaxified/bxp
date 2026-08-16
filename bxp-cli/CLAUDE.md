@@ -448,10 +448,19 @@ still go to stderr in trace mode so a stderr badge can surface them in the GUI.
   freed after each file. `line_alloc` (ArenaAllocator) is reset per row.
 - Real input/output data lives in `../data/<template_id>/` and can be used for testing.
 - Test data with expected outputs lives in `../datasets/<template_id>/`.
-- CSV parser (`csv.zig` + `main.zig`) is RFC 4180 compliant with one intentional deviation:
-  leading/trailing spaces are trimmed from field values and header names (`expr.zig Context.field`,
-  `main.zig` header parsing). RFC 4180 §2 says spaces are part of the value; we trim them
+- CSV parser (the zig-libs `csvstream` module, driven by `pipeline.zig`) is RFC 4180
+  compliant with two intentional deviations. First, a `\n` always ends a record —
+  a quoted field may not span physical lines ("lazy quotes", à la Go
+  `encoding/csv`), so a stray quote is a one-line problem and every `\n` is a
+  safe boundary for the parallel chunk split. A record with an unbalanced quote
+  is counted and warned about, not dropped. Second, leading/trailing spaces are
+  trimmed from field values and header names (`expr.zig Context.field`,
+  `pipeline.zig` header parsing). RFC 4180 §2 says spaces are part of the value; we trim them
   because broker exports frequently pad fields and downstream parsing (dates, numbers) requires clean values.
+- A CSV input with no line break in its first 10 MB is refused
+  (`error.RecordTooLong` → a fatal naming the file). That is the memory guard on
+  the streaming reader: without it a newline-free file — including a bare-CR
+  "classic Mac" export — would be buffered whole.
 
 ## Known non-issues — deliberately not refactored
 

@@ -32,7 +32,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "csv",           .module = core_dep.module("csv") },
+                .{ .name = "csvstream",     .module = core_dep.module("csvstream") },
                 .{ .name = "config",        .module = core_dep.module("config") },
                 .{ .name = "expr",          .module = core_dep.module("expr") },
                 .{ .name = "xlsx",          .module = core_dep.module("xlsx") },
@@ -71,7 +71,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .strip = false,
             .imports = &.{
-                .{ .name = "csv",           .module = core_dep.module("csv") },
+                .{ .name = "csvstream",     .module = core_dep.module("csvstream") },
                 .{ .name = "config",        .module = core_dep.module("config") },
                 .{ .name = "expr",          .module = core_dep.module("expr") },
                 .{ .name = "xlsx",          .module = core_dep.module("xlsx") },

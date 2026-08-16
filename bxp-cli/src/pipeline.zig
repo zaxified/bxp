@@ -5,7 +5,11 @@
 /// live in main.zig; all types that main.zig needs are exported as pub.
 
 const std = @import("std");
-const csv = @import("csv");
+/// CSV record model + streaming chunk reader (the zig-libs `csvstream` module,
+/// re-exported by bxp-core). Both halves used to live here: the record
+/// iterator as `bxp-core/src/csv.zig`, the `ChunkReader` privately in this
+/// file. `csv` stays the local alias so the call sites read unchanged.
+const csv = @import("csvstream");
 const config_mod = @import("config");
 const expr_mod = @import("expr");
 /// Layer 0 transcoder, re-exported by the config module. Used for output
@@ -821,120 +825,48 @@ fn checkUnknownFields(
 // the chunk size — not by the file size. A '\n' is an unconditional
 // record separator (quoted fields may not span lines — see
 // `csv.LineIterator`), so any '\n' is a safe chunk boundary.
+//
+// The reader itself is `csv.ChunkReader` from the zig-libs `csvstream`
+// module — this file used to carry it privately, alongside the record
+// iterator that lived in bxp-core. Upstream holds one module for both
+// halves.
+//
+// ONE upstream default is adopted deliberately rather than inherited: the
+// `max_record_len` guard. A newline-free input — a single enormous record,
+// or a CR-only "classic Mac" file where no '\n' exists at all — used to grow
+// the buffer to the whole file size, silently breaking the bounded-memory
+// promise this very comment makes. It now fails closed past the chunk size.
+// Verified against the pre-migration binary: a 30 MB newline-free file used
+// to be buffered whole and converted as one record, and is now refused. This
+// is the opposite call from `zipstream`'s output cap (which bxp declines,
+// because streaming a multi-GB member is a real use case and costs no
+// resident memory) — here the buffer IS resident, so the cap enforces a
+// guarantee bxp already advertises. A legitimate CSV record is kilobytes;
+// anything past 10 MB on one line is a malformed or non-CSV file.
 
-/// Target chunk size in bytes. The buffer may grow above this when a
-/// single record is longer than CHUNK_SIZE (no '\n' within the window).
+/// Target chunk size in bytes. The buffer may grow above this for a single
+/// long record, but only up to `csv.ChunkReader.max_record_len`.
 const CHUNK_SIZE: usize = 10 * 1024 * 1024;
 
-/// Returns the index of the LAST '\n' in `bytes`, or null if there is
-/// none. Every '\n' is a record boundary (no multi-line quoted fields),
-/// so this is just the last newline — no quote-state tracking needed.
-/// This is what bounds chunk memory: an unbalanced quote can no longer
-/// hide every newline and force the buffer to grow without limit.
-fn findLastBoundary(bytes: []const u8) ?usize {
-    return std.mem.lastIndexOfScalar(u8, bytes, '\n');
+const ChunkReader = csv.ChunkReader;
+
+/// `ChunkReader.nextChunk` with `error.RecordTooLong` translated into a
+/// diagnostic the user can act on. Every other error keeps propagating (the
+/// top level prints its name). Returns `error.Fatal` after reporting, which
+/// main.zig treats as "a diagnostic was already emitted".
+fn nextChunkChecked(cr: *ChunkReader, out: Output, name: []const u8) !?[]const u8 {
+    return cr.nextChunk() catch |err| switch (err) {
+        error.RecordTooLong => {
+            out.fatal(
+                "fatal error: '{s}': no line break in the first {d} MB — a single CSV record cannot exceed that. " ++
+                    "Check the file really is CSV, and that it does not use bare CR (classic Mac) line endings\n",
+                .{ name, cr.max_record_len / (1024 * 1024) },
+            );
+            return error.Fatal;
+        },
+        else => err,
+    };
 }
-
-/// Streaming file reader that yields chunks ending on record boundaries.
-/// Owns a backing `buffer` that holds residual bytes between calls.
-/// The slice returned by `nextChunk` is valid only until the next call.
-const ChunkReader = struct {
-    io: std.Io,
-    file: std.Io.File,
-    buffer: std.array_list.Managed(u8),
-    /// Number of bytes returned by the previous nextChunk() call. Those
-    /// bytes are discarded from the front of `buffer` at the start of the
-    /// next call so only residual remains.
-    last_emit_len: usize,
-    /// Total file size (from stat at init); used to right-size the buffer
-    /// so files smaller than CHUNK_SIZE do not pay for a 10 MiB allocation.
-    total_size: u64,
-    bytes_read: u64,
-    eof: bool,
-    /// File byte offset of `buffer.items[0]`. Incremented by
-    /// `last_emit_len` whenever a previously returned chunk is dropped
-    /// (at the start of `nextChunk`). Public so callers can compute the
-    /// absolute file offset of any byte returned: slice_byte_in_chunk +
-    /// `chunk_start_in_file`. Used by `--trace=bin` to emit a per-record
-    /// `source_locator` for sub-ms drill-down in the GUI (via the bridge).
-    chunk_start_in_file: u64,
-
-    pub fn init(io: std.Io, alloc: std.mem.Allocator, file: std.Io.File) !ChunkReader {
-        const stat = try file.stat(io);
-        return .{
-            .io = io,
-            .file = file,
-            .buffer = std.array_list.Managed(u8).init(alloc),
-            .last_emit_len = 0,
-            .total_size = stat.size,
-            .bytes_read = 0,
-            .eof = false,
-            .chunk_start_in_file = 0,
-        };
-    }
-
-    pub fn deinit(self: *ChunkReader) void {
-        self.buffer.deinit();
-    }
-
-    /// Returns the next chunk of bytes ending at a record boundary
-    /// (the last '\n' in the window). At EOF, returns the remaining
-    /// bytes verbatim. Returns null when nothing is left.
-    pub fn nextChunk(self: *ChunkReader) !?[]const u8 {
-        // Drop bytes returned by the previous call so only residual remains.
-        if (self.last_emit_len > 0) {
-            const tail_len = self.buffer.items.len - self.last_emit_len;
-            if (tail_len > 0) {
-                std.mem.copyForwards(
-                    u8,
-                    self.buffer.items[0..tail_len],
-                    self.buffer.items[self.last_emit_len..],
-                );
-            }
-            self.buffer.items.len = tail_len;
-            // The bytes that used to sit at buffer.items[0..last_emit_len]
-            // are gone; the residual that shifted forward starts at the
-            // file offset previously occupied by the dropped prefix.
-            self.chunk_start_in_file += self.last_emit_len;
-            self.last_emit_len = 0;
-        }
-        while (true) {
-            if (findLastBoundary(self.buffer.items)) |boundary| {
-                self.last_emit_len = boundary + 1;
-                return self.buffer.items[0..self.last_emit_len];
-            }
-            if (self.eof) {
-                if (self.buffer.items.len == 0) return null;
-                self.last_emit_len = self.buffer.items.len;
-                return self.buffer.items;
-            }
-            // Right-size the next read: never reserve more than what the
-            // file still has to offer. For a 281 KB file this caps the
-            // buffer at 281 KB instead of 10 MiB; for a 100 MiB file it
-            // still grants the full 10 MiB chunk after each rotation.
-            const remaining: u64 = if (self.bytes_read >= self.total_size)
-                0
-            else
-                self.total_size - self.bytes_read;
-            if (remaining == 0) {
-                self.eof = true;
-                continue;
-            }
-            const want_cap: usize = @intCast(@min(@as(u64, CHUNK_SIZE), remaining));
-            try self.buffer.ensureUnusedCapacity(want_cap);
-            const dest = self.buffer.unusedCapacitySlice();
-            const want = @min(dest.len, want_cap);
-            // Positional read at the running file offset (`bytes_read`). Zig
-            // 0.16 has no stateful `File.read`; positional reads are also why
-            // the pre_pass→main "rewind" needs no seek — a fresh ChunkReader
-            // starts at offset 0.
-            const n = try self.file.readPositionalAll(self.io, dest[0..want], self.bytes_read);
-            self.buffer.items.len += n;
-            self.bytes_read += n;
-            if (n == 0) self.eof = true;
-        }
-    }
-};
 
 /// Evaluates every configured pre_pass block against one input row,
 /// inserting matching results into `lookup_table`. Strings written to
@@ -2330,9 +2262,9 @@ pub fn processBroker(
             // where body records begin. The same `first_chunk` view is
             // reused both by the pre_pass block loop (when configured)
             // and by the main-pass block loop below.
-            chunk_reader = try ChunkReader.init(runtime.io, file_alloc, in_file);
+            chunk_reader = try ChunkReader.init(runtime.io, file_alloc, in_file, CHUNK_SIZE);
             chunk_reader_inited = true;
-            first_chunk = (try chunk_reader.nextChunk()) orelse "";
+            first_chunk = (try nextChunkChecked(&chunk_reader, out, filename)) orelse "";
             if (first_chunk.len > 0) {
                 // First-chunk UTF-8 validation. Chunk boundaries always
                 // land on '\n' (ASCII), so a multi-byte sequence is never
@@ -2497,7 +2429,7 @@ pub fn processBroker(
                 // Subsequent chunks (one block per chunk; ChunkReader
                 // returns chunks already aligned on record boundaries
                 // at ~10 MiB, which matches our target block size).
-                while (try chunk_reader.nextChunk()) |chunk_bytes| {
+                while (try nextChunkChecked(&chunk_reader, out, filename)) |chunk_bytes| {
                     var it = csv.LineIterator.init(
                         chunk_bytes,
                         bc.csv_text_quote_in,
@@ -2519,8 +2451,8 @@ pub fn processBroker(
                 // same bytes that `parseCsvHeader` consumed during the
                 // pre-pass header parse.
                 chunk_reader.deinit();
-                chunk_reader = try ChunkReader.init(runtime.io, file_alloc, in_file);
-                first_chunk = (try chunk_reader.nextChunk()) orelse "";
+                chunk_reader = try ChunkReader.init(runtime.io, file_alloc, in_file, CHUNK_SIZE);
+                first_chunk = (try nextChunkChecked(&chunk_reader, out, filename)) orelse "";
                 first_chunk_body_start = skipBomAndHeader(first_chunk, bc.csv_text_quote_in, bc.csv_header_line);
             }
         }
@@ -2882,7 +2814,7 @@ pub fn processBroker(
                 pending.clearRetainingCapacity();
             }
             // Subsequent chunks.
-            while (try chunk_reader.nextChunk()) |chunk_bytes| {
+            while (try nextChunkChecked(&chunk_reader, out, filename)) |chunk_bytes| {
                 var it = csv.LineIterator.init(
                     chunk_bytes,
                     bc.csv_text_quote_in,
@@ -3622,15 +3554,11 @@ test "extractDateRange: min>max and bad components are .invalid (not silent .non
     try std.testing.expect(extractDateRange("2026-13-01_2026-99-31") == .invalid);
 }
 
-test "findLastBoundary: last newline, none, trailing newline" {
-    // Chunk ending mid-record: boundary is the '\n' before the partial tail.
-    try std.testing.expectEqual(@as(?usize, 3), findLastBoundary("a\nb\nc"));
-    // No newline at all — nothing can be emitted, the whole window is residual.
-    try std.testing.expectEqual(@as(?usize, null), findLastBoundary("abc"));
-    // Trailing newline — boundary is the final byte, no residual.
-    try std.testing.expectEqual(@as(?usize, 1), findLastBoundary("a\n"));
-    try std.testing.expectEqual(@as(?usize, null), findLastBoundary(""));
-}
+// `findLastBoundary` and its test went upstream with the reader — it is now
+// private to the `csvstream` module, which tests it through `ChunkReader`
+// directly (plus a fuzz harness and the csv-spectrum corpus). The
+// `ChunkReader` test further down stays: it is the integration check that this
+// file drives the module the way its offset bookkeeping expects.
 
 test "skipBomAndHeader: BOM, no BOM, headerless, multi-line preamble" {
     const q = '"';
@@ -3699,7 +3627,7 @@ test "ChunkReader: residual + chunk_start_in_file bookkeeping" {
     try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "in.csv", .data = body });
     var f = try tmp.dir.openFile(std.testing.io, "in.csv", .{});
     defer f.close(std.testing.io);
-    var cr = try ChunkReader.init(std.testing.io, std.testing.allocator, f);
+    var cr = try ChunkReader.init(std.testing.io, std.testing.allocator, f, CHUNK_SIZE);
     defer cr.deinit();
     // File is far below CHUNK_SIZE, so the whole body comes back as one chunk
     // ending on its final '\n'; offset starts at 0.

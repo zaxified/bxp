@@ -300,24 +300,15 @@ fixed before release instead, not parked here).
 
 ### Shared core libraries — consume zig-libs
 
-The seven forked `bxp-core` modules have migrated, then three more pieces that
-were never files of their own: `numparse` (a function inside `expr.zig`),
-`minisign` (the bridge's hand-rolled `.minisig` parser, replaced by the module
-that implements the whole format against known-answer vectors from the real
-`minisign` binary) and `procrun`'s reap core (the bridge's
-`ensureChildReaping` / `waitTolerant`). What is left below is still open. None
-of it promises a speed-up: where these overlap our code they are the same
-algorithms, verified rather than assumed.
-
-- **`csvstream`** — the largest overlap left, and the most delicate. Carries
-  `LineIterator` / `splitFields` / `LineSlice` (our `bxp-core/src/csv.zig`)
-  **and** `ChunkReader` (bxp-cli's `pipeline.zig`, tuned in its own bench
-  session, S03). Two things must be audited before any swap, both load-bearing:
-  our parser deliberately uses lazy-quotes semantics — a newline always ends a
-  record, intentionally *not* RFC 4180 §2.6, validated on IMDb's 12.5M rows —
-  and the parallel chunked pipeline depends on that property to split chunks at
-  all. If upstream is strict RFC 4180 here, this is a policy decision like
-  `zipstream`'s output cap, not a drop-in.
+The seven forked `bxp-core` modules have migrated, then four more pieces the
+2026-08-16 sweep found *below* file level: `numparse` (a function inside
+`expr.zig`), `minisign` (the bridge's hand-rolled `.minisig` parser, replaced
+by the module that implements the whole format against known-answer vectors
+from the real `minisign` binary), `procrun`'s reap core (the bridge's
+`ensureChildReaping` / `waitTolerant`) and `csvstream` (which reunited
+`bxp-core/src/csv.zig` with the `ChunkReader` bxp-cli kept privately). What is
+left below is still open. None of it promises a speed-up: where these overlap
+our code they are the same algorithms, verified rather than assumed.
 
 - **Transport core** — `http`, `rest`, `api`, `mcp`. The concrete piece is
   `bxp-mcp/src/server.zig` (384 lines: JSON-RPC 2.0 framing over stdio plus the
