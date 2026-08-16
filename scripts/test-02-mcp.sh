@@ -112,6 +112,12 @@ call(107, "bxp_eval", {"expr": 5})
 # methods, so the empty catalogs are our registration state showing through.
 print(json.dumps({"jsonrpc":"2.0","id":108,"method":"resources/list"}))
 print(json.dumps({"jsonrpc":"2.0","id":109,"method":"prompts/list"}))
+# An id the transport cannot echo verbatim is refused outright rather than
+# served — one of the two quieter wire changes the mcp migration brought.
+print(json.dumps({"jsonrpc":"2.0","id":{"a":1},"method":"ping"}))
+# A response-shaped line (id + result, no method) is something a client should
+# have received, not a request. It draws no output at all — the other one.
+print(json.dumps({"jsonrpc":"2.0","id":111,"result":{}}))
 # The session survived all of the above: a real tool call still answers.
 call(110, "bxp_eval", {"expr":"UPPER('ok')"})
 PY
@@ -139,13 +145,15 @@ for ln in open(sys.argv[1]):
             continue
         by_id[o["id"]] = o
 
-# Exactly two id:null responses are legal — the two malformed lines, which have
-# no id to echo. The count is also what proves no notification was answered: a
-# stray reply to `notifications/initialized` or an id-less `tools/list` would
-# land here as a third.
-assert len(null_id) == 2, [o.get("error") for o in null_id]
+# Exactly three id:null responses are legal — the two malformed lines and the
+# non-scalar-id request, none of which has an id that can be echoed. The count
+# is also what proves no notification was answered: a stray reply to
+# `notifications/initialized` or an id-less `tools/list` would land here as a
+# fourth.
+assert len(null_id) == 3, [o.get("error") for o in null_id]
 assert null_id[0]["error"]["code"] == -32700, null_id[0]   # not JSON
 assert null_id[1]["error"]["code"] == -32600, null_id[1]   # batch array
+assert null_id[2]["error"]["code"] == -32600, null_id[2]   # non-scalar id
 
 def tool_json(i):
     return json.loads(by_id[i]["result"]["content"][0]["text"])
@@ -248,6 +256,13 @@ for i in (106, 107):
 # the catalogs are empty because that is our registration state.
 assert by_id[108]["result"]["resources"] == [], by_id[108]
 assert by_id[109]["result"]["prompts"] == [], by_id[109]
+
+# The non-scalar-id request is refused rather than served — its `-32600 Invalid
+# request id` is the third null_id entry asserted at the top, since an object id
+# is precisely what cannot be echoed back.
+# A response-shaped line draws nothing at all: answering a response would itself
+# be a protocol violation, so it is dropped the way a notification is.
+assert 111 not in by_id, by_id.get(111)
 
 # The session survived every malformed line above — a long-lived stdio server
 # must not be killable by one bad request.

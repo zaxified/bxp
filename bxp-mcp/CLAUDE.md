@@ -16,8 +16,8 @@ It is one of several adapters over a single shared core
 - **bxp-mcp** — MCP/stdio adapter (this package). _Shipped._
 - **bxp-gui-bridge** — FFI adapter for the Dart GUI (in-process). _Shipped._
 - **bxp-api** — HTTP/port adapter for remote/web callers. _Future direction,
-  folded into the AXP-driven transport core (see `docs/dev/roadmap.md` → "Shared
-  core libraries"); not a committed bxp milestone._
+  folded into the AXP-driven transport core; not a committed bxp milestone and
+  not on `docs/dev/roadmap.md`._
 
 (A former **bxp-fmt** CLI adapter, argv → stdout, was removed once bxp-mcp and
 the bridge covered every operation.)
@@ -64,6 +64,46 @@ no filesystem syscalls — the agent validates config _text_, not a deployed tre
 Unlike the CLI's `--list-templates`/`--fetch-template` (which read a config _file_
 by path), the MCP tools take config _text_ — consistent with `bxp_validate` and
 the no-spawn, no-filesystem stance: the agent passes the config it is authoring.
+
+### Annotated-JSON marker shape (`bxp_validate`)
+
+`annotateRaw` returns the config as ordinary JSON with reserved `$`-prefixed
+**sibling** keys inserted immediately before the offending key (appended at the
+end of the parent when the offending key is absent). All prefixes share one
+monotonically-increasing `<N>` counter, so every sibling key is unique.
+
+| Key prefix  | Value                                           | Meaning                |
+| ----------- | ----------------------------------------------- | ---------------------- |
+| `$err_<N>`  | marker object (below)                           | Validation error.      |
+| `$warn_<N>` | same shape                                      | Non-fatal warning.     |
+| `$info_<N>` | same shape                                      | Informational finding. |
+
+```jsonc
+{ "message": "...", "off"?: N, "len"?: N, "line"?: N, "col"?: N, "suggest"?: "..." }
+```
+
+`message` is the only key always present. `off`/`len` are byte offsets into the
+**expression** source string of the offending token; `line`/`col` are the 1-based
+position in the **config file**, carried by the diagnostics the config loader's
+own scanner produces (JSON5 syntax errors and duplicate keys). `suggest` is the
+did-you-mean hint. A consumer that reads only `message` is unaffected by the
+optional keys.
+
+That is why a JSON5 syntax error now arrives positioned rather than as a bare
+error name — the loader is re-run over the same bytes to recover the position
+even when no annotated document can be built:
+
+```jsonc
+// `data_dir: [1,,]` on line 4
+{ "$err_1": { "message": "unexpected character — check for missing quotes, commas, or brackets",
+              "line": 4, "col": 22 } }
+```
+
+One legacy form survives: `inspect.formatRootErr` emits `$err_<N>` with a bare
+**string** value for a root error, so a strict consumer must branch on the value
+type. **No `$comm_<N>` key is ever emitted** — the JSON5 preprocessor strips
+comments in the annotated variant exactly as in the plain one (the `json5`
+module has a test asserting the key never appears).
 
 ## Source layout
 
@@ -142,8 +182,21 @@ Since the `mcp` migration the server also answers the other two MCP primitives
 `prompts/list`, `prompts/get` — with empty catalogs (and `-32002` /
 `-32602` for a read/get against them), and `initialize` advertises the
 `resources` + `prompts` capabilities accordingly. bxp registers none of either
-today; the methods are served, they just have nothing in them. That is the one
-wire-visible change the migration made (see the differential gate below).
+today; the methods are served, they just have nothing in them.
+
+Two smaller wire-visible changes came with the same migration (all three are
+pinned by the 100-series in `scripts/test-02-mcp.sh`):
+
+- **A non-scalar `id` is refused, not served.** `{"id":{"a":1},"method":"ping"}`
+  now comes back as `-32600 Invalid request id` with `id:null`; the local
+  transport used to answer the call. JSON-RPC 2.0 requires the id to be echoed
+  verbatim, and an object id is a shape the module declines to carry rather than
+  silently reduce.
+- **A response-shaped line is dropped in silence.** A line carrying `id` +
+  `result` but no `method` (i.e. something the *client* should have received) now
+  produces no output at all; the local transport answered `-32600 Missing
+  method`. Answering a response with an error is itself a protocol violation, so
+  the module treats such a line the way it treats a notification.
 
 ## Build and run
 
@@ -195,9 +248,12 @@ local `server.zig` + `progress.zig` (427 lines). Gated by a differential probe:
 non-scalar and null ids, unknown methods/tools, every argument-validation path,
 all nine tools, and `bxp_simulate` with a string / integer / malformed
 progressToken — replayed against the pre- and post-migration binaries. Result:
-**42/42 responses and all 8 progress notifications byte-identical**, except
+**42/42 responses and all 8 progress notifications byte-identical**, except the
+three wire-visible changes recorded in the wire-protocol section above:
 `initialize` now also advertising the `resources` + `prompts` capabilities the
-module serves (see the wire-protocol section).
+module serves, a non-scalar `id` refused with `-32600 Invalid request id` where
+it used to be served, and a response-shaped line dropped in silence where it
+used to draw `-32600 Missing method`.
 
 The standing gate is `scripts/test-02-mcp.sh`, extended in the same change with
 the wiring seams the probe had surfaced (the 100-series requests): every
