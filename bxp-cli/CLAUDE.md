@@ -457,10 +457,15 @@ still go to stderr in trace mode so a stderr badge can surface them in the GUI.
   trimmed from field values and header names (`expr.zig Context.field`,
   `pipeline.zig` header parsing). RFC 4180 §2 says spaces are part of the value; we trim them
   because broker exports frequently pad fields and downstream parsing (dates, numbers) requires clean values.
-- A CSV input with no line break in its first 10 MB is refused
-  (`error.RecordTooLong` → a fatal naming the file). That is the memory guard on
-  the streaming reader: without it a newline-free file — including a bare-CR
-  "classic Mac" export — would be buffered whole.
+- A CSV input that never gives the streaming reader a line break to stop on is
+  refused (`error.RecordTooLong` → a fatal naming the file). This is a **memory
+  guard, not an exact record-size limit**: the check tests how much is already
+  buffered *before* pulling the next 10 MB read, so the point at which a
+  newline-free record trips it depends on where that record starts relative to a
+  chunk boundary — the effective ceiling lands somewhere between 10 MB and
+  roughly 20 MB. What is guaranteed is the property the diagnostic states ("no
+  line break found in 10 MB of buffered input"): without it a newline-free file —
+  including a bare-CR "classic Mac" export — would be buffered whole.
 
 ## Known non-issues — deliberately not refactored
 

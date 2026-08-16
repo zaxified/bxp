@@ -843,6 +843,14 @@ fn checkUnknownFields(
 // resident memory) — here the buffer IS resident, so the cap enforces a
 // guarantee bxp already advertises. A legitimate CSV record is kilobytes;
 // anything past 10 MB on one line is a malformed or non-CSV file.
+//
+// It is a memory guard, NOT an exact record-size limit, and the diagnostic in
+// `nextChunkChecked` is worded accordingly. Upstream tests `buffer.items.len
+// >= max_record_len` BEFORE pulling the next read, so a newline-free record
+// that starts just under the threshold is still accepted whole: the effective
+// ceiling lands somewhere in [max_record_len, ~2 × max_record_len) depending
+// on where the record begins relative to a chunk boundary. Bounded memory —
+// the property that matters — holds either way.
 
 /// Target chunk size in bytes. The buffer may grow above this for a single
 /// long record, but only up to `csv.ChunkReader.max_record_len`.
@@ -857,8 +865,16 @@ const ChunkReader = csv.ChunkReader;
 fn nextChunkChecked(cr: *ChunkReader, out: Output, name: []const u8) !?[]const u8 {
     return cr.nextChunk() catch |err| switch (err) {
         error.RecordTooLong => {
+            // Memory-guard framing, deliberately NOT "records over N MB are
+            // refused": the upstream check tests the buffered length BEFORE
+            // the next read, so the exact byte at which a newline-free record
+            // trips it depends on where the record starts relative to a chunk
+            // boundary (anywhere from `max_record_len` to roughly twice it).
+            // What IS guaranteed is the property the message states — the
+            // reader stops buffering a record that never ends.
             out.fatal(
-                "fatal error: '{s}': no line break in the first {d} MB — a single CSV record cannot exceed that. " ++
+                "fatal error: '{s}': no line break found in {d} MB of buffered input — the streaming reader " ++
+                    "will not keep buffering a single CSV record past that. " ++
                     "Check the file really is CSV, and that it does not use bare CR (classic Mac) line endings\n",
                 .{ name, cr.max_record_len / (1024 * 1024) },
             );
@@ -2550,6 +2566,19 @@ pub fn processBroker(
             out_fw = out_file.writer(runtime.io, &out_file_buf);
             break :blk_sink &out_fw.interface;
         };
+        // A fatal raised anywhere below (e.g. `error.RecordTooLong` on a
+        // newline-free input) must leave NO per-file output behind: `--fresh`
+        // skips an input whose output merely exists, so a half-written or
+        // 0-byte file would make the next `--fresh` run report success and
+        // ship truncated data. `errdefer` fires only on an error leaving this
+        // scope — a normal iteration end (or a `continue`) keeps the file.
+        // Declared BEFORE the close `defer` on purpose: defers unwind in
+        // reverse declaration order, so the handle is closed first and only
+        // then is the name unlinked (Windows refuses to delete an open file).
+        // The combined sink deliberately gets no such cleanup — it is
+        // unconditionally rebuilt in full on every run (never `--fresh`
+        // skipped), so a partial one cannot be mistaken for a complete one.
+        errdefer if (per_file_opened) dir.deleteFile(runtime.io, out_name) catch {};
         defer if (per_file_opened) out_file.close(runtime.io);
         const delim_out = &[_]u8{bc.csv_delimiter_out};
         // Per-file header — always emitted at the start of the per-file
@@ -3234,6 +3263,20 @@ fn unpackOneEntry(
     // this pass owns. Passing the maximum keeps the pre-migration contract.
     try er.initMax(archive, member, window, std.math.maxInt(u64));
     const dest = try dir.createFile(io, out_name, .{});
+    // A failed member must leave NO file behind. `--fresh` skips a member
+    // whose intermediate CSV merely exists (see `zipPrePass`), and a CRC-32
+    // mismatch is only detectable at end-of-stream — by which point the
+    // (truncated, unflushed) bytes are already on disk. Without this cleanup
+    // the next `--fresh` run reports "unpacked (0 members)" with exit 0 and
+    // converts the partial file as if it were complete.
+    // Declared BEFORE the close `defer` on purpose: defers unwind in reverse
+    // declaration order, so the handle is closed first and only then is the
+    // name unlinked (Windows refuses to delete a file that is still open).
+    // The xlsx pre-pass does not need the same guard on its `--fresh` side —
+    // it keys on the FINAL `.csvx`, not on the intermediate CSV — but
+    // `xlsx.extractSheetWithCtx` carries its own `errdefer` for the same
+    // reason: a leftover intermediate is converted by the very same run.
+    errdefer dir.deleteFile(io, out_name) catch {};
     defer dest.close(io);
     var fw = dest.writer(io, wbuf);
     _ = er.reader().streamRemaining(&fw.interface) catch |err| {
@@ -3663,4 +3706,101 @@ test "patchBtraceOutputIdx: rebases output_row idx, leaves other frames" {
     std.mem.writeInt(u64, buf[15..23], 5, .little);
     patchBtraceOutputIdx(buf[0..frame_len], 100);
     try std.testing.expectEqual(@as(u64, 5), std.mem.readInt(u64, buf[15..23], .little));
+}
+
+/// Build a one-member, store-only ZIP by hand, with the member's CRC-32 field
+/// set to `crc`. Passing a wrong `crc` is how the test below reaches the
+/// end-of-stream checksum failure — the only failure mode that can leave a
+/// partially written output file behind.
+fn buildStoreZip(alloc: std.mem.Allocator, name: []const u8, data: []const u8, crc: u32) ![]u8 {
+    var z: std.Io.Writer.Allocating = .init(alloc);
+    errdefer z.deinit();
+    const w = &z.writer;
+
+    // ── Local file header (30 bytes + name) ──
+    try w.writeAll("PK\x03\x04");
+    try w.writeInt(u16, 20, .little); // version needed
+    try w.writeInt(u16, 0, .little); // flags
+    try w.writeInt(u16, 0, .little); // method: store
+    try w.writeInt(u16, 0, .little); // mod time
+    try w.writeInt(u16, 0, .little); // mod date
+    try w.writeInt(u32, crc, .little);
+    try w.writeInt(u32, @intCast(data.len), .little); // compressed size
+    try w.writeInt(u32, @intCast(data.len), .little); // uncompressed size
+    try w.writeInt(u16, @intCast(name.len), .little);
+    try w.writeInt(u16, 0, .little); // extra len
+    try w.writeAll(name);
+    try w.writeAll(data);
+
+    // ── Central directory (46 bytes + name) ──
+    const cd_off = z.written().len;
+    try w.writeAll("PK\x01\x02");
+    try w.writeInt(u16, 20, .little); // version made by
+    try w.writeInt(u16, 20, .little); // version needed
+    try w.writeInt(u16, 0, .little); // flags
+    try w.writeInt(u16, 0, .little); // method: store
+    try w.writeInt(u16, 0, .little); // mod time
+    try w.writeInt(u16, 0, .little); // mod date
+    try w.writeInt(u32, crc, .little);
+    try w.writeInt(u32, @intCast(data.len), .little);
+    try w.writeInt(u32, @intCast(data.len), .little);
+    try w.writeInt(u16, @intCast(name.len), .little);
+    try w.writeInt(u16, 0, .little); // extra len
+    try w.writeInt(u16, 0, .little); // comment len
+    try w.writeInt(u16, 0, .little); // disk number start
+    try w.writeInt(u16, 0, .little); // internal attrs
+    try w.writeInt(u32, 0, .little); // external attrs
+    try w.writeInt(u32, 0, .little); // local header offset
+    try w.writeAll(name);
+    const cd_len = z.written().len - cd_off;
+
+    // ── End of central directory (22 bytes) ──
+    try w.writeAll("PK\x05\x06");
+    try w.writeInt(u16, 0, .little); // this disk
+    try w.writeInt(u16, 0, .little); // cd start disk
+    try w.writeInt(u16, 1, .little); // entries on this disk
+    try w.writeInt(u16, 1, .little); // entries total
+    try w.writeInt(u32, @intCast(cd_len), .little);
+    try w.writeInt(u32, @intCast(cd_off), .little);
+    try w.writeInt(u16, 0, .little); // comment len
+
+    return z.toOwnedSlice();
+}
+
+test "unpackOneEntry: a CRC-mismatched member leaves no partial output behind" {
+    const io = std.testing.io;
+    const alloc = std.testing.allocator;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    // Content is intact; only the declared CRC-32 is wrong, so the failure
+    // lands at end-of-stream — after every byte has been handed to the writer.
+    // That is exactly the case that used to leave a truncated file which the
+    // next `--fresh` run then trusted (its member skip keys on mere existence).
+    const body = "A,B\n1,one\n2,two\n";
+    const zip_bytes = try buildStoreZip(alloc, "rows.csv", body, 0xDEADBEEF);
+    defer alloc.free(zip_bytes);
+    try tmp.dir.writeFile(io, .{ .sub_path = "bad.zip", .data = zip_bytes });
+
+    var f = try tmp.dir.openFile(io, "bad.zip", .{});
+    defer f.close(io);
+    var archive: zipstream.Archive = undefined;
+    try archive.init(io, alloc, f);
+    defer archive.deinit();
+
+    const window = try alloc.alloc(u8, std.compress.flate.max_window_len);
+    defer alloc.free(window);
+    var wbuf: [OUT_FILE_BUF_SIZE]u8 = undefined;
+
+    try std.testing.expectError(error.ZipEntryCorrupt, unpackOneEntry(
+        io,
+        &archive,
+        &archive.entries.items[0],
+        "rows.csv",
+        tmp.dir,
+        window,
+        &wbuf,
+    ));
+    try std.testing.expectError(error.FileNotFound, tmp.dir.access(io, "rows.csv", .{}));
 }

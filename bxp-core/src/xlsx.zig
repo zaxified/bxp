@@ -51,10 +51,15 @@ const PartCtx = struct {
     zip_window: []u8, // inflate history (ZIP_WINDOW_SIZE)
     xml_window: []u8, // XmlTok scan window (XML_WINDOW_SIZE)
     entry_reader: zipstream.EntryReader = undefined,
+    /// True once `open` has successfully initialised `entry_reader`. Until
+    /// then the reader is `undefined`, so `mapCrc` must not consult it: the
+    /// call it wraps can fail BEFORE any part is opened (`createFile` in
+    /// `extractSheetWithCtx` on a read-only dir or a full disk, or `initMax`
+    /// itself failing in `Workbook.init`), and reading `crcMismatch()` off an
+    /// uninitialised struct is undefined behaviour that would also be free to
+    /// mislabel an ordinary I/O failure as a corrupt workbook.
+    entry_open: bool = false,
 
-    /// Opens the named part for streaming and returns an `XmlTok` over its
-    /// decompressed bytes, or null if the part is absent (optional parts like
-    /// sharedStrings.xml / styles.xml may not exist). The returned tokenizer
     /// Translate a failed part read whose real cause was a CRC-32 mismatch.
     ///
     /// `std.Io.Reader`'s vtable has a fixed error set, so zipstream can only
@@ -67,11 +72,14 @@ const PartCtx = struct {
     /// bxp-cli's `zipPrePass` does for the zipped-CSV path.
     fn mapCrc(self: *const PartCtx, result: anytype) !@typeInfo(@TypeOf(result)).error_union.payload {
         return result catch |err| {
-            if (self.entry_reader.crcMismatch()) return error.XlsxEntryCorrupt;
+            if (self.entry_open and self.entry_reader.crcMismatch()) return error.XlsxEntryCorrupt;
             return err;
         };
     }
 
+    /// Opens the named part for streaming and returns an `XmlTok` over its
+    /// decompressed bytes, or null if the part is absent (optional parts like
+    /// sharedStrings.xml / styles.xml may not exist). The returned tokenizer
     /// borrows `self.entry_reader` and the windows, so only one part may be
     /// open at a time.
     fn open(self: *PartCtx, path: []const u8) !?XmlTok {
@@ -84,6 +92,7 @@ const PartCtx = struct {
         // caps that do exist sit on the resident structures instead
         // (`XLSX_SHARED_STRINGS_CAP`).
         try self.entry_reader.initMax(self.archive, entry, self.zip_window, std.math.maxInt(u64));
+        self.entry_open = true;
         return XmlTok.init(self.entry_reader.reader(), self.xml_window);
     }
 
@@ -221,6 +230,17 @@ fn extractSheetWithCtx(
     defer alloc.free(xml_path);
 
     const out_file = try out_dir.createFile(io, csv_name, .{});
+    // A failed or skipped sheet must leave NO output behind. The file is
+    // created before `parseSheet` gets to look at the worksheet part, so a
+    // UTF-16 sheet (`error.Utf16XmlUnsupported`, which the bxp-cli pre-pass
+    // treats as warn-and-skip) used to leave a 0-byte intermediate — which the
+    // SAME run then converted into a header-only output, and which clobbered a
+    // good intermediate produced by an earlier run. The same applies to a hard
+    // failure mid-stream: a partially written CSV is worse than none.
+    // Declared BEFORE the close `defer` on purpose: defers unwind in reverse
+    // declaration order, so the handle is closed first and only then is the
+    // name unlinked (Windows refuses to delete a file that is still open).
+    errdefer out_dir.deleteFile(io, csv_name) catch {};
     defer out_file.close(io);
 
     var out_buf: [CSV_OUT_BUF_SIZE]u8 = undefined;
@@ -1293,6 +1313,129 @@ test "hasUtf16Bom: detects LE/BE BOM, ignores UTF-8 and short input" {
     try testing.expect(!hasUtf16Bom("<?xml version=\"1.0\"?>")); // plain UTF-8
     try testing.expect(!hasUtf16Bom("\xff")); // too short to decide
     try testing.expect(!hasUtf16Bom("")); // empty
+}
+
+/// Build a one-member, store-only ZIP by hand. Test-only: enough of an
+/// archive for `zipstream.Archive` to enumerate and stream one part, without
+/// needing a real workbook on disk.
+fn testBuildStoreZip(alloc: Allocator, name: []const u8, data: []const u8) ![]u8 {
+    var z: std.Io.Writer.Allocating = .init(alloc);
+    errdefer z.deinit();
+    const w = &z.writer;
+    const crc = std.hash.crc.Crc32.hash(data);
+
+    // ── Local file header (30 bytes + name) ──
+    try w.writeAll("PK\x03\x04");
+    try w.writeInt(u16, 20, .little); // version needed
+    try w.writeInt(u16, 0, .little); // flags
+    try w.writeInt(u16, 0, .little); // method: store
+    try w.writeInt(u16, 0, .little); // mod time
+    try w.writeInt(u16, 0, .little); // mod date
+    try w.writeInt(u32, crc, .little);
+    try w.writeInt(u32, @intCast(data.len), .little); // compressed size
+    try w.writeInt(u32, @intCast(data.len), .little); // uncompressed size
+    try w.writeInt(u16, @intCast(name.len), .little);
+    try w.writeInt(u16, 0, .little); // extra len
+    try w.writeAll(name);
+    try w.writeAll(data);
+
+    // ── Central directory (46 bytes + name) ──
+    const cd_off = z.written().len;
+    try w.writeAll("PK\x01\x02");
+    try w.writeInt(u16, 20, .little); // version made by
+    try w.writeInt(u16, 20, .little); // version needed
+    try w.writeInt(u16, 0, .little); // flags
+    try w.writeInt(u16, 0, .little); // method: store
+    try w.writeInt(u16, 0, .little); // mod time
+    try w.writeInt(u16, 0, .little); // mod date
+    try w.writeInt(u32, crc, .little);
+    try w.writeInt(u32, @intCast(data.len), .little);
+    try w.writeInt(u32, @intCast(data.len), .little);
+    try w.writeInt(u16, @intCast(name.len), .little);
+    try w.writeInt(u16, 0, .little); // extra len
+    try w.writeInt(u16, 0, .little); // comment len
+    try w.writeInt(u16, 0, .little); // disk number start
+    try w.writeInt(u16, 0, .little); // internal attrs
+    try w.writeInt(u32, 0, .little); // external attrs
+    try w.writeInt(u32, 0, .little); // local header offset
+    try w.writeAll(name);
+    const cd_len = z.written().len - cd_off;
+
+    // ── End of central directory (22 bytes) ──
+    try w.writeAll("PK\x05\x06");
+    try w.writeInt(u16, 0, .little); // this disk
+    try w.writeInt(u16, 0, .little); // cd start disk
+    try w.writeInt(u16, 1, .little); // entries on this disk
+    try w.writeInt(u16, 1, .little); // entries total
+    try w.writeInt(u32, @intCast(cd_len), .little);
+    try w.writeInt(u32, @intCast(cd_off), .little);
+    try w.writeInt(u16, 0, .little); // comment len
+
+    return z.toOwnedSlice();
+}
+
+test "extractSheetWithCtx: a UTF-16 worksheet leaves no intermediate CSV behind" {
+    const io = std.testing.io;
+    const alloc = std.testing.allocator;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    // The output CSV is created before `parseSheet` gets to look at the part,
+    // so a UTF-16 sheet used to leave a 0-byte file the pipeline then converted
+    // into a header-only output (and which clobbered a good intermediate from
+    // an earlier run). The skip is a warning, not a fatal — nothing else
+    // cleans up after it.
+    const sheet_xml = "\xff\xfe<\x00?\x00x\x00m\x00l\x00?\x00>\x00";
+    const zip_bytes = try testBuildStoreZip(alloc, "xl/worksheets/sheet1.xml", sheet_xml);
+    defer alloc.free(zip_bytes);
+    try tmp.dir.writeFile(io, .{ .sub_path = "book.xlsx", .data = zip_bytes });
+
+    var f = try tmp.dir.openFile(io, "book.xlsx", .{});
+    defer f.close(io);
+    var archive: zipstream.Archive = undefined;
+    try archive.init(io, alloc, f);
+    defer archive.deinit();
+
+    const zip_window = try alloc.alloc(u8, ZIP_WINDOW_SIZE);
+    defer alloc.free(zip_window);
+    const xml_window = try alloc.alloc(u8, XML_WINDOW_SIZE);
+    defer alloc.free(xml_window);
+    var ctx: PartCtx = .{ .archive = &archive, .zip_window = zip_window, .xml_window = xml_window };
+
+    // Hand-built read-only workbook: the sheet map is all `extractSheetWithCtx`
+    // reads, and the parts that would fill in the rest are irrelevant here.
+    var sheet_paths = std.StringHashMap([]const u8).init(alloc);
+    defer sheet_paths.deinit();
+    try sheet_paths.put("Sheet1", "worksheets/sheet1.xml");
+    var shared_strings: std.ArrayList([]u8) = .empty;
+    defer shared_strings.deinit(alloc);
+    var date_styles = std.AutoHashMap(u32, void).init(alloc);
+    defer date_styles.deinit();
+    const wb: Workbook = .{
+        .sheet_paths = sheet_paths,
+        .shared_strings = shared_strings,
+        .date_styles = date_styles,
+    };
+
+    const spec: SheetSpec = .{ .name = "Sheet1", .header_row = 1, .output_suffix = "_s.csv" };
+    try testing.expectError(
+        error.Utf16XmlUnsupported,
+        extractSheetWithCtx(io, alloc, &ctx, &wb, spec, tmp.dir, "book"),
+    );
+    try testing.expectError(error.FileNotFound, tmp.dir.access(io, "book_s.csv", .{}));
+}
+
+test "PartCtx.mapCrc: no part opened yet → original error, reader untouched" {
+    // `entry_reader` stays `undefined` here, exactly as it is when the wrapped
+    // call fails before any part was opened (`createFile` on a read-only dir,
+    // `initMax` itself failing). `mapCrc` must not consult it — reading
+    // `crcMismatch()` off undefined memory is UB, and in a safety build the
+    // 0xAA fill makes it answer "corrupt" for a plain I/O failure.
+    var ctx: PartCtx = .{ .archive = undefined, .zip_window = &.{}, .xml_window = &.{} };
+    try testing.expect(!ctx.entry_open);
+    const failed: anyerror!void = error.AccessDenied;
+    try testing.expectError(error.AccessDenied, ctx.mapCrc(failed));
 }
 
 // The ZIP central-directory walk + store/deflate read path is unit-tested in
