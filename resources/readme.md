@@ -186,7 +186,7 @@ printf '%s\n' \
 
 | Tool | Arguments | Purpose |
 | --- | --- | --- |
-| `bxp_validate` | `config` (JSON5 text) | Validate a config; returns annotated JSON with `$err_*` / `$warn_*` / `$info_*` / `$comm_*` siblings. |
+| `bxp_validate` | `config` (JSON5 text) | Validate a config; returns annotated JSON with `$err_*` / `$warn_*` / `$info_*` siblings marking each problem. Comments are not carried over. |
 | `bxp_validate_expr` | `expr` | Authoring-time check of one expression (syntax + semantics + static lint, e.g. a literal `SPLIT_PART(…, 0)`). `{ok:true}` or `{ok:false,error,detail,off,len}`. |
 | `bxp_eval` | `expr`, `headers?`, `fields?` | Evaluate one expression against an optional row — what it *computes* (lenient runtime). `{ok,value}` or `{ok:false,…}`. |
 | `bxp_eval_trace` | `expr`, `headers?`, `fields?` | Evaluate with a per-call NDJSON trace (one line per nested function call, then a `final` / `error` sentinel). |

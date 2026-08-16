@@ -496,9 +496,9 @@ cd bxp-core && zig build
 cd bxp-core && zig build test
 ```
 
-Module exports in `build.zig`: `json`, `json5`, `csvstream`, `xlsx`, `zipstream`, `btrace`, `decimal`, `encoding`, `expr`, `config`, `docs`, `diagnostics`, `inspect`, `minisign`, `procrun`, `mcp` (`json5`, `zipstream`, `decimal`, `encoding`, `diagnostics`, `csvstream`, `minisign`, `procrun` and `mcp` are zig-libs modules re-exported for downstream packages, not bxp-core sources).
+Module table in `build.zig` — 14 names in two halves. Seven are `b.addModule` entries built from this package's own sources: `json`, `btrace`, `xlsx`, `expr`, `config`, `docs`, `inspect`. Seven are zig-libs modules pushed into the table by the local `reexport()` helper so downstream packages can ask for them by name: `json5`, `diagnostics`, `minisign`, `procrun`, `mcp`, `csvstream`, `zipstream`. Everything else bxp-core takes off the zig-libs handle — `decimal`, `encoding`, `numparse`, `tz`, `datefmt` — is a plain local binding wired into the imports below; nobody downstream asks for those by name, so they are deliberately **not** re-exported.
 `xlsx` imports the named `decimal` and `zipstream` modules; `zipstream` has no bxp-core dependencies (std only).
-`expr` imports `unicode.zig` (file-relative, not a named module) plus the named `decimal`, `numparse`, `uucode`, `encoding`, `regex`, `tz`, `datefmt` modules (`regex` is the Pike-VM engine behind REGEX_MATCH/REGEX_EXTRACT; `tz`, `datefmt`, `encoding` and `numparse` come from zig-libs — all fetch deps, see _External dependencies_ below); `config` imports `json5`, `diagnostics`, `expr`, `encoding`. `encoding` being a named module matters for the same reason `decimal` is one: it is shared by both `expr` and `config`, and a file-relative @import from two modules would compile the file into each — a duplicate-symbol error.
+`expr` imports `unicode.zig` (file-relative, not a named module) plus the named `decimal`, `numparse`, `uucode`, `encoding`, `regex`, `tz`, `datefmt` modules (`regex` is the Pike-VM engine behind REGEX_MATCH/REGEX_EXTRACT; `tz`, `datefmt`, `encoding` and `numparse` come from zig-libs — all fetch deps, see _External dependencies_ below); `config` imports `json5`, `diagnostics`, `expr`, `encoding`, `xlsx` (the last one for `xlsx.listSheets`, which backs the sheet-name resolution in template validation). `encoding` being a named module matters for the same reason `decimal` is one: it is shared by both `expr` and `config`, and a file-relative @import from two modules would compile the file into each — a duplicate-symbol error.
 `docs` imports `config`, `expr`, `json5`; `diagnostics` has no bxp-core dependencies.
 
 ### External dependencies
@@ -521,8 +521,13 @@ content-addressed by hash and re-audited on any pin bump:
   module named `regex`; `build.zig` wires it into the `expr` module. Adds ~56 KB
   to the ReleaseSmall `bxp-cli` (engine + Unicode-scalar case-fold tables).
 - **zig_libs** (MIT, `zaxified/zig-libs`) — the module collection supplying
-  the **seven** modules that used to live in `src/`, plus `numparse`, which
-  used to be a function inside `expr.zig`:
+  the **twelve** modules below. Eight of them used to live in `src/` (`tz`,
+  `datefmt`, `encoding`, `json5`, `decimal`, `zipstream`, `diagnostics` and
+  the `LineIterator`/`splitFields` half of `csvstream`, which was `csv.zig`);
+  `numparse` came from below file level, a function inside `expr.zig`.
+  The remaining three — `minisign`, `procrun`, `mcp` — were never bxp-core
+  sources at all, and neither was `csvstream`'s `ChunkReader` half (that one
+  was private to `bxp-cli`'s `pipeline.zig`):
 
   - `tz` — IANA UTC-offset lookup behind `TO_UTC` / `TZ_OFFSET` /
     `TZ_CONVERT` / `IS_DST`.

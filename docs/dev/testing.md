@@ -16,7 +16,7 @@ archives (`release-01`) are the only ReleaseSmall build.
 
 **`test-01-console.sh`** — Zig / CLI build + unit:
 
-1. `zig build test` in `bxp-core` (unit tests for `csv.zig`, `expr.zig`, `docs.zig`, `inspect.zig`).
+1. `zig build test` in `bxp-core` — eight test roots: `json.zig`, `btrace.zig`, `expr.zig`, `unicode.zig`, `xlsx.zig`, `config.zig`, `docs.zig`, `inspect.zig`. (No `csv`, `tz`, `datefmt`, `json5`, `decimal`, `zipstream` or `diagnostics` roots: those modules moved to zig-libs and carry their own, larger suites upstream.)
 2. Builds `bxp-cli` + runs its unit tests.
 3. `dart test` inside `bxp-gui/packages/json5_ast/`.
 

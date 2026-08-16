@@ -223,8 +223,11 @@ each is noted for reference — that JSON shape is the contract); the
 `bxp-cli` ones are `bridge_run` / `bridge_run_streaming` proxies:
 
 - `loadConfig(path)` → `bridge_inspect {op:config}` (`inspect.annotateRaw`) →
-  annotated JSON with `$comm_*`/`$err_*` siblings. The GUI passes a `check-fs`
-  deadline of 2 s on every load/save for filesystem-existence diagnostics.
+  annotated JSON with `$err_*`/`$warn_*`/`$info_*` siblings (comments are not in
+  it — the annotated JSON5 preprocessor strips them like the plain one does;
+  comment retention is `packages/json5_ast`'s job, which is why Save round-trips
+  the CST rather than this JSON). The GUI passes a `check-fs` deadline of 2 s on
+  every load/save for filesystem-existence diagnostics.
 - `getDocs()` → `bridge_inspect {op:docs}` (`inspect.docsJson`) → cached at
   startup, drives FnDoc tooltips, the schema gate, and `_AddChildDialog`
   insert scaffolds.

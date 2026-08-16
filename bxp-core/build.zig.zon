@@ -3,7 +3,8 @@
     .fingerprint = 0xd3c3e96b8303f761,
     .version = "0.3.0",
     // uucode (MIT) supplies the Unicode case-mapping / decomposition tables
-    // behind UPPER/LOWER (full Unicode incl. ß→SS) and the upcoming `unaccent`.
+    // behind UPPER/LOWER (full Unicode incl. ß→SS) and UNACCENT, which selects
+    // three further fields (decomposition mapping + type, combining class).
     // Pinned to uucode main (Zig 0.16+); the former `zig-0.15` back-port
     // branch carried the 0.15.x line. Field-selected in
     // build.zig so only the tables we use compile in.
@@ -23,12 +24,15 @@
             .hash = "regex-0.1.0-V8KKSWICBACgjPoyQLIoPwMnQjKzCpEOjUMEzkf3ebOD",
         },
         // zig-libs (MIT) — the module collection that now carries the hardened
-        // descendants of several bxp-core modules. `tz` (IANA offset lookup) and
-        // `datefmt` (the date core) are consumed from here instead of kept
-        // locally — both from ONE b.dependency handle in build.zig, so `tz`'s
-        // own datefmt import resolves to the same module rather than a second
-        // date core. The per-module inventory and rationale live in
-        // bxp-core/CLAUDE.md. Treated as a foreign upstream: read-only,
+        // descendants of several bxp-core modules. Bumping this pin moves TWELVE
+        // modules at once: `tz`, `datefmt`, `encoding`, `json5`, `decimal`,
+        // `zipstream`, `diagnostics`, `numparse`, `csvstream`, `minisign`,
+        // `procrun` and `mcp` — that is the whole primitive layer plus the
+        // bxp-mcp transport, so read the diff accordingly. All twelve come from
+        // ONE b.dependency handle in build.zig, so `tz`'s own datefmt import
+        // resolves to the same module rather than a second date core. The
+        // per-module inventory and rationale live in bxp-core/CLAUDE.md ->
+        // External dependencies. Treated as a foreign upstream: read-only,
         // pinned to the exact commit behind a release tag (upstream tags by
         // date, `YYYY-MM-DD`), never edited from this repo. `zig fetch` cannot
         // target a subdirectory (ziglang/zig#23012)

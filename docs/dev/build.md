@@ -25,10 +25,13 @@ install that toolchain; ZLS bundled with the Zig extension matches it.
 Unicode case-mapping tables behind `UPPER`/`LOWER`; `regex`
 (`quangd/regex.zig`, Apache-2.0 OR MIT), the Pike-VM engine behind
 `REGEX_MATCH`/`REGEX_EXTRACT` (linear-time, ReDoS-safe); and `zig_libs` (MIT),
-supplying the `datefmt` date core, the `tz` IANA offset lookup, the
-`encoding` code-page transcoder, the `json5` preprocessor, the `decimal`
-fixed-point numeric core, the `zipstream` ZIP reader and the `diagnostics`
-collector. All are pinned in `bxp-core/build.zig.zon`. The
+supplying **12 modules** — the whole primitive layer: the `datefmt` date core,
+the `tz` IANA offset lookup, the `encoding` code-page transcoder, the `json5`
+preprocessor, the `decimal` fixed-point numeric core, the `numparse` grouped-
+number parser, the `zipstream` ZIP reader, the `csvstream` CSV reader, the
+`diagnostics` collector, plus `minisign` and `procrun` (re-exported for
+`bxp-gui-bridge`) and `mcp` (the JSON-RPC transport re-exported for `bxp-mcp`).
+All are pinned in `bxp-core/build.zig.zon`. The
 fetches are cached after the first build; CI runners have network.
 
 In VS Code terminal:
@@ -80,16 +83,17 @@ bxp/                            # monorepo root (git root)
 │   └── build.zig.zon           # depends on bxp-core (path dep)
 ├── bxp-core/                   # internal shared library (no binary)
 │   ├── src/
-│   │   ├── csv.zig             # RFC 4180 CSV parser
 │   │   ├── xlsx.zig            # .xlsx → CSV (ZIP+XML)
 │   │   ├── expr.zig            # expression evaluator + FnDoc catalog
 │   │   ├── unicode.zig         # UTF-8 case mapping (UPPER/LOWER) over uucode tables
 │   │   ├── config.zig          # JSON5 config loader + FieldDoc tables
 │   │   ├── json.zig            # JSON array-of-objects → row representation
+│   │   ├── btrace.zig          # binary BXTB trace Writer/Reader for --trace
 │   │   ├── docs.zig            # --docs aggregator: re-exports expr + config catalogs
+│   │   └── inspect.zig         # shared stateless core behind bxp-mcp + the bridge
 │   ├── build.zig               # exports named Zig modules
 │   └── build.zig.zon           # fetch deps: uucode (tables), regex (Pike-VM),
-│                               #             zig-libs (7 modules — the whole
+│                               #             zig-libs (12 modules — the whole
 │                               #                       primitive layer)
 ├── bxp-gui/                    # Flutter desktop app (Linux / macOS / Windows)
 │   ├── lib/

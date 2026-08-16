@@ -84,18 +84,20 @@ section. The bridge's C-ABI surface and Debug→ReleaseSafe build rationale live
 in [`bxp-gui-bridge/CLAUDE.md`](https://github.com/zaxified/bxp/blob/master/bxp-gui-bridge/CLAUDE.md).
 
 The **engine modules** node groups two faces of `bxp-core`: the conversion
-engine (`csv` / `xlsx` / `json` / `json5` / `expr` / `datefmt` / `decimal` /
-`btrace`, driven by `bxp-cli`'s pipeline) and the support modules behind the
-`inspect` facade. `datefmt`, `tz`, `encoding`, `json5`, `decimal`,
-`zipstream` and `diagnostics` are drawn here as engine modules because that is
-how the engine uses them, but none of them is in this tree any more — the
-whole primitive layer comes from the pinned `zig_libs` fetch dependency.
+engine (`csvstream` / `xlsx` / `json` / `json5` / `expr` / `datefmt` /
+`decimal` / `btrace`, driven by `bxp-cli`'s pipeline) and the support modules
+behind the `inspect` facade. `datefmt`, `tz`, `encoding`, `json5`, `decimal`,
+`numparse`, `zipstream`, `csvstream` and `diagnostics` are drawn here as engine
+modules because that is how the engine uses them, but none of them is in this
+tree any more — the whole primitive layer comes from the pinned `zig_libs` fetch
+dependency.
 
 `docs.zig` aggregates the language/schema catalog —
 re-exporting `expr.builtins` (the `FnDoc` catalog) and flattening each
 `config.zig` struct's `fields[]` table — so adding a built-in or config field
 updates the docs automatically. Config validation (`inspect.annotateRaw`) runs
-`json5.preprocessAnnotated` to emit the `$comm_*` / `$err_*` siblings the GUI
-renders.
+`json5.preprocessAnnotated` to emit the `$err_*` / `$warn_*` / `$info_*`
+siblings the GUI renders; comments are stripped there as in the plain
+preprocessor, so keeping them is `json5_ast`'s job on the Dart side.
 
 ---

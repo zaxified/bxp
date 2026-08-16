@@ -43,7 +43,7 @@ pub fn build(b: *std.Build) void {
     // accepted (an unterminated block comment was stripped to EOF; a lone /
     // leading comma was elided into a valid-looking empty container). Both
     // deviations are must-reject cases in that corpus. See the migration note
-    // in docs/dev/roadmap.md.
+    // in bxp-core/CLAUDE.md -> Module details.
     const json5_mod = zig_libs.module("json5");
     reexport(b, "json5", json5_mod);
 
@@ -67,7 +67,8 @@ pub fn build(b: *std.Build) void {
     // writes into a caller buffer instead of allocating. That typed error set
     // is what let the div-by-zero and div-overflow cases split apart at the
     // call site in expr.zig; the local copy conflated them into one `null` and
-    // `@intCast`-panicked on the overflow. See docs/dev/roadmap.md.
+    // `@intCast`-panicked on the overflow. See bxp-core/CLAUDE.md -> Module
+    // details.
     const decimal_mod = zig_libs.module("decimal");
 
     // Grouped-number parser (`1,234.56` / `1.234,56`) behind expr.zig's numeric
@@ -146,7 +147,7 @@ pub fn build(b: *std.Build) void {
     // `filename_len` from overflowing `std.zip.Iterator.next`'s u16 arithmetic
     // — reachable straight through `Archive.init` and a live process abort
     // before this migration. Also gains zip64 reading and an ArchiveWriter that
-    // bxp does not use. See docs/dev/roadmap.md.
+    // bxp does not use. See bxp-core/CLAUDE.md -> Module details.
     const zipstream_mod = zig_libs.module("zipstream");
     reexport(b, "zipstream", zipstream_mod);
 
@@ -305,9 +306,10 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
-    // decimal.zig is the fixed-point numeric core, wired as the named "decimal"
-    // module above (shared by expr/json/xlsx). This is its standalone test
-    // artifact — the file is both a module root and a test root, same as json5.
+    // xlsx.zig is both a module root and a test root: the tests live in the same
+    // file the "xlsx" module above is built from. Its import names must therefore
+    // mirror the production wiring — the same decimal + zipstream handles, or the
+    // test build resolves a different module than the shipped one does.
     const xlsx_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/xlsx.zig"),

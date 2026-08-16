@@ -276,8 +276,9 @@ services/prefs_service.dart`.
 - [`bxp-cli/CLAUDE.md`](bxp-cli/CLAUDE.md) — full configuration reference, expression syntax,
   template guide, broker list.
 - [`bxp-mcp/CLAUDE.md`](bxp-mcp/CLAUDE.md) — MCP server: tool catalog (incl. the
-  `$comm_*`/`$err_*`/`$warn_*`/`$info_*` annotated-JSON shape), wire protocol,
-  the shared `inspect` core, `bxp_simulate` spawn design.
+  `$err_*`/`$warn_*`/`$info_*` annotated-JSON marker shape — there is no
+  `$comm_*`, comments are stripped), wire protocol, the shared `inspect` core,
+  `bxp_simulate` spawn design.
 - [`bxp-core/CLAUDE.md`](bxp-core/CLAUDE.md) — module API overview, build details, test coverage.
 - [`bxp-gui/CLAUDE.md`](bxp-gui/CLAUDE.md) — Flutter app structure, services/store/ui split,
   bxp-cli subprocess + bxp-gui-bridge FFI wiring.
