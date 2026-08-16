@@ -101,10 +101,18 @@ pub const Value = union(enum) {
             // American thousands-separated numbers ("1,234.56") are tried
             // after the plain decimal parse fails, so they don't pay the
             // parseGroupedNumber overhead when the input is a plain decimal.
+            // `Decimal.parse` reports WHY it failed (the pre-migration `?Decimal`
+            // could not): a well-formed magnitude that does not fit the i128
+            // range is not junk, and the grouped-number fallback cannot rescue
+            // it either, so it is reported as out-of-range instead of being
+            // blamed for its shape. Both stay data errors, so IFERROR still
+            // catches them (see isDataError).
             .string => |s| if (s.len == 0 or isNonFiniteToken(s)) Decimal.zero else
-                Decimal.parse(s) catch
-                    (parseGroupedNumber(s, ',', '.') orelse
-                        return error.NotANumber),
+                Decimal.parse(s) catch |e| switch (e) {
+                    error.Overflow => return error.NumberOutOfRange,
+                    error.InvalidCharacter => parseGroupedNumber(s, ',', '.') orelse
+                        return error.NotANumber,
+                },
             .boolean => |b| if (b) Decimal.one else Decimal.zero,
         };
     }
@@ -1021,6 +1029,19 @@ const Parser = struct {
         w.writeByte('\n') catch return;
     }
 
+    /// Detail for a failed `toNumber` coercion. The error tells the two failure
+    /// modes apart, so the detail has to follow it rather than always claiming
+    /// "not a number": an out-of-range value IS a number, it just does not fit
+    /// the i128 core. Pass the error straight from the `catch |err|` binding.
+    fn setNumericDetail(self: *Parser, err: anyerror, s: []const u8) void {
+        if (err != error.NumberOutOfRange) return self.setNotANumber(s);
+        if (self.last_field_name.len > 0) {
+            self.setDetail("number out of range: \"{s}\" (in [{s}])", .{ s, self.last_field_name });
+        } else {
+            self.setDetail("number out of range: \"{s}\"", .{s});
+        }
+    }
+
     /// Convenience wrapper for NotANumber — includes field name when known.
     fn setNotANumber(self: *Parser, s: []const u8) void {
         if (self.last_field_name.len > 0) {
@@ -1140,11 +1161,11 @@ const Parser = struct {
             _ = try self.tok.next();
             const right = try self.parseCat();
             const l = left.toNumber() catch |err| {
-                switch (left) { .string => |s| self.setNotANumber(s), else => {} }
+                switch (left) { .string => |s| self.setNumericDetail(err, s), else => {} }
                 return err;
             };
             const r = right.toNumber() catch |err| {
-                switch (right) { .string => |s| self.setNotANumber(s), else => {} }
+                switch (right) { .string => |s| self.setNumericDetail(err, s), else => {} }
                 return err;
             };
             const res = if (t.kind == .plus) l.add(r) else l.sub(r);
@@ -1184,11 +1205,11 @@ const Parser = struct {
             _ = try self.tok.next();
             const right = try self.parseUnary();
             const l = left.toNumber() catch |err| {
-                switch (left) { .string => |s| self.setNotANumber(s), else => {} }
+                switch (left) { .string => |s| self.setNumericDetail(err, s), else => {} }
                 return err;
             };
             const r = right.toNumber() catch |err| {
-                switch (right) { .string => |s| self.setNotANumber(s), else => {} }
+                switch (right) { .string => |s| self.setNumericDetail(err, s), else => {} }
                 return err;
             };
             if (t.kind == .slash) {
@@ -1223,7 +1244,7 @@ const Parser = struct {
             _ = try self.tok.next();
             const v = try self.parseUnary();
             const n = v.toNumber() catch |err| {
-                switch (v) { .string => |s| self.setNotANumber(s), else => {} }
+                switch (v) { .string => |s| self.setNumericDetail(err, s), else => {} }
                 return err;
             };
             return Value{ .decimal = n.neg() catch return error.NumberOverflow };
@@ -1241,9 +1262,20 @@ const Parser = struct {
                 '"' => "\"",
                 else => "",
             } },
-            // The lexer guarantees a syntactically valid number; parse can
-            // still fail (null) on a literal that overflows the i128 range.
-            .number_lit => return Value{ .decimal = Decimal.parse(t.text) catch return error.NumberOutOfRange },
+            // The lexer accepts any run of digits and dots, so a typo like
+            // `1.2.3` reaches here as a "syntactically valid" number token.
+            // `Decimal.parse` tells that apart from a magnitude the i128 core
+            // cannot hold, and the two get different names: blaming a typo on
+            // range sends the template author looking in the wrong place.
+            // MalformedNumber is deliberately NOT a data error (isDataError),
+            // so IFERROR does not muffle a broken literal.
+            .number_lit => return Value{ .decimal = Decimal.parse(t.text) catch |e| switch (e) {
+                error.Overflow => return error.NumberOutOfRange,
+                error.InvalidCharacter => {
+                    self.setDetail("malformed number literal: \"{s}\"", .{t.text});
+                    return error.MalformedNumber;
+                },
+            } },
             .field_ref => return self.evalFieldRef(t.text),
             .lparen => {
                 const v = try self.parseExpr();
@@ -6503,4 +6535,29 @@ test "ISEMPTY: empty / whitespace true, '0' is not empty" {
     try testing.expectEqualStrings("false", try evalString("ISEMPTY('x')", &ctx));
     // The footgun ISEMPTY retires: '0' is NOT empty (a bare `= ''` would match it).
     try testing.expectEqualStrings("false", try evalString("ISEMPTY('0')", &ctx));
+}
+
+// ── Tests: numeric parse failure names ───────────────────────────────────
+
+test "numeric errors: out-of-range vs malformed, data vs template" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    try h.col_index.put("big", 0);
+    const ctx = h.ctx(&.{"999999999999999999999999999999"}, a);
+
+    // A field value that IS a number but exceeds the i128 core: blame the
+    // magnitude, not the shape. `Decimal.parse`'s typed error is what makes
+    // the distinction available — the former `?Decimal` could not.
+    try testing.expectError(error.NumberOutOfRange, eval("[big] + 1", &ctx));
+    // A value that is not a number at all keeps the original name.
+    try testing.expectError(error.NotANumber, eval("'abc' + 1", &ctx));
+    // Same split for a literal written into the template.
+    try testing.expectError(error.NumberOutOfRange, eval("999999999999999999999999999999 + 1", &ctx));
+    try testing.expectError(error.MalformedNumber, eval("1.2.3 + 1", &ctx));
+    // Out-of-range is a data error, so IFERROR catches it; a malformed literal
+    // is a template error and stays loud.
+    try testing.expectEqualStrings("0", try evalString("IFERROR([big] + 1, '0')", &ctx));
+    try testing.expectError(error.MalformedNumber, eval("IFERROR(1.2.3 + 1, '0')", &ctx));
 }
