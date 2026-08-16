@@ -75,30 +75,7 @@
       ZURN:  "ZURN.SW"
     },
     xtb: {
-      "ABR.US":    "ABR",
-      "AGNC.US":   "AGNC",
-      "ASML.NL":   "ASML.AS",
-      "BNTX.US":   "BNTX",
-      "BP.UK":     "BP.L",
-      "CSG.NL":    "CSG.AS",
-      "CZG.CZ":    "COLT.PR",
-      "DSFIR.NL":  "DSFIR.AS",
-      "FOUR.US":   "FOUR",
-      "GBDC.US":   "GBDC",
-      "HTGC.US":   "HTGC",
-      "KOMB.CZ":   "KOMB.PR",
-      "MRNA.US":   "MRNA",
-      "NESN.CH":   "NESN.SW",
-      "NOVN.CH":   "NOVN.SW",
-      "O.US":      "O",
-      "PBR.US":    "PBR",
-      "PFE.US":    "PFE",
-      "PH.US":     "PH",
-      "ROG.CH":    "ROG.SW",
-      "STWD.US":   "STWD",
-      "TABAK.CZ":  "TABAK.PR",
-      "VICI.US":   "VICI",
-      "VWRA.UK":   "VWRA.L"
+      "CZG.CZ":  "COLT.PR"
     }
   },
   /*
@@ -372,16 +349,16 @@
       // pair "Stock split open" rows so "Stock split close" can compute split ratio = open.shares / close.shares
       pre_pass: {
         when:  "[Action] = 'Stock split open'",
-        key:   "[Ticker] & '_' & [Time]",
+        key:   "[Ticker] & '_' & REPLACE(COALESCE([Time],[Time (UTC)]),'+00:00','')",
         values: {
           shares:  "[No. of shares]"
         }
       },
       input_schema: {
-        $date:            "[Time]",              // T212 already emits ISO datetime
+        $date:            "REPLACE(COALESCE([Time],[Time (UTC)]),'+00:00','')",  // T212 already emits ISO or UTC with zone
         // stock row: map ticker; cash row (no ticker): cash placeholder
         $ticker:          "IF([Ticker] != '', REMAP([Ticker], 'trading212'), '$CASH-' & [Currency (Total)])",
-        $isin:            "",                    // optional ISIN output column
+        $isin:            "",                                                    // optional ISIN output column
         $quantity:        "IF([Ticker] != '', [No. of shares], 1)",
         // net price = total minus conversion fee and stamp duty, divided by share count
         $unitprice:       "IF([Ticker] != '', ROUND((ABS([Total]) - ABS([Currency conversion fee]) - ABS([Stamp duty reserve tax])) / [No. of shares], 8), ABS([Total]))",
@@ -389,11 +366,11 @@
         // fee = sum of conversion fee + stamp duty; empty when both are zero
         $fee:             "IF(ABS([Currency conversion fee]) + ABS([Stamp duty reserve tax]) > 0, ABS([Currency conversion fee]) + ABS([Stamp duty reserve tax]), '')",
         $amount:          "IF([Ticker] != '', ABS([Total]) - ABS([Currency conversion fee]) - ABS([Stamp duty reserve tax]), ABS([Total]))",
-        $account:         "'T212'",              // hardcoded account tag; e.g. "'T212'", "[Account]", ""
+        $account:         "'T212'",                                              // hardcoded account tag; e.g. "'T212'", "[Account]", ""
         $fxRate:          "",
         $subtype:         "",
         $instrumentType:  "",
-        $comment:         "[ID] & '_' & [Time]"  // unique identifier from T212 transaction ID
+        $comment:         "[ID] & '_' & REPLACE(COALESCE([Time],[Time (UTC)]),'+00:00','')"  // unique identifier from T212 transaction ID
       },
       row_rules_debug_missing: true,
       row_rules: [
@@ -452,7 +429,7 @@
           ]
         },
         {
-          when:  "IN([Action], 'Dividend (Dividend)', 'Dividend (Dividend manufactured payment)', 'Dividend (Tax exempted)')",
+          when:  "IN([Action], 'Dividend (Dividend)', 'Dividend (Dividend manufactured payment)', 'Dividend (Tax exempted)','Dividend (Return of capital)','Dividend (Return of capital manufactured payment)')",
           rows: [
             {
               $action:  "'DIVIDEND'"
@@ -482,12 +459,12 @@
           rows: [
             {
               $action:     "'SPLIT'",
-              $date:       "[Time]",
+              $date:       "REPLACE(COALESCE([Time],[Time (UTC)]),'+00:00','')",
               $quantity:   "",
               $unitprice:  "",
               $fee:        "",
-              $amount:     "ROUND(LOOKUP([Ticker] & '_' & [Time], 'shares') / [No. of shares], 8)",
-              $comment:    "'split-correction-' & SPLIT_PART([Time], ' ', 1)"
+              $amount:     "ROUND(LOOKUP([Ticker] & '_' & REPLACE(COALESCE([Time],[Time (UTC)]),'+00:00',''), 'shares') / [No. of shares], 8)",
+              $comment:    "'split-correction-' & SPLIT_PART(REPLACE(COALESCE([Time],[Time (UTC)]),'+00:00',''), ' ', 1)"
             }
           ]
         },
@@ -605,12 +582,12 @@
       csv_delimiter_out:   ",",
       csv_decimal_separator_in: ".",
       csv_decimal_separator_out: ".",
-      csv_text_quote_in:   "none",
+      csv_text_quote_in:   "double",
       csv_text_quote_out:  "double",       // wrap output fields in double quotes
       date_filter_from_filename: false,
       input_schema: {
         $date:            "[Close time]",
-        $ticker:          "REMAP([Symbol], 'xtb')",
+        $ticker:          "REPLACE(REMAP([Symbol],'xtb'), '.US','', '.NL','.AS', '.UK','.L', '.CH','.SW', '.CZ','.PR')",
         $quantity:        "[Volume]",
         // sale value divided by volume = per-share price
         $unitprice:       "ROUND([Sale value] / [Volume], 8)",
@@ -677,13 +654,13 @@
       csv_delimiter_out:   ",",
       csv_decimal_separator_in: ".",
       csv_decimal_separator_out: ".",
-      csv_text_quote_in:   "none",
+      csv_text_quote_in:   "double",
       csv_text_quote_out:  "double",
       date_filter_from_filename: false,
       input_schema: {
         $date:            "[Time]",
         // cash rows without symbol → cash placeholder; stock rows → mapped ticker
-        $ticker:          "IF([Symbol] != '', REMAP([Symbol], 'xtb'), '$CASH-CZK')",
+        $ticker:          "IF([Symbol] != '', REPLACE(REMAP([Symbol],'xtb'), '.US','', '.NL','.AS', '.UK','.L', '.CH','.SW', '.CZ','.PR'), '$CASH-CZK')",
         $quantity:        "'1'",  // cash operations have no share quantity
         $unitprice:       "ABS([Amount])",
         $currency:        "'CZK'",
@@ -753,7 +730,7 @@
           rows: [
             {
               $action:     "'BUY'",
-              $ticker:     "REMAP([Symbol], 'xtb')",
+              $ticker:     "REPLACE(REMAP([Symbol],'xtb'), '.US','', '.NL','.AS', '.UK','.L', '.CH','.SW', '.CZ','.PR')",
               $quantity:   "SPLIT_PART(SPLIT_PART([Comment], ' ', 3), '/', 1)",
               $unitprice:  "ROUND(ABS([Amount]) / SPLIT_PART(SPLIT_PART([Comment], ' ', 3), '/', 1), 8)",
               $comment:    "''' & [ID] & '_' & [Time] & '_' & [Comment] & '''"
@@ -809,12 +786,12 @@
       csv_delimiter_out:   ",",
       csv_decimal_separator_in: ".",
       csv_decimal_separator_out: ".",
-      csv_text_quote_in:   "none",
+      csv_text_quote_in:   "double",
       csv_text_quote_out:  "double",
       date_filter_from_filename: false,
       input_schema: {
-        $date:            "[Close Time (UTC)]",  // new format uses UTC timestamps
-        $ticker:          "REMAP([Ticker], 'xtb')",    // new format uses "Ticker" column (was "Symbol")
+        $date:            "[Close Time (UTC)]",                                                                           // new format uses UTC timestamps
+        $ticker:          "REPLACE(REMAP([Ticker],'xtb'), '.US','', '.NL','.AS', '.UK','.L', '.CH','.SW', '.CZ','.PR')",  // new format uses "Ticker" column (was "Symbol")
         $quantity:        "[Volume]",
         $unitprice:       "ROUND([Sale Value] / [Volume], 8)",
         $currency:        "'CZK'",
@@ -877,12 +854,12 @@
       csv_delimiter_out:   ",",
       csv_decimal_separator_in: ".",
       csv_decimal_separator_out: ".",
-      csv_text_quote_in:   "none",
+      csv_text_quote_in:   "double",
       csv_text_quote_out:  "double",
       date_filter_from_filename: false,
       input_schema: {
         $date:            "[Time]",
-        $ticker:          "IF([Ticker] != '', REMAP([Ticker], 'xtb'), '$CASH-CZK')",
+        $ticker:          "IF([Ticker] != '', REPLACE(REMAP([Ticker],'xtb'), '.US','', '.NL','.AS', '.UK','.L', '.CH','.SW', '.CZ','.PR'), '$CASH-CZK')",
         $quantity:        "'1'",
         $unitprice:       "ABS([Amount])",
         $currency:        "'CZK'",
@@ -950,7 +927,7 @@
           rows: [
             {
               $action:     "'BUY'",
-              $ticker:     "REMAP([Ticker], 'xtb')",
+              $ticker:     "REPLACE(REMAP([Ticker],'xtb'), '.US','', '.NL','.AS', '.UK','.L', '.CH','.SW', '.CZ','.PR')",
               $quantity:   "SPLIT_PART(SPLIT_PART([Comment], ' ', 3), '/', 1)",
               $unitprice:  "ROUND(ABS([Amount]) / SPLIT_PART(SPLIT_PART([Comment], ' ', 3), '/', 1), 8)",
               $comment:    "''' & [ID] & '_' & [Time] & '_' & [Comment] & '''"
@@ -1148,7 +1125,7 @@
       date_filter_from_filename: false,
       combined_output:     true,
       input_schema: {
-        $date:      "DATE_CONVERT([Time], 'YYYY-MM-DD[ ]hh:mm:ss', 'YYYY-MM-DD')",
+        $date:      "DATE_CONVERT(REPLACE(COALESCE([Time],[Time (UTC)]),'+00:00',''), 'YYYY-MM-DD[ ]hh:mm:ss', 'YYYY-MM-DD')",
         $ticker:    "REMAP([Ticker], 't212_brychtapp')",
         $isin:      "[ISIN]",
         $quantity:  "[No. of shares]",
@@ -1223,7 +1200,7 @@
       csv_delimiter_out:   ",",
       csv_decimal_separator_in: ".",
       csv_decimal_separator_out: ".",
-      csv_text_quote_in:   "none",
+      csv_text_quote_in:   "double",
       csv_text_quote_out:  "double",
       date_filter_from_filename: false,
       combined_output:     true,
@@ -1245,7 +1222,7 @@
           rows: [
             {
               $type:      "'BUY'",
-              $ticker:    "REMAP([Ticker], 'xtb')",
+              $ticker:    "REPLACE(REMAP([Ticker],'xtb'), '.US','', '.NL','.AS', '.UK','.L', '.CH','.SW', '.CZ','.PR')",
               $quantity:  "SPLIT_PART(SPLIT_PART([Comment], ' ', 3), '/', 1)",
               $price:     "SPLIT_PART([Comment], ' ', 5)"
             }
@@ -1281,7 +1258,7 @@
       csv_delimiter_out:   ",",
       csv_decimal_separator_in: ".",
       csv_decimal_separator_out: ".",
-      csv_text_quote_in:   "none",
+      csv_text_quote_in:   "double",
       csv_text_quote_out:  "double",
       date_filter_from_filename: false,
       combined_output:     true,
@@ -1303,7 +1280,7 @@
           rows: [
             {
               $type:      "'SELL'",
-              $ticker:    "REMAP([Ticker], 'xtb')",
+              $ticker:    "REPLACE(REMAP([Ticker],'xtb'), '.US','', '.NL','.AS', '.UK','.L', '.CH','.SW', '.CZ','.PR')",
               $quantity:  "[Volume]",
               $price:     "[Close Price]"
             }
