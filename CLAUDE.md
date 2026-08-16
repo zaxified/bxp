@@ -33,16 +33,15 @@ bxp/
 │   │   ├── btrace.zig      # Binary BXTB trace Writer/Reader for --trace
 │   │   ├── docs.zig        # Aggregator: re-exports expr catalog + flattens
 │   │   │                   # config FieldDoc tables; serves the docs catalog
-│   │   ├── diagnostics.zig # Structured Diagnostic / Severity collector for
-│   │   │                   # config deep validation
 │   │   └── inspect.zig     # Shared stateless core (validate/validate-expr/eval/
 │   │                       # eval-batch/eval-trace/docs/templates introspection);
 │   │                       # one source for bxp-mcp + bxp-gui-bridge
-│   │                       # (`datefmt`, `tz`, `encoding`, `json5`, `decimal` and
-│   │                       # `zipstream` are NOT here — they come from zig-libs)
+│   │                       # (`datefmt`, `tz`, `encoding`, `json5`, `decimal`,
+│   │                       # `zipstream` and `diagnostics` are NOT here — the
+│   │                       # whole primitive layer comes from zig-libs)
 │   ├── build.zig         # exports each file as a named Zig module
-│   └── build.zig.zon     # fetch deps: uucode, regex, zig-libs (datefmt/tz/
-│                         #             encoding/json5/decimal/zipstream)
+│   └── build.zig.zon     # fetch deps: uucode, regex, zig-libs (7 modules —
+│                         #             the whole primitive layer)
 ├── bxp-gui/              # Flutter desktop app (replaces bxp-ui; talks to bxp-gui-bridge via FFI, which proxies bxp-cli)
 │   ├── lib/              # Dart source (services/, store/, ui/)
 │   ├── linux/, macos/, windows/, web/  # platform configs
@@ -205,14 +204,15 @@ bxp-core/inspect link, and the bridge proxies `bxp-cli` runs. The former
   date core behind `DATE_CONVERT` and every calendar builtin) `encoding`
   (single-byte code page ↔ UTF-8 behind `csv_*_encoding`), `json5` (the
   JSON5 → JSON preprocessor behind config loading), `decimal` (the
-  fixed-point numeric core behind every computed value) and `zipstream`
+  fixed-point numeric core behind every computed value), `zipstream`
   (the streaming ZIP reader behind xlsx ingest and the zipped-CSV
-  pre-pass). Treated as a
+  pre-pass) and `diagnostics` (the structured validation-finding
+  collector). Treated as a
   foreign upstream: read-only, pinned to the commit behind a release tag,
   never edited from this repo. The offset tables are compiled into the `tz`
   module, so there is still **no runtime dependency** — the pinned tzdata
   snapshot ships inside the binary exactly as the former in-tree copy did.
-  All six modules were lifted out of bxp-core and hardened upstream; see
+  All seven modules were lifted out of bxp-core and hardened upstream; see
   `docs/dev/roadmap.md` → "Shared core libraries — consume zig-libs" for the
   remaining candidates.
 

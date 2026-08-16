@@ -248,6 +248,17 @@ fn injectDiagnostics(
             break :blk d.path[last_dot + 1 ..];
         };
 
+        // Severity routing — the annotated-JSON output contract with bxp-gui
+        // (`lib/store/trace_store.dart`) and bxp-mcp. Each marker's value is an
+        // OBJECT: `{ "message": ..., "off": N, "len": N, "suggest": "..." }`,
+        // with `off`/`len`/`suggest` present only when the Diagnostic carries
+        // them. The object shape (rather than a bare message string) is what
+        // lets the GUI's ExprPanel highlight a token range and show a
+        // did-you-mean hint separately from the prose. This note lived in
+        // `diagnostics.zig`'s header until that module moved to zig-libs, where
+        // this bxp-specific mapping does not belong — it belongs here, next to
+        // the switch that produces it. NB `formatRootErr` still emits the older
+        // bare-string form for root errors; see its doc comment.
         const prefix: []const u8 = switch (d.severity) {
             .@"error" => "$err_",
             .warning => "$warn_",

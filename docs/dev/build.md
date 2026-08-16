@@ -27,7 +27,8 @@ Unicode case-mapping tables behind `UPPER`/`LOWER`; `regex`
 `REGEX_MATCH`/`REGEX_EXTRACT` (linear-time, ReDoS-safe); and `zig_libs` (MIT),
 supplying the `datefmt` date core, the `tz` IANA offset lookup, the
 `encoding` code-page transcoder, the `json5` preprocessor, the `decimal`
-fixed-point numeric core and the `zipstream` ZIP reader. All are pinned in `bxp-core/build.zig.zon`. The
+fixed-point numeric core, the `zipstream` ZIP reader and the `diagnostics`
+collector. All are pinned in `bxp-core/build.zig.zon`. The
 fetches are cached after the first build; CI runners have network.
 
 In VS Code terminal:
@@ -86,11 +87,10 @@ bxp/                            # monorepo root (git root)
 │   │   ├── config.zig          # JSON5 config loader + FieldDoc tables
 │   │   ├── json.zig            # JSON array-of-objects → row representation
 │   │   ├── docs.zig            # --docs aggregator: re-exports expr + config catalogs
-│   │   └── diagnostics.zig     # structured validation collector (Severity, Diagnostic)
 │   ├── build.zig               # exports named Zig modules
 │   └── build.zig.zon           # fetch deps: uucode (tables), regex (Pike-VM),
-│                               #             zig-libs (datefmt · tz · encoding ·
-│                               #                       json5 · decimal · zipstream)
+│                               #             zig-libs (7 modules — the whole
+│                               #                       primitive layer)
 ├── bxp-gui/                    # Flutter desktop app (Linux / macOS / Windows)
 │   ├── lib/
 │   │   ├── main.dart           # Flutter entry; window + theme + provider wiring

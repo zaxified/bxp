@@ -48,11 +48,15 @@ pub fn build(b: *std.Build) void {
     reexport(b, "json5", json5_mod);
 
     // Structured diagnostic sink consumed by the inspect core's deep validation
-    // pass. config/expr/json5 modules accept an optional pointer to it
-    // so bxp-cli (which passes null) is unaffected.
-    const diagnostics_mod = b.addModule("diagnostics", .{
-        .root_source_file = b.path("src/diagnostics.zig"),
-    });
+    // pass. config/expr/json5 accept an optional pointer to it, so bxp-cli
+    // (which passes null) is unaffected. Consumed from zig-libs: the local copy
+    // was a strict subset — the collector, the `Diagnostic` fields and both
+    // count methods were identical, upstream just adds three more tests. The
+    // one thing the local header carried that upstream's does not is the
+    // bxp-specific `$err_`/`$warn_`/`$info_` routing, which now lives next to
+    // the switch that implements it in inspect.zig.
+    const diagnostics_mod = zig_libs.module("diagnostics");
+    reexport(b, "diagnostics", diagnostics_mod);
 
     // Fixed-point numeric core shared by every input path that turns a numeric
     // string into a value: expr.zig (expression eval), json.zig and xlsx.zig
@@ -263,15 +267,6 @@ pub fn build(b: *std.Build) void {
     // decimal.zig is the fixed-point numeric core, wired as the named "decimal"
     // module above (shared by expr/json/xlsx). This is its standalone test
     // artifact — the file is both a module root and a test root, same as json5.
-    const diagnostics_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/diagnostics.zig"),
-            .target = target,
-            .optimize = optimize,
-            .strip = false,
-        }),
-    });
-
     const xlsx_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/xlsx.zig"),
@@ -342,7 +337,6 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(btrace_tests).step);
     test_step.dependOn(&b.addRunArtifact(expr_tests).step);
     test_step.dependOn(&b.addRunArtifact(unicode_tests).step);
-    test_step.dependOn(&b.addRunArtifact(diagnostics_tests).step);
     test_step.dependOn(&b.addRunArtifact(xlsx_tests).step);
     test_step.dependOn(&b.addRunArtifact(config_tests).step);
     test_step.dependOn(&b.addRunArtifact(docs_tests).step);

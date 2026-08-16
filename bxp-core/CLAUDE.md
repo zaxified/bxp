@@ -28,7 +28,7 @@ Consumed by bxp-cli (conversion engine) and the stateless-inspect adapters
 | `btrace`      | `btrace.zig`      | Binary trace `Writer` / `Reader` for `--trace=bin`                        |
 | `json5`       | _(zig-libs dep)_  | `preprocess()` + `preprocessAnnotated()` — JSON5 → JSON. **No longer in this tree**: consumed from the pinned `zig_libs` fetch dep. Unlike the others this was NOT a strict subset — the local copy was an older line still carrying two crashes and two JSON5-spec deviations upstream had fixed |
 | `docs`        | `docs.zig`        | `writeDocs(alloc, writer)` — emits the language/schema docs JSON                   |
-| `diagnostics` | `diagnostics.zig` | `Diagnostics`, `Diagnostic`, `Severity` — structured validation collector |
+| `diagnostics` | _(zig-libs dep)_  | `Diagnostics`, `Diagnostic`, `Severity` — structured validation collector. **No longer in this tree**: consumed from the pinned `zig_libs` fetch dep. The former local copy was a strict subset (identical collector, fields and count methods) |
 | `inspect`     | `inspect.zig`     | Shared stateless core: `annotateRaw()`, `validateExpr()`, `validateExprJson()`, `evalExpr()`, `evalTrace()`, `evalBatch()`, `docsJson()`, `listTemplates()`, `fetchTemplate()` — wrapped by bxp-mcp + bxp-gui-bridge |
 
 ## Module details
@@ -406,9 +406,14 @@ blank-cell behaviour for blank divisors, the second is a loud
 guards to `floor`, `ceil` and `parse`; those are forward cover — probing
 confirmed they are not reachable through the expression surface today.
 
-### diagnostics.zig
+### diagnostics _(zig-libs dep)_
 
-Structured diagnostics collector for config/json5/expr validation.
+Structured diagnostics collector for config/json5/expr validation. **No
+longer in this tree** — the named `diagnostics` module comes from the pinned
+`zig_libs` fetch dep; the local copy was a strict subset. The one thing its
+header carried that upstream's does not is the bxp-specific
+`$err_`/`$warn_`/`$info_` severity routing, which now sits next to the switch
+that implements it in `inspect.zig`.
 
 - `Severity` — enum `{ .@"error", .warning, .info }`.
 - `Diagnostic` — one finding: `path` (dot-separated config tree path), optional source
@@ -459,7 +464,7 @@ content-addressed by hash and re-audited on any pin bump:
   module named `regex`; `build.zig` wires it into the `expr` module. Adds ~56 KB
   to the ReleaseSmall `bxp-cli` (engine + Unicode-scalar case-fold tables).
 - **zig_libs** (MIT, `zaxified/zig-libs`) — the module collection supplying
-  six modules that used to live in `src/`:
+  **all seven** modules that used to live in `src/`:
 
   - `tz` — IANA UTC-offset lookup behind `TO_UTC` / `TZ_OFFSET` /
     `TZ_CONVERT` / `IS_DST`.
@@ -476,6 +481,9 @@ content-addressed by hash and re-audited on any pin bump:
     csv / json / xlsx number canonicalisation.
   - `zipstream` — the streaming ZIP reader behind xlsx ingest and
     `zipPrePass`. Re-exported like `json5` (bxp-cli asks for it by name).
+  - `diagnostics` — the structured validation-finding collector behind the
+    inspect core's deep validation pass. Also re-exported (bxp-cli asks for
+    it by name).
 
   Pinned to the commit behind a dated release tag (upstream tags
   `YYYY-MM-DD`, no semver). `build.zig` takes all three off **one shared
@@ -493,15 +501,17 @@ content-addressed by hash and re-audited on any pin bump:
   **Treated as a foreign upstream** — read-only, pinned, never edited from
   this repo. Zig's package manager offers no floating "latest" mode: the
   `hash` field is mandatory and content-addressed, so any upstream movement
-  must land as an explicit `zig fetch --save` edit to `build.zig.zon`. Only
-  `diagnostics` is still local; the
+  must land as an explicit `zig fetch --save` edit to `build.zig.zon`. The
+  migration is complete — nothing in `src/` is a zig-libs candidate any more;
+  the
   remaining candidates and their measured divergence are tabulated in
   `docs/dev/roadmap.md` → "Shared core libraries — consume zig-libs".
 
-Nothing numeric or textual is left in-house: `csv`, `json`, `xlsx`,
-`zipstream`, `btrace`, `expr`, `config`, `docs`, `diagnostics`, `unicode` and
-`inspect` are bxp's own; the primitives underneath them (`datefmt`, `tz`,
-`encoding`, `json5`, `decimal`) all come from zig-libs.
+The split is now clean. What remains in `src/` is bxp's own domain layer —
+`csv`, `json`, `xlsx`, `btrace`, `expr`, `config`, `docs`, `unicode`,
+`inspect` — and every general-purpose primitive underneath it (`datefmt`,
+`tz`, `encoding`, `json5`, `decimal`, `zipstream`, `diagnostics`) comes from
+zig-libs. Anything new that is not bxp-specific belongs upstream, not here.
 
 ## Coding conventions
 

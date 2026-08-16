@@ -131,7 +131,7 @@ Exit `2` runs to completion — the user gets converted output AND a warning
 text on stderr. CI scripts treat `2` as failure (see "datasets are exemplary"
 convention).
 
-**2. Diagnostics (deep validation).** `bxp-core/diagnostics.zig` defines a
+**2. Diagnostics (deep validation).** The `diagnostics` module (zig-libs) defines a
 structured collector consumed by config validation (`inspect.annotateRaw`):
 
 ```text
