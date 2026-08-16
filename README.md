@@ -108,7 +108,7 @@ And a real archive, end to end: the Czech national address register
 in one run - parallel unpack, code-page transcode, date normalisation,
 and a combined roll-up of 3,017,760 rows - in about 10 seconds at ~28 MB
 RAM, no pre-unzip step. See
-[`examples/real-world/ruian-address-points`](examples/real-world/ruian-address-points/00-readme.md).
+[`docs/examples/real-world/ruian-address-points`](docs/examples/real-world/ruian-address-points/index.md).
 
 Practical limits:
 

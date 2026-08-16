@@ -335,6 +335,18 @@ figures predate that migration:
 | `french-dvf-realestate` | 9.1 s | 5.31 s | 18 MB | 21.5 MB |
 | `imdb-title-basics` | 24.5 s | 19.10 s | 26 MB | 29.4 MB |
 
+`ruian-address-points` is the exception that confirms the reading: the root
+README quotes it at "about 10 seconds at ~28 MB" for the **shipped release
+build**, and a ReleaseSmall run measured 9.82 s / 29.9 MB — still accurate.
+The five figures above are all ReleaseFast, which is where the drift is; the
+same RÚIAN run under ReleaseFast takes 6.85 s. So the stale numbers are the
+ReleaseFast ones (pre-Zig-0.16), not the README's. Whoever refreshes them
+should keep each figure's build mode explicit, since ReleaseSmall costs ~40 %
+here. RÚIAN needs no `fetch-full.sh` beyond a direct URL —
+`https://vdp.cuzk.gov.cz/vymenny_format/csv/<YYYYMMDD>_OB_ADR_csv.zip`, dated
+to a month end — which is worth adding so the example is reproducible like
+the others.
+
 Output row counts are unchanged (imdb 12,533,197 and chicago 1,197,482 match
 exactly). `french-dvf-realestate` says 3,499,932 rows but the current upstream
 file carries 3,499,931 and the conversion is 1:1 — correct the doc, not the
