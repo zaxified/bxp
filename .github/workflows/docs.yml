@@ -1,0 +1,94 @@
+# Publishes the MkDocs Material site to GitHub Pages.
+#
+# Triggered by any push to master that touches the docs input: the pages
+# themselves, the site config, or the pinned toolchain. Nothing else rebuilds
+# the site, so an unrelated code change does not redeploy it.
+#
+# The reference pages under docs/reference/ are GENERATED from the in-code
+# catalogs, but they are committed, so this workflow builds them as-is and
+# needs neither Zig nor Dart. Their sync with the catalogs is a test concern,
+# not a publishing one: scripts/gen-docs.sh --check runs inside test-04 on the
+# normal CI matrix and fails there if a catalog moved without a regen.
+#
+# `mkdocs build --strict` turns broken internal links and orphaned pages into
+# build failures, so a bad link stops the deploy rather than shipping.
+#
+# One-time repo setting this depends on: Settings → Pages → Source must be
+# "GitHub Actions". With the default "Deploy from a branch" the deploy step
+# fails; there is no gh-pages branch and deliberately so.
+
+name: docs
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+      - "scripts/docs-requirements.txt"
+      - ".github/workflows/docs.yml"
+  # Manual runs for a first publish, or to redeploy without touching a page.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Serialise deploys, but never cancel one in flight — a half-finished Pages
+# deployment is worse than a queued one.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: scripts/docs-requirements.txt
+
+      # The `social` plugin renders the Open Graph cards through Cairo, which
+      # needs system libraries the Python wheels do not carry.
+      - name: Install Cairo and font libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libcairo2-dev libfreetype6-dev libffi-dev libjpeg-dev libpng-dev
+
+      # Social cards are expensive to render and change only when a page title
+      # or the theme palette does. Material keys its own cache by content, so a
+      # stale restore is corrected, never served.
+      - name: Restore the social-card cache
+        uses: actions/cache@v4
+        with:
+          path: .cache
+          key: mkdocs-material-${{ hashFiles('mkdocs.yml', 'scripts/docs-requirements.txt') }}-${{ github.sha }}
+          restore-keys: |
+            mkdocs-material-${{ hashFiles('mkdocs.yml', 'scripts/docs-requirements.txt') }}-
+            mkdocs-material-
+
+      - name: Install the docs toolchain
+        run: pip install -r scripts/docs-requirements.txt
+
+      - name: Build the site
+        run: mkdocs build --strict
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

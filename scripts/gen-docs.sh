@@ -100,7 +100,21 @@ run_dart_gen "$REF_DIR"
 if [[ ! -x "$MKDOCS" ]]; then
   echo "mkdocs not found at $MKDOCS" >&2
   echo "create the docs venv first:" >&2
-  echo "  python3 -m venv $VENV && $VENV/bin/pip install mkdocs-material" >&2
+  echo "  python3 -m venv $VENV && $VENV/bin/pip install -r $MONO_ROOT/scripts/docs-requirements.txt" >&2
+  exit 1
+fi
+
+# A venv survives its interpreter being replaced under it — after an OS upgrade
+# `bin/python` can point at a newer Python that cannot see the site-packages
+# the venv was built with, and mkdocs then reports itself missing while being
+# installed. Say so, rather than sending the reader to reinstall a package that
+# is already there.
+if ! "$MKDOCS" --version >/dev/null 2>&1; then
+  echo "$MKDOCS exists but cannot run — most likely the venv was built with a" >&2
+  echo "different Python than $VENV/bin/python resolves to today." >&2
+  echo "recreate it:" >&2
+  echo "  rm -rf $VENV && python3 -m venv $VENV \\" >&2
+  echo "    && $VENV/bin/pip install -r $MONO_ROOT/scripts/docs-requirements.txt" >&2
   exit 1
 fi
 
