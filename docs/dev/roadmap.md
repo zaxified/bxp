@@ -10,7 +10,11 @@ lands on master. `CHANGELOG.md` is generated independently.
 
 ### v0.3.2
 
-Simplify manual page (resources/readme.md) - add url links to github mkdocs
+Simplify manual page (resources/readme.md) - add url links to github mkdocs.
+The plan: fold the distribution readme into `docs/` so it becomes part of the
+published site, and let the copy that ships in the archives link out to both
+the versioned `docs/` in the repo and the live Pages site. **Blocked on
+reconciling the drift below — do that first.**
 
 `LOOKUP` across templates within one bxp-cli run cycle
 
@@ -226,6 +230,49 @@ extending it only there, or (c) recording the gap as accepted with the numbers
 that justify it. Whichever wins, the `+`/`-` numeric carve-out must survive —
 re-introducing `'+420 555 0101` would be a regression of the fix that created
 it.
+
+### Reconcile the readme reference against the catalogs before linking it out
+
+Prerequisite for folding `resources/readme.md` into the site (v0.3.2). Before
+a hand-written table can be replaced by a link, the two have to agree — and
+measured 2026-08-17, they do not.
+
+The **inventory** matches exactly: all 57 expression builtins appear in both
+the readme and the generated `docs/reference/expr-functions.md`, with nothing
+extra on either side. The **descriptions have diverged**, and in both
+directions — word-overlap per function has a median of 0.38, with 39 of 53
+comparable entries below 0.5. It is not only rewording; each side documents
+facts the other omits:
+
+| Builtin | Only on the site | Only in the readme |
+| --- | --- | --- |
+| `ROUND` | rounds half away from zero | negative `n` rounds tens / hundreds |
+| `RAND` | not cryptographically secure | — |
+| `FIELDS` | argument must be a positive integer | needed for `csv_header_line: 0` |
+| `WORKDAY` | — | no exchange-holiday awareness |
+
+So the work is not a swap, it is a merge, and it has a direction: **anything
+the readme documents that is true and missing belongs in the `FnDoc` /
+`FieldDoc` catalog**, from which the site page regenerates. Merging the other
+way — editing the generated page — would be undone by the next `gen-docs.sh
+--build`. Once the catalogs carry the union, the readme table has nothing the
+link would lose.
+
+The same comparison still has to be run for the other reference tables (CLI
+flags, exit codes, config schema incl. the nested object schemas, date tokens,
+MCP and gui-mcp tools); only the expression catalog was measured.
+
+Worth deciding at the same time: the readme opens its reference half by
+claiming it is written so an assistant can produce a working template *"given
+only this file and `bxp-cli.examples.json`"*. Repeated attempts to do exactly
+that have never yielded a working config, so the claim is not true today and
+should not survive the rework unedited.
+
+Optional, and cheap either way: a CI check that the catalog name sets and the
+readme's name sets match — no prose comparison, just presence. That is what
+would have caught the missing `--trace` / `--trace-file` / `zip_input` entries
+the 2026-08-17 audit found by hand, and it is independent of whether the
+tables end up inline or linked.
 
 ### Stateless eval accepts a malformed row context and answers anyway
 
