@@ -1,5 +1,6 @@
 # BXP - Broker eXchange Parser
 
+[![Docs](https://img.shields.io/badge/docs-zaxified.github.io%2Fbxp-4c1)](https://zaxified.github.io/bxp/)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE.md)
 [![CodeQL](https://github.com/zaxified/bxp/actions/workflows/github-code-scanning/codeql/badge.svg)](https://github.com/zaxified/bxp/security/code-scanning)
 
@@ -173,12 +174,18 @@ Subsequent launches go through Spotlight / Launchpad / Dock.
 
 ## Documentation
 
-| For                                | Read                                                         |
-| ---------------------------------- | ------------------------------------------------------------ |
-| Using `bxp-cli` (terminal) or `bxp-gui` (desktop) | [`resources/readme.md`](resources/readme.md)  |
-| Developer / architecture / roadmap | [`docs/`](docs/README.md)                                    |
-| Contributing                       | [`CONTRIBUTING.md`](CONTRIBUTING.md)                         |
-| Release history                    | [`CHANGELOG.md`](CHANGELOG.md)                               |
+**📖 [zaxified.github.io/bxp](https://zaxified.github.io/bxp/)** — the full
+documentation site: guides, expression and config reference, runnable
+examples, and the developer docs. Published from `docs/` on every change to
+`master`.
+
+| For                                               | Read                                                                       |
+| ------------------------------------------------- | -------------------------------------------------------------------------- |
+| Getting started, guides, reference, examples      | [the documentation site](https://zaxified.github.io/bxp/)                  |
+| Using `bxp-cli` (terminal) or `bxp-gui` (desktop) | [`resources/readme.md`](resources/readme.md) — also ships in every archive |
+| Developer / architecture / roadmap                | [`docs/dev/`](docs/dev/) · [online](https://zaxified.github.io/bxp/dev/build/) |
+| Contributing                                      | [`CONTRIBUTING.md`](CONTRIBUTING.md)                                       |
+| Release history                                   | [`CHANGELOG.md`](CHANGELOG.md)                                             |
 
 ## Licence
 
