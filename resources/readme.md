@@ -367,13 +367,14 @@ clicking it for a run that already finished does nothing.
 
 ### Filesystem checks (slow paths)
 
-By default config validation skips filesystem checks (existence of
-`data_dir`, of input files) so loading is snappy. Triggering `Ctrl+E`
-(Validate) re-runs validation with a `check-fs` deadline of 2 seconds to
-add these checks. If a check times out, the GUI flips into a degraded mode for
-the rest of the session: subsequent reloads omit the flag too. This
-stops a network-mounted `data_dir` from making the editor feel
-sluggish.
+Config validation includes filesystem checks (does `data_dir` exist, are the
+input files there) on every load and save, under a 2-second deadline.
+`Ctrl+E` runs the same validation on demand against your unsaved draft.
+
+If a check ever exceeds that deadline, the GUI latches into a degraded mode
+for the rest of the session and drops the filesystem half from subsequent
+validations — so a network-mounted `data_dir` that has gone slow costs you
+those diagnostics, but never a sluggish editor. Reopen the app to reset it.
 
 ---
 
@@ -686,7 +687,7 @@ mybroker_to_wealthfolio: {
   // },
 
   // required; $variable definitions evaluated once per input row.
-  // [Column Name] = raw CSV field by header; [n] = field by 1-based index.
+  // [Column Name] = raw CSV field by header name; FIELDS(n) = field by position.
   input_schema: {
     $date:           "DATE_CONVERT([Date], 'DD/MM/YYYY hh:mm:ss', 'YYYY-MM-DD hh:mm:ss')",
     $ticker:         "REMAP([Symbol], 'anycoin')",
@@ -840,7 +841,7 @@ unary -    →    * /    →    & (concat)    →    + -    →    = != < > <= >
 | Syntax | Description |
 | --- | --- |
 | `[ColumnName]` | Raw CSV field by header name (leading/trailing spaces trimmed) |
-| `[n]` | Raw CSV field by 1-based column index |
+| `[2]` | **Not positional.** Brackets always look a column up *by header name*, so this reads a column literally headed `2` — and yields `""` if none exists. Use `FIELDS(2)` for the second field |
 | `'text'` | String literal |
 | `123`, `-0.5` | Numeric literal |
 | `&` | String concatenation (`'$CASH-' & [Currency]`) |
@@ -875,7 +876,7 @@ reserved.
 | `REMAP(s, 'name' \| k, v, ...)` | string | Whole-value lookup: if `s` exactly equals a map key, return its value, else `s` unchanged. Named form resolves a `maps` entry; inline `REMAP(s, k1,v1, ...)` gives pairs directly |
 | `DATE_CONVERT(s, from, to)` | string | Parse `s` using `from` format, emit using `to` format (tokens below) |
 | `LOOKUP([name,] key, 'field')` | string | Retrieve a value stored by a `pre_pass` table. `LOOKUP('name', key, 'field')` selects a named block; the 2-arg `LOOKUP(key, 'field')` works only when exactly one block is defined |
-| `FIELDS(n)` | string | Same as `[n]` — raw field by 1-based index |
+| `FIELDS(n)` | string | Raw field by 1-based position. The only positional accessor — `[n]` is a header-name lookup, not an index. Required for headerless input (`csv_header_line: 0`) |
 | `NOW()` | string | Current UTC datetime, format `YYYY-MM-DDTHH:MM:SSZ` |
 | `RAND(n)` | string | `n` random digits (first 1–9, rest 0–9); `n` clamped to 1–65 |
 | `FILENAME()` | string | Input file stem (directory + matched `file_pattern_in` suffix removed); e.g. `SPLIT_PART(FILENAME(), '_', 3)` reads a field from the name |

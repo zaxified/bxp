@@ -250,8 +250,11 @@ applies mutations (insert / delete / move / set), and dumps back to text.
 Used for the user's `bxp-cli.json` so saves don't reformat the file.
 Replaces the older byte-patcher pipeline.
 
-Round-trip identity is verified by `scripts/test.sh`'s "AST round-trip"
-phase against `DEV/bxp-cli.json`.
+Round-trip identity is verified by the package's own
+`packages/json5_ast/test/round_trip_test.dart` (run by test-04), not by a
+`scripts/test.sh` phase — the former "AST round-trip" phase against
+`DEV/bxp-cli.json` was retired, and `DEV/` is gitignored so it is absent
+from a fresh clone anyway.
 
 ## Agent control (gui-mcp)
 

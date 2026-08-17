@@ -11,7 +11,7 @@
 #   bash scripts/release-02-desktop.sh v0.2.0    — uses the given version string
 #
 # Output: releases/desktop/bxp-desktop-<version>-<platform>.<ext>
-#   Linux   — .tar.gz, .AppImage, .deb
+#   Linux   — .AppImage (the only Linux channel; one update path)
 #   Windows — -setup.exe (NSIS installer)
 #   macOS   — .dmg
 

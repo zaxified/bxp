@@ -97,8 +97,11 @@ bxp/
 │   ├── release-02-desktop.sh    # Host-OS-specific Flutter desktop bundle → .AppImage / .deb
 │   │                            # / .tar.gz / NSIS .exe / DMG (matrixed by GH Actions)
 │   ├── release-03-checksums.sh  # Emit SHA256SUMS for every release artifact
-│   ├── release-changelog.sh     # Extract per-tag section from CHANGELOG.md for release notes
-│   ├── release-tag.sh           # Push a vX.Y.Z tag and trigger the release workflow
+│   ├── release-changelog.sh     # Release prep: bump all 6 manifests + generate the
+│   │                            # CHANGELOG.md entry from commits since the last tag,
+│   │                            # committed as "release: prepare <version>". Push manually
+│   ├── release-tag.sh           # Cut + push the vX.Y.Z tag using the version already in
+│   │                            # the manifests (bxp-cli/build.zig.zon), triggering release.yml
 │   └── check-formatting.sh      # mermaid-fence syntax check; PRE-RELEASE docs
 │                                # step — deliberately NOT a test-NN phase
 │                                # (test.sh does not auto-run it). Markdown
