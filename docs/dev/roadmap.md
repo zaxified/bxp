@@ -7,13 +7,14 @@ lands on master. `CHANGELOG.md` is generated independently.
 
 ### v0.3.1
 
-Auto manual page (resources/readme.md) - AutoDoc
+
+### v0.3.2
+
+Simplify manual page (resources/readme.md) - add url links to github mkdocs
 
 `LOOKUP` across templates within one bxp-cli run cycle
 
 Output row deduplication in combined output files `combined_output_dedup: bool    // (default:false)`
-
-### v0.3.2
 
 Raise the macOS deployment target from 10.15 to 12 — **release blocker.**
 Flutter 3.47 raised its own minimum supported macOS to 12 (to support
@@ -382,25 +383,6 @@ unless noted:
   decimal core. `POWER(base, exp)` and `SQRT(x)` are **blocked on a design call**,
   both need floating point, which conflicts with the deliberately float-free
   decimal core; revisit only with an integer-exponent-only `POWER` or an explicit float-approximation mode.
-
-### Re-take the Linux bench reference on a quiet machine
-
-The documented Linux reference is S17 (`results-20260616-160353.csv`,
-22.36 s total). A 2026-08-16 run measured 26.23 s — but re-running the
-*reference commit itself* on the same day gave 24.86 s, so most of the gap is
-the machine, not the code: those runs happened under a load average of ~1.8
-(browser + editor + language servers), whereas the reference was taken on an
-idle box. The Ubuntu 24.04 → 26.04 upgrade (2026-06-29) is not implicated —
-S17 predates it and the post-upgrade run matched it to within 0.03 s.
-
-Take a fresh reference **after a reboot, with nothing else running**, and
-record it as S18. Recording one now would bake ~11 % of ambient load into the
-baseline and cause a false *improvement* next time.
-
-While writing it up, add the protocol note that actually prevents false
-alarms: a stored reference ages, so on any suspected regression re-run the
-baseline commit in the same session and compare that pair. Comparing a fresh
-run against a weeks-old stored number cannot separate code from machine.
 
 ### Cover the examples tree in the test suite
 
