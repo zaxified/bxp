@@ -61,6 +61,18 @@ class _FakeHost implements GuiMcpHost {
 
   Map<String, dynamic>? trace;
 
+  /// Canned reply for [validationSummary] — same shape TraceStore builds.
+  Map<String, dynamic> validation = {
+    'errors': 0,
+    'warnings': 0,
+    'info': 0,
+    'findings': <Map<String, String>>[],
+    'omitted': 0,
+  };
+
+  @override
+  Map<String, dynamic> validationSummary() => validation;
+
   @override
   Map<String, String> errorsAt(List<String> path) =>
       errorsByPath[path.join('.')] ?? const {};
@@ -369,6 +381,60 @@ void main() {
     expect(out['saved'], true);
     expect(host.saveCount, 1);
     expect(server.activity.first.outcome, 'ok');
+  });
+
+  test('save is refused while the config has validation errors', () async {
+    host
+      ..isDirty = true
+      ..configHasErrors = true
+      ..validation = {
+        'errors': 1,
+        'warnings': 0,
+        'info': 0,
+        'findings': [
+          {
+            'severity': 'error',
+            'path': 'conversion_templates.demo.date_filter_from_filename',
+            'message': "date_filter_from_filename requires '\$date'",
+          },
+        ],
+        'omitted': 0,
+      };
+    allowSave = true; // would approve — the gate must fire before the dialog
+    final result = await client!.callTool(
+      CallToolRequest(name: 'save', arguments: const {}),
+    );
+    final out = _decode(result);
+
+    expect(out['saved'], false);
+    expect(out['reason'], contains('validation errors'));
+    expect((out['validation'] as Map)['errors'], 1);
+    expect(host.saveCount, 0, reason: 'the write must never be attempted');
+    expect(server.activity.first.outcome, 'blocked');
+  });
+
+  test('get_state carries the bounded validation summary', () async {
+    host.validation = {
+      'errors': 2,
+      'warnings': 1,
+      'info': 0,
+      'findings': [
+        {'severity': 'error', 'path': 'a.b', 'message': 'boom'},
+      ],
+      'omitted': 1,
+    };
+    final result = await client!.callTool(
+      CallToolRequest(name: 'get_state', arguments: const {}),
+    );
+    final v = _decode(result)['validation'] as Map<String, dynamic>;
+    expect(v['errors'], 2);
+    expect(v['warnings'], 1);
+    expect(v['omitted'], 1);
+    expect((v['findings'] as List).single, {
+      'severity': 'error',
+      'path': 'a.b',
+      'message': 'boom',
+    });
   });
 
   test('autoApprove getter reflects the setter', () {

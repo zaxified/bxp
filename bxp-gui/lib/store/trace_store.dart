@@ -947,22 +947,44 @@ class TraceStore extends ChangeNotifier {
     return any(_validationErrors) || any(_dartErrors);
   }
 
-  /// Quick predicate: any `$err_*` anywhere in [src]? Used by the save
-  /// pre-flight validator (which would otherwise pass through "annotated
-  /// JSON with errors" silently because the bridge returns annotated JSON even
-  /// then). Mirrors the old `_findFirstErrTrace` behaviour without
-  /// rebuilding the full path map.
+  /// Quick predicate: any `$err_*` anywhere in [src]? Returns its
+  /// displayable message (or the marker key, when the payload carries no
+  /// usable message) so the caller can name the offender; null = clean.
+  /// Used by the save pre-flight validator, which would otherwise pass
+  /// through "annotated JSON with errors" silently because the bridge
+  /// returns annotated JSON even then.
+  ///
+  /// Payload shape is whatever the marker holds: since Phase G1 the bridge
+  /// emits objects (`{message, off?, len?, line?, col?, suggest?}`), and
+  /// bare strings remain accepted for the legacy shape. Extraction is
+  /// delegated to [_diagMessage] — the SAME helper `_extractDiagnostics`
+  /// uses — so the two walkers cannot drift apart on payload shape again.
+  /// (They did: this one matched `value is String` only, which stopped
+  /// matching anything the bridge produces once G1 landed, and let a config
+  /// whose only error is a Zig-side cross-field rule save successfully.)
+  /// Recursion skips exactly the four annotation prefixes
+  /// `_extractDiagnostics` skips — not every `$`-key — so user `$variable`
+  /// names (e.g. under `input_schema`) are still walked into.
   static String? _firstErrTraceIn(dynamic src) {
     if (src is Map) {
       for (final e in src.entries) {
         final k = e.key.toString();
-        if (k.startsWith(r'$err_') && e.value is String) {
-          return e.value as String;
+        if (k.startsWith(r'$err_')) {
+          final msg = _diagMessage(e.value);
+          // An object marker without a `message` yields '' — non-null, so
+          // the save is still blocked, but the banner would read
+          // "pre-save validation failed: ". Name the marker instead.
+          return msg.isEmpty ? k : msg;
         }
       }
       for (final e in src.entries) {
         final k = e.key.toString();
-        if (k.startsWith(r'$')) continue;
+        if (k.startsWith(r'$err_') ||
+            k.startsWith(r'$warn_') ||
+            k.startsWith(r'$info_') ||
+            k.startsWith(r'$comm_')) {
+          continue;
+        }
         final found = _firstErrTraceIn(e.value);
         if (found != null) return found;
       }
@@ -974,6 +996,13 @@ class TraceStore extends ChangeNotifier {
     }
     return null;
   }
+
+  /// Test-only door onto [_firstErrTraceIn]. The pre-save guard is private
+  /// and only reachable through a full `saveConfig` round-trip; the legacy
+  /// bare-string marker shape can no longer be produced by the bridge, so
+  /// this is the only way to keep that branch covered.
+  @visibleForTesting
+  static String? firstErrTraceForTest(dynamic src) => _firstErrTraceIn(src);
 
   /// Walk a parsed `the bridge config validation` tree, collecting `$err_*`,
   /// `$warn_*`, and `$info_*` markers into per-severity path-keyed maps.
@@ -3090,6 +3119,68 @@ class TraceStore extends ChangeNotifier {
       }
     }
     return null;
+  }
+
+  /// Compact, bounded snapshot of the validation state the user sees as
+  /// per-node badges in the config tree: counts per severity plus the
+  /// first [limit] findings, each with its dotted config path and message.
+  ///
+  /// Reads the already-populated buckets (bridge `$err_*`/`$warn_*`/
+  /// `$info_*` + Dart-side `$dart_<N>`) — nothing is re-validated here —
+  /// and applies the same `_validationPathAlive` filter [diagnosticBlob]
+  /// uses, so what it reports is what is actually painted on screen.
+  /// Consumed by gui-mcp's `get_state` so an agent can read the tree's
+  /// error state without parsing the free-form diagnostic blob (which also
+  /// carries run stderr and can be arbitrarily large).
+  Map<String, dynamic> validationSummary({int limit = 10}) {
+    var errors = 0;
+    var warnings = 0;
+    var info = 0;
+    final findings = <Map<String, String>>[];
+    var omitted = 0;
+
+    void collect(String severity, Map<String, Map<String, String>> bucket) {
+      for (final e in bucket.entries) {
+        if (!_validationPathAlive(e.key)) continue;
+        final path = e.key.replaceAll('\x00', '.');
+        for (final msg in e.value.values) {
+          if (msg.isEmpty) continue;
+          switch (severity) {
+            case 'error':
+              errors++;
+            case 'warning':
+              warnings++;
+            default:
+              info++;
+          }
+          if (findings.length < limit) {
+            findings.add({
+              'severity': severity,
+              'path': path,
+              'message': msg,
+            });
+          } else {
+            omitted++;
+          }
+        }
+      }
+    }
+
+    // Errors first so a truncated list never hides them behind warnings.
+    collect('error', _validationErrors);
+    collect('error', _dartErrors);
+    collect('warning', _validationWarnings);
+    collect('warning', _dartWarnings);
+    collect('info', _validationInfo);
+    collect('info', _dartInfo);
+
+    return {
+      'errors': errors,
+      'warnings': warnings,
+      'info': info,
+      'findings': findings,
+      'omitted': omitted,
+    };
   }
 
   /// Combined diagnostic text from every error source the UI surfaces:

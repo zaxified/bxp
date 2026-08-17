@@ -92,6 +92,8 @@ class _TraceStoreMcpHost implements GuiMcpHost {
   @override
   bool get configHasErrors => _store.configHasErrors;
   @override
+  Map<String, dynamic> validationSummary() => _store.validationSummary();
+  @override
   String get runStatusName => _store.status.name;
   @override
   String get runModeName => _store.runMode.name;

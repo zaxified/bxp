@@ -6,9 +6,9 @@ Agent-callable tools the running bxp-gui exposes over localhost StreamableHTTP.
 
 | Tool | What it does |
 | --- | --- |
-| <code class="hl-fn">get_state</code> | Read the live GUI state: loaded config path, unsaved-changes flag, run status, a diagnostics summary, and the active template. Use this to "see the screen" before acting. |
+| <code class="hl-fn">get_state</code> | Read the live GUI state: loaded config path, unsaved-changes flag, run status, a diagnostics summary, and the active template. `validation` carries the same error/warning badges the user sees in the config tree — counts per severity plus the first findings with their config path and message. Use this to "see the screen" before acting. |
 | <code class="hl-fn">edit_node</code> | Edit a scalar leaf in the loaded config. `path` is the list of keys/indices from the config root to the leaf; `value` is the new scalar. Routed through the same live, undoable edit action the UI uses. Blocked when the config was loaded with errors. |
-| <code class="hl-fn">save</code> | Save the edited config back to disk (atomic + validated). Asks the user to confirm before writing. No-op when there are no unsaved changes. |
+| <code class="hl-fn">save</code> | Save the edited config back to disk (atomic + validated). Asks the user to confirm before writing. No-op when there are no unsaved changes. Refused while the config carries validation errors — the same block the toolbar SAVE button applies; call get_state and read `validation` to see them. |
 | <code class="hl-fn">open_config</code> | Load a config file from disk into the editor, replacing the current one. `path` is an absolute filesystem path. |
 | <code class="hl-fn">reload</code> | Reload the active config from disk, discarding unsaved edits. Fails when no config is open. |
 | <code class="hl-fn">dry_run</code> | Run the conversion in dry-run mode (no output files written). Returns the run status and exit code. |

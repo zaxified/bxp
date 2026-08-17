@@ -19,7 +19,10 @@ surfaces in `lastError` and the GUI stays fully usable without it.
 
 **Tools.** `get_state`, `open_config`, `reload`, `edit_node`, `insert_node`,
 `rename_key`, `move_node`, `delete_node`, `set_template`, `dry_run`, `full_run`,
-`get_trace`, `get_row_detail`, `save`, `exit`. `GET /health` is an
+`get_trace`, `get_row_detail`, `save`, `exit`. `get_state` is the "see the
+screen" call: alongside path / dirty / run status it carries `validation` —
+per-severity counts plus the first findings (`{severity, path, message}`),
+the same badges the config tree paints. `GET /health` is an
 unauthenticated handshake (`{name, version, config_path, dirty, agent_connected,
 auto_approve}`) so an agent can confirm it reached the right server before MCP
 `initialize`.
@@ -31,7 +34,10 @@ auto_approve}`) so an agent can confirm it reached the right server before MCP
   `413` instead of an unbounded read.
 - **Confirm-gating** — destructive / side-effecting tools (`save`, `full_run`,
   `delete_node`, `exit`) prompt through an `AgentConfirmFn` dialog; additive
-  edits are blocked outright when the config loaded with errors.
+  edits are blocked outright when the config loaded with errors. `save` is
+  refused before the prompt while the config carries validation errors,
+  returning `{saved:false, reason, validation}` — the agent sees the same
+  block the toolbar SAVE button applies to the user.
 - **Origin policy** — permissive by default (an empty allowlist accepts every
   `Origin`, so webview agents that send one keep working); the loopback bind is
   the protection. A persisted `bxp-gui.mcpOriginAllowlist` tightens it when the

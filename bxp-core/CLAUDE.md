@@ -686,11 +686,24 @@ residual 🔵 design observations. Greppable in-code marker: `AUDIT-OK`.
   against `zipfile.testzip()`, and the live run puts every one of them through
   the CRC-verifying reader.
 - **`inspect.zig formatRootErr` shape ≠ injected-diagnostic shape.** Root
-  errors emit `{"$err_1":"<msg>"}` (bare string); injected diagnostics emit
-  `{"$err_N":{message,off?,len?,suggest?}}` (object). The in-code doc comment
-  flags it; the GUI extractor branches on value type, so it is benign — but a
-  new strict consumer must handle both. Worth unifying to the object form if
-  the error surface is ever reworked.
+  errors emit `{"$err_1":"<msg>"}` (bare string, reachable for `op:config`
+  only when the file cannot be read or preprocessed); injected diagnostics
+  emit `{"$err_N":{message,off?,len?,line?,col?,suggest?}}` (object). The
+  in-code doc comment flags it. **The "benign" claim this note used to make
+  was wrong** — it held for the GUI's *display* extractor
+  (`TraceStore._extractDiagnostics`, which branches on value type) but not
+  for its *pre-save guard* (`TraceStore._firstErrTraceIn`), which matched
+  `$err_*` only when the payload was a bare `String`. Once the injected
+  markers became objects, that guard matched nothing the bridge produces at
+  save time, so a config whose only error is a Zig-side cross-field rule
+  (e.g. `date_filter_from_filename` without `$date` in `input_schema` — the
+  Dart validator has no counterpart) saved successfully and cleared the undo
+  stack over a broken file. **Fixed 2026-08-17**: the guard now delegates
+  payload extraction to the same `_diagMessage` helper the display extractor
+  uses, so both shapes work and the two walkers cannot drift apart again;
+  pinned by `bxp-gui/test/save_guard_test.dart`. The dual shape itself
+  remains — a new strict consumer must still handle both. Worth unifying to
+  the object form if the error surface is ever reworked.
 - **`inspect.zig insertNumberedBefore` is O(K·N) per annotated object.** Each
   insertion re-dupes every key of the target object. Configs are ≤ 1 MB with
   small objects so cost is negligible; only a future "annotate a huge generated

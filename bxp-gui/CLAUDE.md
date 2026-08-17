@@ -304,11 +304,24 @@ free and parity is definitional.
   `move_node`) are blocked when the config loaded with errors;
   destructive/side-effecting ones (`save` / `full_run` / `delete_node` /
   `exit`) are gated by an `AgentConfirmFn` dialog (navigatorKey-backed).
+  `save` additionally refuses **before** prompting when `configHasErrors`
+  is set — the same first-line block the toolbar SAVE button applies —
+  returning `{saved:false, reason, validation}` rather than a bare false.
+  (The store's own pre-save guard, `TraceStore._firstErrTraceIn`, remains
+  the last line of defence for errors only the Zig side knows about.)
   The structural verbs (`insert_node` / `rename_key` / `move_node` /
   `delete_node`) compare `TraceStore.editRevision` before/after the call and
   report `{<verb>:false, reason}` when the store **silently no-ops** a guarded
   edit (a schema-`required` key, a duplicate key, an out-of-range move) — so
   the tool never reports a false success.
+  `get_state` reports what the human sees, including a **bounded validation
+  summary** under `validation`: `{errors, warnings, info, findings,
+  omitted}`, where `findings` is the first 10 `{severity, path, message}`
+  entries (errors first) drawn from the same live buckets the config tree
+  paints its badges from — `TraceStore.validationSummary()`, a projection,
+  not a re-validation. It complements the free-form `diagnostics` blob,
+  which also carries run stderr and is unbounded. The same summary rides
+  along on a refused `save`.
   `get_row_detail` lazy-loads a row's trace detail via
   `TraceStore.ensureDetailLoaded` and is projected to JSON in the
   `_TraceStoreMcpHost` adapter. Every call appends one `AgentActivityEntry`

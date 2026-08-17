@@ -40,6 +40,13 @@ abstract interface class GuiMcpHost {
   /// Whether any live error diagnostic is currently attached.
   bool get configHasErrors;
 
+  /// Compact, bounded snapshot of the validation state the user sees as
+  /// badges in the config tree: `{errors, warnings, info, findings,
+  /// omitted}`, where `findings` is the first N `{severity, path, message}`
+  /// entries (errors first). Read-only projection of state the store
+  /// already holds — nothing is re-validated.
+  Map<String, dynamic> validationSummary();
+
   /// Run lifecycle status name (e.g. `idle` / `running` / `done` / `error`).
   String get runStatusName;
 
@@ -612,7 +619,10 @@ class GuiMcpServer extends ChangeNotifier {
       description:
           'Read the live GUI state: loaded config path, unsaved-changes '
           'flag, run status, a diagnostics summary, and the active template. '
-          'Use this to "see the screen" before acting.',
+          '`validation` carries the same error/warning badges the user sees '
+          'in the config tree — counts per severity plus the first findings '
+          'with their config path and message. Use this to "see the screen" '
+          'before acting.',
       inputSchema: JsonSchema.object(properties: const {}, required: const []),
       annotations: const ToolAnnotations(
         title: 'Get GUI state',
@@ -687,7 +697,9 @@ class GuiMcpServer extends ChangeNotifier {
       description:
           'Save the edited config back to disk (atomic + validated). Asks '
           'the user to confirm before writing. No-op when there are no '
-          'unsaved changes.',
+          'unsaved changes. Refused while the config carries validation '
+          'errors — the same block the toolbar SAVE button applies; call '
+          'get_state and read `validation` to see them.',
       inputSchema: JsonSchema.object(properties: const {}, required: const []),
       annotations: const ToolAnnotations(title: 'Save config'),
       callback: (args, extra) async {
@@ -695,6 +707,22 @@ class GuiMcpServer extends ChangeNotifier {
         if (!_host.isDirty) {
           _record('save', 'no unsaved changes', 'ok');
           return _json({'saved': false, 'reason': 'no unsaved changes'});
+        }
+        // First-line defence, mirroring the toolbar SAVE gate the human
+        // sees: refuse before prompting rather than asking the user to
+        // approve a write the store's own pre-save validation would
+        // reject. Reported as {saved:false, reason} — the same refusal
+        // shape the structural verbs use — so the tool never reports a
+        // false success.
+        if (_host.configHasErrors) {
+          _record('save', _host.configPath, 'blocked');
+          return _json({
+            'saved': false,
+            'reason': 'The config has unresolved validation errors — saving '
+                'is blocked. Call get_state and read `validation` for the '
+                'offending paths, fix them, then retry.',
+            'validation': _host.validationSummary(),
+          });
         }
         final approved = await _confirmAction(
           'Agent wants to save the config',
@@ -1225,6 +1253,11 @@ class GuiMcpServer extends ChangeNotifier {
       'isDirty': _host.isDirty,
       'loadedWithErrors': _host.configLoadHadErrors,
       'hasErrors': _host.configHasErrors,
+      // Bounded per-severity breakdown of the tree badges the user sees.
+      // `diagnostics` below is the same text the status-bar panel shows
+      // (config + run stderr, unbounded); this one is the structured,
+      // capped view an agent can act on without parsing that blob.
+      'validation': _host.validationSummary(),
       'status': _host.runStatusName,
       'runMode': _host.runModeName,
       'lastExitCode': _host.lastExitCode,
