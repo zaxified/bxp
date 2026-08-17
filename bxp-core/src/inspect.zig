@@ -2228,3 +2228,58 @@ test "expr-batch: fewer fields than headers yields empty for missing column" {
     try testing.expectEqualStrings("", results.items[1].object.get("value").?.string);
     try testing.expectEqualStrings("", results.items[2].object.get("value").?.string);
 }
+
+test "every `when` inside a GUI scaffold is a valid expression" {
+    // JSON5-parseability is not enough: a scaffold can parse fine and still
+    // carry a condition the evaluator rejects. That is exactly how the "add
+    // template" insert once shipped `when: "true"` — valid JSON5, but
+    // ExpectedLParen to the expression parser, so the config the GUI wrote
+    // could not be run. Validate every `when` each scaffold contains.
+    const alloc = std.testing.allocator;
+
+    const Source = struct { origin: []const u8, src: []const u8 };
+    const scaffolds = [_]Source{
+        .{ .origin = "RowRule.scaffold", .src = config_mod.RowRule.scaffold_template },
+        .{ .origin = "PrePass.scaffold", .src = config_mod.PrePass.scaffold_template },
+        .{ .origin = "XlsxSheet.scaffold", .src = config_mod.XlsxSheet.scaffold_template },
+        .{ .origin = "BrokerConfig.scaffold", .src = config_mod.BrokerConfig.scaffold_template },
+    };
+
+    const Walk = struct {
+        fn visit(a: std.mem.Allocator, origin: []const u8, v: std.json.Value, seen: *usize) !void {
+            switch (v) {
+                .object => |obj| {
+                    var it = obj.iterator();
+                    while (it.next()) |kv| {
+                        if (std.mem.eql(u8, kv.key_ptr.*, "when") and kv.value_ptr.* == .string) {
+                            const src = kv.value_ptr.*.string;
+                            seen.* += 1;
+                            if (try validateExpr(a, src)) |e| {
+                                std.debug.print(
+                                    "scaffold '{s}' has an invalid `when`: \"{s}\" -> {s}\n",
+                                    .{ origin, src, e.name },
+                                );
+                                return error.InvalidScaffoldExpression;
+                            }
+                        }
+                        try visit(a, origin, kv.value_ptr.*, seen);
+                    }
+                },
+                .array => |arr| for (arr.items) |item| try visit(a, origin, item, seen),
+                else => {},
+            }
+        }
+    };
+
+    var when_count: usize = 0;
+    for (scaffolds) |s| {
+        const preprocessed = try json5_mod.preprocess(alloc, s.src);
+        defer alloc.free(preprocessed);
+        var parsed = try std.json.parseFromSlice(std.json.Value, alloc, preprocessed, .{});
+        defer parsed.deinit();
+        try Walk.visit(alloc, s.origin, parsed.value, &when_count);
+    }
+    // Guard the guard: if scaffolds stop carrying `when` keys this test would
+    // silently pass while checking nothing.
+    try std.testing.expect(when_count >= 3);
+}

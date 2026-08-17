@@ -6,6 +6,7 @@ BXP Desktop keyboard shortcuts (modifier shown for this platform).
 
 | Action | Shortcut |
 | --- | --- |
+| Open config | <code class="hl-type">Ctrl+O</code> |
 | Save | <code class="hl-type">Ctrl+S</code> |
 | Reload from disk | <code class="hl-type">Ctrl+R</code> |
 | Undo / Redo | <code class="hl-type">Ctrl+Z / Ctrl+Y</code> |

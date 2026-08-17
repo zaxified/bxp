@@ -33,6 +33,7 @@ class ShortcutDoc {
 List<ShortcutDoc> shortcutCatalog() {
   final mod = commandModifierLabel;
   return [
+    ShortcutDoc('Open config', '$mod+O'),
     ShortcutDoc('Save', '$mod+S'),
     ShortcutDoc('Reload from disk', '$mod+R'),
     ShortcutDoc('Undo / Redo', '$mod+Z / $mod+Y'),

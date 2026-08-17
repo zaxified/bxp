@@ -2273,7 +2273,7 @@ class TraceStore extends ChangeNotifier {
   /// StatusBar surfaces this to the user.
   String? configSaveError;
   // True while a manual VALIDATE pass is in flight. Mirrors `isSaving`
-  // so the toolbar can grey the button and the Ctrl+V shortcut can no-op
+  // so the toolbar can grey the button and the Ctrl+E shortcut can no-op
   // on re-press.
   bool isValidating = false;
 
@@ -2435,7 +2435,7 @@ class TraceStore extends ChangeNotifier {
   }
 
   /// Manual deep-validation pass triggered by the VALIDATE toolbar button
-  /// (or Ctrl+V). Re-runs the bridge's config validation (check_fs=2), refreshes
+  /// (or Ctrl+E). Re-runs the bridge's config validation (check_fs=2), refreshes
   /// the path-keyed `$err_*`/`$warn_*`/`$info_*` maps, and re-uses the
   /// adaptive `[fs.timeout]` flag so a slow mount only pays the deadline
   /// once per session. When the user has unsaved edits the current draft

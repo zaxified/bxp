@@ -815,7 +815,8 @@ class BxpProcessClient {
       BridgeClient(_bridgeLibPath!).cancel(handle);
     } catch (_) {
       // Best-effort — cancel is idempotent and the run will resolve
-      // anyway when the child exits or the watchdog fires.
+      // anyway when the child exits. There is no watchdog behind this — the
+      // signal is delivered once and never escalated.
     }
   }
 

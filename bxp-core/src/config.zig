@@ -591,7 +591,7 @@ pub const BrokerConfig = struct {
             .type_name = "boolean",
             .required = false,
             .default = "false",
-            .description = "When true, all input files in data_dir produce a single combined output file '1-<template_id>-combined.csvx' instead of one output per input. Files are processed in alphabetical order so combined row order is deterministic.",
+            .description = "When true, all input files in data_dir additionally write their rows to one merged output file '1-<template_id>-combined.csvx', alongside the normal per-input outputs (it is an extra file, not a replacement). Files are processed in alphabetical order so combined row order is deterministic.",
         },
         .{
             .key = "row_rules_debug_missing",
@@ -683,7 +683,7 @@ pub const BrokerConfig = struct {
         \\    $account: ""
         \\  },
         \\  row_rules: [
-        \\    { when: "true", rows: [ { $action: "'DEPOSIT'" } ] }
+        \\    { when: "[column1] = 'test-condition1'", rows: [ { $action: "'DEPOSIT'" } ] }
         \\  ],
         \\  output_schema: {
         \\    date: "$date",
