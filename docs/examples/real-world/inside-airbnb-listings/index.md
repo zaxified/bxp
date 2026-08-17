@@ -42,7 +42,7 @@ Measured on the reference machine (ReleaseFast, 8 cores):
 | `unlicensed`   | 31,645 rows (**86%**)                                |
 | `exempt`       | 2,686 rows                                           |
 | `registered`   | 2,285 rows                                           |
-| price redacted | 36,616 rows (**100%** — endpoint strips every price) |
+| price redacted | 36,471 rows (**every real listing** — the endpoint strips every price; the other 145 rows are the split fragments below, whose columns are shifted) |
 
 !!! note "Why the two row counts differ"
 
@@ -51,12 +51,14 @@ Measured on the reference machine (ReleaseFast, 8 cores):
     part of the value and keeps reading. **36,616** is what bxp emits, because
     a newline **always** ends a record here — lazy-quote semantics, a deliberate
     design decision, not a parsing bug (see *Not planned* in the
-    [roadmap](../../dev/roadmap.md)). 154 listings on this scrape carry a
+    [roadmap](../../../dev/roadmap.md)). 154 listings on this scrape carry a
     newline inside their quoted description — most span two lines, a few up to
     six — so they arrive as 171 extra rows, and the run says so: `308 row(s)
-    had an unbalanced quote — treated as literal text`. If you need those
-    descriptions rejoined, strip the newlines before the conversion; if you
-    only care about the licence fields, the split rows are harmless.
+    had an unbalanced quote — treated as literal text`. Their columns are
+    shifted, so 145 of them show a stray value in `price_usd` and 144 fall into
+    the `unlicensed` bucket by default — a 0.5% skew that does not move the
+    headline rate. If you need those descriptions rejoined, strip the newlines
+    before the conversion.
 
 The 84% `unlicensed` rate in the 300-row slice holds at 86% across the full
 36k listings — Local Law 18's enforcement gap is not a sampling artifact. The

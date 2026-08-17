@@ -53,8 +53,13 @@ input_schema: {
 },
 ```
 
+Extra blocks are free in I/O terms: the first pass reads the input file once
+and fills every block on that single sweep, so a template with four blocks
+still reads the file exactly twice in total.
+
 The single-block form shown above is the legacy shape — it uses the
-2-argument `LOOKUP(key, 'field')` and is still accepted. See
+2-argument `LOOKUP(key, 'field')`, works only while exactly one block is
+defined, and is still accepted. See
 [Config schema](../reference/config-schema.md) for both forms.
 
 Reach for `pre_pass` **only** for genuine cross-row joins (paired

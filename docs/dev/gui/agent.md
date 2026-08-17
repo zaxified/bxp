@@ -23,9 +23,9 @@ surfaces in `lastError` and the GUI stays fully usable without it.
 screen" call: alongside path / dirty / run status it carries `validation` —
 per-severity counts plus the first findings (`{severity, path, message}`),
 the same badges the config tree paints. `GET /health` is an
-unauthenticated handshake (`{name, version, config_path, dirty, agent_connected,
-auto_approve}`) so an agent can confirm it reached the right server before MCP
-`initialize`.
+unauthenticated handshake (`{name, version, config_path, config_loaded, dirty,
+agent_connected, auto_approve}`) so an agent can confirm it reached the right
+server before MCP `initialize`.
 
 **Security model.** The defaults are bounded for a local-only tool:
 

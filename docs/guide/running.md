@@ -21,8 +21,8 @@ All flags are optional. Without arguments, bxp-cli reads `bxp-cli.json`
 from the current directory and processes every template in it.
 
 ```bash
-./bxp-cli --help                                  # print usage
-./bxp-cli                                          # process all templates from bxp-cli.json
+./bxp-cli --help                                    # print usage
+./bxp-cli                                           # process all templates from bxp-cli.json
 ./bxp-cli --template <id>                           # process a single template
 ./bxp-cli --template <id> --data ./my-data/         # override data_dir for that template
 ```

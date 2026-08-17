@@ -21,6 +21,20 @@ and field access converts both shapes automatically:
 Expressions receive numeric fields ready to feed into arithmetic; no
 defensive `IF(CONTAINS(...), REPLACE(...), ...)` wrapper needed.
 
+!!! note
+
+    The decimal separator must differ from `csv_delimiter_in`, so a template
+    that sets `csv_decimal_separator_in: ","` must also move the field
+    separator off the default comma (`csv_delimiter_in: ";"` — which is what
+    these exports use anyway). Otherwise the config is rejected at load.
+
+Numeric output is **canonical, not verbatim**: a plain `[Column]` reference
+whose value the fixed-point core represents exactly drops redundant trailing
+zeros, so `75,00` reaches the output file as `75` and `1,50` as `1.5`. Values
+the core does not canonicalise — a leading-zero form like `0012`, or more than
+12 fractional digits — pass through byte-for-byte, as does anything used in a
+string context (`'' & [Column]`).
+
 US-style brokers (Schwab, Fidelity, Trading 212) use `.` decimal +
 optional `,` thousands — that path is handled automatically (see the
 "American thousands-separated numbers" note under

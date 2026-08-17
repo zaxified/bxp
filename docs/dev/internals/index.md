@@ -91,7 +91,7 @@ fatal on every platform.
 
 Implementation: routing decisions live in
 [`bxp-gui/lib/services/bxp_process_client.dart`](https://github.com/zaxified/bxp/blob/master/bxp-gui/lib/services/bxp_process_client.dart)
-(`_runOneShot`, `_runCliTraceViaBridge`, `traceExpr`). See
+(`_runOneShot`, `_inspect`, `_runWithBtraceViaBridge`). See
 [`bxp-gui-bridge/CLAUDE.md`](https://github.com/zaxified/bxp/blob/master/bxp-gui-bridge/CLAUDE.md) for the C-ABI surface
 of each `bridge_*` entry point.
 
@@ -108,7 +108,7 @@ automatically by Claude Code, but you can read them directly any time.
 | ---------------- | --------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
 | Monorepo         | [`CLAUDE.md`](https://github.com/zaxified/bxp/blob/master/CLAUDE.md)                                                       | Top-level layout + package dep graph + cross-cutting conventions                                                                    |
 | `bxp-cli`        | [`bxp-cli/CLAUDE.md`](https://github.com/zaxified/bxp/blob/master/bxp-cli/CLAUDE.md)                                       | Full config reference, expression syntax, broker list, exit codes, output stream routing                                            |
-| `bxp-mcp`        | [`bxp-mcp/CLAUDE.md`](https://github.com/zaxified/bxp/blob/master/bxp-mcp/CLAUDE.md)                                       | MCP server: adapter model, tool catalog, annotated JSON shape (`$comm_*`/`$err_*`/…), in-proc vs spawn, wire protocol, bxp_simulate |
+| `bxp-mcp`        | [`bxp-mcp/CLAUDE.md`](https://github.com/zaxified/bxp/blob/master/bxp-mcp/CLAUDE.md)                                       | MCP server: adapter model, tool catalog, annotated JSON shape (`$err_*`/`$warn_*`/`$info_*`), in-proc vs spawn, wire protocol, bxp_simulate |
 | `bxp-core`       | [`bxp-core/CLAUDE.md`](https://github.com/zaxified/bxp/blob/master/bxp-core/CLAUDE.md)                                     | Per-module API surface, build details, "known non-issues" rationale                                                                 |
 | `bxp-gui`        | [`bxp-gui/CLAUDE.md`](https://github.com/zaxified/bxp/blob/master/bxp-gui/CLAUDE.md)                                       | Flutter app structure, services/store/ui split, MCP debug workflow                                                                  |
 | `bxp-gui-bridge` | [`bxp-gui-bridge/CLAUDE.md`](https://github.com/zaxified/bxp/blob/master/bxp-gui-bridge/CLAUDE.md)                         | C-ABI surface, Debug→ReleaseSafe rewrite rationale, Win-mandatory / cross-platform roles                                            |

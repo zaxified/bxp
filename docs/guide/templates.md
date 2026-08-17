@@ -83,7 +83,8 @@ mybroker_to_wealthfolio: {
   // before processing (zip → (xlsx) → csv → csvx), e.g. a "zip of one CSV
   // per region" export. entry_pattern picks members by suffix; dir_mode
   // "basename" (default) flattens paths, "keep_path" joins them with
-  // path_separator. Runs in parallel. See examples/real-world/ruian-address-points.
+  // path_separator. Runs in parallel.
+  // See docs/examples/real-world/ruian-address-points.
   // zip_input: { entry_pattern: ".csv", dir_mode: "basename", path_separator: "_" },
 
   // optional; first-pass lookup table for cross-row joins (e.g. paired trade rows)
@@ -97,7 +98,8 @@ mybroker_to_wealthfolio: {
   // },
 
   // required; $variable definitions evaluated once per input row.
-  // [Column Name] = raw CSV field by header; [n] = field by 1-based index.
+  // [Column Name] = raw CSV field by header name; FIELDS(n) = field by
+  // 1-based column position ([2] means a column *named* "2", not the 2nd one).
   input_schema: {
     $date:           "DATE_CONVERT([Date], 'DD/MM/YYYY hh:mm:ss', 'YYYY-MM-DD hh:mm:ss')",
     $ticker:         "REMAP([Symbol], 'anycoin')",
@@ -166,8 +168,9 @@ eight map 1:1 to Wealthfolio's import columns; the rest are optional.
 | `$instrumentType` | e.g. `'Cryptocurrency'` (optional)                                   |
 | `$comment`        | Free-form comment (optional)                                         |
 
-An empty `""` expression omits the variable from output. The activity-type
-vocabulary and sign conventions are described in [Target
+An empty `""` expression leaves that variable blank — the column is still
+written, because `output_schema` alone decides the column set. The
+activity-type vocabulary and sign conventions are described in [Target
 specs](targets.md).
 
 ## Where each concept is covered

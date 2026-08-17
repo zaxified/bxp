@@ -29,8 +29,8 @@ Download
 [`bxp-desktop-windows-x86_64.exe`](https://github.com/zaxified/bxp/releases/latest/download/bxp-desktop-windows-x86_64.exe)
 and run the NSIS installer. SmartScreen may warn — "More info" → "Run
 anyway". It installs **per-user — no administrator rights required** — to
-`%LOCALAPPDATA%\Programs\bxp-gui`, with a Start menu entry and desktop
-shortcut. User preferences live at `%APPDATA%\bxp-gui\bxp-gui.json`.
+`%LOCALAPPDATA%\Programs\bxp-gui`, with Start menu entries for the app and
+its uninstaller. User preferences live at `%APPDATA%\bxp-gui\bxp-gui.json`.
 
 ### macOS (Apple Silicon)
 

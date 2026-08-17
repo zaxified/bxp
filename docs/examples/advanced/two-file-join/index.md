@@ -50,12 +50,6 @@ flowchart TD
    `row_rules` emits only `_type = 'order'`; the dimension rows were just the
    lookup source.
 
-## Run it
-
-```bash
-bxp-cli --config ./sample.json --template two_file_join
-```
-
 ## Final result
 
 Each order gains its customer's name and city. An order whose key is **not** in

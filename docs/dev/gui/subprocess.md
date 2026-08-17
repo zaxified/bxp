@@ -60,14 +60,14 @@ Resolved in this order:
 
 ## Client methods
 
-| Method                  | Binary                             | Notes                                                   |
+| Method                  | Backend call                       | Notes                                                   |
 | ----------------------- | ---------------------------------- | ------------------------------------------------------- |
 | `validateConfig(path)`  | `bridge_inspect {config}`          | Returns annotated JSON with `$err_*`/`$warn_*` siblings |
 | `getDocs()`             | `bridge_inspect {docs}`            | Cached at startup; drives FnDoc tooltips + SchemaGate   |
-| `listTemplates(path)`   | `bridge_inspect {list_templates}`  | Template id array                                       |
+| `listTemplates(path)`   | `bridge_inspect {list_templates}`  | `{templates:[…]}` → `List<TemplateInfo>` (id + io shape) |
 | `validateExpr(text)`    | `bridge_eval_expr`                 | Returns `{error, offset, length}` on failure            |
 | `traceExpr(text, …)`    | `bridge_eval_expr_trace`           | NDJSON stream of per-call values                        |
-| `runDryRun(path, tmpl)` | `bxp-cli --trace`                  | BXTB frame stream → in-store reader                     |
+| `runWithBtrace(...)`    | `bridge_run_streaming` → `bxp-cli --trace=bin` | BXTB frame stream → in-store reader           |
 | `getVersion(name)`      | `bridge_run` → `bxp-cli --version` | Writes to stdout                                        |
 
 ---

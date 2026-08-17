@@ -34,8 +34,8 @@ graph TD
 
     subgraph SVC["lib/services/"]
         BPC["BxpProcessClient
-        spawns bxp-cli
-        parses stdout / stderr streams"]
+        every backend call via bxp-gui-bridge
+        in-proc inspect/eval + proxied bxp-cli runs"]
         ASTL["ast_loader.dart
         parse user config → JsonAstNode tree"]
         ASTP["ast_patch_client.dart
@@ -68,7 +68,7 @@ graph TD
     TS --> SG
     TS --> DV
     TS --> AST
-    TS -->|spawn subprocess| BPC
+    TS -->|backend calls| BPC
     TS --> ASTL
     TS --> ASTP
     TS --> OPL
@@ -113,7 +113,7 @@ Key invariants:
 
 ## Dry-run / Runner Flow
 
-Two toolbar buttons spawn `bxp-cli`: **dry-run** runs `--trace` only (no
+Two toolbar buttons run `bxp-cli` through the bridge: **dry-run** runs `--trace` only (no
 `.csvx` files written, just the BXTB frame stream for the debugger);
 **full-run** writes real output. Neither has a keyboard shortcut — both
 share the same plumbing, only the `dry: bool` argument to `_streamRunBtrace`
@@ -153,40 +153,48 @@ sequenceDiagram
     TS-->>UI: notifyListeners() [final render]
 ```
 
-### Cancellation and watchdog
+### Cancellation
 
 The user can cancel a run mid-stream (the run-button label flips to `cancel`
-while a stream is active); a hung subprocess is also caught by an internal
-idle watchdog. Both paths share the same termination plumbing:
+while a stream is active). Cancellation is **user-driven only** — there is no
+idle watchdog and no SIGKILL escalation; a child that never exits keeps the
+run in `cancelling` until it does.
 
 ```mermaid
 stateDiagram-v2
     [*] --> idle
     idle --> running: runDryRun() / runFullRun()
     running --> running: BXTB frame arrives
-    running --> cancelling: cancelRun (user) OR 10s idle (watchdog)
-    cancelling --> done: child exits
-    cancelling --> killed: 2s grace expires, SIGKILL
-    killed --> done: process reaped
+    running --> cancelling: cancelRun() (user)
+    cancelling --> done: child exits, stream resolves
     running --> done: done frame received
     done --> idle: notifyListeners()
 ```
 
 Step detail:
 
-- **User cancel.** `cancelRun()` sets `_cancelRequested = true` and sends
-  `SIGTERM` to the bxp-cli child. The streaming loop in `_streamRun` detects
-  the flag, drains remaining stdout, and exits.
-- **Watchdog.** A periodic timer in `_streamRunBtrace` measures time since
-  the last BXTB frame. If the gap exceeds 10 seconds, it triggers the same
-  SIGTERM path. This catches a child stuck before emitting `done` (rare but
-  seen during early `--check-fs=N` development).
-- **SIGKILL escalation.** If the process doesn't exit within 2 seconds of
-  SIGTERM, the watchdog escalates to SIGKILL. Negative exit codes from
-  signal-driven termination are treated as cancellation, not a fault.
+- **User cancel.** `cancelRun()` sets `_cancelRequested = true` and calls
+  `BxpProcessClient.cancelBtrace(handle)` → `bridge_cancel`, which signals the
+  `bxp-cli` child (SIGTERM on POSIX, `TerminateProcess` on Windows) and wakes
+  any reader parked on the backpressure semaphore. The bridge's reader threads
+  drain what is already buffered, the wait thread reaps the exit, and
+  `_streamRunBtrace` collapses to its post-loop cleanup with whatever landed —
+  partial output stays visible.
+- **Cancel before the handle exists.** A click between `status = running` and
+  the bridge handle arriving finds `_runBridgeHandle == null`; the flag is set
+  anyway so the `onBridgeSpawn` callback cancels the moment the handle shows
+  up, instead of silently no-opping.
+- **Signal exit codes.** Negative exit codes from signal-driven termination are
+  treated as cancellation, not a fault.
 - **Final notify.** `notifyListeners()` fires once in the `finally` block so
   the toolbar transitions out of `cancelling` regardless of how the run
-  ended (clean done, cancel, kill, error).
+  ended (clean done, cancel, error).
+
+!!! note "Grandchildren are not reached"
+
+    `bridge_cancel` signals the direct child only. Not live today — `bxp-cli`
+    forks nothing (its parallelism is threads) — but see the roadmap entry
+    before that changes.
 
 ---
 
@@ -217,7 +225,7 @@ sequenceDiagram
         TS->>TS: _astRoot = root
         TS->>BPC: loadConfig(path, checkFsSeconds?)
         BPC->>FMT: bridge_inspect {op:config, check_fs:N}
-        FMT-->>BPC: annotated JSON ($comm/$err/$warn/$info siblings)
+        FMT-->>BPC: annotated JSON ($err/$warn/$info siblings)
         BPC-->>TS: jsonOutput
         TS->>TS: extractDiagnostics(bxpTree)\n→ path-keyed buckets
         TS->>TS: _revalidateDart() [synchronous Dart-side overlay]
@@ -253,7 +261,8 @@ into the annotated JSON output before exit.
 ```mermaid
 flowchart TD
     INPUT([raw config bytes]) --> P1[json5.preprocessAnnotated
-    $comm/$err keys for parse-level findings]
+    $err keys for parse-level findings
+    comments stripped, never carried]
     P1 --> P2[std.json.parseFromSliceLeaky
     structural JSON parse]
     P2 --> P3[config.loadFromBytes
@@ -298,9 +307,9 @@ plain stderr warning line during a real run.
 
 ## bxp-mcp: MCP adapter over the shared core
 
-`bxp-mcp` is a second adapter over the same stateless `inspect` core that
-the shared `inspect` core serves — but speaking MCP (JSON-RPC 2.0 over stdio) to an AI agent
-instead of argv/stdout to a shell. An agent host spawns it as a child and pipes
+`bxp-mcp` is a second adapter over the same stateless `inspect` core the GUI
+bridge links — but speaking MCP (JSON-RPC 2.0 over stdio) to an AI agent
+instead of FFI to a Dart process. An agent host spawns it as a child and pipes
 one JSON object per line; every stateless tool is a direct in-process `inspect`
 call (microseconds, no subprocess). The lone exception is `bxp_simulate`, which
 needs the full conversion pipeline and therefore spawns the **co-located
@@ -338,9 +347,12 @@ Key boundaries a developer should keep straight:
 - **`structuredContent` is gated by tool identity**, not by sniffing the output
   shape: a single-object tool exposes the parsed object; `bxp_eval_trace` is
   NDJSON and stays text-only even when a trivial expression yields one line.
-- **Memory is two-tier**: a base arena for startup + persistent reused buffers,
-  and a per-request arena reset (`retain_capacity`) after every response, so RSS
-  reaches a steady state sized to the largest single request.
+- **Memory is two-tier**: a base arena in `main.zig` for startup (argv + the
+  registered tool table), and a **per-message arena the `mcp` module creates and
+  destroys** around each response — destroyed, not reset with
+  `retain_capacity`, so no pointer can survive into the next request's parse.
+  A handler reaches it as `call.arena`: allocate freely, never store past the
+  call.
 
 Full detail — tool catalog, wire protocol, the `bxp_simulate` workspace + BXTB
 fold, build/test — lives in [`mcp.md`](../mcp.md) and
@@ -395,7 +407,7 @@ sequenceDiagram
     Note over TS,FMT: On Save (Ctrl+S)
     TS->>TS: write draft JSON5 to disk
     TS->>FMT: loadConfig(path, checkFsSeconds?)
-    FMT-->>TS: annotated JSON (with $err/$warn/$info/$comm siblings)
+    FMT-->>TS: annotated JSON (with $err/$warn/$info siblings)
     TS->>TS: parse into diagnosticMap (path -> Diagnostic[])
     TS-->>UI: notifyListeners() [diagnostics overlay updated]
 ```

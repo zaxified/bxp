@@ -31,15 +31,23 @@ which a naive numeric cast reads as `0` or `NaN`; (4) present values carry a
 - The packed first-column header `dim1,dim2,…\TIME_PERIOD` is the standard
   shape of every Eurostat bulk TSV.
 
-## A bxp quirk this example documents
+## Addressing the columns
 
-Eurostat's year headers are **bare integers** (`2021`, `2022`). bxp reads
-`[2023]` as its `[N]` _positional_ field reference — "the 2023rd column" — so a
-purely-numeric header is **unreachable by name**. The fix is to address the file
-positionally: `[1]` is the packed dimension column, and the year columns by
-their position (`[2]`/`[3]`/`[4]` in the sliced sample; `[63]`/`[64]`/`[65]` in
-the full file, where every year from 1960 is present). Year columns are appended
-at the end on each release, so the front-counted positions stay stable.
+`[Name]` in bxp is always a lookup **by header name** — there is no `[N]`
+positional form, and headers are trimmed before matching, so Eurostat's
+`2023 ` header (bare integer, trailing space) is in fact reachable as
+`[2023]`, and even the packed first column answers to
+`[freq,unit,age,sex,geo\TIME_PERIOD]`.
+
+This template addresses the file **positionally** instead, with the `FIELDS(n)`
+accessor: `FIELDS(1)` is the packed dimension column, and the year columns are
+`FIELDS(2)`/`FIELDS(3)`/`FIELDS(4)` in the sliced sample and
+`FIELDS(63)`/`FIELDS(64)`/`FIELDS(65)` in the full file, where every year from
+1960 is present. Positional access keeps `sample.json` and `full.json` the same
+shape — the only thing that changes between them is the index — and new year
+columns are appended at the end on each release, so the front-counted positions
+stay stable. Either style works here; pick by-name when the header is stable and
+descriptive, `FIELDS(n)` when the file is really a positional record.
 
 **Data source.** [Eurostat — `demo_pjan` (Population on 1 January by age and
 sex)](https://ec.europa.eu/eurostat/databrowser/view/demo_pjan/) via the
@@ -58,13 +66,13 @@ bxp-cli --config full.json  # cleans every ~17.7k rows (all age/sex/geo combos)
 
 (see `sample.json`):
 
-- **Unpack the dimension column** with `SPLIT_PART([1], ',', N)` — `geo` is
-  part 5, `sex` part 4, `age` part 3.
+- **Unpack the dimension column** with `SPLIT_PART(FIELDS(1), ',', N)` — `geo`
+  is part 5, `sex` part 4, `age` part 3.
 - **Clean each observation** with one composable idiom:
-  `NULLIF(SPLIT_PART(TRIM([n]), ' ', 1), ':')` — `TRIM` drops the trailing
+  `NULLIF(SPLIT_PART(TRIM(FIELDS(n)), ' ', 1), ':')` — `TRIM` drops the trailing
   space, `SPLIT_PART(…, ' ', 1)` keeps the value and discards the flag, and
   `NULLIF(…, ':')` turns the missing-marker into an empty cell.
-- **Keep the flag as data**, not noise: `SPLIT_PART(TRIM([n]), ' ', 2)` lifts
+- **Keep the flag as data**, not noise: `SPLIT_PART(TRIM(FIELDS(n)), ' ', 2)` lifts
   the `b`/`p`/`bep` suffix into its own column so the break/provisional status
   survives the cleanup.
 

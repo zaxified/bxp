@@ -36,14 +36,19 @@ Dev-only tips (not in the user guide):
 ## Adding a new built-in function
 
 1. **Define the function** in `bxp-core/src/expr.zig`:
-   - Find the `evalFunc()` helper (called from the parser when a function name is recognized).
-   - Add a new `if (std.mem.eql(u8, name, "MY_FUNC")) { ... }` branch.
-   - Functions receive already-evaluated `Value` arguments.
+   - Find `Parser.evalCall()` (called from the parser when a function name is
+     recognized) and add a branch for the new name.
+   - Arguments arrive already evaluated as `Value`s, and already checked
+     against the `FnDoc` arg table by the central `validateArgs` dispatcher —
+     so the impl can assume arity and `ArgKind` domains hold. (The lazy
+     builtins `IF` / `CASE` / `IFERROR` parse their own arg lists instead.)
    - Return a `Value` or propagate an error.
 
 2. **Add a `FnDoc` entry** co-located with the implementation — follow the `── MY_FUNC ──`
    section-header pattern used by the existing built-ins. `docs.zig` re-exports the
-   catalog automatically; no separate doc file to update.
+   catalog automatically; no separate doc file to update. The `args[].kind`
+   entries are what `validateArgs` enforces at runtime and what
+   `staticCheckCalls` enforces on literals at config-load time.
 
 3. **Add unit tests** inline in `expr.zig`:
 
@@ -65,15 +70,16 @@ Dev-only tips (not in the user guide):
 
 The bridge hosts a **new-style FFI family** — synchronous, in-process C-ABI
 exports that link a stateless `bxp-core` routine directly into the GUI process,
-skipping the subprocess spawn. The first two members are `bridge_eval_expr`
-(in-proc expr validation) and `bridge_eval_expr_trace` (in-proc expr
-trace). The plan is to add more such direct calls once `bxp-core`'s
-`inspect` surface stabilises and stops churning internally — every new
-member follows the conventions below so adding the tenth export is as
-mechanical as adding the first.
+skipping the subprocess spawn. The shipped members are `bridge_eval_expr`
+(in-proc expr validation), `bridge_eval_expr_trace` (in-proc expr trace),
+`bridge_inspect` (the rest of the stateless surface — `docs` / `config` /
+`list_templates` / `fetch_template` / `eval_batch`, dispatched by a JSON
+request envelope) and `bridge_verify_minisign` (the updater's signature
+check). Every new member follows the conventions below so adding the tenth
+export is as mechanical as adding the first.
 
-> These conventions cover the **stateless `bridge_eval_*` family only**. The
-> legacy subprocess-proxy exports (`bridge_run`, `bridge_run_streaming`,
+> These conventions cover the **stateless in-proc family only**. The
+> subprocess-proxy exports (`bridge_run`, `bridge_run_streaming`,
 > `bridge_cancel`, `bridge_ack`, `bridge_free`) keep their own established
 > conventions from the proxy era. A future **handle-based** family (stateful,
 > e.g. a loaded-config handle) would need a separate convention set — lifecycle,

@@ -54,11 +54,10 @@ bash fetch-full.sh          # downloads the full ~1147-column series into ./full
 bxp-cli --config full.json  # unpivots all ~289 country/region rows → ~867 long rows
 ```
 
-The unpivot is the point, not raw volume (the file is only ~289 rows). Note the
-full file has **1147 columns**, past bxp's 1024-column cap — bxp warns and
-ignores the overflow days. The three snapshot columns this template reads (cols
-5 / 349 / 714) are within range, so the reshape is unaffected; raising that cap
-is a [roadmap item](../../../dev/roadmap.md).
+The unpivot is the point, not raw volume (the file is only ~289 rows). The full
+file is **1147 columns** wide — comfortably inside bxp's 16384-column cap, so
+every day-column stays reachable and the run is warning-free; the three snapshot
+columns this template reads sit at cols 5 / 349 / 714.
 
 ## Final result
 

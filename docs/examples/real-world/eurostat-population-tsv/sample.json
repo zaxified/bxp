@@ -20,10 +20,12 @@
 
       input_schema: {
         // TRICK 1 — POSITIONAL field refs via FIELDS(n). The year headers are
-        // bare integers, so `[2023]` would look for a column *named* "2023" by
-        // header — which the bracket syntax can't reach meaningfully here. FIELDS(n)
-        // addresses by column position instead: FIELDS(1) is the packed dimension
-        // column, FIELDS(2)/FIELDS(3)/FIELDS(4) are years 2021/2022/2023.
+        // bare integers; `[2023]` WOULD resolve (brackets always look up by
+        // header name, and headers are trimmed), but naming each year couples
+        // the template to one vintage of the file. FIELDS(n) addresses by
+        // column position instead, so the same template survives a new year
+        // being appended: FIELDS(1) is the packed dimension column,
+        // FIELDS(2)/FIELDS(3)/FIELDS(4) are years 2021/2022/2023.
 
         // TRICK 2 — UNPACK the dimension column. Column 1 is
         // `A,NR,TOTAL,T,DE` — five comma-joined dimension codes. SPLIT_PART

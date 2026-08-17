@@ -39,7 +39,7 @@ graph TD
 
     subgraph Core["bxp-core (library)"]
         INSPECT["inspect.zig<br/>stateless facade<br/>validate · eval · docs · templates"]
-        ENGINE["engine modules<br/>csv · xlsx · json · json5 · expr<br/>datefmt · decimal · btrace · config · docs · diagnostics"]
+        ENGINE["engine modules<br/>csvstream · xlsx · json · json5 · expr<br/>datefmt · decimal · btrace · config · docs · diagnostics"]
     end
 
     OUT[".csvx output"]

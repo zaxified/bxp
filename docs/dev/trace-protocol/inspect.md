@@ -26,8 +26,10 @@ Each shape's canonical name, the bxp-mcp tool that produces it, and the bridge o
 
 ## --expr
 
-Validates a single expression against an empty row context (no column refs, no
-lookups). Used by bxp-gui's ExprPanel for live per-edit validation.
+Validates a single expression against an empty row context (no column values,
+no lookup table). Runtime eval first, then the static `FnDoc` literal-argument
+check (`staticCheckCalls`). Used by bxp-gui's ExprPanel for live per-edit
+validation.
 
 ```jsonc
 // bxp_validate_expr arguments
@@ -49,9 +51,12 @@ lookups). Used by bxp-gui's ExprPanel for live per-edit validation.
 | `off`    | `u32`    | Byte offset of the offending token in the expression source. Present only when the parser pinned a span. |
 | `len`    | `u32`    | Byte length of the offending token. Present only when `off` is present.                                  |
 
-Column references (`[ColumnName]`) always fail in the `--expr` shape because
-there is no row context; use the `--expr-trace` shape with `headers` / `fields`
-for reference resolution.
+The empty row context is **lenient, not fatal**: a `[ColumnName]` reference
+resolves to `""` (and `LOOKUP(...)` likewise) rather than erroring, so
+`{"expr":"[Foo]"}` answers `{"ok":true}`. That is deliberate — this shape
+answers "is the expression well-formed and runnable?", which is what the
+editor asks on every keystroke. Use the `--expr-trace` shape with
+`headers` / `fields` when you need references actually resolved.
 
 ---
 
@@ -61,11 +66,12 @@ Evaluates an expression with per-function-call trace output and optional fake
 row context. Used by bxp-gui's expression playground (Variables panel).
 
 ```jsonc
-// bxp_eval_trace arguments
+// bxp_eval_trace arguments — headers/fields are JSON arrays
+// ENCODED INTO A STRING, not native JSON arrays
 {
   "expr": "ABS([Price])",
-  "headers": ["Date", "Price"],
-  "fields": ["2026-04-01", "150.00"],
+  "headers": "[\"Date\", \"Price\"]",
+  "fields": "[\"2026-04-01\", \"150.00\"]",
 }
 ```
 
@@ -73,7 +79,7 @@ One NDJSON line per builtin call (emitted before the sentinel — partial trace
 survives a mid-expression error):
 
 ```jsonc
-{ "fn": "ABS", "src_start": 4, "src_end": 15, "value": "150" }
+{ "fn": "ABS", "src_start": 0, "src_end": 12, "value": "150" }
 ```
 
 | Field       | Type     | Notes                                                                        |
@@ -92,14 +98,24 @@ survives a mid-expression error):
 
 The error sentinel carries the same optional `off`/`len` fields as `--expr`.
 
-**Row context arguments** — both required together or omitted together:
+**Row context arguments** — supply both, or neither:
 
-| Argument  | Type                   | Notes                                                       |
-| --------- | ---------------------- | ----------------------------------------------------------- |
-| `headers` | JSON array of `string` | Column names matching the CSV header row.                   |
-| `fields`  | JSON array of `string` | Field values for the current row; same length as `headers`. |
+| Argument  | Type                                | Notes                                                       |
+| --------- | ----------------------------------- | ----------------------------------------------------------- |
+| `headers` | `string` holding a JSON `[…]` array | Column names matching the CSV header row.                   |
+| `fields`  | `string` holding a JSON `[…]` array | Field values for the current row; same length as `headers`. |
 
-Mismatched lengths are rejected as an argument error.
+!!! warning "String-encoded, not native JSON — and unvalidated"
+
+    `bxp_eval` and `bxp_eval_trace` declare `headers` / `fields` as **strings**
+    that contain a JSON array. Passing native JSON arrays is **silently
+    ignored** — the row context ends up empty and every `[Col]` evaluates to
+    `""`, so the call still answers `ok` with a wrong value. (`bxp_eval_batch`
+    is the opposite: it takes native JSON arrays.)
+
+    Lengths are **not** cross-checked either. A `headers` longer than `fields`
+    is accepted, and the surplus columns read as `""`. Neither mismatch is
+    reported.
 
 ---
 
@@ -185,12 +201,31 @@ variant), so `$err_<N>` keys never reach the conversion pipeline.
 { "config": "<bxp-cli.json text>" }
 ```
 
-Returns a JSON array of template ids. No semantic validation — reports whatever
-keys appear under `conversion_templates`, even if a template body is malformed.
+Returns one object per template under a `templates` array. No semantic
+validation — it reports whatever keys appear under `conversion_templates`, even
+if a template body is malformed; the per-entry fields are read straight off the
+parsed block, with `null` for anything absent.
 
 ```jsonc
-["xtb2_cash", "revolut_stocks", "anycoin"]
+{
+  "templates": [
+    {
+      "id": "xtb2_cash",
+      "data_dir": "../data/xtb2",
+      "file_pattern_in": ".csv",
+      "file_pattern_out": null,
+      "file_type_in": "csv",
+      "file_type_out": "csv",
+      "description": null,
+    },
+  ],
+}
 ```
+
+`file_type_in` / `file_type_out` default to `"csv"` when the template omits
+them. `bxp_simulate` reads the same `file_type_in` key (through
+`inspect.templateIo`, its own lookup) to reject non-CSV-input templates before
+staging a run.
 
 ### --fetch-template
 
@@ -199,7 +234,11 @@ keys appear under `conversion_templates`, even if a template body is malformed.
 { "config": "<bxp-cli.json text>", "id": "xtb2_cash" }
 ```
 
-Returns the raw JSON5 block for one template as a JSON string, or an error when the template id is not found.
+Returns one template **re-serialised as a JSON object** (pretty-printed, keys
+in source order). It is not the raw JSON5 text: the block has been through the
+JSON5 preprocessor, so comments are gone and JSON5 sugar is normalised. A
+missing id answers with the bare-string root-error form,
+`{"$err_1": "template id 'x' not found"}`.
 
 ---
 
@@ -221,6 +260,8 @@ of truth consumed by bxp-gui at startup.
   "keywords":      [...],
   "operators":     [...],
   "tokens":        [...],
+  "date_tokens":   [...],
+  "precedence":    [...],
   "config_schema": [...]
 }
 ```
@@ -230,9 +271,10 @@ of truth consumed by bxp-gui at startup.
 ```jsonc
 {
   "name": "ABS",
-  "signature": "ABS(value)",
-  "description": "Absolute value of a number.",
-  "args": [{ "name": "value", "kind": "expr" }],
+  "signature": "ABS(f)",
+  "description": "Absolute numeric value.",
+  "example": "ABS(-12.5)",
+  "args": [{ "name": "f", "kind": "number" }],
   "min_args": 1,
   "max_args": 1,
 }
@@ -242,8 +284,12 @@ of truth consumed by bxp-gui at startup.
 expression) | `literal_string` (bare string literal) | `number` (any
 numeric-typed expression) | `positive_integer` (positive integer literal, ≥ 1) |
 `integer_in_range` (integer literal within a builtin-specific range) |
-`date_format` (datefmt date-format pattern) | `pre_pass_name` (name of a
-declared `pre_pass` block).
+`date_format` (datefmt date-format pattern) | `map_name` (name of a declared
+named map) | `pre_pass_name` (name of a declared `pre_pass` block).
+
+`min_args` / `max_args` are what the runtime `validateArgs` dispatcher
+enforces; the `kind` of a *literal* argument is additionally enforced at
+config-load time by `expr.staticCheckCalls`.
 
 ### `keywords` entry
 
@@ -261,11 +307,15 @@ declared `pre_pass` block).
 
 ```jsonc
 {
-  "kind": "field_ref",
-  "syntax": "[ColName]",
-  "description": "Reference a CSV column by name.",
+  "kind": "columnRef",
+  "syntax": "[ColumnName]",
+  "description": "Input CSV column value by header name. Case-sensitive.",
 }
 ```
+
+The remaining two top-level arrays are `date_tokens` (the `datefmt` pattern
+tokens behind `DATE_CONVERT`) and `precedence` (the operator-precedence ladder),
+both re-exported from `expr.zig` alongside the tables above.
 
 ### `config_schema` entry
 

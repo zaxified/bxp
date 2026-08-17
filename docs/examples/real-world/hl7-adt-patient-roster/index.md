@@ -40,16 +40,24 @@ incl. Donald Duck, born 1924.)
 
 (see `sample.json`):
 
-- **Row filter:** `row_rules` with `when: "[1] = 'PID'"` — emit a row only for
-  `PID` segments; `MSH`/`EVN`/`PV1`/`OBX`/… produce nothing.
-- **Name components:** `SPLIT_PART([6], '^', N)` for family/given, then a second
-  `SPLIT_PART(…, '&', 1)` to peel the surname out of its sub-components.
+- **Headerless input:** `csv_delimiter_in: "|"` makes each segment a row, and
+  `csv_header_line: 0` says the file has no header line at all — nothing is
+  consumed as column names, so the very first `MSH` segment stays a data row.
+  With no header names to look up, fields are addressed positionally with the
+  `FIELDS(n)` accessor (`[Name]` in bxp is *always* a by-header lookup, never an
+  index).
+- **Row filter:** `row_rules` with `when: "FIELDS(1) = 'PID'"` — emit a row only
+  for `PID` segments; `MSH`/`EVN`/`PV1`/`OBX`/… produce nothing.
+- **Name components:** `SPLIT_PART(FIELDS(6), '^', N)` for family/given, then a
+  second `SPLIT_PART(…, '&', 1)` to peel the surname out of its sub-components.
 - **Birth date — string slice.** This is a pure `YYYYMMDD`→ISO _reformat_, so
-  `LEFT([8],4) & '-' & SUBSTR([8],5,2) & '-' & SUBSTR([8],7,2)` does the job
-  directly — no format tokens to get right, no date validation. `DATE_CONVERT([8],
-'YYYYMMDD', 'YYYY-MM-DD')` works equally well here (including the 1924 birth
-  date — `DATE_CONVERT` is a pure parse→format reshuffle with no lower-year
-  limit); string slicing is shown as the leaner idiom for a fixed-width layout.
+  `LEFT(FIELDS(8),4) & '-' & SUBSTR(FIELDS(8),5,2) & '-' & SUBSTR(FIELDS(8),7,2)`
+  does the job directly — no format tokens to get right, no date validation.
+  `DATE_CONVERT(FIELDS(8), 'YYYYMMDD', 'YYYY-MM-DD')` works equally well here
+  (including the 1924 birth date, and it ignores the trailing time on
+  `198808181126+0215` — `DATE_CONVERT` is a pure parse→format reshuffle with no
+  lower-year limit); string slicing is shown as the leaner idiom for a
+  fixed-width layout.
 
 ## At full scale
 
@@ -60,13 +68,16 @@ bxp-cli --config full.json  # one roster row per PID segment (~60)
 
 ## Final result
 
-A 57-line, 20-segment-type message reduces to the one patient row
-that matters, and the pre-1970 birth date survives intact:
+A 53-line feed carrying 22 different segment types reduces to the five patient
+rows that matter, and the pre-1970 birth date survives intact:
 
 ```text
 mrn,family,given,dob,sex
 PATID1234,EVERYMAN,ADAM,1988-08-18,M
+12345,Test,Test,2018-02-05,F
 10006579,DUCK,DONALD,1924-10-10,M
+MRN12345,Doe,Jane,1978-01-01,F
+0000000001,Bixby,Timothy,2008-01-06,M
 ```
 
 That roster drops straight into a spreadsheet or a master-patient-index load —

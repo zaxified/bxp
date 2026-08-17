@@ -107,5 +107,3 @@ Run it with `bxp-cli --config ./sample.json --template freeform_payment_memos`:
     ```csv
     --8<-- "examples/advanced/freeform-payment-memos/sample.csv"
     ```
-</content>
-</invoke>

@@ -63,8 +63,9 @@ column; only the grid render is capped.
 3. **GUI** — rebuild the bridge and restart bxp-gui; the field appears in the
    tree editor's `_AddChildDialog` insert scaffold and tooltip automatically
    via `SchemaGate` + `FnDoc`/`FieldDoc`.
-4. **Tests** — add a dataset fixture if the field affects output; add a
-   bxp-mcp smoke test (test-05) if it adds a new validation path.
+4. **Tests** — add a dataset fixture (`datasets/<id>/`, gated by
+   `test-07-datasets.sh`) if the field affects output; extend the bxp-mcp
+   JSON-RPC smoke (`test-02-mcp.sh`) if it adds a new validation path.
 
 ---
 

@@ -34,7 +34,7 @@ at a time, and collapses absent keys to empty cells.
 **Data source.** [NYC Open Data — 2018 Central Park Squirrel Census
 (`vfnx-vebw`)](https://data.cityofnewyork.us/Environment/2018-Central-Park-Squirrel-Census-Squirrel-Data/vfnx-vebw).
 Public domain. (This slice: the first 40 sightings; two of them omit
-`primary_fur_color`/`location`, demonstrating the heterogeneity.)
+`primary_fur_color` and four omit `location`, demonstrating the heterogeneity.)
 
 ## The trick
 
@@ -67,6 +67,7 @@ The first two sightings have no `primary_fur_color` or
 ```text
 squirrel_id,date,shift,lat,lon,hectare,fur_color,location,running,eating,foraging
 37F-PM-1014-03,2018-10-14,PM,40.7940823884086,-73.9561344937861,37F,,,false,false,false
+21B-AM-1019-04,2018-10-19,AM,40.7837825208444,-73.9688574691102,21B,,,false,false,false
 11B-PM-1014-08,2018-10-14,PM,40.775533619083,-73.9742811484852,11B,Gray,Above Ground,false,false,false
 ```
 

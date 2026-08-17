@@ -105,9 +105,11 @@ bxp/                            # monorepo root (git root)
 │   ├── linux/, macos/, windows/ # per-platform Flutter shells
 │   └── pubspec.yaml
 ├── bxp-gui-bridge/             # Zig FFI shared library — single GUI backend (all platforms)
-│   ├── src/main.zig            # in-proc inspect/eval + bxp-cli run proxy
-│   ├── test/test_helper.zig    # bridge_run / bridge_run_streaming /
-│   ├── build.zig               # bridge_eval_expr* C-ABI surface
+│   ├── src/main.zig            # C-ABI surface: bridge_run(_streaming) proxy +
+│   │                           #   bridge_eval_expr* / bridge_inspect in-proc
+│   ├── test/test_helper.zig    # re-exec target binary driven by argv switches
+│   │                           #   (no reliance on real OS binaries in tests)
+│   ├── build.zig
 │   └── build.zig.zon           # depends on bxp-core (path dep)
 ├── datasets/                   # anonymized sample data + expected outputs
 │   └── <template_id>/
@@ -115,7 +117,7 @@ bxp/                            # monorepo root (git root)
 │       ├── sample.json         # bxp-cli config for this dataset
 │       └── sample.expected     # expected .csvx output (regression baseline)
 ├── docs/
-│   ├── README.md               # docs index + reading order
+│   ├── index.md                # MkDocs landing page (nav lives in mkdocs.yml)
 │   ├── dev/build.md            # this file — setup + build + test entry point
 │   ├── dev/testing.md          # test phases, corpus, regression fixture guide
 │   ├── dev/debugging.md        # debug flags, expression inspection, live GUI debug
@@ -139,8 +141,10 @@ bxp/                            # monorepo root (git root)
 │       ├── bxtb.md             #   binary BXTB frame stream
 │       └── inspect.md          #   inspect output formats
 ├── resources/
-│   ├── console/                # bxp-cli sample config + readme (bundled in console archives)
-│   ├── desktop/                # bxp-gui.desktop template + readme (bundled in desktop archives)
+│   ├── readme.md               # the single hand-maintained readme shipped verbatim
+│   │                           #   in BOTH console + desktop archives
+│   ├── console/                # bxp-cli.examples.json (bundled in console archives)
+│   ├── desktop/                # bxp-gui.desktop template (bundled in desktop archives)
 │   └── icons/                  # SVG variants + build-icons.sh (single source for app icons)
 ├── scripts/
 │   ├── test.sh                 # wrapper: runs every test-NN-*.sh in numeric order
@@ -158,6 +162,8 @@ bxp/                            # monorepo root (git root)
 │   ├── release-03-checksums.sh # emit SHA256SUMS for all release artifacts
 │   ├── release-changelog.sh    # bump versions + generate CHANGELOG.md entry + commit
 │   ├── release-tag.sh          # read version from manifest + tag + push
+│   ├── gen-docs.sh             # regenerate docs/reference/ from the in-code catalogs
+│   │                           #   (+ --check drift guard) and build/serve the site
 │   └── check-formatting.sh     # mermaid-fence syntax check (pre-release; not auto-run)
 └── README.md                   # project overview
 ```

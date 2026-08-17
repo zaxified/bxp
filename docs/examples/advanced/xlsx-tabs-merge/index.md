@@ -77,7 +77,3 @@ one sheet per month, then a fan-in pass merges them:
     ```
 
 The input is a binary file — [`sales_q1.xlsx` on GitHub](https://github.com/zaxified/bxp/tree/master/docs/examples/advanced/xlsx-tabs-merge/sales_q1.xlsx).
-
-**Full-scale &amp; binary files** (run it on the complete dataset): [`sales_q1.xlsx`](https://github.com/zaxified/bxp/tree/master/docs/examples/advanced/xlsx-tabs-merge/sales_q1.xlsx).
-</content>
-</invoke>

@@ -63,8 +63,8 @@ wrapped the same calls argv→stdout and was removed once both covered every op.
 
 | inspect function                            | Backed by                                | Purpose                                                                           |
 | ------------------------------------------- | ---------------------------------------- | --------------------------------------------------------------------------------- |
-| `annotateRaw` / `annotateConfigFromFile`    | `config.load` + `config.validateCollect` | Annotated JSON with `$comm_<N>` / `$err_<N>` / `$warn_<N>` / `$info_<N>` siblings |
-| `listTemplatesValue` / `fetchTemplateValue` | `config.load`                            | Template id array / one template's raw JSON                                       |
+| `annotateRaw` / `annotateConfigFromFile`    | `config.load` + `config.validateCollect` | Annotated JSON with `$err_<N>` / `$warn_<N>` / `$info_<N>` siblings (no `$comm_`) |
+| `listTemplatesValue` / `fetchTemplateValue` | `config.load`                            | `{templates:[{id, data_dir, file_pattern_in/out, file_type_in/out, description}]}` / one template re-serialised as a JSON object |
 | `validateExpr` / `validateExprJson`         | `expr.eval` + static FnArgDoc lint       | Authoring-time validation of one expression                                       |
 | `evalExpr`                                  | `expr.evalString`                        | Lenient runtime value of one expression                                           |
 | `evalTrace`                                 | `expr.eval` (trace_writer)               | Per-call NDJSON trace stream                                                      |

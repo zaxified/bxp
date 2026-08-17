@@ -51,6 +51,7 @@ bxp-gui/
 │   │   ├── desktop_integration_service.dart  # First-run .desktop + hicolor icon writer (Linux AppImage)
 │   │   ├── dev_trace.dart                    # kDebugMode-gated print() helper
 │   │   ├── diagnostic_log.dart               # Opt-in NDJSON trace + engine stderr capture
+│   │   ├── gui_mcp_server.dart               # Embedded gui-mcp server (localhost HTTP)
 │   │   ├── op_log.dart                       # In-memory record of user edits since load
 │   │   ├── op_to_ast.dart                    # Translate ConfigOp → AST mutation calls
 │   │   ├── prefs_service.dart                # User preferences persistence (visible JSON file)
@@ -101,8 +102,11 @@ bxp-gui/
 │   │       └── tokenizer.dart      # JSON5 tokenizer (private)
 │   └── test/                       # ~105 unit tests + round-trip suite
 ├── linux/, macos/, windows/, web/  # Per-platform Flutter shells
-├── test/                           # Widget + service tests (desktop_integration,
-│                                   # expr_corpus_bridge, prefs_service, zoom_overflow)
+├── test/                           # Widget + service tests — bridge FFI surface
+│                                   # (bridge_inspect, bridge_verify_minisign,
+│                                   # expr_corpus_bridge, expr_batch), BXTB wire
+│                                   # contract, gui_mcp_server over real HTTP,
+│                                   # save_guard, prefs_service, zoom_overflow, …
 └── pubspec.yaml
 ```
 
@@ -168,6 +172,9 @@ mutations and writes the result to disk.
 
 ### Round-trip identity
 
-Verified by `scripts/test.sh`'s "AST round-trip" phase against
-`DEV/bxp-cli.json`. The dumper produces deterministic output; first-save
-canonicalizes formatting.
+Verified by `packages/json5_ast/test/round_trip_test.dart` (run by both
+`test-01-console.sh` and `test-04-desktop.sh`). The contract is **idempotent
+canonicalisation**, not byte identity: the first dump may reformat the input,
+but every subsequent parse → dump cycle must produce the same bytes. The older
+`AST round-trip` phase in `scripts/test.sh` was retired because it read a
+gitignored `DEV/bxp-cli.json` and so only worked on one machine.

@@ -102,6 +102,9 @@ it is dominated by per-block synchronization and IO rather than per-row
 codegen quality. The minimal-work passthrough benefits the **most** because
 fixed-cost dispatch overhead is where codegen quality shows up cleanest.
 
-Bench artifacts: `scripts/bench/work/rsrf/` (driver + per-run CSV).
-Reproduce via `scripts/bench/work/rsrf/run.sh` after generating inputs with
-`python3 scripts/bench/gen.py`.
+Reproduce by generating the three inputs with `python3 scripts/bench/gen.py`
+and running `scripts/bench/bench.sh` once per optimize mode
+(`BENCH_SKIP_BUILD=1` against a hand-built binary is the cheapest way to pin
+the mode). The scratch tree the original run used lived under
+`scripts/bench/work/`, which is gitignored — only the committed
+`scripts/bench/results/results-*.csv` snapshots survive a clone.

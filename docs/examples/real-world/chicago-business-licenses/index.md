@@ -55,7 +55,7 @@ Measured on the reference machine (ReleaseFast, 8 cores):
 | `cancelled_during_term`   | 78,329                                 |
 | `revoked`                 | 1,453                                  |
 | `revocation_appealed`     | 13                                     |
-| `applied = <not-on-file>` | **918,458 (76%)**                      |
+| `applied = <not-on-file>` | **918,458 (77%)**                      |
 
 Two things the full run surfaces that the slice can't:
 

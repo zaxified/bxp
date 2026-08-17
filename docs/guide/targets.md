@@ -25,8 +25,8 @@ amount.
 
 ### Activity-type vocabulary
 
-`$action` is set inside `row_rules`. Eight values cover every event the
-built-in templates emit:
+`$action` is set inside `row_rules`. Eight values cover the everyday cash
+and trade events:
 
 | Action         | When                                            |
 | -------------- | ----------------------------------------------- |
@@ -39,8 +39,8 @@ built-in templates emit:
 | `'INTEREST'`   | Interest paid (e.g. on cash balance)            |
 | `'FEE'`        | Fee charged (e.g. monthly account fee, ADR fee) |
 
-Three additional values handle portfolio bookkeeping events that
-Wealthfolio also imports:
+Three more handle portfolio bookkeeping events; the built-in templates emit
+these as well:
 
 | Action           | When                                                                   |
 | ---------------- | ---------------------------------------------------------------------- |
@@ -116,12 +116,16 @@ The default Wealthfolio column mapping:
 | `instrumentType` | `$instrumentType` | Optional                                |
 | `comment`        | `$comment`        | Optional                                |
 
+`output_schema` is free-form — the column set is whatever you declare, so a
+template may add columns beyond this list. `trading212_to_wealthfolio` does
+exactly that, emitting an extra `isin` column after `symbol`.
+
 ## brycht.app
 
-The shipping brycht.app templates (`trading212_to_brychtapp`,
-`xtb2_cash_to_brychtapp`, `xtb2_closed_to_brychtapp`) target a different
-column set than Wealthfolio. The tracker imports by header name, so the
-column order may vary between templates; the fields are:
+The shipping `*_to_brychtapp` templates target a different column set than
+Wealthfolio. The tracker imports by header name, so the column order varies
+between templates (and `isin` is present only where the broker reports one);
+the fields are:
 
 | Column     | Holds                                                       |
 | ---------- | ----------------------------------------------------------- |

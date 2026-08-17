@@ -38,8 +38,9 @@ On first launch the app loads the language catalog in-process from the bridge.
 If the `bxp-gui-bridge` library is missing or unbuilt a fatal error gate
 appears — build it first. Then:
 
-1. Open `DEV/bxp-cli.json` (the developer reference config) via the
-   file-picker or drag-drop.
+1. Open a config via the file-picker or drag-drop — any
+   `datasets/<template_id>/sample.json` works out of a fresh clone, and
+   `resources/console/bxp-cli.examples.json` is the full starter set.
 2. Select a template in the toolbar dropdown.
 3. Click **Run** — the dry-run trace should populate the bottom panel.
 4. Click any row to see per-variable and per-rule results.
@@ -68,15 +69,18 @@ VS Code users: the Flutter extension auto-hot-reloads on save when
 
 ### Zig changes — rebuild + restart
 
-Zig binaries are subprocesses; Flutter does not hot-reload them.
+Flutter does not hot-reload the Zig side.
 
 ```bash
 # Terminal 1 — rebuild after editing bxp-cli or bxp-gui-bridge source
 cd bxp-cli && zig build   # or bxp-gui-bridge
-
-# Terminal 2 — hot-restart the Flutter app to pick up the new binary
-# Press Shift+R in the flutter run terminal, or quit and re-run
 ```
+
+- **`bxp-cli`** is spawned per run (through the bridge), so the next dry-run
+  picks up the new binary; a hot restart (`R`) is enough to re-resolve the path.
+- **`bxp-gui-bridge`** is `dlopen`ed once at process start and mmapped, so a
+  rebuilt `.so` / `.dylib` / `.dll` is **not** picked up by hot reload *or* hot
+  restart. Fully quit the app and re-run.
 
 ### Debugging with print()
 
@@ -91,8 +95,8 @@ cd bxp-cli && zig build   # or bxp-gui-bridge
 MCP live-debug cycle (when working with Claude Code):
 
 ```bash
-# 1. Launch via MCP (root must be a plain path, not file://)
-mcp__dart__launch_app(root: "/home/user/workspace/bxp/bxp-gui")
+# 1. Launch via MCP (root must be a plain absolute path, not file://)
+mcp__dart__launch_app(root: "<abs path to the monorepo>/bxp-gui")
 
 # 2. Edit → hot reload
 mcp__dart__hot_reload()

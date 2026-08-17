@@ -35,13 +35,19 @@ tells you what to look for next.
 If you are an AI assistant generating a new template, follow these rules
 strictly:
 
-1. **`bxp-cli.examples.json` is required context.** It contains twelve
-   working templates with rich inline comments. If you don't have it,
-   ask the user to provide it before generating any template — do not
-   guess at non-trade row patterns, action vocabulary, or broker quirks.
-   Pattern-match against the closest existing template (simple stock
-   broker → Revolut X; paired rows → Anycoin; xlsx source → XTB;
-   brycht.app tracker-mode → trading212_to_brychtapp).
+1. **`bxp-cli.examples.json` is required context.** It ships working
+   templates with rich inline comments. If you don't have it, ask the
+   user to provide it before generating any template — do not guess at
+   non-trade row patterns, action vocabulary, or broker quirks.
+   Pattern-match against whichever shipped template is closest in shape
+   to the broker at hand: a plain stock broker with one row per trade, a
+   broker that emits paired rows per transaction, an xlsx source, or a
+   template targeting the tracker output rather than Wealthfolio. Read
+   the real ids out of the file rather than assuming them — with the
+   bxp-mcp server, `bxp_list_templates` returns a compact index (id plus
+   the file patterns and description) and `bxp_fetch_template` returns a
+   single template's JSON, so you can quote the one you are modelling
+   rather than the whole file. Both take the config **text**, not a path.
 2. **Add, do not modify.** Insert a new entry under
    `conversion_templates`. Never rewrite existing templates unless the
    user explicitly asks.
@@ -53,7 +59,11 @@ strictly:
    `input_schema` only extracts and transforms neutral values.
 5. **Use `pre_pass` only for cross-row joins.** If one input row needs a
    value from another row, use `pre_pass` and `LOOKUP`. Otherwise omit
-   it entirely.
+   it entirely. `pre_pass` has two shapes, and they select different
+   `LOOKUP` arities — do not mix them up:
+   a single block `{ when, key, values }`, read with the 2-arg
+   `LOOKUP(key, 'field')`; or named blocks `{ name1: { … }, name2: { … } }`,
+   read with the 3-arg `LOOKUP('name1', key, 'field')`.
 6. **Prefer named `maps`.** If the broker's symbols overlap an existing
    named map, reference it by name with `REMAP([Symbol], 'xtb')`.
    Otherwise define a small inline `REMAP(s, k, v, ...)`.
@@ -69,9 +79,12 @@ strictly:
    `PRICE_CURRENCY()` for the ISO code.
 10. **Empty values.** Set a `$variable` to `""` to leave that output
     column blank. Drop a column from `output_schema` to remove it.
-11. **Enable debug during development.** Set `row_rules_debug_missing:
-true` and run with `--debug` (CLI) or `dry-run` (GUI) so unmatched
-    rows surface.
+11. **Surface unmatched rows during development.** On the CLI, set
+    `row_rules_debug_missing: true` and run with `--debug` — the pair is
+    what dumps rows matching no rule as JSON. (`--debug` conflicts with
+    `--quiet` and `--trace`.) The GUI does not use that flag: a dry-run
+    reports skipped rows through the per-row trace instead, and clicking
+    one shows its **RULE RESULTS**.
 12. **Self-test before returning.** See below — predict each sample row's
     outcome, then verify with the bxp-mcp tools (`bxp_validate`,
     `bxp_eval` / `bxp_eval_trace`, `bxp_simulate`), or `bxp-cli --debug`.
@@ -89,11 +102,28 @@ expected result, then compare against actual output.
 
 The self-test surface depends on what you have wired:
 
-- **With the bxp-mcp server** (agent path): `bxp_validate`,
-  `bxp_validate_expr` / `bxp_eval` / `bxp_eval_trace` / `bxp_eval_batch`,
-  and `bxp_simulate` (a full end-to-end run). Each takes config /
-  expression _text_ as arguments, so you never touch the filesystem.
+- **With the bxp-mcp server** (agent path), nine tools: `bxp_validate`,
+  `bxp_validate_expr`, `bxp_eval`, `bxp_eval_trace`, `bxp_eval_batch`,
+  `bxp_list_templates`, `bxp_fetch_template`, `bxp_docs`, and
+  `bxp_simulate` (a full end-to-end run). Each takes config / expression
+  _text_ as arguments, so you never touch the filesystem. Reach for
+  `bxp_docs` rather than guessing a builtin's signature — it is the same
+  catalog the reference pages are generated from.
 - **With only `bxp-cli`** (no MCP): `bxp-cli --debug` and a real run.
+
+!!! danger "`headers` / `fields` are typed differently per tool"
+
+    `bxp_eval` and `bxp_eval_trace` take them as **JSON encoded into a
+    string** (`"[\"Price\",\"Qty\"]"`). `bxp_eval_batch` takes them as
+    **native JSON arrays** (`["Price","Qty"]`).
+
+    Getting this wrong on `bxp_eval` / `bxp_eval_trace` fails
+    **silently**: you get `{"ok":true}` back with the row context
+    dropped, so every `[Column]` resolves to `""` and a correct
+    expression looks broken. `bxp_eval_batch` fails loudly instead
+    (`headers/fields/exprs must be JSON arrays`). A single-expression
+    tool that returns an unexpected empty value is almost always this
+    bug — check the argument type before you touch the expression.
 
 **1. Schema + JSON5 syntax check.** Call `bxp_validate` with the config
 text. Expect no `$err_*` / `$warn_*` keys for the new template's path. If
@@ -112,18 +142,40 @@ should produce (0 / 1 / N).
   `bxp_eval_batch` for several `$variable` expressions against the same
   row at once.
 
+  `bxp_eval` / `bxp_eval_trace` — note the quoted, escaped arrays:
+
   ```json
   {
     "expr": "DATE_CONVERT([Time], 'YYYY-MM-DD hh:mm:ss', 'YYYY-MM-DD')",
-    "headers": ["Action", "Time", "Ticker"],
-    "fields": ["Market buy", "2024-04-25 07:00:35", "RIO"]
+    "headers": "[\"Action\", \"Time\", \"Ticker\"]",
+    "fields": "[\"Market buy\", \"2024-04-25 07:00:35\", \"RIO\"]"
   }
   ```
+
+  `bxp_eval_batch` — real arrays, plus `exprs`:
+
+  ```json
+  {
+    "headers": ["Action", "Time", "Ticker"],
+    "fields": ["Market buy", "2024-04-25 07:00:35", "RIO"],
+    "exprs": ["UPPER([Ticker])", "[Action]"]
+  }
+  ```
+
+  `bxp_eval_batch` also accepts `maps` (named `REMAP` / `REPLACE` tables),
+  `lookups` and `single_prepass_name` — the only way to exercise `LOOKUP`
+  without a full run.
 
 - **Step B — run it end-to-end.** With MCP, call `bxp_simulate` with the
   config, the template id, and the sample CSV. It stages and runs the
   real `bxp-cli` pipeline and returns the produced output, a record-count
-  diff, diagnostics, and a per-row `trace`. Without MCP:
+  diff, diagnostics, and a per-row `trace` — each filtered row carrying a
+  reason (`rule_skip` / `no_rule_match`) and its 1-based input line, which
+  is what tells you a `when` condition never matched. `ok: true` only
+  means the run happened; read `exit_code` / `status` / `diagnostics` for
+  the verdict. Pass the optional `workspace` argument to reuse one scratch
+  directory across iterations instead of littering temp with a new one per
+  call. Without MCP:
 
   ```bash
   ./bxp-cli --config bxp-cli.json --template <new_id> --debug

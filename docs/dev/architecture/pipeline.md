@@ -48,8 +48,8 @@ flowchart TD
     and output exists?}
     FRESH -->|skip| NEXT([next file])
     FRESH -->|continue| DETECT{File type?}
-    DETECT -->|.csv| CSV_READ[ChunkReader +
-    csv.LineIterator + csv.splitFields]
+    DETECT -->|.csv| CSV_READ[csvstream ChunkReader +
+    LineIterator + splitFields]
     DETECT -->|.json| JSON_READ[json.scanColNames +
     json.RecordReader streaming]
     CSV_READ --> PREPASS
@@ -115,7 +115,7 @@ source order so the output stays byte-identical to the serial path.
 
 ```mermaid
 flowchart TD
-    READ[ChunkReader
+    READ[csvstream ChunkReader
     10 MiB chunk] --> BLK[Buffer one block of rows
     pending_rows]
     BLK --> FORK[Fork K = max_workers tasks
@@ -368,17 +368,26 @@ template's local `maps` block.
 ### Static analysis path (parallel to runtime eval)
 
 The config validator's passes don't run expressions — they walk the parse
-tree to find typos and dead references. Three top-level entry points in
+tree to find typos and dead references. Two top-level entry points in
 `expr.zig`:
 
-| Function                       | What it returns                                | Used by                                               |
-| ------------------------------ | ---------------------------------------------- | ----------------------------------------------------- |
-| `staticReferences(src, alloc)` | Set of every `[X]` and `$var` referenced       | `validateUnknownKeysCollect`, `validateUnusedCollect` |
-| `staticCheckCalls(src, …)`     | Per-call FnArg arity + signature errors        | config validation                                     |
-| `staticCheckSplitPart(src, …)` | Token-scan for `SPLIT_PART(_, _, ≤0)` literals | config validation                                     |
+| Function                       | What it returns                                                       | Used by                                               |
+| ------------------------------ | --------------------------------------------------------------------- | ----------------------------------------------------- |
+| `staticReferences(src, alloc)` | Set of every `[X]` and `$var` referenced                              | `validateUnknownKeysCollect`, `validateUnusedCollect` |
+| `staticCheckCalls(src)`        | `StaticCheckResult` — the first bad literal arg found, with its span  | config validation, `bridge_eval_expr`                 |
+
+`staticCheckCalls` is the unified literal-argument checker: it walks every
+call in the source, looks each name up in the `builtins` catalog, and reports
+the first argument literal that violates its `FnDoc` `ArgKind` — a
+`positive_integer` violation (`SPLIT_PART(_, _, ≤0)`) in `.split_part`, a
+`date_format` violation (a bad `DATE_CONVERT` pattern) in `.date_format`. It
+replaced the former per-builtin `staticCheckSplitPart` / `staticCheckDateFormat`
+walkers, so adding a checked `ArgKind` needs no new entry point.
 
 These share the parser front-end with `eval()` — same recursive descent, no
-duplicated grammar — but emit `Diagnostic` records into a `*Diagnostics` sink
-instead of producing values.
+duplicated grammar — but return a finding instead of producing values;
+`config.zig` is what turns that finding into a `Diagnostic`
+(`expr.SplitPartBadIndex` / `expr.DateFormatBadToken`) in the `*Diagnostics`
+sink.
 
 ---

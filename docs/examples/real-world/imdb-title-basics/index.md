@@ -68,12 +68,6 @@ stays local.
    first genre into its own `primary_genre` column while `all_genres`
    keeps the full list for filtering.
 
-## Run it
-
-```bash
-bxp-cli --config ./sample.json --template imdb_titles_to_catalog
-```
-
 ## Final result
 
 Before the fix in TRICK 2 was applied, exactly one row in
@@ -83,7 +77,7 @@ year/runtime but not for genres, so `SPLIT_PART('\N', ',', 1)` happily
 returned `'\N'` as the "primary genre" and the literal backslash-N leaked
 into the catalogue.
 
-Open `sample.csv` row 501 (or `sample.csvx` row 501) in the GUI, click the
+Open `sample.csv` line 500 (or `sample.csvx` line 500) in the GUI, click the
 `primary_genre` cell: the trace pane shows the IF branch that now correctly
 returns `''` for the null-genre row. Without that branch, the smoking gun
 was completely invisible — `errors:0`, `warnings:0`, but one row in your

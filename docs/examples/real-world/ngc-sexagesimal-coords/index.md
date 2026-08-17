@@ -57,8 +57,8 @@ The Andromeda Galaxy (M31 = NGC 224) and the Orion Nebula
 (M42 = NGC 1976, southern) convert exactly:
 
 ```text
-NGC0224  00:42:44.35  +41:16:08.6  →  10.68479167   41.26905556
-NGC1976  05:35:16.48  -05:23:22.8  →  83.81866667   -5.38966667
+NGC0224  00:42:44.35  +41:16:08.6  →  10.68479166666   41.269055555556
+NGC1976  05:35:16.48  -05:23:22.8  →  83.818666666665  -5.389666666666
 ```
 
 Those decimal degrees drop straight into a scatter plot, a `astropy` `SkyCoord`,

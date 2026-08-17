@@ -227,6 +227,50 @@ that justify it. Whichever wins, the `+`/`-` numeric carve-out must survive —
 re-introducing `'+420 555 0101` would be a regression of the fix that created
 it.
 
+### Stateless eval accepts a malformed row context and answers anyway
+
+`inspect.evalExpr` and `inspect.evalTrace` take `headers` / `fields` as JSON
+encoded into a *string*. When a caller passes native JSON arrays instead — the
+shape `inspect.evalBatch` requires, so the mistake is a natural one — the row
+context is silently dropped and every `[Column]` reference evaluates to `""`
+while the call still answers `ok:true`. Neither entry point cross-checks
+`headers.len == fields.len` either; `headers=2` with `fields=1` is accepted.
+
+Measured 2026-08-17 against the shipping `bxp-mcp`:
+
+| Call | Result |
+| --- | --- |
+| `bxp_eval` `headers:"[\"Action\"]"` | `{"ok":true,"value":"Market Buy"}` |
+| `bxp_eval` `headers:["Action"]` | `{"ok":true,"value":""}` — wrong, and silent |
+| `bxp_eval_batch` with strings | `isError` — rejected loudly, as it should be |
+
+This is the worst failure mode for the agent audience the surface exists for:
+an assistant reads an empty value, concludes the *expression* is broken, and
+"fixes" a correct one. Three separate docs pages now carry a warning about it,
+which is a workaround for a defect rather than a fix.
+
+Rejecting a non-string `headers` / `fields` cannot break a conforming client —
+the tool schema already declares them as strings, so today's silent path only
+ever serves callers that are already wrong. A length mismatch is the same
+class. The open question is only the shape of the refusal: a domain
+`{"ok":false,…}` (which agents are told to read and act on) or a tool-level
+`isError`. Decide that, then the warnings in the docs can go.
+
+### The macOS updater never checks the host architecture
+
+`UpdaterService._platformAssetPattern()` matches the release *asset name*
+`bxp-desktop-macos-arm64.dmg`. Nothing anywhere reads the host architecture, so
+an Intel Mac matches that asset, downloads it, and installs an arm64 build that
+cannot run. The comment beside the pattern asserts the opposite — that Intel
+Macs "fall through to the manual-update message" — and the user-facing docs
+repeated that claim until this was found (2026-08-17); they no longer do.
+
+Not reachable today only because the release matrix ships no Intel artifact and
+the affected population is small, but the failure is silent and leaves the user
+with a broken install rather than a message. Gate the macOS branch on the host
+architecture and route anything that is not arm64 to the existing
+manual-update path — the same path Linux non-AppImage builds already take.
+
 ### Cancelling a stream does not reach the child's grandchildren
 
 `bridge_cancel` signals the direct child. A grandchild the child forked
@@ -414,7 +458,7 @@ Features that surface repeatedly in audits and reverse-simulations but are
 deliberately **out of scope** — documented here so the same discussion
 doesn't keep restarting. Reopen only if the rationale changes.
 
-- **Multiline quoted fields (`csv_multiline_quotes: true`).** `csv.LineIterator`
+- **Multiline quoted fields (`csv_multiline_quotes: true`).** `csvstream`'s `LineIterator`
   deliberately uses lazy-quotes semantics — a newline always ends the record
   (design decision, validated on IMDb 12.5M rows). This is intentionally
   NOT RFC 4180 §2.6. An opt-in RFC mode would require quote-aware chunk
@@ -437,4 +481,4 @@ doesn't keep restarting. Reopen only if the rationale changes.
   auto-normalised: `parseGroupedNumber` disambiguates dot/comma grouping
   (because `csv_decimal_separator_in` declares the decimal char), but a
   space/NBSP thousands separator stays raw.
-  Workarounf: strips it with `REPLACE(REPLACE([X], ' ', ''), ',', '.')`
+  Workaround: strip it with `REPLACE(REPLACE([X], ' ', ''), ',', '.')`

@@ -37,12 +37,6 @@ See inline comments in `sample.json`:
 4. **Mixed date formats** → `IF(CONTAINS('/'), DATE_CONVERT US, DATE_CONVERT ISO)`
    sniffs the separator per row.
 
-## Run it
-
-```bash
-bxp-cli --config ./sample.json --template hubspot_to_sfdc_lead
-```
-
 ## Final result
 
 Open `sample.csv` row 7 (Lisa Brown / Cyberdyne) in the GUI.

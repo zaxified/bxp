@@ -35,9 +35,12 @@
 
         // TRICK 3 — PID-7 birth date is YYYYMMDD (sometimes a full timestamp
         // like "198808181126+0215"). This is a pure REFORMAT, so slice the
-        // first 8 chars with string ops rather than DATE_CONVERT — string
-        // slicing has no lower-year limit (DATE_CONVERT silently drops dates
-        // before 1970; a 1924 birthdate would vanish). Guard the empty case.
+        // first 8 chars with string ops rather than DATE_CONVERT: slicing
+        // ignores whatever trails the date, so both the bare and the
+        // timestamped form need one expression instead of two formats.
+        // (DATE_CONVERT would also work — pre-1970 dates are fully supported,
+        // 1924 converts fine — it just has to be told which shape to expect.)
+        // Guard the empty case.
         $dob: "IF(ISEMPTY(FIELDS(8)), '', LEFT(FIELDS(8), 4) & '-' & SUBSTR(FIELDS(8), 5, 2) & '-' & SUBSTR(FIELDS(8), 7, 2))",
 
         $sex: "FIELDS(9)"

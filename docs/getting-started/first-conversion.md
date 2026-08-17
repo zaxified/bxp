@@ -5,7 +5,8 @@ app or from a terminal. Pick the entry point that fits you.
 
 ## In BXP Desktop
 
-1. **File → Open** (or ctrl+o). Pick your `bxp-cli.json`.
+1. Click **OPEN** in the toolbar (or ctrl+o — cmd+o on macOS). Pick your
+   `bxp-cli.json`.
 2. Select a template in the toolbar dropdown, click `dry-run`. The
    bottom pane streams trace events for every input row.
 3. Inspect the trace, fix any errors that appear inline in the tree,

@@ -54,7 +54,7 @@ traps, both solved by guarding blanks with `LEN(TRIM([x])) = 0` **first**:
 
 ## Final result
 
-Eight spellings collapse to three states; the `0` is a real
+Ten spellings collapse to three states; the `0` is a real
 `false`, the blank stays blank, and the junk `unknown` is dropped to empty:
 
 ```text

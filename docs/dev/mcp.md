@@ -79,8 +79,17 @@ the agent passes the config it is authoring.
 | `bxp_eval_trace`     | `evalTrace(expr, …, out)`            | NDJSON: one line per function call, then a `final` / `error` sentinel                                                                                                    |
 | `bxp_docs`           | `docsJson()`                         | full language/schema JSON (functions, keywords, operators, tokens, config_schema)                                                                                        |
 | `bxp_list_templates` | `listTemplates(config)`              | `{templates:[…]}` (no semantic validation)                                                                                                                               |
-| `bxp_fetch_template` | `fetchTemplate(config, id)`          | the raw template JSON, or `{"$err_1":…}` for a bad id                                                                                                                    |
+| `bxp_fetch_template` | `fetchTemplate(config, id)`          | one template re-serialised as a JSON object (comments stripped by the JSON5 preprocessor), or `{"$err_1":…}` for a bad id                                                |
 | `bxp_simulate`       | spawns `bxp-cli`                     | full end-to-end run report (see below)                                                                                                                                   |
+
+!!! warning "Row context: two different argument encodings"
+
+    `bxp_eval` and `bxp_eval_trace` declare `headers` / `fields` as **strings
+    containing a JSON array** (`"[\"Price\"]"`). `bxp_eval_batch` takes
+    **native JSON arrays**. Passing native arrays to the first two is silently
+    ignored — the row context is left empty and every `[Col]` reads as `""`, so
+    the call still answers `ok` with a wrong value. See
+    [`trace-protocol/inspect.md`](trace-protocol/inspect.md).
 
 Agent workflow hint (also in the server's `initialize` instructions): call
 `bxp_docs` first to learn the language, `bxp_eval_trace` to debug an expression,

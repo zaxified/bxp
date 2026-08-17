@@ -19,7 +19,7 @@ unary -    →    * /    →    & (concat)    →    + -    →    = != < > <= >
 | Syntax         | Description                                                    |
 | -------------- | -------------------------------------------------------------- |
 | `[ColumnName]` | Raw CSV field by header name (leading/trailing spaces trimmed) |
-| `[n]`          | Raw CSV field by 1-based column index                          |
+| `FIELDS(n)`    | Raw CSV field by 1-based column **position**                   |
 | `'text'`       | String literal                                                 |
 | `123`, `-0.5`  | Numeric literal                                                |
 | `&`            | String concatenation (`'$CASH-' & [Currency]`)                 |
@@ -30,6 +30,12 @@ and other punctuation — `[Price ($)]`, `[Run Date]`, and
 `[Stamp duty reserve tax]` are all valid references. The bracket
 syntax preserves the header verbatim; only the closing `]` itself is
 reserved.
+
+**Brackets are a name lookup, never a position.** `[2]` asks for a column
+whose header is literally `2`; it does not read the second column, and it
+silently yields `""` when no such header exists. Use `FIELDS(2)` to reach a
+column by position — that is also the only way in on headerless input
+(`csv_header_line: 0`).
 
 Function names are case-insensitive.
 

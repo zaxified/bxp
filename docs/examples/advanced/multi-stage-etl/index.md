@@ -21,8 +21,8 @@ pre_pass per pass**. The second hop's key (`category_id`) does not exist on an
 order until the first hop has run, so it _cannot_ be a single lookup — you
 combine, join, combine again, join again. On top of that, the author knows each
 source's date convention up front, and the output target is Prague local time
-with a correct **summer/winter offset** — which the engine has no built-in
-timezone for, yet it's still computable.
+with a correct **summer/winter offset** — which `TZ_OFFSET` resolves from the
+bundled IANA tz database in a single call.
 
 ```mermaid
 flowchart TD
@@ -97,7 +97,8 @@ IF(LEN([order_date]) = 0, '',                                          // (1)!
 
 Three orders, three source date formats, two join hops, and a timezone that
 flips with the season — one clean JSON dataset. Note `order_ts`: `+01:00` in
-January and November, `+02:00` in July:
+January and November, `+02:00` in July. (Shown pretty-printed; bxp writes one
+compact object per line.)
 
 ```json
 [

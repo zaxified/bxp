@@ -83,11 +83,12 @@ slice the engine surfaces:
 
 - 5 rows of `no_passengers` (driver pickups with a paid fare but
   `passenger_count = 0` — physically impossible, almost certainly meter bugs)
-- 1 row of `refund` (every monetary field is negative: `fare = -4`,
-  `tolls = -0.3`, `total = -4.8`)
+- 1 row of `refund` (the fare and the total are both negative: `fare_usd = -4`,
+  `total_usd = -4.8`, and the raw row's mta-tax and surcharge fields are
+  negative too)
 
 !!! tip "Trace it in the GUI"
-    Open `sample.csvx` row 187 (or `sample.csv` row 507) in the GUI, click the
+    Open `sample.csvx` line 507 (the same line in `sample.csv`), click the
     `quality` cell: the trace pane shows the full evaluation chain that decided
     `refund`. Without the quality column those 6 rows silently lower your
     average-fare statistic and skew tip-rate analysis.

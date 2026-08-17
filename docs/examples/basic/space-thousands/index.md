@@ -16,10 +16,12 @@
 
 French, Czech, Slovenian and many other EU exports group
 thousands with a space and use a comma for the decimal point. bxp's built-in
-grouped-number handling recognises the _period_-thousands form (`1.234,56`)
-automatically, but **not** the space-grouped form — so this is the small idiom
-that covers it. (A real cited example of the period-thousands + comma-decimal
-form lives in [real-world/french-dvf-realestate](../../real-world/french-dvf-realestate/index.md).)
+grouped-number handling covers the US `1,234.56` form out of the box, and
+declaring `csv_decimal_separator_in: ","` covers the period-grouped continental
+form (`1.234,56` → `1234.56`) — but **neither** reaches the space-grouped form,
+so this is the small idiom that covers it. (A real cited example of the
+comma-decimal convention, handled with `csv_decimal_separator_in`, lives in
+[real-world/french-dvf-realestate](../../real-world/french-dvf-realestate/index.md).)
 
 **Problem class documented in.** (sources for the problem class — not for the data)
 

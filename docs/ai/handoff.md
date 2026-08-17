@@ -7,8 +7,8 @@ there's anything left to verify:
 ```text
 ## Things to check in bxp-gui
 
-1. **Open** your `bxp-cli.json` (Ctrl+O), select the new template
-   `<id>` in the toolbar dropdown, click **dry-run**.
+1. **Open** your `bxp-cli.json` (Ctrl+O, Cmd+O on macOS), select the
+   new template `<id>` in the toolbar dropdown, click **dry-run**.
 
 2. **DIVIDEND rows** (3 in your sample): the right-hand trace will
    show `quantity = 0`, `unitPrice = (empty)`. Wealthfolio may or
@@ -24,10 +24,11 @@ there's anything left to verify:
 
 4. **Splits / mergers / transfers** (skipped per the target spec): I
    added `rows: []` for direction `in` / `out`. If your account had any
-   splits in the sample period, those rows produce no output — open
-   `--debug` (the Settings inspector → Last debug section) and tell
-   me which lines were skipped. I'll add explicit `'SPLIT'` handling
-   if Wealthfolio supports it.
+   splits in the sample period, those rows produce no output — click one
+   of those rows after the dry-run and read the **RULE RESULTS** panel
+   (it names the rule that matched, or says none did), then tell me the
+   line numbers. I'll add explicit `'SPLIT'` handling if Wealthfolio
+   supports it.
 ```
 
 Each instruction must be:
