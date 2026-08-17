@@ -26,8 +26,90 @@ debugger on top of them.
   previews their behaviour against your real broker exports. Drives
   `bxp-cli` and `bxp-mcp` under the hood.
 
-Sections below marked *(desktop only)* describe the desktop app; skip
-them if you have the console package.
+Sections marked *(desktop only)* describe the desktop app; skip them if
+you have the console package.
+
+This file has two halves. The first is for you: installing, running a
+conversion, and working the desktop app. The second, **Reference for AI
+assistants**, is the material an AI needs to write a template for your
+broker and check its own work — hand it the whole file and it will find
+its half.
+
+---
+
+## First run *(console package)*
+
+There is nothing to install. Unpack the archive and run the binary from
+wherever you put it — it needs no libraries, no runtime, and no entry in
+`PATH`. On Linux and macOS you may need `chmod +x bxp-cli bxp-mcp` if your
+unpacker dropped the executable bit.
+
+The archive is laid out so it runs as-is:
+
+| File | What it is |
+| --- | --- |
+| `bxp-cli` | The conversion engine |
+| `bxp-mcp` | The MCP server for AI agents |
+| `bxp-cli.json` | A working config — one template, ready to run |
+| `bxp-cli.examples.json` | The template library to copy from |
+| `sample.csv` | A sample broker export |
+| `sample.csvx` | The converted result, ready to look at before you run anything. Your first run overwrites it — that is the point |
+| `sample.expected` | The reference copy of that same result. Nothing overwrites it, so it stays a trustworthy answer key |
+| `readme.md` | This file |
+
+The last two are byte-identical on a correct install, which is what makes
+the check below meaningful.
+
+**Check the install in one command.** From the unpacked directory:
+
+```bash
+./bxp-cli --dry-run
+```
+
+```text
+=== template: trading212_to_wealthfolio ===
+processing 'sample.csv'
+summary: errors:0 warnings:0 time:0.004s
+
+=== overall summary ===
+errors:0 warnings:0 time:0.006s
+```
+
+`--dry-run` runs the whole pipeline in memory and writes nothing. Drop the
+flag to produce the real file, then confirm it matches the reference:
+
+```bash
+./bxp-cli
+diff sample.csvx sample.expected     # no output = correct
+```
+
+**Now use it on your own export.** `bxp-cli` reads `bxp-cli.json` from the
+current directory, and each template's `data_dir` is resolved *relative to
+that config file*. The shipped config uses `data_dir: "."`, which is why
+`sample.csv` is found next to the binary. For real work, give each template
+its own folder:
+
+```text
+my-conversions/
+├── bxp-cli.json              # your config — data_dir paths start here
+├── trading212/               # data_dir of the trading212 template
+│   ├── export-2026-01.csv    # drop broker exports here
+│   └── export-2026-01.csvx   # bxp-cli writes the result alongside
+└── revolut/                  # data_dir of another template
+    └── statement.csv
+```
+
+To add a broker, open `bxp-cli.examples.json`, copy the template you want
+into the `conversion_templates` object of your own `bxp-cli.json`, and set
+its `data_dir` to the folder you made for it. Then:
+
+```bash
+./bxp-cli --template trading212_to_wealthfolio   # one template
+./bxp-cli                                        # every template in the config
+```
+
+If your broker isn't covered by any shipped template, see *Need a broker
+that isn't listed?* below.
 
 ---
 
@@ -95,21 +177,15 @@ preferences live at `~/Library/Application Support/bxp-gui/bxp-gui.json`.
 
 ### Built-in templates
 
-| Template ID | Broker |
-| --- | --- |
-| `revolutx_to_wealthfolio` | Revolut X (crypto) |
-| `trading212_to_wealthfolio` | Trading 212 |
-| `anycoin_to_wealthfolio` | Anycoin (crypto) |
-| `xtb1_closed_to_wealthfolio` | XTB — closed positions (old) |
-| `xtb1_cash_to_wealthfolio` | XTB — cash operations (old) |
-| `xtb2_closed_to_wealthfolio` | XTB — closed positions (new) |
-| `xtb2_cash_to_wealthfolio` | XTB — cash operations (new) |
-| `revolutx_to_brychtapp` | Revolut X (crypto) → brycht.app (tracker) |
-| `anycoin_to_brychtapp` | Anycoin (crypto) → brycht.app (tracker) |
-| `trading212_to_brychtapp` | Trading 212 → brycht.app (tracker) |
-| `xtb2_cash_to_brychtapp` | XTB — cash operations (new) → brycht.app (tracker) |
-| `xtb2_closed_to_brychtapp` | XTB — closed positions (new) → brycht.app (tracker) |
+Ready-made templates ship in `bxp-cli.examples.json` — next to the binary in
+the console package, inside the app bundle on desktop. Open it to see which
+brokers and which trackers are covered; every entry carries inline JSON5
+comments explaining its choices. Copy the one you need into your own
+`bxp-cli.json`, or point your AI assistant at the file (see *Need a broker
+that isn't listed?*).
 
+Template ids read `<broker>_to_<tracker>`, so an id names both ends of the
+conversion, and `bxp-cli --template <id>` runs exactly one of them.
 ### Keyboard shortcuts *(desktop only)*
 
 All shortcuts are global (work even while a side panel has focus),
@@ -150,7 +226,9 @@ from the current directory and processes every template in it.
 | `--quiet` | — | Suppress per-template summaries. Exit code still reflects success / warnings / failure. |
 | `--fresh` | — | Skip files whose output already exists. Useful when re-running on a folder where some `.csvx` files are already produced. |
 | `--dry-run` | — | Run the full pipeline in memory but write no output files — a preview / validation run that still reports counts and warnings. Independent of `--trace`. |
-| `--check-fs=N` | seconds (0–60) | Run extra filesystem-existence checks (verifies `data_dir`, etc.). `N` is the deadline in seconds — `0` skips entirely (default). |
+| `--trace` | — | Emit the binary BXTB trace stream on stdout (forces `--quiet`; conflicts with `--debug`). Machine-readable, meant for the GUI's drill-down view — not human-readable in a terminal. |
+| `--trace-file <path>` | path | Write a full binary trace (every row, every event) to `<path>`. Independent of `--trace`; useful for offline GUI drill-down. |
+| `--check-fs <n>` | seconds | Run extra filesystem-existence checks (verifies `data_dir`, etc.). `<n>` is the deadline in seconds — `0` skips entirely (default). `--check-fs=5` and `--check-fs 5` are both accepted. |
 | `--version` | — | Print the binary version to stdout and exit. |
 | `--help` | — | Print the built-in help to stdout and exit. |
 
@@ -160,46 +238,6 @@ from the current directory and processes every template in it.
 ./bxp-cli --template <id>                         # process a single template
 ./bxp-cli --template <id> --data ./my-data/       # override data_dir for that template
 ```
-
-### `bxp-mcp` reference (for AI agents)
-
-`bxp-mcp` is an MCP server (JSON-RPC 2.0 over stdio) that exposes bxp's
-stateless surface as agent-callable tools — everything an assistant
-needs to author and self-test a template without touching the GUI. It
-ships next to `bxp-cli` so its `bxp_simulate` tool can spawn it.
-
-Register it with an MCP-capable client (e.g. Claude Code, in
-`~/.claude.json`):
-
-```json
-{ "mcpServers": { "bxp": { "command": "/abs/path/to/bxp-mcp", "args": [] } } }
-```
-
-…or drive it directly — one JSON-RPC object per line on stdin:
-
-```bash
-printf '%s\n' \
-  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}' \
-  '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"bxp_validate_expr","arguments":{"expr":"IF([Qty] > 0, '\''BUY'\'', '\''SELL'\'')"}}}' \
-  | ./bxp-mcp
-```
-
-| Tool | Arguments | Purpose |
-| --- | --- | --- |
-| `bxp_validate` | `config` (JSON5 text) | Validate a config; returns annotated JSON with `$err_*` / `$warn_*` / `$info_*` siblings marking each problem. Comments are not carried over. |
-| `bxp_validate_expr` | `expr` | Authoring-time check of one expression (syntax + semantics + static lint, e.g. a literal `SPLIT_PART(…, 0)`). `{ok:true}` or `{ok:false,error,detail,off,len}`. |
-| `bxp_eval` | `expr`, `headers?`, `fields?` | Evaluate one expression against an optional row — what it *computes* (lenient runtime). `{ok,value}` or `{ok:false,…}`. |
-| `bxp_eval_trace` | `expr`, `headers?`, `fields?` | Evaluate with a per-call NDJSON trace (one line per nested function call, then a `final` / `error` sentinel). |
-| `bxp_eval_batch` | `headers`, `fields`, `exprs` | Evaluate many expressions against one row in a single call. |
-| `bxp_list_templates` | `config` | List every template id declared in the config. |
-| `bxp_fetch_template` | `config`, `id` | Return one template's raw JSON. |
-| `bxp_docs` | — | Full function / config-schema catalog (the same source the GUI's autocomplete uses). |
-| `bxp_simulate` | `config`, `template`, `csv` | Run a full conversion end-to-end against the supplied CSV; returns the output, a record-count diff, diagnostics, and a per-row trace. The strongest self-test — verifies `pre_pass` / `LOOKUP` / `row_rules` for real. |
-
-A tool *failure* (e.g. a missing required argument) sets `isError:true`
-on the JSON-RPC result; a domain `{"ok":false,…}` answer (an expression
-error, a not-found template) is a valid result the agent should read,
-not a failure. See `docs/mcp.md` for the full wire protocol.
 
 ### `bxp-gui` reference *(desktop only)*
 
@@ -266,6 +304,142 @@ with the release page URL.
 
 ---
 
+## Advanced GUI features *(desktop only)*
+
+These features are GUI-specific and have no terminal equivalent. They
+exist to make authoring and debugging a template faster than editing
+JSON5 by hand.
+
+### Inline schema docs
+
+Hover any field in the tree to see its description, type, default, and
+which expressions it accepts. The catalog is the bundled docs catalog
+(the GUI loads it in-process from the bridge library at startup) — the
+same source of truth that drives autocomplete in the expression editor.
+Add a built-in function to bxp-cli, run a clean rebuild, and the GUI
+sees it automatically with no client-side changes.
+
+### Expression playground
+
+Click any expression cell — a panel opens on the right with:
+
+- A live editor with syntax highlighting and per-keystroke validation.
+- Autocomplete (Ctrl+Space) for built-in functions, `$variables`, and
+  `[ColumnName]` references that exist in the loaded template.
+- Token-level error underlines: a typo'd `[Quanity]` (instead of
+  `[Quantity]`) gets a red underline on exactly the wrong token, with
+  a did-you-mean tooltip.
+- A **Variables** sub-panel that evaluates the expression against the
+  current row in-process (via the bundled bridge) and lists every nested
+  function call's intermediate value. Excellent for debugging "why did
+  this expression return empty string?" cases.
+
+### Add Field dialog
+
+When an object's parent schema permits new keys, a `+` chip appears.
+Clicking it opens a dialog showing only the keys that are valid here
+(driven by `FieldDoc` schema metadata), with default values and
+inserted templates pre-filled. No need to remember which fields go
+where.
+
+### Settings inspector (`Ctrl+Shift+S`)
+
+A drawer slides in from the right with the GUI's complete internal
+state:
+
+- Loaded config path, raw bytes, AST root.
+- Schema docs catalog (loaded in-process from the bundled bridge at startup).
+- Op log (undo / redo history).
+- Path-keyed validation errors / warnings / info.
+- Run state (last exit code, stderr text, trace event count).
+
+Use it when something looks weird and you want to confirm "is the GUI
+seeing what I think it's seeing?".
+
+### Cancelling a run
+
+A run can be cancelled mid-stream by clicking the `cancel` button (the
+run-button label flips to `cancel` while a run is active). This signals the
+`bxp-cli` child — SIGTERM on Linux/macOS, `TerminateProcess` on Windows —
+and the streaming future resolves with the resulting exit code, so the UI
+returns to idle on its own. Cancelling is best-effort and idempotent:
+clicking it for a run that already finished does nothing.
+
+### Filesystem checks (slow paths)
+
+By default config validation skips filesystem checks (existence of
+`data_dir`, of input files) so loading is snappy. Triggering `Ctrl+E`
+(Validate) re-runs validation with a `check-fs` deadline of 2 seconds to
+add these checks. If a check times out, the GUI flips into a degraded mode for
+the rest of the session: subsequent reloads omit the flag too. This
+stops a network-mounted `data_dir` from making the editor feel
+sluggish.
+
+---
+
+## Working with an AI assistant *(desktop only)*
+
+GUI-specific scenarios where an AI helps you go faster.
+
+### Help with the GUI itself
+
+If you're stuck navigating bxp-gui — finding a feature, understanding
+an error message, choosing between dry-run and full-run — paste this
+readme into your assistant and ask:
+
+> *"I use BXP Desktop. Please read the bundled `readme.md`. I'm trying
+> to `<describe what you want to accomplish>`. The GUI is showing
+> `<paste any error chip text or describe the screen>`. Which features
+> should I use, and what keyboard shortcuts apply?"*
+
+The assistant has the full keyboard shortcut table, advanced feature
+descriptions, exit-code semantics, and bundled binary reference —
+enough context to walk you through almost any GUI workflow.
+
+### Debugging an expression that returns wrong values
+
+Open the expression in the playground (right-rail panel). Click
+**Variables** and pick a row that produces the wrong result. Copy the
+NDJSON trace lines (Settings inspector → trace section) and the
+expression text into your assistant:
+
+> *"This BXP expression `<paste expression>` should produce
+> `<expected>` for input row `<paste row from variables panel>` but
+> instead produces `<actual>`. The per-call trace looks like
+> `<paste NDJSON lines>`. What's wrong with the expression?"*
+
+The trace makes the AI's job almost mechanical — every nested function
+call's input and output is visible.
+
+---
+
+## Troubleshooting *(desktop only)*
+
+| Symptom | Likely cause / fix |
+| --- | --- |
+| Fatal error gate on launch | The `bxp-gui-bridge` library is missing from the bundle. Reinstall the desktop package. |
+| `dry-run` button greyed out | No template selected, or the config has a load-time AST parse error (red banner in the tree). |
+| Error chips on every field | Schema docs failed to load. Check the Settings inspector → Docs section for a load error from the bundled docs catalog. |
+| `cancel` button stuck | The bxp-cli child didn't respond to the termination signal. Cancel is not escalated automatically — if the run never returns, close and reopen the app. A cancelled full-run may leave a partially written `.csvx`; delete it before re-running. |
+| Slow first load on a new file | First invocation may include filesystem checks (`Ctrl+E`-driven). Subsequent loads skip them; you can force-skip by avoiding `Ctrl+E`. |
+| Tree shows `$err_<N>` / `$warn_<N>` keys as editable entries | A bug — validation markers should render as inline chips, not as config keys. Open an issue with the offending file attached. |
+
+---
+
+## Environment variables
+
+All optional — BXP works with none of them set.
+
+| Variable | Effect |
+| --- | --- |
+| `BXP_CLI_PATH` | Absolute path to the `bxp-cli` binary the desktop app should run, instead of the one bundled beside it |
+| `BXP_EXAMPLES_PATH` | Absolute path to the `bxp-cli.examples.json` the desktop app offers templates from |
+| `BXP_DIAGNOSTIC` | Set to `1` to write a diagnostic trace (plus captured engine stderr) next to the preferences file — attach it when reporting a bug |
+| `BXP_GUI_MCP_HOST` / `BXP_GUI_MCP_PORT` | Bind address of the desktop app's agent-control server. Defaults `127.0.0.1` / `7717`; the saved preference wins over these |
+| `BXP_GUI_MCP_AUTO_APPROVE` | Seeds the auto-approve gate at startup, so an agent can drive a freshly launched app without a click. The persisted toggle is the one that survives across launches |
+
+---
+
 ## Need a broker that isn't listed?
 
 **Ask your AI assistant.** bxp-cli templates are plain JSON5 — a capable
@@ -279,7 +453,7 @@ have examples.json, it will refuse to guess.
 Paste this prompt into your assistant, attach both files, then drop in
 5 rows of your broker's raw CSV:
 
-> *"I use BXP. Please read the **Advanced usage** section of `readme.md`
+> *"I use BXP. Please read the **Reference for AI assistants** part of `readme.md`
 > and the comments in `bxp-cli.examples.json`. Here is a sample of my
 > broker's export: `<paste 5 rows including the header>`. Add a new
 > entry under `conversion_templates` in my `bxp-cli.json` that converts
@@ -299,7 +473,128 @@ for next.
 
 ---
 
-## Advanced usage
+# Reference for AI assistants
+
+Everything above is written for you, the user. Everything below is the
+material an AI assistant needs in order to author a template, drive the
+tools, and check its own work — the expression language, the config
+schema, the agent-callable surfaces of `bxp-mcp` and the desktop app, and
+the rules it is expected to follow. It doubles as the exhaustive human
+reference for the same things.
+
+## `bxp-mcp` reference — the agent's toolset
+
+`bxp-mcp` is an MCP server (JSON-RPC 2.0 over stdio) that exposes bxp's
+stateless surface as agent-callable tools — everything an assistant
+needs to author and self-test a template without touching the GUI. It
+ships next to `bxp-cli` so its `bxp_simulate` tool can spawn it.
+
+It takes no operational flags — it speaks MCP on stdin/stdout and nothing
+else — but `--help` prints its tool list and `--version` prints the build,
+which is the quickest way to confirm you are pointing a client at the right
+binary.
+
+Register it with an MCP-capable client (e.g. Claude Code, in
+`~/.claude.json`):
+
+```json
+{ "mcpServers": { "bxp": { "command": "/abs/path/to/bxp-mcp", "args": [] } } }
+```
+
+…or drive it directly — one JSON-RPC object per line on stdin:
+
+```bash
+printf '%s\n' \
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"bxp_validate_expr","arguments":{"expr":"IF([Qty] > 0, '\''BUY'\'', '\''SELL'\'')"}}}' \
+  | ./bxp-mcp
+```
+
+| Tool | Arguments | Purpose |
+| --- | --- | --- |
+| `bxp_validate` | `config` (JSON5 text) | Validate a config; returns annotated JSON with `$err_*` / `$warn_*` / `$info_*` siblings marking each problem. Comments are not carried over. |
+| `bxp_validate_expr` | `expr` | Authoring-time check of one expression (syntax + semantics + static lint, e.g. a literal `SPLIT_PART(…, 0)`). `{ok:true}` or `{ok:false,error,detail,off,len}`. |
+| `bxp_eval` | `expr`, `headers?`, `fields?` (**strings**) | Evaluate one expression against an optional row — what it *computes* (lenient runtime). `{ok,value}` or `{ok:false,…}`. |
+| `bxp_eval_trace` | `expr`, `headers?`, `fields?` (**strings**) | Evaluate with a per-call NDJSON trace (one line per nested function call, then a `final` / `error` sentinel). |
+| `bxp_eval_batch` | `headers`, `fields`, `exprs` (**arrays**), `maps?`, `lookups?`, `single_prepass_name?` | Evaluate many expressions against one row in a single call. The `lookups` / `single_prepass_name` arguments let you supply a pre-built `pre_pass` table, so `LOOKUP` expressions can be checked without a full run. |
+| `bxp_list_templates` | `config` | List every template id declared in the config. |
+| `bxp_fetch_template` | `config`, `id` | Return one template's raw JSON. |
+| `bxp_docs` | — | Full function / config-schema catalog (the same source the GUI's autocomplete uses). |
+| `bxp_simulate` | `config`, `template`, `csv`, `workspace?` | Run a full conversion end-to-end against the supplied CSV; returns the output, a record-count diff, diagnostics, and a per-row trace. The strongest self-test — verifies `pre_pass` / `LOOKUP` / `row_rules` for real. |
+
+`headers` / `fields` are **JSON encoded into a string** on `bxp_eval` and
+`bxp_eval_trace` (`"[\"Price\",\"Qty\"]"`), but **native JSON arrays** on
+`bxp_eval_batch`. Getting it wrong on `bxp_eval` fails silently — see
+*Self-testing the generated template* below.
+
+A tool *failure* (e.g. a missing required argument) sets `isError:true`
+on the JSON-RPC result; a domain `{"ok":false,…}` answer (an expression
+error, a not-found template) is a valid result the agent should read,
+not a failure. Each tool's own JSON schema (returned by `tools/list`) is
+the authoritative argument reference; the full wire protocol is documented
+in the project repository under `docs/dev/mcp.md`.
+
+---
+
+## Driving the GUI from an agent (gui-mcp) *(desktop only)*
+
+BXP Desktop runs a small **MCP control server** so a local AI agent can
+read and edit the live config in the running app — the same actions you
+take by hand, but driven step by step while you watch and approve. This is
+the half of the workflow where, after an agent has drafted a config, the
+two of you fine-tune the tricky expressions together inside the GUI.
+
+- **Endpoint** — `http://127.0.0.1:7717/mcp` (StreamableHTTP). The host
+  and port are editable under **Settings inspector → Agent control**
+  (`Ctrl+Shift+S`), where you can also see the live listening address and a
+  log of what the agent did.
+- **Connecting** — the agent should launch BXP Desktop, poll
+  `GET /health` on the endpoint until it returns `200` (the body reports
+  whether a config is already open), then run the MCP `initialize`
+  handshake and call `open_config` with the path it wrote.
+- **Safety** — the server binds loopback only, and critical actions (`save`,
+  `full_run`, `delete_node`, `exit`) pop a confirmation dialog you must
+  accept. The Origin allowlist is **empty by default**, which accepts every
+  Origin — loopback binding is the protection. If you change the bind host
+  to a network address, fill the allowlist in the same panel.
+- **Auto-approve** — *Agent control → Auto-approve agent actions* removes
+  the confirmation dialogs so an agent can work without a click on every
+  step. Off by default; while it is on, a red `devel-auto-approve-mode`
+  chip sits in the status bar. Turn it on only while you are watching, and
+  never together with a non-loopback bind.
+
+Two behaviours an agent should expect rather than treat as failures:
+
+- When the config was loaded **with errors**, the editing tools
+  (`edit_node`, `insert_node`, `rename_key`, `move_node`) are refused, and
+  `save` is refused before it even prompts. The refusal carries a `reason`
+  plus a `validation` summary — fix the reported findings first.
+- The structural verbs report `{<verb>:false, reason}` when an edit is
+  silently rejected by the schema (a `required` key, a duplicate key, an
+  out-of-range move), so a `true` really does mean the tree changed.
+
+Tools the agent can call:
+
+| Tool | What it does |
+| --- | --- |
+| `get_state` | Read the live config path, dirty flag, run status, diagnostics |
+| `open_config` / `reload` | Load (or re-read) a config file from disk |
+| `edit_node` | Change a scalar leaf (e.g. an expression) |
+| `insert_node` / `rename_key` / `move_node` | Add, rename, or reorder config entries |
+| `delete_node` | Remove a config entry (asks first) |
+| `set_template` | Choose which template runs target (empty = all) |
+| `dry_run` / `full_run` | Run the conversion (full run asks first) |
+| `get_trace` | Summarise the most recent run's per-row trace |
+| `get_row_detail` | Drill into one input row: fields, variables, rules, outputs |
+| `save` | Write the edited config back to disk (asks first) |
+| `exit` | Quit the app (asks first) |
+
+You stay in control throughout: every agent edit is revealed in the tree
+where it happens, and nothing is written or run without your click.
+
+---
+
+## Template authoring reference
 
 This section is written so that a capable AI assistant can produce a
 working broker template given only this file and `bxp-cli.examples.json`.
@@ -447,7 +742,7 @@ mybroker_to_wealthfolio: {
 | `file_type_in` | string | no | `"csv"` | `"csv"` or `"json"` (array-of-objects) |
 | `file_type_out` | string | no | `"csv"` | `"csv"` or `"json"` |
 | `file_pattern_in` | string | yes | — | Suffix filter, e.g. `".csv"`, `"_closed.csv"` |
-| `file_pattern_out` | string | no | append `x` | Replaces `file_pattern_in` in output filename |
+| `file_pattern_out` | string | yes | — | Replaces `file_pattern_in` in output filename. Must be non-empty — there is no derived default |
 | `csv_delimiter_in` | string | no | `","` | Field separator of input CSV |
 | `csv_delimiter_out` | string | no | `","` | Field separator of output CSV |
 | `csv_decimal_separator_in` | string | no | `"."` | Decimal separator in numeric fields (input) |
@@ -460,37 +755,76 @@ mybroker_to_wealthfolio: {
 | `date_filter_from_filename` | bool | no | `false` | Filter rows by `YYYY-MM-DD_YYYY-MM-DD` range in filename |
 | `maps` | object | no | `{}` | Template-local named maps `{ name: { key: value } }`, merged over the top-level `maps` registry. Referenced by `REMAP`/`REPLACE` |
 | `xlsx_sheet` | object | no | — | `{ name, header_row, output_suffix }` — convert xlsx before CSV |
+| `zip_input` | object | no | — | `{ entry_pattern, … }` — stream every matching member of each `*.zip` in `data_dir` out to a flat intermediate CSV before the normal CSV loop. For zipped CSV exports |
 | `pre_pass` | object | no | — | `{ when, key, values }` — first-pass lookup table |
 | `input_schema` | object | yes | — | `$variable` → expression, evaluated per row |
 | `row_rules_debug_missing` | bool | no | `false` | Print unmatched rows with `--debug` |
-| `row_rules` | array | yes | — | Ordered routing rules; first match wins |
+| `row_rules` | array | no | — | Ordered routing rules; first match wins. Omitting it is accepted by the loader, but then no row produces output |
 | `output_schema` | object | yes | — | Output CSV header → `$variable`; defines column order |
 | `combined_output` | bool | no | `false` | When `true`, all input files additionally write rows to one merged file `1-{template_id}-combined{file_pattern_out}` in `data_dir`, alongside the normal per-file outputs |
 
+#### Nested object schemas
+
+The four object-valued template fields have their own required keys.
+
+**`row_rules[]` entry**
+
+| Field | Type | Required | Purpose |
+| --- | --- | --- | --- |
+| `when` | expression | yes | Rule applies when this is truthy (non-empty, non-zero, not `"false"`) |
+| `rows` | array | yes | Output rows produced on a match. Each entry overrides `$variables`; `rows: []` skips the row silently, `rows: [{}]` emits one row using `input_schema` verbatim |
+
+**`pre_pass` block** (either the object itself, or each named block inside it)
+
+| Field | Type | Required | Purpose |
+| --- | --- | --- | --- |
+| `when` | expression | yes | Only rows matching this are added to the table |
+| `key` | expression | yes | Evaluated per row to produce the lookup key |
+| `values` | object | yes | `field_name` → expression, retrieved via `LOOKUP` |
+
+**`xlsx_sheet`** — extract one sheet to an intermediate CSV before the CSV loop
+
+| Field | Type | Required | Purpose |
+| --- | --- | --- | --- |
+| `name` | string | yes | Sheet name exactly as it appears in the workbook, e.g. `"CASH OPERATION"` |
+| `header_row` | number | yes | 1-based row within the sheet that holds the column headers |
+| `output_suffix` | string | yes | Appended before `.csv` in the intermediate filename, e.g. `"_cash"`. Use `""` for none |
+
+**`zip_input`** — stream matching members of each `*.zip` in `data_dir` out to flat CSVs first
+
+| Field | Type | Required | Default | Purpose |
+| --- | --- | --- | --- | --- |
+| `entry_pattern` | string | no | `".csv"` | Literal suffix filter for zip members — not a glob |
+| `dir_mode` | string | no | `"basename"` | `"basename"` keeps only the last path segment; `"keep_path"` flattens the whole in-zip path. Use `keep_path` when members in different sub-directories share a filename — `basename` would have them overwrite each other |
+| `path_separator` | string | no | `"_"` | What `/` becomes under `keep_path` (`CSV/x.csv` → `CSV_x.csv`). Ignored for `basename` |
+
 ### Standard `$variable` reference
 
-Output `$variable`s that bxp-cli's Wealthfolio templates set. The first
-eight map 1:1 to Wealthfolio's import columns; the rest are optional.
+The `$variable`s bxp-cli's Wealthfolio templates set, and the output column
+each one feeds. This is the canonical list — the `output_schema` in the
+skeleton above is exactly this mapping written out.
 
-| Variable | Meaning |
-| --- | --- |
-| `$date` | Transaction datetime, format `YYYY-MM-DD hh:mm:ss` |
-| `$ticker` | Yahoo Finance ticker (after `REMAP()` mapping) |
-| `$quantity` | Number of units |
-| `$unitprice` | Price per unit |
-| `$currency` | Currency code (`USD`, `EUR`, `CZK`, …) |
-| `$fee` | Fee amount (empty if broker does not report one) |
-| `$amount` | Total transaction value |
-| `$action` | Activity type — **set only in `row_rules`**, never in `input_schema` |
-| `$account` | Account tag (optional) |
-| `$fxRate` | FX rate (optional) |
-| `$subtype` | Wealthfolio subtype (optional) |
-| `$instrumentType` | e.g. `'Cryptocurrency'` (optional) |
-| `$comment` | Free-form comment (optional) |
+| `$variable` | Output column | Required | Meaning |
+| --- | --- | --- | --- |
+| `$date` | `date` | yes | Transaction datetime, format `YYYY-MM-DD hh:mm:ss` |
+| `$ticker` | `symbol` | yes | Yahoo Finance ticker (after `REMAP()` mapping) |
+| `$quantity` | `quantity` | yes | Number of units |
+| `$action` | `activityType` | yes | Activity type — **set only in `row_rules`**, never in `input_schema` |
+| `$unitprice` | `unitPrice` | yes | Price per unit |
+| `$currency` | `currency` | yes | ISO currency code (`USD`, `EUR`, `CZK`, …) |
+| `$fee` | `fee` | yes | Fee amount; blank if the broker does not report one |
+| `$amount` | `amount` | yes | Total transaction value |
+| `$account` | `account` | no | Account tag |
+| `$fxRate` | `fxRate` | no | FX rate |
+| `$subtype` | `subtype` | no | Wealthfolio subtype |
+| `$instrumentType` | `instrumentType` | no | e.g. `'Cryptocurrency'` |
+| `$comment` | `comment` | no | Free-form comment |
 
-Typical `$action` values for Wealthfolio: `'BUY'`, `'SELL'`, `'DEPOSIT'`,
-`'WITHDRAWAL'`, `'DIVIDEND'`, `'TAX'`, `'INTEREST'`, `'FEE'`. An empty
-`""` expression omits the variable from output.
+Setting a `$variable` to `""` leaves its column blank; dropping the column
+from `output_schema` removes it entirely. Column order is whatever
+`output_schema` declares. For the values `$action` may take, see
+*Wealthfolio target spec* below; `*_to_brychtapp` templates use a different
+column set and vocabulary altogether.
 
 ### Expression language — full reference
 
@@ -540,7 +874,7 @@ reserved.
 | `PRICE_CURRENCY(s)` | string | Extract ISO currency: `"24.00 CZK"` → `"CZK"`, `"$100"` → `"USD"` |
 | `REMAP(s, 'name' \| k, v, ...)` | string | Whole-value lookup: if `s` exactly equals a map key, return its value, else `s` unchanged. Named form resolves a `maps` entry; inline `REMAP(s, k1,v1, ...)` gives pairs directly |
 | `DATE_CONVERT(s, from, to)` | string | Parse `s` using `from` format, emit using `to` format (tokens below) |
-| `LOOKUP(key, 'field')` | string | Retrieve a value stored by `pre_pass` under `key` / `field` |
+| `LOOKUP([name,] key, 'field')` | string | Retrieve a value stored by a `pre_pass` table. `LOOKUP('name', key, 'field')` selects a named block; the 2-arg `LOOKUP(key, 'field')` works only when exactly one block is defined |
 | `FIELDS(n)` | string | Same as `[n]` — raw field by 1-based index |
 | `NOW()` | string | Current UTC datetime, format `YYYY-MM-DDTHH:MM:SSZ` |
 | `RAND(n)` | string | `n` random digits (first 1–9, rest 0–9); `n` clamped to 1–65 |
@@ -602,9 +936,10 @@ with an optional ` hh:mm:ss` (or `T`-separated) time.
   prefix-based action codes (Schwab `MKT BUY` / `LMT BUY`, IBKR
   multi-word actions) need an exact or word-boundary check: prefer
   exact comparison (`[Action] = 'Buy'`), `SPLIT_PART([Action], ' ', 1) = 'Buy'`
-  for the first word, or stack `CONTAINS` checks to exclude false
-  matches (`CONTAINS([Action], 'Buy') AND NOT CONTAINS([Action], 'Sell')`
-  is not yet expressible — use a more specific positive match instead).
+  for the first word, or exclude the false matches explicitly —
+  `CONTAINS([Action], 'Buy') AND NOT CONTAINS([Action], 'Sell')` is a valid
+  expression (`NOT` binds tighter than `AND`, see the precedence line above)
+  and is `false` for `Sell to Buy`.
 - **`SPLIT_PART(s, delim, n)` is 1-based and returns `""` on out-of-range.**
   Out-of-range never errors — silent empty makes it safe to chain but
   hides off-by-one bugs. Trace the variable in `bxp-gui` if the output
@@ -742,6 +1077,34 @@ Note: keys inside `values` are **plain field names**, not `$variables`,
 and they are not visible to `row_rules` or `output_schema` directly —
 only through `LOOKUP()`.
 
+**More than one lookup table.** The shape above is the single-block form.
+When a row needs values from two *different* kinds of other row, declare
+named blocks instead — each is its own namespace, and `LOOKUP` takes the
+name as a first argument:
+
+```json5
+pre_pass: {
+  fees:  { when: "[Type] = 'fee'",  key: "[Id]", values: { amt: "[Amount]" } },
+  rates: { when: "[Type] = 'rate'", key: "[Id]", values: { amt: "[Amount]" } },
+},
+
+input_schema: {
+  $fee:  "LOOKUP('fees',  [Id], 'amt')",
+  $rate: "LOOKUP('rates', [Id], 'amt')",
+},
+```
+
+The two forms are distinguished by the presence of a `when` key directly
+under `pre_pass`: with it, the object *is* the block (single-block form,
+2-arg `LOOKUP`); without it, each key names a block (3-arg `LOOKUP`). The
+2-arg form is an error when more than one block exists, so pick named
+blocks as soon as you need a second table — converting later means
+rewriting every `LOOKUP` call.
+
+Adding blocks does not add passes over the file: the first pass evaluates
+every block against each row as it goes, so the cost of a second table is
+its `when` / `key` expressions, not another read of the input.
+
 ### Wealthfolio target spec
 
 The output `.csvx` is consumed by Wealthfolio. The conventions below
@@ -760,8 +1123,10 @@ not in the sign of the amount.
 | `$quantity` | Always positive — `ABS()` if needed. |
 | `$fee` | Always positive (a cost). `ABS()` if needed. |
 
-**Activity-type vocabulary.** `$action` is set inside `row_rules`.
-Eight values cover every event the built-in templates emit:
+**Activity-type vocabulary.** `$action` is set inside `row_rules`, never in
+`input_schema`. The first group covers every event the built-in templates
+emit; the second handles portfolio bookkeeping events Wealthfolio also
+imports.
 
 | Action | When |
 | --- | --- |
@@ -773,12 +1138,6 @@ Eight values cover every event the built-in templates emit:
 | `'TAX'` | Tax withheld |
 | `'INTEREST'` | Interest paid (e.g. on cash balance) |
 | `'FEE'` | Fee charged (e.g. monthly account fee, ADR fee) |
-
-Three additional values handle portfolio bookkeeping events that
-Wealthfolio also imports:
-
-| Action | When |
-| --- | --- |
 | `'TRANSFER_IN'` | Stock moved into the account from elsewhere (zero-cost arrival) |
 | `'TRANSFER_OUT'` | Stock moved out of the account to elsewhere |
 | `'SPLIT'` | Stock split — `$amount` carries the split ratio (e.g. `2` for 2-for-1) |
@@ -806,11 +1165,8 @@ invent a third:
   flexible when different cash events need different shapes or when
   one input row must produce multiple output rows.
 
-**Required vs optional output columns.**
-
-| Required | Optional |
-| --- | --- |
-| `date`, `symbol`, `quantity`, `activityType`, `unitPrice`, `currency`, `fee`, `amount` | `account`, `fxRate`, `subtype`, `instrumentType`, `comment` |
+**Output columns.** Which columns are required and which are optional is in
+the *Standard `$variable` reference* table above.
 
 **Date format.** `$date` should be `YYYY-MM-DD hh:mm:ss`. Brokers that
 report date-only (no time) result in `... 00:00:00` — that's accepted.
@@ -845,13 +1201,14 @@ optional `,` thousands — that path is handled automatically (see
 If you are an AI assistant reading this section to generate a new
 template, follow these rules strictly:
 
-1. **`bxp-cli.examples.json` is required context.** It contains twelve
-   working templates with rich inline comments. **If you don't have it
-   in your context, ask the user to provide it before generating any
-   template — do not guess at non-trade row patterns, action vocabulary,
-   or broker quirks.** Pattern-match against the closest existing
-   template (simple stock broker → Revolut X; paired rows → Anycoin;
-   xlsx source → XTB; brycht.app tracker-mode → trading212_to_brychtapp).
+1. **`bxp-cli.examples.json` is required context.** It carries the shipping
+   templates with rich inline comments. **If you don't have it in your
+   context, ask the user to provide it before generating any template — do
+   not guess at non-trade row patterns, action vocabulary, or broker
+   quirks.** Read it first, then pattern-match against whichever entry is
+   closest in *shape* to the broker at hand: a plain stock broker, a
+   paired-row broker needing `pre_pass`, an xlsx-sourced one, or a
+   tracker-mode one if the user targets brycht.app rather than Wealthfolio.
 2. **Add, do not modify.** Insert a new entry under
    `conversion_templates` in the user's `bxp-cli.json`. Never rewrite
    existing templates unless the user explicitly asks.
@@ -1004,15 +1361,25 @@ needed. Call `bxp_eval_trace` (or `bxp_eval`) with the expression plus
 
 ```json
 {"expr":"DATE_CONVERT([Time], 'YYYY-MM-DD hh:mm:ss', 'YYYY-MM-DD')",
- "headers":["Action","Time","Ticker"],
- "fields":["Market buy","2024-04-25 07:00:35","RIO"]}
+ "headers":"[\"Action\",\"Time\",\"Ticker\"]",
+ "fields":"[\"Market buy\",\"2024-04-25 07:00:35\",\"RIO\"]"}
 ```
+
+**Watch the argument shape — the two eval families differ.** On `bxp_eval`
+and `bxp_eval_trace`, `headers` and `fields` are **JSON encoded into a
+string** (as above). On `bxp_eval_batch` they are **native JSON arrays**.
+Passing an array to `bxp_eval` does not fail: the row context is silently
+dropped and every `[Column]` reference evaluates to `""` with `ok:true`, so
+a correct expression looks broken. If a `[Column]` comes back empty
+unexpectedly, check this before editing the expression.
 
 `bxp_eval_trace` returns NDJSON; the `{"t":"final","value":...}` line is
 the computed result. Use `bxp_validate_expr` to additionally catch
 authoring-time mistakes the lenient runtime swallows (e.g. a literal
 `SPLIT_PART(…, 0)`), and `bxp_eval_batch` to evaluate several `$variable`
-expressions against the same row in one call.
+expressions against the same row in one call — it also accepts `maps`,
+`lookups` and `single_prepass_name`, which is the only way to exercise a
+`pre_pass` / `LOOKUP` expression without a full run.
 
 **Step B — run it end-to-end.** With MCP, call `bxp_simulate` with the
 config, the template id, and the sample CSV. It stages and runs the real
@@ -1077,208 +1444,29 @@ user once every prediction matches and `--debug` output is empty.
 
 ### Output format
 
-Wealthfolio-compatible CSV. Columns are controlled by `output_schema`;
-the default Wealthfolio set is:
-
-| Column | Value | Notes |
-| --- | --- | --- |
-| `date` | `$date` | `YYYY-MM-DD hh:mm:ss` |
-| `symbol` | `$ticker` | Yahoo Finance ticker |
-| `quantity` | `$quantity` | Number of units |
-| `activityType` | `$action` | `BUY`, `SELL`, `DEPOSIT`, `DIVIDEND`, … |
-| `unitPrice` | `$unitprice` | Price per unit |
-| `currency` | `$currency` | ISO currency code |
-| `fee` | `$fee` | Blank if not reported |
-| `amount` | `$amount` | Total value |
-| `account` | `$account` | Optional |
-| `fxRate` | `$fxRate` | Optional |
-| `subtype` | `$subtype` | Optional |
-| `instrumentType` | `$instrumentType` | Optional |
-| `comment` | `$comment` | Optional |
+Wealthfolio-compatible CSV. Which columns appear, and in what order, is
+controlled entirely by `output_schema` — the default Wealthfolio set and
+the `$variable` behind each column are in the *Standard `$variable`
+reference* table above.
 
 Output is RFC 4180–compliant with basic protection against spreadsheet
 formula injection.
 
 ### brycht.app target
 
-The shipping brycht.app templates (`trading212_to_brychtapp`,
-`xtb2_cash_to_brychtapp`, `xtb2_closed_to_brychtapp`) target a different
-column set than Wealthfolio: `date, type, ticker, quantity, price,
-currency, fees, notes` (8 columns) instead of Wealthfolio's 13. Templates
-default to `combined_output: true` so the tracker imports a single merged
-file per template. brycht.app does not publish a separate machine-readable
-spec — treat the existing brycht.app entries in `bxp-cli.examples.json`
-as the canonical reference: each one carries inline JSON5 comments
-documenting what each `$variable` represents and how `$type` maps to the
-broker's source action.
+The `*_to_brychtapp` templates target a different column set than
+Wealthfolio: `date, type, ticker, quantity, price, currency, fees, notes`
+(8 columns) instead of Wealthfolio's 13. They set `combined_output: true`
+so the tracker imports a single merged file per template. brycht.app does
+not publish a separate machine-readable spec — treat the `*_to_brychtapp`
+entries in `bxp-cli.examples.json` as the canonical reference: each one
+carries inline JSON5 comments documenting what each `$variable` represents
+and how `$type` maps to the broker's source action.
 
-When authoring a new `*_to_brychtapp` template, pattern-match against
-`trading212_to_brychtapp` (simple stock broker) or `xtb2_cash_to_brychtapp`
-(xlsx-sourced, paired cash/closed shape) rather than against the
-Wealthfolio templates above — the `output_schema` shape and `$action`
-vocabulary differ.
-
----
-
-## Advanced GUI features *(desktop only)*
-
-These features are GUI-specific and have no terminal equivalent. They
-exist to make authoring and debugging a template faster than editing
-JSON5 by hand.
-
-### Inline schema docs
-
-Hover any field in the tree to see its description, type, default, and
-which expressions it accepts. The catalog is the bundled docs catalog
-(the GUI loads it in-process from the bridge library at startup) — the
-same source of truth that drives autocomplete in the expression editor.
-Add a built-in function to bxp-cli, run a clean rebuild, and the GUI
-sees it automatically with no client-side changes.
-
-### Expression playground
-
-Click any expression cell — a panel opens on the right with:
-
-- A live editor with syntax highlighting and per-keystroke validation.
-- Autocomplete (Ctrl+Space) for built-in functions, `$variables`, and
-  `[ColumnName]` references that exist in the loaded template.
-- Token-level error underlines: a typo'd `[Quanity]` (instead of
-  `[Quantity]`) gets a red underline on exactly the wrong token, with
-  a did-you-mean tooltip.
-- A **Variables** sub-panel that evaluates the expression against the
-  current row in-process (via the bundled bridge) and lists every nested
-  function call's intermediate value. Excellent for debugging "why did
-  this expression return empty string?" cases.
-
-### Add Field dialog
-
-When an object's parent schema permits new keys, a `+` chip appears.
-Clicking it opens a dialog showing only the keys that are valid here
-(driven by `FieldDoc` schema metadata), with default values and
-inserted templates pre-filled. No need to remember which fields go
-where.
-
-### Settings inspector (`Ctrl+Shift+S`)
-
-A drawer slides in from the right with the GUI's complete internal
-state:
-
-- Loaded config path, raw bytes, AST root.
-- Schema docs catalog (loaded in-process from the bundled bridge at startup).
-- Op log (undo / redo history).
-- Path-keyed validation errors / warnings / info.
-- Run state (last exit code, stderr text, trace event count).
-
-Use it when something looks weird and you want to confirm "is the GUI
-seeing what I think it's seeing?".
-
-### Cancel and watchdog
-
-The run can be cancelled mid-stream by clicking the `cancel` button
-(the run-button label flips). A 10-second internal idle watchdog also
-fires SIGTERM if the bxp-cli child stops emitting events; if SIGTERM
-doesn't take effect within 2 seconds, SIGKILL escalates. You'll never
-end up with a zombie subprocess blocking the UI.
-
-### Filesystem checks (slow paths)
-
-By default config validation skips filesystem checks (existence of
-`data_dir`, of input files) so loading is snappy. Triggering `Ctrl+E`
-(Validate) re-runs validation with a `check-fs` deadline of 2 seconds to
-add these checks. If a check times out, the GUI flips into a degraded mode for
-the rest of the session: subsequent reloads omit the flag too. This
-stops a network-mounted `data_dir` from making the editor feel
-sluggish.
-
----
-
-## Working with an AI assistant in the GUI *(desktop only)*
-
-GUI-specific scenarios where an AI helps you go faster than the
-template-authoring prompt above.
-
-### Letting an agent drive the GUI (gui-mcp)
-
-BXP Desktop runs a small **MCP control server** so a local AI agent can
-read and edit the live config in the running app — the same actions you
-take by hand, but driven step by step while you watch and approve. This is
-the half of the workflow where, after an agent has drafted a config, the
-two of you fine-tune the tricky expressions together inside the GUI.
-
-- **Endpoint** — `http://127.0.0.1:7717/mcp` (StreamableHTTP). The host
-  and port are editable under **Settings inspector → Agent control**
-  (`Ctrl+Shift+S`), where you can also see the live listening address and a
-  log of what the agent did.
-- **Connecting** — the agent should launch BXP Desktop, poll
-  `GET /health` on the endpoint until it returns `200` (the body reports
-  whether a config is already open), then run the MCP `initialize`
-  handshake and call `open_config` with the path it wrote.
-- **Safety** — the server binds loopback only. Critical actions (`save`,
-  `full_run`, `delete_node`, `exit`) pop a confirmation dialog you must
-  accept. If you change the bind host to a network address, an optional
-  Origin allowlist is available in the same panel.
-
-Tools the agent can call:
-
-| Tool | What it does |
-| --- | --- |
-| `get_state` | Read the live config path, dirty flag, run status, diagnostics |
-| `open_config` / `reload` | Load (or re-read) a config file from disk |
-| `edit_node` | Change a scalar leaf (e.g. an expression) |
-| `insert_node` / `rename_key` / `move_node` | Add, rename, or reorder config entries |
-| `delete_node` | Remove a config entry (asks first) |
-| `set_template` | Choose which template runs target (empty = all) |
-| `dry_run` / `full_run` | Run the conversion (full run asks first) |
-| `get_trace` | Summarise the most recent run's per-row trace |
-| `get_row_detail` | Drill into one input row: fields, variables, rules, outputs |
-| `save` | Write the edited config back to disk (asks first) |
-| `exit` | Quit the app (asks first) |
-
-You stay in control throughout: every agent edit is revealed in the tree
-where it happens, and nothing is written or run without your click.
-
-### Help with the GUI itself
-
-If you're stuck navigating bxp-gui — finding a feature, understanding
-an error message, choosing between dry-run and full-run — paste this
-readme into your assistant and ask:
-
-> *"I use BXP Desktop. Please read the bundled `readme.md`. I'm trying
-> to `<describe what you want to accomplish>`. The GUI is showing
-> `<paste any error chip text or describe the screen>`. Which features
-> should I use, and what keyboard shortcuts apply?"*
-
-The assistant has the full keyboard shortcut table, advanced feature
-descriptions, exit-code semantics, and bundled binary reference —
-enough context to walk you through almost any GUI workflow.
-
-### Debugging an expression that returns wrong values
-
-Open the expression in the playground (right-rail panel). Click
-**Variables** and pick a row that produces the wrong result. Copy the
-NDJSON trace lines (Settings inspector → trace section) and the
-expression text into your assistant:
-
-> *"This BXP expression `<paste expression>` should produce
-> `<expected>` for input row `<paste row from variables panel>` but
-> instead produces `<actual>`. The per-call trace looks like
-> `<paste NDJSON lines>`. What's wrong with the expression?"*
-
-The trace makes the AI's job almost mechanical — every nested function
-call's input and output is visible.
-
----
-
-## Troubleshooting *(desktop only)*
-
-| Symptom | Likely cause / fix |
-| --- | --- |
-| Fatal error gate on launch | The `bxp-gui-bridge` library is missing from the bundle. Reinstall the desktop package. |
-| `dry-run` button greyed out | No template selected, or the config has a load-time AST parse error (red banner in the tree). |
-| Error chips on every field | Schema docs failed to load. Check the Settings inspector → Docs section for a load error from the bundled docs catalog. |
-| `cancel` button stuck | The bxp-cli child didn't respond to SIGTERM. Wait 2 seconds — the watchdog escalates to SIGKILL automatically. |
-| Slow first load on a new file | First invocation may include filesystem checks (`Ctrl+E`-driven). Subsequent loads skip them; you can force-skip by avoiding `Ctrl+E`. |
-| Tree shows `$comm_<N>` keys | A bug — those keys should be hidden by the renderer. Open an issue with the offending file attached. |
+When authoring a new `*_to_brychtapp` template, pattern-match against an
+existing `*_to_brychtapp` entry rather than against the Wealthfolio
+templates above — the `output_schema` shape and `$action` vocabulary
+differ.
 
 ---
 
