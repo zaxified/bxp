@@ -37,7 +37,9 @@ entry.)
 (see `sample.json`):
 
 - **RA → degrees:** `(SPLIT_PART([RA],':',1) + SPLIT_PART([RA],':',2)/60 +
-SPLIT_PART([RA],':',3)/3600) * 15` — split on `:`, sum to hours, ×15.
+SPLIT_PART([RA],':',3)/3600) * 15`{.bxp-try} — split on `:`, sum to hours, ×15.
+  Click it to run against `sample.csv`; **show all** turns the whole catalogue
+  into degrees.
 - **Dec → degrees:** capture the sign once with `STARTS_WITH('-')`, then apply
   it to the magnitude `ABS(deg) + min/60 + sec/3600` so the sign covers the
   whole value, not just the degrees field.
@@ -76,7 +78,7 @@ Run it with `bxp-cli --config ./sample.json --template ngc_to_decimal_degrees`:
 
 === "sample.csv"
 
-    ```csv
+    ```{.csv .bxp-sample data-delim=";"}
     --8<-- "examples/real-world/ngc-sexagesimal-coords/sample.csv"
     ```
 

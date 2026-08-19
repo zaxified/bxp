@@ -661,6 +661,24 @@ fn batchErr(msg: []const u8) BatchResult {
 /// request always returns exit 0 even if individual exprs fail — the per-result
 /// `ok` flag carries the per-expr outcome; only a malformed request is an error.
 pub fn evalBatch(a: std.mem.Allocator, request: std.json.Value) !BatchResult {
+    // Real io (shared across all exprs in the batch) so NOW / RAND work;
+    // default `.failing` errors RAND and returns 1970 for NOW.
+    var threaded = std.Io.Threaded.init(a, .{});
+    defer threaded.deinit();
+    return evalBatchIo(a, request, threaded.io());
+}
+
+/// `evalBatch` with the io supplied by the caller instead of constructed here.
+///
+/// Which io a batch runs on is a *platform* decision, not a batch one, and one
+/// platform cannot make the same choice as the others: `std.Io.Threaded` does
+/// not compile for `wasm32-freestanding` (no `posix.getrandom`, no `IOV_MAX`),
+/// so the docs-playground wasm build (`src/wasm.zig`) passes an io whose clock
+/// and CSPRNG are JS imports. Splitting the entry point rather than branching
+/// on `builtin.target` keeps that knowledge at the adapter where it belongs and
+/// leaves the native callers — bxp-mcp's `bxp_eval_batch`, the bridge's
+/// `bridge_inspect {op:eval_batch}` — on the unchanged signature above.
+pub fn evalBatchIo(a: std.mem.Allocator, request: std.json.Value, batch_io: std.Io) !BatchResult {
     if (request != .object) return batchErr("eval_batch request must be a JSON object");
     const obj = request.object;
 
@@ -730,12 +748,6 @@ pub fn evalBatch(a: std.mem.Allocator, request: std.json.Value) !BatchResult {
             else => return batchErr("single_prepass_name must be a string"),
         }
     }
-
-    // Real io (shared across all exprs in the batch) so NOW / RAND work;
-    // default `.failing` errors RAND and returns 1970 for NOW.
-    var threaded = std.Io.Threaded.init(a, .{});
-    defer threaded.deinit();
-    const batch_io = threaded.io();
 
     var aw: std.Io.Writer.Allocating = .init(a);
     errdefer aw.deinit();

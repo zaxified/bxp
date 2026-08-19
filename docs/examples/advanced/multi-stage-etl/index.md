@@ -145,7 +145,7 @@ commented template:
 
 === "orders.csv"
 
-    ```csv
+    ```{.csv .bxp-sample}
     --8<-- "examples/advanced/multi-stage-etl/orders.csv"
     ```
 

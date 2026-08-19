@@ -64,7 +64,7 @@ Measured on the reference machine (ReleaseFast, 8 cores):
 3. **Leading-zero département preserved** — `[Code departement]` is stored as
    text (`01`) and passes through verbatim.
 4. **Damaged postal code repaired** — `[Code postal]` already lost its zero in
-   the source (`1230`); `RIGHT('00000' & [Code postal], 5)` re-pads it back to
+   the source (`1230`); `RIGHT('00000' & [Code postal], 5)`{.bxp-try} re-pads it back to
    `01230`. (This idiom only emits the correct value since the bxp leading-zero
    fix — previously the padded result was re-canonicalised straight back to
    `1230`.)
@@ -100,7 +100,7 @@ away.
 
 === "sample.csv"
 
-    ```csv
+    ```{.csv .bxp-sample data-delim="|"}
     --8<-- "examples/real-world/french-dvf-realestate/sample.csv"
     ```
 

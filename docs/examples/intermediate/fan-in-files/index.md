@@ -81,7 +81,7 @@ Run it with `bxp-cli --config ./sample.json --template fan_in_daily`:
 
 === "2024-01-01.csv"
 
-    ```csv
+    ```{.csv .bxp-sample}
     --8<-- "examples/intermediate/fan-in-files/2024-01-01.csv"
     ```
 

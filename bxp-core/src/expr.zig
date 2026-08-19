@@ -1680,6 +1680,20 @@ pub const FnArgDoc = struct {
 /// titles + intros (pure presentation) stay in docs.zig's `fn_groups`.
 pub const FnCategory = enum { logic, text, regex, lookup, number, date, source };
 
+/// Context a builtin requires beyond its arguments — see `FnDoc.needs`.
+///
+/// The three non-`none` cases are deliberately distinct because a stateless
+/// caller can satisfy them independently:
+///   * `fields`  — needs the row's field values. `inspect.evalBatch` DOES
+///                 supply these, so a caller that passes a row gets a real
+///                 answer; one that passes none gets "".
+///   * `source`  — needs the per-file source context (file name, sheet name,
+///                 record position). No stateless entry point carries it, so
+///                 these always answer ""/0 outside a real conversion — which
+///                 is what each of their descriptions already states.
+///   * `prepass` — needs a pre_pass table to have been built.
+pub const FnNeeds = enum { none, fields, source, prepass };
+
 pub const FnDoc = struct {
     name: []const u8,
     /// Reference-page grouping (see `FnCategory`). No default: every builtin
@@ -1695,6 +1709,20 @@ pub const FnDoc = struct {
     /// LOOKUP is NOT flagged here — its non-invariance is detected structurally
     /// via its table reference in `staticReferences`, not this token scan.
     row_varying: bool,
+    /// What the builtin needs from its surroundings beyond its own arguments.
+    /// `.none` (the default, and the case for all but five builtins) means the
+    /// call is self-contained and evaluates identically anywhere.
+    ///
+    /// Deliberately NOT derived from `row_varying`: that flag answers a
+    /// different question (is the expression constant-foldable) and the two
+    /// sets only overlap. NOW/RAND are row_varying but self-contained — they
+    /// need no context, just a clock. LOOKUP is the mirror image: not
+    /// row_varying at all, yet useless without a pre_pass table.
+    ///
+    /// Consumed by the generated reference page, whose scratchpad evaluates an
+    /// example against no row at all: without this the five affected builtins
+    /// would come back empty with nothing to explain why.
+    needs: FnNeeds = .none,
     signature: []const u8,
     description: []const u8,
     /// Runnable one-line example shown (and click-to-insert) in the
@@ -1971,6 +1999,7 @@ const fields_doc: FnDoc = .{
     .name = "FIELDS",
     .category = .source,
     .row_varying = true,
+    .needs = .fields,
     .signature = "FIELDS(n)",
     .example = "FIELDS(2)",
     .description = "Field value by 1-based column index. n must be a positive integer — use this when the column header is unknown or unstable; use the [ColumnName] syntax to look up by header name.",
@@ -2137,6 +2166,7 @@ const lookup_doc: FnDoc = .{
     .name = "LOOKUP",
     .category = .lookup,
     .row_varying = false,
+    .needs = .prepass,
     .signature = "LOOKUP([name,] key, field)",
     .example = "LOOKUP('AAPL', 'name')",
     .description = "Retrieve a value stored by a pre_pass table. 3-arg form `LOOKUP(name, key, field)` selects the named pre_pass block. 2-arg form `LOOKUP(key, field)` works only when exactly one pre_pass block is defined.",
@@ -3896,6 +3926,7 @@ const filename_doc: FnDoc = .{
     .name = "FILENAME",
     .category = .source,
     .row_varying = true,
+    .needs = .source,
     .signature = "FILENAME()",
     .example = "FILENAME()",
     .description = "Input file stem — the file name with its directory and the matched `file_pattern_in` suffix removed (the same stem used for output naming). Broker exports often encode account/broker/period in the name, so e.g. `SPLIT_PART(FILENAME(), '_', 3)` extracts a field from it. Empty during stateless evaluation (no source file).",
@@ -3912,6 +3943,7 @@ const record_num_doc: FnDoc = .{
     .name = "RECORD_NUM",
     .category = .source,
     .row_varying = true,
+    .needs = .source,
     .signature = "RECORD_NUM()",
     .example = "RECORD_NUM()",
     .description = "1-based input record number of the current row within the file (the first data row is 1). Use it for synthetic IDs, dedup keys, or skip-first-N logic. 0 during stateless evaluation and inside the pre_pass scan.",
@@ -3928,6 +3960,7 @@ const sheet_name_doc: FnDoc = .{
     .name = "SHEET_NAME",
     .category = .source,
     .row_varying = true,
+    .needs = .source,
     .signature = "SHEET_NAME()",
     .example = "SHEET_NAME()",
     .description = "For xlsx-derived input, the configured `xlsx_sheet.name` the row came from; \"\" for native CSV/JSON input and during stateless evaluation.",

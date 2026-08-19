@@ -73,7 +73,7 @@ stays local.
 Before the fix in TRICK 2 was applied, exactly one row in
 this 500-title slice — `tt0000502` (`Bohemios`, 1905 Spanish film) — had
 `genres = '\N'`. The first version of `sample.json` handled `\N` for
-year/runtime but not for genres, so `SPLIT_PART('\N', ',', 1)` happily
+year/runtime but not for genres, so `SPLIT_PART('\N', ',', 1)`{.bxp-try} happily
 returned `'\N'` as the "primary genre" and the literal backslash-N leaked
 into the catalogue.
 
@@ -100,3 +100,4 @@ Run it with `bxp-cli --config ./sample.json --template imdb_titles_to_catalog`:
     ```
 
 **Full-scale &amp; binary files** (run it on the complete dataset): [`fetch-full.sh`](https://github.com/zaxified/bxp/tree/master/docs/examples/real-world/imdb-title-basics/fetch-full.sh) · [`full.json`](https://github.com/zaxified/bxp/tree/master/docs/examples/real-world/imdb-title-basics/full.json).
+

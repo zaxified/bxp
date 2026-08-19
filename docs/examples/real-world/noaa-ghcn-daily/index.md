@@ -60,7 +60,7 @@ The consistency flag earns its keep here: two instrument-fault days hidden in
 
 (See the inline comments in `sample.json`.)
 
-1. **TRIM + ÷10 unit conversion** — `IF(TRIM([TMAX]) = '', '', TRIM([TMAX]) / 10)`
+1. **TRIM + ÷10 unit conversion** — `IF(TRIM([TMAX]) = '', '', TRIM([TMAX]) / 10)`{.bxp-try}
    handles both the whitespace padding and the tenths-of-°C scaling, while
    keeping empty cells empty (`partial` measurement gaps stay empty rather
    than collapsing to 0.0°C).
@@ -105,7 +105,7 @@ Run it with `bxp-cli --config ./sample.json --template noaa_daily_to_metric`:
 
 === "sample.csv"
 
-    ```csv
+    ```{.csv .bxp-sample}
     --8<-- "examples/real-world/noaa-ghcn-daily/sample.csv"
     ```
 

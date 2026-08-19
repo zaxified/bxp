@@ -33,7 +33,7 @@ comma-decimal convention, handled with `csv_decimal_separator_in`, lives in
 
 The key expression (see inline comments in `sample.json`):
 
-```text
+```{.text .bxp-try}
 REPLACE(REPLACE([Amount], ' ', ''), ',', '.') * 1
 ```
 
@@ -64,6 +64,6 @@ Run it with `bxp-cli --config ./sample.json --template space_thousands_clean`:
 
 === "sample.csv"
 
-    ```csv
+    ```{.csv .bxp-sample}
     --8<-- "examples/basic/space-thousands/sample.csv"
     ```

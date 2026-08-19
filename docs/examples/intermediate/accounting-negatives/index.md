@@ -35,7 +35,7 @@ comma thousands separator. The sign silently vanishes or the row errors out.
 
 The whole conversion is one expression on the `Amount` field:
 
-```text
+```{.text .bxp-try}
 IF(STARTS_WITH(TRIM([Amount]), '('),
    0 - (REPLACE(REPLACE(REPLACE(TRIM([Amount]), '(', ''), ')', ''), ',', '') * 1),
         REPLACE(TRIM([Amount]), ',', '') * 1)
@@ -74,6 +74,6 @@ Run it with `bxp-cli --config ./sample.json --template accounting_negatives_clea
 
 === "sample.csv"
 
-    ```csv
+    ```{.csv .bxp-sample}
     --8<-- "examples/intermediate/accounting-negatives/sample.csv"
     ```

@@ -85,43 +85,34 @@ backlog was otherwise exhausted:
   (`file_type_out: json`), the basic-tier mirror of `squirrel-census-json`. Low
   priority: JSON _output_ is already shown by `advanced/multi-stage-etl`.
 
-### Interactive in-browser examples (wasm)
+### Interactive in-browser examples (wasm) — SHIPPED
 
-Run the documented examples *live* on the GitHub Pages docs site — the
-reader edits an expression / a sample and sees the result recomputed in
-their own browser, with nothing to download (no bxp-cli, no bxp-gui).
-`bxp-core` is pure-computation Zig, so it compiles to a `wasm32` target
-and becomes a fourth consumer of the same engine alongside bxp-mcp and
-bxp-gui-bridge — not a reimplementation. WASM is only a compile target; the
-sole genuine browser-sandbox limits are no threads (parallel `zipPrePass`
-degrades to a serial scan — GitHub Pages can't set the COOP/COEP headers
-`SharedArrayBuffer` needs) and no disk/subprocess (irrelevant here — inputs
-are in-memory textbox strings). Two tiers:
+Expressions on the docs site are clickable: the reader clicks one and a docked
+panel evaluates it in their own browser, against the page's own sample rows,
+with a **show all** toggle for the whole column. Nothing is downloaded but the
+page and a ~193 KiB engine, fetched on the first click.
 
-- **A — Scratchpad demo (per-row playground).** Embeds the existing
-  `inspect.evalBatch` (`bxp-core/src/inspect.zig`) behind a thin `wasm32`
-  export: `headers + fields (one row) + exprs → output cells`, the same
-  surface MCP's `bxp_eval_batch` and the bridge already drive. The reader
-  types a formula, sees one row recompute live. Scope: a wasm export wrapper
-  + ~30 lines of JS glue + an mkdocs snippet that turns a fenced block into
-  the widget; the `.wasm` ships as a docs asset. Limit (an `evalBatch` API
-  trait, *not* a wasm one): single-row eval — cross-row `LOOKUP` needs a
-  pre-built lookups blob, so pre_pass demos either omit it or precompute the
-  table.
+That engine is `bxp-core` compiled for `wasm32-freestanding`
+(`bxp-core/src/wasm.zig` → `inspect.evalBatchIo`), making the browser a fourth
+consumer of the one evaluator alongside bxp-cli, bxp-mcp and bxp-gui-bridge.
+Agreement is measured rather than assumed — `scripts/check-wasm-parity.sh`
+runs the cross-runner corpus through both and requires byte-identical results.
 
-- **B — Full-bxp demo (`sample.csv` → `final.csv`).** Runs a complete example
-  transform end-to-end, bit-identical to the CLI: full config, multi-pass,
-  pre_pass / cross-row `LOOKUP`, encoding transcode, date + decimal cores.
-  The reader edits the config/formula and the whole `final.csv` re-renders.
-  This needs the pure transform core lifted out of `bxp-cli/src/pipeline.zig`
-  (today entangled with file I/O + threads) into `bxp-core` so it can be
-  driven from in-memory strings — the same extraction the shared-core-lib
-  track wants anyway. Bigger, but full fidelity.
+**A full in-browser runner (config + CSV → final.csv) was considered and
+dropped.** It is buildable — the row transform in `bxp-cli/src/pipeline.zig` is
+already writer-based and in-memory, and `std.Io`'s no-concurrency vtable turns
+the parallel path serial for free — but reproducing bxp-cli in the browser means
+reimplementing rule selection, variable merging and CSV serialisation in
+JavaScript: bxp semantics written a second time, in a language that cannot share
+the first. `bxp-cli` stays the runner. Examples whose point cannot be shown one
+expression at a time (xlsx/zip input, multi-file fan-in, `combined_output`,
+pre_pass joins) stay static prose and say so.
 
-Open questions: mkdocs integration (raw HTML/JS snippet vs a small plugin
-generating the widget from a fenced ` ```bxp-eval ` block); whether B's
-in-browser output can double as a docs-correctness gate (examples run
-against the real engine instead of frozen expected text).
+What remains open is smaller and editorial: examples with a tab-separated sample
+cannot drive the panel at all (Python-Markdown expands tabs across the whole
+document before parsing), and the named form of `REMAP`/`REPLACE` needs a `maps`
+registry the panel has no way to supply. Both are enforced by
+`scripts/test-08-docs-examples.sh` rather than left to an author to remember.
 
 ### Distribution polish
 

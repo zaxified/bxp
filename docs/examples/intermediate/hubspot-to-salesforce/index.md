@@ -34,8 +34,11 @@ See inline comments in `sample.json`:
    leaf to absorb trailing whitespace.
 3. **Required-but-empty field** (Company) → `COALESCE(..., '<missing>')`
    sentinel so the failure is visible, not silent.
+   Run it: `COALESCE(TRIM([Company Name]), '<missing>')`{.bxp-try}
 4. **Mixed date formats** → `IF(CONTAINS('/'), DATE_CONVERT US, DATE_CONVERT ISO)`
    sniffs the separator per row.
+   Run it: `IF(CONTAINS([Create Date], '/'), DATE_CONVERT([Create Date], 'M/D/YYYY hh:mm:ss', 'YYYY-MM-DD[T]hh:mm:ss[Z]'), DATE_CONVERT([Create Date], 'YYYY-MM-DD hh:mm:ss', 'YYYY-MM-DD[T]hh:mm:ss[Z]'))`{.bxp-try}
+   — on **show all** both branches fire, on different rows.
 
 ## Final result
 
@@ -58,6 +61,6 @@ Run it with `bxp-cli --config ./sample.json --template hubspot_to_sfdc_lead`:
 
 === "sample.csv"
 
-    ```csv
+    ```{.csv .bxp-sample}
     --8<-- "examples/intermediate/hubspot-to-salesforce/sample.csv"
     ```

@@ -37,7 +37,7 @@ vintage's column name and pick whichever is present:
 
 - date — `IF(LEN([Date]) > 0, [Date], DATE_CONVERT([trade_date], 'DD.MM.YYYY', …))`
   (legacy is already ISO; convert only the current vintage).
-- ticker — `COALESCE([Ticker], [symbol])` (a pure rename).
+- ticker — `COALESCE([Ticker], [symbol])`{.bxp-try} (a pure rename).
 - amount — pick by presence, normalise the EU `"1 250,50"` to a number.
 
 `combined_output: true` then stacks all vintages into one
@@ -68,7 +68,7 @@ Run it with `bxp-cli --config ./sample.json --template vintage_harmonise`:
 
 === "trades_2022_legacy.csv"
 
-    ```csv
+    ```{.csv .bxp-sample}
     --8<-- "examples/advanced/vintage-harmonise/trades_2022_legacy.csv"
     ```
 

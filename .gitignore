@@ -7,6 +7,12 @@ docs-old/
 # MkDocs build output
 site/
 
+# Docs playground engine — a generated binary, rebuilt by
+# scripts/gen-wasm-playground.sh (which scripts/gen-docs.sh calls). Tracking a
+# 766 KiB artifact that any checkout can regenerate would bloat the history for
+# nothing.
+docs/assets/wasm/
+
 # MkDocs Material plugin cache (social cards / git dates) — build-time only
 .cache/
 

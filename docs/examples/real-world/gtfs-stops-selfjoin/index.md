@@ -80,7 +80,7 @@ Run it with `bxp-cli --config ./sample.json --template gtfs_stops_selfjoin`:
 
 === "sample.csv"
 
-    ```csv
+    ```{.csv .bxp-sample}
     --8<-- "examples/real-world/gtfs-stops-selfjoin/sample.csv"
     ```
 

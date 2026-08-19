@@ -1,0 +1,354 @@
+/* BXP docs expression scratchpad.
+ *
+ * Every colour here is a Material custom property, never a literal hex: the
+ * site ships several complete palettes switched from the header toggle
+ * (mkdocs.yml `theme.palette` + palettes.css), and a hardcoded colour would
+ * render correctly in exactly one of them.
+ *
+ * Errors use `--md-code-hl-special-color` — a real foreground red that every
+ * palette block defines (#d16969 dark / #cd3131 light). NOT
+ * `--md-typeset-del-color`, which reads like the obvious choice and is not one:
+ * Material defines it as a ~15%-alpha BACKGROUND tint for <del>, so as a text
+ * colour it is invisible on the dark schemes. */
+
+/* ── triggers ───────────────────────────────────────────────────────────────
+   Three shapes wear the class, and they need OPPOSITE treatment, so every rule
+   below is bound to its element. A bare `.bxp-try` selector is a bug: the
+   button reset (display:inline, border:none) also caught the fenced-block form
+   and collapsed it into an inline box — the accent rail detached from the code
+   and the corner tag wrapped one letter per line.
+
+     button.bxp-try   generated reference: strip the form-control chrome, or the
+                      tables sprout 57 grey boxes
+     code.bxp-try     inline span in prose: keep Material's code styling
+     div.bxp-try      the fenced display block: keep Material's block styling */
+button.bxp-try {
+  display: inline;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+/* Whether a page presents its expression as a display block or inside a
+   sentence is an editorial choice, so BOTH have to advertise themselves — a
+   reader must learn "this runs" once, not per page shape. The block carries a
+   corner tag; the inline span carries the same ▸ as a prefix plus a standing
+   dotted underline. Hover-only affordance was tried first and is not enough:
+   an unhovered span is indistinguishable from ordinary inline code, which on
+   the eighteen pages using this form meant nothing looked clickable at all.
+
+   The marker is generated content, so it stays out of `textContent` and the
+   expression the panel receives is unaffected. */
+code.bxp-try {
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-decoration-color: var(--md-default-fg-color--lighter);
+  text-underline-offset: 0.2em;
+}
+
+code.bxp-try::before {
+  content: "▸";
+  margin-right: 0.25em;
+  font-size: 0.85em;
+  color: var(--md-default-fg-color--lighter);
+}
+
+code.bxp-try:hover {
+  text-decoration-color: var(--md-accent-fg-color);
+}
+
+code.bxp-try:hover::before {
+  color: var(--md-accent-fg-color);
+}
+
+/* The generated reference is a dense table of 57 examples; a marker on every
+   row would be visual noise, and its intro admonition already states that every
+   example runs. There the button keeps the hover-only underline. */
+button.bxp-try:hover code {
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 0.2em;
+}
+
+/* The display block holding a page's central expression. Material renders the
+   fence as `div.highlight > pre > code`, so the class lands on the wrapping
+   div: give it a standing accent rail plus a corner tag, since a code block
+   offers no underline to hint with and otherwise reads as inert. */
+div.bxp-try.highlight {
+  position: relative;
+  cursor: pointer;
+  border-left: 2px solid var(--md-accent-fg-color);
+  border-radius: 0 0.1rem 0.1rem 0;
+  transition: background 120ms;
+}
+
+div.bxp-try.highlight:hover {
+  background: var(--md-accent-fg-color--transparent);
+}
+
+div.bxp-try.highlight::after {
+  content: "▸ run";
+  position: absolute;
+  top: 0.15rem;
+  /* Clear of Material's own copy button, which occupies this corner on hover. */
+  right: 2.4rem;
+  font-family: var(--md-code-font-family);
+  font-size: 0.55rem;
+  line-height: 1;
+  white-space: nowrap;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--md-default-fg-color--lighter);
+  pointer-events: none;
+}
+
+div.bxp-try.highlight:hover::after {
+  color: var(--md-accent-fg-color);
+}
+
+.bxp-try:focus-visible {
+  outline: 2px solid var(--md-accent-fg-color);
+  outline-offset: 2px;
+}
+
+/* ── panel ──────────────────────────────────────────────────────────────────
+   Docked bottom-right, hidden until a trigger is clicked, so a reader who
+   never clicks pays nothing but this stylesheet. Docked rather than expanded
+   in place because the reference is a set of Markdown tables, and there is
+   nowhere inside a table cell to grow a widget without wrecking the layout. */
+.bxp-scratch {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  left: auto;
+  z-index: 10;
+  width: min(46rem, calc(100vw - 2rem));
+  display: none;
+  background: var(--md-default-bg-color);
+  border: 1px solid var(--md-default-fg-color--lighter);
+  border-radius: 0.2rem;
+  box-shadow: var(--md-shadow-z2);
+}
+
+.bxp-scratch--open {
+  display: block;
+}
+
+/* "show all" turns the panel into a small results table; give it room, and a
+   ceiling so a long sample scrolls inside the panel instead of covering the
+   page it is explaining. */
+.bxp-scratch--wide {
+  width: min(64rem, calc(100vw - 2rem));
+}
+
+.bxp-scratch-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.3rem 0.6rem;
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--md-default-fg-color--light);
+  background: var(--md-code-bg-color);
+  border-bottom: 1px solid var(--md-default-fg-color--lightest);
+}
+
+.bxp-scratch-title {
+  flex: 1 1 auto;
+}
+
+.bxp-scratch-all {
+  padding: 0.1rem 0.5rem;
+  font: inherit;
+  font-size: 0.58rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--md-default-fg-color--light);
+  background: var(--md-default-bg-color);
+  border: 1px solid var(--md-default-fg-color--lighter);
+  border-radius: 0.1rem;
+  cursor: pointer;
+}
+
+.bxp-scratch-all:hover {
+  color: var(--md-accent-fg-color);
+  border-color: var(--md-accent-fg-color);
+}
+
+.bxp-scratch-close {
+  padding: 0 0.3rem;
+  font: inherit;
+  font-size: 0.9rem;
+  line-height: 1;
+  color: var(--md-default-fg-color--light);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.bxp-scratch-close:hover {
+  color: var(--md-accent-fg-color);
+}
+
+.bxp-scratch-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.6rem;
+}
+
+.bxp-pg-input {
+  flex: 1 1 60%;
+  min-width: 0;
+  padding: 0.3rem 0.5rem;
+  font-family: var(--md-code-font-family);
+  font-size: 0.68rem;
+  color: var(--md-code-fg-color);
+  background: var(--md-code-bg-color);
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 0.1rem;
+}
+
+.bxp-pg-input:focus {
+  outline: none;
+  border-color: var(--md-accent-fg-color);
+}
+
+.bxp-scratch-arrow {
+  flex: 0 0 auto;
+  color: var(--md-default-fg-color--lighter);
+}
+
+/* The value is the point of the panel, so it gets the accent and room to sit
+   on one line; long results scroll rather than reflowing the panel. */
+.bxp-scratch-value {
+  flex: 1 1 40%;
+  min-width: 0;
+  overflow-x: auto;
+  white-space: nowrap;
+  font-family: var(--md-code-font-family);
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: var(--md-accent-fg-color);
+}
+
+/* Errors are sentences, not values: let them wrap. Inheriting the value's
+   `nowrap` + scroll put the engine's own explanation behind a scrollbar, which
+   is the one message a reader most needs to read whole. */
+.bxp-scratch-value--bad {
+  font-weight: 400;
+  color: var(--md-code-hl-special-color);
+  white-space: normal;
+  overflow-x: visible;
+}
+
+/* A genuinely empty result is meaningful in bxp (the IF-guard case the
+   price/currency example teaches), so it gets a glyph rather than looking like
+   a rendering gap. */
+.bxp-scratch-value--empty {
+  font-weight: 400;
+  color: var(--md-default-fg-color--lighter);
+}
+
+/* Context hint under the value — why a builtin that needs a row, a source file
+   or a pre_pass table cannot answer meaningfully here. Empty (and so
+   invisible) by default. */
+.bxp-scratch-note:not(:empty) {
+  padding: 0 0.6rem 0.5rem;
+  font-size: 0.62rem;
+  line-height: 1.4;
+  color: var(--md-default-fg-color--light);
+}
+
+/* ── "show all" table ───────────────────────────────────────────────────── */
+.bxp-scratch-table:not(:empty) {
+  max-height: 40vh;
+  overflow-y: auto;
+  border-top: 1px solid var(--md-default-fg-color--lightest);
+}
+
+.bxp-pg-scroll {
+  overflow-x: auto;
+}
+
+/* The panel draws its own table instead of reusing `.md-typeset table`:
+   Material's version is centred and margin-heavy for prose, which fights a
+   dense results grid. */
+.bxp-pg-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--md-code-font-family);
+  font-size: 0.66rem;
+}
+
+.bxp-pg-table th,
+.bxp-pg-table td {
+  padding: 0.25rem 0.8rem;
+  text-align: left;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--md-default-fg-color--lightest);
+}
+
+.bxp-pg-table th {
+  position: sticky;
+  top: 0;
+  font-weight: 700;
+  color: var(--md-default-fg-color--light);
+  background: var(--md-default-bg-color);
+}
+
+/* Let every input column hug its content and give the slack to the result,
+   which is the column the reader came for. */
+.bxp-pg-table th:last-child,
+.bxp-pg-table td:last-child {
+  width: 100%;
+}
+
+.bxp-pg-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.bxp-pg-table tbody tr:hover {
+  background: var(--md-default-fg-color--lightest);
+}
+
+/* The result column carries the panel's accent so the eye can run down it
+   without re-reading the header. */
+.bxp-scratch-outcol {
+  border-left: 1px solid var(--md-default-fg-color--lightest);
+}
+
+.bxp-scratch-table .bxp-scratch-value {
+  display: inline;
+  white-space: normal;
+}
+
+/* In "show all" the value lives in the table's result column, so the inline
+   value and its arrow would just be an orphaned glyph next to the input. */
+.bxp-scratch--wide .bxp-scratch-arrow,
+.bxp-scratch--wide .bxp-scratch-row > .bxp-scratch-value {
+  display: none;
+}
+
+/* Live region for screen readers only — the sighted reader already has the
+   value in the panel, so this must not take layout or paint. `display:none`
+   would remove it from the accessibility tree too, hence the clip pattern. */
+.bxp-scratch-live {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}

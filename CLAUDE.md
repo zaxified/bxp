@@ -33,6 +33,9 @@ bxp/
 │   │   ├── btrace.zig      # Binary BXTB trace Writer/Reader for --trace
 │   │   ├── docs.zig        # Aggregator: re-exports expr catalog + flattens
 │   │   │                   # config FieldDoc tables; serves the docs catalog
+│   │   ├── wasm.zig        # wasm32 export wrapper (bxp_eval_batch / bxp_docs) —
+│   │   │                   # the docs expression scratchpad's engine; opt-in
+│   │   │                   # `zig build wasm`, never part of `install`
 │   │   └── inspect.zig     # Shared stateless core (validate/validate-expr/eval/
 │   │                       # eval-batch/eval-trace/docs/templates introspection);
 │   │                       # one source for bxp-mcp + bxp-gui-bridge
@@ -92,6 +95,16 @@ bxp/
 │   │                             # wall thresholds)
 │   ├── test-06-expr-corpus.sh    # cross-runner expression corpus regression gate
 │   ├── test-07-datasets.sh   # bxp-cli regression vs datasets/*/*.expected
+│   ├── test-08-docs-examples.sh  # docs example pages: every clickable
+│   │                             # expression must evaluate against its own
+│   │                             # sample; the delimiter declaration must match
+│   │                             # sample.json; no named-map REMAP/REPLACE
+│   │                             # (it passes input through and looks correct)
+│   ├── gen-wasm-playground.sh    # build docs/assets/wasm/bxp-eval.wasm
+│   │                             # (untracked artifact; gen-docs.sh calls it)
+│   ├── check-wasm-parity.sh      # wasm vs native over the expression corpus —
+│   │                             # needs a JS runtime, so NOT a test-NN phase;
+│   │                             # runs in the docs workflow
 │   ├── release.sh            # Wrapper — runs release-01-console.sh + release-02-desktop.sh
 │   ├── release-01-console.sh    # Cross-compile bxp-cli + bxp-mcp, package bxp-console-* archives
 │   ├── release-02-desktop.sh    # Host-OS-specific Flutter desktop bundle → .AppImage / .deb
@@ -108,6 +121,9 @@ bxp/
 │                                # formatting is hand-maintained (prettier +
 │                                # markdownlint dropped — broke MkDocs syntax)
 ├── docs/                 # Developer + user documentation
+│   │                     # assets/javascripts/playground.js + assets/wasm/ =
+│   │                     # the in-browser expression scratchpad; authoring
+│   │                     # conventions in docs/examples/CLAUDE.md
 │   ├── index.md              # MkDocs landing page (nav lives in mkdocs.yml)
 │   ├── getting-started/      # install, first conversion, built-in templates
 │   ├── guide/                # User guide: templates, expressions, dates,
@@ -189,12 +205,15 @@ bxp-gui-bridge  --[path dep]--> bxp-core    (bridge_inspect / bridge_eval_* in-p
                                              also takes zig-libs `minisign` + `procrun`
                                              through bxp-core's module table — one pin)
 bxp-gui         --[FFI]------> bxp-gui-bridge --[subprocess]-> bxp-cli (dry-run/version)
+docs (browser)  --[wasm]-----> bxp-core/src/wasm.zig -> inspect.evalBatchIo
 ```
 
 The stateless inspection surface (config / expression validation, docs,
 templates, eval-batch) lives once in `bxp-core/src/inspect.zig` and is wrapped
-by two thin adapters: `bxp-mcp` (MCP/stdio for agents) and `bxp-gui-bridge`
-(FFI for the Dart GUI). The GUI talks only to `bxp-gui-bridge` on every platform
+by three thin adapters: `bxp-mcp` (MCP/stdio for agents), `bxp-gui-bridge`
+(FFI for the Dart GUI) and `bxp-core/src/wasm.zig` (wasm32, for the docs site's
+expression scratchpad — one expression at a time, deliberately not a browser
+reimplementation of `bxp-cli`). The GUI talks only to `bxp-gui-bridge` on every platform
 since the v0.3.0 proxy flip — stateless ops run in-process via the bridge's
 bxp-core/inspect link, and the bridge proxies `bxp-cli` runs. The former
 `bxp-fmt` CLI adapter was removed once both wrappers covered every operation.

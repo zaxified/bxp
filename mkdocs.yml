@@ -113,10 +113,15 @@ plugins:
 extra_css:
   - assets/stylesheets/palettes.css
   - assets/stylesheets/extra.css
+  - assets/stylesheets/playground.css
 
 extra_javascript:
   - assets/javascripts/tablesort.min.js
   - assets/javascripts/tables.js
+  # Live expression playground. The .wasm it drives is a build artifact, not a
+  # tracked file — run `bash scripts/gen-wasm-playground.sh` before building the
+  # site, or the widget reports that it could not load the engine.
+  - assets/javascripts/playground.js
 
 nav:
   - Home: index.md

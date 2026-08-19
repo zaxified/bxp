@@ -228,7 +228,7 @@ pub fn build(b: *std.Build) void {
     // inspect.zig is the shared stateless inspection core (config validation,
     // docs serialization, single-expression eval) behind both bxp-mcp (MCP
     // server adapter) and the bxp-gui-bridge FFI. "One core, thin adapters".
-    _ = b.addModule("inspect", .{
+    const inspect_mod = b.addModule("inspect", .{
         .root_source_file = b.path("src/inspect.zig"),
         .imports = &.{
             .{ .name = "config",      .module = config_mod },
@@ -238,6 +238,37 @@ pub fn build(b: *std.Build) void {
             .{ .name = "diagnostics", .module = diagnostics_mod },
         },
     });
+
+    // -------------------------------------------------------------------------
+    // wasm32 playground artifact
+    // -------------------------------------------------------------------------
+    // Built by an opt-in step, never by `install`, and deliberately driven by
+    // the SAME `target`/`optimize` options as everything above rather than a
+    // second `b.dependency` handle pinned to wasm: the module graph is already
+    // target-agnostic, so
+    //
+    //     zig build wasm -Dtarget=wasm32-freestanding -Doptimize=ReleaseSmall
+    //
+    // recompiles the existing `inspect` module (and every zig-libs module under
+    // it) for the browser without a parallel wiring block that could drift from
+    // the native one. `entry = .disabled` + `rdynamic` produce a reactor-style
+    // module: no `_start`, just the exports src/wasm.zig marks.
+    const wasm_exe = b.addExecutable(.{
+        .name = "bxp-eval",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/wasm.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "inspect", .module = inspect_mod },
+            },
+        }),
+    });
+    wasm_exe.entry = .disabled;
+    wasm_exe.rdynamic = true;
+
+    const wasm_step = b.step("wasm", "Build the wasm32 eval-batch module for the docs playground");
+    wasm_step.dependOn(&b.addInstallArtifact(wasm_exe, .{}).step);
 
     // -------------------------------------------------------------------------
     // Unit tests

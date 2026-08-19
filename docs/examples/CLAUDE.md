@@ -79,6 +79,65 @@ Author each page in MkDocs Material idiom, matching the gold standard
   `--8<-- "examples/<tier>/<name>/<file>"` (path is docs-relative). Binary inputs
   and `full*`/`fetch-full.sh` are GitHub links, not embeds.
 
+## Clickable expressions (the scratchpad)
+
+An expression on a page can be made runnable in the reader's browser: clicking
+it opens a docked panel that evaluates it against the page's own sample rows,
+with a **show all** toggle for the whole column. The engine is
+`docs/assets/wasm/bxp-eval.wasm` — bxp-core compiled for wasm32 — so the answer
+is the one `bxp-cli` gives, not a second implementation. Glue lives in
+[`../assets/javascripts/playground.js`](../assets/javascripts/playground.js).
+
+**Mark the expression** — inline, or as the display block that introduces it:
+
+```markdown
+`PRICE_VALUE([Price])`{.bxp-try}          <!-- inline, inside a sentence -->
+
+```{.text .bxp-try}                        <!-- the page's central expression -->
+REPLACE(REPLACE([Amount], ' ', ''), ',', '.') * 1
+```
+```
+
+**Mark the sample** so there is a row to evaluate against — the same CSV tab the
+page already shows, no second copy:
+
+```markdown
+=== "sample.csv"
+
+    ```{.csv .bxp-sample}
+    --8<-- "examples/<tier>/<name>/sample.csv"
+    ```
+```
+
+**If the sample is not comma-separated**, repeat the template's
+`csv_delimiter_in` on the fence — `{.csv .bxp-sample data-delim=";"}`. The panel
+cannot read it from `sample.json`, and getting it wrong is not cosmetic: every
+`[Column]` silently resolves to `""`. `scripts/test-08-docs-examples.sh` fails
+if the two disagree.
+
+**Mark only what teaches.** Coverage is not the goal — a clickable expression
+should answer a question the surrounding prose raises. Leave a page static when
+its point is a config feature (`combined_output`), a multi-template pipeline, or
+a transformation whose expressions run on an earlier pass's output.
+
+**What cannot be made clickable** (the gate rejects these, so it is not on you
+to remember them):
+
+| Shape | Why |
+| --- | --- |
+| `LOOKUP(...)` | needs a `pre_pass` table; the panel has none |
+| `REMAP(x, 'name')`, `REPLACE(x, 'name')` | the **named** form needs the `maps` registry — without it the call returns its input unchanged, which reads as a successful remap. The inline form is fine |
+| `FILENAME()`, `SHEET_NAME()`, `RECORD_NUM()` | per-file source context a standalone expression never has |
+| a function *signature* (`TO_UTC(ts, from)`) | prose, not an expression |
+| anything on a **tab-separated** sample | Python-Markdown expands tabs across the whole document before parsing, so a TSV sample cannot reach the panel at all — through a fence or a script element alike |
+
+The first three self-explain in the panel (it names the missing context, from
+the engine's own `FnDoc.needs`); the last two simply must not be marked.
+
+Every mark is gated: `bash scripts/test-08-docs-examples.sh` evaluates all of
+them against their own sample and fails on any that errors or is blank on every
+row.
+
 ## The index pages are generated
 
 `docs/examples/index.md` (central) and `docs/examples/<tier>/index.md` (per-tier

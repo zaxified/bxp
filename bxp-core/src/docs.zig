@@ -225,6 +225,11 @@ pub fn writeDocs(alloc: std.mem.Allocator, writer: *std.Io.Writer) !void {
         try jw.write(f.description);
         try jw.objectField("example");
         try jw.write(f.example);
+        // Context the builtin needs beyond its arguments (`FnDoc.needs`).
+        // Always emitted, including `"none"`, so a consumer can read the field
+        // unconditionally instead of treating absence as a third state.
+        try jw.objectField("needs");
+        try jw.write(@tagName(f.needs));
         try jw.objectField("args");
         try jw.beginArray();
         for (f.args) |a| {
@@ -525,6 +530,25 @@ fn writeHtmlEscaped(w: *std.Io.Writer, s: []const u8) !void {
     };
 }
 
+/// Escape for use inside a double-quoted HTML attribute value.
+///
+/// `writeHtmlEscaped` is deliberately not reused: it leaves `"` alone, which is
+/// correct for element text and wrong here. bxp string literals use `'`, so
+/// today's catalog would survive either way — but a single future example
+/// containing a double quote would silently break out of the attribute, and
+/// that is not a failure worth leaving to chance.
+fn writeHtmlAttr(w: *std.Io.Writer, s: []const u8) !void {
+    for (s) |c| switch (c) {
+        '&' => try w.writeAll("&amp;"),
+        '<' => try w.writeAll("&lt;"),
+        '>' => try w.writeAll("&gt;"),
+        '"' => try w.writeAll("&quot;"),
+        '|' => try w.writeAll("&#124;"),
+        '\n' => try w.writeByte(' '),
+        else => try w.writeByte(c),
+    };
+}
+
 fn isIdentByte(c: u8) bool {
     return (c >= 'A' and c <= 'Z') or (c >= 'a' and c <= 'z') or
         (c >= '0' and c <= '9') or c == '_';
@@ -590,6 +614,11 @@ pub fn writeFunctionsMd(w: *std.Io.Writer) !void {
         \\All function names are case-insensitive. Functions are grouped by purpose
         \\below; each table sorts on a header click and filters as you type.
         \\
+        \\!!! tip "Every example below is runnable"
+        \\    Click any example to evaluate it in your browser — bxp's own
+        \\    expression engine, compiled to WebAssembly. Edit the expression in
+        \\    the panel that opens to try variations; `Esc` closes it.
+        \\
     );
     // One section + table per category, in `fn_groups` order. Rows come from the
     // flat `functions` list filtered by each entry's `FnDoc.category`, so every
@@ -615,14 +644,28 @@ pub fn writeFunctionsMd(w: *std.Io.Writer) !void {
             try w.writeAll("| ");
             try writeExprCode(w, f.signature, "");
             if (f.example.len > 0) {
-                try w.writeAll("<br>");
+                // The example doubles as the trigger for the docs scratchpad
+                // (docs/assets/javascripts/playground.js): clicking it opens a
+                // panel that evaluates this very string in the reader's browser,
+                // through the same engine bxp-cli runs. Emitting the raw source
+                // into `data-bxp-expr` — rather than having the JS scrape it back
+                // out of the syntax-highlighted spans — keeps the catalog the
+                // single source: what runs is `FnDoc.example`, byte for byte.
+                //
+                // Degrades cleanly: with JS off, or before the wasm loads, this
+                // is a button that renders exactly like the old inline code span.
+                try w.writeAll("<br><button type=\"button\" class=\"bxp-try\" data-bxp-expr=\"");
+                try writeHtmlAttr(w, f.example);
+                try w.writeAll("\">");
                 try writeExprCode(w, f.example, "fn-eg");
+                try w.writeAll("</button>");
             }
             try w.writeAll(" | ");
             try writeEscaped(w, f.description);
             try w.writeAll(" |\n");
         }
     }
+
 }
 
 pub fn writeDateTokensMd(w: *std.Io.Writer) !void {

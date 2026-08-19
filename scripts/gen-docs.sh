@@ -97,6 +97,12 @@ fi
 run_zig_gen "$REF_DIR"
 run_dart_gen "$REF_DIR"
 
+# The docs playground's wasm engine. Not a tracked file (see .gitignore), so a
+# fresh checkout has to build it here or every playground on the site reports
+# that it could not load the engine. Deliberately NOT part of --check: it is a
+# binary artifact, not generated prose, so there is nothing to drift-guard.
+bash "$SCRIPT_DIR/gen-wasm-playground.sh"
+
 if [[ ! -x "$MKDOCS" ]]; then
   echo "mkdocs not found at $MKDOCS" >&2
   echo "create the docs venv first:" >&2

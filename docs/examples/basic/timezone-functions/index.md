@@ -28,7 +28,9 @@ arithmetic.
 
 ## The trick
 
-Two ways in, depending on what the source gives you:
+Two ways in, depending on what the source gives you. Each **Run it** below
+evaluates against `sample.csv`; **show all** shows the whole column, which is
+where the winter/summer difference becomes obvious:
 
 ```text
 # The string already carries its offset → subtract it, no zone lookup:
@@ -43,12 +45,16 @@ nyc:    TZ_CONVERT([local_time], [zone], 'America/New_York')  # move it to anoth
 - **`TO_UTC(ts, from)`** parses a format that ends in the `ZZ` offset token (or a
   literal `Z`) and subtracts the parsed offset. It needs no zone database — the
   offset is in the string.
+  Run it: `TO_UTC([raw_iso], 'YYYY-MM-DD[T]hh:mm:ssZZ')`{.bxp-try}
 - **`TZ_OFFSET(datetime, zone)`** returns the DST-aware `±HH:MM` offset of an
   IANA `zone` at a local wall-clock time. Concatenate it onto a naive timestamp
   to make it ISO-8601 tz-aware.
+  Run it: `TZ_OFFSET([local_time], [zone])`{.bxp-try}
 - **`IS_DST(datetime, zone)`** flags whether daylight-saving time was in effect.
+  Run it: `IS_DST([local_time], [zone])`{.bxp-try}
 - **`TZ_CONVERT(ts, from_zone, to_zone)`** converts a wall-clock time between two
   zones (each an IANA id, a fixed offset like `+02:00`, or `UTC`).
+  Run it: `TZ_CONVERT([local_time], [zone], 'America/New_York')`{.bxp-try}
 
 ## Final result
 
@@ -80,6 +86,6 @@ Run it with `bxp-cli --config ./sample.json --template timezone_functions`:
 
 === "sample.csv"
 
-    ```csv
+    ```{.csv .bxp-sample}
     --8<-- "examples/basic/timezone-functions/sample.csv"
     ```

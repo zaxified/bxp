@@ -32,15 +32,15 @@ job a delimiter split already does.
 
 (see `sample.json`)
 
-1. **Capture group** — `REGEX_EXTRACT([Memo], 'INV-([0-9]{4}-[0-9]{4})')`
+1. **Capture group** — `REGEX_EXTRACT([Memo], 'INV-([0-9]{4}-[0-9]{4})')`{.bxp-try}
    returns just the inner `YYYY-NNNN` (the group), dropping the `INV-` literal;
    no match → `""`.
-2. **Different anchor** — `REGEX_EXTRACT([Memo], '#([0-9]+)')` pulls the order
+2. **Different anchor** — `REGEX_EXTRACT([Memo], '#([0-9]+)')`{.bxp-try} pulls the order
    number that follows a `#`, wherever it lands.
-3. **Alternation gate** — `REGEX_MATCH([Memo], 'INV-[0-9]{4}|#[0-9]+')` answers
+3. **Alternation gate** — `REGEX_MATCH([Memo], 'INV-[0-9]{4}|#[0-9]+')`{.bxp-try} answers
    "does this memo carry _any_ structured reference" in a single pass; `CONTAINS`
    would need two calls and would still accept a bare `INV-` with no digits.
-4. **Cost-hierarchy contrast** — `SPLIT_PART([Tags], '|', 1)` for the
+4. **Cost-hierarchy contrast** — `SPLIT_PART([Tags], '|', 1)`{.bxp-try} for the
    already-delimited tag. No regex on purpose.
 
 The cost ladder is deliberate: `IN`/`REMAP` (hash) < `CONTAINS`/`REPLACE`
@@ -104,6 +104,6 @@ Run it with `bxp-cli --config ./sample.json --template freeform_payment_memos`:
 
 === "sample.csv"
 
-    ```csv
+    ```{.csv .bxp-sample}
     --8<-- "examples/advanced/freeform-payment-memos/sample.csv"
     ```

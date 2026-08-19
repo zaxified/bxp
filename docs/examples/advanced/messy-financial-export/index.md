@@ -28,7 +28,7 @@ no glue script orchestrating per-column cleanups.
 
 Each has its own example — see links:
 
-1. `DATE_CONVERT([TradeDate], 'MM/DD/YYYY', 'YYYY-MM-DD')`
+1. `DATE_CONVERT([TradeDate], 'MM/DD/YYYY', 'YYYY-MM-DD')`{.bxp-try}
 2. transaction code → label via `REMAP` over a named map (`BUY` → `purchase`)
 3. accounting negatives → signed — see
    [intermediate/accounting-negatives](../../intermediate/accounting-negatives/index.md)
@@ -69,6 +69,6 @@ Run it with `bxp-cli --config ./sample.json --template messy_financial_export`:
 
 === "sample.csv"
 
-    ```csv
+    ```{.csv .bxp-sample}
     --8<-- "examples/advanced/messy-financial-export/sample.csv"
     ```

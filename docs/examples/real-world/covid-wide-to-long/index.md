@@ -44,7 +44,7 @@ matching ISO date as a literal. Three entries → three country-date rows per
 input country.
 
 !!! note "Field references with slashes"
-    Date columns are named with slashes; `[1/22/20]` works as a field reference.
+    Date columns are named with slashes; `[1/22/20]`{.bxp-try} works as a field reference.
     Inside an override you reference _fields_ with `[..]`, not `$variables`.
 
 ## At full scale
@@ -87,7 +87,7 @@ Run it with `bxp-cli --config ./sample.json --template covid_wide_to_long`:
 
 === "sample.csv"
 
-    ```csv
+    ```{.csv .bxp-sample}
     --8<-- "examples/real-world/covid-wide-to-long/sample.csv"
     ```
 

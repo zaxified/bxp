@@ -75,7 +75,7 @@ See inline comments in `sample.json`:
    every following column.
 1. **room_type enum** — `Entire home/apt` / `Private room` / `Hotel room` /
    `Shared room` → short codes via `REMAP()` + a named map.
-2. **Redacted price sentinel** — `COALESCE([price], '<price-redacted>')` so
+2. **Redacted price sentinel** — `COALESCE([price], '<price-redacted>')`{.bxp-try} so
    the gap is visible in every row instead of silently empty.
 3. **last_review empty == "never reviewed"** — kept as empty on purpose;
    not every absent value is an error.
@@ -110,7 +110,7 @@ Run it with `bxp-cli --config ./sample.json --template airbnb_listings_to_analyt
 
 === "sample.csv"
 
-    ```csv
+    ```{.csv .bxp-sample}
     --8<-- "examples/real-world/inside-airbnb-listings/sample.csv"
     ```
 

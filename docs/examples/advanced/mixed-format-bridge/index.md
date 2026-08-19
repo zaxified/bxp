@@ -78,7 +78,7 @@ commented template:
 
 === "legacy.csv"
 
-    ```csv
+    ```{.csv .bxp-sample}
     --8<-- "examples/advanced/mixed-format-bridge/legacy.csv"
     ```
 

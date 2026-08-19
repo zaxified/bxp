@@ -107,3 +107,4 @@ Run it with `bxp-cli --config ./sample.json --template eurostat_pop_tsv_clean`:
     ```
 
 **Full-scale &amp; binary files** (run it on the complete dataset): [`fetch-full.sh`](https://github.com/zaxified/bxp/tree/master/docs/examples/real-world/eurostat-population-tsv/fetch-full.sh) · [`full.json`](https://github.com/zaxified/bxp/tree/master/docs/examples/real-world/eurostat-population-tsv/full.json).
+

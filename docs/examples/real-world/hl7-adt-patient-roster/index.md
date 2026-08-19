@@ -51,7 +51,7 @@ incl. Donald Duck, born 1924.)
 - **Name components:** `SPLIT_PART(FIELDS(6), '^', N)` for family/given, then a
   second `SPLIT_PART(…, '&', 1)` to peel the surname out of its sub-components.
 - **Birth date — string slice.** This is a pure `YYYYMMDD`→ISO _reformat_, so
-  `LEFT(FIELDS(8),4) & '-' & SUBSTR(FIELDS(8),5,2) & '-' & SUBSTR(FIELDS(8),7,2)`
+  `LEFT(FIELDS(8),4) & '-' & SUBSTR(FIELDS(8),5,2) & '-' & SUBSTR(FIELDS(8),7,2)`{.bxp-try}
   does the job directly — no format tokens to get right, no date validation.
   `DATE_CONVERT(FIELDS(8), 'YYYYMMDD', 'YYYY-MM-DD')` works equally well here
   (including the 1924 birth date, and it ignores the trailing time on

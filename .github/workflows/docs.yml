@@ -6,9 +6,14 @@
 #
 # The reference pages under docs/reference/ are GENERATED from the in-code
 # catalogs, but they are committed, so this workflow builds them as-is and
-# needs neither Zig nor Dart. Their sync with the catalogs is a test concern,
-# not a publishing one: scripts/gen-docs.sh --check runs inside test-04 on the
+# needs no Dart. Their sync with the catalogs is a test concern, not a
+# publishing one: scripts/gen-docs.sh --check runs inside test-04 on the
 # normal CI matrix and fails there if a catalog moved without a regen.
+#
+# Zig IS needed, for one artifact: the expression scratchpad's engine
+# (docs/assets/wasm/bxp-eval.wasm, bxp-core compiled for wasm32-freestanding).
+# It is a build output, deliberately untracked, so without this step the site
+# deploys with every clickable expression reporting a failed engine load.
 #
 # `mkdocs build --strict` turns broken internal links and orphaned pages into
 # build failures, so a bad link stops the deploy rather than shipping.
@@ -27,6 +32,11 @@ on:
       - "mkdocs.yml"
       - "scripts/docs-requirements.txt"
       - ".github/workflows/docs.yml"
+      # The scratchpad ships a compiled slice of the engine, so a change to the
+      # expression evaluator or the catalog behind it changes the published
+      # site even when no page was touched.
+      - "bxp-core/**"
+      - "scripts/gen-wasm-playground.sh"
   # Manual runs for a first publish, or to redeploy without touching a page.
   workflow_dispatch:
 
@@ -34,6 +44,12 @@ permissions:
   contents: read
   pages: write
   id-token: write
+
+# Matches ci.yml: every pinned action ships a Node 24 build except
+# `mlugg/setup-zig`, which still declares `using: node20`. This flag keeps it
+# off the deprecated runtime; drop it once setup-zig ships node24.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 # Serialise deploys, but never cancel one in flight — a half-finished Pages
 # deployment is worse than a queued one.
@@ -72,6 +88,32 @@ jobs:
           restore-keys: |
             mkdocs-material-${{ hashFiles('mkdocs.yml', 'scripts/docs-requirements.txt') }}-
             mkdocs-material-
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+          use-cache: false
+
+      # Same rationale as ci.yml: mlugg's built-in cache keeps only a subset of
+      # the build cache, so persist it here and let the toolchain download stay
+      # cached on its own.
+      - name: Cache Zig build artifacts
+        uses: actions/cache@v6
+        with:
+          path: ${{ github.workspace }}/.zig-cache
+          key: zig-docs-wasm-${{ hashFiles('bxp-core/**/*.zig', 'bxp-core/build.zig.zon') }}
+          restore-keys: |
+            zig-docs-wasm-
+
+      - name: Build the scratchpad engine
+        run: bash scripts/gen-wasm-playground.sh
+
+      # The whole premise of the scratchpad is that the browser runs the SAME
+      # evaluator as bxp-cli. Prove it before publishing: every expression in
+      # the cross-runner corpus is evaluated through the wasm build and through
+      # the native one, and the per-expression results must match byte for byte.
+      - name: Check wasm/native parity
+        run: bash scripts/check-wasm-parity.sh
 
       - name: Install the docs toolchain
         run: pip install -r scripts/docs-requirements.txt

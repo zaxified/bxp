@@ -77,6 +77,6 @@ stacked input and the full commented template:
 
 === "joined_input.csv"
 
-    ```csv
+    ```{.csv .bxp-sample}
     --8<-- "examples/advanced/two-file-join/joined_input.csv"
     ```

@@ -78,7 +78,7 @@ CSV/20260531_OB_500101_ADR.csv  (Windows-1250, ';'-delimited)
 
 becomes one clean UTF-8 row, diacritics and all, date trimmed:
 
-```csv
+```{.csv .bxp-sample data-delim=";"}
 adm_code,municipality_code,municipality,municipality_part,street,house_number,orientation_number,postcode,coord_y,coord_x,valid_from
 11915692,500101,Bražec,Dolní Valov,,1,,36471,835804.84,1019584.24,2016-01-01
 ```

@@ -47,7 +47,7 @@ via the resource-center daily CSV endpoint. Public domain (US Government work).
 ## The trick
 
 - **Convert the date once** in `input_schema` —
-  `DATE_CONVERT([Date], 'MM/DD/YYYY', 'YYYY-MM-DD')` — and every emitted row
+  `DATE_CONVERT([Date], 'MM/DD/YYYY', 'YYYY-MM-DD')`{.bxp-try} — and every emitted row
   reuses that row-constant.
 - **Unpivot via multi-row `row_rules`.** Each entry in `rows: [ … ]` emits one
   row, pulling a different maturity column (`[2 Yr]`) and stamping both the tenor
@@ -97,7 +97,7 @@ Run it with `bxp-cli --config ./sample.json --template treasury_curve_to_long`:
 
 === "sample.csv"
 
-    ```csv
+    ```{.csv .bxp-sample}
     --8<-- "examples/real-world/treasury-yield-curve/sample.csv"
     ```
 

@@ -33,13 +33,18 @@ pile of regexes; bxp has a dedicated pair of functions for it.
 
 (see inline comments in `sample.json`):
 
-- `PRICE_CURRENCY([Price])` → the currency code (`$12.99` → `USD`,
+Every expression below is **clickable**: it runs in your browser — bxp's own
+evaluator, compiled to WebAssembly — against the `sample.csv` further down. The
+panel shows the first row; **show all** runs it over every row, which is the
+fastest way to see why each piece is there.
+
+- `PRICE_CURRENCY([Price])`{.bxp-try} → the currency code (`$12.99` → `USD`,
   `50.00 EUR` → `EUR`, `€3.50` → `EUR`).
-- `PRICE_VALUE([Price])` → the numeric part with the symbol/code removed. It
-  leaves the comma thousands in place (`1,234.00`), so wrap it:
-  `REPLACE(PRICE_VALUE([Price]), ',', '') * 1` lands a clean number.
-- An `IF([Price] = '', '', …)` guard keeps a genuinely empty price empty rather
-  than coercing it to `0`.
+- `PRICE_VALUE([Price])`{.bxp-try} → the numeric part with the symbol/code
+  removed. It leaves the comma thousands in place (`1,234.00`), so wrap it:
+  `REPLACE(PRICE_VALUE([Price]), ',', '') * 1`{.bxp-try} lands a clean number.
+- An `IF([Price] = '', '', REPLACE(PRICE_VALUE([Price]), ',', '') * 1)`{.bxp-try}
+  guard keeps a genuinely empty price empty rather than coercing it to `0`.
 
 ## Final result
 
@@ -55,6 +60,14 @@ $12.99        →  12.99   USD
 `price` is now a real number and `currency` a separate code — ready for FX
 conversion or a `GROUP BY currency` total.
 
+!!! tip "Worth trying in the panel"
+    - `PRICE_VALUE([Price])`{.bxp-try} on **show all** — row 4 keeps its comma
+      (`1,234.00`), which is the whole reason `REPLACE` is there.
+    - `REPLACE(PRICE_VALUE([Price]), ',', '') * 1`{.bxp-try} without the `IF`
+      guard — the empty price coerces to `0` instead of staying empty.
+    - `UPPER([Item])`{.bxp-try} or `LEN([Item])`{.bxp-try} — any expression
+      works, not just the ones this example uses.
+
 ## Sample data
 
 Run it with `bxp-cli --config ./sample.json --template price_currency_split`:
@@ -67,6 +80,6 @@ Run it with `bxp-cli --config ./sample.json --template price_currency_split`:
 
 === "sample.csv"
 
-    ```csv
+    ```{.csv .bxp-sample}
     --8<-- "examples/intermediate/price-currency-split/sample.csv"
     ```

@@ -29,7 +29,7 @@ up front is the first step of almost every cleanup.
 
 See inline comments in `sample.json`:
 
-```text
+```{.text .bxp-try}
 IF(IN(TRIM([Email]), 'NULL', 'NA', 'N/A', 'n/a', 'None', 'none', '-'), '', TRIM([Email]))
 ```
 
@@ -65,6 +65,6 @@ Run it with `bxp-cli --config ./sample.json --template null_variants_clean`:
 
 === "sample.csv"
 
-    ```csv
+    ```{.csv .bxp-sample}
     --8<-- "examples/basic/null-variants/sample.csv"
     ```

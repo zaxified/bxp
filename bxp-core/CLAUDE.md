@@ -30,6 +30,7 @@ Consumed by bxp-cli (conversion engine) and the stateless-inspect adapters
 | `json5`       | _(zig-libs dep)_  | `preprocess()` + `preprocessAnnotated()` — JSON5 → JSON. **No longer in this tree**: consumed from the pinned `zig_libs` fetch dep. Unlike the others this was NOT a strict subset — the local copy was an older line still carrying two crashes and two JSON5-spec deviations upstream had fixed |
 | `docs`        | `docs.zig`        | `writeDocs(alloc, writer)` — emits the language/schema docs JSON                   |
 | `diagnostics` | _(zig-libs dep)_  | `Diagnostics`, `Diagnostic`, `Severity` — structured validation collector. **No longer in this tree**: consumed from the pinned `zig_libs` fetch dep. The former local copy was a strict subset (identical collector, fields and count methods) |
+| `wasm`        | `wasm.zig`        | wasm32 export wrapper around `inspect.evalBatchIo` + `inspect.docsJson` — the docs expression scratchpad's engine. Not a named module: an opt-in `zig build wasm` artifact (see _wasm build_ below) |
 | `inspect`     | `inspect.zig`     | Shared stateless core: `annotateRaw()`, `validateExpr()`, `validateExprJson()`, `evalExpr()`, `evalTrace()`, `evalBatch()`, `docsJson()`, `listTemplates()`, `fetchTemplate()` — wrapped by bxp-mcp + bxp-gui-bridge |
 
 ## Module details
@@ -185,6 +186,12 @@ DATEADD, DATEDIFF, WORKDAY, YEAR, MONTH, DAY, WEEKDAY, EOMONTH, NTH_DOW,
 TO_UTC, TZ_OFFSET, TZ_CONVERT, IS_DST.
 IF/CASE/IFERROR are lazy (parse their own arg lists; only the selected /
 non-erroring branch is evaluated).
+`FnDoc.needs` (`none` / `fields` / `source` / `prepass`) states what a builtin
+requires beyond its arguments — deliberately distinct from `row_varying`, which
+answers a different question (constant-foldability) and only partly overlaps:
+NOW/RAND are row-varying yet self-contained, while LOOKUP is foldable yet
+useless without a pre_pass table. Stateless consumers use it to explain an
+empty answer instead of looking broken; the docs scratchpad is the first.
 TO_UTC/TZ_OFFSET/TZ_CONVERT/IS_DST resolve IANA offsets via the zig-libs `tz`
 module (pinned fetch dep — see _External dependencies_ below); the `ZZ` datefmt
 token carries the parse/format offset. See the datefmt/tz note
@@ -485,6 +492,45 @@ that implements it in `inspect.zig`.
   `.warning` → `$warn_<N>` object, `.info` → `$info_<N>` object. Each object may contain
   `message`, `off`, `len`, `suggest` fields.
 - Unit tests inline (1 test case).
+
+### wasm.zig
+
+wasm32 export wrapper making the browser a **fourth consumer of the same
+evaluator**, alongside bxp-cli, bxp-mcp and bxp-gui-bridge. Built by an opt-in
+step so `install` never pays for it:
+
+```bash
+zig build wasm -Dtarget=wasm32-freestanding -Doptimize=ReleaseSmall
+# or, into the docs tree with size reporting:
+bash ../scripts/gen-wasm-playground.sh
+```
+
+The step deliberately reuses the same `target`/`optimize` options as every
+module above rather than opening a second `b.dependency` handle pinned to wasm —
+the module graph is already target-agnostic, so a parallel wiring block could
+only drift from the native one.
+
+- ABI (wasm32 pointers are u32, so nothing needs 64-bit marshalling):
+  `bxp_input_alloc(len) -> ptr`, `bxp_eval_batch(len) -> 0|1`,
+  `bxp_docs() -> 0|1`, `bxp_result_ptr()`, `bxp_result_len()`. Every entry point
+  resets one shared arena, so the caller copies the result out before the next
+  call.
+- **`std.Io.Threaded` does not compile for wasm32-freestanding** (no
+  `posix.getrandom`, no `IOV_MAX`). That is why `inspect.evalBatch` was split:
+  `evalBatchIo` takes the io from the caller, and this wrapper supplies one built
+  from `std.Io.failing` with exactly two vtable entries replaced — the clock and
+  `randomSecure`, as JS imports (`js_now_ms`, `js_random_bytes`). Everything
+  else stays failing, which is correct: a browser page has no filesystem,
+  network or threads, and nothing on the eval path reaches for them. Without
+  this, `NOW()` would report 1970 and `RAND()` would error.
+- Size: ~800 KiB raw, ~193 KiB gzipped, dominated by **data** (Unicode case
+  tables, tz offsets, regex case-folding) rather than code — so there is no
+  meaningful slimming available that would not also make the browser disagree
+  with the CLI.
+- Parity with the native engine is measured, not assumed:
+  `scripts/check-wasm-parity.sh` runs the whole cross-runner corpus through both
+  and requires byte-identical per-expression results (NOW/RAND compared on the
+  `ok` flag only). It runs in the docs workflow, where a JS runtime exists.
 
 ## Build
 

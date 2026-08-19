@@ -37,7 +37,7 @@ flowchart TD
 
 (see inline comments in `sample.json`):
 
-```text
+```{.text .bxp-try}
 IF(CONTAINS([Rate], '%'),   REPLACE([Rate], '%', '') / 100,
 IF(CONTAINS([Rate], 'bps'), SPLIT_PART([Rate], ' ', 1) / 10000,
                             [Rate] * 1))
@@ -74,6 +74,6 @@ Run it with `bxp-cli --config ./sample.json --template percent_to_fraction`:
 
 === "sample.csv"
 
-    ```csv
+    ```{.csv .bxp-sample}
     --8<-- "examples/intermediate/percent-to-fraction/sample.csv"
     ```
