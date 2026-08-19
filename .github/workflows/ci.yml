@@ -6,10 +6,13 @@ name: ci
 # a v* tag, so without this PRs and master pushes would go untested by CI.
 #
 # Windows-runner portability of test.sh was cleared 2026-06-07 (flutter tests
-# resolve .exe/.dll/bin + path separators per-platform; the expr corpus is
-# pinned eol=lf in .gitattributes; the bench guard SKIPs gracefully on hosts
-# without GNU time). macOS likewise SKIPs the bench guard (BSD time has no
-# `-f`); the perf invariants run on the Linux leg.
+# resolve .exe/.dll/bin + path separators per-platform; text fixtures whose
+# bytes are compared — the expr corpus and the generated docs/reference pages —
+# are pinned eol=lf in .gitattributes so a CRLF checkout cannot fake a diff).
+# Every phase now runs on all three legs, the bench guard included: it reads
+# wall + peak RSS from bxp-cli's own BXP_METRICS line instead of GNU
+# `/usr/bin/time`, so the perf invariants are no longer Linux-only. Verified on
+# all three legs 2026-08-19.
 #
 # The "release: prepare X.Y.Z" commit (emitted by scripts/release-changelog.sh)
 # is skipped here: it only bumps the six manifest version strings + CHANGELOG.md,
@@ -35,6 +38,10 @@ permissions:
   contents: read
 
 # Opt every Node-based action into the Node 24 runtime (matches release.yml).
+# Every action pinned below now ships a Node 24 build of its own EXCEPT
+# `mlugg/setup-zig`, whose latest release (and `main`) still declare
+# `using: node20` — there is no newer major to move to. This flag is what keeps
+# that one off the deprecated runtime; drop it only once setup-zig ships node24.
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
@@ -75,7 +82,7 @@ jobs:
           # ~9 min wall). The Zig toolchain download stays cached regardless.
           use-cache: false
       - name: Cache Zig build artifacts
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ github.workspace }}/.zig-cache
           # Source hash keys the exact-match entry; restore-keys fall back to the

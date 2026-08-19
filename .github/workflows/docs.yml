@@ -45,9 +45,9 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
           cache: pip
@@ -65,7 +65,7 @@ jobs:
       # or the theme palette does. Material keys its own cache by content, so a
       # stale restore is corrected, never served.
       - name: Restore the social-card cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .cache
           key: mkdocs-material-${{ hashFiles('mkdocs.yml', 'scripts/docs-requirements.txt') }}-${{ github.sha }}
@@ -79,7 +79,12 @@ jobs:
       - name: Build the site
         run: mkdocs build --strict
 
-      - uses: actions/upload-pages-artifact@v3
+      # v4 stopped putting dotfiles in the artifact (v5 adds an
+      # `include-hidden-files` opt-in). Checked before the bump: mkdocs
+      # writes no dotfile into site/ — no .nojekyll either, and none is
+      # needed, since a Pages artifact is served as-is and never sees
+      # Jekyll — and docs/ carries no dotfile to copy.
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: site
 
@@ -91,4 +96,4 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
