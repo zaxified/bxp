@@ -28,7 +28,7 @@ printf '%s\n' \
 # Trace per-call values against a fake row (bxp_eval_trace)
 printf '%s\n' \
   '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}' \
-  '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"bxp_eval_trace","arguments":{"expr":"[Price] * [Qty]","headers":"[\"Price\",\"Qty\"]","fields":"[\"12.50\",\"100\"]"}}}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"bxp_eval_trace","arguments":{"expr":"[Price] * [Qty]","headers":["Price","Qty"],"fields":["12.50","100"]}}}' \
   | ./bxp-mcp/zig-out/bin/bxp-mcp
 ```
 

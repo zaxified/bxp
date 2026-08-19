@@ -274,35 +274,6 @@ would have caught the missing `--trace` / `--trace-file` / `zip_input` entries
 the 2026-08-17 audit found by hand, and it is independent of whether the
 tables end up inline or linked.
 
-### Stateless eval accepts a malformed row context and answers anyway
-
-`inspect.evalExpr` and `inspect.evalTrace` take `headers` / `fields` as JSON
-encoded into a *string*. When a caller passes native JSON arrays instead — the
-shape `inspect.evalBatch` requires, so the mistake is a natural one — the row
-context is silently dropped and every `[Column]` reference evaluates to `""`
-while the call still answers `ok:true`. Neither entry point cross-checks
-`headers.len == fields.len` either; `headers=2` with `fields=1` is accepted.
-
-Measured 2026-08-17 against the shipping `bxp-mcp`:
-
-| Call | Result |
-| --- | --- |
-| `bxp_eval` `headers:"[\"Action\"]"` | `{"ok":true,"value":"Market Buy"}` |
-| `bxp_eval` `headers:["Action"]` | `{"ok":true,"value":""}` — wrong, and silent |
-| `bxp_eval_batch` with strings | `isError` — rejected loudly, as it should be |
-
-This is the worst failure mode for the agent audience the surface exists for:
-an assistant reads an empty value, concludes the *expression* is broken, and
-"fixes" a correct one. Three separate docs pages now carry a warning about it,
-which is a workaround for a defect rather than a fix.
-
-Rejecting a non-string `headers` / `fields` cannot break a conforming client —
-the tool schema already declares them as strings, so today's silent path only
-ever serves callers that are already wrong. A length mismatch is the same
-class. The open question is only the shape of the refusal: a domain
-`{"ok":false,…}` (which agents are told to read and act on) or a tool-level
-`isError`. Decide that, then the warnings in the docs can go.
-
 ### The macOS updater never checks the host architecture
 
 `UpdaterService._platformAssetPattern()` matches the release *asset name*

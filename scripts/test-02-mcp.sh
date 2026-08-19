@@ -120,6 +120,23 @@ print(json.dumps({"jsonrpc":"2.0","id":{"a":1},"method":"ping"}))
 print(json.dumps({"jsonrpc":"2.0","id":111,"result":{}}))
 # The session survived all of the above: a real tool call still answers.
 call(110, "bxp_eval", {"expr":"UPPER('ok')"})
+
+# ── row-context shapes (200-series) ─────────────────────────────────────────
+# `headers`/`fields` on the two single-expression eval tools. The canonical
+# shape is a native array of strings — the one a model writes unprompted and the
+# one bxp_eval_batch has always required. The string-encoded form the schema
+# declared until 2026-08-19 stays accepted; every other shape must be refused
+# BY NAME, never dropped. A dropped row context evaluates each [Column] to ""
+# while still answering ok:true, which reads to an agent as a broken expression.
+call(200, "bxp_eval", {"expr":"UPPER([Action])","headers":["Action","Price"],"fields":["Market Buy","150.00"]})
+call(201, "bxp_eval", {"expr":"UPPER([Action])","headers":'["Action","Price"]',"fields":'["Market Buy","150.00"]'})
+call(202, "bxp_eval", {"expr":"UPPER([Action])","headers":[1,2],"fields":["a","b"]})
+call(203, "bxp_eval", {"expr":"UPPER([Action])","headers":{"a":1},"fields":["a"]})
+call(204, "bxp_eval", {"expr":"UPPER([Action])","headers":"Action,Price","fields":["a","b"]})
+# Ragged rows stay tolerated on this path too — field access is by header→index
+# and a missing index is "", exactly as a real run behaves.
+call(205, "bxp_eval", {"expr":"[B]","headers":["A","B"],"fields":["only-one"]})
+call(206, "bxp_eval_trace", {"expr":"UPPER([Action])","headers":["Action"],"fields":["Market Buy"]})
 PY
 
     "$stage/bxp-mcp" <"$reqs" >"$resp" || {
@@ -277,6 +294,26 @@ assert 111 not in by_id, by_id.get(111)
 # The session survived every malformed line above — a long-lived stdio server
 # must not be killable by one bad request.
 assert tool_json(110) == {"ok": True, "value": "OK"}, tool_json(110)
+
+# ── row-context shapes (200-series) ─────────────────────────────────────────
+# Both accepted shapes must produce the SAME value: the native array the schema
+# declares, and the string-encoded array it declared before.
+assert tool_json(200) == {"ok": True, "value": "MARKET BUY"}, tool_json(200)
+assert tool_json(201) == tool_json(200), (tool_json(201), tool_json(200))
+# Anything else is a tool failure naming the argument — the regression this
+# series exists for is the silent `ok:true` + empty value it used to answer.
+for i in (202, 203, 204):
+    assert by_id[i]["result"]["isError"] is True, by_id[i]
+    msg = by_id[i]["result"]["content"][0]["text"]
+    assert "array" in msg and "e.g." in msg, (i, msg)
+# 202/203 name the offending argument; 204 is the parse of a string that did not
+# hold an array, so it names both.
+assert "'headers'" in by_id[202]["result"]["content"][0]["text"], by_id[202]
+# Ragged is tolerated, not an error: [B] has no field at its index → "".
+assert tool_json(205) == {"ok": True, "value": ""}, tool_json(205)
+# The trace path resolves the row context too (not just the value path).
+t206 = [json.loads(ln) for ln in by_id[206]["result"]["content"][0]["text"].splitlines() if ln]
+assert t206[-1] == {"t": "final", "value": "MARKET BUY"}, t206
 PY
 
     rm -f "$stage/bxp-mcp" "$stage/bxp-cli"; rmdir "$stage"; rm -f "$reqs" "$resp"

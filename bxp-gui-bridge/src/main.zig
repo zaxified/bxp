@@ -821,8 +821,8 @@ fn writeExprErrorJson(
 ///   * `> 0` — `bytes_written` of NDJSON in out_buf
 ///   * `-1` OOM (transient scratch allocation failed)
 ///   * `-2` BUF_TOO_SMALL — accumulated payload exceeds out_size
-///   * `-3` INVALID_INPUT — headers/fields aren't matching JSON arrays
-///     of strings, or arrays have mismatched lengths
+///   * `-3` INVALID_INPUT — headers/fields aren't JSON arrays of strings.
+///     A length mismatch is NOT one: ragged rows are tolerated, see below
 export fn bridge_eval_expr_trace(
     text_ptr: [*]const u8,
     text_len: u32,

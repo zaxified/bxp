@@ -51,7 +51,7 @@ agent always invokes it from a location where `bxp-cli` sits alongside.
 | ---- | ------------ | ------- |
 | `bxp_validate` | `annotateRaw(config_text, "<config>", 0)` | Annotated JSON with `$err_`/`$warn_`/`$info_` diagnostics inserted before each offending key. |
 | `bxp_validate_expr` | `validateExprJson(expr)` | Authoring-time verdict for one expression: runtime eval + the static FnArgDoc lint (e.g. a literal `SPLIT_PART(…, 0)`). `{"ok":true}` or `{"ok":false,"error","detail","off","len"}`. The MCP analogue of the GUI bridge's `bridge_eval_expr`. |
-| `bxp_eval` | `evalExpr(expr, headers?, fields?)` | Lenient runtime value: `{"ok":true,"value":"..."}` or `{"ok":false,"error","detail","off","len"}`. |
+| `bxp_eval` | `evalExpr(expr, headers?, fields?)` | Lenient runtime value: `{"ok":true,"value":"..."}` or `{"ok":false,"error","detail","off","len"}`. Row context is a native array of strings — see _Row context_ below. |
 | `bxp_eval_batch` | `evalBatch(request)` | `{"results":[{"ok",…}, …]}` aligned to input order. The call `arguments` object _is_ the request `{headers, fields, exprs, maps?, lookups?, single_prepass_name?}`. |
 | `bxp_eval_trace` | `evalTrace(expr, headers?, fields?, out)` | NDJSON: one `{"fn",…,"value"}` line per function call, then `{"t":"final","value":…}` or `{"t":"error",…}`. |
 | `bxp_docs` | `docsJson()` | Full language/schema JSON (`functions`, `keywords`, `operators`, `tokens`, `config_schema`). |
@@ -64,6 +64,29 @@ no filesystem syscalls — the agent validates config _text_, not a deployed tre
 Unlike the CLI's `--list-templates`/`--fetch-template` (which read a config _file_
 by path), the MCP tools take config _text_ — consistent with `bxp_validate` and
 the no-spawn, no-filesystem stance: the agent passes the config it is authoring.
+
+### Row context (`headers` / `fields`)
+
+All three eval tools take the row context as **native JSON arrays of strings** —
+the shape a model writes unprompted, and what `bxp_eval_batch` has always
+required. `bxp_eval` and `bxp_eval_trace` additionally accept an array encoded
+into a *string* (`"[\"Price\"]"`), the shape their schema declared until
+2026-08-19: it came from bxp-fmt's `--row-headers` argv flag, where a value
+could be nothing else, and `inspect` kept the signature when the stateless core
+was extracted. `rowArg` in `tools.zig` normalises both into the JSON text
+`inspect` takes; the round-trip lives in the wire adapter because the bridge's
+C ABI cannot carry anything but text either.
+
+Anything else is a tool failure naming the argument. It is deliberately not
+dropped: `call.strArg` returning null for a native array used to leave the row
+context empty while still answering `ok:true`, so every `[Column]` read as `""`
+and an agent concluded the *expression* was broken — then "fixed" a correct one.
+That is the worst failure shape for this audience, and it is what the 200-series
+in `scripts/test-02-mcp.sh` pins.
+
+Ragged rows stay tolerated on every path (field access is by header→index; a
+missing index is `""`), because that is what a real run does with, say, an xlsx
+trailing-comma row. A `headers` longer than `fields` is accepted on purpose.
 
 ### Annotated-JSON marker shape (`bxp_validate`)
 

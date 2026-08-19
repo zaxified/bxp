@@ -116,12 +116,18 @@ pub const tool_docs = [_]ToolDoc{
         \\      "description": "The expression text, e.g. UPPER('hi') or [Price]*[Qty]."
         \\    },
         \\    "headers": {
-        \\      "type": "string",
-        \\      "description": "Optional JSON array of column header names, e.g. [\"Price\",\"Qty\"]."
+        \\      "type": "array",
+        \\      "items": {
+        \\        "type": "string"
+        \\      },
+        \\      "description": "Optional column header names, e.g. [\"Price\",\"Qty\"]."
         \\    },
         \\    "fields": {
-        \\      "type": "string",
-        \\      "description": "Optional JSON array of row field values (parallel to headers)."
+        \\      "type": "array",
+        \\      "items": {
+        \\        "type": "string"
+        \\      },
+        \\      "description": "Optional row field values (parallel to headers; ragged rows tolerated)."
         \\    }
         \\  },
         \\  "required": [
@@ -199,12 +205,18 @@ pub const tool_docs = [_]ToolDoc{
         \\      "description": "The expression text."
         \\    },
         \\    "headers": {
-        \\      "type": "string",
-        \\      "description": "Optional JSON array of column header names, e.g. [\"Price\",\"Qty\"]."
+        \\      "type": "array",
+        \\      "items": {
+        \\        "type": "string"
+        \\      },
+        \\      "description": "Optional column header names, e.g. [\"Price\",\"Qty\"]."
         \\    },
         \\    "fields": {
-        \\      "type": "string",
-        \\      "description": "Optional JSON array of row field values (parallel to headers)."
+        \\      "type": "array",
+        \\      "items": {
+        \\        "type": "string"
+        \\      },
+        \\      "description": "Optional row field values (parallel to headers; ragged rows tolerated)."
         \\    }
         \\  },
         \\  "required": [
@@ -594,12 +606,80 @@ fn validateExpr(_: ?*anyopaque, call: *mcp.ToolCall) bool {
     return false;
 }
 
+/// One row-context argument (`headers` / `fields`) of the two single-expression
+/// eval tools, normalised to the JSON text `inspect` takes.
+const RowArg = union(enum) {
+    /// Not supplied — evaluate without a row context.
+    absent,
+    /// JSON text ready for `inspect.evalExpr` / `evalTrace`.
+    json: []const u8,
+    /// Refusal message, ready for `call.fail`.
+    bad: []const u8,
+};
+
+/// Read `headers` / `fields` off the call arguments.
+///
+/// The canonical shape is a **native JSON array of strings** — what a model
+/// writes unprompted, and what the sibling `bxp_eval_batch` already requires.
+/// An array encoded *into a string* stays accepted: that was the declared shape
+/// until 2026-08-19, inherited from bxp-fmt's `--row-headers` flag where an
+/// argv value could carry nothing else, so a caller written against the older
+/// schema keeps working.
+///
+/// Every other shape is refused by name rather than dropped. Dropping it —
+/// which is what `strArg` returning null did for a native array — leaves every
+/// `[Column]` evaluating to "" while the call still answers `ok:true`, and an
+/// agent reads that as a broken *expression* rather than a bad call, then
+/// "fixes" an expression that was correct.
+fn rowArg(call: *mcp.ToolCall, comptime key: []const u8) RowArg {
+    const wrong_shape = "'" ++ key ++ "' must be an array of strings, e.g. [\"Date\",\"Price\"]";
+    if (call.args != .object) return .absent;
+    const v = call.args.object.get(key) orelse return .absent;
+    switch (v) {
+        .null => return .absent,
+        .string => |s| return .{ .json = s },
+        .array => |items| {
+            for (items.items) |item| if (item != .string) return .{ .bad = wrong_shape };
+            // Round-trip back to JSON text: `inspect` takes the row context as a
+            // JSON blob (the shape the FFI bridge must use anyway, since a C ABI
+            // carries nothing else), so shape adaptation belongs here in the wire
+            // adapter. A row context is a handful of short strings — the cost is
+            // noise next to the eval itself.
+            var aw: std.Io.Writer.Allocating = .init(call.arena);
+            std.json.Stringify.value(v, .{}, &aw.writer) catch return .{ .bad = "OutOfMemory" };
+            return .{ .json = aw.written() };
+        },
+        else => return .{ .bad = wrong_shape },
+    }
+}
+
+/// Failure message for an error out of `inspect.evalExpr` / `evalTrace`.
+///
+/// `InvalidRowJson` is the one an agent can act on — it means a `headers` /
+/// `fields` string did not hold a JSON array of strings — so it is spelled out
+/// instead of surfacing as a bare Zig error name. Anything else is unexpected
+/// and keeps its name.
+fn evalFail(call: *mcp.ToolCall, err: anyerror) bool {
+    return call.fail(switch (err) {
+        error.InvalidRowJson => "'headers' and 'fields' must be arrays of strings, e.g. [\"Date\",\"Price\"]",
+        else => @errorName(err),
+    });
+}
+
 fn eval(_: ?*anyopaque, call: *mcp.ToolCall) bool {
     const expr = call.strArg("expr") orelse return call.fail("missing 'expr'");
-    const headers = call.strArg("headers");
-    const fields = call.strArg("fields");
+    const headers = switch (rowArg(call, "headers")) {
+        .absent => null,
+        .json => |j| j,
+        .bad => |msg| return call.fail(msg),
+    };
+    const fields = switch (rowArg(call, "fields")) {
+        .absent => null,
+        .json => |j| j,
+        .bad => |msg| return call.fail(msg),
+    };
     const result = inspect.evalExpr(call.arena, expr, headers, fields) catch |err|
-        return call.fail(@errorName(err));
+        return evalFail(call, err);
     call.write(result);
     return false;
 }
@@ -623,14 +703,22 @@ fn evalBatch(_: ?*anyopaque, call: *mcp.ToolCall) bool {
 
 fn evalTrace(_: ?*anyopaque, call: *mcp.ToolCall) bool {
     const expr = call.strArg("expr") orelse return call.fail("missing 'expr'");
-    const headers = call.strArg("headers");
-    const fields = call.strArg("fields");
+    const headers = switch (rowArg(call, "headers")) {
+        .absent => null,
+        .json => |j| j,
+        .bad => |msg| return call.fail(msg),
+    };
+    const fields = switch (rowArg(call, "fields")) {
+        .absent => null,
+        .json => |j| j,
+        .bad => |msg| return call.fail(msg),
+    };
     // Collect the NDJSON stream (per-call traces + final sentinel) into a buffer
     // and append the error sentinel (if any) so the agent gets the whole trace
     // plus outcome in one blob — the MCP analogue of fmt's stdout+stderr split.
     var aw: std.Io.Writer.Allocating = .init(call.arena);
     const result = inspect.evalTrace(call.arena, expr, headers, fields, &aw.writer) catch |err|
-        return call.fail(@errorName(err));
+        return evalFail(call, err);
     const trace = aw.toOwnedSlice() catch return call.fail("OutOfMemory");
     call.write(trace);
     // An expression-error sentinel is a domain result the agent should read, not

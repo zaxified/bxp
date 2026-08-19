@@ -66,12 +66,11 @@ Evaluates an expression with per-function-call trace output and optional fake
 row context. Used by bxp-gui's expression playground (Variables panel).
 
 ```jsonc
-// bxp_eval_trace arguments — headers/fields are JSON arrays
-// ENCODED INTO A STRING, not native JSON arrays
+// bxp_eval_trace arguments — headers/fields are JSON arrays of strings
 {
   "expr": "ABS([Price])",
-  "headers": "[\"Date\", \"Price\"]",
-  "fields": "[\"2026-04-01\", \"150.00\"]",
+  "headers": ["Date", "Price"],
+  "fields": ["2026-04-01", "150.00"],
 }
 ```
 
@@ -100,22 +99,26 @@ The error sentinel carries the same optional `off`/`len` fields as `--expr`.
 
 **Row context arguments** — supply both, or neither:
 
-| Argument  | Type                                | Notes                                                       |
-| --------- | ----------------------------------- | ----------------------------------------------------------- |
-| `headers` | `string` holding a JSON `[…]` array | Column names matching the CSV header row.                   |
-| `fields`  | `string` holding a JSON `[…]` array | Field values for the current row; same length as `headers`. |
+| Argument  | Type                | Notes                                       |
+| --------- | ------------------- | ------------------------------------------- |
+| `headers` | array of strings    | Column names matching the CSV header row.   |
+| `fields`  | array of strings    | Field values for the current row.           |
 
-!!! warning "String-encoded, not native JSON — and unvalidated"
+!!! note "One shape, plus the legacy one"
 
-    `bxp_eval` and `bxp_eval_trace` declare `headers` / `fields` as **strings**
-    that contain a JSON array. Passing native JSON arrays is **silently
-    ignored** — the row context ends up empty and every `[Col]` evaluates to
-    `""`, so the call still answers `ok` with a wrong value. (`bxp_eval_batch`
-    is the opposite: it takes native JSON arrays.)
+    Native arrays are what all three eval tools take, `bxp_eval_batch`
+    included. `bxp_eval` and `bxp_eval_trace` additionally accept an array
+    encoded into a *string* (`"[\"Date\"]"`) — the shape they declared until
+    2026-08-19, inherited from bxp-fmt's `--row-headers` flag. Any other shape
+    is a tool failure naming the argument; it is never dropped, because a
+    dropped row context answers `ok:true` with every `[Col]` empty, which reads
+    as a broken expression rather than a bad call.
 
-    Lengths are **not** cross-checked either. A `headers` longer than `fields`
-    is accepted, and the surplus columns read as `""`. Neither mismatch is
-    reported.
+    Ragged rows are deliberately **tolerated**, here and in `bxp_eval_batch`:
+    field access is by header→index and an index past the row yields `""`,
+    exactly as a real run behaves (an xlsx trailing comma produces such a row).
+    A `headers` longer than `fields` is therefore accepted on purpose, not
+    overlooked.
 
 ---
 

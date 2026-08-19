@@ -80,6 +80,6 @@ guessing at the whole expression.
 
 An agent with a terminal can get the same thing machine-readable without
 the GUI: `bxp_eval_trace` (bxp-mcp) returns one JSON object per function
-call plus a terminal `{"t":"final","value":…}` line. Note its `headers` /
-`fields` are **JSON encoded into a string**, not arrays — see [Authoring a
+call plus a terminal `{"t":"final","value":…}` line. Its `headers` /
+`fields` are arrays of strings, same as every other eval tool — see [Authoring a
 broker](authoring-a-broker.md#self-testing-the-generated-template).
