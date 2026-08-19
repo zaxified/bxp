@@ -180,9 +180,14 @@ MCP itself is what carries dated versions.
 Since the `mcp` migration the server also answers the other two MCP primitives
 — `resources/list`, `resources/read`, `resources/templates/list`,
 `prompts/list`, `prompts/get` — with empty catalogs (and `-32002` /
-`-32602` for a read/get against them), and `initialize` advertises the
-`resources` + `prompts` capabilities accordingly. bxp registers none of either
-today; the methods are served, they just have nothing in them.
+`-32602` for a read/get against them). bxp registers none of either today; the
+methods are served, they just have nothing in them. Since the `2026-08-19` pin
+they are no longer *advertised*: upstream gates each capability key on its own
+catalog being non-empty, so `initialize` answers
+`"capabilities":{"tools":{"listChanged":false}}` — one key, not three. The
+methods still respond; a spec-conformant client simply is not told to call them
+(`ServerCapabilities` marks all three optional, "Present if the server offers
+any …"). `tools` stays unconditional.
 
 Two smaller wire-visible changes came with the same migration (all three are
 pinned by the 100-series in `scripts/test-02-mcp.sh`):
@@ -250,18 +255,22 @@ all nine tools, and `bxp_simulate` with a string / integer / malformed
 progressToken — replayed against the pre- and post-migration binaries. Result:
 **42/42 responses and all 8 progress notifications byte-identical**, except the
 three wire-visible changes recorded in the wire-protocol section above:
-`initialize` now also advertising the `resources` + `prompts` capabilities the
-module serves, a non-scalar `id` refused with `-32600 Invalid request id` where
-it used to be served, and a response-shaped line dropped in silence where it
-used to draw `-32600 Missing method`.
+`initialize` advertising the `resources` + `prompts` capabilities the module
+serves (reverted upstream at the `2026-08-19` pin — the keys are gated on a
+non-empty catalog now, so bxp is back to advertising `tools` alone), a
+non-scalar `id` refused with `-32600 Invalid request id` where it used to be
+served, and a response-shaped line dropped in silence where it used to draw
+`-32600 Missing method`.
 
 The standing gate is `scripts/test-02-mcp.sh`, extended in the same change with
 the wiring seams the probe had surfaced (the 100-series requests): every
 JSON-RPC error path this binary routes, an unknown tool answered by *our*
 catalog as `-32602`, a missing / non-string argument reaching the handler's own
 failure instead of being coerced, the empty resources + prompts catalogs that
-are our registration state, and — the one that matters on a long-lived stdio
-session — a real tool call still answering after a run of malformed lines. It
+are our registration state — asserted from the handshake side too since the
+`2026-08-19` pin, where `initialize.capabilities` must carry `tools` and
+nothing else — and, the one that matters on a long-lived stdio
+session, a real tool call still answering after a run of malformed lines. It
 deliberately does **not** re-test the framing for its own sake: that is the
 module's, and it has 89 tests upstream.
 

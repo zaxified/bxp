@@ -39,8 +39,8 @@
         // so the whole collection is one package — only the modules actually
         // imported get compiled in.
         .zig_libs = .{
-            .url = "git+https://github.com/zaxified/zig-libs.git?ref=2026-08-15#84332afefbbc22f2e6254ee9412cd5e9f91f27fd",
-            .hash = "zig_libs-0.0.0-WiQ0Gkuq3gJ9oVeW_X5KH_WCwedy4T3uXFl5-DAcgr3J",
+            .url = "git+https://github.com/zaxified/zig-libs.git?ref=2026-08-19#a64d6f778523bf27e10c638cdb8adf871efd4586",
+            .hash = "zig_libs-0.0.0-WiQ0GiHC8gLLy_JZG4Vl-Z2CWT4F8pJILf7CsHL0DVcM",
         },
     },
     .minimum_zig_version = "0.16.0",

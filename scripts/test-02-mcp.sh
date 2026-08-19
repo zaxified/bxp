@@ -163,6 +163,16 @@ assert by_id[1]["result"]["protocolVersion"] == "2025-11-25", by_id[1]
 # Negotiation: an older supported revision is echoed back verbatim.
 assert by_id[9]["result"]["protocolVersion"] == "2025-06-18", by_id[9]
 
+# Advertised capabilities track our registration state: we register nine tools
+# and no resources/prompts, so `tools` is the only key a client may see. The
+# module gates `resources`/`prompts` on a non-empty catalog, so this asserts the
+# same fact as the empty `resources/list` + `prompts/list` below — one from the
+# handshake side. Key set only: what each object CONTAINS (listChanged, …) is
+# the module's business and has its own tests upstream. Both handshakes are
+# checked because the answer is rebuilt per `initialize`, not cached.
+for i in (1, 9):
+    assert set(by_id[i]["result"]["capabilities"]) == {"tools"}, by_id[i]["result"]["capabilities"]
+
 names = {t["name"] for t in by_id[2]["result"]["tools"]}
 assert names == {"bxp_validate","bxp_validate_expr","bxp_eval","bxp_eval_batch",
                  "bxp_eval_trace","bxp_docs","bxp_list_templates",
