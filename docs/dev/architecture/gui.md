@@ -564,9 +564,13 @@ Notes:
   (`release.yml`).
 - **Initial poll fires 5 s after launch.** Avoids slowing app startup; a 6 h
   recurring tick handles long-running sessions.
-- **macOS DMGs target ARM only.** Intel Macs get `assetUrl == null` and the
-  dialog redirects to the GitHub release page — no auto-install path. The
-  release workflow doesn't produce an x86_64 DMG.
+- **macOS DMGs target ARM only.** The macOS branch gates on the host
+  architecture — parsed from `Platform.version`'s ABI tag, since `dart:io`
+  exposes none — so anything that is not `arm64` gets `assetUrl == null` and
+  the dialog redirects to the GitHub release page. Matching the asset *name*
+  alone was not enough: it matches on any macOS host, so an Intel Mac used to
+  install a build it could not launch. The release workflow doesn't produce an
+  x86_64 DMG.
 - **Linux dual path.** AppImage is atomically replaced and `exec()`'d back
   in-place; `.deb` and `.tar.gz` users go to the release page since
   in-place self-update doesn't fit those formats.

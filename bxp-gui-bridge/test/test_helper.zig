@@ -20,6 +20,9 @@
 //!                        (exercises bridge_run stdin pipe)
 //!   stdout-binary <N>  — write N bytes 0x00..0xFF cycling (no newlines;
 //!                        exercises bridge_run_streaming raw-chunk streaming)
+//!   fork-sleep <secs>  — re-exec self as `sleep <secs>` and wait for it, so
+//!                        the bridge's child has a GRANDCHILD holding the
+//!                        inherited stdout pipe (cancel-reaches-the-group test)
 //!
 //! Unknown subcommand → exit 2 + diagnostic on stderr so a typo in the
 //! test surfaces loudly instead of as "unexplained exit 0".
@@ -106,6 +109,21 @@ pub fn main(init: std.process.Init) !void {
         if (argv.len != 3) return badArgs(io, "stdout-binary needs <N>");
         const n = std.fmt.parseInt(usize, argv[2], 10) catch return badArgs(io, "stdout-binary count must be usize");
         try writeStdoutCyclingBytes(io, n);
+        return;
+    }
+
+    if (std.mem.eql(u8, cmd, "fork-sleep")) {
+        if (argv.len != 3) return badArgs(io, "fork-sleep needs <seconds>");
+        // Spawn ourselves one level down and block on it. The grandchild
+        // inherits this process's stdout, which is the bridge's pipe — that
+        // inheritance is the whole point: signalling only the direct child
+        // leaves the pipe held open by the grandchild, so the bridge never
+        // sees EOF. argv[0] is our own path, so no OS binary is involved and
+        // the subcommand behaves identically on every host.
+        var grandchild = try std.process.spawn(io, .{
+            .argv = &.{ argv[0], "sleep", argv[2] },
+        });
+        _ = grandchild.wait(io) catch {};
         return;
     }
 

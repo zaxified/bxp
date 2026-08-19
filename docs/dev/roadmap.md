@@ -274,38 +274,6 @@ would have caught the missing `--trace` / `--trace-file` / `zip_input` entries
 the 2026-08-17 audit found by hand, and it is independent of whether the
 tables end up inline or linked.
 
-### The macOS updater never checks the host architecture
-
-`UpdaterService._platformAssetPattern()` matches the release *asset name*
-`bxp-desktop-macos-arm64.dmg`. Nothing anywhere reads the host architecture, so
-an Intel Mac matches that asset, downloads it, and installs an arm64 build that
-cannot run. The comment beside the pattern asserts the opposite — that Intel
-Macs "fall through to the manual-update message" — and the user-facing docs
-repeated that claim until this was found (2026-08-17); they no longer do.
-
-Not reachable today only because the release matrix ships no Intel artifact and
-the affected population is small, but the failure is silent and leaves the user
-with a broken install rather than a message. Gate the macOS branch on the host
-architecture and route anything that is not arm64 to the existing
-manual-update path — the same path Linux non-AppImage builds already take.
-
-### Cancelling a stream does not reach the child's grandchildren
-
-`bridge_cancel` signals the direct child. A grandchild the child forked
-inherits the stdout pipe, so the pipe stays open and `on_exit` does not fire
-until that grandchild exits. Measured 2026-08-16, unchanged by the `procrun`
-migration: cancelling `sh -c 'sleep 20'` takes the full 20 s, while
-`sh -c 'exec sleep 20'` cancels in 0.3 s.
-
-Not live today — the only thing the bridge spawns is `bxp-cli`, which forks
-nothing (its parallelism is threads). The fix is now one flag away:
-`procrun.Spec.new_process_group` puts the child in its own process group and
-`Handle.cancelGroup` signals `-pgid`, reaching the whole tree. It was
-deliberately NOT turned on with the migration, because it changes what a
-cancel kills, and inheriting an upstream default silently is the mistake the
-`zipstream` cap taught us to avoid. Decide it on its own merits if bxp-cli
-ever spawns anything, or if a user reports a hung cancel.
-
 ### Real-world broker CSV quirks
 
 Surfaced by readme-adequacy simulations against real broker formats

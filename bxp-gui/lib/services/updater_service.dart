@@ -254,8 +254,19 @@ class UpdaterService extends ChangeNotifier {
       return RegExp(r'^bxp-desktop-windows-x86_64\.exe$');
     }
     if (Platform.isMacOS) {
-      // Only Apple Silicon (arm64) DMGs are produced by the release
-      // workflow; Intel Macs fall through to the manual-update message.
+      // Only Apple Silicon (arm64) DMGs are produced by the release workflow,
+      // so anything else has to take the manual-update path — the same null
+      // return Linux non-AppImage builds use. Gating on the ASSET NAME alone
+      // was not enough: the name matches on any macOS host, so an Intel Mac
+      // used to download and install an arm64 build it cannot launch, silently
+      // and with no message.
+      if (hostArchitecture() != 'arm64') {
+        devTrace('updater.archUnsupported', {
+          'platform': 'macos',
+          'arch': hostArchitecture() ?? 'unknown',
+        });
+        return null;
+      }
       return RegExp(r'^bxp-desktop-macos-arm64\.dmg$');
     }
     if (Platform.isLinux) {

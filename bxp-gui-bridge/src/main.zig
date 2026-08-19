@@ -617,6 +617,11 @@ export fn bridge_run_streaming(
         .stderr = .pipe,
         .cwd = if (req.cwd) |cwd| (if (cwd.len > 0) cwd else null) else null,
         .stream_permits = default_queue_permits,
+        // Give the child its own process group so a cancel can reach the whole
+        // tree, not just the direct child (see `bridge_cancel`). POSIX-only —
+        // documented as a no-op on Windows, where `cancelGroup` falls back to
+        // signalling the child exactly as before.
+        .new_process_group = true,
     }, .{
         .ctx = ctx,
         .on_stdout = onStdoutTrampoline,
@@ -635,7 +640,7 @@ export fn bridge_run_streaming(
     var started_ok = false;
     defer if (!started_ok) {
         ctx.shutting_down.store(true, .release);
-        ctx.proc.kill();
+        ctx.proc.killGroup();
         _ = ctx.proc.wait();
     };
 
@@ -663,6 +668,17 @@ export fn bridge_run_streaming(
 /// with the signal exit code. Returns 0 if the signal was sent, -1 if
 /// the handle is unknown (already exited, or never valid). Idempotent:
 /// calling cancel after the stream has exited is a safe no-op.
+///
+/// The signal goes to the child's process GROUP, not the child alone. A
+/// grandchild the child forked inherits the stdout pipe, so signalling only
+/// the direct child left the pipe open and `on_exit` did not fire until that
+/// grandchild exited on its own — a cancel that visibly does nothing. Since
+/// the child leads its own group (`Spec.new_process_group` at spawn), `-pgid`
+/// reaches the whole tree and the group id is the child's own pid, so this can
+/// never signal the GUI's own group. `bxp-cli` forks nothing today (its
+/// parallelism is threads), so what this changes in practice is the behaviour
+/// of anything the bridge spawns later. No-op difference on Windows, which has
+/// no process-group concept here.
 export fn bridge_cancel(handle: i64) i32 {
     const io = bridgeIo();
     streams_mutex.lockUncancelable(io);
@@ -672,7 +688,7 @@ export fn bridge_cancel(handle: i64) i32 {
     // semaphore. The wake is not optional: a reader blocked mid-wait would
     // never see the child's EOF, so the stream would hang past cancellation.
     // The module does both, which is why this no longer posts permits by hand.
-    ctx.proc.cancel();
+    ctx.proc.cancelGroup();
     return 0;
 }
 
@@ -1623,6 +1639,38 @@ test "bridge_cancel kills running stream" {
     try testing.expect(stream_test.waitForExit(5 * std.time.ns_per_s));
     // Killed by SIGTERM → exit code is -SIGTERM (-15) on POSIX,
     // 1 (TerminateProcess code) on Windows.
+    try testing.expect(stream_test.exit_code != 0);
+}
+
+test "bridge_cancel reaches a grandchild holding the pipe" {
+    // The regression this pins: the helper forks a grandchild that inherits the
+    // stdout pipe. Signalling the direct child alone left that pipe open, so
+    // on_exit did not fire until the grandchild finished on its own — a cancel
+    // the user sees do nothing. With the child leading its own process group,
+    // SIGTERM to -pgid reaches both.
+    //
+    // Windows has no process-group concept here, so cancelGroup falls back to
+    // signalling the child and the grandchild would still hold the pipe. The
+    // body is portable, so this is a runtime skip rather than a comptime branch.
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+
+    stream_test.reset();
+    const grandchild_secs = 20;
+    const req = try buildHelperRequestZ(&.{ "fork-sleep", comptime std.fmt.comptimePrint("{d}", .{grandchild_secs}) });
+    defer testing.allocator.free(req);
+    const handle = bridge_run_streaming(req.ptr, streamTestOnStdout, streamTestOnStderr, streamTestOnExit);
+    try testing.expect(handle > 0);
+
+    // Let the child get as far as spawning its own child before cancelling —
+    // otherwise the group has one member and the test proves nothing.
+    testSleepMs(300);
+
+    try testing.expectEqual(@as(i32, 0), bridge_cancel(handle));
+
+    // Generous next to the 20 s the grandchild would otherwise hold the pipe
+    // for, tight enough that only a group-wide signal can meet it. A failure
+    // here means the cancel reached the child alone.
+    try testing.expect(stream_test.waitForExit(5 * std.time.ns_per_s));
     try testing.expect(stream_test.exit_code != 0);
 }
 

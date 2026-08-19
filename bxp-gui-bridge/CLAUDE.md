@@ -164,16 +164,23 @@ the upstream reap core.)
   (bxp-cli stderr is low-volume warnings). A pathological stderr flood could
   accumulate unbounded in-flight heap buffers in Dart's port queue. Acceptable
   by design; on record so the assumption is explicit.
-- **`bridge_cancel` does not reach a child's own grandchildren.** It signals
-  the direct child; a grandchild that inherited the stdout pipe keeps it open,
-  so `on_exit` does not fire until that grandchild exits. Measured
-  2026-08-16 (identical before and after the `procrun` migration): cancelling
-  `sh -c 'sleep 20'` takes the full 20 s, while `sh -c 'exec sleep 20'` — where
-  the child *is* the process — cancels in 0.3 s. Not live: the only thing the
-  bridge spawns is `bxp-cli`, which forks nothing (it uses threads). `procrun`
-  does offer the fix — `Spec.new_process_group` + `Handle.cancelGroup` signal
-  the whole group — but turning it on changes what a cancel kills, so it is a
-  decision, not a follow-on to the migration. See `docs/dev/roadmap.md`.
+- ~~**`bridge_cancel` does not reach a child's own grandchildren.**~~
+  **Fixed 2026-08-19.** It used to signal the direct child only, so a
+  grandchild that inherited the stdout pipe kept it open and `on_exit` did not
+  fire until that grandchild exited — cancelling `sh -c 'sleep 20'` took the
+  full 20 s, while `sh -c 'exec sleep 20'` cancelled in 0.3 s (measured
+  2026-08-16, identical before and after the `procrun` migration). The child
+  now leads its own process group (`Spec.new_process_group`) and `bridge_cancel`
+  signals `-pgid` through `Handle.cancelGroup`, reaching the whole tree; the
+  post-spawn rollback uses `killGroup` for the same reason. Because the group
+  id equals the child's own pid, this can never signal the GUI's own group.
+  POSIX-only — Windows has no process-group concept here and falls back to
+  signalling the child exactly as before. It was deliberately left off with the
+  migration (it changes what a cancel kills) and turned on as its own decision.
+  Nothing the bridge spawns today forks — `bxp-cli`'s parallelism is threads —
+  so what this changes is the behaviour of whatever it spawns next. Pinned by
+  `test "bridge_cancel reaches a grandchild holding the pipe"`, which drives
+  the `fork-sleep` helper subcommand; without the group flag three tests fail.
 - **`bridge_verify_minisign` accepts legacy `"Ed"` alongside prehashed
   `"ED"`.** Not a downgrade vulnerability — both are full Ed25519 over the
   content, forging either needs the private key; CI emits prehashed `"ED"`
