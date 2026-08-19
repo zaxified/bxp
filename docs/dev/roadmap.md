@@ -30,6 +30,14 @@ GUI Config/Create - Import wizard from sample CSV
 GUI updater progress bar
 GUI input file viewer simple viewer
 
+Adopt `material_ui` 1.x — the real Material implementation, not the 0.0.1
+facade the imports point at today. Blocked on `pluto_grid`, `pluto_menu_bar`
+and `flex_seed_scheme`, which all still build on the SDK's Material: under a
+`material_ui` `MaterialApp` their `TextField` / `showDialog` / `PopupMenu`
+would not find the SDK `MaterialLocalizations` they assert on, and
+`flutter analyze` cannot see that. Move once those three ship material_ui
+builds, or replace them.
+
 ### v0.5.0
 
 Full agentic automation - AI support for all steps in workflow

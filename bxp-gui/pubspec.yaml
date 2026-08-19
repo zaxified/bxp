@@ -28,9 +28,16 @@ dependencies:
   # 'package:flutter/material.dart'` — so importing it changes nothing that
   # runs today; what it buys is that the imports already point where the
   # implementation is going before the SDK copies are formally deprecated
-  # (planned for the November 2026 stable). Pinned like every other dep:
-  # a version move is a deliberate edit, not a silent resolve.
-  material_ui: ^0.0.1
+  # (planned for the November 2026 stable).
+  #
+  # Exact, not `^0.0.1`: a caret on a 0.0.x version pins nothing — pub reads it
+  # as `>=0.0.1 <0.1.0`, and 0.0.3 stopped being a facade. It carries its own
+  # ColorScheme, which collides with the SDK's the moment flex_seed_scheme
+  # hands one over, so CI resolved 0.0.3+1 and `flutter analyze` failed on all
+  # three legs. pubspec.lock is gitignored, so this line is the only pin CI
+  # ever sees. Moving to 1.x is a migration, not a bump — see
+  # docs/dev/roadmap.md (v0.4.0).
+  material_ui: 0.0.1
   json5_ast:
     path: packages/json5_ast
 
