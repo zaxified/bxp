@@ -406,6 +406,14 @@ toggle is an explicit, visible (red chip) developer action.
 ## Conventions
 
 - All code comments and documentation in English.
+- **Material comes from `package:material_ui/material_ui.dart`**, not
+  `package:flutter/material.dart`. Flutter 3.47 split Material out of the SDK
+  into a standalone package; at 0.0.1 that package is a pure facade (one
+  `export` of the SDK library), so the migration changed no behaviour — it
+  moves the imports ahead of the SDK copies' formal deprecation, planned for
+  the November 2026 stable. New files follow suit; `dart fix --apply
+  --code=migrate_design_widgets` rewrites any that don't. Nothing here imports
+  Cupertino, so `cupertino_ui` is not a dependency.
 - Layout: every resizable splitter holds **fractions**, not pixels —
   `lib/ui/layout_defaults.dart` is the single source. 3-pane layout = 2
   fractions plus the middle by subtraction.

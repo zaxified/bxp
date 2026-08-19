@@ -32,7 +32,7 @@ anyway". It installs **per-user — no administrator rights required** — to
 `%LOCALAPPDATA%\Programs\bxp-gui`, with Start menu entries for the app and
 its uninstaller. User preferences live at `%APPDATA%\bxp-gui\bxp-gui.json`.
 
-### macOS (Apple Silicon)
+### macOS (Apple Silicon, macOS 12 or newer)
 
 Download
 [`bxp-desktop-macos-arm64.dmg`](https://github.com/zaxified/bxp/releases/latest/download/bxp-desktop-macos-arm64.dmg),

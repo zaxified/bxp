@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:io' show Directory;
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:json5_ast/ast.dart';
 import 'package:json5_ast/path.dart' as ast_path;

@@ -20,24 +20,6 @@ reconciling the drift below — do that first.**
 
 Output row deduplication in combined output files `combined_output_dedup: bool    // (default:false)`
 
-Raise the macOS deployment target from 10.15 to 12 — **release blocker.**
-Flutter 3.47 raised its own minimum supported macOS to 12 (to support
-Xcode 27), while `bxp-gui/macos/Runner.xcodeproj/project.pbxproj` still
-pins `MACOSX_DEPLOYMENT_TARGET = 10.15` in three build configurations.
-The macOS leg of the release matrix has not been exercised since the SDK
-pin moved to 3.47.0, so this is expected to surface first as a tag-push
-failure. Bumping it consciously drops macOS 10.15 and 11 users.
-
-Migrate off the SDK-bundled Material and Cupertino libraries. Flutter
-3.47 split them into standalone `material_ui` / `cupertino_ui` packages;
-the SDK copies still work but are scheduled for formal deprecation in the
-November stable release. 26 files under `bxp-gui/lib/` import
-`package:flutter/material.dart`. The migration is mechanical —
-`dart fix --apply --code=migrate_design_widgets` rewrites the imports —
-but must not be run on Dart 3.13.0, which fails to rewrite `export`
-statements; that fix landed in 3.13.1. `MaterialUiCompatibilityBridge`
-covers dependencies still on the legacy imports.
-
 ### v0.3.3
 
 Transformation visualiser

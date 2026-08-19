@@ -23,6 +23,14 @@ dependencies:
   crypto: ^3.0.6
   url_launcher: ^6.3.1
   mcp_dart: ^2.2.0
+  # Flutter 3.47 split Material out of the SDK into a standalone package.
+  # At 0.0.1 it is a pure facade — a single `export
+  # 'package:flutter/material.dart'` — so importing it changes nothing that
+  # runs today; what it buys is that the imports already point where the
+  # implementation is going before the SDK copies are formally deprecated
+  # (planned for the November 2026 stable). Pinned like every other dep:
+  # a version move is a deliberate edit, not a silent resolve.
+  material_ui: ^0.0.1
   json5_ast:
     path: packages/json5_ast
 

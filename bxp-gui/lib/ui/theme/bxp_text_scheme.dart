@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 /// Holds every "shape" parameter that any sans/prose Text uses in the
 /// app — font family, size scale, weight scale, letter-spacing scale.
