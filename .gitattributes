@@ -27,3 +27,13 @@ scripts/test-06-expr-corpus.txt text eol=lf
 **/generated_plugin_registrant.cc   text eol=lf
 **/generated_plugin_registrant.h    text eol=lf
 **/GeneratedPluginRegistrant.swift  text eol=lf
+
+# Every page under docs/reference/ is generated (scripts/gen-docs.sh's
+# GENERATED_PAGES), and `--check` — the "docs catalog drift" step in
+# scripts/test-04-desktop.sh — byte-diffs the committed page against a freshly
+# generated one. Both generators (tools/zig-doc-gen, tools/dart-doc-gen) write
+# LF on every host, so on a Windows checkout (default core.autocrlf=true) the
+# CRLF-converted committed page differs from the generated one on every single
+# line and the gate reports a whole-file drift that is nothing but line endings.
+# Same rationale as the dataset fixtures and the expression corpus above.
+docs/reference/*.md text eol=lf
