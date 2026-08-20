@@ -23,11 +23,32 @@ const DEFAULT_CONFIG_PATH: []const u8 = "bxp-cli.json";
 ///   * `printHelp` — `--help` requested explicitly: stdout, so callers piping
 ///     `bxp-cli --help | grep` work without `2>&1`.
 ///   * `usageErr`  — argument-validation failures: stderr, alongside the error.
+/// The documentation block is the shipped manual: the archives carry no
+/// readme, so this is where both audiences are pointed at the real thing. The
+/// two surfaces are deliberately different — the rendered site for a person
+/// (search, navigation, the clickable expression playground), the Markdown
+/// sources for an assistant, pinned with `build_options.version` to the exact
+/// release this binary was built from, which the unversioned site cannot offer.
+/// The `bxp-mcp` line carries no path: the binary sits beside this one in every
+/// archive, but inside an AppImage that location is a fresh `/tmp/.mount_*` on
+/// every launch, so a printed path would be stale the moment it was written
+/// down. Its tool names are not listed either — `bxp-mcp --help` renders them
+/// from its own catalog, and duplicating that list here is the kind of hand
+/// copy that drifts.
 const USAGE_HEAD =
-    \\Broker eXchange Parser (BXP)
+    \\Broker eXchange Parser (BXP) {s}
     \\
     \\  CLI tool to convert fiscal CSV exports from your favorite brokers to your favorite portfolio trackers.
     \\  If you don't know how to start, just tell your AI agent to generate a JSON template for you.
+    \\
+    \\Documentation:
+    \\  https://zaxified.github.io/bxp/
+    \\    searchable manual (for human consumer)
+    \\  https://github.com/zaxified/bxp/tree/v{s}/docs/
+    \\    release pinned manual (for AI authoring)
+    \\  bxp-mcp - stdio MCP server binary (for AI authoring)
+    \\    validate configs and expressions, evaluate against sample rows, fetch
+    \\    templates, dry-run a full conversion; run `bxp-mcp --help` for its tools
     \\
     \\Usage:
     \\  {s}                                    process all templates in config file
@@ -60,7 +81,7 @@ const exit_codes = cli_docs.exit_codes;
 /// `exit_codes` rows — into `w`. The single renderer behind both stream variants.
 fn writeUsage(w: *std.Io.Writer, prog: []const u8) void {
     const SPACES = " " ** 24;
-    w.print(USAGE_HEAD, .{ prog, prog, prog }) catch return;
+    w.print(USAGE_HEAD, .{ build_options.version, build_options.version, prog, prog, prog }) catch return;
     for (flags) |f| {
         var label_buf: [48]u8 = undefined;
         const label = if (f.arg.len > 0)
@@ -89,7 +110,11 @@ fn printHelp(io: std.Io, prog: []const u8) void {
 /// Print the help text to stderr. Used after an argument-validation
 /// failure where we want the help to accompany the error message.
 fn usageErr(prog: []const u8) void {
-    var buf: [4096]u8 = undefined;
+    // Fixed (not flushing) — an overflow here silently truncates the help
+    // rather than erroring, so the buffer keeps a wide margin over the ~2.6 KB
+    // the renderer currently emits. `printHelp` has no such constraint: its
+    // buffer belongs to a flushing writer.
+    var buf: [8192]u8 = undefined;
     var w = std.Io.Writer.fixed(&buf);
     writeUsage(&w, prog);
     std.debug.print("{s}", .{w.buffered()});
