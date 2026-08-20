@@ -252,14 +252,6 @@ add one when a real workflow keeps tripping over the idiom.
 - `SIGN(x)` — direction carried in the sign of an amount reads better spelled
   out: `IF([Amount] < 0, 'SELL', 'BUY')`.
 
-`POWER` / `SQRT` were **not** blocked on a design call after all — the pinned
-`decimal` module carries exact `pow` and a correctly-rounded `sqrt`, neither
-using floating point — and the time extractors were **not** waiting on a
-canonical datetime shape, which `parseTzDatetime` had already fixed. Both are
-shipped, along with QUARTER, WEEKNUM, IS_NUMERIC, IS_DATE and TRUNC. `REPT` was
-dropped rather than parked: padding is LPAD/RPAD's job and separator lines are
-reporting, not data.
-
 ### Encoding — more single-byte code pages
 
 The `encoding` module covers Win-1250/1252 and ISO-8859-1/2/15 today. The

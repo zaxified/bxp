@@ -43,9 +43,18 @@ trailing `Z`, or a timezone suffix.
 
 ## Date arithmetic
 
-All date-arithmetic functions take/return ISO `YYYY-MM-DD` strings; an
-empty date argument yields `""`, a malformed one errors. Pre-1970 dates
-are fully supported.
+Every date and time function shares one reader, so a timestamp column
+works with `MONTH()` exactly as it works with `HOUR()`: a date function
+given a timestamp ignores the time half, and a time function given a bare
+date reads midnight. Accepted are `YYYY-MM-DD`, `YYYY-MM-DD hh:mm:ss`, the
+`T`-separated variant, and an ISO tail — fractional seconds, `Z`, `±HH:MM` —
+which is read and ignored, because these functions work in wall-clock time
+and take their zone from another argument.
+
+The reader matches the **whole** value, so `2024-03-15 nonsense` is an
+error rather than midnight on the 15th. The functions return ISO
+`YYYY-MM-DD`; an empty argument yields `""`, a malformed one errors, and
+pre-1970 dates are fully supported.
 
 A few patterns:
 

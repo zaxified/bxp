@@ -112,6 +112,13 @@ expr	ok	HOUR([Time])
 expr	ok	MINUTE([Time])
 expr	ok	SECOND([Time])
 expr	ok	HOUR(TO_UTC([Time], 'YYYY-MM-DD[T]hh:mm:ssZZ'))
+# One reader for the whole family: the date functions take a timestamp column
+# too, and the reader matches the whole value rather than stopping when its
+# format runs out (which used to let '2024-03-15 nonsense' read as midnight).
+expr	ok	MONTH([Time])
+expr	ok	QUARTER([Time]) & '/' & YEAR([Time])
+expr	ok	DATEADD([Time], 7)
+expr	ok	HOUR(NOW())
 # Shape guards. Both answer true/false and never raise, so they are the tests
 # you put in an IF rather than something IFERROR has to catch.
 expr	ok	IS_DATE([Date])

@@ -52,7 +52,7 @@ const fn_groups = [_]FnGroup{
     .{ .cat = .regex, .title = "Pattern matching", .intro = "Linear-time (ReDoS-safe) regular-expression match and extract." },
     .{ .cat = .lookup, .title = "Lookup & mapping", .intro = "Whole-value remap, substring replace, and `pre_pass` table lookups." },
     .{ .cat = .number, .title = "Numbers & money", .intro = "Exact fixed-point arithmetic, rounding, min/max, and price parsing." },
-    .{ .cat = .date, .title = "Dates & time", .intro = "Reformat, shift, diff, and decompose dates — business-day aware." },
+    .{ .cat = .date, .title = "Dates & time", .intro = "Reformat, shift, diff, and decompose dates — business-day aware. Every function here reads the same shapes: `YYYY-MM-DD`, `YYYY-MM-DD hh:mm:ss`, the `T`-separated ISO variant, and an ISO tail (fractional seconds, `Z`, `±HH:MM`) which is accepted and ignored. A date function given a timestamp ignores the time half; a time function given a bare date reads midnight. Anything else is an error rather than a value — a cell the reader cannot account for never answers like a real one." },
     .{ .cat = .source, .title = "Row & source context", .intro = "Values drawn from the current row's position and its source file." },
 };
 

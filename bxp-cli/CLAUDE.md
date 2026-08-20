@@ -312,11 +312,18 @@ Expressions are evaluated per row. Operator precedence (high → low):
 
 ### Date arithmetic functions
 
-All take/return ISO `YYYY-MM-DD` strings, with two deliberate exceptions:
-`HOUR` / `MINUTE` / `SECOND` also accept the datetime shapes named in their
-row, and `IS_DATE` answers rather than raises. Otherwise an empty date arg
-yields `""` and a malformed one raises an error. Pre-1970 dates are fully
-supported.
+One reader serves this whole table plus the timezone functions below, so a
+timestamp column works with `MONTH()` exactly as it works with `HOUR()`.
+Accepted: `YYYY-MM-DD`, `YYYY-MM-DD hh:mm:ss`, the `T`-separated variant, and
+an ISO tail (fractional seconds, `Z`, `±HH:MM`) which is read and ignored — the
+builtins here are wall-clock; only `TO_UTC` honours an offset, through its own
+format argument. A date function given a timestamp ignores the time half; a
+time function given a bare date reads midnight.
+
+The reader matches the **whole** string: `2024-03-15 nonsense` is an error, not
+midnight. Everything else returns ISO `YYYY-MM-DD`; an empty argument yields
+`""`, a malformed one raises (`IS_DATE` answers instead of raising). Pre-1970
+dates are fully supported.
 
 | Syntax                             | Description                                                                                                                                                                                                             |
 | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -329,8 +336,8 @@ supported.
 | `WEEKNUM(d)`                       | ISO 8601 week number of `d`, 1–53 (week 1 holds the first Thursday). Crosses the year: 2021-01-01 is week 53, 2024-12-30 is week 1 — not sortable without its own year |
 | `EOMONTH(d)`                       | Last calendar day of `d`'s month, as `YYYY-MM-DD` (month-end snapping)                                                                                                                                                  |
 | `NTH_DOW(year, month, weekday, n)` | Date of the `n`-th `weekday` (ISO Mon=1 … Sun=7) in `year`/`month`; negative `n` counts from month end (`-1` = last). `""` when it doesn't exist. EU DST = `NTH_DOW(YEAR(d), 3, 7, -1)` … `NTH_DOW(YEAR(d), 10, 7, -1)` |
-| `HOUR(t)` / `MINUTE(t)` / `SECOND(t)` | Time components of a datetime — `YYYY-MM-DD hh:mm:ss`, `YYYY-MM-DDThh:mm:ss` or a bare date (midnight, so a date-only column answers 0). Same shapes the TZ builtins take, so `TO_UTC`'s output feeds straight in |
-| `IS_DATE(d [, format])`            | `true` when `d` parses — as canonical `YYYY-MM-DD` with one arg (what the date builtins accept), or under `format` with two (what `DATE_CONVERT` accepts, 4-letter month abbreviations included). Never raises; blank is `false` |
+| `HOUR(t)` / `MINUTE(t)` / `SECOND(t)` | Time components of a datetime, 0-23 / 0-59 / 0-59. A bare date reads as midnight, so a date-only column answers 0 |
+| `IS_DATE(d [, format])`            | `true` when `d` parses — against the shapes above with one arg, or under `format` with two (what `DATE_CONVERT` accepts, 4-letter month abbreviations included). Never raises; blank is `false` |
 
 ### Timezone functions
 

@@ -3407,22 +3407,33 @@ fn adaptIn(p: *Parser, args: []Value) anyerror!Value {
 // ---------------------------------------------------------------------------
 
 const DateParts = datefmt.DateParts;
-const parseYmd = datefmt.parseIsoDate;
 const ymdToEpochDay = datefmt.ymdToEpochDay;
 const epochDayToYmd = datefmt.epochDayToYmd;
 const isoWeekday = datefmt.isoWeekday;
 const formatYmd = datefmt.formatIsoDate;
 
-/// Parse arg[0] as a date string and return its epoch day. On parse failure
-/// writes a descriptive diagnostic via `setDetail` and returns InvalidDate so
-/// callers see a clickable error in the validator / GUI. Empty input must be
-/// pre-handled by the caller (return "" silently) — see DATE_CONVERT's
-/// rationale at builtinDateConvert.
-fn parseDateArg(p: *Parser, s: []const u8) !i64 {
-    const parts = parseYmd(s) catch {
-        p.setDetail("invalid date '{s}': expected YYYY-MM-DD", .{s});
+/// Parse arg[0] as a date or datetime and return its parts. On failure writes a
+/// descriptive diagnostic via `setDetail` and returns InvalidDate so callers see
+/// a clickable error in the validator / GUI. Empty input must be pre-handled by
+/// the caller (return "" silently) — see DATE_CONVERT's rationale at
+/// builtinDateConvert.
+///
+/// Every calendar builtin reads through here, which is what keeps the family
+/// answering for one column: a timestamp column works with MONTH() exactly as it
+/// works with HOUR(), and the date builtins simply ignore the time half. The
+/// accepted shapes are `parseTzDatetime`'s — the same set the zone builtins take
+/// and TO_UTC emits.
+fn parseDatePartsArg(p: *Parser, s: []const u8) !DateParts {
+    return parseTzDatetime(s) orelse {
+        p.setDetail("invalid date '{s}': expected YYYY-MM-DD or YYYY-MM-DD hh:mm:ss", .{s});
         return error.InvalidDate;
     };
+}
+
+/// `parseDatePartsArg` reduced to an epoch day, for the builtins that do
+/// calendar arithmetic rather than read a component.
+fn parseDateArg(p: *Parser, s: []const u8) !i64 {
+    const parts = try parseDatePartsArg(p, s);
     return ymdToEpochDay(parts.year, parts.month, parts.day);
 }
 
@@ -3433,7 +3444,7 @@ const dateadd_doc: FnDoc = .{
     .row_varying = false,
     .signature = "DATEADD(d, n)",
     .example = "DATEADD('2024-01-31', 7)",
-    .description = "Add `n` calendar days to date `d` (YYYY-MM-DD). Negative `n` subtracts. Returns YYYY-MM-DD. For business-day arithmetic (skipping weekends) use WORKDAY().",
+    .description = "Add `n` calendar days to date `d`. Negative `n` subtracts. Returns YYYY-MM-DD. For business-day arithmetic (skipping weekends) use WORKDAY().",
     .args = &.{
         .{ .name = "d", .kind = .string },
         .{ .name = "n", .kind = .number },
@@ -3463,7 +3474,7 @@ const datediff_doc: FnDoc = .{
     .row_varying = false,
     .signature = "DATEDIFF(d1, d2)",
     .example = "DATEDIFF('2024-01-01', '2024-12-31')",
-    .description = "Calendar days from `d2` to `d1`: positive when `d1` is later. Both arguments are YYYY-MM-DD strings.",
+    .description = "Calendar days from `d2` to `d1`: positive when `d1` is later. A timestamp argument is read for its date; the time half is ignored.",
     .args = &.{
         .{ .name = "d1", .kind = .string },
         .{ .name = "d2", .kind = .string },
@@ -3490,7 +3501,7 @@ const workday_doc: FnDoc = .{
     .row_varying = false,
     .signature = "WORKDAY(d, n)",
     .example = "WORKDAY('2024-01-01', 10)",
-    .description = "Add `n` business days to date `d` (YYYY-MM-DD), skipping Saturdays and Sundays. Negative `n` subtracts, and `n = 0` returns `d` unchanged. Correct for T+2 settlement math; does NOT account for exchange holidays.",
+    .description = "Add `n` business days to date `d`, skipping Saturdays and Sundays. Negative `n` subtracts, and `n = 0` returns `d` unchanged. Correct for T+2 settlement math; does NOT account for exchange holidays.",
     .args = &.{
         .{ .name = "d", .kind = .string },
         .{ .name = "n", .kind = .number },
@@ -3525,7 +3536,7 @@ const year_doc: FnDoc = .{
     .row_varying = false,
     .signature = "YEAR(d)",
     .example = "YEAR('2024-03-15')",
-    .description = "Year component of date `d` (YYYY-MM-DD) as a number.",
+    .description = "Year component of date `d` as a number.",
     .args = &.{.{ .name = "d", .kind = .string }},
     .min_args = 1,
     .max_args = 1,
@@ -3533,10 +3544,7 @@ const year_doc: FnDoc = .{
 fn builtinYear(p: *Parser, args: []Value) !Value {
     const s = switch (args[0]) { .string => |v| v, else => return error.StringExpected };
     if (s.len == 0) return Value{ .string = "" };
-    const parts = parseYmd(s) catch {
-        p.setDetail("invalid date '{s}': expected YYYY-MM-DD", .{s});
-        return error.InvalidDate;
-    };
+    const parts = try parseDatePartsArg(p, s);
     return Value{ .decimal = try fromIntChecked(parts.year) };
 }
 fn adaptYear(p: *Parser, args: []Value) anyerror!Value {
@@ -3550,7 +3558,7 @@ const month_doc: FnDoc = .{
     .row_varying = false,
     .signature = "MONTH(d)",
     .example = "MONTH('2024-03-15')",
-    .description = "Month component of date `d` (YYYY-MM-DD) as a number, 1-12.",
+    .description = "Month component of date `d` as a number, 1-12.",
     .args = &.{.{ .name = "d", .kind = .string }},
     .min_args = 1,
     .max_args = 1,
@@ -3558,10 +3566,7 @@ const month_doc: FnDoc = .{
 fn builtinMonth(p: *Parser, args: []Value) !Value {
     const s = switch (args[0]) { .string => |v| v, else => return error.StringExpected };
     if (s.len == 0) return Value{ .string = "" };
-    const parts = parseYmd(s) catch {
-        p.setDetail("invalid date '{s}': expected YYYY-MM-DD", .{s});
-        return error.InvalidDate;
-    };
+    const parts = try parseDatePartsArg(p, s);
     return Value{ .decimal = try fromIntChecked(parts.month) };
 }
 fn adaptMonth(p: *Parser, args: []Value) anyerror!Value {
@@ -3575,7 +3580,7 @@ const day_doc: FnDoc = .{
     .row_varying = false,
     .signature = "DAY(d)",
     .example = "DAY('2024-03-15')",
-    .description = "Day-of-month component of date `d` (YYYY-MM-DD) as a number, 1-31.",
+    .description = "Day-of-month component of date `d` as a number, 1-31.",
     .args = &.{.{ .name = "d", .kind = .string }},
     .min_args = 1,
     .max_args = 1,
@@ -3583,10 +3588,7 @@ const day_doc: FnDoc = .{
 fn builtinDay(p: *Parser, args: []Value) !Value {
     const s = switch (args[0]) { .string => |v| v, else => return error.StringExpected };
     if (s.len == 0) return Value{ .string = "" };
-    const parts = parseYmd(s) catch {
-        p.setDetail("invalid date '{s}': expected YYYY-MM-DD", .{s});
-        return error.InvalidDate;
-    };
+    const parts = try parseDatePartsArg(p, s);
     return Value{ .decimal = try fromIntChecked(parts.day) };
 }
 fn adaptDay(p: *Parser, args: []Value) anyerror!Value {
@@ -3600,7 +3602,7 @@ const weekday_doc: FnDoc = .{
     .row_varying = false,
     .signature = "WEEKDAY(d)",
     .example = "WEEKDAY('2024-03-15')",
-    .description = "ISO day-of-week for date `d` (YYYY-MM-DD): Monday=1 … Sunday=7. Useful for weekend-trade detection: `WEEKDAY([Date]) > 5`.",
+    .description = "ISO day-of-week for date `d`: Monday=1 … Sunday=7. Useful for weekend-trade detection: `WEEKDAY([Date]) > 5`.",
     .args = &.{.{ .name = "d", .kind = .string }},
     .min_args = 1,
     .max_args = 1,
@@ -3622,7 +3624,7 @@ const quarter_doc: FnDoc = .{
     .row_varying = false,
     .signature = "QUARTER(d)",
     .example = "QUARTER('2024-08-15')",
-    .description = "Calendar quarter of date `d` (YYYY-MM-DD) as a number, 1-4 (Jan-Mar = 1). Quarters are calendar-aligned; a fiscal year starting in another month needs its own arithmetic, e.g. an April start is `QUARTER(DATEADD([Date], -90))`.",
+    .description = "Calendar quarter of date `d` as a number, 1-4 (Jan-Mar = 1). Quarters are calendar-aligned; a fiscal year starting in another month needs its own arithmetic, e.g. an April start is `QUARTER(DATEADD([Date], -90))`.",
     .args = &.{.{ .name = "d", .kind = .string }},
     .min_args = 1,
     .max_args = 1,
@@ -3630,10 +3632,7 @@ const quarter_doc: FnDoc = .{
 fn builtinQuarter(p: *Parser, args: []Value) !Value {
     const s = switch (args[0]) { .string => |v| v, else => return error.StringExpected };
     if (s.len == 0) return Value{ .string = "" };
-    const parts = parseYmd(s) catch {
-        p.setDetail("invalid date '{s}': expected YYYY-MM-DD", .{s});
-        return error.InvalidDate;
-    };
+    const parts = try parseDatePartsArg(p, s);
     return Value{ .decimal = try fromIntChecked((parts.month + 2) / 3) };
 }
 fn adaptQuarter(p: *Parser, args: []Value) anyerror!Value {
@@ -3666,7 +3665,7 @@ const weeknum_doc: FnDoc = .{
     .row_varying = false,
     .signature = "WEEKNUM(d)",
     .example = "WEEKNUM('2024-03-15')",
-    .description = "ISO 8601 week number of date `d` (YYYY-MM-DD), 1-53. Weeks start on Monday and week 1 is the one containing the first Thursday of the year, so the turn of the year crosses over: 2021-01-01 is week 53 (of 2020) and 2024-12-30 is week 1 (of 2025). The number alone is therefore not sortable across years — pair it with the week's own year, `YEAR(DATEADD([Date], 4 - WEEKDAY([Date])))`.",
+    .description = "ISO 8601 week number of date `d`, 1-53. Weeks start on Monday and week 1 is the one containing the first Thursday of the year, so the turn of the year crosses over: 2021-01-01 is week 53 (of 2020) and 2024-12-30 is week 1 (of 2025). The number alone is therefore not sortable across years — pair it with the week's own year, `YEAR(DATEADD([Date], 4 - WEEKDAY([Date])))`.",
     .args = &.{.{ .name = "d", .kind = .string }},
     .min_args = 1,
     .max_args = 1,
@@ -3682,25 +3681,13 @@ fn adaptWeeknum(p: *Parser, args: []Value) anyerror!Value {
 }
 
 // ── HOUR / MINUTE / SECOND ──────────────────────────────────────────────
-/// Parse arg[0] as a datetime and return its parts, or raise InvalidDate with a
-/// clickable diagnostic. Accepts exactly the shapes `parseTzDatetime` does —
-/// the same canonical set the TZ builtins consume, and the one `TO_UTC` emits —
-/// so a timestamp that works with TZ_CONVERT works here too. A bare date is
-/// accepted and reads as midnight, which is what makes `HOUR([Date])` answer 0
-/// instead of erroring on a date-only column.
-fn parseDatetimeArg(p: *Parser, s: []const u8) !DateParts {
-    return parseTzDatetime(s) orelse {
-        p.setDetail("invalid datetime '{s}': expected YYYY-MM-DD hh:mm:ss (or YYYY-MM-DD)", .{s});
-        return error.InvalidDate;
-    };
-}
 const hour_doc: FnDoc = .{
     .name = "HOUR",
     .category = .date,
     .row_varying = false,
     .signature = "HOUR(t)",
     .example = "HOUR('2024-03-15 14:23:01')",
-    .description = "Hour of datetime `t` as a number, 0-23 on a 24-hour clock. `t` is `YYYY-MM-DD hh:mm:ss`, `YYYY-MM-DDThh:mm:ss` or a bare `YYYY-MM-DD` (which reads as midnight, so a date-only column answers 0). Any other layout has to go through DATE_CONVERT first.",
+    .description = "Hour of datetime `t` as a number, 0-23 on a 24-hour clock. A bare date reads as midnight, so a date-only column answers 0; any other layout has to go through DATE_CONVERT first.",
     .args = &.{.{ .name = "t", .kind = .string }},
     .min_args = 1,
     .max_args = 1,
@@ -3708,7 +3695,7 @@ const hour_doc: FnDoc = .{
 fn builtinHour(p: *Parser, args: []Value) !Value {
     const s = switch (args[0]) { .string => |v| v, else => return error.StringExpected };
     if (s.len == 0) return Value{ .string = "" };
-    return Value{ .decimal = try fromIntChecked((try parseDatetimeArg(p, s)).hour) };
+    return Value{ .decimal = try fromIntChecked((try parseDatePartsArg(p, s)).hour) };
 }
 fn adaptHour(p: *Parser, args: []Value) anyerror!Value {
     return builtinHour(p, args);
@@ -3720,7 +3707,7 @@ const minute_doc: FnDoc = .{
     .row_varying = false,
     .signature = "MINUTE(t)",
     .example = "MINUTE('2024-03-15 14:23:01')",
-    .description = "Minute of datetime `t` as a number, 0-59. Accepts the same layouts as HOUR().",
+    .description = "Minute of datetime `t` as a number, 0-59.",
     .args = &.{.{ .name = "t", .kind = .string }},
     .min_args = 1,
     .max_args = 1,
@@ -3728,7 +3715,7 @@ const minute_doc: FnDoc = .{
 fn builtinMinute(p: *Parser, args: []Value) !Value {
     const s = switch (args[0]) { .string => |v| v, else => return error.StringExpected };
     if (s.len == 0) return Value{ .string = "" };
-    return Value{ .decimal = try fromIntChecked((try parseDatetimeArg(p, s)).minute) };
+    return Value{ .decimal = try fromIntChecked((try parseDatePartsArg(p, s)).minute) };
 }
 fn adaptMinute(p: *Parser, args: []Value) anyerror!Value {
     return builtinMinute(p, args);
@@ -3740,7 +3727,7 @@ const second_doc: FnDoc = .{
     .row_varying = false,
     .signature = "SECOND(t)",
     .example = "SECOND('2024-03-15 14:23:01')",
-    .description = "Second of datetime `t` as a number, 0-59. Accepts the same layouts as HOUR().",
+    .description = "Second of datetime `t` as a number, 0-59.",
     .args = &.{.{ .name = "t", .kind = .string }},
     .min_args = 1,
     .max_args = 1,
@@ -3748,7 +3735,7 @@ const second_doc: FnDoc = .{
 fn builtinSecond(p: *Parser, args: []Value) !Value {
     const s = switch (args[0]) { .string => |v| v, else => return error.StringExpected };
     if (s.len == 0) return Value{ .string = "" };
-    return Value{ .decimal = try fromIntChecked((try parseDatetimeArg(p, s)).second) };
+    return Value{ .decimal = try fromIntChecked((try parseDatePartsArg(p, s)).second) };
 }
 fn adaptSecond(p: *Parser, args: []Value) anyerror!Value {
     return builtinSecond(p, args);
@@ -3761,7 +3748,7 @@ const eomonth_doc: FnDoc = .{
     .row_varying = false,
     .signature = "EOMONTH(d)",
     .example = "EOMONTH('2024-02-10')",
-    .description = "Last calendar day of the month containing date `d` (YYYY-MM-DD), as YYYY-MM-DD. Useful for snapping coupon/dividend dates and month-end reporting.",
+    .description = "Last calendar day of the month containing date `d`, as `YYYY-MM-DD`. Useful for snapping coupon/dividend dates and month-end reporting.",
     .args = &.{.{ .name = "d", .kind = .string }},
     .min_args = 1,
     .max_args = 1,
@@ -3769,10 +3756,7 @@ const eomonth_doc: FnDoc = .{
 fn builtinEomonth(p: *Parser, args: []Value) !Value {
     const s = switch (args[0]) { .string => |v| v, else => return error.StringExpected };
     if (s.len == 0) return Value{ .string = "" };
-    const parts = parseYmd(s) catch {
-        p.setDetail("invalid date '{s}': expected YYYY-MM-DD", .{s});
-        return error.InvalidDate;
-    };
+    const parts = try parseDatePartsArg(p, s);
     var next_y = parts.year;
     var next_m = parts.month + 1;
     if (next_m > 12) {
@@ -3823,7 +3807,7 @@ const is_date_doc: FnDoc = .{
     .row_varying = false,
     .signature = "IS_DATE(d [, format])",
     .example = "IS_DATE('31.12.2024', 'DD.MM.YYYY')",
-    .description = "Whether `d` is a readable date: \"true\" or \"false\", never an error. With one argument the test is the canonical `YYYY-MM-DD` — exactly what YEAR/DATEADD/WEEKDAY accept — so it answers \"will the date builtins work on this row\". With a `format` it answers the same question for DATE_CONVERT, using the same tokens and the same tolerance for 4-letter month abbreviations. An empty value is \"false\", not an error, so a blank cell reads as \"no date\" rather than a bad one.",
+    .description = "Whether `d` is a readable date: \"true\" or \"false\", never an error. With one argument it tests the shapes every date and time function reads, so it answers \"will they work on this row\". With a `format` it answers the same question for DATE_CONVERT, using the same tokens and the same tolerance for 4-letter month abbreviations. An empty value is \"false\", not an error, so a blank cell reads as \"no date\" rather than a bad one.",
     .args = &.{
         .{ .name = "d", .kind = .string },
         .{ .name = "format", .kind = .date_format },
@@ -3839,8 +3823,7 @@ fn builtinIsDate(p: *Parser, args: []Value) !Value {
     };
     if (s.len == 0) return Value{ .boolean = false };
     if (args.len < 2) {
-        _ = parseYmd(s) catch return Value{ .boolean = false };
-        return Value{ .boolean = true };
+        return Value{ .boolean = parseTzDatetime(s) != null };
     }
     const fmt = switch (args[1]) { .string => |v| v, else => return error.StringExpected };
     // Mirror DATE_CONVERT's MMM pre-processing exactly: without it IS_DATE would
@@ -4547,14 +4530,58 @@ fn adaptIsNumeric(_: *Parser, args: []Value) anyerror!Value {
 // Canonical output shape for the converting builtins.
 const TZ_CANON_DT = "YYYY-MM-DD hh:mm:ss";
 
-/// Parse a datetime arg for the zone builtins: canonical `YYYY-MM-DD hh:mm:ss`,
-/// the `T`-separated ISO variant, or a bare `YYYY-MM-DD`. Null on failure.
+/// The one date/datetime reader every calendar and zone builtin shares:
+/// canonical `YYYY-MM-DD hh:mm:ss`, the `T`-separated ISO variant, or a bare
+/// `YYYY-MM-DD` (midnight). An ISO tail — fractional seconds, `Z`, `±HH:MM` —
+/// is accepted and ignored, because the timestamps real exports carry it and
+/// every consumer here reads wall-clock time. Null on failure.
+///
+/// **It matches the whole string.** `datefmt.parse` stops when its format runs
+/// out and ignores whatever follows, which used to make `2024-03-15 nonsense`
+/// read as midnight — a junk cell answering like a real one, the failure mode
+/// the engine works hardest to avoid elsewhere. The tail is therefore checked
+/// explicitly rather than left to the format's appetite.
+///
+/// The accepted tails are not arbitrary: `NOW()` emits `…THH:MM:SSZ`, so a
+/// reader that took only the bare 19-character forms would refuse bxp's own
+/// clock — `HOUR(NOW())` is a test.
 fn parseTzDatetime(input: []const u8) ?datefmt.DateParts {
-    if (input.len == 0) return null;
-    if (datefmt.parse(input, "YYYY-MM-DD hh:mm:ss")) |p| return p else |_| {}
-    if (datefmt.parse(input, "YYYY-MM-DDThh:mm:ss")) |p| return p else |_| {}
-    if (datefmt.parse(input, "YYYY-MM-DD")) |p| return p else |_| {}
-    return null;
+    // Bare date: the strict canonical reader, which range-checks month and day.
+    if (input.len == 10) return datefmt.parseIsoDate(input) catch null;
+    if (input.len < 19) return null;
+    const sep = input[10];
+    if (sep != ' ' and sep != 'T') return null;
+    const fmt = if (sep == 'T') "YYYY-MM-DDThh:mm:ss" else "YYYY-MM-DD hh:mm:ss";
+    const parts = datefmt.parse(input[0..19], fmt) catch return null;
+    if (!datefmt.validate(parts)) return null;
+    if (!isIsoDatetimeTail(input[19..])) return null;
+    return parts;
+}
+
+/// Whether what follows `YYYY-MM-DDThh:mm:ss` is a recognised ISO tail rather
+/// than leftover junk: nothing, fractional seconds, a zone designator
+/// (`Z` / `±HH:MM`), or fractional seconds followed by one.
+///
+/// The offset is validated but discarded. Every builtin reading through here
+/// treats its input as wall-clock time in a zone named by another argument;
+/// honouring an embedded offset as well would silently double-apply it. The
+/// builtin that does read an offset is `TO_UTC`, which takes an explicit format
+/// with the `ZZ` token and never comes through this path.
+fn isIsoDatetimeTail(tail: []const u8) bool {
+    var rest = tail;
+    if (rest.len > 0 and rest[0] == '.') {
+        var i: usize = 1;
+        while (i < rest.len and std.ascii.isDigit(rest[i])) i += 1;
+        if (i == 1) return false; // a decimal point with no digits behind it
+        rest = rest[i..];
+    }
+    if (rest.len == 0) return true;
+    if (rest.len == 1 and (rest[0] == 'Z' or rest[0] == 'z')) return true;
+    if (rest.len == 6 and (rest[0] == '+' or rest[0] == '-') and rest[3] == ':') {
+        return std.ascii.isDigit(rest[1]) and std.ascii.isDigit(rest[2]) and
+            std.ascii.isDigit(rest[4]) and std.ascii.isDigit(rest[5]);
+    }
+    return false;
 }
 
 /// Resolve a zone arg — an IANA id or a fixed `±HH:MM` / `Z` / `UTC` offset —
@@ -6671,6 +6698,64 @@ test "eval: QUARTER buckets months, WEEKNUM follows the ISO Thursday rule" {
     try testing.expectEqualStrings("52", try evalString("WEEKNUM('2023-01-01')", &ctx));
     // …and 2024-12-30 (Monday) already opens 2025's week 1.
     try testing.expectEqualStrings("1", try evalString("WEEKNUM('2024-12-30')", &ctx));
+}
+
+test "eval: one reader for the whole family — a timestamp column answers everywhere" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    // The asymmetry this closed: the time functions took a timestamp and the
+    // date functions did not, so one column could not be read by both.
+    try testing.expectEqualStrings("14", try evalString("HOUR('2024-03-15 14:23:01')", &ctx));
+    try testing.expectEqualStrings("3",  try evalString("MONTH('2024-03-15 14:23:01')", &ctx));
+    try testing.expectEqualStrings("2024", try evalString("YEAR('2024-03-15T14:23:01')", &ctx));
+    try testing.expectEqualStrings("1",  try evalString("QUARTER('2024-03-15 14:23:01')", &ctx));
+    try testing.expectEqualStrings("5",  try evalString("WEEKDAY('2024-03-15 14:23:01')", &ctx));
+    try testing.expectEqualStrings("11", try evalString("WEEKNUM('2024-03-15 14:23:01')", &ctx));
+    // Calendar arithmetic reads the date half and returns a date.
+    try testing.expectEqualStrings("2024-03-22", try evalString("DATEADD('2024-03-15 14:23:01', 7)", &ctx));
+    try testing.expectEqualStrings("2024-03-31", try evalString("EOMONTH('2024-03-15T14:23:01')", &ctx));
+    try testing.expectEqualStrings("1", try evalString("DATEDIFF('2024-03-15 23:00:00', '2024-03-14 01:00:00')", &ctx));
+    // …and IS_DATE answers for that same set, or it would be lying about it.
+    try testing.expectEqualStrings("true", try evalString("IS_DATE('2024-03-15 14:23:01')", &ctx));
+
+    // NOW() emits a trailing Z, so bxp's own clock has to be readable — this is
+    // the case that rules out a plain "ten or nineteen characters" test.
+    try testing.expectEqualStrings("2026", try evalString("LEFT(NOW(), 4)", &ctx));
+    _ = try evalString("HOUR(NOW())", &ctx);
+    _ = try evalString("YEAR(NOW())", &ctx);
+    // The rest of the ISO tail: fractional seconds, a zone designator, both.
+    try testing.expectEqualStrings("14", try evalString("HOUR('2024-03-15T14:23:01Z')", &ctx));
+    try testing.expectEqualStrings("14", try evalString("HOUR('2024-03-15T14:23:01.123')", &ctx));
+    try testing.expectEqualStrings("14", try evalString("HOUR('2024-03-15T14:23:01.123456Z')", &ctx));
+    try testing.expectEqualStrings("14", try evalString("HOUR('2024-03-15T14:23:01+02:00')", &ctx));
+    try testing.expectEqualStrings("3",  try evalString("MONTH('2024-03-15 14:23:01.5-05:00')", &ctx));
+}
+
+test "eval: the date reader matches the whole string, so junk cannot read as midnight" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    // Before this, `datefmt.parse` stopped when its format ran out and ignored
+    // the rest, so all of these answered as if they were midnight on a real day.
+    try testing.expectError(error.InvalidDate, eval("HOUR('2024-03-15 nonsense')", &ctx));
+    try testing.expectError(error.InvalidDate, eval("MONTH('2024-03-15 nonsense')", &ctx));
+    try testing.expectError(error.InvalidDate, eval("HOUR('2024-03-15T14:23:01 and more')", &ctx));
+    try testing.expectError(error.InvalidDate, eval("HOUR('2024-03-15T14:23:01.')", &ctx));
+    try testing.expectError(error.InvalidDate, eval("HOUR('2024-03-15T14:23:01+2:00')", &ctx));
+    try testing.expectError(error.InvalidDate, eval("HOUR('2024-03-15X14:23:01')", &ctx));
+    // Field ranges are checked on the time half too, not only the date.
+    try testing.expectError(error.InvalidDate, eval("HOUR('2024-03-15 25:00:00')", &ctx));
+    try testing.expectError(error.InvalidDate, eval("MONTH('2024-13-15 10:00:00')", &ctx));
+    // IS_DATE reports the same verdict without raising.
+    try testing.expectEqualStrings("false", try evalString("IS_DATE('2024-03-15 nonsense')", &ctx));
+    // The zone builtins share the reader; their contract is "" rather than loud.
+    try testing.expectEqualStrings("", try evalString("TZ_OFFSET('2024-03-15 nonsense', 'Europe/Prague')", &ctx));
+    try testing.expectEqualStrings("+01:00", try evalString("TZ_OFFSET('2024-03-15 10:00:00', 'Europe/Prague')", &ctx));
 }
 
 test "eval: HOUR / MINUTE / SECOND read the time half of a datetime" {
