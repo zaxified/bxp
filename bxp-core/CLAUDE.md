@@ -164,11 +164,17 @@ Expression evaluator for `input_schema` and `row_rules` in bxp-cli.json.
   fractional digits): exact `+ −`, half-away-from-zero `× ÷` and `ROUND`. Replaces
   the former `f80` + `{d:.8}` print cap, so `0.02 + 0.08` is exactly `0.10`.
   Passthrough strings (coords, long IDs) bypass the core to keep full precision.
+- `POWER` / `SQRT` are the only builtins that leave the fixed-point core: an
+  exact power outgrows i128 long before its exponent looks unreasonable, and a
+  root is irrational in the general case, so both compute in the module's
+  arbitrary-precision `BigDecimal` and round back into scale 12 exactly once.
+  Still float-free end to end — `BigDecimal.sqrt` is correctly rounded via an
+  exact integer comparison, not Newton iteration.
 - `DATE_CONVERT()` date/time parsing and formatting is handled in-process by
   the zig-libs `datefmt` module (named import; the offset-table-free half of
   the date/TZ pair — no runtime dependency either way). Pre-1970 dates are
   fully supported (pure parse → format reshuffle, no epoch round-trip).
-- Unit tests inline (150 test cases).
+- Unit tests inline (162 test cases).
 
 **Built-in functions:** IF, CASE, IFERROR, ABS, DATE_CONVERT, PRICE_VALUE,
 PRICE_CURRENCY, REMAP, LOOKUP, SPLIT_PART, CONTAINS, REGEX_MATCH,
@@ -176,7 +182,8 @@ REGEX_EXTRACT, REPLACE, TRIM, ROUND,
 FLOOR, CEILING, MOD, NOW, RAND, FILENAME, RECORD_NUM, SHEET_NAME, COALESCE,
 FIELDS, UPPER, LOWER, UNACCENT, LEFT, RIGHT, SUBSTR, LPAD, RPAD, POSITION,
 PROPER, STARTS_WITH, ENDS_WITH, NULLIF, IN, ISEMPTY, LEN, GREATEST, LEAST,
-DATEADD, DATEDIFF, WORKDAY, YEAR, MONTH, DAY, WEEKDAY, EOMONTH, NTH_DOW,
+DATEADD, DATEDIFF, WORKDAY, YEAR, MONTH, DAY, WEEKDAY, QUARTER, WEEKNUM,
+HOUR, MINUTE, SECOND, EOMONTH, NTH_DOW, IS_DATE, IS_NUMERIC, POWER, SQRT,
 TO_UTC, TZ_OFFSET, TZ_CONVERT, IS_DST.
 IF/CASE/IFERROR are lazy (parse their own arg lists; only the selected /
 non-erroring branch is evaluated).

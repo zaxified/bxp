@@ -44,6 +44,13 @@ const tz = @import("tz");
 const unicode = @import("unicode.zig");
 const encoding = @import("encoding");
 const Decimal = @import("decimal").Decimal;
+/// Arbitrary-precision sibling of `Decimal`, used by POWER / SQRT only. The
+/// fixed-point core deliberately carries no `pow`/`sqrt`: an exact power grows
+/// past i128 long before its exponent looks unreasonable, and a root is
+/// irrational in the general case. Both are computed in this arbitrary-precision
+/// form and rounded back into the 12-digit scale exactly once, so neither
+/// builtin introduces a float — see the `decimal` module's own contract.
+const BigDecimal = @import("decimal").BigDecimal;
 // The regex module root file IS the Regex type (`const Regex = @This()`), so the
 // import binds directly to the type — `Regex.compile`, `Regex.Match`, etc.
 const Regex = @import("regex");
@@ -568,9 +575,9 @@ pub const StaticCheckResult = struct {
     /// integer plus its source span for editor highlighting.
     split_part: ?BadSplitPart = null,
     /// `date_format` violation — bad format string literal.
-    /// Today populated by DATE_CONVERT args[1]/[2]; carries the
-    /// offending format text + 0-based offset of the bad character
-    /// plus the absolute source span of the literal token.
+    /// Today populated by DATE_CONVERT args[1]/[2] and IS_DATE arg[1];
+    /// carries the offending format text + 0-based offset of the bad
+    /// character plus the absolute source span of the literal token.
     date_format: ?BadDateFormat = null,
 };
 
@@ -1643,7 +1650,8 @@ pub const ArgKind = union(enum) {
     /// GUI wraps the autocomplete placeholder in quotes.
     literal_string,
     /// Bare string literal containing a datefmt token pattern. Drives
-    /// `expr.BadDateFormat` diagnostics for DATE_CONVERT arg[1]/arg[2].
+    /// `expr.BadDateFormat` diagnostics for DATE_CONVERT arg[1]/arg[2]
+    /// and IS_DATE arg[1].
     date_format,
     /// Bare string literal naming a pre_pass block. Drives autocomplete
     /// in bxp-gui (no static check today — runtime-resolved via
@@ -2693,6 +2701,107 @@ fn adaptCeiling(_: *Parser, args: []Value) anyerror!Value {
     return builtinCeiling(args);
 }
 
+// ── POWER ───────────────────────────────────────────────────────────────
+/// Largest exponent POWER will attempt. The exact result of `b^n` carries
+/// `precision(b) × n` digits, so the exponent — not the base — is what decides
+/// how much work a single cell costs. Any base of magnitude ≥ 2 leaves the
+/// fixed-point range by n ≈ 88, so this bound only ever truncates work that was
+/// going to overflow anyway; it exists to keep a typo'd `POWER([x], 1e9)` from
+/// materialising a billion-digit intermediate before finding that out.
+const POWER_MAX_EXPONENT: i128 = 1024;
+const power_doc: FnDoc = .{
+    .name = "POWER",
+    .category = .number,
+    .row_varying = false,
+    .signature = "POWER(b, n)",
+    .example = "POWER(1.05, 10)",
+    .description = "`b` raised to the whole-number power `n`, computed exactly (`POWER(1.1, 2)` is `1.21`, not `1.2100000001`) and then rounded into the 12-digit fixed-point scale. `n` must be a whole number ≥ 0 and ≤ 1024 — a fractional or negative `n` returns \"\" rather than an approximation, because neither is exact on the decimal core (for a square root use SQRT; for a negative power divide: `1 / POWER(b, n)`). A result too large for the numeric range is a loud `NumberOverflow` that IFERROR can catch.",
+    .args = &.{
+        .{ .name = "b", .kind = .number },
+        .{ .name = "n", .kind = .number },
+    },
+    .min_args = 2,
+    .max_args = 2,
+};
+fn builtinPower(p: *Parser, args: []Value) !Value {
+    const base = try args[0].toNumber();
+    const exp = try args[1].toNumber();
+    // Whole-number exponents only: compare the value against its own truncation
+    // rather than inspecting digits, so `2.0` counts as whole and `2.5` does not.
+    const n = exp.trunc();
+    if ((try fromIntChecked(n)).raw != exp.raw) return Value{ .string = "" };
+    if (n < 0 or n > POWER_MAX_EXPONENT) return Value{ .string = "" };
+
+    const alloc = p.ctx.alloc;
+    var b = try base.toBigDecimal(alloc);
+    defer b.deinit();
+    var r = BigDecimal.pow(alloc, b, @intCast(n)) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        // NegativeExponent is unreachable (guarded above); ResultTooLarge means
+        // the exact answer does not fit the numeric range, which is the same
+        // thing `*` reports when it overflows.
+        else => return error.NumberOverflow,
+    };
+    defer r.deinit();
+    return Value{ .decimal = Decimal.fromBigDecimal(alloc, r, .half_up) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.NumberOverflow,
+    } };
+}
+fn adaptPower(p: *Parser, args: []Value) anyerror!Value {
+    return builtinPower(p, args) catch |err| {
+        if (args.len >= 1) switch (args[0]) { .string => |s| p.setNotANumber(s), else => {} };
+        return err;
+    };
+}
+
+// ── SQRT ────────────────────────────────────────────────────────────────
+/// Significant digits computed for a square root before it is rounded into the
+/// fixed-point scale. The largest representable value is ~1.7e26, whose root
+/// needs 14 integer digits; 12 fractional digits on top of that make 26 the
+/// most any answer can use. The margin to 34 is what keeps the two roundings
+/// (to `SQRT_PRECISION`, then to scale 12) from disagreeing: an inexact root
+/// would have to sit within 1e-22 of a scale-12 tie to notice, and an exact
+/// root is returned exactly by the module rather than rounded at all.
+const SQRT_PRECISION: u32 = 34;
+const sqrt_doc: FnDoc = .{
+    .name = "SQRT",
+    .category = .number,
+    .row_varying = false,
+    .signature = "SQRT(x)",
+    .example = "SQRT(2)",
+    .description = "Square root of `x`, correctly rounded to the 12-digit fixed-point scale (`SQRT(2)` = `1.414213562373`). Exact when the root is exact (`SQRT(6.25)` = `2.5`). A negative `x` returns \"\" — the root is undefined over the reals, and bxp has no imaginary type — so guard with `IF([x] < 0, …)` if a negative input is meaningful in your data.",
+    .args = &.{.{ .name = "x", .kind = .number }},
+    .min_args = 1,
+    .max_args = 1,
+};
+fn builtinSqrt(p: *Parser, args: []Value) !Value {
+    const x = try args[0].toNumber();
+    if (x.raw < 0) return Value{ .string = "" };
+    if (x.isZero()) return Value{ .decimal = Decimal.zero };
+
+    const alloc = p.ctx.alloc;
+    var b = try x.toBigDecimal(alloc);
+    defer b.deinit();
+    var r = BigDecimal.sqrt(alloc, b, SQRT_PRECISION, .half_even) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        // NegativeOperand / PrecisionTooLarge are both guarded above
+        // (sign check, comptime precision), so this arm is defence in depth.
+        else => return error.NumberOverflow,
+    };
+    defer r.deinit();
+    return Value{ .decimal = Decimal.fromBigDecimal(alloc, r, .half_up) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.NumberOverflow,
+    } };
+}
+fn adaptSqrt(p: *Parser, args: []Value) anyerror!Value {
+    return builtinSqrt(p, args) catch |err| {
+        if (args.len >= 1) switch (args[0]) { .string => |s| p.setNotANumber(s), else => {} };
+        return err;
+    };
+}
+
 // ── RAND ────────────────────────────────────────────────────────────────
 /// Upper bound on RAND(n) digit count. Matches MySQL's `DECIMAL(M,…)` max
 /// precision (M ≤ 65) — the most widely-recognised "max digits" limit across
@@ -3455,6 +3564,145 @@ fn adaptWeekday(p: *Parser, args: []Value) anyerror!Value {
     return builtinWeekday(p, args);
 }
 
+// ── QUARTER ─────────────────────────────────────────────────────────────
+const quarter_doc: FnDoc = .{
+    .name = "QUARTER",
+    .category = .date,
+    .row_varying = false,
+    .signature = "QUARTER(d)",
+    .example = "QUARTER('2024-08-15')",
+    .description = "Calendar quarter of date `d` (YYYY-MM-DD) as a number, 1-4 (Jan-Mar = 1). Quarters are calendar-aligned; a fiscal year starting in another month needs its own arithmetic, e.g. an April start is `QUARTER(DATEADD([Date], -90))`.",
+    .args = &.{.{ .name = "d", .kind = .string }},
+    .min_args = 1,
+    .max_args = 1,
+};
+fn builtinQuarter(p: *Parser, args: []Value) !Value {
+    const s = switch (args[0]) { .string => |v| v, else => return error.StringExpected };
+    if (s.len == 0) return Value{ .string = "" };
+    const parts = parseYmd(s) catch {
+        p.setDetail("invalid date '{s}': expected YYYY-MM-DD", .{s});
+        return error.InvalidDate;
+    };
+    return Value{ .decimal = try fromIntChecked((parts.month + 2) / 3) };
+}
+fn adaptQuarter(p: *Parser, args: []Value) anyerror!Value {
+    return builtinQuarter(p, args);
+}
+
+// ── WEEKNUM ─────────────────────────────────────────────────────────────
+/// ISO 8601 week number for an epoch day, 1-53.
+///
+/// The rule is stated in terms of Thursdays, not Mondays: a week belongs to
+/// whichever year contains its Thursday. Stepping to this week's Thursday first
+/// therefore answers "which year's numbering am I in" and "how far into it" in
+/// one move, and needs no special case for the turn of the year — which is why
+/// the last days of December can legitimately come back as week 1, and the
+/// first days of January as week 52 or 53.
+///
+/// Local rather than upstream in `datefmt`: the module offers `isoWeekday` but
+/// no week number, and a week number without its ISO week-*year* is a bxp-level
+/// convenience (the pairing that makes it sortable) rather than a date
+/// primitive worth pushing upstream.
+fn isoWeekNumber(ep: i64) u32 {
+    const dow: i64 = @intCast(isoWeekday(ep));
+    const thursday = ep + (4 - dow);
+    const jan1 = ymdToEpochDay(epochDayToYmd(thursday).year, 1, 1);
+    return @intCast(@divFloor(thursday - jan1, 7) + 1);
+}
+const weeknum_doc: FnDoc = .{
+    .name = "WEEKNUM",
+    .category = .date,
+    .row_varying = false,
+    .signature = "WEEKNUM(d)",
+    .example = "WEEKNUM('2024-03-15')",
+    .description = "ISO 8601 week number of date `d` (YYYY-MM-DD), 1-53. Weeks start on Monday and week 1 is the one containing the first Thursday of the year, so the turn of the year crosses over: 2021-01-01 is week 53 (of 2020) and 2024-12-30 is week 1 (of 2025). The number alone is therefore not sortable across years — pair it with the week's own year, `YEAR(DATEADD([Date], 4 - WEEKDAY([Date])))`.",
+    .args = &.{.{ .name = "d", .kind = .string }},
+    .min_args = 1,
+    .max_args = 1,
+};
+fn builtinWeeknum(p: *Parser, args: []Value) !Value {
+    const s = switch (args[0]) { .string => |v| v, else => return error.StringExpected };
+    if (s.len == 0) return Value{ .string = "" };
+    const ep = try parseDateArg(p, s);
+    return Value{ .decimal = try fromIntChecked(isoWeekNumber(ep)) };
+}
+fn adaptWeeknum(p: *Parser, args: []Value) anyerror!Value {
+    return builtinWeeknum(p, args);
+}
+
+// ── HOUR / MINUTE / SECOND ──────────────────────────────────────────────
+/// Parse arg[0] as a datetime and return its parts, or raise InvalidDate with a
+/// clickable diagnostic. Accepts exactly the shapes `parseTzDatetime` does —
+/// the same canonical set the TZ builtins consume, and the one `TO_UTC` emits —
+/// so a timestamp that works with TZ_CONVERT works here too. A bare date is
+/// accepted and reads as midnight, which is what makes `HOUR([Date])` answer 0
+/// instead of erroring on a date-only column.
+fn parseDatetimeArg(p: *Parser, s: []const u8) !DateParts {
+    return parseTzDatetime(s) orelse {
+        p.setDetail("invalid datetime '{s}': expected YYYY-MM-DD hh:mm:ss (or YYYY-MM-DD)", .{s});
+        return error.InvalidDate;
+    };
+}
+const hour_doc: FnDoc = .{
+    .name = "HOUR",
+    .category = .date,
+    .row_varying = false,
+    .signature = "HOUR(t)",
+    .example = "HOUR('2024-03-15 14:23:01')",
+    .description = "Hour of datetime `t` as a number, 0-23 on a 24-hour clock. `t` is `YYYY-MM-DD hh:mm:ss`, `YYYY-MM-DDThh:mm:ss` or a bare `YYYY-MM-DD` (which reads as midnight, so a date-only column answers 0). Any other layout has to go through DATE_CONVERT first.",
+    .args = &.{.{ .name = "t", .kind = .string }},
+    .min_args = 1,
+    .max_args = 1,
+};
+fn builtinHour(p: *Parser, args: []Value) !Value {
+    const s = switch (args[0]) { .string => |v| v, else => return error.StringExpected };
+    if (s.len == 0) return Value{ .string = "" };
+    return Value{ .decimal = try fromIntChecked((try parseDatetimeArg(p, s)).hour) };
+}
+fn adaptHour(p: *Parser, args: []Value) anyerror!Value {
+    return builtinHour(p, args);
+}
+
+const minute_doc: FnDoc = .{
+    .name = "MINUTE",
+    .category = .date,
+    .row_varying = false,
+    .signature = "MINUTE(t)",
+    .example = "MINUTE('2024-03-15 14:23:01')",
+    .description = "Minute of datetime `t` as a number, 0-59. Accepts the same layouts as HOUR().",
+    .args = &.{.{ .name = "t", .kind = .string }},
+    .min_args = 1,
+    .max_args = 1,
+};
+fn builtinMinute(p: *Parser, args: []Value) !Value {
+    const s = switch (args[0]) { .string => |v| v, else => return error.StringExpected };
+    if (s.len == 0) return Value{ .string = "" };
+    return Value{ .decimal = try fromIntChecked((try parseDatetimeArg(p, s)).minute) };
+}
+fn adaptMinute(p: *Parser, args: []Value) anyerror!Value {
+    return builtinMinute(p, args);
+}
+
+const second_doc: FnDoc = .{
+    .name = "SECOND",
+    .category = .date,
+    .row_varying = false,
+    .signature = "SECOND(t)",
+    .example = "SECOND('2024-03-15 14:23:01')",
+    .description = "Second of datetime `t` as a number, 0-59. Accepts the same layouts as HOUR().",
+    .args = &.{.{ .name = "t", .kind = .string }},
+    .min_args = 1,
+    .max_args = 1,
+};
+fn builtinSecond(p: *Parser, args: []Value) !Value {
+    const s = switch (args[0]) { .string => |v| v, else => return error.StringExpected };
+    if (s.len == 0) return Value{ .string = "" };
+    return Value{ .decimal = try fromIntChecked((try parseDatetimeArg(p, s)).second) };
+}
+fn adaptSecond(p: *Parser, args: []Value) anyerror!Value {
+    return builtinSecond(p, args);
+}
+
 // ── EOMONTH ─────────────────────────────────────────────────────────────
 const eomonth_doc: FnDoc = .{
     .name = "EOMONTH",
@@ -3515,6 +3763,44 @@ fn builtinNthDow(p: *Parser, args: []Value) !Value {
 }
 fn adaptNthDow(p: *Parser, args: []Value) anyerror!Value {
     return builtinNthDow(p, args);
+}
+
+// ── IS_DATE ─────────────────────────────────────────────────────────────
+const is_date_doc: FnDoc = .{
+    .name = "IS_DATE",
+    .category = .date,
+    .row_varying = false,
+    .signature = "IS_DATE(d [, format])",
+    .example = "IS_DATE('31.12.2024', 'DD.MM.YYYY')",
+    .description = "Whether `d` is a readable date: \"true\" or \"false\", never an error. With one argument the test is the canonical `YYYY-MM-DD` — exactly what YEAR/DATEADD/WEEKDAY accept — so it answers \"will the date builtins work on this row\". With a `format` it answers the same question for DATE_CONVERT, using the same tokens and the same tolerance for 4-letter month abbreviations. An empty value is \"false\", not an error, so a blank cell reads as \"no date\" rather than a bad one.",
+    .args = &.{
+        .{ .name = "d", .kind = .string },
+        .{ .name = "format", .kind = .date_format },
+    },
+    .min_args = 1,
+    .max_args = 2,
+};
+fn builtinIsDate(p: *Parser, args: []Value) !Value {
+    const s = switch (args[0]) {
+        .string => |v| v,
+        // A number or boolean is not a date string; say so instead of erroring.
+        else => return Value{ .boolean = false },
+    };
+    if (s.len == 0) return Value{ .boolean = false };
+    if (args.len < 2) {
+        _ = parseYmd(s) catch return Value{ .boolean = false };
+        return Value{ .boolean = true };
+    }
+    const fmt = switch (args[1]) { .string => |v| v, else => return error.StringExpected };
+    // Mirror DATE_CONVERT's MMM pre-processing exactly: without it IS_DATE would
+    // answer "false" for the 4-letter abbreviations ("Sept") that DATE_CONVERT
+    // goes on to parse successfully, and the guard would reject its own input.
+    const normalized = if (containsMMM(fmt)) try normalizeMonthAbbrev(s, p.ctx.alloc) else s;
+    _ = datefmt.parse(normalized, fmt) catch return Value{ .boolean = false };
+    return Value{ .boolean = true };
+}
+fn adaptIsDate(p: *Parser, args: []Value) anyerror!Value {
+    return builtinIsDate(p, args);
 }
 
 // ── LEN ─────────────────────────────────────────────────────────────────
@@ -4176,6 +4462,34 @@ fn adaptIsEmpty(_: *Parser, args: []Value) anyerror!Value {
     return builtinIsEmpty(args);
 }
 
+// ── IS_NUMERIC ──────────────────────────────────────────────────────────
+const is_numeric_doc: FnDoc = .{
+    .name = "IS_NUMERIC",
+    .category = .logic,
+    .row_varying = false,
+    .signature = "IS_NUMERIC(x)",
+    .description = "Whether `x` holds a number: \"true\" or \"false\", never an error. Deliberately stricter than arithmetic, which treats an empty cell and the junk tokens `nan` / `inf` as zero so one bad export row cannot break a whole column — IS_NUMERIC calls all three \"false\", which is how you find those rows instead of silently summing them as 0. Thousands grouping is accepted (`1,234.56`), and a field read through `[Column]` has already had `csv_decimal_separator_in` applied, so European input is judged after normalisation, not before.",
+    .example = "IS_NUMERIC('1,234.56')",
+    .args = &.{.{ .name = "x", .kind = .string }},
+    .min_args = 1,
+    .max_args = 1,
+};
+fn builtinIsNumeric(args: []Value) !Value {
+    const s = switch (args[0]) {
+        .decimal => return Value{ .boolean = true },
+        // A boolean coerces to 1/0 in arithmetic but is not itself a number,
+        // and reporting it as one would make IS_NUMERIC(ISEMPTY(x)) nonsense.
+        .boolean => return Value{ .boolean = false },
+        .string => |v| v,
+    };
+    if (s.len == 0 or isNonFiniteToken(s)) return Value{ .boolean = false };
+    if (Decimal.parse(s)) |_| return Value{ .boolean = true } else |_| {}
+    return Value{ .boolean = parseGroupedNumber(s, ',', '.') != null };
+}
+fn adaptIsNumeric(_: *Parser, args: []Value) anyerror!Value {
+    return builtinIsNumeric(args);
+}
+
 // ── TO_UTC / TZ_OFFSET / TZ_CONVERT / IS_DST ────────────────────────────
 // Timezone builtins over the zig-libs `tz` module's IANA offset tables
 // (pinned fetch dep — see build.zig.zon; the tables compile in, no runtime dep).
@@ -4353,6 +4667,8 @@ pub const builtins = [_]FnEntry{
     .{ .name = "ROUND",          .doc = round_doc,          .impl = adaptRound },
     .{ .name = "FLOOR",          .doc = floor_doc,          .impl = adaptFloor },
     .{ .name = "CEILING",        .doc = ceiling_doc,        .impl = adaptCeiling },
+    .{ .name = "POWER",          .doc = power_doc,          .impl = adaptPower },
+    .{ .name = "SQRT",           .doc = sqrt_doc,           .impl = adaptSqrt },
     .{ .name = "RAND",           .doc = rand_doc,           .impl = adaptRand },
     .{ .name = "COALESCE",       .doc = coalesce_doc,       .impl = adaptCoalesce },
     .{ .name = "DATE_CONVERT",   .doc = date_convert_doc,   .impl = adaptDateConvert },
@@ -4390,8 +4706,14 @@ pub const builtins = [_]FnEntry{
     .{ .name = "MONTH",          .doc = month_doc,          .impl = adaptMonth },
     .{ .name = "DAY",            .doc = day_doc,            .impl = adaptDay },
     .{ .name = "WEEKDAY",        .doc = weekday_doc,        .impl = adaptWeekday },
+    .{ .name = "QUARTER",        .doc = quarter_doc,        .impl = adaptQuarter },
+    .{ .name = "WEEKNUM",        .doc = weeknum_doc,        .impl = adaptWeeknum },
+    .{ .name = "HOUR",           .doc = hour_doc,           .impl = adaptHour },
+    .{ .name = "MINUTE",         .doc = minute_doc,         .impl = adaptMinute },
+    .{ .name = "SECOND",         .doc = second_doc,         .impl = adaptSecond },
     .{ .name = "EOMONTH",        .doc = eomonth_doc,        .impl = adaptEomonth },
     .{ .name = "NTH_DOW",        .doc = nth_dow_doc,        .impl = adaptNthDow },
+    .{ .name = "IS_DATE",        .doc = is_date_doc,        .impl = adaptIsDate },
     .{ .name = "FILENAME",       .doc = filename_doc,       .impl = adaptFilename },
     .{ .name = "RECORD_NUM",     .doc = record_num_doc,     .impl = adaptRecordNum },
     .{ .name = "SHEET_NAME",     .doc = sheet_name_doc,     .impl = adaptSheetName },
@@ -4401,6 +4723,7 @@ pub const builtins = [_]FnEntry{
     .{ .name = "PROPER",         .doc = proper_doc,         .impl = adaptProper },
     .{ .name = "MOD",            .doc = mod_doc,            .impl = adaptMod },
     .{ .name = "ISEMPTY",        .doc = isempty_doc,        .impl = adaptIsEmpty },
+    .{ .name = "IS_NUMERIC",     .doc = is_numeric_doc,     .impl = adaptIsNumeric },
 };
 
 /// Longest builtin name (PRICE_CURRENCY = 14). `evalCall` uppercases the call
@@ -6274,6 +6597,93 @@ test "eval: YEAR / MONTH / DAY / WEEKDAY extract components" {
     try testing.expectEqualStrings("7",    try evalString("WEEKDAY('2026-05-31')", &ctx));
 }
 
+test "eval: QUARTER buckets months, WEEKNUM follows the ISO Thursday rule" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    try testing.expectEqualStrings("1", try evalString("QUARTER('2024-01-01')", &ctx));
+    try testing.expectEqualStrings("1", try evalString("QUARTER('2024-03-31')", &ctx));
+    try testing.expectEqualStrings("2", try evalString("QUARTER('2024-04-01')", &ctx));
+    try testing.expectEqualStrings("4", try evalString("QUARTER('2024-12-31')", &ctx));
+
+    // 2024-01-01 was a Monday, so it opens week 1 of its own year.
+    try testing.expectEqualStrings("1", try evalString("WEEKNUM('2024-01-01')", &ctx));
+    try testing.expectEqualStrings("11", try evalString("WEEKNUM('2024-03-15')", &ctx));
+    // The year boundary is where the Thursday rule earns its keep — these three
+    // are exactly the cases a naive "days since Jan 1 / 7" would get wrong.
+    // 2021-01-01 (Friday) belongs to the last week of 2020, which had 53.
+    try testing.expectEqualStrings("53", try evalString("WEEKNUM('2021-01-01')", &ctx));
+    // 2023-01-01 (Sunday) closes 2022's week 52.
+    try testing.expectEqualStrings("52", try evalString("WEEKNUM('2023-01-01')", &ctx));
+    // …and 2024-12-30 (Monday) already opens 2025's week 1.
+    try testing.expectEqualStrings("1", try evalString("WEEKNUM('2024-12-30')", &ctx));
+}
+
+test "eval: HOUR / MINUTE / SECOND read the time half of a datetime" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    try testing.expectEqualStrings("14", try evalString("HOUR('2024-03-15 14:23:01')", &ctx));
+    try testing.expectEqualStrings("23", try evalString("MINUTE('2024-03-15 14:23:01')", &ctx));
+    try testing.expectEqualStrings("1",  try evalString("SECOND('2024-03-15 14:23:01')", &ctx));
+    // The `T` separator is the same canonical set the TZ builtins accept.
+    try testing.expectEqualStrings("14", try evalString("HOUR('2024-03-15T14:23:01')", &ctx));
+    // A date-only column reads as midnight rather than erroring.
+    try testing.expectEqualStrings("0", try evalString("HOUR('2024-03-15')", &ctx));
+    // Empty stays empty (the blank-field contract), malformed is loud.
+    try testing.expectEqualStrings("", try evalString("HOUR('')", &ctx));
+    try testing.expectError(error.InvalidDate, eval("HOUR('15.03.2024 14:23')", &ctx));
+    // …and what TO_UTC emits is what these consume — the round trip closes.
+    try testing.expectEqualStrings("12", try evalString(
+        "HOUR(TO_UTC('2024-03-15T14:23:01+02:00', 'YYYY-MM-DD[T]hh:mm:ssZZ'))", &ctx));
+}
+
+test "eval: IS_NUMERIC is stricter than arithmetic coercion" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    try testing.expectEqualStrings("true",  try evalString("IS_NUMERIC('1234')", &ctx));
+    try testing.expectEqualStrings("true",  try evalString("IS_NUMERIC('-3.5')", &ctx));
+    try testing.expectEqualStrings("true",  try evalString("IS_NUMERIC('1,234.56')", &ctx));
+    try testing.expectEqualStrings("true",  try evalString("IS_NUMERIC(1 + 1)", &ctx));
+    try testing.expectEqualStrings("false", try evalString("IS_NUMERIC('abc')", &ctx));
+    // The whole point: arithmetic reads these three as 0 so one bad row cannot
+    // break a column, which is exactly why you need a way to find them.
+    try testing.expectEqualStrings("0", try evalString("'' + 0", &ctx));
+    try testing.expectEqualStrings("0", try evalString("'nan' + 0", &ctx));
+    try testing.expectEqualStrings("false", try evalString("IS_NUMERIC('')", &ctx));
+    try testing.expectEqualStrings("false", try evalString("IS_NUMERIC('nan')", &ctx));
+    try testing.expectEqualStrings("false", try evalString("IS_NUMERIC('-inf')", &ctx));
+    // A boolean is not a number, even though it coerces to 1/0 in arithmetic.
+    try testing.expectEqualStrings("false", try evalString("IS_NUMERIC(ISEMPTY('x'))", &ctx));
+}
+
+test "eval: IS_DATE answers for the canonical form and for a given format" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    try testing.expectEqualStrings("true",  try evalString("IS_DATE('2024-03-15')", &ctx));
+    try testing.expectEqualStrings("false", try evalString("IS_DATE('2024-13-15')", &ctx));
+    try testing.expectEqualStrings("false", try evalString("IS_DATE('15.03.2024')", &ctx));
+    try testing.expectEqualStrings("true",  try evalString("IS_DATE('15.03.2024', 'DD.MM.YYYY')", &ctx));
+    try testing.expectEqualStrings("false", try evalString("IS_DATE('not a date', 'DD.MM.YYYY')", &ctx));
+    // Blank is "no date", not a bad one, and never an error.
+    try testing.expectEqualStrings("false", try evalString("IS_DATE('')", &ctx));
+    // It must agree with DATE_CONVERT, including the 4-letter month abbreviation
+    // DATE_CONVERT normalises before parsing.
+    try testing.expectEqualStrings("true",  try evalString("IS_DATE('Sept-03-2024', 'MMM-DD-YYYY')", &ctx));
+    try testing.expectEqualStrings("2024-09-03", try evalString(
+        "DATE_CONVERT('Sept-03-2024', 'MMM-DD-YYYY', 'YYYY-MM-DD')", &ctx));
+}
+
 test "eval: EOMONTH snaps to month end" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -6538,6 +6948,49 @@ test "PROPER: title-case across word breaks and Unicode" {
 }
 
 // ── Tests: MOD ───────────────────────────────────────────────────────────
+
+test "POWER: exact whole powers, empty on what is not exact, loud on overflow" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    // The Java/BigDecimal contract: no digit is discarded, so 1.1^2 is 1.21 —
+    // the answer a float core cannot give without a visible tail.
+    try testing.expectEqualStrings("1.21", try evalString("POWER(1.1, 2)", &ctx));
+    try testing.expectEqualStrings("1024", try evalString("POWER(2, 10)", &ctx));
+    try testing.expectEqualStrings("1", try evalString("POWER(7, 0)", &ctx));
+    try testing.expectEqualStrings("-8", try evalString("POWER(-2, 3)", &ctx));
+    // Compound growth to ten periods, rounded once into the fixed-point scale.
+    try testing.expectEqualStrings("1.628894626777", try evalString("POWER(1.05, 10)", &ctx));
+    // Neither of these is exact on a decimal core, so neither is guessed at.
+    try testing.expectEqualStrings("", try evalString("POWER(2, 0.5)", &ctx));
+    try testing.expectEqualStrings("", try evalString("POWER(2, -1)", &ctx));
+    // …but the documented workarounds are.
+    try testing.expectEqualStrings("1.414213562373", try evalString("SQRT(2)", &ctx));
+    try testing.expectEqualStrings("0.5", try evalString("1 / POWER(2, 1)", &ctx));
+    // Past the numeric range it is a data error, so IFERROR can catch it.
+    try testing.expectError(error.NumberOverflow, eval("POWER(10, 30)", &ctx));
+    try testing.expectEqualStrings("n/a", try evalString("IFERROR(POWER(10, 30), 'n/a')", &ctx));
+    // A runaway exponent is refused before anything is materialised.
+    try testing.expectEqualStrings("", try evalString("POWER(2, 100000)", &ctx));
+}
+
+test "SQRT: correctly rounded, exact when the root is exact, empty on negative" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    try testing.expectEqualStrings("1.414213562373", try evalString("SQRT(2)", &ctx));
+    try testing.expectEqualStrings("2.5", try evalString("SQRT(6.25)", &ctx));
+    try testing.expectEqualStrings("1000", try evalString("SQRT(1000000)", &ctx));
+    try testing.expectEqualStrings("0", try evalString("SQRT(0)", &ctx));
+    // Undefined over the reals — "" rather than an invented answer.
+    try testing.expectEqualStrings("", try evalString("SQRT(-1)", &ctx));
+    // Round-trips through POWER for a perfect square.
+    try testing.expectEqualStrings("144", try evalString("POWER(SQRT(144), 2)", &ctx));
+}
 
 test "MOD: truncated remainder, sign of dividend, div-by-zero" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);

@@ -8,15 +8,16 @@
 # Section headers use box-drawing characters for visual scan.
 # Non-inline comments above complex cases explain the why.
 #
-# Function catalog (per `bxp-mcp` bxp_docs 2026-05-29, 38 functions;
-#   REGEX_MATCH / REGEX_EXTRACT added 2026-06-17):
-#   ABS, CEILING, COALESCE, CONTAINS, DATE_CONVERT, DATEADD, DATEDIFF,
-#   DAY, ENDS_WITH, EOMONTH, FIELDS, FLOOR, GREATEST, IF, IN, LEAST,
-#   LEFT, LEN, LOOKUP, LOWER, MONTH, NOW, NTH_DOW, NULLIF, PRICE_CURRENCY,
-#   PRICE_VALUE, RAND, REGEX_EXTRACT, REGEX_MATCH, REMAP, REPLACE, RIGHT,
-#   ROUND, SPLIT_PART, STARTS_WITH, SUBSTR, TRIM, UPPER, WEEKDAY, WORKDAY, YEAR
+# The function catalog is NOT repeated here. It lives on each builtin's FnDoc
+# in bxp-core/src/expr.zig and is rendered to docs/reference/expr-functions.md;
+# a copy in this header only ever went stale (the one that used to sit here was
+# missing eleven builtins and named a count from 2026-05-29). Coverage of the
+# catalog is not this file's contract either — `zig build test` holds every
+# builtin to a working FnDoc example. What this corpus pins is the *validation
+# verdict*: the shapes that must stay accepted, and the mistakes that must stay
+# refused, across both runners.
+#
 # Keywords: AND, OR, NOT
-# Keywords: AND, OR
 # Operators: &  =  !=  <  >  <=  >=  +  -  *  /
 
 # ── Logical operators ─────────────────────────────────────────────────
@@ -99,6 +100,30 @@ expr	ok	EOMONTH([Date])
 expr	ok	NTH_DOW(2024, 3, 7, -1)
 expr	ok	NTH_DOW(YEAR([Date]), 10, 7, -1)
 expr	err	NTH_DOW(2024, 3, 7)	WrongArgCount
+# Calendar buckets. WEEKNUM follows the ISO Thursday rule, so its value at the
+# turn of the year belongs to the neighbouring year — pair it with that year
+# before sorting on it.
+expr	ok	QUARTER([Date])
+expr	ok	WEEKNUM([Date])
+expr	ok	WEEKNUM([Date]) & '/' & YEAR(DATEADD([Date], 4 - WEEKDAY([Date])))
+# Time components read the same canonical datetime shapes the TZ builtins take,
+# which is what lets them consume TO_UTC's own output.
+expr	ok	HOUR([Time])
+expr	ok	MINUTE([Time])
+expr	ok	SECOND([Time])
+expr	ok	HOUR(TO_UTC([Time], 'YYYY-MM-DD[T]hh:mm:ssZZ'))
+# Shape guards. Both answer true/false and never raise, so they are the tests
+# you put in an IF rather than something IFERROR has to catch.
+expr	ok	IS_DATE([Date])
+expr	ok	IS_DATE([Trade], 'DD.MM.YYYY')
+expr	ok	IF(IS_DATE([Trade], 'DD.MM.YYYY'), DATE_CONVERT([Trade], 'DD.MM.YYYY', 'YYYY-MM-DD'), '')
+expr	ok	IS_NUMERIC([Amount])
+expr	ok	IF(IS_NUMERIC([Amount]), [Amount], '0')
+# Exact power / root over the decimal core.
+expr	ok	POWER([Rate], 2)
+expr	ok	POWER(1.05, 10)
+expr	ok	SQRT([Variance])
+expr	ok	ROUND(SQRT([Variance]), 4)
 # Timezone cluster — offset token normalisation + IANA-backed zone conversion.
 expr	ok	TO_UTC([Time], 'YYYY-MM-DD[T]hh:mm:ssZZ')
 expr	ok	TO_UTC('2024-03-15T14:23:01+02:00', 'YYYY-MM-DD[T]hh:mm:ssZZ')
@@ -160,6 +185,19 @@ expr	err	YEAR()	WrongArgCount
 expr	err	MONTH('a', 'b')	WrongArgCount
 expr	err	DAY()	WrongArgCount
 expr	err	WEEKDAY()	WrongArgCount
+expr	err	QUARTER()	WrongArgCount
+expr	err	WEEKNUM('2024-01-01', 1)	WrongArgCount
+expr	err	HOUR()	WrongArgCount
+expr	err	MINUTE('2024-01-01 10:00:00', 1)	WrongArgCount
+expr	err	SECOND()	WrongArgCount
+expr	err	IS_DATE()	WrongArgCount
+expr	err	IS_DATE([Date], 'DD.MM.YYYY', 'YYYY')	WrongArgCount
+expr	err	IS_NUMERIC()	WrongArgCount
+expr	err	POWER(2)	WrongArgCount
+expr	err	SQRT(1, 2)	WrongArgCount
+# The numeric arg domain is enforced centrally, before either impl runs.
+expr	err	SQRT('abc')	NotANumber
+expr	err	POWER('abc', 2)	NotANumber
 expr	err	EOMONTH()	WrongArgCount
 expr	err	YEAR('2024/01/15')	InvalidDate
 expr	err	DATEADD('2024-13-01', 1)	InvalidDate

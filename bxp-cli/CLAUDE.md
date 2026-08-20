@@ -289,6 +289,7 @@ Expressions are evaluated per row. Operator precedence (high → low):
 | `PROPER(f)`                                             | Title-case — upper-case the first letter of each word, lower-case the rest (`apple inc` → `Apple Inc`); words break on any non-letter                                                                            |
 | `MOD(a, b)`                                             | Remainder of `a / b` with the sign of `a` (truncated, like SQL/C `%`); `MOD(a, 0)` → `""`                                                                                                                       |
 | `ISEMPTY(x)`                                            | `true` when `x` is empty or whitespace-only — the safe emptiness test (`x = ''` wrongly matches `'0'`)                                                                                                          |
+| `IS_NUMERIC(x)`                                         | `true` when `x` actually holds a number (grouping like `1,234.56` accepted). Stricter than arithmetic on purpose: `""`, `nan` and `inf` coerce to 0 in a sum but are `false` here, which is how you find those rows |
 | `UPPER(f)` / `LOWER(f)`                                 | Full-Unicode case conversion (`café`→`CAFÉ`, `ß`→`SS`, `я`→`Я`); unicameral scripts (CJK/Arabic/Hebrew) and invalid UTF-8 bytes pass through unchanged                                                            |
 | `UNACCENT(f)`                                           | Strip Latin diacritics (`café`→`cafe`, `ÀÉ`→`AE`, `ß`→`ss`, `ø`→`o`); Latin-scope like Postgres — non-Latin keeps its base script (`Ά`→`Α`), CJK/Arabic pass through, ligatures not folded                       |
 | `REPLACE(f, old, new, ...)`                             | Replace all occurrences of `old` with `new` in `f` (substring match, multi-byte UTF-8 safe). Variadic `REPLACE(f, o1, n1, o2, n2, ...)` applies the pairs in one left-to-right pass (first match per position wins; output not re-scanned) — one allocation instead of nesting. Empty `old` matches nothing                       |
@@ -296,6 +297,8 @@ Expressions are evaluated per row. Operator precedence (high → low):
 | `ROUND(f, n)`                                           | Round `f` to `n` decimal places, half away from zero — Excel-style (`n` may be negative for tens/hundreds; `n>=12` is a no-op)                                                                                  |
 | `FLOOR(f)`                                              | Largest integer ≤ `f`                                                                                                                                                                                           |
 | `CEILING(f)`                                            | Smallest integer ≥ `f`                                                                                                                                                                                          |
+| `POWER(b, n)`                                           | `b` to the whole power `n` (0 ≤ `n` ≤ 1024), exact then rounded to scale 12 — `POWER(1.1,2)` is `1.21`. Fractional or negative `n` → `""` (use `SQRT`, or `1 / POWER(b, n)`); past the numeric range → `NumberOverflow` |
+| `SQRT(x)`                                               | Square root of `x`, correctly rounded to scale 12 (`SQRT(2)` = `1.414213562373`), exact when the root is (`SQRT(6.25)` = `2.5`). Negative `x` → `""` |
 | `NOW()`                                                 | Current UTC datetime as `"YYYY-MM-DDTHH:MM:SSZ"`                                                                                                                                                                |
 | `RAND(n)`                                               | String of exactly `n` cryptographically random digits (first 1–9, rest 0–9); `n` clamped to `[1, 65]`                                                                                                           |
 | `FILENAME()`                                            | Input file stem — directory + matched `file_pattern_in` suffix removed (the stem used for output naming); e.g. `SPLIT_PART(FILENAME(), '_', 3)` reads a field from the name. `""` in stateless eval             |
@@ -308,8 +311,11 @@ Expressions are evaluated per row. Operator precedence (high → low):
 
 ### Date arithmetic functions
 
-All take/return ISO `YYYY-MM-DD` strings. An empty date arg yields `""`; a
-malformed one raises an error. Pre-1970 dates are fully supported.
+All take/return ISO `YYYY-MM-DD` strings, with two deliberate exceptions:
+`HOUR` / `MINUTE` / `SECOND` also accept the datetime shapes named in their
+row, and `IS_DATE` answers rather than raises. Otherwise an empty date arg
+yields `""` and a malformed one raises an error. Pre-1970 dates are fully
+supported.
 
 | Syntax                             | Description                                                                                                                                                                                                             |
 | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -318,8 +324,12 @@ malformed one raises an error. Pre-1970 dates are fully supported.
 | `WORKDAY(d, n)`                    | Add `n` business days to `d`, skipping Sat/Sun (negative subtracts). T+2 settlement math; does **not** account for exchange holidays. `n=0` returns `d`                                                                 |
 | `YEAR(d)` / `MONTH(d)` / `DAY(d)`  | Year / month (1–12) / day-of-month (1–31) component of `d` as a number                                                                                                                                                  |
 | `WEEKDAY(d)`                       | ISO day-of-week (Mon=1 … Sun=7); weekend trade detection = `WEEKDAY([Date]) > 5`                                                                                                                                        |
+| `QUARTER(d)`                       | Calendar quarter of `d`, 1–4 (Jan–Mar = 1); a fiscal year starting elsewhere shifts first, e.g. `QUARTER(DATEADD([Date], -90))` |
+| `WEEKNUM(d)`                       | ISO 8601 week number of `d`, 1–53 (week 1 holds the first Thursday). Crosses the year: 2021-01-01 is week 53, 2024-12-30 is week 1 — not sortable without its own year |
 | `EOMONTH(d)`                       | Last calendar day of `d`'s month, as `YYYY-MM-DD` (month-end snapping)                                                                                                                                                  |
 | `NTH_DOW(year, month, weekday, n)` | Date of the `n`-th `weekday` (ISO Mon=1 … Sun=7) in `year`/`month`; negative `n` counts from month end (`-1` = last). `""` when it doesn't exist. EU DST = `NTH_DOW(YEAR(d), 3, 7, -1)` … `NTH_DOW(YEAR(d), 10, 7, -1)` |
+| `HOUR(t)` / `MINUTE(t)` / `SECOND(t)` | Time components of a datetime — `YYYY-MM-DD hh:mm:ss`, `YYYY-MM-DDThh:mm:ss` or a bare date (midnight, so a date-only column answers 0). Same shapes the TZ builtins take, so `TO_UTC`'s output feeds straight in |
+| `IS_DATE(d [, format])`            | `true` when `d` parses — as canonical `YYYY-MM-DD` with one arg (what the date builtins accept), or under `format` with two (what `DATE_CONVERT` accepts, 4-letter month abbreviations included). Never raises; blank is `false` |
 
 ### Timezone functions
 
