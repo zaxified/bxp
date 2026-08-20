@@ -1,3 +1,7 @@
+---
+description: "The desktop app's layers: config editing, the dry-run debugger, the trace store and the updater."
+---
+
 # GUI Architecture
 
 ## bxp-gui: Layers and Components

@@ -1,3 +1,7 @@
+---
+description: "Parse and reformat dates with DATE_CONVERT, do calendar and business-day arithmetic, and handle time zones."
+---
+
 # Dates
 
 BXP parses and reformats dates with `DATE_CONVERT(s, from, to)`, and does

@@ -1,13 +1,13 @@
-/// Configuration types and JSON loader for bxp.
-///
-/// Reads bxp-cli.json from the current working directory and populates the Config
-/// struct.  All heap memory is owned by Config and released via Config.deinit().
-/// If bxp-cli.json does not exist the loader returns an empty Config (no error).
-///
-/// xlsx support:
-///   Templates with "xlsx_sheet" in their config have their xlsx files converted
-///   to intermediate CSV files before the normal CSV processing loop runs.
-///   "file_pattern_in" restricts which CSV files a template processes (suffix match).
+//! Configuration types and JSON loader for bxp.
+//!
+//! Reads bxp-cli.json from the current working directory and populates the Config
+//! struct.  All heap memory is owned by Config and released via Config.deinit().
+//! If bxp-cli.json does not exist the loader returns an empty Config (no error).
+//!
+//! xlsx support:
+//!   Templates with "xlsx_sheet" in their config have their xlsx files converted
+//!   to intermediate CSV files before the normal CSV processing loop runs.
+//!   "file_pattern_in" restricts which CSV files a template processes (suffix match).
 
 const std = @import("std");
 const json5 = @import("json5");

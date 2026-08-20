@@ -1,12 +1,15 @@
 # BXP scripts
 
-Two ortogonal groups: `test-` (run all tests) and `release-` (build +
-publish release artifacts). Wrappers (`test.sh`, `release.sh`) iterate
-their numbered siblings (`test-NN-*.sh`, `release-NN-*.sh`) in numeric
-order, so adding a phase = drop a new file with the right prefix.
-Standalone helpers without a numeric prefix
-(`release-changelog.sh`, `release-tag.sh`) are human-driven; the
-wrappers ignore them.
+Two orthogonal groups at this level: `test-` (run all tests) and `release-`
+(build + publish release artifacts). Wrappers (`test.sh`, `release.sh`) iterate
+their numbered siblings (`test-NN-*.sh`, `release-NN-*.sh`) in numeric order, so
+adding a phase = drop a new file with the right prefix. Standalone helpers
+without a numeric prefix (`release-changelog.sh`, `release-tag.sh`) are
+human-driven; the wrappers ignore them.
+
+Everything that serves the **documentation** — site generation, the wasm
+playground, the formatting and parity checks — lives one level down in
+[`docs/`](docs/), so the two groups above stay easy to pick out.
 
 ## Use case → command
 
@@ -22,7 +25,8 @@ wrappers ignore them.
 | Dataset regression only                               | `bash scripts/test-07-datasets.sh`               |
 | Example-page expression gate only                     | `bash scripts/test-08-docs-examples.sh`          |
 | Example regression only                               | `bash scripts/test-09-examples.sh`               |
-| Docs mermaid check (pre-release only)                 | `bash scripts/check-formatting.sh`               |
+| Docs mermaid check (pre-release only)                 | `bash scripts/docs/check-formatting.sh`          |
+| Regenerate the docs site + drift-check it             | `bash scripts/docs/gen-docs.sh --check`          |
 | Full benchmark matrix (dev only, not in `test.sh`)    | `bash scripts/bench/bench.sh`                    |
 | Local smoke build (no publish)                        | `bash scripts/release.sh`                        |
 | Console build only                                    | `bash scripts/release-01-console.sh`             |
@@ -57,15 +61,8 @@ bash scripts/release-tag.sh
 ```text
 test.sh                       wrapper — runs every test-NN-*.sh in order
 test-lib.sh                   shared section/step/summary helpers (sourced)
-test-01-console.sh            bxp-core unit (incl. inspect) + bxp-cli build + json5_ast unit
-test-02-mcp.sh                bxp-mcp build + unit tests + JSON-RPC smoke (incl. bxp_simulate)
-test-03-bridge.sh             bxp-gui-bridge unit tests (FFI surface)
-test-04-desktop.sh            flutter analyze + flutter test + json5_ast dart test (builds bridge .so)
-test-05-bench-guard.sh        coarse perf gate — recycles Console's ReleaseSafe bxp-cli, RSS ceiling + wall scaling ratio
-test-06-expr-corpus.sh        bxp_validate_expr corpus regression gate (via bxp-mcp)
-test-07-datasets.sh           bxp-cli regression vs datasets/*/*.expected
-test-08-docs-examples.sh      example pages — every clickable expression evaluates against its own sample
-test-09-examples.sh           bxp-cli regression vs docs/examples/*/*/*.expected (run in a scratch work dir)
+test-NN-*.sh                  the phases; each states its purpose in its own
+                              header, and docs/dev/testing.md renders that list
 
 All test phases build ReleaseSafe (one optimize mode for the whole suite → small
 codegen/safety error surface); release archives are the only ReleaseSmall builds.
@@ -77,7 +74,18 @@ release-03-checksums.sh       generate SHA256SUMS over release artifacts
 
 release-changelog.sh          standalone — bump versions + prepend CHANGELOG.md
 release-tag.sh                standalone — semver tag (v<build.zig.zon version>) + push (triggers CI)
-check-formatting.sh           standalone — mermaid-fence syntax check (pre-release docs; NOT auto-run by test.sh)
+
+docs/                         ALL documentation support — kept in its own dir so
+                              the test- and release- phases above stay legible
+docs/gen-docs.sh              regenerate every generated page + fragment, build /
+                              serve the site; --check is the drift guard (test-04)
+docs/gen-trees.py             repo tree + test-phase table, harvested from file
+                              headers; --check is folded into gen-docs.sh --check
+docs/gen-examples-index.py    Examples section landing pages
+docs/gen-wasm-playground.sh   build the playground's wasm engine (untracked)
+docs/check-wasm-parity.sh     wasm vs native over the expression corpus (docs CI)
+docs/check-formatting.sh      standalone — mermaid-fence syntax check (pre-release; NOT auto-run by test.sh)
+docs/requirements.txt         pinned mkdocs toolchain, shared by the local venv and CI
 
 bench/bench.sh                dev-only — full stress-test matrix (S1–S6); writes results/results-<ts>.csv
 bench/gen.py                  synthetic CSV + config generator (shared by bench.sh and test-05-bench-guard.sh)

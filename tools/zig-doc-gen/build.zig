@@ -11,6 +11,7 @@ pub fn build(b: *std.Build) void {
     const core = b.dependency("bxp_core", .{ .target = target, .optimize = optimize });
     const cli = b.dependency("bxp_cli", .{ .target = target, .optimize = optimize });
     const mcp = b.dependency("bxp_mcp", .{ .target = target, .optimize = optimize });
+    const bridge = b.dependency("bxp_gui_bridge", .{ .target = target, .optimize = optimize });
 
     const exe = b.addExecutable(.{
         .name = "zig-doc-gen",
@@ -25,9 +26,22 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "config", .module = core.module("config") },
                 .{ .name = "cli_docs", .module = cli.module("cli_docs") },
                 .{ .name = "tools", .module = mcp.module("tools") },
+                // The class-diagram page is rendered from `@typeInfo` over the
+                // live types, so the generator links the modules that define
+                // them rather than a catalog describing them.
+                .{ .name = "expr", .module = core.module("expr") },
+                .{ .name = "xlsx", .module = core.module("xlsx") },
+                .{ .name = "btrace", .module = core.module("btrace") },
+                .{ .name = "diagnostics", .module = core.module("diagnostics") },
+                .{ .name = "pipeline", .module = cli.module("pipeline") },
+                // Architecture catalogs: the bxp-core module inventory + the
+                // inspect surface, and the bridge's C-ABI surface.
+                .{ .name = "module_docs", .module = core.module("module_docs") },
+                .{ .name = "bridge_ops", .module = bridge.module("ops") },
             },
         }),
     });
+
 
     const run = b.addRunArtifact(exe);
     // Output dir via BXP_DOCS_OUT (default ../../docs/reference). Override:

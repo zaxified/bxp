@@ -14,12 +14,13 @@
 //! no spawn-vs-attach race, no Flutter UI competition. `bridge_run` (the
 //! original export) takes a JSON request, spawns the requested child,
 //! captures stdout/stderr/exit, and writes a JSON response into a
-//! caller-provided buffer. The v0.3.0 flip grew the surface to ~11 exports:
-//! a streaming proxy (`bridge_run_streaming` + `bridge_cancel`/`bridge_ack`)
-//! and in-process families (`bridge_eval_expr`/`_trace`, `bridge_inspect`,
-//! `bridge_verify_minisign`) that serve bxp-core/inspect directly, so the GUI
-//! no longer spawns anything for stateless ops. See the C-ABI table in
-//! `bxp-gui-bridge/CLAUDE.md`.
+//! caller-provided buffer. The v0.3.0 flip grew the surface past that one
+//! export: a streaming proxy (`bridge_run_streaming` + `bridge_cancel` /
+//! `bridge_ack`) and in-process families (`bridge_eval_expr`/`_trace`,
+//! `bridge_inspect`, `bridge_verify_minisign`) that serve bxp-core/inspect
+//! directly, so the GUI no longer spawns anything for stateless ops. The
+//! authoritative list is `src/ops.zig`, which the check below holds to this
+//! file and which the docs site renders.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -27,6 +28,33 @@ const build_options = @import("build_options");
 const inspect = @import("inspect");
 const minisign = @import("minisign");
 const procrun = @import("procrun");
+
+// ── C-ABI surface completeness ───────────────────────────────────────────────
+//
+// This file IS the contract with the Dart side, so an export nobody wrote down
+// is an entry point nobody can find. That is not hypothetical: the two site
+// pages describing this surface had both settled on five entries while the
+// library shipped ten, and the updater's `bridge_verify_minisign` appeared on
+// neither. Both directions are checked, so a rename breaks the build instead of
+// leaving the docs describing a symbol that no longer resolves.
+//
+// The exports must be `pub` for this to see them — `decls` reports public
+// declarations only. That costs nothing: `export` already publishes the symbol
+// to the dynamic linker.
+const ops = @import("ops");
+comptime {
+    for (@typeInfo(@This()).@"struct".decls) |d| {
+        if (!std.mem.startsWith(u8, d.name, "bridge_")) continue;
+        var documented = false;
+        for (ops.ops) |op| {
+            if (std.mem.eql(u8, op.name, d.name)) documented = true;
+        }
+        if (!documented) @compileError(d.name ++ " is exported but has no ops.zig entry");
+    }
+    for (ops.ops) |op| {
+        if (!@hasDecl(@This(), op.name)) @compileError("ops.zig names a missing export: " ++ op.name);
+    }
+}
 
 /// Hard cap on captured bytes per stream (stdout, stderr) per call.
 /// 64 MB per stream covers every realistic `bridge_run` payload —
@@ -159,7 +187,7 @@ const Response = struct {
 /// Probe entry point — Dart can call this on load to confirm the DLL
 /// is the right one (version match) before issuing real requests.
 const version_z: [:0]const u8 = build_options.version ++ "";
-export fn bridge_version() [*:0]const u8 {
+pub export fn bridge_version() [*:0]const u8 {
     return version_z.ptr;
 }
 
@@ -184,7 +212,7 @@ export fn bridge_version() [*:0]const u8 {
 /// are released before returning. The response_buf is owned by the
 /// caller — Dart side typically allocates from `malloc` via dart:ffi
 /// and frees it after parsing the JSON.
-export fn bridge_run(
+pub export fn bridge_run(
     request_json: [*:0]const u8,
     stdin_ptr: [*]const u8,
     stdin_len: u32,
@@ -562,7 +590,7 @@ fn streamingWaitLoop(ctx: *StreamingCtx) void {
 /// request JSON, OOM, child spawn failure, thread spawn failure). The
 /// on_exit callback is the canonical "stream is done" signal; no other
 /// callback fires after it.
-export fn bridge_run_streaming(
+pub export fn bridge_run_streaming(
     request_json: [*:0]const u8,
     on_stdout_batch: StreamCallback,
     on_stderr_chunk: StreamCallback,
@@ -679,7 +707,7 @@ export fn bridge_run_streaming(
 /// parallelism is threads), so what this changes in practice is the behaviour
 /// of anything the bridge spawns later. No-op difference on Windows, which has
 /// no process-group concept here.
-export fn bridge_cancel(handle: i64) i32 {
+pub export fn bridge_cancel(handle: i64) i32 {
     const io = bridgeIo();
     streams_mutex.lockUncancelable(io);
     defer streams_mutex.unlock(io);
@@ -698,7 +726,7 @@ export fn bridge_cancel(handle: i64) i32 {
 /// Returns 0 on success, -1 if the handle is unknown (stream already
 /// exited, or never valid). Idempotent in the sense that extra acks
 /// just inflate the permit count harmlessly.
-export fn bridge_ack(handle: i64) i32 {
+pub export fn bridge_ack(handle: i64) i32 {
     const io = bridgeIo();
     streams_mutex.lockUncancelable(io);
     defer streams_mutex.unlock(io);
@@ -719,7 +747,7 @@ export fn bridge_ack(handle: i64) i32 {
 /// anyway), and accepting it gracefully prevents a Dart-side bug — e.g.
 /// re-freeing a slot that was already cleared to (ptr=null, len=0) — from
 /// dereferencing a freed pointer.
-export fn bridge_free(ptr: [*]u8, len: u32) void {
+pub export fn bridge_free(ptr: [*]u8, len: u32) void {
     if (len == 0) return;
     std.heap.c_allocator.free(ptr[0..len]);
 }
@@ -760,7 +788,7 @@ const BridgeFfiError = enum(i32) {
 ///   * `-1` OOM in bridge area (extreme edge — c_allocator can't satisfy)
 ///   * `-2` BUF_TOO_SMALL — caller retries with a bigger buffer
 ///   * `-3` reserved (not currently emitted)
-export fn bridge_eval_expr(
+pub export fn bridge_eval_expr(
     text_ptr: [*]const u8,
     text_len: u32,
     out_buf: [*]u8,
@@ -839,7 +867,7 @@ fn writeExprErrorJson(
 ///   * `-2` BUF_TOO_SMALL — accumulated payload exceeds out_size
 ///   * `-3` INVALID_INPUT — headers/fields aren't JSON arrays of strings.
 ///     A length mismatch is NOT one: ragged rows are tolerated, see below
-export fn bridge_eval_expr_trace(
+pub export fn bridge_eval_expr_trace(
     text_ptr: [*]const u8,
     text_len: u32,
     headers_json_ptr: [*]const u8,
@@ -919,7 +947,7 @@ fn objStr(obj: std.json.ObjectMap, key: []const u8) ?[]const u8 {
 /// Returns: `> 0` byte count of result JSON in out_buf; `-1` OOM; `-2`
 /// BUF_TOO_SMALL (caller retries larger); `-3` INVALID_INPUT (bad request /
 /// unknown op / missing field / malformed eval_batch request).
-export fn bridge_inspect(
+pub export fn bridge_inspect(
     request_ptr: [*]const u8,
     request_len: u32,
     out_buf: [*]u8,
@@ -1017,7 +1045,7 @@ const minisign_scratch_len = 64 + 2048;
 /// file bytes (`file_*`, the release `SHA256SUMS`) against the base64 public
 /// key (`pubkey_*`, the key part of `minisign.pub`). Returns a `MinisignResult`
 /// code — `0` is authentic, non-zero refuses. No heap allocation, thread-safe.
-export fn bridge_verify_minisign(
+pub export fn bridge_verify_minisign(
     file_ptr: [*]const u8,
     file_len: u32,
     sig_ptr: [*]const u8,

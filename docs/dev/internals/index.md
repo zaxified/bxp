@@ -1,3 +1,7 @@
+---
+description: "Design philosophy, why the FFI bridge exists, and where to dig deeper for each package."
+---
+
 # Internals
 
 ## Design philosophy
@@ -74,20 +78,17 @@ shared library, but each role solves a different problem.
 Every backend call goes through the bridge — there is no `Process.start` path
 and no subprocess fallback on any platform:
 
-| GUI call                               | Bridge entry point                                 |
-| -------------------------------------- | -------------------------------------------------- |
-| config validation (load + save)        | `bridge_inspect {config}`                          |
-| docs catalog (startup gate)            | `bridge_inspect {docs}`                            |
-| list / fetch templates                 | `bridge_inspect {list_templates / fetch_template}` |
-| eval-batch (drill-down re-eval)        | `bridge_inspect {eval_batch}`                      |
-| live expr validation (per keystroke)   | `bridge_eval_expr`                                 |
-| ExprPlayground per-call trace          | `bridge_eval_expr_trace`                           |
-| `bxp-cli --trace` (dry-run / full-run) | `bridge_run_streaming`                             |
-| `bxp-cli --version` (probe)            | `bridge_run`                                       |
-
-The first six are in-process (no subprocess); the last two proxy the `bxp-cli`
-spawn, draining its pipes in native Zig code. Library probe failure at startup is
+The stateless work — config validation, the docs catalog, template list and
+fetch, drill-down eval-batch, live expression validation and the playground's
+per-call trace — runs **in-process** against `bxp-core`. Only the two `bxp-cli`
+calls, the `--trace` run and the `--version` probe, are proxied spawns, and even
+those drain their pipes in native Zig code. Library probe failure at startup is
 fatal on every platform.
+
+Which export serves which call is the generated table on
+[Subprocess wiring](../gui/subprocess.md#transport-paths) — one list, held to
+the library's real exports by a compile-time check, rather than a second copy
+here that could disagree with it.
 
 Implementation: routing decisions live in
 [`bxp-gui/lib/services/bxp_process_client.dart`](https://github.com/zaxified/bxp/blob/master/bxp-gui/lib/services/bxp_process_client.dart)

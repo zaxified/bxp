@@ -1,3 +1,7 @@
+---
+description: "What the desktop app adds over the CLI: the config tree editor, dry-run debugger and expression playground."
+---
+
 # GUI features
 
 These features are GUI-specific and have no terminal equivalent. They

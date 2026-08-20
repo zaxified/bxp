@@ -270,12 +270,12 @@ page is wrong.
 
 `docs/examples/index.md` (central) and `docs/examples/<tier>/index.md` (per-tier
 landings) are **signposts auto-generated** by
-[`../../scripts/gen-examples-index.py`](../../scripts/gen-examples-index.py) from
+[`../../scripts/docs/gen-examples-index.py`](../../scripts/docs/gen-examples-index.py) from
 each page's `# H1` + `!!! abstract "What"`. **Do not hand-edit them** — re-run
 the generator after adding, renaming, or re-describing an example:
 
 ```bash
-python3 scripts/gen-examples-index.py
+python3 scripts/docs/gen-examples-index.py
 ```
 
 New examples must also be added to the `nav:` in `mkdocs.yml` (under their tier),

@@ -8,7 +8,7 @@
 #
 # Deliberately NOT tracked in git and NOT a test-NN phase: it is a generated
 # binary, so it belongs to the docs build the same way `site/` does. Run this
-# before `mkdocs build` / `mkdocs serve` (scripts/gen-docs.sh does it for you);
+# before `mkdocs build` / `mkdocs serve` (scripts/docs/gen-docs.sh does it for you);
 # without it the widget renders and reports that the engine failed to load,
 # which is the intended degradation — the surrounding prose still reads.
 #
@@ -19,7 +19,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MONO_ROOT="$(dirname "$SCRIPT_DIR")"
+MONO_ROOT="$(dirname "$(dirname "$SCRIPT_DIR")")"
 OUT_DIR="$MONO_ROOT/docs/assets/wasm"
 
 echo "==> building bxp-eval.wasm (wasm32-freestanding, ReleaseSmall)"

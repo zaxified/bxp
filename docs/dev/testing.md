@@ -1,3 +1,7 @@
+---
+description: "The test-suite phases, how to run one alone, and how to add a regression or an expression-corpus case."
+---
+
 # Testing
 
 This document covers the test suite phases, how to run individual sub-suites,
@@ -8,74 +12,43 @@ and how to add new regression tests or expression corpus cases.
 ./scripts/test.sh
 ```
 
-`test.sh` runs seven sub-scripts in numeric order. Every phase builds the same
-optimize mode (**ReleaseSafe**) — one codegen + safety config across the whole
-gate keeps the error surface small (a mode-specific bug, like the bridge's
-Debug-only SEGV, can't slip through a gap the tests never exercise). The shipped
-archives (`release-01`) are the only ReleaseSmall build.
+`test.sh` runs every `test-NN-*.sh` sibling in numeric order. All of them build
+the same optimize mode (**ReleaseSafe**) — one codegen + safety configuration
+across the whole gate keeps the error surface small, since a mode-specific bug
+like the bridge's old Debug-only SEGV cannot slip through a gap the tests never
+exercise. The shipped archives (`release-01`) are the only ReleaseSmall build.
 
-**`test-01-console.sh`** — Zig / CLI build + unit:
+Each phase describes itself in its own header, and this table is read from those
+headers — so a new phase appears here by being added, and nothing has to be
+kept in step by hand:
 
-1. `zig build test` in `bxp-core` — eight test roots: `json.zig`, `btrace.zig`, `expr.zig`, `unicode.zig`, `xlsx.zig`, `config.zig`, `docs.zig`, `inspect.zig`. (No `csv`, `tz`, `datefmt`, `json5`, `decimal`, `zipstream` or `diagnostics` roots: those modules moved to zig-libs and carry their own, larger suites upstream.)
-2. Builds `bxp-cli` + runs its unit tests.
-3. `dart test` inside `bxp-gui/packages/json5_ast/`.
+--8<-- "includes/test-phases.md:table"
 
-**`test-02-mcp.sh`** — `bxp-mcp` build + unit tests + JSON-RPC smoke for the
-stateless tools (`bxp_validate`, `bxp_validate_expr`, `bxp_eval_batch`, …) plus
-a full `bxp_simulate` run.
+Run one alone with `bash scripts/<phase>`, or just the Zig unit tests with
+`cd bxp-core && zig build test`.
 
-**`test-03-bridge.sh`** — `bxp-gui-bridge` build + unit tests (FFI surface).
+A few phases carry detail the one-liner cannot:
 
-**`test-04-desktop.sh`** — Flutter / Dart side:
+- **test-01** drives eight `zig build test` roots in `bxp-core` — `json`,
+  `btrace`, `expr`, `unicode`, `xlsx`, `config`, `docs`, `inspect`. There are no
+  `csv`, `tz`, `datefmt`, `json5`, `decimal`, `zipstream` or `diagnostics` roots
+  any more: those modules moved to zig-libs and carry their own, larger suites
+  upstream.
+- **test-04** also builds the bridge shared library, because
+  `expr_corpus_bridge_test.dart` loads it, and it hosts the
+  generated-documentation drift guard (see below).
+- **test-08 and test-09** are complementary, not redundant: the first evaluates
+  the *expressions* printed on the example pages, the second runs the examples
+  and diffs their output against the committed goldens.
 
-1. Builds `bxp-gui-bridge` shared library (needed for `expr_corpus_bridge_test.dart`).
-2. `flutter analyze` — static analysis of `bxp-gui/`.
-3. `flutter test` — widget + service tests in `bxp-gui/test/`.
-4. `dart test` inside `bxp-gui/packages/json5_ast/` — json5_ast unit + round-trip tests.
-
-**`test-05-bench-guard.sh`** — coarse perf-regression gate; recycles the Console
-phase's ReleaseSafe `bxp-cli` and asserts an RSS ceiling + a scaling ratio.
-
-**`test-06-expr-corpus.sh`** — expression corpus regression gate (TAB-separated
-`expr<TAB>ok|err<TAB>...` cases).
-
-**`test-07-datasets.sh`** — bxp-cli regression: iterates every `datasets/<id>/`
-directory and diffs output against `sample.expected`.
-
-**`test-08-docs-examples.sh`** — the example *pages*: every expression marked
-clickable must evaluate against the page's own sample, the declared delimiter
-must match the template, and the shapes the scratchpad cannot serve (named
-`REMAP` / `REPLACE`) must not be marked.
-
-**`test-09-examples.sh`** — the example *runs*: every
-`docs/examples/<tier>/<name>/` is executed in a scratch work dir and each
-produced output diffed against its `*.expected` golden. Complements test-07 —
-these carry cases the datasets do not (JSON output, multi-hop `pre_pass` chains,
-self-joins, unpivots, HL7).
-
-> Docs formatting is **not** a test phase, and it is hand-maintained:
-> prettier and markdownlint were dropped because they reflow / mis-lint
-> MkDocs-specific syntax and break the rendered pages.
-> `scripts/check-formatting.sh` (a mermaid-fence parse) and
-> `scripts/gen-docs.sh --check` (the drift guard over the generated
-> `docs/reference/` pages) are standalone pre-release docs checks —
-> `test.sh` runs neither.
-
-Individual sub-suites:
-
-```bash
-bash scripts/test-01-console.sh        # Zig unit + bxp-cli + json5_ast Dart tests
-bash scripts/test-02-mcp.sh            # bxp-mcp build + unit + JSON-RPC smoke
-bash scripts/test-03-bridge.sh         # bxp-gui-bridge build + unit
-bash scripts/test-04-desktop.sh        # flutter analyze + flutter test
-bash scripts/test-05-bench-guard.sh    # coarse perf-regression gate
-bash scripts/test-06-expr-corpus.sh    # expression corpus regression
-bash scripts/test-07-datasets.sh       # bxp-cli regression vs datasets/
-bash scripts/test-08-docs-examples.sh  # clickable expressions on example pages
-bash scripts/test-09-examples.sh       # bxp-cli regression vs docs/examples/
-
-cd bxp-core && zig build test          # Zig unit tests only (no build)
-```
+> **Docs formatting is not a phase, and is hand-maintained.** Prettier and
+> markdownlint were dropped because they reflow and mis-lint MkDocs-specific
+> syntax and break the rendered pages, so
+> `scripts/docs/check-formatting.sh` (a mermaid-fence parse) stays a standalone
+> pre-release check that `test.sh` does not run. The *generated* pages are a
+> different matter: `scripts/docs/gen-docs.sh --check` regenerates every
+> catalog-driven page and fragment and fails on any diff, and it runs inside
+> **test-04** on every suite run.
 
 ## Expression corpus
 

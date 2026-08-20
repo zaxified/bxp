@@ -7,7 +7,7 @@
 # The reference pages under docs/reference/ are GENERATED from the in-code
 # catalogs, but they are committed, so this workflow builds them as-is and
 # needs no Dart. Their sync with the catalogs is a test concern, not a
-# publishing one: scripts/gen-docs.sh --check runs inside test-04 on the
+# publishing one: scripts/docs/gen-docs.sh --check runs inside test-04 on the
 # normal CI matrix and fails there if a catalog moved without a regen.
 #
 # Zig IS needed, for one artifact: the expression scratchpad's engine
@@ -30,13 +30,16 @@ on:
     paths:
       - "docs/**"
       - "mkdocs.yml"
-      - "scripts/docs-requirements.txt"
+      # The whole docs-support toolchain: pinned mkdocs deps, the reference and
+      # tree generators, the wasm playground build, the parity gate. Watching
+      # the directory rather than naming files keeps a new generator covered
+      # from the commit that adds it.
+      - "scripts/docs/**"
       - ".github/workflows/docs.yml"
       # The scratchpad ships a compiled slice of the engine, so a change to the
       # expression evaluator or the catalog behind it changes the published
       # site even when no page was touched.
       - "bxp-core/**"
-      - "scripts/gen-wasm-playground.sh"
   # Manual runs for a first publish, or to redeploy without touching a page.
   workflow_dispatch:
 
@@ -67,7 +70,7 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-          cache-dependency-path: scripts/docs-requirements.txt
+          cache-dependency-path: scripts/docs/requirements.txt
 
       # The `social` plugin renders the Open Graph cards through Cairo, which
       # needs system libraries the Python wheels do not carry.
@@ -84,9 +87,9 @@ jobs:
         uses: actions/cache@v6
         with:
           path: .cache
-          key: mkdocs-material-${{ hashFiles('mkdocs.yml', 'scripts/docs-requirements.txt') }}-${{ github.sha }}
+          key: mkdocs-material-${{ hashFiles('mkdocs.yml', 'scripts/docs/requirements.txt') }}-${{ github.sha }}
           restore-keys: |
-            mkdocs-material-${{ hashFiles('mkdocs.yml', 'scripts/docs-requirements.txt') }}-
+            mkdocs-material-${{ hashFiles('mkdocs.yml', 'scripts/docs/requirements.txt') }}-
             mkdocs-material-
 
       - uses: mlugg/setup-zig@v2
@@ -106,17 +109,17 @@ jobs:
             zig-docs-wasm-
 
       - name: Build the scratchpad engine
-        run: bash scripts/gen-wasm-playground.sh
+        run: bash scripts/docs/gen-wasm-playground.sh
 
       # The whole premise of the scratchpad is that the browser runs the SAME
       # evaluator as bxp-cli. Prove it before publishing: every expression in
       # the cross-runner corpus is evaluated through the wasm build and through
       # the native one, and the per-expression results must match byte for byte.
       - name: Check wasm/native parity
-        run: bash scripts/check-wasm-parity.sh
+        run: bash scripts/docs/check-wasm-parity.sh
 
       - name: Install the docs toolchain
-        run: pip install -r scripts/docs-requirements.txt
+        run: pip install -r scripts/docs/requirements.txt
 
       - name: Build the site
         run: mkdocs build --strict

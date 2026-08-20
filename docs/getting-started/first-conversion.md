@@ -1,3 +1,7 @@
+---
+description: "Run a real conversion end to end: point a shipped template at a broker export and read the result."
+---
+
 # Your first conversion
 
 The same conversion engine runs whether you drive it from the desktop

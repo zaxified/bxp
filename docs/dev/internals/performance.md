@@ -1,3 +1,7 @@
+---
+description: "What makes the runtime fast, what slows it down, and where the benchmarks and the regression gate live."
+---
+
 # Performance
 
 ## Performance model

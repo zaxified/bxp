@@ -1,3 +1,7 @@
+---
+description: "The services / store / ui split inside the Flutter app, and what owns which piece of state."
+---
+
 # Architecture
 
 ## Overview

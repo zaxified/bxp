@@ -4,7 +4,7 @@
 // CLI, runs the mermaid core parser against each, and reports parse
 // errors with file:line context. Returns exit 1 on any failure.
 //
-// Used by scripts/check-formatting.sh — keeps mermaid docs from drifting
+// Used by scripts/docs/check-formatting.sh — keeps mermaid docs from drifting
 // into invalid syntax that renders as raw "Parse error on line ..." in
 // GitHub previews.
 

@@ -1,3 +1,7 @@
+---
+description: "The MCP server embedded in the running app, and the auto-updater it ships alongside."
+---
+
 # Agent Control & Auto-updater
 
 ## Agent control (gui-mcp)

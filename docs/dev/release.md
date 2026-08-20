@@ -1,3 +1,7 @@
+---
+description: "The release walkthrough — version bump, changelog, tag, and what the CI pipeline builds for each platform."
+---
+
 # Release
 
 Release artifacts are produced by `.github/workflows/release.yml` on

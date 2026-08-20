@@ -1,3 +1,7 @@
+---
+description: "The internal contracts: how a row flows through the engine and how one input row becomes zero, one or many output rows."
+---
+
 # Implementation Details
 
 ## Two-pass processing pipeline

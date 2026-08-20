@@ -66,20 +66,15 @@ bxp-gui-bridge/
 
 ## Public C-ABI
 
-All exports use the `.c` calling convention.
-
-| Symbol                       | Purpose                                                       |
-| ---------------------------- | ------------------------------------------------------------- |
-| `bridge_version()`           | NUL-terminated semver string (matches `build.zig.zon`)        |
-| `bridge_run(...)`            | One-shot: spawn, drain stdout/stderr to caller buffer, return |
-| `bridge_run_streaming(...)`  | Streaming: per-batch stdout/stderr callbacks + exit callback  |
-| `bridge_cancel(handle)`      | Cooperative cancel for a streaming handle                     |
-| `bridge_ack(handle)`         | Backpressure ACK (releases one queue permit)                  |
-| `bridge_free(ptr, len)`      | Return a `bridge_run` response buffer to the bridge allocator |
-| `bridge_eval_expr(...)`      | In-proc: parse + evaluate one expression, return result/error |
-| `bridge_eval_expr_trace(..)` | In-proc: same with per-call NDJSON trace + terminal sentinel   |
-| `bridge_inspect(...)`        | In-proc: stateless inspect ops (`docs` / `config` / `list_templates` / `fetch_template` / `eval_batch`) — JSON request envelope → result JSON in out buffer |
-| `bridge_verify_minisign(...)`| In-proc: verify a minisign signature (`.minisig`) over a file (release `SHA256SUMS`) against a base64 public key — Ed25519 + Blake2b-512 via the zig-libs `minisign` module, no heap alloc; returns `0` authentic / non-zero refuse |
+All exports use the `.c` calling convention. **The catalog is
+[`src/ops.zig`](src/ops.zig)** — name, call shape, whether it is served in-proc
+or by proxying `bxp-cli`, and what it is for. A comptime check in `src/main.zig`
+holds that file to the library's actual `pub export fn`s in both directions, so
+it cannot fall behind, and `tools/zig-doc-gen` renders it onto the site as
+[Subprocess wiring](https://zaxified.github.io/bxp/dev/gui/subprocess/#transport-paths).
+Read `ops.zig` rather than a copy here: a second table is exactly what left the
+two site pages claiming five entry points while the library shipped ten, with
+`bridge_verify_minisign` on neither.
 
 The Dart-side shim that calls these lives in
 [`../bxp-gui/lib/services/bridge_client.dart`](../bxp-gui/lib/services/bridge_client.dart).

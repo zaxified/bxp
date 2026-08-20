@@ -138,6 +138,14 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/btrace.zig"),
     });
 
+    // The architecture catalogs — module inventory + the stateless inspect
+    // surface. Pure data, no imports; `tools/zig-doc-gen` renders them and
+    // inspect.zig imports the file directly for its comptime completeness
+    // check, so nothing here costs the shipped binaries anything.
+    const module_docs_mod = b.addModule("module_docs", .{
+        .root_source_file = b.path("src/module_docs.zig"),
+    });
+
     // Streaming ZIP-entry reader (central-dir walk + per-entry inflate) behind
     // xlsx.zig's XML parts and bxp-cli's zipped-CSV pre-pass. Consumed from
     // zig-libs, which added what the local copy lacked: CRC-32 verification at
@@ -236,6 +244,11 @@ pub fn build(b: *std.Build) void {
             .{ .name = "json5",       .module = json5_mod },
             .{ .name = "docs",        .module = docs_mod },
             .{ .name = "diagnostics", .module = diagnostics_mod },
+            // The architecture catalog, for the comptime check that every
+            // public op in this file is documented. A file cannot be both a
+            // module root and a file-relative import elsewhere, so inspect.zig
+            // asks for it by name like any other module.
+            .{ .name = "module_docs", .module = module_docs_mod },
         },
     });
 
@@ -401,6 +414,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "json5",       .module = json5_mod },
                 .{ .name = "docs",        .module = docs_mod },
                 .{ .name = "diagnostics", .module = diagnostics_mod },
+                .{ .name = "module_docs", .module = module_docs_mod },
             },
         }),
     });

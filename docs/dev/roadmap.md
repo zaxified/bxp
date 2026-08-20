@@ -1,3 +1,7 @@
+---
+description: "Planned work by version, and the things deliberately not planned, with the reasoning for each."
+---
+
 # Roadmap
 
 Hand-maintained backlog — entries get crossed out / deleted as work
@@ -103,7 +107,7 @@ page and a ~193 KiB engine, fetched on the first click.
 That engine is `bxp-core` compiled for `wasm32-freestanding`
 (`bxp-core/src/wasm.zig` → `inspect.evalBatchIo`), making the browser a fourth
 consumer of the one evaluator alongside bxp-cli, bxp-mcp and bxp-gui-bridge.
-Agreement is measured rather than assumed — `scripts/check-wasm-parity.sh`
+Agreement is measured rather than assumed — `scripts/docs/check-wasm-parity.sh`
 runs the cross-runner corpus through both and requires byte-identical results.
 
 **A full in-browser runner (config + CSV → final.csv) was considered and
@@ -163,9 +167,9 @@ facts the other omits:
 So the work is not a swap, it is a merge, and it has a direction: **anything
 the readme documents that is true and missing belongs in the `FnDoc` /
 `FieldDoc` catalog**, from which the site page regenerates. Merging the other
-way — editing the generated page — would be undone by the next `gen-docs.sh
---build`. Once the catalogs carry the union, the readme table has nothing the
-link would lose.
+way — editing the generated page — would be undone by the next
+`scripts/docs/gen-docs.sh --build`. Once the catalogs carry the union, the
+readme table has nothing the link would lose.
 
 The same comparison still has to be run for the other reference tables (CLI
 flags, exit codes, config schema incl. the nested object schemas, date tokens,

@@ -15,13 +15,13 @@
 #   reviewer; a syntax slip ships a blank graph to GitHub).
 #
 # Usage (from any directory):
-#   bash scripts/check-formatting.sh
+#   bash scripts/docs/check-formatting.sh
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MONO_ROOT="$(dirname "$SCRIPT_DIR")"
-source "$SCRIPT_DIR/test-lib.sh"
+MONO_ROOT="$(dirname "$(dirname "$SCRIPT_DIR")")"
+source "$MONO_ROOT/scripts/test-lib.sh"
 
 cd "$MONO_ROOT"
 

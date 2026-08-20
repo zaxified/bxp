@@ -1,3 +1,7 @@
+---
+description: "Download, verify and run the console archive or the desktop app on Linux, macOS or Windows."
+---
+
 # Install
 
 ## BXP Desktop

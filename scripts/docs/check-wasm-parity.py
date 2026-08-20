@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Compare the wasm and native expression evaluators over the shared corpus.
 
-Driven by scripts/check-wasm-parity.sh, which guarantees the two runners exist
+Driven by scripts/docs/check-wasm-parity.sh, which guarantees the two runners exist
 and picks the JavaScript runtime. See that script's header for why this gate
 exists and why it is not a test-NN phase.
 
@@ -23,8 +23,10 @@ import sys
 import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ROOT = os.path.dirname(HERE)
-CORPUS = os.path.join(HERE, "test-06-expr-corpus.txt")
+ROOT = os.path.dirname(os.path.dirname(HERE))
+# The corpus is a TEST fixture, so it stays with the test phases in scripts/;
+# only the docs-support tooling lives down here in scripts/docs/.
+CORPUS = os.path.join(ROOT, "scripts", "test-06-expr-corpus.txt")
 MCP = os.path.join(ROOT, "bxp-mcp", "zig-out", "bin", "bxp-mcp")
 WASM = os.path.join(ROOT, "docs", "assets", "wasm", "bxp-eval.wasm")
 JS = os.environ.get("BXP_JS", "node")

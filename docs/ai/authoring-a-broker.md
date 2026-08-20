@@ -1,3 +1,7 @@
+---
+description: "How an agent authors a conversion template from a sample export, validating each step through bxp-mcp."
+---
+
 # Authoring a broker with an AI
 
 bxp-cli templates are plain JSON5 — a capable AI (Claude, ChatGPT, …) can

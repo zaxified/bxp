@@ -35,6 +35,12 @@ pub fn build(b: *std.Build) void {
     // reaper. Same route and same reason as `minisign` — bxp-core holds the one pin.
     const procrun_mod = bxp_core.module("procrun");
 
+    // The C-ABI catalog. Published as a module so `tools/zig-doc-gen` can
+    // render the surface table without linking the library, and imported BY
+    // NAME below rather than file-relative: a file cannot be both a module
+    // root and a file-relative import of another module.
+    const ops_mod = b.addModule("ops", .{ .root_source_file = b.path("src/ops.zig") });
+
     // Shared library: bxp-gui-bridge.dll on Windows, libbxp-gui-bridge.so
     // on Linux, libbxp-gui-bridge.dylib on macOS. Loaded at runtime by
     // bxp-gui via DartFFI's DynamicLibrary.open().
@@ -51,6 +57,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "inspect", .module = inspect_mod },
                 .{ .name = "minisign", .module = minisign_mod },
                 .{ .name = "procrun", .module = procrun_mod },
+                .{ .name = "ops", .module = ops_mod },
             },
         }),
     });
@@ -89,6 +96,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "inspect", .module = inspect_mod },
                 .{ .name = "minisign", .module = minisign_mod },
                 .{ .name = "procrun", .module = procrun_mod },
+                .{ .name = "ops", .module = ops_mod },
             },
         }),
     });

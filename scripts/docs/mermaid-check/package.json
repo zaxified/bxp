@@ -2,7 +2,7 @@
   "name": "bxp-mermaid-check",
   "private": true,
   "type": "module",
-  "description": "Mermaid block syntax validator for docs/**/*.md. Invoked by scripts/check-formatting.sh.",
+  "description": "Mermaid block syntax validator for docs/**/*.md. Invoked by scripts/docs/check-formatting.sh.",
   "dependencies": {
     "happy-dom": "^20.9.0",
     "mermaid": "^11.15.0"

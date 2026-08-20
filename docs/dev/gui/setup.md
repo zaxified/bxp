@@ -1,3 +1,7 @@
+---
+description: "Getting a Flutter development build of the desktop app running, including the bridge library."
+---
+
 # Setup & Development Workflow
 
 ## Getting started

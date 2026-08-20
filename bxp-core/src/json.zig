@@ -1,36 +1,36 @@
-/// Streaming JSON array-of-objects reader for bxp-cli.
-///
-/// Source files are JSON arrays where each top-level element is an object
-/// representing one record. Records may have any subset of keys, so the
-/// column set is the **union** of keys across all records in first-seen
-/// order — this stabilises CSV output column layout when an input file is
-/// missing the optional fields some records carry, and lets the same
-/// template merge data from heterogeneous JSON exports.
-///
-/// Two passes over the file are required:
-///   Pass 0 (`scanColNames`)       — discover the col_names union; no value
-///                                    materialisation; row data is skipped.
-///   Pass 1+ (`RecordReader.next`) — re-read from offset 0 and materialise
-///                                    one record at a time into the
-///                                    caller's row-scoped allocator.
-///
-/// RSS stays bounded to: one Scanner read buffer (READ_BUF_SIZE) + one
-/// row's worth of value bytes. The full file is never held in memory at
-/// once, which is what removed the legacy `MAX_FILE_SIZE_BYTES` limit on
-/// JSON inputs.
-///
-/// Value conversions (parity with the prior whole-file `std.json.Value`
-/// implementation):
-///   .null           → ""
-///   .true / .false  → "true" / "false"
-///   .string         → owned dupe in row_alloc
-///   integer-like #  → owned dupe of the number text (passes JSON literal
-///                     verbatim — matches `allocPrint("{d}", .{i64})`)
-///   non-integer #   → trailing-zero trimmed as a string ("415.20" → "415.2");
-///                     scientific notation expands through the fixed-point
-///                     `Decimal` core (exact to i128, float-free)
-///   nested {} / []  → silently collapsed to "" (skipValue advances the
-///                     scanner past the structure)
+//! Streaming JSON array-of-objects reader for bxp-cli.
+//!
+//! Source files are JSON arrays where each top-level element is an object
+//! representing one record. Records may have any subset of keys, so the
+//! column set is the **union** of keys across all records in first-seen
+//! order — this stabilises CSV output column layout when an input file is
+//! missing the optional fields some records carry, and lets the same
+//! template merge data from heterogeneous JSON exports.
+//!
+//! Two passes over the file are required:
+//!   Pass 0 (`scanColNames`)       — discover the col_names union; no value
+//!                                    materialisation; row data is skipped.
+//!   Pass 1+ (`RecordReader.next`) — re-read from offset 0 and materialise
+//!                                    one record at a time into the
+//!                                    caller's row-scoped allocator.
+//!
+//! RSS stays bounded to: one Scanner read buffer (READ_BUF_SIZE) + one
+//! row's worth of value bytes. The full file is never held in memory at
+//! once, which is what removed the legacy `MAX_FILE_SIZE_BYTES` limit on
+//! JSON inputs.
+//!
+//! Value conversions (parity with the prior whole-file `std.json.Value`
+//! implementation):
+//!   .null           → ""
+//!   .true / .false  → "true" / "false"
+//!   .string         → owned dupe in row_alloc
+//!   integer-like #  → owned dupe of the number text (passes JSON literal
+//!                     verbatim — matches `allocPrint("{d}", .{i64})`)
+//!   non-integer #   → trailing-zero trimmed as a string ("415.20" → "415.2");
+//!                     scientific notation expands through the fixed-point
+//!                     `Decimal` core (exact to i128, float-free)
+//!   nested {} / []  → silently collapsed to "" (skipValue advances the
+//!                     scanner past the structure)
 
 const std = @import("std");
 const Scanner = std.json.Scanner;

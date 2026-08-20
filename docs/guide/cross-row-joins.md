@@ -1,3 +1,7 @@
+---
+description: "Join a row to other rows in the same file with pre_pass and LOOKUP, including multiple named lookup tables."
+---
+
 # Cross-row joins (`pre_pass`)
 
 Use `pre_pass` when an input row needs data that lives on **another

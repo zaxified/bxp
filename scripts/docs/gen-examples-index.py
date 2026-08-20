@@ -10,12 +10,12 @@ from each example's `# H1` and its `!!! abstract "What"` admonition.
 Pure signpost generator — it never touches the example pages themselves. Re-run
 after adding, renaming, or re-describing an example:
 
-    python3 scripts/gen-examples-index.py
+    python3 scripts/docs/gen-examples-index.py
 """
 import os
 import re
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 BASE = os.path.join(ROOT, "docs", "examples")
 TIERS = [
     ("real-world", "Real-world use cases",

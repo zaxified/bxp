@@ -1,3 +1,7 @@
+---
+description: "How a conversion template is put together — data_dir, file patterns, input_schema, row_rules, output_schema."
+---
+
 # Templates
 
 A BXP config (`bxp-cli.json`) is JSON5 — JSON with comments, unquoted

@@ -1,7 +1,7 @@
-/// Broker eXchange Parser — CLI entry point.
-///
-/// Handles argument parsing, config loading, template validation, and dispatches
-/// to the processing pipeline (pipeline.zig) for per-broker file conversion.
+//! Broker eXchange Parser — CLI entry point.
+//!
+//! Handles argument parsing, config loading, template validation, and dispatches
+//! to the processing pipeline (pipeline.zig) for per-broker file conversion.
 const std = @import("std");
 const config_mod = @import("config");
 const diagnostics_mod = @import("diagnostics");

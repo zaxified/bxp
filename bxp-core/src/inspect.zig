@@ -26,6 +26,32 @@ const diagnostics_mod = @import("diagnostics");
 // never drift between the loader and this path.
 const CONFIG_MAX_FILE_SIZE = config_mod.CONFIG_MAX_FILE_SIZE;
 
+// ── documentation completeness ───────────────────────────────────────────────
+//
+// This module IS the agent- and GUI-facing API: bxp-mcp exposes it as tools and
+// bxp-gui-bridge as FFI entry points, so an operation nobody documented is an
+// operation nobody can discover. `evalBatchIo` and `templateIo` had both been
+// added and left out of the docs table before this check existed.
+//
+// `decls` reports public declarations only, which is exactly the surface at
+// issue; a private helper never has to be listed.
+const module_docs = @import("module_docs");
+comptime {
+    for (@typeInfo(@This()).@"struct".decls) |d| {
+        if (@typeInfo(@TypeOf(@field(@This(), d.name))) != .@"fn") continue;
+        var documented = false;
+        for (module_docs.inspect_ops) |op| {
+            if (std.mem.eql(u8, op.name, d.name)) documented = true;
+        }
+        if (!documented) @compileError("inspect." ++ d.name ++ " has no module_docs.inspect_ops entry");
+    }
+    // …and the other way round, so a renamed function cannot leave the docs
+    // describing a call that no longer exists.
+    for (module_docs.inspect_ops) |op| {
+        if (!@hasDecl(@This(), op.name)) @compileError("module_docs.inspect_ops names a missing function: " ++ op.name);
+    }
+}
+
 // ── docs ─────────────────────────────────────────────────────────────────────
 
 /// Serialize the full language/schema documentation JSON into an arena-owned

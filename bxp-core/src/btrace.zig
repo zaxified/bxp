@@ -45,6 +45,39 @@ pub const FrameType = enum(u8) {
     _, // non-exhaustive — unknown types are skipped via `pay_len`
 };
 
+/// One documented frame type. The code and the name come from `FrameType`
+/// itself; only the purpose is prose. Rendered into the trace-protocol
+/// reference by `tools/zig-doc-gen`.
+pub const FrameDoc = struct {
+    t: FrameType,
+    purpose: []const u8,
+};
+
+pub const frame_docs = [_]FrameDoc{
+    .{ .t = .file_start, .purpose = "Begin one input file (template + path + headers)." },
+    .{ .t = .file_end, .purpose = "Close one input file (per-file counters)." },
+    .{ .t = .output_row, .purpose = "One output row written to the `.csvx`. Carries the source-row locator." },
+    .{ .t = .filtered_row, .purpose = "Source row skipped silently (no `output_row`, no `error_row`)." },
+    .{ .t = .error_row, .purpose = "Expression evaluation error against a source row." },
+    .{ .t = .prepass_entry, .purpose = "One entry accumulated during the optional pre-pass over the input file." },
+    .{ .t = .done, .purpose = "Final frame. Carries the process exit code." },
+};
+
+// A new frame type is a wire-format change, and a wire-format change nobody
+// wrote down is how a reader ends up skipping frames it should have handled.
+// Adding a `FrameType` without a `frame_docs` entry fails the build here
+// rather than silently shipping an undocumented frame. (`_` is the
+// non-exhaustive marker, not a field, so it never reaches this loop.)
+comptime {
+    for (@typeInfo(FrameType).@"enum".fields) |f| {
+        var documented = false;
+        for (frame_docs) |d| {
+            if (@intFromEnum(d.t) == f.value) documented = true;
+        }
+        if (!documented) @compileError("FrameType." ++ f.name ++ " has no frame_docs entry");
+    }
+}
+
 pub const InputFormat = enum(u8) {
     csv = 0,
     json = 1,

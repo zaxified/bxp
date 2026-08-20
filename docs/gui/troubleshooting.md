@@ -1,3 +1,7 @@
+---
+description: "Fixes for the desktop app's common failures: a missing bridge library, a stale bundle, a refused update."
+---
+
 # Troubleshooting
 
 | Symptom                                | Likely cause / fix                                                                                                                                                                                                     |

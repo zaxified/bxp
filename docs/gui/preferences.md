@@ -1,3 +1,7 @@
+---
+description: "Where the desktop app stores theme, recent files, custom places and zoom, and what each setting does."
+---
+
 # User preferences
 
 Settings (theme, zoom level, recent files, custom places, and the

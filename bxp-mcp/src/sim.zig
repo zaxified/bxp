@@ -1,14 +1,14 @@
-// bxp-mcp — bxp_simulate orchestration
-//
-// Runs a full conversion the stateless inspect tools cannot: it stages the
-// agent's config + input CSV in a scratch workspace, spawns the co-located
-// bxp-cli (the workhorse) to do the actual run, reads the produced output back,
-// and returns a structured report. bxp-mcp does all the plumbing; bxp-cli only
-// runs — the agent just thinks about the config.
-//
-// No new bxp-cli flags: the run uses the existing --config / --template / --data
-// surface, with --data pointing the chosen template at the scratch data dir, so
-// the agent's config is staged verbatim (its data_dir is left untouched).
+//! bxp-mcp — bxp_simulate orchestration
+//!
+//! Runs a full conversion the stateless inspect tools cannot: it stages the
+//! agent's config + input CSV in a scratch workspace, spawns the co-located
+//! bxp-cli (the workhorse) to do the actual run, reads the produced output back,
+//! and returns a structured report. bxp-mcp does all the plumbing; bxp-cli only
+//! runs — the agent just thinks about the config.
+//!
+//! No new bxp-cli flags: the run uses the existing --config / --template / --data
+//! surface, with --data pointing the chosen template at the scratch data dir, so
+//! the agent's config is staged verbatim (its data_dir is left untouched).
 
 const std = @import("std");
 const builtin = @import("builtin");

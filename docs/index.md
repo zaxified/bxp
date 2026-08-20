@@ -1,3 +1,7 @@
+---
+description: "Convert broker export statements — CSV, XLSX or JSON — into portfolio-tracker formats with declarative JSON5 templates and no code."
+---
+
 # Broker eXchange Parser (BXP)
 
 A converter for broker export statements (CSV, XLSX, JSON) into

@@ -1,3 +1,7 @@
+---
+description: "Send one input row to zero, one or several output rows with row_rules, and set the activity type per branch."
+---
+
 # Row routing (`row_rules`)
 
 After `input_schema` has computed a row's `$variable`s, each row is

@@ -1,3 +1,7 @@
+---
+description: "Flutter patterns that matter here, plus the known issues worth recognising before rediscovering them."
+---
+
 # Patterns, How-to & Known Issues
 
 ## Key patterns

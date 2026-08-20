@@ -67,3 +67,6 @@ docs/examples/real-world/*/full
 # The advanced teaching tier has one scale input too — generated, not fetched
 # (advanced/freeform-payment-memos/make-full.sh), same ./full/ layout.
 docs/examples/advanced/*/full/
+
+# Python bytecode from the docs/test helper scripts.
+__pycache__/

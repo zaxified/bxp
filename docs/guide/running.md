@@ -1,3 +1,7 @@
+---
+description: "Run conversions from the command line: selecting templates, overriding the data directory, dry runs and exit codes."
+---
+
 # Running a conversion
 
 The conversion engine is `bxp-cli`. The GUI runs it for you; from a

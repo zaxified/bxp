@@ -1,13 +1,13 @@
 # Docs toolchain for the MkDocs Material site (mkdocs.yml).
 #
-# Used by BOTH the local venv (see scripts/gen-docs.sh) and the GitHub Pages
+# Used by BOTH the local venv (see scripts/docs/gen-docs.sh) and the GitHub Pages
 # workflow (.github/workflows/docs.yml), so a page that builds on a laptop
 # builds on the runner.
 #
 # Pinned deliberately. Material for MkDocs prints a standing warning that
 # MkDocs 2.0 removes the plugin system and rewrites theming with no migration
 # path — an unpinned install would adopt that the day it ships and break the
-# site build. Bump these on purpose, then run `bash scripts/gen-docs.sh --build`
+# site build. Bump these on purpose, then run `bash scripts/docs/gen-docs.sh --build`
 # and check the result before committing.
 #
 # cairosvg + pillow are not optional extras: mkdocs.yml enables the `social`

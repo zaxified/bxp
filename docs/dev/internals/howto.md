@@ -1,3 +1,7 @@
+---
+description: "Extension recipes — adding a broker template, a built-in function, a config field or an inspect operation."
+---
+
 # How-to Guides
 
 ## Adding a new conversion template

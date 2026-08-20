@@ -1,3 +1,7 @@
+---
+description: "The machine-readable formats bxp-cli and the inspect core emit, and who consumes each."
+---
+
 # Trace protocol
 
 Machine-readable output formats emitted by **bxp-cli** (the binary BXTB trace)

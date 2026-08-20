@@ -1,3 +1,7 @@
+---
+description: "The templates that ship next to the binary, what each one converts, and how to run one by id."
+---
+
 # Built-in templates
 
 BXP ships working templates for several brokers, targeting both

@@ -1,26 +1,19 @@
-# Module Reference
+---
+description: "What every bxp-core module is responsible for, where its code lives, and the stateless inspect surface."
+---
+
+# Module reference
 
 ## bxp-core modules
 
-| Module        | File              | Responsibility                                                                                                                                                                                                                                                                                                                                                                           |
-| ------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `csvstream`   | _(zig-libs dep)_  | CSV record model + streaming reader. `LineIterator` yields records from an in-memory chunk and `splitFields()` unquotes fields (spaces preserved — trimmed at access time in `expr.Context`); `ChunkReader` feeds it, splitting the input on `'\n'` boundaries for the parallel pipeline. Lazy quotes by design: a `'\n'` always ends a record, deliberately not RFC 4180 §2.6, which is what makes any newline a safe chunk boundary. Absorbed both `bxp-core`'s `csv.zig` and `bxp-cli`'s private `ChunkReader`; consumed from the pinned `zig_libs` fetch dependency — no longer in this tree.                     |
-| `xlsx`        | `xlsx.zig`        | Converts `.xlsx` to intermediate `.csv`. Reads ZIP+XML, handles shared strings, formula results, dates (via `styles.xml` numFmtId). Worksheets are streamed (no whole-file size cap); only the shared-strings table is capped (`XLSX_SHARED_STRINGS_CAP`, 1 GiB).                                                                                                                        |
-| `zipstream`   | _(zig-libs dep)_  | Streaming ZIP reader — central-directory walk + per-entry inflate, with CRC-32 verified at end-of-stream. Shared primitive behind xlsx ingest and bxp-cli's parallel `zipPrePass`; consumer memory is O(one inflate window). Store + deflate only. Consumed from the pinned `zig_libs` fetch dependency — no longer in this tree.                                                                                                                                                                              |
-| `expr`        | `expr.zig`        | Expression evaluator. Recursive-descent parser → evaluator. Per-row `Context` holds field values, ticker map, lookup table. `eval()` returns `Value` (string/decimal/bool — decimal is fixed-point i128, see the `decimal` module); `evalString()` coerces to string. Each built-in has a co-located `FnDoc` entry consumed by `docs.zig`.                                                      |
-| `datefmt`     | _(zig-libs dep)_  | Date core (parse / format / civil arithmetic), named module imported by `expr.zig` from the pinned `zig_libs` fetch dependency — no longer in this tree. Pre-1970 dates supported (pure parse → format, no epoch round-trip).                                                                                                                                                            |
-| `tz`          | _(zig-libs dep)_  | IANA time-zone UTC-offset lookup behind `TO_UTC` / `TZ_OFFSET` / `TZ_CONVERT` / `IS_DST`, including the DST transition rules. The zone tables are compiled into the module, so this stays build-time only — no runtime tzdata on the host. Imports `datefmt` internally, which is why both must come off the same `b.dependency` handle. Consumed from the pinned `zig_libs` fetch dependency — no longer in this tree.                                                                                                       |
-| `decimal`     | _(zig-libs dep)_  | Fixed-point `i128` at scale 1e12 (12 fractional digits) numeric core: exact `+ −`, half-away-from-zero `× ÷` / `ROUND`. The named module behind `Value.decimal`; shared by the csv / json / xlsx input paths so an identical numeric string parses identically everywhere. Consumed from the pinned `zig_libs` fetch dependency — no longer in this tree. Fallible operations return `Error!Decimal` (not `?Decimal`) and `toString` writes into a caller buffer instead of allocating.                                                                                                               |
-| `numparse`    | _(zig-libs dep)_  | Grouped-number parser (`1,234.56` / `1.234,56`) behind `expr.zig`'s numeric-coercion fallback, its `GREATEST`/`LEAST` diagnostics and the `decimal_sep_in` locale normalisation. Returns the same `decimal` the module above supplies. The one piece extracted from _below_ file level — it was never its own file here, only a function inside `expr.zig`. Consumed from the pinned `zig_libs` fetch dependency.                                                                        |
-| `unicode`     | `unicode.zig`     | UTF-8 case mapping + diacritic stripping behind `UPPER` / `LOWER` / `UNACCENT`, over `uucode` tables. File-relative `@import` by `expr.zig`.                                                                                                                                                                                                                                             |
-| `encoding`    | _(zig-libs dep)_  | Layer-0 single-byte code page ↔ UTF-8 transcode (Win-1250/1252, Latin-1/2/9) behind `csv_*_encoding`. 256-entry tables, no `uucode`. Named module imported by `expr` + `config` from the pinned `zig_libs` fetch dependency — no longer in this tree.                                                                                                                                                                                                                                            |
-| `config`      | `config.zig`      | Reads `bxp-cli.json` via the `json5` preprocessor then `std.json`. Returns `Config` owning all heap memory. `BrokerConfig.validate()` checks semantic constraints. Each struct has a co-located `FieldDoc` table consumed by `docs.zig`.                                                                                                                                                 |
-| `json`        | `json.zig`        | Reads a JSON array-of-objects into a flat row representation. Builds a union of all keys across all objects; fills missing keys with empty string.                                                                                                                                                                                                                                       |
-| `btrace`      | `btrace.zig`      | Binary BXTB trace `Writer` / `Reader` for `bxp-cli --trace`. Carries metadata only (per-row source byte offsets, errors, pre_pass dump, stats); per-row drill-down is recomputed on demand by the GUI via the bridge. The sole `bxp-cli --trace` format — NDJSON is no longer emitted there (the per-expr `evalTrace` stream is the only remaining NDJSON, see the inspect table below). |
-| `json5`       | _(zig-libs dep)_  | Single-pass tokenizer that converts JSON5 → standard JSON. Strips comments, converts unquoted keys, removes trailing commas, normalizes single-quoted strings. Named module imported by `config` / `docs` / `inspect` from the pinned `zig_libs` fetch dependency — no longer in this tree.                                                                                                                                                                                                                           |
-| `docs`        | `docs.zig`        | Aggregates `expr.zig` FnDoc catalog and `config.zig` FieldDoc tables into the docs catalog JSON. Single source of truth consumed by bxp-gui at startup.                                                                                                                                                                                                                                  |
-| `wasm`        | `wasm.zig`        | wasm32 export wrapper (`bxp_eval_batch` / `bxp_docs`) over `inspect.evalBatchIo` — the engine behind the docs site's expression scratchpad, which makes the browser a fourth consumer of the one evaluator alongside bxp-cli, bxp-mcp and bxp-gui-bridge. Opt-in target (`zig build wasm`), never part of `install`; the `.wasm` it produces is a build artifact, regenerated by `scripts/gen-wasm-playground.sh` and untracked. |
-| `diagnostics` | _(zig-libs dep)_  | Structured validation collector, consumed from the pinned `zig_libs` fetch dependency — no longer in this tree. `Severity` (.error / .warning / .info), `Diagnostic` (path, position, code, message, suggest), `Diagnostics` (ArrayList collector). Used by the config validator's deep validation; bxp-cli passes a null sink.                                                                                                                                         |
+What each module is responsible for, and — the column that used to rot — where
+its code actually lives. Nine are files in `bxp-core/src/`; the rest are pinned
+upstream dependencies, either modules of the `zig-libs` collection or standalone
+fetch dependencies. Three of the zig-libs entries are re-exports bxp-core never
+imports itself: they are published here only so `bxp-gui-bridge` and `bxp-mcp`
+share this package's single pin.
+
+--8<-- "includes/bxp-core-modules.md:table"
 
 ---
 
@@ -62,19 +55,16 @@ all I/O and the arena. Two thin adapters wrap it: **bxp-mcp** (MCP/stdio for
 agents) and **bxp-gui-bridge** (FFI for the GUI). A former `bxp-fmt` CLI adapter
 wrapped the same calls argv→stdout and was removed once both covered every op.
 
-| inspect function                            | Backed by                                | Purpose                                                                           |
-| ------------------------------------------- | ---------------------------------------- | --------------------------------------------------------------------------------- |
-| `annotateRaw` / `annotateConfigFromFile`    | `config.load` + `config.validateCollect` | Annotated JSON with `$err_<N>` / `$warn_<N>` / `$info_<N>` siblings (no `$comm_`) |
-| `listTemplatesValue` / `fetchTemplateValue` | `config.load`                            | `{templates:[{id, data_dir, file_pattern_in/out, file_type_in/out, description}]}` / one template re-serialised as a JSON object |
-| `validateExpr` / `validateExprJson`         | `expr.eval` + static FnArgDoc lint       | Authoring-time validation of one expression                                       |
-| `evalExpr`                                  | `expr.evalString`                        | Lenient runtime value of one expression                                           |
-| `evalTrace`                                 | `expr.eval` (trace_writer)               | Per-call NDJSON trace stream                                                      |
-| `evalBatch`                                 | `expr.evalString` ×N                     | Evaluate N exprs against one row in a single call; `{results:[…]}`                |
-| `docsJson`                                  | `docs.writeDocs`                         | Full FnDoc / FieldDoc catalog (single source for bxp-gui startup)                 |
+--8<-- "includes/inspect-surface.md:table"
 
-Adding an op: write the pure function in `inspect.zig`, then expose it from each
-adapter (a `bxp-mcp` tool in `bxp-mcp/src/tools.zig` + a `bridge_*` entry in
-`bxp-gui-bridge/src/main.zig`). No business logic lives in the adapters.
+That table is the module's entire public surface, held there by a compile-time
+check in `inspect.zig`: a new `pub fn` without an entry — or an entry naming a
+function that was renamed away — fails the build.
+
+Adding an op: write the pure function in `inspect.zig`, describe it in
+`module_docs.inspect_ops`, then expose it from each adapter (a `bxp-mcp` tool in
+`bxp-mcp/src/tools.zig` + a `bridge_*` entry in `bxp-gui-bridge/src/main.zig`).
+No business logic lives in the adapters.
 
 Deeper detail: [`bxp-mcp/CLAUDE.md`](https://github.com/zaxified/bxp/blob/master/bxp-mcp/CLAUDE.md),
 [`bxp-gui-bridge/CLAUDE.md`](https://github.com/zaxified/bxp/blob/master/bxp-gui-bridge/CLAUDE.md).

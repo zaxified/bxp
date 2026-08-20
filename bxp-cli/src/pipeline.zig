@@ -1,8 +1,8 @@
-/// Processing pipeline for bxp-cli: per-template file conversion and xlsx pre-pass.
-///
-/// Owns the core data-processing logic: reading input files, evaluating expressions,
-/// applying row rules, and writing output.  CLI argument parsing and config loading
-/// live in main.zig; all types that main.zig needs are exported as pub.
+//! Processing pipeline for bxp-cli: per-template file conversion and xlsx pre-pass.
+//!
+//! Owns the core data-processing logic: reading input files, evaluating expressions,
+//! applying row rules, and writing output.  CLI argument parsing and config loading
+//! live in main.zig; all types that main.zig needs are exported as pub.
 
 const std = @import("std");
 /// CSV record model + streaming chunk reader (the zig-libs `csvstream` module,

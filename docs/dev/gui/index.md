@@ -1,3 +1,7 @@
+---
+description: "Developer entry point for the Flutter desktop app: what it is and how its parts are laid out."
+---
+
 # GUI internals
 
 Flutter desktop app (`bxp-gui`) that provides a visual config editor, dry-run

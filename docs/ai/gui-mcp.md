@@ -1,3 +1,7 @@
+---
+description: "Drive the running desktop app from an agent over its embedded MCP server — open a config, edit it, dry-run it, read the trace."
+---
+
 # Driving the GUI with an agent (gui-mcp)
 
 BXP Desktop runs a small **MCP control server** so a local AI agent can

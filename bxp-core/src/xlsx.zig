@@ -1,18 +1,18 @@
-/// xlsx.zig — Convert Excel .xlsx files to CSV.
-///
-/// .xlsx files are ZIP archives containing XML. Every part is parsed by
-/// *streaming* its decompressed bytes through `zipstream` (central-directory
-/// walk + per-entry inflate) into the `XmlTok` pull-tokenizer — nothing is
-/// extracted to a temp directory and no XML part is materialised whole. The
-/// memory ceiling for a conversion is therefore O(one inflate window + one XML
-/// token window + the shared-strings table + one output row), independent of
-/// workbook size; the worksheet itself never lands in RAM.
-///
-/// Supported cell types: shared strings (t="s"), inline strings (t="inlineStr"),
-/// formula result strings (t="str"), booleans (t="b"), plain numbers, and
-/// date/time values detected via styles.xml numFmtId.
-///
-/// Not supported: encrypted workbooks, LZMA-compressed ZIP entries.
+//! Converts Excel .xlsx workbooks to CSV.
+//!
+//! .xlsx files are ZIP archives containing XML. Every part is parsed by
+//! *streaming* its decompressed bytes through `zipstream` (central-directory
+//! walk + per-entry inflate) into the `XmlTok` pull-tokenizer — nothing is
+//! extracted to a temp directory and no XML part is materialised whole. The
+//! memory ceiling for a conversion is therefore O(one inflate window + one XML
+//! token window + the shared-strings table + one output row), independent of
+//! workbook size; the worksheet itself never lands in RAM.
+//!
+//! Supported cell types: shared strings (t="s"), inline strings (t="inlineStr"),
+//! formula result strings (t="str"), booleans (t="b"), plain numbers, and
+//! date/time values detected via styles.xml numFmtId.
+//!
+//! Not supported: encrypted workbooks, LZMA-compressed ZIP entries.
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Decimal = @import("decimal").Decimal;

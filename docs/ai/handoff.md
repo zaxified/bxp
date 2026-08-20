@@ -1,3 +1,7 @@
+---
+description: "What an agent should hand back to a non-technical user once a template is working."
+---
+
 # Handing off to the user
 
 The user is often non-technical and is following your natural-language

@@ -104,11 +104,23 @@ bxp/
 │   │                         # — runs each example in a scratch work dir (its
 │   │                         # goldens + committed output sit next to the
 │   │                         # inputs under data_dir ".")
-│   ├── gen-wasm-playground.sh    # build docs/assets/wasm/bxp-eval.wasm
-│   │                             # (untracked artifact; gen-docs.sh calls it)
-│   ├── check-wasm-parity.sh      # wasm vs native over the expression corpus —
-│   │                             # needs a JS runtime, so NOT a test-NN phase;
-│   │                             # runs in the docs workflow
+│   ├── docs/                 # ALL documentation support lives here, so the
+│   │   │                     # test-/release- phases at this level stay legible
+│   │   ├── gen-docs.sh           # regenerate every generated page + fragment,
+│   │   │                         # then build/serve the site; --check = drift guard
+│   │   ├── gen-trees.py          # repo tree + test-phase table, harvested from
+│   │   │                         # file headers (//! / # / front matter)
+│   │   ├── gen-examples-index.py # Examples section landing pages
+│   │   ├── gen-wasm-playground.sh # build docs/assets/wasm/bxp-eval.wasm
+│   │   │                          # (untracked artifact; gen-docs.sh calls it)
+│   │   ├── check-wasm-parity.sh  # wasm vs native over the expression corpus —
+│   │   │                         # needs a JS runtime, so NOT a test-NN phase;
+│   │   │                         # runs in the docs workflow
+│   │   ├── check-formatting.sh   # mermaid-fence syntax check; PRE-RELEASE docs
+│   │   │                         # step — deliberately NOT a test-NN phase.
+│   │   │                         # Markdown formatting is hand-maintained
+│   │   │                         # (prettier + markdownlint broke MkDocs syntax)
+│   │   └── requirements.txt      # pinned mkdocs toolchain (local venv + CI)
 │   ├── release.sh            # Wrapper — runs release-01-console.sh + release-02-desktop.sh
 │   ├── release-01-console.sh    # Cross-compile bxp-cli + bxp-mcp, package bxp-console-* archives
 │   ├── release-02-desktop.sh    # Host-OS-specific Flutter desktop bundle → .AppImage / .deb
@@ -117,13 +129,15 @@ bxp/
 │   ├── release-changelog.sh     # Release prep: bump all 6 manifests + generate the
 │   │                            # CHANGELOG.md entry from commits since the last tag,
 │   │                            # committed as "release: prepare <version>". Push manually
-│   ├── release-tag.sh           # Cut + push the vX.Y.Z tag using the version already in
-│   │                            # the manifests (bxp-cli/build.zig.zon), triggering release.yml
-│   └── check-formatting.sh      # mermaid-fence syntax check; PRE-RELEASE docs
-│                                # step — deliberately NOT a test-NN phase
-│                                # (test.sh does not auto-run it). Markdown
-│                                # formatting is hand-maintained (prettier +
-│                                # markdownlint dropped — broke MkDocs syntax)
+│   └── release-tag.sh           # Cut + push the vX.Y.Z tag using the version already in
+│                                # the manifests (bxp-cli/build.zig.zon), triggering release.yml
+├── tools/                # Build-time doc generators. Never distributed; they sit
+│   │                     # ABOVE every package, so they can import every catalog
+│   │                     # without an upward-import cycle.
+│   ├── zig-doc-gen/      # every Zig catalog + the @typeInfo class diagram →
+│   │                     # docs/reference/, docs/includes/, dev/architecture/
+│   └── dart-doc-gen/     # the Dart GuiToolDoc pages (runs as a `flutter test`,
+│                         # because importing bxp_gui links dart:ui)
 ├── docs/                 # Developer + user documentation
 │   │                     # assets/javascripts/playground.js + assets/wasm/ =
 │   │                     # the in-browser expression scratchpad; authoring
@@ -133,9 +147,10 @@ bxp/
 │   ├── guide/                # User guide: templates, expressions, dates,
 │   │                         # numbers/encoding, row routing, cross-row joins,
 │   │                         # targets, running
-│   ├── reference/            # Generated + hand-maintained reference: CLI flags,
-│   │                         # config schema, expr functions, date tokens, exit
-│   │                         # codes, MCP tools, GUI tools/prefs/shortcuts
+│   ├── reference/            # FULLY GENERATED reference — never hand-edit:
+│   │                         # CLI flags, config schema, expr functions, date
+│   │                         # tokens, exit codes, MCP tools, built-in
+│   │                         # templates, GUI tools/prefs/shortcuts
 │   ├── gui/                  # bxp-gui user-facing guide (features, preferences,
 │   │                         # updates, troubleshooting)
 │   ├── ai/                   # Agent-facing guides (authoring a broker, gui-mcp,
@@ -151,10 +166,16 @@ bxp/
 │   │                         # (basic / intermediate / advanced / real-world);
 │   │                         # hand-authored index.md pages — see
 │   │                         # docs/examples/CLAUDE.md. Indexes generated by
-│   │                         # scripts/gen-examples-index.py.
-│   ├── includes/             # Shared MkDocs snippets (abbreviations)
+│   │                         # scripts/docs/gen-examples-index.py.
+│   ├── includes/             # Snippet fragments pulled into hand-written pages.
+│   │                         # abbreviations.md is hand-kept; the rest are
+│   │                         # GENERATED (bxp-core modules, inspect surface,
+│   │                         # bridge C-ABI, BXTB frames, csv encodings, the
+│   │                         # repo tree, the test-phase table)
 │   └── assets/               # demo.gif hero, logo, favicon, css/js
 ├── .github/workflows/
+│   ├── ci.yml            # Full scripts/test.sh on every PR + master push
+│   ├── docs.yml          # GitHub Pages publish (watches docs/, scripts/docs/, bxp-core/)
 │   └── release.yml       # Multi-host release pipeline triggered by `v*` tag push
 ├── DEV/                  # Developer scratch space — sample data, in-flight plans, AST prototypes
 ├── CLAUDE.md             # This file
@@ -296,6 +317,38 @@ services/prefs_service.dart`.
 - All code comments and documentation in English
 - Zig 0.16.0 API — use zig skill before writing new code
 - User-facing error messages use `std.process.exit(1)` (no Zig stack trace)
+- **Every file states its own purpose in its header**, and the docs generator
+  harvests exactly that: a `//!` module doc-comment in Zig (not `///` — at file
+  scope that documents the next declaration), the comment block under a
+  script's shebang or its module docstring, and a `description:` YAML front
+  matter key in a `docs/` Markdown page. A new file without one appears in the
+  generated repository tree with a blank note.
+
+## Generated documentation — do not hand-edit
+
+Everything under `docs/reference/`, `docs/dev/architecture/data-structures.md`
+and `docs/includes/` (except `abbreviations.md`) is generated, and
+`scripts/docs/gen-docs.sh --check` fails the suite on any diff (it runs inside
+`test-04`). Editing a generated page is undone by the next run — fix the source
+instead:
+
+| Generated from | Lives in |
+| --- | --- |
+| expression + config catalogs | `bxp-core/src/expr.zig`, `config.zig` (`FnDoc` / `FieldDoc`) |
+| CLI flags + exit codes | `bxp-cli/src/cli_docs.zig` |
+| MCP tool catalog | `bxp-mcp/src/tools.zig` |
+| module inventory + inspect surface | `bxp-core/src/module_docs.zig` |
+| bridge C-ABI surface | `bxp-gui-bridge/src/ops.zig` |
+| BXTB frame types | `bxp-core/src/btrace.zig` (`frame_docs`) |
+| the class diagram | `@typeInfo` over the live types, via `tools/zig-doc-gen/src/structs.zig` |
+| repo tree + test phases | file headers, via `scripts/docs/gen-trees.py` |
+| GUI tools / shortcuts / prefs | Dart catalogs, via `tools/dart-doc-gen` |
+
+Four of these are held to reality by a **comptime** check rather than by
+discipline: the inspect surface against `inspect.zig`'s public functions, the
+bridge table against its `pub export fn`s, the frame table against the
+`FrameType` enum, and the class diagram's relations against its class list. An
+undocumented addition is a build error, not a stale page.
 
 ## Detailed documentation
 

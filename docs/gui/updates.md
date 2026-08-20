@@ -1,3 +1,7 @@
+---
+description: "How the in-app updater finds, verifies and installs a new release, and how to turn it off."
+---
+
 # Auto-updates
 
 The app polls `github.com/zaxified/bxp` for new releases 5 seconds after

@@ -1,3 +1,7 @@
+---
+description: "The bird's-eye view: a generic engine driven by a JSON5 config, and how the packages fit together."
+---
+
 # Architecture
 
 ## Bird's-eye View

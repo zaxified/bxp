@@ -1,3 +1,7 @@
+---
+description: "The bxp-mcp stdio server: its tool catalog, how each tool is served, and the wire protocol."
+---
+
 # MCP server
 
 Developer orientation for **bxp-mcp**, the Model Context Protocol server that

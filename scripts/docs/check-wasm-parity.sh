@@ -24,7 +24,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MONO_ROOT="$(dirname "$SCRIPT_DIR")"
+MONO_ROOT="$(dirname "$(dirname "$SCRIPT_DIR")")"
 
 WASM="$MONO_ROOT/docs/assets/wasm/bxp-eval.wasm"
 BXP_MCP="$MONO_ROOT/bxp-mcp/zig-out/bin/bxp-mcp"

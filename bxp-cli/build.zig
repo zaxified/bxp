@@ -60,6 +60,25 @@ pub fn build(b: *std.Build) void {
     // deps — the consumer pays nothing it doesn't reference.
     _ = b.addModule("cli_docs", .{ .root_source_file = b.path("src/cli_docs.zig") });
 
+    // The processing engine is exported as a module for the same reason, but it
+    // is not pure data: the docs generator renders `SectionStats` into the
+    // architecture class diagram off `@typeInfo`, and that struct lives here
+    // next to the loop that fills it rather than in a data file of its own.
+    // Imports mirror the executable's wiring above minus `build_options`, which
+    // only main.zig reads.
+    _ = b.addModule("pipeline", .{
+        .root_source_file = b.path("src/pipeline.zig"),
+        .imports = &.{
+            .{ .name = "csvstream",   .module = core_dep.module("csvstream") },
+            .{ .name = "config",      .module = core_dep.module("config") },
+            .{ .name = "expr",        .module = core_dep.module("expr") },
+            .{ .name = "xlsx",        .module = core_dep.module("xlsx") },
+            .{ .name = "zipstream",   .module = core_dep.module("zipstream") },
+            .{ .name = "json",        .module = core_dep.module("json") },
+            .{ .name = "btrace",      .module = core_dep.module("btrace") },
+        },
+    });
+
     // Inline tests live in src/main.zig (validatePath, matchValueArg) and
     // src/pipeline.zig (writeSafeValue). main.zig is the test root; it
     // @imports pipeline.zig, so the latter's tests are discovered too.

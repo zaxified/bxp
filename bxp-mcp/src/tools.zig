@@ -1,14 +1,14 @@
-// bxp-mcp — tool catalog + handlers (in-process, no spawn)
-//
-// Each tool calls the shared bxp-core `inspect` module directly — the same
-// stateless core the GUI's bxp-gui-bridge also calls. No subprocess: a tool
-// call is a function call, so latency is microseconds, not a process spawn.
-//
-// Handlers have the zig-libs `mcp` module's shape: `fn(ctx, *mcp.ToolCall)
-// bool`. The transport (JSON-RPC framing, the handshake, tools/list, dispatch
-// by name, structuredContent, progress) belongs to that module; this file is
-// only the catalog and the nine handlers. `ctx` is the `App` below — the live
-// `io` + `environ_map` that `bxp_simulate` needs to spawn bxp-cli.
+//! bxp-mcp — tool catalog + handlers (in-process, no spawn)
+//!
+//! Each tool calls the shared bxp-core `inspect` module directly — the same
+//! stateless core the GUI's bxp-gui-bridge also calls. No subprocess: a tool
+//! call is a function call, so latency is microseconds, not a process spawn.
+//!
+//! Handlers have the zig-libs `mcp` module's shape: `fn(ctx, *mcp.ToolCall)
+//! bool`. The transport (JSON-RPC framing, the handshake, tools/list, dispatch
+//! by name, structuredContent, progress) belongs to that module; this file is
+//! only the catalog and the nine handlers. `ctx` is the `App` below — the live
+//! `io` + `environ_map` that `bxp_simulate` needs to spawn bxp-cli.
 
 const std = @import("std");
 const inspect = @import("inspect");

@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# Run desktop-side tests: flutter analyze + flutter test for bxp-gui plus
-# Dart unit tests for the embedded json5_ast package, and the generated-docs
-# drift guard (gen-docs.sh --check — covers all 9 catalog-driven reference
-# pages + nav coverage). The drift guard lives here, not in the console phase,
-# because its Dart-catalog pages are emitted by a `flutter test`, so it needs
-# the SDK. Skips cleanly if Flutter is not installed (so contributors who only
-# touch the console side don't need the SDK).
+# Desktop-side tests plus the generated-documentation drift guard.
+#
+# Runs flutter analyze + flutter test for bxp-gui, the Dart unit tests for the
+# embedded json5_ast package, and `scripts/docs/gen-docs.sh --check`, which
+# regenerates every catalog-driven page and fragment and fails on any diff.
+# The drift guard lives here, not in the console phase, because its
+# Dart-catalog pages are emitted by a `flutter test`, so it needs the SDK.
+# Skips cleanly if Flutter is not installed (so contributors who only touch
+# the console side don't need the SDK).
 #
 # Usage (from any directory):
 #   bash scripts/test-04-desktop.sh   — this phase alone
@@ -48,4 +50,4 @@ step "$(_lab bridge     'build')"       _zig_in "$MONO_ROOT/bxp-gui-bridge" buil
 step "$(_lab flutter    'analyze')"     _flutter_in analyze
 step "$(_lab flutter    'test')"        _flutter_in test
 step "$(_lab json5_ast  'dart test')"   _dart_in "$GUI_ROOT/packages/json5_ast" test
-step "$(_lab docs       'catalog drift')" bash "$SCRIPT_DIR/gen-docs.sh" --check
+step "$(_lab docs       'catalog drift')" bash "$SCRIPT_DIR/docs/gen-docs.sh" --check

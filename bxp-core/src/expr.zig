@@ -1,43 +1,43 @@
-/// Expression evaluator used to compute input_schema variable values.
-///
-/// Expressions are evaluated against a single CSV row represented by a Context.
-/// The evaluator is a single-pass recursive-descent parser that produces a Value
-/// (string, fixed-point decimal, or boolean) without building an intermediate AST.
-/// Numeric values use a fixed-point Decimal core (i128 @ scale 1e12) — see
-/// the `decimal` module — so decimal money math is exact (`0.02 + 0.08 == 0.10`).
-///
-/// Operator precedence (highest to lowest):
-///   unary -
-///   * /       (numeric multiply / divide)
-///   &         (string concatenation)
-///   + -       (numeric add / subtract)
-///   = != < > <= >=  (comparison; string equality only for = and !=)
-///   NOT       (boolean negation; binds looser than comparison, tighter than AND)
-///   AND
-///   OR
-///
-/// Built-in functions:
-///   [ColumnName]              — field value by CSV header name
-///   FIELDS(n)                 — field value by 1-based column index
-///   'text'                    — string literal
-///   IF(cond, yes, no)         — short-circuit conditional
-///   ABS(f)                    — absolute numeric value
-///   NOW()                     — current UTC datetime as ISO 8601 string (YYYY-MM-DDTHH:MM:SSZ)
-///   TRIM(f)                   — strip leading and trailing whitespace from string
-///   ROUND(f, n)               — round f to n decimal places
-///   FLOOR(f)                  — round f down to nearest integer
-///   CEILING(f)                — round f up to nearest integer
-///   RAND(n)                   — string of n random digits (first 1–9, rest 0–9; n clamped 1–65)
-///   COALESCE(a, b, ...)       — first non-empty argument (empty = whitespace-only string)
-///   DATE_CONVERT(f, from, to) — reformat a date/time string; format tokens use datefmt syntax
-///   PRICE_VALUE(f)            — strip currency symbol/code, return numeric string
-///   PRICE_CURRENCY(f)         — extract currency code from a price string
-///   REMAP(s, 'name'|k,v,...)  — whole-value lookup through a `maps` entry / inline pairs
-///   LOOKUP([name,] key, field) — retrieve a value stored by a pre_pass table
-///
-/// The list above is an illustrative sample, not the full set (~70 builtins).
-/// The authoritative, complete catalog is the per-builtin `FnDoc` declarations
-/// further down this file — search for the `── <NAME> ──` section headers.
+//! Expression evaluator used to compute input_schema variable values.
+//!
+//! Expressions are evaluated against a single CSV row represented by a Context.
+//! The evaluator is a single-pass recursive-descent parser that produces a Value
+//! (string, fixed-point decimal, or boolean) without building an intermediate AST.
+//! Numeric values use a fixed-point Decimal core (i128 @ scale 1e12) — see
+//! the `decimal` module — so decimal money math is exact (`0.02 + 0.08 == 0.10`).
+//!
+//! Operator precedence (highest to lowest):
+//!   unary -
+//!   * /       (numeric multiply / divide)
+//!   &         (string concatenation)
+//!   + -       (numeric add / subtract)
+//!   = != < > <= >=  (comparison; string equality only for = and !=)
+//!   NOT       (boolean negation; binds looser than comparison, tighter than AND)
+//!   AND
+//!   OR
+//!
+//! Built-in functions:
+//!   [ColumnName]              — field value by CSV header name
+//!   FIELDS(n)                 — field value by 1-based column index
+//!   'text'                    — string literal
+//!   IF(cond, yes, no)         — short-circuit conditional
+//!   ABS(f)                    — absolute numeric value
+//!   NOW()                     — current UTC datetime as ISO 8601 string (YYYY-MM-DDTHH:MM:SSZ)
+//!   TRIM(f)                   — strip leading and trailing whitespace from string
+//!   ROUND(f, n)               — round f to n decimal places
+//!   FLOOR(f)                  — round f down to nearest integer
+//!   CEILING(f)                — round f up to nearest integer
+//!   RAND(n)                   — string of n random digits (first 1–9, rest 0–9; n clamped 1–65)
+//!   COALESCE(a, b, ...)       — first non-empty argument (empty = whitespace-only string)
+//!   DATE_CONVERT(f, from, to) — reformat a date/time string; format tokens use datefmt syntax
+//!   PRICE_VALUE(f)            — strip currency symbol/code, return numeric string
+//!   PRICE_CURRENCY(f)         — extract currency code from a price string
+//!   REMAP(s, 'name'|k,v,...)  — whole-value lookup through a `maps` entry / inline pairs
+//!   LOOKUP([name,] key, field) — retrieve a value stored by a pre_pass table
+//!
+//! The list above is an illustrative sample, not the full set (~70 builtins).
+//! The authoritative, complete catalog is the per-builtin `FnDoc` declarations
+//! further down this file — search for the `── <NAME> ──` section headers.
 const std = @import("std");
 const datefmt = @import("datefmt");
 const tz = @import("tz");

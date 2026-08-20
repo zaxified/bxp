@@ -24,7 +24,7 @@
 # The evaluator is bxp-mcp's `bxp_eval_batch` (JSON-RPC over stdio), same as
 # test-06 — so this phase needs no JavaScript runtime. What it does NOT cover is
 # the browser glue; the wasm/native agreement has its own gate,
-# scripts/check-wasm-parity.sh, which needs node and runs in the docs workflow.
+# scripts/docs/check-wasm-parity.sh, which needs node and runs in the docs workflow.
 #
 # Exit code = number of failures (0 = green).
 

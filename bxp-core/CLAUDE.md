@@ -12,26 +12,20 @@ Consumed by bxp-cli (conversion engine) and the stateless-inspect adapters
 
 ## Module overview
 
-| Module        | File              | Public API                                                                |
-| ------------- | ----------------- | ------------------------------------------------------------------------- |
-| `csvstream`   | _(zig-libs dep)_  | `splitFields()`, `LineIterator`, `LineSlice` + `ChunkReader` — the CSV record model and the record-aligned streaming reader. **No longer in this tree**: the record half was `csv.zig` here, the `ChunkReader` half was private to bxp-cli's `pipeline.zig`; upstream holds one module for both |
-| `xlsx`        | `xlsx.zig`        | `xlsxToCsv()`, `SheetSpec` — streams every XML part via `zipstream`       |
-| `zipstream`   | _(zig-libs dep)_  | `Archive`, `EntryReader` — streaming ZIP central-dir walk + per-entry inflate (named module; shared by `xlsx` ingest + bxp-cli's parallel `zipPrePass`). **No longer in this tree**: consumed from the pinned `zig_libs` fetch dep, which adds CRC-32 verification, a decompression-bomb cap, a zip-slip predicate, central-directory pre-validation and zip64 reading |
-| `expr`        | `expr.zig`        | `eval()`, `evalString()`, `Context`, `Value`, `FnDoc` catalog             |
-| `datefmt`     | _(zig-libs dep)_  | `parse()`, `format()`, civil/arithmetic helpers, `partsToUnix`/`unixToParts` seconds-epoch, `ZZ` offset token — the date core. **No longer in this tree**: consumed from the pinned `zig_libs` fetch dep as the named `datefmt` module (wired into `expr` in `build.zig`). The former local `datefmt.zig` was a strict subset of the upstream module — identical civil core, parser, formatter and token table, plus coverage and an `xsd:dateTime` entry point bxp does not call |
-| `tz`          | _(zig-libs dep)_  | `find()`, `offsetAt()` — IANA UTC-offset lookup. **No longer in this tree**: consumed from the pinned `zig_libs` fetch dep as the named `tz` module (wired into `expr` in `build.zig`). The offset tables compile in, so there is still no runtime dependency. The former local `tz.zig` was a strict subset of the upstream module; its generator moved to `scripts/tz-gen/` in that repo |
-| `decimal`     | _(zig-libs dep)_  | `Decimal` fixed-point i128 @ 1e12 — numeric core (named `"decimal"` module, shared by every input path). **No longer in this tree**: consumed from the pinned `zig_libs` fetch dep. Same arithmetic, different API — fallible ops return `Error!Decimal` not `?Decimal`, and `toString` writes into a caller buffer instead of allocating |
-| `numparse`    | _(zig-libs dep)_  | `parseGroupedNumber()` — grouped-number parsing (`1,234.56` / `1.234,56`) into a `Decimal`, or null. **No longer in this tree**: `expr.zig` aliases the named module. Extracted below file level (it was never its own file here), and the code is byte-identical to the local original |
-| `unicode`     | `unicode.zig`     | `toUpperStr()`, `toLowerStr()`, `unaccentStr()` — UTF-8 case mapping + diacritic stripping over `uucode` tables (file-rel @import by `expr.zig`, not a named module) |
-| `encoding`    | _(zig-libs dep)_  | `Encoding`, `decodeToUtf8()`, `encodeFromUtf8()` — Layer 0 single-byte code page ↔ UTF-8 (named module shared by `expr` + `config`; no `uucode` dep). **No longer in this tree**: consumed from the pinned `zig_libs` fetch dep. The former local copy was a strict subset — the five 256-entry tables and both transcode entry points were byte-identical |
-| `config`      | `config.zig`      | `Config`, `BrokerConfig`, `load()`, `validate()`, `FieldDoc`              |
-| `json`        | `json.zig`        | `scanColNames()` + `RecordReader` — streaming JSON array-of-objects input |
-| `btrace`      | `btrace.zig`      | Binary trace `Writer` / `Reader` for `--trace=bin`                        |
-| `json5`       | _(zig-libs dep)_  | `preprocess()` + `preprocessAnnotated()` — JSON5 → JSON. **No longer in this tree**: consumed from the pinned `zig_libs` fetch dep. Unlike the others this was NOT a strict subset — the local copy was an older line still carrying two crashes and two JSON5-spec deviations upstream had fixed |
-| `docs`        | `docs.zig`        | `writeDocs(alloc, writer)` — emits the language/schema docs JSON                   |
-| `diagnostics` | _(zig-libs dep)_  | `Diagnostics`, `Diagnostic`, `Severity` — structured validation collector. **No longer in this tree**: consumed from the pinned `zig_libs` fetch dep. The former local copy was a strict subset (identical collector, fields and count methods) |
-| `wasm`        | `wasm.zig`        | wasm32 export wrapper around `inspect.evalBatchIo` + `inspect.docsJson` — the docs expression scratchpad's engine. Not a named module: an opt-in `zig build wasm` artifact (see _wasm build_ below) |
-| `inspect`     | `inspect.zig`     | Shared stateless core: `annotateRaw()`, `validateExpr()`, `validateExprJson()`, `evalExpr()`, `evalTrace()`, `evalBatch()`, `docsJson()`, `listTemplates()`, `fetchTemplate()` — wrapped by bxp-mcp + bxp-gui-bridge |
+**The inventory is [`src/module_docs.zig`](src/module_docs.zig)** — every module,
+what it is responsible for, and whether its code is a file in `src/`, a module of
+the pinned `zig-libs` collection, or a standalone fetch dependency. That last
+column is the one that kept going stale in prose, which is why it is an enum
+there rather than a sentence here; `tools/zig-doc-gen` renders the table onto the
+site as [Module reference](https://zaxified.github.io/bxp/dev/internals/modules/).
+
+The same file also carries `inspect_ops`, the catalog of the stateless `inspect`
+surface. A comptime check in `inspect.zig` holds it to that module's public
+functions in both directions, so an op cannot be added, renamed or removed
+without the docs following.
+
+The per-module API notes and migration rationale below are what those one-liners
+cannot carry — read them for the *why*, `module_docs.zig` for the *what*.
 
 ## Module details
 
@@ -502,7 +496,7 @@ step so `install` never pays for it:
 ```bash
 zig build wasm -Dtarget=wasm32-freestanding -Doptimize=ReleaseSmall
 # or, into the docs tree with size reporting:
-bash ../scripts/gen-wasm-playground.sh
+bash ../scripts/docs/gen-wasm-playground.sh
 ```
 
 The step deliberately reuses the same `target`/`optimize` options as every
@@ -528,7 +522,7 @@ only drift from the native one.
   meaningful slimming available that would not also make the browser disagree
   with the CLI.
 - Parity with the native engine is measured, not assumed:
-  `scripts/check-wasm-parity.sh` runs the whole cross-runner corpus through both
+  `scripts/docs/check-wasm-parity.sh` runs the whole cross-runner corpus through both
   and requires byte-identical per-expression results (NOW/RAND compared on the
   `ok` flag only). It runs in the docs workflow, where a JS runtime exists.
 

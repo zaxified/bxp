@@ -1,3 +1,7 @@
+---
+description: "The JSON shapes the stateless inspect core returns, and how each maps onto an MCP tool and a bridge call."
+---
+
 # Stateless inspect formats
 
 These are the JSON output shapes of the stateless inspection core

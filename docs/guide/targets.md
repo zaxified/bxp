@@ -1,3 +1,7 @@
+---
+description: "The output_schema each supported tracker expects — Wealthfolio and brycht.app — and how to write one for another."
+---
+
 # Target specs
 
 A template's `output_schema` decides which tracker it targets. BXP ships

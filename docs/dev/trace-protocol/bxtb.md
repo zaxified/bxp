@@ -1,3 +1,7 @@
+---
+description: "The binary BXTB frame stream behind --trace: framing, frame types and payload layouts."
+---
+
 # BXTB binary trace
 
 Invoked as `bxp-cli --trace [--config ...] [--template ...]`. Writes a binary
@@ -50,17 +54,12 @@ documents the same shape for consumers that don't link the Zig writer.
 
 ## Frame reference
 
-Seven frame types are defined today:
+Every frame type the producer can emit, straight from the `FrameType` enum — a
+new variant without a description is a compile error in `btrace.zig`, because a
+wire-format change nobody wrote down is how a reader ends up skipping frames it
+should have handled:
 
-| Code   | Name            | Purpose                                                                 |
-| ------ | --------------- | ----------------------------------------------------------------------- |
-| `0x01` | `file_start`    | Begin one input file (template + path + headers).                       |
-| `0x02` | `file_end`      | Close one input file (per-file counters).                               |
-| `0x03` | `output_row`    | One output row written to the `.csvx`. Carries the source-row locator.  |
-| `0x04` | `filtered_row`  | Source row skipped silently (no `output_row`, no `error_row`).          |
-| `0x05` | `error_row`     | Expression evaluation error against a source row.                       |
-| `0x06` | `prepass_entry` | One entry accumulated during the optional pre-pass over the input file. |
-| `0x07` | `done`          | Final frame. Carries the process exit code.                             |
+--8<-- "includes/trace-frames.md:table"
 
 Frames carry **metadata only**: per-output-row pointers into the source CSV
 (`source_locator` byte offset), error list, pre_pass dump, aggregate stats.

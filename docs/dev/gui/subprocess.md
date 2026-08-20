@@ -1,3 +1,7 @@
+---
+description: "How the app reaches its backend: the bridge C-ABI surface, the in-process ops and the bxp-cli proxy."
+---
+
 # Subprocess Wiring
 
 `BxpProcessClient` is the single entry point for all binary calls. Every call
@@ -9,15 +13,16 @@ shapes: in-process inspect / eval, and a native-code `bxp-cli` subprocess proxy
 ## Transport paths
 
 The bridge is the **single backend on every platform** — there is no
-`Process.start` path. All five entry points are `bridge_*` calls:
+`Process.start` path. Every entry point is a `bridge_*` call, and the whole
+C-ABI surface is below: `in-proc` runs inside the GUI process against
+`bxp-core`, `proxy` spawns `bxp-cli` and drains its pipes in native code, and
+`lifecycle` covers handles, buffers and the version probe.
 
-| Transport                | Used for                                                                              |
-| ------------------------ | ------------------------------------------------------------------------------------- |
-| `bridge_inspect`         | Stateless ops in-process: config validation, docs, list/fetch templates, eval-batch   |
-| `bridge_eval_expr`       | expr editor live validation per keystroke (in-process) — avoids a ~50 ms spawn cost   |
-| `bridge_eval_expr_trace` | ExprPlayground per-call NDJSON (in-process), plus per-token trace stream              |
-| `bridge_run_streaming`   | `bxp-cli --trace` dry-run / full-run — native pipe drain sidesteps dart-lang/sdk#1727 |
-| `bridge_run`             | one-shot `bxp-cli --version` — same pipe-truncation workaround                        |
+--8<-- "includes/bridge-ops.md:table"
+
+The table is generated from `bxp-gui-bridge/src/ops.zig`, which a compile-time
+check holds to the library's actual `pub export fn`s in both directions — so an
+export cannot be added, renamed or removed without this page following.
 
 The bridge is implemented as a Zig shared library that links the
 `bxp-core/inspect` + `expr` modules directly (in-proc paths) and spawns the

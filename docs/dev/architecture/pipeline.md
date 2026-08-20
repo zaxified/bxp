@@ -1,3 +1,7 @@
+---
+description: "How one conversion executes end to end, and why the expression language is a custom DSL rather than a hosted engine."
+---
+
 # CLI Pipeline
 
 ## Execution Flow

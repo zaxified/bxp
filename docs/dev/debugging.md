@@ -1,3 +1,7 @@
+---
+description: "Debug a conversion: the flags worth combining, expression inspection, and driving the live GUI from an agent."
+---
+
 # Debugging
 
 ## Debugging workflow

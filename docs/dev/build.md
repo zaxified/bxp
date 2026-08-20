@@ -1,3 +1,7 @@
+---
+description: "Toolchain setup, the repository layout, and how to build every package in the monorepo."
+---
+
 # Build & Setup
 
 ## VS Code setup
@@ -65,110 +69,13 @@ Code setup; see the root `CLAUDE.md` for the skill conventions.
 
 ## Repository layout
 
-```diagram
-bxp/                            # monorepo root (git root)
-├── bxp-cli/                    # user-facing CLI binary
-│   ├── src/
-│   │   ├── main.zig            # arg parsing, config loading, dispatch
-│   │   └── pipeline.zig        # processBroker(), xlsxPrePass(), Output, SectionStats
-│   ├── build.zig               # imports bxp-core modules by name
-│   └── build.zig.zon           # depends on bxp-core (path dep)
-├── bxp-mcp/                    # MCP server (JSON-RPC over stdio) for AI agents
-│   ├── src/
-│   │   ├── main.zig            # entry: arena + --help + register + serveStdio
-│   │   │                       #   (transport = zig-libs `mcp` module)
-│   │   ├── tools.zig           # tool catalog → bxp-core/inspect calls
-│   │   └── sim.zig             # bxp_simulate: stage + spawn bxp-cli + diff
-│   ├── build.zig
-│   └── build.zig.zon           # depends on bxp-core (path dep)
-├── bxp-core/                   # internal shared library (no binary)
-│   ├── src/
-│   │   ├── xlsx.zig            # .xlsx → CSV (ZIP+XML)
-│   │   ├── expr.zig            # expression evaluator + FnDoc catalog
-│   │   ├── unicode.zig         # UTF-8 case mapping (UPPER/LOWER) over uucode tables
-│   │   ├── config.zig          # JSON5 config loader + FieldDoc tables
-│   │   ├── json.zig            # JSON array-of-objects → row representation
-│   │   ├── btrace.zig          # binary BXTB trace Writer/Reader for --trace
-│   │   ├── docs.zig            # --docs aggregator: re-exports expr + config catalogs
-│   │   └── inspect.zig         # shared stateless core behind bxp-mcp + the bridge
-│   ├── build.zig               # exports named Zig modules
-│   └── build.zig.zon           # fetch deps: uucode (tables), regex (Pike-VM),
-│                               #             zig-libs (12 modules — the whole
-│                               #                       primitive layer)
-├── bxp-gui/                    # Flutter desktop app (Linux / macOS / Windows)
-│   ├── lib/
-│   │   ├── main.dart           # Flutter entry; window + theme + provider wiring
-│   │   ├── services/           # subprocess + FFI wrappers, AST loader, prefs, updater
-│   │   ├── store/              # TraceStore ChangeNotifier + trace data models
-│   │   └── ui/                 # widgets: tree editor, expr panel, row debugger, …
-│   ├── packages/json5_ast/     # standalone Dart JSON5 AST library (path dep)
-│   ├── linux/, macos/, windows/ # per-platform Flutter shells
-│   └── pubspec.yaml
-├── bxp-gui-bridge/             # Zig FFI shared library — single GUI backend (all platforms)
-│   ├── src/main.zig            # C-ABI surface: bridge_run(_streaming) proxy +
-│   │                           #   bridge_eval_expr* / bridge_inspect in-proc
-│   ├── test/test_helper.zig    # re-exec target binary driven by argv switches
-│   │                           #   (no reliance on real OS binaries in tests)
-│   ├── build.zig
-│   └── build.zig.zon           # depends on bxp-core (path dep)
-├── datasets/                   # anonymized sample data + expected outputs
-│   └── <template_id>/
-│       ├── sample.csv / .xlsx  # input file
-│       ├── sample.json         # bxp-cli config for this dataset
-│       └── sample.expected     # expected .csvx output (regression baseline)
-├── docs/
-│   ├── index.md                # MkDocs landing page (nav lives in mkdocs.yml)
-│   ├── dev/build.md            # this file — setup + build + test entry point
-│   ├── dev/testing.md          # test phases, corpus, regression fixture guide
-│   ├── dev/debugging.md        # debug flags, expression inspection, live GUI debug
-│   ├── dev/internals/          # design philosophy, module contracts, extensibility
-│   │   ├── index.md            #   overview + reading order
-│   │   ├── howto.md            #   extension recipes
-│   │   ├── implementation.md   #   internal contracts
-│   │   ├── modules.md          #   bxp-core module reference
-│   │   └── performance.md      #   perf model + benchmarks
-│   ├── dev/architecture/       # bird's-eye view + data-flow diagrams
-│   │   ├── index.md            #   topology overview
-│   │   ├── pipeline.md         #   CLI execution + expression evaluator
-│   │   ├── gui.md              #   GUI layers, dry-run, config editing, updater
-│   │   └── data-structures.md  #   Zig struct reference
-│   ├── dev/gui/                # bxp-gui developer guide
-│   ├── dev/mcp.md              # bxp-mcp MCP server guide
-│   ├── dev/release.md          # release process walkthrough
-│   ├── dev/roadmap.md          # forward-looking milestones
-│   └── dev/trace-protocol/     # bxp-cli --trace BXTB + inspect output formats
-│       ├── index.md            #   overview
-│       ├── bxtb.md             #   binary BXTB frame stream
-│       └── inspect.md          #   inspect output formats
-├── resources/
-│   ├── readme.md               # the single hand-maintained readme shipped verbatim
-│   │                           #   in BOTH console + desktop archives
-│   ├── console/                # bxp-cli.examples.json (bundled in console archives)
-│   ├── desktop/                # bxp-gui.desktop template (bundled in desktop archives)
-│   └── icons/                  # SVG variants + build-icons.sh (single source for app icons)
-├── scripts/
-│   ├── test.sh                 # wrapper: runs every test-NN-*.sh in numeric order
-│   ├── test-lib.sh             # shared section/step/summary helpers (sourced)
-│   ├── test-01-console.sh      # bxp-core unit (incl. inspect) + bxp-cli build + json5_ast unit
-│   ├── test-02-mcp.sh          # bxp-mcp build + unit tests + JSON-RPC smoke (incl. bxp_simulate)
-│   ├── test-03-bridge.sh       # bxp-gui-bridge build + unit tests
-│   ├── test-04-desktop.sh      # flutter analyze + flutter test + json5_ast dart test (builds bridge .so)
-│   ├── test-05-bench-guard.sh  # coarse perf gate: recycles Console's ReleaseSafe bxp-cli
-│   ├── test-06-expr-corpus.sh  # cross-runner expression corpus regression gate
-│   ├── test-07-datasets.sh     # bxp-cli regression vs datasets/*/*.expected
-│   ├── test-08-docs-examples.sh # example pages: clickable expressions evaluate
-│   ├── test-09-examples.sh     # bxp-cli regression vs docs/examples/*/*/*.expected
-│   ├── release.sh              # wrapper: release-01-console.sh + release-02-desktop.sh
-│   ├── release-01-console.sh   # cross-compile bxp-cli → bxp-console-* archives
-│   ├── release-02-desktop.sh   # Flutter bundle → AppImage / .deb / .exe / .dmg
-│   ├── release-03-checksums.sh # emit SHA256SUMS for all release artifacts
-│   ├── release-changelog.sh    # bump versions + generate CHANGELOG.md entry + commit
-│   ├── release-tag.sh          # read version from manifest + tag + push
-│   ├── gen-docs.sh             # regenerate docs/reference/ from the in-code catalogs
-│   │                           #   (+ --check drift guard) and build/serve the site
-│   └── check-formatting.sh     # mermaid-fence syntax check (pre-release; not auto-run)
-└── README.md                   # project overview
-```
+Generated by walking the repository, with each entry's note read from the
+file's own header — a `//!` line in Zig, the comment under a script's
+shebang, the `description:` front matter of a Markdown page. Directories are
+described in the generator's own catalog. Nothing here is retyped, so a new
+file arrives on this page with the commit that adds it.
+
+--8<-- "includes/repo-tree.md:tree"
 
 ---
 
@@ -208,14 +115,14 @@ never part of `install`**:
 cd bxp-core && zig build wasm -Dtarget=wasm32-freestanding -Doptimize=ReleaseSmall
 ```
 
-In practice you do not run that by hand: `scripts/gen-wasm-playground.sh` builds
-it into `docs/assets/wasm/bxp-eval.wasm`, and `scripts/gen-docs.sh` calls that
+In practice you do not run that by hand: `scripts/docs/gen-wasm-playground.sh` builds
+it into `docs/assets/wasm/bxp-eval.wasm`, and `scripts/docs/gen-docs.sh` calls that
 script for you. The `.wasm` is a build artifact and stays untracked — a checkout
 regenerates it, and a docs build without it leaves the panel reporting that it
 could not load the engine.
 
 Agreement with the native engine is measured rather than assumed:
-`scripts/check-wasm-parity.sh` runs the cross-runner expression corpus through
+`scripts/docs/check-wasm-parity.sh` runs the cross-runner expression corpus through
 both and requires byte-identical results. It needs a JS runtime, so it is a
 docs-workflow step rather than a `test-NN` phase.
 

@@ -7,12 +7,12 @@
 # under docs/guide/, docs/getting-started/, etc. are hand-authored.
 #
 # Usage (from any directory):
-#   bash scripts/gen-docs.sh           — regenerate reference pages, build the
-#                                        site into site/, then `mkdocs serve`
-#   bash scripts/gen-docs.sh --build   — regenerate + build site/, no serve
-#   bash scripts/gen-docs.sh --check   — verify committed reference pages match a
-#                                        fresh generation + every reference page
-#                                        is in the nav; exit 1 + diff on drift
+#   bash scripts/docs/gen-docs.sh          — regenerate reference pages, build the
+#                                            site into site/, then `mkdocs serve`
+#   bash scripts/docs/gen-docs.sh --build  — regenerate + build site/, no serve
+#   bash scripts/docs/gen-docs.sh --check  — verify committed reference pages match
+#                                            a fresh generation + every reference
+#                                            page is in the nav; exit 1 + diff
 #
 # The three Dart-catalog pages (gui-agent-tools.md, gui-shortcuts.md,
 # gui-prefs.md) can't be read by the Zig tool (language boundary), so they are
@@ -23,24 +23,33 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MONO_ROOT="$(dirname "$SCRIPT_DIR")"
-REF_DIR="$MONO_ROOT/docs/reference"
+MONO_ROOT="$(dirname "$(dirname "$SCRIPT_DIR")")"
+DOCS_DIR="$MONO_ROOT/docs"
+REF_DIR="$DOCS_DIR/reference"
 VENV="$MONO_ROOT/.venv-docs"
 MKDOCS="$VENV/bin/mkdocs"
 
-# The Zig-catalog reference pages the central generator owns (gui-agent-tools.md
-# is hand-authored — see the note above).
+# Every generated page, by its site-relative path. Most are reference tables
+# rendered from a `*Doc` catalog; data-structures.md is rendered from
+# `@typeInfo` over the live types and therefore sits with the architecture
+# pages rather than under reference/.
 GENERATED_PAGES=(
-  expr-functions.md
-  date-tokens.md
-  config-schema.md
-  built-in-templates.md
-  cli-flags.md
-  exit-codes.md
-  mcp-tools.md
-  gui-agent-tools.md
-  gui-shortcuts.md
-  gui-prefs.md
+  reference/expr-functions.md
+  reference/date-tokens.md
+  reference/config-schema.md
+  reference/built-in-templates.md
+  reference/cli-flags.md
+  reference/exit-codes.md
+  reference/mcp-tools.md
+  reference/gui-agent-tools.md
+  reference/gui-shortcuts.md
+  reference/gui-prefs.md
+  dev/architecture/data-structures.md
+  includes/bxp-core-modules.md
+  includes/inspect-surface.md
+  includes/bridge-ops.md
+  includes/trace-frames.md
+  includes/csv-encodings.md
 )
 
 mode="serve"
@@ -66,18 +75,27 @@ run_dart_gen() {
       && BXP_DOCS_OUT="$out" flutter test test/gen_docs_test.dart >/dev/null )
 }
 
+# The repository tree and the test-phase table are harvested from file headers
+# rather than from a Zig catalog, so they have their own generator. It owns its
+# comparison (it writes into docs/includes/ directly), which is why it is not
+# part of GENERATED_PAGES above.
+run_tree_gen() {
+  python3 "$SCRIPT_DIR/gen-trees.py" "$@"
+}
+
 if [[ "$mode" == "check" ]]; then
   rc=0
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' EXIT
   run_zig_gen "$tmp" >/dev/null
   run_dart_gen "$tmp"
+  run_tree_gen --check || rc=1
 
   for page in "${GENERATED_PAGES[@]}"; do
-    if ! diff -q "$REF_DIR/$page" "$tmp/$page" >/dev/null 2>&1; then
+    if ! diff -q "$DOCS_DIR/$page" "$tmp/$page" >/dev/null 2>&1; then
       rc=1
-      echo "DRIFT: docs/reference/$page is out of sync with its catalog — run: bash scripts/gen-docs.sh --build"
-      diff "$REF_DIR/$page" "$tmp/$page" | head -40 || true
+      echo "DRIFT: docs/$page is out of sync with its source — run: bash scripts/docs/gen-docs.sh --build"
+      diff "$DOCS_DIR/$page" "$tmp/$page" | head -40 || true
     fi
   done
 
@@ -95,8 +113,9 @@ if [[ "$mode" == "check" ]]; then
 fi
 
 # serve / build: regenerate in place, then build the site.
-run_zig_gen "$REF_DIR"
-run_dart_gen "$REF_DIR"
+run_zig_gen "$DOCS_DIR"
+run_dart_gen "$DOCS_DIR"
+run_tree_gen
 
 # The docs playground's wasm engine. Not a tracked file (see .gitignore), so a
 # fresh checkout has to build it here or every playground on the site reports
@@ -107,7 +126,7 @@ bash "$SCRIPT_DIR/gen-wasm-playground.sh"
 if [[ ! -x "$MKDOCS" ]]; then
   echo "mkdocs not found at $MKDOCS" >&2
   echo "create the docs venv first:" >&2
-  echo "  python3 -m venv $VENV && $VENV/bin/pip install -r $MONO_ROOT/scripts/docs-requirements.txt" >&2
+  echo "  python3 -m venv $VENV && $VENV/bin/pip install -r $MONO_ROOT/scripts/docs/requirements.txt" >&2
   exit 1
 fi
 
@@ -121,7 +140,7 @@ if ! "$MKDOCS" --version >/dev/null 2>&1; then
   echo "different Python than $VENV/bin/python resolves to today." >&2
   echo "recreate it:" >&2
   echo "  rm -rf $VENV && python3 -m venv $VENV \\" >&2
-  echo "    && $VENV/bin/pip install -r $MONO_ROOT/scripts/docs-requirements.txt" >&2
+  echo "    && $VENV/bin/pip install -r $MONO_ROOT/scripts/docs/requirements.txt" >&2
   exit 1
 fi
 

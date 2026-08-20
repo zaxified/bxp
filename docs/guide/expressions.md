@@ -1,3 +1,7 @@
+---
+description: "The expression language: field references, operators, precedence, type coercion and the built-in functions."
+---
+
 # Expressions
 
 Expressions are strings evaluated once per row, used in `input_schema`
