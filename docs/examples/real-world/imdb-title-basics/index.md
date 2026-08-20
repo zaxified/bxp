@@ -17,13 +17,14 @@ IMDb's public non-commercial datasets are the canonical reference for film resea
   — community thread on the `\N` pitfall
 
 **Data source.** [IMDb Non-Commercial Datasets — `title.basics.tsv.gz`](https://datasets.imdbws.com/title.basics.tsv.gz)
-(this slice: first 500 titles).
+(this slice: 10 real titles hand-picked so that every quirk is visible in one
+short table — a `\N` genre, a `\N` runtime, real `endYear` values, an adult
+title, and two titles carrying a literal `"`).
 
 ## At full scale
 
-The committed `sample.csv` is a 500-row slice that
-shows the quirks; the real file is ~12.5M rows. Pull it and run the same
-template against the whole thing:
+The committed `sample.csv` is a 10-row teaching slice; the real file is ~12.5M
+rows. Pull it and run the same template against the whole thing:
 
 ```bash
 bash fetch-full.sh          # downloads + extracts ./full/title.basics.tsv (~1 GB)
@@ -54,13 +55,13 @@ stays local.
 0. **TSV not CSV** — `csv_delimiter_in: "\t"` switches the parser to tab
    delimiting; output stays CSV for downstream tools.
    - **Unquoted TSV with literal `"`** — `csv_text_quote_in: "none"` turns
-     off RFC-4180 quote handling, so a `"` in a title is plain data. BXP
-     defaults the input quote to `"`; with lazy-quote handling it no longer
-     merges rows even then — every row is kept and the 2 lines with an
-     unbalanced `"` get a warning (older RFC-4180 tools silently drop ~256k
-     rows). `none` is preferred for a known-unquoted format: same result,
-     no warning. This is invisible on the 500-row slice (no quoted titles
-     in it) — see the scale note above.
+     off RFC-4180 quote handling, so a `"` in a title is plain data. The slice
+     carries two such titles, `"Giliap"` and `L'homme du "Picardie"`; the
+     output re-quotes them properly for CSV consumers. BXP defaults the input
+     quote to `"`; with lazy-quote handling it no longer merges rows even then
+     — every row is kept and the lines with an unbalanced `"` get a warning
+     (older RFC-4180 tools silently drop ~256k rows). `none` is preferred for a
+     known-unquoted format: same result, no warning.
 1. **`\N` null marker** — `IF([X] = '\N', '', [X])` rewritten three times
    (startYear, endYear, runtimeMinutes) plus once for the whole `genres`
    field.
@@ -70,18 +71,22 @@ stays local.
 
 ## Final result
 
-Before the fix in TRICK 2 was applied, exactly one row in
-this 500-title slice — `tt0000502` (`Bohemios`, 1905 Spanish film) — had
-`genres = '\N'`. The first version of `sample.json` handled `\N` for
-year/runtime but not for genres, so `SPLIT_PART('\N', ',', 1)`{.bxp-try} happily
-returned `'\N'` as the "primary genre" and the literal backslash-N leaked
-into the catalogue.
+Every `\N` becomes a genuine empty cell, the genre list gains a sortable first
+element, and a `"` in a title survives into properly quoted CSV:
 
-Open `sample.csv` line 500 (or `sample.csvx` line 500) in the GUI, click the
-`primary_genre` cell: the trace pane shows the IF branch that now correctly
-returns `''` for the null-genre row. Without that branch, the smoking gun
-was completely invisible — `errors:0`, `warnings:0`, but one row in your
-catalogue had `\N` as its genre forever.
+```text
+raw                                          →  converted
+Bohemios          genres=\N                  →  primary_genre=(empty)  all_genres=(empty)
+The German …      endYear=1945  runtime=\N   →  end_year=1945          runtime_min=(empty)
+Kate & Leopold    genres=Comedy,Fantasy,…    →  primary_genre=Comedy   all_genres="Comedy,Fantasy,Romance"
+Bacchanales 69    isAdult=1                  →  adult=true
+"Giliap"                                     →  title="Giliap"  (re-quoted for CSV)
+```
+
+The `\N` guard is the one that bites hardest. Without it `SPLIT_PART('\N', ',', 1)`{.bxp-try}
+returns the literal `\N` as a perfectly plausible "primary genre" — the run
+still reports `errors:0`, `warnings:0`, and a backslash-N sits in the catalogue
+forever. `Bohemios` (1905) is that row.
 
 ## Sample data
 
@@ -97,6 +102,12 @@ Run it with `bxp-cli --config ./sample.json --template imdb_titles_to_catalog`:
 
     ```csv
     --8<-- "examples/real-world/imdb-title-basics/sample.csv"
+    ```
+
+=== "sample.csvx (result)"
+
+    ```csv
+    --8<-- "examples/real-world/imdb-title-basics/sample.csvx"
     ```
 
 **Full-scale &amp; binary files** (run it on the complete dataset): [`fetch-full.sh`](https://github.com/zaxified/bxp/tree/master/docs/examples/real-world/imdb-title-basics/fetch-full.sh) · [`full.json`](https://github.com/zaxified/bxp/tree/master/docs/examples/real-world/imdb-title-basics/full.json).

@@ -42,12 +42,32 @@ See inline comments in `sample.json`:
 
 ## Final result
 
-Open `sample.csv` row 7 (Lisa Brown / Cyberdyne) in the GUI.
-Industry value `"Foo Bar Industry"` is not in the lookup map — `REMAP()`
-passes it through unchanged. CLI says `errors:0`, but Salesforce would reject
-the row. Click the Industry cell: the trace pane shows
-`REMAP("Foo Bar Industry") → "Foo Bar Industry"` — input equals output, the
-smoking gun. Add the missing key and watch the cell go green live.
+Every HubSpot vocabulary lands on a Salesforce one, and the two date shapes
+converge:
+
+```text
+raw HubSpot                          →  Salesforce Lead
+"Software"                           →  Technology
+"Pharma & Biotech"                   →  Biotechnology
+"Open " (trailing space)             →  Working - Contacted
+"closed-won"                         →  Closed - Converted
+"2024-01-15 09:23:01"                →  2024-01-15T09:23:01Z
+"1/12/2024 10:30:00"                 →  2024-01-12T10:30:00Z
+"" (company missing)                 →  <missing>
+```
+
+**One row deliberately does not convert.** Row 7 (Cyberdyne) has
+`Industry = "Foo Bar Industry"`, which is not a key in the map — and `REMAP`
+passes an unknown value **through unchanged** rather than blanking it. The run
+reports `errors:0`, the CSV looks fine, and Salesforce rejects the row on
+import. Input equals output is the only signal, which is exactly why the
+`<missing>` sentinel in trick 3 exists for the other failure mode: a gap you
+can see beats a gap you cannot.
+
+!!! tip "Trace it in the GUI"
+    Click that Industry cell: the trace pane shows
+    `REMAP("Foo Bar Industry") → "Foo Bar Industry"` — input equal to output.
+    Add the missing key to the map and the cell updates live.
 
 ## Sample data
 
@@ -63,4 +83,10 @@ Run it with `bxp-cli --config ./sample.json --template hubspot_to_sfdc_lead`:
 
     ```{.csv .bxp-sample}
     --8<-- "examples/intermediate/hubspot-to-salesforce/sample.csv"
+    ```
+
+=== "sample.csvx (result)"
+
+    ```csv
+    --8<-- "examples/intermediate/hubspot-to-salesforce/sample.csvx"
     ```

@@ -31,36 +31,13 @@ which a naive numeric cast reads as `0` or `NaN`; (4) present values carry a
 - The packed first-column header `dim1,dim2,…\TIME_PERIOD` is the standard
   shape of every Eurostat bulk TSV.
 
-## Addressing the columns
-
-`[Name]` in bxp is always a lookup **by header name** — there is no `[N]`
-positional form, and headers are trimmed before matching, so Eurostat's
-`2023 ` header (bare integer, trailing space) is in fact reachable as
-`[2023]`, and even the packed first column answers to
-`[freq,unit,age,sex,geo\TIME_PERIOD]`.
-
-This template addresses the file **positionally** instead, with the `FIELDS(n)`
-accessor: `FIELDS(1)` is the packed dimension column, and the year columns are
-`FIELDS(2)`/`FIELDS(3)`/`FIELDS(4)` in the sliced sample and
-`FIELDS(63)`/`FIELDS(64)`/`FIELDS(65)` in the full file, where every year from
-1960 is present. Positional access keeps `sample.json` and `full.json` the same
-shape — the only thing that changes between them is the index — and new year
-columns are appended at the end on each release, so the front-counted positions
-stay stable. Either style works here; pick by-name when the header is stable and
-descriptive, `FIELDS(n)` when the file is really a positional record.
-
 **Data source.** [Eurostat — `demo_pjan` (Population on 1 January by age and
 sex)](https://ec.europa.eu/eurostat/databrowser/view/demo_pjan/) via the
 dissemination API. Free reuse with attribution (Commission Decision
-2011/833/EU). (This slice: the 59 `freq=A, unit=NR, age=TOTAL, sex=T` rows —
-one per geo — column-sliced to years 2021–2023.)
-
-## At full scale
-
-```bash
-bash fetch-full.sh          # downloads the full demo_pjan bulk TSV into ./full/
-bxp-cli --config full.json  # cleans every ~17.7k rows (all age/sex/geo combos)
-```
+2011/833/EU). (This slice: 8 real `freq=A, unit=NR, age=TOTAL, sex=T` rows,
+column-sliced to 2021–2023 and hand-picked so that every observation shape is
+present — a clean value, each of the `b` / `p` / `ep` / `bep` flag
+combinations, and Andorra's `:` not-available marker.)
 
 ## The trick
 
@@ -75,6 +52,31 @@ bxp-cli --config full.json  # cleans every ~17.7k rows (all age/sex/geo combos)
 - **Keep the flag as data**, not noise: `SPLIT_PART(TRIM(FIELDS(n)), ' ', 2)` lifts
   the `b`/`p`/`bep` suffix into its own column so the break/provisional status
   survives the cleanup.
+
+??? note "By name or by position? — `[Name]` vs `FIELDS(n)`"
+
+    `[Name]` in bxp is always a lookup **by header name** — there is no `[N]`
+    positional form, and headers are trimmed before matching, so Eurostat's
+    `2023 ` header (bare integer, trailing space) is in fact reachable as
+    `[2023]`, and even the packed first column answers to
+    `[freq,unit,age,sex,geo\TIME_PERIOD]`.
+
+    This template addresses the file **positionally** instead, with the `FIELDS(n)`
+    accessor: `FIELDS(1)` is the packed dimension column, and the year columns are
+    `FIELDS(2)`/`FIELDS(3)`/`FIELDS(4)` in the sliced sample and
+    `FIELDS(63)`/`FIELDS(64)`/`FIELDS(65)` in the full file, where every year from
+    1960 is present. Positional access keeps `sample.json` and `full.json` the same
+    shape — the only thing that changes between them is the index — and new year
+    columns are appended at the end on each release, so the front-counted positions
+    stay stable. Either style works here; pick by-name when the header is stable and
+    descriptive, `FIELDS(n)` when the file is really a positional record.
+
+## At full scale
+
+```bash
+bash fetch-full.sh          # downloads the full demo_pjan bulk TSV into ./full/
+bxp-cli --config full.json  # cleans every ~17.7k rows (all age/sex/geo combos)
+```
 
 ## Final result
 
@@ -104,6 +106,22 @@ Run it with `bxp-cli --config ./sample.json --template eurostat_pop_tsv_clean`:
 
     ```csv
     --8<-- "examples/real-world/eurostat-population-tsv/sample.csv"
+    ```
+
+=== "sample.csvx (result)"
+
+    ```csv
+    --8<-- "examples/real-world/eurostat-population-tsv/sample.csvx"
+    ```
+
+=== "full.json (the same template at full scale)"
+
+    Only the indices move: `FIELDS(2)` → `FIELDS(63)`, because the full file
+    carries every year from 1960 while the slice carries three. That is the
+    whole point of addressing this file positionally.
+
+    ```js
+    --8<-- "examples/real-world/eurostat-population-tsv/full.json"
     ```
 
 **Full-scale &amp; binary files** (run it on the complete dataset): [`fetch-full.sh`](https://github.com/zaxified/bxp/tree/master/docs/examples/real-world/eurostat-population-tsv/fetch-full.sh) · [`full.json`](https://github.com/zaxified/bxp/tree/master/docs/examples/real-world/eurostat-population-tsv/full.json).

@@ -1,0 +1,31 @@
+{
+  // Scale config for the regex path — the same template as sample.json, pointed
+  // at the 1M-row file that `make-full.sh` generates into ./full/.
+  // Its literal-only twin is full-cheap.json; the two produce byte-identical
+  // output, which is what makes the timing comparison on the page meaningful.
+  conversion_templates: {
+    freeform_payment_memos: {
+      data_dir:           "full",
+      file_pattern_in:    ".csv",
+      file_pattern_out:   ".csvx",
+
+      input_schema: {
+        $txn_id:   "[TxnId]",
+        $invoice:  "REGEX_EXTRACT([Memo], 'INV-([0-9]{4}-[0-9]{4})')",
+        $order:    "REGEX_EXTRACT([Memo], '#([0-9]+)')",
+        $has_ref:  "REGEX_MATCH([Memo], 'INV-[0-9]{4}|#[0-9]+')",
+        $priority: "SPLIT_PART([Tags], '|', 1)"
+      },
+
+      row_rules: [ { when: "1 = 1", rows: [ {} ] } ],
+
+      output_schema: {
+        txn_id:    "$txn_id",
+        invoice:   "$invoice",
+        order_ref: "$order",
+        has_ref:   "$has_ref",
+        priority:  "$priority"
+      }
+    }
+  }
+}

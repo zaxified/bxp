@@ -64,3 +64,6 @@ scripts/bench/results/results-*.csv
 # creates so its 6,258 unpacked members never land inside the workspace.
 docs/examples/real-world/*/full/
 docs/examples/real-world/*/full
+# The advanced teaching tier has one scale input too — generated, not fetched
+# (advanced/freeform-payment-memos/make-full.sh), same ./full/ layout.
+docs/examples/advanced/*/full/

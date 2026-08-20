@@ -80,3 +80,9 @@ stacked input and the full commented template:
     ```{.csv .bxp-sample}
     --8<-- "examples/advanced/two-file-join/joined_input.csv"
     ```
+
+=== "joined_input.csvx (result)"
+
+    ```csv
+    --8<-- "examples/advanced/two-file-join/joined_input.csvx"
+    ```

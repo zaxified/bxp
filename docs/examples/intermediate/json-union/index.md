@@ -44,7 +44,7 @@ per file as that file's columns; an absent key reads as `""`) and
 `1-json_union-combined.csvx`). The `output_schema` lists every target column;
 each input normalises to it automatically.
 
-!!! note "Note"
+!!! note "Per-file outputs"
     bxp also writes a per-file `<stem>.csvx`; the combined file is the union
     result.
 
@@ -81,4 +81,10 @@ Run it with `bxp-cli --config ./sample.json --template json_union`:
 
     ```json
     --8<-- "examples/intermediate/json-union/crm_beta.in.json"
+    ```
+
+=== "1-json_union-combined.csvx (result)"
+
+    ```csv
+    --8<-- "examples/intermediate/json-union/1-json_union-combined.csvx"
     ```

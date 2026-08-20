@@ -21,16 +21,23 @@
         // A naive parser that skips the TRIM and the ÷10 reports 50°C max
         // for a winter day. Wrap in IF so empty cells stay empty rather
         // than becoming 0.
-        $tmax_c: "IF(TRIM([TMAX]) = '', '', TRIM([TMAX]) / 10)",
-        $tmin_c: "IF(TRIM([TMIN]) = '', '', TRIM([TMIN]) / 10)",
-        $tavg_c: "IF(TRIM([TAVG]) = '', '', TRIM([TAVG]) / 10)",
-        $prcp_mm:"IF(TRIM([PRCP]) = '', '', TRIM([PRCP]) / 10)",
-        $snow_mm:"IF(TRIM([SNOW]) = '', '', TRIM([SNOW]) / 10)",
+        //
+        // The guard MUST be ISEMPTY, not `TRIM([X]) = ''`. A day with no
+        // rain is a real measurement of `0`, and `'0' = ''` is TRUE in bxp
+        // (both sides coerce to the number 0) — so the cheaper-looking
+        // guard silently reports "it didn't rain" as "we don't know".
+        // ISEMPTY tests the trimmed LENGTH, which "0" (length 1) survives.
+        $tmax_c: "IF(ISEMPTY([TMAX]), '', TRIM([TMAX]) / 10)",
+        $tmin_c: "IF(ISEMPTY([TMIN]), '', TRIM([TMIN]) / 10)",
+        $tavg_c: "IF(ISEMPTY([TAVG]), '', TRIM([TAVG]) / 10)",
+        $prcp_mm:"IF(ISEMPTY([PRCP]), '', TRIM([PRCP]) / 10)",
+        $snow_mm:"IF(ISEMPTY([SNOW]), '', TRIM([SNOW]) / 10)",
 
         // TRICK 2 — sanity check column. NOAA occasionally publishes rows
         // where TMAX < TMIN (instrument fault or transcription error).
-        // Flag them so they don't poison climatology averages.
-        $consistency: "IF(TRIM([TMAX]) = '' OR TRIM([TMIN]) = '', 'partial', IF(TRIM([TMAX]) < TRIM([TMIN]), 'tmax_below_tmin', 'ok'))"
+        // Flag them so they don't poison climatology averages. Same ISEMPTY
+        // reasoning: a 0.0 °C minimum is a measurement, not a gap.
+        $consistency: "IF(ISEMPTY([TMAX]) OR ISEMPTY([TMIN]), 'partial', IF(TRIM([TMAX]) < TRIM([TMIN]), 'tmax_below_tmin', 'ok'))"
       },
 
       row_rules: [ { when: "1 = 1", rows: [ {} ] } ],

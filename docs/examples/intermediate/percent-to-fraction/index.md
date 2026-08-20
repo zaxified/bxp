@@ -77,3 +77,9 @@ Run it with `bxp-cli --config ./sample.json --template percent_to_fraction`:
     ```{.csv .bxp-sample}
     --8<-- "examples/intermediate/percent-to-fraction/sample.csv"
     ```
+
+=== "sample.csvx (result)"
+
+    ```csv
+    --8<-- "examples/intermediate/percent-to-fraction/sample.csvx"
+    ```

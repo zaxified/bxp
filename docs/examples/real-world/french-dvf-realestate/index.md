@@ -30,12 +30,14 @@ gone before you even open the file.
   01–09; storing them numerically (a recurring open-data defect) drops it
 
 **Data source.** [DGFiP — Demandes de valeurs foncières (data.gouv.fr)](https://www.data.gouv.fr/fr/datasets/demandes-de-valeurs-foncieres/)
-(this slice: first 250 transactions of the 2024 file, département 01 / Ain).
-Licence Ouverte / Etalab (CC-BY-compatible).
+(this slice: 9 real transactions from the 2024 file, département 01 / Ain,
+hand-picked to show a comma-decimal price, each property type, and several
+postal codes that lost their leading zero). Licence Ouverte / Etalab
+(CC-BY-compatible).
 
 ## At full scale
 
-The committed `sample.csv` is a 250-row slice; the
+The committed `sample.csv` is a 9-row teaching slice; the
 real 2024 file is every property transaction registered in France that year.
 Pull it and run the same template against the whole thing:
 
@@ -69,28 +71,30 @@ Measured on the reference machine (ReleaseFast, 8 cores):
    fix — previously the padded result was re-canonicalised straight back to
    `1230`.)
 
-## Run it
-
-```bash
-bxp-cli --config ./sample.json --template dvf_realestate_to_analytics
-```
-
 ## Final result
 
-Open `sample.csvx` row 1 (`CHALEY`, 02/01/2024):
+A pipe-delimited row with a comma decimal and a broken postal code becomes a
+clean analytics row:
 
-- `price_eur = 346.5` — the raw `346,50`. A naive importer would log this sale
-  at **€34,650**, a 100× error that silently corrupts every price aggregate.
-- `postal_raw = 1230` vs `postal_fixed = 01230` — the column as-shipped vs
-  repaired. Join the raw value against a postal-code reference table and every
-  département-01 through 09 row misses.
+```text
+raw   02/01/2024 | 346,50   | CHALEY | 01 | 1230
+clean 2024-01-02 , 346.5    , CHALEY , 01 , 1230 (raw) , 01230 (fixed)
+```
 
-Click the `price_eur` cell in the GUI: the trace pane shows `[Valeur fonciere]`
-resolving the comma-decimal field to `346.5`. Click `postal_fixed` to watch the
-`RIGHT('00000' & …, 5)` re-pad chain rebuild the leading zero the source threw
-away.
+- `346,50 → 346.5`. A naive importer reads that comma as a thousands separator
+  and logs the sale at **€34,650** — a 100× error that silently corrupts every
+  price aggregate downstream.
+- `1230 → 01230`. Join the raw value against a postal-code reference table and
+  every département 01–09 row misses. The repaired column joins.
+
+!!! tip "Trace it in the GUI"
+    Click the `price_eur` cell: the trace pane shows `[Valeur fonciere]`
+    resolving the comma-decimal field to `346.5`. Click `postal_fixed` to watch
+    the `RIGHT('00000' & …, 5)` chain rebuild the zero the source threw away.
 
 ## Sample data
+
+Run it with `bxp-cli --config ./sample.json --template dvf_realestate_to_analytics`:
 
 === "sample.json (config)"
 
@@ -102,6 +106,12 @@ away.
 
     ```{.csv .bxp-sample data-delim="|"}
     --8<-- "examples/real-world/french-dvf-realestate/sample.csv"
+    ```
+
+=== "sample.csvx (result)"
+
+    ```csv
+    --8<-- "examples/real-world/french-dvf-realestate/sample.csvx"
     ```
 
 **Full-scale &amp; binary files** (run it on the complete dataset): [`fetch-full.sh`](https://github.com/zaxified/bxp/tree/master/docs/examples/real-world/french-dvf-realestate/fetch-full.sh) · [`full.json`](https://github.com/zaxified/bxp/tree/master/docs/examples/real-world/french-dvf-realestate/full.json).

@@ -99,4 +99,10 @@ Run it with `bxp-cli --config ./sample.json --template hl7_adt_patient_roster`:
     --8<-- "examples/real-world/hl7-adt-patient-roster/sample.hl7"
     ```
 
+=== "sample.csvx (result)"
+
+    ```csv
+    --8<-- "examples/real-world/hl7-adt-patient-roster/sample.csvx"
+    ```
+
 **Full-scale &amp; binary files** (run it on the complete dataset): [`fetch-full.sh`](https://github.com/zaxified/bxp/tree/master/docs/examples/real-world/hl7-adt-patient-roster/fetch-full.sh) · [`full.json`](https://github.com/zaxified/bxp/tree/master/docs/examples/real-world/hl7-adt-patient-roster/full.json).

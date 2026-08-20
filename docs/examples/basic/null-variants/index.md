@@ -68,3 +68,9 @@ Run it with `bxp-cli --config ./sample.json --template null_variants_clean`:
     ```{.csv .bxp-sample}
     --8<-- "examples/basic/null-variants/sample.csv"
     ```
+
+=== "sample.csvx (result)"
+
+    ```csv
+    --8<-- "examples/basic/null-variants/sample.csvx"
+    ```

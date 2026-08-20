@@ -37,20 +37,41 @@ flowchart TD
   in the old format have to be bridged to the new pipeline schema — a standard
   data-engineering backfill task.
 
-## The trick
+## The trick — one pass per format, then a fan-in
 
-(see inline comments in `sample.json`) — three templates, run all at once with
-`bxp-cli --config ./sample.json`:
+Three templates, run all at once with `bxp-cli --config ./sample.json`. Each
+writes a real file, and each is pinned by a golden, so the three snippets below
+are exactly what the run produces. Each pass uses a distinct `file_pattern_in`,
+which is what stops the three from picking up one another's output.
 
-1. `bridge_csv` — CSV batch → unified `id,date,amount` (convert US date, strip
-   the `,` thousands).
-2. `bridge_json` — JSON batch → the **identical** schema (map the different key
-   names `order_id`/`ts`/`total`).
-3. `combine_unified` — `combined_output: true` over the two normalised
-   `*.unified.csv` files → one `1-combine_unified-combined.csvx`.
+### Pass 1 · `bridge_csv` — the old CSV batch
 
-Each pass uses a distinct `file_pattern_in` so the three never pick up each
-other's files.
+Reads `legacy.csv` and normalises it to the target schema: US `MM/DD/YYYY`
+becomes ISO, and the `,` thousands separator is stripped so the amount is a real
+number.
+
+```csv title="legacy.unified.csv"
+--8<-- "examples/advanced/mixed-format-bridge/legacy.unified.csv"
+```
+
+### Pass 2 · `bridge_json` — the new JSON batch
+
+Reads `modern.in.json`, whose keys are named differently (`order_id` / `ts` /
+`total`) and whose dates are already ISO. Different input, different work — but
+the **identical** `output_schema`:
+
+```csv title="modern.unified.csv"
+--8<-- "examples/advanced/mixed-format-bridge/modern.unified.csv"
+```
+
+Put those two side by side and the bridge is done: two formats, one shape. A
+template reads one input format, so this is the step that could not have been a
+single pass.
+
+### Pass 3 · `combine_unified` — stack them
+
+`combined_output: true` over `*.unified.csv` concatenates the two normalised
+batches into one file, header written once. That is **Final result** below.
 
 ## Final result
 
@@ -86,4 +107,10 @@ commented template:
 
     ```json
     --8<-- "examples/advanced/mixed-format-bridge/modern.in.json"
+    ```
+
+=== "1-combine_unified-combined.csvx (result)"
+
+    ```csv
+    --8<-- "examples/advanced/mixed-format-bridge/1-combine_unified-combined.csvx"
     ```

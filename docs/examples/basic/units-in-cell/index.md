@@ -31,14 +31,15 @@ calculation.
 See inline comments in `sample.json`:
 
 ```text
-amount: IF(LEN(TRIM([Measure])) = 0, '', SPLIT_PART([Measure], ' ', 1) * 1)
+amount: IF(ISEMPTY([Measure]), '', SPLIT_PART([Measure], ' ', 1) * 1)
 unit:   SPLIT_PART([Measure], ' ', 2)
 ```
 
 - `SPLIT_PART(…, ' ', 1)` takes the number, `* 1` makes it a real numeric.
 - `SPLIT_PART(…, ' ', 2)` takes the unit token.
-- `LEN(TRIM([Measure])) = 0`{.bxp-try} keeps a blank cell empty rather than coercing it
-  to `0` (a length test, so it doesn't itself coerce a real `"0"`).
+- `ISEMPTY([Measure])`{.bxp-try} keeps a blank cell empty rather than coercing it
+  to `0`. It is a length test on the trimmed string, so — unlike a bare
+  `[Measure] = ''` — it does not itself swallow a real `"0"`.
 
 ## Final result
 
@@ -68,4 +69,10 @@ Run it with `bxp-cli --config ./sample.json --template units_in_cell_split`:
 
     ```{.csv .bxp-sample}
     --8<-- "examples/basic/units-in-cell/sample.csv"
+    ```
+
+=== "sample.csvx (result)"
+
+    ```csv
+    --8<-- "examples/basic/units-in-cell/sample.csvx"
     ```

@@ -1,0 +1,5 @@
+[
+{"order_id":"1001","product_id":"P-9","order_date":"2024-01-15","category_id":"C-3","product_added":"2023-01-02"},
+{"order_id":"1002","product_id":"P-7","order_date":"2024-07-20","category_id":"C-1","product_added":"2023-06-15"},
+{"order_id":"1003","product_id":"P-9","order_date":"2024-11-02","category_id":"C-3","product_added":"2023-01-02"}
+]

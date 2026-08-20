@@ -37,7 +37,7 @@ Cadastre — as open data via the VDP portal
 (<https://vdp.cuzk.cz/vdp/ruian/vymennyformat>). The address-points export
 `*_OB_ADR_csv.zip` carries one `OB_<obec>_ADR.csv` per municipality under a
 `CSV/` directory, in Windows-1250 with `;` separators — the shape reproduced by
-`sample.zip` here (5 real municipalities, 338 address points).
+`sample.zip` here (5 real municipalities, 2 address points each).
 
 ## The trick
 
@@ -57,15 +57,6 @@ Three template keys do the archive handling, no code:
 Plus a date trim — `DATE_CONVERT([Platí Od], 'YYYY-MM-DD[*]', 'YYYY-MM-DD')` —
 where `[*]` swallows the `T00:00:00` time suffix, keeping the ISO date.
 
-## Run it
-
-```sh
-bxp-cli --config ./sample.json --template ruian_adr
-```
-
-This unpacks `sample.zip` into per-municipality CSVs, converts each, and writes
-the merged `1-ruian_adr-combined.csvx`.
-
 ## Final result
 
 The raw member is Windows-1250 with a `CSV/` prefix and a
@@ -78,25 +69,28 @@ CSV/20260531_OB_500101_ADR.csv  (Windows-1250, ';'-delimited)
 
 becomes one clean UTF-8 row, diacritics and all, date trimmed:
 
-```{.csv .bxp-sample data-delim=";"}
+```csv
 adm_code,municipality_code,municipality,municipality_part,street,house_number,orientation_number,postcode,coord_y,coord_x,valid_from
 11915692,500101,Bražec,Dolní Valov,,1,,36471,835804.84,1019584.24,2016-01-01
 ```
 
-**Scale (full national export).** The complete `*_OB_ADR_csv.zip` is **6 258
-municipalities = 354 MB of CSV** packed into a **63 MB** deflate archive →
-**3 020 222 address rows** in the combined output (2026-07 export). On an
-8-core desktop (shipped ReleaseSmall build) bxp converts it end-to-end from the
-single `.zip` — parallel unpack, Windows-1250 transcode, date trim, and combined
-roll-up — in **~10 s** at **flat ~30 MB RSS** (streaming inflate, one window per
-worker — no whole-archive or whole-file materialisation). The parallel unpack is
-where it pulls ahead of a serial `unzip`: measured on its own on a 4-core /
-8-thread laptop (i7-7920HQ) the unpack step runs in **~0.50 s vs ~2.5 s
-single-threaded (~5×)** — 6 258
-independent members are embarrassingly parallel, and a
-work-stealing job queue load-balances the very uneven per-municipality sizes.
-The committed `sample.zip` is a 5-municipality slice so the example stays small;
-the full set is the public ČÚZK export linked above.
+## At full scale
+
+The committed `sample.zip` is a 5-municipality teaching slice; the full national
+export is the identical shape three thousand times over — **6,258 municipalities
+= 354 MB of CSV** inside a **63 MB** deflate archive, yielding **3,020,222
+address rows** in the combined output (2026-07 export).
+
+On an 8-core desktop (shipped ReleaseSmall build) bxp converts it end to end
+straight from the `.zip` — parallel unpack, Windows-1250 transcode, date trim
+and combined roll-up — in **~10 s** at a **flat ~30 MB RSS**: streaming inflate,
+one window per worker, no whole-archive or whole-file materialisation.
+
+The parallel unpack is where it pulls ahead of a serial `unzip`. Measured on its
+own on a 4-core / 8-thread laptop (i7-7920HQ) that step runs in **~0.50 s versus
+~2.5 s single-threaded (~5×)** — 6,258 independent members are embarrassingly
+parallel, and a work-stealing job queue load-balances the very uneven
+per-municipality sizes.
 
 Reproduce the scale run — the portal is form-driven, so `fetch-full.sh` probes
 the published month-end paths and takes the newest that resolves:
@@ -106,7 +100,7 @@ bash fetch-full.sh          # downloads <YYYYMMDD>_OB_ADR_csv.zip (~63 MB)
 bxp-cli --config full.json  # reads the archive directly, no unzip step
 ```
 
-Unlike the single-file examples, this run explodes into 6 258 intermediate CSVs
+Unlike the single-file examples, this run explodes into 6,258 intermediate CSVs
 next to the combined output. The script therefore stages the payload in a temp
 dir (override with `BXP_RUIAN_WORK`) and leaves `./full` as a symlink to it, so
 `data_dir: "full"` keeps working while none of those files land inside the
@@ -114,12 +108,20 @@ source tree — editors and SCM watchers have nothing new to index.
 
 ## Sample data
 
-Run it with `bxp-cli --config ./sample.json --template ruian_adr`:
+Run it with `bxp-cli --config ./sample.json --template ruian_adr` — that one
+command unpacks `sample.zip` into per-municipality CSVs, transcodes and converts
+each, and writes the merged `1-ruian_adr-combined.csvx`:
 
 === "sample.json (config)"
 
     ```js
     --8<-- "examples/real-world/ruian-address-points/sample.json"
+    ```
+
+=== "1-ruian_adr-combined.csvx (result)"
+
+    ```csv
+    --8<-- "examples/real-world/ruian-address-points/1-ruian_adr-combined.csvx"
     ```
 
 The input is a binary file — [`sample.zip` on GitHub](https://github.com/zaxified/bxp/tree/master/docs/examples/real-world/ruian-address-points/sample.zip).

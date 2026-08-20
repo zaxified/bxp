@@ -1,0 +1,6 @@
+_type,order_id,product_id,order_ts,category_id,product_added,category_name,created
+order,1001,P-9,2024-01-15T00:00:00+01:00,C-3,2023-01-02,,
+order,1002,P-7,2024-07-20T00:00:00+02:00,C-1,2023-06-15,,
+order,1003,P-9,2024-11-02T00:00:00+01:00,C-3,2023-01-02,,
+category,,,,C-3,,Electronics,20200115
+category,,,,C-1,,Books,20191220

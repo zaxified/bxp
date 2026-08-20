@@ -77,3 +77,9 @@ Run it with `bxp-cli --config ./sample.json --template accounting_negatives_clea
     ```{.csv .bxp-sample}
     --8<-- "examples/intermediate/accounting-negatives/sample.csv"
     ```
+
+=== "sample.csvx (result)"
+
+    ```csv
+    --8<-- "examples/intermediate/accounting-negatives/sample.csvx"
+    ```

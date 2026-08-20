@@ -45,8 +45,8 @@ is run through the one template and the output rows are written to a single file
 files by date gives a chronological stack. The per-row cleanup (`REPLACE` the
 space thousands + comma decimal, `* 1`) is applied uniformly to every file.
 
-!!! warning "Note"
-    Note: bxp still also writes a per-file `<stem>.csvx` for each input; the
+!!! note "Per-file outputs, and adding a period later"
+    bxp still also writes a per-file `<stem>.csvx` for each input; the
     combined file is the fan-in result.
 
     **Incremental re-runs.** Drop a new period file in (`2024-01-04.csv`) and
@@ -95,4 +95,10 @@ Run it with `bxp-cli --config ./sample.json --template fan_in_daily`:
 
     ```csv
     --8<-- "examples/intermediate/fan-in-files/2024-01-03.csv"
+    ```
+
+=== "1-fan_in_daily-combined.csvx (result)"
+
+    ```csv
+    --8<-- "examples/intermediate/fan-in-files/1-fan_in_daily-combined.csvx"
     ```

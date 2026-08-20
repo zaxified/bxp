@@ -15,8 +15,8 @@
 
     month_jan: {
       data_dir:         ".",
-      xlsx_sheet:       { name: "January", header_row: 1, output_suffix: "_jan.csv" },
-      file_pattern_in:  "_jan.csv",
+      xlsx_sheet:       { name: "January", header_row: 1, output_suffix: "_jan.sheet.csv" },
+      file_pattern_in:  "_jan.sheet.csv",
       file_pattern_out: "_1jan.part.csv",
       input_schema: { $month: "'January'", $region: "[region]", $units: "[units] * 1" },
       row_rules: [ { when: "1 = 1", rows: [ {} ] } ],
@@ -25,8 +25,8 @@
 
     month_feb: {
       data_dir:         ".",
-      xlsx_sheet:       { name: "February", header_row: 1, output_suffix: "_feb.csv" },
-      file_pattern_in:  "_feb.csv",
+      xlsx_sheet:       { name: "February", header_row: 1, output_suffix: "_feb.sheet.csv" },
+      file_pattern_in:  "_feb.sheet.csv",
       file_pattern_out: "_2feb.part.csv",
       input_schema: { $month: "'February'", $region: "[region]", $units: "[units] * 1" },
       row_rules: [ { when: "1 = 1", rows: [ {} ] } ],
@@ -35,8 +35,8 @@
 
     month_mar: {
       data_dir:         ".",
-      xlsx_sheet:       { name: "March", header_row: 1, output_suffix: "_mar.csv" },
-      file_pattern_in:  "_mar.csv",
+      xlsx_sheet:       { name: "March", header_row: 1, output_suffix: "_mar.sheet.csv" },
+      file_pattern_in:  "_mar.sheet.csv",
       file_pattern_out: "_3mar.part.csv",
       input_schema: { $month: "'March'", $region: "[region]", $units: "[units] * 1" },
       row_rules: [ { when: "1 = 1", rows: [ {} ] } ],

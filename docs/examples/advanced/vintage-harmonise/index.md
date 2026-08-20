@@ -77,3 +77,9 @@ Run it with `bxp-cli --config ./sample.json --template vintage_harmonise`:
     ```csv
     --8<-- "examples/advanced/vintage-harmonise/trades_2024_current.csv"
     ```
+
+=== "1-vintage_harmonise-combined.csvx (result)"
+
+    ```csv
+    --8<-- "examples/advanced/vintage-harmonise/1-vintage_harmonise-combined.csvx"
+    ```

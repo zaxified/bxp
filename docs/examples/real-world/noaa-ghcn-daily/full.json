@@ -17,13 +17,13 @@
         $lat:     "[LATITUDE]",
         $lon:     "[LONGITUDE]",
 
-        $tmax_c: "IF(TRIM([TMAX]) = '', '', TRIM([TMAX]) / 10)",
-        $tmin_c: "IF(TRIM([TMIN]) = '', '', TRIM([TMIN]) / 10)",
-        $tavg_c: "IF(TRIM([TAVG]) = '', '', TRIM([TAVG]) / 10)",
-        $prcp_mm:"IF(TRIM([PRCP]) = '', '', TRIM([PRCP]) / 10)",
-        $snow_mm:"IF(TRIM([SNOW]) = '', '', TRIM([SNOW]) / 10)",
+        $tmax_c: "IF(ISEMPTY([TMAX]), '', TRIM([TMAX]) / 10)",
+        $tmin_c: "IF(ISEMPTY([TMIN]), '', TRIM([TMIN]) / 10)",
+        $tavg_c: "IF(ISEMPTY([TAVG]), '', TRIM([TAVG]) / 10)",
+        $prcp_mm:"IF(ISEMPTY([PRCP]), '', TRIM([PRCP]) / 10)",
+        $snow_mm:"IF(ISEMPTY([SNOW]), '', TRIM([SNOW]) / 10)",
 
-        $consistency: "IF(TRIM([TMAX]) = '' OR TRIM([TMIN]) = '', 'partial', IF(TRIM([TMAX]) < TRIM([TMIN]), 'tmax_below_tmin', 'ok'))"
+        $consistency: "IF(ISEMPTY([TMAX]) OR ISEMPTY([TMIN]), 'partial', IF(TRIM([TMAX]) < TRIM([TMIN]), 'tmax_below_tmin', 'ok'))"
       },
 
       row_rules: [ { when: "1 = 1", rows: [ {} ] } ],

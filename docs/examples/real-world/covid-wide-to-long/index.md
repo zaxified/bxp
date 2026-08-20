@@ -91,4 +91,10 @@ Run it with `bxp-cli --config ./sample.json --template covid_wide_to_long`:
     --8<-- "examples/real-world/covid-wide-to-long/sample.csv"
     ```
 
+=== "sample.csvx (result)"
+
+    ```csv
+    --8<-- "examples/real-world/covid-wide-to-long/sample.csvx"
+    ```
+
 **Full-scale &amp; binary files** (run it on the complete dataset): [`fetch-full.sh`](https://github.com/zaxified/bxp/tree/master/docs/examples/real-world/covid-wide-to-long/fetch-full.sh) · [`full.json`](https://github.com/zaxified/bxp/tree/master/docs/examples/real-world/covid-wide-to-long/full.json).

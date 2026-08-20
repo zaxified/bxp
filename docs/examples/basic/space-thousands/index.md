@@ -67,3 +67,9 @@ Run it with `bxp-cli --config ./sample.json --template space_thousands_clean`:
     ```{.csv .bxp-sample}
     --8<-- "examples/basic/space-thousands/sample.csv"
     ```
+
+=== "sample.csvx (result)"
+
+    ```csv
+    --8<-- "examples/basic/space-thousands/sample.csvx"
+    ```

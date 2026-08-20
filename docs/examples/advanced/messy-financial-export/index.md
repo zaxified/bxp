@@ -24,9 +24,9 @@ and a half-dozen null spellings, all in different columns. The point of this
 example is that bxp handles the whole thing **declaratively in one pass**, with
 no glue script orchestrating per-column cleanups.
 
-## The idioms combined
+## The tricks
 
-Each has its own example — see links:
+Six idioms in one template; each also has an example of its own:
 
 1. `DATE_CONVERT([TradeDate], 'MM/DD/YYYY', 'YYYY-MM-DD')`{.bxp-try}
 2. transaction code → label via `REMAP` over a named map (`BUY` → `purchase`)
@@ -71,4 +71,10 @@ Run it with `bxp-cli --config ./sample.json --template messy_financial_export`:
 
     ```{.csv .bxp-sample}
     --8<-- "examples/advanced/messy-financial-export/sample.csv"
+    ```
+
+=== "sample.csvx (result)"
+
+    ```csv
+    --8<-- "examples/advanced/messy-financial-export/sample.csvx"
     ```

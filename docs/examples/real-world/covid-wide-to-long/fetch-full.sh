@@ -7,9 +7,9 @@
 #   bash fetch-full.sh
 #   bxp-cli --config full.json   # unpivots all ~280 country/region rows
 #
-# Note: the file has ~1147 columns; bxp's 1024-column cap warns and ignores
-# the overflow days. The three snapshot columns this template uses are within
-# range, so the unpivot is unaffected.
+# Note: the file has ~1147 columns — comfortably inside bxp's 16384-column
+# ceiling (MAX_COLUMNS), so every day-column stays reachable and the run is
+# warning-free.
 set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FULL_DIR="$SCRIPT_DIR/full"

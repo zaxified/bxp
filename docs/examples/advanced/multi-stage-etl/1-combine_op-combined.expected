@@ -1,0 +1,6 @@
+_type,order_id,product_id,order_date,category_id,added_date
+order,1001,P-9,01/15/2024,,
+order,1002,P-7,07/20/2024,,
+order,1003,P-9,11/02/2024,,
+product,,P-9,,C-3,02.01.2023
+product,,P-7,,C-1,15.06.2023

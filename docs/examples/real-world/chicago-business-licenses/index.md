@@ -15,7 +15,7 @@ two most important columns are **opaque codes**: `LICENSE STATUS` is `AAI` /
 `AAC` / `REV` / `REA` and `APPLICATION TYPE` is `ISSUE` / `RENEW` / `C_LOC` /
 `C_CAPA` / `C_EXPA` / `C_SBA`. A naive import leaves them as-is — you cannot
 tell a cancelled licence from a revoked one without keeping the data dictionary
-open in another tab. On top of that, **~84% of rows have a blank
+open in another tab. On top of that, **77% of rows have a blank
 `APPLICATION CREATED DATE`** (only fresh applications carry one), which reads as
 a data-loss bug unless the gap is made explicit. The fix is exactly what a
 lookup table + a sentinel are for.
@@ -30,12 +30,14 @@ dataset's own description on the City of Chicago data portal:
   liquor-area expansion, `C_SBA` = change of business activity.
 
 **Data source.** [City of Chicago — Business Licenses (`r5kz-chrr`)](https://data.cityofchicago.org/Community-Economic-Development/Business-Licenses/r5kz-chrr)
-(this slice: 223 rows pulled via the Socrata API, selected to include all four
-status codes). Public domain (City of Chicago).
+(this slice: 10 real rows pulled via the Socrata API and hand-picked so that one
+short table carries all four status codes, three application types, both a
+present and a blank application date, and a legal name with an embedded comma).
+Public domain (City of Chicago).
 
 ## At full scale
 
-The committed `sample.csv` is a 223-row slice; the
+The committed `sample.csv` is a 10-row teaching slice; the
 real register is the complete licence history from 2002 to today. Pull it and
 run the same template against the whole thing:
 
@@ -87,11 +89,21 @@ Two things the full run surfaces that the slice can't:
 
 ## Final result
 
-Sort `sample.csvx` by `status`. The `revoked` and
-`cancelled_during_term` blocks are now obvious at a glance — in the raw file
-they were `REV` and `AAC`, indistinguishable to anyone without the data
-dictionary, and a compliance query filtering on the literal string `"cancelled"`
-would have returned **zero rows**.
+The two columns that decide every compliance query stop being codes:
+
+```text
+raw                                     →  converted
+AAI    RENEW   (blank date)             →  issued                 renewal              <not-on-file>
+AAI    C_LOC   2026-05-28T00:00:00.000  →  issued                 change_of_location   2026-05-28
+AAC    RENEW   (blank date)             →  cancelled_during_term  renewal              <not-on-file>
+REV    ISSUE   2026-04-15T00:00:00.000  →  revoked                initial_application  2026-04-15
+REA    RENEW   (blank date)             →  revocation_appealed    renewal              <not-on-file>
+```
+
+In the raw file `REV` and `AAC` are indistinguishable to anyone without the data
+dictionary open, and a compliance query filtering on the literal string
+`"cancelled"` returns **zero rows**. The blank application date becomes a
+sentinel you can see, instead of a hole you mistake for data loss.
 
 ## Sample data
 
@@ -107,6 +119,12 @@ Run it with `bxp-cli --config ./sample.json --template chicago_licenses_to_analy
 
     ```{.csv .bxp-sample}
     --8<-- "examples/real-world/chicago-business-licenses/sample.csv"
+    ```
+
+=== "sample.csvx (result)"
+
+    ```csv
+    --8<-- "examples/real-world/chicago-business-licenses/sample.csvx"
     ```
 
 **Full-scale &amp; binary files** (run it on the complete dataset): [`fetch-full.sh`](https://github.com/zaxified/bxp/tree/master/docs/examples/real-world/chicago-business-licenses/fetch-full.sh) · [`full.json`](https://github.com/zaxified/bxp/tree/master/docs/examples/real-world/chicago-business-licenses/full.json).

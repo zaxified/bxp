@@ -36,8 +36,8 @@ flowchart LR
   the file — a single forward scan (`pre_pass`) handles either order
 
 **Data source.** [MTA — NYC subway GTFS feed](https://www.mta.info/developers)
-(`stops.txt`; this slice: the first 20 stations + their 40 platforms).
-Public data.
+(`stops.txt`; this slice: 5 real stations and their 10 directional platforms —
+enough for both sides of the self-join to fit in one screen). Public data.
 
 ## At full scale
 
@@ -82,6 +82,12 @@ Run it with `bxp-cli --config ./sample.json --template gtfs_stops_selfjoin`:
 
     ```{.csv .bxp-sample}
     --8<-- "examples/real-world/gtfs-stops-selfjoin/sample.csv"
+    ```
+
+=== "sample.csvx (result)"
+
+    ```csv
+    --8<-- "examples/real-world/gtfs-stops-selfjoin/sample.csvx"
     ```
 
 **Full-scale &amp; binary files** (run it on the complete dataset): [`fetch-full.sh`](https://github.com/zaxified/bxp/tree/master/docs/examples/real-world/gtfs-stops-selfjoin/fetch-full.sh) · [`full.json`](https://github.com/zaxified/bxp/tree/master/docs/examples/real-world/gtfs-stops-selfjoin/full.json).

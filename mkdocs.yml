@@ -104,6 +104,15 @@ exclude_docs: |
   examples/**/*.zip
   examples/**/*.xlsx
   examples/CLAUDE.md
+  # Committed pipeline intermediates. Excluded because the page already embeds
+  # them where they explain something, not because output is unwelcome on the
+  # site — a standalone copy at its own URL is simply a second copy of bytes the
+  # reader has already been shown, and nothing links to it. The suffixes are
+  # what makes them matchable (`xlsx_sheet.output_suffix` is spelled
+  # `.sheet.csv` precisely so this rule can name it).
+  examples/**/*.sheet.csv
+  examples/**/*.part.csv
+  examples/**/*.unified.csv
 
 plugins:
   - search

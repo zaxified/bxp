@@ -83,3 +83,9 @@ Run it with `bxp-cli --config ./sample.json --template price_currency_split`:
     ```{.csv .bxp-sample}
     --8<-- "examples/intermediate/price-currency-split/sample.csv"
     ```
+
+=== "sample.csvx (result)"
+
+    ```csv
+    --8<-- "examples/intermediate/price-currency-split/sample.csvx"
+    ```

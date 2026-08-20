@@ -89,3 +89,9 @@ Run it with `bxp-cli --config ./sample.json --template timezone_functions`:
     ```{.csv .bxp-sample}
     --8<-- "examples/basic/timezone-functions/sample.csv"
     ```
+
+=== "sample.csvx (result)"
+
+    ```csv
+    --8<-- "examples/basic/timezone-functions/sample.csvx"
+    ```

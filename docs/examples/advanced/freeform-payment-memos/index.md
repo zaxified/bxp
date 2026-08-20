@@ -65,7 +65,7 @@ T005,2023-0911,88,true,low
 T003,,,false,normal
 ```
 
-## Cost — regex vs. the cheaper tools
+## At full scale
 
 Regex is the most expensive rung of the
 ladder, so it is worth knowing the price. On this same workload — but scaled to
@@ -86,11 +86,28 @@ ladder above: regex is cheap enough to use freely when you _need_ shape
 matching, and still worth skipping when a delimiter split or a literal
 `CONTAINS` already answers the question.
 
+Reproduce it — the 1M-row file is generated rather than committed, so this
+directory ships only the six-row teaching slice:
+
+```bash
+bash make-full.sh                 # writes ./full/memos.csv (~62 MB)
+bxp-cli --config full.json        # the regex template
+bxp-cli --config full-cheap.json  # the literal-only template
+diff full/memos.csvx full/memos-cheap.csvx && echo identical
+```
+
+The `diff` is not decoration: a timing comparison between two templates only
+means anything once they are proven to produce the same answer.
+
 > Methodology: best of five interleaved runs, `bxp-cli` built `ReleaseFast`,
 > `BXP_METRICS=1` self-reported wall + peak RSS. Absolute milliseconds vary by
-> machine; the ratio and the flat-RSS shape are the portable takeaways. The
-> 1M-row file is generated, not committed — this directory ships only the
-> six-row teaching slice.
+> machine; the ratio and the flat-RSS shape are the portable takeaways.
+>
+> Note what the cheap template needs and the teaching slice deliberately
+> withholds: **stable literal anchors**. `make-full.sh` emits memos that always
+> spell `INV-` and `#`, which is what lets `CONTAINS` + `SPLIT_PART` reach the
+> tokens at all. Free text in the wild does not promise that — which is the
+> reason the example itself uses regex.
 
 ## Sample data
 
@@ -107,3 +124,11 @@ Run it with `bxp-cli --config ./sample.json --template freeform_payment_memos`:
     ```{.csv .bxp-sample}
     --8<-- "examples/advanced/freeform-payment-memos/sample.csv"
     ```
+
+=== "sample.csvx (result)"
+
+    ```csv
+    --8<-- "examples/advanced/freeform-payment-memos/sample.csvx"
+    ```
+
+**Scale files** (the 1M-row cost comparison): [`make-full.sh`](https://github.com/zaxified/bxp/tree/master/docs/examples/advanced/freeform-payment-memos/make-full.sh) · [`full.json`](https://github.com/zaxified/bxp/tree/master/docs/examples/advanced/freeform-payment-memos/full.json) · [`full-cheap.json`](https://github.com/zaxified/bxp/tree/master/docs/examples/advanced/freeform-payment-memos/full-cheap.json).

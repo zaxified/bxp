@@ -42,7 +42,8 @@ flowchart LR
 **Data source.** [US Treasury — Daily Treasury Par Yield Curve
 Rates](https://home.treasury.gov/resource-center/data-chart-center/interest-rates/TextView?type=daily_treasury_yield_curve)
 via the resource-center daily CSV endpoint. Public domain (US Government work).
-(This slice: 60 business days from 2024.)
+(This slice: 5 real business days from late 2024, spread far enough apart that
+the curve visibly moves — 5 input rows fan out to 65 tidy date-tenor rows.)
 
 ## The trick
 
@@ -99,6 +100,12 @@ Run it with `bxp-cli --config ./sample.json --template treasury_curve_to_long`:
 
     ```{.csv .bxp-sample}
     --8<-- "examples/real-world/treasury-yield-curve/sample.csv"
+    ```
+
+=== "sample.csvx (result)"
+
+    ```csv
+    --8<-- "examples/real-world/treasury-yield-curve/sample.csvx"
     ```
 
 **Full-scale &amp; binary files** (run it on the complete dataset): [`fetch-full.sh`](https://github.com/zaxified/bxp/tree/master/docs/examples/real-world/treasury-yield-curve/fetch-full.sh) · [`full.json`](https://github.com/zaxified/bxp/tree/master/docs/examples/real-world/treasury-yield-curve/full.json).

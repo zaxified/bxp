@@ -43,14 +43,16 @@ flowchart TD
 (see inline comments in `sample.json`)
 
 `LOWER(TRIM(...))` then `IN(...)` against the truthy / falsy spellings. The two
-traps, both solved by guarding blanks with `LEN(TRIM([x])) = 0`{.bxp-try} **first**:
+traps, both solved by guarding blanks with `ISEMPTY([Active])`{.bxp-try} **first**:
 
 1. **Blank vs `'0'`.** bxp coerces an empty cell to `0` and the literal `'0'`
    to `0`, so a blank would wrongly match the `'0'` in the falsy list and become
    `false`. Guarding blanks up front keeps them empty.
-2. **The guard itself.** `TRIM([x]) = ''`{.bxp-try} _also_ coerces (`"0"`→0 == `""`→0), so
-   it would wrongly treat a real `"0"` as blank. `LEN(TRIM([x])) = 0`{.bxp-try} compares
-   **length** — no coercion — so `"0"` (length 1) survives to be read as `false`.
+2. **The guard itself.** A bare `TRIM([Active]) = ''`{.bxp-try} _also_ coerces
+   (`"0"`→0 == `""`→0), so it would wrongly treat a real `"0"` as blank.
+   `ISEMPTY` compares the **trimmed length** — no coercion — so `"0"` (length 1)
+   survives to be read as `false`. Compare the two on **show all**: the `0` row
+   is where they disagree.
 
 ## Final result
 
@@ -80,4 +82,10 @@ Run it with `bxp-cli --config ./sample.json --template boolean_variants_clean`:
 
     ```{.csv .bxp-sample}
     --8<-- "examples/intermediate/boolean-variants/sample.csv"
+    ```
+
+=== "sample.csvx (result)"
+
+    ```csv
+    --8<-- "examples/intermediate/boolean-variants/sample.csvx"
     ```

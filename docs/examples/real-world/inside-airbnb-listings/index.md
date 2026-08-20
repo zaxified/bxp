@@ -18,11 +18,13 @@ Inside Airbnb is the de-facto open dataset for short-term-rental regulation rese
   field semantics
 
 **Data source.** [Inside Airbnb — New York City, 2026-02-13 scrape](https://data.insideairbnb.com/united-states/ny/new-york-city/2026-02-13/visualisations/listings.csv)
-(this slice: first 300 listings).
+(this slice: 12 real listings hand-picked so that each room type meets each of
+the three regulatory states, plus the two comma-inside-quotes names and one
+never-reviewed listing).
 
 ## At full scale
 
-The committed `sample.csv` is a 300-row slice; the
+The committed `sample.csv` is a 12-row teaching slice; the
 real scrape is the full current NYC listing set. Pull it and run the same
 template against the whole thing:
 
@@ -60,8 +62,8 @@ Measured on the reference machine (ReleaseFast, 8 cores):
     headline rate. If you need those descriptions rejoined, strip the newlines
     before the conversion.
 
-The 84% `unlicensed` rate in the 300-row slice holds at 86% across the full
-36k listings — Local Law 18's enforcement gap is not a sampling artifact. The
+**86% of the full 36k listings are `unlicensed`** — Local Law 18's enforcement
+gap, straight out of the `reg_status` column the template derives. The
 quoted-comma names (e.g. `Perfect for Your Parents, With Garden & Patio`)
 stay intact in a single field, exactly as TRICK 0 promises — commas are handled
 by the quoting rules; only newlines break a record.
@@ -84,19 +86,27 @@ See inline comments in `sample.json`:
 
 ## Final result
 
-Run the conversion and look at the `reg_status` histogram.
-In this 300-row real-data slice from February 2026:
+Three raw shapes of the `license` column become one column you can filter on,
+and the redacted price stops looking like a value that happens to be missing:
 
-- **251 listings (84%) are `unlicensed`** — still operating without the
-  NYC-mandated registration two and a half years after Local Law 18 took
-  effect
-- 21 are `exempt` (hotels, certain owner-occupied)
-- 28 are `registered`
+```text
+raw license                →  reg_status    price
+""                         →  unlicensed    <price-redacted>
+"Exempt"                   →  exempt        <price-redacted>
+"OSE-STRREG-0006194"       →  registered    <price-redacted>
+```
 
-Open `sample.csvx` in the GUI and sort by `reg_status`. The 251-row
-`unlicensed` block is the regulatory enforcement gap visible at a glance —
-a downstream tool with no per-field validation would just see "license is a
-string" and never flag the missing-value pattern.
+`"Perfect for Your Parents, With Garden & Patio"` also survives as **one**
+field — the comma inside the quotes does not shift every column to its right.
+
+A downstream tool with no per-field validation sees only "license is a string"
+and never flags the missing-value pattern; here `WHERE reg_status =
+'unlicensed'` is the whole compliance query.
+
+!!! tip "Trace it in the GUI"
+    Open `sample.csvx` and sort by `reg_status`, then click a `price_usd` cell:
+    the trace pane shows `COALESCE` falling through to the sentinel, which is
+    what distinguishes "the endpoint redacts this" from "this listing is free".
 
 ## Sample data
 
@@ -112,6 +122,12 @@ Run it with `bxp-cli --config ./sample.json --template airbnb_listings_to_analyt
 
     ```{.csv .bxp-sample}
     --8<-- "examples/real-world/inside-airbnb-listings/sample.csv"
+    ```
+
+=== "sample.csvx (result)"
+
+    ```csv
+    --8<-- "examples/real-world/inside-airbnb-listings/sample.csvx"
     ```
 
 **Full-scale &amp; binary files** (run it on the complete dataset): [`fetch-full.sh`](https://github.com/zaxified/bxp/tree/master/docs/examples/real-world/inside-airbnb-listings/fetch-full.sh) · [`full.json`](https://github.com/zaxified/bxp/tree/master/docs/examples/real-world/inside-airbnb-listings/full.json).

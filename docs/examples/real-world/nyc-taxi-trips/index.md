@@ -34,7 +34,9 @@ flowchart TD
   documents the negative-fare refund convention
 
 **Data source.** [NYC TLC Trip Record Data](https://www.nyc.gov/site/tlc/about/tlc-trip-record-data.page)
-(this slice: first 800 trips of the 2019 Yellow Taxi data). The TLC has since
+(this slice: 10 real trips hand-picked so that one short table carries all four
+payment types present in the data, both `store_and_fwd_flag` values, and one of
+each data-quality state). The TLC has since
 retired its public CSV downloads in favour of Parquet, so the full-scale fetch
 below pulls the identical records — same CSV layout, same `MM/DD/YYYY hh:mm:ss
 AM/PM` timestamps — from the [NYC OpenData mirror](https://data.cityofnewyork.us/Transportation/2019-Yellow-Taxi-Trip-Data/2upf-qytp).
@@ -54,8 +56,8 @@ AM/PM` timestamps — from the [NYC OpenData mirror](https://data.cityofnewyork.
 
 ## At full scale
 
-The committed `sample.csv` is an 800-row slice; the real 2019 dataset is ~84M
-trips. Pull it and run the same template against the whole thing:
+The committed `sample.csv` is a 10-row teaching slice; the real 2019 dataset is
+~84M trips. Pull it and run the same template against the whole thing:
 
 ```bash
 bash fetch-full.sh          # downloads ./full/yellow_tripdata_2019.csv (~8 GB)
@@ -80,20 +82,26 @@ the raw column.
 
 ## Final result
 
-Run the conversion and look at the `quality` column. In this 800-row real-data
-slice the engine surfaces:
+Timestamps become ISO, the payment code becomes a word, and every row carries
+its own verdict:
 
-- 5 rows of `no_passengers` (driver pickups with a paid fare but
-  `passenger_count = 0` — physically impossible, almost certainly meter bugs)
-- 1 row of `refund` (the fare and the total are both negative: `fare_usd = -4`,
-  `total_usd = -4.8`, and the raw row's mta-tax and surcharge fields are
-  negative too)
+```text
+raw                                                 →  converted
+02/09/2018 01:25:25 PM  pax=2  pay=1  fare=6        →  2018-02-09T13:25:25Z  credit_card  ok
+02/09/2018 01:16:19 PM  pax=1  pay=4  fare=4.5      →  2018-02-09T13:16:19Z  dispute      ok
+02/09/2018 01:45:16 PM  pax=0  pay=1  fare=6.5      →  2018-02-09T13:45:16Z  credit_card  no_passengers
+02/09/2018 01:04:43 PM  pax=6  pay=3  fare=-4       →  2018-02-09T13:04:43Z  no_charge    refund
+```
+
+The last two rows are the point. A trip with a paid fare and **zero passengers**
+is physically impossible, and a **negative** fare is a reversal posted as if it
+were a trip. Both look like ordinary rows to any tool that only checks types —
+and both quietly drag down every average-fare and tip-rate aggregate. At full
+scale that is ~1.94M rows.
 
 !!! tip "Trace it in the GUI"
-    Open `sample.csvx` line 507 (the same line in `sample.csv`), click the
-    `quality` cell: the trace pane shows the full evaluation chain that decided
-    `refund`. Without the quality column those 6 rows silently lower your
-    average-fare statistic and skew tip-rate analysis.
+    Click the `quality` cell of the `refund` row: the trace pane walks the
+    nested `IF` that decided it, one comparison at a time.
 
 ## Sample data
 
@@ -109,6 +117,12 @@ Run it with `bxp-cli --config ./sample.json --template nyc_taxi_to_analytics`:
 
     ```{.csv .bxp-sample}
     --8<-- "examples/real-world/nyc-taxi-trips/sample.csv"
+    ```
+
+=== "sample.csvx (result)"
+
+    ```csv
+    --8<-- "examples/real-world/nyc-taxi-trips/sample.csvx"
     ```
 
 **Full-scale &amp; binary files** (run it on the complete dataset): [`fetch-full.sh`](https://github.com/zaxified/bxp/tree/master/docs/examples/real-world/nyc-taxi-trips/fetch-full.sh) · [`full.json`](https://github.com/zaxified/bxp/tree/master/docs/examples/real-world/nyc-taxi-trips/full.json).

@@ -43,7 +43,7 @@ SPLIT_PART([RA],':',3)/3600) * 15`{.bxp-try} — split on `:`, sum to hours, ×1
 - **Dec → degrees:** capture the sign once with `STARTS_WITH('-')`, then apply
   it to the magnitude `ABS(deg) + min/60 + sec/3600` so the sign covers the
   whole value, not just the degrees field.
-- Both guarded with `LEN(TRIM(...)) = 0` so blank-coord `NonEx` rows stay empty
+- Both guarded with `ISEMPTY(...)` so blank-coord `NonEx` rows stay empty
   instead of computing to `0` (which would be a real point on the sky).
 
 ## At full scale
@@ -80,6 +80,12 @@ Run it with `bxp-cli --config ./sample.json --template ngc_to_decimal_degrees`:
 
     ```{.csv .bxp-sample data-delim=";"}
     --8<-- "examples/real-world/ngc-sexagesimal-coords/sample.csv"
+    ```
+
+=== "sample.csvx (result)"
+
+    ```csv
+    --8<-- "examples/real-world/ngc-sexagesimal-coords/sample.csvx"
     ```
 
 **Full-scale &amp; binary files** (run it on the complete dataset): [`fetch-full.sh`](https://github.com/zaxified/bxp/tree/master/docs/examples/real-world/ngc-sexagesimal-coords/fetch-full.sh) · [`full.json`](https://github.com/zaxified/bxp/tree/master/docs/examples/real-world/ngc-sexagesimal-coords/full.json).

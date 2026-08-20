@@ -33,8 +33,10 @@ at a time, and collapses absent keys to empty cells.
 
 **Data source.** [NYC Open Data — 2018 Central Park Squirrel Census
 (`vfnx-vebw`)](https://data.cityofnewyork.us/Environment/2018-Central-Park-Squirrel-Census-Squirrel-Data/vfnx-vebw).
-Public domain. (This slice: the first 40 sightings; two of them omit
-`primary_fur_color` and four omit `location`, demonstrating the heterogeneity.)
+Public domain. (This slice: 8 real sightings hand-picked for their key sets —
+two omit `primary_fur_color` **and** `location`, one omits only `location`, and
+the rest are complete, so the union-of-keys behaviour is visible in eight
+lines. The records carry 26 to 33 keys each.)
 
 ## The trick
 
@@ -89,6 +91,12 @@ Run it with `bxp-cli --config ./sample.json --template squirrel_census_to_csv`:
 
     ```json
     --8<-- "examples/real-world/squirrel-census-json/sample.in.json"
+    ```
+
+=== "sample.csvx (result)"
+
+    ```csv
+    --8<-- "examples/real-world/squirrel-census-json/sample.csvx"
     ```
 
 **Full-scale &amp; binary files** (run it on the complete dataset): [`fetch-full.sh`](https://github.com/zaxified/bxp/tree/master/docs/examples/real-world/squirrel-census-json/fetch-full.sh) · [`full.json`](https://github.com/zaxified/bxp/tree/master/docs/examples/real-world/squirrel-census-json/full.json).
