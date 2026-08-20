@@ -347,7 +347,7 @@ Editing a generated page is undone by the next run — fix the source instead:
 | BXTB frame types | `bxp-core/src/btrace.zig` (`frame_docs`) |
 | the class diagram | `@typeInfo` over the live types, via `tools/zig-doc-gen/src/structs.zig` |
 | repo tree + test phases | file headers, via `scripts/docs/gen-trees.py` |
-| GUI tools / shortcuts / prefs | Dart catalogs, via `tools/dart-doc-gen` |
+| GUI tools / shortcuts / prefs / env vars | Dart catalogs, via `tools/dart-doc-gen` |
 
 Four of these are held to reality by a **comptime** check rather than by
 discipline: the inspect surface against `inspect.zig`'s public functions, the

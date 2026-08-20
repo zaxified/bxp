@@ -10,6 +10,7 @@ import '../store/trace_store.dart';
 import 'bxp_process_client.dart';
 import 'debug_binding.dart';
 import 'debug_settings.dart';
+import 'env_vars.dart';
 
 /// Opt-in NDJSON diagnostic log for the Windows freeze investigation.
 ///
@@ -129,7 +130,7 @@ class DiagnosticLog {
     if (_sink != null) return true;
 
     final dirPath = _resolveDir();
-    final envValue = Platform.environment['BXP_DIAGNOSTIC'];
+    final envValue = Platform.environment[EnvVars.diagnostic.name];
     final markerPath =
         '$dirPath${Platform.pathSeparator}.bxp-diagnostic';
 
@@ -416,7 +417,7 @@ void emitDiagnosticContextSnapshot(BuildContext context) {
     'bridge_version': BxpProcessClient.bridgeVersion,
     'bridge_lib': BxpProcessClient.bridgeDllPath,
     'bxp_cli_path': BxpProcessClient.findBin('bxp-cli'),
-    'env_BXP_CLI_PATH': Platform.environment['BXP_CLI_PATH'],
+    'env_BXP_CLI_PATH': Platform.environment[EnvVars.cliPath.name],
     'config_path': store.configPath,
     'config_dirty': store.isDirty,
     'config_has_errors': store.configHasErrors,

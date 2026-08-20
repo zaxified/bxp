@@ -19,8 +19,9 @@ defaults. Every persisted key is listed in [User preferences
 (keys)](../reference/gui-prefs.md) — generated from the app's `Prefs` catalog.
 
 The GUI takes no command-line flags — it reads this preferences file, and
-a handful of environment variables override individual settings for a
-single launch (the settings inspector shows which ones are in effect).
+the [environment variables](../reference/environment.md) override individual
+settings for a single launch (the settings inspector shows which ones are in
+effect).
 
 There is deliberately **no startup auto-load**: bxp-gui always opens with
 an empty editor. The recent-files list is remembered across launches and

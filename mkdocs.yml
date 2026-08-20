@@ -237,4 +237,5 @@ nav:
       - reference/gui-agent-tools.md
       - reference/gui-shortcuts.md
       - reference/gui-prefs.md
+      - reference/environment.md
       - reference/exit-codes.md

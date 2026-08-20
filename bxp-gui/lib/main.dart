@@ -9,6 +9,7 @@ import 'services/debug_binding.dart';
 import 'services/debug_settings.dart';
 import 'services/desktop_integration_service.dart';
 import 'services/diagnostic_log.dart';
+import 'services/env_vars.dart';
 import 'services/gui_mcp_server.dart';
 import 'services/prefs_service.dart';
 import 'services/updater_service.dart';
@@ -43,7 +44,7 @@ final GlobalKey<NavigatorState> bxpNavigatorKey = GlobalKey<NavigatorState>();
 /// pref (the inspector's "Auto-approve agent actions" toggle); both feed
 /// [GuiMcpServer.autoApprove], the single source of truth for the gate.
 /// Default off, so an interactive user always sees the dialog.
-const String kAgentAutoApproveEnv = 'BXP_GUI_MCP_AUTO_APPROVE';
+final String kAgentAutoApproveEnv = EnvVars.guiMcpAutoApprove.name;
 
 /// Confirm dialog for critical agent (GUI-MCP) actions. Lives here because it
 /// is the one place that owns [bxpNavigatorKey] — the MCP tool callback fires
@@ -632,7 +633,7 @@ class _ZoomContainerState extends State<ZoomContainer> {
       // pointer positions outside the box's own size, so when the
       // transform mapped a click to child-space x > parentWidth, the
       // hit was dropped before reaching the child — the rightmost ~few
-      // buttons (GITHUB / theme cycle / playground examples) became
+      // buttons (DOCS / theme cycle / playground examples) became
       // unclickable until Ctrl+0 forced zoom = 1.0. Replacing with an
       // explicit SizedBox sized to (size / zoom) gives the inner
       // RenderBox a real expanded rect so transformed hit positions
@@ -865,10 +866,10 @@ class _AgentServerListenerState extends State<_AgentServerListener> {
     // Resolve bind config: persisted prefs → env override → built-in default.
     final prefs = store.prefs;
     final host = prefs.getString(Prefs.mcpHost.key) ??
-        Platform.environment['BXP_GUI_MCP_HOST'] ??
+        Platform.environment[EnvVars.guiMcpHost.name] ??
         GuiMcpServer.kDefaultMcpHost;
     final port = prefs.getDouble(Prefs.mcpPort.key)?.toInt() ??
-        int.tryParse(Platform.environment['BXP_GUI_MCP_PORT'] ?? '') ??
+        int.tryParse(Platform.environment[EnvVars.guiMcpPort.name] ?? '') ??
         GuiMcpServer.kDefaultMcpPort;
     final allowlist = _readOriginAllowlist(prefs);
     // Overlay the persisted auto-approve toggle onto the env-seeded value

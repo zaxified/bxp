@@ -8,6 +8,7 @@ import 'package:path/path.dart' as p;
 import '../store/trace_model.dart';
 import 'bridge_client.dart';
 import 'dev_trace.dart';
+import 'env_vars.dart';
 import 'diagnostic_log.dart';
 
 /// Bridge-backed client for the bxp toolchain.
@@ -54,7 +55,7 @@ class BxpProcessClient {
   /// Returns null when no candidate exists on disk.
   static String? findBin(String name) {
     final envVar = switch (name) {
-      'bxp-cli' => Platform.environment['BXP_CLI_PATH'],
+      'bxp-cli' => Platform.environment[EnvVars.cliPath.name],
       _ => null,
     };
     if (envVar != null && envVar.isNotEmpty) {
@@ -106,7 +107,7 @@ class BxpProcessClient {
   /// (desktop bundle) → dev-tree `<mono>/resources/console/<file>`.
   /// Returns null when no copy exists.
   static String? findExamplesSource() {
-    final env = Platform.environment['BXP_EXAMPLES_PATH'];
+    final env = Platform.environment[EnvVars.examplesPath.name];
     if (env != null && env.isNotEmpty) {
       if (File(env).existsSync()) return env;
       devTrace('findExamples.envOverrideMissing', {'path': env});

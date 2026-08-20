@@ -3,6 +3,7 @@
 //   GuiToolDoc  (gui_mcp_server.dart)  → gui-agent-tools.md
 //   ShortcutDoc (platform_shortcuts.dart) → gui-shortcuts.md
 //   PrefDoc     (prefs_service.dart)   → gui-prefs.md
+//   EnvVarDoc   (env_vars.dart)        → environment.md
 //
 // Runs as a `flutter test` (not `dart run`): importing bxp_gui links dart:ui via
 // Flutter, which only the Flutter test engine provides. The "test" never asserts
@@ -21,6 +22,7 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:bxp_gui/services/env_vars.dart';
 import 'package:bxp_gui/services/gui_mcp_server.dart';
 import 'package:bxp_gui/services/prefs_service.dart';
 import 'package:bxp_gui/ui/platform_shortcuts.dart';
@@ -114,6 +116,23 @@ void main() {
       'Keys persisted in the bxp-gui preferences file (see the GUI guide for the file path).',
       ['Key', 'Description'],
       [for (final p in Prefs.all) [_code(p.key, 'hl-key'), p.description]],
+    );
+
+    // environment — EnvVars.all is a static const catalog. `devOnly` entries
+    // only take effect in a build compiled with the BXP_UPDATE_TEST define, so
+    // they are inert in a released binary and left off the user-facing page.
+    _writePage(
+      dir,
+      'environment.md',
+      'Environment variables',
+      'EnvVarDoc',
+      'Optional environment overrides BXP reads at startup — all of them '
+          'optional, BXP works with none set.',
+      ['Variable', 'Effect'],
+      [
+        for (final e in EnvVars.all.where((e) => !e.devOnly))
+          [_code(e.name, 'hl-key'), e.description],
+      ],
     );
   });
 }

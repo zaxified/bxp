@@ -39,6 +39,8 @@ bxp-gui/
 │   │   ├── desktop_integration_service.dart  # First-run .desktop + hicolor icon writer (Linux AppImage)
 │   │   ├── dev_trace.dart                    # kDebugMode-gated print() helper
 │   │   ├── diagnostic_log.dart               # Opt-in NDJSON trace + engine stderr capture (BXP_DIAGNOSTIC=1)
+│   │   ├── env_vars.dart                     # EnvVarDoc catalog of every BXP_* variable the app reads
+│   │   │                                     # (call sites + docs/reference/environment.md share it)
 │   │   ├── op_log.dart                       # In-memory record of user edits since load
 │   │   ├── op_to_ast.dart                    # Translate ConfigOp → AST mutations
 │   │   ├── prefs_service.dart                # User preferences persistence

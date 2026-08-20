@@ -10,6 +10,7 @@ import 'package:path_provider/path_provider.dart';
 import 'app_runtime.dart';
 import 'bxp_process_client.dart';
 import 'dev_trace.dart';
+import 'env_vars.dart';
 
 // Pure-Dart cross-platform auto-updater.
 //
@@ -60,7 +61,7 @@ class UpdaterService extends ChangeNotifier {
   /// request points the whole download+verify chain at the test server.
   String get _releaseApiUrl {
     if (_testMode) {
-      final o = Platform.environment['BXP_UPDATE_API'];
+      final o = Platform.environment[EnvVars.updateApi.name];
       if (o != null && o.isNotEmpty) return o;
     }
     return 'https://api.github.com/repos/$repoSlug/releases/latest';
@@ -69,7 +70,7 @@ class UpdaterService extends ChangeNotifier {
   /// Minisign trust anchor used to verify the downloaded SHA256SUMS.
   String get _trustKey {
     if (_testMode) {
-      final o = Platform.environment['BXP_UPDATE_PUBKEY'];
+      final o = Platform.environment[EnvVars.updatePubkey.name];
       if (o != null && o.isNotEmpty) return o;
     }
     return minisignPublicKey;
