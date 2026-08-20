@@ -238,7 +238,7 @@ class _MainViewState extends State<MainView> {
             children: [
               Column(
                 children: [
-                  // Top navigation bar (CONFIG · RUNNER · GITHUB · BLUE/GRAY)
+                  // Top navigation bar (CONFIG · RUNNER · DOCS · BLUE/GRAY)
                   const TopBar(),
                   // Main content
                   Expanded(

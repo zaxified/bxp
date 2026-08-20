@@ -6,10 +6,10 @@ import '../../store/trace_store.dart';
 import '../theme/bxp_theme.dart';
 import '../theme/bxp_text.dart';
 
-const _githubUrl = 'https://github.com/zaxified/bxp';
+const _docsUrl = 'https://zaxified.github.io/bxp/';
 
 /// Application-level navigation bar. Contains the CONFIG / RUNNER tab selectors
-/// on the left and the GITHUB link + theme-cycle button on the right.
+/// on the left and the DOCS link + theme-cycle button on the right.
 /// Active tab is tracked in TraceStore.activeTabIndex so the IndexedStack in
 /// MainView reacts automatically; this widget is purely presentation.
 class TopBar extends StatelessWidget {
@@ -43,10 +43,10 @@ class TopBar extends StatelessWidget {
           ),
           const Spacer(),
           _TopTab(
-            label: 'GITHUB',
+            label: 'DOCS',
             active: false,
-            tooltip: 'Open project on GitHub ($_githubUrl)',
-            onTap: _openGithub,
+            tooltip: 'Open the BXP manual ($_docsUrl)',
+            onTap: _openDocs,
           ),
           // Theme cycle button: label shows the current preset's short name
           // (e.g. "SLATE", "ZINC") so the user knows what clicking will do.
@@ -61,33 +61,33 @@ class TopBar extends StatelessWidget {
     );
   }
 
-  Future<void> _openGithub() async {
+  Future<void> _openDocs() async {
     // Surface failures via devTrace — fire-and-forget Process.run swallows
     // the missing-binary case (no xdg-open on minimal Linux installs, no
     // `open` if the macOS user nuked it). Without this, a click that does
     // nothing looks like a UI bug.
     final (cmd, args) = switch (Platform.operatingSystem) {
-      'linux' => ('xdg-open', [_githubUrl]),
-      'macos' => ('open', [_githubUrl]),
-      'windows' => ('cmd', ['/c', 'start', _githubUrl]),
+      'linux' => ('xdg-open', [_docsUrl]),
+      'macos' => ('open', [_docsUrl]),
+      'windows' => ('cmd', ['/c', 'start', _docsUrl]),
       _ => (null, <String>[]),
     };
     if (cmd == null) {
-      devTrace('topBar.openGithub.unsupported',
+      devTrace('topBar.openDocs.unsupported',
           {'platform': Platform.operatingSystem});
       return;
     }
     try {
       final result = await Process.run(cmd, args);
       if (result.exitCode != 0) {
-        devTrace('topBar.openGithub.fail', {
+        devTrace('topBar.openDocs.fail', {
           'cmd': cmd,
           'exitCode': result.exitCode,
           'stderr': result.stderr.toString(),
         });
       }
     } catch (e) {
-      devTrace('topBar.openGithub.spawnFail',
+      devTrace('topBar.openDocs.spawnFail',
           {'cmd': cmd, 'error': e.toString()});
     }
   }
