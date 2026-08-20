@@ -666,7 +666,7 @@ pub const BrokerConfig = struct {
             .key = "row_rules",
             .type_name = "array",
             .required = false,
-            .description = "Ordered list of conditional routing rules. The first rule whose `when` matches produces the output rows; later rules are not evaluated. Rows matching no rule are silently skipped (or shown via row_rules_debug_missing).",
+            .description = "Ordered list of conditional routing rules. The first rule whose `when` matches produces the output rows; later rules are not evaluated. Rows matching no rule are silently skipped (or shown via row_rules_debug_missing). Omitting the key entirely is accepted by the loader, but then nothing matches and the template produces no output at all.",
             .ordered = true,
             .insert_template = "[]",
         },

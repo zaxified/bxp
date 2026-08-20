@@ -52,8 +52,7 @@ If your broker is not in the built-in `conversion_templates` list, the
 workflow is:
 
 1. Draft a template with the AI workflow described in
-   [`resources/readme.md`](resources/readme.md)
-   ("Need a broker that isn't listed?" section).
+   [`docs/ai/authoring-a-broker.md`](docs/ai/authoring-a-broker.md).
 2. Verify it with the bxp-mcp tools (`bxp_validate` + `bxp_simulate`) or
    `bxp-cli --debug` (runtime check).
 3. Add the template to `resources/bxp-cli.examples.json` and a paired
@@ -75,10 +74,11 @@ For build / test commands, repo layout, and architecture see
 
 ## Documentation
 
-Fixes to [`docs/`](docs/) and the user-facing readme in
-[`resources/readme.md`](resources/readme.md) are welcome as
-small PRs. If a section is unclear or wrong, file an issue or open the
-PR directly.
+Fixes to [`docs/`](docs/) are welcome as small PRs. If a page is unclear or
+wrong, file an issue or open the PR directly. Note that everything under
+`docs/reference/`, `docs/dev/architecture/data-structures.md` and
+`docs/includes/` is generated from catalogs in the code — edit the catalog, not
+the page.
 
 ## Recognition
 

@@ -51,7 +51,10 @@ Function names are case-insensitive.
   prefix-based action codes (Schwab `MKT BUY` / `LMT BUY`, IBKR
   multi-word actions) need an exact or word-boundary check: prefer
   exact comparison (`[Action] = 'Buy'`), `SPLIT_PART([Action], ' ', 1) = 'Buy'`
-  for the first word, or a more specific positive match.
+  for the first word, or excluding the false matches explicitly —
+  `CONTAINS([Action], 'Buy') AND NOT CONTAINS([Action], 'Sell')` is a valid
+  expression (`NOT` binds tighter than `AND`, see the precedence above) and is
+  `false` for `Sell to Buy`.
 - **`SPLIT_PART(s, delim, n)` is 1-based and returns `""` on out-of-range.**
   Out-of-range never errors — silent empty makes it safe to chain but
   hides off-by-one bugs. Trace the variable in `bxp-gui` if the output
@@ -81,3 +84,39 @@ PRICE_VALUE([Price])                                           → strip currenc
 SPLIT_PART([Comment], ' @ ', 2)                                → second part after " @ "
 [Commission ($)] + [Fees ($)]                                  → sum two raw numeric columns
 ```
+
+## Worked example — a ticker hidden in free text
+
+Some brokers leave the `Symbol` column empty and name the instrument only
+inside a free-text field: a dividend row reads
+`Description: "Qualified Dividend APPLE INC 100"` with no ticker column at all.
+Two composable functions cover this without a new builtin.
+
+**`REGEX_EXTRACT` isolates the company name.** It is a run of ALL-CAPS words,
+so a pattern matching one-or-more upper-case words skips the Title-case prefix
+and the trailing count on its own:
+
+```text
+REGEX_EXTRACT([Description], '[A-Z]{2,}(?: [A-Z]{2,})*')     → APPLE INC
+```
+
+The group is **non-capturing** `(?:…)` on purpose. A capturing `(…)` under a
+repeat makes `REGEX_EXTRACT` return only the last repetition — one word
+instead of the whole name.
+
+**`REMAP` turns that name into a ticker**, via a named `maps` entry keyed on
+the company name. Maps can key on anything, not just an existing symbol:
+
+```json5
+maps: { company_names: { "APPLE INC": "AAPL", "TESLA INC": "TSLA" } },
+```
+
+Combined into one `$ticker` expression:
+
+```text
+REMAP(REGEX_EXTRACT([Description], '[A-Z]{2,}(?: [A-Z]{2,})*'), 'company_names')
+```
+
+If the field holds *only* the company name, skip the regex and use
+`REMAP([Description], 'company_names')` directly — `REMAP` is a whole-value
+match, so the field has to equal a key exactly.

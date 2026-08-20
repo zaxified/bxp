@@ -9,8 +9,9 @@
 #
 # Output: releases/console/bxp-console-<version>-<platform>.(tar.gz|zip)
 #         Archive contains bxp/ with: bxp-cli(.exe), bxp-mcp(.exe),
-#         bxp-cli.examples.json, bxp-cli.json (trading212 sample), readme.md,
-#         sample.{csv,csvx,expected}
+#         bxp-cli.examples.json, bxp-cli.json (trading212 sample),
+#         sample.{csv,csvx,expected}. No readme: `bxp-cli --help` prints the
+#         documentation links instead, pinned to this release.
 #
 # bxp-mcp (the MCP server) ships alongside bxp-cli so an agent (or a console
 # user) can drive bxp's stateless surface — validate a config / expression,
@@ -51,7 +52,6 @@ build() {
     cp "$mcpbin"                                                       "$stage/bxp/bxp-mcp${ext}"
     cp "$MONO_ROOT/resources/console/bxp-cli.examples.json"            "$stage/bxp/bxp-cli.examples.json"
     cp "$MONO_ROOT/datasets/trading212_to_wealthfolio/sample.json"     "$stage/bxp/bxp-cli.json"
-    cp "$MONO_ROOT/resources/readme.md"                                "$stage/bxp/readme.md"
     cp "$MONO_ROOT/datasets/trading212_to_wealthfolio/sample.csv"      "$stage/bxp/sample.csv"
     cp "$MONO_ROOT/datasets/trading212_to_wealthfolio/sample.csvx"     "$stage/bxp/sample.csvx"
     cp "$MONO_ROOT/datasets/trading212_to_wealthfolio/sample.expected" "$stage/bxp/sample.expected"

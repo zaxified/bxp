@@ -66,6 +66,11 @@ The single-block form shown above is the legacy shape — it uses the
 defined, and is still accepted. See
 [Config schema](../reference/config-schema.md) for both forms.
 
+The two forms are told apart by one thing: a `when` key sitting **directly**
+under `pre_pass` means the object *is* the block. Without it, every key names a
+block. So switch to named blocks as soon as you know a second table is coming —
+converting later means rewriting every `LOOKUP` call in the template.
+
 Reach for `pre_pass` **only** for genuine cross-row joins (paired
 transaction legs, fee refunds, order/fill pairs). If a row's data is
 self-contained, omit it entirely.

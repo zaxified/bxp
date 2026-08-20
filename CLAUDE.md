@@ -69,9 +69,6 @@ bxp/
 │   ├── build.zig
 │   └── build.zig.zon
 ├── resources/
-│   ├── readme.md         # SINGLE hand-maintained readme shipped verbatim in BOTH
-│   │                     # console + desktop archives; desktop-only sections carry a
-│   │                     # *(desktop only)* heading annotation (no more block-marker gen)
 │   ├── console/          # bxp-cli sample config (bxp-cli.examples.json) — console archives
 │   ├── desktop/          # bxp-gui.desktop launcher template — desktop archives
 │   └── icons/            # 4 SVG variants + build-icons.sh — single source for app icons.

@@ -177,7 +177,6 @@ build_windows() {
     # findBridgeLibrary() as a sibling of bxp-gui.exe.
     cp "$MONO_ROOT/bxp-gui-bridge/zig-out/bin/bxp-gui-bridge.dll" \
        "$appdir/bxp-gui-bridge.dll"
-    cp "$MONO_ROOT/resources/readme.md"             "$appdir/readme.md"
     # icons/ ships all four variants for shortcut-icon swap.
     mkdir -p "$appdir/icons"
     cp "$MONO_ROOT/resources/icons"/*.png "$appdir/icons/"

@@ -110,8 +110,9 @@ All broker logic is defined in `bxp-cli.json` — there are no compiled-in broke
   `endsWith` match, **not** a glob — `*` is not special), e.g. `".csv"` for all CSV files,
   `"_3.csv"` to restrict to files ending in `_3.csv`. The matched suffix is also stripped
   from the filename to derive the output name (with `file_pattern_out`).
-- `file_pattern_out` — optional output filename suffix. Replaces `file_pattern_in` in the output
-  filename (e.g. `"_cash.csv"` → `"_cash.csvx"`). Defaults to appending `"x"` when omitted.
+- `file_pattern_out` — **required** — output filename suffix. Replaces `file_pattern_in` in the
+  output filename (e.g. `"_cash.csv"` → `"_cash.csvx"`). There is no derived default: the loader
+  initialises it to `""` and validation rejects an empty value (`config.zig` `validate`).
 - `date_filter_from_filename` — optional boolean (default `false`). When `true`, rows whose
   `$date` value falls outside the date range encoded in the filename (`YYYY-MM-DD_YYYY-MM-DD`)
   are silently skipped. Requires `$date` in `input_schema` — validated at startup.

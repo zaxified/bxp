@@ -2391,7 +2391,7 @@ const regex_extract_doc: FnDoc = .{
     .row_varying = false,
     .signature = "REGEX_EXTRACT(s, pattern)",
     .example = "REGEX_EXTRACT('Qualified Dividend AAPL 100', '[A-Z]{2,}')",
-    .description = "Returns the first part of `s` that regular-expression `pattern` matches, or \"\" if there is no match. When `pattern` has a capture group `(...)`, the first group's text is returned; otherwise the whole match is returned. `pattern` is a regex literal (same syntax + Unicode notes as REGEX_MATCH): linear-time, no backreferences or lookaround, and accented letters need an explicit class like `[A-ZÁ-Ž]` (not `\\w`). Use it to pull a ticker, code, or token a literal REPLACE/SPLIT_PART cannot isolate.",
+    .description = "Returns the first part of `s` that regular-expression `pattern` matches, or \"\" if there is no match. When `pattern` has a capture group `(...)`, the first group's text is returned; otherwise the whole match is returned — so group a repeated alternative as non-capturing `(?:...)` when you want the whole run, since a capturing group under a repeat yields only its last repetition. `pattern` is a regex literal (same syntax + Unicode notes as REGEX_MATCH): linear-time, no backreferences or lookaround, and accented letters need an explicit class like `[A-ZÁ-Ž]` (not `\\w`). Use it to pull a ticker, code, or token a literal REPLACE/SPLIT_PART cannot isolate.",
     .args = &.{
         .{ .name = "s", .kind = .string },
         .{ .name = "pattern", .kind = .string },
@@ -3330,7 +3330,7 @@ const workday_doc: FnDoc = .{
     .row_varying = false,
     .signature = "WORKDAY(d, n)",
     .example = "WORKDAY('2024-01-01', 10)",
-    .description = "Add `n` business days to date `d` (YYYY-MM-DD), skipping Saturdays and Sundays. Negative `n` subtracts. Correct for T+2 settlement math; does NOT account for exchange holidays.",
+    .description = "Add `n` business days to date `d` (YYYY-MM-DD), skipping Saturdays and Sundays. Negative `n` subtracts, and `n = 0` returns `d` unchanged. Correct for T+2 settlement math; does NOT account for exchange holidays.",
     .args = &.{
         .{ .name = "d", .kind = .string },
         .{ .name = "n", .kind = .number },

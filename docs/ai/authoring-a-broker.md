@@ -5,9 +5,9 @@ description: "How an agent authors a conversion template from a sample export, v
 # Authoring a broker with an AI
 
 bxp-cli templates are plain JSON5 — a capable AI (Claude, ChatGPT, …) can
-write one for you. **Two files are required context:** the BXP docs (this
-site, or the bundled `readme.md`) AND `bxp-cli.examples.json` (in the
-console archive and the GitHub repository). The docs define the language
+write one for you. **Two things are required context:** the BXP docs (this
+site, or its Markdown sources in the repository) AND `bxp-cli.examples.json`
+(in the console archive and the GitHub repository). The docs define the language
 and the target output spec; the examples.json carries working per-broker
 patterns the AI is expected to pattern-match against. Without
 examples.json the AI should refuse to guess.
@@ -91,6 +91,7 @@ strictly:
 7. **One-to-many rows.** When one input row must produce multiple output
    rows (currency conversion = FEE + WITHDRAWAL + DEPOSIT; dividend with
    tax), return multiple objects in the same `row_rules[].rows` array.
+   Each object can override `$variable`s for its own output row.
 8. **Match the broker's exact date shape.** Use `DATE_CONVERT` with
    tokens that correspond to the input literally, character-by-character;
    use `[*]` to skip fractional seconds, trailing `Z`, or timezone
@@ -215,6 +216,10 @@ should produce (0 / 1 / N).
 
 Iterate until step B is silent (zero `[expr error]`, zero unmatched rows)
 and the `.csvx` from step C matches every prediction.
+
+`bxp-cli --trace` is not part of this loop: it emits a binary BXTB frame
+stream for the GUI's drill-down view, which is neither readable in a terminal
+nor needed to self-test.
 
 **3. Inspect the `.csvx`.** Header row matches `output_schema` keys, in
 order. Spot-check at least one row of each `$action` type the template

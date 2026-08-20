@@ -182,7 +182,6 @@ examples, and the developer docs. Published from `docs/` on every change to
 | For                                               | Read                                                                       |
 | ------------------------------------------------- | -------------------------------------------------------------------------- |
 | Getting started, guides, reference, examples      | [the documentation site](https://zaxified.github.io/bxp/)                  |
-| Using `bxp-cli` (terminal) or `bxp-gui` (desktop) | [`resources/readme.md`](resources/readme.md) — also ships in every archive |
 | Developer / architecture / roadmap                | [`docs/dev/`](docs/dev/) · [online](https://zaxified.github.io/bxp/dev/build/) |
 | Contributing                                      | [`CONTRIBUTING.md`](CONTRIBUTING.md)                                       |
 | Release history                                   | [`CHANGELOG.md`](CHANGELOG.md)                                             |

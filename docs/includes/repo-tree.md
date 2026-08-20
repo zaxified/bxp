@@ -79,8 +79,7 @@ bxp/                                # monorepo root (git root)
 ├── resources/                      # files shipped inside the release archives
 │   ├── console/                    # the sample config bundled with the console archives
 │   ├── desktop/                    # the Linux launcher template bundled with the desktop archives
-│   ├── icons/                      # SVG variants + build-icons.sh, the single source for app icons
-│   └── readme.md
+│   └── icons/                      # SVG variants + build-icons.sh, the single source for app icons
 ├── scripts/                        # test, release and documentation tooling
 │   ├── bench/                      # developer-only benchmark matrix (not part of test.sh)
 │   │   ├── results/                # recorded benchmark runs — the baseline a regression is measured against
