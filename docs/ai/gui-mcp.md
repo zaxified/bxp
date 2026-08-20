@@ -57,8 +57,8 @@ error message, choosing between dry-run and full-run — paste the docs into
 your assistant and ask:
 
 > _"I use BXP Desktop. Please read the BXP docs. I'm trying to `<describe
-what you want to accomplish>`. The GUI is showing `<paste any error chip
-text or describe the screen>`. Which features should I use, and what
+> what you want to accomplish>`. The GUI is showing `<paste any error chip
+> text or describe the screen>`. Which features should I use, and what
 > keyboard shortcuts apply?"_
 
 The assistant has the keyboard shortcut table, advanced feature
