@@ -11,8 +11,12 @@ broker](../ai/authoring-a-broker.md).
 
 --8<-- "reference/built-in-templates.md:table"
 
+Template ids read `<broker>_to_<tracker>`, so an id names both ends of the
+conversion, and `bxp-cli --template <id>` runs exactly one of them.
+
 The shipping templates live in `bxp-cli.examples.json` — next to the
-`bxp-cli` binary in the console archive, and at
+`bxp-cli` binary in the console archive, inside the app bundle on desktop, and
+at
 [`resources/console/bxp-cli.examples.json`](https://github.com/zaxified/bxp/blob/master/resources/console/bxp-cli.examples.json)
 in the GitHub repository. Each carries inline JSON5 comments
 documenting what every `$variable` represents and how the broker's source

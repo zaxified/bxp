@@ -34,6 +34,32 @@ app or from a terminal. Pick the entry point that fits you.
 All `data_dir` paths are resolved relative to the location of
 `bxp-cli.json`.
 
+## Your own exports
+
+`bxp-cli` reads `bxp-cli.json` from the current directory, and each template's
+`data_dir` is resolved *relative to that config file*. The config in the
+console archive uses `data_dir: "."`, which is why `sample.csv` is found next
+to the binary. For real work, give each template its own folder:
+
+```text
+my-conversions/
+├── bxp-cli.json              # your config — data_dir paths start here
+├── trading212/               # data_dir of the trading212 template
+│   ├── export-2026-01.csv    # drop broker exports here
+│   └── export-2026-01.csvx   # bxp-cli writes the result alongside
+└── revolut/                  # data_dir of another template
+    └── statement.csv
+```
+
+To add a broker, open [`bxp-cli.examples.json`](built-in-templates.md), copy
+the template you want into the `conversion_templates` object of your own
+`bxp-cli.json`, and set its `data_dir` to the folder you made for it. Then:
+
+```bash
+./bxp-cli --template trading212_to_wealthfolio   # one template
+./bxp-cli                                        # every template in the config
+```
+
 ## Next
 
 - Don't see your broker? [Authoring a broker with an

@@ -16,7 +16,9 @@ platform-native installer:
   (per-user, not the system-wide `/Applications/`), unmount, relaunch.
 - **Linux AppImage** — atomic in-place replace + re-`exec()`.
 
-The updater is skipped during development builds. A Linux build that is
-not running from an AppImage — the only supported Linux channel — has no
-installer to fetch, so it surfaces a "manual update required" message
-with the release page URL instead.
+The updater is skipped during development builds. Two hosts have no installer
+to fetch and surface a "manual update required" message with the release page
+URL instead: a Linux build not running from an AppImage — the only supported
+Linux channel — and an Intel Mac, because the release workflow only produces
+arm64 DMGs and installing one there would replace a working app with a build
+that cannot launch.

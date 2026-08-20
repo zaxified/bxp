@@ -51,11 +51,51 @@ The console package — `bxp-cli` + `bxp-mcp`, co-located so `bxp-mcp`'s
 `bxp_simulate` can spawn `bxp-cli` — ships as a per-platform archive
 (`bxp-console-<version>-<platform>.{tar.gz,zip}`) on the same
 [GitHub Releases](https://github.com/zaxified/bxp/releases/latest) page.
-Unpack it anywhere on your `PATH`; the two binaries must stay in the same
-directory.
+
+There is nothing to install. Unpack the archive and run the binary from
+wherever you put it — it needs no libraries, no runtime, and no entry in
+`PATH`. The two binaries must stay in the same directory. On Linux and macOS
+you may need `chmod +x bxp-cli bxp-mcp` if your unpacker dropped the
+executable bit.
+
+The archive is laid out so it runs as-is:
+
+| File | What it is |
+| --- | --- |
+| `bxp-cli` | The conversion engine |
+| `bxp-mcp` | The MCP server for AI agents |
+| `bxp-cli.json` | A working config — one template, ready to run |
+| `bxp-cli.examples.json` | The template library to copy from |
+| `sample.csv` | A sample broker export |
+| `sample.csvx` | The converted result, ready to look at before you run anything. Your first run overwrites it — that is the point |
+| `sample.expected` | The reference copy of that same result. Nothing overwrites it, so it stays a trustworthy answer key |
+
+The last two are byte-identical on a correct install, which is what makes the
+check below meaningful.
+
+### Check the install in one command
+
+From the unpacked directory:
 
 ```bash
-./bxp-cli --help     # verify the engine runs
+./bxp-cli --dry-run
+```
+
+```text
+=== template: trading212_to_wealthfolio ===
+processing 'sample.csv'
+summary: errors:0 warnings:0 time:0.004s
+
+=== overall summary ===
+errors:0 warnings:0 time:0.006s
+```
+
+`--dry-run` runs the whole pipeline in memory and writes nothing. Drop the
+flag to produce the real file, then confirm it matches the reference:
+
+```bash
+./bxp-cli
+diff sample.csvx sample.expected     # no output = correct
 ```
 
 Continue with [Your first conversion](first-conversion.md).

@@ -12,6 +12,23 @@ and the target output spec; the examples.json carries working per-broker
 patterns the AI is expected to pattern-match against. Without
 examples.json the AI should refuse to guess.
 
+## Give the assistant the tools
+
+Everything below works without it, but an assistant that can *run* bxp instead
+of reasoning about it gets there far faster and stops handing you templates it
+could not check. `bxp-mcp` ships in both packages — beside `bxp-cli` in the
+console archive, inside the bundle on desktop — and registering it with an
+MCP-capable client is one entry:
+
+```json
+{ "mcpServers": { "bxp": { "command": "/abs/path/to/bxp-mcp", "args": [] } } }
+```
+
+BXP Desktop fills that block in for you, with the path already resolved:
+**ABOUT** in the top bar. That matters on Linux, where an AppImage mounts
+itself somewhere new on every launch, so the path is not something you can
+write down once.
+
 ## The prompt
 
 Paste this into your assistant, attach both files, then drop in 5 rows of
@@ -115,19 +132,18 @@ The self-test surface depends on what you have wired:
   catalog the reference pages are generated from.
 - **With only `bxp-cli`** (no MCP): `bxp-cli --debug` and a real run.
 
-!!! danger "`headers` / `fields` are typed differently per tool"
+!!! note "`headers` / `fields` are arrays of strings"
 
-    `bxp_eval` and `bxp_eval_trace` take them as **JSON encoded into a
-    string** (`"[\"Price\",\"Qty\"]"`). `bxp_eval_batch` takes them as
-    **native JSON arrays** (`["Price","Qty"]`).
+    Every eval tool takes the row context the same way — a native JSON
+    array, `["Price","Qty"]`. `bxp_eval` and `bxp_eval_trace` still
+    accept the array encoded into a string
+    (`"[\"Price\",\"Qty\"]"`), the shape their schema used to declare,
+    but there is no reason to write it.
 
-    Getting this wrong on `bxp_eval` / `bxp_eval_trace` fails
-    **silently**: you get `{"ok":true}` back with the row context
-    dropped, so every `[Column]` resolves to `""` and a correct
-    expression looks broken. `bxp_eval_batch` fails loudly instead
-    (`headers/fields/exprs must be JSON arrays`). A single-expression
-    tool that returns an unexpected empty value is almost always this
-    bug — check the argument type before you touch the expression.
+    Anything else is a **tool failure naming the argument**, never a
+    silently empty row: an earlier version dropped the context and still
+    answered `{"ok":true}`, so every `[Column]` read as `""` and agents
+    concluded a correct expression was broken.
 
 **1. Schema + JSON5 syntax check.** Call `bxp_validate` with the config
 text. Expect no `$err_*` / `$warn_*` keys for the new template's path. If
@@ -146,17 +162,17 @@ should produce (0 / 1 / N).
   `bxp_eval_batch` for several `$variable` expressions against the same
   row at once.
 
-  `bxp_eval` / `bxp_eval_trace` — note the quoted, escaped arrays:
+  `bxp_eval` / `bxp_eval_trace`:
 
   ```json
   {
     "expr": "DATE_CONVERT([Time], 'YYYY-MM-DD hh:mm:ss', 'YYYY-MM-DD')",
-    "headers": "[\"Action\", \"Time\", \"Ticker\"]",
-    "fields": "[\"Market buy\", \"2024-04-25 07:00:35\", \"RIO\"]"
+    "headers": ["Action", "Time", "Ticker"],
+    "fields": ["Market buy", "2024-04-25 07:00:35", "RIO"]
   }
   ```
 
-  `bxp_eval_batch` — real arrays, plus `exprs`:
+  `bxp_eval_batch` — the same, plus `exprs`:
 
   ```json
   {

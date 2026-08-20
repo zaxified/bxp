@@ -248,6 +248,10 @@ round-trip that drives one tool from each family and a complete `bxp_simulate`
 run (verifying the co-located `bxp-cli` spawn and byte-identical output against a
 dataset's `.expected`).
 
+The binary takes no operational flags — it speaks MCP on stdin/stdout and
+nothing else. `--help` prints its tool list and `--version` prints the build,
+which is the quickest way to confirm a client is pointed at the right binary.
+
 Register with an MCP client (e.g. Claude Code, `~/.claude.json`):
 
 ```json
