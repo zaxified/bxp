@@ -39,6 +39,7 @@ bxp-gui/
 │   │   ├── desktop_integration_service.dart  # First-run .desktop + hicolor icon writer (Linux AppImage)
 │   │   ├── dev_trace.dart                    # kDebugMode-gated print() helper
 │   │   ├── diagnostic_log.dart               # Opt-in NDJSON trace + engine stderr capture (BXP_DIAGNOSTIC=1)
+│   │   ├── doc_links.dart                    # Manual URLs (site + release-pinned Markdown) + browser opener
 │   │   ├── env_vars.dart                     # EnvVarDoc catalog of every BXP_* variable the app reads
 │   │   │                                     # (call sites + docs/reference/environment.md share it)
 │   │   ├── op_log.dart                       # In-memory record of user edits since load
@@ -75,6 +76,7 @@ bxp-gui/
 │           ├── top_bar.dart           # Title bar + actions
 │           ├── panel_header.dart      # Reusable header chrome
 │           ├── resize_handle.dart     # Splitter drag handle
+│           ├── about_dialog.dart      # Versions + manual links + the bundled bxp-mcp path
 │           ├── open_dialog.dart       # Recent-files / file picker
 │           ├── integrate_dialog.dart  # First-run Linux desktop-integration prompt
 │           └── update_dialog.dart     # In-app updater prompt

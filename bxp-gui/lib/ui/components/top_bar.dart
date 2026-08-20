@@ -1,15 +1,13 @@
-import 'dart:io';
 import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
-import '../../services/dev_trace.dart';
+import '../../services/doc_links.dart';
 import '../../store/trace_store.dart';
 import '../theme/bxp_theme.dart';
 import '../theme/bxp_text.dart';
-
-const _docsUrl = 'https://zaxified.github.io/bxp/';
+import 'about_dialog.dart';
 
 /// Application-level navigation bar. Contains the CONFIG / RUNNER tab selectors
-/// on the left and the DOCS link + theme-cycle button on the right.
+/// on the left and the DOCS / ABOUT entries + theme-cycle button on the right.
 /// Active tab is tracked in TraceStore.activeTabIndex so the IndexedStack in
 /// MainView reacts automatically; this widget is purely presentation.
 class TopBar extends StatelessWidget {
@@ -45,8 +43,18 @@ class TopBar extends StatelessWidget {
           _TopTab(
             label: 'DOCS',
             active: false,
-            tooltip: 'Open the BXP manual ($_docsUrl)',
-            onTap: _openDocs,
+            tooltip: 'Open the BXP manual ($kDocsSiteUrl)',
+            onTap: () => openExternalUrl(kDocsSiteUrl),
+          ),
+          _TopTab(
+            label: 'ABOUT',
+            active: false,
+            tooltip: 'Versions, documentation links, and how an agent reaches '
+                'the bundled MCP server',
+            onTap: () => showDialog<void>(
+              context: context,
+              builder: (_) => const BxpAboutDialog(),
+            ),
           ),
           // Theme cycle button: label shows the current preset's short name
           // (e.g. "SLATE", "ZINC") so the user knows what clicking will do.
@@ -59,37 +67,6 @@ class TopBar extends StatelessWidget {
         ],
       ),
     );
-  }
-
-  Future<void> _openDocs() async {
-    // Surface failures via devTrace — fire-and-forget Process.run swallows
-    // the missing-binary case (no xdg-open on minimal Linux installs, no
-    // `open` if the macOS user nuked it). Without this, a click that does
-    // nothing looks like a UI bug.
-    final (cmd, args) = switch (Platform.operatingSystem) {
-      'linux' => ('xdg-open', [_docsUrl]),
-      'macos' => ('open', [_docsUrl]),
-      'windows' => ('cmd', ['/c', 'start', _docsUrl]),
-      _ => (null, <String>[]),
-    };
-    if (cmd == null) {
-      devTrace('topBar.openDocs.unsupported',
-          {'platform': Platform.operatingSystem});
-      return;
-    }
-    try {
-      final result = await Process.run(cmd, args);
-      if (result.exitCode != 0) {
-        devTrace('topBar.openDocs.fail', {
-          'cmd': cmd,
-          'exitCode': result.exitCode,
-          'stderr': result.stderr.toString(),
-        });
-      }
-    } catch (e) {
-      devTrace('topBar.openDocs.spawnFail',
-          {'cmd': cmd, 'error': e.toString()});
-    }
   }
 }
 

@@ -148,13 +148,10 @@ site for a person, the Markdown sources under
 binary was built from, which the unversioned site cannot offer — and a pointer
 to the co-located `bxp-mcp` (no path: inside an AppImage that binary lives
 under a fresh `/tmp/.mount_*` on every launch). The GUI's top bar opens the
-same site. Both of those have landed; two things still have to before the file
+same site, and its `ABOUT` panel now carries the same three entries plus the
+`mcpServers` block for the bundled `bxp-mcp` — the rendezvous the desktop
+archive needs, since it never sees `--help`. One thing is left before the file
 can be deleted.
-
-**A rendezvous for the desktop archive**, which never sees `--help`. A
-*Help → About* in bxp-gui carrying the same three entries is the better shape
-than a one-page `readme.txt`, because the GUI is the one component that can
-resolve its own `bxp-mcp` path and hand the user a working `mcpServers` block.
 
 **A block-by-block merge of the remaining content into `docs/`.** Every readme
 section has a counterpart page, but a shared heading does not mean shared text.
