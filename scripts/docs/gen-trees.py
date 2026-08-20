@@ -34,6 +34,22 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 OUT = os.path.join(ROOT, "docs", "includes")
 
+
+def rel_join(*parts):
+    """Join a repo-relative path with forward slashes on every platform.
+
+    Repo-relative paths here are compared against `git ls-files`, which emits
+    `/` regardless of host. `os.path.join` would produce `bxp-cli\\src` on
+    Windows, every comparison would miss, and the tree would come out empty
+    instead of erroring — the worst kind of platform bug.
+    """
+    return "/".join(p for p in parts if p)
+
+
+def abs_path(rel):
+    return os.path.join(ROOT, *rel.split("/")) if rel else ROOT
+
+
 # ── what the tree shows ──────────────────────────────────────────────────────
 #
 # Explicit rather than "walk everything": a repository tree is a reading aid, so
@@ -217,7 +233,7 @@ def describe_file(path):
 def describe(rel):
     if rel in DIRS:
         return DIRS[rel]
-    full = os.path.join(ROOT, rel)
+    full = abs_path(rel)
     if os.path.isdir(full):
         sys.exit(f"gen-trees: directory {rel!r} has no DIRS entry")
     return describe_file(full)
@@ -225,14 +241,14 @@ def describe(rel):
 
 def entries(rel):
     """Tracked children of `rel`, directories first, then files, each sorted."""
-    full = os.path.join(ROOT, rel) if rel else ROOT
+    full = abs_path(rel)
     # Dotfiles below the root are tooling noise in a layout diagram — the ones
     # that matter (`.github/`) are named explicitly in LAYOUT.
     names = [n for n in os.listdir(full) if n not in HIDE and not n.startswith(".")]
     dirs, files = [], []
     for n in sorted(names):
-        child = os.path.join(rel, n) if rel else n
-        if os.path.isdir(os.path.join(ROOT, child)):
+        child = rel_join(rel, n)
+        if os.path.isdir(abs_path(child)):
             # A directory holding nothing tracked is a build artifact under a
             # name HIDE happens not to list; it does not belong in a layout.
             if any(t.startswith(child + "/") for t in _tracked_set()):
@@ -264,8 +280,8 @@ def render(lines, rel, depth, prefix):
     kids = entries(rel)
     for i, name in enumerate(kids):
         last = i == len(kids) - 1
-        child = os.path.join(rel, name)
-        is_dir = os.path.isdir(os.path.join(ROOT, child))
+        child = rel_join(rel, name)
+        is_dir = os.path.isdir(abs_path(child))
         label = name + "/" if is_dir else name
         lines.append((prefix + ("└── " if last else "├── ") + label, describe(child)))
         if is_dir and depth > 0:
@@ -277,7 +293,7 @@ def repo_tree():
     items = LAYOUT + [(f, 0) for f in ROOT_FILES]
     for i, (name, depth) in enumerate(items):
         last = i == len(items) - 1
-        is_dir = os.path.isdir(os.path.join(ROOT, name))
+        is_dir = os.path.isdir(abs_path(name))
         lines.append((("└── " if last else "├── ") + name + ("/" if is_dir else ""),
                       describe(name)))
         if is_dir and depth > 0:

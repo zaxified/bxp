@@ -26,7 +26,8 @@ playground, the formatting and parity checks — lives one level down in
 | Example-page expression gate only                     | `bash scripts/test-08-docs-examples.sh`          |
 | Example regression only                               | `bash scripts/test-09-examples.sh`               |
 | Docs mermaid check (pre-release only)                 | `bash scripts/docs/check-formatting.sh`          |
-| Regenerate the docs site + drift-check it             | `bash scripts/docs/gen-docs.sh --check`          |
+| Drift-check the generated pages (as CI does)          | `bash scripts/docs/gen-docs.sh --check`          |
+| Regenerate + preview the docs site locally            | `bash scripts/docs/gen-docs.sh`                  |
 | Full benchmark matrix (dev only, not in `test.sh`)    | `bash scripts/bench/bench.sh`                    |
 | Local smoke build (no publish)                        | `bash scripts/release.sh`                        |
 | Console build only                                    | `bash scripts/release-01-console.sh`             |
@@ -78,7 +79,8 @@ release-tag.sh                standalone — semver tag (v<build.zig.zon version
 docs/                         ALL documentation support — kept in its own dir so
                               the test- and release- phases above stay legible
 docs/gen-docs.sh              regenerate every generated page + fragment, build /
-                              serve the site; --check is the drift guard (test-04)
+                              serve the site; --check is the drift guard, run by
+                              .github/workflows/docs.yml (NOT by test.sh)
 docs/gen-trees.py             repo tree + test-phase table, harvested from file
                               headers; --check is folded into gen-docs.sh --check
 docs/gen-examples-index.py    Examples section landing pages

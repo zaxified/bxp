@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
-# Desktop-side tests plus the generated-documentation drift guard.
+# Desktop-side tests: the Flutter app and the embedded json5_ast package.
 #
-# Runs flutter analyze + flutter test for bxp-gui, the Dart unit tests for the
-# embedded json5_ast package, and `scripts/docs/gen-docs.sh --check`, which
-# regenerates every catalog-driven page and fragment and fails on any diff.
-# The drift guard lives here, not in the console phase, because its
-# Dart-catalog pages are emitted by a `flutter test`, so it needs the SDK.
+# Runs flutter analyze + flutter test for bxp-gui plus the Dart unit tests for
+# json5_ast, and builds the bridge shared library those tests load.
+#
+# The generated-documentation drift guard used to live here and does not any
+# more: rendering the site is a GitHub Pages concern, not a product one, so it
+# belongs to .github/workflows/docs.yml alongside the build that publishes it.
+# See docs/dev/testing.md.
+#
 # Skips cleanly if Flutter is not installed (so contributors who only touch
 # the console side don't need the SDK).
 #
@@ -50,4 +53,3 @@ step "$(_lab bridge     'build')"       _zig_in "$MONO_ROOT/bxp-gui-bridge" buil
 step "$(_lab flutter    'analyze')"     _flutter_in analyze
 step "$(_lab flutter    'test')"        _flutter_in test
 step "$(_lab json5_ast  'dart test')"   _dart_in "$GUI_ROOT/packages/json5_ast" test
-step "$(_lab docs       'catalog drift')" bash "$SCRIPT_DIR/docs/gen-docs.sh" --check

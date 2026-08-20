@@ -107,7 +107,8 @@ bxp/
 │   ├── docs/                 # ALL documentation support lives here, so the
 │   │   │                     # test-/release- phases at this level stay legible
 │   │   ├── gen-docs.sh           # regenerate every generated page + fragment,
-│   │   │                         # then build/serve the site; --check = drift guard
+│   │   │                         # then build/serve the site; --check = drift
+│   │   │                         # guard, run by workflows/docs.yml NOT test.sh
 │   │   ├── gen-trees.py          # repo tree + test-phase table, harvested from
 │   │   │                         # file headers (//! / # / front matter)
 │   │   ├── gen-examples-index.py # Examples section landing pages
@@ -174,8 +175,10 @@ bxp/
 │   │                         # repo tree, the test-phase table)
 │   └── assets/               # demo.gif hero, logo, favicon, css/js
 ├── .github/workflows/
-│   ├── ci.yml            # Full scripts/test.sh on every PR + master push
-│   ├── docs.yml          # GitHub Pages publish (watches docs/, scripts/docs/, bxp-core/)
+│   ├── ci.yml            # Full scripts/test.sh on every PR + master push (3 OS)
+│   ├── docs.yml          # EVERYTHING about the site: drift check + wasm parity
+│   │                     # + strict build + Pages publish. No path filter, one
+│   │                     # host. Nothing docs-related belongs in ci.yml.
 │   └── release.yml       # Multi-host release pipeline triggered by `v*` tag push
 ├── DEV/                  # Developer scratch space — sample data, in-flight plans, AST prototypes
 ├── CLAUDE.md             # This file
@@ -327,10 +330,12 @@ services/prefs_service.dart`.
 ## Generated documentation — do not hand-edit
 
 Everything under `docs/reference/`, `docs/dev/architecture/data-structures.md`
-and `docs/includes/` (except `abbreviations.md`) is generated, and
-`scripts/docs/gen-docs.sh --check` fails the suite on any diff (it runs inside
-`test-04`). Editing a generated page is undone by the next run — fix the source
-instead:
+and `docs/includes/` (except `abbreviations.md`) is generated.
+`scripts/docs/gen-docs.sh --check` regenerates it all and fails on any diff.
+That check runs in `.github/workflows/docs.yml`, **not** in `scripts/test.sh` —
+rendering the site is a GitHub Pages concern, and the product suite runs on
+three platforms for reasons that have nothing to do with documentation.
+Editing a generated page is undone by the next run — fix the source instead:
 
 | Generated from | Lives in |
 | --- | --- |

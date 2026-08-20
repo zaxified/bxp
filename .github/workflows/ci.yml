@@ -6,9 +6,10 @@ name: ci
 # a v* tag, so without this PRs and master pushes would go untested by CI.
 #
 # Windows-runner portability of test.sh was cleared 2026-06-07 (flutter tests
-# resolve .exe/.dll/bin + path separators per-platform; text fixtures whose
-# bytes are compared — the expr corpus and the generated docs/reference pages —
-# are pinned eol=lf in .gitattributes so a CRLF checkout cannot fake a diff).
+# resolve .exe/.dll/bin + path separators per-platform; every text file in the
+# repository is pinned eol=lf in .gitattributes, so a CRLF checkout cannot fake
+# a diff in any of the byte-comparing gates — the expression corpus, the
+# dataset fixtures, the example goldens).
 # Every phase now runs on all three legs, the bench guard included: it reads
 # wall + peak RSS from bxp-cli's own BXP_METRICS line instead of GNU
 # `/usr/bin/time`, so the perf invariants are no longer Linux-only. Verified on
@@ -55,6 +56,12 @@ jobs:
       # Keep all three legs running so one platform's failure doesn't mask
       # another's — no per-OS phase carve-outs, every leg runs the same
       # scripts/test.sh and each phase self-selects where it can run.
+      #
+      # What keeps that honest is that test.sh only contains work the product
+      # actually does on three platforms. Rendering the documentation site does
+      # not, so it is not here — it lives in .github/workflows/docs.yml, which
+      # runs once, on ubuntu. Before that split it was a phase in this matrix
+      # and broke the Windows leg twice over line endings alone.
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]

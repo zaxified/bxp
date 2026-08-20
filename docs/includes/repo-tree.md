@@ -110,7 +110,7 @@ bxp/                                # monorepo root (git root)
 │   ├── test-01-console.sh          # Console-side build + unit tests (bxp-core, bxp-cli, json5_ast)
 │   ├── test-02-mcp.sh              # bxp-mcp build + unit tests + JSON-RPC smoke
 │   ├── test-03-bridge.sh           # bxp-gui-bridge unit tests
-│   ├── test-04-desktop.sh          # Desktop-side tests plus the generated-documentation drift guard
+│   ├── test-04-desktop.sh          # Desktop-side tests: the Flutter app and the embedded json5_ast package
 │   ├── test-05-bench-guard.sh      # Performance regression guard
 │   ├── test-06-expr-corpus.sh      # Expression corpus regression gate
 │   ├── test-06-expr-corpus.txt

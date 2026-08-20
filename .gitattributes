@@ -1,39 +1,40 @@
-# Dataset fixtures must keep LF line endings everywhere — bxp-cli
-# emits LF on every platform when generating *.csvx output, so a
-# CRLF-converted *.expected on a Windows checkout (default
-# core.autocrlf=true) would always diff against the freshly produced
-# *.csvx and break scripts/test.sh's regression loop.
-datasets/**/*.csv     text eol=lf
-datasets/**/*.csvx    text eol=lf
-datasets/**/*.expected text eol=lf
-datasets/**/*.json    text eol=lf
-datasets/**/*.json5   text eol=lf
+# Line endings: LF everywhere, on every platform.
+#
+# This repository byte-compares generated artefacts against freshly generated
+# ones in several gates — the dataset and example regressions diff committed
+# `*.expected` against a `bxp-cli` run, the expression corpus is fed line by
+# line to a parser that rejects a stray CR, and the documentation drift guard
+# diffs every generated page and fragment against a fresh render. Every
+# producer writes LF on every host. So on a Windows checkout, the default
+# `core.autocrlf=true` converts the committed copy to CRLF and each of those
+# gates reports a whole-file difference that is nothing but line endings.
+#
+# This used to be handled with one rule per path, which meant every new
+# generated file broke the Windows leg alone until someone remembered to add a
+# line here — twice now. One default is the fix: the working tree is LF for
+# everyone, so nothing has to be enumerated and nothing can be forgotten.
+#
+# Windows tooling is fine with it. Nothing here is a `.bat`/`.cmd`; the NSIS
+# script and the PowerShell asset builder both read LF, and every editor in
+# use this decade writes it.
+* text=auto eol=lf
 
-# The expression corpus is fed line-by-line to `bxp-fmt --expr`
-# (scripts/test-06-expr-corpus.sh), which rejects a stray CR as
-# `UnexpectedChar '\r'`. On a Windows checkout (default core.autocrlf=true)
-# a CRLF-converted corpus would fail every line — same rationale as the
-# dataset fixtures above. Keep it LF on every platform so the planned
-# CI-hardening flutter/test.sh run is green on the Windows runner too.
-scripts/test-06-expr-corpus.txt text eol=lf
+# Binaries. `text=auto` already detects these by their NUL bytes, but a
+# mis-detected binary is a corrupted file, so the known ones are declared
+# rather than guessed. (`.svg` is deliberately absent — it is XML, and belongs
+# under the text default above.)
+*.png  binary
+*.bmp  binary
+*.gif  binary
+*.ico  binary
+*.ttf  binary
+*.xlsx binary
+*.zip  binary
+*.wasm binary
 
-# Flutter regenerates these plugin registrants on every `flutter pub get`
-# / build with LF on every host. Without an explicit eol they fall under
-# the Windows default core.autocrlf=true, which flags a permanent phantom
-# CRLF diff (the file is committed LF, but git wants to convert it to CRLF
-# on the next touch), so they show as modified on every Windows checkout
-# even though nothing changed. Pin them to LF so the working tree matches
-# the committed blob and the churn stops.
-**/generated_plugin_registrant.cc   text eol=lf
-**/generated_plugin_registrant.h    text eol=lf
-**/GeneratedPluginRegistrant.swift  text eol=lf
-
-# Every page under docs/reference/ is generated (scripts/gen-docs.sh's
-# GENERATED_PAGES), and `--check` — the "docs catalog drift" step in
-# scripts/test-04-desktop.sh — byte-diffs the committed page against a freshly
-# generated one. Both generators (tools/zig-doc-gen, tools/dart-doc-gen) write
-# LF on every host, so on a Windows checkout (default core.autocrlf=true) the
-# CRLF-converted committed page differs from the generated one on every single
-# line and the gate reports a whole-file drift that is nothing but line endings.
-# Same rationale as the dataset fixtures and the expression corpus above.
-docs/reference/*.md text eol=lf
+# The one text file whose CRLF is the point. This is a verbatim slice of the
+# JHU COVID-19 time series, which ships CRLF, and the example exists to show
+# that real-world exports convert cleanly as they arrive. Normalising it would
+# quietly edit the source data the page claims to be showing, and would stop
+# the example tree exercising the CRLF input path at all.
+docs/examples/real-world/covid-wide-to-long/sample.csv -text

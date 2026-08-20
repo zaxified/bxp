@@ -1,16 +1,26 @@
-# Publishes the MkDocs Material site to GitHub Pages.
+# Checks and publishes the MkDocs Material site.
 #
-# Triggered by any push to master that touches the docs input: the pages
-# themselves, the site config, or the pinned toolchain. Nothing else rebuilds
-# the site, so an unrelated code change does not redeploy it.
+# Everything about rendering this site lives here, and nothing about it lives
+# in scripts/test.sh. That split is the point: test.sh gates the product — the
+# CLI, the MCP server, the bridge, the desktop app, the dataset and example
+# regressions — and it runs on three operating systems because the product
+# does. Rendering documentation is a GitHub Pages concern that runs in exactly
+# one place on exactly one host, so keeping it in the product suite bought
+# nothing and cost two Windows-only failures that had nothing to do with
+# documentation.
 #
-# The reference pages under docs/reference/ are GENERATED from the in-code
-# catalogs, but they are committed, so this workflow builds them as-is and
-# needs no Dart. Their sync with the catalogs is a test concern, not a
-# publishing one: scripts/docs/gen-docs.sh --check runs inside test-04 on the
-# normal CI matrix and fails there if a catalog moved without a regen.
+# There is deliberately NO path filter. Generated pages are rendered from
+# catalogs scattered across bxp-core, bxp-cli, bxp-mcp, bxp-gui-bridge and the
+# Dart side, from `@typeInfo` over the live types, and from the header comment
+# of every script — so "which paths can change the site" is very nearly "all of
+# them", and every attempt to enumerate it would be one commit away from being
+# wrong. Running on every push and pull request is cheaper than that mistake.
 #
-# Zig IS needed, for one artifact: the expression scratchpad's engine
+# The drift check regenerates every page and fragment and byte-diffs the result
+# against what is committed, which is why this workflow needs Zig, Flutter and
+# Python. A pull request runs the check and the build but never deploys.
+#
+# Zig is also needed for one artifact: the expression scratchpad's engine
 # (docs/assets/wasm/bxp-eval.wasm, bxp-core compiled for wasm32-freestanding).
 # It is a build output, deliberately untracked, so without this step the site
 # deploys with every clickable expression reporting a failed engine load.
@@ -27,19 +37,7 @@ name: docs
 on:
   push:
     branches: [master]
-    paths:
-      - "docs/**"
-      - "mkdocs.yml"
-      # The whole docs-support toolchain: pinned mkdocs deps, the reference and
-      # tree generators, the wasm playground build, the parity gate. Watching
-      # the directory rather than naming files keeps a new generator covered
-      # from the commit that adds it.
-      - "scripts/docs/**"
-      - ".github/workflows/docs.yml"
-      # The scratchpad ships a compiled slice of the engine, so a change to the
-      # expression evaluator or the catalog behind it changes the published
-      # site even when no page was touched.
-      - "bxp-core/**"
+  pull_request:
   # Manual runs for a first publish, or to redeploy without touching a page.
   workflow_dispatch:
 
@@ -108,6 +106,31 @@ jobs:
           restore-keys: |
             zig-docs-wasm-
 
+      # Flutter is here for one reason: three reference pages are rendered from
+      # Dart catalogs (GuiToolDoc, the shortcut table, the prefs keys), and the
+      # generator that reads them has to run as a `flutter test` because
+      # importing bxp_gui links dart:ui. Trimmed to the desktop subset for the
+      # same cache-budget reason as ci.yml.
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.47.0
+          channel: stable
+          cache: true
+          cache-key: "flutter-desktop-:os:-:channel:-:version:"
+      - name: Trim Flutter SDK to the desktop subset
+        run: |
+          flutter config --no-enable-android --no-enable-ios
+          eng="$FLUTTER_ROOT/bin/cache/artifacts/engine"
+          if [ -n "$FLUTTER_ROOT" ] && [ -d "$eng" ]; then
+            find "$eng" -maxdepth 1 -type d -name 'android-*' -exec rm -rf {} + 2>/dev/null || true
+          fi
+
+      # Regenerate every page and fragment and byte-diff against what is
+      # committed. This is the gate that a catalog change cannot be pushed
+      # without the page it feeds; it fails before anything is published.
+      - name: Check generated pages against their sources
+        run: bash scripts/docs/gen-docs.sh --check
+
       - name: Build the scratchpad engine
         run: bash scripts/docs/gen-wasm-playground.sh
 
@@ -135,6 +158,8 @@ jobs:
 
   deploy:
     needs: build
+    # Pull requests check and build the site; only master publishes it.
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     environment:
       name: github-pages

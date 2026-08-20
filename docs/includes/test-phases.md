@@ -7,7 +7,7 @@
 | <code class="hl-fn">test-01-console.sh</code> | Console-side build + unit tests (bxp-core, bxp-cli, json5_ast) |
 | <code class="hl-fn">test-02-mcp.sh</code> | bxp-mcp build + unit tests + JSON-RPC smoke |
 | <code class="hl-fn">test-03-bridge.sh</code> | bxp-gui-bridge unit tests |
-| <code class="hl-fn">test-04-desktop.sh</code> | Desktop-side tests plus the generated-documentation drift guard |
+| <code class="hl-fn">test-04-desktop.sh</code> | Desktop-side tests: the Flutter app and the embedded json5_ast package |
 | <code class="hl-fn">test-05-bench-guard.sh</code> | Performance regression guard |
 | <code class="hl-fn">test-06-expr-corpus.sh</code> | Expression corpus regression gate |
 | <code class="hl-fn">test-07-datasets.sh</code> | Dataset regression: run bxp-cli against every datasets/&lt;template&gt;/sample.json and diff every generated *.csvx against the matching *.expected fixture |

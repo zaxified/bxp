@@ -35,20 +35,31 @@ A few phases carry detail the one-liner cannot:
   any more: those modules moved to zig-libs and carry their own, larger suites
   upstream.
 - **test-04** also builds the bridge shared library, because
-  `expr_corpus_bridge_test.dart` loads it, and it hosts the
-  generated-documentation drift guard (see below).
+  `expr_corpus_bridge_test.dart` loads it.
 - **test-08 and test-09** are complementary, not redundant: the first evaluates
   the *expressions* printed on the example pages, the second runs the examples
   and diffs their output against the committed goldens.
 
-> **Docs formatting is not a phase, and is hand-maintained.** Prettier and
+> **Documentation is not gated by `test.sh` at all.** The suite gates the
+> product — the CLI, the MCP server, the bridge, the desktop app, the dataset
+> and example regressions — and it runs on three operating systems because the
+> product does. Rendering the site runs once, on one host, so it lives in
+> `.github/workflows/docs.yml`: that workflow regenerates every generated page
+> and fragment, byte-diffs them against what is committed, checks wasm/native
+> parity, builds with `--strict`, and only then publishes. A pull request runs
+> the check and the build but does not deploy.
+>
+> Markdown *formatting* stays hand-maintained on top of that — prettier and
 > markdownlint were dropped because they reflow and mis-lint MkDocs-specific
-> syntax and break the rendered pages, so
-> `scripts/docs/check-formatting.sh` (a mermaid-fence parse) stays a standalone
-> pre-release check that `test.sh` does not run. The *generated* pages are a
-> different matter: `scripts/docs/gen-docs.sh --check` regenerates every
-> catalog-driven page and fragment and fails on any diff, and it runs inside
-> **test-04** on every suite run.
+> syntax and break the rendered pages. `scripts/docs/check-formatting.sh`
+> (a mermaid-fence parse) is a standalone pre-release check.
+
+Line endings across the whole repository are pinned to LF in `.gitattributes`.
+Several gates here byte-compare a committed file against freshly produced
+output, and every producer writes LF on every host — so without that pin a
+Windows checkout would convert the committed side to CRLF and every one of
+those gates would report a whole-file difference that is nothing but line
+endings.
 
 ## Expression corpus
 
