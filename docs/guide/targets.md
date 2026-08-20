@@ -95,8 +95,27 @@ that matches your broker, do not invent a third:
 
 `$date` should be `YYYY-MM-DD hh:mm:ss`. Brokers that report date-only
 (no time) result in `... 00:00:00` — that's accepted. Output is RFC
-4180–compliant with basic protection against spreadsheet formula
-injection.
+4180–compliant with protection against spreadsheet formula injection.
+
+!!! info "What the formula guard touches"
+
+    A cell is prefixed with a single apostrophe — which the tracker then
+    reads as part of the value — only when it would otherwise open a
+    formula in Excel / LibreOffice / Sheets:
+
+    - it starts with `=`, or with a tab or CR hiding one, **or**
+    - it starts with `+`, `-` or `@` *and* carries formula machinery — a
+      function call (`@SUM(1,1)`) or a DDE link (`+cmd|'/c calc'!A1`).
+
+    Everything else is written through untouched: signed numbers
+    (`-12.34`), phone numbers (`+420 555 0101`), amounts (`-$1,259.59`)
+    and names or titles that merely begin with one of those characters
+    (`-ISM FURNITURE, LLC`, `@midnight with …`) cannot execute, so they
+    keep their exact value.
+
+    The guard does not depend on quoting: a spreadsheet strips CSV quotes
+    before it parses the cell, so `"=1+2"` evaluates just like `=1+2` and
+    both get the apostrophe.
 
 The default Wealthfolio column mapping:
 

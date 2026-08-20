@@ -456,19 +456,6 @@ fn isNumericValue(s: []const u8) bool {
     return i == s.len;
 }
 
-/// Writes value to out.
-///
-/// When quote_out != 0 and the value contains the output delimiter, the quote
-/// character, \r, or \n, the value is wrapped in quote_out characters and any
-/// internal occurrences of quote_out are doubled (RFC 4180 §2.5–2.7).
-///
-/// When no quoting is applied: values starting with a spreadsheet formula
-/// character ('=', '+', '-', '@') get a leading single-quote to neutralise
-/// injection; embedded \n is replaced with the literal two-char sequence \n;
-/// \r bytes are dropped.
-///
-/// When decimal_sep_out != '.', numeric values have their '.' replaced with
-/// decimal_sep_out before writing.
 /// Transcode a UTF-8 output cell / header to the configured CSV output code
 /// page. `.utf8` (the default) returns the input unchanged with no allocation;
 /// any other encoding allocates the transcoded bytes from `alloc`. Applied at
@@ -479,6 +466,74 @@ fn encodeOutCell(alloc: std.mem.Allocator, value: []const u8, enc: encoding.Enco
     return encoding.encodeFromUtf8(alloc, value, enc);
 }
 
+fn isIdentByte(c: u8) bool {
+    return std.ascii.isAlphanumeric(c) or c == '_' or c == '.';
+}
+
+/// True when a value carries the machinery a spreadsheet formula needs in order
+/// to *do* something: a function call (`SUM(`) or a DDE link
+/// (`cmd|'/c calc'!A1`). Bare text after a sign cannot execute — a cell reading
+/// `-ISM FURNITURE` renders as `#NAME?` at worst.
+fn hasFormulaMachinery(s: []const u8) bool {
+    var seen_pipe = false;
+    for (s, 0..) |ch, i| {
+        switch (ch) {
+            // `IDENT(` is a call. The identifier byte in front of the paren is
+            // what separates `SUM(A1)` from prose like `Foo (Ltd)`.
+            '(' => if (i > 0 and isIdentByte(s[i - 1])) return true,
+            // DDE: `cmd|'/c calc'!A1`, `MSEXCEL|'\\..\\file'!A1`.
+            '|' => seen_pipe = true,
+            '!' => if (seen_pipe) return true,
+            else => {},
+        }
+    }
+    return false;
+}
+
+/// True when `value` reads as a spreadsheet formula rather than as data — i.e.
+/// when writing it verbatim would let Excel / LibreOffice / Sheets evaluate the
+/// cell instead of showing it.
+///
+/// A leading `=` (or a tab / CR hiding one) always counts: it opens a formula
+/// everywhere, quoted or not. The corpus scan behind this rule — `datasets/`,
+/// `docs/examples/` incl. the full-scale inputs, and the real broker exports —
+/// found that shape three times in ~13 M rows (IMDb titles like `=x`), so
+/// guarding it unconditionally costs almost nothing.
+///
+/// A leading `+`, `-` or `@` counts only in company with formula machinery.
+/// Those bytes lead far more data than formulas: signed numbers,
+/// `+420 555 0101`, `-$1,259.59`, business names (`-ISM FURNITURE, LLC`),
+/// handles (`@midnight with …`). Prefixing those writes an apostrophe into a
+/// value that is not a formula and cannot become one — the same over-prefixing
+/// `30ee2ac` fixed for signed numbers, generalised so the machinery decides
+/// rather than the first byte. It also closes the reverse hole: `-1+cmd|…!A1`
+/// starts with a digit-led sign and used to slip through unguarded.
+fn looksLikeFormula(value: []const u8) bool {
+    if (value.len == 0) return false;
+    return switch (value[0]) {
+        '=', '\t', '\r' => true,
+        '+', '-', '@' => hasFormulaMachinery(value[1..]),
+        else => false,
+    };
+}
+
+/// Writes value to out.
+///
+/// When quote_out != 0 and the value contains the output delimiter, the quote
+/// character, \r, or \n, the value is wrapped in quote_out characters and any
+/// internal occurrences of quote_out are doubled (RFC 4180 §2.5–2.7).
+///
+/// A value that `looksLikeFormula` gets a leading single-quote to neutralise
+/// injection — on **every** path, quoted or not. A spreadsheet strips CSV
+/// quoting before it parses the cell, so `"=1+2"` evaluates exactly like
+/// `=1+2` (verified against LibreOffice 26.2); guarding only the unquoted path
+/// made the guard depend on whether the value happened to contain a delimiter.
+///
+/// When no quoting is applied, embedded \n is additionally replaced with the
+/// literal two-char sequence \n and \r bytes are dropped.
+///
+/// When decimal_sep_out != '.', numeric values have their '.' replaced with
+/// decimal_sep_out before writing.
 fn writeSafeValue(out: *Writer, value: []const u8, delimiter_out: u8, decimal_sep_out: u8, quote_out: u8, buf: []u8) !void {
     // Apply decimal separator conversion for numeric output values.
     //
@@ -503,8 +558,13 @@ fn writeSafeValue(out: *Writer, value: []const u8, delimiter_out: u8, decimal_se
     // (produced by ''' expressions) is written with its outer quotes preserved and
     // any internal occurrences of quote_out doubled (RFC 4180 §2.5).
     if (quote_out != 0 and s.len >= 2 and s[0] == quote_out and s[s.len - 1] == quote_out) {
+        const body = s[1 .. s.len - 1];
         try out.writeByte(quote_out);
-        for (s[1 .. s.len - 1]) |ch| {
+        // The guard goes inside the quotes: they are stripped by the
+        // spreadsheet before the cell is parsed, so an apostrophe outside them
+        // would neutralise nothing.
+        if (looksLikeFormula(body)) try out.writeByte('\'');
+        for (body) |ch| {
             if (ch == quote_out) try out.writeByte(quote_out);
             try out.writeByte(ch);
         }
@@ -521,6 +581,7 @@ fn writeSafeValue(out: *Writer, value: []const u8, delimiter_out: u8, decimal_se
         }
         if (needs_quote) {
             try out.writeByte(quote_out);
+            if (looksLikeFormula(s)) try out.writeByte('\'');
             for (s) |ch| {
                 if (ch == quote_out) try out.writeByte(quote_out); // escape: double it
                 try out.writeByte(ch);
@@ -530,25 +591,7 @@ fn writeSafeValue(out: *Writer, value: []const u8, delimiter_out: u8, decimal_se
         }
     }
     // No quoting applied: formula-injection prefix + \n→\n literal replacement.
-    // Tab (`\t`) is also a known Excel/LibreOffice formula trigger when the
-    // cell parser hits it on the leading edge — broker exports rarely emit
-    // a tab-leading value but the prefix is cheap insurance.
-    if (s.len > 0) {
-        switch (s[0]) {
-            '=', '@', '\t' => try out.writeByte('\''),
-            // '+' and '-' both legitimately lead a signed number ("+5",
-            // "-12.34", "+.5") and must NOT be prefixed in that case, or the
-            // value would parse as a string in the portfolio tracker. Only
-            // prefix when the next char is not a digit/decimal separator
-            // (e.g. "+cmd|...", "-- comment"), which is an injection pattern.
-            '+', '-' => {
-                const next_is_numeric = s.len > 1 and
-                    (std.ascii.isDigit(s[1]) or s[1] == decimal_sep_out);
-                if (!next_is_numeric) try out.writeByte('\'');
-            },
-            else => {},
-        }
-    }
+    if (looksLikeFormula(s)) try out.writeByte('\'');
     for (s) |ch| {
         switch (ch) {
             '\n' => try out.writeAll("\\n"),
@@ -3540,12 +3583,25 @@ test "writeSafeValue: formula-injection leads get an apostrophe guard" {
     try expectSafeValue("@SUM(A1:A9)", "'@SUM(A1:A9)");
     try expectSafeValue("+cmd|'/c calc'!A1", "'+cmd|'/c calc'!A1");
     try expectSafeValue("\t=1+1", "'\t=1+1");
+    // A digit after the sign is not an escape hatch: the DDE link decides.
+    try expectSafeValue("-1+cmd|'/c calc'!A1", "'-1+cmd|'/c calc'!A1");
+}
+
+test "writeSafeValue: the guard also runs on the quoted paths" {
+    // A spreadsheet strips CSV quoting before parsing the cell, so a value
+    // that needs RFC 4180 quoting still needs the guard — inside the quotes.
+    try expectSafeValue("@SUM(1,1)", "\"'@SUM(1,1)\"");
+    try expectSafeValue(
+        "=HYPERLINK(\"http://evil.example\",\"click\")",
+        "\"'=HYPERLINK(\"\"http://evil.example\"\",\"\"click\"\")\"",
+    );
+    // Pre-quoted pass-through (a ''' expression): guard goes inside too.
+    try expectSafeValue("\"=1+2\"", "\"'=1+2\"");
 }
 
 test "writeSafeValue: signed numbers are not mangled by the guard" {
     // '+' and '-' legitimately lead a number; prefixing would make the
-    // portfolio tracker parse them as strings. Both must pass through when
-    // the next char is a digit or the decimal separator.
+    // portfolio tracker parse them as strings.
     try expectSafeValue("-12.34", "-12.34");
     try expectSafeValue("+5", "+5");
     try expectSafeValue("+.5", "+.5");
@@ -3553,12 +3609,19 @@ test "writeSafeValue: signed numbers are not mangled by the guard" {
     try expectSafeValue("+420 555 0101", "+420 555 0101"); // intl phone number
 }
 
-test "writeSafeValue: non-numeric +/- leads are still guarded" {
-    // A '+'/'-' followed by a non-digit is an injection pattern, not a number.
-    try expectSafeValue("+SUM(A1:A9)", "'+SUM(A1:A9)");
-    try expectSafeValue("-- comment", "'-- comment");
-    try expectSafeValue("+", "'+"); // lone sign: safe default
-    try expectSafeValue("-", "'-");
+test "writeSafeValue: text after a sign or @ is data, not a formula" {
+    // Every one of these is a real value from the corpus scan (Chicago
+    // business register, IMDb titles, Airbnb listings, a Schwab export).
+    // None can execute — a spreadsheet shows them as text or #NAME? — so an
+    // apostrophe here would only corrupt the value for every consumer.
+    try expectSafeValue("-ISM FURNITURE, LLC", "\"-ISM FURNITURE, LLC\"");
+    try expectSafeValue("@ 35, INC.", "\"@ 35, INC.\"");
+    try expectSafeValue("@midnight with Doug Benson and more!", "@midnight with Doug Benson and more!");
+    try expectSafeValue("@HouseOnHenrySt Private 1 bedroom", "@HouseOnHenrySt Private 1 bedroom");
+    try expectSafeValue("-$1,259.59", "\"-$1,259.59\"");
+    try expectSafeValue("-- comment", "-- comment");
+    try expectSafeValue("+", "+"); // lone sign: no machinery, no formula
+    try expectSafeValue("-", "-");
 }
 
 // ── Pure helpers exercised end-to-end by the dataset gate, but with no
