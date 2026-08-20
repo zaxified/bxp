@@ -15,3 +15,27 @@ Agent-callable tools exposed by the `bxp-mcp` stdio server.
 | <code class="hl-fn">bxp_list_templates</code> | List every conversion template declared in a bxp-cli config (JSON5). Returns {templates:[{id,data_dir,file_pattern_in,file_pattern_out,file_type_in,file_type_out,description}, ...]}; no semantic validation, so broken templates still appear with an error field. |
 | <code class="hl-fn">bxp_fetch_template</code> | Fetch one conversion template's raw JSON by id from a bxp-cli config (JSON5). Returns the template object, or {"$err_1":"..."} if the id is absent. |
 | <code class="hl-fn">bxp_simulate</code> | Run a full conversion end-to-end: stage the config (JSON5) + input CSV in a scratch workspace, run the chosen template through bxp-cli, and return the produced output, a record-count diff, bxp-cli's summary + diagnostics, and a per-row `trace` (BXTB sidecar): for each input row whether it was written, filtered (with reason: rule_skip / no_rule_match), or errored — each carrying the 1-based input-line number. Verifies a config for real (pre_pass/LOOKUP/row_rules) — what bxp_eval/bxp_validate cannot. CSV-input templates only. ok=true means the run happened; consult exit_code/status/diagnostics (0=ok, 2=warnings, 1=error). |
+
+## How each tool is served
+
+Every stateless tool is a direct in-process call into
+`bxp-core/src/inspect.zig` — the same core the GUI reaches through
+`bxp-gui-bridge`, which is why the third column mostly mirrors the second.
+`bxp_simulate` is the exception with no `inspect` entry: a full conversion
+is not a stateless op, so it spawns the co-located `bxp-cli` instead. A
+dash in the last column means the GUI has no equivalent call.
+
+<!-- --8<-- [start:impl-map] -->
+| Tool | inspect call | bridge op |
+| --- | --- | --- |
+| <code class="hl-fn">bxp_validate</code> | <code class="hl-fn">annotateRaw(config, "&lt;config&gt;", 0)</code> | <code class="hl-fn">bridge_inspect {config}</code> |
+| <code class="hl-fn">bxp_validate_expr</code> | <code class="hl-fn">validateExprJson(expr)</code> | <code class="hl-fn">bridge_eval_expr</code> |
+| <code class="hl-fn">bxp_eval</code> | <code class="hl-fn">evalExpr(expr, headers?, fields?)</code> | — |
+| <code class="hl-fn">bxp_eval_batch</code> | <code class="hl-fn">evalBatch(request)</code> | <code class="hl-fn">bridge_inspect {eval_batch}</code> |
+| <code class="hl-fn">bxp_eval_trace</code> | <code class="hl-fn">evalTrace(expr, ..., out)</code> | <code class="hl-fn">bridge_eval_expr_trace</code> |
+| <code class="hl-fn">bxp_docs</code> | <code class="hl-fn">docsJson()</code> | <code class="hl-fn">bridge_inspect {docs}</code> |
+| <code class="hl-fn">bxp_list_templates</code> | <code class="hl-fn">listTemplates(config)</code> | <code class="hl-fn">bridge_inspect {list_templates}</code> |
+| <code class="hl-fn">bxp_fetch_template</code> | <code class="hl-fn">fetchTemplate(config, id)</code> | <code class="hl-fn">bridge_inspect {fetch_template}</code> |
+| <code class="hl-fn">bxp_simulate</code> | — | — |
+
+<!-- --8<-- [end:impl-map] -->

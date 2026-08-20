@@ -70,17 +70,12 @@ All stateless tools share the `bxp-core/inspect` core with the GUI bridge (same
 `inspect` core). The tools take config / expression **text** (not a file path) —
 the agent passes the config it is authoring.
 
-| Tool                 | `inspect` call                       | Returns                                                                                                                                                                  |
-| -------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `bxp_validate`       | `annotateRaw(config, "<config>", 0)` | annotated JSON with `$err_`/`$warn_`/`$info_` diagnostics (`check_fs = 0`, no filesystem)                                                                                |
-| `bxp_validate_expr`  | `validateExprJson(expr)`             | authoring-time verdict for one expression: runtime eval + the static FnArgDoc lint (e.g. a literal `SPLIT_PART(…, 0)`); `{ok:true}` or `{ok:false,error,detail,off,len}` |
-| `bxp_eval`           | `evalExpr(expr, headers?, fields?)`  | `{ok:true,value}` or `{ok:false,error,detail,off,len}`                                                                                                                   |
-| `bxp_eval_batch`     | `evalBatch(request)`                 | `{results:[…]}` — the call `arguments` object _is_ the request                                                                                                           |
-| `bxp_eval_trace`     | `evalTrace(expr, …, out)`            | NDJSON: one line per function call, then a `final` / `error` sentinel                                                                                                    |
-| `bxp_docs`           | `docsJson()`                         | full language/schema JSON (functions, keywords, operators, tokens, config_schema)                                                                                        |
-| `bxp_list_templates` | `listTemplates(config)`              | `{templates:[…]}` (no semantic validation)                                                                                                                               |
-| `bxp_fetch_template` | `fetchTemplate(config, id)`          | one template re-serialised as a JSON object (comments stripped by the JSON5 preprocessor), or `{"$err_1":…}` for a bad id                                                |
-| `bxp_simulate`       | spawns `bxp-cli`                     | full end-to-end run report (see below)                                                                                                                                   |
+All nine, with the `inspect` entry point and the matching bridge call —
+included from the generated catalog so a tenth tool cannot miss this page.
+The per-tool descriptions and JSON schemas are in
+[the MCP tools reference](../reference/mcp-tools.md).
+
+--8<-- "reference/mcp-tools.md:impl-map"
 
 !!! note "Row context: one shape across all three eval tools"
 

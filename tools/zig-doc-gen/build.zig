@@ -20,6 +20,9 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "docs", .module = core.module("docs") },
+                // Reads resources/console/bxp-cli.examples.json so the shipped
+                // template list is rendered from the config itself, not retyped.
+                .{ .name = "config", .module = core.module("config") },
                 .{ .name = "cli_docs", .module = cli.module("cli_docs") },
                 .{ .name = "tools", .module = mcp.module("tools") },
             },

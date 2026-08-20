@@ -336,6 +336,13 @@ pub const ZipInput = struct {
 
 /// Per-template configuration loaded from a single entry inside "conversion_templates" in bxp-cli.json.
 pub const BrokerConfig = struct {
+    /// Human-readable one-liner for this template — what it converts, for a
+    /// person or an agent choosing between templates. Purely descriptive: the
+    /// engine never reads it. Surfaced by `inspect.listTemplates` (and through
+    /// it `bxp_list_templates` and the GUI's template picker), which has always
+    /// emitted the field — until this key existed the loader rejected any
+    /// config that set it, so the value could only ever be null.
+    description: []const u8 = "",
     /// Path to the directory containing input CSV files for this broker.
     data_dir: []const u8,
     /// Named `key→value` maps for this template — the top-level `maps` registry
@@ -465,6 +472,12 @@ pub const BrokerConfig = struct {
     /// Schema docs for this struct's fields. Bound at
     /// `conversion_templates.*` by `bxp-core/src/docs.zig`.
     pub const fields = [_]FieldDoc{
+        .{
+            .key = "description",
+            .type_name = "string",
+            .required = false,
+            .description = "Optional one-line summary of what this template converts, e.g. \"Trading 212 -> Wealthfolio\". Never read by the engine; returned by template listings so a person or an agent can pick between templates.",
+        },
         .{
             .key = "data_dir",
             .type_name = "string",
@@ -1486,8 +1499,10 @@ pub const Config = struct {
     pub fn deinit(self: *Config) void {
         var it = self.brokers.iterator();
         while (it.next()) |entry| {
-            // Free template ID key, data_dir, file_pattern_in and file_pattern_out strings.
+            // Free template ID key, description, data_dir, file_pattern_in and
+            // file_pattern_out strings.
             self._alloc.free(entry.key_ptr.*);
+            self._alloc.free(entry.value_ptr.description);
             self._alloc.free(entry.value_ptr.data_dir);
             self._alloc.free(entry.value_ptr.file_pattern_in);
             self._alloc.free(entry.value_ptr.file_pattern_out);
@@ -2951,6 +2966,8 @@ pub fn loadFromBytes(
             var b_it = brokers_val.object.iterator();
             while (b_it.next()) |b_entry| {
                 // Defaults — overridden by any matching JSON key found below.
+                var description: []const u8 = try alloc.dupe(u8, "");
+                errdefer alloc.free(description);
                 var data_dir: []const u8 = try alloc.dupe(u8, ".");
                 errdefer alloc.free(data_dir);
                 var file_pattern_in: []const u8 = try alloc.dupe(u8, "");
@@ -2990,6 +3007,14 @@ pub fn loadFromBytes(
 
                 if (b_entry.value_ptr.* == .object) {
                     const bobj = b_entry.value_ptr.object;
+
+                    if (bobj.get("description")) |v| {
+                        if (v == .string) {
+                            const new_desc = try alloc.dupe(u8, v.string);
+                            alloc.free(description);
+                            description = new_desc;
+                        }
+                    }
 
                     if (bobj.get("data_dir")) |v| {
                         if (v == .string) {
@@ -3463,6 +3488,7 @@ pub fn loadFromBytes(
                     alloc,
                     try alloc.dupe(u8, b_entry.key_ptr.*),
                     BrokerConfig{
+                        .description               = description,
                         .data_dir                  = data_dir,
                         .file_pattern_in           = file_pattern_in,
                         .file_pattern_out          = file_pattern_out,

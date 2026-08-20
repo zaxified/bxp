@@ -426,9 +426,25 @@ pub const Col = struct {
 };
 
 pub fn writeEscaped(w: *std.Io.Writer, s: []const u8) !void {
-    // Escape the two characters that would break a Markdown table cell.
+    // Escape what would break a Markdown table cell. `|` and a newline end the
+    // cell outright; `<` is subtler and was the one that actually bit — Markdown
+    // passes raw HTML straight through, so a description mentioning a bare
+    // placeholder like <path> had it parsed as an unknown element and dropped,
+    // truncating the published sentence mid-air.
+    //
+    // Angle brackets are escaped ONLY outside a backtick code span. Inside one
+    // Markdown already renders `<` literally, and an entity there would come out
+    // verbatim instead — `n<0` in the ROUND docs would read "n&lt;0" on the
+    // page. Descriptions use single backticks, so a plain toggle is enough.
+    var in_code = false;
     for (s) |c| switch (c) {
+        '`' => {
+            in_code = !in_code;
+            try w.writeByte(c);
+        },
         '|' => try w.writeAll("\\|"),
+        '<' => try w.writeAll(if (in_code) "<" else "&lt;"),
+        '>' => try w.writeAll(if (in_code) ">" else "&gt;"),
         '\n' => try w.writeByte(' '),
         else => try w.writeByte(c),
     };
@@ -501,6 +517,9 @@ pub fn writeTable(w: *std.Io.Writer, rows: anytype, comptime cols: []const Col) 
 
 fn isNonEmptyStr(v: anytype) bool {
     const info = @typeInfo(@TypeOf(v));
+    // An absent optional renders as the "—" placeholder, which must NOT be
+    // wrapped: a dash inside a coloured code chip reads as a value.
+    if (info == .optional) return if (v) |inner| isNonEmptyStr(inner) else false;
     if (info == .pointer and info.pointer.size == .slice and info.pointer.child == u8)
         return v.len > 0;
     return true; // non-string code cells (e.g. an exit code int) always wrap
@@ -733,13 +752,19 @@ test "config_schema covers known paths" {
     const testing = std.testing;
 
     // Total flattened entry count — guard against accidental drift when
-    // adding/removing struct fields or envelope entries. The exact number
-    // is part of the contract with bxp-gui (`lib/store/schema_gate.dart`
-    // expects this many keys). When updating, bump both this assertion
-    // and the GUI-side expectation in lockstep.
+    // adding/removing struct fields or envelope entries. Bump deliberately,
+    // never to make the test pass: the number moving is the signal that the
+    // config surface changed. (The GUI consumes this schema dynamically via
+    // `lib/services/schema_gate.dart`, so there is no second count to keep in
+    // lockstep — an older note here claimed otherwise.)
+    //
+    // 49 -> 50 on 2026-08-20: `conversion_templates.*.description`, an optional
+    // one-liner per template. `inspect.listTemplates` had always emitted a
+    // `description` field, but the loader rejected the key as unknown, so the
+    // value could only ever be null until this entry existed.
     var total: usize = envelope_entries.len;
     for (struct_bindings) |bind| total += bind.fields.len;
-    try testing.expectEqual(@as(usize, 49), total);
+    try testing.expectEqual(@as(usize, 50), total);
 
     // Spot-check that representative paths from each binding category are
     // present. Comptime walk; failure points at the missing key.

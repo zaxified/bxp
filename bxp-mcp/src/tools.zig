@@ -54,11 +54,26 @@ pub const ToolDoc = struct {
     description: []const u8,
     input_schema: []const u8,
     output_schema: []const u8 = "",
+
+    /// How this tool is served, for the implementation map in
+    /// `docs/reference/mcp-tools.md` — which `docs/dev/mcp.md` includes rather
+    /// than restating. Kept here because it is a fact about the handler a few
+    /// lines below, and a hand-maintained copy in prose is exactly what drifts:
+    /// nothing would have caught a tenth tool never reaching that page.
+    ///
+    /// `inspect_call` is the `bxp-core/src/inspect.zig` entry point behind the
+    /// tool (or a plain-English note where the tool is not stateless);
+    /// `bridge_op` is the matching `bxp-gui-bridge` C-ABI call, empty when the
+    /// GUI has no equivalent.
+    inspect_call: ?[]const u8 = null,
+    bridge_op: ?[]const u8 = null,
 };
 
 pub const tool_docs = [_]ToolDoc{
     .{
         .name = "bxp_validate",
+        .inspect_call = "annotateRaw(config, \"<config>\", 0)",
+        .bridge_op = "bridge_inspect {config}",
         .description = "Validate a bxp-cli config (JSON5). Returns annotated JSON with " ++
             "$err_/$warn/$info diagnostics inserted before each offending key.",
         .input_schema =
@@ -78,6 +93,8 @@ pub const tool_docs = [_]ToolDoc{
     },
     .{
         .name = "bxp_validate_expr",
+        .inspect_call = "validateExprJson(expr)",
+        .bridge_op = "bridge_eval_expr",
         .description = "Validate one bxp expression the way the GUI config editor does at authoring " ++
             "time: syntax, semantics, AND static lint findings the lenient runtime silently " ++
             "swallows (e.g. a literal SPLIT_PART index of 0 — 1-based, so 0 always yields \"\" " ++
@@ -103,6 +120,7 @@ pub const tool_docs = [_]ToolDoc{
     },
     .{
         .name = "bxp_eval",
+        .inspect_call = "evalExpr(expr, headers?, fields?)",
         .description = "Evaluate one bxp expression against an optional row context. Returns {ok,value} " ++
             "or {ok:false,error,detail,off,len}. This is the lenient runtime path (what a " ++
             "real bxp-cli run computes); for authoring-time validation that flags literal " ++
@@ -138,6 +156,8 @@ pub const tool_docs = [_]ToolDoc{
     },
     .{
         .name = "bxp_eval_batch",
+        .inspect_call = "evalBatch(request)",
+        .bridge_op = "bridge_inspect {eval_batch}",
         .description = "Evaluate many bxp expressions against one row in a single call. Returns " ++
             "{results:[{ok,value}|{ok:false,error,detail,off,len}, ...]} aligned to the " ++
             "input order. A well-formed request always succeeds; per-expr failures are " ++
@@ -190,6 +210,8 @@ pub const tool_docs = [_]ToolDoc{
     },
     .{
         .name = "bxp_eval_trace",
+        .inspect_call = "evalTrace(expr, ..., out)",
+        .bridge_op = "bridge_eval_expr_trace",
         .description = "Evaluate one bxp expression with a per-call execution trace. Returns NDJSON " ++
             "(one JSON object per line): one {\"fn\",\"src_start\",\"src_end\",\"value\"} line per " ++
             "function call as the engine evaluates inside-out, then a terminal line — " ++
@@ -227,6 +249,8 @@ pub const tool_docs = [_]ToolDoc{
     },
     .{
         .name = "bxp_docs",
+        .inspect_call = "docsJson()",
+        .bridge_op = "bridge_inspect {docs}",
         .description = "Return the full bxp language/schema documentation as JSON (functions, keywords, " ++
             "operators, tokens, config_schema).",
         .input_schema =
@@ -239,6 +263,8 @@ pub const tool_docs = [_]ToolDoc{
     },
     .{
         .name = "bxp_list_templates",
+        .inspect_call = "listTemplates(config)",
+        .bridge_op = "bridge_inspect {list_templates}",
         .description = "List every conversion template declared in a bxp-cli config (JSON5). Returns " ++
             "{templates:[{id,data_dir,file_pattern_in,file_pattern_out,file_type_in,file_type_out,description}, " ++
             "...]}; no semantic validation, so broken templates still appear with an error " ++
@@ -260,6 +286,8 @@ pub const tool_docs = [_]ToolDoc{
     },
     .{
         .name = "bxp_fetch_template",
+        .inspect_call = "fetchTemplate(config, id)",
+        .bridge_op = "bridge_inspect {fetch_template}",
         .description = "Fetch one conversion template's raw JSON by id from a bxp-cli config (JSON5). " ++
             "Returns the template object, or {\"$err_1\":\"...\"} if the id is absent.",
         .input_schema =

@@ -94,6 +94,7 @@
     //   This template also serves as the field-level documentation
     //   reference for the rest of the file.
     anycoin_to_wealthfolio: {
+      description:         "Anycoin (crypto) -> Wealthfolio",
       // required; path to input files, relative to this config file
       // e.g. "anycoin_to_wealthfolio", "../data/anycoin", "/abs/path"
       data_dir:            "anycoin_to_wealthfolio",
@@ -234,6 +235,7 @@
     //   it, PRICE_CURRENCY extracts the ISO code. "Other" type covers
     //   non-trade events and routes to DEPOSIT.
     revolutx_to_wealthfolio: {
+      description:         "Revolut X (crypto) -> Wealthfolio",
       data_dir:            "revolutx_to_wealthfolio",
       file_type_in:        "csv",
       file_type_out:       "csv",
@@ -334,6 +336,7 @@
     //   extended Wealthfolio vocabulary: TRANSFER_IN, TRANSFER_OUT, SPLIT
     //   (in addition to the eight standard actions).
     trading212_to_wealthfolio: {
+      description:         "Trading 212 -> Wealthfolio",
       data_dir:            "trading212_to_wealthfolio",
       file_type_in:        "csv",
       file_type_out:       "csv",
@@ -559,6 +562,7 @@
     //   data_dir is shared with xtb1_cash (the .xlsx is parsed once, two
     //   sheets extracted).
     xtb1_closed_to_wealthfolio: {
+      description:         "XTB closed positions, old export -> Wealthfolio",
       data_dir:            "xtb1_to_wealthfolio",
       /*
        * xlsx_sheet — optional; extracts one sheet from each .xlsx file in data_dir
@@ -640,6 +644,7 @@
     //   for special cases (Stock purchase parses qty/price out of the
     //   Comment field via SPLIT_PART).
     xtb1_cash_to_wealthfolio: {
+      description:         "XTB cash operations, old export -> Wealthfolio",
       data_dir:            "xtb1_to_wealthfolio",  // same dir as xtb1_closed; xlsx extracted once
       xlsx_sheet: {
         name:           "CASH OPERATION",
@@ -772,6 +777,7 @@
     //   ("Ticker" instead of "Symbol", "Close Time (UTC)" instead of
     //   "Close time", "Closed Positions" sheet instead of "CLOSED POSITION").
     xtb2_closed_to_wealthfolio: {
+      description:         "XTB closed positions, new export -> Wealthfolio",
       data_dir:            "xtb2_to_wealthfolio",
       xlsx_sheet: {
         name:           "Closed Positions",  // new format uses different sheet name
@@ -840,6 +846,7 @@
     //   labels (e.g. "Dividend" instead of "DIVIDENT", "Stock sell" instead
     //   of "Stock sale").
     xtb2_cash_to_wealthfolio: {
+      description:         "XTB cash operations, new export -> Wealthfolio",
       data_dir:            "xtb2_to_wealthfolio",  // same dir as xtb2_closed; xlsx extracted once
       xlsx_sheet: {
         name:           "Cash Operations",  // new format sheet name
@@ -993,6 +1000,7 @@
     // ── https://brycht.app - tracker-mode - anycoin - buy/sell ops ──
     //    status: 2026-05-16 - not ready for shipping
     anycoin_to_brychtapp: {
+      description:         "Anycoin (crypto) -> brycht.app tracker",
       data_dir:            "anycoin_to_brychtapp",
       file_type_in:        "csv",
       file_type_out:       "csv",
@@ -1048,6 +1056,7 @@
     // ── https://brycht.app - tracker-mode - revolutx - buy/sell ops ──
     //    status: 2026-05-16 - not ready for shipping
     revolutx_to_brychtapp: {
+      description:         "Revolut X (crypto) -> brycht.app tracker",
       data_dir:            "revolutx_to_brychtapp",
       file_type_in:        "csv",
       file_type_out:       "csv",
@@ -1111,6 +1120,7 @@
     // ── https://brycht.app - tracker-mode - trading212 - buy/sell ops ──
     //    status: 2026-05-16 - OK for shipping
     trading212_to_brychtapp: {
+      description:         "Trading 212 -> brycht.app tracker",
       data_dir:            "trading212_to_brychtapp",
       file_type_in:        "csv",
       file_type_out:       "csv",
@@ -1186,6 +1196,7 @@
     // ── https://brycht.app - tracker-mode - xtb - buy ops ──
     //    status: 2026-05-16 - OK for shipping
     xtb2_cash_to_brychtapp: {
+      description:         "XTB cash operations, new export -> brycht.app tracker",
       data_dir:            "xtb2_to_brychtapp",
       xlsx_sheet: {
         name:           "Cash Operations",
@@ -1244,6 +1255,7 @@
     // ── https://brycht.app - tracker-mode - xtb - sell ops ──
     //    status: 2026-05-16 - OK for shipping
     xtb2_closed_to_brychtapp: {
+      description:         "XTB closed positions, new export -> brycht.app tracker",
       data_dir:            "xtb2_to_brychtapp",
       xlsx_sheet: {
         name:           "Closed Positions",

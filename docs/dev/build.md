@@ -197,6 +197,30 @@ The typical dev workflow:
 
 ---
 
+## The wasm playground target
+
+`bxp-core` also builds for `wasm32-freestanding`, which is what powers the
+clickable expressions on the docs site — the reader's browser runs bxp's own
+evaluator rather than a JavaScript re-implementation. It is an **opt-in target,
+never part of `install`**:
+
+```bash
+cd bxp-core && zig build wasm -Dtarget=wasm32-freestanding -Doptimize=ReleaseSmall
+```
+
+In practice you do not run that by hand: `scripts/gen-wasm-playground.sh` builds
+it into `docs/assets/wasm/bxp-eval.wasm`, and `scripts/gen-docs.sh` calls that
+script for you. The `.wasm` is a build artifact and stays untracked — a checkout
+regenerates it, and a docs build without it leaves the panel reporting that it
+could not load the engine.
+
+Agreement with the native engine is measured rather than assumed:
+`scripts/check-wasm-parity.sh` runs the cross-runner expression corpus through
+both and requires byte-identical results. It needs a JS runtime, so it is a
+docs-workflow step rather than a `test-NN` phase.
+
+---
+
 ## Run the test suite
 
 ```bash

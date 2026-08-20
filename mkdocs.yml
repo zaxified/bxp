@@ -230,6 +230,7 @@ nav:
   - Reference:
       - reference/expr-functions.md
       - reference/config-schema.md
+      - reference/built-in-templates.md
       - reference/date-tokens.md
       - reference/cli-flags.md
       - reference/mcp-tools.md

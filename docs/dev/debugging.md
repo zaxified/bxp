@@ -2,18 +2,20 @@
 
 ## Debugging workflow
 
-**bxp-cli run + debug flags** — composable, all on the same binary (value-taking
-flags accept `--name value` or `--name=value`):
+**bxp-cli run + debug flags.** They are
+catalogued once, in [CLI flags](../reference/cli-flags.md) — which is also
+what `bxp-cli --help` prints, so the two cannot disagree.
 
-| Flag                  | What it does                                                                                                                                                                                                 |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `--debug`             | Prints unmatched rows when `row_rules_debug_missing: true`                                                                                                                                                   |
-| `--debug=json`        | Emits ONE machine-readable JSON run summary on stdout (per-template + overall counts + captured warnings/errors) instead of human output — for CI / agents. Conflicts with `--trace` / `--quiet` / `--debug` |
-| `--quiet`             | Suppresses per-template summaries (exit code still reflects result)                                                                                                                                          |
-| `--dry-run`           | Runs the full pipeline in memory but writes no output files (preview / validation); independent of `--trace`                                                                                                 |
-| `--trace`             | Emits BXTB frame stream on stdout (consumed by `bxp-gui`'s dry-run debugger). Implies `--quiet`                                                                                                              |
-| `--trace-file=<path>` | Mirrors the full BXTB trace to a file, independent of `--trace` (sidecar for offline drill-down)                                                                                                             |
-| `--check-fs=N`        | Adds filesystem-existence checks (templates' `data_dir`, etc.) with N-second timeout                                                                                                                         |
+The combinations worth knowing:
+
+- `--trace` forces `--quiet` and refuses to run beside `--debug`; the BXTB
+  stream on stdout is what `bxp-gui`'s dry-run debugger consumes.
+- `--trace-file` is independent of `--trace` — a sidecar for offline
+  drill-down, so you can have a human-readable run *and* a full trace.
+- `--debug=json` replaces the human output rather than adding to it, and
+  conflicts with `--trace` / `--quiet` / `--debug`. It is the shape to reach
+  for in CI or from an agent.
+- `--dry-run` is independent of all of them: full pipeline, no files written.
 
 **Inspecting an expression in isolation** (via the `bxp-mcp` server — one
 JSON-RPC object per line on stdin):

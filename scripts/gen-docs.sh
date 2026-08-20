@@ -34,6 +34,7 @@ GENERATED_PAGES=(
   expr-functions.md
   date-tokens.md
   config-schema.md
+  built-in-templates.md
   cli-flags.md
   exit-codes.md
   mcp-tools.md
