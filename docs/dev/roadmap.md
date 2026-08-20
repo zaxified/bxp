@@ -92,35 +92,6 @@ backlog was otherwise exhausted:
   (`file_type_out: json`), the basic-tier mirror of `squirrel-census-json`. Low
   priority: JSON _output_ is already shown by `advanced/multi-stage-etl`.
 
-### Interactive in-browser examples (wasm) — SHIPPED
-
-Expressions on the docs site are clickable: the reader clicks one and a docked
-panel evaluates it in their own browser, against the page's own sample rows,
-with a **show all** toggle for the whole column. Nothing is downloaded but the
-page and a ~193 KiB engine, fetched on the first click.
-
-That engine is `bxp-core` compiled for `wasm32-freestanding`
-(`bxp-core/src/wasm.zig` → `inspect.evalBatchIo`), making the browser a fourth
-consumer of the one evaluator alongside bxp-cli, bxp-mcp and bxp-gui-bridge.
-Agreement is measured rather than assumed — `scripts/docs/check-wasm-parity.sh`
-runs the cross-runner corpus through both and requires byte-identical results.
-
-**A full in-browser runner (config + CSV → final.csv) was considered and
-dropped.** It is buildable — the row transform in `bxp-cli/src/pipeline.zig` is
-already writer-based and in-memory, and `std.Io`'s no-concurrency vtable turns
-the parallel path serial for free — but reproducing bxp-cli in the browser means
-reimplementing rule selection, variable merging and CSV serialisation in
-JavaScript: bxp semantics written a second time, in a language that cannot share
-the first. `bxp-cli` stays the runner. Examples whose point cannot be shown one
-expression at a time (xlsx/zip input, multi-file fan-in, `combined_output`,
-pre_pass joins) stay static prose and say so.
-
-What remains open is smaller and editorial: examples with a tab-separated sample
-cannot drive the panel at all (Python-Markdown expands tabs across the whole
-document before parsing), and the named form of `REMAP`/`REPLACE` needs a `maps`
-registry the panel has no way to supply. Both are enforced by
-`scripts/test-08-docs-examples.sh` rather than left to an author to remember.
-
 ### Distribution polish
 
 - Apple Developer ID notarisation for macOS `.app` (~$99/year).
