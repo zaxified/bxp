@@ -58,3 +58,34 @@ EOMONTH([Date])                                      → month-end snapping
 See [Expression functions](../reference/expr-functions.md) for
 `DATEADD`, `DATEDIFF`, `WORKDAY`, `YEAR` / `MONTH` / `DAY`, `WEEKDAY`,
 `EOMONTH`, and `NTH_DOW`.
+
+### Snapping to the start of a period
+
+`EOMONTH` gives you the *end* of a month, and there is no matching
+`DATE_TRUNC` — because the starts are already one expression each, and the
+one you want depends on the period:
+
+```text
+DATE_CONVERT([Date], 'YYYY-MM-DD', 'YYYY-MM') & '-01'   → 2024-08-15 becomes 2024-08-01
+DATE_CONVERT([Date], 'YYYY-MM-DD', 'YYYY') & '-01-01'   → 2024-08-15 becomes 2024-01-01
+DATEADD([Date], 1 - WEEKDAY([Date]))                    → 2024-08-15 becomes 2024-08-12
+```
+
+The week form works because `WEEKDAY` is ISO — Monday is 1 — so subtracting
+one less than the weekday always lands on that week's Monday, whichever day
+you started from.
+
+Reach for these when a destination groups rows by period: bucket the date
+first, then let the tracker aggregate. bxp itself never sums across rows
+(see [Not planned](../dev/roadmap.md#not-planned)).
+
+### Bucketing by ISO week
+
+`WEEKNUM` numbers weeks the ISO way, which means the number alone is not
+sortable across a year boundary: 2021-01-01 is week **53** (it belongs to
+2020's last week) and 2024-12-30 is week **1** (it already belongs to 2025).
+Pair it with the year of its own Thursday:
+
+```text
+YEAR(DATEADD([Date], 4 - WEEKDAY([Date]))) & '-W' & WEEKNUM([Date])
+```

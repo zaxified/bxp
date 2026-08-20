@@ -174,7 +174,7 @@ Expression evaluator for `input_schema` and `row_rules` in bxp-cli.json.
   the zig-libs `datefmt` module (named import; the offset-table-free half of
   the date/TZ pair — no runtime dependency either way). Pre-1970 dates are
   fully supported (pure parse → format reshuffle, no epoch round-trip).
-- Unit tests inline (162 test cases).
+- Unit tests inline (163 test cases).
 
 **Built-in functions:** IF, CASE, IFERROR, ABS, DATE_CONVERT, PRICE_VALUE,
 PRICE_CURRENCY, REMAP, LOOKUP, SPLIT_PART, CONTAINS, REGEX_MATCH,
@@ -184,6 +184,7 @@ FIELDS, UPPER, LOWER, UNACCENT, LEFT, RIGHT, SUBSTR, LPAD, RPAD, POSITION,
 PROPER, STARTS_WITH, ENDS_WITH, NULLIF, IN, ISEMPTY, LEN, GREATEST, LEAST,
 DATEADD, DATEDIFF, WORKDAY, YEAR, MONTH, DAY, WEEKDAY, QUARTER, WEEKNUM,
 HOUR, MINUTE, SECOND, EOMONTH, NTH_DOW, IS_DATE, IS_NUMERIC, POWER, SQRT,
+TRUNC,
 TO_UTC, TZ_OFFSET, TZ_CONVERT, IS_DST.
 IF/CASE/IFERROR are lazy (parse their own arg lists; only the selected /
 non-erroring branch is evaluated).

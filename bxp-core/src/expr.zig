@@ -2701,6 +2701,57 @@ fn adaptCeiling(_: *Parser, args: []Value) anyerror!Value {
     return builtinCeiling(args);
 }
 
+// ── TRUNC ───────────────────────────────────────────────────────────────
+/// Widest power of ten that still fits the fixed-point core's i128. 10^38 is
+/// under the i128 ceiling (~1.7e38) and 10^39 is over it, so any truncation
+/// unit past this is coarser than the largest representable value and the
+/// answer is zero by construction — computed rather than attempted.
+const TRUNC_MAX_UNIT_POW10: i32 = 38;
+const trunc_doc: FnDoc = .{
+    .name = "TRUNC",
+    .category = .number,
+    .row_varying = false,
+    .signature = "TRUNC(x [, n])",
+    .example = "TRUNC(-3.999, 2)",
+    .description = "Cut `x` off after `n` decimal places (default 0) **toward zero**, discarding the rest rather than rounding it. This is what separates it from its neighbours, and only on negatives: `TRUNC(-3.999)` is `-3` where `FLOOR(-3.999)` is `-4`, and `TRUNC(-3.999, 2)` is `-3.99` where `ROUND(-3.999, 2)` is `-4`. Use it where a value must never grow in magnitude — a payout truncated to whole cents, a tax base that is never rounded up. `n<0` cuts at tens/hundreds (`n=-2` → multiples of 100, still toward zero); `n>=12` is a no-op (12 is the fixed-point scale); `n` is clamped to ±30.",
+    .args = &.{
+        .{ .name = "x", .kind = .number },
+        .{ .name = "n", .kind = .{ .integer_in_range = .{
+            .min = -@as(i64, ROUND_MAX_PRECISION),
+            .max = @as(i64, ROUND_MAX_PRECISION),
+        } } },
+    },
+    .min_args = 1,
+    .max_args = 2,
+};
+/// TRUNC(x, n) — truncate toward zero at n decimal places.
+///
+/// Done on the raw fixed-point integer rather than through the decimal core's
+/// rounding modes: `@divTrunc` already truncates toward zero for both signs,
+/// which is exactly the contract, and multiplying the quotient back by the same
+/// unit cannot overflow because the magnitude only ever shrinks.
+fn builtinTrunc(args: []Value) !Value {
+    const x = try args[0].toNumber();
+    const n: i32 = if (args.len >= 2) blk: {
+        // Defence-in-depth: `validateArgs` has already clamped a numeric n to
+        // the integer_in_range domain, mirroring ROUND's own local re-clamp.
+        const t = (try args[1].toNumber()).trunc();
+        break :blk @intCast(@max(@min(t, @as(i128, ROUND_MAX_PRECISION)), -@as(i128, ROUND_MAX_PRECISION)));
+    } else 0;
+
+    const drop: i32 = @as(i32, @intCast(Decimal.scale)) - n;
+    if (drop <= 0) return Value{ .decimal = x }; // finer than the scale: nothing to cut
+    if (drop > TRUNC_MAX_UNIT_POW10) return Value{ .decimal = Decimal.zero };
+    const unit = std.math.powi(i128, 10, @intCast(drop)) catch return Value{ .decimal = Decimal.zero };
+    return Value{ .decimal = .{ .raw = @divTrunc(x.raw, unit) * unit } };
+}
+fn adaptTrunc(p: *Parser, args: []Value) anyerror!Value {
+    return builtinTrunc(args) catch |err| {
+        if (args.len >= 1) switch (args[0]) { .string => |s| p.setNotANumber(s), else => {} };
+        return err;
+    };
+}
+
 // ── POWER ───────────────────────────────────────────────────────────────
 /// Largest exponent POWER will attempt. The exact result of `b^n` carries
 /// `precision(b) × n` digits, so the exponent — not the base — is what decides
@@ -4667,6 +4718,7 @@ pub const builtins = [_]FnEntry{
     .{ .name = "ROUND",          .doc = round_doc,          .impl = adaptRound },
     .{ .name = "FLOOR",          .doc = floor_doc,          .impl = adaptFloor },
     .{ .name = "CEILING",        .doc = ceiling_doc,        .impl = adaptCeiling },
+    .{ .name = "TRUNC",          .doc = trunc_doc,          .impl = adaptTrunc },
     .{ .name = "POWER",          .doc = power_doc,          .impl = adaptPower },
     .{ .name = "SQRT",           .doc = sqrt_doc,           .impl = adaptSqrt },
     .{ .name = "RAND",           .doc = rand_doc,           .impl = adaptRand },
@@ -6948,6 +7000,38 @@ test "PROPER: title-case across word breaks and Unicode" {
 }
 
 // ── Tests: MOD ───────────────────────────────────────────────────────────
+
+test "TRUNC: cuts toward zero, which is where it parts ways with FLOOR/ROUND" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    // Positives agree with FLOOR — the whole distinction lives on the negatives.
+    try testing.expectEqualStrings("3", try evalString("TRUNC(3.999)", &ctx));
+    try testing.expectEqualStrings("3", try evalString("FLOOR(3.999)", &ctx));
+    try testing.expectEqualStrings("-3", try evalString("TRUNC(-3.999)", &ctx));
+    try testing.expectEqualStrings("-4", try evalString("FLOOR(-3.999)", &ctx));
+
+    // …and against ROUND at a precision, which is the case that had no clean
+    // spelling before: -3.999 must become -3.99, never -4.
+    try testing.expectEqualStrings("3.99",  try evalString("TRUNC(3.999, 2)", &ctx));
+    try testing.expectEqualStrings("-3.99", try evalString("TRUNC(-3.999, 2)", &ctx));
+    try testing.expectEqualStrings("-4",    try evalString("ROUND(-3.999, 2)", &ctx));
+
+    // Negative n cuts at tens/hundreds, still toward zero.
+    try testing.expectEqualStrings("1200",  try evalString("TRUNC(1234.5, -2)", &ctx));
+    try testing.expectEqualStrings("-1200", try evalString("TRUNC(-1234.5, -2)", &ctx));
+
+    // Past the fixed-point scale there is nothing left to cut…
+    try testing.expectEqualStrings("1.23456789012", try evalString("TRUNC(1.23456789012, 12)", &ctx));
+    try testing.expectEqualStrings("1.23456789012", try evalString("TRUNC(1.23456789012, 30)", &ctx));
+    // …and a unit coarser than the numeric range can only produce zero.
+    try testing.expectEqualStrings("0", try evalString("TRUNC(1234.5, -30)", &ctx));
+    // Zero and exact values are unmoved.
+    try testing.expectEqualStrings("0", try evalString("TRUNC(0, 4)", &ctx));
+    try testing.expectEqualStrings("-5", try evalString("TRUNC(-5, 2)", &ctx));
+}
 
 test "POWER: exact whole powers, empty on what is not exact, loud on overflow" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);

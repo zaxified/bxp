@@ -236,19 +236,29 @@ fixed before release instead, not parked here).
 
 ### Expression builtins
 
-**Secondary / niche — on hold indefinitely.** No concrete use-case; add only
-when a real one appears. All fit the existing `FnDoc` + `ArgKind` pattern
-unless noted:
+**Sugar over idioms that already work — on hold.** Each of these is one
+existing expression away. The spellings below were evaluated rather than
+assumed, so what a builtin would add here is discoverability, not capability;
+add one when a real workflow keeps tripping over the idiom.
 
-- String / parsing: `REPT(s, n)`.
-- Calendar / clock components: `QUARTER(d)`, `WEEKNUM(d)`, `DATE_TRUNC(unit, d)`,
-  `HOUR(d)` / `MINUTE(d)` / `SECOND(d)`. The time extractors need a canonical
-  ISO-datetime input decision first (bxp's date model is date-only today).
-- Validation: `IS_NUMERIC(x)`, `IS_DATE(x)`.
-- Math: `SIGN(x)`, `TRUNC(x)`, `MROUND(x, m)` are exact on the fixed-point
-  decimal core. `POWER(base, exp)` and `SQRT(x)` are **blocked on a design call**,
-  both need floating point, which conflicts with the deliberately float-free
-  decimal core; revisit only with an integer-exponent-only `POWER` or an explicit float-approximation mode.
+- `DATE_TRUNC(unit, d)` — snapping a date to the start of its period. Start of
+  month is `DATE_CONVERT([D], 'YYYY-MM-DD', 'YYYY-MM') & '-01'`; start of the
+  ISO week is `DATEADD([D], 1 - WEEKDAY([D]))`; start of year is the same trick
+  through `YYYY`. All three are in the dates guide.
+- `MROUND(x, m)` — rounding to a multiple: an exchange tick, a lot size.
+  `ROUND([Price] / 0.05, 0) * 0.05` is exact on the decimal core. The likeliest
+  of the three to earn its place, because tick sizes are real broker data and
+  the idiom is easy to write slightly wrong.
+- `SIGN(x)` — direction carried in the sign of an amount reads better spelled
+  out: `IF([Amount] < 0, 'SELL', 'BUY')`.
+
+`POWER` / `SQRT` were **not** blocked on a design call after all — the pinned
+`decimal` module carries exact `pow` and a correctly-rounded `sqrt`, neither
+using floating point — and the time extractors were **not** waiting on a
+canonical datetime shape, which `parseTzDatetime` had already fixed. Both are
+shipped, along with QUARTER, WEEKNUM, IS_NUMERIC, IS_DATE and TRUNC. `REPT` was
+dropped rather than parked: padding is LPAD/RPAD's job and separator lines are
+reporting, not data.
 
 ### Encoding — more single-byte code pages
 

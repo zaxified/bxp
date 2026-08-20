@@ -124,6 +124,12 @@ expr	ok	POWER([Rate], 2)
 expr	ok	POWER(1.05, 10)
 expr	ok	SQRT([Variance])
 expr	ok	ROUND(SQRT([Variance]), 4)
+# Truncation toward zero — the one that differs from FLOOR/ROUND only on
+# negatives, which is exactly where money rules care.
+expr	ok	TRUNC([Amount])
+expr	ok	TRUNC([Amount], 2)
+expr	ok	TRUNC([Amount], -2)
+expr	ok	IF([Amount] < 0, TRUNC([Amount], 2), ROUND([Amount], 2))
 # Timezone cluster — offset token normalisation + IANA-backed zone conversion.
 expr	ok	TO_UTC([Time], 'YYYY-MM-DD[T]hh:mm:ssZZ')
 expr	ok	TO_UTC('2024-03-15T14:23:01+02:00', 'YYYY-MM-DD[T]hh:mm:ssZZ')
@@ -195,6 +201,9 @@ expr	err	IS_DATE([Date], 'DD.MM.YYYY', 'YYYY')	WrongArgCount
 expr	err	IS_NUMERIC()	WrongArgCount
 expr	err	POWER(2)	WrongArgCount
 expr	err	SQRT(1, 2)	WrongArgCount
+expr	err	TRUNC()	WrongArgCount
+expr	err	TRUNC(1, 2, 3)	WrongArgCount
+expr	err	TRUNC('abc')	NotANumber
 # The numeric arg domain is enforced centrally, before either impl runs.
 expr	err	SQRT('abc')	NotANumber
 expr	err	POWER('abc', 2)	NotANumber
