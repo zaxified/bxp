@@ -6,7 +6,13 @@ description: "How a conversion template is put together — data_dir, file patte
 
 A BXP config (`bxp-cli.json`) is JSON5 — JSON with comments, unquoted
 keys, and trailing commas allowed. It declares optional reusable `maps`
-and one or more `conversion_templates`.
+and **one or more `conversion_templates`**.
+
+One template describes one conversion end to end: where the input files
+are, how to read them, how to reshape each row, and what the output looks
+like. What it describes is up to you — a broker's export, a public
+dataset, another system's dump — the engine draws no distinction, and a
+config can hold templates for all three side by side.
 
 This page is the human guide to authoring a template. The exhaustive
 field-by-field table lives in [Config schema](../reference/config-schema.md).

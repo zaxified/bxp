@@ -6,11 +6,22 @@ description: "Convert tabular exports — CSV, XLSX or JSON — into the shape a
 
 A converter for tabular export files (CSV, XLSX, JSON) into whatever
 shape another tool expects, driven by declarative JSON5 templates.
-[Wealthfolio](https://wealthfolio.app/) and
-[brycht.app](https://brycht.app/) are the two trackers with shipping
-templates today; any other tracker is reachable by writing an
-`output_schema` for it — no code changes. Everything runs locally; your
-data never leaves the machine.
+Everything runs locally; your data never leaves the machine.
+
+The name says *Broker eXchange Parser*, and that is where BXP started —
+but nothing in the engine knows what a broker is. It is a general-purpose
+ETL tool, and the [examples](examples/index.md) convert weather stations,
+transit feeds, hospital messages and taxi trips alongside brokerage
+statements.
+
+The vocabulary follows from that, and it is worth getting straight before
+anything else:
+
+| | |
+| --- | --- |
+| **config** | Your `bxp-cli.json`. Holds **one or more templates**, plus any shared maps. |
+| **template** | One conversion: where the input files are, how to read them, how to reshape each row, and what the output looks like. A template *may* describe a broker's export — many shipped ones do — but just as easily a public dataset or another system's export. |
+| **target** | Whatever consumes the result. [Wealthfolio](https://wealthfolio.app/) and [brycht.app](https://brycht.app/) are the two with shipping templates today; any other is reachable by writing an `output_schema` for it — no code changes. |
 
 ![BXP Desktop](assets/demo.gif)
 

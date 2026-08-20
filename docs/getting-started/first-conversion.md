@@ -51,8 +51,8 @@ my-conversions/
     └── statement.csv
 ```
 
-To add a source, open [`bxp-cli.examples.json`](built-in-templates.md), copy
-the template you want into the `conversion_templates` object of your own
+To add a conversion, open [`bxp-cli.examples.json`](built-in-templates.md)
+and copy the template you want into the `conversion_templates` object of your own
 `bxp-cli.json`, and set its `data_dir` to the folder you made for it. Then:
 
 ```bash

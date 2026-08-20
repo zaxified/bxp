@@ -4,8 +4,9 @@ description: "The templates that ship next to the binary, what each one converts
 
 # Built-in templates
 
-BXP ships working templates for several sources — brokers, today — targeting
-both Wealthfolio and brycht.app. Use one directly, or pattern-match against
+BXP ships working templates for several brokers, targeting both Wealthfolio
+and brycht.app. They are what a template happens to describe here, not what
+templates are for — see [what a template is](../guide/templates.md). Use one directly, or pattern-match against
 the closest one when [authoring a new
 template](../ai/authoring-a-template.md).
 
