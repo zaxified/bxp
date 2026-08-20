@@ -11,14 +11,9 @@ lands on master. `CHANGELOG.md` is generated independently.
 
 ### v0.3.1
 
+consider new flag for skipping intermediate files `combined_output_only: bool    // (default:false)`
 
 ### v0.3.2
-
-Simplify manual page (resources/readme.md) - add url links to github mkdocs.
-The plan: fold the distribution readme into `docs/` so it becomes part of the
-published site, and let the copy that ships in the archives link out to both
-the versioned `docs/` in the repo and the live Pages site. **Blocked on
-reconciling the drift below — do that first.**
 
 `LOOKUP` across templates within one bxp-cli run cycle
 
@@ -144,48 +139,44 @@ registry the panel has no way to supply. Both are enforced by
   recurring operator chore. Demand-driven — only if a real workflow asks;
   docs/examples/ currently show flat dirs.
 
-### Reconcile the readme reference against the catalogs before linking it out
+### Retire the distribution readme
 
-Prerequisite for folding `resources/readme.md` into the site (v0.3.2). Before
-a hand-written table can be replaced by a link, the two have to agree — and
-measured 2026-08-17, they do not.
+`resources/readme.md` goes away rather than being folded into the site. The
+shipped manual is now the documentation block in `bxp-cli --help`: the Pages
+site for a person, the Markdown sources under
+`github/tree/v<version>/docs/` for an assistant — pinned to the release the
+binary was built from, which the unversioned site cannot offer — and a pointer
+to the co-located `bxp-mcp` (no path: inside an AppImage that binary lives
+under a fresh `/tmp/.mount_*` on every launch). The GUI's top bar opens the
+same site. Both of those have landed; two things still have to before the file
+can be deleted.
 
-The **inventory** matches exactly: all 57 expression builtins appear in both
-the readme and the generated `docs/reference/expr-functions.md`, with nothing
-extra on either side. The **descriptions have diverged**, and in both
-directions — word-overlap per function has a median of 0.38, with 39 of 53
-comparable entries below 0.5. It is not only rewording; each side documents
-facts the other omits:
+**A rendezvous for the desktop archive**, which never sees `--help`. A
+*Help → About* in bxp-gui carrying the same three entries is the better shape
+than a one-page `readme.txt`, because the GUI is the one component that can
+resolve its own `bxp-mcp` path and hand the user a working `mcpServers` block.
 
-| Builtin | Only on the site | Only in the readme |
-| --- | --- | --- |
-| `ROUND` | rounds half away from zero | negative `n` rounds tens / hundreds |
-| `RAND` | not cryptographically secure | — |
-| `FIELDS` | argument must be a positive integer | needed for `csv_header_line: 0` |
-| `WORKDAY` | — | no exchange-holiday awareness |
-
-So the work is not a swap, it is a merge, and it has a direction: **anything
+**A block-by-block merge of the remaining content into `docs/`.** Every readme
+section has a counterpart page, but a shared heading does not mean shared text.
+Measured 2026-08-17 on the expression reference: the inventory matches exactly
+(all 57 builtins on both sides, nothing extra on either), while the
+descriptions have diverged in both directions — median word-overlap 0.38, 39 of
+53 entries below 0.5, with each side documenting facts the other omits
+(`ROUND`'s negative `n`, `FIELDS` under `csv_header_line: 0`, and
+`WORKDAY`'s missing holiday awareness are readme-only; the half-away-from-zero
+rule and `RAND`'s non-cryptographic warning are site-only). So each block is
+read on both sides and merged by hand, and the merge has a direction: anything
 the readme documents that is true and missing belongs in the `FnDoc` /
-`FieldDoc` catalog**, from which the site page regenerates. Merging the other
-way — editing the generated page — would be undone by the next
-`scripts/docs/gen-docs.sh --build`. Once the catalogs carry the union, the
-readme table has nothing the link would lose.
+`FieldDoc` catalog the site page regenerates from — editing the generated page
+would be undone by the next `scripts/docs/gen-docs.sh --build`. The same
+comparison still has to be run for the other reference tables (CLI flags, exit
+codes, config schema including the nested object schemas, date tokens, MCP and
+gui-mcp tools); only the expression catalog was measured.
 
-The same comparison still has to be run for the other reference tables (CLI
-flags, exit codes, config schema incl. the nested object schemas, date tokens,
-MCP and gui-mcp tools); only the expression catalog was measured.
-
-Worth deciding at the same time: the readme opens its reference half by
-claiming it is written so an assistant can produce a working template *"given
+One claim must not survive the move: the readme opens its reference half by
+saying it is written so an assistant can produce a working template *"given
 only this file and `bxp-cli.examples.json`"*. Repeated attempts to do exactly
-that have never yielded a working config, so the claim is not true today and
-should not survive the rework unedited.
-
-Optional, and cheap either way: a CI check that the catalog name sets and the
-readme's name sets match — no prose comparison, just presence. That is what
-would have caught the missing `--trace` / `--trace-file` / `zip_input` entries
-the 2026-08-17 audit found by hand, and it is independent of whether the
-tables end up inline or linked.
+that have never yielded a working config.
 
 ### Real-world broker CSV quirks
 
