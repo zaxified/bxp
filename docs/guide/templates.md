@@ -24,7 +24,7 @@ field-by-field table lives in [Config schema](../reference/config-schema.md).
   },
   conversion_templates: {
     // required; map of template_id → template config (see skeleton below)
-    mybroker_to_wealthfolio: {
+    mysource_to_wealthfolio: {
       /* ... */
     },
   },
@@ -39,10 +39,10 @@ All `data_dir` paths are resolved relative to the location of
 Copy, fill in, run:
 
 ```json5
-mybroker_to_wealthfolio: {
+mysource_to_wealthfolio: {
 
   // required; path to input files, relative to bxp-cli.json
-  data_dir:                  "mybroker_to_wealthfolio",
+  data_dir:                  "mysource_to_wealthfolio",
 
   // default "csv"; options: "csv", "json" (array-of-objects)
   file_type_in:              "csv",
@@ -53,7 +53,7 @@ mybroker_to_wealthfolio: {
   // required; suffix of output filename, replaces file_pattern_in
   file_pattern_out:          ".csvx",
 
-  // input CSV parsing — match the broker's actual format
+  // input CSV parsing — match the source's actual format
   csv_delimiter_in:          ",",       // ",", ";", "\t", "|", ...
   csv_decimal_separator_in:  ".",       // ".", ","
   csv_text_quote_in:         "double",  // "none" | "single" ' | "double" "
@@ -65,7 +65,7 @@ mybroker_to_wealthfolio: {
 
   // default 1; 1-based line holding the CSV header. 0 = headerless input
   // (no header row; reach columns by position with FIELDS(n)); N>1 skips
-  // N-1 preamble lines before the header (broker exports with a text banner).
+  // N-1 preamble lines before the header (exports with a text banner).
   // csv_header_line:           1,
 
   // default false; when true rows whose $date is outside the date range encoded
@@ -112,7 +112,7 @@ mybroker_to_wealthfolio: {
     $currency:       "[Currency]",
     $fee:            "[Fee]",
     $amount:         "[Total]",
-    $account:        "",      // optional; e.g. "'MyBroker'", "[Account]"
+    $account:        "",      // optional; e.g. "'MySource'", "[Account]"
     $fxRate:         "",      // optional
     $subtype:        "",      // optional
     $instrumentType: "",      // optional; e.g. "'Cryptocurrency'"
@@ -163,7 +163,7 @@ eight map 1:1 to Wealthfolio's import columns; the rest are optional.
 | `$quantity`       | Number of units                                                      |
 | `$unitprice`      | Price per unit                                                       |
 | `$currency`       | Currency code (`USD`, `EUR`, `CZK`, …)                               |
-| `$fee`            | Fee amount (empty if broker does not report one)                     |
+| `$fee`            | Fee amount (empty if the source does not report one)                 |
 | `$amount`         | Total transaction value                                              |
 | `$action`         | Activity type — **set only in `row_rules`**, never in `input_schema` |
 | `$account`        | Account tag (optional)                                               |

@@ -2,13 +2,13 @@
 description: "How an agent authors a conversion template from a sample export, validating each step through bxp-mcp."
 ---
 
-# Authoring a broker with an AI
+# Authoring a template with an AI
 
 bxp-cli templates are plain JSON5 — a capable AI (Claude, ChatGPT, …) can
 write one for you. **Two things are required context:** the BXP docs (this
 site, or its Markdown sources in the repository) AND `bxp-cli.examples.json`
 (in the console archive and the GitHub repository). The docs define the language
-and the target output spec; the examples.json carries working per-broker
+and the target output spec; the examples.json carries working per-source
 patterns the AI is expected to pattern-match against. Without
 examples.json the AI should refuse to guess.
 
@@ -24,19 +24,18 @@ MCP-capable client is one entry:
 { "mcpServers": { "bxp": { "command": "/abs/path/to/bxp-mcp", "args": [] } } }
 ```
 
-BXP Desktop fills that block in for you, with the path already resolved:
-**ABOUT** in the top bar. That matters on Linux, where an AppImage mounts
-itself somewhere new on every launch, so the path is not something you can
-write down once.
+On desktop, read the path off **Settings inspector → Binaries**
+(ctrl+shift+s) rather than guessing it: an AppImage mounts itself somewhere
+new on every launch, so the path is not something you can write down once.
 
 ## The prompt
 
 Paste this into your assistant, attach both files, then drop in 5 rows of
-your broker's raw CSV:
+your source's raw CSV:
 
 > _"I use BXP. Please read the **Guide** and **Target specs** sections of
 > the docs and the comments in `bxp-cli.examples.json`. Here is a sample
-> of my broker's export: `<paste 5 rows including the header>`. Add a new
+> of my export: `<paste 5 rows including the header>`. Add a new
 > entry under `conversion_templates` in my `bxp-cli.json` that converts
 > this to Wealthfolio CSV, following the same patterns as the existing
 > templates. Self-test your output (validate the config, then run it
@@ -59,11 +58,10 @@ strictly:
 1. **`bxp-cli.examples.json` is required context.** It ships working
    templates with rich inline comments. If you don't have it, ask the
    user to provide it before generating any template — do not guess at
-   non-trade row patterns, action vocabulary, or broker quirks.
+   non-trade row patterns, action vocabulary, or source quirks.
    Pattern-match against whichever shipped template is closest in shape
-   to the broker at hand: a plain stock broker with one row per trade, a
-   broker that emits paired rows per transaction, an xlsx source, or a
-   template targeting the tracker output rather than Wealthfolio. Read
+   to the source at hand: one row per record, paired rows that need
+   joining, an xlsx source, or a template targeting the other tracker. Read
    the real ids out of the file rather than assuming them — with the
    bxp-mcp server, `bxp_list_templates` returns a compact index (id plus
    the file patterns and description) and `bxp_fetch_template` returns a
@@ -74,7 +72,7 @@ strictly:
    user explicitly asks.
 3. **Match the real CSV format.** Set `csv_delimiter_in`,
    `csv_decimal_separator_in`, and `csv_text_quote_in` to what the
-   broker actually exports — do not guess.
+   source actually exports — do not guess.
 4. **Put activity-type logic in `row_rules`, not `input_schema`.**
    `$action` must be assigned inside a `row_rules[].rows[]` entry. The
    `input_schema` only extracts and transforms neutral values.
@@ -85,14 +83,14 @@ strictly:
    a single block `{ when, key, values }`, read with the 2-arg
    `LOOKUP(key, 'field')`; or named blocks `{ name1: { … }, name2: { … } }`,
    read with the 3-arg `LOOKUP('name1', key, 'field')`.
-6. **Prefer named `maps`.** If the broker's symbols overlap an existing
+6. **Prefer named `maps`.** If the source's symbols overlap an existing
    named map, reference it by name with `REMAP([Symbol], 'xtb')`.
    Otherwise define a small inline `REMAP(s, k, v, ...)`.
 7. **One-to-many rows.** When one input row must produce multiple output
    rows (currency conversion = FEE + WITHDRAWAL + DEPOSIT; dividend with
    tax), return multiple objects in the same `row_rules[].rows` array.
    Each object can override `$variable`s for its own output row.
-8. **Match the broker's exact date shape.** Use `DATE_CONVERT` with
+8. **Match the source's exact date shape.** Use `DATE_CONVERT` with
    tokens that correspond to the input literally, character-by-character;
    use `[*]` to skip fractional seconds, trailing `Z`, or timezone
    suffixes.

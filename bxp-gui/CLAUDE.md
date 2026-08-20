@@ -76,7 +76,6 @@ bxp-gui/
 │           ├── top_bar.dart           # Title bar + actions
 │           ├── panel_header.dart      # Reusable header chrome
 │           ├── resize_handle.dart     # Splitter drag handle
-│           ├── about_dialog.dart      # Versions + manual links + the bundled bxp-mcp path
 │           ├── open_dialog.dart       # Recent-files / file picker
 │           ├── integrate_dialog.dart  # First-run Linux desktop-integration prompt
 │           └── update_dialog.dart     # In-app updater prompt

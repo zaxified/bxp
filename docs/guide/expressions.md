@@ -47,9 +47,9 @@ Function names are case-insensitive.
 
 - **`CONTAINS(s, sub)` is a substring match, not a prefix match.** It
   returns `true` whenever `sub` appears _anywhere_ inside `s`, which
-  means `CONTAINS('Sell to Buy', 'Buy')` is `true`. Brokers with
-  prefix-based action codes (Schwab `MKT BUY` / `LMT BUY`, IBKR
-  multi-word actions) need an exact or word-boundary check: prefer
+  means `CONTAINS('Sell to Buy', 'Buy')` is `true`. Sources with
+  prefix-based codes (Schwab `MKT BUY` / `LMT BUY`, IBKR multi-word
+  actions) need an exact or word-boundary check: prefer
   exact comparison (`[Action] = 'Buy'`), `SPLIT_PART([Action], ' ', 1) = 'Buy'`
   for the first word, or excluding the false matches explicitly —
   `CONTAINS([Action], 'Buy') AND NOT CONTAINS([Action], 'Sell')` is a valid
@@ -87,7 +87,7 @@ SPLIT_PART([Comment], ' @ ', 2)                                → second part a
 
 ## Worked example — a ticker hidden in free text
 
-Some brokers leave the `Symbol` column empty and name the instrument only
+Some exports leave the `Symbol` column empty and name the instrument only
 inside a free-text field: a dividend row reads
 `Description: "Qualified Dividend APPLE INC 100"` with no ticker column at all.
 Two composable functions cover this without a new builtin.

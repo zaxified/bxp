@@ -52,9 +52,9 @@ End Shared core libraries extraction
 Today bxp-cli has no concept of a template library: all templates live
 inside one user-owned config file (`bxp-cli.json`), and the starter
 set ships as a single monolithic `resources/console/bxp-cli.examples.json`.
-Users who want a specific broker template have to copy/paste it out of
+Users who want a specific template have to copy/paste it out of
 the examples file into their own config. Split the starter set into a
-per-broker template library so:
+per-source template library so:
 
 - A discovery dir (`templates/revolut.json`, `templates/trading212.json`,
   …) ships next to the binary; users can also drop their own files into
@@ -62,7 +62,7 @@ per-broker template library so:
   on name collision.
 - bxp-mcp's `bxp_list_templates` / `bxp_fetch_template` work without a
   user-owned `bxp-cli.json` — they enumerate the discovered library.
-- Per-broker variants can be added or revised independently without
+- Per-source variants can be added or revised independently without
   re-shipping one bloated examples file.
 
 Open design questions to resolve before implementation:
@@ -138,42 +138,6 @@ registry the panel has no way to supply. Both are enforced by
   of dirs (process all listed) or a `*` glob path segment would close that
   recurring operator chore. Demand-driven — only if a real workflow asks;
   docs/examples/ currently show flat dirs.
-
-### Retire the distribution readme
-
-`resources/readme.md` goes away rather than being folded into the site. The
-shipped manual is now the documentation block in `bxp-cli --help`: the Pages
-site for a person, the Markdown sources under
-`github/tree/v<version>/docs/` for an assistant — pinned to the release the
-binary was built from, which the unversioned site cannot offer — and a pointer
-to the co-located `bxp-mcp` (no path: inside an AppImage that binary lives
-under a fresh `/tmp/.mount_*` on every launch). The GUI's top bar opens the
-same site, and its `ABOUT` panel now carries the same three entries plus the
-`mcpServers` block for the bundled `bxp-mcp` — the rendezvous the desktop
-archive needs, since it never sees `--help`. One thing is left before the file
-can be deleted.
-
-**A block-by-block merge of the remaining content into `docs/`.** Every readme
-section has a counterpart page, but a shared heading does not mean shared text.
-Measured 2026-08-17 on the expression reference: the inventory matches exactly
-(all 57 builtins on both sides, nothing extra on either), while the
-descriptions have diverged in both directions — median word-overlap 0.38, 39 of
-53 entries below 0.5, with each side documenting facts the other omits
-(`ROUND`'s negative `n`, `FIELDS` under `csv_header_line: 0`, and
-`WORKDAY`'s missing holiday awareness are readme-only; the half-away-from-zero
-rule and `RAND`'s non-cryptographic warning are site-only). So each block is
-read on both sides and merged by hand, and the merge has a direction: anything
-the readme documents that is true and missing belongs in the `FnDoc` /
-`FieldDoc` catalog the site page regenerates from — editing the generated page
-would be undone by the next `scripts/docs/gen-docs.sh --build`. The same
-comparison still has to be run for the other reference tables (CLI flags, exit
-codes, config schema including the nested object schemas, date tokens, MCP and
-gui-mcp tools); only the expression catalog was measured.
-
-One claim must not survive the move: the readme opens its reference half by
-saying it is written so an assistant can produce a working template *"given
-only this file and `bxp-cli.examples.json`"*. Repeated attempts to do exactly
-that have never yielded a working config.
 
 ### Real-world broker CSV quirks
 

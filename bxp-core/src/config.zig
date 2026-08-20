@@ -482,7 +482,7 @@ pub const BrokerConfig = struct {
             .key = "data_dir",
             .type_name = "string",
             .required = true,
-            .description = "Path to input files, relative to this config file. e.g. \"my_broker\", \"../data/broker\", or an absolute path.",
+            .description = "Path to input files, relative to this config file. e.g. \"my_source\", \"../data/exports\", or an absolute path.",
             .validator = .non_empty,
         },
         .{

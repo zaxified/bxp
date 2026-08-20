@@ -12,7 +12,7 @@ BXP is a **configuration-driven ETL micro-tool**. The core principle is:
 
 Consequences of this design:
 
-- All broker-specific logic lives in `bxp-cli.json` (`conversion_templates` section).
+- All source-specific logic lives in `bxp-cli.json` (`conversion_templates` section).
 - `bxp-core` is a generic engine: CSV/XLSX parser, expression evaluator, config loader.
 - `bxp-cli` is a thin orchestrator: reads config, finds files, calls the engine.
 - The expression language is intentionally limited - it handles per-row transformations, not general-purpose computation.
@@ -108,7 +108,7 @@ automatically by Claude Code, but you can read them directly any time.
 | Module           | File                                                                              | What's in it                                                                                                                        |
 | ---------------- | --------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
 | Monorepo         | [`CLAUDE.md`](https://github.com/zaxified/bxp/blob/master/CLAUDE.md)                                                       | Top-level layout + package dep graph + cross-cutting conventions                                                                    |
-| `bxp-cli`        | [`bxp-cli/CLAUDE.md`](https://github.com/zaxified/bxp/blob/master/bxp-cli/CLAUDE.md)                                       | Full config reference, expression syntax, broker list, exit codes, output stream routing                                            |
+| `bxp-cli`        | [`bxp-cli/CLAUDE.md`](https://github.com/zaxified/bxp/blob/master/bxp-cli/CLAUDE.md)                                       | Full config reference, expression syntax, template list, exit codes, output stream routing                                            |
 | `bxp-mcp`        | [`bxp-mcp/CLAUDE.md`](https://github.com/zaxified/bxp/blob/master/bxp-mcp/CLAUDE.md)                                       | MCP server: adapter model, tool catalog, annotated JSON shape (`$err_*`/`$warn_*`/`$info_*`), in-proc vs spawn, wire protocol, bxp_simulate |
 | `bxp-core`       | [`bxp-core/CLAUDE.md`](https://github.com/zaxified/bxp/blob/master/bxp-core/CLAUDE.md)                                     | Per-module API surface, build details, "known non-issues" rationale                                                                 |
 | `bxp-gui`        | [`bxp-gui/CLAUDE.md`](https://github.com/zaxified/bxp/blob/master/bxp-gui/CLAUDE.md)                                       | Flutter app structure, services/store/ui split, MCP debug workflow                                                                  |

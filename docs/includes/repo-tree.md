@@ -75,7 +75,7 @@ bxp/                                # monorepo root (git root)
 │   ├── guide/                      # user guide: templates, expressions, dates, routing, targets
 │   ├── includes/                   # generated fragments pulled into hand-written pages
 │   ├── reference/                  # generated reference pages — do not edit by hand
-│   └── index.md                    # Convert broker export statements — CSV, XLSX or JSON — into portfolio-tracker formats with declarative JSON5 templates and no code
+│   └── index.md                    # Convert tabular exports — CSV, XLSX or JSON — into the shape another tool expects, with declarative JSON5 templates and no code
 ├── resources/                      # files shipped inside the release archives
 │   ├── console/                    # the sample config bundled with the console archives
 │   ├── desktop/                    # the Linux launcher template bundled with the desktop archives

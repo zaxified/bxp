@@ -2110,7 +2110,7 @@ const remap_doc: FnDoc = .{
     .row_varying = false,
     .signature = "REMAP(s, 'name' | k, v, ...)",
     .example = "REMAP('VOW.DE', 'VOW.DE', 'VOW.DE.XETRA')",
-    .description = "Whole-value lookup: if `s` exactly equals a map key, return that key's value, else return `s` unchanged. Named form REMAP(s, 'mapname') resolves a `maps` registry entry; inline form REMAP(s, k1,v1, k2,v2, ...) gives the pairs directly. The whole-value sibling of REPLACE (which matches substrings) — use it to remap broker symbols, codes or enum values.",
+    .description = "Whole-value lookup: if `s` exactly equals a map key, return that key's value, else return `s` unchanged. Named form REMAP(s, 'mapname') resolves a `maps` registry entry; inline form REMAP(s, k1,v1, k2,v2, ...) gives the pairs directly. The whole-value sibling of REPLACE (which matches substrings) — use it to remap symbols, codes or enum values.",
     .args = &.{
         .{ .name = "s", .kind = .string },
         .{ .name = "name", .kind = .map_name },
@@ -3929,7 +3929,7 @@ const filename_doc: FnDoc = .{
     .needs = .source,
     .signature = "FILENAME()",
     .example = "FILENAME()",
-    .description = "Input file stem — the file name with its directory and the matched `file_pattern_in` suffix removed (the same stem used for output naming). Broker exports often encode account/broker/period in the name, so e.g. `SPLIT_PART(FILENAME(), '_', 3)` extracts a field from it. Empty during stateless evaluation (no source file).",
+    .description = "Input file stem — the file name with its directory and the matched `file_pattern_in` suffix removed (the same stem used for output naming). Exports often encode account, source or period in the name, so e.g. `SPLIT_PART(FILENAME(), '_', 3)` extracts a field from it. Empty during stateless evaluation (no source file).",
     .min_args = 0,
     .max_args = 0,
 };

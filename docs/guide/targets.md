@@ -23,7 +23,7 @@ amount.
 
 | Variable    | Convention                                                                                |
 | ----------- | ----------------------------------------------------------------------------------------- |
-| `$amount`   | Always positive — wrap raw broker values in `ABS()` if your broker reports signed values. |
+| `$amount`   | Always positive — wrap raw source values in `ABS()` if the source reports signed values. |
 | `$quantity` | Always positive — `ABS()` if needed.                                                      |
 | `$fee`      | Always positive (a cost). `ABS()` if needed.                                              |
 
@@ -53,7 +53,7 @@ these as well:
 | `'SPLIT'`        | Stock split — `$amount` carries the split ratio (e.g. `2` for 2-for-1) |
 
 Wealthfolio also accepts three more activity types that none of the
-built-in templates currently emit, but which a new broker template may
+built-in templates currently emit, but which a new template may
 need:
 
 | Action         | When                                                                       |
@@ -67,7 +67,7 @@ For currency conversions use `'TRANSFER_IN'` / `'TRANSFER_OUT'` (or a
 `CONVERSION_OUT` types were removed and migrated to `TRANSFER_IN` /
 `TRANSFER_OUT`, so do not emit them.
 
-If your broker emits an event that doesn't fit any of these, prefer
+If your source emits an event that doesn't fit any of these, prefer
 `'INTEREST'` for income-like cash, `'FEE'` for cost-like cash, and skip
 the row (`rows: []`) if you can't classify it cleanly.
 
@@ -76,7 +76,7 @@ the row (`rows: []`) if you can't classify it cleanly.
 Cash events (DEPOSIT, WITHDRAWAL, INTEREST, FEE, and DIVIDEND on a
 balance without a ticker) don't have a meaningful symbol or unit price.
 The existing templates demonstrate two valid patterns — pick the one
-that matches your broker, do not invent a third:
+that matches your source, do not invent a third:
 
 - **Centralised in `input_schema`** (Anycoin, Revolut X, XTB cash) —
   `IF([type] = 'cash', '$CASH-XXX', REMAP([Symbol], 'mymap'))` style
@@ -97,7 +97,7 @@ that matches your broker, do not invent a third:
 | -------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
 | `date`, `symbol`, `quantity`, `activityType`, `unitPrice`, `currency`, `fee`, `amount` | `account`, `fxRate`, `subtype`, `instrumentType`, `comment` |
 
-`$date` should be `YYYY-MM-DD hh:mm:ss`. Brokers that report date-only
+`$date` should be `YYYY-MM-DD hh:mm:ss`. Sources that report date-only
 (no time) result in `... 00:00:00` — that's accepted. Output is RFC
 4180–compliant with protection against spreadsheet formula injection.
 
@@ -147,7 +147,7 @@ exactly that, emitting an extra `isin` column after `symbol`.
 
 The shipping `*_to_brychtapp` templates target a different column set than
 Wealthfolio. The tracker imports by header name, so the column order varies
-between templates (and `isin` is present only where the broker reports one);
+between templates (and `isin` is present only where the source reports one);
 the fields are:
 
 | Column     | Holds                                                       |
@@ -155,7 +155,7 @@ the fields are:
 | `date`     | Trade date (`YYYY-MM-DD`)                                    |
 | `type`     | Activity type — `$type`, set in `row_rules` (see below)     |
 | `ticker`   | Instrument symbol                                            |
-| `isin`     | ISIN, when the broker provides one (optional)               |
+| `isin`     | ISIN, when the source provides one (optional)                |
 | `quantity` | Share count — **unsigned**; `type` carries the direction    |
 | `price`    | Price per share — unsigned                                   |
 | `currency` | Price currency (e.g. `GBp` for pence)                       |
@@ -172,8 +172,8 @@ single merged file per template.
 brycht.app does not publish a separate machine-readable spec — treat the
 existing brycht.app entries in `bxp-cli.examples.json` as the canonical
 reference: each carries inline JSON5 comments documenting what each
-`$variable` represents and how `$type` maps to the broker's source
-action.
+`$variable` represents and how `$type` maps to the source's own
+vocabulary.
 
 When authoring a new `*_to_brychtapp` template, pattern-match against
 `trading212_to_brychtapp` (simple stock broker) or

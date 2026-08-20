@@ -20,22 +20,6 @@ run doubles as the stop control (its label flips to `cancel`); the other
 mode's button is disabled meanwhile, so you cannot cancel by accident
 while reaching for it.
 
-## About (versions, manual, agent access)
-
-The top bar's `DOCS` entry opens this manual in your browser. Next to it,
-`ABOUT` opens a small panel with the three versions the install is made of
-(`bxp-gui`, `bxp-cli`, `bxp-mcp`), a link to this site and a link to the same
-manual as Markdown pinned to the release you are running — the form an AI
-assistant should read, because it matches the schema your binaries implement.
-
-The panel also resolves the path of the bundled `bxp-mcp` and offers the
-`mcpServers` entry for it as one copyable block. That is worth knowing about
-if you use an assistant: registering the server lets it validate a config,
-evaluate expressions and dry-run a conversion instead of guessing. The path is
-resolved live rather than written down anywhere, because an AppImage mounts
-itself under a fresh temporary directory on every launch — the path from
-yesterday's session no longer exists today.
-
 ## Inline schema docs
 
 Hover any field in the tree to see its description, type, default, and
@@ -77,7 +61,10 @@ into sections:
 
 - **Versions** / **Binaries** — bxp-gui, bxp-cli and bxp-mcp versions, and
   the resolved paths they were found at (including a `BXP_CLI_PATH`
-  override when one is set).
+  override when one is set). This is where to read the bundled `bxp-mcp`
+  path when registering it with an agent: an AppImage mounts itself under a
+  fresh temporary directory on every launch, so the path is resolved live
+  here rather than written down anywhere.
 - **Bridge** — the loaded `bxp-gui-bridge` version, its library path, and
   the last diagnostic it reported.
 - **Config** — loaded path, dirty / saving flags, whether the file has

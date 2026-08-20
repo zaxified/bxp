@@ -1,20 +1,20 @@
 ---
-description: "Extension recipes — adding a broker template, a built-in function, a config field or an inspect operation."
+description: "Extension recipes — adding a conversion template, a built-in function, a config field or an inspect operation."
 ---
 
 # How-to Guides
 
 ## Adding a new conversion template
 
-No code changes required — adding a broker is purely configuration work. The
+No code changes required — adding a template is purely configuration work. The
 full config schema, expression reference, and field-by-field walkthrough live
 in the user guide: [Templates](../../guide/templates.md),
 [Expressions](../../guide/expressions.md) and
 [Config schema](../../reference/config-schema.md). The short skeleton:
 
 ```json
-"broker_to_tracker": {
-  "data_dir":     "../data/broker_to_tracker",
+"source_to_target": {
+  "data_dir":     "../data/source_to_target",
   "file_pattern_in": ".csv",
   "input_schema": { "$date": "...", "$ticker": "...", /* ... */ },
   "row_rules":    [ { "when": "...", "rows": [ { "$action": "'BUY'" } ] } ],
@@ -26,7 +26,7 @@ Dev-only tips (not in the user guide):
 
 - Start with `row_rules_debug_missing: true` + run with `--debug` to surface
   rows that match no rule.
-- For paired-row brokers (one row references another via an order ID),
+- For paired-row sources (one row references another via an id),
   use `pre_pass` + `LOOKUP()`. AnyCoin is the reference template.
 - Drop a `datasets/<template_id>/{sample.csv, sample.json, sample.expected}`
   triple to wire the template into the regression suite — `scripts/test.sh`

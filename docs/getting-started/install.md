@@ -66,7 +66,7 @@ The archive is laid out so it runs as-is:
 | `bxp-mcp` | The MCP server for AI agents |
 | `bxp-cli.json` | A working config — one template, ready to run |
 | `bxp-cli.examples.json` | The template library to copy from |
-| `sample.csv` | A sample broker export |
+| `sample.csv` | A sample input file |
 | `sample.csvx` | The converted result, ready to look at before you run anything. Your first run overwrites it — that is the point |
 | `sample.expected` | The reference copy of that same result. Nothing overwrites it, so it stays a trustworthy answer key |
 

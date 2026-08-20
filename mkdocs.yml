@@ -148,7 +148,8 @@ nav:
       - guide/targets.md
       - guide/running.md
   - AI Workflow:
-      - ai/authoring-a-broker.md
+      - ai/index.md
+      - ai/authoring-a-template.md
       - ai/gui-mcp.md
       - ai/handoff.md
   - Examples:

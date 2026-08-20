@@ -1,11 +1,11 @@
 ---
-description: "Convert broker export statements — CSV, XLSX or JSON — into portfolio-tracker formats with declarative JSON5 templates and no code."
+description: "Convert tabular exports — CSV, XLSX or JSON — into the shape another tool expects, with declarative JSON5 templates and no code."
 ---
 
 # Broker eXchange Parser (BXP)
 
-A converter for broker export statements (CSV, XLSX, JSON) into
-portfolio-tracker CSV formats using declarative JSON5 templates.
+A converter for tabular export files (CSV, XLSX, JSON) into whatever
+shape another tool expects, driven by declarative JSON5 templates.
 [Wealthfolio](https://wealthfolio.app/) and
 [brycht.app](https://brycht.app/) are the two trackers with shipping
 templates today; any other tracker is reachable by writing an
@@ -20,7 +20,7 @@ BXP comes in two distributions that share one conversion engine:
 
 - **BXP Desktop** — a Flutter GUI with a graphical template editor and a
   dry-run debugger, so you can edit templates and preview their behaviour
-  against your real broker exports without leaving the app.
+  against your real input files without leaving the app.
 - **BXP Console** — the command-line engine and the MCP server, for
   scripting, CI, and AI-assisted authoring.
 
@@ -28,7 +28,7 @@ Three binaries do the work (the desktop bundle ships all three; the
 console bundle ships the first two):
 
 - **`bxp-cli`** — the conversion engine. Produces the actual `.csvx`
-  files from your broker exports and the JSON5 templates. The GUI runs it
+  files from your input files and the JSON5 templates. The GUI runs it
   (proxied through the bundled bridge library); you can also run it
   directly from a terminal.
 - **`bxp-mcp`** — an MCP server (JSON-RPC over stdio) that exposes bxp's
@@ -60,7 +60,7 @@ JSON.
 - Looking up a function or flag? Jump to the
   [Reference](reference/expr-functions.md).
 - Using an AI assistant? The **AI workflows** section covers
-  [authoring a broker with an AI](ai/authoring-a-broker.md), the
+  [authoring a template with an AI](ai/authoring-a-template.md), the
   [live GUI MCP](ai/gui-mcp.md), and [agent handoff](ai/handoff.md).
 
 ## Contributing

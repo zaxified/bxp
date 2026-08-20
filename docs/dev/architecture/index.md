@@ -6,7 +6,7 @@ description: "The bird's-eye view: a generic engine driven by a JSON5 config, an
 
 ## Bird's-eye View
 
-BXP is a single-binary ETL tool. All broker logic lives in a JSON5 config file -
+BXP is a single-binary ETL tool. All source-specific logic lives in a JSON5 config file -
 the binary is a generic engine. The diagram below shows the high-level relationship
 between components. It is a high-level topology (who talks to whom); the
 individual `bxp-core` modules and their internal dependencies are detailed in

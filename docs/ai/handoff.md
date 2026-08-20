@@ -22,7 +22,7 @@ there's anything left to verify:
    DIVIDEND rows specifically.
 
 3. **Cash event description** (FEE, DEPOSIT rows): the `comment`
-   column reads `' ()'` (empty broker columns). If you'd prefer
+   column reads `' ()'` (empty source columns). If you'd prefer
    blank, click any FEE row → expression panel → change `$comment`
    to `IF([Wertpapier] = '', '', [Wertpapier] & ' (' & [WKN] & ')')`.
 

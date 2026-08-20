@@ -273,7 +273,7 @@ when a pattern the cheaper tools cannot phrase is genuinely needed; see
 [`docs/examples/advanced/freeform-payment-memos`](../../examples/advanced/freeform-payment-memos/index.md)
 for the worked tradeoff and the full measurement table.
 
-The target persona is an Excel-comfortable analyst (broker statement
+The target persona is an Excel-comfortable analyst (statement
 authoring, CRM migration mapping), not a Python/JS programmer. A Lua-style
 (`if x then ... end`) or Python-style (`y if cond else z`) syntax would
 alienate that user; SQL/Excel idioms transfer directly from a spreadsheet

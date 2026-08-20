@@ -85,7 +85,7 @@ what unlocks streaming, parallelism, and parse-once below.
 `scripts/release-01-console.sh` builds bxp-cli with `-Doptimize=ReleaseSmall`.
 The console archive ships the small binary by design — small downloads,
 small docker layers, small footprint for users who run bxp-cli once a week
-on a few-hundred-row broker export.
+on a few-hundred-row export.
 
 For perf-critical local runs (large CSVs, repeated batch processing) you can
 rebuild with `zig build -Doptimize=ReleaseFast`. Measured deltas on

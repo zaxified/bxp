@@ -18,7 +18,7 @@ DATE_CONVERT([Date], 'DD/MM/YYYY hh:mm:ss', 'YYYY-MM-DD hh:mm:ss')
 ```
 
 Both the `from` and `to` arguments use the same token set. Any characters
-that are not tokens are matched literally. Match the broker's input shape
+that are not tokens are matched literally. Match the input's own shape
 **character-by-character**; use `[*]` to skip fractional seconds, a
 trailing `Z`, or a timezone suffix.
 

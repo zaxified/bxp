@@ -1,12 +1,10 @@
 /// The documentation destinations the app offers, and the platform call that
 /// opens one in the user's browser.
 ///
-/// Mirrors the block `bxp-cli --help` prints, and for the same reason: the
-/// archives ship no readme, so the product itself has to hand both audiences
-/// the real manual. The two URLs are different surfaces of one source — the
-/// rendered site for a person (search, navigation, the clickable expression
-/// playground), the Markdown sources for an assistant, pinned to the release
-/// so an agent reads the schema the installed binaries actually implement.
+/// The archives ship no readme, so the product itself has to hand the user the
+/// manual. `bxp-cli --help` prints the same destination for console users; an
+/// agent gets the release-pinned Markdown sources from there too, which is why
+/// only the human-facing site URL is needed here.
 library;
 
 import 'dart:io';
@@ -15,15 +13,6 @@ import 'dev_trace.dart';
 
 /// The published manual. Unversioned — it always renders the current master.
 const String kDocsSiteUrl = 'https://zaxified.github.io/bxp/';
-
-/// The same manual as Markdown, pinned to [version] (the tag the release was
-/// cut from). Falls back to `master` when the version could not be probed,
-/// which is the honest answer: an unpinned link is still better than none, and
-/// the caller says which one it is showing.
-String docsSourceUrl(String? version) {
-  final ref = (version == null || version.isEmpty) ? 'master' : 'v$version';
-  return 'https://github.com/zaxified/bxp/tree/$ref/docs/';
-}
 
 /// Open [url] in the platform browser.
 ///

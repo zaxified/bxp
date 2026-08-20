@@ -8,7 +8,7 @@ BXP Desktop runs a small **MCP control server** so a local AI agent can
 read and edit the live config in the running app — the same actions you
 take by hand, but driven step by step while you watch and approve. This
 is the half of the workflow where, after an agent has drafted a config
-(see [Authoring a broker](authoring-a-broker.md)), the two of you
+(see [Authoring a template](authoring-a-template.md)), the two of you
 fine-tune the tricky expressions together inside the GUI.
 
 The full list of agent-callable tools is in [GUI agent
@@ -86,4 +86,4 @@ An agent with a terminal can get the same thing machine-readable without
 the GUI: `bxp_eval_trace` (bxp-mcp) returns one JSON object per function
 call plus a terminal `{"t":"final","value":…}` line. Its `headers` /
 `fields` are arrays of strings, same as every other eval tool — see [Authoring a
-broker](authoring-a-broker.md#self-testing-the-generated-template).
+template](authoring-a-template.md#self-testing-the-generated-template).

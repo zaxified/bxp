@@ -48,11 +48,11 @@ template in the same PR.
 
 ## New broker templates
 
-If your broker is not in the built-in `conversion_templates` list, the
+If no built-in entry in `conversion_templates` matches your source, the
 workflow is:
 
 1. Draft a template with the AI workflow described in
-   [`docs/ai/authoring-a-broker.md`](docs/ai/authoring-a-broker.md).
+   [`docs/ai/authoring-a-template.md`](docs/ai/authoring-a-template.md).
 2. Verify it with the bxp-mcp tools (`bxp_validate` + `bxp_simulate`) or
    `bxp-cli --debug` (runtime check).
 3. Add the template to `resources/bxp-cli.examples.json` and a paired

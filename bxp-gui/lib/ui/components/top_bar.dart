@@ -4,10 +4,9 @@ import '../../services/doc_links.dart';
 import '../../store/trace_store.dart';
 import '../theme/bxp_theme.dart';
 import '../theme/bxp_text.dart';
-import 'about_dialog.dart';
 
 /// Application-level navigation bar. Contains the CONFIG / RUNNER tab selectors
-/// on the left and the DOCS / ABOUT entries + theme-cycle button on the right.
+/// on the left and the DOCS link + theme-cycle button on the right.
 /// Active tab is tracked in TraceStore.activeTabIndex so the IndexedStack in
 /// MainView reacts automatically; this widget is purely presentation.
 class TopBar extends StatelessWidget {
@@ -45,16 +44,6 @@ class TopBar extends StatelessWidget {
             active: false,
             tooltip: 'Open the BXP manual ($kDocsSiteUrl)',
             onTap: () => openExternalUrl(kDocsSiteUrl),
-          ),
-          _TopTab(
-            label: 'ABOUT',
-            active: false,
-            tooltip: 'Versions, documentation links, and how an agent reaches '
-                'the bundled MCP server',
-            onTap: () => showDialog<void>(
-              context: context,
-              builder: (_) => const BxpAboutDialog(),
-            ),
           ),
           // Theme cycle button: label shows the current preset's short name
           // (e.g. "SLATE", "ZINC") so the user knows what clicking will do.

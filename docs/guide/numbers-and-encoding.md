@@ -4,9 +4,9 @@ description: "Exact fixed-point arithmetic, European decimal and thousands separ
 
 # Numbers and encoding
 
-## Locale-aware number parsing (European brokers)
+## Locale-aware number parsing (European exports)
 
-European brokers (Comdirect, DKB, Flatex, BoursoBank, Fineco, …)
+European exports (Comdirect, DKB, Flatex, BoursoBank, Fineco, …)
 typically export numbers with `.` as thousands separator and `,` as
 decimal: `5.000,00` means five thousand. Setting
 `csv_decimal_separator_in: ","` opts the template into EU parsing,
@@ -39,7 +39,7 @@ the core does not canonicalise — a leading-zero form like `0012`, or more than
 12 fractional digits — pass through byte-for-byte, as does anything used in a
 string context (`'' & [Column]`).
 
-US-style brokers (Schwab, Fidelity, Trading 212) use `.` decimal +
+US-style exports (Schwab, Fidelity, Trading 212) use `.` decimal +
 optional `,` thousands — that path is handled automatically (see the
 "American thousands-separated numbers" note under
 [Expressions → Type coercions](expressions.md#type-coercions)).

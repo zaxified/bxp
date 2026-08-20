@@ -35,7 +35,7 @@ row_rules: [
 
 Prefer explicit `IN(...)` / exact equality on the action column rather
 than `CONTAINS` / `STARTS_WITH` — an exact match is forward-safe against
-a broker introducing a new action code that happens to share a prefix.
+a source introducing a new code that happens to share a prefix.
 See the [Expressions gotchas](expressions.md#function-semantics--common-gotchas).
 
 ## Unmatched rows

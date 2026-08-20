@@ -1,5 +1,5 @@
 ---
-description: "Run a real conversion end to end: point a shipped template at a broker export and read the result."
+description: "Run a real conversion end to end: point a shipped template at an export file and read the result."
 ---
 
 # Your first conversion
@@ -18,7 +18,7 @@ app or from a terminal. Pick the entry point that fits you.
 
 ## From a terminal
 
-1. Drop the broker's export file into the template's `data_dir`.
+1. Drop the source export into the template's `data_dir`.
 2. Run `./bxp-cli --template <id>`.
 3. Pick up the generated `*.csvx` file next to the input — ready to
    import into the tracker the template targets (Wealthfolio for
@@ -45,13 +45,13 @@ to the binary. For real work, give each template its own folder:
 my-conversions/
 ├── bxp-cli.json              # your config — data_dir paths start here
 ├── trading212/               # data_dir of the trading212 template
-│   ├── export-2026-01.csv    # drop broker exports here
+│   ├── export-2026-01.csv    # drop source exports here
 │   └── export-2026-01.csvx   # bxp-cli writes the result alongside
 └── revolut/                  # data_dir of another template
     └── statement.csv
 ```
 
-To add a broker, open [`bxp-cli.examples.json`](built-in-templates.md), copy
+To add a source, open [`bxp-cli.examples.json`](built-in-templates.md), copy
 the template you want into the `conversion_templates` object of your own
 `bxp-cli.json`, and set its `data_dir` to the folder you made for it. Then:
 
@@ -62,8 +62,8 @@ the template you want into the `conversion_templates` object of your own
 
 ## Next
 
-- Don't see your broker? [Authoring a broker with an
-  AI](../ai/authoring-a-broker.md), or write a template by hand starting
+- No template for your source? [Authoring a template with an
+  AI](../ai/authoring-a-template.md), or write one by hand starting
   from [Templates](../guide/templates.md).
 - The full flag list is in [CLI flags](../reference/cli-flags.md); see
   also [Running a conversion](../guide/running.md) for exit codes and
