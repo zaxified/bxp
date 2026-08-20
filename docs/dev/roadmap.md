@@ -323,19 +323,6 @@ unless noted:
   both need floating point, which conflicts with the deliberately float-free
   decimal core; revisit only with an integer-exponent-only `POWER` or an explicit float-approximation mode.
 
-### Cover the examples tree in the test suite
-
-`scripts/test-07-datasets.sh` gates the 10 fixtures under `datasets/`, but the
-32 `*.expected` files under `docs/examples/` are gated by nothing. They carry
-edge cases the datasets do not — JSON-emitting templates, multi-hop pre_pass
-chains, self-joins, wide-to-long unpivots, sexagesimal coordinates, HL7
-segments — so a regression there currently reaches a release unnoticed. A
-`test-08-examples.sh` would need two things `test-07` does not: outputs are
-`*.csvx` **or** `*.json` (`file_type_out: json`), and committed output
-artifacts must not be seeded into the work dir as inputs (multi-stage-etl's
-`1-final.json` would otherwise be picked up by a later template's `data_dir`).
-All 32 verified green by hand on 2026-08-16.
-
 ### Encoding — more single-byte code pages
 
 The `encoding` module covers Win-1250/1252 and ISO-8859-1/2/15 today. The

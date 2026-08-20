@@ -100,6 +100,10 @@ bxp/
 │   │                             # sample; the delimiter declaration must match
 │   │                             # sample.json; no named-map REMAP/REPLACE
 │   │                             # (it passes input through and looks correct)
+│   ├── test-09-examples.sh   # bxp-cli regression vs docs/examples/*/*/*.expected
+│   │                         # — runs each example in a scratch work dir (its
+│   │                         # goldens + committed output sit next to the
+│   │                         # inputs under data_dir ".")
 │   ├── gen-wasm-playground.sh    # build docs/assets/wasm/bxp-eval.wasm
 │   │                             # (untracked artifact; gen-docs.sh calls it)
 │   ├── check-wasm-parity.sh      # wasm vs native over the expression corpus —

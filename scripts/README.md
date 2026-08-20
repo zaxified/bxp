@@ -20,6 +20,8 @@ wrappers ignore them.
 | Perf regression guard only                            | `bash scripts/test-05-bench-guard.sh`            |
 | Expression corpus only                                | `bash scripts/test-06-expr-corpus.sh`            |
 | Dataset regression only                               | `bash scripts/test-07-datasets.sh`               |
+| Example-page expression gate only                     | `bash scripts/test-08-docs-examples.sh`          |
+| Example regression only                               | `bash scripts/test-09-examples.sh`               |
 | Docs mermaid check (pre-release only)                 | `bash scripts/check-formatting.sh`               |
 | Full benchmark matrix (dev only, not in `test.sh`)    | `bash scripts/bench/bench.sh`                    |
 | Local smoke build (no publish)                        | `bash scripts/release.sh`                        |
@@ -62,6 +64,8 @@ test-04-desktop.sh            flutter analyze + flutter test + json5_ast dart te
 test-05-bench-guard.sh        coarse perf gate — recycles Console's ReleaseSafe bxp-cli, RSS ceiling + wall scaling ratio
 test-06-expr-corpus.sh        bxp_validate_expr corpus regression gate (via bxp-mcp)
 test-07-datasets.sh           bxp-cli regression vs datasets/*/*.expected
+test-08-docs-examples.sh      example pages — every clickable expression evaluates against its own sample
+test-09-examples.sh           bxp-cli regression vs docs/examples/*/*/*.expected (run in a scratch work dir)
 
 All test phases build ReleaseSafe (one optimize mode for the whole suite → small
 codegen/safety error surface); release archives are the only ReleaseSmall builds.

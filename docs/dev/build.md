@@ -156,6 +156,8 @@ bxp/                            # monorepo root (git root)
 │   ├── test-05-bench-guard.sh  # coarse perf gate: recycles Console's ReleaseSafe bxp-cli
 │   ├── test-06-expr-corpus.sh  # cross-runner expression corpus regression gate
 │   ├── test-07-datasets.sh     # bxp-cli regression vs datasets/*/*.expected
+│   ├── test-08-docs-examples.sh # example pages: clickable expressions evaluate
+│   ├── test-09-examples.sh     # bxp-cli regression vs docs/examples/*/*/*.expected
 │   ├── release.sh              # wrapper: release-01-console.sh + release-02-desktop.sh
 │   ├── release-01-console.sh   # cross-compile bxp-cli → bxp-console-* archives
 │   ├── release-02-desktop.sh   # Flutter bundle → AppImage / .deb / .exe / .dmg

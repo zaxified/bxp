@@ -42,6 +42,17 @@ phase's ReleaseSafe `bxp-cli` and asserts an RSS ceiling + a scaling ratio.
 **`test-07-datasets.sh`** — bxp-cli regression: iterates every `datasets/<id>/`
 directory and diffs output against `sample.expected`.
 
+**`test-08-docs-examples.sh`** — the example *pages*: every expression marked
+clickable must evaluate against the page's own sample, the declared delimiter
+must match the template, and the shapes the scratchpad cannot serve (named
+`REMAP` / `REPLACE`) must not be marked.
+
+**`test-09-examples.sh`** — the example *runs*: every
+`docs/examples/<tier>/<name>/` is executed in a scratch work dir and each
+produced output diffed against its `*.expected` golden. Complements test-07 —
+these carry cases the datasets do not (JSON output, multi-hop `pre_pass` chains,
+self-joins, unpivots, HL7).
+
 > Docs formatting is **not** a test phase, and it is hand-maintained:
 > prettier and markdownlint were dropped because they reflow / mis-lint
 > MkDocs-specific syntax and break the rendered pages.
@@ -60,6 +71,8 @@ bash scripts/test-04-desktop.sh        # flutter analyze + flutter test
 bash scripts/test-05-bench-guard.sh    # coarse perf-regression gate
 bash scripts/test-06-expr-corpus.sh    # expression corpus regression
 bash scripts/test-07-datasets.sh       # bxp-cli regression vs datasets/
+bash scripts/test-08-docs-examples.sh  # clickable expressions on example pages
+bash scripts/test-09-examples.sh       # bxp-cli regression vs docs/examples/
 
 cd bxp-core && zig build test          # Zig unit tests only (no build)
 ```
