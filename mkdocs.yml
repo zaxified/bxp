@@ -135,10 +135,12 @@ extra_javascript:
 nav:
   - Home: index.md
   - Getting Started:
+      - getting-started/index.md
       - getting-started/install.md
       - getting-started/first-conversion.md
       - getting-started/built-in-templates.md
   - Guide:
+      - guide/index.md
       - guide/templates.md
       - guide/expressions.md
       - guide/dates.md
@@ -195,11 +197,13 @@ nav:
           - examples/advanced/vintage-harmonise/index.md
           - examples/advanced/xlsx-tabs-merge/index.md
   - GUI:
+      - gui/index.md
       - gui/features.md
       - gui/preferences.md
       - gui/updates.md
       - gui/troubleshooting.md
   - Developer:
+      - dev/index.md
       - dev/build.md
       - dev/testing.md
       - dev/debugging.md
@@ -229,6 +233,7 @@ nav:
       - dev/release.md
       - dev/roadmap.md
   - Reference:
+      - reference/index.md
       - reference/expr-functions.md
       - reference/config-schema.md
       - reference/built-in-templates.md

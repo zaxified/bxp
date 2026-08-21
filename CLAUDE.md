@@ -148,7 +148,9 @@ bxp/
 │   ├── reference/            # FULLY GENERATED reference — never hand-edit:
 │   │                         # CLI flags, config schema, expr functions, date
 │   │                         # tokens, exit codes, MCP tools, built-in
-│   │                         # templates, GUI tools/prefs/shortcuts
+│   │                         # templates, GUI tools/prefs/shortcuts. The one
+│   │                         # exception is index.md — the section landing page,
+│   │                         # hand-written like every other section's
 │   ├── gui/                  # bxp-gui user-facing guide (features, preferences,
 │   │                         # updates, troubleshooting)
 │   ├── ai/                   # Agent-facing guides (authoring a broker, gui-mcp,
@@ -326,7 +328,8 @@ services/prefs_service.dart`.
 
 ## Generated documentation — do not hand-edit
 
-Everything under `docs/reference/`, `docs/dev/architecture/data-structures.md`
+Everything under `docs/reference/` (except its `index.md` — the hand-written
+section landing page), `docs/dev/architecture/data-structures.md`
 and `docs/includes/` (except `abbreviations.md`) is generated.
 `scripts/docs/gen-docs.sh --check` regenerates it all and fails on any diff.
 That check runs in `.github/workflows/docs.yml`, **not** in `scripts/test.sh` —

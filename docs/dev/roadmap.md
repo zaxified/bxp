@@ -37,10 +37,6 @@ builds, or replace them.
 
 Full agentic automation - AI support for all steps in workflow
 
-### v1.0.0
-
-End Shared core libraries extraction
-
 ## Planned features - not version specific
 
 ### External template JSON files
