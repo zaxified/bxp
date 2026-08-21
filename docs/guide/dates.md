@@ -70,22 +70,27 @@ See [Expression functions](../reference/expr-functions.md) for
 
 ### Snapping to the start of a period
 
-`EOMONTH` gives you the *end* of a month, and there is no matching
-`DATE_TRUNC` — because the starts are already one expression each, and the
-one you want depends on the period:
+`EOMONTH` gives you the *end* of a month; `DATE_TRUNC` gives you the start of
+whichever period you name:
 
 ```text
-DATEADD([Date], 1 - DAY([Date]))                        → 2024-08-15 becomes 2024-08-01
-YEAR([Date]) & '-01-01'                                 → 2024-08-15 becomes 2024-01-01
-DATEADD([Date], 1 - WEEKDAY([Date]))                    → 2024-08-15 becomes 2024-08-12
+DATE_TRUNC('day', [Time])       → 2024-08-15 23:59:59 becomes 2024-08-15
+DATE_TRUNC('week', [Date])      → 2024-08-15 becomes 2024-08-12
+DATE_TRUNC('month', [Date])     → 2024-08-15 becomes 2024-08-01
+DATE_TRUNC('quarter', [Date])   → 2024-08-15 becomes 2024-07-01
+DATE_TRUNC('year', [Date])      → 2024-08-15 becomes 2024-01-01
 ```
 
-The month and week forms are the same move at two granularities: subtracting
-one less than the position within the period always lands on its first day.
-It works for the week because `WEEKDAY` is ISO — Monday is 1 — so whichever
-day you started from, `1 - WEEKDAY` steps back to that week's Monday.
+The unit is case-insensitive, and `week` starts on Monday because `WEEKDAY` is
+ISO. A week is not clipped to the month or year it starts in: the week of
+2025-01-01 begins on 2024-12-30. A timestamp is read for its date, so `day` is
+how you drop a clock reading you do not want in the key.
 
-Reach for these when a destination groups rows by period: bucket the date
+The unit is written by you, not by the data, so a misspelling —
+`DATE_TRUNC('weeks', …)` — is a loud template error rather than a silently
+empty column, and `IFERROR` deliberately does not swallow it.
+
+Reach for this when a destination groups rows by period: bucket the date
 first, then let the tracker aggregate. bxp itself never sums across rows
 (see [Not planned](../dev/roadmap.md#not-planned)).
 

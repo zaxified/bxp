@@ -2752,6 +2752,87 @@ fn adaptTrunc(p: *Parser, args: []Value) anyerror!Value {
     };
 }
 
+// ── SIGN ────────────────────────────────────────────────────────────────
+const sign_doc: FnDoc = .{
+    .name = "SIGN",
+    .category = .number,
+    .row_varying = false,
+    .signature = "SIGN(x)",
+    .example = "SIGN(-12.5)",
+    .description = "Direction of `x`, as a number: `-1` below zero, `0` at zero, `1` above. Written out rather than compared, so a rule reads by direction instead of by threshold — `SIGN([Amount]) = -1` where the source encodes a sale as a negative amount. An empty or non-numeric cell coerces to 0 here exactly as it does in arithmetic, so a `0` answer does not mean the cell held a zero; ask ISEMPTY or IS_NUMERIC when that difference matters.",
+    .args = &.{.{ .name = "x", .kind = .number }},
+    .min_args = 1,
+    .max_args = 1,
+};
+/// SIGN(x) — -1 / 0 / 1 by the sign of the fixed-point value.
+fn builtinSign(args: []Value) !Value {
+    const raw = (try args[0].toNumber()).raw;
+    return Value{ .decimal = try fromIntChecked(if (raw > 0) 1 else if (raw < 0) -1 else 0) };
+}
+fn adaptSign(p: *Parser, args: []Value) anyerror!Value {
+    return builtinSign(args) catch |err| {
+        if (args.len >= 1) switch (args[0]) { .string => |s| p.setNotANumber(s), else => {} };
+        return err;
+    };
+}
+
+// ── MROUND ──────────────────────────────────────────────────────────────
+const mround_doc: FnDoc = .{
+    .name = "MROUND",
+    .category = .number,
+    .row_varying = false,
+    .signature = "MROUND(x, m)",
+    .example = "MROUND(12.37, 0.05)",
+    .description = "Round `x` to the nearest multiple of `m`, halves away from zero (`MROUND(0.075, 0.05)` is `0.1`). Where ROUND snaps to a decimal place, this snaps to a step of your choosing: an exchange quoting in five-cent ticks, a lot size of 25, a fee billed per started hour. The sign of `m` is ignored — only the size of the step matters — and `m = 0` has no multiples to snap to, so it answers \"\". Exact on the fixed-point core, unlike dividing and multiplying back through a float.",
+    .args = &.{
+        .{ .name = "x", .kind = .number },
+        .{ .name = "m", .kind = .number },
+    },
+    .min_args = 2,
+    .max_args = 2,
+};
+/// MROUND(x, m) — nearest multiple of m, ties away from zero.
+///
+/// Done on the raw fixed-point integers: both operands carry the same scale, so
+/// dividing them yields a plain count of steps with the scales already
+/// cancelled — no rescaling before, and multiplying the count back by the step
+/// lands on the scale again. Magnitudes are compared in u128 so a value at the
+/// i128 floor cannot overflow on negation.
+fn builtinMround(args: []Value) !Value {
+    const x = try args[0].toNumber();
+    const m = try args[1].toNumber();
+    if (m.raw == 0) return Value{ .string = "" };
+
+    const ax: u128 = @abs(x.raw);
+    const am: u128 = @abs(m.raw);
+    var q = ax / am;
+    const rem = ax % am;
+    // The tie test is `rem * 2 >= am` with the doubling turned inside out:
+    // `rem` and `am - rem` are both bounded by `am`, so neither side can
+    // overflow the way `rem * 2` could for a step near the ceiling.
+    if (rem >= am - rem) q += 1;
+
+    const mag = std.math.mul(u128, q, am) catch return error.NumberOverflow;
+    if (mag > @as(u128, std.math.maxInt(i128))) return error.NumberOverflow;
+    const signed: i128 = @intCast(mag);
+    return Value{ .decimal = .{ .raw = if (x.raw < 0) -signed else signed } };
+}
+fn adaptMround(p: *Parser, args: []Value) anyerror!Value {
+    return builtinMround(args) catch |err| {
+        // Attribute the arg that actually failed to convert, not arg[0]:
+        // either operand can be the unparseable one and the step is as likely
+        // to come from a column as the value is.
+        for (args) |a| switch (a) {
+            .string => |s| if (a.toNumber()) |_| {} else |_| {
+                p.setNotANumber(s);
+                break;
+            },
+            else => {},
+        };
+        return err;
+    };
+}
+
 // ── POWER ───────────────────────────────────────────────────────────────
 /// Largest exponent POWER will attempt. The exact result of `b^n` carries
 /// `precision(b) × n` digits, so the exponent — not the base — is what decides
@@ -3678,6 +3759,65 @@ fn builtinWeeknum(p: *Parser, args: []Value) !Value {
 }
 fn adaptWeeknum(p: *Parser, args: []Value) anyerror!Value {
     return builtinWeeknum(p, args);
+}
+
+// ── DATE_TRUNC ──────────────────────────────────────────────────────────
+/// The periods DATE_TRUNC snaps to. A closed set rather than free text: the
+/// unit is written by the template author, never by the data, so a misspelling
+/// is a template bug and gets to fail like one.
+const DateTruncUnit = enum { year, quarter, month, week, day };
+
+/// Case-insensitive unit lookup. Five entries scanned linearly — a map would
+/// need the input case-folded into a buffer first, which is more work than the
+/// comparisons it would save.
+fn parseDateTruncUnit(s: []const u8) ?DateTruncUnit {
+    inline for (@typeInfo(DateTruncUnit).@"enum".fields) |f| {
+        if (std.ascii.eqlIgnoreCase(s, f.name)) return @field(DateTruncUnit, f.name);
+    }
+    return null;
+}
+
+const date_trunc_doc: FnDoc = .{
+    .name = "DATE_TRUNC",
+    .category = .date,
+    .row_varying = false,
+    .signature = "DATE_TRUNC(unit, d)",
+    .example = "DATE_TRUNC('month', '2024-08-15')",
+    .description = "First day of the period containing date `d`, as YYYY-MM-DD. `unit` is one of `year`, `quarter`, `month`, `week` or `day`, case-insensitive; `week` starts on Monday, ISO like WEEKDAY. A timestamp is read for its date and the clock half is dropped — that is what `day` is for. Use it to bucket rows by period: bxp never sums across rows, so the truncated date is the label the destination groups on. An unrecognised unit is a loud error rather than a passthrough, because the unit comes from the template, not from the data.",
+    .args = &.{
+        .{ .name = "unit", .kind = .literal_string },
+        .{ .name = "d", .kind = .string },
+    },
+    .min_args = 2,
+    .max_args = 2,
+};
+fn builtinDateTrunc(p: *Parser, args: []Value) !Value {
+    const unit_s = switch (args[0]) { .string => |v| v, else => return error.StringExpected };
+    const ds = switch (args[1]) { .string => |v| v, else => return error.StringExpected };
+    if (ds.len == 0) return Value{ .string = "" };
+    const unit = parseDateTruncUnit(unit_s) orelse {
+        p.setDetail("unknown DATE_TRUNC unit '{s}': expected year, quarter, month, week or day", .{unit_s});
+        return error.BadDateTruncUnit;
+    };
+    const parts = try parseDatePartsArg(p, ds);
+    const ep = switch (unit) {
+        .year => ymdToEpochDay(parts.year, 1, 1),
+        // Quarter starts are months 1/4/7/10 — the month rounded down to the
+        // same step QUARTER counts in.
+        .quarter => ymdToEpochDay(parts.year, ((parts.month - 1) / 3) * 3 + 1, 1),
+        .month => ymdToEpochDay(parts.year, parts.month, 1),
+        .day => ymdToEpochDay(parts.year, parts.month, parts.day),
+        // Stepping back one less than the ISO weekday lands on Monday from any
+        // day of that week — the same move the dates guide spells out longhand.
+        .week => blk: {
+            const d = ymdToEpochDay(parts.year, parts.month, parts.day);
+            break :blk d - (@as(i64, @intCast(isoWeekday(d))) - 1);
+        },
+    };
+    return Value{ .string = try formatYmd(p.ctx.alloc, epochDayToYmd(ep)) };
+}
+fn adaptDateTrunc(p: *Parser, args: []Value) anyerror!Value {
+    return builtinDateTrunc(p, args);
 }
 
 // ── HOUR / MINUTE / SECOND ──────────────────────────────────────────────
@@ -4746,6 +4886,8 @@ pub const builtins = [_]FnEntry{
     .{ .name = "FLOOR",          .doc = floor_doc,          .impl = adaptFloor },
     .{ .name = "CEILING",        .doc = ceiling_doc,        .impl = adaptCeiling },
     .{ .name = "TRUNC",          .doc = trunc_doc,          .impl = adaptTrunc },
+    .{ .name = "SIGN",           .doc = sign_doc,           .impl = adaptSign },
+    .{ .name = "MROUND",         .doc = mround_doc,         .impl = adaptMround },
     .{ .name = "POWER",          .doc = power_doc,          .impl = adaptPower },
     .{ .name = "SQRT",           .doc = sqrt_doc,           .impl = adaptSqrt },
     .{ .name = "RAND",           .doc = rand_doc,           .impl = adaptRand },
@@ -4787,6 +4929,7 @@ pub const builtins = [_]FnEntry{
     .{ .name = "WEEKDAY",        .doc = weekday_doc,        .impl = adaptWeekday },
     .{ .name = "QUARTER",        .doc = quarter_doc,        .impl = adaptQuarter },
     .{ .name = "WEEKNUM",        .doc = weeknum_doc,        .impl = adaptWeeknum },
+    .{ .name = "DATE_TRUNC",     .doc = date_trunc_doc,     .impl = adaptDateTrunc },
     .{ .name = "HOUR",           .doc = hour_doc,           .impl = adaptHour },
     .{ .name = "MINUTE",         .doc = minute_doc,         .impl = adaptMinute },
     .{ .name = "SECOND",         .doc = second_doc,         .impl = adaptSecond },
@@ -7116,6 +7259,113 @@ test "TRUNC: cuts toward zero, which is where it parts ways with FLOOR/ROUND" {
     // Zero and exact values are unmoved.
     try testing.expectEqualStrings("0", try evalString("TRUNC(0, 4)", &ctx));
     try testing.expectEqualStrings("-5", try evalString("TRUNC(-5, 2)", &ctx));
+}
+
+test "MROUND: snaps to a step, ties away from zero, step sign ignored" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+
+    // The tick-size case this exists for: a price quoted in five-cent steps.
+    try testing.expectEqualStrings("12.35", try evalString("MROUND(12.37, 0.05)", &ctx));
+    try testing.expectEqualStrings("12.4",  try evalString("MROUND(12.38, 0.05)", &ctx));
+    // Exactly half a step goes away from zero on both sides — ROUND's rule.
+    try testing.expectEqualStrings("0.1",   try evalString("MROUND(0.075, 0.05)", &ctx));
+    try testing.expectEqualStrings("-0.1",  try evalString("MROUND(-0.075, 0.05)", &ctx));
+    // Sign of the step is not part of the answer, only its size.
+    try testing.expectEqualStrings("-12.35", try evalString("MROUND(-12.37, 0.05)", &ctx));
+    try testing.expectEqualStrings("-12.35", try evalString("MROUND(-12.37, -0.05)", &ctx));
+    // Whole-number steps: lot sizes.
+    try testing.expectEqualStrings("125", try evalString("MROUND(137, 25)", &ctx));
+    try testing.expectEqualStrings("150", try evalString("MROUND(138, 25)", &ctx));
+    // A value already on the grid does not move, and zero stays zero.
+    try testing.expectEqualStrings("12.35", try evalString("MROUND(12.35, 0.05)", &ctx));
+    try testing.expectEqualStrings("0", try evalString("MROUND(0, 0.05)", &ctx));
+    // Exact where the float idiom is not: 0.1+0.2 territory, three ways.
+    try testing.expectEqualStrings("70.15", try evalString("MROUND(70.145, 0.05)", &ctx));
+
+    // No multiples of nothing — "" rather than a divide, mirroring POWER's
+    // refusal to answer where no exact answer exists.
+    try testing.expectEqualStrings("", try evalString("MROUND(12.37, 0)", &ctx));
+    // An empty step cell coerces to 0 like everywhere else, so it lands there too.
+    try testing.expectEqualStrings("", try evalString("MROUND(12.37, '')", &ctx));
+
+    // Rounding UP is what can leave the numeric range: this value sits just
+    // under the ceiling and the nearest multiple of the step is above it. Loud,
+    // and IFERROR still catches it — an overflow is a data error, not a
+    // template one.
+    try testing.expectError(error.NumberOverflow, evalString("MROUND(170141183460469231731687303, 100000000000000000000000000)", &ctx));
+    try testing.expectEqualStrings("n/a", try evalString("IFERROR(MROUND(170141183460469231731687303, 100000000000000000000000000), 'n/a')", &ctx));
+    // Rounding DOWN at the same magnitude stays inside it.
+    try testing.expectEqualStrings("100000000000000000000000000", try evalString("MROUND(140141183460469231731687303, 100000000000000000000000000)", &ctx));
+}
+
+test "SIGN: direction as a number, and it cannot tell empty from zero" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+
+    try testing.expectEqualStrings("-1", try evalString("SIGN(-12.5)", &ctx));
+    try testing.expectEqualStrings("0",  try evalString("SIGN(0)", &ctx));
+    try testing.expectEqualStrings("1",  try evalString("SIGN(12.5)", &ctx));
+    // The smallest representable step still has a direction.
+    try testing.expectEqualStrings("-1", try evalString("SIGN(-0.000000000001)", &ctx));
+    // Empty and non-finite cells coerce to 0 in arithmetic, so they answer 0
+    // here as well — the documented reason to reach for ISEMPTY instead when
+    // the question is "did this cell have a value".
+    try testing.expectEqualStrings("0", try evalString("SIGN('')", &ctx));
+    try testing.expectEqualStrings("0", try evalString("SIGN('nan')", &ctx));
+    // Junk is still loud.
+    try testing.expectError(error.NotANumber, evalString("SIGN('abc')", &ctx));
+}
+
+test "DATE_TRUNC: snaps to the start of a period, loud on an unknown unit" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+
+    try testing.expectEqualStrings("2024-01-01", try evalString("DATE_TRUNC('year', '2024-08-15')", &ctx));
+    try testing.expectEqualStrings("2024-07-01", try evalString("DATE_TRUNC('quarter', '2024-08-15')", &ctx));
+    try testing.expectEqualStrings("2024-08-01", try evalString("DATE_TRUNC('month', '2024-08-15')", &ctx));
+    // 2024-08-15 is a Thursday; its week starts on the 12th.
+    try testing.expectEqualStrings("2024-08-12", try evalString("DATE_TRUNC('week', '2024-08-15')", &ctx));
+    try testing.expectEqualStrings("2024-08-15", try evalString("DATE_TRUNC('day', '2024-08-15')", &ctx));
+
+    // Quarter boundaries land on 1/4/7/10, the same steps QUARTER counts in.
+    try testing.expectEqualStrings("2024-01-01", try evalString("DATE_TRUNC('quarter', '2024-03-31')", &ctx));
+    try testing.expectEqualStrings("2024-10-01", try evalString("DATE_TRUNC('quarter', '2024-12-31')", &ctx));
+    // A Monday is its own week start, a Sunday belongs to the week before it.
+    try testing.expectEqualStrings("2024-08-12", try evalString("DATE_TRUNC('week', '2024-08-12')", &ctx));
+    try testing.expectEqualStrings("2024-08-12", try evalString("DATE_TRUNC('week', '2024-08-18')", &ctx));
+    // A week that crosses a year is not clipped to it: 2025-01-01 is a
+    // Wednesday, so its week starts in the previous year.
+    try testing.expectEqualStrings("2024-12-30", try evalString("DATE_TRUNC('week', '2025-01-01')", &ctx));
+    // 2024-01-01 was itself a Monday, so there the two answers coincide.
+    try testing.expectEqualStrings("2024-01-01", try evalString("DATE_TRUNC('week', '2024-01-01')", &ctx));
+    // Leap day, and the month it truncates to.
+    try testing.expectEqualStrings("2024-02-01", try evalString("DATE_TRUNC('month', '2024-02-29')", &ctx));
+
+    // A timestamp is read for its date; `day` is how you drop the clock half.
+    try testing.expectEqualStrings("2024-08-15", try evalString("DATE_TRUNC('day', '2024-08-15 23:59:59')", &ctx));
+    try testing.expectEqualStrings("2024-08-01", try evalString("DATE_TRUNC('month', '2024-08-15T23:59:59Z')", &ctx));
+
+    // Case-insensitive, because the unit is prose in the template.
+    try testing.expectEqualStrings("2024-08-01", try evalString("DATE_TRUNC('MONTH', '2024-08-15')", &ctx));
+
+    // Empty date passes through silently, as the rest of the date family does.
+    try testing.expectEqualStrings("", try evalString("DATE_TRUNC('month', '')", &ctx));
+    // A misspelled unit is a template bug: loud, and NOT catchable by IFERROR.
+    try testing.expectError(error.BadDateTruncUnit, evalString("DATE_TRUNC('weeks', '2024-08-15')", &ctx));
+    try testing.expectError(error.BadDateTruncUnit, evalString("IFERROR(DATE_TRUNC('weeks', '2024-08-15'), 'x')", &ctx));
+    // A malformed date is a data error, and that one IFERROR does catch.
+    try testing.expectError(error.InvalidDate, evalString("DATE_TRUNC('month', 'not-a-date')", &ctx));
+    try testing.expectEqualStrings("x", try evalString("IFERROR(DATE_TRUNC('month', 'not-a-date'), 'x')", &ctx));
 }
 
 test "POWER: exact whole powers, empty on what is not exact, loud on overflow" {

@@ -209,24 +209,6 @@ fixed before release instead, not parked here).
   `scripts/test-07-datasets.sh` covers it from CI. Reconsider on request
   from a contributor maintaining > 3 templates.
 
-### Expression builtins
-
-**Sugar over idioms that already work — on hold.** Each of these is one
-existing expression away. The spellings below were evaluated rather than
-assumed, so what a builtin would add here is discoverability, not capability;
-add one when a real workflow keeps tripping over the idiom.
-
-- `DATE_TRUNC(unit, d)` — snapping a date to the start of its period. Start of
-  month is `DATE_CONVERT([D], 'YYYY-MM-DD', 'YYYY-MM') & '-01'`; start of the
-  ISO week is `DATEADD([D], 1 - WEEKDAY([D]))`; start of year is the same trick
-  through `YYYY`. All three are in the dates guide.
-- `MROUND(x, m)` — rounding to a multiple: an exchange tick, a lot size.
-  `ROUND([Price] / 0.05, 0) * 0.05` is exact on the decimal core. The likeliest
-  of the three to earn its place, because tick sizes are real broker data and
-  the idiom is easy to write slightly wrong.
-- `SIGN(x)` — direction carried in the sign of an amount reads better spelled
-  out: `IF([Amount] < 0, 'SELL', 'BUY')`.
-
 ### Encoding — more single-byte code pages
 
 The `encoding` module covers Win-1250/1252 and ISO-8859-1/2/15 today. The

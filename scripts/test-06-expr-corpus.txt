@@ -137,6 +137,23 @@ expr	ok	TRUNC([Amount])
 expr	ok	TRUNC([Amount], 2)
 expr	ok	TRUNC([Amount], -2)
 expr	ok	IF([Amount] < 0, TRUNC([Amount], 2), ROUND([Amount], 2))
+# Nearest multiple — the step-rounding ROUND cannot spell: tick sizes, lot
+# sizes, per-started-unit billing. The step's sign is ignored; a zero step has
+# no multiples and answers "".
+expr	ok	MROUND([Amount], 0.05)
+expr	ok	MROUND([Amount], 25)
+expr	ok	MROUND([Amount], [Step])
+expr	ok	ROUND(MROUND([Amount], 0.05), 2)
+# Direction as a value, so a rule can read by sign instead of by threshold.
+expr	ok	SIGN([Amount])
+expr	ok	IF(SIGN([Amount]) = -1, 'SELL', 'BUY')
+# Period buckets. The unit is written by the template, never by the data, so a
+# misspelling is a template error rather than something IFERROR should swallow.
+expr	ok	DATE_TRUNC('month', [Date])
+expr	ok	DATE_TRUNC('quarter', [Date])
+expr	ok	DATE_TRUNC('week', [Date])
+expr	ok	DATE_TRUNC('day', [Time])
+expr	ok	DATE_TRUNC('year', [Date]) & ' bucket'
 # Timezone cluster — offset token normalisation + IANA-backed zone conversion.
 expr	ok	TO_UTC([Time], 'YYYY-MM-DD[T]hh:mm:ssZZ')
 expr	ok	TO_UTC('2024-03-15T14:23:01+02:00', 'YYYY-MM-DD[T]hh:mm:ssZZ')
@@ -211,6 +228,15 @@ expr	err	SQRT(1, 2)	WrongArgCount
 expr	err	TRUNC()	WrongArgCount
 expr	err	TRUNC(1, 2, 3)	WrongArgCount
 expr	err	TRUNC('abc')	NotANumber
+expr	err	MROUND(1)	WrongArgCount
+expr	err	MROUND(1, 2, 3)	WrongArgCount
+expr	err	MROUND('abc', 0.05)	NotANumber
+expr	err	MROUND(1, 'abc')	NotANumber
+expr	err	SIGN()	WrongArgCount
+expr	err	SIGN(1, 2)	WrongArgCount
+expr	err	SIGN('abc')	NotANumber
+expr	err	DATE_TRUNC('month')	WrongArgCount
+expr	err	DATE_TRUNC('month', [Date], 1)	WrongArgCount
 # The numeric arg domain is enforced centrally, before either impl runs.
 expr	err	SQRT('abc')	NotANumber
 expr	err	POWER('abc', 2)	NotANumber
