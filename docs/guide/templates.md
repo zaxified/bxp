@@ -76,6 +76,7 @@ mysource_to_wealthfolio: {
 
   // default false; when true rows whose $date is outside the date range encoded
   // in the filename (YYYY-MM-DD_YYYY-MM-DD) are silently skipped. Requires $date.
+  // A $date too short to compare (empty) is a fatal error, not a silent pass.
   date_filter_from_filename: false,
 
   // default false; when true all input files also write to a merged

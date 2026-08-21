@@ -376,7 +376,9 @@ pub const BrokerConfig = struct {
     /// Null when no "zip_input" key is present in config.
     zip_input: ?ZipInput,
     /// When true, rows whose "$date" value falls outside the date range encoded in
-    /// the input filename (YYYY-MM-DD_YYYY-MM-DD) are silently skipped.
+    /// the input filename (YYYY-MM-DD_YYYY-MM-DD) are silently skipped. A
+    /// $date too short to compare against that range is fatal, not skipped —
+    /// see `requireComparableDate` in bxp-cli's pipeline.zig.
     /// Default: false — no date filtering unless explicitly enabled.
     date_filter_from_filename: bool,
     /// When true, all input files in data_dir produce a single combined
@@ -597,7 +599,7 @@ pub const BrokerConfig = struct {
             .type_name = "boolean",
             .required = false,
             .default = "false",
-            .description = "When true, rows whose $date falls outside the date range encoded in the filename (YYYY-MM-DD_YYYY-MM-DD) are silently skipped. Requires $date in input_schema.",
+            .description = "When true, rows whose $date falls outside the date range encoded in the filename (YYYY-MM-DD_YYYY-MM-DD) are silently skipped. Requires $date in input_schema. A row whose $date is too short to compare (an empty one, typically a [Column] the file does not have) is a fatal error rather than a pass-through: the filter was asked for and cannot be applied to that row. Filenames carrying no range are unfiltered as before.",
         },
         .{
             .key = "combined_output",

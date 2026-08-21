@@ -1105,6 +1105,57 @@ const RowEmit = struct {
 /// passing per-worker sinks + a worker-local `rows_written` counter; the
 /// drain step at the end of `processBlockParallel` rewrites btrace
 /// `outputIdx` fields to absolute file-scope indices.
+/// The date filter answers one question per row — is `$date` inside the range
+/// the filename declared? — and it can only answer it for a `$date` long
+/// enough to compare. A shorter one (an empty string, most often a `$date`
+/// expression naming a column the export does not actually have) leaves the
+/// row placeable neither inside nor outside the range.
+///
+/// Passing such a row through is what this used to do, and it turns a
+/// configured filter into a no-op nobody is told about: the template behaves
+/// exactly as if no filter had been asked for, while its output still looks
+/// filtered. Since the filter is something the user explicitly turned on,
+/// being unable to apply it is theirs to hear about — one unanswerable row is
+/// enough, because the answer for that row does not exist.
+///
+/// Only a filename that actually carried a range arms this. `DateRangeResult
+/// .none` — no `YYYY-MM-DD_YYYY-MM-DD` in the stem — stays the documented
+/// unfiltered pass-through it has always been, so nothing changes for files
+/// whose names never claimed a range.
+/// Can the filter answer "in range?" for this `$date`? False only when the
+/// filename declared a range (so the filter is live for this file) and the
+/// row's `$date` is too short to compare against it.
+fn dateIsComparable(date_min: []const u8, date_max: []const u8, date_str: []const u8) bool {
+    if (date_min.len == 0 and date_max.len == 0) return true;
+    return date_str.len >= 10;
+}
+
+/// One cause, one message. Main-pass rows are evaluated by K workers at once,
+/// so without this every worker that reaches an unanswerable row before the
+/// run unwinds prints its own copy of the same diagnostic. The run aborts on
+/// the first one either way; the flag only decides how many times the user
+/// reads about it. Which record the surviving message names is therefore
+/// whichever worker got there first — the fact being reported is the
+/// template's, not that particular row's.
+var date_filter_reported = std.atomic.Value(bool).init(false);
+
+fn requireComparableDate(
+    rec: *const RowEvalConst,
+    out: Output,
+    record_num: u64,
+    date_str: []const u8,
+) !void {
+    if (dateIsComparable(rec.date_min, rec.date_max, date_str)) return;
+    if (date_filter_reported.swap(true, .seq_cst)) return error.Fatal;
+    out.fatal(
+        "fatal error: template '{s}': '{s}' record {d}: date_filter_from_filename is on, but $date is '{s}' — " ++
+            "too short to compare against the filename's range {s}..{s}, so this row can be neither kept nor " ++
+            "filtered out. Check the $date expression: a [Column] the file does not have evaluates to empty\n",
+        .{ rec.bid, rec.filename, record_num, date_str, rec.date_min, rec.date_max },
+    );
+    return error.Fatal;
+}
+
 fn evalAndEmitRow(
     fields: [][]const u8,
     row_offset: u64,
@@ -1146,6 +1197,7 @@ fn evalAndEmitRow(
     if (rec.date_fast_path) {
         row_detail = "";
         const dstr = expr_mod.evalString(bc.input_schema.get(VAR_DATE).?, &row_ctx) catch "";
+        try requireComparableDate(rec, out, record_num, dstr);
         if ((rec.date_min.len > 0 and dstr.len >= 10 and
             std.mem.order(u8, dstr[0..10], rec.date_min) == .lt) or
             (rec.date_max.len > 0 and dstr.len >= 10 and
@@ -1230,10 +1282,11 @@ fn evalAndEmitRow(
             }
             // Date range filter (date_filter_from_filename). Lexical prefix
             // compare on the first 10 bytes of $date — ISO-8601 datetime
-            // strings sort chronologically as plain ASCII. Skipping when
-            // $date is shorter than 10 bytes passes the row through
-            // unfiltered rather than silently dropping it.
+            // strings sort chronologically as plain ASCII. A $date too short
+            // to compare is a fatal, not a pass-through: see
+            // `requireComparableDate`.
             const date_str = merged.get(VAR_DATE) orelse "";
+            try requireComparableDate(rec, out, record_num, date_str);
             if (rec.date_min.len > 0 and date_str.len >= 10 and
                 std.mem.order(u8, date_str[0..10], rec.date_min) == .lt) {
                 out.binEmitFilteredRow(row_offset, "date_filter_from_filename");
@@ -3866,4 +3919,23 @@ test "unpackOneEntry: a CRC-mismatched member leaves no partial output behind" {
         &wbuf,
     ));
     try std.testing.expectError(error.FileNotFound, tmp.dir.access(io, "rows.csv", .{}));
+}
+
+test "dateIsComparable: only a live range makes a short $date unanswerable" {
+    // No range in the filename — the filter is inert by design, so nothing is
+    // unanswerable and even an empty $date passes (fixtures depend on this).
+    try std.testing.expect(dateIsComparable("", "", ""));
+    try std.testing.expect(dateIsComparable("", "", "2024-08-15"));
+
+    // Range present: a $date long enough to compare is fine either way, and a
+    // short one cannot be placed inside or outside it.
+    try std.testing.expect(dateIsComparable("2024-01-01", "2024-12-31", "2024-08-15"));
+    try std.testing.expect(dateIsComparable("2024-01-01", "2024-12-31", "2024-08-15T10:00:00Z"));
+    try std.testing.expect(!dateIsComparable("2024-01-01", "2024-12-31", ""));
+    try std.testing.expect(!dateIsComparable("2024-01-01", "2024-12-31", "2024-08"));
+
+    // A half-open range still counts as live — the comparison the filter would
+    // run needs the same ten bytes.
+    try std.testing.expect(!dateIsComparable("2024-01-01", "", ""));
+    try std.testing.expect(!dateIsComparable("", "2024-12-31", ""));
 }

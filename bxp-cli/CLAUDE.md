@@ -118,6 +118,11 @@ All broker logic is defined in `bxp-cli.json` — there are no compiled-in broke
   are silently skipped. Requires `$date` in `input_schema` — validated at startup.
   The row-level filter is a lexical (string) prefix compare against the filename range, so
   `$date` MUST evaluate to ISO `YYYY-MM-DD` (or longer ISO prefix like `YYYY-MM-DDTHH:MM:SS`).
+  A `$date` too short to compare — an empty one, most often a `[Column]` the export does not
+  have — is a **fatal error**, not a row that quietly passes: the filter was explicitly asked
+  for, and a row it cannot place is news the caller needs. One message per run, and the run
+  stops. Filenames with no `YYYY-MM-DD_YYYY-MM-DD` range keep processing every row unfiltered
+  (that is what makes the filter opt-in per file, and fixtures depend on it).
   Non-ISO formats (`DD.MM.YYYY`, `MM/DD/YYYY`, …) will mis-filter silently — use
   `DATE_CONVERT` in `input_schema` to normalise first.
 - `maps` — optional template-local named maps `{ map_name: { key: value } }`, merged over the
