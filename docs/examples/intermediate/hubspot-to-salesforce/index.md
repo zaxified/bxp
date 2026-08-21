@@ -30,8 +30,10 @@ See inline comments in `sample.json`:
 
 1. **Long picklist** (Industry) → `REMAP()` over a named map — a reusable
    whole-value string lookup table.
-2. **Short picklists** (Status, LeadSource) → `IF` chain with `TRIM` at the
-   leaf to absorb trailing whitespace.
+2. **Short picklists** (Status, LeadSource) → `CASE()` over a `TRIM`med
+   subject. `TRIM` absorbs trailing whitespace (row 2 has `Open `) and, unlike
+   an `IF` chain, it is written once instead of once per branch.
+   Run it: `CASE(TRIM([Lead Status]), 'New', 'Open - Not Contacted', 'Open', 'Working - Contacted', 'In Progress', 'Working - Contacted', 'Connected', 'Working - Contacted', 'Open Deal', 'Working - Contacted', 'closed-won', 'Closed - Converted', 'Bad Timing', 'Closed - Not Converted', 'Unqualified', 'Closed - Not Converted', 'Open - Not Contacted')`{.bxp-try}
 3. **Required-but-empty field** (Company) → `COALESCE(..., '<missing>')`
    sentinel so the failure is visible, not silent.
    Run it: `COALESCE(TRIM([Company Name]), '<missing>')`{.bxp-try}

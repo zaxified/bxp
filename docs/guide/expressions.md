@@ -75,8 +75,8 @@ Function names are case-insensitive.
 
 ```text
 '$CASH-' & [Currency]                                          → string concat
-IF([Type] = 'Buy', 'BUY', IF([Type] = 'Sell', 'SELL', ''))     → nested conditional
-[Action] = 'Buy' OR CONTAINS([Action], 'Buy to')               → match action variants
+CASE([Type], 'Buy', 'BUY', 'Sell', 'SELL', '')                 → multi-branch mapping
+IN([Action], 'Market buy', 'Limit buy')                        → match action variants
 ROUND(ABS([Total]) / [Quantity], 4)                            → derived unit price
 DATE_CONVERT([Date], 'DD/MM/YYYY hh:mm:ss', 'YYYY-MM-DD hh:mm:ss')
 LOOKUP([Order ID], 'amount') / [Amount]                        → cross-row join via pre_pass

@@ -37,12 +37,13 @@ The whole conversion is one expression on the `Amount` field:
 
 ```{.text .bxp-try}
 IF(STARTS_WITH(TRIM([Amount]), '('),
-   0 - (REPLACE(REPLACE(REPLACE(TRIM([Amount]), '(', ''), ')', ''), ',', '') * 1),
+   0 - (REPLACE(TRIM([Amount]), '(', '', ')', '', ',', '') * 1),
         REPLACE(TRIM([Amount]), ',', '') * 1)
 ```
 
 - `STARTS_WITH('(')` detects the parenthesised (negative) form.
-- `REPLACE` strips `(`, `)` and the `,` thousands separators.
+- One variadic `REPLACE` strips `(`, `)` and the `,` thousands separators in a
+  single pass — the pairs are applied left to right.
 - `* 1` coerces the cleaned text to a number.
 - `0 - (...)` applies the sign the parentheses stood for.
 - The else branch just drops commas — handling plain positives (`"1,234.56"`)

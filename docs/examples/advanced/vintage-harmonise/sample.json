@@ -18,16 +18,18 @@
       combined_output:   true,
 
       input_schema: {
-        // DATE — legacy is already ISO; current is DD.MM.YYYY. Pick by presence,
-        // convert only the one that needs it, so both land as YYYY-MM-DD.
-        $date: "IF(LEN([Date]) > 0, [Date], DATE_CONVERT([trade_date], 'DD.MM.YYYY', 'YYYY-MM-DD'))",
+        // DATE — legacy is already ISO; current is DD.MM.YYYY. COALESCE takes
+        // whichever vintage is present, converting only the one that needs it,
+        // so both land as YYYY-MM-DD.
+        $date: "COALESCE([Date], DATE_CONVERT([trade_date], 'DD.MM.YYYY', 'YYYY-MM-DD'))",
 
         // $ticker — just a rename across vintages; COALESCE takes the non-empty one.
         $ticker: "COALESCE([Ticker], [symbol])",
 
-        // AMOUNT — legacy is plain (1000.50); current is EU '1 250,50'. Pick by
-        // presence and normalise the EU form (strip space, swap comma) to a number.
-        $amount: "IF(LEN([Amount]) > 0, [Amount] * 1, REPLACE(REPLACE([value], ' ', ''), ',', '.') * 1)"
+        // AMOUNT — legacy is plain (1000.50); current is EU '1 250,50'. Same
+        // COALESCE pick, with the EU form normalised (strip space, swap comma)
+        // before the single conversion to a number.
+        $amount: "COALESCE([Amount], REPLACE([value], ' ', '', ',', '.')) * 1"
       },
 
       row_rules: [ { when: "1 = 1", rows: [ {} ] } ],

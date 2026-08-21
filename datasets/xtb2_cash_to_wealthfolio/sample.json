@@ -40,7 +40,7 @@
       date_filter_from_filename: false,
       input_schema: {
         $date:            "[Time]",
-        $ticker:          "IF([Ticker] != '', REMAP([Ticker], 'xtb'), '$CASH-CZK')",
+        $ticker:          "IF(NOT ISEMPTY([Ticker]), REMAP([Ticker], 'xtb'), '$CASH-CZK')",
         $quantity:        "'1'",
         $unitprice:       "ABS([Amount])",
         $currency:        "'CZK'",
@@ -139,7 +139,7 @@
           rows: []
         },
         {
-          when:  "[Type] = ''",
+          when:  "ISEMPTY([Type])",
           rows: []
         }
       ],

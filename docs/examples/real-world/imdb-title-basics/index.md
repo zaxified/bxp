@@ -62,9 +62,9 @@ stays local.
      — every row is kept and the lines with an unbalanced `"` get a warning
      (older RFC-4180 tools silently drop ~256k rows). `none` is preferred for a
      known-unquoted format: same result, no warning.
-1. **`\N` null marker** — `IF([X] = '\N', '', [X])` rewritten three times
-   (startYear, endYear, runtimeMinutes) plus once for the whole `genres`
-   field.
+1. **`\N` null marker** — `NULLIF([X], '\N')` on startYear, endYear and
+   runtimeMinutes, plus once for the whole `genres` field. `NULLIF` is built
+   for sentinels, so each guard names its field once instead of three times.
 2. **Multi-value genre cell** — `SPLIT_PART([genres], ',', 1)` peels the
    first genre into its own `primary_genre` column while `all_genres`
    keeps the full list for filtering.

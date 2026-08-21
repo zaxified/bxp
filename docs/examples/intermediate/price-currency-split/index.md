@@ -43,8 +43,10 @@ fastest way to see why each piece is there.
 - `PRICE_VALUE([Price])`{.bxp-try} → the numeric part with the symbol/code
   removed. It leaves the comma thousands in place (`1,234.00`), so wrap it:
   `REPLACE(PRICE_VALUE([Price]), ',', '') * 1`{.bxp-try} lands a clean number.
-- An `IF([Price] = '', '', REPLACE(PRICE_VALUE([Price]), ',', '') * 1)`{.bxp-try}
+- An `IF(ISEMPTY([Price]), '', REPLACE(PRICE_VALUE([Price]), ',', '') * 1)`{.bxp-try}
   guard keeps a genuinely empty price empty rather than coercing it to `0`.
+  The guard must be `ISEMPTY`, not `[Price] = ''`: that comparison coerces, so
+  a price of `0` would test as empty and a real zero would vanish.
 
 ## Final result
 

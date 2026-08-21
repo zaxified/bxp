@@ -39,10 +39,12 @@
 
         $industry:    "REMAP(TRIM([Industry]), 'industry_hs_to_sfdc')",
 
-        // TRICK 2 — short picklist via IF chain, with TRIM at every leaf
-        // (row 2 has "Open " with trailing whitespace — silent kill without TRIM).
-        $status:      "IF(TRIM([Lead Status]) = 'New',         'Open - Not Contacted', IF(TRIM([Lead Status]) = 'Open',        'Working - Contacted',  IF(TRIM([Lead Status]) = 'In Progress', 'Working - Contacted',  IF(TRIM([Lead Status]) = 'Connected',   'Working - Contacted',  IF(TRIM([Lead Status]) = 'Open Deal',   'Working - Contacted',  IF(TRIM([Lead Status]) = 'closed-won',  'Closed - Converted',   IF(TRIM([Lead Status]) = 'Bad Timing',  'Closed - Not Converted', IF(TRIM([Lead Status]) = 'Unqualified', 'Closed - Not Converted', 'Open - Not Contacted'))))))))",
-        $leadSource:  "IF(TRIM([Original Source]) = 'Organic Search', 'Web', IF(TRIM([Original Source]) = 'Paid Search', 'Web', IF(TRIM([Original Source]) = 'Direct Traffic', 'Web', IF(TRIM([Original Source]) = 'Email Campaign', 'Email', IF(TRIM([Original Source]) = 'Referral', 'Partner Referral', IF(TRIM([Original Source]) = 'Trade Show', 'Trade Show', IF(TRIM([Original Source]) = 'LinkedIn', 'Social', 'Other')))))))",
+        // TRICK 2 — short picklist via CASE. The subject is TRIMmed once,
+        // which is the point: row 2 has "Open " with trailing whitespace, and
+        // an IF chain would need the same TRIM repeated at every leaf — one
+        // missed leaf is a silent kill. CASE gives the trap a single place.
+        $status:      "CASE(TRIM([Lead Status]), 'New', 'Open - Not Contacted', 'Open', 'Working - Contacted', 'In Progress', 'Working - Contacted', 'Connected', 'Working - Contacted', 'Open Deal', 'Working - Contacted', 'closed-won', 'Closed - Converted', 'Bad Timing', 'Closed - Not Converted', 'Unqualified', 'Closed - Not Converted', 'Open - Not Contacted')",
+        $leadSource:  "CASE(TRIM([Original Source]), 'Organic Search', 'Web', 'Paid Search', 'Web', 'Direct Traffic', 'Web', 'Email Campaign', 'Email', 'Referral', 'Partner Referral', 'Trade Show', 'Trade Show', 'LinkedIn', 'Social', 'Other')",
         $numEmployees:"[Number of Employees]",
         $revenue:     "[Annual Revenue]",
         $city:        "TRIM([City])",

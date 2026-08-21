@@ -23,12 +23,12 @@
         $orig:  "[originalTitle]",
         $adult: "IF([isAdult] = '1', 'true', 'false')",
 
-        $year:    "IF([startYear]      = '\\N', '', [startYear])",
-        $end:     "IF([endYear]        = '\\N', '', [endYear])",
-        $runtime: "IF([runtimeMinutes] = '\\N', '', [runtimeMinutes])",
+        $year:    "NULLIF([startYear], '\\N')",
+        $end:     "NULLIF([endYear], '\\N')",
+        $runtime: "NULLIF([runtimeMinutes], '\\N')",
 
-        $primary_genre: "IF([genres] = '\\N', '', SPLIT_PART([genres], ',', 1))",
-        $all_genres:    "IF([genres] = '\\N', '', [genres])"
+        $primary_genre: "SPLIT_PART(NULLIF([genres], '\\N'), ',', 1)",
+        $all_genres:    "NULLIF([genres], '\\N')"
       },
 
       row_rules: [ { when: "1 = 1", rows: [ {} ] } ],

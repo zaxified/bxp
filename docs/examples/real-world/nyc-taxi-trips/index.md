@@ -49,10 +49,10 @@ AM/PM` timestamps — from the [NYC OpenData mirror](https://data.cityofnewyork.
 2. **store_and_fwd_flag** — `"N"`/`"Y"` → readable `false`/`true` with `IF`.
 3. **payment_type code → label** — `REMAP()` over a 1-6 → text named map built
    from the TLC dictionary.
-4. **Data-quality sentinel column** — `IF([passenger_count] = '0', ...)`
+4. **Data-quality sentinel column** — `IF(NOT ISEMPTY([passenger_count]) AND [passenger_count] = 0, ...)`
    classifies each row as `ok` / `no_passengers` / `refund` so the anomalies
    stand out instead of contaminating aggregates.
-   Run it: `IF([passenger_count] = '0', 'no_passengers', IF([fare_amount] < 0, 'refund', 'ok'))`{.bxp-try}
+   Run it: `IF(NOT ISEMPTY([passenger_count]) AND [passenger_count] = 0, 'no_passengers', IF([fare_amount] < 0, 'refund', 'ok'))`{.bxp-try}
 
 ## At full scale
 

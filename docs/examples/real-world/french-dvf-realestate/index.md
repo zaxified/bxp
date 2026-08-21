@@ -66,8 +66,8 @@ Measured on the reference machine (ReleaseFast, 8 cores):
 3. **Leading-zero département preserved** — `[Code departement]` is stored as
    text (`01`) and passes through verbatim.
 4. **Damaged postal code repaired** — `[Code postal]` already lost its zero in
-   the source (`1230`); `RIGHT('00000' & [Code postal], 5)`{.bxp-try} re-pads it back to
-   `01230`. (This idiom only emits the correct value since the bxp leading-zero
+   the source (`1230`); `LPAD([Code postal], 5, '0')`{.bxp-try} re-pads it back to
+   `01230`. (This only emits the correct value since the bxp leading-zero
    fix — previously the padded result was re-canonicalised straight back to
    `1230`.)
 
@@ -90,7 +90,7 @@ clean 2024-01-02 , 346.5    , CHALEY , 01 , 1230 (raw) , 01230 (fixed)
 !!! tip "Trace it in the GUI"
     Click the `price_eur` cell: the trace pane shows `[Valeur fonciere]`
     resolving the comma-decimal field to `346.5`. Click `postal_fixed` to watch
-    the `RIGHT('00000' & …, 5)` chain rebuild the zero the source threw away.
+    `LPAD` rebuild the zero the source threw away.
 
 ## Sample data
 

@@ -25,17 +25,18 @@
 
         // TRICK 1 — \N is IMDb's null marker (two literal chars: backslash + N).
         // Without normalising it, the literal "\N" leaks into the output and
-        // breaks every downstream type cast.
-        $year:    "IF([startYear]      = '\\N', '', [startYear])",
-        $end:     "IF([endYear]        = '\\N', '', [endYear])",
-        $runtime: "IF([runtimeMinutes] = '\\N', '', [runtimeMinutes])",
+        // breaks every downstream type cast. NULLIF exists for exactly this:
+        // "this value means missing" in one call, field named once.
+        $year:    "NULLIF([startYear], '\\N')",
+        $end:     "NULLIF([endYear], '\\N')",
+        $runtime: "NULLIF([runtimeMinutes], '\\N')",
 
         // TRICK 2 — `genres` is a comma-separated list inside a TSV cell.
         // Pull the first one out as the primary genre while keeping the
         // raw list for filtering. Whole-list nulls (\N for titles with no
         // genre tagging) need the same null normalisation as TRICK 1.
-        $primary_genre: "IF([genres] = '\\N', '', SPLIT_PART([genres], ',', 1))",
-        $all_genres:    "IF([genres] = '\\N', '', [genres])"
+        $primary_genre: "SPLIT_PART(NULLIF([genres], '\\N'), ',', 1)",
+        $all_genres:    "NULLIF([genres], '\\N')"
       },
 
       row_rules: [ { when: "1 = 1", rows: [ {} ] } ],

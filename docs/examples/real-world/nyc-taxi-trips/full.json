@@ -34,7 +34,7 @@
         $tolls_usd:   "[tolls_amount]",
         $total_usd:   "[total_amount]",
 
-        $quality:     "IF([passenger_count] = '0', 'no_passengers', IF([fare_amount] < 0, 'refund', 'ok'))"
+        $quality:     "IF(NOT ISEMPTY([passenger_count]) AND [passenger_count] = 0, 'no_passengers', IF([fare_amount] < 0, 'refund', 'ok'))"
       },
 
       row_rules: [ { when: "1 = 1", rows: [ {} ] } ],

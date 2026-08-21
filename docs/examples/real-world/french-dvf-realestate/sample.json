@@ -31,11 +31,13 @@
 
         // TRICK 4 — `Code postal`, by contrast, was stored as a NUMBER by the
         // producer, so its leading zero is already gone ("01230" → "1230").
-        // Re-pad it back to five digits. (This RIGHT('00000' & x, 5) idiom
-        // only emits the correct "01230" since the bxp leading-zero fix —
-        // before it, the padded value was re-canonicalised back to "1230".)
+        // Re-pad it back to five digits with LPAD, which says the intent
+        // outright — the older concat-and-slice spelling RIGHT('00000' & x, 5)
+        // makes the reader simulate it. (Either way the value only survives as
+        // "01230" since the bxp leading-zero fix — before it, the padded value
+        // was re-canonicalised back to "1230".)
         $postal_raw:    "[Code postal]",
-        $postal_fixed:  "RIGHT('00000' & [Code postal], 5)",
+        $postal_fixed:  "LPAD([Code postal], 5, '0')",
 
         $property_type: "[Type local]",
         $area_m2:       "[Surface reelle bati]",

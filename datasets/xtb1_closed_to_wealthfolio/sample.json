@@ -63,7 +63,7 @@
           ]
         },
         {
-          when:  "[Symbol] = ''",
+          when:  "ISEMPTY([Symbol])",
           rows: []
         }
       ],

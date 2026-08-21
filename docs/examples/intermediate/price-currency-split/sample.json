@@ -19,9 +19,11 @@
         //   PRICE_VALUE("$12.99")    → "12.99"
         //   PRICE_CURRENCY("$12.99") → "USD"
         // PRICE_VALUE keeps the comma thousands as-is ("1,234.00"), so wrap it
-        // in REPLACE(…, ',', '') * 1 to land a clean number; the IF guard keeps
-        // a genuinely empty price empty instead of coercing it to 0.
-        $price:    "IF([Price] = '', '', REPLACE(PRICE_VALUE([Price]), ',', '') * 1)",
+        // in REPLACE(…, ',', '') * 1 to land a clean number; the ISEMPTY guard keeps
+        // a genuinely empty price empty. It has to be ISEMPTY and not
+        // [Price] = '' — that test coerces, so a price of "0" would read as
+        // empty and the row would lose a real zero.
+        $price:    "IF(ISEMPTY([Price]), '', REPLACE(PRICE_VALUE([Price]), ',', '') * 1)",
         $currency: "PRICE_CURRENCY([Price])"
       },
 

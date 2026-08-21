@@ -75,14 +75,15 @@ See [Expression functions](../reference/expr-functions.md) for
 one you want depends on the period:
 
 ```text
-DATE_CONVERT([Date], 'YYYY-MM-DD', 'YYYY-MM') & '-01'   → 2024-08-15 becomes 2024-08-01
-DATE_CONVERT([Date], 'YYYY-MM-DD', 'YYYY') & '-01-01'   → 2024-08-15 becomes 2024-01-01
+DATEADD([Date], 1 - DAY([Date]))                        → 2024-08-15 becomes 2024-08-01
+YEAR([Date]) & '-01-01'                                 → 2024-08-15 becomes 2024-01-01
 DATEADD([Date], 1 - WEEKDAY([Date]))                    → 2024-08-15 becomes 2024-08-12
 ```
 
-The week form works because `WEEKDAY` is ISO — Monday is 1 — so subtracting
-one less than the weekday always lands on that week's Monday, whichever day
-you started from.
+The month and week forms are the same move at two granularities: subtracting
+one less than the position within the period always lands on its first day.
+It works for the week because `WEEKDAY` is ISO — Monday is 1 — so whichever
+day you started from, `1 - WEEKDAY` steps back to that week's Monday.
 
 Reach for these when a destination groups rows by period: bucket the date
 first, then let the tracker aggregate. bxp itself never sums across rows
@@ -96,5 +97,8 @@ sortable across a year boundary: 2021-01-01 is week **53** (it belongs to
 Pair it with the year of its own Thursday:
 
 ```text
-YEAR(DATEADD([Date], 4 - WEEKDAY([Date]))) & '-W' & WEEKNUM([Date])
+YEAR(DATEADD([Date], 4 - WEEKDAY([Date]))) & '-W' & LPAD('' & WEEKNUM([Date]), 2, '0')
 ```
+
+Pad the number to two digits or the key is still not sortable — `2024-W10`
+sorts before `2024-W9` as text. `LPAD` takes a string, hence the `'' &`.

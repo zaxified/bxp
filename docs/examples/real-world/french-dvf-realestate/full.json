@@ -19,7 +19,7 @@
         $commune:       "[Commune]",
         $dept:          "[Code departement]",
         $postal_raw:    "[Code postal]",
-        $postal_fixed:  "RIGHT('00000' & [Code postal], 5)",
+        $postal_fixed:  "LPAD([Code postal], 5, '0')",
         $property_type: "[Type local]",
         $area_m2:       "[Surface reelle bati]",
         $rooms:         "[Nombre pieces principales]"

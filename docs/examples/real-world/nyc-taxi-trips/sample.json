@@ -40,8 +40,10 @@
         // TRICK 4 — data-quality sentinels. Real TLC dumps contain rows with
         // passenger_count=0 (driver pickup with no fare) and fare_amount<0
         // (refunds posted as negative trips). Both pass silently into
-        // downstream analytics and skew aggregates.
-        $quality:     "IF([passenger_count] = '0', 'no_passengers', IF([fare_amount] < 0, 'refund', 'ok'))"
+        // downstream analytics and skew aggregates. The ISEMPTY half of the
+        // test is load-bearing: a blank passenger_count coerces to 0, so
+        // without it a missing value would be reported as an observed zero.
+        $quality:     "IF(NOT ISEMPTY([passenger_count]) AND [passenger_count] = 0, 'no_passengers', IF([fare_amount] < 0, 'refund', 'ok'))"
       },
 
       row_rules: [ { when: "1 = 1", rows: [ {} ] } ],

@@ -35,10 +35,11 @@ See inline comments in `sample.json`:
 A column absent from a file reads as `""`, so one template can target _every_
 vintage's column name and pick whichever is present:
 
-- date — `IF(LEN([Date]) > 0, [Date], DATE_CONVERT([trade_date], 'DD.MM.YYYY', …))`
+- date — `COALESCE([Date], DATE_CONVERT([trade_date], 'DD.MM.YYYY', …))`
   (legacy is already ISO; convert only the current vintage).
 - ticker — `COALESCE([Ticker], [symbol])`{.bxp-try} (a pure rename).
-- amount — pick by presence, normalise the EU `"1 250,50"` to a number.
+- amount — the same `COALESCE` pick, with the EU `"1 250,50"` normalised to a
+  number. All three lines say "whichever vintage is present" the same way.
 
 `combined_output: true` then stacks all vintages into one
 `1-vintage_harmonise-combined.csvx`.

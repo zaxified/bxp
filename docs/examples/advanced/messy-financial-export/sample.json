@@ -32,17 +32,17 @@
         $security: "[Security]",
 
         // 3 — accounting negatives + comma thousands → signed decimal.
-        $amount:   "IF(STARTS_WITH(TRIM([Amount]), '('), 0 - (REPLACE(REPLACE(REPLACE(TRIM([Amount]), '(', ''), ')', ''), ',', '') * 1), REPLACE(TRIM([Amount]), ',', '') * 1)",
+        $amount:   "IF(STARTS_WITH(TRIM([Amount]), '('), 0 - (REPLACE(TRIM([Amount]), '(', '', ')', '', ',', '') * 1), REPLACE(TRIM([Amount]), ',', '') * 1)",
 
         // 4 — currency-symbol price → clean number + separate currency code.
-        $price:    "IF([UnitPrice] = '', '', REPLACE(PRICE_VALUE([UnitPrice]), ',', '') * 1)",
+        $price:    "IF(ISEMPTY([UnitPrice]), '', REPLACE(PRICE_VALUE([UnitPrice]), ',', '') * 1)",
         $currency: "PRICE_CURRENCY([UnitPrice])",
 
         // 5 — fee as percent ("0.25%") or basis points ("25 bps") → fraction.
         $fee_rate: "IF(CONTAINS([FeeRate], '%'), REPLACE([FeeRate], '%', '') / 100, IF(CONTAINS([FeeRate], 'bps'), SPLIT_PART([FeeRate], ' ', 1) / 10000, [FeeRate] * 1))",
 
-        // 6 — null-variant notes → genuine empty (LEN guard avoids the "0"
-        // coercion trap; not that "0" appears here, but it's the safe idiom).
+        // 6 — null-variant notes → genuine empty. IN matches the marker
+        // list exactly, so there is no emptiness test here to get wrong.
         $notes:    "IF(IN(TRIM([Notes]), 'N/A', 'NA', 'NULL', 'None', 'none', '-'), '', TRIM([Notes]))"
       },
 

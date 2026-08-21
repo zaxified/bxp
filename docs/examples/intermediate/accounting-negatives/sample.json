@@ -20,12 +20,13 @@
 
         // THE TRICK — accounting negatives + thousands separators in one pass:
         //   * STARTS_WITH('(')  detects the parenthesised (negative) form;
-        //   * strip '(' ')' and the ',' thousands separators with REPLACE;
+        //   * one variadic REPLACE strips '(' ')' and the ',' thousands
+        //     separators in a single left-to-right pass;
         //   * `* 1` coerces the cleaned string to a number;
         //   * `0 - (...)` applies the sign the parentheses stood for.
         // The non-parenthesised branch just drops the commas (handles both
         // plain positives like "1,234.56" and already-signed "-100.00").
-        $amount: "IF(STARTS_WITH(TRIM([Amount]), '('), 0 - (REPLACE(REPLACE(REPLACE(TRIM([Amount]), '(', ''), ')', ''), ',', '') * 1), REPLACE(TRIM([Amount]), ',', '') * 1)"
+        $amount: "IF(STARTS_WITH(TRIM([Amount]), '('), 0 - (REPLACE(TRIM([Amount]), '(', '', ')', '', ',', '') * 1), REPLACE(TRIM([Amount]), ',', '') * 1)"
       },
 
       row_rules: [ { when: "1 = 1", rows: [ {} ] } ],

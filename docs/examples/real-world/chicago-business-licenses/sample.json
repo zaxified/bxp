@@ -45,7 +45,7 @@
         // gap explicit instead of an empty cell that looks like a data loss.
         $start:      "DATE_CONVERT([license_start_date], 'YYYY-MM-DD[T]hh:mm:ss', 'YYYY-MM-DD')",
         $expires:    "DATE_CONVERT([expiration_date], 'YYYY-MM-DD[T]hh:mm:ss', 'YYYY-MM-DD')",
-        $applied:    "IF([application_created_date] = '', '<not-on-file>', DATE_CONVERT([application_created_date], 'YYYY-MM-DD[T]hh:mm:ss', 'YYYY-MM-DD'))"
+        $applied:    "IF(ISEMPTY([application_created_date]), '<not-on-file>', DATE_CONVERT([application_created_date], 'YYYY-MM-DD[T]hh:mm:ss', 'YYYY-MM-DD'))"
       },
 
       row_rules: [ { when: "1 = 1", rows: [ {} ] } ],

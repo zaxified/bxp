@@ -23,7 +23,7 @@
         // The daily files use the continental format "1 250,50" (space
         // thousands, comma decimal). Strip the space, swap the comma, multiply
         // by 1 to land a clean numeric amount.
-        $amount: "REPLACE(REPLACE([gross], ' ', ''), ',', '.') * 1"
+        $amount: "REPLACE([gross], ' ', '', ',', '.') * 1"
       },
 
       row_rules: [ { when: "1 = 1", rows: [ {} ] } ],

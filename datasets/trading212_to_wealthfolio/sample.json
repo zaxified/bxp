@@ -35,13 +35,13 @@
       date_filter_from_filename: false,
       input_schema: {
         $date:            "[Time]",
-        $ticker:          "IF([Ticker] != '', REMAP([Ticker], 'trading212'), '$CASH-' & [Currency (Total)])",
+        $ticker:          "IF(NOT ISEMPTY([Ticker]), REMAP([Ticker], 'trading212'), '$CASH-' & [Currency (Total)])",
         $isin:            "",
-        $quantity:        "IF([Ticker] != '', [No. of shares], 1)",
-        $unitprice:       "IF([Ticker] != '', (ABS([Total]) - ABS([Currency conversion fee]) - ABS([Stamp duty reserve tax])) / [No. of shares], ABS([Total]))",
+        $quantity:        "IF(NOT ISEMPTY([Ticker]), [No. of shares], 1)",
+        $unitprice:       "IF(NOT ISEMPTY([Ticker]), (ABS([Total]) - ABS([Currency conversion fee]) - ABS([Stamp duty reserve tax])) / [No. of shares], ABS([Total]))",
         $currency:        "[Currency (Total)]",
         $fee:             "IF(ABS([Currency conversion fee]) + ABS([Stamp duty reserve tax]) > 0, ABS([Currency conversion fee]) + ABS([Stamp duty reserve tax]), '')",
-        $amount:          "IF([Ticker] != '', ABS([Total]) - ABS([Currency conversion fee]) - ABS([Stamp duty reserve tax]), ABS([Total]))",
+        $amount:          "IF(NOT ISEMPTY([Ticker]), ABS([Total]) - ABS([Currency conversion fee]) - ABS([Stamp duty reserve tax]), ABS([Total]))",
         $account:         "'xT212'",
         $fxRate:          "",
         $subtype:         "",
@@ -51,7 +51,7 @@
       row_rules_debug_missing: true,
       row_rules: [
         {
-          when:  "([Action] = 'Market buy' OR [Action] = 'Limit buy' OR [Action] = 'Stock distribution') AND [Total] = 0",
+          when:  "IN([Action], 'Market buy', 'Limit buy', 'Stock distribution') AND [Total] = 0",
           rows: [
             {
               $action:  "'TRANSFER_IN'"
@@ -67,7 +67,7 @@
           ]
         },
         {
-          when:  "[Action] = 'Market buy' OR [Action] = 'Limit buy' OR [Action] = 'Stock distribution'",
+          when:  "IN([Action], 'Market buy', 'Limit buy', 'Stock distribution')",
           rows: [
             {
               $action:  "'BUY'"
@@ -103,7 +103,7 @@
           ]
         },
         {
-          when:  "[Action] = 'Dividend (Dividend)' OR [Action] = 'Dividend (Dividend manufactured payment)' OR [Action] = 'Dividend (Tax exempted)'",
+          when:  "IN([Action], 'Dividend (Dividend)', 'Dividend (Dividend manufactured payment)', 'Dividend (Tax exempted)')",
           rows: [
             {
               $action:  "'DIVIDEND'"
@@ -111,7 +111,7 @@
           ]
         },
         {
-          when:  "[Action] = 'Interest on cash' OR [Action] = 'Lending interest'",
+          when:  "IN([Action], 'Interest on cash', 'Lending interest')",
           rows: [
             {
               $action:  "'INTEREST'"
@@ -159,7 +159,7 @@
           ]
         },
         {
-          when:  "[Action] = 'Result adjustment' OR [Action] = 'Dividend adjustment'",
+          when:  "IN([Action], 'Result adjustment', 'Dividend adjustment')",
           rows: [
             {
               $action:     "IF([Total] > 0, 'DEPOSIT', 'WITHDRAWAL')",

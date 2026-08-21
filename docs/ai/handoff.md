@@ -24,7 +24,7 @@ there's anything left to verify:
 3. **Cash event description** (FEE, DEPOSIT rows): the `comment`
    column reads `' ()'` (empty source columns). If you'd prefer
    blank, click any FEE row → expression panel → change `$comment`
-   to `IF([Wertpapier] = '', '', [Wertpapier] & ' (' & [WKN] & ')')`.
+   to `IF(ISEMPTY([Wertpapier]), '', [Wertpapier] & ' (' & [WKN] & ')')`.
 
 4. **Splits / mergers / transfers** (skipped per the target spec): I
    added `rows: []` for direction `in` / `out`. If your account had any

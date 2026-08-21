@@ -32,7 +32,7 @@
         // SELF-JOIN — turn the opaque parent_station id ("101") into the human
         // station name stored by another row. Stations themselves have no
         // parent, so guard the empty case.
-        $parent_name: "IF([parent_station] = '', '', LOOKUP([parent_station], 'station_name'))"
+        $parent_name: "IF(ISEMPTY([parent_station]), '', LOOKUP([parent_station], 'station_name'))"
       },
 
       row_rules: [ { when: "1 = 1", rows: [ {} ] } ],

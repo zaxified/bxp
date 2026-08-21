@@ -258,7 +258,7 @@
         $unitprice:       "IF([Type] = 'Other', PRICE_VALUE([Value]), PRICE_VALUE([Price]))",
         $currency:        "PRICE_CURRENCY([Value])",
         // fee only when positive; empty string omits fee column
-        $fee:             "IF(PRICE_VALUE([Fees]) > 0, PRICE_VALUE([Fees]), '')",
+        $fee:             "NULLIF(PRICE_VALUE([Fees]), 0)",
         $amount:          "PRICE_VALUE([Value])",
         $account:         "",
         $fxRate:          "",
@@ -360,15 +360,15 @@
       input_schema: {
         $date:            "REPLACE(COALESCE([Time],[Time (UTC)]),'+00:00','')",  // T212 already emits ISO or UTC with zone
         // stock row: map ticker; cash row (no ticker): cash placeholder
-        $ticker:          "IF([Ticker] != '', REMAP([Ticker], 'trading212'), '$CASH-' & [Currency (Total)])",
+        $ticker:          "IF(NOT ISEMPTY([Ticker]), REMAP([Ticker], 'trading212'), '$CASH-' & [Currency (Total)])",
         $isin:            "",                                                    // optional ISIN output column
-        $quantity:        "IF([Ticker] != '', [No. of shares], 1)",
+        $quantity:        "IF(NOT ISEMPTY([Ticker]), [No. of shares], 1)",
         // net price = total minus conversion fee and stamp duty, divided by share count
-        $unitprice:       "IF([Ticker] != '', ROUND((ABS([Total]) - ABS([Currency conversion fee]) - ABS([Stamp duty reserve tax])) / [No. of shares], 8), ABS([Total]))",
+        $unitprice:       "IF(NOT ISEMPTY([Ticker]), ROUND((ABS([Total]) - ABS([Currency conversion fee]) - ABS([Stamp duty reserve tax])) / [No. of shares], 8), ABS([Total]))",
         $currency:        "[Currency (Total)]",
         // fee = sum of conversion fee + stamp duty; empty when both are zero
-        $fee:             "IF(ABS([Currency conversion fee]) + ABS([Stamp duty reserve tax]) > 0, ABS([Currency conversion fee]) + ABS([Stamp duty reserve tax]), '')",
-        $amount:          "IF([Ticker] != '', ABS([Total]) - ABS([Currency conversion fee]) - ABS([Stamp duty reserve tax]), ABS([Total]))",
+        $fee:             "NULLIF(ABS([Currency conversion fee]) + ABS([Stamp duty reserve tax]), 0)",
+        $amount:          "IF(NOT ISEMPTY([Ticker]), ABS([Total]) - ABS([Currency conversion fee]) - ABS([Stamp duty reserve tax]), ABS([Total]))",
         $account:         "'T212'",                                              // hardcoded account tag; e.g. "'T212'", "[Account]", ""
         $fxRate:          "",
         $subtype:         "",
@@ -617,7 +617,7 @@
           ]
         },
         {
-          when:  "[Symbol] = ''",
+          when:  "ISEMPTY([Symbol])",
           rows: []
         }  // summary/total rows have no symbol
       ],
@@ -639,7 +639,7 @@
     },
     // ── XTB (old format, cash operations) → Wealthfolio ──
     //   Pattern: centralized cash branching in input_schema. Stock vs cash
-    //   rows are distinguished by [Symbol] != ''; cash rows get the
+    //   rows are distinguished by ISEMPTY([Symbol]); cash rows get the
     //   $CASH-CZK placeholder. A few row_rules entries override $variables
     //   for special cases (Stock purchase parses qty/price out of the
     //   Comment field via SPLIT_PART).
@@ -665,7 +665,7 @@
       input_schema: {
         $date:            "[Time]",
         // cash rows without symbol → cash placeholder; stock rows → mapped ticker
-        $ticker:          "IF([Symbol] != '', REPLACE(REMAP([Symbol],'xtb'), '.US','', '.NL','.AS', '.UK','.L', '.CH','.SW', '.CZ','.PR'), '$CASH-CZK')",
+        $ticker:          "IF(NOT ISEMPTY([Symbol]), REPLACE(REMAP([Symbol],'xtb'), '.US','', '.NL','.AS', '.UK','.L', '.CH','.SW', '.CZ','.PR'), '$CASH-CZK')",
         $quantity:        "'1'",  // cash operations have no share quantity
         $unitprice:       "ABS([Amount])",
         $currency:        "'CZK'",
@@ -752,7 +752,7 @@
           rows: []
         },
         {
-          when:  "[Type] = ''",
+          when:  "ISEMPTY([Type])",
           rows: []
         }
       ],
@@ -866,7 +866,7 @@
       date_filter_from_filename: false,
       input_schema: {
         $date:            "[Time]",
-        $ticker:          "IF([Ticker] != '', REPLACE(REMAP([Ticker],'xtb'), '.US','', '.NL','.AS', '.UK','.L', '.CH','.SW', '.CZ','.PR'), '$CASH-CZK')",
+        $ticker:          "IF(NOT ISEMPTY([Ticker]), REPLACE(REMAP([Ticker],'xtb'), '.US','', '.NL','.AS', '.UK','.L', '.CH','.SW', '.CZ','.PR'), '$CASH-CZK')",
         $quantity:        "'1'",
         $unitprice:       "ABS([Amount])",
         $currency:        "'CZK'",
@@ -889,18 +889,10 @@
           ]
         },
         {
-          when:  "[Type] = 'Withholding tax' AND NOT CONTAINS([Comment],'Reclassification')",
+          when:  "[Type] = 'Withholding tax'",
           rows: [
             {
-              $action:  "'TAX'"
-            }
-          ]
-        },
-        {
-          when:  "[Type] = 'Withholding tax' AND CONTAINS([Comment],'Reclassification')",
-          rows: [
-            {
-              $action:  "IF([Amount]>0, 'DIVIDEND', 'TAX')"
+              $action:  "IF(CONTAINS([Comment],'Reclassification') AND [Amount] > 0, 'DIVIDEND', 'TAX')"
             }
           ]
         },
@@ -977,7 +969,7 @@
         },
         // summary row at end of sheet
         {
-          when:  "[Type] = ''",
+          when:  "ISEMPTY([Type])",
           rows: []
         }
       ],
@@ -1023,7 +1015,7 @@
         }
       },
       input_schema: {
-        $date:   "DATE_CONVERT([Time], 'YYYY-MM-DD[T]hh:mm:ss[Z]', 'YYYY-MM-DD')",
+        $date:   "DATE_CONVERT([Date], 'YYYY-MM-DD[*]', 'YYYY-MM-DD')",
         $fees:   "",
         $notes:  ""
       },
@@ -1076,21 +1068,13 @@
         $quantity:  "[Quantity]",
         $price:     "PRICE_VALUE([Price])",
         $currency:  "PRICE_CURRENCY([Value])",
-        $fees:      "IF(PRICE_VALUE([Fees]) > 0, PRICE_VALUE([Fees]), '')",
+        $fees:      "NULLIF(PRICE_VALUE([Fees]), 0)",
         $notes:     ""
       },
       row_rules_debug_missing: false,
       row_rules: [
         {
-          when:  "[Symbol] = 'BTC' AND [Type] = 'Buy'",
-          rows: [
-            {
-              $type:  "'BUY'"
-            }
-          ]
-        },
-        {
-          when:  "[Symbol] = 'BTC' AND [Type] = 'Buy - Revolut X'",
+          when:  "[Symbol] = 'BTC' AND IN([Type], 'Buy', 'Buy - Revolut X')",
           rows: [
             {
               $type:  "'BUY'"
@@ -1135,7 +1119,7 @@
       date_filter_from_filename: false,
       combined_output:     true,
       input_schema: {
-        $date:      "DATE_CONVERT(REPLACE(COALESCE([Time],[Time (UTC)]),'+00:00',''), 'YYYY-MM-DD[ ]hh:mm:ss', 'YYYY-MM-DD')",
+        $date:      "DATE_CONVERT(COALESCE([Time],[Time (UTC)]), 'YYYY-MM-DD[*]', 'YYYY-MM-DD')",
         $ticker:    "REMAP([Ticker], 't212_brychtapp')",
         $isin:      "[ISIN]",
         $quantity:  "[No. of shares]",
@@ -1216,7 +1200,7 @@
       date_filter_from_filename: false,
       combined_output:     true,
       input_schema: {
-        $date:      "DATE_CONVERT([Time], 'YYYY-MM-DD hh:mm:ss', 'YYYY-MM-DD')",
+        $date:      "DATE_CONVERT([Time], 'YYYY-MM-DD[*]', 'YYYY-MM-DD')",
         $type:      "",
         $ticker:    "",
         $quantity:  "",

@@ -35,7 +35,7 @@
       row_rules_debug_missing: true,
       row_rules: [
         {
-          when:  "[Type] = 'Buy' OR [Type] = 'Buy - Revolut X'",
+          when:  "IN([Type], 'Buy', 'Buy - Revolut X')",
           rows: [
             {
               $action:  "'BUY'"
