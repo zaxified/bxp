@@ -11,13 +11,9 @@ lands on master. `CHANGELOG.md` is generated independently.
 
 ### v0.3.1
 
-consider new flag for skipping intermediate files `combined_output_only: bool    // (default:false)`
-
-### v0.3.2
-
 `LOOKUP` across templates within one bxp-cli run cycle
 
-Output row deduplication in combined output files `combined_output_dedup: bool    // (default:false)`
+### v0.3.2
 
 ### v0.3.3
 
@@ -283,9 +279,12 @@ doesn't keep restarting. Reopen only if the rationale changes.
   produces one output stream (plus optional `combined_output`).
   Workaround: define two templates with different `row_rules` filters
   pointing at the same `data_dir`.
-- **Output row deduplication across output files** The re-import scenario
-  it would solve — overlapping date ranges across successive broker exports
-  producing duplicate `.csvx` rows.
+- **Output row deduplication.** The re-import scenario it would solve —
+  overlapping date ranges across successive broker exports producing
+  duplicate `.csvx` rows. Dropping duplicates inside the combined roll-up
+  is no cheaper: the sink is fed pre-serialised bytes assembled in parallel,
+  so it would need either a shared lock in the per-row path or a serial
+  pass over the finished file.
   Workaround: use `date_filter_from_filename:true` in template.
 - **Space / NBSP thousands grouping (`csv_thousands_separator_in`).**
   Space- or NBSP-grouped European numbers (`1 234 567,89`) are not
