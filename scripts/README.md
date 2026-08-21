@@ -64,6 +64,11 @@ test.sh                       wrapper — runs every test-NN-*.sh in order
 test-lib.sh                   shared section/step/summary helpers (sourced)
 test-NN-*.sh                  the phases; each states its purpose in its own
                               header, and docs/dev/testing.md renders that list
+test-NN-*.{txt,py}            a phase's own corpus or checker body — it lives
+                              next to the phase, not in a helper dir, because it
+                              has exactly one caller (test-06's corpus, test-08's
+                              checker). Only a helper with a SECOND consumer earns
+                              a dir of its own — see bench/gen.py below
 
 All test phases build ReleaseSafe (one optimize mode for the whole suite → small
 codegen/safety error surface); release archives are the only ReleaseSmall builds.
@@ -110,9 +115,11 @@ run locally on all three hosts, with a few caveats:
   phase. macOS doesn't ship it; the wrapper degrades gracefully
   (no enforcement). `brew install coreutils` if you want the bound back.
   `release-03-checksums.sh` handles `sha256sum` vs BSD `shasum` itself.
-- **python3** — `test-01-console.sh` / `test-06-expr-corpus.sh` (JSON
-  validation) and `test-05-bench-guard.sh` / `bench/bench.sh` (the
-  `bench/gen.py` synthetic-input generator) shell out to `python3`.
+- **python3** — `test-02-mcp.sh` / `test-06-expr-corpus.sh` (building the
+  JSON-RPC request stream and checking the replies),
+  `test-08-docs-examples.sh` (its whole checker is
+  `test-08-docs-examples.py`) and `test-05-bench-guard.sh` / `bench/bench.sh`
+  (the `bench/gen.py` synthetic-input generator) shell out to `python3`.
   Pre-installed on all three GH runners; on Windows local dev (Git Bash)
   you may need to add Python to PATH explicitly. The bench phases measure
   wall + peak RSS via bxp-cli's own `BXP_METRICS` env var (no GNU

@@ -54,12 +54,16 @@ MONO_ROOT="$MONO_ROOT" BXP_MCP="$BXP_MCP" python3 "$SCRIPT_DIR/test-08-docs-exam
 t1=$(_now)
 dur=$(awk -v a="$t0" -v b="$t1" 'BEGIN{printf "%.1f", b-a}')
 
-cat "$out"
-rm -f "$out"
-
 if [[ $rc -eq 0 ]]; then
-    printf '  %-44s OK %6ss\n' "docs examples" "$dur"
+    # The checker's last line is "stats<TAB>exprs<TAB>pages"; the counts belong
+    # in the label, the way test-06 carries its corpus count, so the phase emits
+    # one result row like every other suite.
+    IFS=$'\t' read -r _ exprs pages < <(grep '^stats	' "$out")
+    rm -f "$out"
+    status_line "docs examples (${exprs} expr, ${pages} pages)" OK "$dur"
 else
-    printf '  %-44s FAIL\n' "docs examples" >&2
+    cat "$out" >&2
+    rm -f "$out"
+    status_line "docs examples" FAIL "$dur" >&2
 fi
 exit $rc

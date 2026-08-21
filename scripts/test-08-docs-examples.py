@@ -224,14 +224,14 @@ def main():
                 elif all(row[i].get("value", "") == "" for row in per):
                     failures.append(f"{rel}: {e[:60]} -> empty on every row")
 
-    print(f"    pages with clickable expressions ... {marked_pages}")
-    print(f"    expressions checked ............... {total_exprs}")
     if failures:
-        print(f"\n  FAILURES: {len(failures)}")
+        print(f"  FAILURES: {len(failures)}")
         for f in failures:
             print(f"    {f}")
         sys.exit(len(failures))
-    print("    every marked expression works against its own sample.")
+    # Machine-readable tail: the wrapper turns it into the report's one result
+    # row, so this phase looks like every other suite. Only counts, only green.
+    print(f"stats\t{total_exprs}\t{marked_pages}")
 
 
 if __name__ == "__main__":

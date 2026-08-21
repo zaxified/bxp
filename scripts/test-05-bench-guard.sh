@@ -74,24 +74,8 @@ CELL_W=20
 
 section "Bench guard"
 
-# step()-style single line: label, dots to the OK column, then OK/FAIL + time.
-_emit() {
-    local label="$1" status="$2" dur="$3"
-    local dots_n=$(( _BXP_OK_COL - 5 - ${#label} ))
-    (( dots_n < 3 )) && dots_n=3
-    local dots
-    dots=$(printf '.%.0s' $(seq 1 "$dots_n"))
-    if [[ "$status" == OK ]]; then
-        # %6s / %4s: trailing "s" on the report's right margin — mirrors step()
-        # in test-lib.sh so guard lines align with every other suite + summary.
-        printf '  %s %s OK %6ss\n' "$label" "$dots" "$dur"
-    else
-        printf '  %s %s FAIL %4ss\n' "$label" "$dots" "$dur"
-    fi
-}
-
 _fail() {
-    _emit "$1" FAIL "$2"
+    status_line "$1" FAIL "$2"
     echo
     shift 2
     for line in "$@"; do echo "    - $line"; done
@@ -106,11 +90,7 @@ _fail() {
 # on every platform that has python3 — Linux, macOS, and Windows alike.
 _skip() {
     local label="$1" reason="$2"
-    local dots_n=$(( _BXP_OK_COL - 5 - ${#label} ))
-    (( dots_n < 3 )) && dots_n=3
-    local dots
-    dots=$(printf '.%.0s' $(seq 1 "$dots_n"))
-    printf '  %s %s SKIP  -\n' "$label" "$dots"
+    status_line "$label" SKIP
     echo "    - $reason"
     exit 0
 }
@@ -363,11 +343,11 @@ large_wall_1=$(awk -v w="$large_wall" 'BEGIN{printf "%.1f", w}')
 xlsx_wall_1=$(awk -v w="$xlsx_wall" 'BEGIN{printf "%.1f", w}')
 wide_wall_1=$(awk -v w="$wide_wall" 'BEGIN{printf "%.1f", w}')
 fanout_wall_1=$(awk -v w="$fanout_wall" 'BEGIN{printf "%.1f", w}')
-(( built )) && _emit "guard build (ReleaseSafe)" OK "$build_dur"
-_emit "guard run N=${SMALL_ROWS} rss=${small_rss_mb}MB (<=${RSS_MB})" OK "$small_wall_1"
-_emit "guard run N=${LARGE_ROWS} rss=${large_rss_mb}MB (<=${RSS_MB})" OK "$large_wall_1"
-_emit "guard scaling ${wall_ratio}x (<=${ratio_limit}x, ${row_ratio}x rows)" OK "$chk_dur"
-_emit "guard xlsx N=${XLSX_ROWS} rss=${xlsx_rss_mb}MB (<=${RSS_MB})" OK "$xlsx_wall_1"
-_emit "guard wide cols=${WIDE_COLS} rss=${wide_rss_mb}MB (<=${RSS_MB})" OK "$wide_wall_1"
-_emit "guard xlsx fan-out ${FANOUT_SHEETS}sh rss=${fanout_rss_mb}MB (<=${RSS_MB})" OK "$fanout_wall_1"
+(( built )) && status_line "guard build (ReleaseSafe)" OK "$build_dur"
+status_line "guard run N=${SMALL_ROWS} rss=${small_rss_mb}MB (<=${RSS_MB})" OK "$small_wall_1"
+status_line "guard run N=${LARGE_ROWS} rss=${large_rss_mb}MB (<=${RSS_MB})" OK "$large_wall_1"
+status_line "guard scaling ${wall_ratio}x (<=${ratio_limit}x, ${row_ratio}x rows)" OK "$chk_dur"
+status_line "guard xlsx N=${XLSX_ROWS} rss=${xlsx_rss_mb}MB (<=${RSS_MB})" OK "$xlsx_wall_1"
+status_line "guard wide cols=${WIDE_COLS} rss=${wide_rss_mb}MB (<=${RSS_MB})" OK "$wide_wall_1"
+status_line "guard xlsx fan-out ${FANOUT_SHEETS}sh rss=${fanout_rss_mb}MB (<=${RSS_MB})" OK "$fanout_wall_1"
 exit 0

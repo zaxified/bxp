@@ -43,6 +43,27 @@ section() {
 #   _lab bxp-core 'unit tests'   →  "bxp-core    unit tests"
 _lab() { printf '%-12s%s' "$1" "$2"; }
 
+# status_line "label" OK|FAIL|SKIP [duration]
+# The report's one result row: label, dots up to the OK column, then the
+# status and a right-aligned time whose trailing "s" lands on the report's
+# right margin (_BXP_LINE_W) — flush with the section rules and the summary
+# total. "FAIL" is 2 chars wider than "OK", so its number field is 2
+# narrower to keep the same edge. step() calls this after running a command;
+# phases that must stream their own output before the row (bench guard,
+# expression corpus, docs examples) call it directly.
+status_line() {
+    local label="$1" status="$2" dur="${3-}"
+    local dots_n=$(( _BXP_OK_COL - 5 - ${#label} ))
+    (( dots_n < 3 )) && dots_n=3
+    local dots
+    dots=$(printf '.%.0s' $(seq 1 "$dots_n"))
+    case "$status" in
+        OK)   printf '  %s %s OK %6ss\n'   "$label" "$dots" "$dur" ;;
+        FAIL) printf '  %s %s FAIL %4ss\n' "$label" "$dots" "$dur" ;;
+        *)    printf '  %s %s SKIP  -\n'   "$label" "$dots" ;;
+    esac
+}
+
 # step "label" cmd args...
 # Runs cmd silently, captures stdout+stderr; on success prints
 #   "  <label> .... OK   X.Xs"
@@ -57,20 +78,11 @@ step() {
     t1=$(_now)
     dur=$(awk -v a="$t0" -v b="$t1" 'BEGIN{printf "%.1f", b-a}')
 
-    local dots_n=$(( _BXP_OK_COL - 5 - ${#label} ))
-    (( dots_n < 3 )) && dots_n=3
-    local dots
-    dots=$(printf '.%.0s' $(seq 1 $dots_n))
-
     if [[ $rc -eq 0 ]]; then
-        # %6s (OK) / %4s (FAIL): right-align the time so its trailing "s"
-        # lands on the report's right margin (_BXP_LINE_W), flush with the
-        # section rules and the summary's total — "FAIL" is 2 chars wider
-        # than "OK", so its number field is 2 narrower to keep the same edge.
-        printf '  %s %s OK %6ss\n' "$label" "$dots" "$dur"
+        status_line "$label" OK "$dur"
         rm -f "$out"
     else
-        printf '  %s %s FAIL %4ss\n' "$label" "$dots" "$dur"
+        status_line "$label" FAIL "$dur"
         echo
         cat "$out" >&2
         rm -f "$out"

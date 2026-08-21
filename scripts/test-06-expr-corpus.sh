@@ -143,22 +143,17 @@ IFS=$'\t' read -r passed total failed <<<"$head_line"
 t1=$(_now)
 dur=$(awk -v a="$t0" -v b="$t1" 'BEGIN{printf "%.1f", b-a}')
 
-# step()-style line — count goes in the label so the OK column lands at the same
-# place as every other step and the whole line stays inside the 60-char visual
-# width set by section().
+# The count goes in the label so the OK column lands at the same place as every
+# other step and the whole line stays inside the 60-char visual width set by
+# section().
 label="corpus (${passed}/${total})"
-dots_n=$(( _BXP_OK_COL - 5 - ${#label} ))
-(( dots_n < 3 )) && dots_n=3
-dots=$(printf '.%.0s' $(seq 1 $dots_n))
 
 if (( failed == 0 )); then
-    # %6s (OK) / %4s (FAIL): match test-lib.sh step() exactly so the trailing
-    # "s" lands on the report's right margin, flush with every other phase.
-    printf '  %s %s OK %6ss\n' "$label" "$dots" "$dur"
+    status_line "$label" OK "$dur"
     exit 0
 fi
 
-printf '  %s %s FAIL %4ss\n' "$label" "$dots" "$dur"
+status_line "$label" FAIL "$dur"
 echo
 echo "  Failures:"
 printf '%s\n' "$summary" | while IFS=$'\t' read -r tag detail; do
