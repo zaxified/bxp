@@ -69,21 +69,6 @@ Open design questions to resolve before implementation:
 - `--list-templates` / `--fetch-template` semantics when the same name
   exists in bundle + user dir.
 
-### New example candidates
-
-Carried over from the (now-deleted) `*-todo` scratch when the example
-backlog was otherwise exhausted:
-
-- **`olist_ecommerce`** real-world multi-file normalisation — Kaggle
-  CC-BY-NC-SA; the login wall conflicts with a no-login `fetch-full.sh` → needs
-  a mirror or a different multi-file dataset.
-- **`czech_public_contracts`** (smlouvy.gov.cz, CC0) — `DD.MM.YYYY` +
-  space-thousands + contract-type maps; confirm a stable export URL + a cited
-  problem first.
-- **`basic/csv-to-json`** teaching example — isolated CSV → JSON array
-  (`file_type_out: json`), the basic-tier mirror of `squirrel-census-json`. Low
-  priority: JSON _output_ is already shown by `advanced/multi-stage-etl`.
-
 ### Distribution polish
 
 - Apple Developer ID notarisation for macOS `.app` (~$99/year).
