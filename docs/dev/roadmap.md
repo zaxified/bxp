@@ -11,8 +11,6 @@ lands on master. `CHANGELOG.md` is generated independently.
 
 ### v0.3.1
 
-`LOOKUP` across templates within one bxp-cli run cycle
-
 ### v0.3.2
 
 ### v0.3.3
@@ -23,7 +21,7 @@ Transformation visualiser
 
 GUI Config/Create - Import wizard from sample CSV
 GUI updater progress bar
-GUI input file viewer simple viewer
+GUI input file simple viewer
 
 Adopt `material_ui` 1.x — the real Material implementation, not the 0.0.1
 facade the imports point at today. Blocked on `pluto_grid`, `pluto_menu_bar`
@@ -245,6 +243,16 @@ therefore picks a new arm up for free.
 Features that surface repeatedly in audits and reverse-simulations but are
 deliberately **out of scope** — documented here so the same discussion
 doesn't keep restarting. Reopen only if the rationale changes.
+
+- **Cross-file / cross-template lookup.** A `pre_pass` table is built from the
+  file being processed and lives only as long as that file — which is why a
+  354 MB, 6,258-file export converts at a flat ~30 MB RSS
+  (`real-world/ruian-address-points`). A table shared across templates would
+  instead be sized by the whole dataset — order of hundreds of MB on that same
+  export — turning the engine's bounded-memory property into something you opt
+  out of by naming a table. Workaround: chain templates through an intermediate
+  file, one template writing what the next one reads, all within a single run
+  (`advanced/multi-stage-etl` does a two-hop join that way).
 
 - **Multiline quoted fields (`csv_multiline_quotes: true`).** `csvstream`'s `LineIterator`
   deliberately uses lazy-quotes semantics — a newline always ends the record
