@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the repository-layout tree and the test-phase list for the docs.
+"""Generate the repository tree, the test-phase table and the VS Code extension table.
 
 Both used to be hand-kept, and both had rotted the same way — by omission
 rather than by contradiction. The layout tree in `docs/dev/build.md` was
@@ -14,6 +14,12 @@ own header, using the convention that file type already follows:
     *.sh    the comment block under the shebang
     *.py    the module docstring (or that same comment block)
     *.md    the `description:` key of the YAML front matter
+
+The VS Code table follows the same rule one level down: the recommendations in
+`bxp.code-workspace` describe themselves in the `//` comment above each entry,
+so the editor setup and the page that documents it cannot drift apart. They had
+— the page listed five extensions, the workspace seven, and only four of them
+were the same four.
 
 Directories have no header to read, so their blurbs are the one catalog in this
 file — `DIRS` below. Adding a directory without describing it is an error, not a
@@ -320,6 +326,46 @@ def test_phases():
     return fragment("scripts/test-NN-*.sh headers", "table", "\n".join(rows))
 
 
+def vscode_extensions():
+    """The recommended-extension table, read from `bxp.code-workspace`.
+
+    The workspace file is JSONC, so the entries carry their own prose: the `//`
+    lines above a recommendation are its purpose. Parsing the array by hand
+    (rather than stripping comments and handing the rest to `json`) is the whole
+    point — the comments *are* the payload here.
+    """
+    path = os.path.join(ROOT, "bxp.code-workspace")
+    lines = open(path, encoding="utf-8").read().splitlines()
+    try:
+        start = next(i for i, l in enumerate(lines)
+                     if l.strip().startswith('"recommendations"'))
+    except StopIteration:
+        sys.exit("gen-trees: bxp.code-workspace has no recommendations array")
+
+    rows = ["| Extension | Purpose |", "| --- | --- |"]
+    block, found = [], 0
+    for line in lines[start + 1:]:
+        text = line.strip()
+        if text.startswith("]"):
+            break
+        if text.startswith("//"):
+            block.append(text[2:].strip())
+            continue
+        m = re.match(r'"([^"]+)",?$', text)
+        if not m:
+            continue
+        if not block:
+            sys.exit(f"gen-trees: {m.group(1)} in bxp.code-workspace has no "
+                     "// comment above it — the table would render a blank cell")
+        rows.append(f'| <code class="hl-fn">{m.group(1)}</code> | '
+                    f'{cell(_first_sentence(block))} |')
+        block, found = [], found + 1
+
+    if not found:
+        sys.exit("gen-trees: no extensions parsed out of bxp.code-workspace")
+    return fragment("bxp.code-workspace recommendations", "table", "\n".join(rows))
+
+
 def cell(text):
     """Escape what would break a Markdown table cell.
 
@@ -339,7 +385,8 @@ def fragment(source, section, body):
             f"<!-- --8<-- [end:{section}] -->\n")
 
 
-FRAGMENTS = {"repo-tree.md": repo_tree, "test-phases.md": test_phases}
+FRAGMENTS = {"repo-tree.md": repo_tree, "test-phases.md": test_phases,
+             "vscode-extensions.md": vscode_extensions}
 
 
 def main():
@@ -362,7 +409,7 @@ def main():
                 fh.write(fresh)
             print(f"gen-trees: wrote docs/includes/{name}")
     if check and rc == 0:
-        print("gen-trees --check: tree + phase fragments in sync")
+        print("gen-trees --check: tree, phase and extension fragments in sync")
     sys.exit(rc)
 
 

@@ -10,7 +10,8 @@ then pick the page for what you are doing.
 
 ## Working in the repo
 
-- [Build](build.md) — toolchain setup and how to build each package.
+- [Build](build.md) — editor and toolchain setup, how to build each
+  package, and how to build the documentation site.
 - [Testing](testing.md) — the suite's phases, running one alone, adding a
   regression or an expression-corpus case.
 - [Debugging](debugging.md) — which flags to combine, inspecting an

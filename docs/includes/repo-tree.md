@@ -96,7 +96,7 @@ bxp/                                # monorepo root (git root)
 │   │   ├── check-wasm-parity.sh    # wasm/native parity gate for the docs expression scratchpad
 │   │   ├── gen-docs.sh             # Generate the MkDocs documentation site and (default) serve it locally
 │   │   ├── gen-examples-index.py   # Generate the Examples index pages for the MkDocs site
-│   │   ├── gen-trees.py            # Generate the repository-layout tree and the test-phase list for the docs
+│   │   ├── gen-trees.py            # Generate the repository tree, the test-phase table and the VS Code extension table
 │   │   ├── gen-wasm-playground.sh  # Build the docs playground's wasm engine into docs/assets/wasm/
 │   │   └── requirements.txt
 │   ├── README.md

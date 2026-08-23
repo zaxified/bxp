@@ -8,12 +8,49 @@ description: "Getting a Flutter development build of the desktop app running, in
 
 ### Prerequisites
 
-| Tool        | Version             | Notes                                                                                                                               |
-| ----------- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| Flutter SDK | ≥ 3.x               | See `bxp-gui/pubspec.yaml` `environment.flutter` for the minimum. Install from [flutter.dev](https://flutter.dev) or via `fvm`.     |
-| Dart SDK    | bundled             | Ships with Flutter; no separate install.                                                                                            |
-| Zig         | see `build.zig.zon` | To build bxp-cli, bxp-mcp, and the bxp-gui-bridge library — `minimum_zig_version` is the source of truth; see [build.md](../build.md). |
-| VS Code     | any                 | + [Flutter extension](https://marketplace.visualstudio.com/items?itemName=Dart-Code.flutter). IntelliJ / Android Studio work too.   |
+| Tool        | Version                  | Notes                                                                                                                                                                    |
+| ----------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Flutter SDK | the version CI pins      | `flutter-version` in `.github/workflows/ci.yml` is the source of truth — pinned rather than floating, because a newer stable surfaces fresh `info` lints that fail CI while passing locally. Install from [flutter.dev](https://flutter.dev) or via [`fvm`](https://fvm.app). |
+| Dart SDK    | bundled                  | Ships with Flutter; no separate install. `environment.sdk` in `bxp-gui/pubspec.yaml` is the *Dart* constraint the package resolves against, not the Flutter version.        |
+| Zig         | see `build.zig.zon`      | To build bxp-cli, bxp-mcp, and the bxp-gui-bridge library — `minimum_zig_version` is the source of truth; see [build.md](../build.md).                                      |
+| VS Code     | any                      | Open `bxp.code-workspace`, which recommends the Dart and Flutter extensions along with the rest — see [build.md](../build.md#vs-code-setup). IntelliJ / Android Studio work too. |
+
+### System prerequisites
+
+Flutter's desktop embedders build native code, so the host toolchain has to be
+there before `flutter run` works. Nothing below is bxp-specific — it is what a
+Flutter desktop build needs on each platform.
+
+=== "Linux"
+
+    ```bash
+    sudo apt-get install -y clang cmake ninja-build pkg-config \
+        libgtk-3-dev liblzma-dev libstdc++-12-dev
+    ```
+
+    The release pipeline installs the same GTK/lzma/libstdc++ set (plus
+    `dpkg-dev`, `fuse` and `libfuse2` for the `.deb` and `.AppImage` packaging
+    steps) — see `.github/workflows/release.yml`. Note that `scripts/test.sh`
+    does **not** need these: `test-04` runs `flutter analyze` and
+    `flutter test`, which never link GTK. Only actually running or bundling
+    the app does.
+
+=== "macOS"
+
+    Xcode plus its command-line tools, and CocoaPods:
+
+    ```bash
+    xcode-select --install
+    sudo gem install cocoapods
+    ```
+
+=== "Windows"
+
+    Visual Studio with the **Desktop development with C++** workload (the
+    Build Tools edition is enough).
+
+`flutter doctor` checks all of this for you and names what is missing; see
+[Verify the install](#verify-the-install) below.
 
 ### First run
 
@@ -38,7 +75,21 @@ automatically. No environment variables needed for local dev.
 
 ### Verify the install
 
-On first launch the app loads the language catalog in-process from the bridge.
+Start with the toolchain itself:
+
+```bash
+flutter doctor -v
+```
+
+The rows that must be green are the host desktop toolchain (**Linux
+toolchain** / **Xcode** / **Visual Studio**) and **Flutter**. Android
+toolchain, Chrome and Android Studio rows can stay red — bxp-gui targets
+desktop only, and CI explicitly disables the mobile toolchains
+(`flutter config --no-enable-android --no-enable-ios`), which is worth doing
+locally too: it drops roughly 0.8 GB of engine artifacts nothing here uses.
+
+Then the app itself. On first launch it loads the language catalog in-process
+from the bridge.
 If the `bxp-gui-bridge` library is missing or unbuilt a fatal error gate
 appears — build it first. Then:
 

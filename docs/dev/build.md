@@ -1,29 +1,48 @@
 ---
-description: "Toolchain setup, the repository layout, and how to build every package in the monorepo."
+description: "Toolchain and editor setup, the repository layout, and how to build every package — and the documentation site — in the monorepo."
 ---
 
 # Build & Setup
 
 ## VS Code setup
 
-Install these extensions for a productive experience:
+Open `bxp.code-workspace` rather than the plain folder: it carries the
+recommended-extension list, and VS Code offers to install the whole set on
+first open (**Extensions → Recommended**, or *Show Recommended Extensions*
+from the command palette).
 
-| Extension           | ID                                                     | Purpose                                                                     |
-| ------------------- | ------------------------------------------------------ | --------------------------------------------------------------------------- |
-| **Zig Language**    | `ziglang.vscode-zig`                                   | Zig language, Syntax highlighting, ZLS integration, build tasks             |
-| **Rainbow CSV**     | `mechatroner.rainbow-csv`                              | Column-aware CSV viewer - helpful when reading source exports                 |
-| **JSON5**           | `blueglassblock.better-json5`                          | Syntax highlighting for `JSON5` config files                                |
-| **Mermaid preview** | `bierner.markdown-mermaid`                             | Renders Mermaid diagrams in Markdown preview (useful for `architecture/`) |
-| **Mermaid syntax**  | `bpruitt-goddard.mermaid-markdown-syntax-highlighting` | Syntax highlighting for Mermaid diagrams (useful for `architecture/`)     |
+--8<-- "includes/vscode-extensions.md:table"
 
-**ZLS (Zig Language Server)** and **Zig language** are bundled with the `ziglang.vscode-zig` extension - it provides completions, go-to-definition and inline error diagnostics out of the box.
+That table is not retyped here — it is generated from the same
+`bxp.code-workspace` list the editor reads, each row's purpose being the
+comment above the entry. Adding an extension for yourself and adding it to this
+page are one action.
+
+**ZLS (Zig Language Server)** comes with `ziglang.vscode-zig` — the extension
+fetches a ZLS matching your Zig toolchain, giving completions, go-to-definition
+and inline diagnostics with nothing else to install.
+
+The Dart and Flutter extensions matter only if you touch `bxp-gui`; the desktop
+side has its own prerequisites and first-run walkthrough in
+[GUI setup](gui/setup.md).
+
+!!! note "The workspace opens a second folder"
+
+    `bxp.code-workspace` also lists `../DEV`, a scratch folder that is not part
+    of this repository. VS Code shows it greyed out if you do not have one —
+    harmless, and removable from **File → Remove Folder from Workspace**.
 
 ---
 
 ## Verify Zig language version
 
-The required Zig version is pinned in `build.zig.zon` (`minimum_zig_version`) —
-install that toolchain; ZLS bundled with the Zig extension matches it.
+The required Zig version is pinned in `build.zig.zon` (`minimum_zig_version`),
+and CI installs exactly that version — `.github/workflows/ci.yml` is the second
+place to look if you want to see the pin in use. Install that toolchain from
+[ziglang.org/download](https://ziglang.org/download/), or with a version
+manager such as [`zigup`](https://github.com/marler8997/zigup) if you keep
+several around; the ZLS the Zig extension fetches follows whichever `zig` is on
+your `PATH`.
 
 `bxp-core` has **three external (fetch) dependencies** — `uucode` (MIT), the
 Unicode case-mapping tables behind `UPPER`/`LOWER`; `regex`
@@ -104,6 +123,58 @@ The typical dev workflow:
 
 ---
 
+## Build the documentation site
+
+The site you are reading is MkDocs Material, driven by one script:
+
+```bash
+# Regenerate every generated page + fragment, build, and serve on :8000
+bash scripts/docs/gen-docs.sh
+
+bash scripts/docs/gen-docs.sh --build   # regenerate + build into site/, no serve
+bash scripts/docs/gen-docs.sh --check   # drift guard: fail if a generated page
+                                        # differs from a fresh generation
+```
+
+The Python toolchain lives in a local venv the script expects to find, and is
+pinned in `scripts/docs/requirements.txt` — the same file the Pages workflow
+installs from, so a page that builds on a laptop builds on the runner:
+
+```bash
+python3 -m venv .venv-docs
+.venv-docs/bin/pip install -r scripts/docs/requirements.txt
+```
+
+The `social` plugin renders the Open Graph preview cards through Cairo, so
+`cairosvg` and `pillow` in that file are not optional extras — and on Linux they
+need system libraries the venv cannot supply:
+
+```bash
+sudo apt-get install -y libcairo2-dev libfreetype6-dev libffi-dev \
+    libjpeg-dev libpng-dev
+```
+
+That is the same list `.github/workflows/docs.yml` installs. Without them
+`mkdocs build --strict` fails inside the plugin rather than on your page.
+
+Two things to know before editing:
+
+- **Regenerating needs a working Zig and Flutter toolchain.** The reference
+  pages come out of `tools/zig-doc-gen`, and four GUI pages out of
+  `tools/dart-doc-gen`, which runs as a `flutter test`. Editing hand-written
+  prose does not need either — building the whole site does.
+- **`--check` is a CI gate, not a test phase.** `.github/workflows/docs.yml`
+  runs the drift check, the wasm/native parity check and a `--strict` build;
+  `scripts/test.sh` deliberately does not. See the note in
+  [Testing](testing.md) for why.
+
+Markdown formatting is hand-maintained (prettier and markdownlint reflow
+MkDocs-specific syntax and break the rendered pages).
+`bash scripts/docs/check-formatting.sh` parses the Mermaid fences and is run
+before a release rather than on every commit.
+
+---
+
 ## The wasm playground target
 
 `bxp-core` also builds for `wasm32-freestanding`, which is what powers the
@@ -135,7 +206,9 @@ docs-workflow step rather than a `test-NN` phase.
 bash scripts/test.sh
 ```
 
-Seven phases covering Zig unit tests, MCP smoke, bridge, Flutter, perf guard,
-expression corpus, and dataset regression. See [Testing](testing.md) for the
-full phase breakdown, individual sub-suite commands, and how to add regression
-tests.
+Nine phases covering the bxp-core unit tests and the CLI build, the MCP server,
+the bridge, the Flutter desktop app, a coarse perf guard, the expression corpus,
+and three regression gates — datasets, the expressions printed on the example
+pages, and the examples' committed output. [Testing](testing.md) has the full
+breakdown (generated from the phase scripts' own headers, so it counts itself),
+the individual sub-suite commands, and how to add a regression.

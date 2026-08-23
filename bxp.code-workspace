@@ -10,15 +10,33 @@
 	"settings": {
 		"workbench.colorTheme": "Dark+"
 	},
+	// The single source for the extension table on docs/dev/build.md: each
+	// entry's purpose is the comment above it, harvested by
+	// scripts/docs/gen-trees.py into docs/includes/vscode-extensions.md.
+	// Add an extension here and the page follows; add one without a comment
+	// and the generator fails rather than rendering a blank cell.
 	"extensions": {
 		"recommendations": [
-			"blueglassblock.better-json5",
+			// Zig language support: syntax, build tasks, and the bundled ZLS
+			// (completions, go-to-definition, inline diagnostics).
+			"ziglang.vscode-zig",
+			// Dart language support: analyzer diagnostics, formatting, debugging.
 			"dart-code.dart-code",
+			// Flutter tooling: device selection, hot reload on save, the widget
+			// inspector, and F5 launch with a full debugger.
 			"dart-code.flutter",
+			// Syntax highlighting for the JSON5 config files bxp reads.
+			"blueglassblock.better-json5",
+			// JSON formatting and tree view — plain-JSON payloads such as MCP
+			// wire dumps and .mcp.json.
 			"zainchen.json",
-			"bpruitt-goddard.mermaid-markdown-syntax-highlighting",
+			// Column-aware CSV viewer — helpful when reading source exports.
 			"mechatroner.rainbow-csv",
-			"ziglang.vscode-zig"
+			// Renders Mermaid diagrams in the Markdown preview, which is how the
+			// architecture pages are written.
+			"bierner.markdown-mermaid",
+			// Syntax highlighting inside those Mermaid fences.
+			"bpruitt-goddard.mermaid-markdown-syntax-highlighting"
 		]
 	}
 }
