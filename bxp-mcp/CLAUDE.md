@@ -179,7 +179,11 @@ Protocol version `2025-11-25` (also accepts + echoes `2025-06-18`; see the
 `mcp` module's `negotiateVersion`). The client (agent host) spawns this process
 and pipes requests; the server reads stdin, writes one response line per
 request to stdout. stderr is free for logs. A single line is capped at
-`mcp.max_line_len` (16 MiB); an over-long line ends the session like EOF.
+`mcp.max_line_len` (16 MiB); an over-long line ends the session like EOF, and
+an **unterminated** final line — the stream ends, or a cancelable read is
+canceled, mid-line — is discarded the same way rather than answered with a
+`-32700` nobody is left to read (upstream `mcp`, 2026-08-22; asserted by
+test-02's 300-series).
 
 - **request** (has `id`) → exactly one response line with the same `id`.
 - **notification** (no `id`, e.g. `notifications/initialized`) → no response.

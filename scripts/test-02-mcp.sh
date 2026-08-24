@@ -316,6 +316,27 @@ t206 = [json.loads(ln) for ln in by_id[206]["result"]["content"][0]["text"].spli
 assert t206[-1] == {"t": "final", "value": "MARKET BUY"}, t206
 PY
 
+    # ── truncated final line (300-series) ───────────────────────────────────
+    # A separate run, because the stream above is newline-terminated by
+    # construction. An UNTERMINATED last line must be discarded, not answered:
+    # the -32700 it used to draw goes to a peer that — on EOF or a canceled
+    # read — is already gone, and a live one reads that error as more invalid
+    # input and answers with another. The complete request before the fragment
+    # must still be served, and the process must still exit 0.
+    printf '%s\n%s' \
+        '{"jsonrpc":"2.0","id":300,"method":"initialize","params":{"capabilities":{}}}' \
+        '{"jsonrpc":"2.0","id":301,"meth' >"$reqs"
+    "$stage/bxp-mcp" <"$reqs" >"$resp" || {
+        echo "FAIL: bxp-mcp exited non-zero on a truncated final line"; rc=1
+    }
+    grep -q '"id":300' "$resp" || {
+        echo "FAIL: request before the truncated fragment went unanswered"; cat "$resp"; rc=1
+    }
+    ! grep -q '"code":-32700' "$resp" || {
+        echo "FAIL: truncated final line drew a parse error instead of being discarded"
+        cat "$resp"; rc=1
+    }
+
     rm -f "$stage/bxp-mcp" "$stage/bxp-cli"; rmdir "$stage"; rm -f "$reqs" "$resp"
     return $rc
 }

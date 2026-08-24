@@ -619,7 +619,7 @@ content-addressed by hash and re-audited on any pin bump:
   `YYYY-MM-DD`, no semver). `build.zig` takes all of them off **one shared
   `b.dependency` handle** — that is what makes them one compilation rather
   than several; `tz` imports `datefmt` internally, so while the local copy
-  existed the binary carried two separate date cores. The 600-zone offset
+  existed the binary carried two separate date cores. The IANA offset
   tables are compiled into `tz`, so this stays a build-time dependency only —
   no runtime tzdata lookup, exactly as the former in-tree copies behaved.
   Size effect on the ReleaseSafe `bxp-cli`: `tz` added ~8 KB (the extra
