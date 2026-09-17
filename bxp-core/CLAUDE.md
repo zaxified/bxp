@@ -615,8 +615,13 @@ content-addressed by hash and re-audited on any pin bump:
   adding a second `zig_libs` entry of their own that would have to be bumped in
   lockstep.
 
-  Pinned to the commit behind a dated release tag (upstream tags
-  `YYYY-MM-DD`, no semver). `build.zig` takes all of them off **one shared
+  Pinned to an exact commit. Upstream tags by date (`YYYY-MM-DD`, no semver)
+  and a tag is the default target, but the choice is decided by what the diff
+  does to these twelve modules, not by the tag: the `2026-09-02` tag left all
+  twelve byte-identical to `2026-08-24`, because the drift re-audits of
+  `json5`, `csvstream`, `encoding`, `procrun` and `mcp` landed after it was
+  cut, so the pin moved past it to the commit that carries them.
+  `build.zig` takes all of them off **one shared
   `b.dependency` handle** — that is what makes them one compilation rather
   than several; `tz` imports `datefmt` internally, so while the local copy
   existed the binary carried two separate date cores. The IANA offset

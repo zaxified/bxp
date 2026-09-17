@@ -273,8 +273,11 @@ bxp-core/inspect link, and the bridge proxies `bxp-cli` runs. The former
   `bxp-mcp/src/server.zig`, extracted there and hardened).
   bxp-core imports none of the last three — they are re-exported so
   `bxp-gui-bridge` and `bxp-mcp` share the same pin. Treated as a
-  foreign upstream: read-only, pinned to the commit behind a release tag,
-  never edited from this repo. The offset tables are compiled into the `tz`
+  foreign upstream: read-only, pinned to an exact commit, never edited from
+  this repo — normally the commit behind a dated release tag, but a tag that
+  leaves all twelve modules untouched is not worth adopting and a later
+  commit that fixes them is (see the pin's own comment in
+  `bxp-core/build.zig.zon`). The offset tables are compiled into the `tz`
   module, so there is still **no runtime dependency** — the pinned tzdata
   snapshot ships inside the binary exactly as the former in-tree copy did.
   All of them were lifted out of bxp-core and hardened upstream (`mcp` the

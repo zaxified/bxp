@@ -118,6 +118,14 @@ print(json.dumps({"jsonrpc":"2.0","id":{"a":1},"method":"ping"}))
 # A response-shaped line (id + result, no method) is something a client should
 # have received, not a request. It draws no output at all — the other one.
 print(json.dumps({"jsonrpc":"2.0","id":111,"result":{}}))
+# `notifications/initialized` is a notification, so the shape carrying an `id`
+# is a request for a method that has no response to give. Upstream used to
+# handle it BEFORE the id check: it mutated the handshake flag and wrote
+# nothing back, against the invariant that a request gets exactly one response.
+# It is now refused. The negative control is the id-LESS twin sent at the top
+# of this script, which must still draw no output — the `len(null_id) == 3`
+# count above is what fails if it starts answering notifications.
+print(json.dumps({"jsonrpc":"2.0","id":112,"method":"notifications/initialized"}))
 # The session survived all of the above: a real tool call still answers.
 call(110, "bxp_eval", {"expr":"UPPER('ok')"})
 
@@ -290,6 +298,13 @@ assert by_id[109]["result"]["prompts"] == [], by_id[109]
 # A response-shaped line draws nothing at all: answering a response would itself
 # be a protocol violation, so it is dropped the way a notification is.
 assert 111 not in by_id, by_id.get(111)
+
+# A notification method sent WITH an id is answered -32600 rather than served
+# silently. Both halves matter, and the id-less twin at the top of the request
+# script is the other half: it must still produce nothing, which the null_id
+# count asserts. Without that pair this line would also pass on a server that
+# answers every notification.
+assert code(112) == -32600, by_id[112]
 
 # The session survived every malformed line above — a long-lived stdio server
 # must not be killable by one bad request.

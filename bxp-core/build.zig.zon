@@ -33,14 +33,20 @@
         // resolves to the same module rather than a second date core. The
         // per-module inventory and rationale live in bxp-core/CLAUDE.md ->
         // External dependencies. Treated as a foreign upstream: read-only,
-        // pinned to the exact commit behind a release tag (upstream tags by
-        // date, `YYYY-MM-DD`), never edited from this repo. `zig fetch` cannot
+        // pinned to an exact commit, never edited from this repo. Normally
+        // that commit is the one behind a release tag (upstream tags by date,
+        // `YYYY-MM-DD`); this pin is deliberately AHEAD of the newest one.
+        // Tag `2026-09-02` leaves all twelve modules byte-identical to the
+        // `2026-08-24` they were pinned at, because upstream's drift re-audits
+        // of `json5`, `csvstream`, `encoding`, `procrun` and `mcp` landed
+        // after it was cut — and four of those fix defects on paths bxp calls
+        // (see CHANGELOG.md in each module). `zig fetch` cannot
         // target a subdirectory (ziglang/zig#23012)
         // so the whole collection is one package — only the modules actually
         // imported get compiled in.
         .zig_libs = .{
-            .url = "git+https://github.com/zaxified/zig-libs.git?ref=2026-08-24#17a79f1ec23b0ba2aa3d3c27c63fdc5d0c7a878e",
-            .hash = "zig_libs-0.0.0-WiQ0GqnfKAOK-CAOPplTu56aLd-H1cjoDF-7FTXU-Tor",
+            .url = "git+https://github.com/zaxified/zig-libs.git#549e89917e054eb460ad8e801156aef3d8af413d",
+            .hash = "zig_libs-0.0.0-WiQ0GkPB0APo1OI5fmPhLUXCmAeWISyTsBV_EjLuBK0z",
         },
     },
     .minimum_zig_version = "0.16.0",
