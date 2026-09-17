@@ -13,14 +13,15 @@ lands on master. `CHANGELOG.md` is generated independently.
 
 ### v0.3.2
 
+GUI - Config / Transformation visualiser
+
 ### v0.3.3
 
-Transformation visualiser
+GUI updater progress bar
 
 ### v0.4.0
 
 GUI Config/Create - Import wizard from sample CSV
-GUI updater progress bar
 GUI input file simple viewer
 
 Adopt `material_ui` 1.x — the real Material implementation, not the 0.0.1
