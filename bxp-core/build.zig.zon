@@ -35,18 +35,18 @@
         // External dependencies. Treated as a foreign upstream: read-only,
         // pinned to an exact commit, never edited from this repo. Normally
         // that commit is the one behind a release tag (upstream tags by date,
-        // `YYYY-MM-DD`); this pin is deliberately AHEAD of the newest one.
-        // Tag `2026-09-02` leaves all twelve modules byte-identical to the
-        // `2026-08-24` they were pinned at, because upstream's drift re-audits
-        // of `json5`, `csvstream`, `encoding`, `procrun` and `mcp` landed
-        // after it was cut — and four of those fix defects on paths bxp calls
-        // (see CHANGELOG.md in each module). `zig fetch` cannot
+        // `YYYY-MM-DD`), but what decides it is the diff to these twelve
+        // modules, not the tag: a tag that leaves them byte-identical is not
+        // worth adopting, and a later commit that fixes them is (see
+        // CHANGELOG.md in each module). Currently tag `2026-09-19`, which
+        // carries csvstream's `splitFieldsOpts` overflow policy that
+        // bxp-cli's field splits use. `zig fetch` cannot
         // target a subdirectory (ziglang/zig#23012)
         // so the whole collection is one package — only the modules actually
         // imported get compiled in.
         .zig_libs = .{
-            .url = "git+https://github.com/zaxified/zig-libs.git#549e89917e054eb460ad8e801156aef3d8af413d",
-            .hash = "zig_libs-0.0.0-WiQ0GkPB0APo1OI5fmPhLUXCmAeWISyTsBV_EjLuBK0z",
+            .url = "git+https://github.com/zaxified/zig-libs.git?ref=2026-09-19#6feedcbdfc500f4f9ee2353b7bdc3aa2248130d1",
+            .hash = "zig_libs-0.0.0-WiQ0GtXd0AMHtCq0dHHSPsxC2zBSc-xSB-U47KbuNAWq",
         },
     },
     .minimum_zig_version = "0.16.0",

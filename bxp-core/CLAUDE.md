@@ -38,13 +38,19 @@ was private to `bxp-cli/src/pipeline.zig`. Upstream holds one module for both,
 which is also where the invariant that ties them together is now documented.
 
 - `splitFields(record, buf, delim, quote_ch, alloc)` — splits one record into
-  field strings, up to `buf.len` fields. Unquotes quoted fields.
+  field strings, up to `buf.len` fields. Unquotes quoted fields. A record with
+  more fields than `buf` holds is refused (`error.FieldBufferTooSmall`); the
+  additive sibling `splitFieldsOpts(..., .{ .on_overflow = .truncate })` fills
+  the buffer and drops the surplus instead. bxp-cli uses the latter at all
+  three split sites (header, main pass, pre-pass) — data-lenient: one over-wide
+  row must not abort the file.
 - `LineIterator.init(bytes, quote, base_offset)` — quote-aware iterator over
   records held in a single in-memory chunk; `next()` yields
   `LineSlice { bytes, byte_offset, unbalanced_quote }`.
 - `ChunkReader.init(io, alloc, file, chunk_size)` — file → record-aligned
-  chunks (each ending on its last `\n`), so peak memory is the chunk size, not
-  the file size. `chunk_start_in_file` is what makes a record's absolute offset
+  chunks (each ending on its last `\n`), so peak memory is bounded by
+  `max_record_len + chunk_size` (`ChunkReader.capacityBound()` — the buffer
+  also carries the previous chunk's partial record), not the file size. `chunk_start_in_file` is what makes a record's absolute offset
   composable — that offset is the `--trace=bin` `source_locator` the GUI seeks
   to for drill-down.
 - **The lazy-quotes rule is load-bearing and survived the move verbatim**: a
@@ -617,10 +623,9 @@ content-addressed by hash and re-audited on any pin bump:
 
   Pinned to an exact commit. Upstream tags by date (`YYYY-MM-DD`, no semver)
   and a tag is the default target, but the choice is decided by what the diff
-  does to these twelve modules, not by the tag: the `2026-09-02` tag left all
-  twelve byte-identical to `2026-08-24`, because the drift re-audits of
-  `json5`, `csvstream`, `encoding`, `procrun` and `mcp` landed after it was
-  cut, so the pin moved past it to the commit that carries them.
+  does to these twelve modules, not by the tag: a tag that leaves all twelve
+  byte-identical is not worth adopting, and a later commit that fixes them is
+  (the pin has sat past a tag before, for exactly that reason).
   `build.zig` takes all of them off **one shared
   `b.dependency` handle** — that is what makes them one compilation rather
   than several; `tz` imports `datefmt` internally, so while the local copy
@@ -712,7 +717,9 @@ the same observations. If the rationale stops applying, revisit.
 The 🔴/🟠/🟡 tiers from the 2026-06-14 audit are all fixed; these are the
 residual 🔵 design observations. Greppable in-code marker: `AUDIT-OK`.
 
-- **`csv.zig splitFields` silently drops fields past `buf.len`.** Correctness
+- **Fields past `buf.len` are dropped.** Upstream's `splitFields` now refuses
+  such a record by default; bxp-cli opts back into dropping them explicitly
+  with `splitFieldsOpts(.truncate)`. Correctness
   depends on the caller sizing `buf` ≥ the widest row. Resolved by the bxp-cli
   side: the body-row path sizes `field_buf` to `MAX_COLUMNS` and the header
   warning already flags any file wider than that (see the documented

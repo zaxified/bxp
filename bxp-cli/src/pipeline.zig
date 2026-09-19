@@ -1547,8 +1547,11 @@ const WorkerSlice = struct {
 
     /// Typed view of `field_buf` as a `[][]const u8` slice for splitFields.
     ///
-    /// Sized at exactly `MAX_COLUMNS` slots: `csv.splitFields` stops at the
-    /// buffer bound and silently drops any further fields. This is an
+    /// Sized at exactly `MAX_COLUMNS` slots. The body splits pass
+    /// `.on_overflow = .truncate`, so a row wider than that keeps its first
+    /// `MAX_COLUMNS` fields and drops the rest — our choice, not the library
+    /// default (plain `csv.splitFields` refuses with `FieldBufferTooSmall`,
+    /// which would abort the whole file over one wide row). This is an
     /// intentional asymmetry with the header path — `parseCsvHeader` sizes its
     /// scratch at `MAX_COLUMNS + 1` precisely to detect and WARN on an
     /// over-wide header — whereas a body row wider than `MAX_COLUMNS`
@@ -1581,12 +1584,13 @@ fn workerMainPass(ws: *WorkerSlice, rec: *const RowEvalConst) void {
     const field_slice = ws.fieldBufSlice();
     for (ws.lines, 0..) |line, j| {
         _ = ws.field_arena.reset(.retain_capacity);
-        const fields = csv.splitFields(
+        const fields = csv.splitFieldsOpts(
             line.bytes,
             field_slice,
             rec.bc.csv_delimiter_in,
             rec.bc.csv_text_quote_in,
             ws.field_arena.allocator(),
+            .{ .on_overflow = .truncate },
         ) catch |err| {
             ws.error_value = err;
             return;
@@ -1838,7 +1842,10 @@ fn parseCsvHeader(
     var hdr_arena = std.heap.ArenaAllocator.init(file_alloc);
     defer hdr_arena.deinit();
     const hdr_scratch = try hdr_arena.allocator().alloc([]const u8, MAX_COLUMNS + 1);
-    const raw_header = try csv.splitFields(hdr_line.bytes, hdr_scratch, delimiter, quote, hdr_arena.allocator());
+    // `.truncate`: a header wider than the scratch still fills it, so
+    // `raw_header.len > MAX_COLUMNS` below detects the overflow and warns
+    // instead of the split refusing the file.
+    const raw_header = try csv.splitFieldsOpts(hdr_line.bytes, hdr_scratch, delimiter, quote, hdr_arena.allocator(), .{ .on_overflow = .truncate });
     const truncated = raw_header.len > MAX_COLUMNS;
     const header_fields = if (truncated) raw_header[0..MAX_COLUMNS] else raw_header;
     if (truncated) {
@@ -2014,12 +2021,13 @@ fn workerPrePass(ws: *WorkerSlice, rec: *const RowEvalConst) void {
     const field_slice = ws.fieldBufSlice();
     for (ws.lines, 0..) |line, j| {
         _ = ws.field_arena.reset(.retain_capacity);
-        const fields = csv.splitFields(
+        const fields = csv.splitFieldsOpts(
             line.bytes,
             field_slice,
             rec.bc.csv_delimiter_in,
             rec.bc.csv_text_quote_in,
             ws.field_arena.allocator(),
+            .{ .on_overflow = .truncate },
         ) catch |err| {
             ws.error_value = err;
             return;
