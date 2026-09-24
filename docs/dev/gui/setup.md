@@ -29,8 +29,8 @@ Flutter desktop build needs on each platform.
     ```
 
     The release pipeline installs the same GTK/lzma/libstdc++ set (plus
-    `dpkg-dev`, `fuse` and `libfuse2` for the `.deb` and `.AppImage` packaging
-    steps) — see `.github/workflows/release.yml`. Note that `scripts/test.sh`
+    `dpkg-dev`, `fuse` and `libfuse2`; the `.AppImage` is the only Linux
+    package) — see `.github/workflows/release.yml`. Note that `scripts/test.sh`
     does **not** need these: `test-04` runs `flutter analyze` and
     `flutter test`, which never link GTK. Only actually running or bundling
     the app does.
@@ -68,7 +68,8 @@ flutter run -d macos    # macOS
 flutter run -d windows  # Windows (PowerShell)
 ```
 
-The dev-tree binary fallback in `findBin()` walks up from the Flutter
+The dev-tree fallback in `findBin()` (and `findBridgeLibrary()` for the
+bridge) walks up from the Flutter
 executable until it finds the `bxp-gui/` segment, then resolves
 `../bxp-cli/zig-out/bin/bxp-cli` and the `bxp-gui-bridge` library
 automatically. No environment variables needed for local dev.
@@ -93,11 +94,11 @@ from the bridge.
 If the `bxp-gui-bridge` library is missing or unbuilt a fatal error gate
 appears — build it first. Then:
 
-1. Open a config via the file-picker or drag-drop — any
+1. Open a config via the open dialog (ctrl+o) — any
    `datasets/<template_id>/sample.json` works out of a fresh clone, and
    `resources/console/bxp-cli.examples.json` is the full starter set.
 2. Select a template in the toolbar dropdown.
-3. Click **Run** — the dry-run trace should populate the bottom panel.
+3. Click **dry-run** — the dry-run trace should populate the bottom panel.
 4. Click any row to see per-variable and per-rule results.
 5. Click any expression cell — the ExprPanel on the right shows a live
    evaluation playground.
@@ -174,4 +175,4 @@ bash scripts/test-04-desktop.sh
 ```
 
 `flutter analyze` enforces sound null-safety and catches common issues. Run it
-before committing — CI runs it on every release build.
+before committing — CI runs it (via `test-04`) on every PR and master push.

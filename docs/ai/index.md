@@ -76,10 +76,11 @@ also shows the live listening address and a log of what the agent did.
 **Every action is visible and reversible.** Edits are in memory until a
 confirmed `save`; destructive tools (`save`, `full_run`, `delete_node`,
 `exit`) pop a dialog the user must accept. An agent should expect two
-non-failures: while a config loaded with errors, the editing tools are refused
-with a `reason` and a `validation` summary, and a structural verb reports
-`{<verb>: false, reason}` when the editor silently declines an edit, so a
-`true` really does mean the tree changed.
+non-failures: while validation errors are attached, `save` is refused before
+prompting with a `reason` and a `validation` summary, and a structural verb
+reports `{<verb>: false, reason}` when the editor silently declines an edit, so
+a `true` really does mean the tree changed. (While a config loaded with errors,
+the editing tools fail outright with `isError: true`.)
 
 For unattended runs the user can turn on *Agent control → Auto-approve agent
 actions*, which skips the dialogs and lights a red chip in the status bar. It

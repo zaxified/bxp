@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Fetch the FULL City of Chicago business-licenses dataset (~1.2M rows) for the
-# scale demonstration. The committed sample.csv is a 223-row slice selected to
-# cover all four LICENSE STATUS codes.
+# scale demonstration. The committed sample.csv is a hand-picked 10-row slice
+# that covers all four LICENSE STATUS codes.
 #
 # We pull from the Socrata SODA endpoint with the SAME column selection as the
 # slice (lowercase API field names like `license_status`), so full.json reuses

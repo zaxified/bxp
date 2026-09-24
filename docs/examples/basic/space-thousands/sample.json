@@ -1,9 +1,10 @@
 {
   // Teaching example — synthetic data. Continental-European number format:
   // space-grouped thousands and a COMMA decimal ("1 234 567,89" = 1234567.89),
-  // common in FR / CZ / SI / many EU exports. bxp auto-handles the
-  // period-thousands form ("1.234,56") but NOT space-grouped thousands, so this
-  // is the one-line idiom for it.
+  // common in FR / CZ / SI / many EU exports. Declaring
+  // csv_decimal_separator_in: "," handles the period-thousands form
+  // ("1.234,56") but NOT space-grouped thousands, so this is the one-line
+  // idiom for it.
   conversion_templates: {
     space_thousands_clean: {
       data_dir:           ".",

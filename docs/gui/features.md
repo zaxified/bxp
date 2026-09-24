@@ -34,8 +34,9 @@ and the GUI sees it automatically with no client-side changes.
 Click any expression cell — a panel opens on the right with:
 
 - A live editor with syntax highlighting and per-keystroke validation.
-- Autocomplete (ctrl+space) for built-in functions, `$variables`, and
-  `[ColumnName]` references that exist in the loaded template.
+- Autocomplete (ctrl+space) for built-in functions and keywords,
+  `[ColumnName]` references (the CSV headers seen by the template's last
+  dry-run), and the pre-pass block names inside `LOOKUP('…'`.
 - Token-level error underlines: a typo'd `[Quanity]` (instead of
   `[Quantity]`) gets a red underline on exactly the wrong token, with a
   did-you-mean tooltip.

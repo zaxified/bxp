@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Fetch the FULL French DVF (Demandes de valeurs foncières) 2024 dataset for
-# the scale demonstration. The committed sample.csv is a 250-row slice; the
-# real file is every property transaction registered in France in 2024
-# (~4M rows). Source: DGFiP open data on data.gouv.fr (Licence Ouverte / CC-BY).
+# the scale demonstration. The committed sample.csv is a hand-picked 9-row
+# slice; the real file is every property transaction registered in France in
+# 2024 (~3.5M rows). Source: DGFiP open data on data.gouv.fr (Licence Ouverte / CC-BY).
 #
 # The download lands in ./full/ (gitignored). Run it through the bundled scale
 # config afterwards:
@@ -10,7 +10,7 @@
 #   bash fetch-full.sh
 #   bxp-cli --config full.json
 #
-# Re-running is cheap: an already-extracted full/valeursfoncieres-2024.txt is
+# Re-running is cheap: an already-extracted full/ValeursFoncieres-2024.txt is
 # reused.
 set -u
 

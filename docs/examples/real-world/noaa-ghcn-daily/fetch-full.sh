@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Fetch the FULL GHCN-Daily record for the Central Park station (USW00094728)
-# for the scale demonstration. The committed sample.csv is a 301-row slice;
+# for the scale demonstration. The committed sample.csv is a 12-row slice;
 # the real per-station file is the complete daily history (~150 years of rows,
 # 124 columns wide).
 #

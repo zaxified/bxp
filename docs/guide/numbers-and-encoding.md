@@ -36,8 +36,9 @@ Numeric output is **canonical, not verbatim**: a plain `[Column]` reference
 whose value the fixed-point core represents exactly drops redundant trailing
 zeros, so `75,00` reaches the output file as `75` and `1,50` as `1.5`. Values
 the core does not canonicalise — a leading-zero form like `0012`, or more than
-12 fractional digits — pass through byte-for-byte, as does anything used in a
-string context (`'' & [Column]`).
+12 fractional digits — pass through byte-for-byte. The same trimming applies to
+any string result that reads as a number as a whole, so `'' & [Column]` does
+not preserve the original form either (`75,00` still becomes `75`).
 
 US-style exports (Schwab, Fidelity, Trading 212) use `.` decimal +
 optional `,` thousands — that path is handled automatically (see the

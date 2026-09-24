@@ -19,7 +19,7 @@ Three layers, top-down:
 │  services/   Pure Dart, no Flutter imports    │
 │  Subprocess wrappers, AST loader, prefs, ...  │
 └───────────────────────────────────────────────┘
-        ↕  Single backend: bxp-gui-bridge (see "Subprocess wiring" below)
+        ↕  Single backend: bxp-gui-bridge (see "Subprocess Wiring", subprocess.md)
         │      bxp-gui-bridge.{dll,so,dylib}    (single backend, all platforms)
         ↓
   bxp-cli  (conversions via --trace BXTB frame stream, proxied by the bridge)
@@ -167,8 +167,9 @@ same limit on the build side.
 parse  →  JsonAstNode tree  →  apply ops  →  dump  →  file
 ```
 
-Operations (`operations.dart`): `insertChild`, `deleteChild`, `moveChild`,
-`setValue`, `duplicateChild`. Each operates on a dot-path into the tree.
+Operations (`operations.dart`): `setValue`, `insertProperty`, `insertElement`,
+`deleteAt`, `moveAt`, `duplicateAt`, `renameProperty` (plus comment
+counterparts). Each operates on a key/index path (`List<String>`) into the tree.
 
 `op_to_ast.dart` translates high-level `ConfigOp` (the type stored in the
 undo ledger) to concrete AST mutations. `ast_patch_client.dart` runs the

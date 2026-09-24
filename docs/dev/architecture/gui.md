@@ -27,16 +27,16 @@ graph TD
         TS["TraceStore (ChangeNotifier)
         config AST · diagnostics · trace frames
         docs catalog · prefs · run status"]
-        SG["SchemaGate
-        insert order · type guard for Add-Child"]
-        DV["DartValidator
-        per-edit Dart-side checks
-        driven by FnDoc.args + FieldDoc"]
         TM["trace_model.dart
         Dart mirrors of BXTB frame payloads"]
     end
 
     subgraph SVC["lib/services/"]
+        SG["SchemaGate
+        insert order · type guard for Add-Child"]
+        DV["DartValidator
+        per-edit Dart-side checks
+        driven by FnDoc.args + FieldDoc"]
         BPC["BxpProcessClient
         every backend call via bxp-gui-bridge
         in-proc inspect/eval + proxied bxp-cli runs"]
@@ -135,21 +135,21 @@ sequenceDiagram
     participant CLI as bxp-cli --trace
 
     UI->>TS: runDryRun() / runFullRun()
-    TS->>TS: write draft config to tmp file
+    TS->>TS: reset run state + pick tmp .bxtb path (runs the on-disk config)
     TS->>BPC: runWithBtrace (configPath, template?)
-    BPC->>CLI: bridge_run_streaming(--trace=bin --config ...)
+    BPC->>CLI: bridge_run_streaming(--config ... --trace=bin --trace-file=tmp.bxtb)
     CLI-->>BPC: BXTB magic + file_start frame
     BPC-->>TS: stdout byte chunk
-    TS->>TS: BtraceReader.feed(bytes), notifyListeners() [stream started]
+    TS->>TS: BtraceReader.appendBytes + nextFrame, notifyListeners() [stream started]
     TS->>TS: register FileModel, set runStatus=running
     loop per source row
         CLI-->>BPC: output_row | filtered_row | error_row | prepass_entry
         BPC-->>TS: stdout byte chunk
-        TS->>TS: BtraceReader.feed → append RowModel to current FileModel
+        TS->>TS: nextFrame → append RowModel to current FileModel
         TS-->>UI: traceLinesCounter.value++ [ValueNotifier — no rebuild]
     end
     CLI-->>BPC: file_end frame
-    TS->>TS: BtraceReader.feed → finalise FileModel stats + publish runtime
+    TS->>TS: nextFrame → finalise FileModel stats + publish runtime
     TS-->>UI: fileGen.value++ [ValueNotifier — file selector refresh]
     CLI-->>BPC: done frame (exit_code=0)
     BPC-->>TS: stream closed
@@ -302,8 +302,9 @@ byte span and `suggest` did-you-mean string. Each finding is inserted as a
 sibling immediately before the offending key in its parent object (or
 appended to the parent when the offending field doesn't exist).
 
-`bxp-cli` runs only the first three passes (load) and skips the entire
-diagnostic chain — its job is to convert files, not validate. Hence the same
+`bxp-cli` runs the load passes plus the fail-fast `BrokerConfig.validate`
+(the same schema constraints as V1, stopping at the first) and skips the rest
+of the diagnostic chain — its job is to convert files, not validate. Hence the same
 typo that surfaces as a `$warn_*` sibling in the annotated JSON appears as a
 plain stderr warning line during a real run.
 
@@ -385,11 +386,13 @@ See [`mcp.md`](../mcp.md) (bxp-mcp) and [`gui/agent.md`](../gui/agent.md#agent-c
 ## Config Editing and AST
 
 Every user edit in the config tree (insert field, delete, setValue, reorder) is
-expressed as a `ConfigOp` and applied to the live `AstNode` tree via
-`json5_ast/operations.dart`. The dumper re-serialises the AST to JSON5 for display and
-for saving. `DartValidator` runs synchronously for fast per-field feedback;
-Config validation runs on every Save for the authoritative full-config
-validation.
+expressed as a `ConfigOp`, applied to the live `AstNode` tree in place via
+`json5_ast/operations.dart` (`applyConfigOp`), and recorded in the op log. On
+Save, `AstPatchClient` replays that op log against the original raw bytes and
+dumps the result through the deterministic emitter. `DartValidator` runs
+synchronously for fast per-field feedback; the bridge's config validation runs
+on every Save (against the temp file, before the real file is touched) for the
+authoritative full-config validation.
 
 ```mermaid
 sequenceDiagram
@@ -399,20 +402,26 @@ sequenceDiagram
     participant DV as DartValidator
     participant FMT as bridge (config)
 
-    UI->>TS: applyOp(ConfigOp)
-    TS->>AST: ops.apply(op, astRoot)
-    AST-->>TS: mutated AstNode tree
-    TS->>AST: dumper.dump(astRoot)
-    AST-->>TS: JSON5 source string (draft)
-    TS->>DV: validatePath(path, value)
-    DV-->>TS: per-field errors (fast, no subprocess)
+    UI->>TS: edit action (ConfigOp)
+    TS->>AST: applyConfigOp(astRoot, op)
+    AST-->>TS: AstNode tree mutated in place
+    TS->>TS: _opLog.record(op) + _pushHistory() [AST snapshot]
+    TS->>DV: _revalidateDart()
+    DV-->>TS: path-keyed errors (fast, no subprocess)
     TS-->>UI: notifyListeners() [tree re-renders with inline markers]
 
     Note over TS,FMT: On Save (Ctrl+S)
-    TS->>TS: write draft JSON5 to disk
-    TS->>FMT: loadConfig(path, checkFsSeconds?)
+    TS->>AST: AstPatchClient.apply(rawBytes, ops)
+    AST-->>TS: JSON5 bytes
+    TS->>TS: write path.bxp-tmp
+    TS->>FMT: loadConfig(tmpPath, checkFsSeconds?)
     FMT-->>TS: annotated JSON (with $err/$warn/$info siblings)
-    TS->>TS: parse into diagnosticMap (path -> Diagnostic[])
+    alt any $err_* marker
+        TS->>TS: delete tmp, keep original, show configSaveError
+    else clean
+        TS->>TS: back up original, rename tmp over it,<br/>reset history to one baseline, clear op log
+        TS->>FMT: loadConfig() [refresh diagnostics]
+    end
     TS-->>UI: notifyListeners() [diagnostics overlay updated]
 ```
 
@@ -423,39 +432,35 @@ new built-in function automatically extends the live validator.
 
 ### Undo / redo
 
-The op log is the canonical record of "what the user did since the last
-load." Every applied `ConfigOp` is paired with its inverse so undo doesn't
-require re-parsing — it just reapplies the inverse against the live AST.
+History is a list of **AST snapshots** (`_astHistory` + `_historyIndex`), not a
+stack of inverse ops: every applied mutation pushes a clone of the live tree,
+and undo / redo just move the index and restore that clone. Index 0 is always
+the last loaded/saved baseline, so `isDirty` is simply `_historyIndex > 0`. The
+op log is kept in step (`_opLog.truncate(_historyIndex)` before each new op),
+because it — not the snapshots — is what Save replays onto the raw bytes.
 
 ```mermaid
 sequenceDiagram
     participant UI as editor / Ctrl+Z / Ctrl+Y
     participant TS as TraceStore
-    participant LOG as _opLog
-    participant REDO as _redoStack
-    participant AST as json5_ast
+    participant H as _astHistory
 
-    Note over UI,AST: Forward edit
-    UI->>TS: applyOp(op)
-    TS->>AST: ops.apply(op, root)
-    TS->>LOG: push (op, inverseOp)
-    TS->>REDO: clear()
+    Note over UI,H: Forward edit
+    UI->>TS: edit action (ConfigOp)
+    TS->>TS: applyConfigOp + _opLog.truncate/record
+    TS->>H: drop entries after _historyIndex, push clone
     TS-->>UI: notifyListeners() [canUndo=true, canRedo=false]
 
-    Note over UI,AST: Undo (Ctrl+Z)
+    Note over UI,H: Undo (Ctrl+Z)
     UI->>TS: undo()
-    TS->>LOG: pop (op, inverseOp)
-    TS->>AST: ops.apply(inverseOp, root)
-    TS->>REDO: push (op, inverseOp)
-    TS->>TS: re-run DartValidator + diagnostic refresh
+    TS->>H: _historyIndex-- , restore clone
+    TS->>TS: invalidate path-keyed state (re-runs DartValidator)
     TS-->>UI: notifyListeners() [canRedo=true]
 
-    Note over UI,AST: Redo (Ctrl+Y)
+    Note over UI,H: Redo (Ctrl+Y)
     UI->>TS: redo()
-    TS->>REDO: pop (op, inverseOp)
-    TS->>AST: ops.apply(op, root)
-    TS->>LOG: push (op, inverseOp)
-    TS->>TS: re-run DartValidator + diagnostic refresh
+    TS->>H: _historyIndex++ , restore clone
+    TS->>TS: invalidate path-keyed state (re-runs DartValidator)
     TS-->>UI: notifyListeners()
 ```
 
@@ -464,50 +469,49 @@ Edge cases handled:
 - **Ctrl+Z inside a text field** falls through to native typo-undo. The
   global handler only fires when focus is somewhere structural (tree, panel,
   top bar). See `_focusInEditableText()` in `main_view.dart`.
-- **Save clears the redo stack but keeps the undo log.** The user can still
-  undo edits made before the save — the AST mutations are reversible
-  regardless of disk persistence.
-- **Reset draft (Ctrl+T)** clears both stacks and re-loads from disk —
-  it's a hard reset, not an undo.
+- **Save and load reset the history.** A successful save compresses the
+  history to a single baseline entry and clears the op log, so edits made
+  before the save can no longer be undone.
+- **Reset draft (Ctrl+T)** restores the last loaded/saved baseline from memory
+  (`resetDraft`, no bridge round-trip) and resets the history — it's a hard
+  reset, not an undo.
 
 ---
 
 ## Expr Playground
 
-Expressions are validated live (per keystroke, debounced ~300 ms) via
-the bridge expr validator. When the user switches to the **Variables** panel, the
-playground calls the bridge's expr-trace with the current row context and streams
-per-call results into the Variables table. Token-level error spans (byte
-`off`/`len`) are used to underline the offending token directly
-in the expr editor.
+Expressions are validated live (per edit, debounced 500 ms): the Dart-side
+`DartValidator` checks first, then the bridge expr validator. Token-level error
+spans (byte `off`/`len`) are used to underline the offending token directly in
+the expr editor. When an expression containing function calls is rendered
+against a selected row, the store lazily asks the bridge's expr-trace for that
+(row, expression) pair and caches the per-call values, which the function-token
+tooltips then show.
 
 ```mermaid
 sequenceDiagram
-    participant UI as expr_editor.dart
+    participant UI as expr_editor.dart / expr_highlight.dart
     participant TS as TraceStore
     participant BPC as BxpProcessClient
     participant FMT as bridge (inspect)
 
     Note over UI,FMT: Live validation (per edit, debounced)
-    UI->>TS: setExprDraft(path, src)
+    UI->>TS: updateSelectedExprText(src)
+    TS->>TS: DartValidator.validateExpr (sync)
     TS->>BPC: validateExpr(src)
     BPC->>FMT: bridge_eval_expr(src)
-    FMT-->>BPC: {ok} or {ok:false, error, detail, off, len}
-    BPC-->>TS: ExprValidation result
+    FMT-->>BPC: 0 (valid) or {error, detail, off, len}
+    BPC-->>TS: validation result
     TS-->>UI: exprValidationOffset/Length → underline token in editor
 
-    Note over UI,FMT: Playground run (Variables panel)
-    UI->>TS: traceExpr(src, headers, fields)
-    TS->>BPC: traceExpr(src, headers, fields)
+    Note over UI,FMT: Per-call trace (selected row, lazily)
+    UI->>TS: requestExprCallTrace(rowId, src)
+    TS->>BPC: traceExpr(expr, headers, fields)
     BPC->>FMT: bridge_eval_expr_trace(src, headers, fields)
-    loop per-call NDJSON line
-        FMT-->>BPC: {"fn":"ABS","src_start":0,"src_end":14,"value":"150"}
-        BPC-->>TS: ExprCallTrace record
-        TS-->>UI: exprCallTrace list [ValueNotifier]
-    end
-    FMT-->>BPC: {"t":"final","value":"150"} or {"t":"error",...}
-    BPC-->>TS: final value or error
-    TS-->>UI: exprFinalValue / exprTraceError
+    FMT-->>BPC: NDJSON: one {"fn","src_start","src_end","value"} line per call<br/>+ {"t":"final",...} or {"t":"error",...}
+    BPC-->>TS: List of ExprCallTrace
+    TS->>TS: cache by (row, expr)
+    TS-->>UI: notifyListeners() → tooltips show per-call values
 ```
 
 ---
@@ -532,7 +536,7 @@ sequenceDiagram
     GH-->>UPD: { tag_name, assets[] }
     UPD->>UPD: compare against current version
     alt newer release found
-        UPD->>UPD: pick asset by platform regex\n(setup.exe / .dmg / .AppImage)
+        UPD->>UPD: pick asset by platform regex\n(.exe / .dmg / .AppImage)
         UPD-->>DLG: notifyListeners() [UpdateInfo available]
         DLG->>UPD: user clicks Install
         UPD->>FS: download asset → tmp dir
@@ -542,7 +546,7 @@ sequenceDiagram
             UPD->>UPD: verify asset SHA-256 against the now-trusted SHA256SUMS
             alt hash matches
                 UPD->>OS: platform-specific install
-                Note right of OS: Windows: setup.exe /S → exit(0)\nmacOS: hdiutil mount → cp -R → open -n\nLinux AppImage: atomic-replace + exec()\nLinux .deb / tarball: open release page
+                Note right of OS: Windows: setup.exe /S → exit(0)\nmacOS: hdiutil mount → cp -R → open -n\nLinux AppImage: atomic-replace + exec()
                 OS-->>UPD: success / failure
             else hash mismatch
                 UPD-->>DLG: error: checksum mismatch — refuse install
@@ -575,9 +579,10 @@ Notes:
   alone was not enough: it matches on any macOS host, so an Intel Mac used to
   install a build it could not launch. The release workflow doesn't produce an
   x86_64 DMG.
-- **Linux dual path.** AppImage is atomically replaced and `exec()`'d back
-  in-place; `.deb` and `.tar.gz` users go to the release page since
-  in-place self-update doesn't fit those formats.
+- **Linux is AppImage-only.** AppImage is atomically replaced and `exec()`'d
+  back in-place; a build running outside an AppImage gets no asset match and a
+  "manual update required" message (the `.deb` / tarball channels were retired
+  in v0.3.0).
 - **`kDebugMode` skips the auto-check.** Dev runs don't accidentally
   download installers over the working tree.
 

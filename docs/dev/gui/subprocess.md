@@ -67,7 +67,7 @@ Resolved in this order:
 
 | Method                  | Backend call                       | Notes                                                   |
 | ----------------------- | ---------------------------------- | ------------------------------------------------------- |
-| `validateConfig(path)`  | `bridge_inspect {config}`          | Returns annotated JSON with `$err_*`/`$warn_*` siblings |
+| `loadConfig(path)`      | `bridge_inspect {config}`          | Returns annotated JSON with `$err_*`/`$warn_*` siblings |
 | `getDocs()`             | `bridge_inspect {docs}`            | Cached at startup; drives FnDoc tooltips + SchemaGate   |
 | `listTemplates(path)`   | `bridge_inspect {list_templates}`  | `{templates:[…]}` → `List<TemplateInfo>` (id + io shape) |
 | `validateExpr(text)`    | `bridge_eval_expr`                 | Returns `{error, offset, length}` on failure            |

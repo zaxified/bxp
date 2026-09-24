@@ -27,8 +27,8 @@ surfaces in `lastError` and the GUI stays fully usable without it.
 screen" call: alongside path / dirty / run status it carries `validation` —
 per-severity counts plus the first findings (`{severity, path, message}`),
 the same badges the config tree paints. `GET /health` is an
-unauthenticated handshake (`{name, version, config_path, config_loaded, dirty,
-agent_connected, auto_approve}`) so an agent can confirm it reached the right
+unauthenticated handshake (`{name, version, config_path, config_loaded,
+loaded_with_errors, dirty, agent_connected, auto_approve}`) so an agent can confirm it reached the right
 server before MCP `initialize`.
 
 **Security model.** The defaults are bounded for a local-only tool:
@@ -87,6 +87,7 @@ automated in CI ([release.yml](https://github.com/zaxified/bxp/blob/master/.gith
 Per-platform install dispatch: Windows `setup.exe /S` (silent NSIS, **per-user
 install — no administrator elevation**, with a rename-swap self-heal so an update
 can replace the running executable); macOS `hdiutil` mount → `cp -R` → `open`;
-Linux AppImage atomic in-place replace + re-`exec`; `.deb` / tarball open the
-release page (in-place self-update is AppImage-only). `kDebugMode` skips the
+Linux AppImage atomic in-place replace + re-`exec`; a Linux build running
+outside an AppImage, or an Intel Mac, gets a "manual update required" message
+with the release page instead (in-place self-update is AppImage / arm64-only). `kDebugMode` skips the
 auto-check during dev runs.

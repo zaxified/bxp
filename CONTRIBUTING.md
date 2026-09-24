@@ -12,14 +12,14 @@ Open an issue at <https://github.com/zaxified/bxp/issues>.
 For bugs, please include:
 
 - The binary version (`bxp-cli --version`, or
-  `RuntimeInfo ctrl-shift-s → Versions` in `bxp-gui`).
+  the settings inspector's Versions section in `bxp-gui` — ctrl+shift+s).
 - A minimal config snippet plus a short input sample that reproduces
   the problem.
 - Expected vs. actual output, and the exit code.
 
 For feature requests, describe the broker or use-case first and the
 implementation idea second. Planned work is in
-[`docs/roadmap.md`](docs/roadmap.md) — check there before opening a new
+[`docs/dev/roadmap.md`](docs/dev/roadmap.md) — check there before opening a new
 issue in case something is already queued.
 
 ## Datasets — the most valuable contribution
@@ -31,7 +31,7 @@ engine cannot silently break a real-world template.
 
 Each dataset folder is named `<template_id>/` and contains:
 
-- `sample.json` — short description of the case.
+- `sample.json` — the bxp-cli config (JSON5) that runs the case.
 - `sample_<from>_<to>.csv` (or `.xlsx` / `.json`) — the anonymised input.
 - `sample_<from>_<to>.expected` — the expected `.csvx` output, byte-for-byte.
 
@@ -55,14 +55,14 @@ workflow is:
    [`docs/ai/authoring-a-template.md`](docs/ai/authoring-a-template.md).
 2. Verify it with the bxp-mcp tools (`bxp_validate` + `bxp_simulate`) or
    `bxp-cli --debug` (runtime check).
-3. Add the template to `resources/bxp-cli.examples.json` and a paired
+3. Add the template to `resources/console/bxp-cli.examples.json` and a paired
    dataset under `datasets/`.
 4. Open a PR.
 
 ## Code contributions
 
 For build / test commands, repo layout, and architecture see
-[`docs/devel.md`](docs/devel.md). Module-level conventions live in the
+[`docs/dev/build.md`](docs/dev/build.md). Module-level conventions live in the
 `CLAUDE.md` file inside each package
 ([`bxp-cli/`](bxp-cli/CLAUDE.md), [`bxp-core/`](bxp-core/CLAUDE.md),
 [`bxp-mcp/`](bxp-mcp/CLAUDE.md), [`bxp-gui/`](bxp-gui/CLAUDE.md)).
@@ -76,7 +76,7 @@ For build / test commands, repo layout, and architecture see
 
 Fixes to [`docs/`](docs/) are welcome as small PRs. If a page is unclear or
 wrong, file an issue or open the PR directly. Note that everything under
-`docs/reference/`, `docs/dev/architecture/data-structures.md` and
+`docs/reference/` (except its `index.md`), `docs/dev/architecture/data-structures.md` and
 `docs/includes/` is generated from catalogs in the code — edit the catalog, not
 the page.
 

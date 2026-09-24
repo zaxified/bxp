@@ -129,8 +129,7 @@ The error sentinel carries the same optional `off`/`len` fields as `--expr`.
 ## --config
 
 Validates a config file and emits it back as **annotated JSON** — standard JSON
-with reserved `$`-prefixed sibling keys that carry preserved comments and
-diagnostics. Used by bxp-gui's `loadConfig()` and the VALIDATE button.
+with reserved `$`-prefixed sibling keys that carry diagnostics. Used by bxp-gui's `loadConfig()` and the VALIDATE button.
 
 ```jsonc
 // bxp_validate arguments
@@ -281,6 +280,7 @@ of truth consumed by bxp-gui at startup.
   "signature": "ABS(f)",
   "description": "Absolute numeric value.",
   "example": "ABS(-12.5)",
+  "needs": "none",
   "args": [{ "name": "f", "kind": "number" }],
   "min_args": 1,
   "max_args": 1,
@@ -289,7 +289,8 @@ of truth consumed by bxp-gui at startup.
 
 `args[].kind` values: `expr` (any expression) | `string` (any string-typed
 expression) | `literal_string` (bare string literal) | `number` (any
-numeric-typed expression) | `positive_integer` (positive integer literal, ≥ 1) |
+numeric-typed expression) | `finite_number` (number that must be finite, no
+NaN/Inf) | `positive_integer` (positive integer literal, ≥ 1) |
 `integer_in_range` (integer literal within a builtin-specific range) |
 `date_format` (datefmt date-format pattern) | `map_name` (name of a declared
 named map) | `pre_pass_name` (name of a declared `pre_pass` block).
@@ -301,13 +302,13 @@ config-load time by `expr.staticCheckCalls`.
 ### `keywords` entry
 
 ```jsonc
-{ "name": "true", "description": "Boolean literal true." }
+{ "name": "AND", "description": "Logical AND. Both operands are evaluated. Returns \"true\" or \"false\"." }
 ```
 
 ### `operators` entry
 
 ```jsonc
-{ "token": "+", "description": "Addition or string concatenation." }
+{ "token": "+", "description": "Numeric addition." }
 ```
 
 ### `tokens` entry
@@ -336,12 +337,12 @@ logic). Each entry describes one config tree path.
   "type_name":       "string",
   "required":        true,
   "default":         null,
-  "description":     "Directory scanned for input files ...",
+  "description":     "Path to input files, relative to this config file. ...",
   "enum_values":     null,
   "ordered":         false,
-  "insert_order":    "schema",
-  "insert_template": { ... },
-  "validator":       "none",
+  "insert_order":    null,
+  "insert_template": null,
+  "validator":       "non_empty",
   "autocomplete":    "none"
 }
 ```

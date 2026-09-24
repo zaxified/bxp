@@ -12,7 +12,7 @@ All flags are optional. Without arguments, bxp-cli reads `bxp-cli.json` from the
 | --- | --- | --- |
 | <code class="hl-fn">--config</code> | <code class="hl-type">&lt;path&gt;</code> | load custom config instead of default bxp-cli.json |
 | <code class="hl-fn">--template</code> | <code class="hl-type">&lt;id&gt;</code> | choose single template |
-| <code class="hl-fn">--data</code> | <code class="hl-type">&lt;path&gt;</code> | override templates's data_dir (requires --template) |
+| <code class="hl-fn">--data</code> | <code class="hl-type">&lt;path&gt;</code> | override template's data_dir (requires --template) |
 | <code class="hl-fn">--fresh</code> |  | skip files whose output already exists (atomic O_EXCL) |
 | <code class="hl-fn">--dry-run</code> |  | run the pipeline in memory without writing output files (preview / validation); independent of --trace |
 | <code class="hl-fn">--trace</code> |  | emit the binary BXTB trace stream on stdout, consumed by bxp-gui's dry-run debugger (forces --quiet; conflicts with --debug) |

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Fetch the FULL Inside Airbnb NYC listings file (2026-02-13 scrape) for the
-# scale demonstration. The committed sample.csv is a 300-row slice; the real
+# scale demonstration. The committed sample.csv is a 12-row slice; the real
 # file is the complete current NYC listing set (~tens of thousands of rows).
 #
 # The download lands in ./full/ (gitignored). Run it through the bundled scale

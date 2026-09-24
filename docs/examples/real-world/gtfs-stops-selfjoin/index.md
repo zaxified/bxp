@@ -57,7 +57,7 @@ platforms resolve their parent station name** via the self-join.
    (`location_type = 1`) by `stop_id`, storing `station_name` (+ coords).
 2. **`LOOKUP([parent_station], 'station_name')`** in `input_schema` resolves
    each platform's opaque parent id to the name captured in the pre-pass.
-   Stations have no parent, so an `IF([parent_station] = '', …)` guard keeps
+   Stations have no parent, so an `IF(ISEMPTY([parent_station]), '', …)` guard keeps
    them clean.
 
 ## Final result

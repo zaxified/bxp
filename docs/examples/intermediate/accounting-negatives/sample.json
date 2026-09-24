@@ -2,7 +2,7 @@
   // Teaching example — synthetic data. A bookkeeping / bank / ERP export where
   // negative amounts use the ACCOUNTING convention: parentheses instead of a
   // minus sign, e.g. "(2,500.00)" = -2500. Thousands are comma-grouped. A naive
-  // `amount * 1` throws on the parentheses (and on the commas); spreadsheets
+  // `amount * 1` throws on the parentheses (the commas alone parse); spreadsheets
   // import "(2,500.00)" as text. The template normalises every amount to a
   // plain signed decimal.
   conversion_templates: {

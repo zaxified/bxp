@@ -27,7 +27,7 @@ unary -    →    * /    →    & (concat)    →    + -    →    = != < > <= >
 | `'text'`       | String literal                                                 |
 | `123`, `-0.5`  | Numeric literal                                                |
 | `&`            | String concatenation (`'$CASH-' & [Currency]`)                 |
-| `$variable`    | Reference to a variable set earlier in `input_schema`          |
+| `$variable`    | Config key naming a variable — **not** usable inside an expression |
 
 Column header names may contain spaces, parentheses, currency symbols,
 and other punctuation — `[Price ($)]`, `[Run Date]`, and

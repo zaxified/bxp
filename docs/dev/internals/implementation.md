@@ -35,7 +35,7 @@ The evaluator is a hand-written recursive-descent parser.
 Operator precedence (high → low):
 
 ```text
-unary -  →  * /  →  & (concat)  →  + -  →  = != < > <= >=  →  AND  →  OR
+unary -  →  * /  →  & (concat)  →  + -  →  = != < > <= >=  →  NOT  →  AND  →  OR
 ```
 
 **How to add a new function:** see [Adding a new built-in function](howto.md#adding-a-new-built-in-function).
@@ -51,9 +51,9 @@ pub const Value = union(enum) {
 
 pub const Context = struct {
     fields: []const []const u8,                 // raw CSV field values for current row
-    col_index: std.StringHashMap(usize),        // header name → field index
-    maps: ?*MapRegistry,                        // named maps for REMAP/REPLACE
-    lookup_table: ?*LookupTable,
+    col_index: *const std.StringHashMap(usize), // header name → field index
+    maps: ?*const MapRegistry,                  // named maps for REMAP/REPLACE
+    lookup_table: ?*const std.StringHashMap([]const u8), // pre_pass LOOKUP data
     alloc: std.mem.Allocator,
     decimal_sep_in: u8,                         // '.' or ','
     quote_out: u8,                              // output quoting character

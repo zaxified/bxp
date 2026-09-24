@@ -21,7 +21,7 @@ what unlocks streaming, parallelism, and parse-once below.
   non-streaming design would grow RSS `O(N)` (~10 GB on 2M rows); streaming
   holds it to a small constant (~24 MB across the bench matrix).
 - **Per-block parallel evaluation.** Rows within a chunk are independent, so
-  they fan out across a `std.Thread.Pool` and re-stitch in source order — see
+  they fan out as `std.Io.Group.async` tasks on `Io`'s thread pool and re-stitch in source order — see
   [architecture/pipeline.md → Parallel Evaluation](../architecture/pipeline.md#parallel-evaluation-per-block-fork-join).
 - **Parse-once expression eval.** `input_schema` and `row_rules`
   expressions are tokenized/parsed **once per file** into `compiled_schema` /

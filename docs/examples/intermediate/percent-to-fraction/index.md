@@ -14,7 +14,7 @@
 
 ## Why interesting
 
-Finance writes the same rate two ways — `2.5%` and `25 bps`
+Finance writes the same rate two ways — `0.25%` and `25 bps`
 are identical — and stores them as text with their unit glued on. Any
 arithmetic (`rate * principal`) throws on the `%` / `bps` suffix, and mixing
 percent and basis points in one column means a single divide-by-100 is wrong for
@@ -54,6 +54,7 @@ the legacy decimal passes straight through:
 
 ```text
 2.5%     →  0.025
+0.25%    →  0.0025
 25 bps   →  0.0025
 150 bps  →  0.015
 0.03     →  0.03

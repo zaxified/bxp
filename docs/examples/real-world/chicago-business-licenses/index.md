@@ -83,9 +83,9 @@ Two things the full run surfaces that the slice can't:
    vocabulary kept inline to show `CASE`; it could equally be a second named
    map). `CASE` matches the code against value/label pairs with the raw code as
    the fallback — one call in place of a six-deep nested `IF`.
-4. **ISO date trim + missing-date sentinel** — `IF([application_created_date] = '', '<not-on-file>', DATE_CONVERT([application_created_date], 'YYYY-MM-DD[T]hh:mm:ss', 'YYYY-MM-DD'))`{.bxp-try}
-   keeps the date part; `IF([application_created_date] = '', '<not-on-file>', …)`
-   turns the 84%-blank column into an explicit marker.
+4. **ISO date trim + missing-date sentinel** — `IF(ISEMPTY([application_created_date]), '<not-on-file>', DATE_CONVERT([application_created_date], 'YYYY-MM-DD[T]hh:mm:ss', 'YYYY-MM-DD'))`{.bxp-try}
+   keeps the date part; `IF(ISEMPTY([application_created_date]), '<not-on-file>', …)`
+   turns the 77%-blank column into an explicit marker.
 
 ## Final result
 
