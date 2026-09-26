@@ -27,8 +27,10 @@ releases/
 # full*.zip, stay ignored by the rule above + the full/ rule below).
 !docs/examples/**/sample.zip
 
-# Claude local state
-.claude/
+# Claude local state stays local; shared rules are committed so cloud sessions
+# (which see only the clone) load them too.
+.claude/*
+!.claude/rules/
 
 # codedb MCP index snapshot (local code-intelligence cache)
 codedb.snapshot

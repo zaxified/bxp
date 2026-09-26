@@ -89,6 +89,8 @@ bxp/                                # monorepo root (git root)
 │   │   ├── verify-output.sh        # One-off output verification for the chunking refactor
 │   │   ├── xlsx-bench.json
 │   │   └── xlsx-fanout-bench.json
+│   ├── cloud/                      # Claude Code cloud-session environment setup (not part of test.sh)
+│   │   └── setup.sh                # Setup script for Claude Code cloud sessions (claude.ai/code) on this repo: installs the pinned Zig toolchain the cloud image lacks
 │   ├── docs/                       # documentation support: site generation, wasm playground, checks
 │   │   ├── mermaid-check/          # the mermaid-fence parser behind check-formatting.sh
 │   │   ├── check-formatting.sh     # Documentation mermaid check — PRE-RELEASE ONLY

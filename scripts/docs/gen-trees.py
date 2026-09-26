@@ -82,6 +82,7 @@ SKIP = {
     ".gitattributes": "git plumbing",
     ".gitignore": "git plumbing",
     ".mcp.json": "editor/agent configuration, not part of the build",
+    ".claude": "agent rules shared with cloud sessions, not part of the build",
     ".zigversion": "toolchain pin, read by CI",
     "bxp.code-workspace": "VS Code workspace file",
 }
@@ -135,6 +136,7 @@ DIRS = {
     "resources/icons": "SVG variants + build-icons.sh, the single source for app icons",
     "scripts": "test, release and documentation tooling",
     "scripts/docs": "documentation support: site generation, wasm playground, checks",
+    "scripts/cloud": "Claude Code cloud-session environment setup (not part of test.sh)",
     "scripts/bench": "developer-only benchmark matrix (not part of test.sh)",
     "scripts/bench/results": "recorded benchmark runs — the baseline a regression is measured against",
     "scripts/docs/mermaid-check": "the mermaid-fence parser behind check-formatting.sh",
