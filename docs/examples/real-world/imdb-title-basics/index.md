@@ -21,6 +21,27 @@ IMDb's public non-commercial datasets are the canonical reference for film resea
 short table — a `\N` genre, a `\N` runtime, real `endYear` values, an adult
 title, and two titles carrying a literal `"`).
 
+## The trick
+
+(see inline comments in `sample.json`):
+
+0. **TSV not CSV** — `csv_delimiter_in: "\t"` switches the parser to tab
+   delimiting; output stays CSV for downstream tools.
+   - **Unquoted TSV with literal `"`** — `csv_text_quote_in: "none"` turns
+     off RFC-4180 quote handling, so a `"` in a title is plain data. The slice
+     carries two such titles, `"Giliap"` and `L'homme du "Picardie"`; the
+     output re-quotes them properly for CSV consumers. BXP defaults the input
+     quote to `"`; with lazy-quote handling it no longer merges rows even then
+     — every row is kept and the lines with an unbalanced `"` get a warning
+     (older RFC-4180 tools silently drop ~256k rows). `none` is preferred for a
+     known-unquoted format: same result, no warning.
+1. **`\N` null marker** — `NULLIF([X], '\N')` on startYear, endYear and
+   runtimeMinutes, plus once for the whole `genres` field. `NULLIF` is built
+   for sentinels, so each guard names its field once instead of three times.
+2. **Multi-value genre cell** — `SPLIT_PART([genres], ',', 1)` peels the
+   first genre into its own `primary_genre` column while `all_genres`
+   keeps the full list for filtering.
+
 ## At full scale
 
 The committed `sample.csv` is a 10-row teaching slice; the real file is ~12.5M
@@ -47,27 +68,6 @@ the 2 lines carrying an unbalanced `"` — it no longer silently merges them
 (older RFC-4180 tools drop ~256k rows here). `none` is still the right call:
 same 1:1 result with no spurious warning. `full/` is gitignored — the download
 stays local.
-
-## The tricks
-
-(see inline comments in `sample.json`):
-
-0. **TSV not CSV** — `csv_delimiter_in: "\t"` switches the parser to tab
-   delimiting; output stays CSV for downstream tools.
-   - **Unquoted TSV with literal `"`** — `csv_text_quote_in: "none"` turns
-     off RFC-4180 quote handling, so a `"` in a title is plain data. The slice
-     carries two such titles, `"Giliap"` and `L'homme du "Picardie"`; the
-     output re-quotes them properly for CSV consumers. BXP defaults the input
-     quote to `"`; with lazy-quote handling it no longer merges rows even then
-     — every row is kept and the lines with an unbalanced `"` get a warning
-     (older RFC-4180 tools silently drop ~256k rows). `none` is preferred for a
-     known-unquoted format: same result, no warning.
-1. **`\N` null marker** — `NULLIF([X], '\N')` on startYear, endYear and
-   runtimeMinutes, plus once for the whole `genres` field. `NULLIF` is built
-   for sentinels, so each guard names its field once instead of three times.
-2. **Multi-value genre cell** — `SPLIT_PART([genres], ',', 1)` peels the
-   first genre into its own `primary_genre` column while `all_genres`
-   keeps the full list for filtering.
 
 ## Final result
 
@@ -111,4 +111,3 @@ Run it with `bxp-cli --config ./sample.json --template imdb_titles_to_catalog`:
     ```
 
 **Full-scale &amp; binary files** (run it on the complete dataset): [`fetch-full.sh`](https://github.com/zaxified/bxp/tree/master/docs/examples/real-world/imdb-title-basics/fetch-full.sh) · [`full.json`](https://github.com/zaxified/bxp/tree/master/docs/examples/real-world/imdb-title-basics/full.json).
-

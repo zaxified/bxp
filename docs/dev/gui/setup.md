@@ -167,7 +167,7 @@ mcp__dart__get_app_logs()
 # Widget + unit tests (bxp-gui)
 flutter test
 
-# json5_ast unit tests (~105 cases + round-trip suite)
+# json5_ast unit tests (incl. the round-trip suite)
 dart test packages/json5_ast/
 
 # Full desktop suite: flutter analyze + flutter test + dart test

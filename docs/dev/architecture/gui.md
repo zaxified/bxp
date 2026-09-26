@@ -581,8 +581,7 @@ Notes:
   x86_64 DMG.
 - **Linux is AppImage-only.** AppImage is atomically replaced and `exec()`'d
   back in-place; a build running outside an AppImage gets no asset match and a
-  "manual update required" message (the `.deb` / tarball channels were retired
-  in v0.3.0).
+  "manual update required" message.
 - **`kDebugMode` skips the auto-check.** Dev runs don't accidentally
   download installers over the working tree.
 

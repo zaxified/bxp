@@ -47,8 +47,8 @@ tools](../reference/gui-agent-tools.md).
   silently declines an edit — so an agent can tell "done" from "ignored".
 
 With the defaults in place you stay in control throughout: every agent edit
-is revealed in the tree where it happens, and nothing is written or run
-without your click.
+is revealed in the tree where it happens, and nothing is written to disk
+without your click — a `dry_run` starts without one, because it writes nothing.
 
 ## Help with the GUI itself
 

@@ -39,16 +39,6 @@ flowchart LR
 (`stops.txt`; this slice: 5 real stations and their 10 directional platforms —
 enough for both sides of the self-join to fit in one screen). Public data.
 
-## At full scale
-
-```bash
-bash fetch-full.sh          # downloads the MTA GTFS zip, extracts ./full/stops.txt
-bxp-cli --config full.json  # resolves every platform → parent station name
-```
-
-On the full feed: 1,488 stops → 496 stations + 992 platforms, and **all 992
-platforms resolve their parent station name** via the self-join.
-
 ## The trick
 
 (see `sample.json`):
@@ -59,6 +49,16 @@ platforms resolve their parent station name** via the self-join.
    each platform's opaque parent id to the name captured in the pre-pass.
    Stations have no parent, so an `IF(ISEMPTY([parent_station]), '', …)` guard keeps
    them clean.
+
+## At full scale
+
+```bash
+bash fetch-full.sh          # downloads the MTA GTFS zip, extracts ./full/stops.txt
+bxp-cli --config full.json  # resolves every platform → parent station name
+```
+
+On the full feed: 1,488 stops → 496 stations + 992 platforms, and **all 992
+platforms resolve their parent station name** via the self-join.
 
 ## Final result
 

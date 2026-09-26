@@ -15,10 +15,6 @@ lands on master. `CHANGELOG.md` is generated independently.
 
 GUI - Config / Transformation visualiser
 
-### v0.3.3
-
-GUI updater progress bar
-
 ### v0.4.0
 
 GUI Config/Create - Import wizard from sample CSV

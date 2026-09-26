@@ -31,9 +31,11 @@ welcome; see [`CONTRIBUTING.md`](CONTRIBUTING.md).
 BXP turns broker statements (CSV, XLSX, JSON) into
 [Wealthfolio](https://wealthfolio.app/) and [brycht.app](https://brycht.app)
 CSV import formats. Adding a new broker is a JSON5 template - no code, no
-compilation. Two binaries ship together:
+compilation. Three binaries ship together:
 
 - **`bxp-cli`** - headless batch converter for scripts and pipelines.
+- **`bxp-mcp`** - MCP server that lets an AI agent validate, evaluate and
+  dry-run templates.
 - **`bxp-gui`** - desktop editor with autocomplete, syntax check, and a
   live dry-run debugger that streams per-row trace events.
 

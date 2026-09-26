@@ -187,8 +187,8 @@ consumption. Effects:
 - Trace bytes shrink from O(rows × variables × bytes-per-trace-event) to
   O(rows × small header) — roughly two orders of magnitude on real
   workloads.
-- Drill-down latency stays low for clicked rows (one re-eval ≈ 50 ms) and is
-  paid only for rows the user actually opens.
+- Drill-down latency stays low for clicked rows (one in-process re-eval
+  through the bridge, no spawn) and is paid only for rows the user actually opens.
 - The current config is the source of truth at click time — drill-down
   reflects edits made after the trace was produced.
 

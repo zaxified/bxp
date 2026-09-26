@@ -33,7 +33,7 @@ that one short table shows every case the template handles — a dry day, a snow
 day, sub-zero temperatures, a 0.0 °C minimum, a genuine measurement gap, and
 both instrument faults).
 
-## The tricks
+## The trick
 
 (See the inline comments in `sample.json`.)
 

@@ -329,6 +329,30 @@ services/prefs_service.dart`.
   matter key in a `docs/` Markdown page. A new file without one appears in the
   generated repository tree with a blank note.
 
+## Project rules
+
+- **Error policy: template-strict, data-lenient.** A mistake by the template
+  author (literals, config, expression syntax) fails loudly and early: static
+  checks, `$err_*` diagnostics, exit 1. An imperfection in the input data (a
+  blank date, a missing optional field, an odd format) is accommodated: the
+  cell becomes `""` or coerces to `0` and the run continues. Never "upgrade" a
+  runtime-data silent `""` into a hard error, and judge a dependency that turns
+  silence into an error by which of the two audiences the error lands on. A
+  crash is never acceptable on either side — guard it, keep the silent `""`.
+- **Docs describe the present.** No package versions and no version history in
+  `docs/` ("since v0.3.0", "previously…", "retired in …", "before the fix") —
+  that belongs in commit messages. `file:constant` pointers are fine; line
+  numbers are not (they rot). The one exception is future milestone versions in
+  `docs/dev/roadmap.md`.
+- **The roadmap is not a backlog mirror.** `docs/dev/roadmap.md` holds only
+  work a user or an external consumer would care about. Internal chores,
+  intermediate steps and closed internal decisions stay out — a gap between
+  the roadmap and an internal TODO list is expected, not drift. A finished
+  item is deleted, not rewritten as "not planned".
+- **Hand-kept counts rot.** Do not write test counts, row counts or catalog
+  sizes next to something that can change; describe the thing instead, or
+  generate the number.
+
 ## Generated documentation — do not hand-edit
 
 Everything under `docs/reference/` (except its `index.md` — the hand-written
@@ -370,7 +394,7 @@ undocumented addition is a build error, not a stale page.
 - [`bxp-gui/CLAUDE.md`](bxp-gui/CLAUDE.md) — Flutter app structure, services/store/ui split,
   bxp-cli subprocess + bxp-gui-bridge FFI wiring.
 - [`bxp-gui-bridge/CLAUDE.md`](bxp-gui-bridge/CLAUDE.md) — Zig FFI shared library;
-  C-ABI surface, Debug→ReleaseSafe rewrite rationale, platform role.
+  C-ABI surface, platform role, why Debug builds stay Debug.
 - [`bxp-gui/packages/json5_ast/CLAUDE.md`](bxp-gui/packages/json5_ast/CLAUDE.md) — standalone
   Dart JSON5 AST library; parser, dumper, mutation API.
 - [`docs/examples/CLAUDE.md`](docs/examples/CLAUDE.md) — authoring conventions for the

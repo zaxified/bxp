@@ -83,7 +83,7 @@ bxp-gui/
 │   ├── lib/                         # parser, tokenizer, ast, dumper,
 │   │                                # operations, path, value_builder —
 │   │                                # all pure Dart, no bxp-specific code
-│   ├── test/                        # ~107 unit tests incl. round-trip
+│   ├── test/                        # unit tests incl. round-trip
 │   │                                # canonicalisation
 │   ├── pubspec.yaml                 # name: json5_ast — candidate for
 │   │                                # extraction to a standalone repo
@@ -162,9 +162,10 @@ on POSIX, `zig-out/bin/bxp-gui-bridge.dll` on Windows). Tests inject the
 dev-tree path via `setBridgeLibPathForTest`.
 
 **Linux dev tree gotcha:** the Linux CMake config copies the bridge
-library (and `bxp-cli`) into the bundle at build time. After rebuilding
-the bridge, run a clean Flutter build (or maintain the symlink under
-`linux/`); the production release script
+library (and `bxp-cli`) into the bundle on every install step (a symlink
+would not survive — the bundle dir is wiped first). The bundled copy wins
+over the dev-tree walk, so after rebuilding the bridge, rebuild and restart
+the app (`flutter run`); the production release script
 (`scripts/release-02-desktop.sh`) overwrites the companions with release
 builds before packaging.
 

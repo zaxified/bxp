@@ -38,22 +38,21 @@ flowchart LR
     subgraph adapters [Thin adapters - transport only]
         bridge[bxp-gui-bridge<br/>FFI in-process]
         mcp[bxp-mcp<br/>JSON-RPC on stdio]
-        api[bxp-api<br/>HTTP - planned]
     end
     core[("inspect.zig<br/>stateless core")]
     cli[[bxp-cli<br/>full pipeline]]
 
     bridge --> core
     mcp --> core
-    api -.-> core
     mcp -- "bxp_simulate only<br/>(subprocess spawn)" --> cli
 ```
 
 "One core, thin adapters": none of the adapters owns the stateless logic — it
 lives in `inspect`. The transport follows from **who** calls and **from where**:
 stdio = a local agent that spawns the server (private pipe, 1:1, zero config); a
-port would be bxp-api's job (remote/shared/web). The boundary rule is _the core
-must not know who is calling it_.
+remote or shared caller would need a network adapter, which bxp does not have.
+The boundary rule is _the core must not know who is calling it_ — that is what
+would keep such an adapter thin.
 
 ## Two execution models
 
@@ -155,7 +154,7 @@ That module is this package's **own former `server.zig`**, extracted upstream on
 near-free: `isSingleJsonObject`, the `tools/list` serializer and every JSON-RPC
 error string were already byte-identical. Upstream adds resources + prompts +
 sampling/elicitation, a 16 MiB line cap, JSON-RPC §4 id validation, a
-JSON-escaped progress message, and 89 unit tests the local transport never had.
+JSON-escaped progress message, and the unit tests the local transport never had.
 
 ## Memory model
 

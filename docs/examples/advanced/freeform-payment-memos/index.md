@@ -47,24 +47,6 @@ The cost ladder is deliberate: `IN`/`REMAP` (hash) < `CONTAINS`/`REPLACE`
 (literal scan) < regex (pattern engine). Pick the cheapest tool that does the
 job; regex earns its keep only on a real pattern the others cannot phrase.
 
-## Final result
-
-A pile of free-text memos —
-
-```text
-T001,Payment for INV-2024-0042 thank you,priority|cleared|eu
-T005,Refund INV-2023-0911 order #88 processed,low|cleared|us
-T003,Card settlement no reference here,normal|pending|us
-```
-
-— becomes a clean, joinable reference table, each token lifted out by shape:
-
-```text
-T001,2024-0042,,true,priority
-T005,2023-0911,88,true,low
-T003,,,false,normal
-```
-
 ## At full scale
 
 Regex is the most expensive rung of the
@@ -108,6 +90,24 @@ means anything once they are proven to produce the same answer.
 > spell `INV-` and `#`, which is what lets `CONTAINS` + `SPLIT_PART` reach the
 > tokens at all. Free text in the wild does not promise that — which is the
 > reason the example itself uses regex.
+
+## Final result
+
+A pile of free-text memos —
+
+```text
+T001,Payment for INV-2024-0042 thank you,priority|cleared|eu
+T005,Refund INV-2023-0911 order #88 processed,low|cleared|us
+T003,Card settlement no reference here,normal|pending|us
+```
+
+— becomes a clean, joinable reference table, each token lifted out by shape:
+
+```text
+T001,2024-0042,,true,priority
+T005,2023-0911,88,true,low
+T003,,,false,normal
+```
 
 ## Sample data
 

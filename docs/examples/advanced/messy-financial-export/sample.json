@@ -32,10 +32,10 @@
         $security: "[Security]",
 
         // 3 — accounting negatives + comma thousands → signed decimal.
-        $amount:   "IF(STARTS_WITH(TRIM([Amount]), '('), 0 - (REPLACE(TRIM([Amount]), '(', '', ')', '', ',', '') * 1), REPLACE(TRIM([Amount]), ',', '') * 1)",
+        $amount:   "IF(STARTS_WITH(TRIM([Amount]), '('), 0 - (REPLACE(TRIM([Amount]), '(', '', ')', '') * 1), [Amount] * 1)",
 
         // 4 — currency-symbol price → clean number + separate currency code.
-        $price:    "IF(ISEMPTY([UnitPrice]), '', REPLACE(PRICE_VALUE([UnitPrice]), ',', '') * 1)",
+        $price:    "IF(ISEMPTY([UnitPrice]), '', PRICE_VALUE([UnitPrice]) * 1)",
         $currency: "PRICE_CURRENCY([UnitPrice])",
 
         // 5 — fee as percent ("0.25%") or basis points ("25 bps") → fraction.

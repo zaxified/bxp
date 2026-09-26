@@ -35,6 +35,25 @@ short table carries all four status codes, three application types, both a
 present and a blank application date, and a legal name with an embedded comma).
 Public domain (City of Chicago).
 
+## The trick
+
+(see inline comments in `sample.json`)
+
+0. **Quoted commas** — `csv_text_quote_in: "double"`; legal/DBA names embed commas.
+1. **DBA fallback** — `COALESCE([doing_business_as_name], [legal_name])`{.bxp-try} so the
+   business is never blank.
+2. **Status code → label** — `REMAP([license_status], 'license_status_label')`
+   over a named map built from the documented `AAI/AAC/REV/REA` meanings. (Not
+   clickable: the named form resolves through the template's `maps` registry,
+   which a standalone expression has no access to.)
+3. **Application type → label** — a `CASE` multi-branch (a second controlled
+   vocabulary kept inline to show `CASE`; it could equally be a second named
+   map). `CASE` matches the code against value/label pairs with the raw code as
+   the fallback — one call in place of a six-deep nested `IF`.
+4. **ISO date trim + missing-date sentinel** — `IF(ISEMPTY([application_created_date]), '<not-on-file>', DATE_CONVERT([application_created_date], 'YYYY-MM-DD[T]hh:mm:ss', 'YYYY-MM-DD'))`{.bxp-try}
+   keeps the date part; `IF(ISEMPTY([application_created_date]), '<not-on-file>', …)`
+   turns the 77%-blank column into an explicit marker.
+
 ## At full scale
 
 The committed `sample.csv` is a 10-row teaching slice; the
@@ -67,25 +86,6 @@ Two things the full run surfaces that the slice can't:
   lists only `AAI/AAC/REV/REA`). `REMAP` leaves an unmapped code **visible and
   unchanged** rather than blanking it, so the gap surfaces instead of silently
   vanishing — a forward-safe lookup, not a silent drop.
-
-## The tricks
-
-(see inline comments in `sample.json`)
-
-0. **Quoted commas** — `csv_text_quote_in: "double"`; legal/DBA names embed commas.
-1. **DBA fallback** — `COALESCE([doing_business_as_name], [legal_name])`{.bxp-try} so the
-   business is never blank.
-2. **Status code → label** — `REMAP([license_status], 'license_status_label')`
-   over a named map built from the documented `AAI/AAC/REV/REA` meanings. (Not
-   clickable: the named form resolves through the template's `maps` registry,
-   which a standalone expression has no access to.)
-3. **Application type → label** — a `CASE` multi-branch (a second controlled
-   vocabulary kept inline to show `CASE`; it could equally be a second named
-   map). `CASE` matches the code against value/label pairs with the raw code as
-   the fallback — one call in place of a six-deep nested `IF`.
-4. **ISO date trim + missing-date sentinel** — `IF(ISEMPTY([application_created_date]), '<not-on-file>', DATE_CONVERT([application_created_date], 'YYYY-MM-DD[T]hh:mm:ss', 'YYYY-MM-DD'))`{.bxp-try}
-   keeps the date part; `IF(ISEMPTY([application_created_date]), '<not-on-file>', …)`
-   turns the 77%-blank column into an explicit marker.
 
 ## Final result
 

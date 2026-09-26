@@ -18,12 +18,12 @@
         // TRICK 1 — split value from currency:
         //   PRICE_VALUE("$12.99")    → "12.99"
         //   PRICE_CURRENCY("$12.99") → "USD"
-        // PRICE_VALUE keeps the comma thousands as-is ("1,234.00"), so wrap it
-        // in REPLACE(…, ',', '') * 1 to land a clean number; the ISEMPTY guard keeps
+        // PRICE_VALUE keeps the comma thousands as-is ("1,234.00"); `* 1` parses
+        // that into a clean number without stripping them. The ISEMPTY guard keeps
         // a genuinely empty price empty. It has to be ISEMPTY and not
         // [Price] = '' — that test coerces, so a price of "0" would read as
         // empty and the row would lose a real zero.
-        $price:    "IF(ISEMPTY([Price]), '', REPLACE(PRICE_VALUE([Price]), ',', '') * 1)",
+        $price:    "IF(ISEMPTY([Price]), '', PRICE_VALUE([Price]) * 1)",
         $currency: "PRICE_CURRENCY([Price])"
       },
 

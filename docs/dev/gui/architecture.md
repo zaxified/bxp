@@ -104,7 +104,7 @@ bxp-gui/
 │   │   ├── value_builder.dart      # Typed value constructors
 │   │   └── src/
 │   │       └── tokenizer.dart      # JSON5 tokenizer (private)
-│   └── test/                       # ~105 unit tests + round-trip suite
+│   └── test/                       # unit tests + round-trip suite
 ├── linux/, macos/, windows/, web/  # Per-platform Flutter shells
 ├── test/                           # Widget + service tests — bridge FFI surface
 │                                   # (bridge_inspect, bridge_verify_minisign,

@@ -38,8 +38,8 @@ flowchart TD
 payment types present in the data, both `store_and_fwd_flag` values, and one of
 each data-quality state). The TLC has since
 retired its public CSV downloads in favour of Parquet, so the full-scale fetch
-below pulls the identical records — same CSV layout, same `MM/DD/YYYY hh:mm:ss
-AM/PM` timestamps — from the [NYC OpenData mirror](https://data.cityofnewyork.us/Transportation/2019-Yellow-Taxi-Trip-Data/2upf-qytp).
+below pulls a later year (2019) in the same CSV layout, with the same
+`MM/DD/YYYY hh:mm:ss AM/PM` timestamps, from the [NYC OpenData mirror](https://data.cityofnewyork.us/Transportation/2019-Yellow-Taxi-Trip-Data/2upf-qytp).
 
 ## The trick
 

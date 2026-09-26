@@ -31,7 +31,7 @@ flowchart LR
     M3 --> C
 ```
 
-**Problem class documented in.** RÚIAN (Registr územní identifikace, adres a
+**Data source.** RÚIAN (Registr územní identifikace, adres a
 nemovitostí) is published by ČÚZK — the Czech Office for Surveying, Mapping and
 Cadastre — as open data via the VDP portal
 (<https://vdp.cuzk.cz/vdp/ruian/vymennyformat>). The address-points export
@@ -56,23 +56,6 @@ Three template keys do the archive handling, no code:
 
 Plus a date trim — `DATE_CONVERT([Platí Od], 'YYYY-MM-DD[*]', 'YYYY-MM-DD')` —
 where `[*]` swallows the `T00:00:00` time suffix, keeping the ISO date.
-
-## Final result
-
-The raw member is Windows-1250 with a `CSV/` prefix and a
-timestamp:
-
-```text
-CSV/20260531_OB_500101_ADR.csv  (Windows-1250, ';'-delimited)
-11915692;500101;Bra\x9eec;…;…;36471;835804.84;1019584.24;2016-01-01T00:00:00
-```
-
-becomes one clean UTF-8 row, diacritics and all, date trimmed:
-
-```csv
-adm_code,municipality_code,municipality,municipality_part,street,house_number,orientation_number,postcode,coord_y,coord_x,valid_from
-11915692,500101,Bražec,Dolní Valov,,1,,36471,835804.84,1019584.24,2016-01-01
-```
 
 ## At full scale
 
@@ -105,6 +88,23 @@ next to the combined output. The script therefore stages the payload in a temp
 dir (override with `BXP_RUIAN_WORK`) and leaves `./full` as a symlink to it, so
 `data_dir: "full"` keeps working while none of those files land inside the
 source tree — editors and SCM watchers have nothing new to index.
+
+## Final result
+
+The raw member is Windows-1250 with a `CSV/` prefix and a
+timestamp:
+
+```text
+CSV/20260531_OB_500101_ADR.csv  (Windows-1250, ';'-delimited)
+11915692;500101;Bra\x9eec;…;…;36471;835804.84;1019584.24;2016-01-01T00:00:00
+```
+
+becomes one clean UTF-8 row, diacritics and all, date trimmed:
+
+```csv
+adm_code,municipality_code,municipality,municipality_part,street,house_number,orientation_number,postcode,coord_y,coord_x,valid_from
+11915692,500101,Bražec,Dolní Valov,,1,,36471,835804.84,1019584.24,2016-01-01
+```
 
 ## Sample data
 

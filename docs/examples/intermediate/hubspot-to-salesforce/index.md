@@ -24,7 +24,7 @@ Real CRM migrations take 2–8 weeks because picklist mismatches, mixed date for
 - <https://clonepartner.com/blog/pipedrive-to-hubspot-migration-data-mapping-apis-rate-limits>
   — multi-object association loss, type coercion
 
-## The tricks
+## The trick
 
 See inline comments in `sample.json`:
 

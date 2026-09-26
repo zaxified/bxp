@@ -18,9 +18,25 @@ Inside Airbnb is the de-facto open dataset for short-term-rental regulation rese
   field semantics
 
 **Data source.** [Inside Airbnb — New York City, 2026-02-13 scrape](https://data.insideairbnb.com/united-states/ny/new-york-city/2026-02-13/visualisations/listings.csv)
-(this slice: 12 real listings hand-picked so that each room type meets each of
-the three regulatory states, plus the two comma-inside-quotes names and one
-never-reviewed listing).
+(this slice: 12 real listings hand-picked so that both common room types —
+entire home and private room — meet each of the three regulatory states, plus
+a hotel room, five comma-inside-quotes names and one never-reviewed listing).
+
+## The trick
+
+See inline comments in `sample.json`:
+
+0. **CSV double-quote escaping** — `csv_text_quote_in: "double"` so names
+   like `"Maison des Sirenes1,bohemian, luminous apartment"` don't shift
+   every following column.
+1. **room_type enum** — `Entire home/apt` / `Private room` / `Hotel room` /
+   `Shared room` → short codes via `REMAP()` + a named map.
+2. **Redacted price sentinel** — `COALESCE([price], '<price-redacted>')`{.bxp-try} so
+   the gap is visible in every row instead of silently empty.
+3. **last_review empty == "never reviewed"** — kept as empty on purpose;
+   not every absent value is an error.
+4. **Three-state regulatory column** — a `CASE` map over `[license]` derives
+   `unlicensed` / `exempt` / `registered`.
 
 ## At full scale
 
@@ -67,22 +83,6 @@ gap, straight out of the `reg_status` column the template derives. The
 quoted-comma names (e.g. `Perfect for Your Parents, With Garden & Patio`)
 stay intact in a single field, exactly as TRICK 0 promises — commas are handled
 by the quoting rules; only newlines break a record.
-
-## The tricks
-
-See inline comments in `sample.json`:
-
-0. **CSV double-quote escaping** — `csv_text_quote_in: "double"` so names
-   like `"Maison des Sirenes1,bohemian, luminous apartment"` don't shift
-   every following column.
-1. **room_type enum** — `Entire home/apt` / `Private room` / `Hotel room` /
-   `Shared room` → short codes via `REMAP()` + a named map.
-2. **Redacted price sentinel** — `COALESCE([price], '<price-redacted>')`{.bxp-try} so
-   the gap is visible in every row instead of silently empty.
-3. **last_review empty == "never reviewed"** — kept as empty on purpose;
-   not every absent value is an error.
-4. **Three-state regulatory column** — a `CASE` map over `[license]` derives
-   `unlicensed` / `exempt` / `registered`.
 
 ## Final result
 

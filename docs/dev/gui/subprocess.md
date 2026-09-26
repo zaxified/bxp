@@ -80,6 +80,7 @@ Resolved in this order:
 ## Linux dev-tree gotcha
 
 The Linux CMake config copies the `bxp-gui-bridge` library (and `bxp-cli`) into
-the bundle at build time. After rebuilding the bridge, either run a clean Flutter
-build or rely on the dev-tree fallback (option 3 above) which reads directly from
-`bxp-gui-bridge/zig-out/`.
+the bundle on every install step. The bundled copy is found first, so the dev-tree
+fallback (option 3 above) never reaches `bxp-gui-bridge/zig-out/` while a bundle
+exists: after rebuilding the bridge, rebuild and restart the app (`flutter run`
+re-copies the library; a hot reload cannot swap a loaded one).

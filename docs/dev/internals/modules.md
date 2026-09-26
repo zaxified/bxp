@@ -62,9 +62,12 @@ check in `inspect.zig`: a new `pub fn` without an entry — or an entry naming a
 function that was renamed away — fails the build.
 
 Adding an op: write the pure function in `inspect.zig`, describe it in
-`module_docs.inspect_ops`, then expose it from each adapter (a `bxp-mcp` tool in
-`bxp-mcp/src/tools.zig` + a `bridge_*` entry in `bxp-gui-bridge/src/main.zig`).
-No business logic lives in the adapters.
+`module_docs.inspect_ops`, then expose it from each adapter — a `bxp-mcp` tool in
+`bxp-mcp/src/tools.zig`, and on the bridge a new `op` branch in the existing
+`bridge_inspect` dispatcher (`bxp-gui-bridge/src/main.zig`; stateless ops share
+that one export). Add the op name to `bridge_inspect`'s `purpose` in
+`bxp-gui-bridge/src/ops.zig` too: that list is hand-written and no comptime
+check catches a missing name. No business logic lives in the adapters.
 
 Deeper detail: [`bxp-mcp/CLAUDE.md`](https://github.com/zaxified/bxp/blob/master/bxp-mcp/CLAUDE.md),
 [`bxp-gui-bridge/CLAUDE.md`](https://github.com/zaxified/bxp/blob/master/bxp-gui-bridge/CLAUDE.md).

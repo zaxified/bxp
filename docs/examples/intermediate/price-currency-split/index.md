@@ -41,9 +41,9 @@ fastest way to see why each piece is there.
 - `PRICE_CURRENCY([Price])`{.bxp-try} → the currency code (`$12.99` → `USD`,
   `50.00 EUR` → `EUR`, `€3.50` → `EUR`).
 - `PRICE_VALUE([Price])`{.bxp-try} → the numeric part with the symbol/code
-  removed. It leaves the comma thousands in place (`1,234.00`), so wrap it:
-  `REPLACE(PRICE_VALUE([Price]), ',', '') * 1`{.bxp-try} lands a clean number.
-- An `IF(ISEMPTY([Price]), '', REPLACE(PRICE_VALUE([Price]), ',', '') * 1)`{.bxp-try}
+  removed, still text (`1,234.00` keeps its comma). `PRICE_VALUE([Price]) * 1`{.bxp-try}
+  lands a clean number — the comma thousands parse as they are.
+- An `IF(ISEMPTY([Price]), '', PRICE_VALUE([Price]) * 1)`{.bxp-try}
   guard keeps a genuinely empty price empty rather than coercing it to `0`.
   The guard must be `ISEMPTY`, not `[Price] = ''`: that comparison coerces, so
   a price of `0` would test as empty and a real zero would vanish.
@@ -64,8 +64,8 @@ conversion or a `GROUP BY currency` total.
 
 !!! tip "Worth trying in the panel"
     - `PRICE_VALUE([Price])`{.bxp-try} on **show all** — row 4 keeps its comma
-      (`1,234.00`), which is the whole reason `REPLACE` is there.
-    - `REPLACE(PRICE_VALUE([Price]), ',', '') * 1`{.bxp-try} without the `IF`
+      (`1,234.00`) until `* 1` turns it into `1234`.
+    - `PRICE_VALUE([Price]) * 1`{.bxp-try} without the `IF`
       guard — the empty price coerces to `0` instead of staying empty.
     - `UPPER([Item])`{.bxp-try} or `LEN([Item])`{.bxp-try} — any expression
       works, not just the ones this example uses.

@@ -13,7 +13,7 @@
 A huge share of public data now ships as a **JSON array of
 objects from an API**, not as a CSV — and turning that into a spreadsheet-ready
 CSV is the daily `jq`/pandas chore bxp removes. This famous dataset packs four
-real JSON-shaped problems into one file: (1) **heterogeneous records** — most
+real JSON-shaped problems into one file: (1) **heterogeneous records** — some
 sightings omit `primary_fur_color` and `location`, so the objects don't share a
 key set and a naive `keys()` on the first record loses columns; (2) **native
 JSON booleans** (`"running": false`) that a CSV needs as text, not as a

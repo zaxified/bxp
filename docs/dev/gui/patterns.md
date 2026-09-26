@@ -10,8 +10,9 @@ description: "Flutter patterns that matter here, plus the known issues worth rec
 
 Calling top-level `notifyListeners()` per BXTB frame causes PlutoGrid to
 reallocate quadratically. Use per-cell `ValueNotifier` instead
-(`traceLinesCounter`, `fileGen`, …). Top-level `notifyListeners()` fires
-at most twice per dry-run stream (start + done).
+(`traceLinesCounter`, `fileGen`, …). Top-level `notifyListeners()` fires a
+handful of times per dry-run stream (start, finish, auto-selecting the first
+file) — a constant, never once per frame.
 
 ### Fractional splitters
 

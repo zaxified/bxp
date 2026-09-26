@@ -35,6 +35,20 @@ hand-picked to show a comma-decimal price, each property type, and several
 postal codes that lost their leading zero). Licence Ouverte / Etalab
 (CC-BY-compatible).
 
+## The trick
+
+(see inline comments in `sample.json`):
+
+0. **Pipe delimiter** — `csv_delimiter_in: "|"`.
+1. **Comma decimal** — `csv_decimal_separator_in: ","` so `346,50` arrives as
+   `346.5` instead of `34650` or a split field.
+2. **DD/MM/YYYY → ISO** — `DATE_CONVERT([Date mutation], 'DD/MM/YYYY', 'YYYY-MM-DD')`.
+3. **Leading-zero département preserved** — `[Code departement]` is stored as
+   text (`01`) and passes through verbatim.
+4. **Damaged postal code repaired** — `[Code postal]` already lost its zero in
+   the source (`1230`); `LPAD([Code postal], 5, '0')`{.bxp-try} re-pads it back to
+   `01230`, and the padded text stays text on output.
+
 ## At full scale
 
 The committed `sample.csv` is a 9-row teaching slice; the
@@ -54,22 +68,6 @@ Measured on the reference machine (ReleaseFast, 8 cores):
 | output    | 3,499,931 rows / 213 MB (1:1)               |
 | wall time | ~4.9 s                                      |
 | peak RSS  | ~22 MB (flat — does not grow with the file) |
-
-## The tricks
-
-(see inline comments in `sample.json`):
-
-0. **Pipe delimiter** — `csv_delimiter_in: "|"`.
-1. **Comma decimal** — `csv_decimal_separator_in: ","` so `346,50` arrives as
-   `346.5` instead of `34650` or a split field.
-2. **DD/MM/YYYY → ISO** — `DATE_CONVERT([Date mutation], 'DD/MM/YYYY', 'YYYY-MM-DD')`.
-3. **Leading-zero département preserved** — `[Code departement]` is stored as
-   text (`01`) and passes through verbatim.
-4. **Damaged postal code repaired** — `[Code postal]` already lost its zero in
-   the source (`1230`); `LPAD([Code postal], 5, '0')`{.bxp-try} re-pads it back to
-   `01230`. (This only emits the correct value since the bxp leading-zero
-   fix — previously the padded result was re-canonicalised straight back to
-   `1230`.)
 
 ## Final result
 

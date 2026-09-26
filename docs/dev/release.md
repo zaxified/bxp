@@ -154,10 +154,10 @@ gh workflow run release.yml -f version=vX.Y.Z-rc-test
   fetch (`runtime-x86_64`) hits a transient network error. Re-run the
   failed job; the cache survives.
 - **Workflow fails in `desktop-macos`** — `create-dmg` is sensitive to
-  the macOS runner image's exact version. If `brew install create-dmg`
-  no longer pins to a working version, fall back to a tarball-only
-  macOS branch by commenting out the DMG step in
-  `release-02-desktop.sh::build_macos`.
+  the macOS runner image's exact version. When `create-dmg` is missing,
+  `release-02-desktop.sh::build_macos` skips the DMG with a warning and the
+  job produces no macOS artifact — pin a working `create-dmg` in
+  `release.yml` rather than shipping without one.
 - **NSIS install on Windows fails silently** — run the installer
   manually with `setup.exe /S` from PowerShell to surface stderr; check
   the `IfSilent` block in `bxp-gui/installer/bxp-desktop.nsi`.
