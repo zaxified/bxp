@@ -553,24 +553,8 @@ fn writeSafeValue(out: *Writer, value: []const u8, delimiter_out: u8, decimal_se
         break :blk value;
     };
     // RFC 4180 output quoting: wrap when value contains the delimiter, the
-    // quote character, CR, or LF.  Internal quote chars are doubled.
-    // Pre-quoted pass-through: a value that already starts and ends with quote_out
-    // (produced by ''' expressions) is written with its outer quotes preserved and
-    // any internal occurrences of quote_out doubled (RFC 4180 §2.5).
-    if (quote_out != 0 and s.len >= 2 and s[0] == quote_out and s[s.len - 1] == quote_out) {
-        const body = s[1 .. s.len - 1];
-        try out.writeByte(quote_out);
-        // The guard goes inside the quotes: they are stripped by the
-        // spreadsheet before the cell is parsed, so an apostrophe outside them
-        // would neutralise nothing.
-        if (looksLikeFormula(body)) try out.writeByte('\'');
-        for (body) |ch| {
-            if (ch == quote_out) try out.writeByte(quote_out);
-            try out.writeByte(ch);
-        }
-        try out.writeByte(quote_out);
-        return;
-    }
+    // quote character, CR, or LF.  Internal quote chars are doubled — including
+    // quotes at both ends: a value's quotes are data, never pre-applied quoting.
     if (quote_out != 0) {
         var needs_quote = false;
         for (s) |ch| {
@@ -3656,8 +3640,13 @@ test "writeSafeValue: the guard also runs on the quoted paths" {
         "=HYPERLINK(\"http://evil.example\",\"click\")",
         "\"'=HYPERLINK(\"\"http://evil.example\"\",\"\"click\"\")\"",
     );
-    // Pre-quoted pass-through (a ''' expression): guard goes inside too.
-    try expectSafeValue("\"=1+2\"", "\"'=1+2\"");
+}
+
+test "writeSafeValue: quotes at both ends are data, not pre-applied quoting" {
+    // An IMDb title that is literally "Giliap" must survive a CSV reader.
+    try expectSafeValue("\"Giliap\"", "\"\"\"Giliap\"\"\"");
+    // Leads with a quote, so no formula guard is needed.
+    try expectSafeValue("\"=1+2\"", "\"\"\"=1+2\"\"\"");
 }
 
 test "writeSafeValue: signed numbers are not mangled by the guard" {

@@ -569,7 +569,7 @@ pub const BrokerConfig = struct {
             .type_name = "string",
             .required = false,
             .default = "none",
-            .description = "Output CSV text quoting style. In expressions, ''' (three single quotes) stands for this quote character (empty when none).",
+            .description = "Output CSV text quoting style. A value is wrapped in quotes only when it needs them (RFC 4180: it holds the delimiter, a quote, CR or LF), with its own quotes doubled — never wrap a value by hand. In expressions, ''' (three single quotes) is this quote character as data (empty when none).",
             .enum_values = &csv_quote_values,
         },
         .{

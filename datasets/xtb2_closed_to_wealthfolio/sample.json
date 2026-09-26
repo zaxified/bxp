@@ -50,7 +50,7 @@
         $fxRate:          "",
         $subtype:         "",
         $instrumentType:  "",
-        $comment:         "''' & [Position ID] & '_' & [Open Time (UTC)] & '''"
+        $comment:         "[Position ID] & '_' & [Open Time (UTC)]"
       },
       row_rules_debug_missing: true,
       row_rules: [

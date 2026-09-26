@@ -602,8 +602,8 @@
         $fxRate:          "",
         $subtype:         "",
         $instrumentType:  "",
-        // single-quoted comment wrapping: ''' evaluates to one literal quote char
-        $comment:         "''' & [Position] & '_' & [Open time] & '''"
+        // plain text; csv_text_quote_out: "double" quotes it when needed
+        $comment:         "[Position] & '_' & [Open time]"
       },
       row_rules_debug_missing: true,
       row_rules: [
@@ -675,7 +675,7 @@
         $fxRate:          "",
         $subtype:         "",
         $instrumentType:  "",
-        $comment:         "''' & [ID] & '_' & [Time] & '_' & [Comment] & '''"
+        $comment:         "[ID] & '_' & [Time] & '_' & [Comment]"
       },
       row_rules_debug_missing: true,
       row_rules: [
@@ -738,7 +738,7 @@
               $ticker:     "REPLACE(REMAP([Symbol],'xtb'), '.US','', '.NL','.AS', '.UK','.L', '.CH','.SW', '.CZ','.PR')",
               $quantity:   "SPLIT_PART(SPLIT_PART([Comment], ' ', 3), '/', 1)",
               $unitprice:  "ROUND(ABS([Amount]) / SPLIT_PART(SPLIT_PART([Comment], ' ', 3), '/', 1), 8)",
-              $comment:    "''' & [ID] & '_' & [Time] & '_' & [Comment] & '''"
+              $comment:    "[ID] & '_' & [Time] & '_' & [Comment]"
             }
           ]
         },
@@ -807,7 +807,7 @@
         $fxRate:          "",
         $subtype:         "",
         $instrumentType:  "",
-        $comment:         "''' & [Position ID] & '_' & [Open Time (UTC)] & '''"
+        $comment:         "[Position ID] & '_' & [Open Time (UTC)]"
       },
       row_rules_debug_missing: true,
       row_rules: [
@@ -876,7 +876,7 @@
         $fxRate:          "",
         $subtype:         "",
         $instrumentType:  "",
-        $comment:         "''' & [ID] & '_' & [Time] & '_' & [Comment] & '''"
+        $comment:         "[ID] & '_' & [Time] & '_' & [Comment]"
       },
       row_rules_debug_missing: true,
       row_rules: [
@@ -929,7 +929,7 @@
               $ticker:     "REPLACE(REMAP([Ticker],'xtb'), '.US','', '.NL','.AS', '.UK','.L', '.CH','.SW', '.CZ','.PR')",
               $quantity:   "SPLIT_PART(SPLIT_PART([Comment], ' ', 3), '/', 1)",
               $unitprice:  "ROUND(ABS([Amount]) / SPLIT_PART(SPLIT_PART([Comment], ' ', 3), '/', 1), 8)",
-              $comment:    "''' & [ID] & '_' & [Time] & '_' & [Comment] & '''"
+              $comment:    "[ID] & '_' & [Time] & '_' & [Comment]"
             }
           ]
         },

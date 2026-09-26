@@ -50,7 +50,7 @@
         $fxRate:          "",
         $subtype:         "",
         $instrumentType:  "",
-        $comment:         "''' & [ID] & '_' & [Time] & '_' & [Comment] & '''"
+        $comment:         "[ID] & '_' & [Time] & '_' & [Comment]"
       },
       row_rules_debug_missing: true,
       row_rules: [
@@ -110,7 +110,7 @@
               $ticker:     "REMAP([Symbol], 'xtb')",
               $quantity:   "SPLIT_PART(SPLIT_PART([Comment], ' ', 3), '/', 1)",
               $unitprice:  "ABS([Amount]) / SPLIT_PART(SPLIT_PART([Comment], ' ', 3), '/', 1)",
-              $comment:    "''' & [ID] & '_' & [Time] & '_' & [Comment] & '''"
+              $comment:    "[ID] & '_' & [Time] & '_' & [Comment]"
             }
           ]
         },
