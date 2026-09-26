@@ -288,7 +288,7 @@ const input_var_token_doc: TokenDoc = .{
 const string_token_doc: TokenDoc = .{
     .kind = "string",
     .syntax = "'single quoted'",
-    .description = "String literal. Escape with \\' for embedded quote.",
+    .description = "String literal. \\' is an embedded quote and \\\\ a backslash; any other backslash is literal ('\\N' stays \\N). Doubling ('') is not an escape.",
 };
 // Recognised by Tokenizer.next()'s digit branch.
 const number_token_doc: TokenDoc = .{
@@ -438,9 +438,19 @@ const Tokenizer = struct {
                 self.pos += 2;
                 return self.mkTok(.triple_quote, "'''", tok_start);
             }
+            // `\'` (embedded quote) and `\\` (literal backslash) are the only
+            // escapes; any other backslash is literal, so `'\N'` stays `\N`.
+            // `text` keeps the raw escaped form — `unescapeString` decodes it.
             const inner_start = self.pos;
-            while (self.pos < self.src.len and self.src[self.pos] != '\'')
-                self.pos += 1;
+            while (self.pos < self.src.len and self.src[self.pos] != '\'') {
+                if (self.src[self.pos] == '\\' and self.pos + 1 < self.src.len and
+                    (self.src[self.pos + 1] == '\'' or self.src[self.pos + 1] == '\\'))
+                {
+                    self.pos += 2;
+                } else {
+                    self.pos += 1;
+                }
+            }
             const text = self.src[inner_start..self.pos];
             if (self.pos < self.src.len) self.pos += 1; // consume closing '
             return self.mkTok(.string_lit, text, tok_start);
@@ -1058,6 +1068,22 @@ const Parser = struct {
         }
     }
 
+    // top := expr EOF — the whole-expression entry point. A token left over
+    // after a complete expression is a template error: `'x' 'y'` used to
+    // evaluate to "x" and drop the rest silently.
+    fn parseTop(self: *Parser) anyerror!Value {
+        const v = try self.parseExpr();
+        const t = try self.tok.next();
+        if (t.kind != .eof) {
+            switch (t.kind) {
+                .eq, .neq, .lt, .gt, .lte, .gte => self.setDetail("comparisons do not chain — combine them with AND (a > 0 AND a < 100)", .{}),
+                else => self.setDetail("unexpected {s} after the end of the expression", .{self.tok.src[t.offset .. t.offset + t.len]}),
+            }
+            return error.UnexpectedToken;
+        }
+        return v;
+    }
+
     // expr := or_expr
     pub fn parseExpr(self: *Parser) anyerror!Value {
         // Depth guard: every nested sub-expression (`(...)`, function arg,
@@ -1118,10 +1144,9 @@ const Parser = struct {
     }
 
     // cmp_expr := add_expr (op add_expr)?
-    // Comparisons are NOT chained: `a < b < c` parses as `(a < b) < c` which
-    // will usually fail with StringComparisonUnsupported (booleans don't
-    // convert to numbers for < / > / <= / >=). Use AND for range checks:
-    // `a > 0 AND a < 100`.
+    // Comparisons do NOT chain: one operator is parsed, and a second one
+    // (`a < b < c`, `a = 1 = 1`) is left over for `parseTop`, which rejects it.
+    // Use AND for range checks: `a > 0 AND a < 100`.
     fn parseCmp(self: *Parser) anyerror!Value {
         const left = try self.parseAdd();
         const t = try self.tok.peek();
@@ -1263,7 +1288,7 @@ const Parser = struct {
     fn parsePrimary(self: *Parser) anyerror!Value {
         const t = try self.tok.next();
         switch (t.kind) {
-            .string_lit => return Value{ .string = t.text },
+            .string_lit => return Value{ .string = try unescapeString(t.text, self.ctx.alloc) },
             .triple_quote => return Value{ .string = switch (self.ctx.quote_out) {
                 '\'' => "'",
                 '"' => "\"",
@@ -4087,7 +4112,7 @@ fn stringIsNumeric(s: []const u8) bool {
 pub fn eval(src: []const u8, ctx: *const Context) !Value {
     if (src.len == 0) return Value{ .string = "" };
     var p = Parser.init(src, ctx);
-    return p.parseExpr() catch |err| {
+    return p.parseTop() catch |err| {
         // If the tokenizer recorded the bad character, surface it as detail.
         // Only set detail when it hasn't already been written by a deeper setDetail call.
         if (p.tok.error_char != 0) {
@@ -4138,6 +4163,22 @@ fn normalizeFieldDecimalSep(raw: []const u8, ctx: *const Context) ![]const u8 {
         return copy;
     }
     return raw;
+}
+
+/// Decodes a string literal's raw inner text: `\'` → `'`, `\\` → `\`, every
+/// other byte (including any other backslash) verbatim. Returns `raw` itself
+/// — no allocation — when it holds no backslash.
+fn unescapeString(raw: []const u8, alloc: std.mem.Allocator) ![]const u8 {
+    if (std.mem.indexOfScalar(u8, raw, '\\') == null) return raw;
+    const out = try alloc.alloc(u8, raw.len);
+    var i: usize = 0;
+    var n: usize = 0;
+    while (i < raw.len) : (n += 1) {
+        if (raw[i] == '\\' and i + 1 < raw.len and (raw[i + 1] == '\'' or raw[i + 1] == '\\')) i += 1;
+        out[n] = raw[i];
+        i += 1;
+    }
+    return out[0..n];
 }
 
 /// True for numeric-looking strings that must NOT be re-formatted, because
@@ -4245,7 +4286,7 @@ pub fn evalNode(node: *const Node, ctx: *const Context) !Value {
         .col_ref => |idx| return Value{ .string = if (idx) |i| try normalizeFieldDecimalSep(ctx.field(i), ctx) else "" },
         .tokenized => |nd| {
             var p = Parser{ .tok = Tokenizer.initCache(nd.src, nd.tokens), .ctx = ctx };
-            return p.parseExpr();
+            return p.parseTop();
         },
     }
 }
@@ -5282,6 +5323,32 @@ test "eval: AND and OR" {
 // ------------------------------------------------------------
 // IF
 // ------------------------------------------------------------
+
+test "eval: string literal escapes \\' and \\\\, other backslashes literal" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    try testing.expectEqualStrings("it's", try evalString("'it\\'s'", &ctx));
+    try testing.expectEqualStrings("C:\\", try evalString("'C:\\\\'", &ctx));
+    try testing.expectEqualStrings("\\N", try evalString("'\\N'", &ctx));
+    try testing.expectEqualStrings("a'b", try evalString("'a' & '\\'' & 'b'", &ctx));
+}
+
+test "eval: tokens after a complete expression are an error" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    try testing.expectError(error.UnexpectedToken, evalString("'x' 'y'", &ctx));
+    // SQL-style doubling is not an escape — it is two literals, now refused.
+    try testing.expectError(error.UnexpectedToken, evalString("'it''s'", &ctx));
+    try testing.expectError(error.UnexpectedToken, evalString("1 2", &ctx));
+    try testing.expectError(error.UnexpectedToken, evalString("1 = 1 = 1", &ctx));
+    try testing.expectError(error.UnexpectedToken, evalString("IF(1 = 1, 'a', 'b') )", &ctx));
+}
 
 test "eval: IF selects true branch" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);

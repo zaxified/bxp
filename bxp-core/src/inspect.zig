@@ -405,7 +405,9 @@ pub fn evalExpr(
     var fields_list: std.ArrayList([]const u8) = .empty;
     if (headers_json) |hj| try parseStringArray(a, hj, &headers_list);
     if (fields_json) |fj| try parseStringArray(a, fj, &fields_list);
-    for (headers_list.items, 0..) |h, idx| try col_index.put(h, idx);
+    // Trim header names exactly as bxp-cli's pipeline does when it builds its
+    // col_index, so `[Name]` resolves here the way it does in a real run.
+    for (headers_list.items, 0..) |h, idx| try col_index.put(std.mem.trim(u8, h, " "), idx);
 
     var detail: []const u8 = "";
     var err_offset: u32 = 0;
@@ -489,7 +491,9 @@ pub fn evalTrace(
     var fields_list: std.ArrayList([]const u8) = .empty;
     if (headers_json) |hj| try parseStringArray(a, hj, &headers_list);
     if (fields_json) |fj| try parseStringArray(a, fj, &fields_list);
-    for (headers_list.items, 0..) |h, idx| try col_index.put(h, idx);
+    // Trim header names exactly as bxp-cli's pipeline does when it builds its
+    // col_index, so `[Name]` resolves here the way it does in a real run.
+    for (headers_list.items, 0..) |h, idx| try col_index.put(std.mem.trim(u8, h, " "), idx);
 
     var detail: []const u8 = "";
     var err_offset: u32 = 0;
@@ -720,7 +724,7 @@ pub fn evalBatchIo(a: std.mem.Allocator, request: std.json.Value, batch_io: std.
     var col_index = std.StringHashMap(usize).init(a);
     for (headers_v.array.items, 0..) |h, idx| {
         if (h != .string) return batchErr("headers entries must be strings");
-        try col_index.put(try a.dupe(u8, h.string), idx);
+        try col_index.put(try a.dupe(u8, std.mem.trim(u8, h.string, " ")), idx); // trimmed like the pipeline
     }
     var fields: std.ArrayList([]const u8) = .empty;
     for (fields_v.array.items) |f| {
@@ -2320,4 +2324,12 @@ test "every `when` inside a GUI scaffold is a valid expression" {
     // Guard the guard: if scaffolds stop carrying `when` keys this test would
     // silently pass while checking nothing.
     try std.testing.expect(when_count >= 3);
+}
+
+test "evalExpr: header names are trimmed like the pipeline's col_index" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const out = try evalExpr(a, "[Currency]", "[\" Currency \"]", "[\"USD\"]");
+    try std.testing.expectEqualStrings("{\"ok\":true,\"value\":\"USD\"}", out);
 }

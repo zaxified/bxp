@@ -598,7 +598,10 @@ fn writeExprCode(w: *std.Io.Writer, s: []const u8, extra: []const u8) !void {
         const c = s[i];
         if (c == '\'') { // single-quoted string literal, through the closing quote
             var j = i + 1;
-            while (j < s.len and s[j] != '\'') : (j += 1) {}
+            // Mirrors the expr tokenizer: `\'` and `\\` do not end the literal.
+            while (j < s.len and s[j] != '\'') : (j += 1) {
+                if (s[j] == '\\' and j + 1 < s.len and (s[j + 1] == '\'' or s[j + 1] == '\\')) j += 1;
+            }
             const end = if (j < s.len) j + 1 else s.len;
             try w.writeAll("<span class=\"hl-str\">");
             try writeHtmlEscaped(w, s[i..end]);

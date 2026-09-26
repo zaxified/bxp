@@ -22,9 +22,9 @@ unary -    →    * /    →    & (concat)    →    + -    →    = != < > <= >
 
 | Syntax         | Description                                                    |
 | -------------- | -------------------------------------------------------------- |
-| `[ColumnName]` | Raw CSV field by header name (leading/trailing spaces trimmed) |
+| `[ColumnName]` | CSV field by header name; the value comes back with leading/trailing spaces trimmed |
 | `FIELDS(n)`    | Raw CSV field by 1-based column **position**                   |
-| `'text'`       | String literal                                                 |
+| `'text'`       | String literal; `\'` is an embedded quote (`'it\'s'`), `\\` a backslash |
 | `123`, `-0.5`  | Numeric literal                                                |
 | `&`            | String concatenation (`'$CASH-' & [Currency]`)                 |
 | `$variable`    | Config key naming a variable — **not** usable inside an expression |
@@ -33,7 +33,14 @@ Column header names may contain spaces, parentheses, currency symbols,
 and other punctuation — `[Price ($)]`, `[Run Date]`, and
 `[Stamp duty reserve tax]` are all valid references. The bracket
 syntax preserves the header verbatim; only the closing `]` itself is
-reserved.
+reserved. Matching is exact and case-sensitive: the file's header names are
+trimmed of surrounding spaces when it is read, but the name inside the
+brackets is not, so `[Currency]` finds a ` Currency ` header and
+`[ Currency ]` finds nothing.
+
+Any other backslash in a string literal is literal — `'\N'` is the two
+characters `\N`. Doubling a quote (`'it''s'`) is **not** an escape: it reads
+as two literals side by side, which is an error.
 
 **Brackets are a name lookup, never a position.** `[2]` asks for a column
 whose header is literally `2`; it does not read the second column, and it

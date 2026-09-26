@@ -37,8 +37,8 @@ expr	ok	[A] = 1 OR [A] = 2 OR [A] = 3 OR [A] = 4
 expr	ok	[A] = 'x' AND ([B] = 'y' OR [C] = 'z')
 # Single-clause boolean — valid; useful as a sanity baseline.
 expr	ok	[A]
-# `=` chains left-associatively: ((A=1)=1).
-expr	ok	[A] = 1 = 1
+# Comparisons do not chain; a leftover operator is a template error.
+expr	err	[A] = 1 = 1	UnexpectedToken
 
 # ── Function calls — ok (one per function) ────────────────────────────
 expr	ok	ABS(-5)
@@ -352,8 +352,10 @@ expr	err	REGEX_EXTRACT([A], '[0-9]', 'extra')	WrongArgCount
 # ── Quoting / strings ─────────────────────────────────────────────────
 # Empty string literal.
 expr	ok	''
-# Triple-quote = literal single-quote inside a string ('').
-expr	ok	''''
+# Embedded quote: \' is the escape; doubling ('') is not.
+expr	ok	'it\'s'
+# Four quotes = the ''' placeholder plus a stray quote — an error.
+expr	err	''''	UnexpectedToken
 # String concat with '&'.
 expr	ok	'a' & 'b'
 expr	ok	'a' & 'b' & 'c'
@@ -410,7 +412,7 @@ expr	ok	DATE_CONVERT([Date], 'D MMM YYYY, hh:mm:ss', 'YYYY-MM-DD')
 # SPLIT_PART nested twice — Anycoin trade comment parser.
 expr	ok	SPLIT_PART(SPLIT_PART([Comment], ' ', 3), '/', 1)
 # String concat for composite identifier.
-expr	ok	''' & [Position ID] & '_' & [Open Time (UTC)] & ''''
+expr	ok	''' & [Position ID] & '_' & [Open Time (UTC)] & '''
 expr	ok	'split-correction-' & SPLIT_PART([Time], ' ', 1)
 # IF with simple Type=value branching.
 expr	ok	IF([Type] = 'deposit', '$CASH-' & [Currency], REMAP([Currency], 'syms'))

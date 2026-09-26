@@ -561,7 +561,7 @@ pub const BrokerConfig = struct {
             .type_name = "string",
             .required = false,
             .default = "double",
-            .description = "Input CSV text quoting style. Use ''' in expressions for a literal single-quote.",
+            .description = "Input CSV text quoting style.",
             .enum_values = &csv_quote_values,
         },
         .{
@@ -569,7 +569,7 @@ pub const BrokerConfig = struct {
             .type_name = "string",
             .required = false,
             .default = "none",
-            .description = "Output CSV text quoting style.",
+            .description = "Output CSV text quoting style. In expressions, ''' (three single quotes) stands for this quote character (empty when none).",
             .enum_values = &csv_quote_values,
         },
         .{
