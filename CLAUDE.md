@@ -180,9 +180,13 @@ bxp/
 │   ├── docs.yml          # EVERYTHING about the site: drift check + wasm parity
 │   │                     # + strict build + Pages publish. No path filter, one
 │   │                     # host. Nothing docs-related belongs in ci.yml.
-│   └── release.yml       # Multi-host release pipeline triggered by `v*` tag push
-├── .claude/rules/         # Shared agent rules, loaded by local AND cloud sessions
-│                         # (zig-pitfalls.md); the rest of .claude/ stays local
+│   ├── release.yml       # Multi-host release pipeline triggered by `v*` tag push
+│   └── zig-skill.yml     # Vendored .claude/skills/zig must equal its release tag
+├── .claude/              # Only rules/ and skills/ are committed (loaded by local AND
+│   │                     # cloud sessions); settings stay local
+│   ├── rules/            # zig-pitfalls.md — repo-specific Zig lessons
+│   └── skills/zig/       # vendored audited zig skill (zaxified/zig-skills release) —
+│                         # never edit; update only via that repo's install.py
 ├── DEV/                  # Developer scratch space — sample data, in-flight plans, AST prototypes
 ├── CLAUDE.md             # This file
 ├── LICENSE.md            # Apache 2.0

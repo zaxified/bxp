@@ -2,6 +2,9 @@
 
 Hard-won lessons from developing bxp on Zig 0.16. Each one cost a real bug or a
 false-green check. Read before writing, reviewing or auditing Zig code here.
+General Zig 0.16 API changes and gotchas live in the `zig` skill
+(`.claude/skills/zig`, vendored from an audited release — never edit it here);
+this file only holds what is specific to this repository.
 
 ## Language and std
 
