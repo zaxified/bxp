@@ -127,7 +127,7 @@ pub const RowRule = struct {
             .key = "when",
             .type_name = "expression",
             .required = true,
-            .description = "Condition expression. Rule applies when this evaluates to truthy (non-empty, non-zero, non-\"false\").",
+            .description = "Condition expression. Rule applies when this evaluates to truthy: boolean true, a non-zero number, or any non-empty string (\"0\" and \"false\" as strings are truthy too).",
             .validator = .expr_string,
         },
         .{
@@ -262,7 +262,7 @@ pub const XlsxSheet = struct {
             .key = "output_suffix",
             .type_name = "string",
             .required = true,
-            .description = "Appended before \".csv\" in the intermediate filename (e.g. \"_3\"). Use \"\" for no suffix.",
+            .description = "Appended to the input basename to form the intermediate filename, extension included (e.g. \"_open.csv\").",
         },
     };
 
@@ -381,9 +381,9 @@ pub const BrokerConfig = struct {
     /// see `requireComparableDate` in bxp-cli's pipeline.zig.
     /// Default: false — no date filtering unless explicitly enabled.
     date_filter_from_filename: bool,
-    /// When true, all input files in data_dir produce a single combined
-    /// output file `1-{template_id}-combined.csvx` instead of one output
-    /// per input file. Header is written once (CSV) or wrapped in one
+    /// When true, all input files in data_dir additionally write their rows
+    /// to one combined output file `1-{template_id}-combined{file_pattern_out}`,
+    /// alongside the normal per-input outputs. Header is written once (CSV) or wrapped in one
     /// JSON array (JSON). Files are processed in alphabetical name order
     /// (same sort as the per-file mode), so the combined row order is
     /// deterministic.  Default: false.
@@ -606,7 +606,7 @@ pub const BrokerConfig = struct {
             .type_name = "boolean",
             .required = false,
             .default = "false",
-            .description = "When true, all input files in data_dir additionally write their rows to one merged output file '1-<template_id>-combined.csvx', alongside the normal per-input outputs (it is an extra file, not a replacement). Files are processed in alphabetical order so combined row order is deterministic.",
+            .description = "When true, all input files in data_dir additionally write their rows to one merged output file '1-<template_id>-combined<file_pattern_out>', alongside the normal per-input outputs (it is an extra file, not a replacement). Files are processed in alphabetical order so combined row order is deterministic.",
         },
         .{
             .key = "row_rules_debug_missing",

@@ -17,7 +17,9 @@ flowchart TD
     json5.preprocess → std.json]
     LOADCFG --> VALIDATE[Validate all templates
     BrokerConfig.validate]
-    VALIDATE --> XLSX_Q{Any templates
+    VALIDATE --> ZIP_PASS[zipPrePass
+    unpack *.zip in data_dir → .csv]
+    ZIP_PASS --> XLSX_Q{Any templates
     with xlsx_sheet?}
     XLSX_Q -->|yes| XLSX_PASS[xlsxPrePass
     extract sheets → .csv]
@@ -37,6 +39,7 @@ flowchart TD
     LOADCFG -->|file missing
     or parse error| FATAL([exit 1])
     VALIDATE -->|invalid config| FATAL
+    ZIP_PASS -->|fatal error| FATAL
     XLSX_PASS -->|fatal error| FATAL
 ```
 
@@ -112,9 +115,10 @@ chunk's rows are evaluated by a fork-join worker pool — see
 output row is a pure function of one input row plus the (already-built)
 pre_pass lookup table — so rows within a block are independent and evaluate
 in parallel. `processBlockParallel` (`bxp-cli/src/pipeline.zig`) buffers a
-block of rows, fans them out across `K = runtime.max_workers` worker tasks on
-a shared `std.Thread.Pool` (owned by `main.zig`, carried on `Runtime`,
-`K = std.Thread.getCpuCount()` typically), then re-stitches the results in
+block of rows, fans them out across `K = runtime.max_workers` worker tasks via
+`std.Io.Group.async` on the runtime `Io`'s own thread pool (`Io` carried on
+`Runtime`; `K = std.Thread.getCpuCount()` typically, clamped by
+`MAX_WORKERS_LIMIT`), then re-stitches the results in
 source order so the output stays byte-identical to the serial path.
 
 ```mermaid
@@ -123,7 +127,7 @@ flowchart TD
     10 MiB chunk] --> BLK[Buffer one block of rows
     pending_rows]
     BLK --> FORK[Fork K = max_workers tasks
-    std.Thread.Pool + WaitGroup]
+    std.Io.Group.async]
     FORK --> W0[worker 0
     disjoint row slice]
     FORK --> W1[worker 1
@@ -135,7 +139,7 @@ flowchart TD
     + partial_lookup]
     W1 --> E1[same, own slice]
     WK --> EK[same, own slice]
-    E0 --> JOIN[WaitGroup.wait]
+    E0 --> JOIN[Group.await]
     E1 --> JOIN
     EK --> JOIN
     JOIN --> DRAIN[Drain per-worker buffers
@@ -152,7 +156,7 @@ Determinism guarantees that make the parallel path a drop-in for the serial
 one:
 
 - **Output order** — workers write into private buffers; the main thread
-  drains them in worker-index (= source-row) order after `WaitGroup.wait()`,
+  drains them in worker-index (= source-row) order after `Group.await`,
   so `.csvx` rows and BXTB `output_row` frames come out in input order.
 - **pre_pass writes** — each worker accumulates into its own `partial_lookup`
   map; the drain merges them into the shared `lookup_table` with
@@ -334,15 +338,19 @@ graph TD
     recursive descent"]
     PARSE --> OR["parseOr"]
     OR --> AND["parseAnd"]
-    AND --> CMP["parseCmp
+    AND --> NOT["parseNot
+    NOT"]
+    NOT --> CMP["parseCmp
     = != < > <= >="]
     CMP --> ADD["parseAdd
-    + - &"]
-    ADD --> MUL["parseMul
+    + -"]
+    ADD --> CAT["parseCat
+    &"]
+    CAT --> MUL["parseMul
     * /"]
     MUL --> UNARY["parseUnary
     unary -"]
-    UNARY --> ATOM["parseAtom"]
+    UNARY --> ATOM["parsePrimary"]
     ATOM --> LIT["string / number literal"]
     ATOM --> FIELD["[ColumnName]"]
     ATOM --> FUNC["function call

@@ -22,7 +22,7 @@ to one representation is routine — but doing it correctly runs into two numeri
 
 ```mermaid
 flowchart TD
-    X["raw cell"] --> G{"LEN(TRIM) = 0?"}
+    X["raw cell"] --> G{"ISEMPTY?"}
     G -->|yes| E["(empty)<br/><small>blank stays blank</small>"]
     G -->|no| L["LOWER(TRIM)"]
     L --> T{"IN truthy?<br/><small>yes·y·1·true·t</small>"}

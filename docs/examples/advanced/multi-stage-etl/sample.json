@@ -17,8 +17,8 @@
   //   products.csv      added_date  EU    DD.MM.YYYY
   //   categories.json   created     long  YYYYMMDD
   // All three are normalised to ISO. The order timestamp additionally gets a
-  // DST-aware Europe/Prague offset (+01:00 winter / +02:00 summer) computed
-  // purely from date builtins — see the big $order_ts expression in PASS 4.
+  // DST-aware Europe/Prague offset (+01:00 winter / +02:00 summer) from
+  // TZ_OFFSET — see the $order_ts expression in PASS 3.
   //
   // Glob safety: intermediate JSONs end ".in.json" so a re-run never re-reads
   // the final ".json"; combined files use the "1-<tpl>-combined.csvx" name.
@@ -96,8 +96,8 @@
         // CET (+01:00) / CEST (+02:00) offset from the bundled IANA tz database,
         // DST and all. Empty-guarded so category rows (no order_date) and startup
         // validation stay safe. (Before the timezone builtins existed you'd
-        // derive this by hand from NTH_DOW — see the basic timezone-functions
-        // example; TZ_OFFSET gives the identical result in one call.)
+        // derive this by hand from NTH_DOW — see "Under the hood" on this
+        // example's page; TZ_OFFSET gives the identical result in one call.)
         $order_ts:      "IF(LEN([order_date]) = 0, '', [order_date] & 'T00:00:00' & TZ_OFFSET([order_date], 'Europe/Prague'))",
         $category_id:   "[category_id]",
         $product_added: "[product_added]",

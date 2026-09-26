@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Fetch the FULL 2018 NYC Central Park Squirrel Census as JSON (all ~3,023
 # sightings) from NYC Open Data (Socrata). Public domain. The committed
-# sample.in.json is the first 40 records; this pulls the whole array.
+# sample.in.json is a hand-picked 8-record slice; this pulls the whole array.
 #
 #   bash fetch-full.sh
 #   bxp-cli --config full.json   # flattens every sighting → CSV

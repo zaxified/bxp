@@ -22,7 +22,7 @@ welcome; see [`CONTRIBUTING.md`](CONTRIBUTING.md).
 <details open>
 <summary> bxp-gui preview demo</summary>
 
-![bxp-gui demo: load - edit - dry-run -- validate](docs/demo.gif)
+![bxp-gui demo: load - edit - dry-run -- validate](docs/assets/demo.gif)
 
 </details>
 
@@ -144,7 +144,7 @@ Download from the
 ```bash
 sudo apt install libfuse2t64   # libfuse2 on older distros
 mkdir -p ~/.local/bin && cd ~/.local/bin
-rm bxp-desktop-linux-x86_64.AppImage   # delete previous downloads
+rm -f bxp-desktop-linux-x86_64.AppImage   # delete previous downloads
 wget https://github.com/zaxified/bxp/releases/latest/download/bxp-desktop-linux-x86_64.AppImage
 chmod +x bxp-desktop-linux-x86_64.AppImage
 ./bxp-desktop-linux-x86_64.AppImage   # first launch prompts to install menu + icons + bxp-gui.json
@@ -161,8 +161,8 @@ Download
 [`bxp-desktop-windows-x86_64.exe`](https://github.com/zaxified/bxp/releases/latest/download/bxp-desktop-windows-x86_64.exe)
 and run the NSIS installer. SmartScreen may warn — "More info" → "Run
 anyway". It installs per-user — no administrator rights required — to
-`%LOCALAPPDATA%\Programs\bxp-gui`, with a Start menu entry and desktop
-shortcut.
+`%LOCALAPPDATA%\Programs\bxp-gui`, with Start menu entries for the app and
+its uninstaller.
 
 #### macOS (Apple Silicon)
 

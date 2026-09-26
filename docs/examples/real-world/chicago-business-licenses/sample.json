@@ -2,7 +2,7 @@
   // City of Chicago — Business Licenses. The status and application-type
   // columns are cryptic codes that mean nothing without the data dictionary;
   // the application date is blank on most rows. Every mapping below is taken
-  // verbatim from the dataset's official description (see 00-readme.md).
+  // verbatim from the dataset's official description (see index.md).
   maps: {
     // LICENSE STATUS codes — from the City of Chicago dataset description.
     license_status_label: {
@@ -41,7 +41,7 @@
         $app_type:   "CASE([application_type], 'ISSUE', 'initial_application', 'RENEW', 'renewal', 'C_LOC', 'change_of_location', 'C_CAPA', 'change_of_capacity', 'C_EXPA', 'liquor_area_expansion', 'C_SBA', 'change_of_business_activity', [application_type])",
 
         // TRICK 4 — dates are ISO with a midnight time + millis; keep the date
-        // part only. The application date is blank on ~84% of rows — make the
+        // part only. The application date is blank on ~77% of rows — make the
         // gap explicit instead of an empty cell that looks like a data loss.
         $start:      "DATE_CONVERT([license_start_date], 'YYYY-MM-DD[T]hh:mm:ss', 'YYYY-MM-DD')",
         $expires:    "DATE_CONVERT([expiration_date], 'YYYY-MM-DD[T]hh:mm:ss', 'YYYY-MM-DD')",

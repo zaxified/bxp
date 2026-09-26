@@ -19,8 +19,9 @@
 The parenthesis-for-negative convention is everywhere in
 finance (it's the default "Accounting" number format in Excel), and it breaks
 naive pipelines twice over: a spreadsheet re-import reads `"(2,500.00)"` as a
-text label, and any `amount * 1` cast throws on both the parentheses and the
-comma thousands separator. The sign silently vanishes or the row errors out.
+text label, and an `amount * 1` cast throws on the parentheses (bxp's number
+parser accepts the comma thousands on its own, but not the parentheses). The
+sign silently vanishes or the row errors out.
 
 **Failure mode documented in.** (sources for the problem class — not for the data)
 

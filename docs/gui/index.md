@@ -13,7 +13,7 @@ runs identically under `bxp-cli` — the app writes the same config file.
 - [Preferences](preferences.md) — theme, recent files, custom places, zoom, and
   where the file lives on each OS.
 - [Updates](updates.md) — how the in-app updater finds, verifies and installs a
-  release, and how to turn it off.
+  release.
 - [Troubleshooting](troubleshooting.md) — a missing bridge library, a stale
   bundle, a refused update.
 

@@ -8,9 +8,9 @@
   // its own `month` literal; a final fan-in pass (`combined_output`) stacks the
   // three into one table. Run it all with:  bxp-cli --config ./sample.json
   //
-  // Glob safety: each month writes "<stem>_<mon>.part.csv"; the fan-in reads
-  // ".part.csv" only, and never re-reads the extracted "_<mon>.csv" or its own
-  // combined ".csvx".
+  // Glob safety: each month writes "<stem>_<n><mon>.part.csv"; the fan-in
+  // reads ".part.csv" only, and never re-reads the extracted "_<mon>.sheet.csv"
+  // or its own combined ".csvx".
   conversion_templates: {
 
     month_jan: {

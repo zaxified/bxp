@@ -53,7 +53,7 @@ const USAGE_HEAD =
     \\Usage:
     \\  {s}                                    process all templates in config file
     \\  {s} --template <id>                    process single template
-    \\  {s} --template <id> --data <path>      override templates's data_dir
+    \\  {s} --template <id> --data <path>      override template's data_dir
     \\
     \\Options:
     \\

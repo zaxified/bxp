@@ -104,7 +104,7 @@ strictly:
     what dumps rows matching no rule as JSON. (`--debug` conflicts with
     `--quiet` and `--trace`.) The GUI does not use that flag: a dry-run
     reports skipped rows through the per-row trace instead, and clicking
-    one shows its **RULE RESULTS**.
+    one shows its **RULES** panel (`no rule matched`).
 12. **Self-test before returning.** See below — predict each sample row's
     outcome, then verify with the bxp-mcp tools (`bxp_validate`,
     `bxp_eval` / `bxp_eval_trace`, `bxp_simulate`), or `bxp-cli --debug`.
@@ -192,9 +192,9 @@ should produce (0 / 1 / N).
   reason (`rule_skip` / `no_rule_match`) and its 1-based input line, which
   is what tells you a `when` condition never matched. `ok: true` only
   means the run happened; read `exit_code` / `status` / `diagnostics` for
-  the verdict. Pass the optional `workspace` argument to reuse one scratch
-  directory across iterations instead of littering temp with a new one per
-  call. Without MCP:
+  the verdict. The optional `workspace` argument names the scratch directory
+  (default: the template id); it is reused across calls, so iterating does
+  not litter temp with a new one per call. Without MCP:
 
   ```bash
   ./bxp-cli --config bxp-cli.json --template <new_id> --debug

@@ -1,5 +1,5 @@
 ---
-description: "How the in-app updater finds, verifies and installs a new release, and how to turn it off."
+description: "How the in-app updater finds, verifies and installs a new release."
 ---
 
 # Auto-updates

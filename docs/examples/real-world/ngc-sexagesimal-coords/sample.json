@@ -20,7 +20,7 @@
         // TRICK 1 — RA is in HOURS:MIN:SEC. Convert to hours, then ×15 because
         // 24h spans 360° (1h = 15°). SPLIT_PART on ':' pulls each part.
         //   00:42:44.35 → (0 + 42/60 + 44.35/3600) × 15 = 10.6848°
-        // (Non-existent catalogue entries have blank coords → guard with LEN.)
+        // (Non-existent catalogue entries have blank coords → guard with ISEMPTY.)
         $ra_deg: "IF(ISEMPTY([RA]), '', (SPLIT_PART([RA], ':', 1) + SPLIT_PART([RA], ':', 2) / 60 + SPLIT_PART([RA], ':', 3) / 3600) * 15)",
 
         // TRICK 2 — Dec is ±DEG:ARCMIN:ARCSEC. The sign on the degrees part must

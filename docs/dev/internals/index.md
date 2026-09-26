@@ -92,7 +92,7 @@ here that could disagree with it.
 
 Implementation: routing decisions live in
 [`bxp-gui/lib/services/bxp_process_client.dart`](https://github.com/zaxified/bxp/blob/master/bxp-gui/lib/services/bxp_process_client.dart)
-(`_runOneShot`, `_inspect`, `_runWithBtraceViaBridge`). See
+(`_runOneShotStreaming`, `_runWithBtraceViaBridge`, and `BridgeClient.inspect` via `_bridge()`). See
 [`bxp-gui-bridge/CLAUDE.md`](https://github.com/zaxified/bxp/blob/master/bxp-gui-bridge/CLAUDE.md) for the C-ABI surface
 of each `bridge_*` entry point.
 
@@ -112,6 +112,6 @@ automatically by Claude Code, but you can read them directly any time.
 | `bxp-mcp`        | [`bxp-mcp/CLAUDE.md`](https://github.com/zaxified/bxp/blob/master/bxp-mcp/CLAUDE.md)                                       | MCP server: adapter model, tool catalog, annotated JSON shape (`$err_*`/`$warn_*`/`$info_*`), in-proc vs spawn, wire protocol, bxp_simulate |
 | `bxp-core`       | [`bxp-core/CLAUDE.md`](https://github.com/zaxified/bxp/blob/master/bxp-core/CLAUDE.md)                                     | Per-module API surface, build details, "known non-issues" rationale                                                                 |
 | `bxp-gui`        | [`bxp-gui/CLAUDE.md`](https://github.com/zaxified/bxp/blob/master/bxp-gui/CLAUDE.md)                                       | Flutter app structure, services/store/ui split, MCP debug workflow                                                                  |
-| `bxp-gui-bridge` | [`bxp-gui-bridge/CLAUDE.md`](https://github.com/zaxified/bxp/blob/master/bxp-gui-bridge/CLAUDE.md)                         | C-ABI surface, Debug→ReleaseSafe rewrite rationale, Win-mandatory / cross-platform roles                                            |
+| `bxp-gui-bridge` | [`bxp-gui-bridge/CLAUDE.md`](https://github.com/zaxified/bxp/blob/master/bxp-gui-bridge/CLAUDE.md)                         | C-ABI surface, platform role (mandatory on every platform), the removed Debug→ReleaseSafe rewrite                                 |
 | `json5_ast`      | [`bxp-gui/packages/json5_ast/CLAUDE.md`](https://github.com/zaxified/bxp/blob/master/bxp-gui/packages/json5_ast/CLAUDE.md) | Standalone-library-candidate status, comment ownership, future extraction recipe                                                    |
 | `docs/examples`  | [`docs/examples/CLAUDE.md`](https://github.com/zaxified/bxp/blob/master/docs/examples/CLAUDE.md)                   | Authoring the example tree: what a sample is for, the closed heading set, the two gates, clickable expressions |

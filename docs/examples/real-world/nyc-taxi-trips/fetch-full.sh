@@ -6,7 +6,8 @@
 # in the original CSV layout, with the `MM/DD/YYYY hh:mm:ss AM/PM` timestamps
 # this example's template expects — are mirrored on NYC OpenData (Socrata), so
 # that is what we pull here. It is the complete 2019 dataset (~84M rows /
-# ~8 GB), a superset of the committed sample's January slice.
+# ~8 GB) — same layout as the committed sample, whose rows come from February
+# 2018.
 #
 # The download lands in ./full/ (gitignored). Run it through the bundled scale
 # config afterwards:

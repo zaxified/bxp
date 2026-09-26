@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Build the 1,000,000-row memo file the "Cost — regex vs. the cheaper tools"
-# section of index.md is measured on, then run both templates over it.
+# Build the 1,000,000-row memo file the "At full scale" section of index.md is
+# measured on, then run both templates over it.
 #
 # The real-world examples pull their scale input with a `fetch-full.sh`; this is
 # a teaching example, so its scale input is *generated* — same role, same

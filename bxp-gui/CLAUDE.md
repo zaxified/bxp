@@ -215,8 +215,10 @@ dispatched to a platform-native install:
   relaunches the GUI.
 - macOS: `hdiutil` mount → `cp -R` to `~/Applications/` → `open -n`.
 - Linux AppImage: atomic-replace the running AppImage + re-`exec()`.
-- Linux `.deb` / tarball: open release page via `url_launcher` (the
-  in-place self-update path is AppImage-only).
+- Linux outside an AppImage, or an Intel Mac: no matching asset, so the
+  updater surfaces a "manual update required" message (the in-place
+  self-update path is AppImage-only on Linux, arm64-only on macOS; the
+  `.deb` / tarball channels were retired in v0.3.0).
 
 `kDebugMode` skips the auto-check during dev runs.
 
@@ -279,7 +281,8 @@ free and parity is definitional.
   endpoint without a discovery file; a bind clash is surfaced in `lastError`
   (non-fatal — unlike the bridge, the GUI is fully usable without it).
 - **`GET /health`** — unauthenticated probe returning `{name, version,
-  config_path, config_loaded, dirty, agent_connected, auto_approve}`; the
+  config_path, config_loaded, loaded_with_errors, dirty, agent_connected,
+  auto_approve}`; the
   handshake an agent uses to confirm it reached the right server before MCP
   `initialize`.
 - **Origin policy** — permissive by default (empty allowlist accepts every

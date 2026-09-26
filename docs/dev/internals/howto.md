@@ -1,5 +1,5 @@
 ---
-description: "Extension recipes — adding a conversion template, a built-in function, a config field or an inspect operation."
+description: "Extension recipes — adding a conversion template, a built-in function or a bridge FFI export."
 ---
 
 # How-to Guides
@@ -147,7 +147,7 @@ family, not here.
 **5 — UTF-8, length-prefixed strings.** Inputs are `ptr: [*]const u8, len: u32`,
 **not** null-terminated (`[*:0]`): Dart strings may contain interior `\0`, the
 explicit length skips a `strlen`, and it stays consistent with the output buffer
-protocol. JSON args (e.g. `row_headers` / `row_fields` for the trace export)
+protocol. JSON args (e.g. `headers_json` / `fields_json` for the trace export)
 follow the same shape.
 
 **6 — Output JSON shape matches the `inspect` core contract.** A failure payload is
@@ -156,18 +156,17 @@ so the existing Dart parser handles bridge and subprocess responses
 identically — no Dart parser change when wiring a new export:
 
 ```json
-{"error":"<ErrorName>","detail":"<detail>","off":N,"len":N,"suggest":"..."}
+{"error":"<ErrorName>","detail":"<detail>","off":N,"len":N}
 ```
 
-`off` / `len` / `suggest` are optional (emitted only when the parser pins a token
-or has a "did-you-mean" candidate). The trace export instead emits an NDJSON
+`off` / `len` are optional (emitted only when the parser pins a token). The trace export instead emits an NDJSON
 stream identical to `inspect.evalTrace` output, where success/failure is read
 from the `t` field of the last line.
 
 **Worked reference — the shipped `bridge_eval_expr`:** see
 [`bxp-gui-bridge/src/main.zig`](https://github.com/zaxified/bxp/blob/master/bxp-gui-bridge/src/main.zig) (`bridge_eval_expr`,
-`writeExprErrorJson`, `writeStaticErrorJson`). Note it does two things beyond a
-bare `expr.eval`: it runs `expr.staticCheckCalls` after a clean eval to catch
+`writeExprErrorJson`). Note it delegates to `inspect.validateExpr`, which does more
+than a bare `expr.eval`: it runs `expr.staticCheckCalls` after a clean eval to catch
 literal-only mistakes the runtime skips (e.g. `SPLIT_PART(..., 0)`), mirroring
 `BrokerConfig.validate()` so editor-time and Save-time diagnostics agree. The
 Dart side lives in

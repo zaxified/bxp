@@ -1,7 +1,7 @@
 {
   // Scale/complete-run config: identical flattening to sample.json, pointed at
   // the full census JSON in ./full/ (~3,023 sightings). JSON keys are referenced
-  // by name, so the same template works on the 40-record slice and the full
+  // by name, so the same template works on the 8-record slice and the full
   // array unchanged.
   conversion_templates: {
     squirrel_census_to_csv: {

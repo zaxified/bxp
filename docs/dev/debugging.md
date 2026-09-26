@@ -43,7 +43,8 @@ for the `mcp__dart__launch_app` → `hot_reload` → `get_app_logs` cycle. Quick
 tip: `print()` from Dart is captured; `developer.log()` is not.
 
 **Settings inspector (Ctrl+Shift+S in bxp-gui):** opens an internal-state
-drawer showing the loaded config, parsed AST, schema docs, op log, and
-validation errors. The fastest way to confirm "is the GUI seeing what I
+drawer showing component versions, the resolved binaries and bridge library,
+the loaded config's state (path, dirty, errors), its templates, the last run's
+status, shortcuts and prefs, plus the agent-control and debug toggles. The fastest way to confirm "is the GUI seeing what I
 think it's seeing?".
 

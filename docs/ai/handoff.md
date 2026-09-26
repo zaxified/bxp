@@ -29,7 +29,7 @@ there's anything left to verify:
 4. **Splits / mergers / transfers** (skipped per the target spec): I
    added `rows: []` for direction `in` / `out`. If your account had any
    splits in the sample period, those rows produce no output — click one
-   of those rows after the dry-run and read the **RULE RESULTS** panel
+   of those rows after the dry-run and read the **RULES** panel
    (it names the rule that matched, or says none did), then tell me the
    line numbers. I'll add explicit `'SPLIT'` handling if Wealthfolio
    supports it.

@@ -14,7 +14,7 @@ pub const FlagDoc = struct {
 pub const flags = [_]FlagDoc{
     .{ .flag = "--config", .arg = "<path>", .description = "load custom config instead of default bxp-cli.json" },
     .{ .flag = "--template", .arg = "<id>", .description = "choose single template" },
-    .{ .flag = "--data", .arg = "<path>", .description = "override templates's data_dir (requires --template)" },
+    .{ .flag = "--data", .arg = "<path>", .description = "override template's data_dir (requires --template)" },
     .{ .flag = "--fresh", .description = "skip files whose output already exists (atomic O_EXCL)" },
     .{ .flag = "--dry-run", .description = "run the pipeline in memory without writing output files (preview / validation); independent of --trace" },
     .{ .flag = "--trace", .description = "emit the binary BXTB trace stream on stdout, consumed by bxp-gui's dry-run debugger (forces --quiet; conflicts with --debug)" },

@@ -5,7 +5,7 @@
 # archived (stopped updating March 2023). CC BY 4.0.
 #
 #   bash fetch-full.sh
-#   bxp-cli --config full.json   # unpivots all ~280 country/region rows
+#   bxp-cli --config full.json   # unpivots all ~289 country/region rows
 #
 # Note: the file has ~1147 columns — comfortably inside bxp's 16384-column
 # ceiling (MAX_COLUMNS), so every day-column stays reachable and the run is

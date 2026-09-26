@@ -81,10 +81,10 @@ validation, the ExprPlayground, and the docs / config / template ops avoid the
 `SHA256SUMS` signature for the auto-updater. Library probe failure at startup is
 **fatal** on all platforms — a missing library means a broken install.
 
-For the **per-call transport matrix** (which GUI calls use which transport on
-each OS, plus the two-cause "why" behind the split), see
+For **per-call routing** (which bridge export serves which GUI call, plus the
+two-cause "why" behind the bridge), see
 [`internals`'s "Why the bridge exists" + "Per-call routing"](../internals/index.md#why-the-bridge-exists)
-section. The bridge's C-ABI surface and Debug→ReleaseSafe build rationale live
+section. The bridge's C-ABI surface and its platform role live
 in [`bxp-gui-bridge/CLAUDE.md`](https://github.com/zaxified/bxp/blob/master/bxp-gui-bridge/CLAUDE.md).
 
 The **engine modules** node groups two faces of `bxp-core`: the conversion

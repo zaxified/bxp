@@ -1,6 +1,6 @@
 {
   // Scale-run config: identical template to sample.json, pointed at the full
-  // valeursfoncieres-2024.txt fetched by fetch-full.sh into ./full/ (~4M rows).
+  // ValeursFoncieres-2024.txt fetched by fetch-full.sh into ./full/ (~3.5M rows).
   // Keep the input_schema in sync with sample.json — same dataset, same tricks.
   conversion_templates: {
     dvf_realestate_to_analytics: {

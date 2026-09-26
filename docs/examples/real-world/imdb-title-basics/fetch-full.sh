@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Fetch the FULL IMDb title.basics dataset (~11M rows, 222 MB gzip → ~1 GB TSV)
-# for the scale demonstration. The committed sample.csv is a 500-row slice that
+# Fetch the FULL IMDb title.basics dataset (~12.5M rows, 222 MB gzip → ~1 GB TSV)
+# for the scale demonstration. The committed sample.csv is a 10-row slice that
 # shows the data quirks; this pulls the real file so you can prove BXP processes
 # the whole thing at constant memory.
 #
