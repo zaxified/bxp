@@ -31,6 +31,7 @@ releases/
 # (which see only the clone) load them too.
 .claude/*
 !.claude/rules/
+!.claude/skills/
 
 # codedb MCP index snapshot (local code-intelligence cache)
 codedb.snapshot
