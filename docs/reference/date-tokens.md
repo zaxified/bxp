@@ -32,5 +32,11 @@ Both the `from` and `to` arguments of `DATE_CONVERT` use the same token set.
 | <code class="hl-type">EEEE</code> | Full day name | Monday |
 | <code class="hl-type">EEE/EE/E</code> | Short day name | Mon |
 | <code class="hl-type">e</code> | Day of week as number (1 = Mon … 7 = Sun) | 1 |
+| <code class="hl-type">SSS</code> | Fraction of a second, 3 digits (milliseconds; format truncates) | 123 |
+| <code class="hl-type">SSSSSS</code> | Fraction of a second, 6 digits (microseconds; format truncates) | 123456 |
+| <code class="hl-type">SSSSSSSSS</code> | Fraction of a second, 9 digits (nanoseconds) | 123456789 |
+| <code class="hl-type">GGGG</code> | 4-digit ISO week-year (the year owning the ISO week) | 2009 |
+| <code class="hl-type">WW</code> | 2-digit ISO week number (01–53) | 53 |
+| <code class="hl-type">W</code> | 1–2 digit ISO week number | 5 |
 | <code class="hl-type">[text]</code> | Literal text (escaped inside format string) | [T] → T |
 | <code class="hl-type">[*]</code> | Wildcard — skip until the next token | skips Z, timezone suffix |

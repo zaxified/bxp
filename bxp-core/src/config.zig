@@ -2651,6 +2651,53 @@ fn diagJsonError(
     }
 }
 
+/// Reports a literal `json5.preprocess` refuses outright (`error.NonFiniteNumber`,
+/// `error.HexLiteralTooLarge`) the way `diagJsonError` reports a std.json one:
+/// a structured diagnostic plus, on the bxp-cli path, the `# file:line` text and
+/// the source line. The message is ours — upstream's names a library option a
+/// template author cannot set.
+///
+/// zig-libs request: json5 — `Diagnostic` carries the line but no column, so
+/// the line is shown without a caret and the diagnostic has no `col`.
+fn diagPreprocessError(
+    alloc: std.mem.Allocator,
+    raw: []const u8,
+    config_path: []const u8,
+    err: anyerror,
+    line: usize,
+    out_diag: ?*Diagnostics,
+) void {
+    const desc: []const u8 = switch (err) {
+        error.NonFiniteNumber    => "Infinity / NaN is not a valid value — write a number, or quote it as a string",
+        error.HexLiteralTooLarge => "hexadecimal number is too large",
+        else                     => @errorName(err),
+    };
+    if (out_diag) |d| {
+        if (alloc.dupe(u8, desc)) |m| d.append(.{
+            .path = "",
+            .line = if (line > 0) std.math.cast(u32, line) else null,
+            .severity = .@"error",
+            .code = "json5.parse_error",
+            .message = m,
+        }) catch {} else |_| {}
+    }
+    printHuman(out_diag, "---\n", .{});
+    if (line == 0) {
+        printHuman(out_diag, "# {s}: JSON error — {s}\n", .{ config_path, desc });
+        return;
+    }
+    printHuman(out_diag, "# {s}:{d}: JSON error (line {d}) — {s}\n", .{ config_path, line, line, desc });
+    if (out_diag != null) return;
+    var line_iter = std.mem.splitScalar(u8, raw, '\n');
+    var cur: usize = 1;
+    while (line_iter.next()) |line_content| : (cur += 1) {
+        if (cur == line) {
+            std.debug.print("#   {s}\n", .{std.mem.trimEnd(u8, line_content, "\r")});
+            break;
+        }
+    }
+}
+
 /// Parses a single `{ when, key, values }` pre_pass block into a PrePass.
 /// Caller owns all heap-allocated strings (released by Config.deinit).
 /// Missing fields are silently treated as empty so that downstream validation
@@ -2921,7 +2968,14 @@ pub fn loadFromBytes(
         ._alloc = alloc,
     };
 
-    const content = try json5.preprocess(alloc, raw);
+    var j5_diag: json5.Diagnostic = .{};
+    const content = json5.preprocessWithOptions(alloc, raw, .{ .diagnostic = &j5_diag }) catch |err| {
+        // The two literals the preprocessor itself refuses (Infinity/NaN, a
+        // hex number past f64) fail BEFORE std.json runs, so diagJsonError
+        // never sees them and the run would exit 1 with no message at all.
+        if (err != error.OutOfMemory) diagPreprocessError(alloc, raw, config_path, err, j5_diag.line, diag);
+        return err;
+    };
     defer alloc.free(content);
 
     // Detect duplicate object keys before parsing — std.json's parseFromSlice
@@ -3640,6 +3694,28 @@ test "loadFromBytes: csv-punctuation + enum fields parse through their helpers" 
     try testing.expectEqual(FileType.json, demo.file_type_out);
     // A clean config emits no diagnostics.
     try testing.expectEqual(@as(usize, 0), diag.count());
+}
+
+test "loadFromBytes: a literal the JSON5 preprocessor refuses still yields a positioned diagnostic" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    var diag = Diagnostics.init(a);
+    defer diag.deinit();
+
+    const src =
+        \\{
+        \\  maps: { m: { k: Infinity } },
+        \\  conversion_templates: {},
+        \\}
+    ;
+    try testing.expectError(error.NonFiniteNumber, loadFromBytes(a, src, "<test>", &diag));
+    try testing.expectEqual(@as(usize, 1), diag.items.items.len);
+    const d = diag.items.items[0];
+    try testing.expectEqualStrings("json5.parse_error", d.code);
+    try testing.expectEqual(@as(?u32, 2), d.line);
+    try testing.expect(std.mem.indexOf(u8, d.message, "Infinity") != null);
 }
 
 test "loadFromBytes: csv_header_line parses (default 1, headerless 0, preamble N)" {

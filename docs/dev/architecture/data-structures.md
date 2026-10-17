@@ -121,10 +121,14 @@ classDiagram
         +append()
         +count()
         +countBySeverity()
+        +sortByPosition()
+        +render()
+        +writeJson()
     }
 
     class Diagnostic {
         +path: string
+        +file: ?string
         +line: ?u32
         +col: ?u32
         +end_line: ?u32
@@ -135,6 +139,10 @@ classDiagram
         +code: string
         +message: string
         +suggest: ?string
+        +labels: ?[]Label
+        +notes: ?[]Note
+        +code_url: ?string
+        +fix: ?Fix
     }
 
     class SectionStats {

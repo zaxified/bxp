@@ -43,7 +43,10 @@ which is also where the invariant that ties them together is now documented.
   additive sibling `splitFieldsOpts(..., .{ .on_overflow = .truncate })` fills
   the buffer and drops the surplus instead. bxp-cli uses the latter at all
   three split sites (header, main pass, pre-pass) — data-lenient: one over-wide
-  row must not abort the file.
+  row must not abort the file. A trailing delimiter yields a final empty field
+  (`a,b,` is three fields, as RFC 4180 / Python / Go read it); bxp keeps that
+  upstream default. A header `a,b,` therefore has an empty third column name,
+  which the duplicate-header check already skips.
 - `LineIterator.init(bytes, quote, base_offset)` — quote-aware iterator over
   records held in a single in-memory chunk; `next()` yields
   `LineSlice { bytes, byte_offset, unbalanced_quote }`.
@@ -146,7 +149,11 @@ regardless of archive/entry size.
   then rejects anything containing a separator, so its guard is strictly
   narrower than the predicate. Kept in mind if a future path ever writes member
   names through unchanged.
-- Store + Deflate only; anything else is `error.UnsupportedCompressionMethod`.
+- Store + Deflate only. A member with another method (or the encryption flag)
+  is still listed — the rest of the archive stays readable — and refused only
+  when opened (`error.UnsupportedCompressionMethod` / `error.ZipEncryptedEntry`).
+  `zipPrePass` checks `Entry.compression` / `Entry.encrypted` while planning and
+  skips such a member with a warning instead of opening it.
 - Both `Archive` and `EntryReader` carry internal self-pointers — init in place,
   never move after init.
 - Inline unit tests are small + functional (store-only, hand-built zips):
@@ -385,6 +392,11 @@ tree** — the named `json5` module comes from the pinned `zig_libs` fetch dep.
   `$err_<N>` entries instead of aborting, so the GUI can render diagnostics
   against a still-parseable document.
 - Implemented as a single-pass tokenizer — no external dependencies.
+- Two literals are refused by the preprocessor itself, before `std.json` runs:
+  `Infinity`/`NaN` (`error.NonFiniteNumber`) and a hex number past f64
+  (`error.HexLiteralTooLarge`). `config.loadFromBytes` turns both into a
+  positioned (line-only) diagnostic via `diagPreprocessError`; without it the
+  CLI exited 1 with no message.
 - Tests live upstream (27 + two fuzz harnesses + the json5/json5-tests
   conformance corpus).
 - **This module is the one migration that changed behaviour** (2026-08-16).

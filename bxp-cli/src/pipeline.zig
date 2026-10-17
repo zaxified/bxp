@@ -3505,11 +3505,6 @@ pub fn zipPrePass(
 
             var archive: zipstream.Archive = undefined;
             archive.init(runtime.io, alloc, zip_file) catch |err| {
-                if (err == zipstream.Error.UnsupportedCompressionMethod) {
-                    out.warning("warning: skipping '{s}': uses an unsupported compression method (only store + deflate are read)\n", .{zip_name});
-                    stats.warnings += 1;
-                    continue;
-                }
                 out.fatal("fatal error: cannot read zip '{s}': {s}\n", .{ zip_name, @errorName(err) });
                 stats.has_fatal = true;
                 stats.time_ns = timer.read();
@@ -3533,6 +3528,21 @@ pub fn zipPrePass(
             var jobs = std.array_list.Managed(ZipJob).init(na);
             for (archive.entries.items, 0..) |*member, idx| {
                 if (!std.mem.endsWith(u8, member.name, zi.entry_pattern)) continue;
+
+                // zipstream lists a member it cannot read (a method other than
+                // store/deflate, or encryption) and refuses it only when the
+                // member is opened. That is a property of the input, not of the
+                // template, so skip that one member with a warning and keep
+                // unpacking the rest — rather than letting the worker's open
+                // turn it into a fatal for the whole run.
+                const readable = member.compression == .store or member.compression == .deflate;
+                if (member.encrypted or !readable) {
+                    out.warning("warning: zip '{s}': skipping member '{s}': {s} (only unencrypted store + deflate are read)\n", .{
+                        zip_name, member.name, if (member.encrypted) "encrypted" else "unsupported compression method",
+                    });
+                    stats.warnings += 1;
+                    continue;
+                }
 
                 const out_name = try zipEntryOutputName(na, member.name, zi);
                 // Zip-slip / sanity guard: a flat name only — never a path

@@ -411,6 +411,9 @@ fetch dependency (see `bxp-core/CLAUDE.md` → _External dependencies_).
 | `m`            | 1–2 digit minute                                    | `5`                   |
 | `ss`           | 2-digit second                                      | `09`                  |
 | `s`            | 1–2 digit second                                    | `9`                   |
+| `SSS`          | Fraction of a second, 3 digits (`SSSSSS` = 6, `SSSSSSSSS` = 9) | `123`      |
+| `GGGG`         | ISO week-year (the year owning the ISO week)        | `2020`                |
+| `WW`           | 2-digit ISO week number (01–53); `W` = 1–2 digits   | `53`                  |
 | `A`            | AM/PM uppercase                                     | `PM`                  |
 | `a`            | am/pm lowercase                                     | `pm`                  |
 | `ZZ`           | UTC offset `±HH:MM` (literal `Z` → `+00:00`)         | `+02:00`              |
@@ -423,6 +426,9 @@ fetch dependency (see `bxp-core/CLAUDE.md` → _External dependencies_).
 **Gotchas:**
 
 - `mm` = minute, `MM` = month — easy to mix up
+- The full, generated token list is `docs/reference/date-tokens.md` (from
+  `datefmt.date_tokens`); this table is a quick reference
+- Numeric fields are ASCII digits only — a sign (`+1/05/2024`) or `_` does not parse
 - `MMM` expects exactly 3 chars; `normalizeMonthAbbrev` in `expr.zig` pre-processes 4-char variants like `Sept`, `June`
 - Pre-1970 dates are fully supported — `DATE_CONVERT` is a pure field reshuffle
   (parse → format) and never round-trips through a Unix epoch, so birthdates,
