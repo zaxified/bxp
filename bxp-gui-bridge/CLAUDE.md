@@ -109,7 +109,9 @@ Debug-mode x86-64 codegen produced broken register allocation for
 `mem.Allocator.remap` / `json.Scanner.next` — a NULL deref at offset `0x30`
 under realistic streaming load (137 K rows from `bxp-cli --trace`). That was a
 backend defect; Zig 0.16's self-hosted x86 backend does not reproduce it, so
-the rewrite is gone and Debug builds as Debug again. If a 0x30-class SEGV ever
+the rewrite is gone and Debug builds as Debug again. Debug uses LLVM like
+every other mode unless `-Dselfhosted=true` is passed (the repo-wide rule in
+`.claude/rules/zig-pitfalls.md`). If a 0x30-class SEGV ever
 resurfaces under streaming load, suspect a backend regression first — don't
 silently reinstate the rewrite without reproducing under load (a debugger run
 that breaks early will appear to "work").

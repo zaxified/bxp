@@ -37,7 +37,7 @@ this file only holds what is specific to this repository.
   and run the check against the *unfixed* code first — if it passes there too,
   it is not a test.
 - **Build mode matters for correctness, not only speed.** A bare `zig build` is
-  Debug. The bridge in Debug has stack frames big enough to overflow the Dart FFI
+  Debug (except `bxp-cli`, whose `build.zig` defaults to ReleaseSafe). The bridge in Debug has stack frames big enough to overflow the Dart FFI
   thread (`0xc00000fd` on Windows). Smoke-test and measure with
   `-Doptimize=ReleaseSafe` — the whole `scripts/test.sh` runs in that one mode.
 - **Datasets and the expression corpus can stay byte-identical over a broken
@@ -48,6 +48,27 @@ this file only holds what is specific to this repository.
   blacklist — a new builtin that reads row state (fields, `FIELDS`, `LOOKUP`,
   `NOW`, `RAND`, `FILENAME`, `RECORD_NUM`, `SHEET_NAME`) must be added to it. Gate such
   changes with `test-09` (the examples), not only `test-06`/`test-07`.
+
+## Build modes and backends here
+
+Every compile step in all five `build.zig` files (`bxp-core`, `bxp-cli`, `bxp-mcp`,
+`bxp-gui-bridge`, `tools/zig-doc-gen`) uses LLVM unless `-Dselfhosted=true` is passed.
+The self-hosted backend is for the edit loop only; no gate and no CI lane uses it.
+Each defect class is caught once, in the cheapest place:
+
+| when | what to run |
+|---|---|
+| editing | whatever is fastest; `-Dselfhosted=true` is fine here |
+| iterating on a fix | `zig build test` in the package you touched — LLVM Debug (`bxp-cli`: ReleaseSafe by default), `-Dtest-filter=` welcome |
+| before ending work | the `scripts/test-NN-*.sh` phase(s) covering what you touched (ReleaseSafe). A change in `bxp-core` or the zig-libs pin reaches every package → `bash scripts/test.sh` |
+| every package on three OSes | CI (`ci.yml`): the full `scripts/test.sh`, ReleaseSafe, on every PR and master push |
+| the shipped mode | ReleaseSmall, built only by `scripts/release-0N-*.sh` |
+| benchmarks, profiling, RSS | ReleaseFast / ReleaseSafe, never Debug (`file <bin>` before trusting a number) |
+
+- `-Dselfhosted` is a per-package option: a downstream package never builds bxp-core's
+  Compile steps, so it has to be passed to the package being built.
+- There is no direct `zig test` / `zig build-exe` call in `scripts/`; a new one takes
+  `-fllvm`.
 
 ## Repository conventions
 

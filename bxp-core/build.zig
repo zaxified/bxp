@@ -3,6 +3,11 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    // Self-hosted backend only on request, for the edit loop: every build and
+    // test step here compiles with LLVM (~/.claude/zig-backend.md; tiers in
+    // .claude/rules/zig-pitfalls.md). A no-op in the release modes.
+    const selfhosted = b.option(bool, "selfhosted", "Use Zig's self-hosted backend (edit loop only)") orelse false;
+    const use_llvm: ?bool = if (selfhosted) null else true;
 
     // uucode supplies the Unicode tables behind expr.zig's text builtins:
     // UPPER/LOWER (case mapping) and UNACCENT (canonical decomposition + the
@@ -268,6 +273,7 @@ pub fn build(b: *std.Build) void {
     // module: no `_start`, just the exports src/wasm.zig marks.
     const wasm_exe = b.addExecutable(.{
         .name = "bxp-eval",
+        .use_llvm = use_llvm,
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/wasm.zig"),
             .target = target,
@@ -293,6 +299,7 @@ pub fn build(b: *std.Build) void {
     // it — covered by the datasets gate (test-07) and the expression corpus.
 
     const json_tests = b.addTest(.{
+        .use_llvm = use_llvm,
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/json.zig"),
             .target = target,
@@ -305,6 +312,7 @@ pub fn build(b: *std.Build) void {
     });
 
     const btrace_tests = b.addTest(.{
+        .use_llvm = use_llvm,
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/btrace.zig"),
             .target = target,
@@ -314,6 +322,7 @@ pub fn build(b: *std.Build) void {
     });
 
     const expr_tests = b.addTest(.{
+        .use_llvm = use_llvm,
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/expr.zig"),
             .target = target,
@@ -339,6 +348,7 @@ pub fn build(b: *std.Build) void {
     // (scripts/test-06-expr-corpus.sh).
 
     const unicode_tests = b.addTest(.{
+        .use_llvm = use_llvm,
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/unicode.zig"),
             .target = target,
@@ -355,6 +365,7 @@ pub fn build(b: *std.Build) void {
     // mirror the production wiring — the same decimal + zipstream handles, or the
     // test build resolves a different module than the shipped one does.
     const xlsx_tests = b.addTest(.{
+        .use_llvm = use_llvm,
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/xlsx.zig"),
             .target = target,
@@ -369,6 +380,7 @@ pub fn build(b: *std.Build) void {
 
     // The test module's import names must match the production wiring above.
     const config_tests = b.addTest(.{
+        .use_llvm = use_llvm,
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/config.zig"),
             .target = target,
@@ -385,6 +397,7 @@ pub fn build(b: *std.Build) void {
     });
 
     const docs_tests = b.addTest(.{
+        .use_llvm = use_llvm,
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/docs.zig"),
             .target = target,
@@ -403,6 +416,7 @@ pub fn build(b: *std.Build) void {
     // they moved here when bxp-fmt was deleted, since they exercise the shared
     // inspect core, not the CLI adapter. Imports mirror the inspect module above.
     const inspect_tests = b.addTest(.{
+        .use_llvm = use_llvm,
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/inspect.zig"),
             .target = target,

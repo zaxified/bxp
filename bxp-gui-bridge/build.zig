@@ -7,8 +7,14 @@ pub fn build(b: *std.Build) void {
     // the 0.15.2 Debug-mode x86-64 codegen bug (broken regalloc for
     // `mem.Allocator.remap` / `json.Scanner.next`, NULL deref at offset 0x30
     // under streaming load) was a backend defect, and 0.16's self-hosted x86
-    // backend does not reproduce it. Debug now builds as Debug again.
+    // backend does not reproduce it. Debug now builds as Debug again — and with
+    // LLVM, not the self-hosted backend, unless `-Dselfhosted=true` (below).
     const optimize = b.standardOptimizeOption(.{});
+    // Self-hosted backend only on request, for the edit loop: every build and
+    // test step here compiles with LLVM (~/.claude/zig-backend.md; tiers in
+    // .claude/rules/zig-pitfalls.md). A no-op in the release modes.
+    const selfhosted = b.option(bool, "selfhosted", "Use Zig's self-hosted backend (edit loop only)") orelse false;
+    const use_llvm: ?bool = if (selfhosted) null else true;
 
     const options = b.addOptions();
     options.addOption([]const u8, "version", zon.version);
@@ -46,6 +52,7 @@ pub fn build(b: *std.Build) void {
     // bxp-gui via DartFFI's DynamicLibrary.open().
     const lib = b.addLibrary(.{
         .name = "bxp-gui-bridge",
+        .use_llvm = use_llvm,
         .linkage = .dynamic,
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
@@ -74,6 +81,7 @@ pub fn build(b: *std.Build) void {
     // resulting binary is NOT installed (it never reaches release archives).
     const helper = b.addExecutable(.{
         .name = "bridge-test-helper",
+        .use_llvm = use_llvm,
         .root_module = b.createModule(.{
             .root_source_file = b.path("test/test_helper.zig"),
             .target = target,
@@ -85,6 +93,7 @@ pub fn build(b: *std.Build) void {
     test_options.addOptionPath("test_helper_path", helper.getEmittedBin());
 
     const tests = b.addTest(.{
+        .use_llvm = use_llvm,
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
             .target = target,

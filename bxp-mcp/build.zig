@@ -4,6 +4,11 @@ const zon = @import("build.zig.zon");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    // Self-hosted backend only on request, for the edit loop: every build and
+    // test step here compiles with LLVM (~/.claude/zig-backend.md; tiers in
+    // .claude/rules/zig-pitfalls.md). A no-op in the release modes.
+    const selfhosted = b.option(bool, "selfhosted", "Use Zig's self-hosted backend (edit loop only)") orelse false;
+    const use_llvm: ?bool = if (selfhosted) null else true;
 
     const core_dep = b.dependency("bxp_core", .{ .target = target, .optimize = optimize });
 
@@ -14,6 +19,7 @@ pub fn build(b: *std.Build) void {
 
     const exe = b.addExecutable(.{
         .name = "bxp-mcp",
+        .use_llvm = use_llvm,
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
             .target = target,
@@ -52,6 +58,7 @@ pub fn build(b: *std.Build) void {
     // Unit tests over the same source tree (picks up inline tests in
     // sim.zig/tools.zig reachable from main.zig).
     const exe_tests = b.addTest(.{
+        .use_llvm = use_llvm,
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
             .target = target,
