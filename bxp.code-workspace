@@ -1,9 +1,11 @@
 {
 	"folders": [
 		{
+			"name": "bxp",
 			"path": "."
 		},
 		{
+			"name": "DEV",
 			"path": "../DEV"
 		}
 	],
