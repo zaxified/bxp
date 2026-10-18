@@ -38,16 +38,17 @@
         // `YYYY-MM-DD`), but what decides it is the diff to these twelve
         // modules, not the tag: a tag that leaves them byte-identical is not
         // worth adopting, and a later commit that fixes them is (see
-        // CHANGELOG.md in each module). Currently an untagged `main` commit
-        // past tag `2026-10-07`: the window after that tag still changes ten
-        // of the twelve modules (datefmt, zipstream, minisign, json5, ...).
+        // CHANGELOG.md in each module). Currently tag `2026-10-18`, the last
+        // one on Zig 0.16 (the collection moves to 0.17 after it); since the
+        // previous pin `5ee701f8` only json5 (Diagnostic col/offset/len) and
+        // minisign (constant-time sweep) changed among the twelve.
         // `zig fetch` cannot
         // target a subdirectory (ziglang/zig#23012)
         // so the whole collection is one package — only the modules actually
         // imported get compiled in.
         .zig_libs = .{
-            .url = "git+https://github.com/zaxified/zig-libs.git?ref=main#5ee701f845cdb09621043a926f50287cac2fb474",
-            .hash = "zig_libs-0.0.0-WiQ0GsnH5Qb8OJrz0q5BRXpgSg39NfGWYxcGyN1r4RFw",
+            .url = "git+https://github.com/zaxified/zig-libs.git#a3fe0128a14805e9facbfc98f92859ec8f13dd86",
+            .hash = "zig_libs-0.0.0-WiQ0GhSb6gYTsronuZW_4cdNjQ8154NCdQJjMixzmJKG",
         },
     },
     .minimum_zig_version = "0.16.0",
