@@ -148,6 +148,13 @@ dur=$(awk -v a="$t0" -v b="$t1" 'BEGIN{printf "%.1f", b-a}')
 # section().
 label="corpus (${passed}/${total})"
 
+# A corpus that parsed to zero cases (format drift) must not pass vacuously.
+if (( total == 0 )); then
+    status_line "corpus (0/0)" FAIL "$dur"
+    echo "  no corpus cases parsed from $CORPUS" >&2
+    exit 1
+fi
+
 if (( failed == 0 )); then
     status_line "$label" OK "$dur"
     exit 0
@@ -160,4 +167,5 @@ printf '%s\n' "$summary" | while IFS=$'\t' read -r tag detail; do
     [[ "$tag" == "F" ]] && echo "    - $detail"
 done
 echo
-exit "$failed"
+# Clamp: an exit status is taken mod 256 (256 failures would read as success).
+exit $(( failed > 255 ? 255 : failed ))

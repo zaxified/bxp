@@ -27,6 +27,15 @@ VERSION_BARE="${VERSION#v}"
 
 mkdir -p "$OUTDIR"
 
+# Delete a scratch tree without `rm -rf` (repo rule: no recursive force-remove
+# in scripts). `find -delete` removes the contents; `rmdir` then refuses to
+# remove the directory itself unless it is really empty.
+_rm_tree() {
+    local d="$1"
+    [[ -n "$d" && -d "$d" ]] || return 0
+    find "$d" -mindepth 1 -delete && rmdir "$d"
+}
+
 # ─── Shared helpers ─────────────────────────────────────────────────────
 
 build_companions() {
@@ -91,7 +100,7 @@ build_linux() {
 
     _build_appimage "$appdir" "$stage"
 
-    rm -rf "$stage"
+    _rm_tree "$stage"
     restore_native_companions
 }
 
@@ -104,9 +113,14 @@ _appimagetool() {
     if [ ! -x "$bin" ]; then
         mkdir -p "$cache"
         echo "  Downloading appimagetool to $bin..." >&2
-        curl -fsSL -o "$bin" \
-            "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage" >&2
-        chmod +x "$bin"
+        # Download to a side name and rename on success: this runs inside
+        # `tool=$(_appimagetool)`, where errexit is off, so a failed or
+        # truncated curl would otherwise leave an executable stub in the cache
+        # that every later run trusts.
+        curl -fsSL -o "$bin.part" \
+            "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage" >&2 \
+            || return 1
+        chmod +x "$bin.part" && mv "$bin.part" "$bin" || return 1
     fi
     echo "$bin"
 }
@@ -141,7 +155,7 @@ _build_appimage() {
     cat > "$appdir/AppRun" <<'EOF'
 #!/bin/sh
 HERE="$(dirname "$(readlink -f "$0")")"
-export LD_LIBRARY_PATH="$HERE/usr/bin/lib:$LD_LIBRARY_PATH"
+export LD_LIBRARY_PATH="$HERE/usr/bin/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 exec "$HERE/usr/bin/bxp-gui" "$@"
 EOF
     chmod +x "$appdir/AppRun"
@@ -200,7 +214,7 @@ build_windows() {
         "$GUI_ROOT/installer/bxp-desktop.nsi" >/dev/null
     echo "  → $OUTDIR/bxp-desktop-windows-x86_64.exe"
 
-    rm -rf "$stage"
+    _rm_tree "$stage"
     restore_native_companions
 }
 

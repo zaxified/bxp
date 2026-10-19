@@ -40,6 +40,15 @@ source "$SCRIPT_DIR/test-lib.sh"
 BXP="$MONO_ROOT/bxp-cli/zig-out/bin/bxp-cli"
 EXAMPLES="$MONO_ROOT/docs/examples"
 
+# Delete a scratch tree without `rm -rf` (repo rule: no recursive force-remove
+# in scripts). `find -delete` removes the contents; `rmdir` then refuses to
+# remove the directory itself unless it is really empty.
+_rm_tree() {
+    local d="$1"
+    [[ -n "$d" && -d "$d" ]] || return 0
+    find "$d" -mindepth 1 -delete && rmdir "$d"
+}
+
 _run_example() {
     local dir="$1"
     local work rc=0
@@ -93,13 +102,13 @@ _run_example() {
         rc=$?
         echo "exit $rc (warnings/error)"
         cat "$stderr_file"
-        rm -rf "$work"
+        _rm_tree "$work"
         return 1
     }
     if [[ -s "$stderr_file" ]]; then
         echo "non-empty stderr (warnings):"
         cat "$stderr_file"
-        rm -rf "$work"
+        _rm_tree "$work"
         return 1
     fi
     rm -f "$stderr_file"
@@ -123,13 +132,13 @@ _run_example() {
         if [[ -z "$hit" ]]; then
             echo "no output produced for golden $base.expected"
             echo "run created: $(echo $new)"
-            rm -rf "$work"
+            _rm_tree "$work"
             return 1
         fi
         if ! diff -q "$work/$hit" "$expected" > /dev/null 2>&1; then
             echo "diff: $hit"
             diff "$work/$hit" "$expected" | head -20
-            rm -rf "$work"
+            _rm_tree "$work"
             return 1
         fi
         # The committed copy of the output is not just a convenience for people
@@ -138,11 +147,11 @@ _run_example() {
         if [[ -f "$dir/$hit" ]] && ! diff -q "$dir/$hit" "$expected" > /dev/null 2>&1; then
             echo "committed $hit is stale (differs from $base.expected)"
             diff "$dir/$hit" "$expected" | head -20
-            rm -rf "$work"
+            _rm_tree "$work"
             return 1
         fi
     done
-    rm -rf "$work"
+    _rm_tree "$work"
 
     if [[ "$goldens" -eq 0 ]]; then
         echo "no *.expected golden in $dir — example is ungated"

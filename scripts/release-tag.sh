@@ -36,9 +36,9 @@ done
 # there.
 
 CANON="$MONO_ROOT/bxp-cli/build.zig.zon"
-VERSION=$(grep -E '^\s*\.version\s*=\s*"' "$CANON" \
+VERSION=$(grep -E '^[[:space:]]*\.version[[:space:]]*=[[:space:]]*"' "$CANON" \
     | head -n1 \
-    | sed -E 's/^\s*\.version\s*=\s*"([^"]+)".*/\1/')
+    | sed -E 's/^[[:space:]]*\.version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/')
 
 if [ -z "$VERSION" ]; then
     echo "error: could not read .version from $CANON" >&2
@@ -70,6 +70,17 @@ esac
 if git -C "$MONO_ROOT" rev-parse "$TAG" >/dev/null 2>&1; then
     echo "error: tag $TAG already exists locally" >&2
     echo "       did you forget to run release-changelog.sh first?" >&2
+    exit 1
+fi
+
+# The tag must sit on a commit the remote already has: release.yml checks out
+# the tag, so an unpushed HEAD would publish a release from a commit that is
+# on no branch (and the "push to master first, let CI go green" procedure
+# would silently be skipped). Uses the local remote-tracking ref — run
+# `git fetch` first if it may be stale.
+if ! git -C "$MONO_ROOT" branch -r --contains HEAD 2>/dev/null | grep -q .; then
+    echo "error: HEAD is not contained in any remote branch" >&2
+    echo "       push the release commit first: git push origin master" >&2
     exit 1
 fi
 

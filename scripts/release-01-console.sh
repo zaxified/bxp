@@ -33,6 +33,15 @@ VERSION=${1:-$(git -C "$MONO_ROOT" describe --tags --abbrev=0 2>/dev/null || ech
 echo "Building bxp-console ${VERSION}"
 mkdir -p "$OUTDIR"
 
+# Delete a scratch tree without `rm -rf` (repo rule: no recursive force-remove
+# in scripts). `find -delete` removes the contents; `rmdir` then refuses to
+# remove the directory itself unless it is really empty.
+_rm_tree() {
+    local d="$1"
+    [[ -n "$d" && -d "$d" ]] || return 0
+    find "$d" -mindepth 1 -delete && rmdir "$d"
+}
+
 build() {
     local target=$1   # zig target triple
     local name=$2     # output filename suffix
@@ -63,7 +72,7 @@ build() {
         tar -czf "${base}.tar.gz" -C "$stage" bxp
         echo "    → ${base}.tar.gz"
     fi
-    rm -rf "$stage"
+    _rm_tree "$stage"
 }
 
 build "x86_64-linux-musl" "linux-x86_64"   ""

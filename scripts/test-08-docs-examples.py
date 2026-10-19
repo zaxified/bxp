@@ -228,7 +228,12 @@ def main():
         print(f"  FAILURES: {len(failures)}")
         for f in failures:
             print(f"    {f}")
-        sys.exit(len(failures))
+        # Clamp: a process exit status is taken mod 256, so exactly 256
+        # failures would otherwise read as success.
+        sys.exit(min(len(failures), 255))
+    if not total_exprs:
+        # A moved/renamed examples tree must not pass vacuously.
+        sys.exit("  no marked expressions found - refusing to pass")
     # Machine-readable tail: the wrapper turns it into the report's one result
     # row, so this phase looks like every other suite. Only counts, only green.
     print(f"stats\t{total_exprs}\t{marked_pages}")

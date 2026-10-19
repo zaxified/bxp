@@ -87,7 +87,8 @@ run_tree_gen() {
 if [[ "$mode" == "check" ]]; then
   rc=0
   tmp="$(mktemp -d)"
-  trap 'rm -rf "$tmp"' EXIT
+  # No `rm -rf` in scripts (repo rule): empty the tree with find, then rmdir.
+  trap 'find "$tmp" -mindepth 1 -delete; rmdir "$tmp"' EXIT
   run_zig_gen "$tmp" >/dev/null
   run_dart_gen "$tmp"
   run_tree_gen --check || rc=1
@@ -140,7 +141,7 @@ if ! "$MKDOCS" --version >/dev/null 2>&1; then
   echo "$MKDOCS exists but cannot run — most likely the venv was built with a" >&2
   echo "different Python than $VENV/bin/python resolves to today." >&2
   echo "recreate it:" >&2
-  echo "  rm -rf $VENV && python3 -m venv $VENV \\" >&2
+  echo "  python3 -m venv --clear $VENV \\" >&2
   echo "    && $VENV/bin/pip install -r $MONO_ROOT/scripts/docs/requirements.txt" >&2
   exit 1
 fi

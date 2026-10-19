@@ -25,7 +25,14 @@ _zig_in() {
 _json5_ast_tests() {
     local d="$MONO_ROOT/bxp-gui/packages/json5_ast"
     [[ -d "$d" ]] || return 0
-    command -v dart >/dev/null 2>&1 || return 0
+    if ! command -v dart >/dev/null 2>&1; then
+        # Local contributors without Dart skip; CI must never skip silently.
+        if [[ -n "${CI:-}" ]]; then
+            echo "dart not found on CI — json5_ast tests cannot run" >&2
+            return 1
+        fi
+        return 0
+    fi
     (cd "$d" && dart test)
 }
 

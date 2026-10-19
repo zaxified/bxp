@@ -50,9 +50,9 @@ fi
 # ─── Resolve the new version ────────────────────────────────────────
 
 current_version() {
-    grep -E '^\s*\.version|^version:' "$1" \
+    grep -E '^[[:space:]]*\.version[[:space:]]*=|^version:' "$1" \
         | head -n1 \
-        | sed -E 's/^\s*\.version\s*=\s*"([^"]+)".*/\1/; s/^version:\s*([^[:space:]]+).*/\1/'
+        | sed -E 's/^[[:space:]]*\.version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/; s/^version:[[:space:]]*([^[:space:]]+).*/\1/'
 }
 
 bump_semver() {
@@ -86,6 +86,30 @@ case "$BUMP_ARG" in
         ;;
 esac
 
+# The explicit x.y.z glob above accepts trailing junk ("1.2.3/x", "1.2.3&"),
+# which would corrupt the sed replacement below. Require plain semver.
+if ! [[ "$NEW" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "error: '$NEW' is not a plain x.y.z version (current: '$CURRENT')" >&2
+    exit 1
+fi
+
+# The lockstep contract: every manifest must agree before a bump, otherwise
+# the bump would silently paper over a drifted manifest.
+for m in "${MANIFESTS[@]}"; do
+    if [ "$(current_version "$m")" != "$CURRENT" ]; then
+        echo "error: ${m#$MONO_ROOT/} is at '$(current_version "$m")', bxp-cli is at '$CURRENT'" >&2
+        echo "       manifests are out of lockstep — align them first" >&2
+        exit 1
+    fi
+done
+
+# `git commit` below commits the whole index: refuse if something unrelated is
+# already staged, so it cannot slip into the release commit.
+if ! $DRY_RUN && ! git -C "$MONO_ROOT" diff --cached --quiet; then
+    echo "error: the index has staged changes — commit or unstage them first" >&2
+    exit 1
+fi
+
 echo "[1/3] Bumping versions: $CURRENT → $NEW"
 for m in "${MANIFESTS[@]}"; do
     cur=$(current_version "$m")
@@ -98,8 +122,8 @@ for m in "${MANIFESTS[@]}"; do
         # argument after `-i` and disagrees with GNU on the empty form.
         tmp=$(mktemp)
         sed -E \
-            -e "s/^(\s*\.version\s*=\s*\")[^\"]+(\".*)$/\1$NEW\2/" \
-            -e "s/^(version:\s*)[^[:space:]]+(.*)$/\1$NEW\2/" \
+            -e "s/^([[:space:]]*\.version[[:space:]]*=[[:space:]]*\")[^\"]+(\".*)$/\1$NEW\2/" \
+            -e "s/^(version:[[:space:]]*)[^[:space:]]+(.*)$/\1$NEW\2/" \
             "$m" > "$tmp"
         mv "$tmp" "$m"
     fi

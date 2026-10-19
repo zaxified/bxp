@@ -66,6 +66,9 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    # Only two phases carry their own timeout; this bounds a hang anywhere else
+    # (default is 360 min per leg).
+    timeout-minutes: 90
     env:
       # One shared Zig cache dir for the whole job. Each test-NN phase cd's into
       # its own package, so without a fixed absolute path the local cache would
@@ -78,8 +81,8 @@ jobs:
         # windows-latest and bash is the default shell on linux/macos.
         shell: bash
     steps:
-      - uses: actions/checkout@v5
-      - uses: mlugg/setup-zig@v2
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
         with:
           version: 0.17.0
           # Persist the build cache ourselves (next step) instead. mlugg's
@@ -103,7 +106,7 @@ jobs:
           key: zig-${{ runner.os }}-z017-base-${{ hashFiles('bxp-core/**/*.zig', 'bxp-cli/**/*.zig', 'bxp-mcp/**/*.zig', 'bxp-gui-bridge/**/*.zig', '**/build.zig.zon') }}
           restore-keys: |
             zig-${{ runner.os }}-z017-base-
-      - uses: subosito/flutter-action@v2
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:
           # Pinned (not floating `channel: stable`) so CI is reproducible: the
           # stable channel drifts ahead of local SDKs and surfaces fresh `info`
@@ -126,7 +129,7 @@ jobs:
           flutter config --no-enable-android --no-enable-ios
           eng="$FLUTTER_ROOT/bin/cache/artifacts/engine"
           if [ -n "$FLUTTER_ROOT" ] && [ -d "$eng" ]; then
-            find "$eng" -maxdepth 1 -type d -name 'android-*' -exec rm -rf {} + 2>/dev/null || true
+            find "$eng" -maxdepth 1 -type d -name 'android-*' -exec find {} -delete \; 2>/dev/null || true
           fi
           du -sh "$FLUTTER_ROOT" 2>/dev/null || true
       # A fresh checkout has no .dart_tool. The flutter phases imply a pub

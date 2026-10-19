@@ -41,7 +41,7 @@ run_and_capture() {
   # Wipe stale outputs first so we measure THIS run's products only.
   find "$base" -maxdepth 4 -name "*$out_suffix" -type f -delete 2>/dev/null || true
 
-  ( cd "$base" && eval "$BXP $config_args" --quiet ) || {
+  ( cd "$base" && "$BXP" $config_args --quiet ) || {
     echo "  [warn] bxp-cli exited non-zero for $tag (continuing)" >&2
   }
 

@@ -23,6 +23,12 @@ MONO_ROOT="$(dirname "$SCRIPT_DIR")"
 source "$SCRIPT_DIR/test-lib.sh"
 
 if ! command -v flutter >/dev/null 2>&1; then
+    # CI always installs Flutter; a missing SDK there is a broken setup, not a
+    # reason to pass the phase.
+    if [[ -n "${CI:-}" ]]; then
+        echo "test-04-desktop.sh: flutter SDK not found on CI — refusing to skip" >&2
+        exit 1
+    fi
     echo "test-04-desktop.sh: flutter SDK not found — skipping"
     exit 0
 fi

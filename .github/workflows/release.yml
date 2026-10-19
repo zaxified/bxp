@@ -146,6 +146,19 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      # A tag push must match the version the manifests carry (release-tag.sh
+      # derives the tag from bxp-cli/build.zig.zon). A hand-pushed tag that
+      # disagrees would publish archives and an updater feed labelled with a
+      # version the binaries do not report.
+      - name: Tag matches manifest version
+        if: github.event_name == 'push'
+        run: |
+          ver=$(grep -E '^[[:space:]]*\.version[[:space:]]*=' bxp-cli/build.zig.zon \
+                | head -n1 | sed -E 's/.*"([^"]+)".*/\1/')
+          if [ "$RELEASE_VERSION" != "v$ver" ]; then
+            echo "::error::tag $RELEASE_VERSION != manifest version v$ver"
+            exit 1
+          fi
       - name: Download all artifacts
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
@@ -156,6 +169,22 @@ jobs:
           find artifacts -type f \
               \( -name 'bxp-console-*' -o -name 'bxp-desktop-*' \) \
               -exec cp {} staging/ \;
+          # Every platform artifact must be present BEFORE we sign + publish.
+          # release-02-desktop.sh skips the macOS DMG when create-dmg is
+          # missing, and verify-release below only catches that after the
+          # release is already public.
+          for f in \
+              "bxp-desktop-windows-x86_64.exe" \
+              "bxp-desktop-macos-arm64.dmg" \
+              "bxp-desktop-linux-x86_64.AppImage" \
+              "bxp-console-${RELEASE_VERSION}-linux-x86_64.tar.gz" \
+              "bxp-console-${RELEASE_VERSION}-windows-x86_64.zip" \
+              "bxp-console-${RELEASE_VERSION}-macos-aarch64.tar.gz"; do
+            if [ ! -f "staging/$f" ]; then
+              echo "::error::expected release artifact missing: $f"
+              exit 1
+            fi
+          done
           bash scripts/release-03-checksums.sh staging > staging/SHA256SUMS
           # Re-verify every hash + assert the manifest is non-empty before we
           # sign + upload, so a truncated/corrupt artifact fails loudly here.
