@@ -2064,20 +2064,20 @@ class TraceStore extends ChangeNotifier {
       }
     }
 
-    // Selection invalidation BEFORE the mutation so we can still inspect
-    // the current path. Two cases that both clear the selection:
-    //   - the deleted node IS the selected leaf
-    //   - the deleted node is an ancestor of the selected leaf
-    if (selectedExprPath != null &&
-        _pathStartsWith(selectedExprPath!, path)) {
-      clearSelectedExpr();
-    }
-
     final removedIdx = parent is JsonArray ? int.tryParse(lastKey) : null;
     if (parent is JsonArray && removedIdx == null) return;
 
     if (!_applyOpToAst(DeleteOp(path), 'op.delete', {'path': path})) {
       return;
+    }
+    // Selection invalidation AFTER a successful mutation: a rejected delete
+    // must leave the user's selection (and any unsaved expression text)
+    // alone. Two cases that both clear the selection:
+    //   - the deleted node IS the selected leaf
+    //   - the deleted node is an ancestor of the selected leaf
+    if (selectedExprPath != null &&
+        _pathStartsWith(selectedExprPath!, path)) {
+      clearSelectedExpr();
     }
     if (parent is JsonArray) {
       // Shift sibling-selections downward: indices > removedIdx slide
@@ -3420,6 +3420,21 @@ class TraceStore extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    // A run still in flight would keep its bxp-cli child alive after the
+    // store is gone (window close mid-run): cancel it through the bridge.
+    // A handle that has not arrived yet is covered by _cancelRequested, which
+    // the onBridgeSpawn callback checks.
+    if (status == RunStatus.running) {
+      _cancelRequested = true;
+      final handle = _runBridgeHandle;
+      if (handle != null) {
+        try {
+          BxpProcessClient.cancelBtrace(handle);
+        } catch (_) {
+          // Best-effort: the bridge may already be gone at teardown.
+        }
+      }
+    }
     _validationDebounce?.cancel();
     _validateToastTimer?.cancel();
     _exprInsertRequest.dispose();
@@ -3946,15 +3961,29 @@ class TraceStore extends ChangeNotifier {
 
   Future<void> _runDetailLoad(RowModel row, String rowId) async {
     row.detailLoading = true;
+    row.detailFailed = false;
     notifyListeners();
     try {
       await _loadRowDetail(row);
+      // The source row could not be read back (best-effort read in
+      // _loadRowDetail swallowed an IO error): the detail is a stub, so
+      // treat it as failed rather than final.
+      if (!row.fieldsPopulated &&
+          row.sourceLocator >= 0 &&
+          (traceModel?.files[row.fileId]?.sourceCsvPath.isNotEmpty ?? false)) {
+        throw StateError('source row not readable');
+      }
       row.detailLoaded = true;
     } catch (e) {
       devTrace('btrace.ensureDetail.error', {'rowId': rowId, 'error': '$e'});
-      // Mark as loaded-with-stub so the UI doesn't loop the spinner; the
-      // row stays empty but rendering proceeds.
-      row.detailLoaded = true;
+      // Terminal failed state: detailLoaded stays false so an explicit
+      // ensureDetailLoaded() can retry, detailFailed stops the UI from
+      // re-requesting on every rebuild. Drop partial entries so a retry
+      // does not duplicate them.
+      row.vars.clear();
+      row.rules.clear();
+      row.outputs.clear();
+      row.detailFailed = true;
     } finally {
       row.detailLoading = false;
       row.detailLoadFuture = null;

@@ -1,6 +1,6 @@
-// Windows bridge STREAMING transport probe (v0.2.5 pre-release sweep).
+// Windows bridge STREAMING transport probe (pre-release sweep).
 //
-// The single GUI backend on every platform is now the bridge, and bxp-cli runs
+// The single GUI backend on every platform is the bridge, and bxp-cli runs
 // (dry-run / full-run / --version) all flow through `bridge_run_streaming`.
 // flutter test covers bridge_inspect + expr-corpus (small, in-proc FFI) but NOT
 // a large streamed bxp-cli stdout — exactly the dart-lang/sdk#1727 Windows
@@ -16,7 +16,7 @@
 // Run on Windows (after `zig build` in bxp-gui-bridge and bxp-cli):
 //   cd bxp-gui && dart run tool/win_bridge_stream_probe.dart
 //
-// Fixtures live in DEV/win-prerelease-0.2.5/bridge-test (gitignored scratch):
+// Fixtures live in a gitignored scratch dir (DEV/win-prerelease-0.2.5/bridge-test):
 //   config.json + data/big_*.csv (150k rows) + gt.bin (shell ground truth).
 
 import 'dart:io';

@@ -170,6 +170,13 @@ class RowModel {
   /// for transient state changes.
   bool detailLoading = false;
 
+  /// True when the last ensureDetailLoaded() attempt failed (the load threw,
+  /// or the source row could not be read back). [detailLoaded] stays false so
+  /// an explicit retry is possible, but the UI must not re-request on its own
+  /// while this is set — that would be a rebuild loop. Cleared when a new
+  /// attempt starts.
+  bool detailFailed = false;
+
   /// The in-flight ensureDetailLoaded() future for this row, or null when
   /// none is running. A concurrent caller (e.g. the gui-mcp `get_row_detail`
   /// tool racing the UI's auto-load of the selected row) awaits this instead

@@ -541,8 +541,20 @@ class _AgentSectionState extends State<_AgentSection> {
     final host = _hostCtl.text.trim().isEmpty
         ? GuiMcpServer.kDefaultMcpHost
         : _hostCtl.text.trim();
-    final port =
-        int.tryParse(_portCtl.text.trim()) ?? GuiMcpServer.kDefaultMcpPort;
+    // An empty field means "default"; anything else must be a valid TCP
+    // port. A typo must not silently turn into the default port: reject it
+    // with a visible message and leave the field as typed.
+    final portText = _portCtl.text.trim();
+    final port = portText.isEmpty
+        ? GuiMcpServer.kDefaultMcpPort
+        : int.tryParse(portText);
+    if (port == null || port < 1 || port > 65535) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Invalid port "$portText": use a number from 1 to 65535.'),
+        duration: const Duration(seconds: 4),
+      ));
+      return;
+    }
     final allowlist = _allowlistCtl.text
         .split(',')
         .map((s) => s.trim())

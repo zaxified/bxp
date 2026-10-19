@@ -1201,7 +1201,9 @@ class _RowListInnerState extends State<_RowListInner> {
               final selectedId = widget.store.selectedRowId;
               if (selectedId != null) {
                 final idx = rowList.indexWhere((r) => r.id == selectedId);
-                if (idx >= 0) {
+                // `rows` is the cached PlutoRow list; it can lag `rowList`
+                // by a revision, so bound-check before indexing.
+                if (idx >= 0 && idx < rows.length) {
                   _stateManager?.setCurrentCell(
                     rows[idx].cells['row_num'],
                     idx,

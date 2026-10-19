@@ -43,7 +43,8 @@ class _RowDetailState extends State<RowDetail> {
     // after the current build frame so we don't notifyListeners() while
     // building. The spinner branch below covers the loading state; once
     // detailLoaded flips true, the next watch() rebuild renders normally.
-    if (model.fromBtrace && !row.detailLoaded && !row.detailLoading) {
+    if (model.fromBtrace && !row.detailLoaded && !row.detailLoading &&
+        !row.detailFailed) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         store.ensureDetailLoaded(rowId);
       });

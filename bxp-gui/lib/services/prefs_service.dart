@@ -170,13 +170,13 @@ class PrefsService {
   /// Persist a string value and flush to disk atomically via a tmp rename.
   Future<void> setString(String key, String value) async {
     _data[key] = value;
-    await _flush();
+    await _persist();
   }
 
   /// Persist a double value and flush to disk atomically via a tmp rename.
   Future<void> setDouble(String key, double value) async {
     _data[key] = value;
-    await _flush();
+    await _persist();
   }
 
   /// Persist an integer and flush. Written to JSON as a bare integer
@@ -185,19 +185,19 @@ class PrefsService {
   /// of storing it as `int` in memory.
   Future<void> setInt(String key, int value) async {
     _data[key] = value;
-    await _flush();
+    await _persist();
   }
 
   /// Persist a bool value and flush to disk atomically via a tmp rename.
   Future<void> setBool(String key, bool value) async {
     _data[key] = value;
-    await _flush();
+    await _persist();
   }
 
   /// Persist a string list and flush to disk atomically via a tmp rename.
   Future<void> setStringList(String key, List<String> value) async {
     _data[key] = value;
-    await _flush();
+    await _persist();
   }
 
   /// Synchronous probe for whether the prefs file exists on disk.
@@ -221,6 +221,18 @@ class PrefsService {
   Future<void> ensureExists() async {
     if (await _file.exists()) return;
     await _flush();
+  }
+
+  /// Flush for the setters: a disk error (disk full, read-only home) is
+  /// logged and swallowed. The setters are mostly called un-awaited from UI
+  /// code, where a propagated IO error would surface as an unhandled async
+  /// exception; the in-memory value stays set for this session.
+  Future<void> _persist() async {
+    try {
+      await _flush();
+    } catch (e) {
+      devTrace('prefs.flush.error', {'error': '$e'});
+    }
   }
 
   /// Write the in-memory `_data` map to disk atomically.

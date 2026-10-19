@@ -1,18 +1,16 @@
-// Cross-platform bridge STREAMING-load probe (Zig 0.16 migration verification).
+// Cross-platform bridge STREAMING-load probe (streaming-drain regression check).
 //
 // The single GUI backend is the bridge; bxp-cli runs flow through
 // `bridge_run_streaming`, whose native reader thread drains the child's stdout
-// pipe. On Zig 0.15.2 that path SEGV'd (NULL deref at 0x30) under sustained
-// streaming load — the reason `build.zig` used to force Debug→ReleaseSafe. The
-// rewrite was dropped on 0.16 (new self-hosted x86 backend); this probe proves
-// the streaming drain survives a multi-MB BXTB stream byte-identical under load.
+// pipe. This probe proves the streaming drain survives a multi-MB BXTB stream
+// byte-identical under load.
 //
 //   S1 spawn+stream --version returns exit 0 with output
 //   S2 a ~5 MB BXTB --trace stream is byte-IDENTICAL to a shell-redirected
 //      ground truth (proof the pipe drains with no truncation/corruption)
 //   S3 cancel mid-stream stops early, doesn't hang, child exits non-zero
 //
-// Run (after building the 0.16 bridge .so + bxp-cli):
+// Run (after building the bridge .so + bxp-cli):
 //   BXP_PROBE_DIR=/tmp/bxp-stream-probe BXP_CLI=<abs bxp-cli> \
 //     dart run tool/bridge_stream_probe.dart
 // Fixtures (gitignored scratch): $BXP_PROBE_DIR/{config.json, data/, gt.bin}.

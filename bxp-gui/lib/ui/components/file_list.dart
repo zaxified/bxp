@@ -148,9 +148,13 @@ class _FileListState extends State<FileList> {
                   // warnings) both flow through `stats.warnings` /
                   // exit 2 on the producer side — surface them as a
                   // single GUI "warn" badge.
-                  final warnings =
-                      ((file.stats?['warnings'] as int?) ?? 0) +
-                          ((file.stats?['errors'] as int?) ?? 0);
+                  // Tolerant num parse: a stats value that arrives as a
+                  // double (or a non-number) must not throw in build.
+                  int statInt(String k) {
+                    final v = file.stats?[k];
+                    return v is num && v.isFinite ? v.toInt() : 0;
+                  }
+                  final warnings = statInt('warnings') + statInt('errors');
                   // Once file_end has populated stats, prefer its
                   // authoritative source-row count (the producer's tally,
                   // distinct from output rows for 1:N templates). During

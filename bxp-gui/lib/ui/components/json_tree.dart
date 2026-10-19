@@ -477,7 +477,7 @@ class _JsonNodeState extends State<_JsonNode> {
   void didUpdateWidget(covariant _JsonNode oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.expandAll != widget.expandAll) {
-      expanded = widget.expandAll || widget.depth < 3;
+      expanded = widget.expandAll || widget.depth < 2;
     }
   }
 
@@ -2637,7 +2637,10 @@ class _EditableNumberState extends State<_EditableNumber> {
     setState(() => isEditing = false);
     _focus.unfocus();
     final n = num.tryParse(controller.text);
-    if (n != null && n != widget.value) {
+    // NaN / Infinity / 1e999 are not JSON numbers: the engine's JSON5 loader
+    // refuses them, so committing one would write a config that no longer
+    // loads. Treat them like any other unparseable input (revert).
+    if (n != null && n.isFinite && n != widget.value) {
       widget.onCommit(n);
     } else {
       controller.text = widget.value.toString();

@@ -46,7 +46,7 @@ List<ShortcutDoc> shortcutCatalog() {
     ShortcutDoc('Open settings inspector', '$mod+Shift+S'),
     ShortcutDoc('Open theme inspector', '$mod+Shift+T'),
     ShortcutDoc('Zoom the whole UI', '$mod+Scroll'),
-    ShortcutDoc('Step zoom up / down', '$mod++ / $mod+-'),
+    ShortcutDoc('Step zoom up / down', '$mod++ / $mod+- (zoom out also $mod+/)'),
     ShortcutDoc('Reset zoom', '$mod+0'),
     ShortcutDoc('Close dialog or inspector', 'Esc'),
   ];

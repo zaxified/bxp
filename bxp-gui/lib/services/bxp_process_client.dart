@@ -316,6 +316,7 @@ class BxpProcessClient {
     final client = BridgeClient(dllPath);
     final stdoutBuf = BytesBuilder(copy: false);
     final stderrBuf = StringBuffer();
+    int? handle;
     try {
       final exitCode = await client
           .runStreamingBinary(
@@ -323,6 +324,7 @@ class BxpProcessClient {
             arguments,
             onChunk: (chunk) => stdoutBuf.add(chunk),
             onStderr: (chunk) => stderrBuf.write(chunk),
+            onSpawn: (h) => handle = h,
           )
           .timeout(timeout);
       return ProcessResult(
@@ -331,6 +333,18 @@ class BxpProcessClient {
         utf8.decode(stdoutBuf.takeBytes(), allowMalformed: true),
         stderrBuf.toString(),
       );
+    } on TimeoutException catch (e) {
+      // The timeout only abandons the Future: without a cancel the child
+      // keeps running and its stream callables stay open. Cancelling makes
+      // the bridge reap it, which closes the callables on the normal exit
+      // path.
+      final h = handle;
+      if (h != null) {
+        try {
+          client.cancel(h);
+        } catch (_) {/* best-effort — the child may already be gone */}
+      }
+      return ProcessResult(0, 1, '', 'bridge stream: $e');
     } catch (e) {
       return ProcessResult(0, 1, '', 'bridge stream: $e');
     }

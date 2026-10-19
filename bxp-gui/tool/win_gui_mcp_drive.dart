@@ -1,5 +1,5 @@
 // Drives the embedded GUI-MCP server of a RUNNING bxp-gui over StreamableHTTP
-// (v0.2.5 Windows pre-release sweep). Exercises the agent-control surface
+// (Windows pre-release sweep). Exercises the agent-control surface
 // end-to-end on Windows: HTTP bind + MCP handshake, a read-only get_state, an
 // open_config (→ bridge_inspect config + GUI repaint), a dry_run (→ bxp-cli via
 // bridge_run_streaming through the real GUI + trace populate), and get_trace

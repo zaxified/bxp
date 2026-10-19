@@ -23,6 +23,6 @@ BXP Desktop keyboard shortcuts (modifier shown for this platform).
 | Open settings inspector | <code class="hl-type">Ctrl+Shift+S</code> |
 | Open theme inspector | <code class="hl-type">Ctrl+Shift+T</code> |
 | Zoom the whole UI | <code class="hl-type">Ctrl+Scroll</code> |
-| Step zoom up / down | <code class="hl-type">Ctrl++ / Ctrl+-</code> |
+| Step zoom up / down | <code class="hl-type">Ctrl++ / Ctrl+- (zoom out also Ctrl+/)</code> |
 | Reset zoom | <code class="hl-type">Ctrl+0</code> |
 | Close dialog or inspector | <code class="hl-type">Esc</code> |

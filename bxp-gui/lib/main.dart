@@ -711,6 +711,9 @@ class _UpdaterListener extends StatefulWidget {
 
 class _UpdaterListenerState extends State<_UpdaterListener> {
   bool _showing = false;
+  // Version whose dialog was already shown: `available` stays set after the
+  // user dismisses the dialog, so every later notify would re-open it.
+  String? _shownVersion;
   UpdaterService? _svc;
 
   @override
@@ -732,8 +735,9 @@ class _UpdaterListenerState extends State<_UpdaterListener> {
   void _onChange() {
     if (_showing) return;
     final info = _svc?.available;
-    if (info == null) return;
+    if (info == null || info.version == _shownVersion) return;
     _showing = true;
+    _shownVersion = info.version;
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) {
         _showing = false;
