@@ -1005,15 +1005,24 @@ pub const TemplateIo = struct {
     /// Template declares an xlsx_sheet — its input is xlsx, not feedable as
     /// inline CSV text.
     has_xlsx_sheet: bool,
+    /// Set (to the parser's error name) when the config text did not parse, so a
+    /// caller can say "config does not parse" instead of "template not found".
+    /// `found` is false whenever this is non-null.
+    parse_error: ?[]const u8 = null,
 };
 
 /// Introspect one template's input shape. Returns `found = false` (with safe
 /// defaults) when the id is missing or the config can't be parsed — the caller
-/// turns that into a user-facing error. The returned `file_pattern_in` is owned
-/// by the arena `a`.
+/// turns that into a user-facing error; `parse_error` tells the two apart. The
+/// returned `file_pattern_in` is owned by the arena `a`.
 pub fn templateIo(a: std.mem.Allocator, config_text: []const u8, id: []const u8) !TemplateIo {
     const not_found: TemplateIo = .{ .found = false, .file_pattern_in = "", .csv_input = true, .has_xlsx_sheet = false };
-    const root = parseConfigText(a, config_text) catch return not_found;
+    const root = parseConfigText(a, config_text) catch |err| {
+        if (err == error.OutOfMemory) return err;
+        var r = not_found;
+        r.parse_error = @errorName(err);
+        return r;
+    };
     if (root != .object) return not_found;
     const ct = root.object.get("conversion_templates") orelse return not_found;
     if (ct != .object) return not_found;
@@ -1028,6 +1037,25 @@ pub fn templateIo(a: std.mem.Allocator, config_text: []const u8, id: []const u8)
         .csv_input = std.mem.eql(u8, fti, "csv"),
         .has_xlsx_sheet = has_xlsx,
     };
+}
+
+test "templateIo: an unparseable config reports parse_error, a missing id does not" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const bad = try templateIo(a, "{ conversion_templates: { x: ", "x");
+    try std.testing.expect(!bad.found);
+    try std.testing.expect(bad.parse_error != null);
+
+    const cfg = "{ conversion_templates: { x: { file_pattern_in: '.csv' } } }";
+    const missing = try templateIo(a, cfg, "nope");
+    try std.testing.expect(!missing.found);
+    try std.testing.expect(missing.parse_error == null);
+
+    const ok = try templateIo(a, cfg, "x");
+    try std.testing.expect(ok.found);
+    try std.testing.expect(ok.parse_error == null);
 }
 
 // ── tests ──────────────────────────────────────────────────────────────────

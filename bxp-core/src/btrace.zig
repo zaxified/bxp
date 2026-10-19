@@ -20,7 +20,8 @@
 //!   │ ── frame ─────────────                  │
 //!   │ ...                                     │
 //!
-//! `pay_len` lets a reader skip unknown frame types — forward compatibility.
+//! `pay_len` lets a reader skip unknown frame types, and the trailing fields
+//! a newer producer appends to a known one — forward compatibility.
 //!
 //! Variable-length strings use a length-prefix (lp): `u32 len + bytes`.
 //!
@@ -280,6 +281,9 @@ pub const Done = struct {
 pub const Reader = struct {
     r: *std.Io.Reader,
     alloc: std.mem.Allocator,
+    /// Payload bytes taken from the current frame so far — checked against
+    /// `pay_len` once a known frame has been parsed.
+    consumed: u64 = 0,
 
     pub fn init(r: *std.Io.Reader, alloc: std.mem.Allocator) !Reader {
         const magic = try r.takeInt(u32, .little);
@@ -287,16 +291,26 @@ pub const Reader = struct {
         return .{ .r = r, .alloc = alloc };
     }
 
+    fn takeInt(self: *Reader, comptime T: type) !T {
+        const v = try self.r.takeInt(T, .little);
+        self.consumed += @sizeOf(T);
+        return v;
+    }
+
     fn readLp(self: *Reader) ![]const u8 {
-        const len = try self.r.takeInt(u32, .little);
+        const len = try self.takeInt(u32);
         const src = try self.r.take(len);
+        self.consumed += len;
         const owned = try self.alloc.alloc(u8, len);
         @memcpy(owned, src);
         return owned;
     }
 
     /// Returns next frame, or `null` at EOF. Unknown frame types are silently
-    /// skipped via `pay_len` (forward compat).
+    /// skipped via `pay_len` (forward compat). A known frame whose payload is
+    /// longer than the fields this reader knows (a newer producer appended
+    /// one) has the surplus discarded, so the next frame stays in sync; one
+    /// whose fields run past `pay_len` is `error.CorruptFrame`.
     pub fn nextFrame(self: *Reader) !?Frame {
         while (true) {
             const type_byte = self.r.takeByte() catch |err| switch (err) {
@@ -306,18 +320,19 @@ pub const Reader = struct {
             const chunk_id = try self.r.takeInt(u16, .little);
             const pay_len = try self.r.takeInt(u32, .little);
             const ft: FrameType = @enumFromInt(type_byte);
-            switch (ft) {
-                .file_start => {
+            self.consumed = 0;
+            const frame: Frame = switch (ft) {
+                .file_start => blk: {
                     // InputFormat is exhaustive: @enumFromInt on an unknown byte
                     // from the stream is illegal behaviour, so refuse it instead.
-                    const input_format = std.enums.fromInt(InputFormat, try self.r.takeByte()) orelse
+                    const input_format = std.enums.fromInt(InputFormat, try self.takeInt(u8)) orelse
                         return error.InvalidInputFormat;
                     const template = try self.readLp();
                     const path = try self.readLp();
-                    const headers_count = try self.r.takeInt(u16, .little);
+                    const headers_count = try self.takeInt(u16);
                     const headers = try self.alloc.alloc([]const u8, headers_count);
                     for (0..headers_count) |i| headers[i] = try self.readLp();
-                    return Frame{ .file_start = .{
+                    break :blk .{ .file_start = .{
                         .chunk_id = chunk_id,
                         .input_format = input_format,
                         .template = template,
@@ -325,19 +340,19 @@ pub const Reader = struct {
                         .headers = headers,
                     } };
                 },
-                .file_end => return Frame{ .file_end = .{
+                .file_end => .{ .file_end = .{
                     .chunk_id = chunk_id,
-                    .source_rows = try self.r.takeInt(u64, .little),
-                    .written_rows = try self.r.takeInt(u64, .little),
-                    .errors = try self.r.takeInt(u32, .little),
-                    .warnings = try self.r.takeInt(u32, .little),
+                    .source_rows = try self.takeInt(u64),
+                    .written_rows = try self.takeInt(u64),
+                    .errors = try self.takeInt(u32),
+                    .warnings = try self.takeInt(u32),
                 } },
-                .output_row => {
-                    const source_locator = try self.r.takeInt(u64, .little);
-                    const output_idx = try self.r.takeInt(u64, .little);
-                    const rule_idx = try self.r.takeInt(i32, .little);
+                .output_row => blk: {
+                    const source_locator = try self.takeInt(u64);
+                    const output_idx = try self.takeInt(u64);
+                    const rule_idx = try self.takeInt(i32);
                     const action = try self.readLp();
-                    return Frame{ .output_row = .{
+                    break :blk .{ .output_row = .{
                         .chunk_id = chunk_id,
                         .source_locator = source_locator,
                         .output_idx = output_idx,
@@ -345,22 +360,22 @@ pub const Reader = struct {
                         .action = action,
                     } };
                 },
-                .filtered_row => {
-                    const source_locator = try self.r.takeInt(u64, .little);
+                .filtered_row => blk: {
+                    const source_locator = try self.takeInt(u64);
                     const reason = try self.readLp();
-                    return Frame{ .filtered_row = .{
+                    break :blk .{ .filtered_row = .{
                         .chunk_id = chunk_id,
                         .source_locator = source_locator,
                         .reason = reason,
                     } };
                 },
-                .error_row => {
-                    const source_locator = try self.r.takeInt(u64, .little);
+                .error_row => blk: {
+                    const source_locator = try self.takeInt(u64);
                     const var_name = try self.readLp();
                     const error_kind = try self.readLp();
                     const detail = try self.readLp();
                     const origin = try self.readLp();
-                    return Frame{ .error_row = .{
+                    break :blk .{ .error_row = .{
                         .chunk_id = chunk_id,
                         .source_locator = source_locator,
                         .var_name = var_name,
@@ -369,22 +384,29 @@ pub const Reader = struct {
                         .origin = origin,
                     } };
                 },
-                .prepass_entry => return Frame{ .prepass_entry = .{
+                .prepass_entry => .{ .prepass_entry = .{
                     .chunk_id = chunk_id,
                     .name = try self.readLp(),
                     .key = try self.readLp(),
                     .field = try self.readLp(),
                     .value = try self.readLp(),
                 } },
-                .done => return Frame{ .done = .{
+                .done => .{ .done = .{
                     .chunk_id = chunk_id,
-                    .exit_code = try self.r.takeInt(i32, .little),
+                    .exit_code = try self.takeInt(i32),
                 } },
                 _ => {
                     // Forward compat: skip unknown frame via pay_len.
                     try self.r.discardAll(pay_len);
+                    continue;
                 },
-            }
+            };
+            // The fields ran past the declared payload: the header and the
+            // body disagree, so nothing after this point can be trusted.
+            if (self.consumed > pay_len) return error.CorruptFrame;
+            // Fields a newer producer appended to a known frame.
+            try self.r.discardAll(@intCast(pay_len - self.consumed));
+            return frame;
         }
     }
 };
@@ -615,6 +637,48 @@ test "forward compat: unknown frame type skipped via pay_len" {
     var br = try Reader.init(&rdr, arena.allocator());
     const f = (try br.nextFrame()).?;
     try std.testing.expectEqual(@as(i32, 42), f.done.exit_code);
+}
+
+test "forward compat: trailing payload on a known frame is discarded, the next frame still parses" {
+    var buf: [64]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&buf);
+    try w.writeInt(u32, FRAME_MAGIC, .little);
+    // A `done` frame from a newer producer: exit_code plus 3 appended bytes.
+    try w.writeByte(@intFromEnum(FrameType.done));
+    try w.writeInt(u16, 0, .little);
+    try w.writeInt(u32, 4 + 3, .little);
+    try w.writeInt(i32, 7, .little);
+    try w.writeAll("new");
+    var bw_after: Writer = .{ .w = &w, .chunk_id = 0 };
+    try bw_after.writeFilteredRow(99, "date");
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var rdr: std.Io.Reader = .fixed(w.buffered());
+    var br = try Reader.init(&rdr, arena.allocator());
+    const f1 = (try br.nextFrame()).?;
+    try std.testing.expectEqual(@as(i32, 7), f1.done.exit_code);
+    const f2 = (try br.nextFrame()).?;
+    try std.testing.expectEqual(@as(u64, 99), f2.filtered_row.source_locator);
+    try std.testing.expectEqualStrings("date", f2.filtered_row.reason);
+    try std.testing.expect((try br.nextFrame()) == null);
+}
+
+test "Reader refuses a known frame whose fields overrun pay_len" {
+    var buf: [64]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&buf);
+    try w.writeInt(u32, FRAME_MAGIC, .little);
+    // `done` needs 4 payload bytes; the header claims 2.
+    try w.writeByte(@intFromEnum(FrameType.done));
+    try w.writeInt(u16, 0, .little);
+    try w.writeInt(u32, 2, .little);
+    try w.writeInt(i32, 7, .little);
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var rdr: std.Io.Reader = .fixed(w.buffered());
+    var br = try Reader.init(&rdr, arena.allocator());
+    try std.testing.expectError(error.CorruptFrame, br.nextFrame());
 }
 
 test "Reader refuses an unknown input_format byte instead of trapping" {

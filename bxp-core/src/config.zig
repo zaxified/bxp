@@ -2705,7 +2705,14 @@ fn diagPreprocessError(
 /// (`BrokerConfig.validate` / `validateCollect`) can produce a descriptive
 /// error path including the block name — e.g. "pre_pass.my_block.when must
 /// not be empty" — rather than a generic parse error here without context.
-fn parsePrePassBlock(alloc: std.mem.Allocator, ppobj: std.json.ObjectMap) !PrePass {
+fn parsePrePassBlock(
+    alloc: std.mem.Allocator,
+    diag: ?*Diagnostics,
+    config_path: []const u8,
+    template_id: []const u8,
+    block_path: []const u8,
+    ppobj: std.json.ObjectMap,
+) !PrePass {
     var when: []const u8 = try alloc.dupe(u8, "");
     var pp_key: []const u8 = try alloc.dupe(u8, "");
     var pp_values = std.StringHashMap([]const u8).init(alloc);
@@ -2726,12 +2733,15 @@ fn parsePrePassBlock(alloc: std.mem.Allocator, ppobj: std.json.ObjectMap) !PrePa
         if (vals_val == .object) {
             var vit = vals_val.object.iterator();
             while (vit.next()) |e| {
-                if (e.value_ptr.* == .string) {
-                    try pp_values.put(
-                        try alloc.dupe(u8, e.key_ptr.*),
-                        try alloc.dupe(u8, e.value_ptr.string),
-                    );
-                }
+                if (isAnnotationKey(e.key_ptr.*)) continue;
+                // A non-string value would silently drop that LOOKUP field.
+                if (e.value_ptr.* != .string) try failTemplate(alloc, diag, "config.wrong_type", config_path,
+                    template_id, try std.fmt.allocPrint(alloc, "{s}.values.{s}", .{ block_path, e.key_ptr.* }),
+                    "{s}.values.{s} must be an expression string, got {s}", .{ block_path, e.key_ptr.*, @tagName(e.value_ptr.*) });
+                try pp_values.put(
+                    try alloc.dupe(u8, e.key_ptr.*),
+                    try alloc.dupe(u8, e.value_ptr.string),
+                );
             }
         }
     }
@@ -2801,6 +2811,39 @@ fn emitTemplateDiag(
         .code = code,
         .message = message,
     });
+}
+
+/// `failTemplate` for a mistake outside any template (the global `maps`
+/// block): same three outputs, with a caller-built `path`.
+fn failGlobal(
+    alloc: std.mem.Allocator,
+    diag: ?*Diagnostics,
+    code: []const u8,
+    config_path: []const u8,
+    path: []const u8,
+    comptime fmt: []const u8,
+    args: anytype,
+) !noreturn {
+    if (diag) |d| try d.append(.{
+        .path = try alloc.dupe(u8, path),
+        .severity = .@"error",
+        .code = code,
+        .message = try std.fmt.allocPrint(alloc, fmt, args),
+    });
+    printHuman(diag, "---\n# {s}: config error: " ++ fmt ++ "\n", .{config_path} ++ args);
+    return error.InvalidConfig;
+}
+
+/// The first non-string value of a named map (annotation keys skipped), or
+/// null. `dupeNamedMap` keeps strings only, so anything else would vanish
+/// from REMAP/REPLACE without a word.
+fn firstNonStringMapValue(src: std.json.ObjectMap) ?std.json.ObjectMap.Entry {
+    var it = src.iterator();
+    while (it.next()) |e| {
+        if (isAnnotationKey(e.key_ptr.*)) continue;
+        if (e.value_ptr.* != .string) return e;
+    }
+    return null;
 }
 
 /// Report a template mistake loudly and stop loading: an `.error` diagnostic
@@ -2926,8 +2969,9 @@ fn parseFileTypeField(
 }
 
 /// Deep-dupe a JSON object into an ordered `expr.NamedMap` (insertion order
-/// preserved so REPLACE applies pairs in declaration order). String values only;
-/// non-string entries are skipped, matching the historical ticker_map loader.
+/// preserved so REPLACE applies pairs in declaration order). Callers reject
+/// non-string values first (`firstNonStringMapValue`); annotation keys are
+/// the only non-strings that still reach here, and they are skipped.
 /// Keys/values are duped into `alloc` (owned by the resulting Config).
 fn dupeNamedMap(alloc: std.mem.Allocator, src: std.json.ObjectMap) !expr.NamedMap {
     var m: expr.NamedMap = .empty;
@@ -3009,14 +3053,21 @@ pub fn loadFromBytes(
     // REPLACE applies a named map's pairs in declaration order.
     var named_maps = std.StringHashMap(std.json.ObjectMap).init(alloc);
     defer named_maps.deinit();
+    // Template-strict: a global map that is not an object, or a map value
+    // that is not a string, used to be dropped without a word.
     if (root.object.get("maps")) |tm_root| {
-        if (tm_root == .object) {
-            var nm_it = tm_root.object.iterator();
-            while (nm_it.next()) |e| {
-                if (e.value_ptr.* == .object) {
-                    try named_maps.put(e.key_ptr.*, e.value_ptr.object);
-                }
-            }
+        if (tm_root != .object) try failGlobal(alloc, diag, "config.wrong_type", config_path, "maps",
+            "maps must be an object {{ map_name: {{ key: value }} }}, got {s}", .{@tagName(tm_root)});
+        var nm_it = tm_root.object.iterator();
+        while (nm_it.next()) |e| {
+            if (isAnnotationKey(e.key_ptr.*)) continue;
+            if (e.value_ptr.* != .object) try failGlobal(alloc, diag, "config.wrong_type", config_path,
+                try std.fmt.allocPrint(alloc, "maps.{s}", .{e.key_ptr.*}),
+                "maps.{s} must be an object {{ key: value }}, got {s}", .{ e.key_ptr.*, @tagName(e.value_ptr.*) });
+            if (firstNonStringMapValue(e.value_ptr.object)) |bad| try failGlobal(alloc, diag, "config.wrong_type", config_path,
+                try std.fmt.allocPrint(alloc, "maps.{s}.{s}", .{ e.key_ptr.*, bad.key_ptr.* }),
+                "maps.{s}.{s} must be a string, got {s}", .{ e.key_ptr.*, bad.key_ptr.*, @tagName(bad.value_ptr.*) });
+            try named_maps.put(e.key_ptr.*, e.value_ptr.object);
         }
     }
 
@@ -3065,11 +3116,19 @@ pub fn loadFromBytes(
                 var file_type_in: FileType = .csv;
                 var file_type_out: FileType = .csv;
 
+                // A template that is not an object (`demo: 5`) used to fall
+                // through to a misleading "output_schema is required".
+                if (b_entry.value_ptr.* != .object and !isAnnotationKey(b_entry.key_ptr.*))
+                    try failTemplate(alloc, diag, "config.wrong_type", config_path, b_entry.key_ptr.*, "",
+                        "a template must be an object {{ input_schema, output_schema, … }}, got {s}", .{@tagName(b_entry.value_ptr.*)});
                 if (b_entry.value_ptr.* == .object) {
                     const bobj = b_entry.value_ptr.object;
 
                     if (bobj.get("description")) |v| {
-                        if (v == .string) {
+                        if (v != .string) try failTemplate(alloc, diag, "config.wrong_type", config_path,
+                            b_entry.key_ptr.*, "description",
+                            "description must be a string, got {s}", .{@tagName(v)});
+                        {
                             const new_desc = try alloc.dupe(u8, v.string);
                             alloc.free(description);
                             description = new_desc;
@@ -3077,7 +3136,10 @@ pub fn loadFromBytes(
                     }
 
                     if (bobj.get("data_dir")) |v| {
-                        if (v == .string) {
+                        if (v != .string) try failTemplate(alloc, diag, "config.wrong_type", config_path,
+                            b_entry.key_ptr.*, "data_dir",
+                            "data_dir must be a string, got {s}", .{@tagName(v)});
+                        {
                             // Resolve data_dir relative to the config file's directory so that
                             // a config in /home/user/bxp-cli.json with data_dir: "revolut" resolves
                             // to /home/user/revolut regardless of the process's cwd. Allocate
@@ -3091,7 +3153,10 @@ pub fn loadFromBytes(
                     }
 
                     if (bobj.get("file_pattern_in")) |v| {
-                        if (v == .string) {
+                        if (v != .string) try failTemplate(alloc, diag, "config.wrong_type", config_path,
+                            b_entry.key_ptr.*, "file_pattern_in",
+                            "file_pattern_in must be a string, got {s}", .{@tagName(v)});
+                        {
                             const new_pat = try alloc.dupe(u8, v.string);
                             alloc.free(file_pattern_in);
                             file_pattern_in = new_pat;
@@ -3099,7 +3164,10 @@ pub fn loadFromBytes(
                     }
 
                     if (bobj.get("file_pattern_out")) |v| {
-                        if (v == .string) {
+                        if (v != .string) try failTemplate(alloc, diag, "config.wrong_type", config_path,
+                            b_entry.key_ptr.*, "file_pattern_out",
+                            "file_pattern_out must be a string, got {s}", .{@tagName(v)});
+                        {
                             const new_pat = try alloc.dupe(u8, v.string);
                             alloc.free(file_pattern_out);
                             file_pattern_out = new_pat;
@@ -3369,6 +3437,9 @@ pub fn loadFromBytes(
                                 );
                                 return error.InvalidConfig;
                             }
+                            if (firstNonStringMapValue(lm.value_ptr.object)) |bad| try failTemplate(alloc, diag, "config.wrong_type", config_path,
+                                b_entry.key_ptr.*, try std.fmt.allocPrint(alloc, "maps.{s}.{s}", .{ lm.key_ptr.*, bad.key_ptr.* }),
+                                "maps.{s}.{s} must be a string, got {s}", .{ lm.key_ptr.*, bad.key_ptr.*, @tagName(bad.value_ptr.*) });
                             const new_map = try dupeNamedMap(alloc, lm.value_ptr.object);
                             if (maps.getEntry(lm.key_ptr.*)) |existing| {
                                 // Template-local overrides a same-named global map:
@@ -3389,18 +3460,23 @@ pub fn loadFromBytes(
                     }
 
                     // input_schema: $variable → expression string, evaluated per row.
+                    // A non-string value (`$amount: 5`) is a template error, not a
+                    // silently missing variable; annotation siblings are skipped.
                     if (bobj.get("input_schema")) |is_val| {
-                        if (is_val == .object) {
-                            var is_it = is_val.object.iterator();
-                            while (is_it.next()) |e| {
-                                if (e.value_ptr.* == .string) {
-                                    try input_schema.put(
-                                        alloc,
-                                        try alloc.dupe(u8, e.key_ptr.*),
-                                        try alloc.dupe(u8, e.value_ptr.string),
-                                    );
-                                }
-                            }
+                        if (is_val != .object) try failTemplate(alloc, diag, "config.wrong_type", config_path,
+                            b_entry.key_ptr.*, "input_schema",
+                            "input_schema must be an object {{ $variable: \"expression\" }}, got {s}", .{@tagName(is_val)});
+                        var is_it = is_val.object.iterator();
+                        while (is_it.next()) |e| {
+                            if (isAnnotationKey(e.key_ptr.*)) continue;
+                            if (e.value_ptr.* != .string) try failTemplate(alloc, diag, "config.wrong_type", config_path,
+                                b_entry.key_ptr.*, try std.fmt.allocPrint(alloc, "input_schema.{s}", .{e.key_ptr.*}),
+                                "input_schema.{s} must be an expression string, got {s}", .{ e.key_ptr.*, @tagName(e.value_ptr.*) });
+                            try input_schema.put(
+                                alloc,
+                                try alloc.dupe(u8, e.key_ptr.*),
+                                try alloc.dupe(u8, e.value_ptr.string),
+                            );
                         }
                     }
 
@@ -3415,17 +3491,24 @@ pub fn loadFromBytes(
                     }
 
                     // row_rules: ordered list of conditional routing rules.
-                    // Non-object array elements (null, number, etc.) are silently skipped
-                    // rather than failing hard — they're almost certainly JSON5 trailing
-                    // commas that the preprocessor already stripped, or accidental blank
-                    // entries. Missing `when` is treated as empty string ("") so that
-                    // BrokerConfig.validate() can produce a helpful error message with
-                    // the rule index instead of failing here with a generic parse error.
+                    // Every shape mismatch is a template error: a non-array
+                    // row_rules, a non-object rule (JSON5 trailing commas never
+                    // reach here — the preprocessor strips them), a non-array
+                    // `rows`, a non-object row and a non-string override value
+                    // would each otherwise drop output without a word. Missing
+                    // `when` is treated as empty string ("") so that
+                    // BrokerConfig.validate() can produce a helpful error message
+                    // with the rule index instead of failing here.
                     if (bobj.get("row_rules")) |rr_val| {
-                        if (rr_val == .array) {
+                        if (rr_val != .array) try failTemplate(alloc, diag, "config.wrong_type", config_path,
+                            b_entry.key_ptr.*, "row_rules",
+                            "row_rules must be an array of {{ when, rows }} objects, got {s}", .{@tagName(rr_val)});
+                        {
                             var rr_list = std.array_list.Managed(RowRule).init(alloc);
-                            for (rr_val.array.items) |rule_val| {
-                                if (rule_val != .object) continue;
+                            for (rr_val.array.items, 0..) |rule_val, ri| {
+                                if (rule_val != .object) try failTemplate(alloc, diag, "config.wrong_type", config_path,
+                                    b_entry.key_ptr.*, try std.fmt.allocPrint(alloc, "row_rules.{d}", .{ri}),
+                                    "row_rules[{d}] must be an object {{ when, rows }}, got {s}", .{ ri, @tagName(rule_val) });
                                 const robj = rule_val.object;
                                 const when_str = if (robj.get("when")) |w|
                                     if (w == .string) try alloc.dupe(u8, w.string) else try alloc.dupe(u8, "")
@@ -3433,21 +3516,26 @@ pub fn loadFromBytes(
                                     try alloc.dupe(u8, "");
                                 var rows_list = std.array_list.Managed(RowOverride).init(alloc);
                                 if (robj.get("rows")) |rows_val| {
-                                    if (rows_val == .array) {
-                                        for (rows_val.array.items) |row_val| {
-                                            if (row_val != .object) continue;
-                                            var row_map = RowOverride.init(alloc);
-                                            var rv_it = row_val.object.iterator();
-                                            while (rv_it.next()) |rv| {
-                                                if (rv.value_ptr.* == .string) {
-                                                    try row_map.put(
-                                                        try alloc.dupe(u8, rv.key_ptr.*),
-                                                        try alloc.dupe(u8, rv.value_ptr.string),
-                                                    );
-                                                }
-                                            }
-                                            try rows_list.append(row_map);
+                                    if (rows_val != .array) try failTemplate(alloc, diag, "config.wrong_type", config_path,
+                                        b_entry.key_ptr.*, try std.fmt.allocPrint(alloc, "row_rules.{d}.rows", .{ri}),
+                                        "row_rules[{d}].rows must be an array of objects, got {s}", .{ ri, @tagName(rows_val) });
+                                    for (rows_val.array.items, 0..) |row_val, rj| {
+                                        if (row_val != .object) try failTemplate(alloc, diag, "config.wrong_type", config_path,
+                                            b_entry.key_ptr.*, try std.fmt.allocPrint(alloc, "row_rules.{d}.rows.{d}", .{ ri, rj }),
+                                            "row_rules[{d}].rows[{d}] must be an object {{ $variable: \"expression\" }}, got {s}", .{ ri, rj, @tagName(row_val) });
+                                        var row_map = RowOverride.init(alloc);
+                                        var rv_it = row_val.object.iterator();
+                                        while (rv_it.next()) |rv| {
+                                            if (isAnnotationKey(rv.key_ptr.*)) continue;
+                                            if (rv.value_ptr.* != .string) try failTemplate(alloc, diag, "config.wrong_type", config_path,
+                                                b_entry.key_ptr.*, try std.fmt.allocPrint(alloc, "row_rules.{d}.rows.{d}.{s}", .{ ri, rj, rv.key_ptr.* }),
+                                                "row_rules[{d}].rows[{d}].{s} must be an expression string, got {s}", .{ ri, rj, rv.key_ptr.*, @tagName(rv.value_ptr.*) });
+                                            try row_map.put(
+                                                try alloc.dupe(u8, rv.key_ptr.*),
+                                                try alloc.dupe(u8, rv.value_ptr.string),
+                                            );
                                         }
+                                        try rows_list.append(row_map);
                                     }
                                 }
                                 try rr_list.append(RowRule{
@@ -3467,20 +3555,24 @@ pub fn loadFromBytes(
 
                     // output_schema: ordered output column header → $variable mappings.
                     // Per-template and required — validated after this block.
+                    // A non-string value would silently lose its output column.
                     if (bobj.get("output_schema")) |os_val| {
-                        if (os_val == .object) {
-                            var os_list = std.array_list.Managed(OutputColumn).init(alloc);
-                            var os_it = os_val.object.iterator();
-                            while (os_it.next()) |e| {
-                                if (e.value_ptr.* == .string) {
-                                    try os_list.append(OutputColumn{
-                                        .header   = try alloc.dupe(u8, e.key_ptr.*),
-                                        .variable = try alloc.dupe(u8, e.value_ptr.string),
-                                    });
-                                }
-                            }
-                            output_schema = os_list;
+                        if (os_val != .object) try failTemplate(alloc, diag, "config.wrong_type", config_path,
+                            b_entry.key_ptr.*, "output_schema",
+                            "output_schema must be an object {{ header: \"$variable\" }}, got {s}", .{@tagName(os_val)});
+                        var os_list = std.array_list.Managed(OutputColumn).init(alloc);
+                        var os_it = os_val.object.iterator();
+                        while (os_it.next()) |e| {
+                            if (isAnnotationKey(e.key_ptr.*)) continue;
+                            if (e.value_ptr.* != .string) try failTemplate(alloc, diag, "config.wrong_type", config_path,
+                                b_entry.key_ptr.*, try std.fmt.allocPrint(alloc, "output_schema.{s}", .{e.key_ptr.*}),
+                                "output_schema.{s} must be a \"$variable\" string, got {s}", .{ e.key_ptr.*, @tagName(e.value_ptr.*) });
+                            try os_list.append(OutputColumn{
+                                .header   = try alloc.dupe(u8, e.key_ptr.*),
+                                .variable = try alloc.dupe(u8, e.value_ptr.string),
+                            });
                         }
+                        output_schema = os_list;
                     }
 
                     // pre_pass: optional first-pass lookup table(s) built before main row loop.
@@ -3497,11 +3589,14 @@ pub fn loadFromBytes(
                     // strings "name\x00key\x00field". A NUL in the block name would make
                     // it impossible to distinguish where the name ends and the key begins.
                     if (bobj.get("pre_pass")) |pp_val| {
-                        if (pp_val == .object) {
+                        if (pp_val != .object) try failTemplate(alloc, diag, "config.wrong_type", config_path,
+                            b_entry.key_ptr.*, "pre_pass",
+                            "pre_pass must be an object, got {s}", .{@tagName(pp_val)});
+                        {
                             const ppobj = pp_val.object;
                             const is_legacy_form = ppobj.get("when") != null;
                             if (is_legacy_form) {
-                                const block = try parsePrePassBlock(alloc, ppobj);
+                                const block = try parsePrePassBlock(alloc, diag, config_path, b_entry.key_ptr.*, "pre_pass", ppobj);
                                 try pre_passes.put(alloc, try alloc.dupe(u8, "_default"), block);
                             } else {
                                 var pp_it = ppobj.iterator();
@@ -3517,8 +3612,15 @@ pub fn loadFromBytes(
                                         );
                                         return error.InvalidConfig;
                                     }
-                                    if (pe.value_ptr.* != .object) continue;
-                                    const block = try parsePrePassBlock(alloc, pe.value_ptr.object);
+                                    if (isAnnotationKey(name)) continue;
+                                    const block_path = try std.fmt.allocPrint(alloc, "pre_pass.{s}", .{name});
+                                    // A non-object block (often a legacy-form key such
+                                    // as `key` / `values` with `when` forgotten) would
+                                    // otherwise vanish, and every LOOKUP into it with it.
+                                    if (pe.value_ptr.* != .object) try failTemplate(alloc, diag, "config.wrong_type", config_path,
+                                        b_entry.key_ptr.*, block_path,
+                                        "{s} must be an object {{ when, key, values }}, got {s}", .{ block_path, @tagName(pe.value_ptr.*) });
+                                    const block = try parsePrePassBlock(alloc, diag, config_path, b_entry.key_ptr.*, block_path, pe.value_ptr.object);
                                     try pre_passes.put(alloc, try alloc.dupe(u8, name), block);
                                 }
                             }
@@ -3549,7 +3651,7 @@ pub fn loadFromBytes(
                         },
                     } else csv_header_line;
                     // csv_delimiter_in / csv_delimiter_out / csv_decimal_separator_in / csv_decimal_separator_out
-                    // Each must be a single-character string; silently ignored if wrong length.
+                    // Each must be a single-character string; anything else is a template error.
                     csv_delimiter_in = try parseSingleCharCsvField(alloc, diag, config_path, bobj, b_entry.key_ptr.*, "csv_delimiter_in", csv_delimiter_in);
                     csv_delimiter_out = try parseSingleCharCsvField(alloc, diag, config_path, bobj, b_entry.key_ptr.*, "csv_delimiter_out", csv_delimiter_out);
                     csv_decimal_separator_in = try parseSingleCharCsvField(alloc, diag, config_path, bobj, b_entry.key_ptr.*, "csv_decimal_separator_in", csv_decimal_separator_in);
@@ -3830,6 +3932,64 @@ test "loadFromBytes: xlsx_sheet refuses header_row 0, an empty name and a suffix
     }
 }
 
+test "loadFromBytes: a wrong-typed schema, rule or pre_pass value is a template error, not a silent drop" {
+    // Each of these used to be skipped without a word: a variable, an output
+    // column, a rule, a row or a LOOKUP table vanished from the template.
+    const bad = [_]struct { body: []const u8, path: []const u8 }{
+        .{ .body = "input_schema: { $x: \"1\", $amount: 5 }, output_schema: { c: \"$x\" }", .path = "conversion_templates.demo.input_schema.$amount" },
+        .{ .body = "input_schema: { $x: \"1\" }, output_schema: { c: \"$x\", d: 7 }", .path = "conversion_templates.demo.output_schema.d" },
+        .{ .body = "input_schema: [\"$x\"], output_schema: { c: \"$x\" }", .path = "conversion_templates.demo.input_schema" },
+        .{ .body = "input_schema: { $x: \"1\" }, output_schema: \"$x\"", .path = "conversion_templates.demo.output_schema" },
+        .{ .body = "input_schema: { $x: \"1\" }, output_schema: { c: \"$x\" }, row_rules: { when: \"true\" }", .path = "conversion_templates.demo.row_rules" },
+        .{ .body = "input_schema: { $x: \"1\" }, output_schema: { c: \"$x\" }, row_rules: [{ when: \"true\", rows: [{}] }, \"oops\"]", .path = "conversion_templates.demo.row_rules.1" },
+        .{ .body = "input_schema: { $x: \"1\" }, output_schema: { c: \"$x\" }, row_rules: [{ when: \"true\", rows: {} }]", .path = "conversion_templates.demo.row_rules.0.rows" },
+        .{ .body = "input_schema: { $x: \"1\" }, output_schema: { c: \"$x\" }, row_rules: [{ when: \"true\", rows: [null] }]", .path = "conversion_templates.demo.row_rules.0.rows.0" },
+        .{ .body = "input_schema: { $x: \"1\" }, output_schema: { c: \"$x\" }, row_rules: [{ when: \"true\", rows: [{ $x: 2 }] }]", .path = "conversion_templates.demo.row_rules.0.rows.0.$x" },
+        .{ .body = "input_schema: { $x: \"1\" }, output_schema: { c: \"$x\" }, pre_pass: \"x\"", .path = "conversion_templates.demo.pre_pass" },
+        .{ .body = "input_schema: { $x: \"1\" }, output_schema: { c: \"$x\" }, pre_pass: { key: \"[k]\", values: { v: \"[v]\" } }", .path = "conversion_templates.demo.pre_pass.key" },
+        .{ .body = "input_schema: { $x: \"1\" }, output_schema: { c: \"$x\" }, pre_pass: { p: { when: \"true\", key: \"[k]\", values: { v: 1 } } }", .path = "conversion_templates.demo.pre_pass.p.values.v" },
+        .{ .body = "input_schema: { $x: \"1\" }, output_schema: { c: \"$x\" }, pre_pass: { when: \"true\", key: \"[k]\", values: { v: true } }", .path = "conversion_templates.demo.pre_pass.values.v" },
+        .{ .body = "description: 3, input_schema: { $x: \"1\" }, output_schema: { c: \"$x\" }", .path = "conversion_templates.demo.description" },
+        .{ .body = "data_dir: null, input_schema: { $x: \"1\" }, output_schema: { c: \"$x\" }", .path = "conversion_templates.demo.data_dir" },
+        .{ .body = "file_pattern_in: [\".csv\"], input_schema: { $x: \"1\" }, output_schema: { c: \"$x\" }", .path = "conversion_templates.demo.file_pattern_in" },
+        .{ .body = "file_pattern_out: 1, input_schema: { $x: \"1\" }, output_schema: { c: \"$x\" }", .path = "conversion_templates.demo.file_pattern_out" },
+    };
+    for (bad) |c| {
+        var arena = std.heap.ArenaAllocator.init(testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+        var diag = Diagnostics.init(a);
+        defer diag.deinit();
+        const src = try std.fmt.allocPrint(a, "{{ conversion_templates: {{ demo: {{ {s} }} }} }}", .{c.body});
+        try testing.expectError(error.InvalidConfig, loadFromBytes(a, src, "<test>", &diag));
+        try testing.expectEqual(@as(usize, 1), diag.items.items.len);
+        try testing.expectEqualStrings("config.wrong_type", diag.items.items[0].code);
+        try testing.expectEqualStrings(c.path, diag.items.items[0].path);
+    }
+
+    // The well-typed shapes still load clean, including `rows: []` (skip the
+    // row) and `rows: [{}]` (one row of input_schema values verbatim).
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var diag = Diagnostics.init(a);
+    defer diag.deinit();
+    const good =
+        \\{ conversion_templates: { demo: {
+        \\  input_schema: { $x: "1" }, output_schema: { c: "$x" },
+        \\  row_rules: [{ when: "false", rows: [] }, { when: "true", rows: [{}, { $x: "2" }] }],
+        \\  pre_pass: { p: { when: "true", key: "[k]", values: { v: "[v]" } } },
+        \\} } }
+    ;
+    var config = try loadFromBytes(a, good, "<test>", &diag);
+    defer config.deinit();
+    const demo = config.brokers.get("demo").?;
+    try testing.expectEqual(@as(usize, 2), demo.row_rules.?.len);
+    try testing.expectEqual(@as(usize, 2), demo.row_rules.?[1].rows.len);
+    try testing.expect(demo.pre_passes.get("p") != null);
+    try testing.expectEqual(@as(usize, 0), diag.count());
+}
+
 test "XlsxSheet.scaffold_template loads as a valid xlsx_sheet block" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -3845,4 +4005,36 @@ test "XlsxSheet.scaffold_template loads as a valid xlsx_sheet block" {
     defer config.deinit();
     try testing.expect(config.brokers.get("demo").?.xlsx_sheet != null);
     try testing.expectEqual(@as(usize, 0), diag.count());
+}
+
+test "loadFromBytes: a non-string map value or a non-object template is a template error" {
+    const bad = [_]struct { src: []const u8, path: []const u8 }{
+        .{ .src = "{ maps: { m: { a: 1 } }, conversion_templates: {} }", .path = "maps.m.a" },
+        .{ .src = "{ maps: { m: 5 }, conversion_templates: {} }", .path = "maps.m" },
+        .{ .src = "{ maps: [], conversion_templates: {} }", .path = "maps" },
+        .{ .src = "{ conversion_templates: { demo: { maps: { m: { a: true } }, input_schema: { $x: \"[1]\" }, output_schema: { c: \"$x\" } } } }", .path = "conversion_templates.demo.maps.m.a" },
+        .{ .src = "{ conversion_templates: { demo: 5 } }", .path = "conversion_templates.demo" },
+    };
+    for (bad) |c| {
+        var arena = std.heap.ArenaAllocator.init(testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+        var diag = Diagnostics.init(a);
+        defer diag.deinit();
+        try testing.expectError(error.InvalidConfig, loadFromBytes(a, c.src, "<test>", &diag));
+        try testing.expectEqualStrings("config.wrong_type", diag.items.items[0].code);
+        try testing.expectEqualStrings(c.path, diag.items.items[0].path);
+    }
+    // String values, including the annotation keys the GUI may leave behind, load.
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var diag = Diagnostics.init(a);
+    defer diag.deinit();
+    var config = try loadFromBytes(a,
+        \\{ maps: { m: { a: "x", $comm_1: { message: "c" } } },
+        \\  conversion_templates: { demo: { input_schema: { $x: "REMAP([1], 'm')" }, output_schema: { c: "$x" } } } }
+    , "<test>", &diag);
+    defer config.deinit();
+    try testing.expectEqual(@as(usize, 0), diag.countBySeverity(.@"error"));
 }

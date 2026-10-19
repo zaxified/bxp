@@ -106,6 +106,9 @@ Converts `.xlsx` files (ZIP + XML) to intermediate CSV files.
   "the next row / the next column". A self-closed `<si/>` is an empty shared
   string that still takes its index, and phonetic runs (`<rPh>`) are not part of
   the cell text.
+- A `header_row` that is blank or absent from the XML while data rows follow
+  it is `error.XlsxHeaderRowEmpty` (bxp-cli names the sheet and row); a sheet
+  with nothing below the header still converts to an empty file.
 - XML parts are assumed UTF-8 (what Excel always writes). A UTF-16 BOM on the
   sheet or sharedStrings XML returns `error.Utf16XmlUnsupported` (`XmlTok.peekUtf16Bom`)
   instead of silently producing garbage; the pipeline turns that into a
@@ -310,7 +313,10 @@ JSON5 configuration loader.
   refused). An unknown enum value or a wrong-typed scalar field
   (`file_type_in: "jsno"`, an unknown encoding, a non-boolean flag) is a
   template error (`config.invalid_enum` / `config.wrong_type`), never a
-  silent fallback to the default. `loadFromBytes` allocates into a caller-owned arena — tests pass
+  silent fallback to the default. The same holds for the shapes: a template,
+  `input_schema` / `output_schema` / `row_rules` / `rows` / `pre_pass` /
+  `maps` entry of the wrong JSON type, or a non-string value inside one, is
+  refused with its full path instead of being dropped. `loadFromBytes` allocates into a caller-owned arena — tests pass
   an `ArenaAllocator`, matching how the inspect adapters drive it.
 
 **Doc catalog** (`pub const FieldDoc`, plus `pub const fields = [_]FieldDoc{...}`
@@ -383,7 +389,9 @@ recomputed on demand by the GUI (via the bridge) seeking to a row's
   `writeFilteredRow`, `writeErrorRow`, `writePrepassEntry`, `writeDone`.
 - `Reader.init(r, alloc)` verifies the magic; `nextFrame()` returns
   `?Frame` (null at EOF). Unknown frame types are silently skipped via the
-  `pay_len` prefix (forward compat).
+  `pay_len` prefix, and so are trailing bytes a newer producer appends to a
+  known frame (forward compat); fields that overrun `pay_len` are
+  `error.CorruptFrame`.
 - Each frame: `[1B type][2B chunk_id][4B pay_len][payload]`. `chunk_id` is
   reserved for future multicore chunk dispatch (always 0 today).
 - Variable-length strings use length-prefix (lp): `[u32 len][bytes]`.

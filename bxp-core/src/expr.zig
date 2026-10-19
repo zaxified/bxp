@@ -2401,8 +2401,9 @@ fn adaptContains(_: *Parser, args: []Value) anyerror!Value {
 //
 // Backed by the zig-libs `regex` module (RE2 syntax, Go `regexp` semantics):
 // linear-time matching, so a pathological pattern degrades gracefully instead
-// of exploding (ReDoS-proof by construction). The pattern is a template-authored
-// literal — a compile failure is a loud template error (attributed to the
+// of exploding (ReDoS-proof by construction). The pattern is normally a
+// template-authored literal (an expression-built one is accepted, not
+// encouraged) — a compile failure is a loud template error (attributed to the
 // pattern arg), while a non-matching *data* row is the lenient case ("" / false),
 // matching the template-strict / data-lenient contract elsewhere in the engine.
 //
@@ -2428,7 +2429,7 @@ const regex_match_doc: FnDoc = .{
     .row_varying = false,
     .signature = "REGEX_MATCH(s, pattern)",
     .example = "REGEX_MATCH('AAPL US Equity', '[A-Z]+')",
-    .description = "Returns \"true\" if regular-expression `pattern` matches anywhere in `s`, else \"false\". `pattern` is a regex literal: anchors `^ $`, classes `[...]`, quantifiers `* + ? {m,n}`, groups, and alternation `|` — linear-time (no backreferences or lookaround). `.` and class ranges span whole code points, but `\\d`/`\\w`/`\\s` stay ASCII — match letters of any alphabet, accented ones included, with `\\p{L}` (`\\p{Lu}` upper case, `\\p{Ll}` lower case) or an explicit class like `[A-ZÁ-Ž]`; `(?i)` makes the match case-insensitive, accented letters too. Pay for the cheapest tool that does the job: CONTAINS for a literal substring, IN/REMAP for whole-value sets, regex only for a real pattern.",
+    .description = "Returns \"true\" if regular-expression `pattern` matches anywhere in `s`, else \"false\". `pattern` is RE2 syntax, normally a quoted literal (one built by an expression works too, but a pattern that does not compile is always a loud error, so never build one from raw data): anchors `^ $`, classes `[...]`, quantifiers `* + ? {m,n}`, groups, and alternation `|` — linear-time (no backreferences or lookaround). `.` and class ranges span whole code points, but `\\d`/`\\w`/`\\s` stay ASCII — match letters of any alphabet, accented ones included, with `\\p{L}` (`\\p{Lu}` upper case, `\\p{Ll}` lower case) or an explicit class like `[A-ZÁ-Ž]`; `(?i)` makes the match case-insensitive, accented letters too. Pay for the cheapest tool that does the job: CONTAINS for a literal substring, IN/REMAP for whole-value sets, regex only for a real pattern.",
     .args = &.{
         .{ .name = "s", .kind = .string },
         .{ .name = "pattern", .kind = .string },
@@ -2457,7 +2458,7 @@ const regex_extract_doc: FnDoc = .{
     .row_varying = false,
     .signature = "REGEX_EXTRACT(s, pattern)",
     .example = "REGEX_EXTRACT('Qualified Dividend AAPL 100', '[A-Z]{2,}')",
-    .description = "Returns the first part of `s` that regular-expression `pattern` matches, or \"\" if there is no match. When `pattern` has a capture group `(...)`, the first group's text is returned; otherwise the whole match is returned — so group a repeated alternative as non-capturing `(?:...)` when you want the whole run, since a capturing group under a repeat yields only its last repetition. `pattern` is a regex literal (same syntax + Unicode notes as REGEX_MATCH): linear-time, no backreferences or lookaround, and accented letters need `\\p{L}` or an explicit class like `[A-ZÁ-Ž]` (not `\\w`). Use it to pull a ticker, code, or token a literal REPLACE/SPLIT_PART cannot isolate.",
+    .description = "Returns the first part of `s` that regular-expression `pattern` matches, or \"\" if there is no match. When `pattern` has a capture group `(...)`, the first group's text is returned; otherwise the whole match is returned — so group a repeated alternative as non-capturing `(?:...)` when you want the whole run, since a capturing group under a repeat yields only its last repetition. `pattern` follows REGEX_MATCH's rules (syntax, Unicode notes, literal vs built): linear-time, no backreferences or lookaround, and accented letters need `\\p{L}` or an explicit class like `[A-ZÁ-Ž]` (not `\\w`). Use it to pull a ticker, code, or token a literal REPLACE/SPLIT_PART cannot isolate.",
     .args = &.{
         .{ .name = "s", .kind = .string },
         .{ .name = "pattern", .kind = .string },
@@ -2638,21 +2639,28 @@ const now_doc: FnDoc = .{
 /// NOW() — current UTC datetime as ISO 8601 string: YYYY-MM-DDTHH:MM:SSZ.
 fn builtinNow(args: []Value, alloc: std.mem.Allocator, io: std.Io) !Value {
     if (args.len != 0) return error.WrongArgCount;
+    return Value{ .string = try formatNowIso(alloc, std.Io.Timestamp.now(io, .real).toSeconds()) };
+}
+/// NOW()'s formatting half, split off so a test can feed it any clock value.
+/// A clock set before the Unix epoch (negative seconds) yields "" rather than
+/// panicking in the i64 → u64 cast — the environment, like bad input data, must
+/// never crash a run.
+fn formatNowIso(alloc: std.mem.Allocator, secs_signed: i64) ![]const u8 {
     const epoch = std.time.epoch;
-    const secs: u64 = @intCast(std.Io.Timestamp.now(io, .real).toSeconds());
+    const secs = std.math.cast(u64, secs_signed) orelse return "";
     const es = epoch.EpochSeconds{ .secs = secs };
     const day = es.getEpochDay();
     const time = es.getDaySeconds();
     const yd = day.calculateYearDay();
     const md = yd.calculateMonthDay();
-    return Value{ .string = try std.fmt.allocPrint(alloc, "{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}Z", .{
+    return std.fmt.allocPrint(alloc, "{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}Z", .{
         yd.year,
         md.month.numeric(),
         md.day_index + 1,
         time.getHoursIntoDay(),
         time.getMinutesIntoHour(),
         time.getSecondsIntoMinute(),
-    }) };
+    });
 }
 fn adaptNow(p: *Parser, args: []Value) anyerror!Value {
     return builtinNow(args, p.ctx.alloc, p.ctx.io);
@@ -3167,15 +3175,28 @@ fn containsMMM(fmt: []const u8) bool {
     return false;
 }
 
-/// Returns a copy of s with any 4-character month abbreviations trimmed to 3
-/// characters (e.g. "Sept" → "Sep", "June" → "Jun").  Allocates only when a
-/// replacement is actually needed; returns the original slice otherwise.
-fn normalizeMonthAbbrev(s: []const u8, alloc: std.mem.Allocator) ![]const u8 {
+/// A 4-letter word whose first three letters are an English month
+/// abbreviation, read as that month where the MMM token expects 3 letters.
+/// Deliberately broad (data-lenient): besides the English "Sept" / "June" /
+/// "July" it carries the 4-letter forms other languages export — German
+/// "Juni" / "Juli" / "Marz", Spanish "Mayo" — at the cost of reading a stray
+/// word like "Marx" in a date field as March.
+fn isLongMonthAbbrev(word: []const u8) bool {
+    if (word.len != 4) return false;
     const abbrevs = [_][]const u8{
         "Jan", "Feb", "Mar", "Apr", "May", "Jun",
         "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
     };
+    for (abbrevs) |m| {
+        if (std.ascii.eqlIgnoreCase(word[0..3], m)) return true;
+    }
+    return false;
+}
 
+/// Returns a copy of s with the 4-letter month spellings of `isLongMonthAbbrev`
+/// trimmed to 3 characters ("Sept" → "Sep", "June" → "Jun"). Allocates only
+/// when a replacement is actually needed; returns the original slice otherwise.
+fn normalizeMonthAbbrev(s: []const u8, alloc: std.mem.Allocator) ![]const u8 {
     // First pass: check whether any fix is needed before allocating.
     var needs_fix = false;
     var i: usize = 0;
@@ -3186,13 +3207,9 @@ fn normalizeMonthAbbrev(s: []const u8, alloc: std.mem.Allocator) ![]const u8 {
         }
         const start = i;
         while (i < s.len and std.ascii.isAlphabetic(s[i])) i += 1;
-        if (i - start == 4) {
-            for (abbrevs) |a| {
-                if (std.ascii.eqlIgnoreCase(s[start .. start + 3], a)) {
-                    needs_fix = true;
-                    break :check;
-                }
-            }
+        if (isLongMonthAbbrev(s[start..i])) {
+            needs_fix = true;
+            break :check;
         }
     }
     if (!needs_fix) return s;
@@ -3210,17 +3227,7 @@ fn normalizeMonthAbbrev(s: []const u8, alloc: std.mem.Allocator) ![]const u8 {
         const start = i;
         while (i < s.len and std.ascii.isAlphabetic(s[i])) i += 1;
         const word = s[start..i];
-        var trimmed = false;
-        if (word.len == 4) {
-            for (abbrevs) |a| {
-                if (std.ascii.eqlIgnoreCase(word[0..3], a)) {
-                    try out.appendSlice(word[0..3]);
-                    trimmed = true;
-                    break;
-                }
-            }
-        }
-        if (!trimmed) try out.appendSlice(word);
+        try out.appendSlice(if (isLongMonthAbbrev(word)) word[0..3] else word);
     }
     return out.toOwnedSlice();
 }
@@ -3649,21 +3656,41 @@ const workday_doc: FnDoc = .{
 fn builtinWorkday(p: *Parser, args: []Value) !Value {
     const ds = switch (args[0]) { .string => |v| v, else => return error.StringExpected };
     if (ds.len == 0) return Value{ .string = "" };
-    var n = toDayOffset(try args[1].toNumber()) orelse return Value{ .string = "" };
-    var ep = try parseDateArg(p, ds);
-    // Excel semantics: WORKDAY(d, 0) returns d unchanged (no snap to next workday).
-    while (n > 0) {
-        ep += 1;
-        if (isoWeekday(ep) <= 5) n -= 1;
-    }
-    while (n < 0) {
-        ep -= 1;
-        if (isoWeekday(ep) <= 5) n += 1;
-    }
-    return Value{ .string = try formatYmd(p.ctx.alloc, epochDayToYmd(ep)) };
+    const n = toDayOffset(try args[1].toNumber()) orelse return Value{ .string = "" };
+    const ep = try parseDateArg(p, ds);
+    return Value{ .string = try formatYmd(p.ctx.alloc, epochDayToYmd(workdayAdd(ep, n))) };
 }
 fn adaptWorkday(p: *Parser, args: []Value) anyerror!Value {
     return builtinWorkday(p, args);
+}
+
+/// The epoch day `n` business days (Mon–Fri) after `ep` — before it for a
+/// negative `n` — in O(1): whole weeks are 7 calendar days per 5 business
+/// days, and only the remainder can cross a weekend. A weekend start is first
+/// moved onto the adjacent business day on the side the count walks away from
+/// (Friday going forward, Monday going back), which never changes the answer
+/// because the walk counts only days strictly after (before) the start.
+/// Excel semantics: `n == 0` returns `ep` unchanged, with no snap to a
+/// business day. `workdayAddLoop` (test-only) is the day-by-day reference.
+fn workdayAdd(ep: i64, n: i64) i64 {
+    if (n == 0) return ep;
+    var start = ep;
+    const wd = isoWeekday(ep); // 1 = Monday … 7 = Sunday
+    if (n > 0) {
+        if (wd >= 6) start -= wd - 5; // Sat/Sun → the Friday before
+        const w: i64 = @min(wd, 5);
+        const weeks = @divTrunc(n, 5);
+        const rem = @rem(n, 5);
+        start += weeks * 7;
+        return start + rem + (if (w + rem > 5) @as(i64, 2) else 0);
+    }
+    const m = -n;
+    if (wd >= 6) start += 8 - wd; // Sat/Sun → the Monday after
+    const w: i64 = if (wd >= 6) 1 else wd;
+    const weeks = @divTrunc(m, 5);
+    const rem = @rem(m, 5);
+    start -= weeks * 7;
+    return start - rem - (if (w - rem < 1) @as(i64, 2) else 0);
 }
 
 // ── YEAR ────────────────────────────────────────────────────────────────
@@ -4377,6 +4404,11 @@ fn canonicaliseNumericString(s: []const u8, alloc: std.mem.Allocator) ![]const u
         var end = s.len;
         while (end > 1 and s[end - 1] == '0') end -= 1;
         if (end > 0 and s[end - 1] == '.') end -= 1;
+        // A zero spelled with a sign or no integer digit ("-0.00", "+0.0",
+        // ".0", "-.0") would trim to "-0" / "+0" / "" / "-": print it as the
+        // fixed-point core prints every zero, "0".
+        const unsigned = std.mem.trimStart(u8, s[0..end], "+-");
+        if (std.mem.trimStart(u8, unsigned, "0").len == 0) return "0";
         return s[0..end];
     }
     return s;
@@ -5191,6 +5223,23 @@ test "evalString: high-precision passthrough decimals keep every significant dig
     try testing.expectEqualStrings("8.629999999997", try evalString("ABS(0 - 8.6299999999974)", &ctx));
 }
 
+test "canonicaliseNumericString: a signed or digitless zero prints as 0" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Same spelling the fixed-point core gives a computed zero.
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    try testing.expectEqualStrings("0", try evalString("0 - 0.00", &ctx));
+    for ([_][]const u8{ "-0.00", "+0.0", "-0.", ".0", "-.0", "0.000" }) |z| {
+        try testing.expectEqualStrings("0", try canonicaliseNumericString(z, a));
+    }
+    // Non-zero values keep their sign and every significant digit.
+    try testing.expectEqualStrings("-0.5", try canonicaliseNumericString("-0.50", a));
+    try testing.expectEqualStrings("-0.000000000000001", try canonicaliseNumericString("-0.000000000000001", a));
+    try testing.expectEqualStrings(".5", try canonicaliseNumericString(".50", a));
+}
+
 test "Value.toBool: empty string is false, non-empty is true (even '0')" {
     try testing.expect(!(Value{ .string = "" }).toBool());
     try testing.expect((Value{ .string = "0" }).toBool()); // non-empty string → true!
@@ -5815,7 +5864,21 @@ test "normalizeMonthAbbrev: 4-char abbrev trimmed to 3" {
     const a = arena.allocator();
     try testing.expectEqualStrings("26 Sep 2022", try normalizeMonthAbbrev("26 Sept 2022", a));
     try testing.expectEqualStrings("26 Jun 2024", try normalizeMonthAbbrev("26 June 2024", a));
-    try testing.expectEqualStrings("01 Mar 2020", try normalizeMonthAbbrev("01 Marc 2020", a));
+    try testing.expectEqualStrings("01 JUL 2020", try normalizeMonthAbbrev("01 JULY 2020", a));
+}
+
+test "normalizeMonthAbbrev: 4-letter foreign month forms read as the month" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Deliberately lenient: German / Spanish 4-letter forms parse.
+    try testing.expectEqualStrings("01 May 2020", try normalizeMonthAbbrev("01 Mayo 2020", a));
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    try testing.expectEqualStrings("2020-06-01", try evalString("DATE_CONVERT('01 Juni 2020', 'DD MMM YYYY', 'YYYY-MM-DD')", &ctx));
+    try testing.expectEqualStrings("2020-07-01", try evalString("DATE_CONVERT('01 July 2020', 'DD MMM YYYY', 'YYYY-MM-DD')", &ctx));
+    // A word that does not start with a month is untouched and fails → "".
+    try testing.expectEqualStrings("", try evalString("DATE_CONVERT('01 Abcd 2020', 'DD MMM YYYY', 'YYYY-MM-DD')", &ctx));
 }
 
 test "normalizeMonthAbbrev: no change when not needed returns original slice" {
@@ -6084,6 +6147,16 @@ test "eval: NOW returns ISO 8601 UTC string" {
     try testing.expectEqual(@as(u8, '-'), result[7]);
     try testing.expectEqual(@as(u8, ':'), result[13]);
     try testing.expectEqual(@as(u8, ':'), result[16]);
+}
+
+test "formatNowIso: a clock before the epoch is \"\", not a panic" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    try testing.expectEqualStrings("", try formatNowIso(a, -1));
+    try testing.expectEqualStrings("", try formatNowIso(a, std.math.minInt(i64)));
+    try testing.expectEqualStrings("1970-01-01T00:00:00Z", try formatNowIso(a, 0));
+    try testing.expectEqualStrings("2024-02-29T23:59:59Z", try formatNowIso(a, 1709251199));
 }
 
 test "eval: NOW rejects wrong arg count" {
@@ -7001,6 +7074,44 @@ test "eval: WORKDAY skips weekends" {
     try testing.expectEqualStrings("2024-01-06", try evalString("WORKDAY('2024-01-06', 0)", &ctx));
     // Negative n — back-dating settlement.
     try testing.expectEqualStrings("2024-01-04", try evalString("WORKDAY('2024-01-08', -2)", &ctx));
+}
+
+/// Day-by-day reference for `workdayAdd` — the original O(|n|) walk, kept only
+/// to prove the closed form equivalent.
+fn workdayAddLoop(ep0: i64, n0: i64) i64 {
+    var ep = ep0;
+    var n = n0;
+    while (n > 0) {
+        ep += 1;
+        if (isoWeekday(ep) <= 5) n -= 1;
+    }
+    while (n < 0) {
+        ep -= 1;
+        if (isoWeekday(ep) <= 5) n += 1;
+    }
+    return ep;
+}
+
+test "workdayAdd: closed form equals the day-by-day walk" {
+    // Every start weekday (two weeks, incl. Sat/Sun starts, both sides of the
+    // epoch) × every offset in [-40, 40] (0, negatives, partial and whole weeks).
+    const base = ymdToEpochDay(2024, 1, 1); // a Monday
+    for ([_]i64{ base, -base, 0 }) |anchor| {
+        var s: i64 = 0;
+        while (s < 14) : (s += 1) {
+            var n: i64 = -40;
+            while (n <= 40) : (n += 1) {
+                try testing.expectEqual(workdayAddLoop(anchor + s, n), workdayAdd(anchor + s, n));
+            }
+        }
+    }
+    // Large offsets, up to the ±MAX_DATE_OFFSET_DAYS bound the builtin accepts.
+    for ([_]i64{ 997, -997, 123_457, -123_457, MAX_DATE_OFFSET_DAYS, -MAX_DATE_OFFSET_DAYS }) |n| {
+        var s: i64 = 0;
+        while (s < 7) : (s += 1) {
+            try testing.expectEqual(workdayAddLoop(base + s, n), workdayAdd(base + s, n));
+        }
+    }
 }
 
 test "eval: YEAR / MONTH / DAY / WEEKDAY extract components" {

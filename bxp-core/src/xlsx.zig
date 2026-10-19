@@ -114,7 +114,8 @@ pub const SheetSpec = struct {
     /// 1-based row number that contains the column headers.
     /// Rows before this number are skipped (report titles, blank lines, etc.).
     header_row: u32,
-    /// Appended before ".csv" in the output filename (e.g. "_3").
+    /// Appended verbatim to the workbook stem, extension included
+    /// (e.g. "_cash.csv" → "<stem>_cash.csv").
     output_suffix: []const u8,
 };
 
@@ -638,6 +639,9 @@ fn isDateFormatCode(code: []const u8) bool {
 /// Parses a worksheet XML and writes CSV rows to out.
 /// Rows before header_row are silently skipped.
 /// Row header_row becomes the CSV header; subsequent rows become data rows.
+/// A non-empty row below a header_row that is missing or blank is
+/// `error.XlsxHeaderRowEmpty`: it would otherwise be dropped with every row
+/// after it. A sheet with no data below the header still converts (empty).
 fn parseSheet(
     alloc: Allocator,
     ctx: *PartCtx,
@@ -787,6 +791,13 @@ fn parseSheet(
                     } else if (current_row > header_row and col_count > 0) {
                         const data_start = @min(skip_cols, @as(u32, @intCast(row_cells.items.len)));
                         try writeRowCsvFixed(row_cells.items[data_start..], col_count, out);
+                    } else if (current_row > header_row and rowHasValue(row_cells.items)) {
+                        // Data below a header_row that is blank or absent from
+                        // the XML (Excel omits an empty row): there are no
+                        // columns to put it in, so every data row would vanish
+                        // into a header-less file. header_row points at nothing
+                        // — a template mistake, not lenient data.
+                        return error.XlsxHeaderRowEmpty;
                     }
                     // Rows before header_row are silently skipped.
                 }
@@ -894,6 +905,12 @@ fn writeRowCsv(cells: []const []u8, out: *std.Io.Writer) !void {
         try writeCsvField(out, cell);
     }
     try out.writeAll("\n");
+}
+
+/// True when any cell of the row holds a non-empty value.
+fn rowHasValue(cells: []const []u8) bool {
+    for (cells) |c| if (c.len > 0) return true;
+    return false;
 }
 
 /// Like writeRowCsv but always emits exactly col_count fields, padding with empty
@@ -1742,6 +1759,50 @@ test "parseSheet: rows and cells without `r` take implied positions" {
     defer out.deinit();
     try parseSheet(alloc, &t.ctx, "xl/worksheets/sheet1.xml", 1, &.{}, &date_styles, &out.writer);
     try testing.expectEqualStrings("h1,h2,h3\n1.5,x,\n,,3\n,4,5\n", out.written());
+}
+
+test "parseSheet: data below a missing or blank header_row is an error, not an empty file" {
+    const alloc = testing.allocator;
+    // Excel omits an empty row from the XML, so header_row 2 here points at
+    // nothing; the data in row 3 used to be dropped with no word.
+    const cases = [_][]const u8{
+        // header row absent from the XML
+        "<worksheet><sheetData>" ++
+            "<row r=\"1\"><c r=\"A1\" t=\"inlineStr\"><is><t>title</t></is></c></row>" ++
+            "<row r=\"3\"><c r=\"A3\"><v>1</v></c></row>" ++
+            "</sheetData></worksheet>",
+        // header row present but every cell blank (styled, no value)
+        "<worksheet><sheetData>" ++
+            "<row r=\"2\"><c r=\"A2\" s=\"1\"/><c r=\"B2\" s=\"1\"/></row>" ++
+            "<row r=\"3\"><c r=\"A3\"><v>1</v></c></row>" ++
+            "</sheetData></worksheet>",
+    };
+    var date_styles = std.AutoHashMap(u32, void).init(alloc);
+    defer date_styles.deinit();
+    for (cases) |xml| {
+        var t: TestPart = undefined;
+        try t.init("xl/worksheets/sheet1.xml", xml);
+        defer t.deinit();
+        var out: std.Io.Writer.Allocating = .init(alloc);
+        defer out.deinit();
+        try testing.expectError(error.XlsxHeaderRowEmpty,
+            parseSheet(alloc, &t.ctx, "xl/worksheets/sheet1.xml", 2, &.{}, &date_styles, &out.writer));
+    }
+
+    // Lenient side: a sheet with nothing at or below header_row (an empty
+    // export), or only blank rows below it, still converts to an empty file.
+    const empty_ok =
+        "<worksheet><sheetData>" ++
+        "<row r=\"1\"><c r=\"A1\" t=\"inlineStr\"><is><t>title</t></is></c></row>" ++
+        "<row r=\"4\"><c r=\"A4\" s=\"1\"/></row>" ++
+        "</sheetData></worksheet>";
+    var t: TestPart = undefined;
+    try t.init("xl/worksheets/sheet1.xml", empty_ok);
+    defer t.deinit();
+    var out: std.Io.Writer.Allocating = .init(alloc);
+    defer out.deinit();
+    try parseSheet(alloc, &t.ctx, "xl/worksheets/sheet1.xml", 2, &.{}, &date_styles, &out.writer);
+    try testing.expectEqualStrings("", out.written());
 }
 
 test "matchSheet: exact name wins, else the shortest prefix match" {
