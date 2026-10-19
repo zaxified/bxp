@@ -212,11 +212,14 @@ module (pinned fetch dep — see _External dependencies_ below); the `ZZ` datefm
 token carries the parse/format offset. See the datefmt/tz note
 under _Module overview_. FILENAME/RECORD_NUM/SHEET_NAME read the
 per-file/row `Context` and are excluded from constant-folding (`isRowInvariant`).
-REGEX_MATCH/REGEX_EXTRACT compile a regex literal per call through the Pike-VM
-engine (`quangd/regex.zig` fetch dep, linear-time/ReDoS-safe) in Unicode-scalar mode;
-`\d`/`\w`/`\s` stay ASCII, so accented runs use an explicit class like
-`[A-ZÁ-Ž]`. A bad pattern is a loud, pattern-attributed template error
-(`error.BadRegexPattern`); a non-matching row is the lenient "" / false case.
+REGEX_MATCH/REGEX_EXTRACT compile a regex literal per call through the zig-libs
+`regex` module (RE2 syntax, Go `regexp` semantics, linear-time/ReDoS-safe), which
+matches per code point; `\d`/`\w`/`\s` stay ASCII, so accented runs use `\p{L}`
+or an explicit class like `[A-ZÁ-Ž]`. REGEX_MATCH answers from `Matcher.find`,
+not `Regex.isMatch`, whose lazy-DFA fast path has a false negative (reported
+upstream; the `zig-libs request:` comment in `builtinRegexMatch` marks it). An
+invalid UTF-8 byte in the data reads as one U+FFFD, as in Go. A bad pattern is
+a loud, pattern-attributed template error (`error.BadRegexPattern`); a non-matching row is the lenient "" / false case.
 
 **Doc catalog** (`pub const builtins`, `keywords`, `operators`, `tokens`): each
 builtin sits next to its `FnDoc` declaration (search for `── <NAME> ──`
@@ -562,14 +565,14 @@ cd bxp-core && zig build
 cd bxp-core && zig build test
 ```
 
-Module table in `build.zig` — 14 names in two halves. Seven are `b.addModule` entries built from this package's own sources: `json`, `btrace`, `xlsx`, `expr`, `config`, `docs`, `inspect`. Seven are zig-libs modules pushed into the table by the local `reexport()` helper so downstream packages can ask for them by name: `json5`, `diagnostics`, `minisign`, `procrun`, `mcp`, `csvstream`, `zipstream`. Everything else bxp-core takes off the zig-libs handle — `decimal`, `encoding`, `numparse`, `tz`, `datefmt` — is a plain local binding wired into the imports below; nobody downstream asks for those by name, so they are deliberately **not** re-exported.
+Module table in `build.zig` — 14 names in two halves. Seven are `b.addModule` entries built from this package's own sources: `json`, `btrace`, `xlsx`, `expr`, `config`, `docs`, `inspect`. Seven are zig-libs modules pushed into the table by the local `reexport()` helper so downstream packages can ask for them by name: `json5`, `diagnostics`, `minisign`, `procrun`, `mcp`, `csvstream`, `zipstream`. Everything else bxp-core takes off the zig-libs handle — `decimal`, `encoding`, `numparse`, `tz`, `datefmt`, `regex` — is a plain local binding wired into the imports below; nobody downstream asks for those by name, so they are deliberately **not** re-exported.
 `xlsx` imports the named `decimal` and `zipstream` modules; `zipstream` has no bxp-core dependencies (std only).
-`expr` imports `unicode.zig` (file-relative, not a named module) plus the named `decimal`, `numparse`, `uucode`, `encoding`, `regex`, `tz`, `datefmt` modules (`regex` is the Pike-VM engine behind REGEX_MATCH/REGEX_EXTRACT; `tz`, `datefmt`, `encoding` and `numparse` come from zig-libs — all fetch deps, see _External dependencies_ below); `config` imports `json5`, `diagnostics`, `expr`, `encoding`, `xlsx` (the last one for `xlsx.listSheets`, which backs the sheet-name resolution in template validation). `encoding` being a named module matters for the same reason `decimal` is one: it is shared by both `expr` and `config`, and a file-relative @import from two modules would compile the file into each — a duplicate-symbol error.
+`expr` imports `unicode.zig` (file-relative, not a named module) plus the named `decimal`, `numparse`, `uucode`, `encoding`, `regex`, `tz`, `datefmt` modules (`regex` is the engine behind REGEX_MATCH/REGEX_EXTRACT; `uucode` is a fetch dep of its own, the rest come from zig-libs — see _External dependencies_ below); `config` imports `json5`, `diagnostics`, `expr`, `encoding`, `xlsx` (the last one for `xlsx.listSheets`, which backs the sheet-name resolution in template validation). `encoding` being a named module matters for the same reason `decimal` is one: it is shared by both `expr` and `config`, and a file-relative @import from two modules would compile the file into each — a duplicate-symbol error.
 `docs` imports `config`, `expr`, `json5`; `diagnostics` has no bxp-core dependencies.
 
 ### External dependencies
 
-`bxp-core/build.zig.zon` pins three external (fetch) dependencies, all
+`bxp-core/build.zig.zon` pins two external (fetch) dependencies, both
 content-addressed by hash and re-audited on any pin bump:
 
 - **uucode** (MIT) — the Unicode case-mapping / decomposition table library,
@@ -578,22 +581,15 @@ content-addressed by hash and re-audited on any pin bump:
   `uppercase_mapping` / `lowercase_mapping` fields, so just those tables are
   generated + compiled in (field selection keeps the static binary small).
   Imported into the `expr` module and consumed by `unicode.zig`.
-- **regex** (`quangd/regex.zig`, Apache-2.0 OR MIT) — the Pike-VM
-  regular-expression engine behind `expr.zig`'s `REGEX_MATCH` / `REGEX_EXTRACT`
-  builtins. Pinned to an exact commit. Chosen by a 2026-06-17 security +
-  capability audit for its zero transitive deps, OS-surface-free source (no
-  `std.os`/`posix`/`net`/`process`/`fs`/`@cImport` anywhere), and guaranteed
-  linear-time (ReDoS-proof) matching. The package exposes its engine as the
-  module named `regex`; `build.zig` wires it into the `expr` module. Adds ~56 KB
-  to the ReleaseSmall `bxp-cli` (engine + Unicode-scalar case-fold tables).
 - **zig_libs** (MIT, `zaxified/zig-libs`) — the module collection supplying
-  the **twelve** modules below. Eight of them used to live in `src/` (`tz`,
+  the modules below. Eight of them used to live in `src/` (`tz`,
   `datefmt`, `encoding`, `json5`, `decimal`, `zipstream`, `diagnostics` and
   the `LineIterator`/`splitFields` half of `csvstream`, which was `csv.zig`);
   `numparse` came from below file level, a function inside `expr.zig`.
-  The remaining three — `minisign`, `procrun`, `mcp` — were never bxp-core
-  sources at all, and neither was `csvstream`'s `ChunkReader` half (that one
-  was private to `bxp-cli`'s `pipeline.zig`):
+  `minisign`, `procrun` and `mcp` were never bxp-core sources at all, and
+  neither was `csvstream`'s `ChunkReader` half (that one was private to
+  `bxp-cli`'s `pipeline.zig`); `regex` replaced a standalone fetch dependency
+  (`quangd/regex.zig`):
 
   - `tz` — IANA UTC-offset lookup behind `TO_UTC` / `TZ_OFFSET` /
     `TZ_CONVERT` / `IS_DST`.
@@ -626,6 +622,15 @@ content-addressed by hash and re-audited on any pin bump:
     module that travelled the other way first: upstream's copy is this repo's
     former `bxp-mcp/src/server.zig`, extracted 2026-07-04 and hardened there,
     then consumed back on 2026-08-16.
+  - `regex` — the RE2-syntax engine behind `REGEX_MATCH` / `REGEX_EXTRACT`
+    (Go `regexp` semantics, linear time, `\p{…}` classes). It replaced the
+    `quangd/regex.zig` fetch dependency after a differential run over ~20 M
+    (pattern, input) pairs plus Go as the referee: identical on valid UTF-8
+    except one `isMatch` false negative, which bxp routes around (see
+    _expr.zig_ above); on invalid UTF-8 it follows Go's U+FFFD rule. ~19 KB
+    larger ReleaseSmall `bxp-cli` than quangd (the `\p{…}` category tables);
+    2–6× faster per call in ReleaseSmall, 1.1–3.7× slower in ReleaseSafe
+    (`memset` of its `undefined` scratch — tests only, nothing ships Safe).
 
   `minisign`, `procrun` and `mcp` are the modules bxp-core does **not** import
   at all: they are re-exported purely so `bxp-gui-bridge/build.zig` and
@@ -635,7 +640,7 @@ content-addressed by hash and re-audited on any pin bump:
 
   Pinned to an exact commit. Upstream tags by date (`YYYY-MM-DD`, no semver)
   and a tag is the default target, but the choice is decided by what the diff
-  does to these twelve modules, not by the tag: a tag that leaves all twelve
+  does to the modules bxp takes, not by the tag: a tag that leaves all of them
   byte-identical is not worth adopting, and a later commit that fixes them is
   (the pin has sat past a tag before, for exactly that reason).
   `build.zig` takes all of them off **one shared

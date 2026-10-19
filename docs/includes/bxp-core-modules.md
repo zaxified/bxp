@@ -22,10 +22,10 @@
 | <code class="hl-fn">encoding</code> | _(zig-libs)_ | Layer-0 single-byte code page to UTF-8 transcode (Win-1250/1252, Latin-1/2/9) behind `csv_input_encoding` / `csv_output_encoding`. 256-entry tables, no `uucode`. |
 | <code class="hl-fn">json5</code> | _(zig-libs)_ | Single-pass tokenizer converting JSON5 to standard JSON: strips comments, quotes bare keys, removes trailing commas, normalises single-quoted strings. Imported by `config`, `docs` and `inspect`. |
 | <code class="hl-fn">diagnostics</code> | _(zig-libs)_ | Structured validation collector: `Severity` (error / warning / info), `Diagnostic` (path, position, code, message, suggest) and the `Diagnostics` collector. Used by the config validator's deep validation; bxp-cli passes a null sink. |
+| <code class="hl-fn">regex</code> | _(zig-libs)_ | RE2-syntax regular expressions with Go `regexp` semantics, linear-time matching, `\p{…}` Unicode classes, behind `REGEX_MATCH` / `REGEX_EXTRACT`. |
 | <code class="hl-fn">minisign</code> | _(zig-libs)_ <br>re-export only | Minisign signature format (Ed25519 + Blake2b-512) behind the GUI updater's authenticity check. bxp-core never imports it — re-published so `bxp-gui-bridge` shares this package's single zig-libs pin. |
 | <code class="hl-fn">procrun</code> | _(zig-libs)_ <br>re-export only | Reap-race-tolerant child wait behind the bridge's `bxp-cli` spawns (the Dart VM's own reaper would otherwise trip std's ECHILD panic). Re-published for the same single-pin reason. |
 | <code class="hl-fn">mcp</code> | _(zig-libs)_ <br>re-export only | JSON-RPC 2.0 / MCP transport behind `bxp-mcp` — the one module that came back: upstream's copy is this repo's former `bxp-mcp/src/server.zig`, extracted there and hardened. Re-published for the same single-pin reason. |
 | <code class="hl-fn">uucode</code> | _(fetch dep)_ | Field-selected Unicode case-mapping and decomposition tables behind `UPPER` / `LOWER` / `UNACCENT`. Only the tables `unicode.zig` asks for are generated and compiled in. |
-| <code class="hl-fn">regex</code> | _(fetch dep)_ | The Pike-VM engine (`quangd/regex.zig`, linear time, zero transitive deps) behind `REGEX_MATCH` / `REGEX_EXTRACT`. |
 
 <!-- --8<-- [end:table] -->

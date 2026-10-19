@@ -56,14 +56,15 @@ ladder, so it is worth knowing the price. On this same workload — but scaled t
 literal-only template that produces **byte-identical output** by leaning on the
 stable `INV-` / `#` anchors (`CONTAINS` + nested `SPLIT_PART`):
 
-| Template (1M rows)                         | Wall   | Peak RSS | Throughput   |
-| ------------------------------------------ | ------ | -------- | ------------ |
-| regex (2× `REGEX_EXTRACT` + `REGEX_MATCH`) | ~2.4 s | ~23 MB   | ~415k rows/s |
-| cheap (`CONTAINS` + `SPLIT_PART`)          | ~1.3 s | ~23 MB   | ~790k rows/s |
+| Template (1M rows, release build)          | CPU time | Peak RSS |
+| ------------------------------------------ | -------- | -------- |
+| regex (2× `REGEX_EXTRACT` + `REGEX_MATCH`) | ~14 s    | ~37 MB   |
+| cheap (`CONTAINS` + `SPLIT_PART`)          | ~12 s    | ~37 MB   |
 
-So the regex path costs roughly **1.9× the wall time** here — about **+1 µs per
-row** for the three pattern ops — while **peak RSS is flat** (the Pike-VM engine
-is window/arena-bounded, with no per-row growth). The takeaway matches the cost
+CPU time is the sum over the worker threads, so it does not depend on how many
+cores the run got. The regex path costs roughly **1.2× the CPU time** here —
+about **+2 µs of CPU per row** for the three pattern ops — while **peak RSS is
+flat** (the engine works in bounded per-call scratch, with no per-row growth). The takeaway matches the cost
 ladder above: regex is cheap enough to use freely when you _need_ shape
 matching, and still worth skipping when a delimiter split or a literal
 `CONTAINS` already answers the question.

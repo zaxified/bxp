@@ -321,7 +321,7 @@ expr	ok	WORKDAY('2024-01-01', 'inf')
 expr	ok	DATEADD('2024-01-01', 30)
 
 # ── REGEX_MATCH / REGEX_EXTRACT ───────────────────────────────────────
-# Pike-VM regex (linear-time, ReDoS-safe). The validator compiles the literal
+# Linear-time regex (ReDoS-safe). The validator compiles the literal
 # pattern during eval, so a malformed pattern is caught here as a loud,
 # pattern-attributed BadRegexPattern — same static-literal verdict as
 # DATE_CONVERT's DateFormatBadToken. A valid pattern (even a classic
@@ -332,10 +332,13 @@ expr	ok	REGEX_MATCH([Symbol], '^[A-Z]{2}[A-Z0-9]{9}[0-9]$')
 expr	ok	REGEX_EXTRACT('Qualified Dividend AAPL 100', '[A-Z]{2,}')
 # Capture group: the first group's text wins over the whole match.
 expr	ok	REGEX_EXTRACT('order id=42 qty=3', 'id=([0-9]+)')
-# Unicode-scalar mode: `.` and class ranges span code points, so accented
-# letters match via an explicit class like `[A-ZÁ-Ž]` (not `\w`, which is ASCII).
+# Matching is per code point: `.` and class ranges span code points, so accented
+# letters match via `\p{L}` / `\p{Lu}` or an explicit class like `[A-ZÁ-Ž]` (not
+# `\w`, which is ASCII).
 expr	ok	REGEX_MATCH('Škoda', '[A-ZÁ-Ž]')
 expr	ok	REGEX_EXTRACT([Note], '[A-ZÁ-Ž]{2,}')
+expr	ok	REGEX_EXTRACT([Note], '\p{Lu}{2,}')
+expr	ok	REGEX_MATCH('ŠKODA', '(?i)škoda')
 # Real-world: ISIN well-formedness gate.
 expr	ok	REGEX_MATCH([ISIN], '^[A-Z]{2}[A-Z0-9]{9}[0-9]$')
 # ReDoS-bait pattern stays a clean compile — locks the no-explosion contract.
@@ -343,6 +346,8 @@ expr	ok	REGEX_MATCH('aaaaaaaaaaaaaaaaaaaa!', '(a+)+$')
 # Malformed patterns: unterminated group / class → loud BadRegexPattern.
 expr	err	REGEX_MATCH('x', '(')	BadRegexPattern
 expr	err	REGEX_EXTRACT('x', '[')	BadRegexPattern
+# A repeat of a repeat (`a**`, `a++`, `a{2}{3}`) is refused, as in Go/RE2.
+expr	err	REGEX_MATCH('x', 'a**')	BadRegexPattern
 # Both builtins are strictly 2-arg.
 expr	err	REGEX_MATCH([A])	WrongArgCount
 expr	err	REGEX_MATCH([A], '[0-9]', 'extra')	WrongArgCount

@@ -44,8 +44,8 @@ bxp/
 │   │                       # `csvstream` are NOT here — the whole primitive
 │   │                       # layer comes from zig-libs)
 │   ├── build.zig         # exports each file as a named Zig module
-│   └── build.zig.zon     # fetch deps: uucode, regex, zig-libs (12 modules —
-│                         #             the whole primitive layer)
+│   └── build.zig.zon     # fetch deps: uucode, zig-libs (the whole primitive
+│                         #             layer + the regex engine)
 ├── bxp-gui/              # Flutter desktop app (replaces bxp-ui; talks to bxp-gui-bridge via FFI, which proxies bxp-cli)
 │   ├── lib/              # Dart source (services/, store/, ui/)
 │   ├── linux/, macos/, windows/, web/  # platform configs
@@ -253,14 +253,12 @@ since the v0.3.0 proxy flip — stateless ops run in-process via the bridge's
 bxp-core/inspect link, and the bridge proxies `bxp-cli` runs. The former
 `bxp-fmt` CLI adapter was removed once both wrappers covered every operation.
 
-`bxp-core` is a local path dependency (`../bxp-core`) with **three external
+`bxp-core` is a local path dependency (`../bxp-core`) with **two external
 (fetch) dependencies**, each pinned and content-addressed in
 `bxp-core/build.zig.zon`:
 
 - `uucode` (MIT) — field-selected Unicode case-mapping / decomposition tables
   behind `UPPER` / `LOWER` / `UNACCENT`, pinned to its `main` line.
-- `regex` (`quangd/regex.zig`) — the Pike-VM engine behind `REGEX_MATCH` /
-  `REGEX_EXTRACT`, pinned to an exact commit.
 - `zig_libs` — the module collection supplying `tz` (IANA UTC-offset lookup
   behind `TO_UTC` / `TZ_OFFSET` / `TZ_CONVERT` / `IS_DST`), `datefmt` (the
   date core behind `DATE_CONVERT` and every calendar builtin) `encoding`
@@ -276,20 +274,22 @@ bxp-core/inspect link, and the bridge proxies `bxp-cli` runs. The former
   upstream holds one module for both halves), `minisign` (the
   signature format behind the GUI updater's authenticity check), `procrun`
   (the reap-race-tolerant child wait behind the bridge's `bxp-cli` spawns)
-  and `mcp` (the JSON-RPC 2.0 / MCP transport behind `bxp-mcp` — the one
+  `mcp` (the JSON-RPC 2.0 / MCP transport behind `bxp-mcp` — the one
   module that came *back*: upstream's copy is this repo's former
-  `bxp-mcp/src/server.zig`, extracted there and hardened).
-  bxp-core imports none of the last three — they are re-exported so
+  `bxp-mcp/src/server.zig`, extracted there and hardened) and `regex` (the
+  RE2-syntax, linear-time engine behind `REGEX_MATCH` / `REGEX_EXTRACT`).
+  bxp-core imports none of `minisign`, `procrun` and `mcp` — they are re-exported so
   `bxp-gui-bridge` and `bxp-mcp` share the same pin. Treated as a
   foreign upstream: read-only, pinned to an exact commit, never edited from
   this repo — normally the commit behind a dated release tag, but a tag that
-  leaves all twelve modules untouched is not worth adopting and a later
+  leaves every module bxp takes untouched is not worth adopting and a later
   commit that fixes them is (see the pin's own comment in
   `bxp-core/build.zig.zon`). The offset tables are compiled into the `tz`
   module, so there is still **no runtime dependency** — the pinned tzdata
   snapshot ships inside the binary exactly as the former in-tree copy did.
-  All of them were lifted out of bxp-core and hardened upstream (`mcp` the
-  other way round first — see above). The per-module inventory and rationale
+  All of them but `regex` were lifted out of bxp-core and hardened upstream
+  (`mcp` the other way round first — see above); `regex` replaced a
+  standalone fetch dependency. The per-module inventory and rationale
   live in [`bxp-core/CLAUDE.md`](bxp-core/CLAUDE.md); finishing the extraction
   is the `v1.0.0` milestone in `docs/dev/roadmap.md`.
 

@@ -61,12 +61,12 @@ pub const modules = [_]ModuleDoc{
     .{ .name = "encoding", .origin = .zig_libs, .responsibility = "Layer-0 single-byte code page to UTF-8 transcode (Win-1250/1252, Latin-1/2/9) behind `csv_input_encoding` / `csv_output_encoding`. 256-entry tables, no `uucode`." },
     .{ .name = "json5", .origin = .zig_libs, .responsibility = "Single-pass tokenizer converting JSON5 to standard JSON: strips comments, quotes bare keys, removes trailing commas, normalises single-quoted strings. Imported by `config`, `docs` and `inspect`." },
     .{ .name = "diagnostics", .origin = .zig_libs, .responsibility = "Structured validation collector: `Severity` (error / warning / info), `Diagnostic` (path, position, code, message, suggest) and the `Diagnostics` collector. Used by the config validator's deep validation; bxp-cli passes a null sink." },
+    .{ .name = "regex", .origin = .zig_libs, .responsibility = "RE2-syntax regular expressions with Go `regexp` semantics, linear-time matching, `\\p{…}` Unicode classes, behind `REGEX_MATCH` / `REGEX_EXTRACT`." },
     .{ .name = "minisign", .origin = .zig_libs, .reexport_only = true, .responsibility = "Minisign signature format (Ed25519 + Blake2b-512) behind the GUI updater's authenticity check. bxp-core never imports it — re-published so `bxp-gui-bridge` shares this package's single zig-libs pin." },
     .{ .name = "procrun", .origin = .zig_libs, .reexport_only = true, .responsibility = "Reap-race-tolerant child wait behind the bridge's `bxp-cli` spawns (the Dart VM's own reaper would otherwise trip std's ECHILD panic). Re-published for the same single-pin reason." },
     .{ .name = "mcp", .origin = .zig_libs, .reexport_only = true, .responsibility = "JSON-RPC 2.0 / MCP transport behind `bxp-mcp` — the one module that came back: upstream's copy is this repo's former `bxp-mcp/src/server.zig`, extracted there and hardened. Re-published for the same single-pin reason." },
 
     .{ .name = "uucode", .origin = .fetch_dep, .responsibility = "Field-selected Unicode case-mapping and decomposition tables behind `UPPER` / `LOWER` / `UNACCENT`. Only the tables `unicode.zig` asks for are generated and compiled in." },
-    .{ .name = "regex", .origin = .fetch_dep, .responsibility = "The Pike-VM engine (`quangd/regex.zig`, linear time, zero transitive deps) behind `REGEX_MATCH` / `REGEX_EXTRACT`." },
 };
 
 /// One entry point of the stateless `inspect` surface.

@@ -51,9 +51,8 @@ const Decimal = @import("decimal").Decimal;
 /// form and rounded back into the 12-digit scale exactly once, so neither
 /// builtin introduces a float — see the `decimal` module's own contract.
 const BigDecimal = @import("decimal").BigDecimal;
-// The regex module root file IS the Regex type (`const Regex = @This()`), so the
-// import binds directly to the type — `Regex.compile`, `Regex.Match`, etc.
-const Regex = @import("regex");
+const regex = @import("regex");
+const Regex = regex.Regex;
 
 /// Re-export so callers that already import the `expr` module (bxp-cli pipeline,
 /// the inspect core, bxp-mcp) can name the encoding type / helpers without a separate dependency.
@@ -2365,25 +2364,24 @@ fn adaptContains(_: *Parser, args: []Value) anyerror!Value {
 // the extraction-only sibling for "pull a substring by pattern" jobs the cheaper
 // tools cannot express — NOT a superset that replaces them.
 //
-// Backed by the Pike-VM engine (quangd/regex.zig, a pinned fetch dependency —
-// see bxp-core/build.zig.zon): linear-time matching, so a pathological pattern
-// degrades gracefully instead of
-// exploding (ReDoS-proof by construction). The pattern is a template-authored
+// Backed by the zig-libs `regex` module (RE2 syntax, Go `regexp` semantics):
+// linear-time matching, so a pathological pattern degrades gracefully instead
+// of exploding (ReDoS-proof by construction). The pattern is a template-authored
 // literal — a compile failure is a loud template error (attributed to the
 // pattern arg), while a non-matching *data* row is the lenient case ("" / false),
 // matching the template-strict / data-lenient contract elsewhere in the engine.
 //
-// Unicode-scalar mode is on, so `.` and character-class ranges span whole code
-// points. `\d`/`\w`/`\s` stay ASCII (upstream behaviour), so Czech-diacritic
-// runs match via an explicit scalar class like `[A-ZÁ-Ž]`, not `\w` (`\p{...}`
-// is upstream-PLANNED). The pattern compiles per call — consistent with the
-// fused parse+eval engine that re-parses the whole expression each row; a
-// compiled-pattern cache belongs to the deferred AST/IR work, not here.
-const regex_opts: Regex.CompileOptions = .{ .syntax = .{ .unicode = true } };
+// Matching is per code point, so `.` and character-class ranges span whole
+// code points, and an invalid UTF-8 byte in the data reads as one U+FFFD (Go's
+// rule) instead of failing the match. `\d`/`\w`/`\s`/`\b` stay ASCII; Unicode
+// letters are `\p{L}` / `\p{Lu}` or an explicit class like `[A-ZÁ-Ž]`. The
+// pattern compiles per call — consistent with the fused parse+eval engine that
+// re-parses the whole expression each row; a compiled-pattern cache belongs to
+// the deferred AST/IR work, not here.
 
 /// Compile `pattern` or raise a loud, pattern-attributed template error.
 fn compileRegex(p: *Parser, pattern: []const u8) anyerror!Regex {
-    return Regex.compile(p.ctx.alloc, pattern, regex_opts) catch |err| {
+    return Regex.compile(p.ctx.alloc, pattern) catch |err| {
         p.setDetail("invalid regex pattern \"{s}\": {s}", .{ pattern, @errorName(err) });
         return error.BadRegexPattern;
     };
@@ -2395,7 +2393,7 @@ const regex_match_doc: FnDoc = .{
     .row_varying = false,
     .signature = "REGEX_MATCH(s, pattern)",
     .example = "REGEX_MATCH('AAPL US Equity', '[A-Z]+')",
-    .description = "Returns \"true\" if regular-expression `pattern` matches anywhere in `s`, else \"false\". `pattern` is a regex literal: anchors `^ $`, classes `[...]`, quantifiers `* + ? {m,n}`, groups, and alternation `|` — linear-time (no backreferences or lookaround). Unicode-scalar mode is on, so `.` and class ranges span whole code points, but `\\d`/`\\w`/`\\s` stay ASCII — match accented letters with an explicit class like `[A-ZÁ-Ž]`. Pay for the cheapest tool that does the job: CONTAINS for a literal substring, IN/REMAP for whole-value sets, regex only for a real pattern.",
+    .description = "Returns \"true\" if regular-expression `pattern` matches anywhere in `s`, else \"false\". `pattern` is a regex literal: anchors `^ $`, classes `[...]`, quantifiers `* + ? {m,n}`, groups, and alternation `|` — linear-time (no backreferences or lookaround). `.` and class ranges span whole code points, but `\\d`/`\\w`/`\\s` stay ASCII — match letters of any alphabet, accented ones included, with `\\p{L}` (`\\p{Lu}` upper case, `\\p{Ll}` lower case) or an explicit class like `[A-ZÁ-Ž]`; `(?i)` makes the match case-insensitive, accented letters too. Pay for the cheapest tool that does the job: CONTAINS for a literal substring, IN/REMAP for whole-value sets, regex only for a real pattern.",
     .args = &.{
         .{ .name = "s", .kind = .string },
         .{ .name = "pattern", .kind = .string },
@@ -2414,8 +2412,14 @@ fn builtinRegexMatch(p: *Parser, args: []Value) anyerror!Value {
         else => return error.StringExpected,
     };
     var re = try compileRegex(p, pattern);
-    defer re.deinit();
-    return Value{ .boolean = re.match(s) };
+    defer re.deinit(p.ctx.alloc);
+    // zig-libs request: regex — isMatch false negative. `Regex.isMatch` (its
+    // lazy-DFA fast path) can answer false where a match exists
+    // (`a?\b+(  *((xxxxa+)xx|()+){2}){1,3}` on "a1 "; Go and `Matcher` say
+    // true), so the answer comes from the same search REGEX_EXTRACT uses.
+    var m = try regex.Matcher.init(p.ctx.alloc, &re);
+    defer m.deinit();
+    return Value{ .boolean = m.find(s, 0) != null };
 }
 
 const regex_extract_doc: FnDoc = .{
@@ -2424,7 +2428,7 @@ const regex_extract_doc: FnDoc = .{
     .row_varying = false,
     .signature = "REGEX_EXTRACT(s, pattern)",
     .example = "REGEX_EXTRACT('Qualified Dividend AAPL 100', '[A-Z]{2,}')",
-    .description = "Returns the first part of `s` that regular-expression `pattern` matches, or \"\" if there is no match. When `pattern` has a capture group `(...)`, the first group's text is returned; otherwise the whole match is returned — so group a repeated alternative as non-capturing `(?:...)` when you want the whole run, since a capturing group under a repeat yields only its last repetition. `pattern` is a regex literal (same syntax + Unicode notes as REGEX_MATCH): linear-time, no backreferences or lookaround, and accented letters need an explicit class like `[A-ZÁ-Ž]` (not `\\w`). Use it to pull a ticker, code, or token a literal REPLACE/SPLIT_PART cannot isolate.",
+    .description = "Returns the first part of `s` that regular-expression `pattern` matches, or \"\" if there is no match. When `pattern` has a capture group `(...)`, the first group's text is returned; otherwise the whole match is returned — so group a repeated alternative as non-capturing `(?:...)` when you want the whole run, since a capturing group under a repeat yields only its last repetition. `pattern` is a regex literal (same syntax + Unicode notes as REGEX_MATCH): linear-time, no backreferences or lookaround, and accented letters need `\\p{L}` or an explicit class like `[A-ZÁ-Ž]` (not `\\w`). Use it to pull a ticker, code, or token a literal REPLACE/SPLIT_PART cannot isolate.",
     .args = &.{
         .{ .name = "s", .kind = .string },
         .{ .name = "pattern", .kind = .string },
@@ -2445,17 +2449,15 @@ fn builtinRegexExtract(p: *Parser, args: []Value) anyerror!Value {
         else => return error.StringExpected,
     };
     var re = try compileRegex(p, pattern);
-    defer re.deinit();
-    const caps = re.findCaptures(s) orelse return Value{ .string = "" };
+    defer re.deinit(p.ctx.alloc);
+    var m = try regex.Matcher.init(p.ctx.alloc, &re);
+    defer m.deinit();
     // Group 0 is the whole match; group 1 is the first user capture. Prefer the
     // capture when the pattern declares (and this match filled) one.
-    const m: Regex.Match = blk: {
-        if (caps.len() > 1) {
-            if (caps.get(1)) |g| break :blk g;
-        }
-        break :blk caps.span();
-    };
-    return Value{ .string = m.bytes(s) };
+    var groups: [2]?regex.Span = .{ null, null };
+    if (!m.captures(s, 0, &groups)) return Value{ .string = "" };
+    const span = if (re.groupCount() >= 1 and groups[1] != null) groups[1].? else groups[0].?;
+    return Value{ .string = span.slice(s) };
 }
 
 // ── REPLACE ─────────────────────────────────────────────────────────────
@@ -5575,16 +5577,46 @@ test "eval: REGEX_EXTRACT whole match and capture group" {
     try testing.expectEqualStrings("", try evalString("REGEX_EXTRACT('no digits here', '[0-9]+')", &ctx));
 }
 
-test "eval: REGEX extracts Czech diacritics via explicit scalar class" {
+test "eval: REGEX extracts Czech diacritics via \\p{L} and explicit class" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
     var h = TestHelper.init(a);
     const ctx = h.ctx(&.{}, a);
-    // \w stays ASCII, but a Unicode-scalar class range covers Czech caps:
-    // Č(U+010C) ∈ [Á(U+00C1)..Ž(U+017D)]. Empirically confirmed in the bake-off.
+    // \w stays ASCII, but a code-point class range covers Czech caps:
+    // Č(U+010C) ∈ [Á(U+00C1)..Ž(U+017D)].
     try testing.expectEqualStrings("ČEZ", try evalString("REGEX_EXTRACT('Akcie ČEZ a.s. 100', '[A-ZÁ-Ž]{2,}')", &ctx));
     try testing.expectEqualStrings("true", try evalString("REGEX_MATCH('Škoda', '[A-ZÁ-Ž]')", &ctx));
+    // Unicode general categories need no hand-written range.
+    try testing.expectEqualStrings("ČEZ", try evalString("REGEX_EXTRACT('Akcie ČEZ a.s. 100', '\\p{Lu}{2,}')", &ctx));
+    try testing.expectEqualStrings("Škoda", try evalString("REGEX_EXTRACT('100 Škoda Auto', '\\p{L}+')", &ctx));
+    // (?i) folds accented letters as well as ASCII.
+    try testing.expectEqualStrings("true", try evalString("REGEX_MATCH('ŠKODA', '(?i)škoda')", &ctx));
+}
+
+test "eval: REGEX_MATCH agrees with REGEX_EXTRACT where isMatch alone would not" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{}, a);
+    // zig-libs request: regex — isMatch false negative. `Regex.isMatch` answers
+    // false here although " " at 2..3 matches (Go: true); REGEX_MATCH must
+    // follow the full search, exactly as REGEX_EXTRACT does.
+    try testing.expectEqualStrings(" ", try evalString("REGEX_EXTRACT('a1 ', 'a?\\b+(  *((xxxxa+)xx|()+){2}){1,3}')", &ctx));
+    try testing.expectEqualStrings("true", try evalString("REGEX_MATCH('a1 ', 'a?\\b+(  *((xxxxa+)xx|()+){2}){1,3}')", &ctx));
+}
+
+test "eval: REGEX on invalid UTF-8 data is lenient, not an error" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    // A broken byte reads as one U+FFFD (Go's rule): `.` matches it, a letter
+    // class does not, and nothing fails.
+    const ctx = h.ctx(&.{"ab\xffcd"}, a);
+    try testing.expectEqualStrings("ab\xffcd", try evalString("REGEX_EXTRACT(FIELDS(1), '.+')", &ctx));
+    try testing.expectEqualStrings("ab", try evalString("REGEX_EXTRACT(FIELDS(1), '\\p{L}+')", &ctx));
 }
 
 test "eval: REGEX bad pattern is a loud template error" {
@@ -5604,7 +5636,7 @@ test "eval: REGEX is ReDoS-safe (linear-time engine, no catastrophic backtrackin
     const a = arena.allocator();
     var h = TestHelper.init(a);
     // A classic catastrophic pattern on a long non-matching run: a backtracking
-    // engine would blow up here. The Pike VM completes in linear time and simply
+    // engine would blow up here. The linear-time engine completes and simply
     // reports no match. The test passing at all (no hang) is the assertion.
     const n = 20_000;
     const buf = try a.alloc(u8, n);

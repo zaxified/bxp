@@ -172,14 +172,12 @@ pub fn build(b: *std.Build) void {
         },
     });
 
-    // regex engine (quangd/regex.zig) behind expr.zig's REGEX_MATCH /
-    // REGEX_EXTRACT builtins — a pinned fetch dependency (zero transitive deps,
-    // Pike-VM linear-time; security-audited 2026-06-17, see build.zig.zon). The
-    // upstream package exposes its engine as the module named "regex".
-    const regex_mod = b.dependency("regex", .{
-        .target = target,
-        .optimize = optimize,
-    }).module("regex");
+    // RE2-syntax regex engine behind expr.zig's REGEX_MATCH / REGEX_EXTRACT
+    // builtins, consumed from zig-libs (no dependencies of its own, linear-time
+    // matching, Go `regexp` semantics). It replaced the standalone
+    // quangd/regex.zig fetch dependency: on the patterns bxp templates use the
+    // answers are identical, and it adds `\p{…}` Unicode classes.
+    const regex_mod = zig_libs.module("regex");
 
     // IANA time-zone offset lookup behind TO_UTC / TZ_OFFSET / TZ_CONVERT /
     // IS_DST. Consumed from the zig-libs collection (pinned in build.zig.zon)

@@ -23,11 +23,10 @@ Consequences of this design:
 
 ```text
   bxp-cli         ── path dep ──►  bxp-core   ── fetch dep ──►  uucode   (Unicode tables)
-  (binary)                         (library)                    regex    (Pike-VM engine)
-                                                                zig-libs (12 modules: datefmt · tz ·
-                                                                          encoding · json5 · decimal ·
-                                                                          numparse · zipstream ·
-                                                                          csvstream · diagnostics ·
+  (binary)                         (library)                    zig-libs (datefmt · tz · encoding ·
+                                                                          json5 · decimal · numparse ·
+                                                                          zipstream · csvstream ·
+                                                                          diagnostics · regex ·
                                                                           minisign · procrun · mcp)
   bxp-mcp         ── path dep ──►  bxp-core           (wraps inspect.zig; spawns bxp-cli
   (binary)                                             for bxp_simulate; takes `mcp`,
@@ -42,12 +41,11 @@ Consequences of this design:
   (Flutter)                              in-proc inspect + proxied bxp-cli runs)
 ```
 
-`bxp-core` is a **local path dependency** (`../bxp-core`) and pulls three
-external fetch dependencies of its own: `uucode` (Unicode case-mapping tables),
-`regex` (`quangd/regex.zig`, the Pike-VM engine behind `REGEX_MATCH`/
-`REGEX_EXTRACT`), and `zig_libs` (12 modules — `datefmt`, `tz`, `encoding`,
-`json5`, `decimal`, `numparse`, `zipstream`, `csvstream` and `diagnostics`, the
-whole primitive layer, plus `minisign`, `procrun` and `mcp`, which bxp-core does
+`bxp-core` is a **local path dependency** (`../bxp-core`) and pulls two
+external fetch dependencies of its own: `uucode` (Unicode case-mapping tables)
+and `zig_libs` (`datefmt`, `tz`, `encoding`, `json5`, `decimal`, `numparse`,
+`zipstream`, `csvstream`, `diagnostics` and `regex` — the whole primitive layer
+and the engine behind `REGEX_MATCH`/`REGEX_EXTRACT` — plus `minisign`, `procrun` and `mcp`, which bxp-core does
 not import at all and merely re-exports so the bridge and bxp-mcp share its
 single pin), all pinned in `build.zig.zon`.
 `bxp-gui` ships `bxp-cli`, `bxp-mcp`, and `bxp-gui-bridge.{dll,so,dylib}`

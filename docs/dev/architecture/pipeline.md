@@ -268,11 +268,10 @@ shape.
 
 The string-matching builtins form a deliberate **cost ladder** — `IN`/`REMAP`
 (hash lookup) < `CONTAINS`/`REPLACE` (literal scan) < `REGEX_MATCH`/`REGEX_EXTRACT`
-(the Pike-VM pattern engine, a linear-time / ReDoS-safe fetch dependency
-`quangd/regex.zig`). Regex is the only builtin backed by an external engine and
-the most expensive rung: on 1M synthetic rows it measured **~1.9× the wall time**
-of a literal-only equivalent producing byte-identical output, at **flat peak
-RSS** (the engine is window/arena-bounded — no per-row growth). Reach for it only
+(the linear-time / ReDoS-safe pattern engine, the zig-libs `regex` module).
+Regex is the most expensive rung: on 1M synthetic rows the release build spent
+**~1.2× the CPU time** of a literal-only equivalent producing byte-identical
+output, at **flat peak RSS** (bounded per-call scratch — no per-row growth). Reach for it only
 when a pattern the cheaper tools cannot phrase is genuinely needed; see
 [`docs/examples/advanced/freeform-payment-memos`](../../examples/advanced/freeform-payment-memos/index.md)
 for the worked tradeoff and the full measurement table.

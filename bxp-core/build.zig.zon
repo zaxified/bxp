@@ -13,22 +13,13 @@
             .url = "https://github.com/jacobsandlund/uucode/archive/2826a37a4562284fdacd8fa029d49509cc9bffcd.tar.gz",
             .hash = "uucode-0.2.0-ZZjBPlK5VADj7fdoq7G8LIHzD5o6FSkcBXXrRWr4jnrA",
         },
-        // quangd/regex.zig (Apache-2.0 OR MIT) — the Pike-VM regular-expression
-        // engine behind expr.zig's REGEX_MATCH / REGEX_EXTRACT. Pinned to an exact
-        // commit (content-addressed by hash); chosen by the 2026-06-17 security +
-        // capability audit for its zero transitive deps, OS-surface-free source,
-        // and guaranteed linear-time (ReDoS-proof) matching. Re-audit the diff on
-        // any pin bump.
-        .regex = .{
-            .url = "https://github.com/quangd42/regex.zig/archive/a22a2e68bcc5aa55310f12128de38e26bfa2cece.tar.gz",
-            .hash = "regex-0.1.0-V8KKSWICBACgjPoyQLIoPwMnQjKzCpEOjUMEzkf3ebOD",
-        },
         // zig-libs (MIT) — the module collection that now carries the hardened
-        // descendants of several bxp-core modules. Bumping this pin moves TWELVE
+        // descendants of several bxp-core modules. Bumping this pin moves THIRTEEN
         // modules at once: `tz`, `datefmt`, `encoding`, `json5`, `decimal`,
         // `zipstream`, `diagnostics`, `numparse`, `csvstream`, `minisign`,
-        // `procrun` and `mcp` — that is the whole primitive layer plus the
-        // bxp-mcp transport, so read the diff accordingly. All twelve come from
+        // `procrun`, `mcp` and `regex` — that is the whole primitive layer plus
+        // the bxp-mcp transport and the regex engine, so read the diff
+        // accordingly. All thirteen come from
         // ONE b.dependency handle in build.zig, so `tz`'s own datefmt import
         // resolves to the same module rather than a second date core. The
         // per-module inventory and rationale live in bxp-core/CLAUDE.md ->
@@ -39,9 +30,7 @@
         // modules, not the tag: a tag that leaves them byte-identical is not
         // worth adopting, and a later commit that fixes them is (see
         // CHANGELOG.md in each module). Currently tag `2026-10-18`, the last
-        // one on Zig 0.16 (the collection moves to 0.17 after it); since the
-        // previous pin `5ee701f8` only json5 (Diagnostic col/offset/len) and
-        // minisign (constant-time sweep) changed among the twelve.
+        // one on Zig 0.16 (the collection moves to 0.17 after it).
         // `zig fetch` cannot
         // target a subdirectory (ziglang/zig#23012)
         // so the whole collection is one package — only the modules actually

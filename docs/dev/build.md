@@ -44,16 +44,16 @@ manager such as [`zigup`](https://github.com/marler8997/zigup) if you keep
 several around; the ZLS the Zig extension fetches follows whichever `zig` is on
 your `PATH`.
 
-`bxp-core` has **three external (fetch) dependencies** — `uucode` (MIT), the
-Unicode case-mapping tables behind `UPPER`/`LOWER`; `regex`
-(`quangd/regex.zig`, Apache-2.0 OR MIT), the Pike-VM engine behind
-`REGEX_MATCH`/`REGEX_EXTRACT` (linear-time, ReDoS-safe); and `zig_libs` (MIT),
-supplying **12 modules** — the whole primitive layer: the `datefmt` date core,
+`bxp-core` has **two external (fetch) dependencies** — `uucode` (MIT), the
+Unicode case-mapping tables behind `UPPER`/`LOWER`, and `zig_libs` (MIT),
+supplying the whole primitive layer: the `datefmt` date core,
 the `tz` IANA offset lookup, the `encoding` code-page transcoder, the `json5`
 preprocessor, the `decimal` fixed-point numeric core, the `numparse` grouped-
 number parser, the `zipstream` ZIP reader, the `csvstream` CSV reader, the
-`diagnostics` collector, plus `minisign` and `procrun` (re-exported for
-`bxp-gui-bridge`) and `mcp` (the JSON-RPC transport re-exported for `bxp-mcp`).
+`diagnostics` collector and the `regex` engine behind
+`REGEX_MATCH`/`REGEX_EXTRACT` (linear-time, ReDoS-safe), plus `minisign` and
+`procrun` (re-exported for `bxp-gui-bridge`) and `mcp` (the JSON-RPC transport
+re-exported for `bxp-mcp`).
 All are pinned in `bxp-core/build.zig.zon`. The
 fetches are cached after the first build; CI runners have network.
 
