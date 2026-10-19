@@ -248,6 +248,9 @@ jobs:
           tag_name: ${{ env.RELEASE_VERSION }}
           name: ${{ env.RELEASE_VERSION }}
           body_path: release_notes.md
+          # A workflow_dispatch test run must never become the "latest"
+          # release the in-app updater offers to every user.
+          prerelease: ${{ github.event_name == 'workflow_dispatch' }}
           files: |
             staging/*
 

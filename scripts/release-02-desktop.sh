@@ -108,19 +108,31 @@ _appimagetool() {
     # Use a cached download so we don't depend on it being preinstalled.
     # All status messages go to stderr so callers can capture stdout as
     # the resolved path: `tool=$(_appimagetool)`.
+    # Pinned release + its SHA-256 (the asset digest GitHub publishes, checked
+    # against an independent download). `continuous` is a moving target that
+    # would put an unreviewed binary into every desktop release. Bump both
+    # together.
+    local version="1.9.1"
+    local sha256="ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0"
     local cache="$HOME/.cache/bxp-build"
-    local bin="$cache/appimagetool-x86_64.AppImage"
+    local bin="$cache/appimagetool-${version}-x86_64.AppImage"
     if [ ! -x "$bin" ]; then
         mkdir -p "$cache"
-        echo "  Downloading appimagetool to $bin..." >&2
+        echo "  Downloading appimagetool ${version} to $bin..." >&2
         # Download to a side name and rename on success: this runs inside
         # `tool=$(_appimagetool)`, where errexit is off, so a failed or
         # truncated curl would otherwise leave an executable stub in the cache
         # that every later run trusts.
         curl -fsSL -o "$bin.part" \
-            "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage" >&2 \
+            "https://github.com/AppImage/appimagetool/releases/download/${version}/appimagetool-x86_64.AppImage" >&2 \
             || return 1
         chmod +x "$bin.part" && mv "$bin.part" "$bin" || return 1
+    fi
+    # Verify on every use, not only after download: the cache outlives runs.
+    if ! echo "$sha256  $bin" | sha256sum -c --status; then
+        echo "  appimagetool checksum mismatch: $bin (expected $sha256)" >&2
+        rm -f "$bin"
+        return 1
     fi
     echo "$bin"
 }
