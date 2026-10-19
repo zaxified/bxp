@@ -120,8 +120,14 @@ pub fn main(init: std.process.Init) !void {
         // leaves the pipe held open by the grandchild, so the bridge never
         // sees EOF. argv[0] is our own path, so no OS binary is involved and
         // the subcommand behaves identically on every host.
+        //
+        // stdin is NOT inherited: the bridge spawns us with stdin closed, and
+        // on macOS std spawns through posix_spawn, where inheriting a closed
+        // fd makes the spawn itself fail — we would exit at once and the
+        // cancel would find no stream left to cancel.
         var grandchild = try std.process.spawn(io, .{
             .argv = &.{ argv[0], "sleep", argv[2] },
+            .stdin = .ignore,
         });
         _ = grandchild.wait(io) catch {};
         return;
