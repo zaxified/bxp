@@ -305,9 +305,12 @@ JSON5 configuration loader.
 - Internally uses the `json5` module to preprocess JSON5 → standard JSON before `std.json` parsing.
 - Inline unit tests cover the pure did-you-mean / parsing helpers
   (`levenshteinIgnoreCase`, `closestBuiltin`, `closestKey`, `suffixOverlap`,
-  `isAnnotationKey`, `extractQuotedName`, `jsonErrorDesc`) plus two
-  `loadFromBytes` integration cases (enum/punctuation parse + invalid-enum
-  warning). `loadFromBytes` allocates into a caller-owned arena — tests pass
+  `isAnnotationKey`, `extractQuotedName`, `jsonErrorDesc`) plus
+  `loadFromBytes` integration cases (enum/punctuation parse, invalid values
+  refused). An unknown enum value or a wrong-typed scalar field
+  (`file_type_in: "jsno"`, an unknown encoding, a non-boolean flag) is a
+  template error (`config.invalid_enum` / `config.wrong_type`), never a
+  silent fallback to the default. `loadFromBytes` allocates into a caller-owned arena — tests pass
   an `ArenaAllocator`, matching how the inspect adapters drive it.
 
 **Doc catalog** (`pub const FieldDoc`, plus `pub const fields = [_]FieldDoc{...}`

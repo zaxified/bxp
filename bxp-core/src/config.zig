@@ -2803,14 +2803,33 @@ fn emitTemplateDiag(
     });
 }
 
+/// Report a template mistake loudly and stop loading: an `.error` diagnostic
+/// into the bag (inspect adapters), the same text on stderr when there is no
+/// bag (bxp-cli), then `error.InvalidConfig`. Template-strict: a typo'd enum
+/// or a wrong-typed flag must not fall back to a default nobody asked for.
+fn failTemplate(
+    alloc: std.mem.Allocator,
+    diag: ?*Diagnostics,
+    code: []const u8,
+    config_path: []const u8,
+    template_id: []const u8,
+    field_suffix: []const u8,
+    comptime fmt: []const u8,
+    args: anytype,
+) !noreturn {
+    try emitTemplateDiag(alloc, diag, .@"error", code, template_id, field_suffix, fmt, args);
+    printHuman(diag, "---\n# {s}: config error: template '{s}': " ++ fmt ++ "\n", .{ config_path, template_id } ++ args);
+    return error.InvalidConfig;
+}
+
 /// Parse a single-character string config field (`csv_delimiter_in`,
 /// `csv_decimal_separator_out`, etc.). Returns the new char on a valid
-/// 1-char string; on any other shape (missing, wrong type, wrong
-/// length) returns the supplied default and emits a `wrong_type_silent`
-/// warning into the diagnostics bag if non-null.
+/// 1-char string, the supplied default when the key is absent; any other
+/// shape (wrong type, wrong length) is a `wrong_type` template error.
 fn parseSingleCharCsvField(
     alloc: std.mem.Allocator,
     diag: ?*Diagnostics,
+    config_path: []const u8,
     bobj: std.json.ObjectMap,
     template_id: []const u8,
     field: []const u8,
@@ -2819,107 +2838,91 @@ fn parseSingleCharCsvField(
     const v = bobj.get(field) orelse return default_value;
     if (v == .string and v.string.len == 1) return v.string[0];
 
-    if (v == .string) {
-        try emitTemplateDiag(alloc, diag, .warning, "config.wrong_type_silent",
-            template_id, field,
-            "{s} must be a single character, got string of length {d} — value ignored",
-            .{ field, v.string.len });
-    } else {
-        try emitTemplateDiag(alloc, diag, .warning, "config.wrong_type_silent",
-            template_id, field,
-            "{s} must be a single-character string, got {s} — value ignored",
-            .{ field, @tagName(v) });
-    }
-    return default_value;
+    if (v == .string) try failTemplate(alloc, diag, "config.wrong_type", config_path,
+        template_id, field,
+        "{s} must be a single character, got string of length {d}",
+        .{ field, v.string.len });
+    try failTemplate(alloc, diag, "config.wrong_type", config_path,
+        template_id, field,
+        "{s} must be a single-character string, got {s}",
+        .{ field, @tagName(v) });
 }
 
 /// Parse the `csv_text_quote_in` / `csv_text_quote_out` enum field.
 /// Accepts `"single"`, `"double"`, and `"none"` per the FieldDoc
-/// (`"none" | "single" | "double"`). Any other string surfaces an
-/// `invalid_enum` warning and falls back to no-quoting; non-string
-/// values are reported as `wrong_type_silent`.
+/// (`"none" | "single" | "double"`). Any other string is an `invalid_enum`
+/// template error; a non-string value is a `wrong_type` one.
 fn parseTextQuoteField(
     alloc: std.mem.Allocator,
     diag: ?*Diagnostics,
+    config_path: []const u8,
     bobj: std.json.ObjectMap,
     template_id: []const u8,
     field: []const u8,
     default_value: u8,
 ) !u8 {
     const v = bobj.get(field) orelse return default_value;
-    if (v != .string) {
-        try emitTemplateDiag(alloc, diag, .warning, "config.wrong_type_silent",
-            template_id, field,
-            "{s} must be a string ('none' | 'single' | 'double'), got {s} — value ignored",
-            .{ field, @tagName(v) });
-        return default_value;
-    }
+    if (v != .string) try failTemplate(alloc, diag, "config.wrong_type", config_path,
+        template_id, field,
+        "{s} must be a string ('none' | 'single' | 'double'), got {s}",
+        .{ field, @tagName(v) });
     if (std.mem.eql(u8, v.string, "single")) return '\'';
     if (std.mem.eql(u8, v.string, "double")) return '"';
     if (std.mem.eql(u8, v.string, "none")) return 0;
-    try emitTemplateDiag(alloc, diag, .warning, "config.invalid_enum",
+    try failTemplate(alloc, diag, "config.invalid_enum", config_path,
         template_id, field,
-        "{s} must be 'none' | 'single' | 'double', got '{s}' — defaulting to none",
+        "{s} must be 'none' | 'single' | 'double', got '{s}'",
         .{ field, v.string });
-    return 0;
 }
 
 /// Parse the `csv_input_encoding` / `csv_output_encoding` enum field. Accepts
 /// the canonical code page names (plus aliases — see `encoding.Encoding.parse`).
-/// A non-string value reports `wrong_type_silent`; an unrecognised string
-/// reports `invalid_enum` and falls back to `.utf8` (the safe pass-through).
+/// A non-string value is a `wrong_type` template error, an unrecognised name
+/// an `invalid_enum` one.
 fn parseEncodingField(
     alloc: std.mem.Allocator,
     diag: ?*Diagnostics,
+    config_path: []const u8,
     bobj: std.json.ObjectMap,
     template_id: []const u8,
     field: []const u8,
     default_value: encoding.Encoding,
 ) !encoding.Encoding {
     const v = bobj.get(field) orelse return default_value;
-    if (v != .string) {
-        try emitTemplateDiag(alloc, diag, .warning, "config.wrong_type_silent",
+    if (v != .string) try failTemplate(alloc, diag, "config.wrong_type", config_path,
+        template_id, field,
+        "{s} must be a string encoding name (e.g. 'utf-8', 'windows-1250'), got {s}",
+        .{ field, @tagName(v) });
+    return encoding.Encoding.parse(v.string) orelse
+        try failTemplate(alloc, diag, "config.invalid_enum", config_path,
             template_id, field,
-            "{s} must be a string encoding name (e.g. 'utf-8', 'windows-1250'), got {s} — value ignored",
-            .{ field, @tagName(v) });
-        return default_value;
-    }
-    return encoding.Encoding.parse(v.string) orelse {
-        try emitTemplateDiag(alloc, diag, .warning, "config.invalid_enum",
-            template_id, field,
-            "{s} unknown encoding '{s}' — defaulting to utf-8",
+            "{s}: unknown encoding '{s}'",
             .{ field, v.string });
-        return .utf8;
-    };
 }
 
 /// Parse the `file_type_in` / `file_type_out` enum field (`"json"` /
-/// `"csv"`). Anything else silently defaults to `.csv` today; this
-/// helper preserves that behavior but surfaces a warning so users see
-/// when a typo (`"jsno"`) silently fell back.
+/// `"csv"`). Anything else is a template error: a typo like `"jsno"` would
+/// otherwise read a JSON file as CSV.
 fn parseFileTypeField(
     alloc: std.mem.Allocator,
     diag: ?*Diagnostics,
+    config_path: []const u8,
     bobj: std.json.ObjectMap,
     template_id: []const u8,
     field: []const u8,
     default_value: FileType,
 ) !FileType {
     const v = bobj.get(field) orelse return default_value;
-    if (v != .string) {
-        try emitTemplateDiag(alloc, diag, .warning, "config.wrong_type_silent",
-            template_id, field,
-            "{s} must be a string ('json' or 'csv'), got {s} — value ignored",
-            .{ field, @tagName(v) });
-        return default_value;
-    }
+    if (v != .string) try failTemplate(alloc, diag, "config.wrong_type", config_path,
+        template_id, field,
+        "{s} must be a string ('json' or 'csv'), got {s}",
+        .{ field, @tagName(v) });
     if (std.mem.eql(u8, v.string, "json")) return .json;
     if (std.mem.eql(u8, v.string, "csv")) return .csv;
-    try emitTemplateDiag(alloc, diag, .warning, "config.invalid_enum",
+    try failTemplate(alloc, diag, "config.invalid_enum", config_path,
         template_id, field,
-        "{s} must be 'json' or 'csv', got '{s}' — defaulting to 'csv'",
+        "{s} must be 'json' or 'csv', got '{s}'",
         .{ field, v.string });
-    return .csv;
 }
 
 /// Deep-dupe a JSON object into an ordered `expr.NamedMap` (insertion order
@@ -3324,9 +3327,9 @@ pub fn loadFromBytes(
                         if (v == .bool) {
                             date_filter_from_filename = v.bool;
                         } else {
-                            try emitTemplateDiag(alloc, diag, .warning, "config.wrong_type_silent",
+                            try failTemplate(alloc, diag, "config.wrong_type", config_path,
                                 b_entry.key_ptr.*, "date_filter_from_filename",
-                                "date_filter_from_filename must be a boolean, got {s} — value ignored", .{@tagName(v)});
+                                "date_filter_from_filename must be a boolean, got {s}", .{@tagName(v)});
                         }
                     }
 
@@ -3334,9 +3337,9 @@ pub fn loadFromBytes(
                         if (v == .bool) {
                             combined_output = v.bool;
                         } else {
-                            try emitTemplateDiag(alloc, diag, .warning, "config.wrong_type_silent",
+                            try failTemplate(alloc, diag, "config.wrong_type", config_path,
                                 b_entry.key_ptr.*, "combined_output",
-                                "combined_output must be a boolean, got {s} — value ignored", .{@tagName(v)});
+                                "combined_output must be a boolean, got {s}", .{@tagName(v)});
                         }
                     }
 
@@ -3405,9 +3408,9 @@ pub fn loadFromBytes(
                         if (v == .bool) {
                             row_rules_debug_missing = v.bool;
                         } else {
-                            try emitTemplateDiag(alloc, diag, .warning, "config.wrong_type_silent",
+                            try failTemplate(alloc, diag, "config.wrong_type", config_path,
                                 b_entry.key_ptr.*, "row_rules_debug_missing",
-                                "row_rules_debug_missing must be a boolean, got {s} — value ignored", .{@tagName(v)});
+                                "row_rules_debug_missing must be a boolean, got {s}", .{@tagName(v)});
                         }
                     }
 
@@ -3547,16 +3550,16 @@ pub fn loadFromBytes(
                     } else csv_header_line;
                     // csv_delimiter_in / csv_delimiter_out / csv_decimal_separator_in / csv_decimal_separator_out
                     // Each must be a single-character string; silently ignored if wrong length.
-                    csv_delimiter_in = try parseSingleCharCsvField(alloc, diag, bobj, b_entry.key_ptr.*, "csv_delimiter_in", csv_delimiter_in);
-                    csv_delimiter_out = try parseSingleCharCsvField(alloc, diag, bobj, b_entry.key_ptr.*, "csv_delimiter_out", csv_delimiter_out);
-                    csv_decimal_separator_in = try parseSingleCharCsvField(alloc, diag, bobj, b_entry.key_ptr.*, "csv_decimal_separator_in", csv_decimal_separator_in);
-                    csv_decimal_separator_out = try parseSingleCharCsvField(alloc, diag, bobj, b_entry.key_ptr.*, "csv_decimal_separator_out", csv_decimal_separator_out);
-                    csv_text_quote_in = try parseTextQuoteField(alloc, diag, bobj, b_entry.key_ptr.*, "csv_text_quote_in", csv_text_quote_in);
-                    csv_text_quote_out = try parseTextQuoteField(alloc, diag, bobj, b_entry.key_ptr.*, "csv_text_quote_out", csv_text_quote_out);
-                    csv_input_encoding = try parseEncodingField(alloc, diag, bobj, b_entry.key_ptr.*, "csv_input_encoding", csv_input_encoding);
-                    csv_output_encoding = try parseEncodingField(alloc, diag, bobj, b_entry.key_ptr.*, "csv_output_encoding", csv_output_encoding);
-                    file_type_in = try parseFileTypeField(alloc, diag, bobj, b_entry.key_ptr.*, "file_type_in", file_type_in);
-                    file_type_out = try parseFileTypeField(alloc, diag, bobj, b_entry.key_ptr.*, "file_type_out", file_type_out);
+                    csv_delimiter_in = try parseSingleCharCsvField(alloc, diag, config_path, bobj, b_entry.key_ptr.*, "csv_delimiter_in", csv_delimiter_in);
+                    csv_delimiter_out = try parseSingleCharCsvField(alloc, diag, config_path, bobj, b_entry.key_ptr.*, "csv_delimiter_out", csv_delimiter_out);
+                    csv_decimal_separator_in = try parseSingleCharCsvField(alloc, diag, config_path, bobj, b_entry.key_ptr.*, "csv_decimal_separator_in", csv_decimal_separator_in);
+                    csv_decimal_separator_out = try parseSingleCharCsvField(alloc, diag, config_path, bobj, b_entry.key_ptr.*, "csv_decimal_separator_out", csv_decimal_separator_out);
+                    csv_text_quote_in = try parseTextQuoteField(alloc, diag, config_path, bobj, b_entry.key_ptr.*, "csv_text_quote_in", csv_text_quote_in);
+                    csv_text_quote_out = try parseTextQuoteField(alloc, diag, config_path, bobj, b_entry.key_ptr.*, "csv_text_quote_out", csv_text_quote_out);
+                    csv_input_encoding = try parseEncodingField(alloc, diag, config_path, bobj, b_entry.key_ptr.*, "csv_input_encoding", csv_input_encoding);
+                    csv_output_encoding = try parseEncodingField(alloc, diag, config_path, bobj, b_entry.key_ptr.*, "csv_output_encoding", csv_output_encoding);
+                    file_type_in = try parseFileTypeField(alloc, diag, config_path, bobj, b_entry.key_ptr.*, "file_type_in", file_type_in);
+                    file_type_out = try parseFileTypeField(alloc, diag, config_path, bobj, b_entry.key_ptr.*, "file_type_out", file_type_out);
                 }
 
                 if (output_schema == null) {
@@ -3772,35 +3775,36 @@ test "loadFromBytes: csv_header_line parses (default 1, headerless 0, preamble N
     try testing.expectEqual(@as(usize, 0), diag.count());
 }
 
-test "loadFromBytes: invalid enum surfaces a warning but still loads with the default" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const a = arena.allocator();
+test "loadFromBytes: an invalid enum or a wrong-typed field is a template error" {
+    // Template-strict: `file_type_in: "jsno"` used to read a JSON file as CSV
+    // with only a warning nobody saw on the CLI. Each case must now refuse to
+    // load and name the offending field.
+    const bad = [_]struct { field: []const u8, code: []const u8 }{
+        .{ .field = "file_type_in: \"jsno\"", .code = "config.invalid_enum" },
+        .{ .field = "csv_text_quote_out: \"fancy\"", .code = "config.invalid_enum" },
+        .{ .field = "csv_input_encoding: \"latin-99\"", .code = "config.invalid_enum" },
+        .{ .field = "csv_delimiter_in: \";;\"", .code = "config.wrong_type" },
+        .{ .field = "file_type_out: 1", .code = "config.wrong_type" },
+        .{ .field = "combined_output: \"yes\"", .code = "config.wrong_type" },
+    };
+    for (bad) |c| {
+        var arena = std.heap.ArenaAllocator.init(testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+        var diag = Diagnostics.init(a);
+        defer diag.deinit();
 
-    var diag = Diagnostics.init(a);
-    defer diag.deinit();
-
-    const src =
-        \\{
-        \\  conversion_templates: {
-        \\    demo: {
-        \\      file_type_out: "jsno",
-        \\      csv_text_quote_out: "fancy",
-        \\      input_schema: { $x: "[1]" },
-        \\      output_schema: { col: "$x" },
-        \\    },
-        \\  },
-        \\}
-    ;
-    var config = try loadFromBytes(a, src, "<test>", &diag);
-    defer config.deinit();
-
-    const demo = config.brokers.get("demo").?;
-    // Typos fall back to the documented defaults...
-    try testing.expectEqual(FileType.csv, demo.file_type_out);
-    try testing.expectEqual(@as(u8, 0), demo.csv_text_quote_out); // "none"
-    // ...but the user is warned about each one rather than failing silently.
-    try testing.expectEqual(@as(usize, 2), diag.countBySeverity(.warning));
+        const src = try std.fmt.allocPrint(a,
+            \\{{ conversion_templates: {{ demo: {{
+            \\  {s},
+            \\  input_schema: {{ $x: "[1]" }},
+            \\  output_schema: {{ col: "$x" }},
+            \\}} }} }}
+        , .{c.field});
+        try testing.expectError(error.InvalidConfig, loadFromBytes(a, src, "<test>", &diag));
+        try testing.expectEqual(@as(usize, 1), diag.countBySeverity(.@"error"));
+        try testing.expectEqualStrings(c.code, diag.items.items[0].code);
+    }
 }
 
 test "loadFromBytes: xlsx_sheet refuses header_row 0, an empty name and a suffix with a separator" {

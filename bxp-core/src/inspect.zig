@@ -1325,18 +1325,15 @@ test "annotateRaw Phase C: duplicate top-level key surfaces \\$err_ with key nam
     try testing.expect(has_dup);
 }
 
-test "annotateRaw Phase D: wrong-type-silent emits \\$warn_ at template" {
+test "annotateRaw Phase D: an invalid enum is an \\$err_ at template" {
     const testing = std.testing;
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
 
-    // Three silent fall-through cases that today produce no diagnostic
-    // and silently use defaults: bool field gets a number, csv enum
-    // gets a typo, file_type enum gets garbage. Phase D surfaces all
-    // three as `$warn_<N>` warnings without changing the runtime
-    // behavior (still falls back to the default). Includes a clean
-    // output_schema so the load doesn't bail early on a hard error.
+    // A typo'd enum (or a wrong-typed flag) is a template error: it used to
+    // fall back to the default behind a warning the CLI never printed, so
+    // `file_type_out: "jsno"` silently wrote CSV.
     const fixture =
         \\{
         \\  conversion_templates: {
@@ -1344,8 +1341,6 @@ test "annotateRaw Phase D: wrong-type-silent emits \\$warn_ at template" {
         \\      data_dir: ".",
         \\      file_pattern_in: ".csv",
         \\      file_pattern_out: ".csvx",
-        \\      date_filter_from_filename: 1,
-        \\      csv_text_quote_in: "singlle",
         \\      file_type_out: "jsno",
         \\      input_schema: { $date: "[Date]" },
         \\      output_schema: { date: "$date" },
@@ -1355,33 +1350,21 @@ test "annotateRaw Phase D: wrong-type-silent emits \\$warn_ at template" {
     ;
 
     const result = try annotateRaw(a, fixture, "<inline>", 0);
-    // exit 0 — warnings don't fail, only error-severity does
-    try testing.expectEqual(@as(u8, 0), result.exit_code);
+    try testing.expectEqual(@as(u8, 1), result.exit_code);
 
     var parsed = try std.json.parseFromSliceLeaky(std.json.Value, a, result.json, .{});
     const ct = parsed.object.get("conversion_templates") orelse return error.MissingCT;
     const sample = ct.object.get("sample") orelse return error.MissingSample;
 
-    var warn_count: usize = 0;
-    var found_bool = false;
-    var found_quote = false;
-    var found_filetype = false;
+    var found = false;
     var it = sample.object.iterator();
     while (it.next()) |kv| {
-        if (!std.mem.startsWith(u8, kv.key_ptr.*, "$warn_")) continue;
+        if (!std.mem.startsWith(u8, kv.key_ptr.*, "$err_")) continue;
         if (kv.value_ptr.* != .object) continue;
-        warn_count += 1;
-        if (diagHas(kv.value_ptr, "date_filter_from_filename") and
-            diagHas(kv.value_ptr, "boolean")) found_bool = true;
-        if (diagHas(kv.value_ptr, "csv_text_quote_in") and
-            diagHas(kv.value_ptr, "singlle")) found_quote = true;
         if (diagHas(kv.value_ptr, "file_type_out") and
-            diagHas(kv.value_ptr, "jsno")) found_filetype = true;
+            diagHas(kv.value_ptr, "jsno")) found = true;
     }
-    try testing.expectEqual(@as(usize, 3), warn_count);
-    try testing.expect(found_bool);
-    try testing.expect(found_quote);
-    try testing.expect(found_filetype);
+    try testing.expect(found);
 }
 
 test "annotateRaw Phase E: file_pattern_in collision warns at first template" {
