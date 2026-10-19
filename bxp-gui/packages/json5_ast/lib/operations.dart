@@ -302,10 +302,12 @@ void insertProperty(
     if (atIndex < 0 || atIndex > parent.properties.length) {
       throw AstOpError('insertProperty: atIndex out of range', parentPath);
     }
-    parent.properties.insert(atIndex, prop);
+    parent.properties.insert(
+        _afterInlineTrail(parent.properties, atIndex), prop);
   } else {
     final lastReal = _lastRealPropertyIndex(parent.properties);
-    parent.properties.insert(lastReal + 1, prop);
+    parent.properties.insert(
+        _afterInlineTrail(parent.properties, lastReal + 1), prop);
   }
 }
 
@@ -324,7 +326,8 @@ void insertElement(
         'insertElement: parent at $parentPath is not an array', parentPath);
   }
   final n = parent.elements.length;
-  final clamped = index < 0 ? 0 : (index > n ? n : index);
+  final clamped = _afterInlineTrail(
+      parent.elements, index < 0 ? 0 : (index > n ? n : index));
   if (clamped == n) {
     parent.elements.add(value);
     return;
@@ -437,6 +440,20 @@ int _findPropertyIndex(JsonObject obj, String key) {
     if (e is JsonProperty && e.key == key) return i;
   }
   return -1;
+}
+
+/// Move an insertion position past any inline-placement CommentLine peers
+/// sitting at it. Such a comment is the trailing note of the entry just
+/// before [pos]; inserting in front of it would make the dumper glue the
+/// note to the NEW entry instead.
+int _afterInlineTrail(List<JsonAstNode> entries, int pos) {
+  while (pos > 0 &&
+      pos < entries.length &&
+      entries[pos] is CommentLine &&
+      (entries[pos] as CommentLine).inlinePlacement) {
+    pos++;
+  }
+  return pos;
 }
 
 int _lastRealPropertyIndex(List<JsonAstNode> entries) {

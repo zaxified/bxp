@@ -77,6 +77,10 @@ class Parser {
     return ParseResult(root, diagnostics);
   }
 
+  /// Human-readable token description for diagnostics (EOF has no text).
+  static String _describe(Token t) =>
+      t.kind == TokKind.eof ? 'end of input' : "'${t.raw}'";
+
   Token _peek([int delta = 0]) => _toks[_p + delta];
 
   Token _advance() => _toks[_p++];
@@ -202,6 +206,9 @@ class Parser {
         n.sourceSpan = tok.span;
         return n;
       default:
+        if (tok.kind == TokKind.eof) {
+          throw ParserError('unexpected end of input', tok.span);
+        }
         throw ParserError(
             "unexpected token '${tok.raw}' (${tok.kind})", tok.span);
     }
@@ -230,9 +237,16 @@ class Parser {
       if (keyTok.kind == TokKind.string) {
         _advance();
         key = keyTok.value ?? '';
-      } else if (keyTok.kind == TokKind.ident) {
+      } else if (keyTok.kind == TokKind.ident ||
+          keyTok.kind == TokKind.trueLit ||
+          keyTok.kind == TokKind.falseLit ||
+          keyTok.kind == TokKind.nullLit ||
+          keyTok.kind == TokKind.infinityLit ||
+          keyTok.kind == TokKind.nanLit) {
+        // Reserved words are valid bare keys (JSON5 IdentifierName); the
+        // keyword tokens carry the word in `raw`/`value` like identifiers.
         _advance();
-        key = keyTok.value ?? '';
+        key = keyTok.value ?? keyTok.raw;
       } else {
         throw ParserError(
             "expected key, got '${keyTok.raw}' (${keyTok.kind})",
@@ -298,6 +312,9 @@ class Parser {
           _advance();
           return obj;
         }
+        throw ParserError(
+            "expected ',' or '}' after value, got ${_describe(_peek())}",
+            _peek().span);
       }
     }
   }
@@ -347,6 +364,9 @@ class Parser {
           _advance();
           return arr;
         }
+        throw ParserError(
+            "expected ',' or ']' after element, got ${_describe(_peek())}",
+            _peek().span);
       }
     }
   }

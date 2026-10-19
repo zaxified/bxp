@@ -64,7 +64,7 @@ class Tokenizer {
       final startLine = _line, startCol = _col, startOff = _i;
       final c = src.codeUnitAt(_i);
 
-      if (c == 0x20 || c == 0x09 || c == 0x0D) {
+      if (_isWhitespace(c)) {
         _advance();
         continue;
       }
@@ -165,10 +165,25 @@ class Tokenizer {
       _isDigit(c) ||
       (c >= 0x41 && c <= 0x46) ||
       (c >= 0x61 && c <= 0x66);
+  /// JSON5 WhiteSpace (ES5 §7.2) minus `\n`, which is a token of its own.
+  /// Includes the BOM, NBSP, form feed / vertical tab and the Unicode Zs
+  /// class; U+2028 / U+2029 count as plain blanks here (not comment-ending
+  /// newlines — no real config depends on them).
+  bool _isWhitespace(int c) =>
+      c == 0x20 || c == 0x09 || c == 0x0D || c == 0x0B || c == 0x0C ||
+      c == 0xA0 || c == 0xFEFF || c == 0x1680 ||
+      (c >= 0x2000 && c <= 0x200A) || c == 0x2028 || c == 0x2029 ||
+      c == 0x202F || c == 0x205F || c == 0x3000;
+
+  /// Non-ASCII code units (letters of any script, surrogate halves of
+  /// astral letters) are accepted inside identifiers: JSON5 allows Unicode
+  /// ID_Start / ID_Continue in bare keys. Over-accepting symbols is harmless —
+  /// the dumper re-quotes every key that is not a plain ASCII identifier.
   bool _isIdentStart(int c) =>
       (c >= 0x41 && c <= 0x5A) ||
       (c >= 0x61 && c <= 0x7A) ||
-      c == 0x5F || c == 0x24;
+      c == 0x5F || c == 0x24 ||
+      (c >= 0x80 && !_isWhitespace(c));
   bool _isIdentCont(int c) => _isIdentStart(c) || _isDigit(c);
 
   Token _readLineComment(int sl, int sc, int so) {
@@ -339,14 +354,21 @@ class Tokenizer {
             SourceSpan(sl, sc, so, _line, _col, _i));
       }
     }
+    var mantissaDigits = 0;
     while (_i < src.length && _isDigit(src.codeUnitAt(_i))) {
       _advance();
+      mantissaDigits++;
     }
     if (_i < src.length && src.codeUnitAt(_i) == 0x2E) {
       _advance();
       while (_i < src.length && _isDigit(src.codeUnitAt(_i))) {
         _advance();
+        mantissaDigits++;
       }
+    }
+    // A bare `.` (or `-.`, `+.e5`) has no digit on either side of the point.
+    if (mantissaDigits == 0) {
+      throw TokenizerError("expected digit in number", _i, _line, _col);
     }
     if (_i < src.length &&
         (src.codeUnitAt(_i) == 0x65 || src.codeUnitAt(_i) == 0x45)) {

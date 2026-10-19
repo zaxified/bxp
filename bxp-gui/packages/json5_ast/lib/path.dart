@@ -27,7 +27,7 @@ class ParentRef {
 
 /// Resolve `path` to the target node. Path uses the same convention as
 /// `op_log.dart#ConfigPath`: Map segments are string keys, Array segments
-/// are stringified ints (real-only — skipping [CommentLine]). The last
+/// are stringified RAW ints (counting [CommentLine] peers). The last
 /// segment may be `$comm_<N>` to address a comment by global N (in source
 /// order); see [findCommentByGlobalN].
 JsonAstNode resolveNode(JsonAstNode root, List<String> path) {

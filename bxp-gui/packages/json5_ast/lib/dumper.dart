@@ -95,14 +95,27 @@ class Dumper {
     _indent(depth);
     if (c.style == CommentStyle.line) {
       _b.write('//');
-      _b.write(c.text);
+      _b.write(_lineCommentBody(c.text));
       _b.write('\n');
     } else {
       _b.write('/*');
-      _b.write(c.text);
+      _b.write(_blockCommentBody(c.text));
       _b.write('*/\n');
     }
   }
+
+  /// A `//` body must stay on one line or the rest of it would be parsed as
+  /// code on the next load. A single trailing CR is how a CRLF source's
+  /// comment decodes, so it is kept (the file's line ending survives).
+  static String _lineCommentBody(String t) {
+    if (!t.contains('\n') && !t.contains('\r')) return t;
+    final tail = t.endsWith('\r') ? '\r' : '';
+    final body = t.substring(0, t.length - tail.length);
+    return body.replaceAll(RegExp(r'[\r\n]+'), ' ') + tail;
+  }
+
+  /// A `*/` inside a block body would end the comment early.
+  static String _blockCommentBody(String t) => t.replaceAll('*/', '* /');
 
   void _writeObject(JsonObject obj, int depth) {
     if (obj.properties.isEmpty) {
@@ -205,10 +218,10 @@ class Dumper {
   void _writeInlineComment(CommentNode tc) {
     if (tc.style == CommentStyle.line) {
       _b.write('//');
-      _b.write(tc.text);
+      _b.write(_lineCommentBody(tc.text));
     } else {
       _b.write('/*');
-      _b.write(tc.text);
+      _b.write(_blockCommentBody(tc.text));
       _b.write('*/');
     }
   }
@@ -302,7 +315,8 @@ class Dumper {
             if (el.properties.isEmpty) continue;
             final inner = _inlineObjectIfShort(el);
             if (inner == null) return null;
-          } else if (el is JsonArray) {
+          } else if (el is JsonArray || el is CommentLine) {
+            // A comment peer cannot be inlined without being dropped.
             return null;
           }
         }
