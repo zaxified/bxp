@@ -43,7 +43,16 @@ render() {
     local size=$2
     local out=$3
     mkdir -p "$(dirname "$out")"
-    "${IM[@]}" -background none -density "$size" "$svg" \
+    # Rasterise at 4x the target (capped at 4096 px), then downscale. The
+    # rendered width is <svg width> * density / 96, so the density follows
+    # from the SVG's width at 96 dpi. `-density $size` used to render the
+    # 1024 px icon at ~10900 px square (~1 GB) before resizing it.
+    local w96 render_px density
+    w96=$("${IM[@]}" -density 96 "$svg" -format '%w' info:)
+    render_px=$(( size * 4 > 4096 ? 4096 : size * 4 ))
+    density=$(( 96 * render_px / w96 ))
+    (( density > 0 )) || density=1
+    "${IM[@]}" -background none -density "$density" "$svg" \
         -resize "${size}x${size}" "$out"
 }
 

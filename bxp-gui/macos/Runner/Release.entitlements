@@ -1,8 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
+<!--
+  Not sandboxed, matching what ships: scripts/release-02-desktop.sh re-signs
+  the bundle ad hoc without entitlements. The app spawns the bundled bxp-cli,
+  reads files the user picks through its own dialog (not NSOpenPanel), serves
+  gui-mcp on a local port and downloads updates; a sandbox without matching
+  entitlements would break all four.
+-->
 <dict>
 	<key>com.apple.security.app-sandbox</key>
-	<true/>
+	<false/>
 </dict>
 </plist>
