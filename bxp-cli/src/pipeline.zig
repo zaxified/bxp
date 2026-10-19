@@ -1120,7 +1120,8 @@ fn dateIsComparable(date_min: []const u8, date_max: []const u8, date_str: []cons
 /// the first one either way; the flag only decides how many times the user
 /// reads about it. Which record the surviving message names is therefore
 /// whichever worker got there first — the fact being reported is the
-/// template's, not that particular row's.
+/// template's, not that particular row's. Reset at the top of every
+/// `processBroker` call (the fatal ends the run, so per template = per run).
 var date_filter_reported = std.atomic.Value(bool).init(false);
 
 fn requireComparableDate(
@@ -2123,6 +2124,10 @@ pub fn processBroker(
 
     out_in.info("\n=== template: {s} ===\n", .{bid});
 
+    // No worker runs yet, so this cannot race; an in-process caller running
+    // several conversions must not inherit an earlier run's "already said".
+    date_filter_reported.store(false, .seq_cst);
+
     const out = out_in;
 
     // Worker scratch — one `WorkerSlice` per pool worker, allocated once
@@ -2320,6 +2325,107 @@ pub fn processBroker(
         // number instead of duplicating `file_expr_errors`. Aggregated into
         // `stats.warnings` at file end alongside section-level bumps.
         var file_warnings: u32 = 0;
+
+        // Derive output filename — and decide the `--fresh` skip — before the
+        // input is opened: a skipped file must not pay for (or warn from) the
+        // header parse, the unknown-field check or the whole pre_pass.
+        // Convention: strip file_pattern_in suffix and append file_pattern_out.
+        // Example: "export_3.csv" with file_pattern_in="_3.csv" and
+        // file_pattern_out="_3.csvx" → "export_3.csvx".
+        // When file_pattern_out is not set, the fallback appends a literal "x"
+        // to the full input filename: "export.csv" → "export.csvx". This keeps
+        // the output file distinguishable from the input in the same directory
+        // without requiring every template to spell out the suffix explicitly.
+        const out_name = try perFileOutputName(file_alloc, filename, bc.file_pattern_in, bc.file_pattern_out);
+        // --fresh under dry-run: still meaningful for the user to see which
+        // files would be skipped, so check via access() — no file is created.
+        if (fresh and out.dry_run) {
+            const exists = blk: {
+                dir.access(runtime.io, out_name, .{}) catch |e| {
+                    if (e == error.FileNotFound) break :blk false;
+                    return e;
+                };
+                break :blk true;
+            };
+            if (exists) {
+                // Mirror the real-write path below: with `combined_output`
+                // the file is still iterated (into the discarding per-file
+                // sink) so the preview's combined rows match a real run.
+                if (combined) {
+                    out.info("  skipping per-file '{s}' (exists; combined still being built)\n", .{filename});
+                } else {
+                    out.info("  skipping '{s}' (output exists)\n", .{filename});
+                    try emitSkippedFile(out, bc, bid, dir_path, filename, file_alloc);
+                    continue;
+                }
+            }
+        }
+
+        // Output sink: real file, or Discarding writer under --dry-run.
+        //
+        // Under --fresh, the real-write path uses an atomic O_EXCL create
+        // so another process racing the access()→createFile() window
+        // can't make us silently overwrite their output.
+        //
+        // The Discarding writer under --dry-run still goes through the full
+        // pipeline (expression evaluation, row rules, output formatting),
+        // so timing and row counts in the trace events are representative
+        // of a real run. The write buffer is reused as scratch space for
+        // the Discarding sink — it's never flushed to disk.
+        var out_file: std.Io.File = undefined;
+        var out_file_buf: [OUT_FILE_BUF_SIZE]u8 = undefined;
+        var out_fw: std.Io.File.Writer = undefined;
+        var discarding: std.Io.Writer.Discarding = undefined;
+        var per_file_opened = false;
+        const fout: *std.Io.Writer = blk_sink: {
+            if (out.dry_run) {
+                discarding = .init(&out_file_buf);
+                break :blk_sink &discarding.writer;
+            }
+            if (fresh) {
+                if (dir.createFile(runtime.io, out_name, .{ .exclusive = true })) |f| {
+                    out_file = f;
+                } else |e| switch (e) {
+                    error.PathAlreadyExists => {
+                        // Per-file output already exists. When combined is
+                        // enabled the combined sink always needs this file's
+                        // rows (it is rebuilt in full every run), so keep
+                        // iterating with a Discarding per-file writer so the
+                        // combined gets filled — mirroring the "full run
+                        // without --fresh" target state. Otherwise skip the
+                        // whole iteration.
+                        if (combined) {
+                            out.info("  skipping per-file '{s}' (exists; combined still being built)\n", .{filename});
+                            discarding = .init(&out_file_buf);
+                            break :blk_sink &discarding.writer;
+                        }
+                        out.info("  skipping '{s}' (output exists)\n", .{filename});
+                        try emitSkippedFile(out, bc, bid, dir_path, filename, file_alloc);
+                        continue;
+                    },
+                    else => return e,
+                }
+            } else {
+                out_file = try dir.createFile(runtime.io, out_name, .{});
+            }
+            per_file_opened = true;
+            out_fw = out_file.writer(runtime.io, &out_file_buf);
+            break :blk_sink &out_fw.interface;
+        };
+        // A fatal raised anywhere below (e.g. `error.RecordTooLong` on a
+        // newline-free input) must leave NO per-file output behind: `--fresh`
+        // skips an input whose output merely exists, so a half-written or
+        // 0-byte file would make the next `--fresh` run report success and
+        // ship truncated data. `errdefer` fires only on an error leaving this
+        // scope — a normal iteration end (or a `continue`) keeps the file.
+        // Declared BEFORE the close `defer` on purpose: defers unwind in
+        // reverse declaration order, so the handle is closed first and only
+        // then is the name unlinked (Windows refuses to delete an open file).
+        // The combined sink deliberately gets no such cleanup — it is
+        // unconditionally rebuilt in full on every run (never `--fresh`
+        // skipped), so a partial one cannot be mistaken for a complete one.
+        errdefer if (per_file_opened) dir.deleteFile(runtime.io, out_name) catch {};
+        defer if (per_file_opened) out_file.close(runtime.io);
 
         // Extract date range from filename when date_filter_from_filename is enabled.
         // Strip file_pattern_in from the filename to get the stem for date extraction.
@@ -2645,106 +2751,6 @@ pub fn processBroker(
             break :blk bc.pre_passes.keys()[0];
         };
 
-        // Derive output filename.
-        // Convention: strip file_pattern_in suffix and append file_pattern_out.
-        // Example: "export_3.csv" with file_pattern_in="_3.csv" and
-        // file_pattern_out="_3.csvx" → "export_3.csvx".
-        // When file_pattern_out is not set, the fallback appends a literal "x"
-        // to the full input filename: "export.csv" → "export.csvx". This keeps
-        // the output file distinguishable from the input in the same directory
-        // without requiring every template to spell out the suffix explicitly.
-        const out_name = try perFileOutputName(file_alloc, filename, bc.file_pattern_in, bc.file_pattern_out);
-        // --fresh under dry-run: still meaningful for the user to see which
-        // files would be skipped, so check via access() — no file is created.
-        if (fresh and out.dry_run) {
-            const exists = blk: {
-                dir.access(runtime.io, out_name, .{}) catch |e| {
-                    if (e == error.FileNotFound) break :blk false;
-                    return e;
-                };
-                break :blk true;
-            };
-            if (exists) {
-                // Mirror the real-write path below: with `combined_output`
-                // the file is still iterated (into the discarding per-file
-                // sink) so the preview's combined rows match a real run.
-                if (combined) {
-                    out.info("  skipping per-file '{s}' (exists; combined still being built)\n", .{filename});
-                } else {
-                    out.info("  skipping '{s}' (output exists)\n", .{filename});
-                    // `file_start` was already emitted above: close it so a
-                    // trace consumer never sees an unterminated file.
-                    out.binEmitFileEnd(0, 0, 0, file_warnings);
-                    continue;
-                }
-            }
-        }
-
-        // Output sink: real file, or Discarding writer under --dry-run.
-        //
-        // Under --fresh, the real-write path uses an atomic O_EXCL create
-        // so another process racing the access()→createFile() window
-        // can't make us silently overwrite their output.
-        //
-        // The Discarding writer under --dry-run still goes through the full
-        // pipeline (expression evaluation, row rules, output formatting),
-        // so timing and row counts in the trace events are representative
-        // of a real run. The write buffer is reused as scratch space for
-        // the Discarding sink — it's never flushed to disk.
-        var out_file: std.Io.File = undefined;
-        var out_file_buf: [OUT_FILE_BUF_SIZE]u8 = undefined;
-        var out_fw: std.Io.File.Writer = undefined;
-        var discarding: std.Io.Writer.Discarding = undefined;
-        var per_file_opened = false;
-        const fout: *std.Io.Writer = blk_sink: {
-            if (out.dry_run) {
-                discarding = .init(&out_file_buf);
-                break :blk_sink &discarding.writer;
-            }
-            if (fresh) {
-                if (dir.createFile(runtime.io, out_name, .{ .exclusive = true })) |f| {
-                    out_file = f;
-                } else |e| switch (e) {
-                    error.PathAlreadyExists => {
-                        // Per-file output already exists. When combined is
-                        // enabled the combined sink always needs this file's
-                        // rows (it is rebuilt in full every run), so keep
-                        // iterating with a Discarding per-file writer so the
-                        // combined gets filled — mirroring the "full run
-                        // without --fresh" target state. Otherwise skip the
-                        // whole iteration.
-                        if (combined) {
-                            out.info("  skipping per-file '{s}' (exists; combined still being built)\n", .{filename});
-                            discarding = .init(&out_file_buf);
-                            break :blk_sink &discarding.writer;
-                        }
-                        out.info("  skipping '{s}' (output exists)\n", .{filename});
-                        out.binEmitFileEnd(0, 0, 0, file_warnings);
-                        continue;
-                    },
-                    else => return e,
-                }
-            } else {
-                out_file = try dir.createFile(runtime.io, out_name, .{});
-            }
-            per_file_opened = true;
-            out_fw = out_file.writer(runtime.io, &out_file_buf);
-            break :blk_sink &out_fw.interface;
-        };
-        // A fatal raised anywhere below (e.g. `error.RecordTooLong` on a
-        // newline-free input) must leave NO per-file output behind: `--fresh`
-        // skips an input whose output merely exists, so a half-written or
-        // 0-byte file would make the next `--fresh` run report success and
-        // ship truncated data. `errdefer` fires only on an error leaving this
-        // scope — a normal iteration end (or a `continue`) keeps the file.
-        // Declared BEFORE the close `defer` on purpose: defers unwind in
-        // reverse declaration order, so the handle is closed first and only
-        // then is the name unlinked (Windows refuses to delete an open file).
-        // The combined sink deliberately gets no such cleanup — it is
-        // unconditionally rebuilt in full on every run (never `--fresh`
-        // skipped), so a partial one cannot be mistaken for a complete one.
-        errdefer if (per_file_opened) dir.deleteFile(runtime.io, out_name) catch {};
-        defer if (per_file_opened) out_file.close(runtime.io);
         const delim_out = &[_]u8{bc.csv_delimiter_out};
         // Per-file header — always emitted at the start of the per-file
         // sink. Combined-mode header was written once above the loop.
@@ -3157,10 +3163,14 @@ const XlsxFanCtx = struct {
     // io-free guard suffices for the rare first-error record path).
     err_claimed: std.atomic.Value(bool) = .init(false),
     first_err: ?anyerror = null,
+    /// Index into `specs` of the sheet behind `first_err`, when the error came
+    /// from a sheet (null for a failure to open the file itself).
+    first_spec: ?usize = null,
 
-    fn record(self: *XlsxFanCtx, err: anyerror) void {
+    fn record(self: *XlsxFanCtx, err: anyerror, spec: ?usize) void {
         if (self.err_claimed.cmpxchgStrong(false, true, .acq_rel, .monotonic) == null) {
             self.first_err = err;
+            self.first_spec = spec;
         }
         self.failed.store(true, .monotonic);
     }
@@ -3178,13 +3188,13 @@ const XlsxFanCtx = struct {
 /// an arena turns into a no-op, accumulating every row's cells (~a whole
 /// sheet's worth, ~10 MB on a 400k-row sheet) until the arena is reset.
 fn xlsxExtractWorker(ctx: *XlsxFanCtx) void {
-    const file = ctx.dir.openFile(ctx.io, ctx.xlsx_name, .{}) catch |err| return ctx.record(err);
+    const file = ctx.dir.openFile(ctx.io, ctx.xlsx_name, .{}) catch |err| return ctx.record(err, null);
     defer file.close(ctx.io);
 
     while (!ctx.failed.load(.monotonic)) {
         const i = ctx.next.fetchAdd(1, .monotonic);
         if (i >= ctx.specs.len) break;
-        xlsx_mod.extractSheet(ctx.io, ctx.alloc, file, ctx.wb, ctx.specs[i], ctx.dir, ctx.stem) catch |err| return ctx.record(err);
+        xlsx_mod.extractSheet(ctx.io, ctx.alloc, file, ctx.wb, ctx.specs[i], ctx.dir, ctx.stem) catch |err| return ctx.record(err, i);
     }
 }
 
@@ -3314,17 +3324,39 @@ pub fn xlsxPrePass(
             // the template with stale data for the missing sheet. The cost
             // of a full re-extraction on a partial miss is negligible
             // compared to processing an entire file directory.
+            //
+            // "Output" is each reading template's own per-file output name,
+            // derived from its file_pattern_in/out exactly as processBroker
+            // will derive it — not a guessed `<intermediate>x`.
             if (fresh) {
                 var all_exist = true;
-                for (specs) |spec| {
-                    const csvx_name = try std.mem.concat(alloc, u8, &.{ stem, spec.output_suffix, "x" });
-                    defer alloc.free(csvx_name);
-                    dir.access(runtime.io, csvx_name, .{}) catch {
-                        all_exist = false;
-                        break;
-                    };
+                var owners: usize = 0;
+                var own_it = cfg.brokers.iterator();
+                scan: while (own_it.next()) |own| {
+                    const obc = own.value_ptr;
+                    const osheet = obc.xlsx_sheet orelse continue;
+                    const odir: []const u8 = if (template_id) |tid| blk: {
+                        if (!std.mem.eql(u8, tid, own.key_ptr.*)) continue;
+                        break :blk dir_path_arg orelse obc.data_dir;
+                    } else obc.data_dir;
+                    if (!std.mem.eql(u8, odir, dir_path)) continue;
+                    switch (try xlsxFreshTarget(alloc, stem, osheet.output_suffix, obc)) {
+                        .not_read => continue,
+                        .must_extract => {
+                            all_exist = false;
+                            break :scan;
+                        },
+                        .output => |name| {
+                            defer alloc.free(name);
+                            owners += 1;
+                            dir.access(runtime.io, name, .{}) catch {
+                                all_exist = false;
+                                break :scan;
+                            };
+                        },
+                    }
                 }
-                if (all_exist) {
+                if (all_exist and owners > 0) {
                     out.info("  skipping '{s}' (output exists)\n", .{xlsx_name});
                     continue;
                 }
@@ -3369,6 +3401,18 @@ pub fn xlsxPrePass(
                 for (0..k) |_| g.async(runtime.io, xlsxExtractWorker, .{&fan});
                 g.await(runtime.io) catch {};
                 if (fan.first_err) |err| {
+                    // A template mistake that only the failing sheet can
+                    // explain: name the sheet and the row, not just the error.
+                    if (err == error.XlsxHeaderRowEmpty) if (fan.first_spec) |si| {
+                        out.fatal(
+                            "fatal error: xlsx '{s}' sheet '{s}': header_row {d} is blank or missing, but data rows follow — check xlsx_sheet.header_row\n",
+                            .{ xlsx_name, specs[si].name, specs[si].header_row },
+                        );
+                        xlsx_stats.has_fatal = true;
+                        xlsx_stats.time_ns = timer.read();
+                        out.summary(xlsx_stats);
+                        return error.Fatal;
+                    };
                     switch (classifyXlsxErr(runtime.io, err, xlsx_name, xlsx_file, &xlsx_stats, out)) {
                         .skip_file => continue,
                         .fatal => {
@@ -3396,6 +3440,59 @@ fn zipEntryOutputName(alloc: std.mem.Allocator, entry_name: []const u8, zi: conf
         .basename => try alloc.dupe(u8, std.Io.Dir.path.basename(entry_name)),
         .keep_path => try std.mem.replaceOwned(u8, alloc, entry_name, "/", zi.path_separator),
     };
+}
+
+const XlsxFreshTarget = union(enum) {
+    /// The template's file_pattern_in does not match the intermediate CSV, so
+    /// it never reads it and has no say in the skip.
+    not_read,
+    /// The intermediate CSV is needed whatever exists: a `combined_output`
+    /// roll-up is rebuilt from every input on each run.
+    must_extract,
+    /// The per-file output processBroker would write from it (caller frees).
+    output: []u8,
+};
+
+/// What `--fresh` must find on disk before xlsxPrePass may skip extracting the
+/// `<stem><output_suffix>` intermediate CSV that template `bc` reads.
+fn xlsxFreshTarget(
+    alloc: std.mem.Allocator,
+    stem: []const u8,
+    output_suffix: []const u8,
+    bc: *const config_mod.BrokerConfig,
+) !XlsxFreshTarget {
+    const csv_name = try std.mem.concat(alloc, u8, &.{ stem, output_suffix });
+    defer alloc.free(csv_name);
+    if (!std.mem.endsWith(u8, csv_name, bc.file_pattern_in)) return .not_read;
+    if (bc.combined_output) return .must_extract;
+    return .{ .output = try perFileOutputName(alloc, csv_name, bc.file_pattern_in, bc.file_pattern_out) };
+}
+
+/// Trace frames for an input skipped by `--fresh` before it was opened: a
+/// `file_start` (no header row was read, so no columns) closed at once by an
+/// empty `file_end`, so a trace consumer still sees every input, terminated.
+fn emitSkippedFile(
+    out: Output,
+    bc: *const config_mod.BrokerConfig,
+    bid: []const u8,
+    dir_path: []const u8,
+    filename: []const u8,
+    file_alloc: std.mem.Allocator,
+) !void {
+    if (out.btrace_writer == null and out.btrace_file_writer == null) return;
+    const full_path = try std.Io.Dir.path.join(file_alloc, &.{ dir_path, filename });
+    out.binEmitFileStart(if (bc.file_type_in == .json) .json else .csv, bid, full_path, &.{});
+    out.binEmitFileEnd(0, 0, 0, 0);
+}
+
+/// True when two templates sharing a data_dir would unpack it differently.
+/// `path_separator` only matters under `keep_path` (it is ignored by
+/// `basename`, see `zipEntryOutputName`), so a stray difference there under
+/// `basename` is not a conflict.
+fn zipInputsConflict(a: config_mod.ZipInput, b: config_mod.ZipInput) bool {
+    if (!std.mem.eql(u8, a.entry_pattern, b.entry_pattern)) return true;
+    if (a.dir_mode != b.dir_mode) return true;
+    return a.dir_mode == .keep_path and !std.mem.eql(u8, a.path_separator, b.path_separator);
 }
 
 /// True when `name` is a single flat file name that stays inside the
@@ -3554,8 +3651,9 @@ pub fn zipPrePass(
     var stats = SectionStats{};
     var timer = Timer.begin(runtime.io);
 
-    // data_dir -> ZipInput (first active template wins; a shared dir is
-    // unpacked once). Mirrors xlsxPrePass's per-dir dedupe.
+    // data_dir -> ZipInput (a shared dir is unpacked once; templates sharing
+    // it must agree on the spec — see `zipInputsConflict`). Mirrors
+    // xlsxPrePass's per-dir dedupe.
     var dir_specs: std.StringArrayHashMapUnmanaged(config_mod.ZipInput) = .empty;
     defer dir_specs.deinit(alloc);
 
@@ -3568,7 +3666,24 @@ pub fn zipPrePass(
             break :blk dir_path_arg orelse bc.data_dir;
         } else bc.data_dir;
         const gop = try dir_specs.getOrPut(alloc, dir_path);
-        if (!gop.found_existing) gop.value_ptr.* = zi;
+        if (!gop.found_existing) {
+            gop.value_ptr.* = zi;
+            continue;
+        }
+        // A shared dir is unpacked once, under one spec. A second template
+        // asking for different members or naming would otherwise be silently
+        // served the first template's files — a template conflict.
+        if (zipInputsConflict(gop.value_ptr.*, zi)) {
+            const first = gop.value_ptr.*;
+            out.fatal("error: templates sharing data_dir '{s}' declare different zip_input specs (entry_pattern '{s}' dir_mode {s} path_separator '{s}' vs entry_pattern '{s}' dir_mode {s} path_separator '{s}') — a shared data_dir is unpacked once, so the specs must match\n", .{
+                dir_path,
+                first.entry_pattern, @tagName(first.dir_mode), first.path_separator,
+                zi.entry_pattern,    @tagName(zi.dir_mode),    zi.path_separator,
+            });
+            stats.has_fatal = true;
+            out.summary(stats);
+            return error.Fatal;
+        }
     }
 
     if (dir_specs.count() == 0) return stats;
@@ -4182,4 +4297,39 @@ test "isSafeFlatName: only flat names that stay inside data_dir" {
     try std.testing.expect(!isSafeFlatName("CSV\\rows.csv"));
     try std.testing.expect(!isSafeFlatName("C:rows.csv")); // drive-relative on Windows
     try std.testing.expect(!isSafeFlatName("rows.csv:ads")); // NTFS alternate stream
+}
+
+test "zipInputsConflict: a shared data_dir needs one unpack spec" {
+    const base = config_mod.ZipInput{ .entry_pattern = ".csv", .dir_mode = .basename, .path_separator = "_" };
+    try std.testing.expect(!zipInputsConflict(base, base));
+    // path_separator is ignored by basename — not a conflict there.
+    try std.testing.expect(!zipInputsConflict(base, .{ .entry_pattern = ".csv", .dir_mode = .basename, .path_separator = "-" }));
+    try std.testing.expect(zipInputsConflict(base, .{ .entry_pattern = ".txt", .dir_mode = .basename, .path_separator = "_" }));
+    try std.testing.expect(zipInputsConflict(base, .{ .entry_pattern = ".csv", .dir_mode = .keep_path, .path_separator = "_" }));
+    const kp = config_mod.ZipInput{ .entry_pattern = ".csv", .dir_mode = .keep_path, .path_separator = "_" };
+    try std.testing.expect(!zipInputsConflict(kp, kp));
+    try std.testing.expect(zipInputsConflict(kp, .{ .entry_pattern = ".csv", .dir_mode = .keep_path, .path_separator = "-" }));
+}
+
+test "xlsxFreshTarget: --fresh looks for the reading template's real output" {
+    const alloc = std.testing.allocator;
+    // Only the three fields xlsxFreshTarget reads are set.
+    var bc: config_mod.BrokerConfig = undefined;
+    bc.file_pattern_in = "_cash.csv";
+    bc.file_pattern_out = "_cash.wf.csv";
+    bc.combined_output = false;
+
+    // The output is `<stem>_cash.wf.csv`, not the old `<stem>_cash.csvx` guess.
+    switch (try xlsxFreshTarget(alloc, "Book", "_cash.csv", &bc)) {
+        .output => |name| {
+            defer alloc.free(name);
+            try std.testing.expectEqualStrings("Book_cash.wf.csv", name);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+    // A sheet this template does not read has no say.
+    try std.testing.expect(try xlsxFreshTarget(alloc, "Book", "_closed.csv", &bc) == .not_read);
+    // A combined roll-up needs every intermediate CSV on every run.
+    bc.combined_output = true;
+    try std.testing.expect(try xlsxFreshTarget(alloc, "Book", "_cash.csv", &bc) == .must_extract);
 }

@@ -609,7 +609,14 @@ pub fn main(init: std.process.Init) !void {
         // error is unexpected (e.g. OOM): re-throw under --debug for a stack
         // trace, else surface the error name through the same diagnostic sink.
         if (err != error.Fatal) {
-            if (debug) return err; // propagate — Zig prints trace
+            // Propagate so Zig prints the trace — but close the trace first:
+            // `--trace-file` is allowed with `--debug`, and without this its
+            // buffered tail (and the `done` frame) would never reach disk.
+            if (debug) {
+                out.binEmitDone(1);
+                closeTraceFile(io, &trace_file_fw_storage, trace_file_handle);
+                return err;
+            }
             out.fatal("---\n# fatal error: {s}\n", .{@errorName(err)});
         }
         // --debug=json: the early-exit path has no per-template breakdown, so

@@ -54,7 +54,9 @@ zig build
 # Suppress all output (exit code still reflects result)
 ./zig-out/bin/bxp-cli --quiet
 
-# Skip files whose per-file output already exists.
+# Skip files whose per-file output already exists. The check runs before the
+# input is opened, so a skipped file costs no pre_pass and adds no warnings;
+# the xlsx pre-pass skips a workbook when every reading template's output exists.
 # With `combined_output`, the per-file skip still applies, but the
 # combined roll-up is always rebuilt in full so it reflects every input
 # (a skipped input is still iterated into the combined sink).
@@ -141,7 +143,9 @@ All broker logic is defined in `bxp-cli.json` — there are no compiled-in broke
   member whose intermediate CSV already exists. The unpack runs **in parallel** — the members are
   independent, so workers steal jobs off a shared queue (each with its own file cursor + inflate
   window), beating a single-threaded `unzip` on a multi-core host. Templates sharing a `data_dir`
-  unpack it once. See `docs/examples/real-world/ruian-address-points/`.
+  unpack it once, so they must declare the same spec (`entry_pattern`, `dir_mode`, and
+  `path_separator` under `keep_path`); a difference is a fatal conflict. See
+  `docs/examples/real-world/ruian-address-points/`.
 - `xlsx_sheet` — optional object `{ "name", "header_row", "output_suffix" }`.
   When present, xlsx files in `data_dir` are converted to an intermediate CSV file before the
   normal CSV processing loop. `name` is a prefix of the sheet name in the workbook (prefix
