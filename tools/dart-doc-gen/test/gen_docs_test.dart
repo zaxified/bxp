@@ -54,13 +54,17 @@ void _writePage(
   List<String> headers,
   List<List<String>> rows,
 ) {
+  // A catalog that came back empty would write a header-only page and look
+  // like success; fail the generator instead.
+  if (rows.isEmpty) throw StateError('dart-doc-gen: $file has no rows ($source is empty)');
+  final fm = intro.replaceAll(r'\', r'\\').replaceAll('"', r'\"');
   final out = StringBuffer()
     // Front matter: Material renders `description` as the page's
     // <meta name="description">, and scripts/docs/gen-trees.py reads it as the
     // page's blurb. The intro sentence already says what the page is, so it is
     // reused rather than written twice.
     ..writeln('---')
-    ..writeln('description: "$intro"')
+    ..writeln('description: "$fm"')
     ..writeln('---')
     ..writeln()
     ..writeln('# $title')

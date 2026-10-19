@@ -12,10 +12,11 @@ class MainFlutterWindow: NSWindow {
     // is "BXP".
     self.title = "BXP"
 
-    // Enforce a minimum content size of 1024x768. Mirrors the GTK
-    // GdkGeometry hint in linux/runner/my_application.cc and the
-    // WM_GETMINMAXINFO override in windows/runner/win32_window.cpp;
-    // every panel split in the UI assumes at least this much room.
+    // Enforce a minimum content size of 1024x768 (kLogicalMinWidth/Height in
+    // lib/ui/zoom_limits.dart). Same floor as the WM_GETMINMAXINFO override in
+    // windows/runner/win32_window.cpp; the Linux runner pins a larger 1280x800
+    // minimum in my_application.cc. Every panel split in the UI assumes at
+    // least this much room.
     self.contentMinSize = NSSize(width: 1024, height: 768)
 
     RegisterGeneratedPlugins(registry: flutterViewController)

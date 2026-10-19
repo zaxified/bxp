@@ -79,6 +79,12 @@
       .then(function (res) {
         exportsOf = res.instance.exports;
         return exportsOf;
+      })
+      .catch(function (err) {
+        // Do not cache a failure: a transient network error would otherwise
+        // leave every later click on this page load stuck on the same error.
+        enginePromise = null;
+        throw err;
       });
     return enginePromise;
   }

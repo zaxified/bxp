@@ -130,9 +130,10 @@ endif()
 # Dev-tree copy of the bxp-gui-bridge shared library next to the bxp-gui
 # binary so findBridgeLibrary()'s sibling-lookup succeeds on `flutter run`
 # builds. The bundle directory is nuked at the start of every install
-# (line 88), so a manually-created symlink doesn't survive — recreating it
-# here is the only stable way. The release pipeline (scripts/release.sh)
-# ships a real release build instead of this dev copy.
+# (the file(REMOVE_RECURSE) install step above), so a manually-created symlink
+# doesn't survive — recreating it here is the only stable way. The release
+# pipeline (scripts/release-02-desktop.sh) overwrites it with a real release
+# build instead of this dev copy.
 #
 # Since the v0.3.0 proxy flip the bridge is the GUI's SINGLE backend on every
 # platform: stateless ops (config/expr validation, docs, templates, eval-batch)

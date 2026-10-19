@@ -528,10 +528,11 @@ Win32Window::MessageHandler(HWND hwnd,
       return 0;
 
     case WM_GETMINMAXINFO: {
-      // Enforce a minimum window size of 1024x768. Mirrors the GTK
-      // GdkGeometry hint in linux/runner/my_application.cc and the
-      // contentMinSize set in macos/Runner/MainFlutterWindow.swift;
-      // every panel split in the UI assumes at least this much room.
+      // Enforce a minimum window size of 1024x768 (kLogicalMinWidth/Height in
+      // lib/ui/zoom_limits.dart). Same floor as contentMinSize in
+      // macos/Runner/MainFlutterWindow.swift; the Linux runner pins a larger
+      // 1280x800 minimum in my_application.cc. Every panel split in the UI
+      // assumes at least this much room.
       // Values are in physical pixels; scale by current DPI so the
       // minimum stays consistent across high-DPI displays.
       auto* mmi = reinterpret_cast<MINMAXINFO*>(lparam);

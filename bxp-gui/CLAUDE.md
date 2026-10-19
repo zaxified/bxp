@@ -162,7 +162,7 @@ on POSIX, `zig-out/bin/bxp-gui-bridge.dll` on Windows). Tests inject the
 dev-tree path via `setBridgeLibPathForTest`.
 
 **Linux dev tree gotcha:** the Linux CMake config copies the bridge
-library (and `bxp-cli`) into the bundle on every install step (a symlink
+library (not `bxp-cli`) into the bundle on every install step (a symlink
 would not survive — the bundle dir is wiped first). The bundled copy wins
 over the dev-tree walk, so after rebuilding the bridge, rebuild and restart
 the app (`flutter run`); the production release script
@@ -478,10 +478,12 @@ then):
   (0700 on POSIX) inside the temp dir, so only a same-user process could race
   it, and a same-user process can already tamper with the app. Not a
   privilege-crossing hole, just an inconsistency with the Linux path.
-- **The updater cannot detect a downgrade.** The version comparison uses the
-  unsigned GitHub API answer, and the signed `SHA256SUMS` carries no version,
-  so a hostile edge could offer an older signed release. Closing it needs a
-  version inside the signed payload (a `release.yml` change).
+- **The updater does not bind a version into the signature.** The version
+  comparison uses the GitHub API answer (over TLS), and the signed
+  `SHA256SUMS` carries no version, so only a forged API answer could offer an
+  older signed release. Accepted by design: the updater only ever moves
+  forward, and a rollback is shipped as a real upgrade under a new tag, never
+  as a downgrade.
 
 ## Windows performance notes
 

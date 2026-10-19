@@ -80,12 +80,14 @@ for size in 16 32 64 128 256 512 1024; do
 done
 
 echo "  Windows .ico..."
-TMPDIR=$(mktemp -d)
-trap 'rm -rf "$TMPDIR"' EXIT
+ICO_TMP=$(mktemp -d)
+# Per-file removal, never rm -rf (repo rule); ICO_TMP is not TMPDIR so the
+# ImageMagick child keeps its own temp location.
+trap 'for f in "$ICO_TMP"/icon-*.png; do [ -e "$f" ] && rm -f "$f"; done; rmdir "$ICO_TMP"' EXIT
 for size in 16 32 48 64 128 256; do
-    render "$SVG_PRIMARY" "$size" "$TMPDIR/icon-${size}.png"
+    render "$SVG_PRIMARY" "$size" "$ICO_TMP/icon-${size}.png"
 done
-"${IM[@]}" "$TMPDIR"/icon-*.png \
+"${IM[@]}" "$ICO_TMP"/icon-*.png \
     "$GUI_ROOT/windows/runner/resources/app_icon.ico"
 
 echo ""
