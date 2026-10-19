@@ -201,6 +201,32 @@ pub fn listSheets(io: std.Io, alloc: Allocator, xlsx_file: std.Io.File) !std.Str
     return parseWorkbook(alloc, &ctx);
 }
 
+/// Resolve a configured sheet name to its part path (relative to `xl/`).
+///
+/// Prefix match: "OPEN POSITION" matches "OPEN POSITION 28022026". An exact
+/// name always wins, and among several prefix matches the shortest name (then
+/// the lexicographically smallest) is taken. `sheet_paths` is a hash map, so
+/// returning the first prefix match its iterator yields made "Sheet1" pick
+/// "Sheet1" or "Sheet10" depending on hash order — a workbook holding both
+/// could convert the wrong sheet.
+fn matchSheet(sheet_paths: *const std.StringHashMap([]const u8), name: []const u8) ?[]const u8 {
+    if (sheet_paths.get(name)) |p| return p;
+    var best_name: ?[]const u8 = null;
+    var best_path: []const u8 = "";
+    var sit = sheet_paths.iterator();
+    while (sit.next()) |e| {
+        const k = e.key_ptr.*;
+        if (!std.mem.startsWith(u8, k, name)) continue;
+        if (best_name) |b| {
+            if (k.len > b.len) continue;
+            if (k.len == b.len and std.mem.order(u8, k, b) != .lt) continue;
+        }
+        best_name = k;
+        best_path = e.value_ptr.*;
+    }
+    return if (best_name != null) best_path else null;
+}
+
 /// Extract one sheet to `<out_basename><spec.output_suffix>` in `out_dir`,
 /// using a `ctx` whose archive is already open on the xlsx file. A sheet whose
 /// name is not found (prefix match) is silently skipped (no output), matching
@@ -214,15 +240,7 @@ fn extractSheetWithCtx(
     out_dir: std.Io.Dir,
     out_basename: []const u8,
 ) !void {
-    // Prefix match: "OPEN POSITION" matches "OPEN POSITION 28022026".
-    // Also handles exact names since startsWith("X", "X") == true.
-    const rel_path = blk: {
-        var sit = wb.sheet_paths.iterator();
-        while (sit.next()) |e| {
-            if (std.mem.startsWith(u8, e.key_ptr.*, spec.name)) break :blk e.value_ptr.*;
-        }
-        return; // sheet not found → skip (no output)
-    };
+    const rel_path = matchSheet(&wb.sheet_paths, spec.name) orelse return; // not found → skip (no output)
 
     const csv_name = try std.fmt.allocPrint(alloc, "{s}{s}", .{ out_basename, spec.output_suffix });
     defer alloc.free(csv_name);
@@ -325,6 +343,15 @@ pub fn xlsxToCsv(
 // Workbook parser  (xl/workbook.xml + xl/_rels/workbook.xml.rels)
 // ---------------------------------------------------------------------------
 
+/// A worksheet relationship target as a path relative to `xl/`. OPC allows a
+/// package-absolute target ("/xl/worksheets/sheet1.xml" — some non-Excel
+/// writers emit it); taken verbatim, it resolved to "xl//xl/…" and the sheet
+/// failed with a missing-entry error.
+fn relTarget(raw: []const u8) []const u8 {
+    if (std.mem.startsWith(u8, raw, "/xl/")) return raw["/xl/".len..];
+    return raw;
+}
+
 /// Returns a StringHashMap: sheet_name → relative path within xl/.
 /// Caller owns map and its key/value strings; use the deinit pattern below:
 ///   var it = map.iterator(); while (it.next()) |e| { free key, free value }
@@ -355,7 +382,7 @@ fn parseWorkbook(alloc: Allocator, ctx: *PartCtx) !std.StringHashMap([]const u8)
                     const rel_type = getAttr(t.attrs, "Type") orelse continue;
                     if (!std.mem.endsWith(u8, rel_type, "/worksheet")) continue;
                     const id = getAttr(t.attrs, "Id") orelse continue;
-                    const target = getAttr(t.attrs, "Target") orelse continue;
+                    const target = relTarget(getAttr(t.attrs, "Target") orelse continue);
                     try rid_to_path.put(try aa.dupe(u8, id), try aa.dupe(u8, target));
                 },
                 else => {},
@@ -410,6 +437,20 @@ fn parseWorkbook(alloc: Allocator, ctx: *PartCtx) !std.StringHashMap([]const u8)
 /// concatenate all <t> runs into a single string per <si> because bxp-cli
 /// only cares about the plain text content, not the per-run formatting.
 /// The result is indexed by the integer value stored in the 's' cell attribute.
+/// Append one finished shared-string item (taking ownership of `s`), keeping
+/// the running table size under `XLSX_SHARED_STRINGS_CAP`.
+fn appendSharedString(alloc: Allocator, strings: *std.ArrayList([]u8), total: *usize, s: []u8) !void {
+    total.* +|= s.len;
+    if (total.* > XLSX_SHARED_STRINGS_CAP) {
+        alloc.free(s);
+        return error.FileTooBig;
+    }
+    strings.append(alloc, s) catch |err| {
+        alloc.free(s);
+        return err;
+    };
+}
+
 fn parseSharedStrings(alloc: Allocator, ctx: *PartCtx) !std.ArrayList([]u8) {
     var strings: std.ArrayList([]u8) = .empty;
     // Streamed-but-resident: the table itself must persist (cells index into it),
@@ -424,6 +465,7 @@ fn parseSharedStrings(alloc: Allocator, ctx: *PartCtx) !std.ArrayList([]u8) {
 
     var in_si = false;
     var in_t = false;
+    var in_rph = false; // inside <rPh>: its <t> runs are not the item's text
     var total: usize = 0; // running table size — guarded by XLSX_SHARED_STRINGS_CAP
     // Accumulator for the current <si> text (multiple <t> runs are concatenated).
     var current: std.ArrayList(u8) = .empty;
@@ -434,9 +476,23 @@ fn parseSharedStrings(alloc: Allocator, ctx: *PartCtx) !std.ArrayList([]u8) {
             .open => |t| {
                 const tag = stripNs(t.name);
                 if (std.mem.eql(u8, tag, "si")) {
+                    if (t.self_close) {
+                        // `<si/>` is a schema-valid empty item. It emits no
+                        // close token, so without this every later string
+                        // would shift one index down and cells would read
+                        // their neighbour's text.
+                        try appendSharedString(alloc, &strings, &total, try alloc.dupe(u8, ""));
+                        continue;
+                    }
                     in_si = true;
+                    in_rph = false;
                     current.clearRetainingCapacity();
-                } else if (in_si and std.mem.eql(u8, tag, "t")) {
+                } else if (in_si and std.mem.eql(u8, tag, "rPh") and !t.self_close) {
+                    // Phonetic (furigana) run: Excel stores the reading of
+                    // East Asian text next to it, each with its own <t>.
+                    // It is a reading aid, not part of the cell's value.
+                    in_rph = true;
+                } else if (in_si and !in_rph and std.mem.eql(u8, tag, "t")) {
                     in_t = true;
                 }
             },
@@ -445,15 +501,12 @@ fn parseSharedStrings(alloc: Allocator, ctx: *PartCtx) !std.ArrayList([]u8) {
                 if (std.mem.eql(u8, tag, "si")) {
                     in_si = false;
                     in_t = false;
-                    const s = try current.toOwnedSlice(alloc);
-                    total +|= s.len;
-                    if (total > XLSX_SHARED_STRINGS_CAP) {
-                        alloc.free(s);
-                        return error.FileTooBig;
-                    }
-                    try strings.append(alloc, s);
+                    in_rph = false;
+                    try appendSharedString(alloc, &strings, &total, try current.toOwnedSlice(alloc));
                 } else if (std.mem.eql(u8, tag, "t")) {
                     in_t = false;
+                } else if (std.mem.eql(u8, tag, "rPh")) {
+                    in_rph = false;
                 }
             },
             .text => |raw| {
@@ -621,7 +674,9 @@ fn parseSheet(
     var in_cell: bool = false;
     var in_value: bool = false; // inside <v>
     var in_inline_t: bool = false; // inside <is><t>
+    var in_rph: bool = false; // inside <is><rPh> (phonetic run, not cell text)
     var cell_col: u32 = 0;
+    var next_col: u32 = 0; // implied column of a `<c>` that carries no `r`
     // cell_type is read at the `<c>` open but consumed at the matching `</c>`
     // close, several `next()` calls (and window compactions) later — so it is
     // COPIED out of the tokenizer window into this small backing buffer rather
@@ -637,8 +692,16 @@ fn parseSheet(
 
                 if (std.mem.eql(u8, tag, "row")) {
                     in_row = true;
-                    const r_str = getAttr(t.attrs, "r") orelse "0";
-                    current_row = std.fmt.parseInt(u32, r_str, 10) catch 0;
+                    // `r` is optional in OOXML (ECMA-376 §18.3.1.73): a row
+                    // without it is the one after the previous row. Reading a
+                    // missing `r` as 0 put every such row before any
+                    // header_row, so the whole sheet converted to nothing.
+                    const implied_row = current_row +| 1;
+                    current_row = if (getAttr(t.attrs, "r")) |r_str|
+                        std.fmt.parseInt(u32, r_str, 10) catch implied_row
+                    else
+                        implied_row;
+                    next_col = 0;
                     // Clear row_cells for the new row.
                     for (row_cells.items) |s| alloc.free(s);
                     row_cells.clearRetainingCapacity();
@@ -652,13 +715,23 @@ fn parseSheet(
                     cell_type = cell_type_buf[0..tn];
                     const s_str = getAttr(t.attrs, "s") orelse "0";
                     cell_style = std.fmt.parseInt(u32, s_str, 10) catch 0;
-                    const r_str = getAttr(t.attrs, "r") orelse "";
-                    cell_col = colRefToIndex(r_str);
+                    // `r` is optional on a cell too: without it the cell is the
+                    // one after the previous cell of the row. Reading a missing
+                    // `r` as column A made every such cell overwrite the last.
+                    cell_col = if (getAttr(t.attrs, "r")) |r_str|
+                        colRefToIndex(r_str)
+                    else
+                        @min(next_col, MAX_SHEET_COLS - 1);
+                    next_col = cell_col +| 1;
                 } else if (in_cell and std.mem.eql(u8, tag, "v")) {
                     in_value = true;
                 } else if (in_cell and std.mem.eql(u8, tag, "is")) {
                     // Inline string — text will arrive via nested <t>.
-                } else if (in_cell and std.mem.eql(u8, tag, "t")) {
+                } else if (in_cell and std.mem.eql(u8, tag, "rPh") and !t.self_close) {
+                    // Phonetic (furigana) run: its <t> is reading aid, not
+                    // cell text — see `parseSharedStrings`.
+                    in_rph = true;
+                } else if (in_cell and !in_rph and std.mem.eql(u8, tag, "t")) {
                     in_inline_t = true;
                 }
             },
@@ -670,10 +743,13 @@ fn parseSheet(
                     in_value = false;
                 } else if (std.mem.eql(u8, tag, "t")) {
                     in_inline_t = false;
+                } else if (std.mem.eql(u8, tag, "rPh")) {
+                    in_rph = false;
                 } else if (std.mem.eql(u8, tag, "c")) {
                     in_cell = false;
                     in_value = false;
                     in_inline_t = false;
+                    in_rph = false;
 
                     if (current_row >= header_row) {
                         const resolved = try resolveCellValue(
@@ -1580,4 +1656,108 @@ test "writeCsvField: RFC 4180 quoting" {
     try Check.run(&buf, "a,b", "\"a,b\""); // delimiter → wrap
     try Check.run(&buf, "say \"hi\"", "\"say \"\"hi\"\"\""); // quote → wrap + double
     try Check.run(&buf, "line\nbreak", "\"line\nbreak\""); // newline → wrap
+}
+
+/// Test-only: open a one-member store zip (built by `testBuildStoreZip`) and
+/// hand back a `PartCtx` over it. The caller owns `t` and frees it with
+/// `deinit`; the struct must not move after `init` (the archive and context
+/// keep pointers into it).
+const TestPart = struct {
+    tmp: std.testing.TmpDir,
+    file: std.Io.File,
+    archive: zipstream.Archive,
+    zip_window: []u8,
+    xml_window: []u8,
+    ctx: PartCtx,
+
+    fn init(t: *TestPart, name: []const u8, data: []const u8) !void {
+        const io = std.testing.io;
+        const alloc = std.testing.allocator;
+        t.tmp = std.testing.tmpDir(.{});
+        const zip_bytes = try testBuildStoreZip(alloc, name, data);
+        defer alloc.free(zip_bytes);
+        try t.tmp.dir.writeFile(io, .{ .sub_path = "book.xlsx", .data = zip_bytes });
+        t.file = try t.tmp.dir.openFile(io, "book.xlsx", .{});
+        try t.archive.init(io, alloc, t.file);
+        t.zip_window = try alloc.alloc(u8, ZIP_WINDOW_SIZE);
+        t.xml_window = try alloc.alloc(u8, XML_WINDOW_SIZE);
+        t.ctx = .{ .archive = &t.archive, .zip_window = t.zip_window, .xml_window = t.xml_window };
+    }
+
+    fn deinit(t: *TestPart) void {
+        const alloc = std.testing.allocator;
+        alloc.free(t.xml_window);
+        alloc.free(t.zip_window);
+        t.archive.deinit();
+        t.file.close(std.testing.io);
+        t.tmp.cleanup();
+    }
+};
+
+test "parseSharedStrings: <si/> keeps its index, <rPh> phonetic runs are not text" {
+    const alloc = testing.allocator;
+    // Index 1 is a self-closed empty item: it emits no close token, so it
+    // used to be dropped and every later cell read its neighbour's string.
+    // Index 2 carries a phonetic reading that used to be appended to the text.
+    const xml =
+        "<sst><si><t>a</t></si><si/>" ++
+        "<si><r><t>Tok</t></r><r><t>yo</t></r><rPh sb=\"0\" eb=\"1\"><t>toukyou</t></rPh><phoneticPr fontId=\"1\"/></si>" ++
+        "<si><t>z</t></si></sst>";
+    var t: TestPart = undefined;
+    try t.init("xl/sharedStrings.xml", xml);
+    defer t.deinit();
+
+    var strings = try parseSharedStrings(alloc, &t.ctx);
+    defer {
+        for (strings.items) |s| alloc.free(s);
+        strings.deinit(alloc);
+    }
+    try testing.expectEqual(@as(usize, 4), strings.items.len);
+    try testing.expectEqualStrings("a", strings.items[0]);
+    try testing.expectEqualStrings("", strings.items[1]);
+    try testing.expectEqualStrings("Tokyo", strings.items[2]);
+    try testing.expectEqualStrings("z", strings.items[3]);
+}
+
+test "parseSheet: rows and cells without `r` take implied positions" {
+    const alloc = testing.allocator;
+    // `r` is optional on <row> and <c>. A missing row `r` used to read as row
+    // 0 (before any header_row → empty output) and a missing cell `r` as
+    // column A (each cell overwrote the previous one). The inline string in
+    // row 2 also carries a phonetic run that must not leak into the value.
+    const xml =
+        "<worksheet><sheetData>" ++
+        "<row><c t=\"inlineStr\"><is><t>h1</t></is></c><c t=\"inlineStr\"><is><t>h2</t></is></c><c t=\"inlineStr\"><is><t>h3</t></is></c></row>" ++
+        "<row><c><v>1.50</v></c><c t=\"inlineStr\"><is><t>x</t><rPh><t>y</t></rPh></is></c></row>" ++
+        "<row r=\"5\"><c r=\"C5\"><v>3</v></c></row>" ++
+        "<row><c r=\"B6\"><v>4</v></c><c><v>5</v></c></row>" ++
+        "</sheetData></worksheet>";
+    var t: TestPart = undefined;
+    try t.init("xl/worksheets/sheet1.xml", xml);
+    defer t.deinit();
+
+    var date_styles = std.AutoHashMap(u32, void).init(alloc);
+    defer date_styles.deinit();
+    var out: std.Io.Writer.Allocating = .init(alloc);
+    defer out.deinit();
+    try parseSheet(alloc, &t.ctx, "xl/worksheets/sheet1.xml", 1, &.{}, &date_styles, &out.writer);
+    try testing.expectEqualStrings("h1,h2,h3\n1.5,x,\n,,3\n,4,5\n", out.written());
+}
+
+test "matchSheet: exact name wins, else the shortest prefix match" {
+    var m = std.StringHashMap([]const u8).init(testing.allocator);
+    defer m.deinit();
+    try m.put("Sheet10", "worksheets/sheet10.xml");
+    try m.put("Sheet1", "worksheets/sheet1.xml");
+    try m.put("OPEN POSITION 28022026", "worksheets/sheet3.xml");
+    try m.put("OPEN POSITION 2802202", "worksheets/sheet4.xml");
+    try testing.expectEqualStrings("worksheets/sheet1.xml", matchSheet(&m, "Sheet1").?);
+    try testing.expectEqualStrings("worksheets/sheet10.xml", matchSheet(&m, "Sheet10").?);
+    try testing.expectEqualStrings("worksheets/sheet4.xml", matchSheet(&m, "OPEN POSITION").?);
+    try testing.expect(matchSheet(&m, "Missing") == null);
+}
+
+test "relTarget: package-absolute targets become xl/-relative" {
+    try testing.expectEqualStrings("worksheets/sheet1.xml", relTarget("/xl/worksheets/sheet1.xml"));
+    try testing.expectEqualStrings("worksheets/sheet1.xml", relTarget("worksheets/sheet1.xml"));
 }

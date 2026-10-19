@@ -102,6 +102,10 @@ Converts `.xlsx` files (ZIP + XML) to intermediate CSV files.
   `error.XmlTokenTooLong`.
 - Supported cell types: shared strings, inline strings, formula results, booleans,
   plain numbers, date/time (detected via styles.xml numFmtId).
+- The `r` attribute on `<row>` / `<c>` is optional in OOXML; a missing one means
+  "the next row / the next column". A self-closed `<si/>` is an empty shared
+  string that still takes its index, and phonetic runs (`<rPh>`) are not part of
+  the cell text.
 - XML parts are assumed UTF-8 (what Excel always writes). A UTF-16 BOM on the
   sheet or sharedStrings XML returns `error.Utf16XmlUnsupported` (`XmlTok.peekUtf16Bom`)
   instead of silently producing garbage; the pipeline turns that into a
@@ -187,7 +191,7 @@ Expression evaluator for `input_schema` and `row_rules` in bxp-cli.json.
   the zig-libs `datefmt` module (named import; the offset-table-free half of
   the date/TZ pair — no runtime dependency either way). Pre-1970 dates are
   fully supported (pure parse → format reshuffle, no epoch round-trip).
-- Unit tests inline (163 test cases).
+- Unit tests inline.
 
 **Built-in functions:** IF, CASE, IFERROR, ABS, DATE_CONVERT, PRICE_VALUE,
 PRICE_CURRENCY, REMAP, LOOKUP, SPLIT_PART, CONTAINS, REGEX_MATCH,
@@ -215,9 +219,9 @@ per-file/row `Context` and are excluded from constant-folding (`isRowInvariant`)
 REGEX_MATCH/REGEX_EXTRACT compile a regex literal per call through the zig-libs
 `regex` module (RE2 syntax, Go `regexp` semantics, linear-time/ReDoS-safe), which
 matches per code point; `\d`/`\w`/`\s` stay ASCII, so accented runs use `\p{L}`
-or an explicit class like `[A-ZÁ-Ž]`. REGEX_MATCH answers from `Matcher.find`,
-not `Regex.isMatch`, whose lazy-DFA fast path has a false negative (reported
-upstream; the `zig-libs request:` comment in `builtinRegexMatch` marks it). An
+or an explicit class like `[A-ZÁ-Ž]`. REGEX_MATCH answers from `Regex.isMatch`;
+a test pins it to REGEX_EXTRACT on a pattern past the lazy DFA's size limit,
+where both engines once missed a match after a prefilter skip. An
 invalid UTF-8 byte in the data reads as one U+FFFD, as in Go. A bad pattern is
 a loud, pattern-attributed template error (`error.BadRegexPattern`); a non-matching row is the lenient "" / false case.
 
@@ -249,7 +253,7 @@ module.
   ASCII byte loop's passthrough and the blank-field resilience contract).
 - Unicode data comes from the `uucode` fetch dependency (see _External
   dependency_ below); this file is only the UTF-8 plumbing.
-- Inline tests (12): case mapping (ASCII, Latin-1 accents,
+- Inline tests: case mapping (ASCII, Latin-1 accents,
   Swedish/German/Cyrillic/Greek, ß→SS, unicameral passthrough, empty,
   invalid-UTF-8); unaccent (Latin strip, hand-list letters, non-Latin
   base-script keep, empty + invalid-UTF-8 passthrough).
@@ -299,7 +303,7 @@ JSON5 configuration loader.
   when `date_filter_from_filename=true`).
 - Config file size limit: `CONFIG_MAX_FILE_SIZE=1MB`.
 - Internally uses the `json5` module to preprocess JSON5 → standard JSON before `std.json` parsing.
-- Inline unit tests (11) cover the pure did-you-mean / parsing helpers
+- Inline unit tests cover the pure did-you-mean / parsing helpers
   (`levenshteinIgnoreCase`, `closestBuiltin`, `closestKey`, `suffixOverlap`,
   `isAnnotationKey`, `extractQuotedName`, `jsonErrorDesc`) plus two
   `loadFromBytes` integration cases (enum/punctuation parse + invalid-enum
@@ -380,7 +384,7 @@ recomputed on demand by the GUI (via the bridge) seeking to a row's
 - Each frame: `[1B type][2B chunk_id][4B pay_len][payload]`. `chunk_id` is
   reserved for future multicore chunk dispatch (always 0 today).
 - Variable-length strings use length-prefix (lp): `[u32 len][bytes]`.
-- Inline tests (14): per-frame roundtrip + adversarial UTF-8 + empty
+- Inline tests: per-frame roundtrip + adversarial UTF-8 + empty
   strings + forward-compat unknown-type skip + EOF returns null.
 
 ### json5 _(zig-libs dep)_
@@ -626,8 +630,8 @@ content-addressed by hash and re-audited on any pin bump:
     (Go `regexp` semantics, linear time, `\p{…}` classes). It replaced the
     `quangd/regex.zig` fetch dependency after a differential run over ~20 M
     (pattern, input) pairs plus Go as the referee: identical on valid UTF-8
-    except one `isMatch` false negative, which bxp routes around (see
-    _expr.zig_ above); on invalid UTF-8 it follows Go's U+FFFD rule. ~19 KB
+    except one `isMatch` false negative after a prefilter skip, since fixed
+    upstream (see _expr.zig_ above); on invalid UTF-8 it follows Go's U+FFFD rule. ~19 KB
     larger ReleaseSmall `bxp-cli` than quangd (the `\p{…}` category tables);
     2–6× faster per call in ReleaseSmall, 1.1–3.7× slower in ReleaseSafe
     (`memset` of its `undefined` scratch — tests only, nothing ships Safe).

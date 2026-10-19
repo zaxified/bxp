@@ -308,7 +308,10 @@ pub const Reader = struct {
             const ft: FrameType = @enumFromInt(type_byte);
             switch (ft) {
                 .file_start => {
-                    const input_format: InputFormat = @enumFromInt(try self.r.takeByte());
+                    // InputFormat is exhaustive: @enumFromInt on an unknown byte
+                    // from the stream is illegal behaviour, so refuse it instead.
+                    const input_format = std.enums.fromInt(InputFormat, try self.r.takeByte()) orelse
+                        return error.InvalidInputFormat;
                     const template = try self.readLp();
                     const path = try self.readLp();
                     const headers_count = try self.r.takeInt(u16, .little);
@@ -612,4 +615,38 @@ test "forward compat: unknown frame type skipped via pay_len" {
     var br = try Reader.init(&rdr, arena.allocator());
     const f = (try br.nextFrame()).?;
     try std.testing.expectEqual(@as(i32, 42), f.done.exit_code);
+}
+
+test "Reader refuses an unknown input_format byte instead of trapping" {
+    var buf: [64]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&buf);
+    try w.writeInt(u32, FRAME_MAGIC, .little);
+    try w.writeByte(@intFromEnum(FrameType.file_start));
+    try w.writeInt(u16, 0, .little);
+    try w.writeInt(u32, 1, .little);
+    try w.writeByte(0xEE); // not a valid InputFormat
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var rdr: std.Io.Reader = .fixed(w.buffered());
+    var br = try Reader.init(&rdr, arena.allocator());
+    try std.testing.expectError(error.InvalidInputFormat, br.nextFrame());
+}
+
+test "Reader reports a truncated frame as an error, not a panic" {
+    var buf: [64]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&buf);
+    var bw = try Writer.init(&w);
+    try bw.writeErrorRow(1, "$a", "K", "detail", "o");
+    const full = w.buffered();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var cut: usize = 5; // every prefix past the magic that ends inside the frame
+    while (cut < full.len) : (cut += 1) {
+        var rdr: std.Io.Reader = .fixed(full[0..cut]);
+        var br = try Reader.init(&rdr, arena.allocator());
+        const r = br.nextFrame();
+        if (r) |fr| try std.testing.expect(fr == null) else |_| {}
+    }
 }

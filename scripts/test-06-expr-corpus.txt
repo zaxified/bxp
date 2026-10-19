@@ -359,8 +359,8 @@ expr	err	REGEX_EXTRACT([A], '[0-9]', 'extra')	WrongArgCount
 expr	ok	''
 # Embedded quote: \' is the escape; doubling ('') is not.
 expr	ok	'it\'s'
-# Four quotes = the ''' placeholder plus a stray quote — an error.
-expr	err	''''	UnexpectedToken
+# Four quotes = the ''' placeholder plus an unclosed quote — an error.
+expr	err	''''	UnterminatedString
 # String concat with '&'.
 expr	ok	'a' & 'b'
 expr	ok	'a' & 'b' & 'c'

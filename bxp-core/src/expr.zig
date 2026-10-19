@@ -427,8 +427,9 @@ const Tokenizer = struct {
         // quote character defined by csv_text_quote_out ("none"/"single"/"double").
         // The triple-quote check must come BEFORE the generic single-quote path
         // so that ''' is never consumed as an empty string '' followed by a lone '.
-        // Unclosed strings (no closing ') consume to end of source and return
-        // whatever was scanned — the parser will fail at the next expected token.
+        // An unclosed string (no closing ') is a lexing error, as is an unclosed
+        // `[`: read to the end, `'abc` and `[Price` would otherwise evaluate as
+        // if they had been closed.
         if (c == '\'') {
             self.pos += 1;
             if (self.pos + 1 < self.src.len and
@@ -451,7 +452,11 @@ const Tokenizer = struct {
                 }
             }
             const text = self.src[inner_start..self.pos];
-            if (self.pos < self.src.len) self.pos += 1; // consume closing '
+            if (self.pos >= self.src.len) {
+                self.markUnterminated(tok_start);
+                return error.UnterminatedString;
+            }
+            self.pos += 1; // consume closing '
             return self.mkTok(.string_lit, text, tok_start);
         }
 
@@ -462,7 +467,11 @@ const Tokenizer = struct {
             while (self.pos < self.src.len and self.src[self.pos] != ']')
                 self.pos += 1;
             const text = self.src[inner_start..self.pos];
-            if (self.pos < self.src.len) self.pos += 1; // consume ]
+            if (self.pos >= self.src.len) {
+                self.markUnterminated(tok_start);
+                return error.UnterminatedFieldRef;
+            }
+            self.pos += 1; // consume ]
             return self.mkTok(.field_ref, text, tok_start);
         }
 
@@ -531,6 +540,16 @@ const Tokenizer = struct {
                 return error.UnexpectedChar;
             },
         };
+    }
+
+    /// Record an unclosed `'…` / `[…` starting at `start` (its opening
+    /// delimiter becomes `error_char`, the span runs to the end of the source)
+    /// for the caller's error detail.
+    fn markUnterminated(self: *Tokenizer, start: usize) void {
+        self.error_char = self.src[start];
+        self.error_pos = start;
+        self.last_offset = @intCast(start);
+        self.last_len = @intCast(self.src.len - start);
     }
 
     // Peek does NOT restore `last_offset`/`last_len` — only `pos`.
@@ -1268,19 +1287,26 @@ const Parser = struct {
         return left;
     }
 
-    // unary := '-' unary | primary
+    // unary := '-'* primary
+    // The prefix run is consumed in a loop, not by recursion: `- - - … 1` never
+    // passes through `parseExpr`, so a recursive form would sidestep the
+    // MAX_PARSE_DEPTH guard and a long run of minuses would overflow the stack.
+    // Each negation is still applied innermost-first, as the recursion did.
     fn parseUnary(self: *Parser) anyerror!Value {
-        const t = try self.tok.peek();
-        if (t.kind == .minus) {
+        var negations: usize = 0;
+        while ((try self.tok.peek()).kind == .minus) {
             _ = try self.tok.next();
-            const v = try self.parseUnary();
+            negations += 1;
+        }
+        var v = try self.parsePrimary();
+        while (negations > 0) : (negations -= 1) {
             const n = v.toNumber() catch |err| {
                 switch (v) { .string => |s| self.setNumericDetail(err, s), else => {} }
                 return err;
             };
-            return Value{ .decimal = n.neg() catch return error.NumberOverflow };
+            v = Value{ .decimal = n.neg() catch return error.NumberOverflow };
         }
-        return self.parsePrimary();
+        return v;
     }
 
     // primary := STRING_LIT | NUMBER | FIELD_REF | FUNC_CALL | '(' expr ')'
@@ -1520,17 +1546,24 @@ const Parser = struct {
         // date-format results, etc.); whichever backing the slice uses, the
         // strings it holds are either static or arena-owned and will outlive
         // the call frame.
+        // Every argument must be followed by ',' or the closing ')': a missing
+        // comma (`ABS(1 2)`), a missing ')' (`ABS(-5`) or a trailing comma
+        // (`ABS(1,)`) is a template error, not something to read past.
         var arg_acc: ArgAccumulator = .empty;
-        var t = try self.tok.peek();
-        while (t.kind != .rparen and t.kind != .eof) {
+        if ((try self.tok.peek()).kind == .rparen) {
+            _ = try self.tok.next(); // consume ')' of a zero-arg call
+        } else while (true) {
             try arg_acc.append(self.ctx.alloc, try self.parseExpr());
-            t = try self.tok.peek();
-            if (t.kind == .comma) {
-                _ = try self.tok.next();
-                t = try self.tok.peek();
+            const sep = try self.tok.next();
+            if (sep.kind == .rparen) break;
+            if (sep.kind == .comma) continue;
+            if (sep.kind == .eof) {
+                self.setDetail("missing ')' to close {s}(", .{name});
+                return error.ExpectedRParen;
             }
+            self.setDetail("expected ',' or ')' in {s}(…), found {s}", .{ name, self.tok.src[sep.offset .. sep.offset + sep.len] });
+            return error.ExpectedComma;
         }
-        _ = try self.tok.next(); // consume ')'
         const args = arg_acc.slice();
 
         // O(1) dispatch: uppercase the ident once and look it up in the
@@ -1667,8 +1700,10 @@ const Parser = struct {
 pub const ArgKind = union(enum) {
     /// Any expression — no runtime guard, no static check (default).
     expr,
-    /// Coerces to a string via `toString` (never fails). Signals a
-    /// string-typed arg for docs / autocomplete; no runtime guard needed.
+    /// String-typed arg, for docs / autocomplete. No central guard and no
+    /// silent `toString` coercion: a builtin that needs text raises its own
+    /// `StringExpected` for a number or boolean (`LEN(5)` is a template
+    /// error, pinned by the expression corpus).
     string,
     /// Bare string literal expected (validators may scan literal text).
     /// GUI wraps the autocomplete placeholder in quotes.
@@ -2413,13 +2448,7 @@ fn builtinRegexMatch(p: *Parser, args: []Value) anyerror!Value {
     };
     var re = try compileRegex(p, pattern);
     defer re.deinit(p.ctx.alloc);
-    // zig-libs request: regex — isMatch false negative. `Regex.isMatch` (its
-    // lazy-DFA fast path) can answer false where a match exists
-    // (`a?\b+(  *((xxxxa+)xx|()+){2}){1,3}` on "a1 "; Go and `Matcher` say
-    // true), so the answer comes from the same search REGEX_EXTRACT uses.
-    var m = try regex.Matcher.init(p.ctx.alloc, &re);
-    defer m.deinit();
-    return Value{ .boolean = m.find(s, 0) != null };
+    return Value{ .boolean = re.isMatch(s) };
 }
 
 const regex_extract_doc: FnDoc = .{
@@ -4119,9 +4148,11 @@ pub fn eval(src: []const u8, ctx: *const Context) !Value {
         // Only set detail when it hasn't already been written by a deeper setDetail call.
         if (p.tok.error_char != 0) {
             const d = ctx.error_detail orelse return err;
-            if (d.len == 0) {
-                p.setDetail("unexpected character '{c}' at pos {d}", .{ p.tok.error_char, p.tok.error_pos + 1 });
-            }
+            if (d.len == 0) switch (err) {
+                error.UnterminatedString => p.setDetail("unterminated string literal starting at pos {d} — missing closing '", .{p.tok.error_pos + 1}),
+                error.UnterminatedFieldRef => p.setDetail("unterminated column reference starting at pos {d} — missing closing ]", .{p.tok.error_pos + 1}),
+                else => p.setDetail("unexpected character '{c}' at pos {d}", .{ p.tok.error_char, p.tok.error_pos + 1 }),
+            };
         }
         return err;
     };
@@ -5594,17 +5625,86 @@ test "eval: REGEX extracts Czech diacritics via \\p{L} and explicit class" {
     try testing.expectEqualStrings("true", try evalString("REGEX_MATCH('ŠKODA', '(?i)škoda')", &ctx));
 }
 
-test "eval: REGEX_MATCH agrees with REGEX_EXTRACT where isMatch alone would not" {
+test "eval: REGEX_MATCH agrees with REGEX_EXTRACT after a prefilter skip" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
     var h = TestHelper.init(a);
     const ctx = h.ctx(&.{}, a);
-    // zig-libs request: regex — isMatch false negative. `Regex.isMatch` answers
-    // false here although " " at 2..3 matches (Go: true); REGEX_MATCH must
-    // follow the full search, exactly as REGEX_EXTRACT does.
+    // " " at 2..3 matches (Go: true). This pattern once made `Regex.isMatch`
+    // answer false (a stale closure after a prefilter skip); REGEX_MATCH must
+    // agree with the full search REGEX_EXTRACT runs.
     try testing.expectEqualStrings(" ", try evalString("REGEX_EXTRACT('a1 ', 'a?\\b+(  *((xxxxa+)xx|()+){2}){1,3}')", &ctx));
     try testing.expectEqualStrings("true", try evalString("REGEX_MATCH('a1 ', 'a?\\b+(  *((xxxxa+)xx|()+){2}){1,3}')", &ctx));
+}
+
+test "eval: a long run of unary minuses does not recurse" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{"x"}, a);
+    // `- - … 1` never re-enters parseExpr, so the depth guard cannot bound it;
+    // a recursive parseUnary overflowed the stack here.
+    const n = 200_000; // even → +1
+    const src = try a.alloc(u8, n * 2 + 1);
+    for (0..n) |i| {
+        src[2 * i] = '-';
+        src[2 * i + 1] = ' ';
+    }
+    src[n * 2] = '1';
+    try testing.expectEqualStrings("1", try evalString(src, &ctx));
+    // Negation still applies innermost-first, numeric coercion included.
+    try testing.expectEqualStrings("-2", try evalString("- '2'", &ctx));
+    try testing.expectEqualStrings("3", try evalString("- -3", &ctx));
+    try testing.expectError(error.NotANumber, eval("- - 'abc'", &ctx));
+}
+
+test "eval: a call's argument list must be well-formed" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    var detail: []const u8 = "";
+    var ctx = h.ctx(&.{}, a);
+    ctx.error_detail = &detail;
+    // These used to evaluate: a missing ',' became an extra argument and a
+    // missing ')' was read past, so `ABS(-5` answered 5.
+    try testing.expectError(error.ExpectedRParen, eval("ABS(-5", &ctx));
+    try testing.expect(std.mem.indexOf(u8, detail, "missing ')'") != null);
+    detail = "";
+    try testing.expectError(error.ExpectedComma, eval("COALESCE('' 'x')", &ctx));
+    try testing.expectError(error.UnexpectedToken, eval("ABS(1,)", &ctx));
+    try testing.expectError(error.UnexpectedToken, eval("UPPER('a', ", &ctx));
+    // Well-formed calls are unaffected.
+    try testing.expectEqualStrings("5", try evalString("ABS(-5)", &ctx));
+    try testing.expectEqualStrings("", try evalString("FILENAME()", &ctx));
+    try testing.expectEqualStrings("x", try evalString("COALESCE('', 'x')", &ctx));
+}
+
+test "eval: unterminated string literal and column reference are errors" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    try h.col_index.put("Price", 0);
+    var detail: []const u8 = "";
+    var ctx = h.ctx(&.{"12"}, a);
+    ctx.error_detail = &detail;
+    try testing.expectError(error.UnterminatedString, eval("'abc", &ctx));
+    try testing.expect(std.mem.indexOf(u8, detail, "unterminated string") != null);
+    try testing.expectError(error.UnterminatedString, eval("'it\\'s", &ctx));
+    detail = "";
+    try testing.expectError(error.UnterminatedFieldRef, eval("[Price", &ctx));
+    try testing.expect(std.mem.indexOf(u8, detail, "unterminated column") != null);
+    // The compiled path falls back to the fused one and fails the same way.
+    const col_index = std.StringHashMap(usize).init(a);
+    const node = compile("'abc", &col_index, a);
+    try testing.expectError(error.UnterminatedString, evalNodeString(&node, &ctx));
+    // Closed forms are unaffected.
+    try testing.expectEqualStrings("it's", try evalString("'it\\'s'", &ctx));
+    try testing.expectEqualStrings("", try evalString("''", &ctx));
+    try testing.expectEqualStrings("12", try evalString("[Price]", &ctx));
 }
 
 test "eval: REGEX on invalid UTF-8 data is lenient, not an error" {

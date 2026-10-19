@@ -249,8 +249,14 @@ pub const RecordReader = struct {
                 _ = try self.reader.next();
                 return row;
             }
-            // Key.
-            const key_tok = try self.reader.nextAlloc(self.scratch.allocator(), .alloc_if_needed);
+            // Key. A token that straddles a buffer refill comes back as an
+            // allocated copy; it is allocated in `row_alloc` (reset by the
+            // caller per row), NOT in `self.scratch` — that arena lives for the
+            // whole pass (it backs the Scanner's nesting stack and cannot be
+            // reset), so every straddling key or value used to stay resident
+            // until the end of the file: a file of long string values grew RSS
+            // by roughly its own size.
+            const key_tok = try self.reader.nextAlloc(row_alloc, .alloc_if_needed);
             const key_slice: []const u8 = switch (key_tok) {
                 .string => |s| s,
                 .allocated_string => |s| s,
@@ -283,16 +289,18 @@ pub const RecordReader = struct {
                     row[col_idx] = "false";
                 },
                 .string => {
-                    const tok = try self.reader.nextAlloc(self.scratch.allocator(), .alloc_if_needed);
-                    const s: []const u8 = switch (tok) {
-                        .string => |v| v,
+                    // Row-scoped allocation — see the key read above. An
+                    // allocated copy already lives in `row_alloc`, so only a
+                    // slice into the scanner buffer needs duplicating.
+                    const tok = try self.reader.nextAlloc(row_alloc, .alloc_if_needed);
+                    row[col_idx] = switch (tok) {
+                        .string => |v| try row_alloc.dupe(u8, v),
                         .allocated_string => |v| v,
                         else => unreachable,
                     };
-                    row[col_idx] = try row_alloc.dupe(u8, s);
                 },
                 .number => {
-                    const tok = try self.reader.nextAlloc(self.scratch.allocator(), .alloc_if_needed);
+                    const tok = try self.reader.nextAlloc(row_alloc, .alloc_if_needed);
                     const num_str: []const u8 = switch (tok) {
                         .number => |v| v,
                         .allocated_number => |v| v,
@@ -340,6 +348,12 @@ fn numberStringToOutput(row_alloc: std.mem.Allocator, num_str: []const u8) ![]co
             var num_buf: [Decimal.str_buf_len]u8 = undefined;
             return try row_alloc.dupe(u8, d.toString(&num_buf));
         } else |_| {}
+        return try row_alloc.dupe(u8, num_str);
+    }
+    // No '.', no exponent and not integer-formatted: the one such JSON number
+    // is "-0" (`isNumberFormattedLikeAnInteger` rejects it on purpose). The
+    // zero trim below assumes a fractional part and would cut it to "-".
+    if (std.mem.indexOfScalar(u8, num_str, '.') == null) {
         return try row_alloc.dupe(u8, num_str);
     }
     // Plain decimal: trim trailing zeros (and a dangling '.') as a string op.
@@ -493,9 +507,61 @@ test "numberStringToOutput: decimal-core canonicalisation (CSV-parity, float-fre
         .{ .in = "1.23456789012345678e5", .want = "123456.789012345678" },
         // Out of i128 range → source token passes through verbatim.
         .{ .in = "1e40", .want = "1e40" },
+        // "-0" is not integer-formatted per std.json and has no '.': it used
+        // to fall into the fractional zero trim and come out as "-".
+        .{ .in = "-0", .want = "-0" },
+        .{ .in = "-0.0", .want = "-0" },
+        .{ .in = "100.00", .want = "100" },
     };
     for (cases) |c| {
         const got = try numberStringToOutput(a, c.in);
         try testing.expectEqualStrings(c.want, got);
     }
+}
+
+test "RecordReader: long string values do not accumulate in the reader's scratch arena" {
+    // A value longer than the Scanner's read buffer always straddles a refill
+    // and comes back as an allocated copy. That copy used to be allocated in
+    // `self.scratch`, which lives for the whole pass, so a file of long
+    // string values grew RSS by roughly its own size.
+    const alloc = testing.allocator;
+    const big_len = READ_BUF_SIZE * 3;
+    const n_records = 8;
+
+    var src: std.Io.Writer.Allocating = .init(alloc);
+    defer src.deinit();
+    try src.writer.writeByte('[');
+    for (0..n_records) |i| {
+        if (i > 0) try src.writer.writeByte(',');
+        try src.writer.writeAll("{\"k\": \"");
+        try src.writer.splatByteAll(@intCast('a' + i), big_len);
+        try src.writer.writeAll("\"}");
+    }
+    try src.writer.writeByte(']');
+
+    var col_index = std.StringHashMap(usize).init(alloc);
+    defer col_index.deinit();
+    try col_index.put("k", 0);
+
+    // A small-buffered stream so the scanner really refills mid-value.
+    var fixed: std.Io.Reader = .fixed(src.written());
+    var small_buf: [4096]u8 = undefined;
+    var limited = fixed.limited(.unlimited, &small_buf);
+
+    var rr: RecordReader = undefined;
+    rr.init(alloc, &limited.interface, &col_index);
+    defer rr.deinit();
+    var row_arena = std.heap.ArenaAllocator.init(alloc);
+    defer row_arena.deinit();
+
+    var seen: usize = 0;
+    while (try rr.next(row_arena.allocator())) |row| : (seen += 1) {
+        try testing.expectEqual(@as(usize, big_len), row[0].len);
+        try testing.expectEqual(@as(u8, @intCast('a' + seen)), row[0][0]);
+        try testing.expectEqual(@as(u8, @intCast('a' + seen)), row[0][big_len - 1]);
+        _ = row_arena.reset(.retain_capacity);
+    }
+    try testing.expectEqual(@as(usize, n_records), seen);
+    // Only the Scanner's own bookkeeping may live here — not one value.
+    try testing.expect(rr.scratch.queryCapacity() < big_len);
 }

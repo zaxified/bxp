@@ -241,9 +241,8 @@ pub const XlsxSheet = struct {
 
     /// Schema docs for this struct's fields. Bound at
     /// `conversion_templates.*.xlsx_sheet` by `bxp-core/src/docs.zig`.
-    /// All three keys are required — the loader treats `xlsx_sheet` as
-    /// all-or-nothing; any missing/wrong-typed sub-key silently aborts
-    /// xlsx parsing for the whole template.
+    /// All three keys are required — a missing or wrong-typed sub-key is a
+    /// hard config error (`error.InvalidConfig` with a `$err_*` diagnostic).
     pub const fields = [_]FieldDoc{
         .{
             .key = "name",
@@ -266,9 +265,11 @@ pub const XlsxSheet = struct {
         },
     };
 
-    /// JSON5 scaffold the GUI inserts for a new `xlsx_sheet` block.
+    /// JSON5 scaffold the GUI inserts for a new `xlsx_sheet` block. Carries
+    /// all three required keys: without `output_suffix` the inserted block
+    /// failed the loader straight away.
     pub const scaffold_template =
-        \\{ name: "SHEET_NAME", header_row: 1 }
+        \\{ name: "SHEET_NAME", header_row: 1, output_suffix: "_sheet.csv" }
     ;
 };
 
@@ -3122,7 +3123,18 @@ pub fn loadFromBytes(
                         }
                         const obj = xs_val.object;
                         const name = if (obj.get("name")) |v| switch (v) {
-                            .string => |s| try alloc.dupe(u8, s),
+                            // An empty name is a prefix of every sheet name, so
+                            // the run would convert an arbitrary sheet.
+                            .string => |s| if (s.len > 0) try alloc.dupe(u8, s) else {
+                                try emitTemplateDiag(alloc, diag, .@"error", "config.invalid_value",
+                                    b_entry.key_ptr.*, "xlsx_sheet.name",
+                                    "xlsx_sheet.name must not be empty", .{});
+                                printHuman(diag,
+                                    "---\n# {s}: config error: template '{s}': xlsx_sheet.name must not be empty\n",
+                                    .{ config_path, b_entry.key_ptr.* },
+                                );
+                                return error.InvalidConfig;
+                            },
                             else => {
                                 try emitTemplateDiag(alloc, diag, .@"error", "config.wrong_type",
                                     b_entry.key_ptr.*, "xlsx_sheet.name",
@@ -3151,10 +3163,13 @@ pub fn loadFromBytes(
                                 // out-of-u32-range i64 reaching @intCast is illegal
                                 // behaviour (panic in the ReleaseSafe bridge / GUI
                                 // backend, wrap in ReleaseSmall) on a hostile config.
-                                if (n < 0 or n > std.math.maxInt(u32)) {
+                                // 0 is refused too: worksheet rows are numbered
+                                // from 1, so no row ever matched and the sheet
+                                // converted to an empty file without a word.
+                                if (n < 1 or n > std.math.maxInt(u32)) {
                                     try emitTemplateDiag(alloc, diag, .@"error", "config.invalid_value",
                                         b_entry.key_ptr.*, "xlsx_sheet.header_row",
-                                        "xlsx_sheet.header_row must be between 0 and {d}, got {d}", .{ std.math.maxInt(u32), n });
+                                        "xlsx_sheet.header_row must be between 1 and {d}, got {d}", .{ std.math.maxInt(u32), n });
                                     printHuman(diag,
                                         "---\n# {s}: config error: template '{s}': xlsx_sheet.header_row out of range, got {d}\n",
                                         .{ config_path, b_entry.key_ptr.*, n });
@@ -3183,7 +3198,20 @@ pub fn loadFromBytes(
                             return error.InvalidConfig;
                         };
                         const output_suffix = if (obj.get("output_suffix")) |v| switch (v) {
-                            .string => |s| try alloc.dupe(u8, s),
+                            // The suffix is appended to the workbook stem to name
+                            // a file created in data_dir; a path separator would
+                            // write it elsewhere (and the CSV loop, which reads
+                            // data_dir non-recursively, would never see it).
+                            .string => |s| if (std.mem.indexOfAny(u8, s, "/\\") == null) try alloc.dupe(u8, s) else {
+                                try emitTemplateDiag(alloc, diag, .@"error", "config.invalid_value",
+                                    b_entry.key_ptr.*, "xlsx_sheet.output_suffix",
+                                    "xlsx_sheet.output_suffix must not contain a path separator, got \"{s}\"", .{s});
+                                printHuman(diag,
+                                    "---\n# {s}: config error: template '{s}': xlsx_sheet.output_suffix must not contain a path separator, got \"{s}\"\n",
+                                    .{ config_path, b_entry.key_ptr.*, s },
+                                );
+                                return error.InvalidConfig;
+                            },
                             else => {
                                 try emitTemplateDiag(alloc, diag, .@"error", "config.wrong_type",
                                     b_entry.key_ptr.*, "xlsx_sheet.output_suffix",
@@ -3773,4 +3801,44 @@ test "loadFromBytes: invalid enum surfaces a warning but still loads with the de
     try testing.expectEqual(@as(u8, 0), demo.csv_text_quote_out); // "none"
     // ...but the user is warned about each one rather than failing silently.
     try testing.expectEqual(@as(usize, 2), diag.countBySeverity(.warning));
+}
+
+test "loadFromBytes: xlsx_sheet refuses header_row 0, an empty name and a suffix with a separator" {
+    const bad = [_]struct { block: []const u8, path: []const u8 }{
+        .{ .block = "{ name: \"S\", header_row: 0, output_suffix: \"_s.csv\" }", .path = "conversion_templates.demo.xlsx_sheet.header_row" },
+        .{ .block = "{ name: \"\", header_row: 1, output_suffix: \"_s.csv\" }", .path = "conversion_templates.demo.xlsx_sheet.name" },
+        .{ .block = "{ name: \"S\", header_row: 1, output_suffix: \"/../x.csv\" }", .path = "conversion_templates.demo.xlsx_sheet.output_suffix" },
+        .{ .block = "{ name: \"S\", header_row: 1, output_suffix: \"_a\\\\b.csv\" }", .path = "conversion_templates.demo.xlsx_sheet.output_suffix" },
+    };
+    for (bad) |c| {
+        var arena = std.heap.ArenaAllocator.init(testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+        var diag = Diagnostics.init(a);
+        defer diag.deinit();
+        const src = try std.fmt.allocPrint(a,
+            \\{{ conversion_templates: {{ demo: {{ xlsx_sheet: {s}, input_schema: {{ $x: "1" }}, output_schema: {{ c: "$x" }} }} }} }}
+        , .{c.block});
+        try testing.expectError(error.InvalidConfig, loadFromBytes(a, src, "<test>", &diag));
+        try testing.expectEqual(@as(usize, 1), diag.items.items.len);
+        try testing.expectEqualStrings("config.invalid_value", diag.items.items[0].code);
+        try testing.expectEqualStrings(c.path, diag.items.items[0].path);
+    }
+}
+
+test "XlsxSheet.scaffold_template loads as a valid xlsx_sheet block" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var diag = Diagnostics.init(a);
+    defer diag.deinit();
+    // The GUI inserts this block verbatim; it used to omit the required
+    // `output_suffix`, so the freshly inserted block failed the loader.
+    const src = try std.fmt.allocPrint(a,
+        \\{{ conversion_templates: {{ demo: {{ xlsx_sheet: {s}, input_schema: {{ $x: "1" }}, output_schema: {{ c: "$x" }} }} }} }}
+    , .{XlsxSheet.scaffold_template});
+    var config = try loadFromBytes(a, src, "<test>", &diag);
+    defer config.deinit();
+    try testing.expect(config.brokers.get("demo").?.xlsx_sheet != null);
+    try testing.expectEqual(@as(usize, 0), diag.count());
 }

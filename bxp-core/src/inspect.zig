@@ -128,6 +128,11 @@ pub fn annotateRaw(a: std.mem.Allocator, raw: []const u8, path_label: []const u8
         try injectDiagnostics(a, &root, pdiag.items.items, &counter);
         return .{ .json = try valueToJsonString(a, root), .exit_code = 1 };
     };
+    // Markers can only be attached to an object. A source that parses to a
+    // bare array / string / number (`[]`, `42`) is not a config at all, and
+    // annotating it in place would drop every marker — handing the caller the
+    // input back with exit 1 and no message. Annotate an empty root instead.
+    if (value != .object) value = .{ .object = .empty };
 
     var diag: diagnostics_mod.Diagnostics = .init(a);
 
@@ -213,12 +218,7 @@ fn injectSemanticErrors(
     counter: *u32,
 ) !void {
     for (errors) |e| {
-        const parent_ptr: *std.json.Value = blk: {
-            if (e.path.len == 0) break :blk root;
-            const last_dot = std.mem.lastIndexOfScalar(u8, e.path, '.') orelse break :blk root;
-            const parent_path = e.path[0..last_dot];
-            break :blk getPtrAtPath(root, parent_path) orelse root;
-        };
+        const parent_ptr = markerParent(root, e.path);
 
         const field_name: []const u8 = blk: {
             const last_dot = std.mem.lastIndexOfScalar(u8, e.path, '.') orelse break :blk e.path;
@@ -288,12 +288,7 @@ fn injectDiagnostics(
     counter: *u32,
 ) !void {
     for (items) |d| {
-        const parent_ptr: *std.json.Value = blk: {
-            if (d.path.len == 0) break :blk root;
-            const last_dot = std.mem.lastIndexOfScalar(u8, d.path, '.') orelse break :blk root;
-            const parent_path = d.path[0..last_dot];
-            break :blk getPtrAtPath(root, parent_path) orelse root;
-        };
+        const parent_ptr = markerParent(root, d.path);
 
         const field_name: []const u8 = blk: {
             const last_dot = std.mem.lastIndexOfScalar(u8, d.path, '.') orelse break :blk d.path;
@@ -332,6 +327,16 @@ fn injectDiagnostics(
         if (d.suggest) |s| try obj.put(a, "suggest", .{ .string = try a.dupe(u8, s) });
         try insertNumberedBefore(a, parent_ptr, prefix, field_name, .{ .object = obj }, counter);
     }
+}
+
+/// The object a marker for `path` is inserted into: the parent of `path`'s
+/// last segment, or `root` when that parent is missing OR is not an object.
+/// `insertNumberedBefore` is a no-op on a non-object, so returning an array /
+/// scalar parent here would silently lose the finding.
+fn markerParent(root: *std.json.Value, path: []const u8) *std.json.Value {
+    const last_dot = std.mem.lastIndexOfScalar(u8, path, '.') orelse return root;
+    const parent = getPtrAtPath(root, path[0..last_dot]) orelse return root;
+    return if (parent.* == .object) parent else root;
 }
 
 fn getPtrAtPath(root: *std.json.Value, path: []const u8) ?*std.json.Value {
@@ -1109,6 +1114,28 @@ test "annotateRaw: comments preserved + missing conversion_templates → \\$err_
     // Phase G1: $err_<N> values are objects {message, off?, len?, suggest?}.
     const err1 = parsed.object.get("$err_1") orelse return error.MissingErr1;
     try testing.expect(diagHas(&err1, "no conversion_templates"));
+}
+
+test "annotateRaw: a non-object root still carries an \\$err_ marker" {
+    // `[]` / `42` parse as JSON but are not configs. Annotating them in place
+    // dropped every marker (insertion is a no-op on a non-object), so the
+    // caller got its input back with exit 1 and nothing saying why.
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    for ([_][]const u8{ "[]", "42", "\"text\"" }) |src| {
+        const result = try annotateRaw(a, src, "<inline>", 0);
+        try testing.expectEqual(@as(u8, 1), result.exit_code);
+        const parsed = try std.json.parseFromSliceLeaky(std.json.Value, a, result.json, .{});
+        try testing.expect(parsed == .object);
+        var has_err = false;
+        for (parsed.object.keys()) |k| {
+            if (std.mem.startsWith(u8, k, "$err_")) has_err = true;
+        }
+        try testing.expect(has_err);
+    }
 }
 
 test "annotateRaw: clean config exits 0 with no \\$err_* markers" {
