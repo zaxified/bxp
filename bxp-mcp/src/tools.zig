@@ -75,7 +75,7 @@ pub const tool_docs = [_]ToolDoc{
         .inspect_call = "annotateRaw(config, \"<config>\", 0)",
         .bridge_op = "bridge_inspect {config}",
         .description = "Validate a bxp-cli config (JSON5). Returns annotated JSON with " ++
-            "$err_/$warn/$info diagnostics inserted before each offending key.",
+            "$err_/$warn_/$info_ diagnostics inserted before each offending key.",
         .input_schema =
         \\{
         \\  "type": "object",

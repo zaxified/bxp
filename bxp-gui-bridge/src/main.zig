@@ -374,9 +374,9 @@ fn writeErr(out_buf: []u8, comptime fmt: []const u8, args: anytype) i32 {
 // success (negative on pre-spawn failure). Dart can call `bridge_cancel(h)`
 // to deliver SIGTERM / TerminateProcess to the child mid-stream; the reader
 // threads then drain the remaining buffered output, the wait thread reaps
-// the child, and on_exit fires with the signal exit code. Handles are
-// invalidated when on_exit returns — calling `bridge_cancel` after that
-// is a safe no-op (returns -1).
+// the child, and on_exit fires with the signal exit code. A handle is
+// invalidated right after the reap, BEFORE on_exit fires — calling
+// `bridge_cancel` / `bridge_ack` from then on is a safe no-op (returns -1).
 
 /// Per-stream batch callback. Invoked from a bridge-owned thread; the data
 /// pointer becomes Dart's responsibility (call bridge_free).
@@ -428,7 +428,43 @@ const StreamingCtx = struct {
     on_exit: ExitCallback,
     handle: i64 = 0,
     shutting_down: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    /// Publication of `proc` to the reader threads. `procrun` starts the
+    /// readers INSIDE `spawnStreaming`, so a reader can drop a chunk — and
+    /// need `proc.ack()` to return its permit — before `spawnStreaming` has
+    /// returned and `proc` been written. Under this mutex a reader either sees
+    /// `proc_ready` (and a fully written `proc`) or records the permit in
+    /// `owed_acks`, which `publishProc` settles once `proc` exists.
+    proc_mutex: std.Io.Mutex = .init,
+    proc_ready: bool = false,
+    owed_acks: usize = 0,
 };
+
+/// Store the freshly spawned handle and return any permits a reader dropped
+/// before it existed (see `StreamingCtx.proc_mutex`).
+fn publishProc(ctx: *StreamingCtx, proc: procrun.Handle) void {
+    const io = bridgeIo();
+    ctx.proc_mutex.lockUncancelable(io);
+    ctx.proc = proc;
+    ctx.proc_ready = true;
+    const owed = ctx.owed_acks;
+    ctx.owed_acks = 0;
+    ctx.proc_mutex.unlock(io);
+    for (0..owed) |_| proc.ack();
+}
+
+/// Return one stdout permit from a reader thread, deferring it to
+/// `publishProc` when `proc` has not been published yet.
+fn returnPermit(ctx: *StreamingCtx) void {
+    const io = bridgeIo();
+    ctx.proc_mutex.lockUncancelable(io);
+    if (!ctx.proc_ready) {
+        ctx.owed_acks += 1;
+        ctx.proc_mutex.unlock(io);
+        return;
+    }
+    ctx.proc_mutex.unlock(io);
+    ctx.proc.ack();
+}
 
 // ── procrun → Dart trampolines ──────────────────────────────────────────
 //
@@ -452,9 +488,10 @@ fn onStdoutTrampoline(cctx: ?*anyopaque, chunk: []const u8) void {
     // `default_queue_permits` drops park the stdout reader forever, fill the
     // pipe and stall the child with no on_exit ever firing. Teardown is the
     // exception: the run is being abandoned, and the reader is woken by the
-    // kill rather than by permits.
+    // kill rather than by permits. The permit goes through `returnPermit`, not
+    // `ctx.proc` directly: this can run before `spawnStreaming` has returned.
     if (!dispatchCopy(ctx, ctx.on_stdout_batch, chunk) and
-        !ctx.shutting_down.load(.acquire)) ctx.proc.ack();
+        !ctx.shutting_down.load(.acquire)) returnPermit(ctx);
 }
 
 fn onStderrTrampoline(cctx: ?*anyopaque, chunk: []const u8) void {
@@ -628,6 +665,9 @@ pub export fn bridge_run_streaming(
     ctx.handle = 0;
     // ctx came from `create` (not zeroed), so the field defaults have not run.
     ctx.shutting_down = std.atomic.Value(bool).init(false);
+    ctx.proc_mutex = .init;
+    ctx.proc_ready = false;
+    ctx.owed_acks = 0;
 
     // `procrun` owns the child, both reader threads and the backpressure
     // semaphore from here on. Its own errdefer chain covers a failure DURING
@@ -638,7 +678,7 @@ pub export fn bridge_run_streaming(
     // `stream_permits` is passed explicitly rather than left to the module
     // default so the bound stays a decision this file makes and documents,
     // even though the two values currently agree.
-    ctx.proc = procrun.spawnStreaming(gpa, io, .{
+    const proc = procrun.spawnStreaming(gpa, io, .{
         .argv = argv.items,
         .stdin = .close,
         .stdout = .pipe,
@@ -658,6 +698,8 @@ pub export fn bridge_run_streaming(
         // `streamingWaitLoop`, after teardown. See onProcExitTrampoline.
         .on_exit = onProcExitTrampoline,
     }) catch return -1;
+    // The readers are already running; publish under the lock they consult.
+    publishProc(ctx, proc);
 
     // Rollback for the post-spawn window (registry OOM, wait-thread spawn
     // failure). Raise the teardown flag FIRST so a reader draining the last
@@ -755,7 +797,7 @@ pub export fn bridge_free(ptr: [*]u8, len: u32) void {
 // ── In-process expr evaluation ──────────────────────────────────────────
 //
 // New-style FFI family — see "Adding a new bridge FFI export" in
-// docs/devel.md for the conventions these exports follow:
+// docs/dev/internals/howto.md for the conventions these exports follow:
 //   * caller-supplied output buffer, `bytes_written` return value
 //   * negative codes for bridge-level failures only
 //   * per-call arena; no handle table, no Dart-side `bridge_free`
@@ -1804,6 +1846,35 @@ test "bridge_ack succeeds for active stream" {
 
     _ = bridge_cancel(handle);
     try testing.expect(stream_test.waitForExit(5 * std.time.ns_per_s));
+}
+
+test "bridge_run_streaming without a stdout callback drains past the permit bound" {
+    // Every stdout chunk is dropped here, so each one's permit has to come back
+    // through `returnPermit` — including chunks a reader drops before
+    // `spawnStreaming` has returned, which used to call `ctx.proc.ack()` on a
+    // `proc` not yet written. 1 MiB is far more than `default_queue_permits`
+    // reads, so a lost permit parks the reader, the pipe fills, the child
+    // blocks and on_exit never fires.
+    stream_test.reset();
+    const req = try buildHelperRequestZ(&.{ "stdout-bytes", "1048576" });
+    defer testing.allocator.free(req);
+    const handle = bridge_run_streaming(req.ptr, null, streamTestOnStderr, streamTestOnExit);
+    try testing.expect(handle > 0);
+    try testing.expect(stream_test.waitForExit(10 * std.time.ns_per_s));
+    try testing.expectEqual(@as(i32, 0), stream_test.exit_code);
+}
+
+test "returnPermit defers an ack until proc is published" {
+    // A reader that drops a chunk before `publishProc` must not touch `proc`;
+    // the permit is recorded and handed back on publication.
+    var ctx: StreamingCtx = undefined;
+    ctx.proc_mutex = .init;
+    ctx.proc_ready = false;
+    ctx.owed_acks = 0;
+    returnPermit(&ctx);
+    returnPermit(&ctx);
+    try testing.expectEqual(@as(usize, 2), ctx.owed_acks);
+    try testing.expect(!ctx.proc_ready);
 }
 
 // ── bridge_eval_expr tests ──────────────────────────────────────────────

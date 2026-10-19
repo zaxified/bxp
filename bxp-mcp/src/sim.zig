@@ -37,6 +37,12 @@ const MAX_TRACE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_TRACE_SAMPLE: usize = 200;
 /// Cap on the sanitized workspace-id length.
 const MAX_UID_LEN: usize = 64;
+/// Idle limit for the bxp-cli child: no byte on stdout/stderr for this long and
+/// it is killed. Without it a wedged child blocks the single-threaded stdio
+/// server — and with it the whole agent session — forever. The limit restarts
+/// on every read; an inline CSV is capped at 16 MiB by the transport, so five
+/// minutes of silence is a hang, not a big run. Keep `runFailMessage` in step.
+const CHILD_IDLE_TIMEOUT_S: i64 = 300;
 
 /// A produced output file. `read_error` is set (and `content` empty) when the
 /// file could not be read back — e.g. it exceeds `MAX_FILE_BYTES` — so the
@@ -134,8 +140,8 @@ fn run(
         .argv = &.{ cli_path, "--config", config_path, "--template", template, "--data", data_dir, "--trace-file", trace_path },
         .stdout_limit = .limited(MAX_OUTPUT_BYTES),
         .stderr_limit = .limited(MAX_OUTPUT_BYTES),
-    }) catch |err|
-        return errJson(a, "bxp-cli spawn failed", @errorName(err));
+        .timeout = .{ .duration = .{ .raw = .fromSeconds(CHILD_IDLE_TIMEOUT_S), .clock = .awake } },
+    }) catch |err| return errJson(a, runFailMessage(err), @errorName(err));
 
     const exit_code: i32 = switch (result.term) {
         .exited => |c| @intCast(c),
@@ -170,6 +176,10 @@ fn run(
         }
     }
 
+    // Directory iteration order is filesystem-defined; sort so the same run
+    // reports its outputs in the same order every time.
+    std.mem.sort(OutputFile, outputs.items, {}, outputLessThan);
+
     // 7. bxp-mcp's own diff: input vs output record counts → outcome status.
     //    Counts are data rows (header excluded) so they line up with the BXTB
     //    trace's source_rows / written_rows.
@@ -191,6 +201,21 @@ fn run(
         .diagnostics = result.stderr,
         .trace_bytes = trace_bytes,
     });
+}
+
+fn outputLessThan(_: void, l: OutputFile, r: OutputFile) bool {
+    return std.mem.lessThan(u8, l.name, r.name);
+}
+
+/// Agent-facing message for a failed `std.process.run`: the two limits we set
+/// are the ones an agent can act on, so they are spelled out instead of
+/// surfacing as a bare "spawn failed".
+fn runFailMessage(err: anyerror) []const u8 {
+    return switch (err) {
+        error.Timeout => "bxp-cli produced no output for 300 s and was killed (hung run?)",
+        error.StreamTooLong => "bxp-cli wrote more than 16 MiB to stdout/stderr and was killed",
+        else => "bxp-cli spawn failed",
+    };
 }
 
 const Report = struct {
@@ -582,4 +607,24 @@ test "sanitize: keeps [A-Za-z0-9_-], maps the rest, never empty, length-capped" 
     try t.expectEqualStrings("_", try sanitize(a, ""));
     const long = try sanitize(a, comptime &@as([100:0]u8, @splat('x')));
     try t.expectEqual(MAX_UID_LEN, long.len);
+}
+
+test "outputLessThan: orders output files by name" {
+    const t = std.testing;
+    var v = [_]OutputFile{
+        .{ .name = "b.csv", .content = "" },
+        .{ .name = "a_cash.csv", .content = "" },
+        .{ .name = "a.csv", .content = "" },
+    };
+    std.mem.sort(OutputFile, &v, {}, outputLessThan);
+    try t.expectEqualStrings("a.csv", v[0].name);
+    try t.expectEqualStrings("a_cash.csv", v[1].name);
+    try t.expectEqualStrings("b.csv", v[2].name);
+}
+
+test "runFailMessage: names the limits an agent can act on" {
+    const t = std.testing;
+    try t.expect(std.mem.indexOf(u8, runFailMessage(error.Timeout), "300 s") != null);
+    try t.expect(std.mem.indexOf(u8, runFailMessage(error.StreamTooLong), "16 MiB") != null);
+    try t.expectEqualStrings("bxp-cli spawn failed", runFailMessage(error.AccessDenied));
 }

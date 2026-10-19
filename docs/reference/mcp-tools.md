@@ -10,7 +10,7 @@ Agent-callable tools exposed by the `bxp-mcp` stdio server.
 
 | Tool | Description |
 | --- | --- |
-| <code class="hl-fn">bxp_validate</code> | Validate a bxp-cli config (JSON5). Returns annotated JSON with $err_/$warn/$info diagnostics inserted before each offending key. |
+| <code class="hl-fn">bxp_validate</code> | Validate a bxp-cli config (JSON5). Returns annotated JSON with $err_/$warn_/$info_ diagnostics inserted before each offending key. |
 | <code class="hl-fn">bxp_validate_expr</code> | Validate one bxp expression the way the GUI config editor does at authoring time: syntax, semantics, AND static lint findings the lenient runtime silently swallows (e.g. a literal SPLIT_PART index of 0 — 1-based, so 0 always yields "" — or a DATE_CONVERT format with an unbracketed non-vocab letter). Returns {ok:true} when the expression is sound, or {ok:false,error,detail,off,len} for the first finding (off/len pin the offending token span). Use this when AUTHORING a config to catch mistakes before a run; use bxp_eval to see what an expression COMPUTES against a row. Mirrors the GUI's bridge_eval_expr. |
 | <code class="hl-fn">bxp_eval</code> | Evaluate one bxp expression against an optional row context. Returns {ok,value} or {ok:false,error,detail,off,len}. This is the lenient runtime path (what a real bxp-cli run computes); for authoring-time validation that flags literal mistakes, use bxp_validate_expr. |
 | <code class="hl-fn">bxp_eval_batch</code> | Evaluate many bxp expressions against one row in a single call. Returns {results:[{ok,value}\|{ok:false,error,detail,off,len}, ...]} aligned to the input order. A well-formed request always succeeds; per-expr failures are carried by each result's ok flag. |

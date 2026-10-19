@@ -48,7 +48,7 @@ bxp-gui-bridge/
                        teardown ordering that keeps a buffer from orphaning in
                        Dart's port queue.
   test/
-    test_helper.zig  ← stand-alone "re-exec target" binary (~140 LOC)
+    test_helper.zig  ← stand-alone "re-exec target" binary
                        compiled by `zig build test` and pointed to via
                        `test_options.test_helper_path`. Behaviour is
                        fully controlled by argv switches so the test
