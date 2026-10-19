@@ -613,8 +613,29 @@ fn handlerFor(comptime tool: Tool) mcp.Handler {
 //
 // `call.arena` is the per-request arena: allocate freely, never store.
 
+/// True when `key` is present, not null, and not a string. `ToolCall.strArg`
+/// folds that case into "absent", which for an LLM turns `"config": 5` into the
+/// misleading "missing 'config'"; `call.args` is the raw object, so the two can
+/// be told apart here. zig-libs request: mcp — ToolCall has no way to tell
+/// missing from wrong-typed (proposed: `strArgChecked(key) union{absent,value,wrong_type}`).
+fn wrongType(call: *const mcp.ToolCall, key: []const u8) bool {
+    if (call.args != .object) return false;
+    return switch (call.args.object.get(key) orelse return false) {
+        .string, .null => false,
+        else => true,
+    };
+}
+
+/// Required string argument; on failure writes the tool error (missing vs
+/// wrong-typed named apart) and returns null — callers `orelse return true`.
+fn reqStr(call: *mcp.ToolCall, comptime key: []const u8) ?[]const u8 {
+    if (call.strArg(key)) |s| return s;
+    _ = call.fail(if (wrongType(call, key)) "'" ++ key ++ "' must be a string" else "missing '" ++ key ++ "'");
+    return null;
+}
+
 fn validate(_: ?*anyopaque, call: *mcp.ToolCall) bool {
-    const config = call.strArg("config") orelse return call.fail("missing 'config'");
+    const config = reqStr(call, "config") orelse return true;
     // check_fs = 0: pure structural/expression validation, no filesystem
     // syscalls (the agent is validating config text, not a deployed tree).
     const result = inspect.annotateRaw(call.arena, config, "<config>", 0) catch |err|
@@ -624,7 +645,7 @@ fn validate(_: ?*anyopaque, call: *mcp.ToolCall) bool {
 }
 
 fn validateExpr(_: ?*anyopaque, call: *mcp.ToolCall) bool {
-    const expr = call.strArg("expr") orelse return call.fail("missing 'expr'");
+    const expr = reqStr(call, "expr") orelse return true;
     // Authoring-time verdict (runtime eval + static FnArgDoc lint), serialized as
     // {ok:true} / {ok:false,error,…} by the shared core. A flagged expression is a
     // domain result the agent should read, not a tool failure — isError stays false.
@@ -695,7 +716,7 @@ fn evalFail(call: *mcp.ToolCall, err: anyerror) bool {
 }
 
 fn eval(_: ?*anyopaque, call: *mcp.ToolCall) bool {
-    const expr = call.strArg("expr") orelse return call.fail("missing 'expr'");
+    const expr = reqStr(call, "expr") orelse return true;
     const headers = switch (rowArg(call, "headers")) {
         .absent => null,
         .json => |j| j,
@@ -730,7 +751,7 @@ fn evalBatch(_: ?*anyopaque, call: *mcp.ToolCall) bool {
 }
 
 fn evalTrace(_: ?*anyopaque, call: *mcp.ToolCall) bool {
-    const expr = call.strArg("expr") orelse return call.fail("missing 'expr'");
+    const expr = reqStr(call, "expr") orelse return true;
     const headers = switch (rowArg(call, "headers")) {
         .absent => null,
         .json => |j| j,
@@ -759,7 +780,7 @@ fn evalTrace(_: ?*anyopaque, call: *mcp.ToolCall) bool {
 }
 
 fn listTemplates(_: ?*anyopaque, call: *mcp.ToolCall) bool {
-    const config = call.strArg("config") orelse return call.fail("missing 'config'");
+    const config = reqStr(call, "config") orelse return true;
     const result = inspect.listTemplates(call.arena, config) catch |err|
         return call.fail(@errorName(err));
     call.write(result);
@@ -767,8 +788,8 @@ fn listTemplates(_: ?*anyopaque, call: *mcp.ToolCall) bool {
 }
 
 fn fetchTemplate(_: ?*anyopaque, call: *mcp.ToolCall) bool {
-    const config = call.strArg("config") orelse return call.fail("missing 'config'");
-    const id = call.strArg("id") orelse return call.fail("missing 'id'");
+    const config = reqStr(call, "config") orelse return true;
+    const id = reqStr(call, "id") orelse return true;
     // The result JSON is the template object on success, or {"$err_1":"..."} for
     // a missing id / unparseable config — both are useful agent-facing content
     // (a present-but-not-found id is a domain answer, not a tool failure).
@@ -783,10 +804,12 @@ fn simulate(ctx: ?*anyopaque, call: *mcp.ToolCall) bool {
     // inspect op, so it spawns the co-located bxp-cli and needs the live `io`
     // + environment to do it.
     const app: *App = @ptrCast(@alignCast(ctx.?));
-    const config = call.strArg("config") orelse return call.fail("missing 'config'");
-    const template = call.strArg("template") orelse return call.fail("missing 'template'");
-    const csv_text = call.strArg("csv") orelse return call.fail("missing 'csv'");
-    const workspace = call.strArg("workspace"); // optional
+    const config = reqStr(call, "config") orelse return true;
+    const template = reqStr(call, "template") orelse return true;
+    const csv_text = reqStr(call, "csv") orelse return true;
+    // Optional, but a wrong-typed value is refused rather than silently ignored.
+    if (wrongType(call, "workspace")) return call.fail("'workspace' must be a string");
+    const workspace = call.strArg("workspace");
     // sim.simulate handles its own logical failures as {"ok":false,...} JSON (a
     // domain result, isError:false); only OOM/unexpected surfaces here as a
     // genuine tool failure.

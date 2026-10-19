@@ -105,9 +105,17 @@ call(105, "bxp_not_a_tool", {})
 # missing-arg path, not fault before it.
 print(json.dumps({"jsonrpc":"2.0","id":106,"method":"tools/call",
                   "params":{"name":"bxp_eval"}}))
-# A non-string argument is "missing" to strArg — the handler must say so
-# rather than coerce it.
+# A non-string argument must be named as wrong-typed (not "missing") and never
+# coerced.
 call(107, "bxp_eval", {"expr": 5})
+# Negative control: an explicit null stays "missing" (absent), and a wrong-typed
+# optional `workspace` is refused instead of ignored.
+call(130, "bxp_eval", {"expr": None})
+call(131, "bxp_simulate", {"config": "{}", "template": "t", "csv": "a", "workspace": 5})
+# bxp_simulate on a config that does not parse says so (not "template not found");
+# the negative control is a parseable config lacking the id.
+call(132, "bxp_simulate", {"config": "{ conversion_templates: { t: ", "template": "t", "csv": "a"})
+call(133, "bxp_simulate", {"config": "{ conversion_templates: {} }", "template": "t", "csv": "a"})
 # We register no resources and no prompts; the module still serves both
 # methods, so the empty catalogs are our registration state showing through.
 print(json.dumps({"jsonrpc":"2.0","id":108,"method":"resources/list"}))
@@ -282,10 +290,18 @@ assert code(105) == -32602, by_id[105]
 
 # `arguments` absent, and a non-string argument, both reach the handler and come
 # back as its own tool failure — not a transport error, not a coerced value.
-for i in (106, 107):
+for i, want in ((106, "error: missing 'expr'"),
+                (107, "error: 'expr' must be a string"),
+                (130, "error: missing 'expr'"),
+                (131, "error: 'workspace' must be a string")):
     assert "error" not in by_id[i], (i, by_id[i])
     assert by_id[i]["result"]["isError"] is True, by_id[i]
-    assert by_id[i]["result"]["content"][0]["text"] == "error: missing 'expr'", by_id[i]
+    assert by_id[i]["result"]["content"][0]["text"] == want, by_id[i]
+
+t132 = by_id[132]["result"]["content"][0]["text"]
+assert '"ok":false' in t132 and "config does not parse" in t132, t132
+t133 = by_id[133]["result"]["content"][0]["text"]
+assert "template not found in config" in t133 and "does not parse" not in t133, t133
 
 # bxp registers no resources and no prompts: the module serves both methods,
 # the catalogs are empty because that is our registration state.

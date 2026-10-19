@@ -218,7 +218,7 @@ Report (declares an `outputSchema`):
 - An output file that can't be read back (e.g. exceeds the 16 MB cap) appears as
   `{file, error}` instead of `{file, records, csv}` — never silently dropped.
 - `ok:false` is reserved for **orchestration** failures that prevented a run
-  (template not found, unsupported input, spawn/IO problem) and carries
+  (template not found, config does not parse, unsupported input, spawn/IO problem) and carries
   `{ok:false, error, detail}`.
 
 The `trace` object folds the BXTB sidecar into JSON: aggregate

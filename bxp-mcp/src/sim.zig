@@ -81,6 +81,10 @@ fn run(
     report(call, 1, 4, "validating template");
     // 1. Introspect the template's input shape and reject what we can't stage.
     const tio = try inspect.templateIo(a, config_text, template);
+    if (tio.parse_error) |reason| {
+        const msg = try std.fmt.allocPrint(a, "config does not parse: {s}", .{reason});
+        return errJson(a, msg, template);
+    }
     if (!tio.found) return errJson(a, "template not found in config", template);
     if (tio.has_xlsx_sheet) return errJson(a, "xlsx-input templates cannot be simulated from inline CSV", template);
     if (!tio.csv_input) return errJson(a, "only CSV-input templates can be simulated (file_type_in must be csv)", template);
