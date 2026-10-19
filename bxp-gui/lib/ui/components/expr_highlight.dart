@@ -159,8 +159,17 @@ List<_Span> _tokenize(String src, _LiveSets sets) {
       i += word.length;
       continue;
     }
-    out.add(_Span(_Tok.ident, src[i]));
-    i++;
+    // Unknown character. Take a whole surrogate pair as one span: a span
+    // holding half a pair is not well-formed UTF-16, and the paragraph
+    // builder throws on it (an emoji typed outside a string or `[...]`).
+    final cu = src.codeUnitAt(i);
+    final isPair = cu >= 0xD800 &&
+        cu <= 0xDBFF &&
+        i + 1 < src.length &&
+        (src.codeUnitAt(i + 1) & 0xFC00) == 0xDC00;
+    final n = isPair ? 2 : 1;
+    out.add(_Span(_Tok.ident, src.substring(i, i + n)));
+    i += n;
   }
   return out;
 }

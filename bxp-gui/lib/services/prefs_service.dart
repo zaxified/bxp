@@ -123,6 +123,11 @@ class PrefsService {
       } catch (e) {
         devTrace('prefs.load.error', {'error': '$e'});
         _data = {};
+        // The next flush rewrites the file from the (now empty) map, which
+        // would destroy a hand-edited file over one typo. Keep a copy.
+        try {
+          await _file.copy('${_file.path}.corrupt');
+        } catch (_) {/* best-effort */}
       }
     }
   }
@@ -153,12 +158,12 @@ class PrefsService {
   }
 
   /// Returns the stored list for [key] as a `List<String>`, or null when absent.
-  /// The JSON store may hold a heterogeneous list from a future version; `cast()`
-  /// will throw if the list contains non-String values — callers should guard
-  /// with `try/catch` on the outer `_prefs.getStringList` call site.
+  /// The JSON store may hold a heterogeneous list (hand-edited file, future
+  /// version); non-String entries are dropped rather than failing later on
+  /// iteration.
   List<String>? getStringList(String key) {
     final v = _data[key];
-    if (v is List) return v.cast<String>();
+    if (v is List) return v.whereType<String>().toList();
     return null;
   }
 
@@ -239,7 +244,17 @@ class PrefsService {
   /// safe regardless of init order. Cost is one extra read per
   /// flush; flushes happen on user actions (theme cycle, zoom
   /// change, recent files mutation) and are not hot-path.
-  Future<void> _flush() async {
+  Future<void> _flush() {
+    // Serialise: two overlapping flushes share `<file>.tmp`, so the second
+    // rename would fail (tmp already moved) or publish a half-written file.
+    final next = _flushTail.then((_) => _flushNow());
+    _flushTail = next.then<void>((_) {}, onError: (_) {});
+    return next;
+  }
+
+  Future<void> _flushTail = Future<void>.value();
+
+  Future<void> _flushNow() async {
     if (await _file.exists()) {
       try {
         final decoded = jsonDecode(await _file.readAsString());

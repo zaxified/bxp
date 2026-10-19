@@ -110,6 +110,9 @@ class _CounterOverlayState extends State<CounterOverlay> {
   }
 
   void _onFrame(Duration _) {
+    // Persistent frame callbacks cannot be removed; once the overlay is gone
+    // the registration only has to do nothing.
+    if (!mounted) return;
     _frThisSec++;
     final binding = WidgetsBinding.instance;
     if (binding is DebugBinding) {

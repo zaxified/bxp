@@ -11,6 +11,43 @@ import 'platform_shortcuts.dart';
 import 'theme/bxp_theme.dart';
 import 'theme/bxp_text.dart';
 
+bool _discardPromptOpen = false;
+
+/// Asks before an action that replaces the in-memory config with the file on
+/// disk (Open / Reload). Returns true when nothing is unsaved or the user
+/// agreed to discard it; false on cancel or while a prompt is already open
+/// (a held-down shortcut must not stack dialogs). Without it a stray
+/// Ctrl+R silently dropped every unsaved edit and the op log with it.
+Future<bool> confirmDiscardUnsaved(
+    BuildContext context, TraceStore store, String action) async {
+  if (!store.isDirty) return true;
+  if (_discardPromptOpen) return false;
+  _discardPromptOpen = true;
+  try {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Discard unsaved changes?'),
+        content: Text('$action replaces the config with the file on disk. '
+            'Your unsaved edits will be lost.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Discard'),
+          ),
+        ],
+      ),
+    );
+    return ok ?? false;
+  } finally {
+    _discardPromptOpen = false;
+  }
+}
+
 class ConfigView extends StatefulWidget {
   const ConfigView({super.key});
 
@@ -60,31 +97,44 @@ class _ConfigViewState extends State<ConfigView> {
                     _ToolbarBtn(
                       title: 'OPEN',
                       tooltip: 'Open config file ($mod+O)',
-                      onTap: () => OpenDialog.show(context, (path) async {
-                        store.setConfigPath(path);
-                        await store.loadConfig();
-                      }),
+                      onTap: () async {
+                        if (!await confirmDiscardUnsaved(
+                            context, store, 'Opening another config')) {
+                          return;
+                        }
+                        if (!context.mounted) return;
+                        OpenDialog.show(context, (path) async {
+                          store.setConfigPath(path);
+                          await store.loadConfig();
+                        });
+                      },
                     ),
                     _ToolbarBtn(
                       title: 'RELOAD',
                       tooltip: 'Reload from disk ($mod+R)',
-                      disabled: store.configPath.isEmpty,
-                      onTap: () => store.loadConfig(),
+                      disabled: store.configPath.isEmpty || store.isSaving,
+                      onTap: () async {
+                        if (!await confirmDiscardUnsaved(
+                            context, store, 'Reloading')) {
+                          return;
+                        }
+                        store.loadConfig();
+                      },
                     ),
                     _ToolbarBtn(
                         title: 'RESET',
                         tooltip: 'Discard all unsaved changes ($mod+T)',
-                        disabled: readOnly || !store.isDirty,
+                        disabled: readOnly || !store.isDirty || store.isSaving,
                         onTap: () => store.resetDraft()),
                     _ToolbarBtn(
                         title: 'UNDO',
                         tooltip: 'Undo ($mod+Z)',
-                        disabled: readOnly || !store.canUndo,
+                        disabled: readOnly || !store.canUndo || store.isSaving,
                         onTap: () => store.undo()),
                     _ToolbarBtn(
                         title: 'REDO',
                         tooltip: 'Redo ($mod+Y)',
-                        disabled: readOnly || !store.canRedo,
+                        disabled: readOnly || !store.canRedo || store.isSaving,
                         onTap: () => store.redo()),
                     _ToolbarBtn(
                         title: store.isValidating ? 'VALIDATING…' : 'VALIDATE',

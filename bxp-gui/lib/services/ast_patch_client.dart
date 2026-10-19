@@ -34,7 +34,15 @@ class AstPatchClient {
   static Uint8List apply(List<int> rawInput, List<ConfigOp> ops) {
     devTrace('astPatch.start',
         {'rawBytes': rawInput.length, 'opCount': ops.length});
-    final src = utf8.decode(rawInput);
+    final String src;
+    try {
+      src = utf8.decode(rawInput);
+    } on FormatException catch (e) {
+      // The loader decodes leniently, so a file with invalid UTF-8 opens; a
+      // save must refuse rather than rewrite it with U+FFFD substitutions
+      // (callers catch AstPatchError only).
+      throw AstPatchError('config is not valid UTF-8 (${e.message})');
+    }
     final parsed = Parser.parse(src);
     if (parsed.root == null || parsed.hasErrors) {
       final first = parsed.diagnostics.isNotEmpty

@@ -34,6 +34,13 @@ class UpdaterService extends ChangeNotifier {
   static const String repoSlug = 'zaxified/bxp';
   static const Duration _initialDelay = Duration(seconds: 5);
   static const Duration _periodicInterval = Duration(hours: 6);
+  static const Duration _connectTimeout = Duration(seconds: 30);
+  static const Duration _idleTimeout = Duration(seconds: 60);
+
+  /// Ceiling for the SHA256SUMS / .minisig fetches (a few hundred bytes in
+  /// practice) so a hostile edge cannot stream an unbounded body into memory.
+  @visibleForTesting
+  static const int maxSmallFetchBytes = 1024 * 1024;
 
   // Trust anchor for the minisign verification of `SHA256SUMS`. This is the
   // base64 payload from the maintainer's `minisign.pub` (algorithm + key id +
@@ -78,6 +85,7 @@ class UpdaterService extends ChangeNotifier {
 
   String? _currentVersion;
   Timer? _periodicTimer;
+  Timer? _initialTimer;
   bool _initialized = false;
   bool _checking = false;
 
@@ -113,7 +121,7 @@ class UpdaterService extends ChangeNotifier {
       devTrace('updater.init.skipped', {'reason': 'kDebugMode'});
       return;
     }
-    Timer(_initialDelay, () => checkForUpdates());
+    _initialTimer = Timer(_initialDelay, () => checkForUpdates());
     _periodicTimer = Timer.periodic(
       _periodicInterval,
       (_) => checkForUpdates(),
@@ -122,6 +130,7 @@ class UpdaterService extends ChangeNotifier {
 
   @override
   void dispose() {
+    _initialTimer?.cancel();
     _periodicTimer?.cancel();
     super.dispose();
   }
@@ -181,7 +190,7 @@ class UpdaterService extends ChangeNotifier {
   /// rate-limited at a lower threshold.
   Future<Map<String, dynamic>> _fetchLatestRelease() async {
     final uri = Uri.parse(_releaseApiUrl);
-    final client = HttpClient();
+    final client = HttpClient()..connectionTimeout = _connectTimeout;
     try {
       final req = await client.getUrl(uri);
       req.headers.set(HttpHeaders.acceptHeader, 'application/vnd.github+json');
@@ -190,7 +199,8 @@ class UpdaterService extends ChangeNotifier {
       if (res.statusCode != 200) {
         throw Exception('GitHub API ${res.statusCode}');
       }
-      final body = await res.transform(utf8.decoder).join();
+      final body =
+          await res.timeout(_idleTimeout).transform(utf8.decoder).join();
       return jsonDecode(body) as Map<String, dynamic>;
     } finally {
       // force:true closes the connection immediately even when the response body
@@ -293,6 +303,22 @@ class UpdaterService extends ChangeNotifier {
   }) async {
     final info = _available;
     if (info == null) return false;
+    // A second tap while a download is running would write the same file twice.
+    if (_installing) return false;
+    _installing = true;
+    try {
+      return await _downloadAndInstall(info, onProgress);
+    } finally {
+      _installing = false;
+    }
+  }
+
+  bool _installing = false;
+
+  Future<bool> _downloadAndInstall(
+    UpdateInfo info,
+    void Function(double)? onProgress,
+  ) async {
     _lastError = null;
 
     // No matching asset for this platform/host combination — e.g. Linux
@@ -306,14 +332,22 @@ class UpdaterService extends ChangeNotifier {
       return false;
     }
 
+    Directory? workDir;
+    var launched = false;
     try {
       final tmpDir = await getTemporaryDirectory();
+      // A fresh, unpredictable directory (mode 0700 on POSIX) instead of a
+      // fixed name in the shared temp dir: on Linux that is /tmp, where
+      // another local user could pre-plant a symlink at the fixed path and
+      // have the download overwrite a victim's file, or swap the installer
+      // between the hash check and a path-based launch (Windows / macOS).
+      workDir = await tmpDir.createTemp('bxp-update-');
       // `assetName` comes from the GitHub API; `p.basename` strips any path
       // components so a crafted name (e.g. "../../x") can't escape the temp
       // dir when joined. (Belt-and-braces — `_pickAssetUrl`'s strict
       // per-platform regex already rejects such names.)
       final assetPath = p.join(
-        tmpDir.path,
+        workDir.path,
         p.basename(info.assetName ?? 'bxp-desktop-update'),
       );
       await _downloadFile(info.assetUrl!, assetPath, onProgress);
@@ -375,12 +409,13 @@ class UpdaterService extends ChangeNotifier {
         return false;
       }
 
-      // Dispatch.
+      // Dispatch. Windows / macOS hand the installer to the OS by path, so
+      // its directory must outlive this call once the launch succeeded.
       if (Platform.isWindows) {
-        return await _installWindows(assetPath);
+        return launched = await _installWindows(assetPath);
       }
       if (Platform.isMacOS) {
-        return await _installMacOS(assetPath);
+        return launched = await _installMacOS(assetPath);
       }
       if (Platform.isLinux) {
         return await _installLinuxAppImage(installerBytes);
@@ -393,6 +428,13 @@ class UpdaterService extends ChangeNotifier {
       devTrace('updater.install.error', {'error': '$e'});
       notifyListeners();
       return false;
+    } finally {
+      // Never leave a partial or rejected installer behind in the temp dir.
+      if (workDir != null && !launched) {
+        try {
+          await workDir.delete(recursive: true);
+        } catch (_) {/* best-effort */}
+      }
     }
   }
 
@@ -401,7 +443,7 @@ class UpdaterService extends ChangeNotifier {
     String dest,
     void Function(double)? onProgress,
   ) async {
-    final client = HttpClient();
+    final client = HttpClient()..connectionTimeout = _connectTimeout;
     try {
       final req = await client.getUrl(Uri.parse(url));
       req.headers.set(HttpHeaders.userAgentHeader, 'bxp-gui-updater');
@@ -424,7 +466,7 @@ class UpdaterService extends ChangeNotifier {
       // hiccup mid-download leaves the file descriptor open until GC
       // and the partial file lingers on disk.
       try {
-        await for (final chunk in res) {
+        await for (final chunk in res.timeout(_idleTimeout)) {
           sink.add(chunk);
           received += chunk.length;
           if (total > 0) {
@@ -448,7 +490,7 @@ class UpdaterService extends ChangeNotifier {
   /// assets (a few KB each), which are fetched once and reused so the
   /// signature and the checksum compare see identical bytes.
   Future<Uint8List?> _fetchBytes(String url) async {
-    final client = HttpClient();
+    final client = HttpClient()..connectionTimeout = _connectTimeout;
     try {
       final req = await client.getUrl(Uri.parse(url));
       req.headers.set(HttpHeaders.userAgentHeader, 'bxp-gui-updater');
@@ -458,8 +500,12 @@ class UpdaterService extends ChangeNotifier {
         return null;
       }
       final builder = BytesBuilder(copy: false);
-      await for (final chunk in res) {
+      await for (final chunk in res.timeout(_idleTimeout)) {
         builder.add(chunk);
+        if (builder.length > maxSmallFetchBytes) {
+          devTrace('updater.fetch.too-large', {'url': url});
+          return null;
+        }
       }
       return builder.toBytes();
     } catch (e) {
@@ -635,13 +681,23 @@ class UpdaterService extends ChangeNotifier {
       final destApp = p.join(destDir, appName);
 
       await Directory(destDir).create(recursive: true);
-      final existing = Directory(destApp);
-      if (existing.existsSync()) existing.deleteSync(recursive: true);
-
-      final copy = await Process.run('cp', ['-R', appEntry.path, destDir]);
-      if (copy.exitCode != 0) {
-        _lastError = 'macOS install failed (copy): ${copy.stderr}';
-        return false;
+      // Copy into a staging dir first and only then replace the installed
+      // app: a failed copy (disk full, I/O error) must not leave the user
+      // with no app at all.
+      final staging = await Directory(destDir).createTemp('.bxp-update-');
+      try {
+        final copy = await Process.run('cp', ['-R', appEntry.path, staging.path]);
+        if (copy.exitCode != 0) {
+          _lastError = 'macOS install failed (copy): ${copy.stderr}';
+          return false;
+        }
+        final existing = Directory(destApp);
+        if (existing.existsSync()) existing.deleteSync(recursive: true);
+        await Directory(p.join(staging.path, appName)).rename(destApp);
+      } finally {
+        try {
+          await staging.delete(recursive: true);
+        } catch (_) {/* best-effort */}
       }
       await Process.run('open', ['-n', destApp]);
       return true;
@@ -669,8 +725,21 @@ class UpdaterService extends ChangeNotifier {
       return false;
     }
     final tmp = File('$current.new');
-    await tmp.writeAsBytes(newBytes, flush: true);
-    await Process.run('chmod', ['+x', tmp.path]);
+    try {
+      await tmp.writeAsBytes(newBytes, flush: true);
+      final chmod = await Process.run('chmod', ['+x', tmp.path]);
+      if (chmod.exitCode != 0) {
+        // Replacing the running AppImage with a non-executable file would
+        // leave the user with an app that no longer starts.
+        throw FileSystemException('chmod +x failed: ${chmod.stderr}', tmp.path);
+      }
+    } catch (e) {
+      try {
+        if (tmp.existsSync()) tmp.deleteSync();
+      } catch (_) {/* best-effort */}
+      _lastError = 'Could not prepare the new AppImage: $e';
+      return false;
+    }
     await tmp.rename(current);
     // Re-exec — detached so the old process can exit cleanly.
     await Process.start(current, [], mode: ProcessStartMode.detached);

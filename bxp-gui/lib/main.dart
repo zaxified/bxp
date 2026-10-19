@@ -862,6 +862,9 @@ class _AgentServerListenerState extends State<_AgentServerListener> {
     final store = _store;
     if (store == null || !store.initialized) return;
     _started = true;
+    // A broken install (bridge missing / docs unreadable) shows only the fatal
+    // screen; an agent endpoint over it would answer tools that cannot work.
+    if (store.fatalStartupError != null) return;
     if (store.prefs.getString(Prefs.mcpEnabled.key) == 'false') return;
     // Resolve bind config: persisted prefs → env override → built-in default.
     final prefs = store.prefs;

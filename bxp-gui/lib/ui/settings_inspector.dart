@@ -62,6 +62,10 @@ class _SettingsInspectorState extends State<SettingsInspector> {
   bool _handleKey(KeyEvent event) {
     if (event is! KeyDownEvent) return false;
     if (event.logicalKey != LogicalKeyboardKey.escape) return false;
+    // A dialog opened from the drawer (diagnostic-mode confirm, desktop
+    // integration) sits on a route above it: Escape belongs to that dialog.
+    // Consuming it here left the dialog open and closed the drawer instead.
+    if (ModalRoute.of(context)?.isCurrent == false) return false;
     widget.onClose();
     return true;
   }
@@ -327,6 +331,19 @@ Future<void> _toggleDiagnosticMode(BuildContext context, bool enable) async {
       !store.configLoadHadErrors &&
       !store.isSaving) {
     await store.saveConfig();
+  }
+  // Edits that could not be saved (config with errors, or the save itself
+  // failed) would be lost by the restart below: stop before touching the
+  // marker, and say why.
+  if (store.isDirty) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Restart cancelled: unsaved changes could not be '
+            'saved. Fix or discard them first.'),
+        duration: Duration(seconds: 5),
+      ));
+    }
+    return;
   }
 
   await DiagnosticLog.setMarker(enable);

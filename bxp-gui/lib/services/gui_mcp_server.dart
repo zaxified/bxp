@@ -329,7 +329,21 @@ class GuiMcpServer extends ChangeNotifier {
   /// server).
   Future<void> start(
       {String? host, int? port, List<String>? originAllowlist}) async {
-    if (isRunning) return;
+    if (isRunning || _starting) return;
+    _starting = true;
+    try {
+      await _startImpl(host: host, port: port, originAllowlist: originAllowlist);
+    } finally {
+      _starting = false;
+    }
+  }
+
+  // Guards against two overlapping start() calls both binding (the loser's
+  // failure handler would then forget the winner's live server).
+  bool _starting = false;
+
+  Future<void> _startImpl(
+      {String? host, int? port, List<String>? originAllowlist}) async {
     if (host != null) _bindHost = host;
     if (port != null) _bindPort = port;
     if (originAllowlist != null) _originAllowlist = List.of(originAllowlist);
@@ -374,7 +388,9 @@ class GuiMcpServer extends ChangeNotifier {
   Future<void> stop() async {
     await _sub?.cancel();
     _sub = null;
-    for (final t in _transports.values) {
+    // Copy: closing a transport fires the session-removal hook, which mutates
+    // the map mid-iteration (ConcurrentModificationError aborts the stop).
+    for (final t in _transports.values.toList()) {
       try {
         await t.close();
       } catch (_) {/* best-effort */}
@@ -506,7 +522,14 @@ class GuiMcpServer extends ChangeNotifier {
       await req.response.close();
       return;
     }
-    final body = jsonDecode(utf8.decode(raw));
+    final dynamic body;
+    try {
+      body = jsonDecode(utf8.decode(raw));
+    } on FormatException {
+      // Malformed UTF-8 / JSON from the client is a 400, not a server fault.
+      await _badRequest(req, 'Request body is not valid JSON');
+      return;
+    }
     final sid = req.headers.value('mcp-session-id');
 
     if (sid != null && _transports.containsKey(sid)) {
@@ -524,15 +547,20 @@ class GuiMcpServer extends ChangeNotifier {
           },
         ),
       );
-      transport.onclose = () {
+      // Each session gets its own McpServer (one transport per server in
+      // mcp_dart); the tool closures all capture this service + the shared
+      // store, so behaviour is identical across sessions.
+      final server = _buildServer();
+      // The hook lives on the protocol layer: `connect` replaces
+      // `transport.onclose` with its own handler, so a hook set on the
+      // transport would never fire and closed sessions would stay in
+      // `_transports` (agentConnected stuck true, transports leaked).
+      server.server.onclose = () {
         final id = transport.sessionId;
         if (id != null) _transports.remove(id);
         notifyListeners(); // agentConnected may flip false
       };
-      // Each session gets its own McpServer (one transport per server in
-      // mcp_dart); the tool closures all capture this service + the shared
-      // store, so behaviour is identical across sessions.
-      await _buildServer().connect(transport);
+      await server.connect(transport);
       await transport.handleRequest(req, body);
       return;
     }
@@ -955,7 +983,7 @@ class GuiMcpServer extends ChangeNotifier {
         }
         final key = args['key'] is String ? args['key'] as String : null;
         final value = args['value'];
-        final index = args['index'] is num ? (args['index'] as num).toInt() : null;
+        final index = _intArg(args['index']);
         _host.showConfigPanel();
         final rev0 = _host.editRevision;
         _host.insertConfigNode(path, key, value, atIndex: index);
@@ -1067,7 +1095,7 @@ class GuiMcpServer extends ChangeNotifier {
           _record('move_node', '$rawPath', 'error');
           return _error('`path` must be a non-empty array of keys/indices.');
         }
-        if (rawDelta is! num || rawDelta == 0) {
+        if (rawDelta is! num || !rawDelta.isFinite || rawDelta == 0) {
           _record('move_node', rawPath.join('.'), 'error');
           return _error('`delta` must be a non-zero integer (+1 / -1).');
         }
@@ -1164,7 +1192,7 @@ class GuiMcpServer extends ChangeNotifier {
       ),
       callback: (args, extra) async {
         final rawRow = args['file_row'];
-        if (rawRow is! num) {
+        if (rawRow is! num || !rawRow.isFinite) {
           _record('get_row_detail', '$rawRow', 'error');
           return _error('`file_row` must be an integer (1-based source line).');
         }
@@ -1277,6 +1305,9 @@ class GuiMcpServer extends ChangeNotifier {
     }
     notifyListeners();
   }
+
+  /// A finite JSON number as an int, else null (`Infinity.toInt()` throws).
+  static int? _intArg(dynamic v) => v is num && v.isFinite ? v.toInt() : null;
 
   static CallToolResult _json(Map<String, dynamic> data) =>
       CallToolResult.fromContent([TextContent(text: jsonEncode(data))]);

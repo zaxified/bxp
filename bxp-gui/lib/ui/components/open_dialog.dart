@@ -89,6 +89,13 @@ class _OpenDialogState extends State<OpenDialog> {
   final FocusNode _rootFocus = FocusNode(debugLabel: 'OpenDialogRoot');
   final ScrollController _listCtrl = ScrollController();
 
+  // Probed once per dialog. The sidebar is rebuilt on every selection move
+  // (arrow keys); probing A-Z drive letters each time stalls on offline
+  // network drives on Windows.
+  late final List<String> _drives =
+      Platform.isWindows ? _windowsDrives() : const <String>[];
+  late final bool _showDocs = Directory(p.join(_userHome(), 'Documents')).existsSync();
+
   @override
   void initState() {
     super.initState();
@@ -124,7 +131,14 @@ class _OpenDialogState extends State<OpenDialog> {
     if (!_searchFocus.hasFocus) _rootFocus.requestFocus();
   }
 
+  /// Stamp of the newest [_navigate] call. Listings finish in any order
+  /// (a slow network share clicked before a fast local folder); only the
+  /// newest request may write its result, or the panel would end up showing
+  /// a folder other than the one the user last picked.
+  int _navSeq = 0;
+
   Future<void> _navigate(String path) async {
+    final seq = ++_navSeq;
     setState(() {
       loading = true;
       loadError = null;
@@ -133,7 +147,7 @@ class _OpenDialogState extends State<OpenDialog> {
     try {
       final dir = Directory(path);
       final exists = await dir.exists();
-      if (!mounted) return;
+      if (!mounted || seq != _navSeq) return;
       if (!exists) {
         setState(() {
           loadError = 'Directory does not exist';
@@ -143,7 +157,7 @@ class _OpenDialogState extends State<OpenDialog> {
       }
 
       final list = await dir.list().toList();
-      if (!mounted) return;
+      if (!mounted || seq != _navSeq) return;
       // Only the always-on filter (hidden entries) is applied here — the
       // file-extension filter lives in _recomputeVisible so toggling
       // showAllFiles doesn't require re-listing the directory.
@@ -174,7 +188,7 @@ class _OpenDialogState extends State<OpenDialog> {
       });
       _refocusRootIfSearchInactive();
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted || seq != _navSeq) return;
       setState(() {
         loadError = e.toString();
         loading = false;
@@ -214,6 +228,7 @@ class _OpenDialogState extends State<OpenDialog> {
   }
 
   void _goUp() {
+    if (currentPath.isEmpty) return; // first listing not landed yet
     final parent = p.dirname(currentPath);
     if (!p.equals(parent, currentPath)) {
       _navigate(parent);
@@ -225,6 +240,7 @@ class _OpenDialogState extends State<OpenDialog> {
   /// install grab the starter templates without the console archive. Re-
   /// lists so the new file shows up, and reports the outcome via snackbar.
   Future<void> _createExamplesHere() async {
+    if (currentPath.isEmpty) return; // no folder listed yet / listing failed
     final messenger = ScaffoldMessenger.of(context);
     String? created;
     try {
@@ -403,6 +419,8 @@ class _OpenDialogState extends State<OpenDialog> {
                         width: 300,
                         child: _QuickSidebar(
                           currentPath: currentPath,
+                          drives: _drives,
+                          showDocs: _showDocs,
                           onPick: (path) {
                             _navigate(path);
                           },
@@ -501,12 +519,16 @@ class _DialogTitleBar extends StatelessWidget {
 
 class _QuickSidebar extends StatelessWidget {
   final String currentPath;
+  final List<String> drives;
+  final bool showDocs;
   final ValueChanged<String> onPick;
   final ValueChanged<String> onPickFile;
   final ValueChanged<String> onRemoveCustomPlace;
 
   const _QuickSidebar({
     required this.currentPath,
+    required this.drives,
+    required this.showDocs,
     required this.onPick,
     required this.onPickFile,
     required this.onRemoveCustomPlace,
@@ -518,8 +540,6 @@ class _QuickSidebar extends StatelessWidget {
     final store = context.watch<TraceStore>();
     final home = _userHome();
     final docs = p.join(home, 'Documents');
-    final showDocs = Directory(docs).existsSync();
-    final drives = Platform.isWindows ? _windowsDrives() : const <String>[];
     final custom = store.customPlaces;
 
     return Container(

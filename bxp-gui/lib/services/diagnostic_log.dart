@@ -266,7 +266,9 @@ class DiagnosticLog {
     _buildUs = 0;
     _rasterUs = 0;
 
-    _sink?.flush();
+    // An async write error (disk full, handle closed) surfaces through the
+    // flush future; unhandled it would escape to the zone every second.
+    _sink?.flush().catchError((Object _) {});
   }
 
   /// Best-effort enumeration of installed video adapters via
@@ -322,10 +324,13 @@ class DiagnosticLog {
       'kind': kind,
     };
     if (data != null) entry.addAll(data);
-    final line = '${jsonEncode(entry)}\n';
+    final String line;
     try {
+      line = '${jsonEncode(entry)}\n';
       sink.write(line);
     } catch (_) {
+      // Unencodable payload or closed sink: a diagnostic hook must never
+      // throw into the code path it is observing.
       return;
     }
     _bytesWritten += line.length;

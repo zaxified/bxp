@@ -77,6 +77,10 @@ class _MainViewState extends State<MainView> {
     // an action the equivalent button greys out (save while invalid,
     // undo with empty history, reset on a clean tree, …).
     final readOnly = store.configLoadHadErrors;
+    // While a save is in flight the tree is locked (config_view.dart) because
+    // an edit made now races the post-save reload and silently disappears;
+    // the keyboard must not be a way around that lock.
+    final saving = store.isSaving;
     switch (event.logicalKey) {
       case LogicalKeyboardKey.keyS:
         // Ctrl+Shift+S toggles the settings/runtime inspector. Mirrors the
@@ -103,27 +107,34 @@ class _MainViewState extends State<MainView> {
         // typo-undo meaning. Only intercept for the global config undo
         // when focus is somewhere structural (tree, panels, top bar).
         if (_focusInEditableText()) return false;
-        if (readOnly || !store.canUndo) return true;
+        if (readOnly || saving || !store.canUndo) return true;
         devTrace('action.shortcut', {'combo': 'Ctrl+Z', 'action': 'undo'});
         store.undo();
         return true;
       case LogicalKeyboardKey.keyY:
         if (_focusInEditableText()) return false;
-        if (readOnly || !store.canRedo) return true;
+        if (readOnly || saving || !store.canRedo) return true;
         devTrace('action.shortcut', {'combo': 'Ctrl+Y', 'action': 'redo'});
         store.redo();
         return true;
       case LogicalKeyboardKey.keyO:
+        if (saving) return true;
         devTrace('action.shortcut', {'combo': 'Ctrl+O', 'action': 'openDialog'});
-        OpenDialog.show(context, (path) async {
-          store.setConfigPath(path);
-          await store.loadConfig();
+        confirmDiscardUnsaved(context, store, 'Opening another config')
+            .then((ok) {
+          if (!ok || !mounted) return;
+          OpenDialog.show(context, (path) async {
+            store.setConfigPath(path);
+            await store.loadConfig();
+          });
         });
         return true;
       case LogicalKeyboardKey.keyR:
-        if (store.configPath.isEmpty) return true;
+        if (store.configPath.isEmpty || saving) return true;
         devTrace('action.shortcut', {'combo': 'Ctrl+R', 'action': 'reload'});
-        store.loadConfig();
+        confirmDiscardUnsaved(context, store, 'Reloading').then((ok) {
+          if (ok) store.loadConfig();
+        });
         return true;
       case LogicalKeyboardKey.keyE:
         // Ctrl+E for validate. Ctrl+V was the obvious mnemonic but
@@ -146,21 +157,25 @@ class _MainViewState extends State<MainView> {
           setState(() => _inspectorOpen = !_inspectorOpen);
           return true;
         }
-        if (readOnly || !store.isDirty) return true;
+        if (readOnly || saving || !store.isDirty) return true;
         devTrace('action.shortcut', {'combo': 'Ctrl+T', 'action': 'resetDraft'});
         store.resetDraft();
         return true;
       case LogicalKeyboardKey.arrowUp:
         if (!shift) return false;
+        if (saving) return true;
         return _moveFocused(store, -1);
       case LogicalKeyboardKey.arrowDown:
         if (!shift) return false;
+        if (saving) return true;
         return _moveFocused(store, 1);
       case LogicalKeyboardKey.delete:
         if (!shift) return false;
+        if (saving) return true;
         return _deleteFocused(store);
       case LogicalKeyboardKey.insert:
         if (!shift) return false;
+        if (saving) return true;
         return _addChildFocused(store);
     }
     return false;

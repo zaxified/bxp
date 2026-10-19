@@ -199,7 +199,9 @@ class _OutputTableState extends State<_OutputTable> {
       textDirection: TextDirection.ltr,
       maxLines: 1,
     )..layout();
-    return tp.size.width;
+    final w = tp.size.width;
+    tp.dispose();
+    return w;
   }
 }
 

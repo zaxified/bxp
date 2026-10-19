@@ -148,7 +148,18 @@ class _ExprEditorState extends State<ExprEditor> {
   @override
   void dispose() {
     _acDebounce?.cancel();
-    _hidePopup();
+    // The visibility callback may notify listeners (TraceStore) or setState
+    // an ancestor; both are illegal while the tree is being unmounted, so
+    // remove the entry here and report "closed" after the frame. Skipping
+    // the report would leave the store's autocomplete flag stuck on.
+    if (_popup != null) {
+      _popup!.remove();
+      _popup = null;
+      final cb = widget.onAutocompleteVisibilityChanged;
+      if (cb != null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) => cb(false));
+      }
+    }
     _store?.exprInsertRequest.removeListener(_onInsertRequest);
     widget.controller.removeListener(_onEdit);
     _focusNode.removeListener(_onFocusChange);
@@ -190,6 +201,14 @@ class _ExprEditorState extends State<ExprEditor> {
       case LogicalKeyboardKey.tab:
       case LogicalKeyboardKey.enter:
       case LogicalKeyboardKey.numpadEnter:
+        // The item list refreshes 500 ms after the last edit; accepting
+        // inside that window would splice into a stale range. Refresh now
+        // and let the key through when no completion survives.
+        if (_acDebounce?.isActive ?? false) {
+          _acDebounce!.cancel();
+          _refreshAutocomplete();
+          if (_popup == null) return KeyEventResult.ignored;
+        }
         _applyAutocomplete(_acItems[_acIndex]);
         return KeyEventResult.handled;
       case LogicalKeyboardKey.escape:
@@ -650,6 +669,14 @@ class _ExprEditorState extends State<ExprEditor> {
       return;
     }
     final text = widget.controller.text;
+    // Range recorded when the popup was last refreshed; a mouse pick can
+    // still land on one the text has since outgrown (`replaceRange` throws).
+    if (_acReplaceStart < 0 ||
+        _acReplaceStart > _acReplaceEnd ||
+        _acReplaceEnd > text.length) {
+      _hidePopup();
+      return;
+    }
     String insert = item.insert;
     // Pre_pass picks live inside a LOOKUP first-arg literal — close
     // the quote the user opened, append `, `, and move the cursor
@@ -743,6 +770,7 @@ class _ExprEditorState extends State<ExprEditor> {
       TextPosition(offset: textBefore.length),
       Rect.zero,
     );
+    tp.dispose();
     // contentPadding 12 (see TextField below) + ~1 line-height so the
     // popup hangs just below the active line. fontSize 13 × ~1.4 = 18.
     const lineH = 18.0;

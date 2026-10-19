@@ -350,7 +350,9 @@ class BridgeClient {
       final responseJson = utf8.decode(bytes);
       final response = jsonDecode(responseJson) as Map<String, dynamic>;
       return BridgeResult(
-        exitCode: response['exit_code'] as int,
+        // Tolerate a malformed response (missing / non-integer exit_code):
+        // report a bridge-level failure instead of an uncaught cast error.
+        exitCode: response['exit_code'] is int ? response['exit_code'] as int : -1,
         stdout: response['stdout'] as String? ?? '',
         stderr: response['stderr'] as String? ?? '',
         err: response['err'] as String?,
@@ -715,9 +717,9 @@ class BridgeClient {
     }
     streamHandle = handle;
 
-    onSpawn?.call(handle);
-
     try {
+      // Inside the try so a throwing observer still tears the callables down.
+      onSpawn?.call(handle);
       return await completer.future;
     } finally {
       stdoutCb.close();

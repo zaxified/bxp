@@ -444,6 +444,8 @@ class DartValidator {
           // Strip leading [ and trailing ] to get the bare column name.
           // Digit-leading tokens are numeric array indices (e.g. `[0]`)
           // which are not CSV column references — skip them.
+          // An unterminated `[` (mid-typing) has no closing bracket: skip it.
+          if (t.text.length < 2 || !t.text.endsWith(']')) continue;
           final inner = t.text.substring(1, t.text.length - 1);
           if (inner.isNotEmpty && !_isDigit(inner.codeUnitAt(0))) {
             fieldRefs.add(inner);
@@ -967,7 +969,10 @@ class DartValidator {
         while (i < src.length) {
           final cc = src.codeUnitAt(i);
           if (cc == 0x5C) {
+            // A trailing backslash would step past the end; clamp so the
+            // substring below stays in range (editor keystroke path).
             i += 2;
+            if (i > src.length) i = src.length;
             continue;
           }
           if (cc == 0x27) {

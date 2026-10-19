@@ -889,7 +889,9 @@ class _RuleResultsTableState extends State<_RuleResultsTable> {
       textDirection: TextDirection.ltr,
       maxLines: 1,
     )..layout();
-    return tp.size.width;
+    final w = tp.size.width;
+    tp.dispose();
+    return w;
   }
 
   @override

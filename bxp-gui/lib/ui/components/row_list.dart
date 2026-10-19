@@ -485,7 +485,12 @@ class _RowListInnerState extends State<_RowListInner> {
       _filterScanCursor = 0;
       _filterScanActive = true;
     });
-    final result = await widget.store.filterScanLargeFile(
+    // A read failure inside the scan (file vanished, RAF error) must not
+    // leave `_filterScanKey` set: the spinner would stay up and every
+    // later scroll-expansion is blocked by the "scan in flight" gate.
+    final ({List<String> matched, int nextFromIdx, bool done}) result;
+    try {
+      result = await widget.store.filterScanLargeFile(
       fileId: widget.fileId,
       filters: _filters,
       globalFilter: _wideGlobalFilter,
@@ -499,6 +504,10 @@ class _RowListInnerState extends State<_RowListInner> {
       },
       isAborted: () => !mounted || _filterScanKey != scanKey,
     );
+    } catch (_) {
+      _failScan(scanKey);
+      return;
+    }
     if (!mounted || _filterScanKey != scanKey) return;
     // PlutoGrid doesn't react to `widget.rows` changes after mount — we
     // must replace its internal refRows via the state manager. Clear
@@ -518,6 +527,16 @@ class _RowListInnerState extends State<_RowListInner> {
     _publishDisplayedCount();
   }
 
+  /// Drop the in-flight marker of a scan that threw, unless a newer scan
+  /// has already superseded it.
+  void _failScan(Object scanKey) {
+    if (!mounted || _filterScanKey != scanKey) return;
+    setState(() {
+      _filterScanKey = null;
+      _filterScanProgress = null;
+    });
+  }
+
   /// Continue an active filter scan past its first page. Called from
   /// the scroll-expansion path when the user nears the bottom of the
   /// match list. Appends to (rather than replaces) the visible set.
@@ -535,7 +554,12 @@ class _RowListInnerState extends State<_RowListInner> {
       _filterScanProgress =
           (matched: priorMatches, scanned: priorCursor);
     });
-    final result = await widget.store.filterScanLargeFile(
+    // A read failure inside the scan (file vanished, RAF error) must not
+    // leave `_filterScanKey` set: the spinner would stay up and every
+    // later scroll-expansion is blocked by the "scan in flight" gate.
+    final ({List<String> matched, int nextFromIdx, bool done}) result;
+    try {
+      result = await widget.store.filterScanLargeFile(
       fileId: widget.fileId,
       filters: _filters,
       globalFilter: _wideGlobalFilter,
@@ -550,6 +574,10 @@ class _RowListInnerState extends State<_RowListInner> {
       },
       isAborted: () => !mounted || _filterScanKey != scanKey,
     );
+    } catch (_) {
+      _failScan(scanKey);
+      return;
+    }
     if (!mounted || _filterScanKey != scanKey) return;
     // Append the new matches to the existing PlutoRow list.
     final sm = _stateManager;
@@ -701,7 +729,9 @@ class _RowListInnerState extends State<_RowListInner> {
       textDirection: TextDirection.ltr,
       maxLines: 1,
     )..layout();
-    return tp.size.width;
+    final w = tp.size.width;
+    tp.dispose();
+    return w;
   }
 
   /// Snapshot the current rendered widths from the grid's stateManager
@@ -791,6 +821,8 @@ class _RowListInnerState extends State<_RowListInner> {
   /// [_applyFilter] machinery as the text filters so eager / lazy paths
   /// and the displayed-count publish stay unified.
   void _setStatusFilter(Set<String> next) {
+    // The menu is a separate route and can outlive this grid (file switch).
+    if (!mounted) return;
     setState(() {
       _statusFilter
         ..clear()

@@ -473,14 +473,23 @@ class TraceStore extends ChangeNotifier {
     final fields = List<String>.from(row.fields);
     _exprCallInFlight.add(key);
     () async {
-      final calls = await BxpProcessClient.traceExpr(
-        expr: expr,
-        headers: headers,
-        fields: fields,
-      );
+      var calls = const <ExprCallTrace>[];
+      try {
+        calls = await BxpProcessClient.traceExpr(
+          expr: expr,
+          headers: headers,
+          fields: fields,
+        );
+      } catch (e) {
+        // Hover detail is best-effort; cache the empty result so the key is
+        // not re-requested on every build and the in-flight mark is cleared.
+        devTrace('exprTrace.failed', {'error': '$e'});
+      }
       if (_disposed) return;
+      // A reload / new run cleared the in-flight set while we were awaiting:
+      // the row ids are reused across runs, so this result must not land.
+      if (!_exprCallInFlight.remove(key)) return;
       _exprCallCache[key] = calls;
-      _exprCallInFlight.remove(key);
       notifyListeners();
     }();
   }
@@ -712,6 +721,21 @@ class TraceStore extends ChangeNotifier {
   // recently spawned call is allowed to write the result.
   int _exprValidateGen = 0;
 
+  /// Undo / redo / reset swap `selectedExprText` under a pending debounce or
+  /// in-flight validation, whose results are then dropped as stale — without
+  /// this the badge would stay on "checking…" (or show the old text's
+  /// verdict) forever.
+  void _revalidateSelectedExpr() {
+    _validationDebounce?.cancel();
+    exprValidationState = selectedExprText.trim().isEmpty
+        ? ExprValidationState.idle
+        : ExprValidationState.pending;
+    _validateNow(selectedExprText);
+  }
+
+  static String _flattenNewlines(String s) =>
+      s.replaceAll(RegExp(r'[\r\n]+'), ' ');
+
   void _validateNow(String text) async {
     // Belt-and-suspenders: strip newlines on the validator boundary too,
     // matching `updateSelectedExprText`. Anything getting here from
@@ -751,7 +775,7 @@ class TraceStore extends ChangeNotifier {
       final v = DartValidator(d);
       final ed = v.validateExpr(text, root: root, activeTemplateId: activeTid);
       if (ed != null) {
-        if (selectedExprText != text) return;
+        if (_flattenNewlines(selectedExprText) != text) return;
         exprValidationError = ed.suggest == null
             ? ed.message
             : '${ed.message} — ${ed.suggest}';
@@ -770,7 +794,10 @@ class TraceStore extends ChangeNotifier {
     if (gen != _exprValidateGen) return;
     // Selected expression changed under us (e.g. user clicked a different
     // leaf) — same drop rule.
-    if (selectedExprText != text) return;
+    // (Compare the newline-flattened form: `text` was flattened above, while
+    // `setSelectedExpr` stores a multi-line leaf verbatim — a raw compare
+    // dropped every result for it and left the badge on "checking…".)
+    if (_flattenNewlines(selectedExprText) != text) return;
     final err = res.error;
     exprValidationError = err;
     // The bridge reports err_offset/err_len as UTF-8 BYTE offsets; the
@@ -1111,7 +1138,14 @@ class TraceStore extends ChangeNotifier {
   }
 
   TraceStore() {
-    _init();
+    // Not awaited: any escape from _init (e.g. the prefs directory cannot be
+    // created) must still end the splash, or the app spins forever.
+    _init().catchError((Object e, StackTrace st) {
+      devTrace('init.failed', {'error': '$e'});
+      _fatalStartupError ??= 'Startup failed.\n\n$e';
+      _initialized = true;
+      notifyListeners();
+    });
   }
 
   /// True after [_init] finishes — successfully OR with a fatal error.
@@ -1411,6 +1445,18 @@ class TraceStore extends ChangeNotifier {
   /// before.
   Future<void> loadConfig({bool preserveTreeState = false}) async {
     devTrace('loadConfig.start', {'path': configPath});
+    // Re-entrancy: a second load (Ctrl+R twice, open-file while a reload is
+    // in flight) must not interleave with this one — the older call resumes
+    // after its awaits and would mix its AST with the newer call's
+    // diagnostics (and read a `configPath` that has since changed). Every
+    // await below re-checks [mySeq]; a superseded call returns without
+    // touching state and leaves `isLoadingConfig` to the newer one.
+    final mySeq = ++_loadSeq;
+    final path = configPath;
+    // True once the edit history has been reset against the freshly parsed
+    // AST (see [_resetEditHistory]); the tail only repeats it when no AST
+    // was installed.
+    var historyReset = false;
     isLoadingConfig = true;
     // Reset transient state from any previous load so errors don't stick:
     // a fresh load starts assumed-clean and the parse / validator paths
@@ -1445,21 +1491,28 @@ class TraceStore extends ChangeNotifier {
     if (!preserveTreeState) clearSelectedExpr();
     notifyListeners();
     try {
-      if (configPath.isEmpty) {
+      // `break load` (not `return`) leaves this block for the shared tail
+      // below: a `return` inside the try would skip the history reset and
+      // the final notifyListeners(), leaving the UI on a stale tree with
+      // `isLoadingConfig` already false.
+      load:
+      {
+      if (path.isEmpty) {
         _astRoot = null;
         _clearValidationDiagnostics();
         configError = null;
         _rawConfigInput = null;
         _templateInfos = const [];
         devTrace('loadConfig.skip', {'reason': 'empty path'});
-        return;
+        break load;
       }
 
       // AST is the primary loader. Parse the file via the Dart JSON5 AST
       // library; the bridge runs alongside as a background validator that
       // contributes `$err_*` and `$warn_*` diagnostics (mapped into the
       // path-keyed `_validationErrors` / `_validationWarnings` tables).
-      final astResult = await AstLoader.loadFromFile(configPath);
+      final astResult = await AstLoader.loadFromFile(path);
+      if (mySeq != _loadSeq) return;
       _rawConfigInput = utf8.encode(astResult.rawText);
 
       if (astResult.root == null) {
@@ -1475,19 +1528,27 @@ class TraceStore extends ChangeNotifier {
         _templateInfos = const [];
         devTrace('loadConfig.astParseFail',
             {'diagnostics': astResult.diagnostics.length, 'first': configError});
-        return;
+        break load;
       }
 
       _astRoot = astResult.root;
+      // The history/baseline/op log belong to THIS AST, so reset them in the
+      // same synchronous step that installs it. Doing it in the tail (after
+      // the validator + template awaits below) silently baked any edit the
+      // user made in that window into the "clean" baseline: not dirty, not
+      // in the op log, so neither Save nor the next save's replay had it.
+      _resetEditHistory();
+      historyReset = true;
 
       // Background validator: the bridge config validation gives us schema / expr /
       // pre_pass diagnostics that the AST parser (pure JSON5) doesn't
       // know about. Parse its output, build the path-keyed error map.
       try {
         final jsonOutput = await BxpProcessClient.loadConfig(
-          configPath,
+          path,
           checkFsSeconds: _activeFsCheckSeconds(),
         );
+        if (mySeq != _loadSeq) return;
         final bxpTree = jsonDecode(jsonOutput);
         if (bxpTree is Map<String, dynamic>) {
           final bxpFatal = bxpTree['error'] as String?;
@@ -1540,8 +1601,12 @@ class TraceStore extends ChangeNotifier {
 
       // Pull richer template metadata for the selector (separate subprocess
       // call into bxp-cli; not part of the AST loader path).
-      _templateInfos = await BxpProcessClient.listTemplates(configPath);
+      final infos = await BxpProcessClient.listTemplates(path);
+      if (mySeq != _loadSeq) return;
+      _templateInfos = infos;
+      }
     } catch (e, st) {
+      if (mySeq != _loadSeq) return;
       configError = e.toString();
       _astRoot = null;
       _clearValidationDiagnostics();
@@ -1549,24 +1614,22 @@ class TraceStore extends ChangeNotifier {
       _templateInfos = const [];
       devTrace('loadConfig.fail', {'err': e.toString(), 'stack': st.toString().split('\n').take(3).join(' | ')});
     } finally {
-      isLoadingConfig = false;
+      if (mySeq == _loadSeq) isLoadingConfig = false;
     }
-    // New load starts a fresh op log.
-    _opLog.clear();
+    // No AST was installed (empty path, parse failure, exception): drop the
+    // previous file's op log / history so Undo cannot resurrect it.
+    if (!historyReset) _resetEditHistory();
     // Empty templateId means "all templates" (bxp-cli runs every template
     // in the config when --template is omitted). Keep that as the default;
     // only drop a stale selection if the current template no longer exists.
+    // The memoised list still describes the PREVIOUS AST here (the cache is
+    // keyed on treeLoadGen, which only bumps below) — drop it first, or a
+    // template that does not exist in the new file survives the check.
+    _availableTemplatesGen = -1;
     final templates = availableTemplates;
     if (templateId.isNotEmpty && !templates.contains(templateId)) {
       templateId = '';
     }
-    // Fresh load establishes a new "clean" baseline. Everything edited
-    // after this point counts as dirty until the user saves.
-    _astBaseline = _astRoot?.clone();
-    _isDirty = false;
-    _astHistory.clear();
-    _historyIndex = 0;
-    if (_astRoot != null) _astHistory.add(_astRoot!.clone());
     configSaveError = null;
     // Add to MRU when the AST parsed (even if the bridge found errors —
     // user can still re-open later). Skip when the spawn itself crashed
@@ -1575,9 +1638,9 @@ class TraceStore extends ChangeNotifier {
     // for the load flow, but surface failures through the trace so debug
     // sessions can see when prefs writes are dropping silently (full disk,
     // permissions, locked file on Windows).
-    if (configPath.isNotEmpty && _astRoot != null) {
+    if (path.isNotEmpty && _astRoot != null) {
       // ignore: discarded_futures
-      _addRecentFile(configPath).catchError((Object e) {
+      _addRecentFile(path).catchError((Object e) {
         devTrace('action.loadConfig.addRecent.failed', {'error': '$e'});
       });
     }
@@ -1657,6 +1720,29 @@ class TraceStore extends ChangeNotifier {
   int _historyIndex = -1;
   JsonAstNode? _astBaseline;
 
+  /// Bumped on every change of the editable state (applied edit, undo, redo,
+  /// reset, fresh baseline). [saveConfig] snapshots it before its async
+  /// round-trip and refuses to write when it moved: the bytes it staged would
+  /// lack the newer edits, which the post-save baseline reset would then
+  /// declare "saved".
+  int _mutationSeq = 0;
+
+  /// Generation of the in-flight [loadConfig]; see the re-entrancy note there.
+  int _loadSeq = 0;
+
+  /// Install a fresh "clean" baseline for the current `_astRoot`: empty op
+  /// log, single-entry history, not dirty. Everything edited after this
+  /// point counts as dirty until the user saves.
+  void _resetEditHistory() {
+    _opLog.clear();
+    _astBaseline = _astRoot?.clone();
+    _isDirty = false;
+    _astHistory.clear();
+    _historyIndex = 0;
+    if (_astRoot != null) _astHistory.add(_astRoot!.clone());
+    _mutationSeq++;
+  }
+
   bool get canUndo => _historyIndex > 0;
   bool get canRedo => _historyIndex < _astHistory.length - 1;
 
@@ -1666,6 +1752,7 @@ class TraceStore extends ChangeNotifier {
     }
     if (_astRoot != null) _astHistory.add(_astRoot!.clone());
     _historyIndex = _astHistory.length - 1;
+    _mutationSeq++;
     // Dirty derives from history index: reaching index 0 means we're
     // at the saved baseline. Mutation methods used to call
     // _recomputeDirty BEFORE _pushHistory; that left them stale on the
@@ -1700,11 +1787,13 @@ class TraceStore extends ChangeNotifier {
     _astHistory.clear();
     if (_astRoot != null) _astHistory.add(_astRoot!.clone());
     _historyIndex = 0;
+    _mutationSeq++;
     _invalidatePathKeyedState();
     if (selectedExprPath != null) {
       final val = _getAt(selectedExprPath!);
       selectedExprText = val is String ? val : '';
       exprGeneration++;
+      _revalidateSelectedExpr();
     }
     notifyListeners();
   }
@@ -1713,6 +1802,7 @@ class TraceStore extends ChangeNotifier {
     if (canUndo) {
       devTrace('action.undo', {'historyIndex': _historyIndex - 1});
       _historyIndex--;
+      _mutationSeq++;
       _astRoot = _astHistory[_historyIndex].clone();
       _recomputeDirty();
       _invalidatePathKeyedState();
@@ -1720,6 +1810,7 @@ class TraceStore extends ChangeNotifier {
         final val = _getAt(selectedExprPath!);
         selectedExprText = val is String ? val : '';
         exprGeneration++;
+        _revalidateSelectedExpr();
       }
       notifyListeners();
     }
@@ -1729,6 +1820,7 @@ class TraceStore extends ChangeNotifier {
     if (canRedo) {
       devTrace('action.redo', {'historyIndex': _historyIndex + 1});
       _historyIndex++;
+      _mutationSeq++;
       _astRoot = _astHistory[_historyIndex].clone();
       _recomputeDirty();
       _invalidatePathKeyedState();
@@ -1736,6 +1828,7 @@ class TraceStore extends ChangeNotifier {
         final val = _getAt(selectedExprPath!);
         selectedExprText = val is String ? val : '';
         exprGeneration++;
+        _revalidateSelectedExpr();
       }
       notifyListeners();
     }
@@ -2283,6 +2376,9 @@ class TraceStore extends ChangeNotifier {
   /// the (possibly slow) round-trip.
   bool isSaving = false;
 
+  static const String _kEditedWhileSaving =
+      'config was edited while saving — nothing was written; save again';
+
   Future<void> saveConfig() async {
     if (_astRoot == null || configPath.isEmpty) return;
     if (isSaving) return; // re-entrancy guard against double-click
@@ -2299,6 +2395,8 @@ class TraceStore extends ChangeNotifier {
     configSaveError = null;
     isSaving = true;
     notifyListeners();
+    // Edits are not blocked while the save round-trip runs; see [_mutationSeq].
+    final seqAtStart = _mutationSeq;
     final tmpPath = '$configPath.bxp-tmp';
     final tmpFile = File(tmpPath);
     try {
@@ -2378,6 +2476,11 @@ class TraceStore extends ChangeNotifier {
         return;
       }
 
+      if (_mutationSeq != seqAtStart) {
+        await failPreSave(_kEditedWhileSaving);
+        return;
+      }
+
       // Backup the original before overwriting so the user has a recovery
       // path if a save turns out to be wrong. Suffix is a sortable
       // timestamp so multiple saves of the same file don't collide.
@@ -2389,6 +2492,12 @@ class TraceStore extends ChangeNotifier {
         } catch (_) {
           // Best-effort backup; don't block the save if the FS rejects it.
         }
+      }
+
+      // The backup copy awaited too: re-check right before the rename.
+      if (_mutationSeq != seqAtStart) {
+        await failPreSave(_kEditedWhileSaving);
+        return;
       }
 
       // Atomic rename: this is the one filesystem operation that cannot
@@ -2764,16 +2873,25 @@ class TraceStore extends ChangeNotifier {
     _activeRaf = raf;
 
     if (file.sourceLoadEager) {
+      // Read into a local and publish only after the seq check: a
+      // superseded activation assigning `_activeEagerBytes` straight from
+      // the await would overwrite the newer file's bytes.
+      Uint8List? bytes;
+      String? readErr;
       try {
-        _activeEagerBytes = await raf.read(file.sourceCsvSizeBytes);
+        bytes = await raf.read(file.sourceCsvSizeBytes);
       } catch (e) {
-        traceModel?.issues.add('eager read failed: ${file.sourceCsvPath}: $e');
-        _activeEagerBytes = null;
+        readErr = '$e';
       }
       if (mySeq != _activationSeq) {
         try { await raf.close(); } catch (_) {}
         return;
       }
+      if (readErr != null) {
+        traceModel?.issues
+            .add('eager read failed: ${file.sourceCsvPath}: $readErr');
+      }
+      _activeEagerBytes = bytes;
       // Sweep populate all rows from the cached bytes.
       _populateRangeSync(file, 0, file.rowIds.length);
     } else {
@@ -3303,6 +3421,8 @@ class TraceStore extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _validationDebounce?.cancel();
+    _validateToastTimer?.cancel();
+    _exprInsertRequest.dispose();
     _traceLinesCounter.dispose();
     _tracesBytesCounter.dispose();
     _fileGen.dispose();
@@ -3334,6 +3454,11 @@ class TraceStore extends ChangeNotifier {
   /// once at the start and mutated in place as frames land.
   Future<void> _streamRunBtrace({required bool dry}) async {
     if (configPath.isEmpty) return;
+    // A second run while one is in flight would reset the shared counters /
+    // runtimes / handle under the first, whose late `finally` would then
+    // overwrite the newer run's status. The UI disables the buttons; the
+    // gui-mcp tools do not.
+    if (status == RunStatus.running) return;
     status = RunStatus.running;
     _runStartedAt = DateTime.now();
     runMode = dry ? RunMode.dry : RunMode.full;
@@ -3412,6 +3537,7 @@ class TraceStore extends ChangeNotifier {
     // the status-bar tier display) on a 100 ms cadence so the status bar
     // updates without calling notifyListeners() per frame.
     final ticker = Timer.periodic(const Duration(milliseconds: 100), (_) {
+      if (_disposed) return;
       if (_traceLinesCounter.value != rawLines) {
         _traceLinesCounter.value = rawLines;
       }
@@ -3518,11 +3644,13 @@ class TraceStore extends ChangeNotifier {
       if (runError == null) {
         try { File(bxtbPath).deleteSync(); } catch (_) {}
       }
-      if (_traceLinesCounter.value != rawLines) {
-        _traceLinesCounter.value = rawLines;
-      }
-      if (_tracesBytesCounter.value != rawBytes) {
-        _tracesBytesCounter.value = rawBytes;
+      if (!_disposed) {
+        if (_traceLinesCounter.value != rawLines) {
+          _traceLinesCounter.value = rawLines;
+        }
+        if (_tracesBytesCounter.value != rawBytes) {
+          _tracesBytesCounter.value = rawBytes;
+        }
       }
       // Record how long the run took for the status bar. Runs in `finally`
       // so every terminal path (done / error / cancelled / spawn fail)
@@ -3561,6 +3689,9 @@ class TraceStore extends ChangeNotifier {
   /// behind it. Caller drives this in a loop from a stdout-chunk listener.
   Future<void> _ingestBtraceFrame(
       _BtraceIngestCtx ctx, btrace_mod.Frame frame) async {
+    // Late frames of a run that outlived the store: the ValueNotifiers below
+    // are disposed.
+    if (_disposed) return;
     if (frame is btrace_mod.FileStart) {
       await ctx.finalizeCurrentFile();
       final fileId = '${frame.template}::${frame.path}';

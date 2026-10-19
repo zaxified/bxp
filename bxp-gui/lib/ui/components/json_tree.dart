@@ -2528,7 +2528,9 @@ class _EditableStringState extends State<_EditableString> {
       text: TextSpan(text: widget.value, style: textStyle),
       textDirection: TextDirection.ltr,
     )..layout();
-    final fieldWidth = (tp.width * 1.2 + 24)
+    final textWidth = tp.width;
+    tp.dispose();
+    final fieldWidth = (textWidth * 1.2 + 24)
         .clamp(LayoutDefaults.editableMinWidth, LayoutDefaults.editableMaxWidth);
     return SizedBox(
       height: 20,

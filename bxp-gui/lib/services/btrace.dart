@@ -160,6 +160,10 @@ class BtraceReader {
   Uint8List _data;
   ByteData _bd;
   int _pos = 0;
+
+  /// Bytes dropped from the front of [_data] by [appendBytes] compaction, so
+  /// [position] stays an absolute stream offset.
+  int _dropped = 0;
   bool _headerVerified;
   final bool _streaming;
 
@@ -200,9 +204,17 @@ class BtraceReader {
       throw StateError('appendBytes called on bulk-mode BtraceReader');
     }
     if (chunk.isEmpty) return;
-    final out = Uint8List(_data.length + chunk.length);
-    out.setRange(0, _data.length, _data);
-    out.setRange(_data.length, out.length, chunk);
+    // Drop the already-consumed prefix while copying: re-copying the whole
+    // stream on every chunk made a multi-MB trace quadratic and kept every
+    // consumed byte resident. Only after the magic is verified (_pos is then
+    // a frame boundary).
+    final keepFrom = _headerVerified ? _pos : 0;
+    final keep = _data.length - keepFrom;
+    final out = Uint8List(keep + chunk.length);
+    out.setRange(0, keep, _data, keepFrom);
+    out.setRange(keep, out.length, chunk);
+    _dropped += keepFrom;
+    _pos -= keepFrom;
     _data = out;
     _bd = ByteData.sublistView(_data);
   }
@@ -211,7 +223,7 @@ class BtraceReader {
   bool get hasMore => _pos < _data.length;
 
   /// Current byte position (after header). Useful for diagnostics.
-  int get position => _pos;
+  int get position => _dropped + _pos;
 
   /// Returns next frame, or `null` when there are no more frames available.
   ///
@@ -264,15 +276,35 @@ class BtraceReader {
         _pos = payloadEnd;
         continue;
       }
-      final result = switch (frameType) {
-        FrameType.fileStart => _readFileStart(chunkId),
-        FrameType.fileEnd => _readFileEnd(chunkId),
-        FrameType.outputRow => _readOutputRow(chunkId),
-        FrameType.filteredRow => _readFilteredRow(chunkId),
-        FrameType.errorRow => _readErrorRow(chunkId),
-        FrameType.prepassEntry => _readPrepassEntry(chunkId),
-        FrameType.done => _readDone(chunkId),
-      };
+      final Frame result;
+      try {
+        result = switch (frameType) {
+          FrameType.fileStart => _readFileStart(chunkId),
+          FrameType.fileEnd => _readFileEnd(chunkId),
+          FrameType.outputRow => _readOutputRow(chunkId),
+          FrameType.filteredRow => _readFilteredRow(chunkId),
+          FrameType.errorRow => _readErrorRow(chunkId),
+          FrameType.prepassEntry => _readPrepassEntry(chunkId),
+          FrameType.done => _readDone(chunkId),
+        };
+      } on RangeError catch (e) {
+        // A field ran past the end of the buffered bytes: the payload is
+        // shorter than its own length prefixes claim. Skip the frame and
+        // report it as a format error (callers catch FormatException only).
+        _pos = payloadEnd;
+        throw FormatException(
+            'btrace: ${frameType.name} payload shorter than its fields ($e)');
+      } on FormatException {
+        _pos = payloadEnd; // stay aligned on the next frame
+        rethrow;
+      }
+      if (_pos > payloadEnd) {
+        // The fields read into the NEXT frame's bytes — without this check a
+        // short pay_len silently yields a garbage frame and skips a good one.
+        _pos = payloadEnd;
+        throw FormatException(
+            'btrace: ${frameType.name} fields overrun pay_len $payLen');
+      }
       assert(_pos == payloadEnd,
           'btrace: payload over/underrun for ${frameType.name} '
           '(read to $_pos, payload ended at $payloadEnd)');
@@ -353,6 +385,8 @@ class BtraceReader {
     _pos += 4;
     final bytes = _data.sublist(_pos, _pos + len);
     _pos += len;
-    return utf8.decode(bytes);
+    // Data-lenient: a source value with invalid UTF-8 (error detail, path)
+    // must not drop the whole frame.
+    return utf8.decode(bytes, allowMalformed: true);
   }
 }

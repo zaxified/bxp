@@ -453,10 +453,12 @@ dialog-gated. The two notes below are bounded by that model and sharpen only
 when the user **binds to a network interface** (set an `Origin` allowlist
 then):
 
-- **Unbounded session-transport map.** Each `initialize` without a matching
-  close leaks one transport (+ `McpServer`) in `_transports`; only
-  `transport.onclose` removes it. Slow memory growth, amplified on a network
-  bind. Each session still needs a valid `initialize`.
+- **Abandoned sessions stay in the transport map.** A closed session is
+  removed (the hook sits on `server.server.onclose`, because
+  `McpServer.connect` replaces `transport.onclose`), but an `initialize`
+  whose client never closes keeps its transport (+ `McpServer`) in
+  `_transports`. Slow memory growth, amplified on a network bind. Each session
+  still needs a valid `initialize`.
 - **`GET /health` is unauthenticated and discloses `config_path`** (an absolute
   path, possibly under `~`) to any caller that passes the origin check. Minor
   info-disclosure; it is the intentional handshake surface. Matters on a
@@ -464,33 +466,22 @@ then):
 
 **Other:**
 
-- **`bridge_client._runWithBuffer` does `response['exit_code'] as int`** with no
-  guard — a bridge returning JSON without `exit_code` throws an uncaught cast
-  instead of a `BridgeResult{err}`. The bridge is the project's own trusted code
-  (Module 4 audit clean), so unreachable today.
-- **`PrefsService._flush` uses a fixed `<file>.tmp` path.** Two un-awaited `setX`
-  calls would race the tmp write/rename; single-isolate Dart + setters awaited
-  at every live call site means no live trigger. The tmp→rename itself is sound.
 - **`trace_store.drainQueue` is O(n²) on the frame backlog** (`removeAt(0)` in a
   loop). The queue normally stays short (drained incrementally); a fast
   producer / slow consumer or the single post-exit final drain can let it grow.
   Bounded by trace size, not attacker-controlled. Fix if it ever bites:
   `dart:collection ListQueue` (`removeFirst()` is O(1)).
-- **`UpdaterService` HTTP fetches are uncapped + untimed.** `_fetchBytes`
-  (SHA256SUMS, `.minisig`) and `_fetchLatestRelease` read the whole body into a
-  builder with no size cap and no `HttpClient` timeout. Over TLS to
-  `api.github.com` / `objects.githubusercontent.com` size + trust are bounded in
-  practice, but a compromised CDN edge / MITM-with-cert could stream an
-  unbounded body (main-isolate memory) or stall forever. Same class as the
-  (now-fixed) gui-mcp body cap; add a few-MB ceiling on the SUMS/sig fetches +
-  a connection/idle timeout when the updater is next touched.
 - **Win/macOS self-update re-opens the verified installer by path** (residual
   TOCTOU): Linux writes the already-hashed bytes straight to `$APPIMAGE.new`,
   but `setup.exe /S` / `hdiutil attach` re-read the file the hash was computed
-  from. Materially mitigated — `getTemporaryDirectory()` is a **per-user** dir
-  on both, so only a same-user process could race it, and a same-user process
-  can already tamper with the app. Not a privilege-crossing hole, just an
-  inconsistency with the Linux path.
+  from. Mitigated — the download lands in a fresh `createTemp` directory
+  (0700 on POSIX) inside the temp dir, so only a same-user process could race
+  it, and a same-user process can already tamper with the app. Not a
+  privilege-crossing hole, just an inconsistency with the Linux path.
+- **The updater cannot detect a downgrade.** The version comparison uses the
+  unsigned GitHub API answer, and the signed `SHA256SUMS` carries no version,
+  so a hostile edge could offer an older signed release. Closing it needs a
+  version inside the signed payload (a `release.yml` change).
 
 ## Windows performance notes
 

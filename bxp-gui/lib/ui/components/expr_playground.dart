@@ -64,6 +64,7 @@ class _ExprPlaygroundState extends State<ExprPlayground> {
   void initState() {
     super.initState();
     _ctrl = ExprTextEditingController(text: _examples.first.expr);
+    _lastText = _stripNewlines(_ctrl.text);
     _ctrl.addListener(_onChanged);
     _validate(_ctrl.text);
   }
@@ -84,9 +85,18 @@ class _ExprPlaygroundState extends State<ExprPlayground> {
   String _stripNewlines(String s) =>
       s.replaceAll(RegExp(r'[\r\n]+'), ' ');
 
-  void _onChanged() {
-    _debounce?.cancel();
+  /// Stripped text the last [_onChanged] pass looked at. The controller
+  /// also notifies for cursor moves and for [setValidationSpan]; without
+  /// this gate each notification flipped the badge back to PENDING and
+  /// re-ran validation (an error verdict showed PENDING for another 500 ms
+  /// because publishing its own underline span re-triggered the listener).
+  String _lastText = '';
+
+  void _onChanged({bool force = false}) {
     final text = _stripNewlines(_ctrl.text);
+    if (!force && text == _lastText) return;
+    _lastText = text;
+    _debounce?.cancel();
     if (text.trim().isEmpty) {
       setState(() {
         _state = ExprValidationState.idle;
@@ -104,13 +114,14 @@ class _ExprPlaygroundState extends State<ExprPlayground> {
   }
 
   void _onAutocompleteVisibility(bool open) {
+    if (!mounted) return;
     setState(() => _autocompleteOpen = open);
     if (open) {
       _debounce?.cancel();
     } else {
       // Popup closed — re-validate the final text so the badge catches
       // up to whatever the user picked / typed past the suggestions.
-      _onChanged();
+      _onChanged(force: true);
     }
   }
 

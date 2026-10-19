@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'app_runtime.dart';
 import 'dev_trace.dart';
 
@@ -68,7 +69,7 @@ class DesktopIntegrationService {
     final currentAppImage = _appImage();
     if (currentAppImage == null) return false;
     final content = file.readAsStringSync();
-    return content.contains('Exec=$currentAppImage');
+    return content.contains('Exec=${execToken(currentAppImage)}');
   }
 
   /// Snapshot of the absolute paths the integration will touch.
@@ -149,7 +150,7 @@ class DesktopIntegrationService {
     final desktopFile = File(_desktopFilePath());
     if (!await desktopFile.exists()) return;
     final current = await desktopFile.readAsString();
-    if (current.contains('Exec=$appImage')) return;
+    if (current.contains('Exec=${execToken(appImage)}')) return;
     await desktopFile.writeAsString(_desktopFileContent(appImage));
   }
 
@@ -163,11 +164,26 @@ class DesktopIntegrationService {
       '${_hicolorDir()}/${size}x$size/apps/bxp-gui.png';
   String _prefsFilePath() => '${_home()}/.local/share/bxp-gui/bxp-gui.json';
 
+  /// [path] as the program token of a `.desktop` `Exec=` line. A path with a
+  /// space or another reserved character (`~/My Apps/bxp.AppImage`) must be
+  /// double-quoted, or the launcher splits it into several arguments and the
+  /// menu entry does nothing. Inside quotes the spec escapes `"` `` ` `` `$`
+  /// `\` with a backslash, and the file-level string escaping doubles every
+  /// backslash again; a literal `%` is written `%%`. Plain paths stay bare.
+  @visibleForTesting
+  static String execToken(String path) {
+    final escPct = path.replaceAll('%', '%%');
+    if (!RegExp(r'[\s"\x27\\<>~|&;$*?#()`]').hasMatch(path)) return escPct;
+    final quoted = escPct.replaceAllMapped(
+        RegExp(r'["`$\\]'), (m) => '\\${m[0]}');
+    return '"${quoted.replaceAll('\\', '\\\\')}"';
+  }
+
   String _desktopFileContent(String execPath) => '[Desktop Entry]\n'
       'Type=Application\n'
       'Name=BXP\n'
       'Comment=Broker eXchange Parser - convert broker exports to portfolio trackers\n'
-      'Exec=$execPath %F\n'
+      'Exec=${execToken(execPath)} %F\n'
       'Icon=bxp-gui\n'
       'Terminal=false\n'
       'Categories=Office;Finance;Utility;\n'

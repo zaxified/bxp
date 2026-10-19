@@ -21,6 +21,17 @@ const String kDocsSiteUrl = 'https://zaxified.github.io/bxp/';
 /// no `open` if the macOS user removed it), and without this a click that does
 /// nothing looks like a UI bug.
 Future<void> openExternalUrl(String url) async {
+  // Only web links go to the OS opener: it would also launch local files and
+  // custom protocol handlers. On Windows the URL travels through `cmd`, which
+  // treats `& | < > ^ " %` as syntax, so a URL carrying them is refused.
+  final uri = Uri.tryParse(url);
+  final webLink = uri != null &&
+      (uri.scheme == 'http' || uri.scheme == 'https') &&
+      uri.host.isNotEmpty;
+  if (!webLink || (Platform.isWindows && RegExp(r'[&|<>^"%\s]').hasMatch(url))) {
+    devTrace('openExternalUrl.rejected', {'url': url});
+    return;
+  }
   final (cmd, args) = switch (Platform.operatingSystem) {
     'linux' => ('xdg-open', [url]),
     'macos' => ('open', [url]),
