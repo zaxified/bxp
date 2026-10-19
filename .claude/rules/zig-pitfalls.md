@@ -33,6 +33,12 @@ this file only holds what is specific to this repository.
   They are left for 0.17.1, which carries the fix. Until then, write a new
   signed → unsigned narrowing in two steps (`std.math.cast(u64, x)` first, then
   the narrow cast) and test it in ReleaseSafe at the boundary value.
+- **On macOS, spawning with an inherited closed fd fails.** `std.process.spawn`
+  defaults stdin/stdout/stderr to `.inherit`; on macOS it spawns through
+  `posix_spawn` and inherits via `addinherit_np`, which fails the whole spawn
+  when that fd is closed. The bridge starts its children with stdin closed, so
+  anything they spawn must pass `.stdin = .ignore` (see `test_helper.zig`
+  `fork-sleep`). Linux forks and never notices — only the macOS CI leg does.
 
 ## Allocators
 
