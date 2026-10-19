@@ -261,8 +261,9 @@ build_macos() {
     codesign --deep --force --sign - "$app"
 
     if ! command -v create-dmg >/dev/null 2>&1; then
-        echo "  ! create-dmg not found — skipping DMG packaging"
-        return 0
+        echo "  ! create-dmg not found — the DMG is the only macOS release artifact, refusing to skip" >&2
+        echo "    install it (e.g. brew install create-dmg) and ensure it is on PATH" >&2
+        exit 1
     fi
     local out="$OUTDIR/bxp-desktop-macos-arm64.dmg"
     create-dmg \

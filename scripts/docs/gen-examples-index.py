@@ -11,9 +11,14 @@ Pure signpost generator — it never touches the example pages themselves. Re-ru
 after adding, renaming, or re-describing an example:
 
     python3 scripts/docs/gen-examples-index.py
+
+`--check` writes nothing: it renders every page in memory, compares with the
+committed file and exits 1 listing each page that is stale or missing (the
+drift guard scripts/docs/gen-docs.sh --check calls).
 """
 import os
 import re
+import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 BASE = os.path.join(ROOT, "docs", "examples")
@@ -68,7 +73,7 @@ def grid(items, link_prefix):
     return "\n".join(lines)
 
 
-def write_central():
+def render_central():
     out = [
         "# Examples", "",
         "Runnable demonstrations of one data problem each — config, input, and the",
@@ -81,29 +86,48 @@ def write_central():
         if not items:
             continue
         out += [f"## {heading}", "", intro, "", grid(items, f"{slug}/")]
-    path = os.path.join(BASE, "index.md")
-    open(path, "w", encoding="utf-8").write("\n".join(out).rstrip() + "\n")
-    return path
+    return os.path.join(BASE, "index.md"), "\n".join(out).rstrip() + "\n"
 
 
-def write_tier(slug, heading, intro):
+def render_tier(slug, heading, intro):
     items = examples_in(slug)
     if not items:
         return None
     out = [f"# {heading}", "", intro, "", grid(items, "")]
-    path = os.path.join(BASE, slug, "index.md")
-    open(path, "w", encoding="utf-8").write("\n".join(out).rstrip() + "\n")
-    return path
+    return os.path.join(BASE, slug, "index.md"), "\n".join(out).rstrip() + "\n"
+
+
+def render_all():
+    pages = [render_central()]
+    for slug, heading, intro in TIERS:
+        p = render_tier(slug, heading, intro)
+        if p:
+            pages.append(p)
+    return pages
 
 
 def main():
-    written = [write_central()]
-    for slug, heading, intro in TIERS:
-        p = write_tier(slug, heading, intro)
-        if p:
-            written.append(p)
-    for p in written:
-        print("wrote", os.path.relpath(p, ROOT))
+    pages = render_all()
+    if "--check" in sys.argv[1:]:
+        stale = []
+        for path, content in pages:
+            try:
+                have = open(path, encoding="utf-8").read()
+            except OSError:
+                have = None
+            if have != content:
+                stale.append(os.path.relpath(path, ROOT))
+        for p in stale:
+            print("stale:", p, file=sys.stderr)
+        if stale:
+            print("gen-examples-index --check: run python3 scripts/docs/gen-examples-index.py",
+                  file=sys.stderr)
+            sys.exit(1)
+        print("gen-examples-index --check: in sync")
+        return
+    for path, content in pages:
+        open(path, "w", encoding="utf-8").write(content)
+        print("wrote", os.path.relpath(path, ROOT))
 
 
 if __name__ == "__main__":

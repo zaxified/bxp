@@ -62,7 +62,7 @@ jobs:
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
 
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.13"
           cache: pip
@@ -80,7 +80,7 @@ jobs:
       # or the theme palette does. Material keys its own cache by content, so a
       # stale restore is corrected, never served.
       - name: Restore the social-card cache
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: .cache
           key: mkdocs-material-${{ hashFiles('mkdocs.yml', 'scripts/docs/requirements.txt') }}-${{ github.sha }}
@@ -97,7 +97,7 @@ jobs:
       # the build cache, so persist it here and let the toolchain download stay
       # cached on its own.
       - name: Cache Zig build artifacts
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ${{ github.workspace }}/.zig-cache
           key: zig-docs-wasm-z017-${{ hashFiles('bxp-core/**/*.zig', 'bxp-core/build.zig.zon') }}
@@ -150,7 +150,7 @@ jobs:
       # writes no dotfile into site/ — no .nojekyll either, and none is
       # needed, since a Pages artifact is served as-is and never sees
       # Jekyll — and docs/ carries no dotfile to copy.
-      - uses: actions/upload-pages-artifact@v5
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5
         with:
           path: site
 
@@ -168,4 +168,4 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v5
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5

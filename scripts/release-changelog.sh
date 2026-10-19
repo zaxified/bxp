@@ -4,6 +4,9 @@
 # changes as "release: prepare <version> (<date>)". Push manually after
 # review.
 #
+# Requires bash >= 4 (associative arrays). Human-run on Linux; the macOS
+# system bash 3.2 will not do — install a newer bash there.
+#
 # Usage (from any directory):
 #   bash scripts/release-changelog.sh patch     # all manifests +0.0.1
 #   bash scripts/release-changelog.sh minor     # all manifests +0.1.0

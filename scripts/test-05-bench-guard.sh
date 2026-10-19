@@ -139,6 +139,17 @@ if (( bin_bytes > 10485760 )); then
     _fail "guard" 0 "guard binary too large (${bin_mb} MB > 10 MB) — not optimized?"
 fi
 
+# The cached inputs under $WORK are keyed on the generator's content: the
+# directory name encodes the parameters, `.gen.sum` records the checksum of the
+# generator that wrote them. A changed gen.py / gen-xlsx.py therefore
+# regenerates instead of measuring a stale input.
+_gen_current() {   # <dir> <generator>  → 0 when the cached input matches it
+    [[ "$(cat "$1/.gen.sum" 2>/dev/null)" == "$(cksum < "$2")" ]]
+}
+_gen_stamp() {     # <dir> <generator>
+    cksum < "$2" > "$1/.gen.sum"
+}
+
 # Run one (rows) → echoes "wall_s rss_kb" or aborts the phase on a bad exit.
 # bxp-cli self-reports wall + peak RSS on stderr when BXP_METRICS is set, so
 # no external timer is needed (works identically on Linux/macOS/Windows).
@@ -146,10 +157,11 @@ _run_point() {
     local rows="$1"
     local dir="$WORK/n${rows}"
     mkdir -p "$dir"
-    # Regenerate only if the input is absent — gen.py is deterministic.
-    if [[ ! -f "$dir/input.in.csv" || ! -f "$dir/bxp-cli.json" ]]; then
+    # Regenerate if the input is absent or gen.py changed since it was written.
+    if [[ ! -f "$dir/input.in.csv" || ! -f "$dir/bxp-cli.json" ]] || ! _gen_current "$dir" "$GEN"; then
         python3 "$GEN" --rows "$rows" --cols "$COLS" --cell-width "$CELL_W" \
             --out-dir "$dir" >/dev/null 2>&1 || return 1
+        _gen_stamp "$dir" "$GEN"
     fi
     # Capture stderr (the metrics line); discard stdout. --quiet keeps stderr
     # to just the `bxp-metrics wall_ms=<N> peak_rss_kb=<N>` line.
@@ -171,10 +183,11 @@ _run_xlsx_point() {
     local rows="$1"
     local dir="$WORK/xlsx-n${rows}"
     mkdir -p "$dir"
-    # Regenerate only if the workbook is absent — gen-xlsx.py is deterministic.
-    if [[ ! -f "$dir/bench.xlsx" ]]; then
+    # Regenerate if the workbook is absent or gen-xlsx.py changed since.
+    if [[ ! -f "$dir/bench.xlsx" ]] || ! _gen_current "$dir" "$XLSX_GEN"; then
         python3 "$XLSX_GEN" "$dir/bench.xlsx" --rows "$rows" --vocab 5000 \
             --symbols 200 --tmp "$dir/parts" >/dev/null 2>&1 || return 1
+        _gen_stamp "$dir" "$XLSX_GEN"
     fi
     cp "$XLSX_CFG" "$dir/bxp-cli.json"
     # Drop any prior intermediate/output so a stale skip doesn't mask the run.
@@ -200,9 +213,10 @@ _run_wide_point() {
     local rows="$1" cols="$2"
     local dir="$WORK/wide-c${cols}-n${rows}"
     mkdir -p "$dir"
-    if [[ ! -f "$dir/input.in.csv" || ! -f "$dir/bxp-cli.json" ]]; then
+    if [[ ! -f "$dir/input.in.csv" || ! -f "$dir/bxp-cli.json" ]] || ! _gen_current "$dir" "$GEN"; then
         python3 "$GEN" --rows "$rows" --cols "$cols" --cell-width "$CELL_W" \
             --passthrough-only --out-dir "$dir" >/dev/null 2>&1 || return 1
+        _gen_stamp "$dir" "$GEN"
     fi
     local metrics
     metrics=$(BXP_METRICS=1 "$BXP" --config "$dir/bxp-cli.json" --quiet 2>&1 >/dev/null) || return 1
@@ -223,9 +237,10 @@ _run_fanout_point() {
     local rows="$1" sheets="$2"
     local dir="$WORK/xlsx-fanout-s${sheets}-n${rows}"
     mkdir -p "$dir"
-    if [[ ! -f "$dir/bench.xlsx" ]]; then
+    if [[ ! -f "$dir/bench.xlsx" ]] || ! _gen_current "$dir" "$XLSX_GEN"; then
         python3 "$XLSX_GEN" "$dir/bench.xlsx" --rows "$rows" --sheets "$sheets" \
             --vocab 5000 --symbols 200 --tmp "$dir/parts" >/dev/null 2>&1 || return 1
+        _gen_stamp "$dir" "$XLSX_GEN"
     fi
     cp "$XLSX_FANOUT_CFG" "$dir/bxp-cli.json"
     rm -f "$dir"/*_data*.csv "$dir"/*_data*.csvx 2>/dev/null

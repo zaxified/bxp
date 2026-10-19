@@ -92,6 +92,8 @@ if [[ "$mode" == "check" ]]; then
   run_zig_gen "$tmp" >/dev/null
   run_dart_gen "$tmp"
   run_tree_gen --check || rc=1
+  # The Examples landing pages (docs/examples/**/index.md) have their own generator.
+  python3 "$SCRIPT_DIR/gen-examples-index.py" --check || rc=1
 
   for page in "${GENERATED_PAGES[@]}"; do
     if ! diff -q "$DOCS_DIR/$page" "$tmp/$page" >/dev/null 2>&1; then
