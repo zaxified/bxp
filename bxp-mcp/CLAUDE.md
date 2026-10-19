@@ -325,16 +325,19 @@ and races below are bounded by that model and only re-open under a future
 revisit them there.
 
 - **`sim.zig` wipes the reused workspace on every call** (`deleteTree` +
-  `makePath`). The default id is `<template>-<pid>`, so two bxp-mcp processes
-  (two agent sessions) never share one; two calls in one process are
+  `makePath`). The default id is `<template>-<token>` (8 random hex chars drawn
+  once per process, pid as fallback), so two bxp-mcp processes (two agent
+  sessions) never share one, even across containers sharing `/tmp`; two calls in one process are
   serialised by single-threaded stdio. Only an explicit, shared `workspace` id
   can still race wipe-vs-read across processes — the caller asked for that.
-  Path is confined to `tmp_base/bxp-mcp-sim/<uid>`. On a multi-user host a
-  pre-planted `/tmp/bxp-mcp-sim` owned by another user is not detected;
-  macOS and Windows temp dirs are per-user.
+  Path is confined to `tmp_base/bxp-mcp-sim-<uid>`, directly in the temp
+  dir: no shared parent another user could pre-create, and the sticky temp
+  dir keeps others from swapping our entries. An explicit `workspace` id is
+  guessable, so on a multi-user Linux host it is the caller's choice to use
+  one; macOS and Windows temp dirs are per-user.
 - **`sim.zig tmpDir` trusts `TMPDIR`/`TMP`/`TEMP`.** Standard, and the env is
   the user's own; the subsequent `deleteTree` only ever targets the sanitized
-  `bxp-mcp-sim/<uid>` subtree, so a redirected temp base cannot widen the
+  `bxp-mcp-sim-<uid>` directory, so a redirected temp base cannot widen the
   delete blast radius.
 - ~~**`server.zig readLine` grows `line_buf` unboundedly**~~ — **resolved
   2026-08-16** by the `mcp` migration: the module's `readLine` caps a line at

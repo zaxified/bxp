@@ -339,7 +339,7 @@ pub const tool_docs = [_]ToolDoc{
         \\    },
         \\    "workspace": {
         \\      "type": "string",
-        \\      "description": "Optional scratch-workspace id (defaults to <template>-<server pid>, private to this server process). Reused across calls, so repeated runs don't litter temp with new dirs; pass the same id from two sessions only to share one workspace."
+        \\      "description": "Optional scratch-workspace id (defaults to <template>-<random token>, private to this server process). Reused across calls, so repeated runs don't litter temp with new dirs; pass the same id from two sessions only to share one workspace."
         \\    }
         \\  },
         \\  "required": [

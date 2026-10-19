@@ -181,8 +181,9 @@ store past the call.
 
 1. **Validate** the template's input shape via `inspect.templateIo`; reject
    xlsx/JSON-input templates (CSV input only).
-2. **Stage** a stable, reused scratch workspace `<tmp>/bxp-mcp-sim/<uid>/`
-   (sanitized id, `<template>-<pid>` unless the call names one, so two agent
+2. **Stage** a stable, reused scratch workspace `<tmp>/bxp-mcp-sim-<uid>/`
+   (sanitized id, `<template>-<token>` with a random token drawn once per server process unless
+   the call names one, so two agent
    sessions never share it by accident; wiped fresh per run, left in place for
    inspection): the config
    verbatim as `config.json`, the CSV as `data/input<suffix>` (suffix matched to
@@ -208,7 +209,7 @@ Report (declares an `outputSchema`):
   "summary": "…",             // bxp-cli stdout
   "diagnostics": "…",         // bxp-cli stderr
   "trace": { … },             // BXTB sidecar folded in (below)
-  "workspace": "/tmp/bxp-mcp-sim/…"
+  "workspace": "/tmp/bxp-mcp-sim-…"
 }
 ```
 

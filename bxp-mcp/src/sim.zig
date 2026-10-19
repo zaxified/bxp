@@ -108,16 +108,23 @@ fn run(
         return errJson(a, "bxp-cli binary not found next to bxp-mcp", cli_path);
 
     // 3. Stable, reused scratch workspace (no per-call temp litter). The
-    //    default id carries this process's pid: two agent sessions (two
-    //    bxp-mcp processes) simulating the same template at once would
-    //    otherwise wipe each other's workspace mid-run. An explicit
-    //    `workspace` id is taken as given — the agent chose to share it.
+    //    default id carries a random token drawn once per process: two agent
+    //    sessions (two bxp-mcp processes) simulating the same template at
+    //    once would otherwise wipe each other's workspace mid-run. Random
+    //    rather than the pid: pids collide across containers sharing /tmp
+    //    and are predictable. An explicit `workspace` id is taken as given —
+    //    the agent chose to share it.
     const uid = if (workspace_id) |w|
         try sanitize(a, w)
     else
-        try std.fmt.allocPrint(a, "{s}-{d}", .{ try sanitize(a, template), ownPid() });
+        try std.fmt.allocPrint(a, "{s}-{s}", .{ try sanitize(a, template), &processToken(io) });
     const tmp_base = tmpDir(env);
-    const workspace = try std.Io.Dir.path.join(a, &.{ tmp_base, "bxp-mcp-sim", uid });
+    // Directly in the temp dir, no shared `bxp-mcp-sim/` parent: on a
+    // multi-user host another user could pre-create that parent and then
+    // swap entries inside it. The temp dir itself is sticky (only the owner
+    // may rename or delete), and the random token makes the name unguessable.
+    const ws_name = try std.fmt.allocPrint(a, "bxp-mcp-sim-{s}", .{uid});
+    const workspace = try std.Io.Dir.path.join(a, &.{ tmp_base, ws_name });
     const data_dir = try std.Io.Dir.path.join(a, &.{ workspace, "data" });
     const config_path = try std.Io.Dir.path.join(a, &.{ workspace, "config.json" });
     const trace_path = try std.Io.Dir.path.join(a, &.{ workspace, "trace.bxtb" });
@@ -564,7 +571,22 @@ fn countDataRecords(bytes: []const u8) usize {
 
 /// Filesystem-safe workspace id: keep [A-Za-z0-9_-], map everything else to
 /// '_', cap the length, never empty.
-/// This process's id, for the default workspace name.
+/// Per-process token for the default workspace name: 8 hex chars drawn from
+/// the OS CSPRNG on first use and then kept, so one session reuses one
+/// workspace across calls. stdio serves one request at a time, so the lazy
+/// init needs no lock. Falls back to the pid if the entropy source fails.
+var process_token: ?[8]u8 = null;
+
+fn processToken(io: std.Io) [8]u8 {
+    if (process_token) |t| return t;
+    var raw: [4]u8 = undefined;
+    io.randomSecure(&raw) catch std.mem.writeInt(u32, &raw, @truncate(ownPid()), .little);
+    const t = std.fmt.bytesToHex(raw, .lower);
+    process_token = t;
+    return t;
+}
+
+/// This process's id — the fallback when no entropy is available.
 fn ownPid() u64 {
     return switch (builtin.os.tag) {
         .windows => std.os.windows.GetCurrentProcessId(),
@@ -643,4 +665,12 @@ test "runFailMessage: names the limits an agent can act on" {
     try t.expect(std.mem.indexOf(u8, runFailMessage(error.Timeout), "300 s") != null);
     try t.expect(std.mem.indexOf(u8, runFailMessage(error.StreamTooLong), "16 MiB") != null);
     try t.expectEqualStrings("bxp-cli spawn failed", runFailMessage(error.AccessDenied));
+}
+
+test "processToken: stable within the process, hex only" {
+    const t = std.testing;
+    const a = processToken(t.io);
+    const b = processToken(t.io);
+    try t.expectEqualSlices(u8, &a, &b);
+    for (a) |c| try t.expect(std.ascii.isHex(c));
 }
