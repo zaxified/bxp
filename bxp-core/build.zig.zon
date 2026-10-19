@@ -29,15 +29,16 @@
         // `YYYY-MM-DD`), but what decides it is the diff to these twelve
         // modules, not the tag: a tag that leaves them byte-identical is not
         // worth adopting, and a later commit that fixes them is (see
-        // CHANGELOG.md in each module). Currently tag `2026-10-19`, the first
-        // one on Zig 0.17.
+        // CHANGELOG.md in each module). Currently `main` past tag `2026-10-19`:
+        // that window carries the regex prefilter-skip fix (isMatch / Pike VM
+        // missed matches after a skipped position).
         // `zig fetch` cannot
         // target a subdirectory (ziglang/zig#23012)
         // so the whole collection is one package — only the modules actually
         // imported get compiled in.
         .zig_libs = .{
-            .url = "git+https://github.com/zaxified/zig-libs.git#2287aee010d6426bedcc94e3000b3fea33ed572e",
-            .hash = "zig_libs-0.0.0-WiQ0GtMx7AY4SjNmnCPyxhALEZp_Q4vgenygGzhHYt5j",
+            .url = "git+https://github.com/zaxified/zig-libs.git?ref=main#a41eb23325a6274949e78452c1f5d25b9e257262",
+            .hash = "zig_libs-0.0.0-WiQ0GqZi7AaEpFo1OotDfilK-YxBnjJCXZQnyUcqaOEz",
         },
     },
     .minimum_zig_version = "0.17.0",
