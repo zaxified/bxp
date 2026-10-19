@@ -576,8 +576,8 @@ Module table in `build.zig` — 14 names in two halves. Seven are `b.addModule` 
 content-addressed by hash and re-audited on any pin bump:
 
 - **uucode** (MIT) — the Unicode case-mapping / decomposition table library,
-  on its `main` line (which requires Zig 0.16 — the former `zig-0.15` back-port
-  branch was dropped at the Zig 0.16 migration). `build.zig` requests only the
+  on its `main` line (which requires Zig 0.17; its `zig-0.16` branch carries the
+  0.16 line). `build.zig` requests only the
   `uppercase_mapping` / `lowercase_mapping` fields, so just those tables are
   generated + compiled in (field selection keeps the static binary small).
   Imported into the `expr` module and consumed by `unicode.zig`.
@@ -673,7 +673,7 @@ not here.
 ## Coding conventions
 
 - All code comments and documentation in English.
-- Zig 0.16.0 API.
+- Zig 0.17.0 API.
 - `processBroker()` in pipeline.zig (~930 lines) and `loadFromBytes()` in
   config.zig (~480 lines) are large, deliberately linear pipelines. Splitting
   them is pure reorganisation (no behaviour change), so weigh it against

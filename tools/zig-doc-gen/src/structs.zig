@@ -214,26 +214,26 @@ pub fn write(w: *std.Io.Writer) !void {
         // for itself (`Config._alloc`); it is not part of the shape a reader
         // of this page is looking at.
         switch (info) {
-            .@"struct" => |s| inline for (s.fields) |f| {
-                if (f.name[0] != '_') try w.print("        +{s}: {s}\n", .{ f.name, typeLabel(f.type) });
+            .@"struct" => |s| inline for (s.field_names, s.field_types) |f_name, f_type| {
+                if (f_name[0] != '_') try w.print("        +{s}: {s}\n", .{ f_name, typeLabel(f_type) });
             },
-            .@"union" => |u| inline for (u.fields) |f| {
-                if (f.name[0] != '_') try w.print("        +{s}: {s}\n", .{ f.name, typeLabel(f.type) });
+            .@"union" => |u| inline for (u.field_names, u.field_types) |f_name, f_type| {
+                if (f_name[0] != '_') try w.print("        +{s}: {s}\n", .{ f_name, typeLabel(f_type) });
             },
-            .@"enum" => |e| inline for (e.fields) |f| {
-                try w.print("        +{s}\n", .{f.name});
+            .@"enum" => |e| inline for (e.field_names) |f_name| {
+                try w.print("        +{s}\n", .{f_name});
             },
             else => @compileError("documented type is neither struct, union nor enum: " ++ @typeName(c.T)),
         }
         const decls = switch (info) {
-            .@"struct" => |s| s.decls,
-            .@"union" => |u| u.decls,
-            .@"enum" => |e| e.decls,
+            .@"struct" => |s| s.decl_names,
+            .@"union" => |u| u.decl_names,
+            .@"enum" => |e| e.decl_names,
             else => unreachable,
         };
         inline for (decls) |d| {
-            if (@typeInfo(@TypeOf(@field(c.T, d.name))) == .@"fn") {
-                try w.print("        +{s}()\n", .{d.name});
+            if (@typeInfo(@TypeOf(@field(c.T, d))) == .@"fn") {
+                try w.print("        +{s}()\n", .{d});
             }
         }
         try w.writeAll("    }\n\n");

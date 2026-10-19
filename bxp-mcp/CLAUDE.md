@@ -255,7 +255,7 @@ Register with an MCP client (e.g. Claude Code, `~/.claude.json`):
 ## Coding conventions
 
 - All code comments and documentation in English.
-- Zig 0.16.0 API — use the zig skill before writing new code.
+- Zig 0.17.0 API — use the zig-0.17 skill before writing new code.
 - One dependency beyond the `bxp-core` path dep: the zig-libs `mcp` module,
   taken through bxp-core's re-export so this package shares that single pin
   rather than carrying a `zig_libs` entry of its own. `mcp` is itself pure

@@ -20,7 +20,12 @@ pub fn main(init: std.process.Init) !void {
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
 
-    const out = init.environ_map.get("BXP_DOCS_OUT") orelse "../../docs";
+    // Output dir: first CLI argument (`zig build run -- <dir>` forwards it via
+    // addPassthruArgs), else BXP_DOCS_OUT, else the default.
+    var args = try std.process.Args.Iterator.initAllocator(init.minimal.args, alloc);
+    defer args.deinit();
+    _ = args.skip();
+    const out = args.next() orelse init.environ_map.get("BXP_DOCS_OUT") orelse "../../docs";
 
     // ── bxp-core catalogs (expr functions, date tokens, config schema) ──
     {

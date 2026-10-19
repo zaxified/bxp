@@ -8,6 +8,6 @@
         .bxp_mcp = .{ .path = "../../bxp-mcp" },
         .bxp_gui_bridge = .{ .path = "../../bxp-gui-bridge" },
     },
-    .minimum_zig_version = "0.16.0",
+    .minimum_zig_version = "0.17.0",
     .paths = .{"."},
 }

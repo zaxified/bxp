@@ -15,10 +15,10 @@ pub fn build(b: *std.Build) void {
     //     explicitly (the -Doptimize form overrides this). Use -Doptimize=Debug
     //     when you need a debugger.
     const optimize = b.option(
-        std.builtin.OptimizeMode,
+        std.lang.Optimize,
         "optimize",
         "Prioritize performance, safety, or binary size",
-    ) orelse .ReleaseSafe;
+    ) orelse .safe;
     // Self-hosted backend only on request, for the edit loop: every build and
     // test step here compiles with LLVM (~/.claude/zig-backend.md; tiers in
     // .claude/rules/zig-pitfalls.md). A no-op in the release modes.
@@ -56,7 +56,7 @@ pub fn build(b: *std.Build) void {
 
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
-    if (b.args) |args| run_cmd.addArgs(args);
+    run_cmd.addPassthruArgs();
 
     const run_step = b.step("run", "Run Broker eXchange Parser");
     run_step.dependOn(&run_cmd.step);

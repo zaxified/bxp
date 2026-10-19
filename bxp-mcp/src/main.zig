@@ -81,7 +81,7 @@ pub fn main(init: std.process.Init) void {
             // Both lists render from catalogs (no hand-written prose): Options
             // from `flags`, Tools from `tools.tool_docs` (the same source behind
             // `tools/list`), so --help can't drift from either.
-            const SPACES = " " ** 24;
+            const SPACES = comptime &@as([24:0]u8, @splat(' '));
             var buf: [2048]u8 = undefined;
             var w = std.Io.Writer.fixed(&buf);
             w.writeAll(

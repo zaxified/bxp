@@ -80,7 +80,7 @@ const exit_codes = cli_docs.exit_codes;
 /// Render the full usage text — fixed head, then the `flags` rows, then the
 /// `exit_codes` rows — into `w`. The single renderer behind both stream variants.
 fn writeUsage(w: *std.Io.Writer, prog: []const u8) void {
-    const SPACES = " " ** 24;
+    const SPACES = comptime &@as([24:0]u8, @splat(' '));
     w.print(USAGE_HEAD, .{ build_options.version, build_options.version, prog, prog, prog }) catch return;
     for (flags) |f| {
         var label_buf: [48]u8 = undefined;
@@ -348,7 +348,7 @@ fn collectArgs(
         for (list.items) |a| dest.free(a);
         list.deinit(dest);
     }
-    while (it.next()) |a| try list.append(dest, try dest.dupeZ(u8, a));
+    while (it.next()) |a| try list.append(dest, try dest.dupeSentinel(u8, a, 0));
     return list.toOwnedSlice(dest);
 }
 
@@ -375,7 +375,7 @@ pub fn main(init: std.process.Init) !void {
     var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const alloc: std.mem.Allocator = switch (@import("builtin").mode) {
-        .Debug => gpa.allocator(),
+        .debug => gpa.allocator(),
         else => std.heap.smp_allocator,
     };
 

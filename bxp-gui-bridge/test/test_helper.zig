@@ -39,7 +39,7 @@ pub fn main(init: std.process.Init) !void {
     var arg_it = try std.process.Args.Iterator.initAllocator(init.minimal.args, init.gpa);
     defer arg_it.deinit();
     var argv_list: std.ArrayList([:0]const u8) = .empty;
-    while (arg_it.next()) |arg| try argv_list.append(a, try a.dupeZ(u8, arg));
+    while (arg_it.next()) |arg| try argv_list.append(a, try a.dupeSentinel(u8, arg, 0));
     const argv = argv_list.items;
 
     if (argv.len < 2) {

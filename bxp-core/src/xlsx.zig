@@ -1322,7 +1322,7 @@ fn testBuildStoreZip(alloc: Allocator, name: []const u8, data: []const u8) ![]u8
     var z: std.Io.Writer.Allocating = .init(alloc);
     errdefer z.deinit();
     const w = &z.writer;
-    const crc = std.hash.crc.Crc32.hash(data);
+    const crc = std.hash.Crc32.hash(data);
 
     // ── Local file header (30 bytes + name) ──
     try w.writeAll("PK\x03\x04");

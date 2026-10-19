@@ -50,8 +50,8 @@ pub fn build(b: *std.Build) void {
 
 
     const run = b.addRunArtifact(exe);
-    // Output dir via BXP_DOCS_OUT (default ../../docs/reference). Override:
-    // zig build run -- <dir>
-    if (b.args) |a| if (a.len > 0) run.setEnvironmentVariable("BXP_DOCS_OUT", a[0]);
+    // Output dir: first CLI argument, else BXP_DOCS_OUT, else ../../docs (the
+    // tool decides). Override: zig build run -- <dir>
+    run.addPassthruArgs();
     b.step("run", "Generate all Zig-catalog reference Markdown pages").dependOn(&run.step);
 }

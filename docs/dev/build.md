@@ -67,8 +67,8 @@ zig version   # must satisfy build.zig.zon's minimum_zig_version
 
 ## Claude Code setup
 
-BXP development in Zig works with [Claude Code](https://claude.ai/code), locally
-and in cloud sessions. What the repository commits for it:
+BXP development in Zig works with [Claude Code](https://claude.ai/code), locally.
+What the repository commits for it:
 
 - **`CLAUDE.md` files** — the root one plus one per package (`bxp-cli/`,
   `bxp-core/`, `bxp-mcp/`, `bxp-gui/`, `bxp-gui-bridge/`,
@@ -76,23 +76,16 @@ and in cloud sessions. What the repository commits for it:
   automatically; the root file's *Project rules* section is the one to read first.
 - **`.claude/rules/zig-pitfalls.md`** — Zig lessons specific to this repository
   (helpers to use, false-green checks, no `zig fmt`).
-- **`.claude/skills/zig/`** — the `zig` API-reference skill for the Zig version in
+- **`.claude/skills/zig-0.17/`** — the `zig-0.17` API-reference skill for the Zig version in
   `.zigversion`, vendored from an audited release of
   [zaxified/zig-skills](https://github.com/zaxified/zig-skills). Claude loads it
   before writing or reviewing Zig code. **Never edit these files**: the
   `zig-skill` workflow fails on any difference from the release named in
-  `.claude/skills/zig/.zig-skills-source.json`. To move to a newer release, run
+  `.claude/skills/zig-0.17/.zig-skills-source.json`. To move to a newer release, run
   that repository's `scripts/install.py` from the new tag and commit the result.
 
 Everything else under `.claude/` (settings, local permissions) stays on your
 machine and is ignored by git.
-
-**Cloud sessions** (claude.ai/code) see only the clone, so the files above are all
-they get. Their image has no Zig: paste `scripts/cloud/setup.sh` into the cloud
-environment's setup script (it installs the pinned Zig, checksum-verified) and
-allow `ziglang.org` in the environment's network access. Flutter is deliberately
-not installed there — `scripts/test.sh` skips the Flutter and Dart phases when
-the SDKs are absent, and GUI work stays local.
 
 ---
 

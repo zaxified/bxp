@@ -5,13 +5,13 @@
     // uucode (MIT) supplies the Unicode case-mapping / decomposition tables
     // behind UPPER/LOWER (full Unicode incl. ß→SS) and UNACCENT, which selects
     // three further fields (decomposition mapping + type, combining class).
-    // Pinned to uucode main (Zig 0.16+); the former `zig-0.15` back-port
-    // branch carried the 0.15.x line. Field-selected in
+    // Pinned to uucode main (Zig 0.17+); the `zig-0.16` / `zig-0.15`
+    // back-port branches carry the older lines. Field-selected in
     // build.zig so only the tables we use compile in.
     .dependencies = .{
         .uucode = .{
-            .url = "https://github.com/jacobsandlund/uucode/archive/2826a37a4562284fdacd8fa029d49509cc9bffcd.tar.gz",
-            .hash = "uucode-0.2.0-ZZjBPlK5VADj7fdoq7G8LIHzD5o6FSkcBXXrRWr4jnrA",
+            .url = "https://github.com/jacobsandlund/uucode/archive/1fb73433bba5d93366c57f23ff2e9d7939746500.tar.gz",
+            .hash = "uucode-0.2.0-ZZjBPm6FVgBcY-79AHV8ckQj86z0JwOyVyj89VeZrEiv",
         },
         // zig-libs (MIT) — the module collection that now carries the hardened
         // descendants of several bxp-core modules. Bumping this pin moves THIRTEEN
@@ -29,17 +29,17 @@
         // `YYYY-MM-DD`), but what decides it is the diff to these twelve
         // modules, not the tag: a tag that leaves them byte-identical is not
         // worth adopting, and a later commit that fixes them is (see
-        // CHANGELOG.md in each module). Currently tag `2026-10-18`, the last
-        // one on Zig 0.16 (the collection moves to 0.17 after it).
+        // CHANGELOG.md in each module). Currently tag `2026-10-19`, the first
+        // one on Zig 0.17.
         // `zig fetch` cannot
         // target a subdirectory (ziglang/zig#23012)
         // so the whole collection is one package — only the modules actually
         // imported get compiled in.
         .zig_libs = .{
-            .url = "git+https://github.com/zaxified/zig-libs.git#a3fe0128a14805e9facbfc98f92859ec8f13dd86",
-            .hash = "zig_libs-0.0.0-WiQ0GhSb6gYTsronuZW_4cdNjQ8154NCdQJjMixzmJKG",
+            .url = "git+https://github.com/zaxified/zig-libs.git#2287aee010d6426bedcc94e3000b3fea33ed572e",
+            .hash = "zig_libs-0.0.0-WiQ0GtMx7AY4SjNmnCPyxhALEZp_Q4vgenygGzhHYt5j",
         },
     },
-    .minimum_zig_version = "0.16.0",
+    .minimum_zig_version = "0.17.0",
     .paths = .{"."},
 }

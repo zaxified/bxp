@@ -1,9 +1,9 @@
 # Zig pitfalls in this repository
 
-Hard-won lessons from developing bxp on Zig 0.16. Each one cost a real bug or a
+Hard-won lessons from developing bxp on Zig 0.17. Each one cost a real bug or a
 false-green check. Read before writing, reviewing or auditing Zig code here.
-General Zig 0.16 API changes and gotchas live in the `zig` skill
-(`.claude/skills/zig`, vendored from an audited release — never edit it here);
+General Zig 0.17 API changes and gotchas live in the `zig-0.17` skill
+(`.claude/skills/zig-0.17`, vendored from an audited release — never edit it here);
 this file only holds what is specific to this repository.
 
 ## Language and std
@@ -21,6 +21,18 @@ this file only holds what is specific to this repository.
   every target, so a body that does not compile on Windows breaks the Windows
   build. Wrap it in a comptime-known `if (builtin.os.tag != .windows) { … }` —
   the doubled condition looks redundant and is not; do not "simplify" it.
+- **Zig 0.17.0 miscompiles signed → narrower-unsigned casts (#37131).**
+  `@intCast`, `std.math.cast`, `@max(0, x)` narrowing and `std.json` integer
+  parsing into an unsigned type lower to `trunc nsw`: a value in the upper half
+  of the destination range is poison in every optimized mode (the gate and the
+  shipped ReleaseSmall), and a later check on it may be folded away. Debug is
+  unaffected, so a Debug test proves nothing. Measured over every bxp root: no
+  site where that changes behaviour — the reachable ones
+  (`toPositiveIndex`, `header_row` / `csv_header_line` in `config.zig`, the
+  bridge's `check_fs` timeout) only compare the result or turn it into `""`.
+  They are left for 0.17.1, which carries the fix. Until then, write a new
+  signed → unsigned narrowing in two steps (`std.math.cast(u64, x)` first, then
+  the narrow cast) and test it in ReleaseSafe at the boundary value.
 
 ## Allocators
 

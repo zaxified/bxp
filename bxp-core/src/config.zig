@@ -215,10 +215,10 @@ pub const OutputColumn = struct {
 /// the GUI dropdown options derive from the enum itself and can't drift from it.
 /// Use for enums whose tag name IS the user-facing value (FileType, ZipDirMode);
 /// Encoding needs `canonicalName()` (utf8 → "utf-8"), so it derives separately.
-fn enumTagNames(comptime T: type) [@typeInfo(T).@"enum".fields.len][]const u8 {
-    const flds = @typeInfo(T).@"enum".fields;
+fn enumTagNames(comptime T: type) [@typeInfo(T).@"enum".field_names.len][]const u8 {
+    const flds = @typeInfo(T).@"enum".field_names;
     var arr: [flds.len][]const u8 = undefined;
-    for (flds, 0..) |f, i| arr[i] = f.name;
+    for (flds, 0..) |f, i| arr[i] = f;
     return arr;
 }
 
@@ -465,9 +465,9 @@ pub const BrokerConfig = struct {
     // GUI dropdown options can't drift from the enum the parser accepts — adding
     // a code page to the enum surfaces it here automatically.
     const csv_encoding_values = blk: {
-        const flds = @typeInfo(encoding.Encoding).@"enum".fields;
+        const flds = @typeInfo(encoding.Encoding).@"enum".field_names;
         var arr: [flds.len][]const u8 = undefined;
-        for (flds, 0..) |f, i| arr[i] = @field(encoding.Encoding, f.name).canonicalName();
+        for (flds, 0..) |f, i| arr[i] = @field(encoding.Encoding, f).canonicalName();
         break :blk arr;
     };
 
@@ -3590,8 +3590,8 @@ test "levenshteinIgnoreCase: distance, case-insensitivity, long-string shortcut"
     try testing.expectEqual(@as(usize, 3), levenshteinIgnoreCase("kitten", "sitting"));
     try testing.expectEqual(@as(usize, 5), levenshteinIgnoreCase("", "abcde"));
     // Past the 64-char DP ceiling the helper degrades to a length-delta.
-    const long_a = "a" ** 70;
-    const long_b = "a" ** 65;
+    const long_a = comptime &@as([70:0]u8, @splat('a'));
+    const long_b = comptime &@as([65:0]u8, @splat('a'));
     try testing.expectEqual(@as(usize, 5), levenshteinIgnoreCase(long_a, long_b));
 }
 

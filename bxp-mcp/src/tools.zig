@@ -581,8 +581,8 @@ pub fn allowsStructured(tool: Tool) bool {
 /// `StaticStringMap` (and its pdq sort blows the default eval-branch quota for
 /// what is a nine-entry lookup done once at startup).
 fn tagFor(comptime name: []const u8) Tool {
-    for (@typeInfo(Tool).@"enum".fields) |f| {
-        if (std.mem.eql(u8, f.name, name)) return @field(Tool, f.name);
+    for (@typeInfo(Tool).@"enum".field_names) |f| {
+        if (std.mem.eql(u8, f, name)) return @field(Tool, f);
     }
     @compileError("tool_docs entry '" ++ name ++ "' has no matching Tool enum tag");
 }

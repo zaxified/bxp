@@ -69,12 +69,13 @@ pub const frame_docs = [_]FrameDoc{
 // rather than silently shipping an undocumented frame. (`_` is the
 // non-exhaustive marker, not a field, so it never reaches this loop.)
 comptime {
-    for (@typeInfo(FrameType).@"enum".fields) |f| {
+    const frame_info = @typeInfo(FrameType).@"enum";
+    for (frame_info.field_names, frame_info.field_values) |f_name, f_value| {
         var documented = false;
         for (frame_docs) |d| {
-            if (@intFromEnum(d.t) == f.value) documented = true;
+            if (@intFromEnum(d.t) == f_value) documented = true;
         }
-        if (!documented) @compileError("FrameType." ++ f.name ++ " has no frame_docs entry");
+        if (!documented) @compileError("FrameType." ++ f_name ++ " has no frame_docs entry");
     }
 }
 

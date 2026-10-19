@@ -81,7 +81,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: mlugg/setup-zig@v2
         with:
-          version: 0.16.0
+          version: 0.17.0
           # Persist the build cache ourselves (next step) instead. mlugg's
           # built-in cache only kept a partial subset (~137 MB of a ~1.1 GB
           # build cache — the compiled `o/` outputs were dropped), so every run
@@ -97,10 +97,12 @@ jobs:
           # The `base` token is a cache epoch tied to the gate's build flags
           # (-Dcpu=baseline): the Zig cache key embeds the CPU, so a cache built
           # under different flags can never hit. Bump the token (base2, …) if the
-          # gate's optimize/cpu/target ever changes, to discard the stale caches.
-          key: zig-${{ runner.os }}-base-${{ hashFiles('bxp-core/**/*.zig', 'bxp-cli/**/*.zig', 'bxp-mcp/**/*.zig', 'bxp-gui-bridge/**/*.zig', '**/build.zig.zon') }}
+          # gate's optimize/cpu/target ever changes, to discard the stale caches;
+          # the `z017` token does the same for the Zig version (a cache from
+          # another compiler can never hit).
+          key: zig-${{ runner.os }}-z017-base-${{ hashFiles('bxp-core/**/*.zig', 'bxp-cli/**/*.zig', 'bxp-mcp/**/*.zig', 'bxp-gui-bridge/**/*.zig', '**/build.zig.zon') }}
           restore-keys: |
-            zig-${{ runner.os }}-base-
+            zig-${{ runner.os }}-z017-base-
       - uses: subosito/flutter-action@v2
         with:
           # Pinned (not floating `channel: stable`) so CI is reproducible: the

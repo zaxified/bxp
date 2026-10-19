@@ -92,7 +92,7 @@ jobs:
 
       - uses: mlugg/setup-zig@v2
         with:
-          version: 0.16.0
+          version: 0.17.0
           use-cache: false
 
       # Same rationale as ci.yml: mlugg's built-in cache keeps only a subset of
@@ -102,9 +102,9 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ${{ github.workspace }}/.zig-cache
-          key: zig-docs-wasm-${{ hashFiles('bxp-core/**/*.zig', 'bxp-core/build.zig.zon') }}
+          key: zig-docs-wasm-z017-${{ hashFiles('bxp-core/**/*.zig', 'bxp-core/build.zig.zon') }}
           restore-keys: |
-            zig-docs-wasm-
+            zig-docs-wasm-z017-
 
       # Flutter is here for one reason: three reference pages are rendered from
       # Dart catalogs (GuiToolDoc, the shortcut table, the prefs keys), and the

@@ -37,13 +37,13 @@ const CONFIG_MAX_FILE_SIZE = config_mod.CONFIG_MAX_FILE_SIZE;
 // issue; a private helper never has to be listed.
 const module_docs = @import("module_docs");
 comptime {
-    for (@typeInfo(@This()).@"struct".decls) |d| {
-        if (@typeInfo(@TypeOf(@field(@This(), d.name))) != .@"fn") continue;
+    for (@typeInfo(@This()).@"struct".decl_names) |d| {
+        if (@typeInfo(@TypeOf(@field(@This(), d))) != .@"fn") continue;
         var documented = false;
         for (module_docs.inspect_ops) |op| {
-            if (std.mem.eql(u8, op.name, d.name)) documented = true;
+            if (std.mem.eql(u8, op.name, d)) documented = true;
         }
-        if (!documented) @compileError("inspect." ++ d.name ++ " has no module_docs.inspect_ops entry");
+        if (!documented) @compileError("inspect." ++ d ++ " has no module_docs.inspect_ops entry");
     }
     // …and the other way round, so a renamed function cannot leave the docs
     // describing a call that no longer exists.

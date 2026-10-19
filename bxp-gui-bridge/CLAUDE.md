@@ -142,7 +142,7 @@ that breaks early will appear to "work").
 ## Coding conventions
 
 - All code comments and documentation in English.
-- Zig 0.16.0 API — use the `zig` skill before writing new code.
+- Zig 0.17.0 API — use the `zig-0.17` skill before writing new code.
 - Tests use the `test_helper.zig` re-exec pattern — never call out to
   real OS binaries; the suite must be identical on every host
   ([[feedback_test_helper_subprocess]]).

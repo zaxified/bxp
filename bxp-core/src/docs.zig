@@ -863,7 +863,7 @@ test "FieldDoc.key matches a real struct field" {
     }) |pair| {
         const T = pair[0];
         const overrides: []const Override = pair[1];
-        const struct_fields = @typeInfo(T).@"struct".fields;
+        const struct_fields = @typeInfo(T).@"struct".field_names;
         for (T.fields) |fd| {
             const expected = blk: {
                 for (overrides) |o| {
@@ -873,7 +873,7 @@ test "FieldDoc.key matches a real struct field" {
             };
             var found = false;
             inline for (struct_fields) |f| {
-                if (std.mem.eql(u8, f.name, expected)) found = true;
+                if (std.mem.eql(u8, f, expected)) found = true;
             }
             if (!found) {
                 std.debug.print(

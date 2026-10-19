@@ -43,13 +43,13 @@ const procrun = @import("procrun");
 // to the dynamic linker.
 const ops = @import("ops");
 comptime {
-    for (@typeInfo(@This()).@"struct".decls) |d| {
-        if (!std.mem.startsWith(u8, d.name, "bridge_")) continue;
+    for (@typeInfo(@This()).@"struct".decl_names) |d| {
+        if (!std.mem.startsWith(u8, d, "bridge_")) continue;
         var documented = false;
         for (ops.ops) |op| {
-            if (std.mem.eql(u8, op.name, d.name)) documented = true;
+            if (std.mem.eql(u8, op.name, d)) documented = true;
         }
-        if (!documented) @compileError(d.name ++ " is exported but has no ops.zig entry");
+        if (!documented) @compileError(d ++ " is exported but has no ops.zig entry");
     }
     for (ops.ops) |op| {
         if (!@hasDecl(@This(), op.name)) @compileError("ops.zig names a missing export: " ++ op.name);

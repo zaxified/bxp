@@ -580,6 +580,6 @@ test "sanitize: keeps [A-Za-z0-9_-], maps the rest, never empty, length-capped" 
     try t.expectEqualStrings("abc_DEF-9", try sanitize(a, "abc/DEF-9"));
     try t.expectEqualStrings("a_b_c", try sanitize(a, "a b.c"));
     try t.expectEqualStrings("_", try sanitize(a, ""));
-    const long = try sanitize(a, "x" ** 100);
+    const long = try sanitize(a, comptime &@as([100:0]u8, @splat('x')));
     try t.expectEqual(MAX_UID_LEN, long.len);
 }

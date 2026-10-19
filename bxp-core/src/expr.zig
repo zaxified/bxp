@@ -3798,8 +3798,8 @@ const DateTruncUnit = enum { year, quarter, month, week, day };
 /// need the input case-folded into a buffer first, which is more work than the
 /// comparisons it would save.
 fn parseDateTruncUnit(s: []const u8) ?DateTruncUnit {
-    inline for (@typeInfo(DateTruncUnit).@"enum".fields) |f| {
-        if (std.ascii.eqlIgnoreCase(s, f.name)) return @field(DateTruncUnit, f.name);
+    inline for (@typeInfo(DateTruncUnit).@"enum".field_names) |f| {
+        if (std.ascii.eqlIgnoreCase(s, f)) return @field(DateTruncUnit, f);
     }
     return null;
 }

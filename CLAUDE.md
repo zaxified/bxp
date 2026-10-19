@@ -119,8 +119,6 @@ bxp/
 │   │   │                         # Markdown formatting is hand-maintained
 │   │   │                         # (prettier + markdownlint broke MkDocs syntax)
 │   │   └── requirements.txt      # pinned mkdocs toolchain (local venv + CI)
-│   ├── cloud/setup.sh        # Claude Code cloud-session setup: installs the pinned Zig
-│   │                         # (no Flutter — GUI work and its tests stay local)
 │   ├── release.sh            # Wrapper — runs release-01-console.sh + release-02-desktop.sh
 │   ├── release-01-console.sh    # Cross-compile bxp-cli + bxp-mcp, package bxp-console-* archives
 │   ├── release-02-desktop.sh    # Host-OS-specific Flutter desktop bundle → .AppImage / .deb
@@ -181,11 +179,11 @@ bxp/
 │   │                     # + strict build + Pages publish. No path filter, one
 │   │                     # host. Nothing docs-related belongs in ci.yml.
 │   ├── release.yml       # Multi-host release pipeline triggered by `v*` tag push
-│   └── zig-skill.yml     # Vendored .claude/skills/zig must equal its release tag
-├── .claude/              # Only rules/ and skills/ are committed (loaded by local AND
-│   │                     # cloud sessions); settings stay local
+│   └── zig-skill.yml     # Vendored .claude/skills/zig-0.17 must equal its release tag
+├── .claude/              # Only rules/ and skills/ are committed (loaded by Claude
+│   │                     # Code sessions); settings stay local
 │   ├── rules/            # zig-pitfalls.md — repo-specific Zig lessons
-│   └── skills/zig/       # vendored audited zig skill (zaxified/zig-skills release) —
+│   └── skills/zig-0.17/  # vendored audited zig-0.17 skill (zaxified/zig-skills release) —
 │                         # never edit; update only via that repo's install.py
 ├── DEV/                  # Developer scratch space — sample data, in-flight plans, AST prototypes
 ├── CLAUDE.md             # This file
@@ -328,7 +326,7 @@ services/prefs_service.dart`.
 ## Coding conventions
 
 - All code comments and documentation in English
-- Zig 0.16.0 API — use zig skill before writing new code
+- Zig 0.17.0 API — use zig-0.17 skill before writing new code
 - User-facing error messages use `std.process.exit(1)` (no Zig stack trace)
 - **Every file states its own purpose in its header**, and the docs generator
   harvests exactly that: a `//!` module doc-comment in Zig (not `///` — at file
