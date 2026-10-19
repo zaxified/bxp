@@ -146,10 +146,13 @@ All broker logic is defined in `bxp-cli.json` — there are no compiled-in broke
   When present, xlsx files in `data_dir` are converted to an intermediate CSV file before the
   normal CSV processing loop. `name` is a prefix of the sheet name in the workbook (prefix
   match, so `"CASH OPERATION"` also matches `"CASH OPERATION 28022026"`);
+  An exact sheet name wins over a prefix match; among prefix matches the shortest name wins.
   `header_row` is the 1-based row number containing column headers; `output_suffix` is appended
-  before `.csv` in the output filename (e.g. `"_3"` → `"<stem>_3.csv"`).
+  verbatim, extension included, to the workbook stem (e.g. `"_cash.csv"` → `"<stem>_cash.csv"`);
+  it must not contain a path separator.
   Templates sharing the same `data_dir` — each with their own `xlsx_sheet` — share the xlsx
-  extraction pass (each xlsx file is extracted only once).
+  extraction pass (each xlsx file is extracted only once); two templates whose specs share an
+  `output_suffix` but differ in sheet or header row are a fatal conflict.
 - `pre_pass` — optional first-pass lookup table(s). Iterates all rows before the main loop,
   collects rows matching `when`, stores `values` expressions keyed by `key`. Two accepted shapes:
   - **Legacy single block** `{ when, key, values }` — accessible via 2-arg

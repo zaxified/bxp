@@ -750,6 +750,7 @@ fn run(args: [][:0]u8, out: Output, fresh: bool, check_fs_seconds: u8, runtime: 
                     config_explicit = true;
                 },
                 .missing_value => {
+                    out.fatal("error: --config requires a path argument\n", .{});
                     usageErr(args[0]);
                     return error.Fatal;
                 },
@@ -987,6 +988,7 @@ fn run(args: [][:0]u8, out: Output, fresh: bool, check_fs_seconds: u8, runtime: 
         switch (matchValueArg(args, &i, "--template")) {
             .value => |v| { template_id = v; continue; },
             .missing_value => {
+                out.fatal("error: --template requires an id argument\n", .{});
                 usageErr(args[0]);
                 overall.has_fatal = true;
                 return error.Fatal;
@@ -996,6 +998,7 @@ fn run(args: [][:0]u8, out: Output, fresh: bool, check_fs_seconds: u8, runtime: 
         switch (matchValueArg(args, &i, "--data")) {
             .value => |v| { dir_path_arg = v; continue; },
             .missing_value => {
+                out.fatal("error: --data requires a path argument\n", .{});
                 usageErr(args[0]);
                 overall.has_fatal = true;
                 return error.Fatal;

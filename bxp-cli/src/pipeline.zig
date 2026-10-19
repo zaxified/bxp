@@ -1458,7 +1458,7 @@ const WorkerSlice = struct {
         self.worker_out = Output{
             .writer = &self.debug_alloc.writer,
             .quiet = false,
-            .debug = false, // set per call via setDebug()
+            .debug = false, // set per file via setDiagnostics()
             .trace = .off,
             .dry_run = false,
             .btrace_writer = &self.btw,
@@ -1479,8 +1479,19 @@ const WorkerSlice = struct {
         alloc.free(self.field_buf);
     }
 
-    pub fn setDebug(self: *WorkerSlice, debug: bool) void {
-        self.worker_out.debug = debug;
+    /// Mirror the real `Output`'s diagnostic routing into the per-worker one:
+    /// `--debug`, and where a worker's `fatal` / `warning` text goes. Without
+    /// the `quiet` / `json_debug` / `msg_sink` half, a fatal raised inside a
+    /// worker (`requireComparableDate`) bypassed `--quiet` and went to stderr
+    /// instead of the `--debug=json` document's `messages`. Sharing `msg_sink`
+    /// is safe: `requireComparableDate` lets exactly one caller through its
+    /// atomic flag, and the main thread is parked in `Group.await` meanwhile.
+    pub fn setDiagnostics(self: *WorkerSlice, real: Output) void {
+        self.worker_out.debug = real.debug;
+        self.worker_out.quiet = real.quiet;
+        self.worker_out.json_debug = real.json_debug;
+        self.worker_out.msg_sink = real.msg_sink;
+        self.worker_out.msg_alloc = real.msg_alloc;
     }
 
     /// Enable or disable per-worker btrace frame emission. When the real
@@ -1967,7 +1978,7 @@ fn drainBlockMain(
 
 /// Drains K pre_pass workers: merges per-worker `partial_lookup` maps
 /// into the shared `lookup_table` (last-writer-wins on duplicate
-/// composite keys, matching serial semantics), then appends per-worker
+/// composite keys, matching serial semantics) and empties them, then appends per-worker
 /// btrace bytes (only `prepass_entry` frames — no outputIdx patching
 /// needed) and debug bytes to the real sinks.
 fn drainBlockPrePass(
@@ -1988,6 +1999,14 @@ fn drainBlockPrePass(
         while (it.next()) |entry| {
             try shared_lookup_table.put(entry.key_ptr.*, entry.value_ptr.*);
         }
+        // Merged entries must not be merged again: `partial_lookup` outlives
+        // the block (only `resetForFile` clears it), so a stale entry from an
+        // earlier block would be re-put AFTER a lower-indexed worker's newer
+        // value for the same key and win — breaking last-writer-wins once a
+        // file spans more than one block. The key/value bytes live in
+        // `prepass_arena` (file-scoped), so the shared table's pointers stay
+        // valid after the clear.
+        w.partial_lookup.clearRetainingCapacity();
         if (debug_bytes.len > 0) {
             real_out.writer.writeAll(debug_bytes) catch {};
             real_out.writer.flush() catch {};
@@ -2031,6 +2050,46 @@ fn workerPrePass(ws: *WorkerSlice, rec: *const RowEvalConst) void {
             return;
         };
     }
+}
+
+/// Per-file output name: strip `file_pattern_in` from `filename` and append
+/// `file_pattern_out` ("export_3.csv" + "_3.csv"→"_3.csvx" = "export_3.csvx").
+/// When `file_pattern_out` is empty (validation rejects that, but stateless
+/// callers may not validate) a literal "x" is appended to the full name.
+fn perFileOutputName(alloc: std.mem.Allocator, filename: []const u8, pattern_in: []const u8, pattern_out: []const u8) ![]u8 {
+    if (pattern_out.len > 0 and std.mem.endsWith(u8, filename, pattern_in))
+        return std.mem.concat(alloc, u8, &.{ filename[0 .. filename.len - pattern_in.len], pattern_out });
+    return std.mem.concat(alloc, u8, &.{ filename, "x" });
+}
+
+const OutputClash = struct { out_name: []u8, input: []const u8 };
+
+/// First output file (per-file, or the `combined_output` roll-up) whose name
+/// equals one of `names` (this template's inputs), or null. Caller frees
+/// `out_name`.
+fn outputCollidesWithInput(
+    alloc: std.mem.Allocator,
+    names: []const []u8,
+    pattern_in: []const u8,
+    pattern_out: []const u8,
+    combined: bool,
+    bid: []const u8,
+) !?OutputClash {
+    var inputs = std.StringHashMap(void).init(alloc);
+    defer inputs.deinit();
+    for (names) |n| try inputs.put(n, {});
+    for (names) |filename| {
+        const out_name = try perFileOutputName(alloc, filename, pattern_in, pattern_out);
+        if (inputs.contains(out_name)) return .{ .out_name = out_name, .input = filename };
+        alloc.free(out_name);
+    }
+    if (combined) {
+        const suffix = if (pattern_out.len > 0) pattern_out else "x";
+        const combined_name = try std.fmt.allocPrint(alloc, "1-{s}-combined{s}", .{ bid, suffix });
+        if (inputs.contains(combined_name)) return .{ .out_name = combined_name, .input = combined_name };
+        alloc.free(combined_name);
+    }
+    return null;
 }
 
 /// Processes all matching input files in dir_path for the given template.
@@ -2138,6 +2197,20 @@ pub fn processBroker(
 
     if (names.items.len == 0) {
         out.info("No input files for template '{s}' in '{s}'\n", .{ bid, dir_path });
+        stats.time_ns = timer.read();
+        return stats;
+    }
+
+    // An output name that is itself one of this template's inputs would be
+    // truncated by `createFile` before (or while) it is read — e.g.
+    // `file_pattern_in: ".csv"` + `file_pattern_out: ".csv"` overwrote the
+    // user's original export with the converted rows and exited 0. That is a
+    // template mistake, so it fails loudly before anything is written.
+    if (try outputCollidesWithInput(alloc, names.items, bc.file_pattern_in, bc.file_pattern_out, bc.combined_output, bid)) |clash| {
+        defer alloc.free(clash.out_name);
+        out.fatal("error: template '{s}': output '{s}' (for input '{s}') is itself an input file of this template — " ++
+            "file_pattern_out must not map an input onto another input; refusing to overwrite it\n", .{ bid, clash.out_name, clash.input });
+        stats.has_fatal = true;
         stats.time_ns = timer.read();
         return stats;
     }
@@ -2443,7 +2516,7 @@ pub fn processBroker(
                 const trace_on = out.btrace_writer != null or out.btrace_file_writer != null;
                 for (workers) |*w| {
                     w.resetForFile();
-                    w.setDebug(out.debug);
+                    w.setDiagnostics(out);
                     w.setBtraceEnabled(trace_on);
                 }
                 var prepass_buf: [json_mod.READ_BUF_SIZE]u8 = undefined;
@@ -2495,7 +2568,7 @@ pub fn processBroker(
                 const trace_on = out.btrace_writer != null or out.btrace_file_writer != null;
                 for (workers) |*w| {
                     w.resetForFile();
-                    w.setDebug(out.debug);
+                    w.setDiagnostics(out);
                     w.setBtraceEnabled(trace_on);
                 }
                 var pending = std.array_list.Managed(csv.LineSlice).init(file_alloc);
@@ -2580,14 +2653,7 @@ pub fn processBroker(
         // to the full input filename: "export.csv" → "export.csvx". This keeps
         // the output file distinguishable from the input in the same directory
         // without requiring every template to spell out the suffix explicitly.
-        const out_name = if (bc.file_pattern_out.len > 0 and
-            std.mem.endsWith(u8, filename, bc.file_pattern_in))
-            try std.mem.concat(file_alloc, u8, &.{
-                filename[0 .. filename.len - bc.file_pattern_in.len],
-                bc.file_pattern_out,
-            })
-        else
-            try std.mem.concat(file_alloc, u8, &.{ filename, "x" });
+        const out_name = try perFileOutputName(file_alloc, filename, bc.file_pattern_in, bc.file_pattern_out);
         // --fresh under dry-run: still meaningful for the user to see which
         // files would be skipped, so check via access() — no file is created.
         if (fresh and out.dry_run) {
@@ -2599,8 +2665,18 @@ pub fn processBroker(
                 break :blk true;
             };
             if (exists) {
-                out.info("  skipping '{s}' (output exists)\n", .{filename});
-                continue;
+                // Mirror the real-write path below: with `combined_output`
+                // the file is still iterated (into the discarding per-file
+                // sink) so the preview's combined rows match a real run.
+                if (combined) {
+                    out.info("  skipping per-file '{s}' (exists; combined still being built)\n", .{filename});
+                } else {
+                    out.info("  skipping '{s}' (output exists)\n", .{filename});
+                    // `file_start` was already emitted above: close it so a
+                    // trace consumer never sees an unterminated file.
+                    out.binEmitFileEnd(0, 0, 0, file_warnings);
+                    continue;
+                }
             }
         }
 
@@ -2643,6 +2719,7 @@ pub fn processBroker(
                             break :blk_sink &discarding.writer;
                         }
                         out.info("  skipping '{s}' (output exists)\n", .{filename});
+                        out.binEmitFileEnd(0, 0, 0, file_warnings);
                         continue;
                     },
                     else => return e,
@@ -2845,7 +2922,7 @@ pub fn processBroker(
             // output matches the single-threaded baseline byte-for-byte.
             const trace_on = out.btrace_writer != null or out.btrace_file_writer != null;
             for (workers) |*w| {
-                w.setDebug(out.debug);
+                w.setDiagnostics(out);
                 w.setBtraceEnabled(trace_on);
             }
             var main_buf: [json_mod.READ_BUF_SIZE]u8 = undefined;
@@ -2895,7 +2972,7 @@ pub fn processBroker(
             // pre_pass loop and the bytes feed the shared lookup_table).
             const trace_on = out.btrace_writer != null or out.btrace_file_writer != null;
             for (workers) |*w| {
-                w.setDebug(out.debug);
+                w.setDiagnostics(out);
                 w.setBtraceEnabled(trace_on);
             }
             var pending = std.array_list.Managed(csv.LineSlice).init(file_alloc);
@@ -3156,6 +3233,26 @@ pub fn xlsxPrePass(
         if (!gop.found_existing) {
             gop.value_ptr.* = std.array_list.Managed(xlsx_mod.SheetSpec).init(alloc);
         }
+        // Two templates sharing a data_dir may read the same sheet (e.g. one
+        // export feeding two trackers). An identical spec is extracted once —
+        // two parallel workers would otherwise write the same file at once.
+        // The same `output_suffix` with a different sheet/header_row is a
+        // template conflict: one intermediate CSV cannot hold both.
+        var duplicate = false;
+        for (gop.value_ptr.items) |existing| {
+            if (!std.mem.eql(u8, existing.output_suffix, sheet.output_suffix)) continue;
+            if (std.mem.eql(u8, existing.name, sheet.name) and existing.header_row == sheet.header_row) {
+                duplicate = true;
+                break;
+            }
+            out.fatal("error: templates sharing data_dir '{s}' declare xlsx_sheet.output_suffix '{s}' for different sheets ('{s}' row {d} vs '{s}' row {d}) — each extracted sheet needs its own output_suffix\n", .{
+                dir_path, sheet.output_suffix, existing.name, existing.header_row, sheet.name, sheet.header_row,
+            });
+            xlsx_stats.has_fatal = true;
+            out.summary(xlsx_stats);
+            return error.Fatal;
+        }
+        if (duplicate) continue;
         try gop.value_ptr.append(.{
             .name = sheet.name,
             .header_row = sheet.header_row,
@@ -3192,6 +3289,11 @@ pub fn xlsxPrePass(
             while (try fit.next(runtime.io)) |entry| {
                 if (entry.kind != .file and entry.kind != .sym_link) continue;
                 if (!std.mem.endsWith(u8, entry.name, ".xlsx")) continue;
+                // `~$Book.xlsx` is the owner/lock file Excel keeps next to an
+                // open workbook — a ~165-byte non-zip. Converting it aborted
+                // the whole run (`ZipNoEndRecord`) whenever the user still had
+                // the export open in Excel. It is never data: skip it.
+                if (std.mem.startsWith(u8, entry.name, "~$")) continue;
                 try xlsx_names.append(try alloc.dupe(u8, entry.name));
             }
         }
@@ -3295,6 +3397,21 @@ fn zipEntryOutputName(alloc: std.mem.Allocator, entry_name: []const u8, zi: conf
         .keep_path => try std.mem.replaceOwned(u8, alloc, entry_name, "/", zi.path_separator),
     };
 }
+
+/// True when `name` is a single flat file name that stays inside the
+/// directory it is created in on every supported host: non-empty, not `.` /
+/// `..`, and free of `/`, `\` and `:` (see the call site in `zipPrePass`).
+fn isSafeFlatName(name: []const u8) bool {
+    if (name.len == 0 or std.mem.eql(u8, name, ".") or std.mem.eql(u8, name, "..")) return false;
+    return std.mem.indexOfAny(u8, name, "/\\:") == null;
+}
+
+/// Default file-system case sensitivity of the build target: NTFS and APFS /
+/// HFS+ fold case, so two zip members differing only in case collide there.
+const case_insensitive_fs = switch (@import("builtin").os.tag) {
+    .windows, .macos => true,
+    else => false,
+};
 
 /// One unpack job produced by the serial planning phase: which archive member
 /// to inflate, and the validated flat output filename it writes to. Names are
@@ -3547,9 +3664,12 @@ pub fn zipPrePass(
                 const out_name = try zipEntryOutputName(na, member.name, zi);
                 // Zip-slip / sanity guard: a flat name only — never a path
                 // separator (so it can't escape data_dir), never empty/"."/"..".
-                if (out_name.len == 0 or
-                    std.mem.indexOfScalar(u8, out_name, '/') != null or
-                    std.mem.eql(u8, out_name, ".") or std.mem.eql(u8, out_name, ".."))
+                // `\` and `:` are rejected on every host: on Windows `\` is a
+                // separator (a `keep_path` path_separator of "\\" would nest)
+                // and `C:x.csv` is drive-relative — it resolves against the
+                // drive's cwd, not data_dir — while `x.csv:s` names an NTFS
+                // alternate stream. A CSV member name never needs either.
+                if (!isSafeFlatName(out_name))
                 {
                     out.fatal("fatal error: zip '{s}': member '{s}' maps to an unsafe output name '{s}'\n", .{ zip_name, member.name, out_name });
                     stats.has_fatal = true;
@@ -3558,14 +3678,18 @@ pub fn zipPrePass(
                     return error.Fatal;
                 }
                 // Collision guard: two members must not target the same file.
-                if (seen.contains(out_name)) {
+                // Windows and macOS file systems are case-insensitive by
+                // default, so there `Data.csv` and `data.csv` are one file —
+                // and two parallel workers would write it at the same time.
+                const seen_key = if (case_insensitive_fs) try std.ascii.allocLowerString(na, out_name) else out_name;
+                if (seen.contains(seen_key)) {
                     out.fatal("fatal error: zip '{s}': two members map to the same output file '{s}' — set zip_input.dir_mode to \"keep_path\"\n", .{ zip_name, out_name });
                     stats.has_fatal = true;
                     stats.time_ns = timer.read();
                     out.summary(stats);
                     return error.Fatal;
                 }
-                try seen.put(out_name, {});
+                try seen.put(seen_key, {});
 
                 // --fresh: skip members whose intermediate CSV already exists.
                 if (fresh) {
@@ -3945,4 +4069,117 @@ test "dateIsComparable: only a live range makes a short $date unanswerable" {
     // run needs the same ten bytes.
     try std.testing.expect(!dateIsComparable("2024-01-01", "", ""));
     try std.testing.expect(!dateIsComparable("", "2024-12-31", ""));
+}
+
+test "drainBlockPrePass: an earlier block's entry does not override a later block's" {
+    const alloc = std.testing.allocator;
+    var workers: [2]WorkerSlice = undefined;
+    for (&workers) |*w| {
+        w.* = undefined;
+        try w.init(alloc);
+    }
+    defer for (&workers) |*w| w.deinit();
+
+    var sink = std.Io.Writer.Allocating.init(alloc);
+    defer sink.deinit();
+    const out = Output{ .writer = &sink.writer, .quiet = true, .debug = false };
+    var table = std.StringHashMap([]const u8).init(alloc);
+    defer table.deinit();
+
+    // Block 1: the key's last occurrence sits in worker 1's slice.
+    try workers[1].partial_lookup.put("k", "old");
+    try drainBlockPrePass(&workers, 2, out, &table);
+    try std.testing.expectEqualStrings("old", table.get("k").?);
+
+    // Block 2: a later row (worker 0's slice) sets it again; worker 1 has no
+    // occurrence this time. Serial semantics: the later row wins.
+    for (&workers) |*w| w.resetForBlock();
+    try workers[0].partial_lookup.put("k", "new");
+    try drainBlockPrePass(&workers, 2, out, &table);
+    try std.testing.expectEqualStrings("new", table.get("k").?);
+}
+
+test "setDiagnostics: a worker's fatal honours --debug=json and --quiet" {
+    const alloc = std.testing.allocator;
+    var ws: WorkerSlice = undefined;
+    try ws.init(alloc);
+    defer ws.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    defer arena.deinit();
+    var msgs = std.array_list.Managed([]const u8).init(alloc);
+    defer msgs.deinit();
+    var aw = std.Io.Writer.Allocating.init(alloc);
+    defer aw.deinit();
+
+    const rec = RowEvalConst{
+        .bc = undefined,
+        .col_index = undefined,
+        .col_names = &.{},
+        .lookup_table_ptr = null,
+        .single_prepass_name = null,
+        .date_min = "2024-01-01",
+        .date_max = "2024-12-31",
+        .bid = "t",
+        .filename = "x_2024-01-01_2024-12-31",
+    };
+
+    // --debug=json: the message lands in the run's sink, not on stderr.
+    ws.setDiagnostics(.{ .writer = &aw.writer, .quiet = false, .debug = false, .json_debug = true, .msg_sink = &msgs, .msg_alloc = arena.allocator() });
+    date_filter_reported.store(false, .seq_cst);
+    try std.testing.expectError(error.Fatal, requireComparableDate(&rec, ws.worker_out, 1, ""));
+    try std.testing.expectEqual(@as(usize, 1), msgs.items.len);
+    try std.testing.expect(std.mem.indexOf(u8, msgs.items[0], "date_filter_from_filename") != null);
+
+    // --quiet: still fatal, but nothing is captured or printed.
+    ws.setDiagnostics(.{ .writer = &aw.writer, .quiet = true, .debug = false });
+    try std.testing.expect(ws.worker_out.quiet and !ws.worker_out.json_debug and ws.worker_out.msg_sink == null);
+    date_filter_reported.store(false, .seq_cst);
+    try std.testing.expectError(error.Fatal, requireComparableDate(&rec, ws.worker_out, 1, ""));
+    try std.testing.expectEqual(@as(usize, 1), msgs.items.len);
+    date_filter_reported.store(false, .seq_cst);
+}
+
+test "outputCollidesWithInput: an output named like an input is caught" {
+    const alloc = std.testing.allocator;
+    var a = "a.csv".*;
+    var b = "a_x.csv".*;
+    var c = "1-t-combined.csv".*;
+    const names = [_][]u8{ &a, &b, &c };
+
+    // Same pattern in and out: every output is its own input.
+    {
+        const clash = (try outputCollidesWithInput(alloc, names[0..1], ".csv", ".csv", false, "t")).?;
+        defer alloc.free(clash.out_name);
+        try std.testing.expectEqualStrings("a.csv", clash.out_name);
+    }
+    // a.csv → a_x.csv, which is another (not yet processed) input.
+    {
+        const clash = (try outputCollidesWithInput(alloc, names[0..2], ".csv", "_x.csv", false, "t")).?;
+        defer alloc.free(clash.out_name);
+        try std.testing.expectEqualStrings("a_x.csv", clash.out_name);
+        try std.testing.expectEqualStrings("a.csv", clash.input);
+    }
+    // The combined roll-up's name is an input.
+    {
+        const clash = (try outputCollidesWithInput(alloc, &.{ &a, &c }, ".csv", ".csv2", true, "t"));
+        try std.testing.expect(clash == null); // combined = 1-t-combined.csv2
+        const clash2 = (try outputCollidesWithInput(alloc, &.{&c}, "d.csv", ".csv", true, "t")).?;
+        defer alloc.free(clash2.out_name);
+        try std.testing.expectEqualStrings("1-t-combined.csv", clash2.out_name);
+    }
+    // The ordinary case: .csv → .csvx, chained templates are untouched.
+    try std.testing.expect((try outputCollidesWithInput(alloc, &names, ".csv", ".csvx", true, "t")) == null);
+}
+
+test "isSafeFlatName: only flat names that stay inside data_dir" {
+    try std.testing.expect(isSafeFlatName("rows.csv"));
+    try std.testing.expect(isSafeFlatName("CSV_rows.csv"));
+    try std.testing.expect(!isSafeFlatName(""));
+    try std.testing.expect(!isSafeFlatName("."));
+    try std.testing.expect(!isSafeFlatName(".."));
+    try std.testing.expect(!isSafeFlatName("CSV/rows.csv"));
+    try std.testing.expect(!isSafeFlatName("CSV\\rows.csv"));
+    try std.testing.expect(!isSafeFlatName("C:rows.csv")); // drive-relative on Windows
+    try std.testing.expect(!isSafeFlatName("rows.csv:ads")); // NTFS alternate stream
 }
