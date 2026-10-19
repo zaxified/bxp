@@ -594,12 +594,31 @@ class BxpProcessClient {
       _lastSubprocessDiag = 'evalBatch: bridge_inspect failed';
       return const [];
     }
+    // A malformed request comes back as `{"error":"<reason>"}` (the same
+    // reason bxp-mcp reports) instead of a bare failure code.
+    final reason = _batchRequestError(raw);
+    if (reason != null) {
+      _lastSubprocessDiag = 'evalBatch: $reason';
+      return const [];
+    }
     return _parseBatchResults(raw);
   }
 
   /// Parse the `{"results":[...]}` shape from `the bridge expr batch`.
   /// Tolerates malformed individual entries (rendered as ok:false) so a
   /// single corrupt result line can't discard the rest of the batch.
+  /// The reason string of an `{"error":"…"}` batch answer, or null when
+  /// [out] is anything else (a normal `{"results":[…]}` included).
+  static String? _batchRequestError(String out) {
+    try {
+      final v = jsonDecode(out);
+      if (v is Map && v['results'] == null && v['error'] is String) {
+        return v['error'] as String;
+      }
+    } catch (_) {/* not JSON — _parseBatchResults handles it */}
+    return null;
+  }
+
   static List<ExprBatchResult> _parseBatchResults(String out) {
     Map<String, dynamic>? parsed;
     try {

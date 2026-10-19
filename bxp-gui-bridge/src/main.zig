@@ -987,8 +987,9 @@ fn objStr(obj: std.json.ObjectMap, key: []const u8) ?[]const u8 {
 ///   {"op":"eval_batch","request":{ headers, fields, exprs, … }}
 ///
 /// Returns: `> 0` byte count of result JSON in out_buf; `-1` OOM; `-2`
-/// BUF_TOO_SMALL (caller retries larger); `-3` INVALID_INPUT (bad request /
-/// unknown op / missing field / malformed eval_batch request).
+/// BUF_TOO_SMALL (caller retries larger); `-3` INVALID_INPUT (bad envelope /
+/// unknown op / missing field). A malformed eval_batch `request` is not -3:
+/// it answers `{"error":"<reason>"}`.
 pub export fn bridge_inspect(
     request_ptr: [*]const u8,
     request_len: u32,
@@ -1031,7 +1032,12 @@ pub export fn bridge_inspect(
     } else if (std.mem.eql(u8, op, "eval_batch")) blk: {
         const reqv = obj.get("request") orelse return invalid;
         const r = inspect.evalBatch(a, reqv) catch return oom;
-        if (r.error_message != null) return invalid;
+        // A malformed batch request answers `{"error":"<reason>"}` as a
+        // normal result rather than a bare -3, so the GUI can name the reason
+        // the way bxp-mcp and the wasm build already do. No ABI change: a
+        // caller that only looks for `results` still sees an empty batch.
+        if (r.error_message) |msg|
+            break :blk std.json.Stringify.valueAlloc(a, .{ .@"error" = msg }, .{}) catch return oom;
         break :blk r.json;
     } else return invalid;
 
@@ -2119,6 +2125,18 @@ test "bridge_inspect rejects unknown op and bad request" {
     try testing.expectEqual(@as(i32, -3), bridge_inspect(not_obj.ptr, @intCast(not_obj.len), &buf, buf.len));
     const missing_path: []const u8 = "{\"op\":\"config\"}";
     try testing.expectEqual(@as(i32, -3), bridge_inspect(missing_path.ptr, @intCast(missing_path.len), &buf, buf.len));
+}
+
+test "bridge_inspect eval_batch names the reason for a malformed request" {
+    var buf: [512]u8 = undefined;
+    const req: []const u8 = "{\"op\":\"eval_batch\",\"request\":{\"headers\":[],\"fields\":[]}}";
+    const n = bridge_inspect(req.ptr, @intCast(req.len), &buf, buf.len);
+    try testing.expect(n > 0);
+    const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, buf[0..@intCast(n)], .{});
+    defer parsed.deinit();
+    const msg = parsed.value.object.get("error") orelse return error.TestExpectedErrorKey;
+    try testing.expect(msg == .string and msg.string.len > 0);
+    try testing.expect(parsed.value.object.get("results") == null);
 }
 
 test "bridge_inspect BUF_TOO_SMALL when docs exceeds out_size" {
