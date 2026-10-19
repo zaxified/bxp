@@ -325,9 +325,13 @@ and races below are bounded by that model and only re-open under a future
 revisit them there.
 
 - **`sim.zig` wipes the reused workspace on every call** (`deleteTree` +
-  `makePath`). Two concurrent `bxp_simulate` calls sharing a `workspace` id
-  (default = template id) would race wipe-vs-read; single-threaded stdio makes
-  that unreachable today. Path is confined to `tmp_base/bxp-mcp-sim/<uid>`.
+  `makePath`). The default id is `<template>-<pid>`, so two bxp-mcp processes
+  (two agent sessions) never share one; two calls in one process are
+  serialised by single-threaded stdio. Only an explicit, shared `workspace` id
+  can still race wipe-vs-read across processes — the caller asked for that.
+  Path is confined to `tmp_base/bxp-mcp-sim/<uid>`. On a multi-user host a
+  pre-planted `/tmp/bxp-mcp-sim` owned by another user is not detected;
+  macOS and Windows temp dirs are per-user.
 - **`sim.zig tmpDir` trusts `TMPDIR`/`TMP`/`TEMP`.** Standard, and the env is
   the user's own; the subsequent `deleteTree` only ever targets the sanitized
   `bxp-mcp-sim/<uid>` subtree, so a redirected temp base cannot widen the

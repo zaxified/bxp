@@ -107,8 +107,15 @@ fn run(
     std.Io.Dir.cwd().access(io, cli_path, .{}) catch
         return errJson(a, "bxp-cli binary not found next to bxp-mcp", cli_path);
 
-    // 3. Stable, reused scratch workspace (no per-call temp litter).
-    const uid = try sanitize(a, workspace_id orelse template);
+    // 3. Stable, reused scratch workspace (no per-call temp litter). The
+    //    default id carries this process's pid: two agent sessions (two
+    //    bxp-mcp processes) simulating the same template at once would
+    //    otherwise wipe each other's workspace mid-run. An explicit
+    //    `workspace` id is taken as given — the agent chose to share it.
+    const uid = if (workspace_id) |w|
+        try sanitize(a, w)
+    else
+        try std.fmt.allocPrint(a, "{s}-{d}", .{ try sanitize(a, template), ownPid() });
     const tmp_base = tmpDir(env);
     const workspace = try std.Io.Dir.path.join(a, &.{ tmp_base, "bxp-mcp-sim", uid });
     const data_dir = try std.Io.Dir.path.join(a, &.{ workspace, "data" });
@@ -557,6 +564,15 @@ fn countDataRecords(bytes: []const u8) usize {
 
 /// Filesystem-safe workspace id: keep [A-Za-z0-9_-], map everything else to
 /// '_', cap the length, never empty.
+/// This process's id, for the default workspace name.
+fn ownPid() u64 {
+    return switch (builtin.os.tag) {
+        .windows => std.os.windows.GetCurrentProcessId(),
+        .linux => @intCast(std.os.linux.getpid()),
+        else => @intCast(std.c.getpid()),
+    };
+}
+
 fn sanitize(a: std.mem.Allocator, s: []const u8) ![]u8 {
     const n = @min(s.len, MAX_UID_LEN);
     if (n == 0) return a.dupe(u8, "_");

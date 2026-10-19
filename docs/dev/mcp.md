@@ -182,7 +182,9 @@ store past the call.
 1. **Validate** the template's input shape via `inspect.templateIo`; reject
    xlsx/JSON-input templates (CSV input only).
 2. **Stage** a stable, reused scratch workspace `<tmp>/bxp-mcp-sim/<uid>/`
-   (sanitized id; wiped fresh per run, left in place for inspection): the config
+   (sanitized id, `<template>-<pid>` unless the call names one, so two agent
+   sessions never share it by accident; wiped fresh per run, left in place for
+   inspection): the config
    verbatim as `config.json`, the CSV as `data/input<suffix>` (suffix matched to
    `file_pattern_in`).
 3. **Run** the co-located `bxp-cli` with the existing flags only —
