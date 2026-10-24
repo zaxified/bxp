@@ -31,14 +31,15 @@
         // worth adopting, and a later commit that fixes them is (see
         // CHANGELOG.md in each module). Currently `main` past tag `2026-10-19`:
         // that window carries the regex prefilter-skip fix (isMatch / Pike VM
-        // missed matches after a skipped position).
+        // missed matches after a skipped position) and the mcp `uniqueItems`
+        // stack-overflow fix (8b5872fc, 2026-10-24).
         // `zig fetch` cannot
         // target a subdirectory (ziglang/zig#23012)
         // so the whole collection is one package — only the modules actually
         // imported get compiled in.
         .zig_libs = .{
-            .url = "git+https://github.com/zaxified/zig-libs.git?ref=main#a41eb23325a6274949e78452c1f5d25b9e257262",
-            .hash = "zig_libs-0.0.0-WiQ0GqZi7AaEpFo1OotDfilK-YxBnjJCXZQnyUcqaOEz",
+            .url = "git+https://github.com/zaxified/zig-libs.git?ref=main#8b5872fcb8a8e7909247ae499e6a11fe397e47c9",
+            .hash = "zig_libs-0.0.0-WiQ0GoSh6gcA0qUrs0UllR7I3t_gW1Ra8DfCz7JU1Nkd",
         },
     },
     .minimum_zig_version = "0.17.0",

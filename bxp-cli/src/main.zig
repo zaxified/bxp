@@ -850,7 +850,7 @@ fn run(args: [][:0]u8, out: Output, fresh: bool, check_fs_seconds: u8, runtime: 
                                     has_keys_fatal = true;
                                 },
                                 .warning => out.warning("warning: {s}\n", .{d.message}),
-                                .info => out.info("{s}\n", .{d.message}),
+                                .info, .hint => out.info("{s}\n", .{d.message}),
                             }
                         }
                         if (has_keys_fatal) {
@@ -933,7 +933,7 @@ fn run(args: [][:0]u8, out: Output, fresh: bool, check_fs_seconds: u8, runtime: 
                     out.warning("warning: {s}\n", .{d.message});
                     any_warning = true;
                 },
-                .info => out.info("{s}\n", .{d.message}),
+                .info, .hint => out.info("{s}\n", .{d.message}),
             }
         }
         if (any_warning) overall.warnings += 1;
@@ -968,7 +968,7 @@ fn run(args: [][:0]u8, out: Output, fresh: bool, check_fs_seconds: u8, runtime: 
                     has_fs_fatal = true;
                 },
                 .warning => out.warning("warning: {s}\n", .{d.message}),
-                .info => out.info("{s}\n", .{d.message}),
+                .info, .hint => out.info("{s}\n", .{d.message}),
             }
         }
         if (has_fs_fatal) {

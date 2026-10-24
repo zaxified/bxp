@@ -121,6 +121,12 @@ pub fn main(init: std.process.Init) void {
         .instructions = INSTRUCTIONS,
     });
     defer server.deinit();
+    // zig-libs mcp checks `tools/call` arguments against each `input_schema`
+    // before the handler (on by default since 2026-10-20). bxp's handlers do
+    // their own argument checks with actionable messages, and accept a
+    // JSON-text string for `headers`/`fields` that the schemas do not
+    // advertise — the schema check would refuse that before it got here.
+    server.validate_tool_io = false;
 
     // Registration failure is a build-time bug (a duplicate tool name or OOM
     // before the first request), not something a client can provoke — fail

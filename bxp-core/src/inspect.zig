@@ -309,7 +309,10 @@ fn injectDiagnostics(
         const prefix: []const u8 = switch (d.severity) {
             .@"error" => "$err_",
             .warning => "$warn_",
-            .info => "$info_",
+            // `hint` (LSP's fourth level) is never produced by bxp's own
+            // validators; it folds into info so the GUI contract keeps
+            // its three prefixes.
+            .info, .hint => "$info_",
         };
 
         var obj: std.json.ObjectMap = .empty;
