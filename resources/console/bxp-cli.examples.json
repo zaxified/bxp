@@ -927,8 +927,8 @@
             {
               $action:     "'BUY'",
               $ticker:     "REPLACE(REMAP([Ticker],'xtb'), '.US','', '.NL','.AS', '.UK','.L', '.CH','.SW', '.CZ','.PR')",
-              $quantity:   "SPLIT_PART(SPLIT_PART([Comment], ' ', 3), '/', 1)",
-              $unitprice:  "ROUND(ABS([Amount]) / SPLIT_PART(SPLIT_PART([Comment], ' ', 3), '/', 1), 8)",
+              $quantity:   "REGEX_EXTRACT([Comment], '([0-9.]+)(?:/[0-9.]+)? @')",
+              $unitprice:  "ROUND(ABS([Amount]) / REGEX_EXTRACT([Comment], '([0-9.]+)(?:/[0-9.]+)? @'), 8)",
               $comment:    "[ID] & '_' & [Time] & '_' & [Comment]"
             }
           ]
@@ -1218,8 +1218,8 @@
             {
               $type:      "'BUY'",
               $ticker:    "REPLACE(REMAP([Ticker],'xtb'), '.US','', '.NL','.AS', '.UK','.L', '.CH','.SW', '.CZ','.PR')",
-              $quantity:  "SPLIT_PART(SPLIT_PART([Comment], ' ', 3), '/', 1)",
-              $price:     "SPLIT_PART([Comment], ' ', 5)"
+              $quantity:  "REGEX_EXTRACT([Comment], '([0-9.]+)(?:/[0-9.]+)? @')",
+              $price:     "REGEX_EXTRACT([Comment], '@ ([0-9.]+)')"
             }
           ]
         }
