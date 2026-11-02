@@ -104,7 +104,7 @@ pub fn annotateRaw(a: std.mem.Allocator, raw: []const u8, path_label: []const u8
     const ann = json5_mod.preprocessAnnotated(a, raw) catch |err| {
         return .{ .json = try formatRootErr(a, @errorName(err)), .exit_code = 1 };
     };
-    var counter: u32 = ann.next_id - 1;
+    var counter: usize = ann.next_id - 1;
 
     var value = std.json.parseFromSliceLeaky(std.json.Value, a, ann.out, .{
         .duplicate_field_behavior = .use_last,
@@ -215,7 +215,7 @@ fn injectSemanticErrors(
     a: std.mem.Allocator,
     root: *std.json.Value,
     errors: []const config_mod.ValidationError,
-    counter: *u32,
+    counter: *usize,
 ) !void {
     for (errors) |e| {
         const parent_ptr = markerParent(root, e.path);
@@ -241,7 +241,7 @@ fn insertErrBefore(
     parent: *std.json.Value,
     target_key: []const u8,
     msg: []const u8,
-    counter: *u32,
+    counter: *usize,
 ) !void {
     var obj: std.json.ObjectMap = .empty;
     try obj.put(a, "message", .{ .string = try a.dupe(u8, msg) });
@@ -254,7 +254,7 @@ fn insertNumberedBefore(
     prefix: []const u8,
     target_key: []const u8,
     value: std.json.Value,
-    counter: *u32,
+    counter: *usize,
 ) !void {
     if (parent.* != .object) return;
     counter.* += 1;
@@ -285,7 +285,7 @@ fn injectDiagnostics(
     a: std.mem.Allocator,
     root: *std.json.Value,
     items: []const diagnostics_mod.Diagnostic,
-    counter: *u32,
+    counter: *usize,
 ) !void {
     for (items) |d| {
         const parent_ptr = markerParent(root, d.path);

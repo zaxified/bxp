@@ -129,14 +129,16 @@ if [[ ! -x "$BXP" ]]; then
     _fail "guard" 0 "guard binary missing after build: $BXP"
 fi
 
-# Optimized-build sanity: a ReleaseSafe bxp-cli is ~6 MB. A fat debug-info
-# build (20+ MB) would signal an unoptimized binary that invalidates the
-# scaling check. `wc -c` is portable (GNU `stat -c` / BSD `stat -f` differ
-# across Linux/macOS).
+# Optimized-build sanity: a Debug bxp-cli is roughly three times the size of a
+# ReleaseSafe one (both keep debug info), and a Debug binary would invalidate
+# the scaling check. The ceiling sits between the two; it is not a size budget —
+# the zig-libs read codecs and regex tables legitimately move the ReleaseSafe
+# size. `wc -c` is portable (GNU `stat -c` / BSD `stat -f` differ across
+# Linux/macOS).
 bin_bytes=$(wc -c < "$BXP" | tr -d '[:space:]')
-if (( bin_bytes > 10485760 )); then
+if (( bin_bytes > 16777216 )); then
     bin_mb=$(awk -v b="$bin_bytes" 'BEGIN{printf "%.1f", b/1048576}')
-    _fail "guard" 0 "guard binary too large (${bin_mb} MB > 10 MB) — not optimized?"
+    _fail "guard" 0 "guard binary too large (${bin_mb} MB > 16 MB) — not optimized?"
 fi
 
 # The cached inputs under $WORK are keyed on the generator's content: the

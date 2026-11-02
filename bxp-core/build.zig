@@ -33,9 +33,15 @@ pub fn build(b: *std.Build) void {
     // they import each other (`tz` imports `datefmt`), and a second
     // `b.dependency` call would compile a second, separate copy of the shared
     // ones. Foreign upstream — read-only, pinned in build.zig.zon.
+    //
+    // zipstream's Zstandard / bzip2 / LZMA / XZ decoders stay out: xlsx parts
+    // are Deflate, and `zipPrePass` reads only Store and Deflate members (it
+    // skips any other method with a warning before opening it), so linking
+    // them would only grow every binary.
     const zig_libs = b.dependency("zig_libs", .{
         .target = target,
         .optimize = optimize,
+        .@"zipstream-builtin-decoders" = false,
     });
 
     // JSON5 -> JSON preprocessor (plain + source-location annotated), consumed

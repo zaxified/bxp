@@ -8,5 +8,33 @@
 - <code class="hl-str">iso-8859-1</code>
 - <code class="hl-str">iso-8859-2</code>
 - <code class="hl-str">iso-8859-15</code>
+- <code class="hl-str">ibm866</code>
+- <code class="hl-str">iso-8859-3</code>
+- <code class="hl-str">iso-8859-4</code>
+- <code class="hl-str">iso-8859-5</code>
+- <code class="hl-str">iso-8859-6</code>
+- <code class="hl-str">iso-8859-7</code>
+- <code class="hl-str">iso-8859-8</code>
+- <code class="hl-str">iso-8859-8-i</code>
+- <code class="hl-str">iso-8859-10</code>
+- <code class="hl-str">iso-8859-13</code>
+- <code class="hl-str">iso-8859-14</code>
+- <code class="hl-str">iso-8859-16</code>
+- <code class="hl-str">koi8-r</code>
+- <code class="hl-str">koi8-u</code>
+- <code class="hl-str">macintosh</code>
+- <code class="hl-str">windows-874</code>
+- <code class="hl-str">windows-1251</code>
+- <code class="hl-str">windows-1253</code>
+- <code class="hl-str">windows-1254</code>
+- <code class="hl-str">windows-1255</code>
+- <code class="hl-str">windows-1256</code>
+- <code class="hl-str">windows-1257</code>
+- <code class="hl-str">windows-1258</code>
+- <code class="hl-str">x-mac-cyrillic</code>
+- <code class="hl-str">x-user-defined</code>
+- <code class="hl-str">ibm437</code>
+- <code class="hl-str">ibm850</code>
+- <code class="hl-str">ibm852</code>
 
 <!-- --8<-- [end:values] -->

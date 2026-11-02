@@ -140,9 +140,11 @@ classDiagram
         +message: string
         +suggest: ?string
         +labels: ?[]Label
+        +span_message: ?string
         +notes: ?[]Note
         +code_url: ?string
         +fix: ?Fix
+        +tags: ?[]Tag
     }
 
     class SectionStats {

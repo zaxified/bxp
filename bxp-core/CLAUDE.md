@@ -561,8 +561,8 @@ only drift from the native one.
   else stays failing, which is correct: a browser page has no filesystem,
   network or threads, and nothing on the eval path reaches for them. Without
   this, `NOW()` would report 1970 and `RAND()` would error.
-- Size: ~800 KiB raw, ~193 KiB gzipped, dominated by **data** (Unicode case
-  tables, tz offsets, regex case-folding) rather than code — so there is no
+- Size: ~1.2 MiB raw, ~300 KiB gzipped, dominated by **data** (Unicode case
+  tables, tz offsets, regex Unicode property and case-folding tables) rather than code — so there is no
   meaningful slimming available that would not also make the browser disagree
   with the CLI.
 - Parity with the native engine is measured, not assumed:
