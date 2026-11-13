@@ -143,6 +143,13 @@ The default Wealthfolio column mapping:
 template may add columns beyond this list. `trading212_to_wealthfolio` does
 exactly that, emitting an extra `isin` column after `symbol`.
 
+**Sources that report only an ISIN** (DEGIRO, many EU banks) still need a
+ticker in `symbol`. Map the ISINs you hold to tickers — inline for a handful,
+`REMAP([ISIN], 'IE00B3XXRP09','VUSA.AS', …)`, or a named map shared across
+templates, `REMAP([ISIN], 'isin_to_ticker')` — and keep the ISIN itself in an
+extra column or `$comment` so an unmapped one is easy to spot: `REMAP` passes
+an unknown key through unchanged, so it lands in `symbol` as the ISIN.
+
 ## brycht.app
 
 The shipping `*_to_brychtapp` templates target a different column set than

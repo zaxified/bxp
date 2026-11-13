@@ -46,7 +46,11 @@ as two literals side by side, which is an error.
 whose header is literally `2`; it does not read the second column, and it
 silently yields `""` when no such header exists. Use `FIELDS(2)` to reach a
 column by position — that is also the only way in on headerless input
-(`csv_header_line: 0`).
+(`csv_header_line: 0`), and into a column whose header cell is blank. Some
+exports leave header cells blank and put the label one column off the value
+it describes: DEGIRO's account statement reads `…,Mutatie,,Saldo,,…`, so
+`[Mutatie]` holds the currency and the amount is the unnamed column after it,
+`FIELDS(9)`. Check a sample row against the header before trusting a name.
 
 Function names are case-insensitive.
 

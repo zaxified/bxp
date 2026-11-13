@@ -40,6 +40,18 @@ the core does not canonicalise — a leading-zero form like `0012`, or more than
 any string result that reads as a number as a whole, so `'' & [Column]` does
 not preserve the original form either (`75,00` still becomes `75`).
 
+The conversion applies to a field that *is* a number, not to a number inside
+text. A price embedded in a description (`Koop 34 @ 26,88 EUR`) is extracted
+first and converted by hand — drop the thousands dots, then swap the comma:
+
+```text
+REPLACE(REPLACE(REGEX_EXTRACT([Description], '@ ([0-9.,]+) '), '.', ''), ',', '.')
+```
+
+That is also the way for a source whose amount columns use `.` but whose text
+uses `,` (DEGIRO): `csv_decimal_separator_in` describes the columns, so it
+stays `"."` there.
+
 US-style exports (Schwab, Fidelity, Trading 212) use `.` decimal +
 optional `,` thousands — that path is handled automatically (see the
 "American thousands-separated numbers" note under
