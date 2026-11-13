@@ -1851,33 +1851,25 @@ pub fn validateFilesystemWithTimeout(
         return validateFilesystem(ctx.io, cfg, alloc, sink);
     };
 
-    // Deadline-loop on a monotonic (`.awake`) clock. `std.Io.Event.waitTimeout`
-    // returns `error.Timeout` on a *spurious* wakeup as well as a real one, so
-    // we re-check against an absolute deadline instead of trusting a single
-    // wait. Only a wakeup past the deadline counts as a real timeout.
+    // Absolute deadline on a monotonic (`.awake`) clock. `Event.waitTimeout`
+    // retries spurious wakeups itself, so an error here is a real timeout.
     const deadline = std.Io.Clock.Timestamp.fromNow(ctx.io, .{
         .raw = std.Io.Duration.fromMilliseconds(@intCast(deadline_ms)),
         .clock = .awake,
     });
-    const timeout: std.Io.Timeout = .{ .deadline = deadline };
-    while (!ctx.done.isSet()) {
-        ctx.done.waitTimeout(ctx.io, timeout) catch {};
-        if (ctx.done.isSet()) break;
-        const now = std.Io.Clock.Timestamp.now(ctx.io, .awake);
-        if (deadline.compare(.lte, now)) {
-            // Timeout. Detach the worker (it will continue to completion in
-            // the background and exit when its syscall returns; OS reaps
-            // the thread on process exit). The ctx — including its `threaded`
-            // io and page-allocated diagnostics — leaks intentionally so the
-            // detached worker's late `done.set(io)` stays valid. The inspect
-            // core / bxp-cli are short-lived processes, the cost is negligible.
-            thread.detach();
-            try emitGlobalDiag(alloc, sink, .warning, "fs.timeout",
-                "[fs.timeout] filesystem check exceeded {d}ms — data_dir existence not verified",
-                .{deadline_ms});
-            return;
-        }
-    }
+    ctx.done.waitTimeout(ctx.io, .{ .deadline = deadline }) catch {
+        // Timeout. Detach the worker (it will continue to completion in
+        // the background and exit when its syscall returns; OS reaps
+        // the thread on process exit). The ctx — including its `threaded`
+        // io and page-allocated diagnostics — leaks intentionally so the
+        // detached worker's late `done.set(io)` stays valid. The inspect
+        // core / bxp-cli are short-lived processes, the cost is negligible.
+        thread.detach();
+        try emitGlobalDiag(alloc, sink, .warning, "fs.timeout",
+            "[fs.timeout] filesystem check exceeded {d}ms — data_dir existence not verified",
+            .{deadline_ms});
+        return;
+    };
 
     // Worker finished within deadline. Join, copy diagnostics into the
     // caller's allocator (page-allocated originals are about to be

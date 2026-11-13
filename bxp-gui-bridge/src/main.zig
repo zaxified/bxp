@@ -1619,13 +1619,8 @@ const stream_test = struct {
             .raw = std.Io.Duration.fromNanoseconds(@intCast(timeout_ns)),
             .clock = .awake,
         });
-        const timeout: std.Io.Timeout = .{ .deadline = deadline };
-        while (!exit_event.isSet()) {
-            exit_event.waitTimeout(io, timeout) catch {};
-            if (exit_event.isSet()) return true;
-            const now = std.Io.Clock.Timestamp.now(io, .awake);
-            if (deadline.compare(.lte, now)) return false;
-        }
+        // `Event.waitTimeout` retries spurious wakeups itself.
+        exit_event.waitTimeout(io, .{ .deadline = deadline }) catch return exit_event.isSet();
         return true;
     }
 };

@@ -1,5 +1,16 @@
 const std = @import("std");
 
+// Zig 0.17.1 or newer, enforced here: `minimum_zig_version` in build.zig.zon is
+// advisory (Zig never compares it). 0.17.0 lowers a signed -> narrower-unsigned
+// `@intCast` / `std.math.cast` as LLVM `trunc nsw` (ziglang/zig#37131), and bxp's
+// own such casts (`toPositiveIndex`, `header_row` / `csv_header_line`, the
+// bridge's `check_fs` timeout) rely on the fixed lowering. Every bxp package
+// compiles this file through its path dependency, so one check covers them all.
+comptime {
+    if (@import("builtin").zig_version.order(.{ .major = 0, .minor = 17, .patch = 1 }) == .lt)
+        @compileError("bxp needs Zig 0.17.1 or newer (0.17.0 miscompiles signed -> narrower-unsigned casts, ziglang/zig#37131)");
+}
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});

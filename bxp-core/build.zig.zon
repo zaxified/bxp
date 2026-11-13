@@ -29,18 +29,17 @@
         // `YYYY-MM-DD`), but what decides it is the diff to these thirteen
         // modules, not the tag: a tag that leaves them byte-identical is not
         // worth adopting, and a later commit that fixes them is (see
-        // CHANGELOG.md in each module). Currently tag `2026-11-10`, the last
-        // one whose minimum_zig_version is 0.17.0 — from `2026-11-11` on
-        // upstream requires 0.17.1, so moving past it means raising ours too.
+        // CHANGELOG.md in each module). Currently tag `2026-11-11`, the first
+        // that requires Zig 0.17.1 (its build.zig refuses older compilers).
         // `zig fetch` cannot
         // target a subdirectory (ziglang/zig#23012)
         // so the whole collection is one package — only the modules actually
         // imported get compiled in.
         .zig_libs = .{
-            .url = "git+https://github.com/zaxified/zig-libs.git?ref=2026-11-10#8b87749c350777c70d3954f2ae6b3b3a6fa8a231",
-            .hash = "zig_libs-0.0.0-WiQ0GiXvWQr3VYO4YmxsoOFmqqcI3krCDWMA6kL2fLW-",
+            .url = "git+https://github.com/zaxified/zig-libs.git?ref=2026-11-11#5992e8aed362f11f77b8bd00c0f574d581a8fa54",
+            .hash = "zig_libs-0.0.0-WiQ0Glm2WAoExDji5e6y0c8U9d5KL1Zkr5jgbbhKDl4t",
         },
     },
-    .minimum_zig_version = "0.17.0",
+    .minimum_zig_version = "0.17.1",
     .paths = .{"."},
 }

@@ -326,7 +326,7 @@ services/prefs_service.dart`.
 ## Coding conventions
 
 - All code comments and documentation in English
-- Zig 0.17.0 API — use zig-0.17 skill before writing new code
+- Zig 0.17.1 API — use zig-0.17 skill before writing new code
 - User-facing error messages use `std.process.exit(1)` (no Zig stack trace)
 - **Every file states its own purpose in its header**, and the docs generator
   harvests exactly that: a `//!` module doc-comment in Zig (not `///` — at file

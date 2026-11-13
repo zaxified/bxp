@@ -689,7 +689,7 @@ not here.
 ## Coding conventions
 
 - All code comments and documentation in English.
-- Zig 0.17.0 API.
+- Zig 0.17.1 API.
 - `processBroker()` in pipeline.zig (~930 lines) and `loadFromBytes()` in
   config.zig (~480 lines) are large, deliberately linear pipelines. Splitting
   them is pure reorganisation (no behaviour change), so weigh it against

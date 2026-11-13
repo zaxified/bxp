@@ -84,7 +84,7 @@ jobs:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
         with:
-          version: 0.17.0
+          version: 0.17.1
           # Persist the build cache ourselves (next step) instead. mlugg's
           # built-in cache only kept a partial subset (~137 MB of a ~1.1 GB
           # build cache — the compiled `o/` outputs were dropped), so every run

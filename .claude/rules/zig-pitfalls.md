@@ -21,18 +21,15 @@ this file only holds what is specific to this repository.
   every target, so a body that does not compile on Windows breaks the Windows
   build. Wrap it in a comptime-known `if (builtin.os.tag != .windows) { … }` —
   the doubled condition looks redundant and is not; do not "simplify" it.
-- **Zig 0.17.0 miscompiles signed → narrower-unsigned casts (#37131).**
-  `@intCast`, `std.math.cast`, `@max(0, x)` narrowing and `std.json` integer
-  parsing into an unsigned type lower to `trunc nsw`: a value in the upper half
-  of the destination range is poison in every optimized mode (the gate and the
-  shipped ReleaseSmall), and a later check on it may be folded away. Debug is
-  unaffected, so a Debug test proves nothing. Measured over every bxp root: no
-  site where that changes behaviour — the reachable ones
-  (`toPositiveIndex`, `header_row` / `csv_header_line` in `config.zig`, the
-  bridge's `check_fs` timeout) only compare the result or turn it into `""`.
-  They are left for 0.17.1, which carries the fix. Until then, write a new
-  signed → unsigned narrowing in two steps (`std.math.cast(u64, x)` first, then
-  the narrow cast) and test it in ReleaseSafe at the boundary value.
+- **Zig 0.17.1 is the floor, and `bxp-core/build.zig` enforces it.** 0.17.0
+  miscompiles signed → narrower-unsigned casts (#37131: `@intCast`,
+  `std.math.cast`, `std.json` integer parsing lower to `trunc nsw`, poison in
+  every optimized mode), and bxp writes such casts plainly. `minimum_zig_version`
+  in `build.zig.zon` is advisory — Zig never compares it — so the comptime
+  `builtin.zig_version` check is the real guard; do not remove it.
+- **`std.Io.Event.waitTimeout` returns `error.Timeout` only at the deadline.**
+  It retries spurious wakeups itself, so one call with an absolute `.deadline`
+  is the whole wait — no re-check loop around it.
 - **On macOS, spawning with an inherited closed fd fails.** `std.process.spawn`
   defaults stdin/stdout/stderr to `.inherit`; on macOS it spawns through
   `posix_spawn` and inherits via `addinherit_np`, which fails the whole spawn
