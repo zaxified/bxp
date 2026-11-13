@@ -326,7 +326,7 @@ and races below are bounded by that model and only re-open under a future
 revisit them there.
 
 - **`sim.zig` wipes the reused workspace on every call** (`deleteTree` +
-  `makePath`). The default id is `<template>-<token>` (8 random hex chars drawn
+  `createDirPath`). The default id is `<template>-<token>` (8 random hex chars drawn
   once per process, pid as fallback), so two bxp-mcp processes (two agent
   sessions) never share one, even across containers sharing `/tmp`; two calls in one process are
   serialised by single-threaded stdio. Only an explicit, shared `workspace` id

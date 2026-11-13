@@ -121,7 +121,7 @@ Converts `.xlsx` files (ZIP + XML) to intermediate CSV files.
   `isBuiltinDateFmt`, `getAttr`, `stripNs`, `writeCsvField`, `hasUtf16Bom`). The
   ZIP central-dir walk + store/deflate read is unit-tested upstream in `zipstream`;
   end-to-end streaming (real deflate + XTB version mismatch) is gated
-  byte-identical by the `xtb*` datasets (test-02).
+  byte-identical by the `xtb*` datasets (test-07).
 
 ### zipstream _(zig-libs dep)_
 
@@ -334,7 +334,7 @@ the GUI (bxp-gui) consumes at startup.
   plus envelope entries declared inline for top-level keys, map wildcards,
   and the legacy `pre_pass` single-block form).
 - The output JSON shape is a stable contract with bxp-gui's
-  `lib/store/trace_store.dart` and `lib/store/schema_gate.dart`. Verify
+  `lib/store/trace_store.dart` and `lib/services/schema_gate.dart`. Verify
   refactors via `jq -S '.config_schema |= sort_by(.key)'` byte-diff before/after.
 - Inline test guards the entry count and known paths against drift.
 
@@ -697,7 +697,7 @@ not here.
   them is pure reorganisation (no behaviour change), so weigh it against
   regression risk rather than doing it for line-count alone. `processBroker`'s
   combined-output path is now covered by `datasets/combined_output_demo`
-  (test-02 gate); see the REFACTOR NOTE on the function. config's
+  (test-07 gate); see the REFACTOR NOTE on the function. config's
   `loadFromBytes` is well-covered by test-01 + test-02 + inspect tests, so a
   per-section split there is lower-risk if a maintenance need arises.
 
