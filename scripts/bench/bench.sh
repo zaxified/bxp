@@ -89,13 +89,15 @@ if [ ! -x "$BXP_CLI" ]; then
   exit 1
 fi
 
-# Sanity guard: a ReleaseFast bxp-cli is ~5 MB; a Debug build is ~20+ MB.
-# Refuse to run on anything that looks like Debug — silent perf regression
-# is the failure mode this whole script exists to detect.
+# Sanity guard: a Debug bxp-cli is roughly three times the size of a
+# ReleaseFast one (both keep debug info). Refuse to run on anything that looks
+# like Debug — silent perf regression is the failure mode this whole script
+# exists to detect. The ceiling sits between the two, the same one
+# test-05-bench-guard.sh uses; it is not a size budget.
 BIN_BYTES=$(wc -c < "$BXP_CLI" | tr -d '[:space:]')
-if [ "$BIN_BYTES" -gt 10485760 ]; then
+if [ "$BIN_BYTES" -gt 16777216 ]; then
   bin_mb=$(awk -v b="$BIN_BYTES" 'BEGIN { printf "%.1f", b/1048576 }')
-  echo "binary too large ($bin_mb MB > 10 MB) — likely a Debug build" >&2
+  echo "binary too large ($bin_mb MB > 16 MB) — likely a Debug build" >&2
   echo "rebuild: (cd bxp-cli && zig build -Doptimize=ReleaseFast)" >&2
   exit 1
 fi
