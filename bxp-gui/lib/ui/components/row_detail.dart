@@ -491,7 +491,11 @@ class _VariablesTableState extends State<_VariablesTable> {
                 Colors.transparent,
               );
             } else if (isHovered) {
-              rowBg = t.panelBg;
+              // The same hover token as the rule-results table below. A raw
+              // `panelBg` is darker than `surfaceBg` in some dark palettes
+              // (VS Code Dark), so the hovered row went dark there while
+              // the rule rows went light.
+              rowBg = t.withHover(t.surfaceBg);
             } else {
               rowBg = Colors.transparent;
             }
@@ -1044,7 +1048,9 @@ class _RuleResultsTableState extends State<_RuleResultsTable> {
                                 Colors.transparent,
                               );
                             } else if (isHovered) {
-                              cellBg = t.panelBg;
+                              // Same hover token as the other row-detail
+                              // tables (see _VariablesTable).
+                              cellBg = t.withHover(t.surfaceBg);
                             } else {
                               cellBg = Colors.transparent;
                             }
