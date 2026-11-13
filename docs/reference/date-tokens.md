@@ -18,6 +18,7 @@ Both the `from` and `to` arguments of `DATE_CONVERT` use the same token set.
 | <code class="hl-type">MMM</code> | 3-char month abbreviation | Mar |
 | <code class="hl-type">DD</code> | 2-digit day (01–31) | 07 |
 | <code class="hl-type">D</code> | 1–2 digit day | 7 |
+| <code class="hl-type">DDDD</code> | 3-digit day of year (001–366; parse overrides MM/DD) | 066 |
 | <code class="hl-type">hh</code> | 2-digit hour, 24h (00–23) | 14 |
 | <code class="hl-type">h</code> | 1–2 digit hour, 24h | 14 |
 | <code class="hl-type">ii</code> | 2-digit hour, 12h (01–12) | 02 |
@@ -29,12 +30,14 @@ Both the `from` and `to` arguments of `DATE_CONVERT` use the same token set.
 | <code class="hl-type">A</code> | AM/PM uppercase | PM |
 | <code class="hl-type">a</code> | am/pm lowercase | pm |
 | <code class="hl-type">ZZ</code> | UTC offset ±HH:MM (parses a literal Z as +00:00) | +02:00 |
+| <code class="hl-type">ZZZ</code> | UTC offset ±HHMM (parse as ZZ) | +0200 |
 | <code class="hl-type">EEEE</code> | Full day name | Monday |
 | <code class="hl-type">EEE/EE/E</code> | Short day name | Mon |
 | <code class="hl-type">e</code> | Day of week as number (1 = Mon … 7 = Sun) | 1 |
 | <code class="hl-type">SSS</code> | Fraction of a second, 3 digits (milliseconds; format truncates) | 123 |
 | <code class="hl-type">SSSSSS</code> | Fraction of a second, 6 digits (microseconds; format truncates) | 123456 |
 | <code class="hl-type">SSSSSSSSS</code> | Fraction of a second, 9 digits (nanoseconds) | 123456789 |
+| <code class="hl-type">FFF/FFFFFF/FFFFFFFFF</code> | Fraction of a second, up to 3/6/9 digits, trailing zeros trimmed; a zero fraction drops a preceding . or , too | ss.FFF → 09.12 / 09 |
 | <code class="hl-type">GGGG</code> | 4-digit ISO week-year (the year owning the ISO week) | 2009 |
 | <code class="hl-type">WW</code> | 2-digit ISO week number (01–53) | 53 |
 | <code class="hl-type">W</code> | 1–2 digit ISO week number | 5 |

@@ -159,7 +159,8 @@ JSON-RPC §4 id validation, a JSON-escaped progress message, and 89 unit tests
 where the local transport had none.
 
 Handler shape is `fn(ctx: ?*anyopaque, call: *mcp.ToolCall) bool` — `call.arena`
-is the per-request arena, `call.strArg` reads an argument, `call.write` appends
+is the per-request arena, `call.requireStr` / `call.strArgChecked` read an
+argument (telling a missing one from a wrong-typed one), `call.write` appends
 the result, `call.fail` marks a tool failure, `call.reportProgress` emits a
 progress notification. `ctx` is `tools.App` (the live `io` + `environ_map`);
 only `bxp_simulate` reads it, to spawn bxp-cli.

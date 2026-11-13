@@ -613,25 +613,13 @@ fn handlerFor(comptime tool: Tool) mcp.Handler {
 //
 // `call.arena` is the per-request arena: allocate freely, never store.
 
-/// True when `key` is present, not null, and not a string. `ToolCall.strArg`
-/// folds that case into "absent", which for an LLM turns `"config": 5` into the
-/// misleading "missing 'config'"; `call.args` is the raw object, so the two can
-/// be told apart here. zig-libs request: mcp — ToolCall has no way to tell
-/// missing from wrong-typed (proposed: `strArgChecked(key) union{absent,value,wrong_type}`).
-fn wrongType(call: *const mcp.ToolCall, key: []const u8) bool {
-    if (call.args != .object) return false;
-    return switch (call.args.object.get(key) orelse return false) {
-        .string, .null => false,
-        else => true,
-    };
-}
-
-/// Required string argument; on failure writes the tool error (missing vs
-/// wrong-typed named apart) and returns null — callers `orelse return true`.
+/// Required string argument; on failure writes the tool error and returns null
+/// — callers `orelse return true`. Missing and wrong-typed are named apart
+/// ("missing 'config'" vs "'config' must be a string"): `ToolCall.strArg` folds
+/// the two together, which for an LLM turns `"config": 5` into the misleading
+/// "missing 'config'".
 fn reqStr(call: *mcp.ToolCall, comptime key: []const u8) ?[]const u8 {
-    if (call.strArg(key)) |s| return s;
-    _ = call.fail(if (wrongType(call, key)) "'" ++ key ++ "' must be a string" else "missing '" ++ key ++ "'");
-    return null;
+    return call.requireStr(key);
 }
 
 fn validate(_: ?*anyopaque, call: *mcp.ToolCall) bool {
@@ -808,8 +796,11 @@ fn simulate(ctx: ?*anyopaque, call: *mcp.ToolCall) bool {
     const template = reqStr(call, "template") orelse return true;
     const csv_text = reqStr(call, "csv") orelse return true;
     // Optional, but a wrong-typed value is refused rather than silently ignored.
-    if (wrongType(call, "workspace")) return call.fail("'workspace' must be a string");
-    const workspace = call.strArg("workspace");
+    const workspace: ?[]const u8 = switch (call.strArgChecked("workspace")) {
+        .absent => null,
+        .value => |s| s,
+        .wrong_type => return call.fail("'workspace' must be a string"),
+    };
     // sim.simulate handles its own logical failures as {"ok":false,...} JSON (a
     // domain result, isError:false); only OOM/unexpected surfaces here as a
     // genuine tool failure.

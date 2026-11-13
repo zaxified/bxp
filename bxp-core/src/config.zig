@@ -2654,18 +2654,17 @@ fn diagJsonError(
 
 /// Reports a literal `json5.preprocess` refuses outright (`error.NonFiniteNumber`,
 /// `error.HexLiteralTooLarge`) the way `diagJsonError` reports a std.json one:
-/// a structured diagnostic plus, on the bxp-cli path, the `# file:line` text and
-/// the source line. The message is ours — upstream's names a library option a
-/// template author cannot set.
-///
-/// zig-libs request: json5 — `Diagnostic` carries the line but no column, so
-/// the line is shown without a caret and the diagnostic has no `col`.
+/// a structured diagnostic plus, on the bxp-cli path, the `# file:line:col` text
+/// and the source line with a caret under the literal. The message is ours —
+/// upstream's names a library option a template author cannot set.
+/// `pos.line` / `pos.col` are 1-based (0 = unknown); `pos.col` counts bytes,
+/// which is what the caret printer walks.
 fn diagPreprocessError(
     alloc: std.mem.Allocator,
     raw: []const u8,
     config_path: []const u8,
     err: anyerror,
-    line: usize,
+    pos: json5.Diagnostic,
     out_diag: ?*Diagnostics,
 ) void {
     const desc: []const u8 = switch (err) {
@@ -2673,10 +2672,13 @@ fn diagPreprocessError(
         error.HexLiteralTooLarge => "hexadecimal number is too large",
         else                     => @errorName(err),
     };
+    const line = pos.line;
+    const col = if (line > 0) pos.col else 0;
     if (out_diag) |d| {
         if (alloc.dupe(u8, desc)) |m| d.append(.{
             .path = "",
             .line = if (line > 0) std.math.cast(u32, line) else null,
+            .col = if (col > 0) std.math.cast(u32, col) else null,
             .severity = .@"error",
             .code = "json5.parse_error",
             .message = m,
@@ -2687,16 +2689,12 @@ fn diagPreprocessError(
         printHuman(out_diag, "# {s}: JSON error — {s}\n", .{ config_path, desc });
         return;
     }
-    printHuman(out_diag, "# {s}:{d}: JSON error (line {d}) — {s}\n", .{ config_path, line, line, desc });
-    if (out_diag != null) return;
-    var line_iter = std.mem.splitScalar(u8, raw, '\n');
-    var cur: usize = 1;
-    while (line_iter.next()) |line_content| : (cur += 1) {
-        if (cur == line) {
-            std.debug.print("#   {s}\n", .{std.mem.trimEnd(u8, line_content, "\r")});
-            break;
-        }
+    if (col == 0) {
+        printHuman(out_diag, "# {s}:{d}: JSON error (line {d}) — {s}\n", .{ config_path, line, line, desc });
+        return;
     }
+    printHuman(out_diag, "# {s}:{d}:{d}: JSON error (line {d}, pos {d}) — {s}\n", .{ config_path, line, col, line, col, desc });
+    printHumanCaret(out_diag, raw, line, col);
 }
 
 /// Parses a single `{ when, key, values }` pre_pass block into a PrePass.
@@ -3021,7 +3019,7 @@ pub fn loadFromBytes(
         // The two literals the preprocessor itself refuses (Infinity/NaN, a
         // hex number past f64) fail BEFORE std.json runs, so diagJsonError
         // never sees them and the run would exit 1 with no message at all.
-        if (err != error.OutOfMemory) diagPreprocessError(alloc, raw, config_path, err, j5_diag.line, diag);
+        if (err != error.OutOfMemory) diagPreprocessError(alloc, raw, config_path, err, j5_diag, diag);
         return err;
     };
     defer alloc.free(content);
@@ -3848,6 +3846,8 @@ test "loadFromBytes: a literal the JSON5 preprocessor refuses still yields a pos
     const d = diag.items.items[0];
     try testing.expectEqualStrings("json5.parse_error", d.code);
     try testing.expectEqual(@as(?u32, 2), d.line);
+    // The literal's first byte: `  maps: { m: { k: ` is 18 bytes.
+    try testing.expectEqual(@as(?u32, 19), d.col);
     try testing.expect(std.mem.indexOf(u8, d.message, "Infinity") != null);
 }
 

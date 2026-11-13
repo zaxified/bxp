@@ -413,7 +413,8 @@ tree** — the named `json5` module comes from the pinned `zig_libs` fetch dep.
 - Two literals are refused by the preprocessor itself, before `std.json` runs:
   `Infinity`/`NaN` (`error.NonFiniteNumber`) and a hex number past f64
   (`error.HexLiteralTooLarge`). `config.loadFromBytes` turns both into a
-  positioned (line-only) diagnostic via `diagPreprocessError`; without it the
+  positioned (line + byte column, caret on the CLI) diagnostic via
+  `diagPreprocessError`; without it the
   CLI exited 1 with no message.
 - Tests live upstream (27 + two fuzz harnesses + the json5/json5-tests
   conformance corpus).

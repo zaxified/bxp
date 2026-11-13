@@ -419,11 +419,14 @@ fetch dependency (see `bxp-core/CLAUDE.md` → _External dependencies_).
 | `ss`           | 2-digit second                                      | `09`                  |
 | `s`            | 1–2 digit second                                    | `9`                   |
 | `SSS`          | Fraction of a second, 3 digits (`SSSSSS` = 6, `SSSSSSSSS` = 9) | `123`      |
+| `FFF`          | Fraction, up to 3 digits, trailing zeros trimmed (`FFFFFF` = 6, `FFFFFFFFF` = 9); a zero fraction drops the `.`/`,` before it | `ss.FFF` → `09.12` / `09` |
+| `DDDD`         | 3-digit day of year (001–366; on parse overrides `MM`/`DD`) | `066`         |
 | `GGGG`         | ISO week-year (the year owning the ISO week)        | `2020`                |
 | `WW`           | 2-digit ISO week number (01–53); `W` = 1–2 digits   | `53`                  |
 | `A`            | AM/PM uppercase                                     | `PM`                  |
 | `a`            | am/pm lowercase                                     | `pm`                  |
 | `ZZ`           | UTC offset `±HH:MM` (literal `Z` → `+00:00`)         | `+02:00`              |
+| `ZZZ`          | UTC offset `±HHMM`                                  | `+0200`               |
 | `EEEE`         | Full day name                                       | `Monday`              |
 | `EEE`/`EE`/`E` | Short day name                                      | `Mon`                 |
 | `e`            | Day of week as number (1=Mon … 7=Sun)               | `1`                   |

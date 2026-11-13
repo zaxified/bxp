@@ -26,22 +26,19 @@
         // External dependencies. Treated as a foreign upstream: read-only,
         // pinned to an exact commit, never edited from this repo. Normally
         // that commit is the one behind a release tag (upstream tags by date,
-        // `YYYY-MM-DD`), but what decides it is the diff to these twelve
+        // `YYYY-MM-DD`), but what decides it is the diff to these thirteen
         // modules, not the tag: a tag that leaves them byte-identical is not
         // worth adopting, and a later commit that fixes them is (see
-        // CHANGELOG.md in each module). Currently `main` past tag `2026-10-19`:
-        // that window carries the regex prefilter-skip fix (isMatch / Pike VM
-        // missed matches after a skipped position), the mcp `uniqueItems`
-        // stack-overflow fix and the no-panic sweep across every module bxp
-        // takes, incl. the datefmt civil-core fix for dates before 0000-03-01
-        // (9a1b7779, 2026-11-02).
+        // CHANGELOG.md in each module). Currently tag `2026-11-10`, the last
+        // one whose minimum_zig_version is 0.17.0 — from `2026-11-11` on
+        // upstream requires 0.17.1, so moving past it means raising ours too.
         // `zig fetch` cannot
         // target a subdirectory (ziglang/zig#23012)
         // so the whole collection is one package — only the modules actually
         // imported get compiled in.
         .zig_libs = .{
-            .url = "git+https://github.com/zaxified/zig-libs.git?ref=main#9a1b77797e52834762c9a9941f39ca5ea3dab4fc",
-            .hash = "zig_libs-0.0.0-WiQ0Gu9j6gigs3Ph_TSM6i2K8HsRaTtZ_M8ccsLU1exR",
+            .url = "git+https://github.com/zaxified/zig-libs.git?ref=2026-11-10#8b87749c350777c70d3954f2ae6b3b3a6fa8a231",
+            .hash = "zig_libs-0.0.0-WiQ0GiXvWQr3VYO4YmxsoOFmqqcI3krCDWMA6kL2fLW-",
         },
     },
     .minimum_zig_version = "0.17.0",
