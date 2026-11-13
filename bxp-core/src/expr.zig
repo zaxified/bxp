@@ -2392,12 +2392,12 @@ fn adaptContains(_: *Parser, args: []Value) anyerror!Value {
     return builtinContains(args);
 }
 
-// ── REGEX_MATCH / REGEX_EXTRACT ─────────────────────────────────────────
+// ── REGEX_MATCH / REGEX_EXTRACT / REGEX_REPLACE ─────────────────────────
 //
 // Regex sits at the top of a deliberate cost hierarchy: O(1) hash lookup
 // (IN/REMAP) < literal substring scan (CONTAINS/REPLACE) < regex engine. It is
-// the extraction-only sibling for "pull a substring by pattern" jobs the cheaper
-// tools cannot express — NOT a superset that replaces them.
+// the sibling for "match / pull / rewrite by pattern" jobs the cheaper tools
+// cannot express — NOT a superset that replaces them.
 //
 // Backed by the zig-libs `regex` module (RE2 syntax, Go `regexp` semantics):
 // linear-time matching, so a pathological pattern degrades gracefully instead
@@ -2488,6 +2488,41 @@ fn builtinRegexExtract(p: *Parser, args: []Value) anyerror!Value {
     if (!m.captures(s, 0, &groups)) return Value{ .string = "" };
     const span = if (re.groupCount() >= 1 and groups[1] != null) groups[1].? else groups[0].?;
     return Value{ .string = span.slice(s) };
+}
+
+const regex_replace_doc: FnDoc = .{
+    .name = "REGEX_REPLACE",
+    .category = .regex,
+    .row_varying = false,
+    .signature = "REGEX_REPLACE(s, pattern, replacement)",
+    .example = "REGEX_REPLACE('Div. 12/31/2024', '([0-9]+)/([0-9]+)/([0-9]{4})', '${3}-${1}-${2}')",
+    .description = "Replaces every non-overlapping match of regular-expression `pattern` in `s` with `replacement`; `s` comes back unchanged when nothing matches. In `replacement`, `$1` / `${1}` insert a capture group, `${name}` a named group `(?P<name>...)`, and `$$` a literal `$` — write `${1}x`, not `$1x`, when a letter or digit follows (that would name group `1x`, which is empty). `pattern` follows REGEX_MATCH's rules (syntax, Unicode notes, literal vs built). Use REPLACE when the text to replace is fixed — it is cheaper; REGEX_REPLACE is for what only a pattern can describe, such as collapsing runs of spaces (`' +'` → `' '`) or reordering parts of a value.",
+    .args = &.{
+        .{ .name = "s", .kind = .string },
+        .{ .name = "pattern", .kind = .string },
+        .{ .name = "replacement", .kind = .string },
+    },
+    .min_args = 3,
+    .max_args = 3,
+};
+/// REGEX_REPLACE(s, pattern, replacement) → string — Go's `ReplaceAllString`:
+/// every match replaced, `$n` / `${name}` / `$$` expanded in `replacement`.
+fn builtinRegexReplace(p: *Parser, args: []Value) anyerror!Value {
+    const s = switch (args[0]) {
+        .string => |v| v,
+        else => return error.StringExpected,
+    };
+    const pattern = switch (args[1]) {
+        .string => |v| v,
+        else => return error.StringExpected,
+    };
+    const replacement = switch (args[2]) {
+        .string => |v| v,
+        else => return error.StringExpected,
+    };
+    var re = try compileRegex(p, pattern);
+    defer re.deinit(p.ctx.alloc);
+    return Value{ .string = try re.replaceAll(p.ctx.alloc, s, replacement) };
 }
 
 // ── REPLACE ─────────────────────────────────────────────────────────────
@@ -5011,6 +5046,7 @@ pub const builtins = [_]FnEntry{
     .{ .name = "CONTAINS",       .doc = contains_doc,       .impl = adaptContains },
     .{ .name = "REGEX_MATCH",    .doc = regex_match_doc,    .impl = builtinRegexMatch },
     .{ .name = "REGEX_EXTRACT",  .doc = regex_extract_doc,  .impl = builtinRegexExtract },
+    .{ .name = "REGEX_REPLACE",  .doc = regex_replace_doc,  .impl = builtinRegexReplace },
     .{ .name = "REPLACE",        .doc = replace_doc,        .impl = adaptReplace },
     .{ .name = "FIELDS",         .doc = fields_doc,         .impl = adaptFields },
     .{ .name = "LEFT",           .doc = left_doc,           .impl = adaptLeft },
@@ -5777,6 +5813,24 @@ test "eval: REGEX bad pattern is a loud template error" {
     // An unbalanced class is a template bug, not silent "" — it must propagate.
     try testing.expectError(error.BadRegexPattern, evalString("REGEX_EXTRACT('x', '[')", &ctx));
     try testing.expectError(error.BadRegexPattern, evalString("REGEX_MATCH('x', '(')", &ctx));
+    try testing.expectError(error.BadRegexPattern, evalString("REGEX_REPLACE('x', '(', '')", &ctx));
+}
+
+test "eval: REGEX_REPLACE replaces every match and expands groups" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var h = TestHelper.init(a);
+    const ctx = h.ctx(&.{"Apple   Inc.  (US)"}, a);
+    try testing.expectEqualStrings("Apple Inc. (US)", try evalString("REGEX_REPLACE(FIELDS(1), ' +', ' ')", &ctx));
+    try testing.expectEqualStrings("2024-12-31", try evalString("REGEX_REPLACE('12/31/2024', '([0-9]+)/([0-9]+)/([0-9]{4})', '${3}-${1}-${2}')", &ctx));
+    try testing.expectEqualStrings("q#4", try evalString("REGEX_REPLACE('q4', '(?P<n>[0-9])', '#${n}')", &ctx));
+    // `$$` is a literal dollar; `$1x` names group "1x", which is empty (Go).
+    try testing.expectEqualStrings("$5", try evalString("REGEX_REPLACE('5', '([0-9])', '$$$1')", &ctx));
+    try testing.expectEqualStrings("", try evalString("REGEX_REPLACE('5', '([0-9])', '$1x')", &ctx));
+    // No match: unchanged. Accented letters via \p{L}; invalid UTF-8 is not an error.
+    try testing.expectEqualStrings("abc", try evalString("REGEX_REPLACE('abc', '[0-9]', '#')", &ctx));
+    try testing.expectEqualStrings("_ _", try evalString("REGEX_REPLACE('Žluť kůň', '\\p{L}+', '_')", &ctx));
 }
 
 test "eval: REGEX is ReDoS-safe (linear-time engine, no catastrophic backtracking)" {

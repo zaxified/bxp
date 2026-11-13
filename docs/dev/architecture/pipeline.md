@@ -260,14 +260,15 @@ The DSL is intentionally **SQL/Excel-flavored**:
 Built-ins map onto recognisable SQL/Excel functions wherever possible:
 `COALESCE`, `NULLIF`, `IN`, `SUBSTR`, `LEFT`/`RIGHT`, `UPPER`/`LOWER`,
 `TRIM`, `ROUND`, `FLOOR`/`CEILING`, `REPLACE`, `SPLIT_PART` (PostgreSQL),
-`REGEX_MATCH`/`REGEX_EXTRACT` (PostgreSQL `~` / `regexp_match`),
+`REGEX_MATCH`/`REGEX_EXTRACT`/`REGEX_REPLACE` (PostgreSQL `~` /
+`regexp_match` / `regexp_replace`),
 `STARTS_WITH`/`ENDS_WITH` (PostgreSQL `starts_with`/`ends_with`),
 `CONTAINS` (SQL Server), `LOOKUP` (Excel). Domain extensions (`DATE_CONVERT`,
 `PRICE_VALUE`, `PRICE_CURRENCY`, `REMAP`) follow the same `UPPER_CASE`
 shape.
 
 The string-matching builtins form a deliberate **cost ladder** — `IN`/`REMAP`
-(hash lookup) < `CONTAINS`/`REPLACE` (literal scan) < `REGEX_MATCH`/`REGEX_EXTRACT`
+(hash lookup) < `CONTAINS`/`REPLACE` (literal scan) < `REGEX_MATCH`/`REGEX_EXTRACT`/`REGEX_REPLACE`
 (the linear-time / ReDoS-safe pattern engine, the zig-libs `regex` module).
 Regex is the most expensive rung: on 1M synthetic rows the release build spent
 **~1.2× the CPU time** of a literal-only equivalent producing byte-identical

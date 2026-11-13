@@ -320,7 +320,7 @@ expr	ok	DATEADD('2024-01-01', 1000000000)
 expr	ok	WORKDAY('2024-01-01', 'inf')
 expr	ok	DATEADD('2024-01-01', 30)
 
-# ── REGEX_MATCH / REGEX_EXTRACT ───────────────────────────────────────
+# ── REGEX_MATCH / REGEX_EXTRACT / REGEX_REPLACE ───────────────────────
 # Linear-time regex (ReDoS-safe). The validator compiles the literal
 # pattern during eval, so a malformed pattern is caught here as a loud,
 # pattern-attributed BadRegexPattern — same static-literal verdict as
@@ -353,6 +353,14 @@ expr	err	REGEX_MATCH([A])	WrongArgCount
 expr	err	REGEX_MATCH([A], '[0-9]', 'extra')	WrongArgCount
 expr	err	REGEX_EXTRACT([A])	WrongArgCount
 expr	err	REGEX_EXTRACT([A], '[0-9]', 'extra')	WrongArgCount
+# REGEX_REPLACE: every match replaced; `$1` / `${name}` / `$$` expand in the
+# replacement (Go ReplaceAllString). Strictly 3-arg; a bad pattern is loud.
+expr	ok	REGEX_REPLACE([Name], ' +', ' ')
+expr	ok	REGEX_REPLACE('12/31/2024', '([0-9]+)/([0-9]+)/([0-9]{4})', '${3}-${1}-${2}')
+expr	ok	REGEX_REPLACE([Note], '\p{L}+', '_')
+expr	err	REGEX_REPLACE('x', '(', '')	BadRegexPattern
+expr	err	REGEX_REPLACE([A], '[0-9]')	WrongArgCount
+expr	err	REGEX_REPLACE([A], '[0-9]', '#', 'extra')	WrongArgCount
 
 # ── Quoting / strings ─────────────────────────────────────────────────
 # Empty string literal.

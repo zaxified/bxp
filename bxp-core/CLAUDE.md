@@ -198,7 +198,7 @@ Expression evaluator for `input_schema` and `row_rules` in bxp-cli.json.
 
 **Built-in functions:** IF, CASE, IFERROR, ABS, DATE_CONVERT, PRICE_VALUE,
 PRICE_CURRENCY, REMAP, LOOKUP, SPLIT_PART, CONTAINS, REGEX_MATCH,
-REGEX_EXTRACT, REPLACE, TRIM, ROUND,
+REGEX_EXTRACT, REGEX_REPLACE, REPLACE, TRIM, ROUND,
 FLOOR, CEILING, MOD, NOW, RAND, FILENAME, RECORD_NUM, SHEET_NAME, COALESCE,
 FIELDS, UPPER, LOWER, UNACCENT, LEFT, RIGHT, SUBSTR, LPAD, RPAD, POSITION,
 PROPER, STARTS_WITH, ENDS_WITH, NULLIF, IN, ISEMPTY, LEN, GREATEST, LEAST,
@@ -219,7 +219,7 @@ module (pinned fetch dep — see _External dependencies_ below); the `ZZ` datefm
 token carries the parse/format offset. See the datefmt/tz note
 under _Module overview_. FILENAME/RECORD_NUM/SHEET_NAME read the
 per-file/row `Context` and are excluded from constant-folding (`isRowInvariant`).
-REGEX_MATCH/REGEX_EXTRACT compile a regex literal per call through the zig-libs
+REGEX_MATCH/REGEX_EXTRACT/REGEX_REPLACE compile a regex literal per call through the zig-libs
 `regex` module (RE2 syntax, Go `regexp` semantics, linear-time/ReDoS-safe), which
 matches per code point; `\d`/`\w`/`\s` stay ASCII, so accented runs use `\p{L}`
 or an explicit class like `[A-ZÁ-Ž]`. REGEX_MATCH answers from `Regex.isMatch`;
