@@ -4,9 +4,6 @@ description: "Planned work by version, and the things deliberately not planned, 
 
 # Roadmap
 
-Hand-maintained backlog — entries get crossed out / deleted as work
-lands on master. `CHANGELOG.md` is generated independently.
-
 ## Milestones
 
 ### v0.3.1
