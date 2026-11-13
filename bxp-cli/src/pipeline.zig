@@ -556,34 +556,36 @@ fn writeSafeValue(out: *Writer, value: []const u8, delimiter_out: u8, decimal_se
     // RFC 4180 output quoting: wrap when value contains the delimiter, the
     // quote character, CR, or LF.  Internal quote chars are doubled — including
     // quotes at both ends: a value's quotes are data, never pre-applied quoting.
+    //
+    // Both paths below copy the runs between special bytes with one `writeAll`
+    // each instead of a `writeByte` per byte: a long cell is mostly such a run,
+    // and the per-byte loop spent most of a long-cell run bumping the writer's
+    // end index (and swung ~10 % with mere code placement).
     if (quote_out != 0) {
-        var needs_quote = false;
-        for (s) |ch| {
-            if (ch == delimiter_out or ch == quote_out or ch == '\r' or ch == '\n') {
-                needs_quote = true;
-                break;
-            }
-        }
-        if (needs_quote) {
+        const specials = [_]u8{ delimiter_out, quote_out, '\r', '\n' };
+        if (std.mem.indexOfAny(u8, s, &specials) != null) {
             try out.writeByte(quote_out);
             if (looksLikeFormula(s)) try out.writeByte('\'');
-            for (s) |ch| {
-                if (ch == quote_out) try out.writeByte(quote_out); // escape: double it
-                try out.writeByte(ch);
+            var rest = s;
+            while (std.mem.indexOfScalar(u8, rest, quote_out)) |i| {
+                try out.writeAll(rest[0 .. i + 1]); // up to and including the quote …
+                try out.writeByte(quote_out); //      … then double it
+                rest = rest[i + 1 ..];
             }
+            try out.writeAll(rest);
             try out.writeByte(quote_out);
             return;
         }
     }
     // No quoting applied: formula-injection prefix + \n→\n literal replacement.
     if (looksLikeFormula(s)) try out.writeByte('\'');
-    for (s) |ch| {
-        switch (ch) {
-            '\n' => try out.writeAll("\\n"),
-            '\r' => {},
-            else => try out.writeByte(ch),
-        }
+    var rest = s;
+    while (std.mem.indexOfAny(u8, rest, "\r\n")) |i| {
+        try out.writeAll(rest[0..i]);
+        if (rest[i] == '\n') try out.writeAll("\\n"); // '\r' is dropped
+        rest = rest[i + 1 ..];
     }
+    try out.writeAll(rest);
 }
 
 /// Writes a JSON object row to out.
@@ -3908,6 +3910,84 @@ test "writeSafeValue: signed numbers are not mangled by the guard" {
     try expectSafeValue("+.5", "+.5");
     try expectSafeValue("-.5", "-.5");
     try expectSafeValue("+420 555 0101", "+420 555 0101"); // intl phone number
+}
+
+/// The former byte-at-a-time writeSafeValue body (quoting + escaping only; the
+/// decimal-separator step is shared), kept as the oracle for the run-based one.
+fn writeSafeValueBytewise(out: *Writer, s: []const u8, delimiter_out: u8, quote_out: u8) !void {
+    if (quote_out != 0) {
+        var needs_quote = false;
+        for (s) |ch| {
+            if (ch == delimiter_out or ch == quote_out or ch == '\r' or ch == '\n') {
+                needs_quote = true;
+                break;
+            }
+        }
+        if (needs_quote) {
+            try out.writeByte(quote_out);
+            if (looksLikeFormula(s)) try out.writeByte('\'');
+            for (s) |ch| {
+                if (ch == quote_out) try out.writeByte(quote_out);
+                try out.writeByte(ch);
+            }
+            try out.writeByte(quote_out);
+            return;
+        }
+    }
+    if (looksLikeFormula(s)) try out.writeByte('\'');
+    for (s) |ch| {
+        switch (ch) {
+            '\n' => try out.writeAll("\\n"),
+            '\r' => {},
+            else => try out.writeByte(ch),
+        }
+    }
+}
+
+test "writeSafeValue: run-based writes equal the byte-at-a-time oracle" {
+    // Every string of length 0..6 over an alphabet holding each special byte
+    // (both quote styles, both delimiters, CR, LF, a formula lead) plus a
+    // plain letter, under quoted and unquoted output: 9^0 + ... + 9^6 inputs
+    // per configuration, so runs at the start, end, back to back and empty
+    // are all covered.
+    const alphabet = "a\"',;\r\n=x";
+    const configs = [_]struct { delim: u8, quote: u8 }{
+        .{ .delim = ',', .quote = '"' },
+        .{ .delim = ';', .quote = '\'' },
+        .{ .delim = ',', .quote = 0 },
+    };
+    var input: [6]u8 = undefined;
+    var idx: [6]usize = undefined;
+    var got_buf: [64]u8 = undefined;
+    var want_buf: [64]u8 = undefined;
+    var val_buf: [VAL_BUF_SIZE]u8 = undefined;
+    for (configs) |c| {
+        var len: usize = 0;
+        while (len <= input.len) : (len += 1) {
+            @memset(idx[0..len], 0);
+            while (true) {
+                for (idx[0..len], 0..) |k, j| input[j] = alphabet[k];
+                var got: Writer = .fixed(&got_buf);
+                var want: Writer = .fixed(&want_buf);
+                try writeSafeValue(&got, input[0..len], c.delim, '.', c.quote, &val_buf);
+                try writeSafeValueBytewise(&want, input[0..len], c.delim, c.quote);
+                try std.testing.expectEqualStrings(want.buffered(), got.buffered());
+                // odometer increment over idx[0..len]
+                var p: usize = 0;
+                while (p < len) : (p += 1) {
+                    idx[p] += 1;
+                    if (idx[p] < alphabet.len) break;
+                    idx[p] = 0;
+                }
+                if (p == len) break;
+            }
+        }
+    }
+    // The unquoted path's two rewrites, spelled out.
+    var buf: [32]u8 = undefined;
+    var w: Writer = .fixed(&buf);
+    try writeSafeValue(&w, "a\r\nb\nc\r", ',', '.', 0, &val_buf);
+    try std.testing.expectEqualStrings("a\\nb\\nc", w.buffered());
 }
 
 test "writeSafeValue: text after a sign or @ is data, not a formula" {
