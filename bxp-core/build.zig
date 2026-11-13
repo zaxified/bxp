@@ -149,6 +149,12 @@ pub fn build(b: *std.Build) void {
     // byte-identical. Re-exported because bxp-cli asks for it by name.
     reexport(b, "csvstream", zig_libs.module("csvstream"));
 
+    // JSON string-literal writer (RFC 8259 §7) with an explicit policy for
+    // ill-formed UTF-8 — behind bxp-cli's `file_type_out: "json"` rows. bxp-core
+    // does not import it; re-exported for the same single-pin reason as
+    // `minisign` / `procrun` / `mcp`.
+    reexport(b, "jsontext", zig_libs.module("jsontext"));
+
     _ = b.addModule("json", .{
         .root_source_file = b.path("src/json.zig"),
         .imports = &.{

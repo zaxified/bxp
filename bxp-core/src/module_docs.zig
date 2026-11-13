@@ -65,6 +65,7 @@ pub const modules = [_]ModuleDoc{
     .{ .name = "minisign", .origin = .zig_libs, .reexport_only = true, .responsibility = "Minisign signature format (Ed25519 + Blake2b-512) behind the GUI updater's authenticity check. bxp-core never imports it — re-published so `bxp-gui-bridge` shares this package's single zig-libs pin." },
     .{ .name = "procrun", .origin = .zig_libs, .reexport_only = true, .responsibility = "Reap-race-tolerant child wait behind the bridge's `bxp-cli` spawns (the Dart VM's own reaper would otherwise trip std's ECHILD panic). Re-published for the same single-pin reason." },
     .{ .name = "mcp", .origin = .zig_libs, .reexport_only = true, .responsibility = "JSON-RPC 2.0 / MCP transport behind `bxp-mcp` — the one module that came back: upstream's copy is this repo's former `bxp-mcp/src/server.zig`, extracted there and hardened. Re-published for the same single-pin reason." },
+    .{ .name = "jsontext", .origin = .zig_libs, .reexport_only = true, .responsibility = "JSON string-literal writer behind `bxp-cli`'s `file_type_out: \"json\"` rows; ill-formed UTF-8 in a value becomes U+FFFD, so the output is always valid JSON. Re-published for the same single-pin reason." },
 
     .{ .name = "uucode", .origin = .fetch_dep, .responsibility = "Field-selected Unicode case-mapping and decomposition tables behind `UPPER` / `LOWER` / `UNACCENT`. Only the tables `unicode.zig` asks for are generated and compiled in." },
 };

@@ -26,6 +26,7 @@
 | <code class="hl-fn">minisign</code> | _(zig-libs)_ <br>re-export only | Minisign signature format (Ed25519 + Blake2b-512) behind the GUI updater's authenticity check. bxp-core never imports it — re-published so `bxp-gui-bridge` shares this package's single zig-libs pin. |
 | <code class="hl-fn">procrun</code> | _(zig-libs)_ <br>re-export only | Reap-race-tolerant child wait behind the bridge's `bxp-cli` spawns (the Dart VM's own reaper would otherwise trip std's ECHILD panic). Re-published for the same single-pin reason. |
 | <code class="hl-fn">mcp</code> | _(zig-libs)_ <br>re-export only | JSON-RPC 2.0 / MCP transport behind `bxp-mcp` — the one module that came back: upstream's copy is this repo's former `bxp-mcp/src/server.zig`, extracted there and hardened. Re-published for the same single-pin reason. |
+| <code class="hl-fn">jsontext</code> | _(zig-libs)_ <br>re-export only | JSON string-literal writer behind `bxp-cli`'s `file_type_out: "json"` rows; ill-formed UTF-8 in a value becomes U+FFFD, so the output is always valid JSON. Re-published for the same single-pin reason. |
 | <code class="hl-fn">uucode</code> | _(fetch dep)_ | Field-selected Unicode case-mapping and decomposition tables behind `UPPER` / `LOWER` / `UNACCENT`. Only the tables `unicode.zig` asks for are generated and compiled in. |
 
 <!-- --8<-- [end:table] -->

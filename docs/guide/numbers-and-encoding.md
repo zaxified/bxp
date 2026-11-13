@@ -62,3 +62,7 @@ The full field reference, defaults included, is in the generated
 
 Encoding applies to **CSV only** — JSON (always UTF-8 by RFC 8259) and
 xlsx (XML-in-ZIP, always UTF-8 in practice) never reach the transcoder.
+A JSON *output* therefore needs UTF-8 values: if a legacy CSV is read without
+`csv_input_encoding`, its accented bytes are not UTF-8 and each one is written
+to the JSON file as `�` (U+FFFD). The file stays valid JSON; set
+`csv_input_encoding` to get the real characters.

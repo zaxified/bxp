@@ -18,6 +18,7 @@ const expr_mod = @import("expr");
 const encoding = config_mod.encoding;
 const xlsx_mod = @import("xlsx");
 const zipstream = @import("zipstream");
+const jsontext = @import("jsontext");
 const json_mod = @import("json");
 const btrace = @import("btrace");
 
@@ -587,7 +588,10 @@ fn writeSafeValue(out: *Writer, value: []const u8, delimiter_out: u8, decimal_se
 
 /// Writes a JSON object row to out.
 /// Format: {"col1":"val1","col2":"val2",...}
-/// All values are emitted as JSON strings.  Special characters are escaped.
+/// All values are emitted as JSON strings (RFC 8259 §7). A JSON file must be
+/// UTF-8, but a field value need not be — a legacy-encoded CSV read without
+/// `csv_input_encoding` passes its raw bytes through — so ill-formed UTF-8
+/// becomes U+FFFD rather than making the whole file unparseable (data-lenient).
 fn writeJsonRow(
     out: *Writer,
     columns: []const config_mod.OutputColumn,
@@ -596,33 +600,31 @@ fn writeJsonRow(
     try out.writeByte('{');
     for (columns, 0..) |col, ci| {
         if (ci > 0) try out.writeByte(',');
-        try out.writeByte('"');
         try writeJsonString(out, col.header);
-        try out.writeAll("\":\"");
+        try out.writeByte(':');
         try writeJsonString(out, vars.get(col.variable) orelse "");
-        try out.writeByte('"');
     }
     try out.writeByte('}');
 }
 
-/// Writes s to out with JSON string escaping (RFC 8259 §7).
-fn writeJsonString(out: *Writer, s: []const u8) !void {
-    for (s) |ch| {
-        switch (ch) {
-            '"' => try out.writeAll("\\\""),
-            '\\' => try out.writeAll("\\\\"),
-            '\n' => try out.writeAll("\\n"),
-            '\r' => try out.writeAll("\\r"),
-            '\t' => try out.writeAll("\\t"),
-            // Other C0 control characters (excluding \n=0x0a, \r=0x0d, \t=0x09):
-            0x00...0x08, 0x0b, 0x0c, 0x0e...0x1f => {
-                var buf: [6]u8 = undefined;
-                const esc = std.fmt.bufPrint(&buf, "\\u{x:0>4}", .{@as(u32, ch)}) catch unreachable; // buf is [6]u8; "\uXXXX" is always 6 bytes
-                try out.writeAll(esc);
-            },
-            else => try out.writeByte(ch),
-        }
-    }
+/// One quoted JSON string; `.replace` never returns `InvalidUtf8`.
+fn writeJsonString(out: *Writer, s: []const u8) Writer.Error!void {
+    jsontext.writeString(out, s, .{ .invalid_utf8 = .replace }) catch |err| switch (err) {
+        error.WriteFailed => return error.WriteFailed,
+        error.InvalidUtf8 => unreachable,
+    };
+}
+
+test "writeJsonString: escapes, and ill-formed UTF-8 becomes U+FFFD (valid JSON)" {
+    var buf: [128]u8 = undefined;
+    var w: Writer = .fixed(&buf);
+    // cp1250 "České" read without csv_input_encoding: 0xC8 and 0xE9 are not UTF-8.
+    try writeJsonString(&w, "\xC8esk\xE9 \"q\" a\\b \n\x01 ž");
+    try std.testing.expectEqualStrings(
+        "\"\u{FFFD}esk\u{FFFD} \\\"q\\\" a\\\\b \\n\\u0001 ž\"",
+        w.buffered(),
+    );
+    try std.testing.expect(std.unicode.utf8ValidateSlice(w.buffered()));
 }
 
 /// Evaluates all input_schema expressions for the current row into a variable map.

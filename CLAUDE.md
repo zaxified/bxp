@@ -274,10 +274,12 @@ bxp-core/inspect link, and the bridge proxies `bxp-cli` runs. The former
   (the reap-race-tolerant child wait behind the bridge's `bxp-cli` spawns)
   `mcp` (the JSON-RPC 2.0 / MCP transport behind `bxp-mcp` — the one
   module that came *back*: upstream's copy is this repo's former
-  `bxp-mcp/src/server.zig`, extracted there and hardened) and `regex` (the
+  `bxp-mcp/src/server.zig`, extracted there and hardened), `jsontext` (the
+  JSON string writer behind bxp-cli's JSON output) and `regex` (the
   RE2-syntax, linear-time engine behind `REGEX_MATCH` / `REGEX_EXTRACT`).
-  bxp-core imports none of `minisign`, `procrun` and `mcp` — they are re-exported so
-  `bxp-gui-bridge` and `bxp-mcp` share the same pin. Treated as a
+  bxp-core imports none of `minisign`, `procrun`, `mcp` and `jsontext` — they
+  are re-exported so `bxp-gui-bridge`, `bxp-mcp` and `bxp-cli` share the same
+  pin. Treated as a
   foreign upstream: read-only, pinned to an exact commit, never edited from
   this repo — normally the commit behind a dated release tag, but a tag that
   leaves every module bxp takes untouched is not worth adopting and a later

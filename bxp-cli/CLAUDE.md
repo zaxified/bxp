@@ -185,7 +185,10 @@ export needs none of them.
 
 - `file_type_in` / `file_type_out` — `"csv"` (default) or `"json"`. `json` in =
   array-of-objects input (streamed via `json.zig`); `json` out = the
-  `output_schema` rows emitted as a JSON array instead of CSV.
+  `output_schema` rows emitted as a JSON array instead of CSV. Strings are
+  written by the zig-libs `jsontext` module; ill-formed UTF-8 in a value (a
+  legacy CSV read without `csv_input_encoding`) becomes U+FFFD, so the file is
+  always valid JSON.
 - `csv_delimiter_in` / `csv_delimiter_out` — field separator (single char,
   default `","`; e.g. `";"`, `"\t"`, `"|"`). CSV only.
 - `csv_decimal_separator_in` / `csv_decimal_separator_out` — decimal char in

@@ -581,7 +581,7 @@ cd bxp-core && zig build
 cd bxp-core && zig build test
 ```
 
-Module table in `build.zig` — 14 names in two halves. Seven are `b.addModule` entries built from this package's own sources: `json`, `btrace`, `xlsx`, `expr`, `config`, `docs`, `inspect`. Seven are zig-libs modules pushed into the table by the local `reexport()` helper so downstream packages can ask for them by name: `json5`, `diagnostics`, `minisign`, `procrun`, `mcp`, `csvstream`, `zipstream`. Everything else bxp-core takes off the zig-libs handle — `decimal`, `encoding`, `numparse`, `tz`, `datefmt`, `regex` — is a plain local binding wired into the imports below; nobody downstream asks for those by name, so they are deliberately **not** re-exported.
+Module table in `build.zig` — 15 names in two halves. Seven are `b.addModule` entries built from this package's own sources: `json`, `btrace`, `xlsx`, `expr`, `config`, `docs`, `inspect`. Eight are zig-libs modules pushed into the table by the local `reexport()` helper so downstream packages can ask for them by name: `json5`, `diagnostics`, `minisign`, `procrun`, `mcp`, `csvstream`, `jsontext`, `zipstream`. Everything else bxp-core takes off the zig-libs handle — `decimal`, `encoding`, `numparse`, `tz`, `datefmt`, `regex` — is a plain local binding wired into the imports below; nobody downstream asks for those by name, so they are deliberately **not** re-exported.
 `xlsx` imports the named `decimal` and `zipstream` modules; `zipstream` has no bxp-core dependencies (std only).
 `expr` imports `unicode.zig` (file-relative, not a named module) plus the named `decimal`, `numparse`, `uucode`, `encoding`, `regex`, `tz`, `datefmt` modules (`regex` is the engine behind REGEX_MATCH/REGEX_EXTRACT; `uucode` is a fetch dep of its own, the rest come from zig-libs — see _External dependencies_ below); `config` imports `json5`, `diagnostics`, `expr`, `encoding`, `xlsx` (the last one for `xlsx.listSheets`, which backs the sheet-name resolution in template validation). `encoding` being a named module matters for the same reason `decimal` is one: it is shared by both `expr` and `config`, and a file-relative @import from two modules would compile the file into each — a duplicate-symbol error.
 `docs` imports `config`, `expr`, `json5`; `diagnostics` has no bxp-core dependencies.
@@ -634,6 +634,9 @@ content-addressed by hash and re-audited on any pin bump:
     behind the bridge's `bxp-cli` spawns.
   - `csvstream` — the CSV record model + `ChunkReader` behind every CSV input
     path. Re-exported like `json5` / `zipstream` (bxp-cli asks for it by name).
+  - `jsontext` — the JSON string-literal writer behind bxp-cli's
+    `file_type_out: "json"` rows (ill-formed UTF-8 → U+FFFD, so the file is
+    always valid JSON).
   - `mcp` — the MCP / JSON-RPC 2.0 server transport behind `bxp-mcp`. The one
     module that travelled the other way first: upstream's copy is this repo's
     former `bxp-mcp/src/server.zig`, extracted 2026-07-04 and hardened there,
@@ -648,9 +651,9 @@ content-addressed by hash and re-audited on any pin bump:
     2–6× faster per call in ReleaseSmall, 1.1–3.7× slower in ReleaseSafe
     (`memset` of its `undefined` scratch — tests only, nothing ships Safe).
 
-  `minisign`, `procrun` and `mcp` are the modules bxp-core does **not** import
-  at all: they are re-exported purely so `bxp-gui-bridge/build.zig` and
-  `bxp-mcp/build.zig` can take them off this package's single pin instead of
+  `minisign`, `procrun`, `mcp` and `jsontext` are the modules bxp-core does
+  **not** import at all: they are re-exported purely so `bxp-gui-bridge`,
+  `bxp-mcp` and `bxp-cli` can take them off this package's single pin instead of
   adding a second `zig_libs` entry of their own that would have to be bumped in
   lockstep.
 
