@@ -68,9 +68,8 @@ graph TD
 ```
 
 `bxp-gui-bridge` is the FFI shim the GUI loads via `dart:ffi` at startup. It is
-the GUI's **single backend on every platform** — there is no `bxp-fmt` spawn and
-no `Process.start` route. Three
-roles in one shared library: (1) the **subprocess proxy**
+the GUI's **single backend on every platform** — there is no `Process.start`
+route. Three roles in one shared library: (1) the **subprocess proxy**
 (`bridge_run` / `bridge_run_streaming`) wraps the `bxp-cli` runs the GUI needs
 (dry-run / full-run `--trace=bin`, `--version`) from native code, sidestepping
 dart-lang/sdk#1727 (~8 KB stdout cutoff that kills `--trace`); (2) the **in-proc

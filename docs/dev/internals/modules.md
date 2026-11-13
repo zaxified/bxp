@@ -6,12 +6,11 @@ description: "What every bxp-core module is responsible for, where its code live
 
 ## bxp-core modules
 
-What each module is responsible for, and — the column that used to rot — where
-its code actually lives. Nine are files in `bxp-core/src/`; the rest are pinned
-upstream dependencies, either modules of the `zig-libs` collection or standalone
-fetch dependencies. Three of the zig-libs entries are re-exports bxp-core never
-imports itself: they are published here only so `bxp-gui-bridge` and `bxp-mcp`
-share this package's single pin.
+What each module is responsible for, and where its code actually lives: a file
+in `bxp-core/src/`, or a module of the pinned `zig-libs` collection. Some
+zig-libs entries are re-exports bxp-core never imports itself: they are
+published here only so `bxp-cli`, `bxp-gui-bridge` and `bxp-mcp` share this
+package's single pin.
 
 --8<-- "includes/bxp-core-modules.md:table"
 
@@ -52,8 +51,7 @@ validation / evaluation / trace, expr-batch, schema/docs emission, template
 list/fetch — lives in one stateless module, `bxp-core/src/inspect.zig`. It is
 pure: it never reads argv, never writes stdout/stderr, never exits; callers own
 all I/O and the arena. Two thin adapters wrap it: **bxp-mcp** (MCP/stdio for
-agents) and **bxp-gui-bridge** (FFI for the GUI). A former `bxp-fmt` CLI adapter
-wrapped the same calls argv→stdout and was removed once both covered every op.
+agents) and **bxp-gui-bridge** (FFI for the GUI).
 
 --8<-- "includes/inspect-surface.md:table"
 

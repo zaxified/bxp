@@ -84,9 +84,8 @@ The per-tool descriptions and JSON schemas are in
 
     `bxp_eval`, `bxp_eval_trace` and `bxp_eval_batch` all take `headers` /
     `fields` as **native JSON arrays of strings**. The first two additionally
-    accept an array encoded into a string (`"[\"Price\"]"`) — the shape they
-    declared until 2026-08-19 — so a caller written against the older schema
-    keeps working. Any other shape is refused by name. See
+    accept an array encoded into a string (`"[\"Price\"]"`), so a caller that
+    sends that shape keeps working. Any other shape is refused by name. See
     [`trace-protocol/inspect.md`](trace-protocol/inspect.md).
 
 Agent workflow hint (also in the server's `initialize` instructions): call
@@ -149,12 +148,9 @@ The JSON-RPC layer is the zig-libs **`mcp`** module — framing, handshake,
 taken through bxp-core's re-export, so bxp-mcp shares that package's single
 zig-libs pin; the module itself is pure `std` with no dependencies of its own.
 
-That module is this package's **own former `server.zig`**, extracted upstream on
-2026-07-04 and hardened there — which is why the 2026-08-16 migration was
-near-free: `isSingleJsonObject`, the `tools/list` serializer and every JSON-RPC
-error string were already byte-identical. Upstream adds resources + prompts +
+The module also provides resources + prompts +
 sampling/elicitation, a 16 MiB line cap, JSON-RPC §4 id validation, a
-JSON-escaped progress message, and the unit tests the local transport never had.
+JSON-escaped progress message, and its own unit tests.
 
 ## Memory model
 

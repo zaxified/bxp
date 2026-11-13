@@ -38,8 +38,8 @@ ordering.
 **Mandatory on every platform.** Library probe failure at startup is fatal
 (synthetic error surfaced through the normal startup gate, which also parses
 the docs catalog). There is no subprocess fallback — Windows can't use
-`Process.start` (dart-lang/sdk#1727) and the Linux/macOS `Process.start` route
-was removed when the bridge became the single backend.
+`Process.start` (dart-lang/sdk#1727) and the bridge is the single backend on
+Linux/macOS too.
 
 **Reloading bridge changes.** `dlopen` mmaps the file at process start, so
 editing a `.so`/`.dylib` and `mcp__dart__hot_reload` does NOT pick it up. After

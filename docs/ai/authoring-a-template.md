@@ -122,7 +122,7 @@ expected result, then compare against actual output.
 
 The self-test surface depends on what you have wired:
 
-- **With the bxp-mcp server** (agent path), nine tools: `bxp_validate`,
+- **With the bxp-mcp server** (agent path), its tools: `bxp_validate`,
   `bxp_validate_expr`, `bxp_eval`, `bxp_eval_trace`, `bxp_eval_batch`,
   `bxp_list_templates`, `bxp_fetch_template`, `bxp_docs`, and
   `bxp_simulate` (a full end-to-end run). Each takes config / expression
@@ -136,13 +136,13 @@ The self-test surface depends on what you have wired:
     Every eval tool takes the row context the same way — a native JSON
     array, `["Price","Qty"]`. `bxp_eval` and `bxp_eval_trace` still
     accept the array encoded into a string
-    (`"[\"Price\",\"Qty\"]"`), the shape their schema used to declare,
+    (`"[\"Price\",\"Qty\"]"`),
     but there is no reason to write it.
 
     Anything else is a **tool failure naming the argument**, never a
-    silently empty row: an earlier version dropped the context and still
-    answered `{"ok":true}`, so every `[Column]` read as `""` and agents
-    concluded a correct expression was broken.
+    silently empty row: a dropped context would answer `{"ok":true}` with
+    every `[Column]` reading as `""`, and agents would conclude a correct
+    expression was broken.
 
 **1. Schema + JSON5 syntax check.** Call `bxp_validate` with the config
 text. Expect no `$err_*` / `$warn_*` keys for the new template's path. If

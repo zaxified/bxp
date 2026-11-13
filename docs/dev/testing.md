@@ -49,10 +49,11 @@ A few phases carry detail the one-liner cannot:
 > parity, builds with `--strict`, and only then publishes. A pull request runs
 > the check and the build but does not deploy.
 >
-> Markdown *formatting* stays hand-maintained on top of that — prettier and
-> markdownlint were dropped because they reflow and mis-lint MkDocs-specific
-> syntax and break the rendered pages. `scripts/docs/check-formatting.sh`
-> (a mermaid-fence parse) is a standalone pre-release check.
+> Markdown *formatting* stays hand-maintained on top of that — automatic
+> formatters and linters (prettier, markdownlint) reflow and mis-lint
+> MkDocs-specific syntax and break the rendered pages, so none is used.
+> `scripts/docs/check-formatting.sh` (a mermaid-fence parse) is a standalone
+> pre-release check.
 
 Line endings across the whole repository are pinned to LF in `.gitattributes`.
 Several gates here byte-compare a committed file against freshly produced

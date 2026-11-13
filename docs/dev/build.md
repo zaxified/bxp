@@ -171,8 +171,8 @@ Two things to know before editing:
   `scripts/test.sh` deliberately does not. See the note in
   [Testing](testing.md) for why.
 
-Markdown formatting is hand-maintained (prettier and markdownlint reflow
-MkDocs-specific syntax and break the rendered pages).
+Markdown formatting is hand-maintained (automatic formatters such as prettier
+and markdownlint reflow MkDocs-specific syntax and break the rendered pages).
 `bash scripts/docs/check-formatting.sh` parses the Mermaid fences and is run
 before a release rather than on every commit.
 
@@ -209,7 +209,7 @@ docs-workflow step rather than a `test-NN` phase.
 bash scripts/test.sh
 ```
 
-Nine phases covering the bxp-core unit tests and the CLI build, the MCP server,
+The phases cover the bxp-core unit tests and the CLI build, the MCP server,
 the bridge, the Flutter desktop app, a coarse perf guard, the expression corpus,
 and three regression gates — datasets, the expressions printed on the example
 pages, and the examples' committed output. [Testing](testing.md) has the full

@@ -180,6 +180,4 @@ mutations and writes the result to disk.
 Verified by `packages/json5_ast/test/round_trip_test.dart` (run by both
 `test-01-console.sh` and `test-04-desktop.sh`). The contract is **idempotent
 canonicalisation**, not byte identity: the first dump may reformat the input,
-but every subsequent parse → dump cycle must produce the same bytes. The older
-`AST round-trip` phase in `scripts/test.sh` was retired because it read a
-gitignored `DEV/bxp-cli.json` and so only worked on one machine.
+but every subsequent parse → dump cycle must produce the same bytes.

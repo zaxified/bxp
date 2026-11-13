@@ -108,12 +108,11 @@ The error sentinel carries the same optional `off`/`len` fields as `--expr`.
 | `headers` | array of strings    | Column names matching the CSV header row.   |
 | `fields`  | array of strings    | Field values for the current row.           |
 
-!!! note "One shape, plus the legacy one"
+!!! note "One shape, plus a string-encoded one"
 
     Native arrays are what all three eval tools take, `bxp_eval_batch`
     included. `bxp_eval` and `bxp_eval_trace` additionally accept an array
-    encoded into a *string* (`"[\"Date\"]"`) — the shape they declared until
-    2026-08-19, inherited from bxp-fmt's `--row-headers` flag. Any other shape
+    encoded into a *string* (`"[\"Date\"]"`). Any other shape
     is a tool failure naming the argument; it is never dropped, because a
     dropped row context answers `ok:true` with every `[Col]` empty, which reads
     as a broken expression rather than a bad call.
