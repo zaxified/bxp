@@ -75,9 +75,9 @@ Windows).
 
 If green → push the tag (step 3 below). If red → fix on the dev host,
 push to master, repeat the Win pull/build/test cycle until clean. The
-RC workflow_dispatch path is the alternative when Windows hardware
-isn't available — see "Testing on the windows-latest runner without a
-real tag" further down (uses the workflow_dispatch trigger).
+alternative is a `workflow_dispatch` run of `release.yml` (see below): it
+builds the real installers on the GitHub runners, and you test the one
+you download from the run on a Windows machine or VM.
 
 Skip this step for tag-prep wave releases (CHANGELOG / version bumps
 only), pure `bxp-cli` / `bxp-core` changes, or documentation-only
@@ -133,7 +133,14 @@ to test the Windows / macOS branches without cutting a real tag:
 
 ```bash
 gh workflow run release.yml -f version=vX.Y.Z-rc-test
+gh run download <run-id> -n desktop-windows   # or desktop-linux / desktop-macos / console
 ```
+
+Such a run builds and uploads every archive as a run artifact (kept for
+seven days) and publishes nothing: the publish job runs in the `release`
+environment, which admits `v*` tags only, so on a branch run GitHub refuses
+it and the run ends red at that job. That is expected — the builds before
+it are what the run is for.
 
 ## Verifying a published release
 
@@ -180,8 +187,8 @@ in-app updater **fails closed** without it:
   The key is reachable only from `v*` tag runs.
 - **A tag release with no signing key refuses to publish** — an unsigned release
   would be rejected by every fail-closed client, so the workflow errors out
-  instead of shipping one. (A `workflow_dispatch` test run skips signing, as it
-  is not a real release.)
+  instead of shipping one. (A `workflow_dispatch` test run never reaches that
+  job: the environment refuses it, so it neither signs nor publishes.)
 
 On the client, `UpdaterService` verifies `SHA256SUMS.minisig` against an embedded
 public key **before** trusting the manifest, then matches the downloaded

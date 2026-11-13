@@ -5,8 +5,11 @@ name: release
 # Release with a SHA256SUMS file the in-app UpdaterService verifies
 # downloads against.
 #
-# Manual trigger via workflow_dispatch is supported for testing without
-# cutting a real tag — `gh workflow run release.yml -f version=v0.2.0-test`.
+# Manual trigger via workflow_dispatch builds every archive without cutting a
+# real tag — `gh workflow run release.yml -f version=v0.2.0-test` — and leaves
+# them as run artifacts (`gh run download <run-id> -n desktop-windows`). It
+# publishes nothing: the `release` environment the publish job needs admits
+# `v*` tags only, so that job is refused on a branch run.
 
 on:
   push:
