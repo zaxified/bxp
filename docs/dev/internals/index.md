@@ -22,12 +22,12 @@ Consequences of this design:
 ## Package dependency graph
 
 ```text
-  bxp-cli         ── path dep ──►  bxp-core   ── fetch dep ──►  uucode   (Unicode tables)
-  (binary)                         (library)                    zig-libs (datefmt · tz · encoding ·
-                                                                          json5 · decimal · numparse ·
+  bxp-cli         ── path dep ──►  bxp-core   ── fetch dep ──►  zig-libs (datefmt · tz · encoding ·
+  (binary)                         (library)                              json5 · decimal · numparse ·
                                                                           zipstream · csvstream ·
-                                                                          diagnostics · regex ·
-                                                                          minisign · procrun · mcp)
+                                                                          diagnostics · regex · unitext ·
+                                                                          minisign · procrun · mcp ·
+                                                                          jsontext)
   bxp-mcp         ── path dep ──►  bxp-core           (wraps inspect.zig; spawns bxp-cli
   (binary)                                             for bxp_simulate; takes `mcp`,
                                                        the JSON-RPC transport, through
@@ -41,13 +41,14 @@ Consequences of this design:
   (Flutter)                              in-proc inspect + proxied bxp-cli runs)
 ```
 
-`bxp-core` is a **local path dependency** (`../bxp-core`) and pulls two
-external fetch dependencies of its own: `uucode` (Unicode case-mapping tables)
-and `zig_libs` (`datefmt`, `tz`, `encoding`, `json5`, `decimal`, `numparse`,
-`zipstream`, `csvstream`, `diagnostics` and `regex` — the whole primitive layer
-and the engine behind `REGEX_MATCH`/`REGEX_EXTRACT` — plus `minisign`, `procrun` and `mcp`, which bxp-core does
-not import at all and merely re-exports so the bridge and bxp-mcp share its
-single pin), all pinned in `build.zig.zon`.
+`bxp-core` is a **local path dependency** (`../bxp-core`) and pulls one
+external fetch dependency of its own: `zig_libs` (`datefmt`, `tz`, `encoding`,
+`json5`, `decimal`, `numparse`, `zipstream`, `csvstream`, `diagnostics`,
+`regex` and `unitext` — the whole primitive layer, the engine behind
+`REGEX_MATCH`/`REGEX_EXTRACT` and the Unicode text layer behind
+`UPPER`/`LOWER`/`UNACCENT` — plus `minisign`, `procrun`, `mcp` and `jsontext`,
+which bxp-core does not import at all and merely re-exports so the bridge,
+bxp-mcp and bxp-cli share its single pin), pinned in `build.zig.zon`.
 `bxp-gui` ships `bxp-cli`, `bxp-mcp`, and `bxp-gui-bridge.{dll,so,dylib}`
 inside the Flutter bundle.
 

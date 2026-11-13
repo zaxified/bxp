@@ -21,7 +21,7 @@ bxp/                                # monorepo root (git root)
 │   │   ├── inspect.zig             # inspect — shared stateless inspection core for bxp-mcp and the GUI bridge
 │   │   ├── json.zig                # Streaming JSON array-of-objects reader for bxp-cli
 │   │   ├── module_docs.zig         # Architecture catalogs for bxp-core: the module inventory and the stateless `inspect` surface
-│   │   ├── unicode.zig             # In-house Unicode text operations for expr.zig builtins
+│   │   ├── unicode.zig             # UTF-8 text operations behind expr.zig's UPPER / LOWER / UNACCENT / PROPER
 │   │   ├── wasm.zig                # wasm32 export wrapper around the stateless inspect core
 │   │   └── xlsx.zig                # Converts Excel .xlsx workbooks to CSV
 │   ├── CLAUDE.md

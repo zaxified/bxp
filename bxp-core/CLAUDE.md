@@ -236,35 +236,32 @@ file to keep in sync.
 
 ### unicode.zig
 
-UTF-8 text operations behind expr.zig's `UPPER` / `LOWER` / `UNACCENT` builtins
-(Layer 1 of the planned Unicode subsystem; the Layer 0 `csv_*_encoding`
-transcoding comes later). File-relative `@import` by `expr.zig`, not a named
-module.
+bxp's calling policy for the text builtins `UPPER` / `LOWER` / `UNACCENT` /
+`PROPER`, over the zig-libs `unitext` module (which holds the algorithms and
+the Unicode data, generated from one UCD version). File-relative `@import` by
+`expr.zig`, not a named module.
 
-- `toUpperStr(alloc, s)` / `toLowerStr(alloc, s)` — full-Unicode case mapping.
-  Codepoint walk, not a byte loop, so output byte length may differ from input
-  (`ß` → `SS`); callers must not pre-size to `s.len`. Latin/Greek/Cyrillic etc.
-  map correctly; unicameral scripts (CJK/Arabic/Hebrew) pass through unchanged.
-- `unaccentStr(alloc, s)` — Latin-scope diacritic stripping (`café`→`cafe`,
-  `ß`→`ss`, `ø`→`o`). Recurses the canonical (NFD) decomposition, drops
-  combining marks (non-zero canonical combining class), and keeps base letters;
-  a small `latinHandlist` covers the non-decomposing Latin letters
-  (`ß ø ł đ æ þ` …). Non-Latin keeps its base script (Greek `Ά`→`Α`, NOT `A`);
-  compatibility decompositions (ligatures, `①`) are deliberately not folded.
-- Data-lenient: a byte sequence that is not valid UTF-8 is emitted verbatim
-  one byte at a time — never an error, never a crash (matches the previous
-  ASCII byte loop's passthrough and the blank-field resilience contract).
-- Unicode data comes from the `uucode` fetch dependency (see _External
-  dependency_ below); this file is only the UTF-8 plumbing.
-- Inline tests: case mapping (ASCII, Latin-1 accents,
-  Swedish/German/Cyrillic/Greek, ß→SS, unicameral passthrough, empty,
-  invalid-UTF-8); unaccent (Latin strip, hand-list letters, non-Latin
-  base-script keep, empty + invalid-UTF-8 passthrough).
+- `toUpperStr(alloc, s)` / `toLowerStr(alloc, s)` — full Unicode case mapping,
+  SpecialCasing included: `ß` → `SS`, `İ` → `i̇`, a word-final capital sigma →
+  `ς`. Output byte length may differ from input; callers must not pre-size to
+  `s.len`. Unicameral scripts (CJK/Arabic/Hebrew) pass through unchanged.
+- `unaccentStr(alloc, s)` — the ICU recipe "NFD; remove nonspacing marks; NFC"
+  plus the Latin letters with no decomposition (`ł ø đ ŧ ƀ` …) and the
+  ligatures (`æ œ ß þ ĳ ﬁ ǅ` → `ae oe ss th ij fi Dz`). A non-Latin letter keeps
+  its own script (Greek `Ά` → `Α`, not `A`), but nonspacing marks are removed in
+  every script (Hebrew points, Arabic harakat, Indic vowel signs of category
+  Mn). Compatibility forms (`①`, full-width letters) are not folded.
+  `foldEng` adds ŋ/Ŋ → n/N on top (a pending zig-libs request).
+- Data-lenient: a byte sequence that is not valid UTF-8 is copied through
+  unchanged (`.invalid_utf8 = .pass_through`) — never an error, never a crash.
+- Inline tests pin bxp's contract (pass-through, the documented examples);
+  the conformance suites (NormalizationTest, CPython/Rust vectors) live
+  upstream.
 
 ### encoding _(zig-libs dep)_
 
 Layer 0 of the Unicode subsystem: legacy single-byte code page ↔ UTF-8
-transcoding (the "iconv" job). No `uucode` dependency — just 256-entry mapping
+transcoding (the "iconv" job). Just 256-entry mapping
 tables. **No longer in this tree** — the named `encoding` module comes from the
 pinned `zig_libs` fetch dep; what bxp still owns is the *policy* that drives
 it: the per-template `csv_input_encoding` / `csv_output_encoding` config keys
@@ -581,22 +578,16 @@ cd bxp-core && zig build
 cd bxp-core && zig build test
 ```
 
-Module table in `build.zig` — 15 names in two halves. Seven are `b.addModule` entries built from this package's own sources: `json`, `btrace`, `xlsx`, `expr`, `config`, `docs`, `inspect`. Eight are zig-libs modules pushed into the table by the local `reexport()` helper so downstream packages can ask for them by name: `json5`, `diagnostics`, `minisign`, `procrun`, `mcp`, `csvstream`, `jsontext`, `zipstream`. Everything else bxp-core takes off the zig-libs handle — `decimal`, `encoding`, `numparse`, `tz`, `datefmt`, `regex` — is a plain local binding wired into the imports below; nobody downstream asks for those by name, so they are deliberately **not** re-exported.
+Module table in `build.zig` — 15 names in two halves. Seven are `b.addModule` entries built from this package's own sources: `json`, `btrace`, `xlsx`, `expr`, `config`, `docs`, `inspect`. Eight are zig-libs modules pushed into the table by the local `reexport()` helper so downstream packages can ask for them by name: `json5`, `diagnostics`, `minisign`, `procrun`, `mcp`, `csvstream`, `jsontext`, `zipstream`. Everything else bxp-core takes off the zig-libs handle — `decimal`, `encoding`, `numparse`, `tz`, `datefmt`, `regex`, `unitext` — is a plain local binding wired into the imports below; nobody downstream asks for those by name, so they are deliberately **not** re-exported.
 `xlsx` imports the named `decimal` and `zipstream` modules; `zipstream` has no bxp-core dependencies (std only).
-`expr` imports `unicode.zig` (file-relative, not a named module) plus the named `decimal`, `numparse`, `uucode`, `encoding`, `regex`, `tz`, `datefmt` modules (`regex` is the engine behind REGEX_MATCH/REGEX_EXTRACT; `uucode` is a fetch dep of its own, the rest come from zig-libs — see _External dependencies_ below); `config` imports `json5`, `diagnostics`, `expr`, `encoding`, `xlsx` (the last one for `xlsx.listSheets`, which backs the sheet-name resolution in template validation). `encoding` being a named module matters for the same reason `decimal` is one: it is shared by both `expr` and `config`, and a file-relative @import from two modules would compile the file into each — a duplicate-symbol error.
+`expr` imports `unicode.zig` (file-relative, not a named module) plus the named `decimal`, `numparse`, `unitext`, `encoding`, `regex`, `tz`, `datefmt` modules (`regex` is the engine behind REGEX_MATCH/REGEX_EXTRACT, `unitext` the one behind the text builtins; all come from zig-libs — see _External dependencies_ below); `config` imports `json5`, `diagnostics`, `expr`, `encoding`, `xlsx` (the last one for `xlsx.listSheets`, which backs the sheet-name resolution in template validation). `encoding` being a named module matters for the same reason `decimal` is one: it is shared by both `expr` and `config`, and a file-relative @import from two modules would compile the file into each — a duplicate-symbol error.
 `docs` imports `config`, `expr`, `json5`; `diagnostics` has no bxp-core dependencies.
 
 ### External dependencies
 
-`bxp-core/build.zig.zon` pins two external (fetch) dependencies, both
+`bxp-core/build.zig.zon` pins one external (fetch) dependency,
 content-addressed by hash and re-audited on any pin bump:
 
-- **uucode** (MIT) — the Unicode case-mapping / decomposition table library,
-  on its `main` line (which requires Zig 0.17; its `zig-0.16` branch carries the
-  0.16 line). `build.zig` requests only the
-  `uppercase_mapping` / `lowercase_mapping` fields, so just those tables are
-  generated + compiled in (field selection keeps the static binary small).
-  Imported into the `expr` module and consumed by `unicode.zig`.
 - **zig_libs** (MIT, `zaxified/zig-libs`) — the module collection supplying
   the modules below. Eight of them used to live in `src/` (`tz`,
   `datefmt`, `encoding`, `json5`, `decimal`, `zipstream`, `diagnostics` and
@@ -641,6 +632,14 @@ content-addressed by hash and re-audited on any pin bump:
     module that travelled the other way first: upstream's copy is this repo's
     former `bxp-mcp/src/server.zig`, extracted 2026-07-04 and hardened there,
     then consumed back on 2026-08-16.
+  - `unitext` — Unicode case mapping, normalization and unaccent behind
+    `UPPER` / `LOWER` / `UNACCENT` / `PROPER`. It replaced the `uucode` fetch
+    dependency after a differential over every code point: identical except
+    where `unitext` is right and `uucode`'s use here was not (Final_Sigma,
+    `İ`, NFC recomposition, ~230 more Latin letters and ligatures folded),
+    nonspacing marks of non-Latin scripts now dropped, and ~20 code points
+    new in Unicode 18 (`unitext` is on UCD 17, like `regex`). ~73 KB smaller
+    ReleaseSmall `bxp-cli`.
   - `regex` — the RE2-syntax engine behind `REGEX_MATCH` / `REGEX_EXTRACT`
     (Go `regexp` semantics, linear time, `\p{…}` classes). It replaced the
     `quangd/regex.zig` fetch dependency after a differential run over ~20 M

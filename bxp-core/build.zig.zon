@@ -2,31 +2,20 @@
     .name = .bxp_core,
     .fingerprint = 0xd3c3e96b8303f761,
     .version = "0.3.0",
-    // uucode (MIT) supplies the Unicode case-mapping / decomposition tables
-    // behind UPPER/LOWER (full Unicode incl. ß→SS) and UNACCENT, which selects
-    // three further fields (decomposition mapping + type, combining class).
-    // Pinned to uucode main (Zig 0.17+); the `zig-0.16` / `zig-0.15`
-    // back-port branches carry the older lines. Field-selected in
-    // build.zig so only the tables we use compile in.
     .dependencies = .{
-        .uucode = .{
-            .url = "https://github.com/jacobsandlund/uucode/archive/1fb73433bba5d93366c57f23ff2e9d7939746500.tar.gz",
-            .hash = "uucode-0.2.0-ZZjBPm6FVgBcY-79AHV8ckQj86z0JwOyVyj89VeZrEiv",
-        },
         // zig-libs (MIT) — the module collection that now carries the hardened
-        // descendants of several bxp-core modules. Bumping this pin moves THIRTEEN
-        // modules at once: `tz`, `datefmt`, `encoding`, `json5`, `decimal`,
-        // `zipstream`, `diagnostics`, `numparse`, `csvstream`, `minisign`,
-        // `procrun`, `mcp` and `regex` — that is the whole primitive layer plus
-        // the bxp-mcp transport and the regex engine, so read the diff
-        // accordingly. All thirteen come from
+        // descendants of several bxp-core modules. Bumping this pin moves every
+        // module bxp takes at once (the list is `module_docs.zig`, origin
+        // `zig_libs`) — the whole primitive layer plus the bxp-mcp transport,
+        // the regex engine and the Unicode text layer, so read the diff
+        // accordingly. All of them come from
         // ONE b.dependency handle in build.zig, so `tz`'s own datefmt import
         // resolves to the same module rather than a second date core. The
         // per-module inventory and rationale live in bxp-core/CLAUDE.md ->
         // External dependencies. Treated as a foreign upstream: read-only,
         // pinned to an exact commit, never edited from this repo. Normally
         // that commit is the one behind a release tag (upstream tags by date,
-        // `YYYY-MM-DD`), but what decides it is the diff to these thirteen
+        // `YYYY-MM-DD`), but what decides it is the diff to those
         // modules, not the tag: a tag that leaves them byte-identical is not
         // worth adopting, and a later commit that fixes them is (see
         // CHANGELOG.md in each module). Currently tag `2026-11-11`, the first

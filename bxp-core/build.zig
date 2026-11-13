@@ -20,25 +20,6 @@ pub fn build(b: *std.Build) void {
     const selfhosted = b.option(bool, "selfhosted", "Use Zig's self-hosted backend (edit loop only)") orelse false;
     const use_llvm: ?bool = if (selfhosted) null else true;
 
-    // uucode supplies the Unicode tables behind expr.zig's text builtins:
-    // UPPER/LOWER (case mapping) and UNACCENT (canonical decomposition + the
-    // combining class, from which unicode.zig strips diacritics). Field-
-    // selected: only these tables are generated + compiled in, keeping the
-    // binary small. The dependency's own table generator runs in Debug + LLVM
-    // internally (it works around the Zig x86 backend bug itself), so our
-    // optimize mode only governs the thin lookup `lib` module.
-    const uucode_mod = b.dependency("uucode", .{
-        .target = target,
-        .optimize = optimize,
-        .fields = @as([]const []const u8, &.{
-            "uppercase_mapping",
-            "lowercase_mapping",
-            "decomposition_mapping",
-            "decomposition_type",
-            "canonical_combining_class",
-        }),
-    }).module("uucode");
-
     // zig-libs carries the hardened descendants of several modules that used to
     // live in src/. Every module taken from it must come off THIS one handle:
     // they import each other (`tz` imports `datefmt`), and a second
@@ -139,6 +120,10 @@ pub fn build(b: *std.Build) void {
     // config.zig and the per-field decode in expr.zig.
     const encoding_mod = zig_libs.module("encoding");
 
+    // Unicode case mapping, normalization and unaccent behind UPPER / LOWER /
+    // UNACCENT / PROPER (`src/unicode.zig` fixes bxp's calling policy on top).
+    const unitext_mod = zig_libs.module("unitext");
+
     // CSV record model — `LineIterator` / `splitFields` / `LineSlice` (what
     // src/csv.zig used to be) AND `ChunkReader` (what bxp-cli's pipeline.zig
     // used to carry privately). Both were extracted upstream, so this is one
@@ -228,7 +213,7 @@ pub fn build(b: *std.Build) void {
         .imports = &.{
             .{ .name = "decimal", .module = decimal_mod },
             .{ .name = "numparse", .module = numparse_mod },
-            .{ .name = "uucode", .module = uucode_mod },
+            .{ .name = "unitext", .module = unitext_mod },
             .{ .name = "encoding", .module = encoding_mod },
             .{ .name = "regex", .module = regex_mod },
             .{ .name = "tz", .module = tz_mod },
@@ -352,7 +337,7 @@ pub fn build(b: *std.Build) void {
             .imports = &.{
                 .{ .name = "decimal", .module = decimal_mod },
                 .{ .name = "numparse", .module = numparse_mod },
-                .{ .name = "uucode", .module = uucode_mod },
+                .{ .name = "unitext", .module = unitext_mod },
                 .{ .name = "encoding", .module = encoding_mod },
                 .{ .name = "regex", .module = regex_mod },
                 .{ .name = "tz", .module = tz_mod },
@@ -376,7 +361,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .strip = false,
             .imports = &.{
-                .{ .name = "uucode", .module = uucode_mod },
+                .{ .name = "unitext", .module = unitext_mod },
             },
         }),
     });

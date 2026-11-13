@@ -28,8 +28,8 @@ bxp/
 │   │   ├── expr.zig        # Expression evaluator + per-builtin FnDoc catalog
 │   │   ├── config.zig      # JSON5 config loader + per-struct FieldDoc tables
 │   │   ├── json.zig        # JSON array-of-objects → CSV rows
-│   │   ├── unicode.zig     # UTF-8 case mapping (UPPER/LOWER) over uucode tables
-│   │   │                   # — file-rel @import by expr.zig; uucode is fetch dep
+│   │   ├── unicode.zig     # UPPER/LOWER/UNACCENT calling policy over zig-libs
+│   │   │                   # `unitext` — file-rel @import by expr.zig
 │   │   ├── btrace.zig      # Binary BXTB trace Writer/Reader for --trace
 │   │   ├── docs.zig        # Aggregator: re-exports expr catalog + flattens
 │   │   │                   # config FieldDoc tables; serves the docs catalog
@@ -44,8 +44,8 @@ bxp/
 │   │                       # `csvstream` are NOT here — the whole primitive
 │   │                       # layer comes from zig-libs)
 │   ├── build.zig         # exports each file as a named Zig module
-│   └── build.zig.zon     # fetch deps: uucode, zig-libs (the whole primitive
-│                         #             layer + the regex engine)
+│   └── build.zig.zon     # fetch dep: zig-libs (the whole primitive layer +
+│                         #            the regex engine + Unicode text)
 ├── bxp-gui/              # Flutter desktop app (replaces bxp-ui; talks to bxp-gui-bridge via FFI, which proxies bxp-cli)
 │   ├── lib/              # Dart source (services/, store/, ui/)
 │   ├── linux/, macos/, windows/, web/  # platform configs
@@ -230,7 +230,7 @@ that file. See `docs/dev/release.md` for the operator walkthrough.
 ## Package dependency
 
 ```text
-bxp-cli         --[path dep]--> bxp-core   --[fetch dep]--> uucode (Unicode tables)
+bxp-cli         --[path dep]--> bxp-core   --[fetch dep]--> zig-libs (one pin)
 bxp-mcp         --[path dep]--> bxp-core    --[subprocess]-> bxp-cli (bxp_simulate only)
                                             (also takes zig-libs `mcp` — the JSON-RPC
                                              transport — through bxp-core's module table)
@@ -251,12 +251,10 @@ since the v0.3.0 proxy flip — stateless ops run in-process via the bridge's
 bxp-core/inspect link, and the bridge proxies `bxp-cli` runs. The former
 `bxp-fmt` CLI adapter was removed once both wrappers covered every operation.
 
-`bxp-core` is a local path dependency (`../bxp-core`) with **two external
-(fetch) dependencies**, each pinned and content-addressed in
+`bxp-core` is a local path dependency (`../bxp-core`) with **one external
+(fetch) dependency**, pinned and content-addressed in
 `bxp-core/build.zig.zon`:
 
-- `uucode` (MIT) — field-selected Unicode case-mapping / decomposition tables
-  behind `UPPER` / `LOWER` / `UNACCENT`, pinned to its `main` line.
 - `zig_libs` — the module collection supplying `tz` (IANA UTC-offset lookup
   behind `TO_UTC` / `TZ_OFFSET` / `TZ_CONVERT` / `IS_DST`), `datefmt` (the
   date core behind `DATE_CONVERT` and every calendar builtin) `encoding`
@@ -275,7 +273,9 @@ bxp-core/inspect link, and the bridge proxies `bxp-cli` runs. The former
   `mcp` (the JSON-RPC 2.0 / MCP transport behind `bxp-mcp` — the one
   module that came *back*: upstream's copy is this repo's former
   `bxp-mcp/src/server.zig`, extracted there and hardened), `jsontext` (the
-  JSON string writer behind bxp-cli's JSON output) and `regex` (the
+  JSON string writer behind bxp-cli's JSON output), `unitext` (the Unicode
+  case mapping, normalization and unaccent behind `UPPER` / `LOWER` /
+  `UNACCENT` / `PROPER`) and `regex` (the
   RE2-syntax, linear-time engine behind `REGEX_MATCH` / `REGEX_EXTRACT`).
   bxp-core imports none of `minisign`, `procrun`, `mcp` and `jsontext` — they
   are re-exported so `bxp-gui-bridge`, `bxp-mcp` and `bxp-cli` share the same
@@ -287,9 +287,9 @@ bxp-core/inspect link, and the bridge proxies `bxp-cli` runs. The former
   `bxp-core/build.zig.zon`). The offset tables are compiled into the `tz`
   module, so there is still **no runtime dependency** — the pinned tzdata
   snapshot ships inside the binary exactly as the former in-tree copy did.
-  All of them but `regex` were lifted out of bxp-core and hardened upstream
-  (`mcp` the other way round first — see above); `regex` replaced a
-  standalone fetch dependency. The per-module inventory and rationale
+  Most were lifted out of bxp-core and hardened upstream (`mcp` the other
+  way round first — see above); `regex` and `unitext` replaced standalone
+  fetch dependencies (`quangd/regex.zig`, `uucode`). The per-module inventory and rationale
   live in [`bxp-core/CLAUDE.md`](bxp-core/CLAUDE.md); finishing the extraction
   is the `v1.0.0` milestone in `docs/dev/roadmap.md`.
 

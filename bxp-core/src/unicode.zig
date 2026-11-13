@@ -1,174 +1,79 @@
-//! In-house Unicode text operations for expr.zig builtins.
+//! UTF-8 text operations behind expr.zig's UPPER / LOWER / UNACCENT / PROPER.
 //!
-//! Layer 1 of the Unicode subsystem: case mapping (UPPER / LOWER) and, later,
-//! diacritic stripping (`unaccent`). The Unicode data tables come from the
-//! `uucode` module (field-selected in bxp-core/build.zig); this file is the
-//! thin UTF-8 plumbing on top.
+//! The algorithms and the Unicode data are the zig-libs `unitext` module (full
+//! case mapping with SpecialCasing and Final_Sigma, NFD/NFC, the ICU-style
+//! unaccent); this file only fixes bxp's policy for calling it, so the three
+//! builtins cannot drift apart on it:
 //!
-//! Everything is UTF-8 in / UTF-8 out. Because case mapping is a codepoint
-//! walk (not a byte loop), the output byte length may differ from the input
-//! (e.g. `ß` → `SS`), so callers must not pre-size to `s.len`.
-//!
-//! Data-lenient by design: a byte sequence that is not valid UTF-8 is emitted
-//! verbatim, one byte at a time, never an error and never a crash. Broker
-//! exports occasionally carry stray non-UTF-8 bytes (see the Layer 0
-//! `csv_*_encoding` transcoding work); UPPER/LOWER must pass them through the
-//! same way the previous ASCII byte loop did.
+//! - Data-lenient: a byte sequence that is not well-formed UTF-8 is copied
+//!   through unchanged (`.pass_through`), never an error and never a crash.
+//!   Broker exports read without `csv_input_encoding` carry such bytes.
+//! - The output length may differ from the input (`ß` → `SS`), so callers must
+//!   not pre-size to `s.len`.
+//! - `error.TooLarge` (unitext's cap on what one input may allocate, 1 GiB by
+//!   default) is reported as `error.OutOfMemory`: no field gets near it, and
+//!   the callers already treat OOM as non-recoverable.
 
 const std = @import("std");
-const uucode = @import("uucode");
+const unitext = @import("unitext");
+
+const opts: unitext.Options = .{ .invalid_utf8 = .pass_through };
 
 /// Full-Unicode upper-casing: `café` → `CAFÉ`, `ß` → `SS`, `я` → `Я`.
 /// Unicameral scripts (CJK, Arabic, Hebrew) pass through unchanged.
 /// Caller owns the returned slice.
-pub fn toUpperStr(alloc: std.mem.Allocator, s: []const u8) ![]u8 {
-    return mapCase(alloc, s, .uppercase_mapping);
+pub fn toUpperStr(alloc: std.mem.Allocator, s: []const u8) error{OutOfMemory}![]u8 {
+    return unitext.upper(alloc, s, opts) catch |err| mapErr(err);
 }
 
-/// Full-Unicode lower-casing: `CAFÉ` → `café`, `Я` → `я`.
+/// Full-Unicode lower-casing: `CAFÉ` → `café`, `Я` → `я`, a word-final
+/// capital sigma → `ς`. Caller owns the returned slice.
+pub fn toLowerStr(alloc: std.mem.Allocator, s: []const u8) error{OutOfMemory}![]u8 {
+    return unitext.lower(alloc, s, opts) catch |err| mapErr(err);
+}
+
+/// Strip diacritics: `café` → `cafe`, `Łódź` → `Lodz`, `straße` → `strasse`,
+/// `æther` → `aether`. A non-Latin letter keeps its own script (`Ά` → `Α`, a
+/// Greek alpha, not `A`) — romanisation is lossy and almost never wanted.
+/// Compatibility forms (`①`, full-width letters) are not folded.
 /// Caller owns the returned slice.
-pub fn toLowerStr(alloc: std.mem.Allocator, s: []const u8) ![]u8 {
-    return mapCase(alloc, s, .lowercase_mapping);
+pub fn unaccentStr(alloc: std.mem.Allocator, s: []const u8) error{OutOfMemory}![]u8 {
+    const out = unitext.unaccent(alloc, s, .{ .invalid_utf8 = .pass_through }) catch |err| return mapErr(err);
+    return foldEng(alloc, out);
 }
 
-fn mapCase(alloc: std.mem.Allocator, s: []const u8, comptime field: uucode.FieldEnum) ![]u8 {
-    var out: std.ArrayList(u8) = .empty;
-    errdefer out.deinit(alloc);
-    // Case mapping is 1:1 in length for almost every codepoint; pre-size to the
-    // input length and let the rare 1:N mapping (ß→SS) grow the buffer.
-    try out.ensureTotalCapacity(alloc, s.len);
-
-    var i: usize = 0;
-    var cp_buf: [1]u21 = undefined;
-    var enc_buf: [4]u8 = undefined;
-    while (i < s.len) {
-        const seq_len = std.unicode.utf8ByteSequenceLength(s[i]) catch {
-            try out.append(alloc, s[i]); // invalid leading byte → verbatim
-            i += 1;
-            continue;
-        };
-        if (i + seq_len > s.len) {
-            try out.append(alloc, s[i]); // truncated trailing sequence → verbatim
-            i += 1;
-            continue;
+/// zig-libs request: unitext — `unaccent` leaves ŋ / Ŋ (U+014B / U+014A, eng)
+/// unchanged, where ICU Latin-ASCII and PostgreSQL `unaccent` give n / N.
+/// Both encode as two bytes (C5 8B / C5 8A) and fold to one, so this rewrites
+/// `out` in place and shrinks the allocation. Delete once upstream folds them.
+fn foldEng(alloc: std.mem.Allocator, out: []u8) error{OutOfMemory}![]u8 {
+    if (std.mem.indexOfScalar(u8, out, 0xC5) == null) return out;
+    var r: usize = 0;
+    var w: usize = 0;
+    while (r < out.len) {
+        if (out[r] == 0xC5 and r + 1 < out.len and (out[r + 1] == 0x8B or out[r + 1] == 0x8A)) {
+            out[w] = if (out[r + 1] == 0x8B) 'n' else 'N';
+            r += 2;
+        } else {
+            out[w] = out[r];
+            r += 1;
         }
-        const cp = std.unicode.utf8Decode(s[i .. i + seq_len]) catch {
-            try out.append(alloc, s[i]); // malformed continuation → verbatim
-            i += 1;
-            continue;
-        };
-        const mapped = uucode.get(field, cp).with(&cp_buf, cp);
-        for (mapped) |mcp| {
-            const n = std.unicode.utf8Encode(mcp, &enc_buf) catch continue;
-            try out.appendSlice(alloc, enc_buf[0..n]);
-        }
-        i += seq_len;
+        w += 1;
     }
-    return out.toOwnedSlice(alloc);
+    if (w == out.len) return out;
+    return alloc.realloc(out, w);
 }
 
-// ── unaccent (diacritic stripping) ─────────────────────────────────────────
-
-/// Strip diacritics from Latin text: `café`→`cafe`, `ÀÉÎ`→`AEI`, `ß`→`ss`,
-/// `ø`→`o`. Deliberately Latin-scope, matching Postgres's `unaccent`: a
-/// non-Latin letter keeps its base form rather than being romanised
-/// (`unaccent('Ά')`→`Α`, a Greek alpha, NOT `A`; CJK passes through unchanged) —
-/// romanisation is lossy and almost never what the caller wants.
-///
-/// Method: recurse the canonical (NFD) decomposition, drop combining marks
-/// (non-zero canonical combining class), keep base codepoints; plus a small
-/// hand-list for the Latin letters that have no canonical decomposition
-/// (`ß ø ł đ æ þ` …). UTF-8 in / out; invalid bytes pass through verbatim.
-/// Caller owns the returned slice.
-pub fn unaccentStr(alloc: std.mem.Allocator, s: []const u8) ![]u8 {
-    var out: std.ArrayList(u8) = .empty;
-    errdefer out.deinit(alloc);
-    try out.ensureTotalCapacity(alloc, s.len);
-
-    var i: usize = 0;
-    var enc_buf: [4]u8 = undefined;
-    while (i < s.len) {
-        const seq_len = std.unicode.utf8ByteSequenceLength(s[i]) catch {
-            try out.append(alloc, s[i]);
-            i += 1;
-            continue;
-        };
-        if (i + seq_len > s.len) {
-            try out.append(alloc, s[i]);
-            i += 1;
-            continue;
-        }
-        const cp = std.unicode.utf8Decode(s[i .. i + seq_len]) catch {
-            try out.append(alloc, s[i]);
-            i += 1;
-            continue;
-        };
-        try emitUnaccented(alloc, &out, cp, &enc_buf);
-        i += seq_len;
-    }
-    return out.toOwnedSlice(alloc);
-}
-
-fn emitUnaccented(
-    alloc: std.mem.Allocator,
-    out: *std.ArrayList(u8),
-    cp: u21,
-    enc_buf: *[4]u8,
-) error{OutOfMemory}!void {
-    // Latin letters with no canonical decomposition → conventional ASCII spelling.
-    if (latinHandlist(cp)) |repl| {
-        try out.appendSlice(alloc, repl);
-        return;
-    }
-    // Canonical decomposition (NFD): recurse so multi-step decompositions fully
-    // unfold. Compatibility decompositions are intentionally skipped (we don't
-    // want ligatures/① folded here — only diacritics removed).
-    if (uucode.get(.decomposition_type, cp) == .canonical) {
-        var dec_buf: [1]u21 = undefined;
-        const seq = uucode.get(.decomposition_mapping, cp).with(&dec_buf, cp);
-        for (seq) |dcp| try emitUnaccented(alloc, out, dcp, enc_buf);
-        return;
-    }
-    // Atomic codepoint: drop it if it is a combining mark, else keep it verbatim
-    // (an unaccented base letter — Latin → ASCII, non-Latin → its own script).
-    if (uucode.get(.canonical_combining_class, cp) != 0) return;
-    const n = std.unicode.utf8Encode(cp, enc_buf) catch return;
-    try out.appendSlice(alloc, enc_buf[0..n]);
-}
-
-/// ASCII spellings for the common European Latin letters that carry no
-/// canonical decomposition (so the NFD walk above leaves them untouched).
-/// Mirrors the non-decomposing entries of CLDR `Latin-ASCII` / Postgres
-/// `unaccent`. Returns null for everything else (let the NFD path handle it).
-fn latinHandlist(cp: u21) ?[]const u8 {
-    return switch (cp) {
-        0x00DF => "ss", // ß
-        0x1E9E => "SS", // ẞ
-        0x00E6 => "ae", // æ
-        0x00C6 => "AE", // Æ
-        0x0153 => "oe", // œ
-        0x0152 => "OE", // Œ
-        0x00F8 => "o", // ø
-        0x00D8 => "O", // Ø
-        0x0142 => "l", // ł
-        0x0141 => "L", // Ł
-        0x0111 => "d", // đ
-        0x0110 => "D", // Đ
-        0x00F0 => "d", // ð
-        0x00D0 => "D", // Ð
-        0x00FE => "th", // þ
-        0x00DE => "TH", // Þ
-        0x0127 => "h", // ħ
-        0x0126 => "H", // Ħ
-        0x0131 => "i", // ı (dotless i)
-        0x0130 => "I", // İ
-        0x014B => "n", // ŋ
-        0x014A => "N", // Ŋ
-        else => null,
+fn mapErr(err: unitext.Error) error{OutOfMemory} {
+    return switch (err) {
+        error.OutOfMemory, error.TooLarge => error.OutOfMemory,
+        error.InvalidUtf8 => unreachable, // `.pass_through` never reports it
     };
 }
 
 // ── tests ────────────────────────────────────────────────────────────────
+// bxp's contract on top of unitext (which carries the conformance suites):
+// the pass-through policy and the examples the builtin docs promise.
 const testing = std.testing;
 
 fn expectUpper(s: []const u8, want: []const u8) !void {
@@ -234,6 +139,7 @@ test "invalid UTF-8 bytes pass through verbatim" {
     try expectLower("X\x80Y", "x\x80y");
     // truncated 2-byte lead at end of string
     try expectUpper("ok\xc3", "OK\xc3");
+    try expectUnaccent("ab\xffcd é", "ab\xffcd e");
 }
 
 test "unaccent: Latin diacritics stripped to base letter" {
@@ -246,23 +152,23 @@ test "unaccent: Latin diacritics stripped to base letter" {
     try expectUnaccent("AAPL 123", "AAPL 123");
 }
 
-test "unaccent: non-decomposing Latin letters via hand-list" {
+test "unaccent: non-decomposing Latin letters" {
     try expectUnaccent("straße", "strasse");
     try expectUnaccent("Øresund", "Oresund");
     try expectUnaccent("Łódź", "Lodz");
     try expectUnaccent("æther œuvre", "aether oeuvre");
-    try expectUnaccent("Þór", "THor");
+    try expectUnaccent("Ŋaŋ ŋ", "Nan n");
 }
 
 test "unaccent: non-Latin keeps its base script (no romanisation)" {
     // Greek alpha-with-tonos → bare Greek alpha, NOT Latin "A"
     try expectUnaccent("Ά", "Α");
-    // CJK / Arabic pass through unchanged
+    // CJK / Arabic / Hangul pass through unchanged
     try expectUnaccent("日本語", "日本語");
     try expectUnaccent("مرحبا", "مرحبا");
+    try expectUnaccent("한국어", "한국어");
 }
 
-test "unaccent: empty + invalid UTF-8 passthrough" {
+test "unaccent: empty" {
     try expectUnaccent("", "");
-    try expectUnaccent("ab\xffcd", "ab\xffcd");
 }
