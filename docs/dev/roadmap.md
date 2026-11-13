@@ -9,13 +9,19 @@ description: "Planned work by version, and the things deliberately not planned, 
 ### v0.4.1
 
 Maintenance release
+gui auto generation readme video gif with agent over mcp
 
 ### v0.5.0
 
 GUI - Config / Transformation visualiser
-GUI Config/Create - Import wizard from sample CSV
-GUI input file simple viewer
+GUI - Config / Create - Import wizard from sample CSV
+GUI - input file simple viewer
 Full agentic automation - AI support for all steps in workflow
+External template sync - first poc design
+
+### v0.5.1
+
+Maintenance release
 
 ## Planned features - not version specific
 
