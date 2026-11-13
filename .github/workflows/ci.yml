@@ -113,7 +113,7 @@ jobs:
           # lints that fail CI while passing locally. Bump deliberately. `cache`
           # persists the SDK across runs (~60 s/run); the pin keeps that key
           # stable. (roadmap → CI hardening)
-          flutter-version: 3.47.9
+          flutter-version: 3.50.0
           channel: stable
           cache: true
           # `desktop` epoch + the trim step below keep this cache to the desktop
