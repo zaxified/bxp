@@ -16,7 +16,7 @@ import 'package:flutter/painting.dart';
 /// observed paint mix:
 ///
 ///   - axis-aligned filled and stroked rects (panel chrome, JsonTree
-///     cells, PlutoGrid cells, dividers);
+///     cells, TrinaGrid cells, dividers);
 ///   - shadowed rectangles (tooltips, dialogs, snackbars, autocomplete
 ///     popup);
 ///   - antialiased circles and arcs (CircularProgressIndicator on the

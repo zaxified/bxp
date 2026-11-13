@@ -8,7 +8,7 @@
 
 import 'package:bxp_gui/store/trace_store.dart';
 import 'package:bxp_gui/ui/config_view.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 class _Store extends TraceStore {

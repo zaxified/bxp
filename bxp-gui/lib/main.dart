@@ -485,7 +485,19 @@ class BxpApp extends StatelessWidget {
               data: mq.copyWith(
                 textScaler: TextScaler.linear(dpr > 0 ? 1.0 / dpr : 1.0),
               ),
-              child: ZoomContainer(child: child ?? const SizedBox.shrink()),
+              child: ZoomContainer(
+                // trina_grid still builds on the SDK's Material
+                // (`package:flutter/material.dart`), a separate set of
+                // types: without this its cells, filter row and menus get
+                // the SDK default theme and assert on a missing SDK
+                // MaterialLocalizations. Deprecated only because it is a
+                // migration aid — delete it once trina_grid moves to
+                // material_ui (planned there as a major version).
+                // ignore: deprecated_member_use
+                child: MaterialUiCompatibilityBridge(
+                  child: child ?? const SizedBox.shrink(),
+                ),
+              ),
             );
           },
           home: const _UpdaterListener(

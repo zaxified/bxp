@@ -6,27 +6,15 @@ description: "Planned work by version, and the things deliberately not planned, 
 
 ## Milestones
 
-### v0.3.1
+### v0.4.1
 
-### v0.3.2
-
-GUI - Config / Transformation visualiser
-
-### v0.4.0
-
-GUI Config/Create - Import wizard from sample CSV
-GUI input file simple viewer
-
-Adopt `material_ui` 1.x — the real Material implementation, not the 0.0.1
-facade the imports point at today, together with `flex_seed_scheme` 5 (which
-requires it). Blocked on `pluto_grid` and `pluto_menu_bar`, which still build
-on the SDK's Material: under a `material_ui` `MaterialApp` their `TextField` /
-`showDialog` / `PopupMenu` would not find the SDK `MaterialLocalizations` they
-assert on, and `flutter analyze` cannot see that. Move once both ship
-material_ui builds, or replace them.
+Maintenance release
 
 ### v0.5.0
 
+GUI - Config / Transformation visualiser
+GUI Config/Create - Import wizard from sample CSV
+GUI input file simple viewer
 Full agentic automation - AI support for all steps in workflow
 
 ## Planned features - not version specific
@@ -150,7 +138,7 @@ fixed before release instead, not parked here).
   124 cols) sits well below the cap. Both paths below are therefore
   **deferred indefinitely** — revisit only if a genuine in-GUI wide-display
   (1000+ visible cols) use case appears:
-  - **Query-driven viewport (csvql or in-house slicer).** PlutoGrid
+  - **Query-driven viewport (csvql or in-house slicer).** TrinaGrid
     becomes a windowed display of `~30 visible cols x ~50 visible rows`.
     On scroll, query a slice from disk
     ([csvql](https://github.com/melihbirim/csvql) or an in-house
@@ -162,16 +150,16 @@ fixed before release instead, not parked here).
     metadata (status / warnings) which csvql does not know about.
     In-house slicer is the cheaper start (no new dep); csvql wins if we
     also want SQL-style queries as a user feature (joins / aggregates).
-  - **Custom table widget replacing PlutoGrid.** Our use is much
-    narrower than what Pluto offers (no editing, sorting, reordering,
+  - **Custom table widget replacing TrinaGrid.** Our use is much
+    narrower than what TrinaGrid offers (no editing, sorting, reordering,
     type validation, context menus, frozen cols). A purpose-built
     widget could deliver 2D virtualisation (column headers virtualised
     same as body cells), no `MediaQuery` sandwich for the Scrollbar
     wiring, and tighter coupling with BXTB metadata. Cost: 2-4 weeks
     of focused work to reach feature parity (scroll sync between
     header strip and body, focus management, keyboard navigation,
-    accessibility, IME) — Pluto has had years of upstream bugfixes.
-    Reconsider if we hit a Pluto bug we cannot work around, or if the
+    accessibility, IME) — the Pluto/Trina line has had years of upstream bugfixes.
+    Reconsider if we hit a TrinaGrid bug we cannot work around, or if the
     above query-viewport path lands and forces a custom widget anyway.
 
   Both paths are big — single-session POC is unlikely. Decision input:
@@ -179,7 +167,7 @@ fixed before release instead, not parked here).
   comfortable for shipping use cases?
 
 - **Rendered output `.csvx` preview in the bottom pane.** Tabular view
-  of generated output after a full-run, reusing PlutoGrid from the trace
+  of generated output after a full-run, reusing TrinaGrid from the trace
   view. Users today alt-tab to Rainbow CSV / Excel for sanity-check.
   Small implementation; reconsider when a GUI workflow audit shows the
   alt-tab friction is frequent.

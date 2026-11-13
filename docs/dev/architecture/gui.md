@@ -122,7 +122,7 @@ Two toolbar buttons run `bxp-cli` through the bridge: **dry-run** runs `--trace`
 **full-run** writes real output. Neither has a keyboard shortcut — both
 share the same plumbing, only the `dry: bool` argument to `_streamRunBtrace`
 differs. Frames stream back as binary BXTB; the in-store reader folds each
-frame into `TraceStore`. To avoid a rebuild storm (PlutoGrid reallocates
+frame into `TraceStore`. To avoid a rebuild storm (TrinaGrid reallocates
 quadratically on every `notifyListeners`), incremental row updates go through
 `ValueNotifier<int>` counters; the full `notifyListeners()` fires only twice:
 at stream start and after the `done` frame.

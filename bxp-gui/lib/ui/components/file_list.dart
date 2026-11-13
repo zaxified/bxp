@@ -91,7 +91,7 @@ class _FileListState extends State<FileList> {
     // Listen to BOTH the main store (for selection / theme / config events)
     // and `store.fileGen` (bumped on every `file_start` during a stream so
     // FileList grows live without main `notifyListeners`, which would
-    // otherwise cascade into a quadratic PlutoGrid rebuild in RowList).
+    // otherwise cascade into a quadratic TrinaGrid rebuild in RowList).
     final store = context.watch<TraceStore>();
     return ListenableBuilder(
       listenable: store.fileGen,

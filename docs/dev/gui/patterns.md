@@ -8,7 +8,7 @@ description: "Flutter patterns that matter here, plus the known issues worth rec
 
 ### Streaming rebuild storm — never call notifyListeners per trace frame
 
-Calling top-level `notifyListeners()` per BXTB frame causes PlutoGrid to
+Calling top-level `notifyListeners()` per BXTB frame causes TrinaGrid to
 reallocate quadratically. Use per-cell `ValueNotifier` instead
 (`traceLinesCounter`, `fileGen`, …). Top-level `notifyListeners()` fires a
 handful of times per dry-run stream (start, finish, auto-selecting the first
@@ -24,7 +24,7 @@ All resizable panels hold **fractions**, not pixels.
 
 Use `HardwareKeyboard.instance.addHandler` in `initState`, not
 `CallbackShortcuts` — the latter only fires when focus bubbles up, which
-misses shortcuts while e.g. PlutoGrid has focus. The command modifier is
+misses shortcuts while e.g. TrinaGrid has focus. The command modifier is
 resolved per-host by `isCommandModifierPressed()` in
 `ui/platform_shortcuts.dart` — `Cmd` (Meta) on macOS, `Ctrl` elsewhere —
 so bindings follow host convention and don't clash with macOS
@@ -49,7 +49,7 @@ The trace grid is a **debug viewer, not a spreadsheet**. The CLI accepts up to
 `MAX_COLUMNS` (16384) columns, but the GUI renders at most `kMaxDisplayCols`
 (200) ([store/trace_store.dart](https://github.com/zaxified/bxp/blob/master/bxp-gui/lib/store/trace_store.dart)); files
 wider than `kWideColLimit` (64) data columns also skip the per-column filter
-pass. Both caps exist because PlutoGrid cost scales with column count — laying
+pass. Both caps exist because TrinaGrid cost scales with column count — laying
 out 16k+ columns on every rebuild would stall the UI for no debugging benefit
 (you read a handful of columns at a time). Drill-down still resolves every
 column; only the grid render is capped.

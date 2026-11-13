@@ -278,7 +278,7 @@ class FileModel {
   /// Monotonic counter bumped each time `TraceStore._populateRangeSync`
   /// fills `row.fields` for a batch of rows in this file. RowList folds
   /// this value into its widget key so the second build after activation
-  /// (post-populate) forces a PlutoGrid remount and the row cells get
+  /// (post-populate) forces a TrinaGrid remount and the row cells get
   /// repainted with real values instead of the `…` placeholder shown
   /// while data was still being read from disk.
   int populateGen = 0;

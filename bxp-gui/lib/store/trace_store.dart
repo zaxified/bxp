@@ -40,15 +40,15 @@ enum RunStatus { idle, running, done, error }
 // • Small files (< [kEagerFileLoadBytes]) — the active file's whole CSV
 //   is slurped into a temporary `Uint8List` and every `RowModel.fields`
 //   is populated up-front. RowList behaves as before (all rows visible,
-//   PlutoGrid's built-in filter works). On switch-away the bytes and
+//   TrinaGrid's built-in filter works). On switch-away the bytes and
 //   row strings are dropped — re-population on revisit is cheap.
 //
 // • Large files (>= [kEagerFileLoadBytes]) — the active file gets a
 //   persistent `RandomAccessFile` handle. Only the first
 //   [kLazyInitialRows] rows are populated initially; the user sees a
-//   subset of the file in PlutoGrid. Scroll near the end triggers an
+//   subset of the file in TrinaGrid. Scroll near the end triggers an
 //   in-place append of [kLazyExpandBatch] more rows. Filter typing
-//   bypasses PlutoGrid's filter and runs a sequential scan via the RAF,
+//   bypasses TrinaGrid's filter and runs a sequential scan via the RAF,
 //   yielding every [kFilterScanYieldEvery] iterations so the UI stays
 //   responsive. row_fields are kept after switch-away (re-population is
 //   expensive — sequential disk read pass).
@@ -63,8 +63,8 @@ const int kFilterScanYieldEvery = 2000;
 /// tests near the 1024 ceiling) cross it.
 const int kWideColLimit = 64;
 /// Hard cap on how many data columns the grid actually renders. bxp-gui is
-/// a fast-debug view, not a wide-CSV viewer: above this we build PlutoColumns
-/// + PlutoCells for only the first N columns and a banner reports how many
+/// a fast-debug view, not a wide-CSV viewer: above this we build TrinaColumns
+/// + TrinaCells for only the first N columns and a banner reports how many
 /// were hidden. Keeps grid RSS/layout cost bounded regardless of how wide
 /// the output is — bxp-cli's `MAX_COLUMNS` is far higher (16384), so the CLI
 /// can process extreme widths while the GUI stays responsive.
@@ -91,7 +91,7 @@ enum ExprValidationState { idle, pending, ok, error }
 ///
 /// Streaming invariant: NEVER call `notifyListeners()` per trace line — use
 /// `_traceLinesCounter` and `_fileGen` ValueNotifiers to update live counters
-/// without triggering the full PlutoGrid rebuild chain on every event.
+/// without triggering the full TrinaGrid rebuild chain on every event.
 class TraceStore extends ChangeNotifier {
   // Set in dispose(); guards every async-tail notifyListeners against
   // setState-after-dispose when the store outlives a fast tear-down
@@ -166,7 +166,7 @@ class TraceStore extends ChangeNotifier {
   // Live trace-line counter exposed as a ValueListenable so the StatusBar's
   // "trace lines" cell can rebuild at ~10 Hz during a stream WITHOUT
   // calling main `notifyListeners()` (which would also rebuild RowList /
-  // FileList / OutputPanel and turn the dry-run into an O(N²) PlutoGrid
+  // FileList / OutputPanel and turn the dry-run into an O(N²) TrinaGrid
   // re-allocation storm). Mutation is internal-only.
   final ValueNotifier<int> _traceLinesCounter = ValueNotifier(0);
   ValueListenable<int> get traceLinesCounter => _traceLinesCounter;
@@ -2820,7 +2820,7 @@ class TraceStore extends ChangeNotifier {
   /// applies, or the smaller "matched" / "visible window" count
   /// otherwise. Published by RowList via [setRowsInDisplayed] so the
   /// PanelHeader above it can surface `(total) — N filtered` without
-  /// reaching into PlutoGrid internals across the widget tree.
+  /// reaching into TrinaGrid internals across the widget tree.
   /// Null when no file is active.
   int? get rowsInDisplayed => _rowsInDisplayed;
   int? _rowsInDisplayed;
@@ -2898,7 +2898,7 @@ class TraceStore extends ChangeNotifier {
       // Lazy mode: populate first window so the user sees something.
       _populateRangeSync(file, 0, kLazyInitialRows);
     }
-    // Bump populateGen so RowList's widget key changes and PlutoGrid
+    // Bump populateGen so RowList's widget key changes and TrinaGrid
     // remounts with the freshly-populated cell values. Bumped only here
     // (one-shot per activation) and NOT inside `_populateRangeSync`
     // because scroll-expand populates go through the imperative

@@ -209,7 +209,7 @@ _run_xlsx_point() {
 # field/output path is actually exercised. This guard's other points fix
 # COLS=16 and vary rows; this one fixes rows and widens to guard the per-row buffer +
 # output streaming against a return to O(cols)-buffered RSS. Echoes
-# "wall_s rss_kb". (The DEV PlutoGrid fixture was GUI-render stress — not
+# "wall_s rss_kb". (The DEV TrinaGrid fixture was GUI-render stress — not
 # headless-runnable; this is the CLI-side wide-column guard.)
 _run_wide_point() {
     local rows="$1" cols="$2"

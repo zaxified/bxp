@@ -3,7 +3,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart' show mapEquals;
 import 'package:material_ui/material_ui.dart';
-import 'package:pluto_grid/pluto_grid.dart';
+import 'package:trina_grid/trina_grid.dart';
 import 'package:provider/provider.dart';
 import '../../store/trace_store.dart';
 import '../../store/trace_model.dart';
@@ -12,7 +12,7 @@ import '../theme/bxp_text.dart';
 
 /// Renders the input rows table for the currently selected file.
 ///
-/// PlutoGrid keeps internal state (columns, row cache, focused cell) that
+/// TrinaGrid keeps internal state (columns, row cache, focused cell) that
 /// does NOT refresh on rebuild alone — so we key the widget by fileId to
 /// force a hard re-mount when the user picks a different file. Without
 /// this, clicking a file in FileList leaves the grid showing the previous
@@ -92,7 +92,7 @@ class RowList extends StatelessWidget {
     // remount decision. `selectedRowId` flips on every row click; if we
     // watched the whole store, RowList would rebuild per click and
     // _RowListInner.build would re-allocate its columns + rows lists
-    // (900 cols * 1000 rows ~= 900k PlutoCell objects on the wide-CSV
+    // (900 cols * 1000 rows ~= 900k TrinaCell objects on the wide-CSV
     // path) on the main isolate — freezing the UI long enough for the
     // Wayland compositor to terminate the client. context.select narrows
     // the dependency to: model identity, selected file, and the file's
@@ -121,7 +121,7 @@ class RowList extends StatelessWidget {
     if (file == null) return const SizedBox.shrink();
 
     return _RowListInner(
-      // Hard remount on file change — PlutoGrid would otherwise keep the
+      // Hard remount on file change — TrinaGrid would otherwise keep the
       // old columns/rows and ignore new inputs.
       // Identity key bounded for wide files: header count plus the first
       // kMaxDisplayCols names (joining all 16k+ on every rebuild is wasted
@@ -164,12 +164,12 @@ class _RowListInner extends StatefulWidget {
 }
 
 class _RowListInnerState extends State<_RowListInner> {
-  PlutoGridStateManager? _stateManager;
+  TrinaGridStateManager? _stateManager;
 
   /// Data columns actually rendered in the grid. bxp-gui is a fast-debug
   /// view, not a wide-CSV viewer — above [kMaxDisplayCols] we render only
   /// the first N columns (a banner reports how many were hidden). Every
-  /// PlutoColumn / PlutoCell builder reads through this getter, so the
+  /// TrinaColumn / TrinaCell builder reads through this getter, so the
   /// grid's column + cell count stays bounded no matter how wide the
   /// output is (bxp-cli's MAX_COLUMNS is far higher). The full column set
   /// is still on `widget.file.headers` for the banner's hidden-count.
@@ -178,7 +178,7 @@ class _RowListInnerState extends State<_RowListInner> {
     return h.length > kMaxDisplayCols ? h.sublist(0, kMaxDisplayCols) : h;
   }
   /// Previous-frame `activeTabIndex` snapshot. When the user swaps to a
-  /// non-Runner tab and returns, PlutoGrid's keyboard focus snaps back
+  /// non-Runner tab and returns, TrinaGrid's keyboard focus snaps back
   /// to (row 0, row_num) instead of the previously selected row — a
   /// stale highlight rectangle that doesn't match what RowDetail /
   /// OutputPanel are showing. Detecting the tab transition lets us
@@ -188,8 +188,8 @@ class _RowListInnerState extends State<_RowListInner> {
 
   /// Per-column substring filter (case-insensitive). Empty string = no
   /// filter on that column. Filtering is applied imperatively via
-  /// [PlutoGridStateManager.setFilter] — passing a pre-filtered `rows`
-  /// list to PlutoGrid doesn't work because the grid keeps its own copy
+  /// [TrinaGridStateManager.setFilter] — passing a pre-filtered `rows`
+  /// list to TrinaGrid doesn't work because the grid keeps its own copy
   /// in `stateManager.refRows`.
   final Map<String, String> _filters = {};
 
@@ -207,11 +207,11 @@ class _RowListInnerState extends State<_RowListInner> {
   final Set<String> _statusFilter = {};
 
   /// Subset of `widget.file.rowIds` currently materialised into
-  /// PlutoRows. For eager (small) files this equals `widget.file.rowIds`
+  /// TrinaRows. For eager (small) files this equals `widget.file.rowIds`
   /// after activation; for lazy (large) files it starts at the first
   /// [kLazyInitialRows] and grows in batches of [kLazyExpandBatch] as
   /// the user scrolls near the end. Populated in [_resyncVisibleRows];
-  /// the build method reads it to construct PlutoRows.
+  /// the build method reads it to construct TrinaRows.
   List<String> _visibleRowIds = const [];
 
   /// True when [_visibleRowIds] is shorter than `widget.file.rowIds` —
@@ -237,25 +237,25 @@ class _RowListInnerState extends State<_RowListInner> {
   /// Guards against re-entrant scroll-expansion triggers while the
   /// previous batch is still being populated (or the debug delay is
   /// running). Scroll fires can repeat rapidly; without this they would
-  /// schedule N parallel appends that all race on PlutoGrid state.
+  /// schedule N parallel appends that all race on TrinaGrid state.
   bool _expandInFlight = false;
 
-  /// Memoised PlutoColumn + PlutoRow lists. `build` recomputed both on
-  /// every call before — at ~900 cols / 1000 rows that's ~900 k PlutoCell
+  /// Memoised TrinaColumn + TrinaRow lists. `build` recomputed both on
+  /// every call before — at ~900 cols / 1000 rows that's ~900 k TrinaCell
   /// allocations per rebuild. The store fires `notifyListeners` during
   /// row-detail load (~3x per click) and the resulting RowList rebuilds
   /// were starving the event loop, making each subprocess wait stretch
   /// from ~10 ms to >1 s and ultimately tripping the Wayland compositor
-  /// ping timeout. PlutoGrid consumes `columns` / `rows` once on mount
+  /// ping timeout. TrinaGrid consumes `columns` / `rows` once on mount
   /// and ignores subsequent widget.rows changes (we mutate its state
-  /// imperatively via `_replacePlutoRows`), so caching them across
+  /// imperatively via `_replaceTrinaRows`), so caching them across
   /// rebuilds is sound. Invalidated on file/header change (handled by
   /// the parent ValueKey remount) and on `_visibleRowIds` change.
-  List<PlutoColumn>? _cachedColumns;
-  List<PlutoRow>? _cachedRows;
+  List<TrinaColumn>? _cachedColumns;
+  List<TrinaRow>? _cachedRows;
   /// Bump to force the next build to rebuild the rows list. Set by code
   /// paths that mutate `_visibleRowIds` (filter scan, window expand) so
-  /// the rebuild sees fresh row content if PlutoGrid happens to be
+  /// the rebuild sees fresh row content if TrinaGrid happens to be
   /// remounted on the next frame.
   int _rowsRevision = 0;
   int _cachedRowsRevision = -1;
@@ -266,24 +266,24 @@ class _RowListInnerState extends State<_RowListInner> {
   }
 
   /// Horizontal scroll controller for the sticky filter row above the
-  /// grid. Kept in sync with PlutoGrid's body scroll so the filter
+  /// grid. Kept in sync with TrinaGrid's body scroll so the filter
   /// inputs stay aligned with their columns when the grid is wider
   /// than the viewport.
   final ScrollController _filterHCtrl = ScrollController();
 
-  /// Fallback scroll controllers used before PlutoGrid's onLoaded fires.
-  /// Replaced by PlutoGrid's real body controllers once they are available,
-  /// keeping the widget tree shape constant so PlutoGrid is never remounted.
+  /// Fallback scroll controllers used before TrinaGrid's onLoaded fires.
+  /// Replaced by TrinaGrid's real body controllers once they are available,
+  /// keeping the widget tree shape constant so TrinaGrid is never remounted.
   final ScrollController _fallbackVertCtrl = ScrollController();
   final ScrollController _fallbackHorizCtrl = ScrollController();
 
-  /// Real body scroll controllers sourced from PlutoGrid's stateManager.
+  /// Real body scroll controllers sourced from TrinaGrid's stateManager.
   /// Set synchronously inside onLoaded (before the postFrameCallback setState)
   /// so the next rebuild triggered by _publishColumnWidths sees them already.
   ScrollController? _bodyVertCtrl;
   ScrollController? _bodyHorizCtrl;
 
-  /// Live column widths read from PlutoGrid's stateManager. Updated
+  /// Live column widths read from TrinaGrid's stateManager. Updated
   /// after autoFitColumn fires on load and whenever the user drags a
   /// column edge. The filter row above the grid uses these to keep
   /// each input perfectly aligned with the column it filters — the
@@ -331,7 +331,7 @@ class _RowListInnerState extends State<_RowListInner> {
 
   /// Push the currently-displayed row count up to the store so the
   /// PanelHeader above us can render a "(total) — N filtered" suffix.
-  /// For eager files we read PlutoGrid's filtered view (refRows.length)
+  /// For eager files we read TrinaGrid's filtered view (refRows.length)
   /// because the stock filter narrows it imperatively; for lazy files
   /// the visible-window list is authoritative.
   ///
@@ -355,8 +355,8 @@ class _RowListInnerState extends State<_RowListInner> {
   /// is being activated (RAF open + initial populate) `row.fields` is
   /// still empty — render `…` so the user sees a "loading" placeholder
   /// rather than a blank cell. The widget key folds in `populateGen` so
-  /// the rebuild triggered when populate finishes remounts PlutoGrid
-  /// and re-creates the PlutoRows from real values. Synthetic rows
+  /// the rebuild triggered when populate finishes remounts TrinaGrid
+  /// and re-creates the TrinaRows from real values. Synthetic rows
   /// (`sourceLocator < 0`, e.g. summary placeholders) always render
   /// blank — they have no source row to load.
   static String _cellValueFor(RowModel row, int i) {
@@ -368,7 +368,7 @@ class _RowListInnerState extends State<_RowListInner> {
 
   /// Append the next [kLazyExpandBatch] rowIds to [_visibleRowIds] and
   /// trigger a populate sweep so the new rows arrive with content. Adds
-  /// the new PlutoRows directly to the stateManager (PlutoGrid does NOT
+  /// the new TrinaRows directly to the stateManager (TrinaGrid does NOT
   /// react to widget.rows changes after mount — only to its imperative
   /// API).
   ///
@@ -414,7 +414,7 @@ class _RowListInnerState extends State<_RowListInner> {
     widget.store.ensureRowsPopulated(widget.fileId, start, end);
     final newIds = rowIds.sublist(start, end);
     final headers = _displayHeaders;
-    final newPlutoRows = <PlutoRow>[];
+    final newTrinaRows = <TrinaRow>[];
     for (final id in newIds) {
       final row = widget.model.rows[id];
       if (row == null) continue;
@@ -424,31 +424,31 @@ class _RowListInnerState extends State<_RowListInner> {
         statusValue =
             'warning|${row.warningDetails.length}|${row.warningDetails.first}';
       }
-      final cells = <String, PlutoCell>{
-        'row_num': PlutoCell(value: '${row.fileRow}'),
-        'status': PlutoCell(value: statusValue),
+      final cells = <String, TrinaCell>{
+        'row_num': TrinaCell(value: '${row.fileRow}'),
+        'status': TrinaCell(value: statusValue),
       };
       for (int i = 0; i < headers.length; i++) {
-        cells[headers[i]] = PlutoCell(
+        cells[headers[i]] = TrinaCell(
           value: _cellValueFor(row, i),
         );
       }
-      newPlutoRows.add(PlutoRow(cells: cells));
+      newTrinaRows.add(TrinaRow(cells: cells));
     }
-    if (newPlutoRows.isNotEmpty) {
-      sm.appendRows(newPlutoRows);
+    if (newTrinaRows.isNotEmpty) {
+      sm.appendRows(newTrinaRows);
     }
     if (!mounted) return;
     setState(() {
       _visibleRowIds = rowIds.sublist(0, end);
       _hasMoreToShow = end < rowIds.length;
       // Append to the cache instead of invalidating it — rebuilding all
-      // visible rows (e.g. 6000 * 900 = 5.4 M PlutoCells) on every
+      // visible rows (e.g. 6000 * 900 = 5.4 M TrinaCells) on every
       // scroll-driven expand is what made RSS spike multi-GB on wide
       // files. The new batch was already built above for `appendRows`;
       // attach it to the cache so future rebuilds keep using the cached
       // list verbatim.
-      _cachedRows?.addAll(newPlutoRows);
+      _cachedRows?.addAll(newTrinaRows);
     });
     _publishDisplayedCount();
     } finally {
@@ -456,7 +456,7 @@ class _RowListInnerState extends State<_RowListInner> {
     }
   }
 
-  /// Scroll listener on PlutoGrid's body vertical controller. When the
+  /// Scroll listener on TrinaGrid's body vertical controller. When the
   /// user scrolls within `kLazyExpandBatch * rowHeight` of the end, kick
   /// an expand. Multiple firings are idempotent — `_expandVisibleWindow`
   /// short-circuits on no-more-rows.
@@ -509,12 +509,12 @@ class _RowListInnerState extends State<_RowListInner> {
       return;
     }
     if (!mounted || _filterScanKey != scanKey) return;
-    // PlutoGrid doesn't react to `widget.rows` changes after mount — we
+    // TrinaGrid doesn't react to `widget.rows` changes after mount — we
     // must replace its internal refRows via the state manager. Clear
-    // the existing rows, build PlutoRows for every match, append.
+    // the existing rows, build TrinaRows for every match, append.
     final sm = _stateManager;
     if (sm != null) {
-      _replacePlutoRows(sm, result.matched);
+      _replaceTrinaRows(sm, result.matched);
     }
     setState(() {
       _filterScanKey = null;
@@ -579,10 +579,10 @@ class _RowListInnerState extends State<_RowListInner> {
       return;
     }
     if (!mounted || _filterScanKey != scanKey) return;
-    // Append the new matches to the existing PlutoRow list.
+    // Append the new matches to the existing TrinaRow list.
     final sm = _stateManager;
     if (sm != null && result.matched.isNotEmpty) {
-      _appendPlutoRows(sm, result.matched);
+      _appendTrinaRows(sm, result.matched);
     }
     setState(() {
       _filterScanKey = null;
@@ -594,12 +594,12 @@ class _RowListInnerState extends State<_RowListInner> {
     _publishDisplayedCount();
   }
 
-  /// Build PlutoRows for `rowIds` and append them to the live grid via
+  /// Build TrinaRows for `rowIds` and append them to the live grid via
   /// the state manager (same logic as `_expandVisibleWindow` minus the
   /// `_visibleRowIds` bookkeeping). Used by `_continueLargeFilterScan`.
-  void _appendPlutoRows(PlutoGridStateManager sm, List<String> rowIds) {
+  void _appendTrinaRows(TrinaGridStateManager sm, List<String> rowIds) {
     final headers = _displayHeaders;
-    final fresh = <PlutoRow>[];
+    final fresh = <TrinaRow>[];
     for (final id in rowIds) {
       final row = widget.model.rows[id];
       if (row == null) continue;
@@ -609,27 +609,27 @@ class _RowListInnerState extends State<_RowListInner> {
         statusValue =
             'warning|${row.warningDetails.length}|${row.warningDetails.first}';
       }
-      final cells = <String, PlutoCell>{
-        'row_num': PlutoCell(value: '${row.fileRow}'),
-        'status': PlutoCell(value: statusValue),
+      final cells = <String, TrinaCell>{
+        'row_num': TrinaCell(value: '${row.fileRow}'),
+        'status': TrinaCell(value: statusValue),
       };
       for (int i = 0; i < headers.length; i++) {
-        cells[headers[i]] = PlutoCell(
+        cells[headers[i]] = TrinaCell(
           value: _cellValueFor(row, i),
         );
       }
-      fresh.add(PlutoRow(cells: cells));
+      fresh.add(TrinaRow(cells: cells));
     }
     if (fresh.isNotEmpty) sm.appendRows(fresh);
   }
 
-  /// Rebuild PlutoGrid's refRows from the given list of rowIds. Used by
+  /// Rebuild TrinaGrid's refRows from the given list of rowIds. Used by
   /// the filter-scan completion path (and the abort path back to the
   /// initial window) — both need to replace the entire grid contents
   /// without remounting.
-  void _replacePlutoRows(PlutoGridStateManager sm, List<String> rowIds) {
+  void _replaceTrinaRows(TrinaGridStateManager sm, List<String> rowIds) {
     final headers = _displayHeaders;
-    final fresh = <PlutoRow>[];
+    final fresh = <TrinaRow>[];
     for (final id in rowIds) {
       final row = widget.model.rows[id];
       if (row == null) continue;
@@ -639,16 +639,16 @@ class _RowListInnerState extends State<_RowListInner> {
         statusValue =
             'warning|${row.warningDetails.length}|${row.warningDetails.first}';
       }
-      final cells = <String, PlutoCell>{
-        'row_num': PlutoCell(value: '${row.fileRow}'),
-        'status': PlutoCell(value: statusValue),
+      final cells = <String, TrinaCell>{
+        'row_num': TrinaCell(value: '${row.fileRow}'),
+        'status': TrinaCell(value: statusValue),
       };
       for (int i = 0; i < headers.length; i++) {
-        cells[headers[i]] = PlutoCell(
+        cells[headers[i]] = TrinaCell(
           value: _cellValueFor(row, i),
         );
       }
-      fresh.add(PlutoRow(cells: cells));
+      fresh.add(TrinaRow(cells: cells));
     }
     sm.removeRows(sm.refRows.toList());
     if (fresh.isNotEmpty) sm.appendRows(fresh);
@@ -663,7 +663,7 @@ class _RowListInnerState extends State<_RowListInner> {
       _resyncVisibleRows();
     });
     final sm = _stateManager;
-    if (sm != null) _replacePlutoRows(sm, _visibleRowIds);
+    if (sm != null) _replaceTrinaRows(sm, _visibleRowIds);
     _publishDisplayedCount();
   }
 
@@ -673,13 +673,13 @@ class _RowListInnerState extends State<_RowListInner> {
     _filterHCtrl.dispose();
     _fallbackVertCtrl.dispose();
     _fallbackHorizCtrl.dispose();
-    // _bodyVertCtrl / _bodyHorizCtrl are owned by PlutoGrid — do not dispose.
+    // _bodyVertCtrl / _bodyHorizCtrl are owned by TrinaGrid — do not dispose.
     super.dispose();
   }
 
   /// Per-column width measurement. Considers BOTH the column header
   /// text and every visible cell, using their respective real text
-  /// styles (PlutoGrid's built-in autoFitColumn picks the longer
+  /// styles (TrinaGrid's built-in autoFitColumn picks the longer
   /// string by char count, then measures with the *default* text
   /// style — which is wrong for our monospace cells and ignores the
   /// title outright). Result is clamped to [minWidth, maxWidth]:
@@ -691,9 +691,9 @@ class _RowListInnerState extends State<_RowListInner> {
   /// 900-col x 1000-row file that's ~900k layouts, multi-second main-
   /// isolate block (and Wayland compositor ping timeout on Linux).
   /// Skip the pass entirely above `kWideColLimit` data columns;
-  /// PlutoColumn falls back to its declared 150 px default and the
+  /// TrinaColumn falls back to its declared 150 px default and the
   /// user can still drag any edge to override.
-  void _autoFitDataColumns(PlutoGridStateManager sm) {
+  void _autoFitDataColumns(TrinaGridStateManager sm) {
     final headerStyle = _cachedHeaderStyle;
     final cellStyle = _cachedCellStyle;
     if (headerStyle == null || cellStyle == null) return;
@@ -701,7 +701,7 @@ class _RowListInnerState extends State<_RowListInner> {
     // columns; subtract them to reason about data-column count.
     final dataCols = sm.refColumns.length - 2;
     if (dataCols > kWideColLimit) return;
-    const cellHorizontalPadding = 14.0; // PlutoGrid default cell pad
+    const cellHorizontalPadding = 14.0; // TrinaGrid default cell pad
     const cellExtraChars = 21.0; // ~3 chars breathing room
     const minWidth = 60.0;
     const maxWidth = 320.0;
@@ -754,7 +754,7 @@ class _RowListInnerState extends State<_RowListInner> {
   /// Apply current `_filters` map to the grid. Two code paths:
   ///
   /// • Eager (small) file — every row's content is already populated
-  ///   in `RowModel.fields` and mirrored into PlutoCells, so PlutoGrid's
+  ///   in `RowModel.fields` and mirrored into TrinaCells, so TrinaGrid's
   ///   built-in `setFilter` does the work without any disk read.
   /// • Lazy (large) file — most rows have empty cells (their bytes
   ///   are still on disk). Built-in filter would miss matches in the
@@ -835,7 +835,7 @@ class _RowListInnerState extends State<_RowListInner> {
   Widget build(BuildContext context) {
     final t = context.bxpTheme;
     // Detect Runner ↔ other-tab transitions. When the user swaps
-    // *away* from Runner, drop PlutoGrid's keyboard focus + current
+    // *away* from Runner, drop TrinaGrid's keyboard focus + current
     // cell so the eventual return doesn't render a stale focus
     // rectangle on (row 0, row_num) instead of the previously
     // selected row. Re-syncing back to `selectedRowId` on return
@@ -870,7 +870,7 @@ class _RowListInnerState extends State<_RowListInner> {
     // For eager (small) files this is identical to `widget.file.rowIds`.
     // For lazy (large) files this is the materialised window — first
     // [kLazyInitialRows] initially, growing in batches as the user
-    // scrolls or contracted to a filter-scan match list. PlutoGrid
+    // scrolls or contracted to a filter-scan match list. TrinaGrid
     // receives only this subset.
     final rowList = _visibleRowIds
         .map((id) => widget.model.rows[id])
@@ -888,17 +888,17 @@ class _RowListInnerState extends State<_RowListInner> {
       widget.file.rowIds.length.toString().length,
     );
     final rowNumWidth = 22.0 + 8.0 * rowNumDigits;
-    // Memoise both lists across rebuilds. PlutoGrid consumes columns /
+    // Memoise both lists across rebuilds. TrinaGrid consumes columns /
     // rows once on mount and ignores subsequent widget changes (we mutate
-    // its state imperatively via `_replacePlutoRows` on filter / window
+    // its state imperatively via `_replaceTrinaRows` on filter / window
     // expand), so passing the cached lists is safe and saves ~900 col +
-    // ~900 k PlutoCell allocations per notify-driven rebuild — the eat
+    // ~900 k TrinaCell allocations per notify-driven rebuild — the eat
     // of CPU that was starving the event loop during drill-down loads.
-    _cachedColumns ??= <PlutoColumn>[
-      PlutoColumn(
+    _cachedColumns ??= <TrinaColumn>[
+      TrinaColumn(
         title: '#',
         field: 'row_num',
-        type: PlutoColumnType.text(),
+        type: TrinaColumnType.text(),
         width: rowNumWidth,
         minWidth: rowNumWidth,
         enableEditingMode: false,
@@ -907,20 +907,20 @@ class _RowListInnerState extends State<_RowListInner> {
         enableContextMenu: false,
         enableDropToResize: false,
         enableColumnDrag: false,
-        textAlign: PlutoColumnTextAlign.right,
+        textAlign: TrinaColumnTextAlign.right,
         renderer: (ctx) => Text(
           ctx.cell.value.toString(),
           textAlign: TextAlign.right,
           style: BxpText.body(context, color: t.textMuted, size: BxpSize.md),
         ),
       ),
-      PlutoColumn(
+      TrinaColumn(
         // Icon-only status column — the glyph itself is small, but a hover
         // tooltip explains what each one means (▶ written, ⏩ written-multi,
         // ▼ filtered, ⊘ skipped, ? unmatched, ⚠ warning).
         title: '',
         field: 'status',
-        type: PlutoColumnType.text(),
+        type: TrinaColumnType.text(),
         width: 28,
         minWidth: 28,
         enableEditingMode: false,
@@ -929,7 +929,7 @@ class _RowListInnerState extends State<_RowListInner> {
         enableDropToResize: false,
         enableColumnDrag: false,
         enableSorting: false,
-        textAlign: PlutoColumnTextAlign.center,
+        textAlign: TrinaColumnTextAlign.center,
         renderer: (ctx) {
           // Cell value carries the status NAME (e.g. "written") — or for
           // warning rows a `warning|<count>|<first-detail>` triple. We
@@ -966,10 +966,10 @@ class _RowListInnerState extends State<_RowListInner> {
         },
       ),
       ...headers.map(
-        (h) => PlutoColumn(
+        (h) => TrinaColumn(
           title: h,
           field: h,
-          type: PlutoColumnType.text(),
+          type: TrinaColumnType.text(),
           // Initial width — auto-fit kicks in on load (see onLoaded
           // below) and resizes per column to its widest cell. User
           // can then drag the column edge to override.
@@ -1000,18 +1000,18 @@ class _RowListInnerState extends State<_RowListInner> {
         statusValue =
             'warning|${row.warningDetails.length}|${row.warningDetails.first}';
       }
-      final cells = <String, PlutoCell>{
-        'row_num': PlutoCell(value: '${row.fileRow}'),
+      final cells = <String, TrinaCell>{
+        'row_num': TrinaCell(value: '${row.fileRow}'),
         // Store the status NAME, not the glyph — the renderer resolves
         // glyph + colour + tooltip together so they can't drift apart.
-        'status': PlutoCell(value: statusValue),
+        'status': TrinaCell(value: statusValue),
       };
       for (int i = 0; i < headers.length; i++) {
-        cells[headers[i]] = PlutoCell(
+        cells[headers[i]] = TrinaCell(
           value: _cellValueFor(row, i),
         );
       }
-      return PlutoRow(cells: cells);
+      return TrinaRow(cells: cells);
     }).toList();
       _cachedRowsRevision = _rowsRevision;
     }
@@ -1100,7 +1100,7 @@ class _RowListInnerState extends State<_RowListInner> {
               //
               // Guard `mounted`: the focus listener can fire after this
               // RowList state has been disposed (e.g. tab switch under a
-              // pending IME commit) — calling into a torn-down PlutoGrid
+              // pending IME commit) — calling into a torn-down TrinaGrid
               // state manager throws asserts in debug builds.
               onFocus: () {
                 if (!mounted) return;
@@ -1116,7 +1116,7 @@ class _RowListInnerState extends State<_RowListInner> {
                 child: LayoutBuilder(
             builder: (context, constraints) {
               // Flutter Scrollbar computes _trackExtent = viewportDimension.
-              // bodyRowsVertical.viewportDimension = PlutoGrid height minus
+              // bodyRowsVertical.viewportDimension = TrinaGrid height minus
               // the column-header+padding offset (~33 px), leaving a gap at
               // the bottom. Compensate by injecting a negative MediaQuery
               // bottom-padding so the formula yields track = full height.
@@ -1150,13 +1150,13 @@ class _RowListInnerState extends State<_RowListInner> {
                     child: MediaQuery(
                       data: MediaQuery.of(context).copyWith(
                           padding: EdgeInsets.zero),
-                      child: PlutoGrid(
+                      child: TrinaGrid(
             columns: columns,
             rows: rows,
             onLoaded: (event) {
               _stateManager = event.stateManager;
               _stateManager?.setShowColumnFilter(false);
-              // Save PlutoGrid's real body scroll controllers synchronously so
+              // Save TrinaGrid's real body scroll controllers synchronously so
               // the next rebuild (triggered by _publishColumnWidths below) can
               // swap them into the Flutter Scrollbar wrappers immediately.
               _bodyVertCtrl = event.stateManager.scroll.bodyRowsVertical;
@@ -1175,10 +1175,10 @@ class _RowListInnerState extends State<_RowListInner> {
                 _publishColumnWidths();
                 sm.resizingChangeNotifier.addListener(_publishColumnWidths);
               });
-              // Mirror PlutoGrid's body horizontal scroll into our filter
+              // Mirror TrinaGrid's body horizontal scroll into our filter
               // row so the column header inputs stay aligned when the grid
               // scrolls sideways. We hop on the existing horizontal scroll
-              // group's offset; PlutoGrid syncs body+header+footer via the
+              // group's offset; TrinaGrid syncs body+header+footer via the
               // same controller group.
               final scroll = _stateManager?.scroll;
               scroll?.horizontal?.addOffsetChangedListener(() {
@@ -1201,7 +1201,7 @@ class _RowListInnerState extends State<_RowListInner> {
               final selectedId = widget.store.selectedRowId;
               if (selectedId != null) {
                 final idx = rowList.indexWhere((r) => r.id == selectedId);
-                // `rows` is the cached PlutoRow list; it can lag `rowList`
+                // `rows` is the cached TrinaRow list; it can lag `rowList`
                 // by a revision, so bound-check before indexing.
                 if (idx >= 0 && idx < rows.length) {
                   _stateManager?.setCurrentCell(
@@ -1217,7 +1217,7 @@ class _RowListInnerState extends State<_RowListInner> {
               final rowNum =
                   event.row!.cells['row_num']?.value.toString() ?? '';
               // Read _visibleRowIds at click time, not from the captured
-              // `rowList` closure built at PlutoGrid mount. After a filter
+              // `rowList` closure built at TrinaGrid mount. After a filter
               // scan _visibleRowIds is rewritten to the matched ids; the
               // closure-captured rowList still holds the pre-filter window,
               // so a matched row outside that window would resolve to null
@@ -1230,10 +1230,10 @@ class _RowListInnerState extends State<_RowListInner> {
                 }
               }
             },
-            mode: PlutoGridMode.selectWithOneTap,
-            configuration: PlutoGridConfiguration(
-              style: PlutoGridStyleConfig(
-                // Chrome. PlutoGrid renders the column header strip with
+            mode: TrinaGridMode.selectWithOneTap,
+            configuration: TrinaGridConfiguration(
+              style: TrinaGridStyleConfig(
+                // Chrome. TrinaGrid renders the column header strip with
                 // `gridBackgroundColor`, so to match the OutputPanel header
                 // (which uses `t.panelBg`) we set the grid background to
                 // panelBg and override row colours back to surfaceBg below.
@@ -1251,7 +1251,7 @@ class _RowListInnerState extends State<_RowListInner> {
                 // Columns header + cell text — both flow through
                 // BxpText.body so any change to the central typography
                 // scheme (font, size scale, letter spacing) propagates
-                // straight into PlutoGrid without further wiring.
+                // straight into TrinaGrid without further wiring.
                 columnTextStyle: BxpText.body(
                   context,
                   color: t.textSubtle,
@@ -1263,7 +1263,7 @@ class _RowListInnerState extends State<_RowListInner> {
                   color: t.textPrimary,
                   size: BxpSize.md,
                 ),
-                // Row height: tighter than Pluto default so the list is dense.
+                // Row height: tighter than Trina default so the list is dense.
                 rowHeight: 28,
                 columnHeight: 30,
                 // Show vertical column + cell separators so rows-in and
@@ -1276,18 +1276,26 @@ class _RowListInnerState extends State<_RowListInner> {
                 cellColorInEditState: t.surfaceBg,
                 cellColorInReadOnlyState: t.surfaceBg,
               ),
-              scrollbar: const PlutoGridScrollbarConfig(
+              // The grid's own scrollbars stay hidden and take no room
+              // (`columnShowScrollWidth: false` drops the band the header
+              // and body would otherwise reserve for them). Wheel input
+              // jumps instead of animating, so the lazy-append scroll
+              // listener and the filter-row offset mirror see each step.
+              scrollbar: const TrinaGridScrollbarConfig(
                 isAlwaysShown: false,
-                scrollbarThickness: 0,
-                scrollbarThicknessWhileDragging: 0,
-                hoverWidth: 0,
-                onlyDraggingThumb: true,
-                scrollBarColor: Colors.transparent,
-                scrollBarTrackColor: Colors.transparent,
+                showHorizontal: false,
+                showVertical: false,
+                thumbVisible: false,
+                showTrack: false,
+                thickness: 0,
+                columnShowScrollWidth: false,
+                smoothScrolling: false,
+                thumbColor: Colors.transparent,
+                trackColor: Colors.transparent,
               ),
             ),
           ),
-                    ),  // MediaQuery (reset padding for PlutoGrid)
+                    ),  // MediaQuery (reset padding for TrinaGrid)
             ),
           ),
               );
@@ -1782,7 +1790,7 @@ class _FilterCell extends StatefulWidget {
   final String initial;
   final ValueChanged<String> onChanged;
   // Fires when the input first gains focus, used by RowList to clear
-  // PlutoGrid's lingering current-cell highlight so the grid doesn't
+  // TrinaGrid's lingering current-cell highlight so the grid doesn't
   // look like it still owns input focus.
   final VoidCallback? onFocus;
   const _FilterCell({

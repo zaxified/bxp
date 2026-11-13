@@ -415,12 +415,17 @@ toggle is an explicit, visible (red chip) developer action.
 - All code comments and documentation in English.
 - **Material comes from `package:material_ui/material_ui.dart`**, not
   `package:flutter/material.dart`. Flutter 3.47 split Material out of the SDK
-  into a standalone package; at 0.0.1 that package is a pure facade (one
-  `export` of the SDK library), so the migration changed no behaviour — it
-  moves the imports ahead of the SDK copies' formal deprecation, planned for
-  the November 2026 stable. New files follow suit; `dart fix --apply
-  --code=migrate_design_widgets` rewrites any that don't. Nothing here imports
-  Cupertino, so `cupertino_ui` is not a dependency.
+  into a standalone package whose types (`ThemeData`, `MaterialLocalizations`,
+  `Material`, …) are distinct from the SDK copies — so a widget built on one
+  does not see the other's theme or localizations, and `flutter analyze`
+  cannot tell. New files and **tests** follow suit (a test that pumps the SDK
+  `MaterialApp` around a material_ui `showDialog` fails with "No
+  MaterialLocalizations found"); `dart fix --apply
+  --code=migrate_design_widgets` rewrites any that don't.
+- **`trina_grid` still builds on the SDK's Material.** `main.dart` wraps the
+  navigator in `MaterialUiCompatibilityBridge` (in `MaterialApp.builder`),
+  which maps the material_ui theme and localizations onto the SDK types the
+  grid reads. Delete the bridge once trina_grid ships a material_ui build.
 - Layout: every resizable splitter holds **fractions**, not pixels —
   `lib/ui/layout_defaults.dart` is the single source. 3-pane layout = 2
   fractions plus the middle by subtraction.
@@ -431,7 +436,7 @@ toggle is an explicit, visible (red chip) developer action.
   is missing.
 - Streaming traces: never call top-level `notifyListeners()` per trace
   event. Use per-cell `ValueNotifier` (e.g. `traceLinesCounter`,
-  `fileGen`) to avoid quadratic PlutoGrid rebuild storms.
+  `fileGen`) to avoid quadratic TrinaGrid rebuild storms.
 - Global keyboard shortcuts (Save/Undo/Redo/Open/Zoom) use
   `HardwareKeyboard.instance.addHandler` in `initState`, not
   `CallbackShortcuts` — the latter only fires when focus bubbles up.

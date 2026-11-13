@@ -30,7 +30,7 @@ bxp-gui replaced an earlier Electrobun + React + CodeMirror 6 frontend
 - **Sound null-safety.** Dart's type system catches whole classes of runtime
   errors that were silent in the JS frontend. The `trace_model.dart` event
   mirrors are typed exhaustively.
-- **Rich table widgets.** PlutoGrid provides a spreadsheet-like trace view
+- **Rich table widgets.** TrinaGrid provides a spreadsheet-like trace view
   for the dry-run debugger — reproducing it in a webview would have required
   a heavy JS dependency.
 

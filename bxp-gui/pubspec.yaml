@@ -17,27 +17,20 @@ dependencies:
   provider: ^6.1.5+1
   split_view: ^3.2.2
   package_info_plus: ^10.0.0
-  pluto_grid: ^8.1.0
-  pluto_menu_bar: ^3.0.1
-  flex_seed_scheme: ^4.0.1
+  # The maintained fork of pluto_grid (whose repository is abandoned); it
+  # still builds on the SDK's Material, so main.dart bridges the theme and
+  # localizations into its subtree — see MaterialUiCompatibilityBridge there.
+  trina_grid: ^2.4.0
+  flex_seed_scheme: ^5.0.1
   crypto: ^3.0.6
   url_launcher: ^6.3.1
   mcp_dart: ^2.2.0
-  # Flutter 3.47 split Material out of the SDK into a standalone package.
-  # At 0.0.1 it is a pure facade — a single `export
-  # 'package:flutter/material.dart'` — so importing it changes nothing that
-  # runs today; what it buys is that the imports already point where the
-  # implementation is going before the SDK copies are formally deprecated
-  # (planned for the November 2026 stable).
-  #
-  # Exact, not `^0.0.1`: a caret on a 0.0.x version pins nothing — pub reads it
-  # as `>=0.0.1 <0.1.0`, and 0.0.3 stopped being a facade. It carries its own
-  # ColorScheme, which collides with the SDK's the moment flex_seed_scheme
-  # hands one over, so CI resolved 0.0.3+1 and `flutter analyze` failed on all
-  # three legs. pubspec.lock is gitignored, so this line is the only pin CI
-  # ever sees. Moving to 1.x is a migration, not a bump — see
-  # docs/dev/roadmap.md (v0.4.0).
-  material_ui: 0.0.1
+  # Flutter 3.47 split Material out of the SDK into this standalone package,
+  # with its own types (ThemeData, ColorScheme, Material, …) distinct from
+  # the SDK copies. flex_seed_scheme 5 builds on it as well; trina_grid does
+  # not yet (see above). pubspec.lock is gitignored, so these constraints are
+  # the only pins CI ever sees.
+  material_ui: ^1.11.0
   json5_ast:
     path: packages/json5_ast
 
