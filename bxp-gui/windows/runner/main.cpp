@@ -18,6 +18,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 
   flutter::DartProject project(L"data");
+  // Impeller became the Windows default in Flutter 3.47; on the VMware SVGA
+  // D3D11 driver it loses the device and never recovers (Context Lost loop).
+  // Stay on Skia until upstream fixes the recovery.
+  project.set_impeller_switch(flutter::ImpellerSwitch::Disabled);
 
   std::vector<std::string> command_line_arguments =
       GetCommandLineArguments();
