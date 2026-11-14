@@ -1,5 +1,222 @@
 # Changelog
 
+## 2026.11.14 — bxp-cli 0.4.0, bxp-mcp 0.4.0, bxp-gui 0.4.0
+
+### Breaking changes
+
+A template that ran cleanly on 0.3.0 can fail to load, or write different
+bytes, on 0.4.0. Each change below turns a silent wrong answer into a loud
+one or a correct one; none of them changes a value that was right before.
+
+- **CSV output quotes every value per RFC 4180.** A value that already
+  started and ended with the output quote used to be written verbatim; the
+  quotes are now data and get doubled. A template that wrapped a value in
+  quote characters by hand (the 0.3.0 XTB examples did this for `$comment`)
+  now writes them twice — drop the wrapping, `csv_text_quote_out` already
+  quotes where needed.
+- **Config values are checked like config keys.** An unknown enum value
+  (`file_type_in: "jsno"`) or a wrong-typed field (a string where a boolean
+  belongs) is now a load error, exit 1. It used to fall back to the default
+  without a word.
+- **Expressions must end where they end.** A token left after a complete
+  expression is an error (`'it''s'` used to evaluate to `it`). String
+  literals gain the escapes `\'` and `\\`.
+- **Date functions read the whole value.** `"2024-03-15 nonsense"` is no
+  longer midnight on the 15th; `MONTH()` and friends accept full
+  timestamps (`YYYY-MM-DD hh:mm:ss`, `T`, ISO tail) like the time functions.
+- **`date_filter_from_filename` refuses a row it cannot place.** An empty
+  `$date` under an active filter is fatal instead of passing the row through
+  unfiltered.
+
+### Changed
+
+- `UNACCENT` spells out ligatures (`ﬁ` → `fi`) and strips Hebrew and Arabic
+  marks; `LOWER` writes a word-final `Σ` as `ς`.
+- JSON output replaces bytes that are not UTF-8 with U+FFFD, so the file
+  stays valid JSON for a legacy-encoded input read without
+  `csv_input_encoding`.
+- The formula-injection guard looks for formula machinery, not just a
+  leading `+ - @`: signed numbers and names keep their exact value, and the
+  guard now also applies to quoted cells.
+- bxp-gui: the row grid moves from `pluto_grid` to its maintained fork
+  `trina_grid`, and Material comes from `material_ui` 1.x.
+
+### Features
+
+- feat(bxp-core): catalog date tokens + operator precedence, emit in docs JSON
+- feat(bxp-gui): render date tokens + precedence in the docs panel
+- feat(bxp-core): full DST-aware IANA timezone support
+- feat(bxp-core): consume tz from zig-libs instead of keeping a local copy
+- feat(bxp-core): consume datefmt from zig-libs instead of keeping a local copy
+- feat(bxp-core): consume encoding from zig-libs instead of keeping a local copy
+- feat(bxp-core): consume diagnostics from zig-libs — migration complete
+- feat(examples): give RÚIAN a fetch-full.sh that stages outside the tree
+- feat(docs): run the examples' expressions in the reader's browser
+- feat(gui): open the manual from the top bar, not the repository
+- feat(cli): name the manual and the MCP server in --help
+- feat(gui): give the desktop archive its own documentation rendezvous
+- feat(expr): add the nine builtins whose blockers had already lifted
+- feat(expr): add TRUNC, the one cut the language could not spell
+- feat(expr): DATE_TRUNC, MROUND and SIGN — the last three on the shelf
+- feat(expr): REGEX_REPLACE(s, pattern, replacement)
+
+### Fixes
+
+- fix(bxp-core): drive constant-folding reject set from the FnDoc catalog
+- fix(bxp-core): consume json5 from zig-libs, fixing two config-parse crashes
+- fix(bxp-core): consume decimal from zig-libs, fixing a division-overflow crash
+- fix(bxp-core): consume zipstream from zig-libs, adding CRC checks and a CD guard
+- fix(xlsx): report a CRC mismatch as a corrupt workbook, not a bare ReadFailed
+- fix(cli): leave nothing behind when a conversion fails
+- fix(bridge): close the cancel/ack use-after-free window
+- fix(expr): tell an out-of-range number apart from a malformed one
+- fix(inspect): keep the position of a JSON5 syntax error
+- fix(gui): make the pre-save guard match the markers the bridge emits
+- fix(catalog): correct what the docs are generated from, not the pages
+- fix(mcp): take the row context in the shape a model writes
+- fix(gui): stop offering an update the host cannot run, cancel the whole tree
+- fix(gui): pin material_ui exactly, because a caret on 0.0.x pins nothing
+- fix(cli): guard the formula, not the first byte of the cell
+- fix(expr): one date reader for the whole family, matching the whole string
+- fix(templates,examples): say it with the builtin that means it
+- fix(cli): refuse a date filter that cannot be applied to a row
+- fix(scripts): one emitter for the report's result row
+- fix(expr): reject leftover tokens, add \' and \\ string escapes
+- fix(csv): quote output per RFC 4180, drop the pre-quoted pass-through
+- fix(core): audit fixes in expr, config, json, xlsx, btrace and inspect
+- fix(cli): audit fixes in the pipeline and argument parsing
+- fix(bridge,mcp): streaming handle race, child timeout, catalog drift
+- fix(json5_ast): comment safety on insert and dump, stricter parsing
+- fix(gui): audit fixes in store, services and UI
+- fix(scripts,ci): false greens, release safety, no rm -rf
+- fix(config): an invalid enum or wrong-typed field is a template error
+- fix(mcp): bxp_simulate default workspace is private to the process
+- fix(bridge): eval_batch names the reason for a malformed request
+- fix: gap-sweep audit of runners, tools and the docs playground
+- fix(mcp): random per-process workspace token, no shared parent dir
+- fix(release): entitlements match the shipped app, icons render bounded
+- fix(core): wave-2 audit leftovers in expr, config, xlsx and btrace
+- fix(cli): zip_input conflicts, --fresh before the input, trace on --debug
+- fix(mcp): wrong-typed arguments and unparseable configs say so
+- fix(gui): wave-2 audit leftovers
+- fix(scripts,ci): pin remaining actions, index drift check, safer bench
+- fix(resources): xtb2 BUY parsing survives the ticker in the comment
+- fix(bench): raise the Debug-size guard to the 16 MB test-05 uses
+- fix(cli): JSON output stays valid JSON on non-UTF-8 values
+- perf(cli): writeSafeValue copies runs instead of single bytes
+- fix(gui): one hover token across the row-detail tables
+- fix(gui): render with Skia on Windows, not Impeller
+
+### Internal
+
+- chore(release): retire debug-gui workflow, fix release docs drift + changelog double-blank
+- docs(roadmap): restructure backlog into versioned milestones
+- refactor(bxp-cli): catalog flags + exit codes as *Doc, render --help from them
+- refactor(bxp-mcp): catalog tools as ToolDoc, render tools/list + --help from it
+- refactor(bxp-gui): catalog keyboard shortcuts as ShortcutDoc
+- refactor(bxp-core): derive FieldDoc.enum_values from the source enums
+- refactor(bxp-mcp): catalog flags as FlagDoc (uniform with bxp-cli)
+- refactor(bxp-gui): catalog gui-mcp tools as GuiToolDoc
+- refactor(bxp-gui): catalog user prefs as PrefDoc
+- refactor(bxp-gui): drive expr highlighter operators from the catalog
+- docs: MkDocs site + tools/ catalog-driven reference generators
+- docs: theme switcher with VS Code + Material palettes, site polish
+- docs: colour reference tables by type from the catalogs
+- ci: bump pinned Flutter 3.44.2 -> 3.44.3 in the release workflow
+- refactor(bxp-core): move function category onto FnDoc (SSOT)
+- docs(examples): migrate examples/ into docs/examples/ MkDocs section
+- docs: apply docs-audit fixes (flags, targets vocab, guide gaps)
+- build: exclude docs/examples from prettier (MkDocs admonitions)
+- build: drop prettier and markdownlint from the docs workflow
+- docs: unify the shipped readme into a single resources/readme.md
+- test: wire gen-docs.sh --check drift guard into test-04-desktop
+- docs(readme): document ticker extraction from a free-text description
+- docs(examples): add basic timezone-functions example; adopt TZ_OFFSET in multi-stage-etl
+- ci: bump pinned Flutter 3.44.2/3.44.3 -> 3.47.0 (Dart 3.13)
+- docs(roadmap): record the two Flutter 3.47 follow-ups
+- docs: repoint CLAUDE.md at the post-MkDocs docs tree
+- docs(roadmap): drop the completed entries, keep only open work
+- docs(roadmap): drop the completed zig-libs migration, keep only what is open
+- docs(roadmap): backlog a clean bench reference + an example-figures refresh
+- docs: fix the stale RÚIAN example link on the front page
+- docs(roadmap): queue the RÚIAN fetch script and examples test coverage
+- docs(roadmap): queue the remaining zig-libs candidates found by a full sweep
+- refactor(deps): consume zig-libs numparse, minisign and procrun
+- refactor(deps): consume zig-libs csvstream, retiring bxp-core/src/csv.zig
+- docs(roadmap): correct the CSV-injection entry, queue the quoted-path survey
+- refactor(bridge): move both spawn paths onto procrun's runner
+- docs(roadmap): give the transport-core entry an example per candidate
+- refactor(deps): consume zig-libs mcp, retiring bxp-mcp's own transport
+- docs(roadmap): drop the shared-core-libs sections, no open tasks left
+- docs(bench): record S18 — zig-libs verification run, no regression
+- docs(examples): refresh the full-scale figures, all re-measured today
+- test(mcp): pin the two wire changes the transport migration made
+- docs(deps): correct what the zig-libs migration left saying the old thing
+- docs(roadmap): retire the settled bench task, re-file the manual entry
+- docs(readme): correct, complete and re-order the shipped manual
+- docs: audit every hand-written page against the code it describes
+- docs: queue the two code defects the audit found, fix stale project notes
+- ci(docs): publish the site to GitHub Pages on every docs change
+- docs(readme): point the front page at the published documentation site
+- docs(roadmap): queue reconciling the readme reference with the catalogs
+- build(deps): re-point zig-libs at the 2026-08-19 tag
+- ci(docs): keep the generated reference pages LF on a Windows checkout
+- ci: move the Node 20 actions onto their Node 24 majors
+- build(gui): meet Flutter 3.47 where it already is
+- test(examples): gate every example run, not just the ten datasets
+- docs(examples): rebuild the thirty-two examples as teaching documents
+- docs(reference): move the hand-copied columns into the catalogs
+- docs: generate the tables and trees that were being retyped
+- ci: take documentation out of the product suite, and pin the repo to LF
+- docs(reference): generate the environment variables from a catalog
+- docs(roadmap): retire the readme instead of folding it into the site
+- docs: merge the readme's user half into the site
+- docs: retire the distribution readme
+- docs: drop "broker" as the generic word, and explain the two MCP servers
+- docs: state the config / template / source vocabulary instead of dodging it
+- docs: close the blockquote in the gui-mcp help prompt
+- docs(roadmap): delete the wasm entry instead of describing it
+- test(bridge): describe the phase that exists, not the one that was retired
+- docs(roadmap): drop both output-shaping entries, unqualify the refusal
+- docs: give every section a landing page
+- docs(roadmap): drop the example candidates, two of them unbuildable
+- docs(roadmap): cross-template LOOKUP goes back to Not planned
+- docs(dev): make the environment setup complete and checkable
+- docs(roadmap): pull the transformation visualiser forward to v0.3.2
+- docs: audit hand-written docs against the code and fix stale claims
+- docs: resolve the verified findings of the cloud docs audit
+- chore(claude): share Zig rules and a setup script with cloud sessions
+- docs(claude): place the vendored zig skill next to the repo's own Zig rules
+- docs(build): describe the committed Claude Code setup and cloud sessions
+- build(deps): bump zig-libs to main 5ee701f8 (past tag 2026-10-07)
+- chore(vscode): name the workspace folders
+- build: LLVM for every compile step, self-hosted only on request; zig skill r4
+- build(deps): bump zig-libs to tag 2026-10-18 (a3fe0128)
+- build(deps): take regex from zig-libs, drop the quangd/regex.zig fetch dep
+- build: migrate to Zig 0.17.0
+- test(bridge): fork-sleep helper must not inherit the closed stdin
+- docs(rules): macOS posix_spawn fails on an inherited closed fd
+- build(deps): bump zig-libs to main a41eb233
+- build(release): pin appimagetool, dispatch runs publish as prerelease
+- build(deps): bump zig-libs to main 8b5872fc
+- build(deps): bump zig-libs to main 9a1b7779
+- build(deps): bump zig-libs to tag 2026-11-10
+- build: move to Zig 0.17.1 and zig-libs tag 2026-11-11
+- docs(roadmap): drop the stale backlog preamble
+- refactor(core): Unicode text builtins on zig-libs `unitext`, drop uucode
+- build(deps): Flutter 3.47.9, current GitHub Actions and docs toolchain
+- build(gui): trina_grid in place of pluto_grid, material_ui 1.x, flex_seed_scheme 5
+- docs(claude): point stale CLAUDE.md references at what exists
+- docs: describe the present, drop history and hand-kept counts
+- docs(guide): blank header cells, numbers inside text, ISIN-only sources
+- docs(readme): no hand-kept template count, current builtin floor
+- build(deps): Flutter 3.50.0; plain title bar on Linux
+- docs(release): a dispatch run builds the archives and publishes nothing
+- docs(roadmap): v0.4.1 README demo by agent, v0.5.0 template sync PoC, v0.5.1
+- deps(zig-libs): move the pin to 2026-08-24
+- deps(zig-libs): move the pin past the tag, to the drift re-audits
+- deps(zig-libs): move the pin to tag 2026-09-19; truncate over-wide rows again
+
 ## 2026.06.17 — bxp-cli 0.3.0, bxp-mcp 0.3.0, bxp-gui 0.3.0
 
 ### Features

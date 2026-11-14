@@ -1,7 +1,7 @@
 .{
     .name = .bxp_core,
     .fingerprint = 0xd3c3e96b8303f761,
-    .version = "0.3.0",
+    .version = "0.4.0",
     .dependencies = .{
         // zig-libs (MIT) — the module collection that now carries the hardened
         // descendants of several bxp-core modules. Bumping this pin moves every
